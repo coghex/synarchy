@@ -64,6 +64,7 @@ module Unit.Thread.Command.Solidify
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import Data.List (nub)
 import qualified Data.Text as T
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Capability.UnitCombat
@@ -80,6 +81,7 @@ import Unit.Thread.Command.Pose (handleUnitKillCommand)
 import Engine.Core.Capability.WorldSim (withPageLifecycle)
 import World.Chunk.Admit (pageIncarnation)
 import World.Generate.Coordinates (canonicalTile)
+import World.Reaction.Occupants (occupiesTile)
 import World.State.Types (pageWrapWorldSize)
 import World.Chunk.Residency (ChunkGeneration)
 import World.Page.Types (WorldPageId(..))
@@ -204,9 +206,26 @@ handleUnitSolidifyOccupantsCommandWith
                 living = [ (uid, uiName inst)
                          | (uid, (inst, ss)) ← named, usPose ss ≢ Dead ]
             forM_ (map fst living) (handleUnitKillCommand env utsRef)
+            -- Everyone the new stone is under RIGHT NOW, victim or not.
+            --
+            -- The victim set is deliberately a cutoff: a unit that
+            -- stepped onto the cell after the snapshot was not caught by
+            -- this reaction and must not be killed by it. But it is
+            -- still standing on a column that grew a level, and this
+            -- path REPLACED the ordinary 'UnitReGround' that would
+            -- otherwise have lifted it — so settling only the victims
+            -- would leave that survivor permanently inside the rock,
+            -- which is the other half of requirement 4.
+            --
+            -- Not a lift of a living OCCUPANT in requirement 4's sense:
+            -- that rule is about the units this reaction caught, and it
+            -- is honoured by killing them rather than raising them. A
+            -- late entrant was never caught, so it gets exactly what
+            -- any other terrain edit would have given it.
+            latecomers ← currentlyOnTile env pageId gx gy
             -- Read AFTER the kills, so a unit whose death moved nothing
             -- is still measured from where it actually lies.
-            forM_ (map fst named)
+            forM_ (nub (map fst named ⧺ latecomers))
                   (settleClearOfTerrain env utsRef pageId gx gy committedTop)
             pure living
 
@@ -252,6 +271,28 @@ handleUnitSolidifyOccupantsCommandWith
                     "Unit.Solidify"
                     (solidificationDeathText name gx gy)
                     (Just (gx, gy)) (Just raw) (Just (unWorldPageId pageId))
+
+-- | Every unit of @pageId@ whose AUTHORITATIVE position is on tile
+--   @(gx, gy)@ right now — the occupants as they stand at the drain,
+--   which is a different set from the victims the commit captured.
+--
+--   Used only to decide who needs settling, never who dies: the kill
+--   list is the carried cutoff and nothing here widens it.
+currentlyOnTile ∷ EngineEnv → WorldPageId → Int → Int → IO [UnitId]
+currentlyOnTile env pageId gx gy = do
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    case lookup pageId (wmWorlds wm) of
+        Nothing → pure []
+        Just ws → do
+            worldSize ← pageWrapWorldSize ws
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            uts ← readIORef (ucUtsRef (toUnitCombatCapability env))
+            pure [ uid
+                 | (uid, inst) ← HM.toList (umInstances um)
+                 , uiPage inst ≡ pageId
+                 , Just ss ← [HM.lookup uid (utsSimStates uts)]
+                 , occupiesTile worldSize (gx, gy)
+                                (usRealX ss) (usRealY ss) ]
 
 -- | The incarnation the page registered under @pageId@ currently
 --   stands at, or 'Nothing' when no page is registered under that name.

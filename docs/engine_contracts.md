@@ -5197,10 +5197,18 @@ pause epoch's own mutex. The kills and the height correction are
 committed inside; only the rows are outside, and the unit thread is the
 only producer of them, so nothing observable is reordered.
 
-**Nothing is buried, and nothing else moves.** Every surviving occupant
-— the fresh corpse and an older one alike — is raised clear of the
-terrain it is standing on where it is below it, in the sim state and the
-render-facing instance together. That is a `max`, not a snap: it is the
+**Nothing is buried, and nothing else moves.** Everything standing on
+the tile afterwards is raised clear of the terrain it is on where it is
+below it, in the sim state and the render-facing instance together. That
+set is deliberately WIDER than the victim set: the corpses this reaction
+just made, an older corpse it left alone, AND any unit that stepped onto
+the cell after the snapshot. The cutoff decides who DIES, not who gets
+kept out of the rock — and because this path replaced the ordinary
+`UnitReGround`, settling only the victims would leave such a late
+entrant permanently inside the stone. That is not the lift requirement 4
+forbids: that rule governs the occupants this reaction CAUGHT, and it is
+honoured by killing them rather than raising them; a unit it did not
+catch gets exactly what any other terrain edit would have given it. That is a `max`, not a snap: it is the
 minimum correction that keeps a body out of the ground, and it never
 moves one horizontally.
 
@@ -5267,7 +5275,9 @@ on both surfaces, a mid-crossing victim, an already-dead occupant
 producing no second death, transfer-order retirement and selection
 clearing, a u-alias occupant, a same-coordinate row on another page, a
 refused result, a replayed one, the edit-time victim set surviving
-queue delay, a mover whose sim position and render mirror disagree, a
+queue delay (asserting the survivor is settled clear of the stone
+rather than merely spared), a mover whose sim position and render mirror
+disagree, a
 movement committed between the snapshot and the first stone (through
 `ReactionCommitSeams`), a victim that walked onto a higher column before
 the drain, a corpse under fluid the solidified cell retained, a victim

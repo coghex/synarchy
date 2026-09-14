@@ -791,6 +791,21 @@ spec = describe "solidification occupants (#2490)" $ do
         poseOf env latecomer `shouldReturn` Standing
         (length <$> deathsFor env latecomer) `shouldReturn` 0
 
+        -- …but "untouched" means NOT KILLED, not "left inside the
+        -- rock". This path replaced the ordinary re-ground, so if the
+        -- handler settled only its victims the survivor would stand a
+        -- level below the stone it is standing on, for ever.
+        after ← chunkAt ws (lpLava lp)
+        let stoneTop = terrainTopAt after reactCell
+        stoneTop `shouldBe` terrainTopAt before reactCell + 1
+        lateSs ← simStateOf env latecomer
+        lateInst ← instanceOf env latecomer
+        tileUnderUnit lateSs `shouldBe` doomed
+        (usGridZ lateSs ≥ stoneTop) `shouldBe` True
+        (usRealZ lateSs ≥ fromIntegral stoneTop) `shouldBe` True
+        (uiGridZ lateInst ≥ stoneTop) `shouldBe` True
+        (uiRealZ lateInst ≥ fromIntegral stoneTop) `shouldBe` True
+
     it "commits a solidification with no occupants at all without \
        \killing anything or filing an event" $ \env → do
         prepare env
