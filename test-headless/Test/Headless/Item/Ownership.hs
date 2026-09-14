@@ -772,7 +772,12 @@ ownershipModule = "src" </> "Item" </> "Ownership.hs"
 --   * @materializeNode@ MINTS a tree (#1418's one mint boundary);
 --   * @fromItemInstanceDTO@ REBUILDS one already materialized;
 --   * @coolItem@ RE-VALUES temperatures in place, moving nothing;
---   * the two medical draws DESTROY contents rather than re-owning them.
+--   * the two medical draws DESTROY contents rather than re-owning them;
+--   * @simulateLootProfile@ (#2502) builds a THROWAWAY copy of a shell
+--     with its contents cleared, purely to ask whether a rejected lot
+--     would have fitted that shell empty. The copy is a measurement,
+--     never published anywhere and never owning anything — the
+--     simulation's real admissions all go through 'insertInstance'.
 contentsWriterAllowlist ∷ [(FilePath, String)]
 contentsWriterAllowlist =
     [ ("src" </> "Item" </> "Materialize.hs", "materializeNode")
@@ -787,6 +792,7 @@ contentsWriterAllowlist =
         </> "Medical.hs", "consumeBandages")
     , ("src" </> "Engine" </> "Scripting" </> "Lua" </> "API" </> "Units"
         </> "Medical.hs", "consumeKitFill")
+    , ("src" </> "LootProfile" </> "Simulate.hs", "simulateLootProfile")
     ]
 
 -- | Every @iiContents@ assignment in the whole production tree, deduped

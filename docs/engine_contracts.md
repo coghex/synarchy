@@ -78,6 +78,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Flora species identity: the authored name is the key (#2241)](#flora-species-identity-the-authored-name-is-the-key-2241)
 - [Flora visual state and fallback (#2526)](#flora-visual-state-and-fallback-2526)
 - [Loot profiles (#2499)](#loot-profiles-2499)
+- [Loot realization (#2502)](#loot-realization-2502)
 - [Farming (#331-#336)](#farming-331-336)
 - [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485-2490)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
@@ -4514,7 +4515,8 @@ Both build a fresh table per call, so a script that edits what it got
 back has edited its own copy. They live under the existing `loot`
 namespace by D-20; the namespace list stays closed.
 
-**No consumer rolls a profile yet.** PLC-13 owns realization, PLC-14 the
+**Realization is PLC-13's**, in
+[Loot realization (#2502)](#loot-realization-2502) below; PLC-14 owns the
 container content entries, and PLC-10 both the wooden crate and any
 retuning of the shipped `ruin_industrial_salvage` calibration. The
 shipped file exists because #2203 makes a queued registry family that
@@ -4528,6 +4530,151 @@ queries), `tools/content_registry_probe.py` (the family end to end
 against the real item tree), `tools/startup_asset_logging_probe.py` and
 hspec `--match "Startup"` (the thirteenth normal family and twelfth
 arena one).
+
+---
+
+## Loot realization (#2502)
+
+Realization is the pass that turns a loot PROFILE plus a realization
+context into a portable container's actual cargo, exactly once, with the
+same answer in any process and any chunk/location load order
+(`docs/portable_loot_containers.md` D-3, D-6, D-19, D-22, D-23).
+`LootProfile.Realize` owns it and `LootProfile.Simulate` owns the
+distribution diagnostic over it. Where the pending descriptor lives is
+PLC-14's and when realization fires is PLC-15's; neither is here.
+
+**The context is the only input that varies.** A realization is
+identified by `(world seed, location-instance id, slot)` — the persisted
+`wgpSeed`, the placed location's stable instance id (#911), and the
+positional index of the container's content source within that location.
+The slot is positional for the reason `LootTable.Roll`'s entry index is:
+one location may hold several crates sharing a profile, and those must
+not share a stream.
+
+**Every stream is derived from that context alone.** The operation takes
+NO caller-supplied generator: one that could be handed in could make the
+output depend on the caller's state, which is what determinism forbids.
+Each stream folds the three context components, then a stream tag, then
+that stream's own coordinates, through `LootTable.Roll`'s written-out
+`mix64` finalizer (`mixFold`, exported for this and shared with #948's
+location loot rather than restated — the `Location loot determinism`
+fixed vectors are what hold that sharing byte-identical). The appearance,
+multiplier and shuffle draws take the hash's top 24 bits (`unitFromHash`,
+exactly a `Float` mantissa). The per-lot physical roll is a different
+thing and is not claimed to be the same algorithm: the hash seeds a
+`StdGen`, and what `Item.Roll` then draws from it through
+`materializeItem` belongs to `random`.
+
+**The draw order is a contract:**
+
+1. every entry's appearance, in AUTHORED order, against its own absolute
+   `chance`;
+2. a quantity multiplier for EACH successful entry, in that same order —
+   one per entry, never one shared by the profile (population step 4);
+3. the entry's `quantity_factor × multiplier` proposal expressed as
+   `multiplier` atomic lots of `quantity_factor` instances each;
+4. a deterministic shuffle of all proposed lots, which is the SOLE
+   admission priority (D-6);
+5. per-lot candidate evaluation and admitted-lot commit, in that
+   shuffled order.
+
+Draws are indexed by the entry's authored position, so an entry that
+does not appear still consumes its own multiplier index and reordering a
+file is a content change. A lot's own seed comes from its
+`(entry index, lot index)` identity, never its shuffled position, so the
+shuffle reorders lots without rerolling them.
+
+**Candidate, then commit.** PLC-4's admission decision needs a lot's
+exact tree, quality, weight, fill, nesting, recursive weight and
+direct-child bulk — all of which the materializer ROLLS. So each lot is
+materialized twice from the IDENTICAL per-lot seed: once with a LOCAL
+allocator purely to decide admission, and again with the caller's REAL
+allocator only if that decision was "admit". Therefore committed physical
+values equal the capacity-tested candidate exactly, a rejected lot
+consumes no real instance id, and a rejection cannot shift what a later
+lot rolls. `materializeItem`'s descendant-before-parent allocation order
+is preserved inside every committed tree.
+
+**Admission goes through `Item.Ownership.insertInstance`**, never a
+second copy of its capacity arithmetic. A lot is atomic: its instances
+are offered to that boundary in turn against the accumulating shell, and
+the lot is admitted only if ALL of them clear it. Sequential insertion IS
+the aggregate check — each instance is measured against the shell already
+holding its predecessors — and nothing is written until the whole lot has
+passed, so a partial lot cannot be committed. A rejection never evicts a
+lot already admitted.
+
+**Authored contents are preserved** (D-22). The shell's own identity,
+physical values and `iiStorage` are unchanged, its existing children keep
+their order, and generated lots are admitted against whatever capacity
+those children left. An empty contents list is a valid outcome only for a
+shell that began empty.
+
+**Refusal is not emptiness** (D-23). Two conditions refuse the whole
+realization, changing no contents and allocating no real id:
+`shell_not_storage` (the shell's `iiStorage` is `Nothing`) and
+`unknown_entry_item` (a profile entry names an item absent from the
+supplied registry — which #2499 rejects at load, so it is reported rather
+than panicked on). Both are distinct from a SUCCESSFUL realization that
+admitted nothing, and an intrinsically oversized lot is a fourth thing
+again: an ordinary, reported capacity rejection.
+
+**Logging is outside the determinism contract.** Candidate evaluation
+runs the materializer a second time on commit, so a cyclic authored
+`contents:` entry warns once per mint — twice per admitted lot. The cargo
+is unaffected.
+
+### The simulation: `loot.simulate`
+
+`loot.simulate(profileId, containerDefName, sampleCount)` (D-21) answers
+a report table, or `nil`. Sample `i` (one-based) uses the ACTIVE world
+page's generation seed — the same value `world.getSeed()` with no
+argument answers — with `LocationInstanceId i` and slot `0`, and runs the
+same realization and admission production does. Every allocator and
+generator it uses is local to the call, so it advances neither the
+engine's instance-id counter nor the shared stat RNG, and each sample's
+shell is minted through `materializeItem` on its own context-derived
+stream. Authored shell contents are retained and reduce available
+capacity exactly as in production.
+
+The report's measures, all over `N` samples:
+
+- `naturally_empty` — successful samples that admitted no generated lot,
+  divided by `N`. Authored contents do not make a sample non-empty;
+- `weight_histogram` / `bulk_histogram` — occupancy after realization
+  against the container's INTERNAL capacity, in ten left-closed
+  percentage bins `[0,10)` … `[90,100]`, counted over all `N` samples.
+  The top bin is closed and also catches an occupancy above 100%, which
+  is reachable only from authored contents that already exceed the
+  capacity; a non-positive capacity cannot occur, since the `storage:`
+  parser rejects one;
+- `saturated` — samples that admitted at least one lot AND rejected at
+  least one lot which, using that lot's own already-materialized
+  candidate rather than a reroll, would have fitted an OTHERWISE EMPTY
+  copy of the same shell — authored contents removed too. A lot too big
+  for the empty crate is not evidence the crate filled up;
+- `rejected_by_item` — rejected lots grouped by item definition over all
+  samples.
+
+`refused` is reported beside them: it is zero for every registered
+profile, and it is what makes `naturally_empty` readable as a fraction of
+successful samples.
+
+`nil`, with nothing measured, for a missing or non-string profile id or
+container name; a sample count that is not a Lua `number` (a numeric
+STRING is refused rather than coerced — `Lua.tointeger` would accept
+`"200"`); a non-positive count; an unknown profile; an item definition
+that is unknown or declares no `storage:`; and no active world page, or
+one with no generation parameters yet.
+
+Gates: hspec `--match "Loot realization"` (three pinned context vectors
+rendered down to every physical field with ids masked, order
+independence, the candidate/commit equality, the draw contract, every
+capacity bound driven one unit either side of its verdict, the distinct
+outcomes, and the three pinned `loot.simulate` reports through the
+registered verb), plus `--match "Loot profiles"`, `--match "Location loot
+determinism"` (the shared finalizer stays byte-identical),
+`--match "Item.Ownership"` and `--match "Item.Materialize"`.
 
 ---
 

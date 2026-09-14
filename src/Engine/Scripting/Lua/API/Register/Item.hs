@@ -7,6 +7,7 @@ import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Blood
 import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.LootProfiles
+import Engine.Scripting.Lua.API.LootSimulate (lootSimulateFn)
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Forage (itemGetFoodFn)
 import Engine.Scripting.Lua.API.Items.Knowledge
@@ -15,6 +16,10 @@ import Engine.Scripting.Lua.API.Items.Knowledge
 import Engine.Core.State (EngineEnv, statRNGRef)
 import Engine.Core.Capability.ContentRegistries
   (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+  (toContentRegistriesViewCapability)
+import Engine.Core.Capability.Core (toCoreCapability)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified HsLua as Lua
 
 -- | Populate and install the @blood@, @loot@, and @item@ global
@@ -60,10 +65,20 @@ registerItemAPI callStats env = do
   registerLuaFunction callStats "loot" "rollFor" (lootRollForFn regs)
   -- Loot PROFILES (#2499) share this namespace by D-20 and are
   -- read-only: `profile` answers one def as a fresh table, `listProfiles`
-  -- the sorted ids. A profile is not a table and is not rolled here —
-  -- realization is PLC-13's.
+  -- the sorted ids. A profile is not a table and is not rolled by
+  -- either of them; `simulate` below is what rolls one.
   registerLuaFunction callStats "loot" "profile"      (lootProfileFn regs)
   registerLuaFunction callStats "loot" "listProfiles" (lootListProfilesFn regs)
+  -- Loot profile REALIZATION's distribution diagnostic (#2502, D-21).
+  -- Four narrow capabilities and no EngineEnv: the profile registry to
+  -- resolve the id, the read-only item view to mint against, the world
+  -- page for its generation seed, and the logger the materializer
+  -- reports a cyclic definition graph through. It allocates no engine
+  -- instance id and draws from no shared generator.
+  registerLuaFunction callStats "loot" "simulate"
+    (lootSimulateFn (toCoreCapability env) regs
+                    (toContentRegistriesViewCapability env)
+                    (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "loot")
 
   Lua.newtable

@@ -5,6 +5,9 @@ module LootTable.Roll
     , pickByWeight
     , LootRollContext(..)
     , lootRollUnit
+      -- * The seed-stable derivation, reusable by a second context
+    , mixFold
+    , unitFromHash
     ) where
 
 import UPrelude
@@ -80,30 +83,44 @@ mix64 z0 =
         z2 = (z1 `xor` (z1 `shiftR` 27)) * 0x94d049bb133111eb
     in z2 `xor` (z2 `shiftR` 31)
 
--- | Fold the context's four components into one well-mixed word. Each
+-- | Fold a context's components into one well-mixed word. Each
 --   component is absorbed in turn (golden-ratio increment, mix, xor
 --   into the accumulator), so the result is order-sensitive: changing
 --   any single component — including swapping two of them — moves the
 --   draw. Negative components (a negative world seed, or the
 --   anchor-derived fallback id @scripts\/locations.lua@ uses for a
 --   hand-stamped location that owns no placed instance) wrap into
---   'Word64' deterministically.
+--   'Word64' deterministically before they get here.
+--
+--   Exported since #2502: "LootProfile.Realize" derives its own
+--   streams from a DIFFERENT context (world seed, location-instance id,
+--   slot, plus a per-stream tag) and must fold it through this exact
+--   finalizer rather than a second written-out copy that could drift
+--   away from it.
+mixFold ∷ [Word64] → Word64
+mixFold = foldl' step 0x9e3779b97f4a7c15
+  where
+    step acc w = acc `xor` mix64 (acc + 0x9e3779b97f4a7c15 + w)
+
+-- | This context's four components, folded through 'mixFold'.
 lootRollHash ∷ LootRollContext → Word64
-lootRollHash ctx = foldl' step 0x9e3779b97f4a7c15
+lootRollHash ctx = mixFold
     [ fromIntegral (lrcWorldSeed ctx)
     , fromIntegral (lrcInstanceId ctx)
     , fromIntegral (lrcEntryIndex ctx)
     , fromIntegral (lrcRollIndex ctx)
     ]
-  where
-    step acc w = acc `xor` mix64 (acc + 0x9e3779b97f4a7c15 + w)
 
--- | The context's draw in [0, 1). Takes the hash's top 24 bits, which
---   is exactly a 'Float' mantissa — the conversion is lossless, so the
---   fixed vectors can't drift on a different FPU rounding mode.
+-- | A hash's draw in [0, 1). Takes the top 24 bits, which is exactly a
+--   'Float' mantissa — the conversion is lossless, so the fixed vectors
+--   can't drift on a different FPU rounding mode. Exported alongside
+--   'mixFold' and for the same reason.
+unitFromHash ∷ Word64 → Float
+unitFromHash h = fromIntegral (h `shiftR` 40) / 16777216
+
+-- | The context's draw in [0, 1).
 lootRollUnit ∷ LootRollContext → Float
-lootRollUnit ctx =
-    fromIntegral (lootRollHash ctx `shiftR` 40) / 16777216
+lootRollUnit = unitFromHash ∘ lootRollHash
 
 -- | One weighted draw for a placed location's loot-table content entry
 --   (#948) — a PURE function of the loot table and the stable context,

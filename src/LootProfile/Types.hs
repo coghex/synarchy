@@ -12,8 +12,9 @@
 --   over, which is why this is its own registry rather than a variant
 --   of the loot-table one.
 --
---   Pure authored data. Rolling, lot admission and realization are
---   PLC-13's, and nothing consumes a profile yet.
+--   Pure authored data. Rolling, lot admission and realization live in
+--   the sibling "LootProfile.Realize" (#2502, PLC-13), which is the one
+--   consumer.
 module LootProfile.Types
     ( LootProfileEntry(..)
     , LootProfileDef(..)

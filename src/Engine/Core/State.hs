@@ -695,8 +695,9 @@ data EngineEnv = EngineEnv
     --   independently against its own absolute chance and sizes each
     --   accepted lot from the profile's quantity multiplier. Populated
     --   by `engine.loadLootProfileYaml`, read back read-only through
-    --   `loot.profile` / `loot.listProfiles`. Pure authored data — no
-    --   consumer rolls it yet; PLC-13 owns realization.
+    --   `loot.profile` / `loot.listProfiles`. Pure authored data; its
+    --   one roller is `LootProfile.Realize` (#2502, PLC-13), reached
+    --   from here through `loot.simulate`.
   , tutorialRegistryRef ∷ IORef TutorialRegistry
     -- ^ The one active tutorial definition tree, loaded from
     --   data/tutorials/*.yaml at boot (#957). Pure authored data —
