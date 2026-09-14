@@ -5097,6 +5097,16 @@ same commit cannot be graded against different positions of one walking
 unit. `ReactionCommitSeams` is the seam a test interposes on to drive
 that ordering deterministically, the same shape as `SpawnSeams`.
 
+Both of the snapshot's own reads — the roster from `umInstances` and the
+positions from `utsSimStates` — happen under `pageLifecycleLock`. Read
+separately they are not a snapshot of anything: a spawn commit landing
+between them is in neither the roster already read nor, if the movement
+tick also steps an existing occupant off the cell in that window, the
+positions read afterwards, and a tile occupied throughout would yield no
+victims at all. Every roster transition takes that same mutex, so none
+can interleave. Nothing blocks inside the section — two `readIORef`s and
+pure work — which is the contract that lock states for every holder.
+
 It is NOT atomic with respect to the unit thread, and no lock-free
 arrangement could be: `utsSimStates` is written by the unit thread's
 movement tick, which takes nothing the world thread could hold. What is
@@ -5231,7 +5241,8 @@ check (through `SolidifySeams`), the reaction's chunk evicted before the
 drain, a victim killed mid-pull-up whose grid z was already clear while
 its continuous z was not, and a death filed under a category the player
 set to pause (asserting the lifecycle lock is free while the pause epoch
-is held elsewhere) — plus the occupancy predicate itself.
+is held elsewhere), and a real spawn commit that cannot land between the
+snapshot's two reads — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
 the alias check for the `world.getMaterialAt` query both probes read the
 product through, and #2490's live occupant scenario (a unit and an item

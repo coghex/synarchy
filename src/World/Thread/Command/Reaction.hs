@@ -256,18 +256,25 @@ commitReactions = commitReactionsWith productionReactionCommitSeams
 --   'productionReactionCommitSeams', so what a test drives is this
 --   module's real body with one hook filled in, never a
 --   reimplementation of it.
-newtype ReactionCommitSeams = ReactionCommitSeams
+data ReactionCommitSeams = ReactionCommitSeams
     { seamAfterOccupantSnapshot ∷ IO ()
       -- ^ Runs after the victim set has been read and before the first
       --   'World.Edit.Apply.applyEdit' of the delivery. A test moves a
       --   unit here; production does nothing, which is what makes the
       --   snapshot's precedence over everything downstream the only
       --   thing standing between the two.
+    , seamInsideOccupantSnapshot ∷ IO ()
+      -- ^ Runs BETWEEN the snapshot's two reads — the roster and the
+      --   positions — inside the page lifecycle lock it holds across
+      --   both. A test starts a roster transition here and asserts it
+      --   cannot land while the section is open; production does
+      --   nothing.
     }
 
 productionReactionCommitSeams ∷ ReactionCommitSeams
 productionReactionCommitSeams = ReactionCommitSeams
-    { seamAfterOccupantSnapshot = pure () }
+    { seamAfterOccupantSnapshot  = pure ()
+    , seamInsideOccupantSnapshot = pure () }
 
 commitReactionsWith
     ∷ ReactionCommitSeams → EngineEnv → LoggerState → WorldPageId
@@ -284,7 +291,8 @@ commitReactionsWith seams env logger pageId ws admitted
         let tiles = [ reactionEventTile ev
                     | (_, evs) ← admitted, (ev, _) ← evs ]
         victims ← snapshotSolidificationOccupants
-                      (toUnitCombatCapability env) pageId ws tiles
+                      (toUnitCombatCapability env) (toWorldSimCapability env)
+                      (seamInsideOccupantSnapshot seams) pageId ws tiles
         seamAfterOccupantSnapshot seams
         solidified ← foldM (commitEvent logger ws) HM.empty
                            (concatMap snd admitted)

@@ -48,17 +48,34 @@
 --     tiles of the same commit cannot be graded against different
 --     positions of the same walking unit.
 --
---   What it is NOT is atomic with respect to the unit thread, and no
---   lock-free arrangement could be: @utsSimStates@ is written by
---   @Unit.Thread@'s movement tick, which runs on its own thread and
---   takes nothing this one could hold. What IS guaranteed is the shape
---   of the residual window. Positions change only in that movement
---   tick, so this reads the positions as of the last movement tick
---   before the snapshot — one well-defined instant, not a smear —
---   and the alternative it replaces (selecting at the drain) would
---   read the last movement tick before the DRAIN, an unbounded number
---   of ticks later and behind however much of the queue was already
---   waiting.
+--   __The two stores are read under one lock.__ Membership lives in
+--   @umInstances@ and position in @utsSimStates@, and reading them
+--   separately is not a snapshot of anything: a spawn commit landing
+--   between the two reads is visible in neither the roster that was
+--   already read nor — if the movement tick also steps an existing
+--   occupant off the cell in that window — in the positions read
+--   afterwards, and a tile occupied throughout would yield no victims
+--   at all. So both reads happen inside 'withPageLifecycle', the
+--   process-lifetime mutex #2476 built for exactly this: every roster
+--   TRANSITION — an admission, a spawn commit, a page teardown or a
+--   same-id replacement — takes it too, so none of them can interleave
+--   and the membership seen by the second read is the membership seen
+--   by the first.
+--
+--   Nothing blocks inside that section: two 'readIORef's and pure
+--   work, no second lock, which is the contract
+--   'Engine.Core.State.pageLifecycleLock' states for every holder.
+--
+--   What the lock does NOT freeze is POSITION. @utsSimStates@ is
+--   written by @Unit.Thread@'s movement tick, which takes nothing this
+--   thread could hold, and no lock-free arrangement could change that.
+--   What IS guaranteed is the shape of the residual window. Positions
+--   change only in that movement tick, so this reads the positions as
+--   of the last movement tick before the snapshot — one well-defined
+--   instant, not a smear — and the alternative it replaces (selecting
+--   at the drain) would read the last movement tick before the DRAIN,
+--   an unbounded number of ticks later and behind however much of the
+--   queue was already waiting.
 --
 --   __Where the positions come from.__ @utsSimStates@ — the
 --   AUTHORITATIVE simulation coordinates, read through
@@ -68,7 +85,8 @@
 --   @unit.getInfo@ both already do); this is a READ, and the unit
 --   thread remains its only writer. One 'readIORef' of an immutable map
 --   is a consistent whole-roster snapshot, so no victim can be seen
---   half-moved.
+--   half-moved, and the lock above is what makes the SECOND store's
+--   read agree with the first's.
 --
 --   @umInstances@ answers ONE question here: which units belong to this
 --   page. It is never asked for a position.
@@ -100,6 +118,8 @@ import qualified Data.HashSet as HS
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability, withPageLifecycle)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Ground (GroundItem(..))
 import Unit.Command.Types (UnitCommand(..))
@@ -141,25 +161,35 @@ newtype SolidificationVictims = SolidificationVictims
 --   canonicalize against, and 'pageWrapWorldSize' answering 0 is the
 --   identity — the right answer for a page holding no chunks either.
 snapshotSolidificationOccupants
-    ∷ UnitCombatCapability → WorldPageId → WorldState → [(Int, Int)]
-    → IO SolidificationVictims
-snapshotSolidificationOccupants uc pageId ws tiles
+    ∷ UnitCombatCapability → WorldSimCapability → IO () → WorldPageId
+    → WorldState → [(Int, Int)] → IO SolidificationVictims
+snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
     | null tiles = pure (SolidificationVictims [])
     | otherwise = do
+        -- Outside the lock: it reads only this page's own gen params,
+        -- which no roster transition touches.
         worldSize ← pageWrapWorldSize ws
-        -- ONE read of each. Page ownership from the manager (@uiPage@ is
-        -- the instance's own field), position from the sim state.
-        um  ← readIORef (ucUnitManagerRef uc)
-        uts ← readIORef (ucUtsRef uc)
-        let onPage = HS.fromList
-                         (HM.keys (unitsOnPage pageId (umInstances um)))
-        pure $ SolidificationVictims
-            [ ( canonicalTile worldSize gx gy
-              , [ uid
-                | (uid, ss) ← HM.toList (utsSimStates uts)
-                , HS.member uid onPage
-                , occupiesTile worldSize (gx, gy) (usRealX ss) (usRealY ss) ] )
-            | (gx, gy) ← tiles ]
+        -- ONE read of each, and both under the lifecycle lock so the
+        -- roster cannot change between them. Page ownership from the
+        -- manager (@uiPage@ is the instance's own field), position from
+        -- the sim state.
+        withPageLifecycle wsc $ do
+            um  ← readIORef (ucUnitManagerRef uc)
+            -- Production passes @pure ()@. A test lands a roster
+            -- transition here, and what it is asserting is that the
+            -- transition CANNOT complete while this section is open.
+            betweenReads
+            uts ← readIORef (ucUtsRef uc)
+            let onPage = HS.fromList
+                             (HM.keys (unitsOnPage pageId (umInstances um)))
+            pure $ SolidificationVictims
+                [ ( canonicalTile worldSize gx gy
+                  , [ uid
+                    | (uid, ss) ← HM.toList (utsSimStates uts)
+                    , HS.member uid onPage
+                    , occupiesTile worldSize (gx, gy)
+                                   (usRealX ss) (usRealY ss) ] )
+                | (gx, gy) ← tiles ]
 
 -- | Destroy everything caught at the tiles this commit turned to stone.
 --

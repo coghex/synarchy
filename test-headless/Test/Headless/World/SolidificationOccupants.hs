@@ -54,6 +54,7 @@ import Unit.Faction (Faction(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Sim.Types
 import Unit.Thread.Command (processAllUnitCommands)
+import Unit.Thread.Command.Spawn (handleUnitSpawnCommand)
 import Unit.Thread.Command.Solidify
     ( SolidifySeams(..), handleUnitSolidifyOccupantsCommandWith
     , productionSolidifySeams, solidificationDeathCause
@@ -66,7 +67,7 @@ import World.Chunk.Admit (pageIncarnation)
 import World.Material (MaterialRegistry, matLoam)
 import World.Thread.Command.Reaction
     ( ReactionAdmission(..), ReactionCommitSeams(..), admitReaction
-    , commitReactionsWith )
+    , commitReactionsWith, productionReactionCommitSeams )
 import World.Edit.Apply (applyEdit)
 import World.Edit.Types (WorldEdit(..))
 import World.Flora.Designation (replaceChunkForgettingFlora)
@@ -93,7 +94,7 @@ replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
 mirrorPageId, floodedPageId ∷ WorldPageId
 seamPageId, movedPageId, retiredPageId, orphanPageId ∷ WorldPageId
 racedPageId, evictedPageId, climbingPageId ∷ WorldPageId
-pausedPageId ∷ WorldPageId
+pausedPageId, coherentPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -116,6 +117,7 @@ racedPageId     = WorldPageId "occupants_raced_w8"
 evictedPageId   = WorldPageId "occupants_evicted_w8"
 climbingPageId  = WorldPageId "occupants_climbing_w8"
 pausedPageId    = WorldPageId "occupants_paused_w8"
+coherentPageId  = WorldPageId "occupants_coherent_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -362,9 +364,9 @@ surfaceAt lc (lx, ly) = lcSurfaceMap lc VU.! columnIndex lx ly
 --   with the commit's internals. That is safe here for the reason
 --   'floodTileDeep' is: the page's init has been waited for, no batch
 --   is in flight, and the world thread touches nothing in between.
-reactWithSeam ∷ EngineEnv → LivePage → WorldPageId → (Int, Int) → IO ()
-                → IO ()
-reactWithSeam env lp pageId cell between = do
+reactWithSeam ∷ EngineEnv → LivePage → WorldPageId → (Int, Int)
+              → (ReactionCommitSeams → ReactionCommitSeams) → IO ()
+reactWithSeam env lp pageId cell withSeam = do
     let ws = lpState lp
     registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
     gens ← readIORef (wsChunkEditGenRef ws)
@@ -377,8 +379,7 @@ reactWithSeam env lp pageId cell between = do
         ReactionRefused why →
             expectationFailure ("fixture: the result was refused: " ⧺ show why)
         ReactionAdmitted evs →
-            commitReactionsWith
-                ReactionCommitSeams { seamAfterOccupantSnapshot = between }
+            commitReactionsWith (withSeam productionReactionCommitSeams)
                 env logger pageId ws [(rr, evs)]
 
 -- | Re-initialise a page under the SAME id, which is what retires the
@@ -896,9 +897,10 @@ spec = describe "solidification occupants (#2490)" $ do
         -- the commit does afterwards — the edits, the item removals,
         -- the generation advance, both refreshes — happens with the
         -- units in their SWAPPED positions.
-        reactWithSeam env lp seamPageId reactCell $ do
-            placeAt env caught beside
-            placeAt env latecomer doomed
+        reactWithSeam env lp seamPageId reactCell $ \seams →
+            seams { seamAfterOccupantSnapshot = do
+                        placeAt env caught beside
+                        placeAt env latecomer doomed }
         drainUnits env
 
         poseOf env caught `shouldReturn` Dead
@@ -1154,6 +1156,59 @@ spec = describe "solidification occupants (#2490)" $ do
         _ ← setCategoryPause env solidificationEventCategory
                 (fromMaybe False restore)
         writeIORef (enginePausedRef env) False
+
+    it "reads the roster and the positions under ONE lock, so a spawn \
+       \commit cannot land between them" $ \env → do
+        prepare env
+        lp ← livePage env coherentPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        let baseZ = terrainTopAt before reactCell
+        occupant ← spawnAt env ws coherentPageId 9985 doomed baseZ
+        epoch ← pageIncarnation ws
+
+        -- The interleaving the two-read snapshot used to admit: a spawn
+        -- commit lands between the roster read and the position read,
+        -- so the newcomer is missing from the roster already taken —
+        -- and if the mover is also stepped off the cell in that window,
+        -- a tile occupied throughout yields no victims at all.
+        --
+        -- The spawn rides the REAL commit handler, which takes the same
+        -- page lifecycle lock the snapshot now holds across both reads,
+        -- so it must NOT be able to complete while that section is open.
+        landedInside ← newIORef True
+        spawnDone ← newEmptyMVar
+        reactWithSeam env lp coherentPageId reactCell $ \seams →
+            seams { seamInsideOccupantSnapshot = do
+                      _ ← forkIO $ do
+                            handleUnitSpawnCommand env (utsRef env)
+                                (UnitId 9986) occupantDefName
+                                (fromIntegral (fst doomed) + 0.5)
+                                (fromIntegral (snd doomed) + 0.5)
+                                baseZ FactionPlayer coherentPageId epoch
+                            putMVar spawnDone ()
+                      -- Long enough for an unlocked spawn to have
+                      -- finished several times over.
+                      threadDelay 300000
+                      um ← readIORef (unitManagerRef env)
+                      writeIORef landedInside
+                          (HM.member (UnitId 9986) (umInstances um))
+                      -- …and the mover leaves, which is the other half
+                      -- of the interleaving.
+                      placeAt env occupant (tileOf lp nextCell) }
+
+        -- The spawn was still blocked on the lock when the roster had
+        -- already been read, so the two reads describe one roster.
+        readIORef landedInside `shouldReturn` False
+        finished ← timeout ackTimeoutMicros (takeMVar spawnDone)
+        finished `shouldBe` Just ()
+
+        drainUnits env
+        -- The newcomer was not an occupant when the stone was decided,
+        -- and it is not killed for one.
+        poseOf env (UnitId 9986) `shouldReturn` Standing
+        (length <$> deathsFor env (UnitId 9986)) `shouldReturn` 0
 
 -- * The occupancy predicate itself ------------------------------------
 

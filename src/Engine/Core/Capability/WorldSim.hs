@@ -120,7 +120,10 @@ data WorldSimCapability = WorldSimCapability
     -- ^ Global pause flag, persisted exactly and __authoritative over
     --   any Lua-side copy__. Written by @LuaThread@
     --   (@engine.setPaused@) and @WorldThread@ (load publish — a load
-    --   always comes up paused). @WorldThread@\/@UnitThread@\/
+    --   always comes up paused), and by any thread emitting a player
+    --   event under a category the player has set to @pause@, through
+    --   'World.Pause.imposePause' — @WorldThread@, @LuaThread@ and,
+    --   since #2490's solidification deaths, @UnitThread@. @WorldThread@\/@UnitThread@\/
     --   @SimThread@\/@CombatThread@ skip advancing simulated state
     --   while it is true; @MainRender@ keeps rendering and dispatching
     --   input regardless.
@@ -136,13 +139,25 @@ data WorldSimCapability = WorldSimCapability
     --   restore — see 'withPlayerIntent' \/ 'restoreIfPlayerIdle' and
     --   'Engine.Core.State's field haddock (which also covers why
     --   engine-internal pause\/scale writes must NOT bump it).
+    --
+    --   HOLDING the mutex is wider than bumping the counter: every
+    --   pause-epoch transition takes it through
+    --   'World.Pause.withEpochLock', so @WorldThread@, @LuaThread@
+    --   and — since #2490 — @UnitThread@ all enter this section
+    --   without changing the value. That unit-thread call is
+    --   deliberately made with 'wsPageLifecycleLock' RELEASED: no
+    --   holder of that outermost boundary may take a second lock
+    --   underneath it.
   , wsEnginePauseGenRef   ∷ IORef Word64
     -- ^ #1730's engine-pause generation: how many times a pause source
     --   INDEPENDENT of any running save has asserted a pause. Bumped by
-    --   @WorldThread@ and @LuaThread@ alike through
-    --   'World.Pause.imposePause' (a @pause: true@ notification
-    --   category, an @engine.loadSave@ acceptance); read by @LuaThread@
-    --   at an autosave's acceptance and by @WorldThread@ at its restore.
+    --   @WorldThread@, @LuaThread@ and (since #2490) @UnitThread@
+    --   alike through 'World.Pause.imposePause' (a @pause: true@
+    --   notification category — the unit thread reaches it when
+    --   @Unit.Thread.Command.Solidify@ reports a solidification death
+    --   and the player has set that category to pause — or an
+    --   @engine.loadSave@ acceptance); read by @LuaThread@ at an
+    --   autosave's acceptance and by @WorldThread@ at its restore.
     --   Never touched outside the 'wsPlayerIntentGenRef' critical
     --   section — every epoch transition and both of those sites hold
     --   that mutex — which is what makes \"has anyone else paused since
@@ -162,10 +177,14 @@ data WorldSimCapability = WorldSimCapability
     --   entity-admission verbs) and @UnitThread@ (the two commit
     --   fences: @Unit.Thread.Command.Spawn@'s insertion and, since
     --   #2490, @Unit.Thread.Command.Solidify@'s kill), through
-    --   'withPageLifecycle' and nothing else. No holder may take
-    --   another lock underneath it — which is why the solidification
-    --   kill reports its deaths after releasing this rather than
-    --   inside it. Process-lifetime: unlike every other field here
+    --   'withPageLifecycle' and nothing else. Since #2490 the WORLD
+    --   thread also takes it to read that reaction's occupant
+    --   snapshot, whose two stores — the roster and the positions —
+    --   have to describe one instant, which is exactly the
+    --   linearisation against roster transitions this mutex provides.
+    --   No holder may take another lock underneath it: that is why the
+    --   solidification kill reports its deaths after releasing this
+    --   rather than inside it. Process-lifetime: unlike every other field here
     --   it survives a session boundary and a load untouched, because it
     --   is a critical section rather than state. See 'EngineEnv's field
     --   haddock for why the id ordering it establishes is the whole
