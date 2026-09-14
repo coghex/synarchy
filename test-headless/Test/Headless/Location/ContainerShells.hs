@@ -7,9 +7,14 @@
 --   Three layers, because a regression in one is invisible from the
 --   other two:
 --
---   * 'pureSpec' — placement, the authoring boundary, the decode rules,
+--   * 'pureSpec' — placement, the authoring RULE SET, the decode rules,
 --     the session-wide provenance graph, the load-time profile check,
 --     and the v11→v12 migration. No engine.
+--   * 'yamlSpec' — the same authoring rules driven through the REAL
+--     @engine.loadLocationYaml@ verb against the live item and
+--     loot-profile registries, which is the only layer that can show the
+--     loader consults them at all and rejects the whole FILE rather than
+--     the offending definition.
 --   * 'engineSpec' — the real @world.spawnLocationContainer@ binding and
 --     the real @item.pickupGround@ refusal, driven through their own Lua
 --     functions against a live 'EngineEnv', the pattern
@@ -21,10 +26,15 @@
 --     contents_spawned marker be written", because the marker is written
 --     by the script, once, after the whole pass.
 --
+--   The load-time profile refusal has no layer here on purpose: it lives
+--   in @continueLoad@'s @allMissing@ gate and needs a real envelope, so
+--   @tools/location_content_probe.py@'s last phase owns it.
+--
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Location container shells"'@.
 module Test.Headless.Location.ContainerShells
     ( pureSpec
+    , yamlSpec
     , engineSpec
     , luaSpec
     ) where
@@ -40,14 +50,33 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef
+    (modifyIORef', newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlLocations
     ( LocationYamlContent(..), LocationYamlDef(..), containerContentErrors )
+import Control.Exception (finally)
 import Engine.Core.Init (EngineInitResult(..))
+import Engine.Core.Log
+    ( LogBackend(..), LogConfig(..), LogEntry(..), defaultLogConfig
+    , initLogger )
+import Engine.Core.Capability.Core (toCoreCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Engine.Scripting.Lua.API.Locations (loadLocationYamlFn)
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Core.Thread (ThreadControl(..))
+import LootProfile.Types
+    ( LootProfileDef(..), LootProfileEntry(..)
+    , emptyLootProfileRegistry, registerLootProfile )
+import System.FilePath ((</>))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Scripting.Lua.API.Items.Ground
-    (pickupGroundOnPage, worldSpawnLocationContainerFn)
+    (pickupGroundOnPage, spawnSalvageOnPage, worldSpawnLocationContainerFn)
 import Engine.Scripting.Lua.API.WorldQuery.Location
     (worldGetLocationInstanceFn)
 import Item.Ground
@@ -57,10 +86,13 @@ import Language.Semantic.Types (ConceptId(..))
 import Location.Bounds (RelBounds(..))
 import Location.Instance
 import Location.Types
-    ( LocationContent(..), LocationDef(..), LocationNaming(..) )
+    ( LocationContent(..), LocationDef(..), LocationNaming(..)
+    , emptyLocationRegistry, lookupLocation )
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Location.Bounds (decodeDef)
+import Building.Types (BuildingId(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
@@ -76,12 +108,13 @@ import World.Save.Component.Page
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Save.Types (SaveData(..))
 import Test.Headless.World.Save.Integrity
-    (buildSnap, minimalPage, minimalUnit)
+    (buildSnap, minimalBuilding, minimalPage, minimalUnit)
 import World.Save.Integrity
     (IntegrityError(..), sessionIntegrityErrors, sessionIntegrityWarnings)
 import World.Save.Snapshot (PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Types
     ( WorldPageSave(..), UnitSnapshot(..), UnitInstanceSnapshot(..)
+    , BuildingSnapshot(..), BuildingInstanceSnapshot(..)
     , MissingContainerProfileRef(..)
     , missingContainerProfileReferences, renderMissingContainerProfileRef )
 import World.State.Types
@@ -402,6 +435,18 @@ pureSpec = describe "Location container shells (#2505)" $ do
                         (nestedOnGround (snapshotWith (Just 900) pendingTable)))
                 `shouldBe` ["wrong-scope-reference"]
 
+        it "hard-fails a shell sitting in a BUILDING's storage on its own \
+           \page" $
+            -- A distinct carrier from the inventory case, and a distinct
+            -- one from the nested case: a crate in a cargo hold resolves
+            -- through the page's building projection rather than its unit
+            -- or ground ones, so a rule that only walked units would pass
+            -- it while the shell is provably not on the ground.
+            codesOf (sessionIntegrityErrors
+                        (inBuildingStorage
+                            (snapshotWith (Just 900) pendingTable)))
+                `shouldBe` ["wrong-scope-reference"]
+
         it "hard-fails a shell resolving on a different page" $
             codesOf (sessionIntegrityErrors (otherPage 900 pendingTable))
                 `shouldBe` ["wrong-scope-reference"]
@@ -587,6 +632,13 @@ engineSpec = beforeAll initEnv $
         let pageId = WorldPageId "shell_coords"
         ws ← newContainerPage env pageId pendingTable
         before ← readIORef (nextItemInstanceIdRef env)
+        -- The shared stat RNG is snapshotted too, not just the two
+        -- counters: 'spawnSalvageOnPage' draws quality and condition
+        -- from it before anything is allocated, so a coordinate check
+        -- that ran after those rolls would leave the counters untouched
+        -- while still having consumed the draw — and every later roll in
+        -- the session would come out different.
+        rngBefore ← show <$> readIORef (ucStatRNGRef (toUnitCombatCapability env))
         forM_ [ (0 / 0, 8), (1 / 0, 8), (8, -(1 / 0)), (8, 1e39) ] $
             \(x, y) → spawnContainer env pageId 1 1 (x, y)
                           `shouldReturn` False
@@ -598,6 +650,57 @@ engineSpec = beforeAll initEnv $
         readIORef (nextItemInstanceIdRef env) `shouldReturn` before
         gis ← readIORef (wsGroundItemsRef ws)
         gisNextId gis `shouldBe` 0
+        rngAfter ← show <$> readIORef (ucStatRNGRef (toUnitCombatCapability env))
+        rngAfter `shouldBe` rngBefore
+
+    it "leaves the stat RNG ADVANCED after a spawn that really happens, \
+       \so the untouched generator above is a real refusal" $ \env → do
+        -- The control for the snapshot above. Without it, an assertion
+        -- that the RNG is unchanged would also pass against a verb that
+        -- never drew from it at all.
+        let pageId = WorldPageId "shell_coords_control"
+        _ ← newContainerPage env pageId pendingTable
+        rngBefore ← show <$> readIORef (ucStatRNGRef (toUnitCombatCapability env))
+        spawnContainer env pageId 1 1 (8, 8) `shouldReturn` True
+        rngAfter ← show <$> readIORef (ucStatRNGRef (toUnitCombatCapability env))
+        rngAfter `shouldNotBe` rngBefore
+
+    it "answers Nothing and spawns nothing when MATERIALIZATION fails, \
+       \leaving the ground and its allocator untouched" $ \env → do
+        -- Driven at 'spawnSalvageOnPage', the production core the verb
+        -- composes, rather than through the verb: the verb resolves the
+        -- slot's definition against the same live registry
+        -- 'materializeItem' then resolves the NAME against, so from Lua
+        -- the two agree by construction and this branch is unreachable.
+        -- It is reachable HERE because the helper takes the def and the
+        -- name separately — which is also the shape a deregistration
+        -- landing between the verb's two reads would produce.
+        let pageId = WorldPageId "shell_materialize"
+        ws ← newContainerPage env pageId pendingTable
+        before ← readIORef (nextItemInstanceIdRef env)
+        spawned ← spawnSalvageOnPage env ws crateItemDef "no_such_crate"
+                      8 8 Nothing Nothing Nothing Nothing
+        isJust spawned `shouldBe` False
+        groundCount ws `shouldReturn` 0
+        gis ← readIORef (wsGroundItemsRef ws)
+        gisNextId gis `shouldBe` 0
+        -- The two salvage rolls happen before the materialize, so the
+        -- RNG legitimately moved; the ITEM-INSTANCE counter must not
+        -- have, because no instance was ever built.
+        readIORef (nextItemInstanceIdRef env) `shouldReturn` before
+
+    it "still spawns through that same core when the name DOES resolve, \
+       \so the failure above is the materializer's and not the call's" $
+       \env → do
+        let pageId = WorldPageId "shell_materialize_control"
+        ws ← newContainerPage env pageId pendingTable
+        spawned ← spawnSalvageOnPage env ws crateItemDef "fixture_crate"
+                      8 8 Nothing Nothing Nothing Nothing
+        case spawned of
+            Nothing → expectationFailure "the control spawn was refused"
+            Just (_, inst) → do
+                iiDefName inst `shouldBe` "fixture_crate"
+                groundCount ws `shouldReturn` 1
 
     it "removes the just-spawned shell when the binding fails" $ \env → do
         -- The binding is refused because the id this spawn is ABOUT to
@@ -814,6 +917,222 @@ containerUnit page = UnitInstance
     , uiClimbDest = Nothing
     , uiTrailState = Nothing
     }
+
+-- * The YAML boundary, through the real registered verb --------------
+
+-- | The authoring rules, driven through @engine.loadLocationYaml@ rather
+--   than through 'containerContentErrors' directly.
+--
+--   The pure spec above pins WHAT the rule set says; this pins that the
+--   production loader actually consults it, against the LIVE item and
+--   loot-profile registries, and rejects the whole FILE rather than the
+--   offending definition. Neither half is visible from a direct call:
+--   the loader could resolve the container id against the wrong registry,
+--   skip the check entirely, or register the good definitions in a file
+--   it then reports as rejected, and every example in 'pureSpec' would
+--   still be green.
+yamlSpec ∷ Spec
+yamlSpec = beforeAll initYamlEnv $
+    describe "Location container shells (#2505) — the YAML boundary" $ do
+
+    it "registers a valid container definition, with both ids reaching \
+       \the registered def" $ \fx → withCleanLocationRegistry fx $ do
+        fst <$> loadLocationFile fx validLocationYaml `shouldReturn` Just 1
+        contentsOf fx "crate_site" `shouldReturn`
+            [("container", "fixture_crate", Just "fixture_salvage")]
+
+    it "rejects the whole file when the container names an UNREGISTERED \
+       \item definition, and registers nothing" $ \fx →
+        withCleanLocationRegistry fx $ do
+            (count, logged) ← loadLocationFile fx
+                (locationYamlNaming "no_such_crate" "fixture_salvage")
+            count `shouldBe` Just 0
+            contentsOf fx "crate_site" `shouldReturn` []
+            logged `shouldSatisfy` mentioning
+                [ "crate_site", "no_such_crate"
+                , "no registered item definition" ]
+
+    it "rejects the whole file when the container names an UNREGISTERED \
+       \loot profile, and registers nothing" $ \fx →
+        withCleanLocationRegistry fx $ do
+            (count, logged) ← loadLocationFile fx
+                (locationYamlNaming "fixture_crate" "no_such_profile")
+            count `shouldBe` Just 0
+            contentsOf fx "crate_site" `shouldReturn` []
+            logged `shouldSatisfy` mentioning
+                [ "crate_site", "no_such_profile"
+                , "no registered loot profile" ]
+
+    it "is ALL-OR-NOTHING: one bad definition takes the file's good ones \
+       \down with it" $ \fx → withCleanLocationRegistry fx $ do
+        -- The rejection is reported for the whole file, so a loader that
+        -- skipped the offending def and registered the rest would leave
+        -- a world half-populated from a file its author believes failed.
+        fst <$> loadLocationFile fx twoDefLocationYaml `shouldReturn` Just 0
+        contentsOf fx "crate_site" `shouldReturn` []
+        contentsOf fx "good_site" `shouldReturn` []
+
+    it "rejects a container entry with no profile at the DECODER, before \
+       \either registry is consulted" $ \fx →
+        withCleanLocationRegistry fx $ do
+            -- A different rejection path from the two above: this one
+            -- fails the file's decode, so the verb reports it did not
+            -- PARSE rather than reporting a zero-count registration.
+            fst <$> loadLocationFile fx noProfileLocationYaml
+                `shouldReturn` Nothing
+            contentsOf fx "crate_site" `shouldReturn` []
+
+-- | An engine plus a bare registered Lua backend, so the location loader
+--   can be called exactly as @engine.loadLocationYaml@ calls it.
+initYamlEnv ∷ IO YamlFixture
+initYamlEnv = do
+    EngineInitResult env ← initializeEngineHeadlessQuiet
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+             (assetPoolRef env) (nextObjectIdRef env)
+             (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    let regs = toContentRegistriesCapability env
+    -- The two registries the container check resolves against, populated
+    -- the way boot populates them: items, then loot profiles, then
+    -- locations.
+    writeIORef (crItemManagerRef regs) containerItemDefs
+    writeIORef (crLootProfileRegistryRef regs)
+        (registerLootProfile fixtureProfile emptyLootProfileRegistry)
+    pure (YamlFixture env ls)
+
+data YamlFixture = YamlFixture
+    { yfEnv     ∷ EngineEnv
+    , yfBackend ∷ LuaBackendState
+    }
+
+-- | The fixture profile the valid file names. Minimal but real: one
+--   entry against a registered item, which is all the container check
+--   asks of it (nothing here ever DRAWS from it).
+fixtureProfile ∷ LootProfileDef
+fixtureProfile = LootProfileDef
+    { lpdId            = "fixture_salvage"
+    , lpdMultiplierMin = 1
+    , lpdMultiplierMax = 2
+    , lpdEntries       = [LootProfileEntry "rations" 0.5 1]
+    }
+
+-- | Run @action@ with the live location registry EMPTY, restoring
+--   whatever it held. The ref is shared with every other spec riding
+--   this engine, so it is borrowed rather than reassigned — the pattern
+--   'Test.Headless.Location.LootDeterminism' established.
+withCleanLocationRegistry ∷ YamlFixture → IO a → IO a
+withCleanLocationRegistry fx action = do
+    let ref = crLocationDefsRef (toContentRegistriesCapability (yfEnv fx))
+    before ← readIORef ref
+    writeIORef ref emptyLocationRegistry
+    action `finally` writeIORef ref before
+
+-- | One @engine.loadLocationYaml(path)@ call over a temporary file
+--   holding @src@, through the REAL registered verb.
+--
+--   Answers the verb's own two-value reply reduced to what the examples
+--   care about: 'Nothing' when the file did not PARSE, @Just n@ when it
+--   decoded and registered @n@ definitions. A file rejected by the
+--   registry checks decoded fine, so it is @Just 0@ — which is exactly
+--   the distinction #2203 introduced and a bare boolean would lose.
+--   It also answers everything the loader LOGGED, captured off the
+--   engine's own logger ref for the duration of the call, so an example
+--   can assert the rejection still names which id it refused — the half
+--   of the diagnostic a count can never show.
+loadLocationFile ∷ YamlFixture → Text → IO (Maybe Int, [Text])
+loadLocationFile fx src =
+    withExclusiveTempDirectory "container-yaml" $ \dir → do
+        let path = dir </> "locations.yaml"
+        writeFile path (T.unpack src)
+        withCapturedLog fx $ Lua.run $ do
+            Lua.openlibs
+            Lua.pushstring (TE.encodeUtf8 (T.pack path))
+            -- The parse outcome is OPT-IN (#2203): a truthy SECOND
+            -- argument is what makes the verb answer two values instead
+            -- of the bare count every other caller reads. This is the
+            -- form scripts/startup_loader.lua uses, and it is the only
+            -- one that can tell a file that did not DECODE from one that
+            -- decoded and was then refused by the registry checks.
+            Lua.pushboolean True
+            _ ← loadLocationYamlFn (toCoreCapability (yfEnv fx))
+                     (toContentRegistriesCapability (yfEnv fx))
+                     (yfEnv fx) (yfBackend fx)
+            parsed ← Lua.toboolean Lua.top
+            count  ← Lua.tointeger (Lua.nth 2)
+            pure (if parsed then Just (maybe 0 fromIntegral count) else Nothing)
+
+-- | Run @action@ with the engine's logger swapped for a capturing one,
+--   answering its result beside every line it produced. The ref is
+--   BORROWED and restored, like every other live ref this module reaches.
+withCapturedLog ∷ YamlFixture → IO a → IO (a, [Text])
+withCapturedLog fx action = do
+    entriesRef ← newIORef []
+    capturing ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' entriesRef (e :)) }
+    before ← readIORef (loggerRef (yfEnv fx))
+    result ← (writeIORef (loggerRef (yfEnv fx)) capturing >> action)
+                 `finally` writeIORef (loggerRef (yfEnv fx)) before
+    entries ← readIORef entriesRef
+    pure (result, reverse (map leMessage entries))
+
+mentioning ∷ [Text] → [Text] → Bool
+mentioning fragments =
+    any (\line → all (`T.isInfixOf` line) fragments)
+
+-- | The @(kind, id, profile)@ of every content entry the LIVE registry
+--   holds for @lid@ — empty when no such definition registered.
+contentsOf ∷ YamlFixture → Text → IO [(Text, Text, Maybe Text)]
+contentsOf fx lid = do
+    reg ← readIORef (crLocationDefsRef (toContentRegistriesCapability (yfEnv fx)))
+    pure [ (lconKind c, lconId c, lconProfile c)
+         | Just def ← [lookupLocation lid reg], c ← ldContents def ]
+
+validLocationYaml ∷ Text
+validLocationYaml = locationYamlNaming "fixture_crate" "fixture_salvage"
+
+locationYamlNaming ∷ Text → Text → Text
+locationYamlNaming itemId profileId = T.unlines
+    [ "locations:"
+    , "  - id: crate_site"
+    , "    builder: room_small"
+    , "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
+    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+    , "    contents:"
+    , "      - { kind: container, id: " <> itemId
+        <> ", profile: " <> profileId <> ", count: 1 }"
+    ]
+
+-- | One file, two definitions: the second names an unknown profile. The
+--   FIRST is perfectly valid and must still not register.
+twoDefLocationYaml ∷ Text
+twoDefLocationYaml = T.unlines
+    [ "locations:"
+    , "  - id: good_site"
+    , "    builder: room_small"
+    , "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
+    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+    , "    contents:"
+    , "      - { kind: item, id: rations, count: 1 }"
+    , "  - id: crate_site"
+    , "    builder: room_small"
+    , "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
+    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+    , "    contents:"
+    , "      - { kind: container, id: fixture_crate, "
+        <> "profile: no_such_profile, count: 1 }"
+    ]
+
+noProfileLocationYaml ∷ Text
+noProfileLocationYaml = T.unlines
+    [ "locations:"
+    , "  - id: crate_site"
+    , "    builder: room_small"
+    , "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }"
+    , "    naming: { heads: [KEEP], modifiers: [ASH] }"
+    , "    contents:"
+    , "      - { kind: container, id: fixture_crate, count: 1 }"
+    ]
 
 -- * Lua spec ----------------------------------------------------------
 
@@ -1101,6 +1420,18 @@ inInventory = moveShell $ \page →
   where
     carrier = minimalUnit
         { uisInventory = [plainInstance 900 "fixture_crate"] }
+
+-- | The shell moved off the ground and into a BUILDING's storage on the
+--   same page — it cannot be there without having been picked up, which
+--   this slice refuses outright.
+inBuildingStorage ∷ SessionSnapshot → SessionSnapshot
+inBuildingStorage = moveShell $ \page →
+    page { pgsGroundItems = emptyGroundItems
+         , pgsBuildings = (pgsBuildings page)
+             { bsnInstances = HM.singleton (BuildingId 1) holder } }
+  where
+    holder = minimalBuilding
+        { bisStorage = [plainInstance 900 "fixture_crate"] }
 
 -- | The shell nested INSIDE another ground container rather than lying
 --   on the ground as itself. It exists on the page, so the flattened

@@ -2206,7 +2206,9 @@ validation, the v11→v12 migration), an engine spec driving the real
 and a standalone stubbed-VM spec over `scripts/locations.lua`'s
 incidental dispatch — plus `--match "save migrations"`,
 `tools/save_compat_audit.py`, `tools/persistence_inventory_audit.py`, and
-`tools/location_content_probe.py`'s container scenario. Design authority:
+`tools/location_content_probe.py`'s container scenario — whose last phase
+is the only place the load-time profile refusal below can be seen, since
+it lives in `continueLoad` and needs a real envelope. Design authority:
 `docs/portable_loot_containers.md` D-2, D-3, D-17, D-18, D-22, D-23.
 
 **What a pending shell IS.** A portable container enters the world
@@ -2320,8 +2322,12 @@ shape.
 one. `missingContainerProfileReferences` refuses a load whose UNREALIZED
 slot names an unregistered profile — BOUND or unbound, the deliberate
 divergence from `missingSignificantItemReferences` — counted into
-`allMissing` before `advanceLoad LoadContentValidated`, so the old
-session survives and the message names page, instance, slot and profile.
+`continueLoad`'s `allMissing`, and the message names page, instance, slot
+and profile. That gate sits in FRONT of staging, so the refusal is
+synchronous: `engine.loadSave` itself answers false, nothing is staged,
+nothing is published, and the live session is untouched. #763's
+asynchrony begins after it, which is why there is no request to poll for
+this outcome.
 A bound obligation's def name is history; a bound shell's profile is
 still a future draw, and D-23 makes an incompletable realization refuse
 the pickup, so a shell whose profile is gone is a crate nobody could ever

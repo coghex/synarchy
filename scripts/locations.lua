@@ -19,15 +19,25 @@
 -- locations.spawnContents(id, gx, gy, worldId) once per chunk load,
 -- independent of whether the geometry was (re)built this call. It
 -- dispatches each `contents` entry to unit.spawn / item.spawnGround /
--- building.spawn / loot.rollFor, gated by its own one-time engine flag
--- (world.hasSpawnedLocationContents) so contents are never re-spawned.
--- Those four kinds are the whole vocabulary, and it is CLOSED at the
--- YAML boundary (#1708): Engine.Asset.YamlLocations' validContentKinds
--- fails the file's load on anything else, so a def that reaches here
--- can only carry kinds dispatchContent handles. The nested "structure"
--- kind was removed there — it re-translated the outer def's bounds
--- around a shifted anchor, stamping geometry outside the box #777 made
--- authoritative.
+-- building.spawn / loot.rollFor / world.spawnLocationContainer, gated by
+-- its own one-time engine flag (world.hasSpawnedLocationContents) so
+-- contents are never re-spawned.
+-- Those FIVE kinds are the whole vocabulary, and it is CLOSED at the
+-- YAML boundary (#1708, #2505): Engine.Asset.YamlLocations'
+-- validContentKinds fails the file's load on anything else, so a def
+-- that reaches here can only carry kinds dispatchContent handles. The
+-- nested "structure" kind was removed there — it re-translated the outer
+-- def's bounds around a shifted anchor, stamping geometry outside the
+-- box #777 made authoritative.
+--
+-- Two of the five do NOT go through dispatchContent's ordinary loop.
+-- A ranged `unit` encounter (#916) and a `significant: true` item (#917)
+-- belong to persisted per-instance obligations and are filled by their
+-- own passes, which RETURN on failure so the one-time marker is left
+-- unwritten and the next chunk load retries. `container` (#2505) is
+-- deliberately not one of them: design D-18 makes a pending shell
+-- ordinary incidental content, so a failed spawn warns, continues, and
+-- the marker is written exactly as it is for a failed loot_table roll.
 -- The loot draw is seed-stable per placed instance (#948) — see the
 -- "Content spawning" section below — so a ruin's rewards are as
 -- reproducible from the world seed as its geometry already was.

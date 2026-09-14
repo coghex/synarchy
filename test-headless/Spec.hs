@@ -1227,6 +1227,7 @@ main = hspec $ do
     -- install a one-page fixture per example.
     LocationContainerShells.pureSpec
     LocationContainerShells.luaSpec
+    LocationContainerShells.yamlSpec
     LocationContainerShells.engineSpec
     LocationNaming.spec
     RiverNaming.spec

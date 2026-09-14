@@ -32,6 +32,7 @@ module Test.Headless.World.Save.Integrity
     , minimalPage
     , minimalGlobals
     , minimalUnit
+    , minimalBuilding
     , buildSnap
     ) where
 

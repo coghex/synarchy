@@ -3,9 +3,9 @@
 (issues #1884, #2095).
 
 `tools/location_content_probe.py` is manual-only. It boots engines from
-seven `boot_isolated` CALL SITES, one of which runs twice -- once
+ten `boot_isolated` CALL SITES, one of which runs twice -- once
 visiting the ruins in the same order, once in the exact reverse -- so an
-observable run LAUNCHES eight engine processes across several generated
+observable run LAUNCHES eleven engine processes across several generated
 worlds, and its own acceptance can only be seen by a run nothing in CI
 can make. The contract this file pins is the half that is pure Python
 and would otherwise regress silently: every file one invocation creates
@@ -14,7 +14,8 @@ away again on every handled exit — unless `--keep-artifacts` says
 otherwise.
 
 Since #2095 the scenario assertions live in owners under
-`tools/location_content/` and the probe file is the façade over them, so
+`tools/location_content/` -- five of them since #2505 added the pending
+container shells -- and the probe file is the façade over them, so
 every structural check below scans the COMPLETE reorganized surface --
 the façade plus every module it imports from that package -- and asserts
 its own non-vacuity first. Rooted at the façade alone, the
@@ -22,8 +23,8 @@ exclusion-style properties ("no bare `boot`", "no raw fixture `send`",
 "every log read is this invocation's") would all evaluate True over an
 empty node set: they would report OK while inspecting nothing.
 
-Before #1884 the probe's five fixture YAMLs and its engine log were the
-fixed, process-global names `/tmp/loc_content_probe_bogus.yaml`,
+Before #1884 the probe's five fixture YAMLs -- #2505 has since taken it
+to nine -- and its engine log were the fixed, process-global names `/tmp/loc_content_probe_bogus.yaml`,
 `/tmp/loc_content_probe_bogus_loot.yaml`,
 `/tmp/loc_content_probe_quinoa.yaml`,
 `/tmp/loc_content_probe_quinoa_loot.yaml`,
@@ -61,9 +62,9 @@ leak, collide, or stop proving what it claims:
   * Every boot goes through the one funnel that hands it this
     invocation's log and registers the process as it is launched, and
     both log-reading ASSERTIONS read that same log.
-  * Only the façade boots at all, from exactly seven call sites, and the
+  * Only the façade boots at all, from exactly ten call sites, and the
     regeneration site is still a loop over the two visit orders -- so the
-    run still LAUNCHES eight processes. A call-site count alone would
+    run still LAUNCHES eleven processes. A call-site count alone would
     accept that loop being unrolled, flattened to one case, or grown to
     three, each of which changes the process count.
   * The façade still offers exactly one `run(args, art, token)` for
@@ -73,7 +74,8 @@ leak, collide, or stop proving what it claims:
     extracted module, and every scan runs over all of them.
   * Every PASS diagnostic and every recorded failure belongs to a
     scenario owner rather than the façade or the shared infrastructure,
-    and the counts are the pre-split file's exactly.
+    and the counts are the pre-split file's plus each scenario added
+    since.
   * No scenario owner keeps cross-scenario state in a mutable module
     global; the values `run` used to accumulate across phases are
     fields of the one handoff record the façade threads.
@@ -154,20 +156,31 @@ LEGACY_PATHS = (
 #: phase 3's own order. Across owners the order is incidental — they
 #: register in different processes.
 FIXTURE_NAMES = (
-    "crate_item", "crate_profile", "crate_location",
+    "crate_item", "crate_profile", "crate_location", "crate_location_noprofile",
     "bogus", "bogus_loot", "quinoa", "quinoa_loot", "dense",
 )
 
-#: The loader each of those is registered through, in the same order.
-FIXTURE_LOADERS = (
-    "engine.loadItemYaml",
-    "engine.loadLootProfileYaml",
-    "engine.loadLocationYaml",
-    "engine.loadLocationYaml",
-    "engine.loadLootTableYaml",
-    "engine.loadLocationYaml",
-    "engine.loadLootTableYaml",
-    "engine.loadLocationYaml",
+#: Every `load_fixture_yaml` call on the surface, as
+#: `(local variable, loader)` in source order.
+#:
+#: Deliberately its OWN sequence rather than a mapping over
+#: `FIXTURE_NAMES`: one fixture is registered by two different phases.
+#: The crate item is needed by the pending-shell world AND by the
+#: missing-profile refusal that follows it, which boots a fresh engine
+#: and so has to register it again. A one-load-per-fixture expectation
+#: would forbid that — and forbidding it is not a contract anybody wants,
+#: it is just what the pre-#2505 shape happened to satisfy.
+FIXTURE_REGISTRATIONS = (
+    ("item_yaml", "engine.loadItemYaml"),
+    ("profile_yaml", "engine.loadLootProfileYaml"),
+    ("location_yaml", "engine.loadLocationYaml"),
+    ("item_yaml", "engine.loadItemYaml"),
+    ("noprofile_yaml", "engine.loadLocationYaml"),
+    ("bogus_yaml", "engine.loadLocationYaml"),
+    ("bogus_loot_yaml", "engine.loadLootTableYaml"),
+    ("quinoa_yaml", "engine.loadLocationYaml"),
+    ("quinoa_loot_yaml", "engine.loadLootTableYaml"),
+    ("dense_yaml", "engine.loadLocationYaml"),
 )
 
 #: The package the scenario owners live in (#2095).
@@ -192,12 +205,13 @@ SCENARIO_OWNERS = ("container", "content", "dispatch", "knowledge", "naming")
 INFRASTRUCTURE = ("engine_queries", "invocation")
 
 #: #2095 requirement 11 and the acceptance's process count. Nine
-#: `boot_isolated` call sites — seven, plus #2505's two (the crate world,
-#: and the fresh process that loads its save) — one of them inside a
-#: two-element loop over the visit orders, so a run launches ten engine
-#: processes.
-BOOT_CALL_SITES = 9
-PROCESS_LAUNCHES = 10
+#: `boot_isolated` call sites — seven, plus #2505's three (the crate
+#: world, the fresh process that loads its save, and the fresh process
+#: that proves a deregistered profile refuses that load) — one of them
+#: inside a two-element loop over the visit orders, so a run launches
+#: eleven engine processes.
+BOOT_CALL_SITES = 10
+PROCESS_LAUNCHES = 11
 
 #: The whole surface's diagnostic totals, recounted across every owner.
 #: Moving an assertion between owners is a visible edit here; losing
@@ -205,10 +219,10 @@ PROCESS_LAUNCHES = 10
 #: totals were 45/67; #917's `check_significant_contents` added the six
 #: PASS lines and eight failure records of the guaranteed-contents and
 #: compound-clearance scenario.
-#: …and #2505's container owner added the eleven PASS lines and nineteen
-#: failure records of the pending-shell scenario.
-TOTAL_PASS_DIAGNOSTICS = 62
-TOTAL_FAILURE_RECORDS = 94
+#: …and #2505's container owner added the fifteen PASS lines and
+#: twenty-three failure records of the pending-shell scenario.
+TOTAL_PASS_DIAGNOSTICS = 66
+TOTAL_FAILURE_RECORDS = 98
 
 #: The values `run` used to accumulate in local variables across its
 #: phases (#2095's cross-scenario handoff). Each is now a field of the
@@ -218,6 +232,7 @@ HANDOFF_FIELDS = (
     "placed_all", "ruins", "counts1", "geoms1", "loot1", "r0mem_key",
     "mem_uids", "dangling_uid", "sibling_keys", "saved_content",
     "saved_naming", "saved_crate", "named", "crate_slots", "crate_shells",
+    "crate_slot_name",
 )
 
 
@@ -337,6 +352,8 @@ FIXTURE_DIGESTS = {
         "1418a15e9bd66a2c99a8d583e15820b16354d2aeb0686d1250c13d8fab70e4b7",
     "CONTAINER_LOCATION_YAML":
         "d0d46f15cb724aad4719f0e435f5211b603f455d935906e90bbd134fa4bd59f1",
+    "CONTAINER_LOCATION_NOPROFILE_YAML":
+        "35218be4a6fca87c197b5e77d362f8bc42ea9e38c13da9928e1900ee855bddc8",
 }
 
 
@@ -1045,15 +1062,10 @@ def test_registration_order_and_loaders_are_unchanged() -> None:
                if isinstance(node.args[1], ast.Constant)]
     targets = [node.args[2].id for _path, node in loads
                if isinstance(node.args[2], ast.Name)]
-    # The container trio registers under its own local names, which are
-    # not `<fixture>_yaml`: its parameters say what each IS
-    # (item/profile/location) rather than repeating the artifact key.
-    expected_targets = ["item_yaml", "profile_yaml", "location_yaml"] + [
-        f"{n}_yaml" for n in FIXTURE_NAMES[3:]]
-    expect(targets == expected_targets,
+    expect(targets == [name for name, _ in FIXTURE_REGISTRATIONS],
            f"every fixture registers in the unchanged order "
            f"(got {targets})")
-    expect(loaders == list(FIXTURE_LOADERS),
+    expect(loaders == [loader for _, loader in FIXTURE_REGISTRATIONS],
            f"...each through its own loader (got {loaders})")
 
 
@@ -1064,8 +1076,8 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
     # current schema stops the probe at SETUP instead of surfacing as
     # downstream behavioural failures.
     loads = surface_calls("load_fixture_yaml")
-    expect(len(loads) == len(FIXTURE_NAMES),
-           f"every one of the fixtures is loaded through the checking "
+    expect(len(loads) == len(FIXTURE_REGISTRATIONS),
+           f"every one of the registrations goes through the checking "
            f"helper, and nothing else is (got {len(loads)})")
     sends = surface_calls("send")
     expect(sends, "the surface really calls send() — the exclusion below "
@@ -1109,9 +1121,10 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
 
 def test_both_log_assertions_read_this_invocations_log() -> None:
     print("\ntest_both_log_assertions_read_this_invocations_log")
-    # #1884 requirement 9. Two checks ASSERT against the engine log —
-    # the integrity diagnostic in phase 2 and the two unknown-content
-    # warnings in phase 3 — so a read of anything but this invocation's
+    # #1884 requirement 9. Three checks ASSERT against the engine log —
+    # the integrity diagnostic in phase 2, the two unknown-content
+    # warnings in phase 3, and (#2505) the load rejection naming the
+    # unresolved profile — so a read of anything but this invocation's
     # own log could report another run's evidence as this one's.
     opens = surface_calls("open")
     expect(opens, "the surface really opens files — an empty scan would "
@@ -1120,15 +1133,16 @@ def test_both_log_assertions_read_this_invocations_log() -> None:
              if not any(isinstance(a, ast.Constant) and a.value == "w"
                         for a in node.args[1:])]
     writes = [pair for pair in opens if pair not in reads]
-    expect(len(reads) == 2,
-           f"the probe reads the log in exactly the two places that assert "
+    expect(len(reads) == 3,
+           f"the probe reads the log in exactly the three places that assert "
            f"against it (got {[(p.name, n.lineno) for p, n in reads]})")
-    # The two now sit with the owners that assert on them — the
-    # knowledge owner's integrity diagnostic and the dispatch owner's
-    # unknown-content warnings — and each still takes the invocation's
-    # `RunArtifacts` rather than reaching for a log of its own.
-    expect(len({path for path, _ in reads}) == 2,
-           f"...one in each of the two owners that read it (got "
+    # The three sit with the owners that assert on them — the knowledge
+    # owner's integrity diagnostic, the dispatch owner's unknown-content
+    # warnings, and the container owner's load rejection — and each still
+    # takes the invocation's `RunArtifacts` rather than reaching for a log
+    # of its own.
+    expect(len({path for path, _ in reads}) == 3,
+           f"...one in each of the three owners that read it (got "
            f"{sorted(path.name for path, _ in reads)})")
     expect(all(isinstance(node.args[0], ast.Attribute)
                and node.args[0].attr == "engine_log"
@@ -1359,8 +1373,8 @@ def test_no_scenario_owner_keeps_cross_scenario_state_in_a_module_global()\
 
 def test_the_handoff_record_carries_every_threaded_value() -> None:
     print("\ntest_the_handoff_record_carries_every_threaded_value")
-    # The twelve values `run` used to accumulate in local variables
-    # across its phases. Each must be a field of the record the façade
+    # Every value `run` used to accumulate in local variables across its
+    # phases. Each must be a field of the record the façade
     # threads, and each must default to something a skipped phase can
     # leave alone — which is what makes the dependent phases skip rather
     # than assert against a value nothing produced.

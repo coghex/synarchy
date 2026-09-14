@@ -430,3 +430,7 @@ class ScenarioState:
     #: one actually saw rather than against a number written here.
     crate_slots: int = 0
     crate_shells: int = 0
+    #: The save slot the crate world published, so the two fresh
+    #: processes that read it — the round-trip and the missing-profile
+    #: refusal — name the same one the façade created.
+    crate_slot_name: str = ""

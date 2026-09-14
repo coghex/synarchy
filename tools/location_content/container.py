@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import time
 
-from probelib import load_fixture_yaml, send
+from probelib import load_fixture_yaml, send, send_json
 
 from .invocation import RunArtifacts
 
@@ -83,6 +83,35 @@ CONTAINER_LOCATION_YAML = (
     "profile: probe_crate_salvage, count: 1, position: {x: 0, y: 0} }\n"
 )
 
+#: The SAME location id over an EMPTY contents list. Registered by the
+#: load-refusal phase in place of the real one, which is the only way to
+#: reach the state that phase is about: a save carrying a pending slot
+#: whose profile this build no longer registers.
+#:
+#: The real fixture cannot do it. Its container entry resolves its
+#: profile against the live registry at LOAD (Engine.Asset.YamlLocations'
+#: containerContentErrors), so registering it without the profile
+#: registers nothing at all — and then the load would fail on the
+#: location DEF being unknown, which is a different rejection masking the
+#: one under test. The def id is what missingLocationDefReferences
+#: resolves; the pending slot rides on the saved INSTANCE, not on today's
+#: contents list. So this models exactly the real case: a world
+#: materialized when the profile existed, loaded against a build whose
+#: content set has moved on.
+CONTAINER_LOCATION_NOPROFILE_YAML = (
+    "locations:\n"
+    "  - id: crate_ruin\n"
+    "    label: Crate Ruin\n"
+    "    type: ruin\n"
+    "    builder: room_small\n"
+    "    anchor: [waterside]\n"
+    "    max_count: 100000\n"
+    "    min_spacing: 1\n"
+    "    bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 }\n"
+    "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
+    "    contents: []\n"
+)
+
 #: The crate definition's own empty weight, and the mass its ONE
 #: authored default content adds — both read straight off the fixture
 #: bodies above, so editing either there and not here fails loudly
@@ -96,7 +125,7 @@ RATIONS_KG = 0.1
 CRATE_PAGE = "wk"
 
 
-def write_container_fixtures(art: RunArtifacts) -> tuple[str, str, str]:
+def write_container_fixtures(art: RunArtifacts) -> tuple[str, str, str, str]:
     """Stage this scenario's three fixtures into the invocation's own
     fixtures directory, and answer their paths in REGISTRATION order —
     items, then the profile, then the location.
@@ -116,7 +145,10 @@ def write_container_fixtures(art: RunArtifacts) -> tuple[str, str, str]:
     location_yaml = art.fixture("crate_location")
     with open(location_yaml, "w") as fh:
         fh.write(CONTAINER_LOCATION_YAML)
-    return item_yaml, profile_yaml, location_yaml
+    noprofile_yaml = art.fixture("crate_location_noprofile")
+    with open(noprofile_yaml, "w") as fh:
+        fh.write(CONTAINER_LOCATION_NOPROFILE_YAML)
+    return item_yaml, profile_yaml, location_yaml, noprofile_yaml
 
 
 def register_container_fixtures(port: int, item_yaml: str,
@@ -380,3 +412,89 @@ def check_shell_survived_reload(args, state, failures: list[str]) -> None:
         failures.append(
             "the restored slots and ground shells name different item "
             "instances")
+
+
+def register_without_profile(port: int, item_yaml: str,
+                             noprofile_yaml: str) -> None:
+    """The crate item and a container-free `crate_ruin`, and NOTHING
+    else: this build knows the item and the location def, but has never
+    heard of `probe_crate_salvage`."""
+    load_fixture_yaml(port, "engine.loadItemYaml", item_yaml)
+    load_fixture_yaml(port, "engine.loadLocationYaml", noprofile_yaml)
+
+
+def check_missing_profile_refuses_load(args, state, art,
+                                       failures: list[str]) -> None:
+    """A save whose PENDING slot names a profile this build no longer
+    registers is refused BEFORE the replacement session is staged, and
+    the old session is left exactly as it was.
+
+    Requirement 8's other half, and the one no hspec group can reach: the
+    check is wired into `continueLoad`'s `allMissing` gate, so only a real
+    `engine.loadSave` against a real envelope can show that the gate runs
+    at all, aborts, and leaves the live session alone.
+
+    The refusal is SYNCHRONOUS — `engine.loadSave` itself answers false.
+    #763's asynchrony begins at staging and publication, which this gate
+    sits in front of, so there is no request to wait on and nothing was
+    ever staged.
+    """
+    before_page = send(args.port, "return world.getActiveWorldId()").strip()
+    before_locations = send(
+        args.port,
+        f"return #(world.listPlacedLocations('{CRATE_PAGE}') or {{}})").strip()
+    accepted = send(args.port,
+                    f"return engine.loadSave('{state.crate_slot_name}')").strip()
+    if accepted == "false":
+        print("PASS: the load was refused outright — nothing was staged and "
+              "no replacement session was published")
+    else:
+        failures.append(
+            "a save whose pending container slot names an unregistered "
+            f"profile should be refused; engine.loadSave returned {accepted!r}")
+
+    # The diagnostic must be actionable: page, instance, slot and the
+    # profile id, so an operator can tell WHICH crate lost its profile.
+    log_text = open(art.engine_log, errors="replace").read()
+    attributed = [line for line in log_text.splitlines()
+                  if "loadSave rejected" in line
+                  and "probe_crate_salvage" in line]
+    if attributed and all(
+            token in attributed[-1]
+            for token in ("pending container shell", "slot",
+                          "unknown loot profile", f"page '{CRATE_PAGE}'")):
+        print("PASS: the rejection names the page, the location, the slot "
+              "and the unresolved profile id")
+    else:
+        failures.append(
+            "the rejection should name the page, instance, slot and profile "
+            f"id; found {attributed[-1][:200] if attributed else '<no such line>'}")
+
+    # "nothing changed" is the message's own claim, so check it: the
+    # active page is the one this process generated, and the saved crate
+    # page never became live.
+    after_page = send(args.port, "return world.getActiveWorldId()").strip()
+    after_locations = send(
+        args.port,
+        f"return #(world.listPlacedLocations('{CRATE_PAGE}') or {{}})").strip()
+    if after_page == before_page and after_locations == before_locations:
+        print("PASS: the refused load left the old session live and "
+              "unchanged — the saved crate page never became live")
+    else:
+        failures.append(
+            "the refused load changed the live session: active page "
+            f"{before_page!r} -> {after_page!r}, crate-page locations "
+            f"{before_locations!r} -> {after_locations!r}")
+
+    # …and the failure is recorded against the content-validation phase,
+    # not against an earlier one — which is what tells an operator the
+    # save decoded fine and was refused on its CONTENT.
+    status = send_json(args.port, "return engine.getLoadStatus()")
+    phase = status.get("failedAtPhase") if isinstance(status, dict) else None
+    if phase == "LoadContentValidated":
+        print("PASS: the failure is recorded at the content-validation "
+              "phase")
+    else:
+        failures.append(
+            "the refusal should be recorded at LoadContentValidated "
+            f"(got {phase!r})")
