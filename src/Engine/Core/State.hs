@@ -426,8 +426,10 @@ data EngineEnv = EngineEnv
   , injuryEventsRef     ∷ IORef (Seq Combat.Types.CombatEvent)
     -- ^ NON-combat injury stream (falls / hazards / wound-caused
     --   deaths) → Lua. Reuses the CombatEvent shape (target = victim).
-    --   Producers: Unit.Fall, unit.injure, and `injury.emit` from Lua;
-    --   drained via `injury.drainEvents` into the injury-log UI.
+    --   Producers: Unit.Fall, Unit.Thread.Command.Solidify (#2490's
+    --   deaths at a solidifying cell), unit.injure, and `injury.emit`
+    --   from Lua; drained via `injury.drainEvents` into the injury-log
+    --   UI.
     --   Runtime only, not persisted.
   , thoughtEventsRef    ∷ IORef (Seq Combat.Types.CombatEvent)
     -- ^ Per-unit thought stream (#351) → Lua. Purely Lua-produced —

@@ -4845,9 +4845,11 @@ serialized: see
 **The stone is an EDIT.** Each accepted event appends one
 `World.Edit.Types.WeAddTile` for its column and product material to
 `wsEditsRef` and applies it through the same `World.Edit.Apply.applyEdit`,
-`replaceChunkForgettingFlora`, plant/construct revalidation and
-`UnitReGround` a player's own add-tile uses
-(`World.Thread.Command.Reaction`). A fluid writeback could not do this:
+`replaceChunkForgettingFlora` and plant/construct revalidation a player's
+own add-tile uses (`World.Thread.Command.Reaction`). The one step it does
+NOT share is that path's `UnitReGround`: since #2490 an occupant of a
+solidifying cell is destroyed rather than lifted, so the commit sends
+`UnitSolidifyOccupants` instead — see §Occupants of a solidifying cell. A fluid writeback could not do this:
 `applyOneWriteback` replaces a chunk's sim-owned fields in memory and
 appends nothing, so terrain written that way would vanish on eviction and
 never reach a save. Replay over regenerated terrain and a fresh-process

@@ -10,9 +10,13 @@
 --   item's height to go stale.
 --
 --   Stored on 'WorldState' (wsGroundItemsRef) and persisted in saves
---   (sdGroundItems, v32). Writers use atomicModifyIORef' — debug
---   spawn (Lua thread), future drop/pickup (unit thread), and future
---   dig yields (world thread) all mutate the same map safely.
+--   (sdGroundItems, v32). Writers use atomicModifyIORef' — debug and
+--   salvage spawn (Lua thread), pickup and drop (Lua thread, through
+--   'World.GroundItems'), and the world thread's own removals (#2490's
+--   lava-water reaction destroying whatever lay on the cell it turned
+--   to stone) all mutate the same map safely. The two that have to
+--   agree with the ground-item SELECTION go through
+--   'World.GroundItems' and take the page's lock; see that module.
 module Item.Ground
     ( GroundItem(..)
     , GroundItems(..)
