@@ -132,7 +132,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 11
+            ccVersion worldPagesCodec `shouldBe` 12
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -288,7 +288,8 @@ spec = do
     -- ('decodeComponentValue' 's own @ccDecode@ then @ccValidate@
     -- sequence) at EVERY carrier shape, so no historical version
     -- routes around the check: the current 'LocationInstanceDTO' rides
-    -- @world-pages@ v10, frozen 'LocationInstanceDTOv5' rides v8/v9,
+    -- @world-pages@ v12, frozen 'LocationInstanceDTOv6' rides v10/v11,
+    -- frozen 'LocationInstanceDTOv5' rides v8/v9,
     -- 'LocationInstanceDTOv4' rides v7, 'LocationInstanceDTOv3' rides v6,
     -- 'LocationInstanceDTOv2' rides v4/v5 and 'LocationInstanceDTOv1'
     -- rides v2/v3 (one version per identical carrier shape suffices).
@@ -312,6 +313,7 @@ spec = do
                             , liContentsSpawned = False
                             , liEncounter       = Nothing
                             , liSignificant     = []
+                            , liContainers      = []
                             , liClearEventEmitted = False }
                     , lisPendingLegacy = Nothing } }
             -- One box per carrier, all inverted on x, so a failure names
@@ -322,15 +324,30 @@ spec = do
             degenerate = AbsBounds 6 6 6 6
 
             bytesAt ∷ Word32 → AbsBounds → BS.ByteString
-            bytesAt 11 b = S.encode (WorldPagesDTO
+            bytesAt 12 b = S.encode (WorldPagesDTO
                 [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            -- #2505: v11 is the same page core over gen params whose
+            -- location instances carry no container slots, so it must be
+            -- encoded through its own frozen DTO -- the current type's
+            -- bytes would misparse at the appended list.
+            bytesAt 11 b = S.encode (WorldPagesDTOv11
+                [ PageCoreDTOv11
+                    { pc11PageId = page1
+                    , pc11GenParams = toWorldGenParamsDTOv8 (gpWith b)
+                    , pc11CameraX = 0, pc11CameraY = 0
+                    , pc11TimeHour = 0, pc11TimeMinute = 0
+                    , pc11TimeRemainder = 0
+                    , pc11DateYear = 1, pc11DateMonth = 1, pc11DateDay = 1
+                    , pc11MapMode = ZMDefault, pc11Identity = Nothing
+                    , pc11GeneratedId =
+                        Just (fixtureGeneratedWorldIdForPage page1) } ])
             -- #2471: v10 is the same page core WITHOUT the appended
             -- sub-minute remainder, so it must be encoded through its own
             -- frozen DTO -- the current type's bytes would misparse.
             bytesAt 10 b = S.encode (WorldPagesDTOv10
                 [ PageCoreDTOv10
                     { pc10PageId = page1
-                    , pc10GenParams = toWorldGenParamsDTO (gpWith b)
+                    , pc10GenParams = toWorldGenParamsDTOv8 (gpWith b)
                     , pc10CameraX = 0, pc10CameraY = 0
                     , pc10TimeHour = 0, pc10TimeMinute = 0
                     , pc10DateYear = 1, pc10DateMonth = 1, pc10DateDay = 1
@@ -392,8 +409,9 @@ spec = do
                     Right wp → Right (ccValidate worldPagesCodec wp)
 
             carriers ∷ [(String, Word32)]
-            carriers = [ ("v11 / LocationInstanceDTO",  11)
-                       , ("v10 / LocationInstanceDTO", 10)
+            carriers = [ ("v12 / LocationInstanceDTO",  12)
+                       , ("v11 / LocationInstanceDTOv6", 11)
+                       , ("v10 / LocationInstanceDTOv6", 10)
                        , ("v9 / LocationInstanceDTOv5",  9)
                        , ("v8 / LocationInstanceDTOv5",  8)
                        , ("v7 / LocationInstanceDTOv4", 7)
@@ -584,14 +602,14 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2, v3)")
 
-        it "reports an unsupported version identically for an \
-           \ELEVEN-version reader" $
-            decodeErrorOf worldPagesCodec 12 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 12
+        it "reports an unsupported version identically for a \
+           \TWELVE-version reader" $
+            decodeErrorOf worldPagesCodec 13 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 13
                     DecodePhase
                     "unsupported schema version \
                     \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
-                    \v10, v11)")
+                    \v10, v11, v12)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \

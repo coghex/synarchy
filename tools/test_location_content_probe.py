@@ -140,14 +140,29 @@ LEGACY_PATHS = (
     "/tmp/location_content_engine.log",
 )
 
-#: The five fixtures, by the logical name `RunArtifacts.fixture` is
-#: asked for, in the order the probe REGISTERS them: phase 3's four
-#: (bogus location, bogus loot, quinoa location, quinoa loot) and then
-#: phase 4's `dense` alone.
-FIXTURE_NAMES = ("bogus", "bogus_loot", "quinoa", "quinoa_loot", "dense")
+#: The eight fixtures, by the logical name `RunArtifacts.fixture` is
+#: asked for, in SURFACE (file, line) order — which is the order the
+#: scans below read them in: the container owner's three (#2505's crate
+#: item, its loot profile, and the DENSE location pairing them), then
+#: the dispatch owner's four rejection fixtures and its `dense`.
+#:
+#: Within each owner that IS registration order, which is what the two
+#: order checks below are actually about: the container trio must
+#: register items → profile → location (the location loader resolves a
+#: container entry's item AND profile ids against the live registries and
+#: rejects the whole file on either), and the rejection four must keep
+#: phase 3's own order. Across owners the order is incidental — they
+#: register in different processes.
+FIXTURE_NAMES = (
+    "crate_item", "crate_profile", "crate_location",
+    "bogus", "bogus_loot", "quinoa", "quinoa_loot", "dense",
+)
 
 #: The loader each of those is registered through, in the same order.
 FIXTURE_LOADERS = (
+    "engine.loadItemYaml",
+    "engine.loadLootProfileYaml",
+    "engine.loadLocationYaml",
     "engine.loadLocationYaml",
     "engine.loadLootTableYaml",
     "engine.loadLocationYaml",
@@ -173,14 +188,16 @@ SURFACE = (Path(probe.__file__).resolve(),
 #: The scenario owners, as distinct from the shared infrastructure the
 #: façade also imports. Named because the checks that say WHERE a
 #: contract lives need both halves of the distinction.
-SCENARIO_OWNERS = ("content", "dispatch", "knowledge", "naming")
+SCENARIO_OWNERS = ("container", "content", "dispatch", "knowledge", "naming")
 INFRASTRUCTURE = ("engine_queries", "invocation")
 
-#: #2095 requirement 11 and the acceptance's process count. Seven
-#: `boot_isolated` call sites, one of them inside a two-element loop over
-#: the visit orders, so a run launches eight engine processes.
-BOOT_CALL_SITES = 7
-PROCESS_LAUNCHES = 8
+#: #2095 requirement 11 and the acceptance's process count. Nine
+#: `boot_isolated` call sites — seven, plus #2505's two (the crate world,
+#: and the fresh process that loads its save) — one of them inside a
+#: two-element loop over the visit orders, so a run launches ten engine
+#: processes.
+BOOT_CALL_SITES = 9
+PROCESS_LAUNCHES = 10
 
 #: The whole surface's diagnostic totals, recounted across every owner.
 #: Moving an assertion between owners is a visible edit here; losing
@@ -188,8 +205,10 @@ PROCESS_LAUNCHES = 8
 #: totals were 45/67; #917's `check_significant_contents` added the six
 #: PASS lines and eight failure records of the guaranteed-contents and
 #: compound-clearance scenario.
-TOTAL_PASS_DIAGNOSTICS = 51
-TOTAL_FAILURE_RECORDS = 75
+#: …and #2505's container owner added the eleven PASS lines and nineteen
+#: failure records of the pending-shell scenario.
+TOTAL_PASS_DIAGNOSTICS = 62
+TOTAL_FAILURE_RECORDS = 94
 
 #: The values `run` used to accumulate in local variables across its
 #: phases (#2095's cross-scenario handoff). Each is now a field of the
@@ -198,7 +217,7 @@ TOTAL_FAILURE_RECORDS = 75
 HANDOFF_FIELDS = (
     "placed_all", "ruins", "counts1", "geoms1", "loot1", "r0mem_key",
     "mem_uids", "dangling_uid", "sibling_keys", "saved_content",
-    "saved_naming", "named",
+    "saved_naming", "saved_crate", "named", "crate_slots", "crate_shells",
 )
 
 
@@ -312,6 +331,12 @@ FIXTURE_DIGESTS = {
         "09bc563d2e3daf2c7fbfadca995ef164e0af9ff7d91d145120659d0f76a7bf5a",
     "DENSE_LOCATION_YAML":
         "3e0fc0dbd0b9abf46ba05f85c00b0446b39799393aec0179c520d811226104d0",
+    "CONTAINER_ITEM_YAML":
+        "59a5870edad79a5b5ad13b144a73c9ad119397ed642c008072c12925bfd96f86",
+    "CONTAINER_PROFILE_YAML":
+        "1418a15e9bd66a2c99a8d583e15820b16354d2aeb0686d1250c13d8fab70e4b7",
+    "CONTAINER_LOCATION_YAML":
+        "d0d46f15cb724aad4719f0e435f5211b603f455d935906e90bbd134fa4bd59f1",
 }
 
 
@@ -456,15 +481,19 @@ def test_every_fixture_path_is_absolute_and_owned() -> None:
     calls = surface_calls("fixture", attribute=True)
     expect(calls, "the surface really contains `art.fixture(...)` calls — "
                   "an empty scan would make the order check below vacuous")
-    owners = {path for path, _ in calls}
-    expect(len(owners) == 1,
-           f"all five fixtures are asked for by ONE owner, so their source "
-           f"order is their registration order (got "
-           f"{sorted(path.name for path in owners)})")
+    # Each fixture is asked for by the owner that CONSUMES it (#2095
+    # requirement 7), so this is no longer a single owner — it is a set
+    # of them, and what matters is that a fixture never crosses one:
+    # within an owner, source order IS registration order, which is what
+    # both order checks below read.
+    owners = {path.name for path, _ in calls}
+    expect(owners <= {f"{name}.py" for name in SCENARIO_OWNERS},
+           f"every fixture is asked for by a SCENARIO owner, never by the "
+           f"façade or the shared infrastructure (got {sorted(owners)})")
     fixtures = [node.args[0].value for _path, node in calls
                 if node.args and isinstance(node.args[0], ast.Constant)]
     expect(tuple(fixtures) == FIXTURE_NAMES,
-           f"the probe asks for exactly these five fixtures, in this order "
+           f"the probe asks for exactly these fixtures, in this order "
            f"(got {fixtures})")
 
 
@@ -1004,16 +1033,25 @@ def test_registration_order_and_loaders_are_unchanged() -> None:
     loads = surface_calls("load_fixture_yaml")
     expect(loads, "the surface really registers fixtures — an empty scan "
                   "would make both order checks below vacuous")
-    owners = {path for path, _ in loads}
-    expect(len(owners) == 1,
-           f"one owner registers all five, so its source order IS the "
-           f"registration order (got {sorted(path.name for path in owners)})")
+    ask_owners = {path.name for path, _ in surface_calls("fixture",
+                                                        attribute=True)}
+    load_owners = {path.name for path, _ in loads}
+    expect(load_owners == ask_owners,
+           f"the owner that ASKS for a fixture is the one that registers "
+           f"it, so its source order IS that fixture's registration order "
+           f"(asked in {sorted(ask_owners)}, registered in "
+           f"{sorted(load_owners)})")
     loaders = [node.args[1].value for _path, node in loads
                if isinstance(node.args[1], ast.Constant)]
     targets = [node.args[2].id for _path, node in loads
                if isinstance(node.args[2], ast.Name)]
-    expect(targets == [f"{n}_yaml" for n in FIXTURE_NAMES],
-           f"the five fixtures register in the unchanged order "
+    # The container trio registers under its own local names, which are
+    # not `<fixture>_yaml`: its parameters say what each IS
+    # (item/profile/location) rather than repeating the artifact key.
+    expected_targets = ["item_yaml", "profile_yaml", "location_yaml"] + [
+        f"{n}_yaml" for n in FIXTURE_NAMES[3:]]
+    expect(targets == expected_targets,
+           f"every fixture registers in the unchanged order "
            f"(got {targets})")
     expect(loaders == list(FIXTURE_LOADERS),
            f"...each through its own loader (got {loaders})")
@@ -1027,7 +1065,7 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
     # downstream behavioural failures.
     loads = surface_calls("load_fixture_yaml")
     expect(len(loads) == len(FIXTURE_NAMES),
-           f"every one of the five fixtures is loaded through the checking "
+           f"every one of the fixtures is loaded through the checking "
            f"helper, and nothing else is (got {len(loads)})")
     sends = surface_calls("send")
     expect(sends, "the surface really calls send() — the exclusion below "
@@ -1102,7 +1140,7 @@ def test_both_log_assertions_read_this_invocations_log() -> None:
            and all(isinstance(node.args[0], ast.Name)
                    and node.args[0].id.endswith("_yaml")
                    for _path, node in writes),
-           f"and every truncating write on the surface is one of the five "
+           f"and every truncating write on the surface is one of the "
            f"fixtures (got {len(writes)})")
 
 

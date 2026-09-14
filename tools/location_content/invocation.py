@@ -419,5 +419,14 @@ class ScenarioState:
     #: Whether each fresh-process phase has a save to read.
     saved_content: bool = False
     saved_naming: bool = False
+    saved_crate: bool = False
     #: instance id -> (name, gloss) on the named world (#1101).
     named: dict = field(default_factory=dict)
+    #: #2505: how many container slots the crate world derived at
+    #: placement, and how many shells reached its ground. Both are
+    #: whole-scenario expectations rather than per-ruin ones -- crate_ruin
+    #: is a DENSE definition, so the count depends on the generated
+    #: world's land, and the later phases compare against what the first
+    #: one actually saw rather than against a number written here.
+    crate_slots: int = 0
+    crate_shells: int = 0

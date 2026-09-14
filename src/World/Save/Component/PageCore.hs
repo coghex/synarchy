@@ -76,6 +76,8 @@ module World.Save.Component.PageCore
     , WorldPagesDTOv9(..)
     , PageCoreDTOv10(..)
     , WorldPagesDTOv10(..)
+    , PageCoreDTOv11(..)
+    , WorldPagesDTOv11(..)
       -- * The component
     , worldPagesVersion
     , WorldPages(..)
@@ -93,6 +95,7 @@ module World.Save.Component.PageCore
     , migrateWorldPagesV8
     , migrateWorldPagesV9
     , migrateWorldPagesV10
+    , migrateWorldPagesV11
     ) where
 
 import UPrelude
@@ -113,11 +116,12 @@ import World.Save.Component.WorldGen
     , WorldGenParamsDTOv5(..), fromWorldGenParamsDTOv5
     , WorldGenParamsDTOv6(..), fromWorldGenParamsDTOv6
     , WorldGenParamsDTOv7(..), fromWorldGenParamsDTOv7
+    , WorldGenParamsDTOv8(..), fromWorldGenParamsDTOv8
     , EtymologySourceDTO(..)
     , toEtymologySourceDTO, fromEtymologySourceDTO )
 import Location.Instance
     ( locationInstanceAllocatorErrors, locationInstanceBoundsErrors
-    , locationSignificantItemErrors )
+    , locationSignificantItemErrors, locationContainerSlotErrors )
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId, WorldIdentity(..))
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
@@ -247,7 +251,8 @@ fromWorldIdentityDTOv1 d =
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v11) wire shape — see 'PageCoreDTOv10' for the
+--   This is the CURRENT (v12) wire shape — see 'PageCoreDTOv11' for the
+--   frozen pre-#2505 one, 'PageCoreDTOv10' for the
 --   frozen pre-#2471 one, 'PageCoreDTOv9' for the
 --   frozen pre-#917 one, 'PageCoreDTOv8' for the
 --   frozen pre-#2021 one, 'PageCoreDTOv7' for the
@@ -538,8 +543,9 @@ data WorldPages = WorldPages
       --   without guessing which version it is looking at.
     } deriving (Show)
 
--- | Encoding always writes the current v11 shape; v10 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV10' (#2471), v9
+-- | Encoding always writes the current v12 shape; v11 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV11' (#2505), v10
+--   via 'migrateWorldPagesV10' (#2471), v9
 --   via 'migrateWorldPagesV9' (#917), v8
 --   via 'migrateWorldPagesV8' (#2021), v7
 --   via 'migrateWorldPagesV7' (#916), v6
@@ -568,7 +574,7 @@ data WorldPages = WorldPages
 --   "world-pages stamps its errors with the version it WRITES", which
 --   asserts @ccVersion worldPagesCodec ≡ worldPagesVersion@.
 worldPagesVersion ∷ Word32
-worldPagesVersion = 11
+worldPagesVersion = 12
 
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
@@ -576,13 +582,14 @@ worldPagesCodec = componentCodec ComponentSpec
       -- A literal, not 'worldPagesVersion': the save-compat audit parses
       -- this field statically. The example named on that constant is
       -- what keeps the two from drifting.
-    , csVersion       = 11
+    , csVersion       = 12
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 10 migrateWorldPagesV10
+    , csOlderVersions = [ atVersion 11 migrateWorldPagesV11
+                        , atVersion 10 migrateWorldPagesV10
                         , atVersion 9 migrateWorldPagesV9
                         , atVersion 8 migrateWorldPagesV8
                         , atVersion 7 migrateWorldPagesV7
@@ -663,6 +670,11 @@ validatePages wp
           , msg ← locationInstanceAllocatorErrors lis
                     ⧺ locationInstanceBoundsErrors lis
                     ⧺ locationSignificantItemErrors lis
+                    -- #2505: the container-slot rules, and the
+                    -- CROSS-FAMILY duplicate-ownership walk the
+                    -- significant one cannot see (one allocator, two
+                    -- slot families).
+                    ⧺ locationContainerSlotErrors lis
           ]
   where
     -- The version this build WRITES, not a literal that has to be
@@ -673,7 +685,7 @@ validatePages wp
     -- deterministic rather than a hash-map traversal order.
     duplicates xs = [ y | (y : _ : _) ← L.group (L.sort xs) ]
 
--- | Turn the decoded current v11 page cores into the base 'PageSnapshot'
+-- | Turn the decoded current v12 page cores into the base 'PageSnapshot'
 --   map every other page-scoped component then writes onto (assembly).
 --   All entity/activity/edit fields start empty and are overwritten by
 --   their own REQUIRED components; a valid save leaves none of these
@@ -815,14 +827,19 @@ migrateWorldPagesV9 (WorldPagesDTOv9 ps) = WorldPages
 --   schema change freezes the current shape as 'PageCoreDTOv11' rather
 --   than touching this one (frozen-DTO boundary rule).
 --
---   Its gen params and identity are the CURRENT types on purpose: #2471
---   changed neither, so repointing them would fabricate a difference
---   between two shapes whose bytes for those fields are identical. That
---   is the same repointing rule 'PageCoreDTOv8' documents, applied in
---   the direction where nothing has to move yet.
+--   Its identity is the CURRENT type on purpose: #2471 changed it not at
+--   all, so repointing it would fabricate a difference between two
+--   shapes whose bytes for that field are identical.
+--
+--   Its GEN PARAMS were the current type for exactly that reason too,
+--   until #2505 appended a field to the live location instance. That is
+--   the "later schema change" this note anticipated: the field is now
+--   the frozen 'WorldGenParamsDTOv8', which carries the identical bytes
+--   the live type carried at v10, so no tracked v10 fixture moved. Same
+--   repointing rule 'PageCoreDTOv8' documents.
 data PageCoreDTOv10 = PageCoreDTOv10
     { pc10PageId      ∷ !WorldPageId
-    , pc10GenParams   ∷ !WorldGenParamsDTO
+    , pc10GenParams   ∷ !WorldGenParamsDTOv8
     , pc10CameraX     ∷ !Float
     , pc10CameraY     ∷ !Float
     , pc10TimeHour    ∷ !Int
@@ -860,7 +877,7 @@ migrateWorldPagesV10 (WorldPagesDTOv10 ps) = WorldPages
     }
   where
     toBase p = (blankPageSnapshot (pc10PageId p)
-                    (fromWorldGenParamsDTO (pc10GenParams p)))
+                    (fromWorldGenParamsDTOv8 (pc10GenParams p)))
         { pgsCameraX    = pc10CameraX p
         , pgsCameraY    = pc10CameraY p
         , pgsTimeHour   = pc10TimeHour p
@@ -871,6 +888,79 @@ migrateWorldPagesV10 (WorldPagesDTOv10 ps) = WorldPages
         , pgsMapMode    = pc10MapMode p
         , pgsIdentity   = fromWorldIdentityDTO <$> pc10Identity p
         , pgsGeneratedId = pc10GeneratedId p
+        }
+
+-- | The FROZEN v11 wire shape (#2471 through #2505): the CURRENT page
+--   core in every respect except that its gen params are the frozen
+--   'WorldGenParamsDTOv8' — the shape whose location instances carry no
+--   pending container shells. Preserved verbatim for decode-only
+--   backward compatibility; never edited, and a further schema change
+--   freezes the current shape as 'PageCoreDTOv12' rather than touching
+--   this one (frozen-DTO boundary rule).
+--
+--   Its identity is the CURRENT type on purpose: #2505 changed it not at
+--   all, so repointing it would fabricate a difference between two
+--   shapes whose bytes for that field are identical.
+--
+--   The page core's own field list is byte-identical to 'PageCoreDTO''s.
+--   #2505's change is entirely INSIDE the gen params, which is why this
+--   is a distinct wire shape at all: a v11 payload read as the current
+--   type would run off the end of every location instance's field list.
+data PageCoreDTOv11 = PageCoreDTOv11
+    { pc11PageId      ∷ !WorldPageId
+    , pc11GenParams   ∷ !WorldGenParamsDTOv8
+    , pc11CameraX     ∷ !Float
+    , pc11CameraY     ∷ !Float
+    , pc11TimeHour    ∷ !Int
+    , pc11TimeMinute  ∷ !Int
+    , pc11TimeRemainder ∷ !Double
+    , pc11DateYear    ∷ !Int
+    , pc11DateMonth   ∷ !Int
+    , pc11DateDay     ∷ !Int
+    , pc11MapMode     ∷ !ZoomMapMode
+    , pc11Identity    ∷ !(Maybe WorldIdentityDTO)
+    , pc11GeneratedId ∷ !(Maybe GeneratedWorldId)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv11 = WorldPagesDTOv11 { wpd11Pages ∷ [PageCoreDTOv11] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The v11→v12 migration (#2505): every field a v11 page carries rides
+--   across untouched, and every placed location gains NO container
+--   slots.
+--
+--   Empty is what such a save actually recorded, not a guess. Container
+--   content did not exist when those bytes were written, so no v11 page
+--   ever held a pending shell — and reading slots off today's YAML would
+--   owe a materialized world crates it never spawned, against instances
+--   whose @contents_spawned@ flag guarantees nothing will ever spawn
+--   them. The same rule 'migrateWorldPagesV9' applies to #917's
+--   obligations, for the same reason.
+--
+--   'wpIdsFromPayload' stays TRUE: v11 carries generated-world ids, so
+--   an absent id in one is corruption exactly as it is in a v12 payload
+--   and @validatePages@ must keep saying so.
+migrateWorldPagesV11 ∷ WorldPagesDTOv11 → WorldPages
+migrateWorldPagesV11 (WorldPagesDTOv11 ps) = WorldPages
+    { wpPageIds = map pc11PageId ps
+    , wpBase    = HM.fromList [ (pc11PageId p, toBase p) | p ← ps ]
+    , wpIdsFromPayload = True
+    }
+  where
+    toBase p = (blankPageSnapshot (pc11PageId p)
+                    (fromWorldGenParamsDTOv8 (pc11GenParams p)))
+        { pgsCameraX    = pc11CameraX p
+        , pgsCameraY    = pc11CameraY p
+        , pgsTimeHour   = pc11TimeHour p
+        , pgsTimeMinute = pc11TimeMinute p
+        , pgsTimeRemainder = pc11TimeRemainder p
+        , pgsDateYear   = pc11DateYear p
+        , pgsDateMonth  = pc11DateMonth p
+        , pgsDateDay    = pc11DateDay p
+        , pgsMapMode    = pc11MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc11Identity p
+        , pgsGeneratedId = pc11GeneratedId p
         }
 
 -- | The v7→v8 migration (#916): every historical placed location keeps

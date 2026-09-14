@@ -225,6 +225,7 @@ instanceFor cat prov expr = LocationInstance
     , liContentsSpawned = False
     , liEncounter       = Nothing
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 

@@ -370,6 +370,7 @@ import qualified Test.Headless.Item.PortableKnowledge as PortableKnowledge
 import qualified Test.Headless.Item.NestedContents as NestedContents
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.SignificantContents as LocationSignificantContents
+import qualified Test.Headless.Location.ContainerShells as LocationContainerShells
 import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
@@ -1220,6 +1221,13 @@ main = hspec $ do
     PortableKnowledge.spec
     LocationInstance.spec
     LocationSignificantContents.spec
+    -- #2505: three layers of the pending-container-shell slice. The pure
+    -- and stubbed-VM halves need no engine; the spawn boundary brings
+    -- its OWN engine, because it rewrites the world and item managers to
+    -- install a one-page fixture per example.
+    LocationContainerShells.pureSpec
+    LocationContainerShells.luaSpec
+    LocationContainerShells.engineSpec
     LocationNaming.spec
     RiverNaming.spec
     LocationLootDeterminism.spec

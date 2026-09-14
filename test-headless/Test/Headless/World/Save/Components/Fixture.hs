@@ -293,6 +293,7 @@ significantOwner entries = LocationInstance
     , liContentsSpawned = False
     , liEncounter       = Nothing
     , liSignificant     = entries
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 

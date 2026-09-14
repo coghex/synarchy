@@ -21,7 +21,19 @@
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "persistence reference integrity"'@.
-module Test.Headless.World.Save.Integrity (spec) where
+--   The minimal one-page session fixture below is SHARED rather than
+--   copied: 'Test.Headless.Location.ContainerShells' drives #2505's
+--   pending-shell provenance rules against the same 'minimalPage' /
+--   'minimalGlobals' / 'buildSnap' trio this module's own rules use, so
+--   a field added to 'PageSnapshot' or 'SessionGlobals' is reconciled
+--   once.
+module Test.Headless.World.Save.Integrity
+    ( spec
+    , minimalPage
+    , minimalGlobals
+    , minimalUnit
+    , buildSnap
+    ) where
 
 import UPrelude
 import Test.Hspec
@@ -347,6 +359,7 @@ pageWithEncounter pid uid = (minimalPage pid)
                     , leCleared = False
                     }
                 , liSignificant = []
+                , liContainers  = []
                 , liClearEventEmitted = False
                 }
             , lisPendingLegacy = Nothing
@@ -374,6 +387,7 @@ pageOwing pid entry = (minimalPage pid)
                 , liContentsSpawned = True
                 , liEncounter = Nothing
                 , liSignificant = [entry]
+                , liContainers  = []
                 , liClearEventEmitted = False
                 }
             , lisPendingLegacy = Nothing

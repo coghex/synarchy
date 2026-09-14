@@ -64,6 +64,17 @@ location's chunk loads, end to end:
      pages so the SAME instance id names a different real location on
      each, and checks the two units' memories stay distinct.
 
+  5b. Pending container shells (#2505): a location authoring a
+     `kind: container` entry mints ONE unrolled shell per occurrence on
+     first chunk load — bound to its persisted slot, carrying the
+     definition's authored default contents and no profile draw —
+     revisiting the same chunks mints no second one, an ordinary pickup
+     of a pending shell is REFUSED with the shell left where it is, and
+     the whole pending slot survives save -> quit -> fresh restart ->
+     load. Its three fixtures (a crate item, a loot profile, and a DENSE
+     location pairing them) are the probe's own: no SHIPPED location
+     authors a container entry yet, because PLC-10 owns the wooden crate
+     and the ruin_small entry that will carry it.
   6. Location naming (#1101): a world with a #1092 language provenance
      names every placed ruin in that language -- a generated native
      name (never the `ldLabel` "Small Ruin") plus a non-empty English
@@ -79,7 +90,7 @@ Headless skips the GUI data-loading step, so defs are registered by
 hand here (items/units/buildings/loot_tables/locations), same as
 tools/location_overlay_probe.py does for locations alone.
 
-EVERY file this invocation creates -- its five fixture YAMLs, its
+EVERY file this invocation creates -- its eight fixture YAMLs, its
 engine log, and the throwaway resource root with the save slots #1620
 already moved into it -- lives under ONE directory this process owns,
 and goes away again on every handled exit (#1884). Before that the
@@ -116,7 +127,7 @@ import time
 from probelib import FixtureNotRegistered, load_ai_stack, quit_engine, send
 from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
-from location_content import content, dispatch, knowledge, naming
+from location_content import container, content, dispatch, knowledge, naming
 from location_content.engine_queries import (gen_world, load_defs,
                                              load_registries, placed_ready,
                                              ruin_geometry, spawn_counts,
@@ -161,7 +172,7 @@ def main() -> int:
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--port", type=int, default=9190)
     ap.add_argument("--keep-artifacts", action="store_true",
-                    help="keep this run's artifact directory (its five "
+                    help="keep this run's artifact directory (its eight "
                          "fixture YAMLs, the engine log, and the isolated "
                          "resource root with its save slots) instead of "
                          "deleting it, and name it in the summary — for "
@@ -233,10 +244,10 @@ def main() -> int:
 
 
 def run(args, art: RunArtifacts, token: str) -> int:
-    """The eight-process sequence, and nothing else.
+    """The ten-process sequence, and nothing else.
 
-    Seven `boot_isolated` call sites; the loot-stability one runs twice
-    (same order, then reversed), so a passing run launches eight engine
+    Nine `boot_isolated` call sites; the loot-stability one runs twice
+    (same order, then reversed), so a passing run launches ten engine
     processes. Every scenario assertion lives in a `location_content.*`
     owner, reached with the live port this function opened and the
     `ScenarioState` it threads between them — no owner boots an engine
@@ -244,6 +255,7 @@ def run(args, art: RunArtifacts, token: str) -> int:
     """
     slot_content = f"loc_content_probe_{token}"
     slot_naming = f"loc_naming_probe_{token}"
+    slot_crate = f"loc_crate_probe_{token}"
 
     failures: list[str] = []
     state = ScenarioState()
@@ -395,6 +407,60 @@ def run(args, art: RunArtifacts, token: str) -> int:
             send(args.port, "world.show('ln'); return 'ok'")
             time.sleep(1.0)
             naming.check_names_survived_reload(args, state, failures)
+        except _PhaseAborted:
+            pass
+        finally:
+            quit_engine(args.port, proc)
+
+    # ---- Process 9 (#2505): a location authoring a `kind: container`
+    #      entry mints ONE pending shell per occurrence on first chunk
+    #      load, revisiting mints no second, and an ordinary pickup of a
+    #      pending shell is refused. Registries only -- NOT
+    #      ruin_small.yaml, which would contend with crate_ruin for chunk
+    #      (0,0) exactly as dense_ruin does, and would additionally put
+    #      ruin_small's own ground items on the page the shell count is
+    #      read from. ----
+    (crate_item_yaml, crate_profile_yaml,
+     crate_location_yaml) = container.write_container_fixtures(art)
+    proc = boot_isolated(args.port, art)
+    try:
+        load_registries(args.port)
+        container.register_container_fixtures(args.port, crate_item_yaml,
+                                              crate_profile_yaml,
+                                              crate_location_yaml)
+        gen_world(args.port, container.CRATE_PAGE, args.seed, args.size)
+        container.observe_initial_shell(args, state, failures)
+        if state.crate_slots:
+            container.check_no_respawn_and_pickup(args, state, failures)
+            # Process 10 reads this fixture from a FRESH process, so the
+            # save must be COMPLETE -- not merely accepted -- before that
+            # process boots (#1620).
+            state.saved_crate = save_and_wait(args.port, container.CRATE_PAGE,
+                                              slot_crate, failures,
+                                              log=art.engine_log)
+    finally:
+        quit_engine(args.port, proc)
+
+    # ---- Process 10: the pending slot, its profile and its bound shell
+    #      all come back from that save in a fresh process. The crate and
+    #      profile fixtures are re-registered first: the LOAD boundary
+    #      refuses a save whose pending slot names an unregistered
+    #      profile, so a load that succeeds here is itself evidence the
+    #      reference resolved. ----
+    if state.crate_slots and state.saved_crate and not failures:
+        proc = boot_isolated(args.port, art)
+        try:
+            load_registries(args.port)
+            container.register_container_fixtures(args.port, crate_item_yaml,
+                                                  crate_profile_yaml,
+                                                  crate_location_yaml)
+            load_ai_stack(args.port)
+            if not load_and_wait(args.port, slot_crate, failures,
+                                 log=art.engine_log):
+                raise _PhaseAborted
+            send(args.port, f"world.show('{container.CRATE_PAGE}'); return 'ok'")
+            time.sleep(1.0)
+            container.check_shell_survived_reload(args, state, failures)
         except _PhaseAborted:
             pass
         finally:

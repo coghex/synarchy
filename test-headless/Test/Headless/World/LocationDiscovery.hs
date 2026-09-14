@@ -295,6 +295,7 @@ encounterParamsAt lifecycle occupants = pageParams
                     -- already clearance-satisfied (a zero roll with no
                     -- significant item — nobody cleared it), unspent
                     -- while any condition is outstanding.
+                    , liContainers = []
                     , liClearEventEmitted = null occupants }
 
 occupantAt ∷ UnitId → (Float, Float) → LocationEncounterOccupant
@@ -1050,6 +1051,7 @@ significantParams lifecycle mOccupants entries = pageParams
         , liSignificant = entries
         -- Seeded the way the real constructor seeds it: no location
         -- owing an untaken item is ever born already satisfied.
+        , liContainers = []
         , liClearEventEmitted = False
         }
 
