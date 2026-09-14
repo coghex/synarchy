@@ -1221,10 +1221,11 @@ main = hspec $ do
     PortableKnowledge.spec
     LocationInstance.spec
     LocationSignificantContents.spec
-    -- #2505: three layers of the pending-container-shell slice. The pure
-    -- and stubbed-VM halves need no engine; the spawn boundary brings
-    -- its OWN engine, because it rewrites the world and item managers to
-    -- install a one-page fixture per example.
+    -- #2505: four layers of the pending-container-shell slice. The pure
+    -- and stubbed-VM halves need no engine; the YAML boundary and the
+    -- spawn boundary each bring their OWN, because one borrows the live
+    -- item/loot-profile/location registries and the other rewrites the
+    -- world and item managers to install a one-page fixture per example.
     LocationContainerShells.pureSpec
     LocationContainerShells.luaSpec
     LocationContainerShells.yamlSpec

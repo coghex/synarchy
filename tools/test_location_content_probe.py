@@ -1130,8 +1130,8 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
            "a rejected fixture ends the run rather than a traceback")
 
 
-def test_both_log_assertions_read_this_invocations_log() -> None:
-    print("\ntest_both_log_assertions_read_this_invocations_log")
+def test_every_log_assertion_reads_this_invocations_log() -> None:
+    print("\ntest_every_log_assertion_reads_this_invocations_log")
     # #1884 requirement 9. Three checks ASSERT against the engine log —
     # the integrity diagnostic in phase 2, the two unknown-content
     # warnings in phase 3, and (#2505) the load rejection naming the
@@ -1218,41 +1218,107 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
 #: what a reader acts on — so a number that moved in code and not in prose
 #: leaves the authoritative contract stating something false.
 NUMBER_WORDS = {
-    3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight",
-    9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+    2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
+    8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
 }
 
-#: Every prose file that DESCRIBES this probe's topology, as opposed to
-#: asserting it. `tools/README.md` is included deliberately: it is the
-#: tools index a reader reaches first, and it carried the stale counts
-#: through two review rounds of #2505 while every structural check below
-#: stayed green.
-TOPOLOGY_PROSE = (
-    *SURFACE,
-    TOOLS / "README.md",
-)
+#: Words that state a count without naming the number, keyed by the count
+#: they mean. A sentence saying "both" of something is exactly as stale as
+#: one saying "two" once there are three, and that was the form which
+#: survived a whole review round — so these are matched wherever a number
+#: word would be, in either position.
+#:
+#: Deliberately spelled as data rather than illustrated in prose: this
+#: file scans ITSELF (see `topology_prose`), so an example sentence here
+#: quoting a stale claim would be found and reported as one.
+ALSO_MEANS = {2: ("both", "twice")}
+
+#: `tools/README.md` documents every probe, so only the parts that
+#: describe THIS one may be read: the companion's own section, and the
+#: probe's row in the index table. Scanning the whole file would judge
+#: another probe's sentences by this probe's counts.
+README = TOOLS / "README.md"
+README_SECTION_HEADING = "### `test_location_content_probe.py`"
+README_TABLE_ROW = "| `location_content_probe.py` |"
+
+
+def readme_prose() -> str:
+    """The README text that is ABOUT this probe, and nothing else."""
+    body = README.read_text(encoding="utf-8")
+    start = body.index(README_SECTION_HEADING)
+    end = body.index("\n### ", start + len(README_SECTION_HEADING))
+    rows = [line for line in body.splitlines()
+            if line.startswith(README_TABLE_ROW)]
+    return body[start:end] + "\n" + "\n".join(rows)
+
+
+def topology_prose() -> tuple[tuple[str, str], ...]:
+    """(name, text) for every prose body that DESCRIBES this probe's
+    topology, as opposed to asserting it.
+
+    The README is included deliberately: it is the tools index a reader
+    reaches first, and it carried the stale counts through two review
+    rounds of #2505 while every structural check below stayed green.
+    """
+    return tuple(
+        [(path.name, module_source(path)) for path in SURFACE]
+        + [(README.name, readme_prose())]
+        # THIS file too. It is the checker, but it is also a contract:
+        # its module docstring and its failure messages tell a reader what
+        # the probe's shape is, and round 4 of #2505 found a stale "both"
+        # in exactly those sentences while every check here passed.
+        + [(Path(__file__).name,
+            Path(__file__).read_text(encoding="utf-8"))]
+    )
 
 #: The quantities those files state in words, each with the phrases that
 #: introduce it. A phrase is matched against the whole prose body, and the
 #: number word immediately before it must be the current one.
 def topology_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
-    """(label, current value, phrases it is spelled before)."""
+    """(label, current value, phrases the number is spelled BEFORE).
+
+    Prose that puts the number AFTER its subject ("ASSERTS against that
+    log three times") is covered by 'TRAILING_CLAIMS' instead — the two
+    shapes both occur, and a guard that knew only one would keep passing
+    over the other.
+    """
     return (
         ("boot call sites", BOOT_CALL_SITES,
          ("boot_isolated` call sites", "boot_isolated` CALL SITES",
           "call sites", "boot CALL SITES")),
         ("process launches", PROCESS_LAUNCHES,
          ("engine processes", "launches", "processes from")),
-        # Deliberately NOT the fixture count. It is legitimately stated
-        # per-OWNER as well as probe-wide -- `dispatch` owns five and
-        # `container` four -- so a number word before "fixtures" cannot be
-        # judged without knowing whose, and a guard that guessed would
-        # force those true sentences to be rewritten into false ones.
         ("scenario owners", len(SCENARIO_OWNERS), ("scenario owners",)),
         ("log assertions", LOG_ASSERTION_SITES,
-         ("checks ASSERT against", "places that assert",
-          "log-reading ASSERTION", "owners that read it")),
+         ("checks ASSERT against", "checks below ASSERT against",
+          "places that assert", "log-reading ASSERTION",
+          "owners that read it")),
     )
+
+
+def trailing_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """(label, current value, phrases the number is spelled AFTER)."""
+    return (
+        ("log assertions", LOG_ASSERTION_SITES,
+         ("ASSERTS against that log",)),
+    )
+
+
+def owner_fixture_counts() -> dict[Path, int]:
+    """How many fixtures each SCENARIO OWNER stages, from its own
+    `art.fixture(...)` calls.
+
+    The fixture total is the one topology count that is legitimately
+    stated per-owner as well as probe-wide — `dispatch` stages five and
+    `container` four — so it cannot be checked against one number. It CAN
+    be checked against the owner's own, which is what this derives: in an
+    owner module, a number word before "fixtures" is a claim about that
+    owner, and the truth is countable from the same file.
+    """
+    counts: dict[Path, int] = {}
+    for path, _node in surface_calls("fixture", attribute=True):
+        counts[path] = counts.get(path, 0) + 1
+    return counts
 
 
 def test_the_topology_prose_states_the_current_counts() -> None:
@@ -1275,14 +1341,37 @@ def test_the_topology_prose_states_the_current_counts() -> None:
     print("\ntest_the_topology_prose_states_the_current_counts")
     stale: list[str] = []
     checked = 0
-    for path in TOPOLOGY_PROSE:
-        body = module_source(path)
-        for label, current, phrases in topology_claims():
+    owner_fixtures = {path.name: count
+                      for path, count in owner_fixture_counts().items()}
+    expect(owner_fixtures,
+           "the owners really stage fixtures — an empty derivation would "
+           "make the per-owner fixture claim below vacuous")
+    bodies = topology_prose()
+    expect(any(README.name == name for name, _ in bodies),
+           "the README's own section is among the prose scanned — it is "
+           "where the stale counts survived longest")
+    for name, body in bodies:
+        claims = list(topology_claims())
+        # An owner's WHOLE fixture set, checked only in that owner's file.
+        # Restricted to the phrasings that mean the whole set: an owner
+        # legitimately also counts a SUBSET ("phase 3's four fixtures"),
+        # and elsewhere a number before "fixtures" may be the probe-wide
+        # total or a qualified historical note.
+        if name in owner_fixtures:
+            claims.append(("its own fixture set", owner_fixtures[name],
+                           ("inline YAML fixtures", "YAML fixtures are")))
+        for label, current, phrases in claims:
             wanted = NUMBER_WORDS[current]
+            spellings = [
+                number for value, number in NUMBER_WORDS.items()
+                if number != wanted
+            ] + [
+                alias
+                for value, aliases in ALSO_MEANS.items() if value != current
+                for alias in aliases
+            ]
             for phrase in phrases:
-                for word, number in NUMBER_WORDS.items():
-                    if number == wanted:
-                        continue
+                for number in spellings:
                     # Only a number word DIRECTLY before the phrase is a
                     # claim about this quantity. "eight" elsewhere in the
                     # file (another probe's rule, a historical aside) is
@@ -1292,9 +1381,24 @@ def test_the_topology_prose_states_the_current_counts() -> None:
                         checked += 1
                         if needle in body:
                             stale.append(
-                                f"{path.name}: {label} is {current} "
+                                f"{name}: {label} is {current} "
                                 f"({wanted}), but the prose says "
                                 f"{needle!r}")
+        for label, current, phrases in trailing_claims():
+            wanted = NUMBER_WORDS[current]
+            spellings = [number for number in NUMBER_WORDS.values()
+                         if number != wanted]
+            spellings += [alias
+                          for value, aliases in ALSO_MEANS.items()
+                          if value != current for alias in aliases]
+            for phrase in phrases:
+                for number in spellings:
+                    needle = f"{phrase} {number}"
+                    checked += 1
+                    if needle in body:
+                        stale.append(
+                            f"{name}: {label} is {current} ({wanted}), but "
+                            f"the prose says {needle!r}")
     expect(checked > 0,
            "the prose scan really looked at something — an empty sweep "
            "would report OK having read nothing")
@@ -1523,7 +1627,7 @@ def main() -> int:
     test_the_fixture_bodies_are_byte_for_byte_unchanged()
     test_registration_order_and_loaders_are_unchanged()
     test_every_fixture_still_goes_through_load_fixture_yaml()
-    test_both_log_assertions_read_this_invocations_log()
+    test_every_log_assertion_reads_this_invocations_log()
     test_the_public_helpers_other_probes_import_are_intact()
     test_the_topology_prose_states_the_current_counts()
     test_the_reorganized_surface_is_complete()

@@ -4,8 +4,8 @@
 --   the strict intermediate lifecycle that keeps one addressable until
 --   PLC-15 (#2510) realizes it.
 --
---   Three layers, because a regression in one is invisible from the
---   other two:
+--   Four layers, because a regression in one is invisible from the
+--   other three:
 --
 --   * 'pureSpec' — placement, the authoring RULE SET, the decode rules,
 --     the session-wide provenance graph, the load-time profile check,

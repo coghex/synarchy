@@ -9,11 +9,14 @@ minted the first time a chunk actually loads, NOT minted again when that
 chunk is revisited, and the pending slot surviving a save, a process
 exit and a load in a fresh engine. That is what this owner covers.
 
-Its three YAML fixtures are the reason the scenario exists at all: no
+Its four YAML fixtures are the reason the scenario exists at all: no
 SHIPPED location authors a `kind: container` entry yet (PLC-10 owns the
 wooden crate and the `ruin_small` entry that will carry it), so the
-probe supplies its own crate item, its own loot profile, and a DENSE
-location that guarantees one at the synchronous centre chunk.
+probe supplies its own crate item, its own loot profile, a DENSE
+location pairing them that guarantees one at the synchronous centre
+chunk, and a container-free twin of that location -- the fourth, used by
+the last phase alone, and the only way to reach an engine that knows the
+location def but has never heard of the profile.
 """
 from __future__ import annotations
 
@@ -126,9 +129,11 @@ CRATE_PAGE = "wk"
 
 
 def write_container_fixtures(art: RunArtifacts) -> tuple[str, str, str, str]:
-    """Stage this scenario's three fixtures into the invocation's own
-    fixtures directory, and answer their paths in REGISTRATION order —
-    items, then the profile, then the location.
+    """Stage this scenario's four fixtures into the invocation's own
+    fixtures directory, and answer their paths with the first three in
+    REGISTRATION order — items, then the profile, then the location —
+    followed by the container-free twin, which a LATER phase registers in
+    place of that location rather than beside it.
 
     That order is the engine's own (`scripts/startup_loader.lua`) and it
     is load-bearing here, not cosmetic: the location loader resolves a
