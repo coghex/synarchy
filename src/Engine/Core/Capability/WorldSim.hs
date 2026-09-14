@@ -174,9 +174,10 @@ data WorldSimCapability = WorldSimCapability
     --   enqueues the page-scoped clears carrying them as exclusive
     --   cutoffs, and rewrites 'wsWorldManagerRef'. Taken by
     --   @WorldThread@ (those three handlers), @LuaThread@ (the three
-    --   entity-admission verbs) and @UnitThread@ (the two commit
-    --   fences: @Unit.Thread.Command.Spawn@'s insertion and, since
-    --   #2490, @Unit.Thread.Command.Solidify@'s kill), through
+    --   entity-admission verbs) and @UnitThread@ (two fences of its
+    --   own: @Unit.Thread.Command.Spawn@'s insertion, and since #2490
+    --   @Unit.Thread.Command.Solidify@'s kill — separate roles, since
+    --   the kill allocates no id and takes no cutoff), through
     --   'withPageLifecycle' and nothing else. #2490 also made the WORLD
     --   thread take it for a READ that writes nothing:
     --   @World.Reaction.Occupants.snapshotSolidificationOccupants@
@@ -265,7 +266,7 @@ restoreIfPlayerIdle wsc expected act =
 --   or one read that has to be coherent against either, as a single
 --   critical section (#2476).
 --
---   The four callers hold it for different halves of the same
+--   The five callers hold it for different halves of the same
 --   boundary, which is why they must be the same lock:
 --
 --   * A __lifecycle transition__ (a single-page @world.destroy@; either
@@ -284,16 +285,25 @@ restoreIfPlayerIdle wsc expected act =
 --     thread) re-reads the target page's incarnation epoch and inserts,
 --     inside one call. The epoch its command carries was checked at the
 --     top of a handler that does a great deal of work before writing, so
---     only holding the lock across BOTH makes it a fence. Since #2490
---     @Unit.Thread.Command.Solidify@'s solidification kill is one of
---     these: it revalidates the reaction page's epoch and then kills,
---     for the same reason.
+--     only holding the lock across BOTH makes it a fence.
+--   * A __solidification kill__ (#2490:
+--     @Unit.Thread.Command.Solidify@'s handler, on the unit thread)
+--     re-reads the reaction page's incarnation epoch and then decides
+--     the roster, kills and corrects the corpses, inside one call. The
+--     same fence shape as the spawn commit and for the same reason:
+--     without it a replacement landing after its own early-out check
+--     would leave it killing an orphan off a captured victim list and
+--     filing that death against the page that replaced it. It is its
+--     own role rather than a spawn commit because it INSERTS nothing —
+--     it allocates no id and takes no cutoff — so the id-ordering
+--     argument below is not what it rests on.
 --   * A __coherent read__ (#2490:
 --     @World.Reaction.Occupants.snapshotSolidificationOccupants@, on
 --     the world thread) takes two 'Data.IORef.readIORef's — the unit
 --     roster and the authoritative positions — inside one call, so no
 --     MEMBERSHIP change can land between them. It writes nothing; the
---     lock is here purely to make the pair one instant.
+--     lock is here purely to make the pair one instant. Alone among
+--     the five it is not a fence and revalidates nothing.
 --
 --   None can interleave with another, so an id allocated before a
 --   transition is provably below that transition's cutoff and one

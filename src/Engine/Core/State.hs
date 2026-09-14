@@ -552,15 +552,19 @@ data EngineEnv = EngineEnv
     --   one `readIORef` of that map is one coherent instant of all of
     --   them, which is all the read claims.
     --
-    --   The last two holders are a FENCE, not a check. The epoch a
-    --   spawn command carries is verified at the top of a handler that
-    --   then rolls stats, sheds inventory and commits a footprint
-    --   before it writes, so a transition could otherwise outlive the
-    --   check and the handler would insert a departed incarnation's
-    --   entity under the replacement's reused name; a solidification
-    --   kill has the same shape, and would otherwise kill an orphan off
-    --   its own captured victim list and attribute the death to the
-    --   page that replaced it.
+    --   Of the five, the spawn COMMIT and the solidification KILL are a
+    --   FENCE rather than a check. The epoch a spawn command carries is
+    --   verified at the top of a handler that then rolls stats, sheds
+    --   inventory and commits a footprint before it writes, so a
+    --   transition could otherwise outlive the check and the handler
+    --   would insert a departed incarnation's entity under the
+    --   replacement's reused name; a solidification kill has the same
+    --   shape, and would otherwise kill an orphan off its own captured
+    --   victim list and attribute the death to the page that replaced
+    --   it. The COHERENT READ is not a fence and revalidates nothing:
+    --   it writes nothing at all, and holds the mutex solely so that
+    --   its two reads land on one side or the other of every
+    --   membership change rather than straddling one.
     --
     --   The no-second-lock rule below is why that kill FILES its
     --   player-event and injury rows after releasing this, not inside
