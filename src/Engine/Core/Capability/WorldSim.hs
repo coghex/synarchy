@@ -183,7 +183,8 @@ data WorldSimCapability = WorldSimCapability
     --   @World.Reaction.Occupants.snapshotSolidificationOccupants@
     --   reads the roster and the authoritative positions inside one
     --   section, so no ADDITION can land between them (a removal can,
-    --   and takes both stores, so it drops out either way). No holder
+    --   leaving a stale candidate the consumer's own roster recheck
+    --   drops). No holder
     --   may take another lock underneath it: that is why the
     --   solidification kill reports its deaths after releasing this
     --   rather than inside it. Process-lifetime: unlike every other field here
@@ -308,14 +309,19 @@ restoreIfPlayerIdle wsc expected act =
 --     What that buys is precise and narrow: no ADDITION can land
 --     between the two reads, because the only sites that create new
 --     membership (the spawn commit above, and a page reincarnation) are
---     holders too. A REMOVAL still can — @UnitDestroy@ and the page
---     clears bypass this lock — and does not need to be excluded,
---     because it takes BOTH stores: whichever read it straddles, the
---     row drops out of the selection, which is the right answer for a
---     unit that is gone. The pair is therefore NOT \"one instant\" of
---     the roster; what it is, is free of phantom ADDITIONS. Correctness
---     also leans on the consumer: the solidification kill re-reads the
---     roster and the page epoch before it acts on any named victim.
+--     holders too.
+--
+--     A REMOVAL still can, and is NOT made harmless by this lock.
+--     @UnitDestroy@ bypasses it and retires the two stores in two
+--     separate 'Data.IORef.atomicModifyIORef'' calls, in the same order
+--     the read takes them — roster first, sim state second — so one
+--     landing between the two reads is seen present in BOTH and enters
+--     the selection as a STALE CANDIDATE. That is harmless for a
+--     different reason: the consumer re-reads the roster and the page
+--     epoch before acting on any name it was handed, and a row that is
+--     gone by then is skipped. The pair is therefore NOT \"one
+--     instant\" of the roster; what it is, is free of phantom
+--     ADDITIONS, and the consumer's recheck is what covers the rest.
 --
 --   None can interleave with another, so an id allocated before a
 --   transition is provably below that transition's cutoff and one
@@ -327,12 +333,11 @@ restoreIfPlayerIdle wsc expected act =
 --   __What it does NOT cover.__ Only the callers listed above take it.
 --   A unit REMOVAL does not: @Unit.Thread.Command.Lifecycle@'s
 --   @UnitDestroy@ and the page clears drop a row from the roster and
---   from the sim states without it. That is harmless for the coherent
---   read, because a removal takes BOTH stores — a row it retires
---   between the two reads simply contributes nothing, which is the
---   right answer for a unit that is gone. New MEMBERSHIP is the
---   direction that matters, and the only site that creates it in a live
---   session is the spawn commit above. (A load publish replaces the
+--   from the sim states without it, and not even atomically with each
+--   other — so one can leave a coherent read holding a stale candidate,
+--   which that read's consumer filters by rechecking the roster. New
+--   MEMBERSHIP is the direction this lock actually covers, and the only
+--   site that creates it in a live session is the spawn commit above. (A load publish replaces the
 --   whole session's roster outside this lock; a reaction cannot survive
 --   one either way — its page-incarnation fence refuses it.) Unit
 --   POSITIONS are likewise not frozen: the movement tick writes them,

@@ -70,15 +70,19 @@
 --     mutex; so does a page reincarnation. (A load publish replaces the
 --     whole roster outside the lock. A reaction cannot survive one
 --     either way — the page-incarnation fence on the kill refuses it.)
---   * REMOVALS are not excluded, and need not be.
---     @Unit.Thread.Command.Lifecycle@'s @UnitDestroy@ and the page
---     clears drop a row from BOTH stores without this lock, so one
---     landing between the two reads contributes no victim — the right
---     answer for a unit that is gone. So the pair is not "one instant"
---     of the roster, and nothing here rests on it being one: it rests
---     on additions being excluded, and on the CONSUMER re-reading the
---     roster and the page epoch before acting on any name this carried
---     ('Unit.Thread.Command.Solidify').
+--   * REMOVALS are NOT excluded, and this lock does not make them
+--     harmless. @Unit.Thread.Command.Lifecycle@'s @UnitDestroy@
+--     bypasses it and retires the roster row and the sim row in two
+--     separate 'Data.IORef.atomicModifyIORef'' calls — in the same
+--     order this reads them — so a destroy landing between the two
+--     reads is seen present in BOTH and enters the victim list as a
+--     STALE CANDIDATE. What covers that is the CONSUMER:
+--     'Unit.Thread.Command.Solidify' re-reads the roster and the page
+--     epoch before acting on any name carried here, and skips one the
+--     roster no longer holds — the "Gone" case it documents. So the
+--     pair is not "one instant" of the roster, and nothing rests on it
+--     being one: it rests on ADDITIONS being excluded here and stale
+--     names being filtered there.
 --   * POSITIONS are not frozen. @Unit.Thread@'s movement tick writes
 --     them, and so do @UnitTeleport@ and the re-ground handlers; none
 --     takes anything this thread could hold, and no lock-free

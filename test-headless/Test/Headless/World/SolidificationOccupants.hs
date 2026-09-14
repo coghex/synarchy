@@ -1199,7 +1199,13 @@ spec = describe "solidification occupants (#2490)" $ do
                       placeAt env occupant (tileOf lp nextCell) }
 
         -- The spawn was still blocked on the lock when the roster had
-        -- already been read, so the two reads describe one roster.
+        -- already been read, so no ADDITION straddled the two reads.
+        -- (That is the whole of what the lock buys here. A concurrent
+        -- REMOVAL still can straddle them — `UnitDestroy` retires the
+        -- two stores in two separate writes, in this same order — and
+        -- what filters the stale name it leaves behind is the consumer:
+        -- the kill handler's own roster recheck, covered by the "skips
+        -- a victim the ROSTER no longer holds" example above.)
         readIORef landedInside `shouldReturn` False
         finished ← timeout ackTimeoutMicros (takeMVar spawnDone)
         finished `shouldBe` Just ()

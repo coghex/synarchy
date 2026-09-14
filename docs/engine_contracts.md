@@ -5115,11 +5115,14 @@ the narrower statement is the one to rely on:
   publish replaces the whole roster outside the lock, and a reaction
   cannot survive one either way — the page-incarnation fence refuses
   it.)
-* **Removals are not excluded, and need not be.** `UnitDestroy` and the
-  page clears drop a row from `umInstances` and `utsSimStates` both,
-  without this lock. One landing between the two reads therefore
-  contributes no victim, which is the right answer for a unit that is
-  gone.
+* **Removals are not excluded, and the lock does not make them
+  harmless.** `UnitDestroy` bypasses it and retires the roster row and
+  the sim row in two separate `atomicModifyIORef'` calls — in the same
+  order the snapshot reads them — so one landing between the two reads
+  is seen present in both and enters the victim list as a *stale
+  candidate*. What covers that is the consumer, not this lock: the kill
+  handler re-reads the roster and the page epoch and skips a name the
+  roster no longer holds (its documented "Gone" case).
 * **Positions are not frozen.** The movement tick writes them, and so do
   `UnitTeleport` and the re-ground handlers. One `readIORef` of that map
   is one coherent instant of every position at once — no unit is seen
@@ -5127,9 +5130,9 @@ the narrower statement is the one to rely on:
   described above.
 
 So the pair is not "one instant" of the roster, and correctness does not
-rest on it being one. It rests on two things together: the lock excludes
-new-membership commits, and the CONSUMER re-reads the roster and the
-page epoch before acting on any name the snapshot carried.
+rest on it being one. It rests on two things together, one at each end:
+the lock excludes new-membership commits, and the consumer filters the
+stale names a concurrent removal can leave behind.
 
 Positions are not atomic against the unit thread, and no lock-free
 arrangement could make them so: every writer of `utsSimStates` is on
