@@ -112,8 +112,9 @@
 --   @unit.getInfo@ both already do); this is a READ, and the unit
 --   thread remains its only writer. One 'readIORef' of an immutable map
 --   is a consistent whole-roster snapshot, so no victim can be seen
---   half-moved, and the lock above is what makes the SECOND store's
---   read agree with the first's.
+--   half-moved. It does NOT follow that the second store's read agrees
+--   with the first's — a concurrent removal can disagree, and the
+--   bullets below say what does and does not survive that.
 --
 --   @umInstances@ answers ONE question here: which units belong to this
 --   page. It is never asked for a position.
@@ -182,7 +183,11 @@ newtype SolidificationVictims = SolidificationVictims
 --
 --   Reads only. The caller applies the edits afterwards and then hands
 --   this straight to 'destroySolidificationOccupants'; see the module
---   header for why the order is load-bearing rather than incidental.
+--   header for why the order is load-bearing rather than incidental,
+--   and for exactly what the lock around the two reads does and does
+--   not exclude. In short: no addition and no page reincarnation can
+--   straddle them; a concurrent removal can, and the names it strands
+--   are filtered by the consumer rather than here.
 --
 --   A page whose gen params are not loaded yet has no wrap to
 --   canonicalize against, and 'pageWrapWorldSize' answering 0 is the
@@ -196,10 +201,19 @@ snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
         -- Outside the lock: it reads only this page's own gen params,
         -- which no roster transition touches.
         worldSize ← pageWrapWorldSize ws
-        -- ONE read of each, and both under the lifecycle lock so the
-        -- roster cannot change between them. Page ownership from the
-        -- manager (@uiPage@ is the instance's own field), position from
-        -- the sim state.
+        -- ONE read of each, both under the lifecycle lock. That
+        -- excludes exactly two things from landing between them: an
+        -- ADDITION (the spawn commit is a holder) and a page
+        -- REINCARNATION (also a holder, and it only retires). It does
+        -- NOT exclude a @UnitDestroy@, which bypasses the lock and
+        -- retires the two stores in two separate writes — in this very
+        -- order — so one can leave a STALE CANDIDATE in the result. The
+        -- consumer filters those: 'Unit.Thread.Command.Solidify'
+        -- re-reads the roster and the page epoch before acting on any
+        -- name, and skips one the roster no longer holds.
+        --
+        -- Page ownership from the manager (@uiPage@ is the instance's
+        -- own field), position from the sim state.
         withPageLifecycle wsc $ do
             um  ← readIORef (ucUnitManagerRef uc)
             -- Production passes @pure ()@. A test lands a roster

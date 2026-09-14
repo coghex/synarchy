@@ -38,6 +38,12 @@ occupants"`` proves the same rules against hand-delivered results; what
 only a live run can show is that the SIM's own reaction, delivered by
 the real sim thread, reaches them at all.
 
+The occupant set itself is resolved BEFORE the first stone of the
+delivery lands (``World.Thread.Command.Reaction.commitReactions`` reads
+it at its top), which is why this scenario places the unit and the item
+before it places any fluid: putting them there afterwards would be
+staging them into a cell that had already turned to rock.
+
 This probe is the injury stream's ONLY consumer while that scenario
 runs: ``scripts/init_loader.lua`` loads ``scripts/injury_log_panel.lua``
 at boot even headless and its 0.1 s tick calls ``injury.drainEvents()``,
@@ -85,11 +91,13 @@ OCCUPANT_ITEM = "granite_chunk"
 # the commit that follows it.
 REACTION_TIMEOUT = 60.0
 # How long the OCCUPANT outcome has after the stone is observable. The
-# stone appears in `commitEvent`; the occupant set is resolved later in
-# `publishCommit`, the kill rides the unit queue to the unit thread's
-# own tick, and the item removal is a third moment. Generous, because a
-# probe that graded any of them one shot after the height rose would be
-# racing all three.
+# occupant SET is resolved first of all, before `commitEvent` writes any
+# stone -- but everything the probe can OBSERVE comes after that. The
+# stone appears in `commitEvent`; `publishCommit` then dispatches the
+# destruction, which removes the items and queues the kill; the unit
+# thread drains that on its own tick; and the two death records are
+# written later still. Generous, because a probe that graded any of them
+# one shot after the height rose would be racing all of it.
 OCCUPANT_TIMEOUT = 30.0
 
 
@@ -408,12 +416,14 @@ def await_occupant_destruction(port: int, uid: int, seconds: float):
     three is a proxy for the others. The terrain height the probe waited
     for earlier is not the finish line either: ``commitEvent`` writes the
     stone into the tiles, and only afterwards does ``publishCommit``
-    dispatch the occupant destruction; the unit thread drains that on its
-    own tick; and inside the handler ``handleUnitKillCommand`` stamps the
-    pose BEFORE ``recordSolidificationDeath`` pushes the injury event and
-    then writes the player-event row. A reader that stopped at the first
-    ``dead`` could therefore drain an empty stream and read a log that
-    has not been written to yet.
+    dispatch the occupant destruction; the unit thread drains the kill on
+    its own tick; and inside that handler the ``commitKills`` phase
+    stamps the pose -- through ``handleUnitKillCommand``, under the page
+    lifecycle lock -- while the two death records are written by the
+    ``reportKills`` phase after that lock is released, the injury event
+    first and the player-event row after it. A reader that stopped at the
+    first ``dead`` could therefore drain an empty stream and read a log
+    that has not been written to yet.
 
     Accumulating the batches is what makes polling safe rather than
     merely patient: ``injury.drainEvents`` is DESTRUCTIVE, so a poll that
