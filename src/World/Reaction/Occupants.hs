@@ -67,9 +67,15 @@
 --   * NEW MEMBERSHIP cannot appear. The one site that puts a new
 --     'Unit.Types.UnitId' into @umInstances@ in a live session is
 --     @Unit.Thread.Command.Spawn@'s commit, and it holds this same
---     mutex; so does a page reincarnation. (A load publish replaces the
---     whole roster outside the lock. A reaction cannot survive one
---     either way — the page-incarnation fence on the kill refuses it.)
+--     mutex. (A load publish replaces the whole roster outside the
+--     lock; a reaction cannot survive one either way — the
+--     page-incarnation fence on the kill refuses it.)
+--   * A page REINCARNATION cannot straddle the two reads either, but
+--     for the opposite reason: it adds nothing. What it does is RETIRE
+--     the outgoing incarnation's rows
+--     ('World.Thread.Command.Init.registerPageIncarnation' calls
+--     @retirePageUnits@), and it is a holder, so that removal lands on
+--     one side of the pair or the other.
 --   * REMOVALS are NOT excluded, and this lock does not make them
 --     harmless. @Unit.Thread.Command.Lifecycle@'s @UnitDestroy@
 --     bypasses it and retires the roster row and the sim row in two
@@ -83,12 +89,14 @@
 --     pair is not "one instant" of the roster, and nothing rests on it
 --     being one: it rests on ADDITIONS being excluded here and stale
 --     names being filtered there.
---   * POSITIONS are not frozen. @Unit.Thread@'s movement tick writes
---     them, and so do @UnitTeleport@ and the re-ground handlers; none
---     takes anything this thread could hold, and no lock-free
---     arrangement could change that. One 'readIORef' of that map is
---     still one coherent instant of every position at once, so no unit
---     is seen half-moved — WHICH instant is the residual window below.
+--   * POSITIONS are not frozen. @Unit.Thread@'s movement tick and
+--     @UnitTeleport@ write the horizontal position; the re-ground
+--     handlers and this reaction's own corpse settle write the
+--     vertical. Every one of them runs on the unit thread and takes
+--     nothing this thread could hold, and no lock-free arrangement
+--     could change that. One 'readIORef' of that map is still one
+--     coherent instant of every position at once, so no unit is seen
+--     half-moved — WHICH instant is the residual window below.
 --
 --   That window is bounded by the unit thread's own cadence rather than
 --   by anything this thread does, and it is far narrower than what it

@@ -5111,10 +5111,13 @@ the narrower statement is the one to rely on:
 
 * **New membership cannot appear.** The only site that puts a new
   `UnitId` into `umInstances` in a live session is the spawn commit, and
-  it holds this same mutex; so does a page reincarnation. (A load
-  publish replaces the whole roster outside the lock, and a reaction
-  cannot survive one either way — the page-incarnation fence refuses
-  it.)
+  it holds this same mutex. (A load publish replaces the whole roster
+  outside the lock; a reaction cannot survive one either way — the
+  page-incarnation fence refuses it.)
+* **A page reincarnation cannot straddle the reads either**, for the
+  opposite reason: it adds nothing. `registerPageIncarnation` RETIRES
+  the outgoing incarnation's rows, and it is a holder, so that removal
+  lands on one side of the pair or the other.
 * **Removals are not excluded, and the lock does not make them
   harmless.** `UnitDestroy` bypasses it and retires the roster row and
   the sim row in two separate `atomicModifyIORef'` calls — in the same
@@ -5123,11 +5126,12 @@ the narrower statement is the one to rely on:
   candidate*. What covers that is the consumer, not this lock: the kill
   handler re-reads the roster and the page epoch and skips a name the
   roster no longer holds (its documented "Gone" case).
-* **Positions are not frozen.** The movement tick writes them, and so do
-  `UnitTeleport` and the re-ground handlers. One `readIORef` of that map
-  is one coherent instant of every position at once — no unit is seen
-  half-moved — and *which* instant it is remains the residual window
-  described above.
+* **Positions are not frozen.** The movement tick and `UnitTeleport`
+  write the horizontal position; the re-ground handlers and this
+  reaction's own corpse settle write the vertical. One `readIORef` of
+  that map is one coherent instant of every position at once — no unit
+  is seen half-moved — and *which* instant it is remains the residual
+  window described above.
 
 So the pair is not "one instant" of the roster, and correctness does not
 rest on it being one. It rests on two things together, one at each end:

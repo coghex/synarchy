@@ -307,9 +307,12 @@ restoreIfPlayerIdle wsc expected act =
 --     revalidates nothing.
 --
 --     What that buys is precise and narrow: no ADDITION can land
---     between the two reads, because the only sites that create new
---     membership (the spawn commit above, and a page reincarnation) are
---     holders too.
+--     between the two reads, because the only site that creates new
+--     unit membership in a live session — the spawn commit above — is a
+--     holder too. A page reincarnation cannot straddle them either, but
+--     because it ADDS nothing: it retires the outgoing incarnation's
+--     rows, and it is a holder, so that removal lands on one side of
+--     the pair or the other.
 --
 --     A REMOVAL still can, and is NOT made harmless by this lock.
 --     @UnitDestroy@ bypasses it and retires the two stores in two
@@ -340,8 +343,9 @@ restoreIfPlayerIdle wsc expected act =
 --   site that creates it in a live session is the spawn commit above. (A load publish replaces the
 --   whole session's roster outside this lock; a reaction cannot survive
 --   one either way — its page-incarnation fence refuses it.) Unit
---   POSITIONS are likewise not frozen: the movement tick writes them,
---   and so do @UnitTeleport@ and the re-ground handlers. One
+--   POSITIONS are likewise not frozen: the movement tick and
+--   @UnitTeleport@ write the horizontal position, and the re-ground
+--   handlers and #2490's own corpse settle write the vertical. One
 --   'Data.IORef.readIORef' of that map is still one coherent instant of
 --   every position at once, which is all the coherent read claims.
 --

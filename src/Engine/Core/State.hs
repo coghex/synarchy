@@ -543,10 +543,13 @@ data EngineEnv = EngineEnv
     --   authoritative positions, and writes nothing: it is here only so
     --   that no ADDITION can land between the two.
     --
-    --   Additions are the direction this covers, and the only sites
-    --   creating new membership in a live session — the spawn commit
-    --   above and a page reincarnation — are holders. Removals are NOT
-    --   covered: a `UnitDestroy` retires the roster row and the sim row
+    --   Additions are the direction this covers, and the only site
+    --   creating new unit membership in a live session — the spawn
+    --   commit above — is a holder. (A page reincarnation adds nothing;
+    --   it RETIRES the outgoing incarnation's rows, and being a holder
+    --   its removal cannot straddle a coherent read either.) Other
+    --   removals are NOT covered: a `UnitDestroy` retires the roster
+    --   row and the sim row
     --   in two separate `atomicModifyIORef'` calls, in the same order a
     --   coherent read takes them, so one landing between those reads is
     --   seen in both and enters the selection as a STALE CANDIDATE.
@@ -554,8 +557,9 @@ data EngineEnv = EngineEnv
     --   which re-reads the roster and the page epoch before acting on
     --   any name it was handed. So the pair is NOT "one instant" of the
     --   roster; it is a reading free of phantom ADDITIONS. Positions are
-    --   not frozen at all; the movement tick, `UnitTeleport` and the
-    --   re-ground handlers all write them, and one `readIORef` of that
+    --   not frozen at all: the movement tick and `UnitTeleport` write
+    --   the horizontal position, the re-ground handlers and #2490's
+    --   corpse settle write the vertical, and one `readIORef` of that
     --   map is one coherent instant of every POSITION at once, which is
     --   all that half claims.
     --
