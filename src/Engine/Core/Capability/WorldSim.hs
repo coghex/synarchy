@@ -177,12 +177,12 @@ data WorldSimCapability = WorldSimCapability
     --   entity-admission verbs) and @UnitThread@ (the two commit
     --   fences: @Unit.Thread.Command.Spawn@'s insertion and, since
     --   #2490, @Unit.Thread.Command.Solidify@'s kill), through
-    --   'withPageLifecycle' and nothing else. Since #2490 the WORLD
-    --   thread also takes it to read that reaction's occupant
-    --   snapshot, whose two stores — the roster and the positions —
-    --   have to describe one instant, which is exactly the
-    --   linearisation against roster transitions this mutex provides.
-    --   No holder may take another lock underneath it: that is why the
+    --   'withPageLifecycle' and nothing else. #2490 also made the WORLD
+    --   thread take it for a READ that writes nothing:
+    --   @World.Reaction.Occupants.snapshotSolidificationOccupants@
+    --   reads the roster and the authoritative positions inside one
+    --   section so no membership change lands between them. No holder
+    --   may take another lock underneath it: that is why the
     --   solidification kill reports its deaths after releasing this
     --   rather than inside it. Process-lifetime: unlike every other field here
     --   it survives a session boundary and a load untouched, because it
@@ -261,10 +261,11 @@ restoreIfPlayerIdle wsc expected act =
       then pure (g, Nothing)
       else (\r → (g, Just r)) ⊚ act
 
--- | Run one PAGE\/ENTITY LIFECYCLE transition, or one entity
---   ADMISSION, as a single critical section (#2476).
+-- | Run one PAGE\/ENTITY LIFECYCLE transition, one entity ADMISSION,
+--   or one read that has to be coherent against either, as a single
+--   critical section (#2476).
 --
---   The three callers hold it for different halves of the same
+--   The four callers hold it for different halves of the same
 --   boundary, which is why they must be the same lock:
 --
 --   * A __lifecycle transition__ (a single-page @world.destroy@; either
@@ -283,7 +284,16 @@ restoreIfPlayerIdle wsc expected act =
 --     thread) re-reads the target page's incarnation epoch and inserts,
 --     inside one call. The epoch its command carries was checked at the
 --     top of a handler that does a great deal of work before writing, so
---     only holding the lock across BOTH makes it a fence.
+--     only holding the lock across BOTH makes it a fence. Since #2490
+--     @Unit.Thread.Command.Solidify@'s solidification kill is one of
+--     these: it revalidates the reaction page's epoch and then kills,
+--     for the same reason.
+--   * A __coherent read__ (#2490:
+--     @World.Reaction.Occupants.snapshotSolidificationOccupants@, on
+--     the world thread) takes two 'Data.IORef.readIORef's — the unit
+--     roster and the authoritative positions — inside one call, so no
+--     MEMBERSHIP change can land between them. It writes nothing; the
+--     lock is here purely to make the pair one instant.
 --
 --   None can interleave with another, so an id allocated before a
 --   transition is provably below that transition's cutoff and one
@@ -292,11 +302,27 @@ restoreIfPlayerIdle wsc expected act =
 --   the queued clear retires only the rows below its cutoff, on its own
 --   page, and leaves the replacement's alone.
 --
+--   __What it does NOT cover.__ Only the callers listed above take it.
+--   A unit REMOVAL does not: @Unit.Thread.Command.Lifecycle@'s
+--   @UnitDestroy@ and the page clears drop a row from the roster and
+--   from the sim states without it. That is harmless for the coherent
+--   read, because a removal takes BOTH stores — a row it retires
+--   between the two reads simply contributes nothing, which is the
+--   right answer for a unit that is gone. New MEMBERSHIP is the
+--   direction that matters, and the only site that creates it in a live
+--   session is the spawn commit above. (A load publish replaces the
+--   whole session's roster outside this lock; a reaction cannot survive
+--   one either way — its page-incarnation fence refuses it.) Unit
+--   POSITIONS are likewise not frozen: the movement tick writes them,
+--   and so do @UnitTeleport@ and the re-ground handlers. One
+--   'Data.IORef.readIORef' of that map is still one coherent instant of
+--   every position at once, which is all the coherent read claims.
+--
 --   __Ordering rule.__ This is the OUTERMOST coordination boundary an
 --   admission or commit takes: no holder may acquire another page or
 --   entity lock underneath it. What runs inside is
---   'Data.IORef.atomicModifyIORef''
---   transitions and non-blocking queue writes, neither of which can
+--   'Data.IORef.readIORef' reads, 'Data.IORef.atomicModifyIORef''
+--   transitions and non-blocking queue writes, none of which can
 --   wait on a lock. It is also deliberately NOT held across world
 --   generation — the init handlers release it as soon as the
 --   replacement is registered, so a full @world.init@ does not stall

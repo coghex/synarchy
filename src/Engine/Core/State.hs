@@ -518,7 +518,7 @@ data EngineEnv = EngineEnv
     -- ^ #2476: the PROCESS-LIFETIME mutex that linearises a world
     --   page's entity lifecycle against every entity admission.
     --
-    --   Four kinds of holder take it. A LIFECYCLE transition —
+    --   Five kinds of holder take it. A LIFECYCLE transition —
     --   `world.destroy` on a single page, and either `world.init` /
     --   `world.initArena` that REPLACES a registered page id — holds it
     --   while it reads the live `umNextId`/`bmNextId`, enqueues the
@@ -537,7 +537,20 @@ data EngineEnv = EngineEnv
     --   the unit thread's `handleUnitSolidifyOccupantsCommand` — holds
     --   it on the same terms across the re-read of the reaction page's
     --   epoch, the roster and pose decision, the kills and the corpse
-    --   height correction.
+    --   height correction. A COHERENT READ (#2490) — the world thread's
+    --   `World.Reaction.Occupants.snapshotSolidificationOccupants` —
+    --   holds it across two `readIORef`s, the unit roster and the
+    --   authoritative positions, and writes nothing: it is here only so
+    --   that no MEMBERSHIP change can land between the two.
+    --
+    --   Removals are deliberately NOT covered, and do not need to be: a
+    --   `UnitDestroy` or a page clear drops a row from both stores
+    --   without this lock, so one landing between those two reads
+    --   contributes nothing — the right answer for a unit that is gone.
+    --   Positions are not frozen either; the movement tick,
+    --   `UnitTeleport` and the re-ground handlers all write them, and
+    --   one `readIORef` of that map is one coherent instant of all of
+    --   them, which is all the read claims.
     --
     --   The last two holders are a FENCE, not a check. The epoch a
     --   spawn command carries is verified at the top of a handler that

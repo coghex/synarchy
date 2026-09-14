@@ -5100,22 +5100,39 @@ that ordering deterministically, the same shape as `SpawnSeams`.
 Both of the snapshot's own reads — the roster from `umInstances` and the
 positions from `utsSimStates` — happen under `pageLifecycleLock`. Read
 separately they are not a snapshot of anything: a spawn commit landing
-between them is in neither the roster already read nor, if the movement
-tick also steps an existing occupant off the cell in that window, the
-positions read afterwards, and a tile occupied throughout would yield no
-victims at all. Every roster transition takes that same mutex, so none
-can interleave. Nothing blocks inside the section — two `readIORef`s and
-pure work — which is the contract that lock states for every holder.
+between them is in neither the roster already read nor, if an existing
+occupant is also stepped off the cell in that window, the positions read
+afterwards, and a tile occupied throughout would yield no victims at
+all. Nothing blocks inside the section — two `readIORef`s and pure work
+— which is the contract that lock states for every holder.
 
-It is NOT atomic with respect to the unit thread, and no lock-free
-arrangement could be: `utsSimStates` is written by the unit thread's
-movement tick, which takes nothing the world thread could hold. What is
-guaranteed is the shape of the residual window. Positions change only in
-that movement tick, so the snapshot reads the positions as of the last
-movement tick before it — one well-defined instant, not a smear — where
-selecting at the drain would read the last movement tick before the
-DRAIN, an unbounded number of ticks later and behind however much of the
-queue was already waiting.
+What that buys is narrower than "roster and positions are frozen", and
+the narrower statement is the one to rely on:
+
+* **New membership cannot appear.** The only site that puts a new
+  `UnitId` into `umInstances` in a live session is the spawn commit, and
+  it holds this same mutex; so does a page reincarnation. (A load
+  publish replaces the whole roster outside the lock, and a reaction
+  cannot survive one either way — the page-incarnation fence refuses
+  it.)
+* **Removals are not excluded, and need not be.** `UnitDestroy` and the
+  page clears drop a row from `umInstances` and `utsSimStates` both,
+  without this lock. One landing between the two reads therefore
+  contributes no victim, which is the right answer for a unit that is
+  gone.
+* **Positions are not frozen.** The movement tick writes them, and so do
+  `UnitTeleport` and the re-ground handlers. One `readIORef` of that map
+  is one coherent instant of every position at once — no unit is seen
+  half-moved — and *which* instant it is remains the residual window
+  described above.
+
+Positions are not atomic against the unit thread, and no lock-free
+arrangement could make them so: every writer of `utsSimStates` is on
+that thread and takes nothing the world thread could hold. What the
+residual window is bounded BY is that thread's own cadence, not by
+anything the commit does — and it is far narrower than what it replaces.
+Selecting at the drain would read positions an unbounded number of ticks
+later, behind however much of the queue was already waiting.
 
 **Occupancy is a floor in the canonical frame.** A unit's position is a
 sub-tile float, so the tile it is on is `floor` of it — which is why a

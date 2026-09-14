@@ -52,30 +52,41 @@
 --   @umInstances@ and position in @utsSimStates@, and reading them
 --   separately is not a snapshot of anything: a spawn commit landing
 --   between the two reads is visible in neither the roster that was
---   already read nor — if the movement tick also steps an existing
---   occupant off the cell in that window — in the positions read
---   afterwards, and a tile occupied throughout would yield no victims
---   at all. So both reads happen inside 'withPageLifecycle', the
---   process-lifetime mutex #2476 built for exactly this: every roster
---   TRANSITION — an admission, a spawn commit, a page teardown or a
---   same-id replacement — takes it too, so none of them can interleave
---   and the membership seen by the second read is the membership seen
---   by the first.
+--   already read nor — if an existing occupant is also stepped off the
+--   cell in that window — in the positions read afterwards, and a tile
+--   occupied throughout would yield no victims at all. So both reads
+--   happen inside 'withPageLifecycle'. Nothing blocks in that section:
+--   two 'readIORef's and pure work, no second lock, which is the
+--   contract 'Engine.Core.State.pageLifecycleLock' states for every
+--   holder.
 --
---   Nothing blocks inside that section: two 'readIORef's and pure
---   work, no second lock, which is the contract
---   'Engine.Core.State.pageLifecycleLock' states for every holder.
+--   __Exactly what the lock buys, and what it does not.__ It is
+--   narrower than "the roster and the positions are frozen", and the
+--   narrow version is the one to rely on:
 --
---   What the lock does NOT freeze is POSITION. @utsSimStates@ is
---   written by @Unit.Thread@'s movement tick, which takes nothing this
---   thread could hold, and no lock-free arrangement could change that.
---   What IS guaranteed is the shape of the residual window. Positions
---   change only in that movement tick, so this reads the positions as
---   of the last movement tick before the snapshot — one well-defined
---   instant, not a smear — and the alternative it replaces (selecting
---   at the drain) would read the last movement tick before the DRAIN,
---   an unbounded number of ticks later and behind however much of the
---   queue was already waiting.
+--   * NEW MEMBERSHIP cannot appear. The one site that puts a new
+--     'Unit.Types.UnitId' into @umInstances@ in a live session is
+--     @Unit.Thread.Command.Spawn@'s commit, and it holds this same
+--     mutex; so does a page reincarnation. (A load publish replaces the
+--     whole roster outside the lock. A reaction cannot survive one
+--     either way — the page-incarnation fence on the kill refuses it.)
+--   * REMOVALS are not excluded, and need not be.
+--     @Unit.Thread.Command.Lifecycle@'s @UnitDestroy@ and the page
+--     clears drop a row from BOTH stores without this lock, so one
+--     landing between the two reads contributes no victim — the right
+--     answer for a unit that is gone.
+--   * POSITIONS are not frozen. @Unit.Thread@'s movement tick writes
+--     them, and so do @UnitTeleport@ and the re-ground handlers; none
+--     takes anything this thread could hold, and no lock-free
+--     arrangement could change that. One 'readIORef' of that map is
+--     still one coherent instant of every position at once, so no unit
+--     is seen half-moved — WHICH instant is the residual window below.
+--
+--   That window is bounded by the unit thread's own cadence rather than
+--   by anything this thread does, and it is far narrower than what it
+--   replaces: selecting at the drain would read positions an unbounded
+--   number of ticks later, behind however much of the queue was already
+--   waiting.
 --
 --   __Where the positions come from.__ @utsSimStates@ — the
 --   AUTHORITATIVE simulation coordinates, read through
