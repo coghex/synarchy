@@ -730,8 +730,11 @@ library
                      Engine.Asset.YamlLootTables
                      Engine.Scripting.Lua.API.LootTables
                      LootProfile.Types
+                     LootProfile.Realize
+                     LootProfile.Simulate
                      Engine.Asset.YamlLootProfiles
                      Engine.Scripting.Lua.API.LootProfiles
+                     Engine.Scripting.Lua.API.LootSimulate
                      Tutorial.Types
                      Engine.Asset.YamlTutorials
                      Engine.Scripting.Lua.API.Tutorial
@@ -1756,6 +1759,7 @@ test-suite synarchy-test-headless
                    Test.Headless.River.Naming
                    Test.Headless.Location.LootDeterminism
                    Test.Headless.Loot.Profiles
+                   Test.Headless.Loot.Realization
                    Test.Headless.Location.MapIcons
                    Test.Headless.Location.StampCommit
                    Test.Headless.Location.Stamping

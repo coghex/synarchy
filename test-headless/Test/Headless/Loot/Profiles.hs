@@ -7,9 +7,10 @@
 --   1. __The shipped file.__ @ruin_industrial_salvage.yaml@ is decoded
 --      through the REAL loader and compared against an explicit pin,
 --      the same technique 'Test.Headless.Location.LootDeterminism' uses
---      for @ruin_common@. Nothing consumes a profile yet, so a fixture
---      copy would let the shipped calibration drift silently until
---      PLC-13 arrives and starts rolling it.
+--      for @ruin_common@. Nothing in the shipped game rolls a profile
+--      yet — PLC-13's realization exists but PLC-15 has not wired it to
+--      a pickup — so a fixture copy would let the shipped calibration
+--      drift silently.
 --
 --   2. __Every authored-field rule, at its own boundary.__ Each rule is
 --      driven through the production caller (a real file, the real
