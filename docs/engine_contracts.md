@@ -5065,9 +5065,14 @@ rejected. Every other terrain edit keeps the lift unchanged.
 
 **Each half runs where its state lives.** Ground items are removed on
 the WORLD thread, by `World.Reaction.Occupants`, through
-`World.GroundItems.takeGroundItemsOnPageWhere` — the same page
-ground-item lock a selection takes, so a removal cannot slip between a
-selection's check and its commit. Units are only NAMED there: their sim
+`World.GroundItems.takeGroundItemsOnPage` — the same page ground-item
+lock a selection takes, so a removal cannot slip between a selection's
+check and its commit. It removes the ids the SNAPSHOT captured, at the
+same cutoff as the units, rather than rescanning the map at removal
+time: that scan runs after every stone of the delivery has landed, so it
+would also take an item dropped onto the cell in between — one that
+never occupied the cell the reaction caught, and that the unit half
+would never have selected. Units are only NAMED there: their sim
 state belongs to the unit thread (#1890), so the kill rides that
 thread's queue and lands in `Unit.Thread.Command.Solidify`, which calls
 the ordinary `handleUnitKillCommand` rather than restating a terminal

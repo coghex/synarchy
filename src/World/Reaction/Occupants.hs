@@ -18,9 +18,10 @@
 --
 --   * __Ground items are removed here.__ They live on the page's
 --     'World.State.Types.wsGroundItemsRef', the world thread owns that
---     page, and 'World.GroundItems.takeGroundItemsOnPageWhere' takes
---     the page's ground-item lock for the whole read-decide-write
---     exactly as a selection does. (Item removal is not exclusively a
+--     page, and 'World.GroundItems.takeGroundItemsOnPage' takes the
+--     page's ground-item lock for the whole read-decide-write exactly
+--     as a selection does. WHICH items is decided at the snapshot
+--     below, not at the removal — the same cutoff the units get. (Item removal is not exclusively a
 --     world-thread act — @item.removeGround@ reaches the same helper
 --     from the Lua thread — so what matters is the LOCK, not the
 --     thread. This reaction's own removals stay on the thread that
@@ -143,13 +144,14 @@ module World.Reaction.Occupants
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import Data.List (sort)
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability, withPageLifecycle)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
-import Item.Ground (GroundItem(..))
+import Item.Ground (GroundItem(..), GroundItems(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Unit.Types (UnitId(..), UnitManager(..), unitsOnPage)
@@ -158,7 +160,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
 import World.Tile.Types (lookupChunk)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
-import World.GroundItems (takeGroundItemsOnPageWhere)
+import World.GroundItems (takeGroundItemsOnPage)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), pageWrapWorldSize)
 
@@ -174,8 +176,16 @@ import World.State.Types (WorldState(..), pageWrapWorldSize)
 --   CANONICAL frame (so the unit thread never has to canonicalize
 --   again) beside the units occupying it — dead ones included, since a
 --   corpse the stone closed over still has to be kept out of the rock.
-newtype SolidificationVictims = SolidificationVictims
-    { svTiles ∷ [((Int, Int), [UnitId])] }
+data SolidificationVictims = SolidificationVictims
+    { svTiles ∷ [((Int, Int), [UnitId])]
+    , svItems ∷ [Int]
+      -- ^ The page-local ids of the ground items lying on those tiles
+      --   when the snapshot was taken. Ids rather than a predicate to
+      --   re-evaluate later, for the same reason the unit set is a list
+      --   of 'UnitId's: an item dropped onto the cell after the commit
+      --   began never occupied the cell this reaction caught, and
+      --   re-deciding at removal time would destroy it anyway.
+    }
     deriving (Show, Eq)
 
 -- | Read the occupants of the tiles this commit is ABOUT to turn to
@@ -196,7 +206,7 @@ snapshotSolidificationOccupants
     ∷ UnitCombatCapability → WorldSimCapability → IO () → WorldPageId
     → WorldState → [(Int, Int)] → IO SolidificationVictims
 snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
-    | null tiles = pure (SolidificationVictims [])
+    | null tiles = pure (SolidificationVictims [] [])
     | otherwise = do
         -- Outside the lock: it reads only this page's own gen params,
         -- which no roster transition touches.
@@ -221,8 +231,18 @@ snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
             -- transition CANNOT complete while this section is open.
             betweenReads
             uts ← readIORef (ucUtsRef uc)
+            -- The ground items are captured HERE too, at the same
+            -- cutoff as the units, and by id. They are not read under
+            -- the ground-item lock and could not usefully be: a spawn
+            -- does not take that lock, so holding it would exclude
+            -- nothing this cutoff does not already exclude by being
+            -- EARLY. Anything dropped onto a doomed cell after this
+            -- point simply is not in the set.
+            gis ← readIORef (wsGroundItemsRef ws)
             let onPage = HS.fromList
                              (HM.keys (unitsOnPage pageId (umInstances um)))
+                canonical = HS.fromList
+                    [ canonicalTile worldSize gx gy | (gx, gy) ← tiles ]
             pure $ SolidificationVictims
                 [ ( canonicalTile worldSize gx gy
                   , [ uid
@@ -231,6 +251,11 @@ snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
                     , occupiesTile worldSize (gx, gy)
                                    (usRealX ss) (usRealY ss) ] )
                 | (gx, gy) ← tiles ]
+                (sort [ gid
+                      | (gid, gi) ← HM.toList (gisItems gis)
+                      , HS.member (canonicalTile worldSize
+                                       (floor (giX gi)) (floor (giY gi)))
+                                  canonical ])
 
 -- | Destroy everything caught at the tiles this commit turned to stone.
 --
@@ -248,26 +273,24 @@ snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
 destroySolidificationOccupants
     ∷ UnitCombatCapability → LoggerState → WorldPageId → ChunkGeneration
     → WorldState → SolidificationVictims → IO ()
-destroySolidificationOccupants uc logger pageId epoch ws (SolidificationVictims plan)
+destroySolidificationOccupants uc logger pageId epoch ws victims
     | null plan = pure ()
     | otherwise = do
         worldSize ← pageWrapWorldSize ws
-        let canonical = HS.fromList (map fst plan)
-        -- Items are matched here rather than in the snapshot because
-        -- nothing moves a ground item on its own: they are placed and
-        -- taken by explicit acts, so there is no equivalent of a mover
-        -- crossing the cell between the two calls.
-        removed ← takeGroundItemsOnPageWhere ws $ \gi →
-            HS.member (canonicalTile worldSize (floor (giX gi))
-                                               (floor (giY gi)))
-                      canonical
+        -- Exactly the ids the snapshot captured, removed under the
+        -- page's ground-item lock. NOT a fresh scan of the map: this
+        -- runs after every stone of the delivery has landed, so a scan
+        -- here would also catch an item dropped onto the cell in
+        -- between — one that never occupied the cell the reaction
+        -- caught, and that the unit half would never have selected.
+        removed ← takeGroundItemsOnPage ws (svItems victims)
         -- The tiles as this commit LEFT them. Read here, on the world
         -- thread that owns them and while the chunk is certainly still
         -- loaded, because the handler's own lookup may not be able to:
         -- the queue delay is unbounded and the chunk can be evicted in
         -- the meantime.
         td ← readIORef (wsTilesRef ws)
-        forM_ plan $ \((cgx, cgy), victims) → do
+        forM_ plan $ \((cgx, cgy), uids) → do
             let (coord, (lx, ly), _) = canonicalTileFrame worldSize cgx cgy
                 committedTop = case lookupChunk coord td of
                     Just lc → lcTerrainSurfaceMap lc VU.! columnIndex lx ly
@@ -284,13 +307,15 @@ destroySolidificationOccupants uc logger pageId epoch ws (SolidificationVictims 
             -- the lift it replaced.
             Q.writeQueue (ucUnitQueue uc)
                 (UnitSolidifyOccupants pageId epoch cgx cgy committedTop
-                                       victims)
+                                       uids)
         logDebug logger CatWorld $
             "Solidification destroyed " <> tshow (length removed)
             <> " ground item(s) and named "
             <> tshow (sum (map (length ∘ snd) plan))
             <> " unit occupant(s) across " <> tshow (length plan)
             <> " stone tile(s) on page " <> unWorldPageId pageId
+  where
+    plan = svTiles victims
 
 -- | Is a unit at authoritative sim position @(ux, uy)@ standing on
 --   @tile@, in the canonical frame?

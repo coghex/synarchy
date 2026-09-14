@@ -10,13 +10,24 @@
 --   item's height to go stale.
 --
 --   Stored on 'WorldState' (wsGroundItemsRef) and persisted in saves
---   (sdGroundItems, v32). Writers use atomicModifyIORef' — debug and
---   salvage spawn (Lua thread), pickup and drop (Lua thread, through
---   'World.GroundItems'), and the world thread's own removals (#2490's
---   lava-water reaction destroying whatever lay on the cell it turned
---   to stone) all mutate the same map safely. The two that have to
---   agree with the ground-item SELECTION go through
---   'World.GroundItems' and take the page's lock; see that module.
+--   (sdGroundItems, v32). Every writer uses atomicModifyIORef', so
+--   they mutate the same map safely, but they fall into two classes and
+--   only one of them is locked:
+--
+--   * ADDITIONS go straight to 'spawnGroundItem' and take NO lock, from
+--     BOTH the Lua thread (@item.spawnGround@, a drop out of an
+--     inventory, a forage harvest, location\/loot salvage) and the
+--     world thread (dig yields, and a construct designation's refund).
+--     They need no lock: a spawn never reuses an id, so it cannot
+--     invalidate a gid a selection just validated.
+--   * REMOVALS take the page's ground-item lock, through
+--     "World.GroundItems", because they can: @item.removeGround@ and a
+--     pickup through 'World.GroundItems.takeGroundItemOnPage' (Lua
+--     thread), and #2490's lava-water reaction through
+--     'World.GroundItems.takeGroundItemsOnPage' (world thread),
+--     destroying whatever lay on the cell it turned to stone. That lock
+--     is what keeps a removal from landing between a selection's check
+--     and its commit; see that module.
 module Item.Ground
     ( GroundItem(..)
     , GroundItems(..)

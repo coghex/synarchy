@@ -94,7 +94,7 @@ replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
 mirrorPageId, floodedPageId ∷ WorldPageId
 seamPageId, movedPageId, retiredPageId, orphanPageId ∷ WorldPageId
 racedPageId, evictedPageId, climbingPageId ∷ WorldPageId
-pausedPageId, coherentPageId ∷ WorldPageId
+pausedPageId, coherentPageId, lateItemPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -118,6 +118,7 @@ evictedPageId   = WorldPageId "occupants_evicted_w8"
 climbingPageId  = WorldPageId "occupants_climbing_w8"
 pausedPageId    = WorldPageId "occupants_paused_w8"
 coherentPageId  = WorldPageId "occupants_coherent_w8"
+lateItemPageId  = WorldPageId "occupants_lateitem_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -1215,6 +1216,37 @@ spec = describe "solidification occupants (#2490)" $ do
         -- and it is not killed for one.
         poseOf env (UnitId 9986) `shouldReturn` Standing
         (length <$> deathsFor env (UnitId 9986)) `shouldReturn` 0
+
+    it "destroys the ground items captured at the victim cutoff, and \
+       \leaves one dropped onto the cell after it" $ \env → do
+        prepare env
+        lp ← livePage env lateItemPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        caught ← dropItemAt ws "caught_item" doomed
+        lateGid ← newIORef (-1)
+
+        -- The item set is captured with the units, BEFORE the first
+        -- stone. A drop landing after that cutoff — here, between the
+        -- snapshot and the edits, but equally any time before the
+        -- removal runs — was never on the cell this reaction caught.
+        -- Scanning the live map at removal time instead would take it.
+        reactWithSeam env lp lateItemPageId reactCell $ \seams →
+            seams { seamAfterOccupantSnapshot = do
+                      gid ← dropItemAt ws "late_item" doomed
+                      writeIORef lateGid gid }
+        drainUnits env
+
+        late ← readIORef lateGid
+        (late ≢ caught) `shouldBe` True
+        holdsItem ws caught `shouldReturn` False
+        holdsItem ws late `shouldReturn` True
+        -- …and the stone really did land on that tile, so the survival
+        -- is about the cutoff and not about nothing having happened.
+        after ← chunkAt ws (lpLava lp)
+        before ← pure (lpBefore lp)
+        (terrainTopAt after reactCell > terrainTopAt before reactCell)
+            `shouldBe` True
 
 -- * The occupancy predicate itself ------------------------------------
 

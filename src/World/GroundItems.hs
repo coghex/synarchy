@@ -28,7 +28,7 @@
 module World.GroundItems
     ( selectGroundItemOnPage
     , takeGroundItemOnPage
-    , takeGroundItemsOnPageWhere
+    , takeGroundItemsOnPage
     ) where
 
 import UPrelude
@@ -66,8 +66,10 @@ selectGroundItemOnPage ws gid =
 
 -- | Remove ground item @gid@ from @ws@, returning it for pickup flows.
 --
---   The removal counterpart of 'selectGroundItemOnPage' and the only
---   way a ground item leaves a live page: taking the same lock is what
+--   The single-item removal counterpart of 'selectGroundItemOnPage' —
+--   the pickup path. Since #2490 it is not the only way an item leaves
+--   a live page: 'takeGroundItemsOnPage' below removes a captured SET
+--   for the lava-water reaction. Both take the same lock, which is what
 --   makes "no removal interleaves a selection" true rather than a
 --   property of which thread happens to run the removal today.
 takeGroundItemOnPage ∷ WorldState → Int → IO (Maybe GroundItem)
@@ -75,15 +77,22 @@ takeGroundItemOnPage ws gid =
     withMVar (wsGroundItemLock ws) $ \_ →
         atomicModifyIORef' (wsGroundItemsRef ws) (removeGroundItem gid)
 
--- | Remove every ground item of @ws@ satisfying @doomed@, answering the
---   removed entries in ascending id order (#2490).
+-- | Remove the ground items @gids@ names, answering the entries that
+--   were actually there in ascending id order (#2490).
 --
---   The bulk counterpart of 'takeGroundItemOnPage', for a caller
---   destroying whatever happens to be at a place rather than taking one
---   item it already named. It takes the SAME lock, for the same reason:
---   the predicate is evaluated and every matching entry deleted inside
---   one hold, so a selection cannot validate an id this removal is
---   about to retire.
+--   The bulk counterpart of 'takeGroundItemOnPage', for a caller that
+--   decided WHICH items to destroy at an earlier instant than the one
+--   it destroys them at. It takes ids rather than a predicate for
+--   exactly that reason: the lava-water reaction chooses its victims
+--   before its stone lands and removes them after, and re-deciding at
+--   removal time would destroy an item that was dropped onto the cell
+--   in between — one that never occupied the cell the reaction caught.
+--   An id no longer present is simply skipped.
+--
+--   Takes the SAME lock 'takeGroundItemOnPage' and
+--   'selectGroundItemOnPage' take, for the same reason: the whole
+--   read-decide-write happens inside one hold, so a selection cannot
+--   validate an id this removal is about to retire.
 --
 --   Unlike the single-item take it also CLEARS a selection of an item
 --   it removed, and that difference is deliberate. A pickup leaves the
@@ -93,13 +102,14 @@ takeGroundItemOnPage ws gid =
 --   to notice, so the clear has to happen where the removal does
 --   (requirement 3 of #2490). A selection naming an item this call did
 --   NOT remove is left exactly as it was.
-takeGroundItemsOnPageWhere ∷ WorldState → (GroundItem → Bool)
-                           → IO [(Int, GroundItem)]
-takeGroundItemsOnPageWhere ws doomed =
+takeGroundItemsOnPage ∷ WorldState → [Int] → IO [(Int, GroundItem)]
+takeGroundItemsOnPage _ [] = pure []
+takeGroundItemsOnPage ws gids =
     withMVar (wsGroundItemLock ws) $ \_ → do
         removed ← atomicModifyIORef' (wsGroundItemsRef ws) $ \gis →
-            let hit = sortOn fst [ e | e@(_, gi) ← HM.toList (gisItems gis)
-                                     , doomed gi ]
+            let hit = sortOn fst [ (gid, gi)
+                                 | gid ← gids
+                                 , Just gi ← [HM.lookup gid (gisItems gis)] ]
             in ( gis { gisItems = foldl' (flip HM.delete) (gisItems gis)
                                          (map fst hit) }
                , hit )
