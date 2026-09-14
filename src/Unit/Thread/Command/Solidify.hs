@@ -155,48 +155,103 @@ handleUnitSolidifyOccupantsCommandWith
     current ← pageIncarnationOf env pageId
     when (current ≡ Just epoch) $ do
         seamAfterEpochCheck seams
-        -- …and the REAL fence: revalidate and act inside the page
-        -- lifecycle lock, in one critical section, exactly as
-        -- 'Unit.Thread.Command.Spawn.handleUnitSpawnCommandWith' does.
-        -- 'World.Thread.Command.Init.registerPageIncarnation' holds this
-        -- same lock across retiring the outgoing incarnation's rows and
-        -- registering the replacement, so a transition cannot interleave
-        -- between the revalidation and the kills. Without it the check
-        -- above is pure time-of-check-to-time-of-use: a replacement
-        -- landing after it would leave this handler killing an orphan
-        -- off its own captured list and attributing the death to the
-        -- page that replaced it.
-        --
-        -- Taken with no other page or entity lock held. What runs
-        -- inside reads the manager, the sim states and the page's
-        -- tiles, and writes the two unit records — the world thread
-        -- never blocks on this thread while holding this lock.
-        withPageLifecycle (toWorldSimCapability env) $ do
-            live ← pageIncarnationOf env pageId
-            when (live ≡ Just epoch) $ do
-                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                uts0 ← readIORef utsRef
-                -- Present in BOTH records, and still on this page. The
-                -- roster half is what makes the "Gone" case real rather
-                -- than documented: a teardown drops the instance at once
-                -- and leaves the sim row for a clear queued behind this.
-                let onPage uid =
-                        case ( HM.lookup uid (umInstances um)
-                             , HM.lookup uid (utsSimStates uts0) ) of
-                            (Just inst, Just ss) | uiPage inst ≡ pageId →
-                                Just ss
-                            _ → Nothing
-                    named  = [ (uid, ss) | uid ← victims
-                                         , Just ss ← [onPage uid] ]
-                    living = [ uid | (uid, ss) ← named, usPose ss ≢ Dead ]
-                forM_ living $ \uid → do
-                    handleUnitKillCommand env utsRef uid
-                    recordSolidificationDeath env pageId gx gy uid
-                -- Read AFTER the kills, so a unit whose death moved
-                -- nothing is still measured from where it actually lies.
-                forM_ (map fst named)
-                      (settleClearOfTerrain env utsRef pageId gx gy
-                                            committedTop)
+        -- Two phases, and the split between them is a LOCK-ORDER rule,
+        -- not a style choice. Everything that has to be atomic against
+        -- a page replacement happens in the first; everything that can
+        -- block happens in the second, after the lock is released.
+        killed ← commitKills
+        reportKills killed
+  where
+    worldSim = toWorldSimCapability env
+    combat   = toUnitCombatCapability env
+
+    -- | Phase one: revalidate and mutate, inside the page lifecycle
+    --   lock, in one critical section — exactly as
+    --   'Unit.Thread.Command.Spawn.handleUnitSpawnCommandWith' does.
+    --   'World.Thread.Command.Init.registerPageIncarnation' holds this
+    --   same lock across retiring the outgoing incarnation's rows and
+    --   registering the replacement, so a transition cannot interleave
+    --   between the revalidation and the kills. Without it the early-out
+    --   above is pure time-of-check-to-time-of-use: a replacement
+    --   landing after it would leave this handler killing an orphan off
+    --   its own captured list and attributing the death to the page that
+    --   replaced it.
+    --
+    --   Everything inside is an 'IORef' read or an 'atomicModifyIORef''
+    --   — the manager, the sim states and the page's tiles read; the two
+    --   unit records and the transfer-order stores written — and no
+    --   other lock is taken, which is what keeps this within
+    --   'Engine.Core.State.pageLifecycleLock''s documented contract.
+    --   Answers the victims it killed, with the display name each had
+    --   at that moment, so phase two reports exactly what phase one did.
+    commitKills = withPageLifecycle worldSim $ do
+        live ← pageIncarnationOf env pageId
+        if live ≢ Just epoch then pure [] else do
+            um ← readIORef (ucUnitManagerRef combat)
+            uts0 ← readIORef utsRef
+            -- Present in BOTH records, and still on this page. The
+            -- roster half is what makes the "Gone" case real rather
+            -- than documented: a teardown drops the instance at once
+            -- and leaves the sim row for a clear queued behind this.
+            let onPage uid =
+                    case ( HM.lookup uid (umInstances um)
+                         , HM.lookup uid (utsSimStates uts0) ) of
+                        (Just inst, Just ss) | uiPage inst ≡ pageId →
+                            Just (inst, ss)
+                        _ → Nothing
+                named  = [ (uid, pair) | uid ← victims
+                                       , Just pair ← [onPage uid] ]
+                living = [ (uid, uiName inst)
+                         | (uid, (inst, ss)) ← named, usPose ss ≢ Dead ]
+            forM_ (map fst living) (handleUnitKillCommand env utsRef)
+            -- Read AFTER the kills, so a unit whose death moved nothing
+            -- is still measured from where it actually lies.
+            forM_ (map fst named)
+                  (settleClearOfTerrain env utsRef pageId gx gy committedTop)
+            pure living
+
+    -- | Phase two: file each death on the two surfaces requirement 2
+    --   names, with the lifecycle lock RELEASED.
+    --
+    --   It is out here because it can block. A category whose
+    --   notification settings turn @pause@ on sends
+    --   'Engine.PlayerEvent.Emit.emitEventFullOnPage' through
+    --   'World.Pause.imposePause', which takes the pause epoch's own
+    --   mutex — and taking a second lock under the outermost commit
+    --   boundary is what 'Engine.Core.State.pageLifecycleLock' forbids.
+    --   The shipped @unit_warning@ settings do not enable it, but they
+    --   are player-editable (@config\/notifications.local.yaml@), so a
+    --   correct handler cannot depend on that.
+    --
+    --   Reporting after the fact loses nothing: the kills are already
+    --   committed, the names were captured with them, and this thread is
+    --   the only producer of these rows, so their order is preserved.
+    --   A page replaced in between changes nothing either — these rows
+    --   describe deaths that really happened on the incarnation the
+    --   commit ran against, and they name that page explicitly rather
+    --   than resolving one now.
+    reportKills killed
+        | null killed = pure ()
+        | otherwise = do
+            now ← readIORef (wsGameTimeRef worldSim)
+            forM_ killed $ \(UnitId raw, name) → do
+                pushInjuryEvent (ucInjuryEventsRef combat) now raw "death"
+                    [ ("cause", solidificationDeathCause gx gy) ]
+                -- The page is passed EXPLICITLY rather than derived from
+                -- the unit or snapshotted from whichever page is active:
+                -- this reaction can commit on a loaded page nobody is
+                -- looking at, and those coordinates are in that page's
+                -- frame ('Engine.PlayerEvent.Emit.resolveEventPage' case
+                -- 1).
+                --
+                -- The source tag names the subsystem the row came from,
+                -- and that is this handler: the reaction decided the
+                -- tile, but only the unit thread decided there was a
+                -- death to report.
+                emitEventFullOnPage env solidificationEventCategory
+                    "Unit.Solidify"
+                    (solidificationDeathText name gx gy)
+                    (Just (gx, gy)) (Just raw) (Just (unWorldPageId pageId))
 
 -- | The incarnation the page registered under @pageId@ currently
 --   stands at, or 'Nothing' when no page is registered under that name.
@@ -204,29 +259,6 @@ pageIncarnationOf ∷ EngineEnv → WorldPageId → IO (Maybe ChunkGeneration)
 pageIncarnationOf env pageId = do
     wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     traverse pageIncarnation (lookup pageId (wmWorlds wm))
-
--- | File one death on both surfaces requirement 2 names.
-recordSolidificationDeath
-    ∷ EngineEnv → WorldPageId → Int → Int → UnitId → IO ()
-recordSolidificationDeath env pageId gx gy uid@(UnitId raw) = do
-    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-    pushInjuryEvent (ucInjuryEventsRef (toUnitCombatCapability env))
-        now raw "death" [ ("cause", solidificationDeathCause gx gy) ]
-    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-    let name = maybe "" uiName (HM.lookup uid (umInstances um))
-    -- The page is passed EXPLICITLY rather than derived from the unit
-    -- or snapshotted from whichever page is active: this reaction can
-    -- commit on a loaded page nobody is looking at, and those
-    -- coordinates are in that page's frame
-    -- ('Engine.PlayerEvent.Emit.resolveEventPage' case 1).
-    --
-    -- The source tag names the subsystem the row came from, and that
-    -- is this handler: the reaction decided the tile, but only the
-    -- unit thread decided there was a death to report.
-    emitEventFullOnPage env solidificationEventCategory
-        "Unit.Solidify"
-        (solidificationDeathText name gx gy)
-        (Just (gx, gy)) (Just raw) (Just (unWorldPageId pageId))
 
 -- | Raise one row clear of the terrain it is standing on, if it is
 --   below it — in the sim state and the render-facing instance

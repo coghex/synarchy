@@ -31,15 +31,20 @@ import qualified Data.Sequence as Seq
 import qualified Data.Vector.Unboxed as VU
 import Data.Foldable (toList)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar
+    (MVar, newEmptyMVar, putMVar, takeMVar, tryTakeMVar)
+import System.Timeout (timeout)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (writeTVar)
 
 import qualified Engine.Core.Queue as Q
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Capability.WorldSim (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability, withPlayerIntentHeld)
 import Engine.Core.State (EngineEnv(..))
-import Engine.PlayerEvent (PlayerEvent(..), StoredEvent(..), emptyEventStore)
+import Engine.PlayerEvent
+    (CategoryCfg(..), PlayerEvent(..), StoredEvent(..), emptyEventStore)
 import Engine.PlayerEvent.Emit (readEventLog)
 import Combat.Types (CombatEvent(..))
 import Item.Ground (GroundItems(..), spawnGroundItem)
@@ -71,7 +76,8 @@ import World.Reaction.Occupants (occupiesTile)
 import World.Types
 import Test.Headless.Harness (getWorldState, sendWorldCommand)
 import Test.Headless.World.Solidification
-    (LivePage(..), chunkAt, deliver, livePage, liveEvent)
+    ( LivePage(..), ackTimeoutMicros, chunkAt, deliver, livePage
+    , liveEvent )
 
 -- * Fixtures ---------------------------------------------------------
 
@@ -87,6 +93,7 @@ replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
 mirrorPageId, floodedPageId ∷ WorldPageId
 seamPageId, movedPageId, retiredPageId, orphanPageId ∷ WorldPageId
 racedPageId, evictedPageId, climbingPageId ∷ WorldPageId
+pausedPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -108,6 +115,7 @@ orphanPageId    = WorldPageId "occupants_orphan_w8"
 racedPageId     = WorldPageId "occupants_raced_w8"
 evictedPageId   = WorldPageId "occupants_evicted_w8"
 climbingPageId  = WorldPageId "occupants_climbing_w8"
+pausedPageId    = WorldPageId "occupants_paused_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -438,6 +446,33 @@ drainUnitsWithSolidifySeam env between = do
 evictChunkFrom ∷ WorldState → ChunkCoord → IO ()
 evictChunkFrom ws coord = atomicModifyIORef' (wsTilesRef ws) $ \td →
     (td { wtdChunks = HM.delete coord (wtdChunks td) }, ())
+
+-- | Turn the @pause@ flag of one notification category on or off, the
+--   way a player's own @config\/notifications.local.yaml@ override does,
+--   answering the previous setting so an example can restore it.
+setCategoryPause ∷ EngineEnv → Text → Bool → IO (Maybe Bool)
+setCategoryPause env category wanted =
+    atomicModifyIORef' (notificationCfgRef env) $ \cfg →
+        case HM.lookup category cfg of
+            Nothing  → (cfg, Nothing)
+            Just cat → ( HM.insert category cat { ccPause = wanted } cfg
+                       , Just (ccPause cat) )
+
+-- | Is @lock@ free right now? Takes and immediately returns it, so a
+--   probe never steals it from a real holder for longer than the check.
+lockIsFree ∷ MVar () → IO Bool
+lockIsFree lock = do
+    got ← tryTakeMVar lock
+    case got of
+        Nothing → pure False
+        Just () → putMVar lock () ≫ pure True
+
+-- | Poll @p@ every 10 ms until it holds or the attempts run out.
+pollUntil ∷ Int → IO Bool → IO Bool
+pollUntil 0 _ = pure False
+pollUntil n p = do
+    ok ← p
+    if ok then pure True else threadDelay 10000 ≫ pollUntil (n - 1) p
 
 -- * The live group ----------------------------------------------------
 
@@ -1065,6 +1100,60 @@ spec = describe "solidification occupants (#2490)" $ do
         (usRealZ ss ≥ fromIntegral stoneTop) `shouldBe` True
         (uiRealZ inst ≥ fromIntegral stoneTop) `shouldBe` True
         uiGridZ inst `shouldBe` stoneTop
+
+    it "files the deaths with the lifecycle lock RELEASED, so a category \
+       \the player set to pause cannot take a second lock under it" $
+      \env → do
+        prepare env
+        let worldSim = toWorldSimCapability env
+        -- The shipped unit_warning settings do not pause, but they are
+        -- player-editable, and a handler may not depend on that.
+        restore ← setCategoryPause env solidificationEventCategory True
+        lp ← livePage env pausedPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        victim ← spawnAt env ws pausedPageId 9997 doomed
+                         (terrainTopAt before reactCell)
+        react env lp pausedPageId reactCell
+
+        -- Another actor holds the pause epoch — the mutex
+        -- `World.Pause.imposePause` needs — for as long as this example
+        -- wants it. Anything that reaches for it now blocks.
+        epochHeld ← newEmptyMVar
+        releaseEpoch ← newEmptyMVar
+        _ ← forkIO $ withPlayerIntentHeld worldSim $ \_ → do
+                putMVar epochHeld ()
+                takeMVar releaseEpoch
+        takeMVar epochHeld
+
+        drained ← newEmptyMVar
+        _ ← forkIO (drainUnits env ≫ putMVar drained ())
+
+        -- The kill happens INSIDE the lifecycle lock, so a dead pose
+        -- means the handler has reached the point where the old
+        -- arrangement would emit — still holding that lock — and block
+        -- on the epoch the thread above owns.
+        killed ← pollUntil 500 ((≡ Dead) <$> poseOf env victim)
+        killed `shouldBe` True
+        -- So the lifecycle lock must be free while the epoch is still
+        -- held. Emitting under it would keep it held for exactly as
+        -- long as this example chooses to hold the epoch.
+        free ← pollUntil 200 (lockIsFree (wsPageLifecycleLock worldSim))
+        free `shouldBe` True
+
+        putMVar releaseEpoch ()
+        finished ← timeout ackTimeoutMicros (takeMVar drained)
+        finished `shouldBe` Just ()
+        -- …and the report still happened, pause and all.
+        (length <$> deathsFor env victim) `shouldReturn` 1
+        (length <$> logRowsFor env victim) `shouldReturn` 1
+        readIORef (enginePausedRef env) `shouldReturn` True
+
+        -- Leave the shared engine as it was found.
+        _ ← setCategoryPause env solidificationEventCategory
+                (fromMaybe False restore)
+        writeIORef (enginePausedRef env) False
 
 -- * The occupancy predicate itself ------------------------------------
 

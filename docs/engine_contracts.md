@@ -5142,6 +5142,15 @@ list and attributing the death to the page that replaced it.
 `SolidifySeams` is the seam a test interposes on to land exactly that
 schedule.
 
+What the lock does NOT cover is the reporting. That lock is the
+outermost coordination boundary and no holder may take another
+underneath it, so the two event rows are filed after it is released: a
+notification category the player has set to pause routes
+`emitEventFullOnPage` through `World.Pause.imposePause`, which takes the
+pause epoch's own mutex. The kills and the height correction are
+committed inside; only the rows are outside, and the unit thread is the
+only producer of them, so nothing observable is reordered.
+
 **Nothing is buried, and nothing else moves.** Every surviving occupant
 — the fresh corpse and an older one alike — is raised clear of the
 terrain it is standing on where it is below it, in the sim state and the
@@ -5219,8 +5228,10 @@ the drain, a corpse under fluid the solidified cell retained, a victim
 the roster no longer holds, a page re-initialised under the same id
 before the kill drained, a page replaced AFTER the handler's first epoch
 check (through `SolidifySeams`), the reaction's chunk evicted before the
-drain, and a victim killed mid-pull-up whose grid z was already clear
-while its continuous z was not — plus the occupancy predicate itself.
+drain, a victim killed mid-pull-up whose grid z was already clear while
+its continuous z was not, and a death filed under a category the player
+set to pause (asserting the lifecycle lock is free while the pause epoch
+is held elsewhere) — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
 the alias check for the `world.getMaterialAt` query both probes read the
 product through, and #2490's live occupant scenario (a unit and an item

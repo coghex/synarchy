@@ -158,9 +158,14 @@ data WorldSimCapability = WorldSimCapability
     --   it while it captures the entity allocators' current readings,
     --   enqueues the page-scoped clears carrying them as exclusive
     --   cutoffs, and rewrites 'wsWorldManagerRef'. Taken by
-    --   @WorldThread@ (those three handlers) and @LuaThread@ (the three
-    --   entity-admission verbs), through 'withPageLifecycle' and
-    --   nothing else. Process-lifetime: unlike every other field here
+    --   @WorldThread@ (those three handlers), @LuaThread@ (the three
+    --   entity-admission verbs) and @UnitThread@ (the two commit
+    --   fences: @Unit.Thread.Command.Spawn@'s insertion and, since
+    --   #2490, @Unit.Thread.Command.Solidify@'s kill), through
+    --   'withPageLifecycle' and nothing else. No holder may take
+    --   another lock underneath it — which is why the solidification
+    --   kill reports its deaths after releasing this rather than
+    --   inside it. Process-lifetime: unlike every other field here
     --   it survives a session boundary and a load untouched, because it
     --   is a critical section rather than state. See 'EngineEnv's field
     --   haddock for why the id ordering it establishes is the whole

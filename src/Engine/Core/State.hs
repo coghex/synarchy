@@ -518,7 +518,7 @@ data EngineEnv = EngineEnv
     -- ^ #2476: the PROCESS-LIFETIME mutex that linearises a world
     --   page's entity lifecycle against every entity admission.
     --
-    --   Three kinds of holder take it. A LIFECYCLE transition —
+    --   Four kinds of holder take it. A LIFECYCLE transition —
     --   `world.destroy` on a single page, and either `world.init` /
     --   `world.initArena` that REPLACES a registered page id — holds it
     --   while it reads the live `umNextId`/`bmNextId`, enqueues the
@@ -533,14 +533,29 @@ data EngineEnv = EngineEnv
     --   `handleUnitSpawnCommand` and `applyBuildingSpawn`, plus #1602's
     --   bound route into the latter on the world thread — holds it
     --   across the re-read of the target page's incarnation epoch and
-    --   the manager insertion itself.
+    --   the manager insertion itself. A SOLIDIFICATION KILL (#2490) —
+    --   the unit thread's `handleUnitSolidifyOccupantsCommand` — holds
+    --   it on the same terms across the re-read of the reaction page's
+    --   epoch, the roster and pose decision, the kills and the corpse
+    --   height correction.
     --
-    --   That third holder is a FENCE, not a check: the epoch a spawn
-    --   command carries is verified at the top of a handler that then
-    --   rolls stats, sheds inventory and commits a footprint before it
-    --   writes, so a transition could otherwise outlive the check and
-    --   the handler would insert a departed incarnation's entity under
-    --   the replacement's reused name.
+    --   The last two holders are a FENCE, not a check. The epoch a
+    --   spawn command carries is verified at the top of a handler that
+    --   then rolls stats, sheds inventory and commits a footprint
+    --   before it writes, so a transition could otherwise outlive the
+    --   check and the handler would insert a departed incarnation's
+    --   entity under the replacement's reused name; a solidification
+    --   kill has the same shape, and would otherwise kill an orphan off
+    --   its own captured victim list and attribute the death to the
+    --   page that replaced it.
+    --
+    --   The no-second-lock rule below is why that kill FILES its
+    --   player-event and injury rows after releasing this, not inside
+    --   it: a notification category the player has set to pause routes
+    --   `Engine.PlayerEvent.Emit.emitEventFullOnPage` through
+    --   `World.Pause.imposePause`, which takes the pause epoch's own
+    --   mutex. The deaths are committed inside; only the reporting is
+    --   outside, so nothing observable is reordered.
     --
     --   That is what makes the cutoffs mean anything: an admission
     --   completed before a teardown provably holds an id BELOW the
