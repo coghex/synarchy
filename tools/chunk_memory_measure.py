@@ -201,7 +201,7 @@ def run(args):
                     raise RuntimeError('ordinary world creation refused')
             else:
                 query(f'world.init("measurement",42,{args.size},3); world.show("measurement"); return true')
-            poll('return world.getInitProgress()',
+            poll('local p,c,t,s=world.getInitProgress(); return {phase=p,completed=c,total=t,label=s}',
                  lambda v: isinstance(v, dict) and v.get('phase') == 3, seconds=1200)
             poll('return world.getActiveWorldId() == "measurement"', lambda v: v is True)
             if args.mode == 'offscreen':
