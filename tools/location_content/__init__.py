@@ -19,14 +19,21 @@ means growing a single 980-line `run`.
     save/load survival, and same-instance-id isolation across pages.
   * `dispatch` — unknown unit/item identifiers, the warning-log
     assertions, fixed-position item placement, and valid unit/building
-    content dispatch. Owns all five inline YAML fixtures, because it is
-    the scenario that consumes them.
+    content dispatch. Owns its own five inline YAML fixtures, because
+    an owner holds the fixtures it consumes.
   * `naming` — generated-language names and glosses, the label fallback
     without provenance, save/load preservation, and deterministic fresh
     regeneration.
+  * `container` — (#2505) pending container shells: one unrolled shell
+    minted per authored occurrence on first chunk load and bound to its
+    persisted slot, no second on revisit, an ordinary pickup of a pending
+    shell refused with nothing moved, the slot surviving save/quit/load,
+    and a save whose slot names a deregistered profile refused before the
+    replacement session is staged. Owns its own four inline YAML
+    fixtures, on the same rule as `dispatch` — nine across the package.
 
 No module here boots an engine: `location_content_probe.run` owns the
-process sequence (seven `boot_isolated` call sites, eight launches,
-because the loot-stability site runs once for same order and once for
-reversed) and hands each owner the live port it opened.
+process sequence (ten `boot_isolated` call sites, eleven engine
+launches, because the loot-stability site runs once for same order and
+once for reversed) and hands each owner the live port it opened.
 """

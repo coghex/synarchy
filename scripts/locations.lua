@@ -19,15 +19,25 @@
 -- locations.spawnContents(id, gx, gy, worldId) once per chunk load,
 -- independent of whether the geometry was (re)built this call. It
 -- dispatches each `contents` entry to unit.spawn / item.spawnGround /
--- building.spawn / loot.rollFor, gated by its own one-time engine flag
--- (world.hasSpawnedLocationContents) so contents are never re-spawned.
--- Those four kinds are the whole vocabulary, and it is CLOSED at the
--- YAML boundary (#1708): Engine.Asset.YamlLocations' validContentKinds
--- fails the file's load on anything else, so a def that reaches here
--- can only carry kinds dispatchContent handles. The nested "structure"
--- kind was removed there — it re-translated the outer def's bounds
--- around a shifted anchor, stamping geometry outside the box #777 made
--- authoritative.
+-- building.spawn / loot.rollFor / world.spawnLocationContainer, gated by
+-- its own one-time engine flag (world.hasSpawnedLocationContents) so
+-- contents are never re-spawned.
+-- Those FIVE kinds are the whole vocabulary, and it is CLOSED at the
+-- YAML boundary (#1708, #2505): Engine.Asset.YamlLocations'
+-- validContentKinds fails the file's load on anything else, so a def
+-- that reaches here can only carry kinds dispatchContent handles. The
+-- nested "structure" kind was removed there — it re-translated the outer
+-- def's bounds around a shifted anchor, stamping geometry outside the
+-- box #777 made authoritative.
+--
+-- Two of the five do NOT go through dispatchContent's ordinary loop.
+-- A ranged `unit` encounter (#916) and a `significant: true` item (#917)
+-- belong to persisted per-instance obligations and are filled by their
+-- own passes, which RETURN on failure so the one-time marker is left
+-- unwritten and the next chunk load retries. `container` (#2505) is
+-- deliberately not one of them: design D-18 makes a pending shell
+-- ordinary incidental content, so a failed spawn warns, continues, and
+-- the marker is written exactly as it is for a failed loot_table roll.
 -- The loot draw is seed-stable per placed instance (#948) — see the
 -- "Content spawning" section below — so a ruin's rewards are as
 -- reproducible from the world seed as its geometry already was.
@@ -626,6 +636,69 @@ local function spawnSignificantContent(def, gx, gy, worldId, placed)
     return true
 end
 
+-- #2505 (epic #1231, PLC-14): a PENDING container shell.
+--
+-- Incidental, exactly like the loot-table branch below (design D-18):
+-- a failure warns and continues, the instance-level contents_spawned
+-- marker is written regardless, and nothing here participates in the
+-- #917 clearance predicate. That is the whole difference from
+-- spawnSignificantContent above, which RETURNS false and leaves the
+-- marker unwritten so the next chunk load retries.
+--
+-- Like the significant pass, though, this script never chooses WHICH
+-- item fills a slot: world.spawnLocationContainer mints the shell from
+-- the slot's own persisted definition and binds it in one engine call.
+-- It also never draws the profile — "unrolled" is the point of the
+-- slice (D-22); PLC-15 owns realization.
+--
+-- `slots` is the placed instance's own containers array, consumed
+-- POSITIONALLY across the whole content pass: the engine derives slot
+-- numbers over the container entries in authored order then count
+-- (Location.Instance's containerSlotsFromDef), and this walks them in
+-- that same order, so entry 2's first occurrence takes the slot after
+-- entry 1's last. `cursor` carries that position between entries.
+local function spawnContainerContent(def, entry, gx, gy, worldId, placed, cursor)
+    -- No placed instance means no owner: a hand-stamped ruin (the
+    -- console, the debug overlay, a probe) has no LocationInstanceId, so
+    -- there is no slot to bind a shell's provenance to and nothing that
+    -- could ever realize it. Same rule the encounter and significant
+    -- passes follow — and said out loud, because a silently skipped
+    -- crate is indistinguishable from a broken one.
+    if not placed then
+        engine.logWarn("locations: container content '" ..
+            tostring(entry.id) .. "' skipped: this location has no placed " ..
+            "instance to own a pending shell")
+        return cursor
+    end
+    local slots = placed.containers or {}
+    for _ = 1, (entry.count or 1) do
+        cursor = cursor + 1
+        local slot = slots[cursor]
+        if not slot then
+            engine.logWarn("locations: container content '" ..
+                tostring(entry.id) .. "' has no derived slot " ..
+                tostring(cursor) .. " on instance " ..
+                tostring(placed.instance_id))
+        elseif slot.item_instance_id then
+            -- Already bound: a retried spawn must not mint a second
+            -- shell for a slot that already owns one. The engine refuses
+            -- the binding anyway, but that would leave the duplicate
+            -- crate on the ground long enough to be seen.
+            engine.logDebug("locations: container slot " ..
+                tostring(slot.slot) .. " already holds a shell")
+        else
+            local ox, oy = contentOffset(def, entry)
+            if not world.spawnLocationContainer(
+                    placed.instance_id, slot.slot, gx + ox, gy + oy, worldId) then
+                engine.logWarn("locations: could not spawn container '" ..
+                    tostring(entry.id) .. "' for slot " ..
+                    tostring(slot.slot))
+            end
+        end
+    end
+    return cursor
+end
+
 -- `rollCtx` is the stable per-entry roll context built by
 -- locations.spawnContents (#948): { seed, instance, index }. Each roll
 -- adds its own 1-based roll number, so the entry's rolls are
@@ -671,16 +744,22 @@ local function isOwnedByDedicatedPass(entry)
         or (entry.significant and entry.kind == "item")
 end
 
-local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
+-- Returns the container-slot cursor, advanced past whatever this entry
+-- consumed (only the container branch consumes any).
+local function dispatchContent(def, entry, gx, gy, worldId, rollCtx,
+                               placed, cursor)
     local kind = entry.kind
     if kind == "unit" then
-        return spawnUnitContent(def, entry, gx, gy, worldId)
+        spawnUnitContent(def, entry, gx, gy, worldId)
     elseif kind == "item" then
         spawnItemContent(def, entry, gx, gy, worldId)
     elseif kind == "loot_table" then
         spawnLootTableContent(def, entry, gx, gy, worldId, rollCtx)
     elseif kind == "building" then
         spawnBuildingContent(def, entry, gx, gy, worldId)
+    elseif kind == "container" then
+        return spawnContainerContent(def, entry, gx, gy, worldId,
+                                     placed, cursor)
     else
         -- Unreachable from authored data: every def here came through
         -- engine.loadLocationYaml, whose closed validContentKinds
@@ -690,6 +769,7 @@ local function dispatchContent(def, entry, gx, gy, worldId, rollCtx)
         engine.logWarn("locations: unknown content kind '" ..
             tostring(kind) .. "'")
     end
+    return cursor
 end
 
 local function placedInstanceAt(gx, gy, worldId)
@@ -768,10 +848,18 @@ function locations.spawnContents(id, gx, gy, worldId)
         if not spawnSignificantContent(def, gx, gy, worldId, placed) then
             return
         end
+        -- #2505: the container-slot cursor rides the whole incidental
+        -- pass so successive container entries take successive slots,
+        -- matching the order the engine derived them in. Entries the
+        -- dedicated passes own are skipped here and consume no slot,
+        -- which is correct: neither of them authors a container.
+        local containerCursor = 0
         for index, entry in ipairs(def.contents or {}) do
             if not isOwnedByDedicatedPass(entry) then
                 rollCtx.index = index
-                dispatchContent(def, entry, gx, gy, worldId, rollCtx)
+                containerCursor = dispatchContent(def, entry, gx, gy, worldId,
+                                                  rollCtx, placed,
+                                                  containerCursor)
             end
         end
     else

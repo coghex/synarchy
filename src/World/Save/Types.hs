@@ -34,6 +34,9 @@ module World.Save.Types
     , MissingSignificantItemRef(..)
     , renderMissingSignificantItemRef
     , missingSignificantItemReferences
+    , MissingContainerProfileRef(..)
+    , renderMissingContainerProfileRef
+    , missingContainerProfileReferences
     , MissingRecipeRef(..)
     , renderMissingRecipeRef
     , missingRecipeReferences
@@ -75,7 +78,8 @@ import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
     ( LocationGeometryError, LocationInstance(..), LocationInstanceId(..)
-    , LocationSignificantItem(..), instancesToList
+    , LocationSignificantItem(..), LocationContainerSlot(..)
+    , instancesToList
     , resolveLegacyLocationInstances )
 import Location.Types (LocationRegistry)
 import World.Generate.Types (WorldGenParams(..))
@@ -1319,6 +1323,60 @@ missingSignificantItemReferences itemDefs pages =
     , e ← liSignificant inst
     , isNothing (lsiInstanceId e)
     , not (HS.member (lsiItemDefName e) itemDefs)
+    ]
+
+-- | A PENDING container slot (#2505) whose stored loot-profile id does
+--   not resolve against the currently-registered profiles.
+--
+--   Same load-validation contract as 'MissingSignificantItemRef', by a
+--   different route. The profile is what PLC-15 will realize the shell's
+--   cargo FROM, and design D-23 makes a realization that cannot complete
+--   refuse the pickup — so a shell whose profile is gone is a crate no
+--   unit can ever pick up, for the rest of that world's life. Refused
+--   here rather than published into that state, exactly as the authoring
+--   boundary ('Engine.Asset.YamlLocations.containerContentErrors')
+--   refuses it coming the other way.
+--
+--   Checked whether or not the slot is BOUND, which is the deliberate
+--   divergence from 'missingSignificantItemReferences' (that one is
+--   restricted to unspawned obligations). The asymmetry is not an
+--   oversight: a spawned obligation's def name is a historical record of
+--   an item already made, so a deregistered def there is inert. A
+--   pending slot's profile is the opposite — it is a FUTURE draw, and
+--   binding the shell brings that draw closer rather than retiring it.
+--
+--   REALIZED slots are exempt, and have nothing to check: D-3 discards
+--   the profile once the cargo is installed, so a realized slot's stored
+--   profile is not a reference to anything any more.
+data MissingContainerProfileRef = MissingContainerProfileRef
+    { mcprPage     ∷ !WorldPageId
+    , mcprInstance ∷ !Int          -- ^ the owning 'LocationInstanceId'
+    , mcprSlot     ∷ !Int          -- ^ the slot's own number
+    , mcprProfile  ∷ !Text         -- ^ the unresolved loot-profile id
+    } deriving (Show, Eq)
+
+renderMissingContainerProfileRef ∷ MissingContainerProfileRef → Text
+renderMissingContainerProfileRef r =
+    "location #" <> tshow (mcprInstance r) <> " on page '"
+        <> unWorldPageId (mcprPage r) <> "' owes a pending container \
+           \shell at slot " <> tshow (mcprSlot r)
+        <> " referencing unknown loot profile '" <> mcprProfile r <> "'"
+
+-- | Every PENDING container slot across every page whose stored profile
+--   id is absent from the registered loot-profile key set. Empty ⇒ every
+--   shell this save still owes could actually be realized.
+missingContainerProfileReferences
+    ∷ HS.HashSet Text                     -- ^ registered loot-profile ids
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingContainerProfileRef]
+missingContainerProfileReferences profiles pages =
+    [ MissingContainerProfileRef pid (unLocationInstanceId (liId inst))
+                                 (lcsSlot e) (lcsProfile e)
+    | (pid, w) ← pages
+    , inst ← instancesToList (wgpLocationInstances (wpsGenParams w))
+    , e ← liContainers inst
+    , not (lcsRealized e)
+    , not (HS.member (lcsProfile e) profiles)
     ]
 
 -- | A saved craft bill whose 'cbRecipe' does not resolve against the

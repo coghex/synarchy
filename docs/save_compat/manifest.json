@@ -2529,6 +2529,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z1-portable-container-knowledge.expected.json"
         }
       ]
+    },
+    {
+      "id": "z2-pending-container-shells",
+      "description": "The #2505 shape (world-pages v12, epic #1231 PLC-14): every placed location instance now carries its PENDING CONTAINER SHELLS beside #917's significant obligations -- per slot, the authored container item definition, the loot-profile id its cargo will be realized from, the bound shell's physical iiInstanceId once spawned, and its own realized latch. The list is APPENDED to LocationInstanceDTO, and a Generic Serialize record's fields are positional, so this is a distinct wire shape rather than a compatible one: a v11 payload read as the current type would take the list's length prefix from whatever followed the clearance latch, and every field after it would shift. This fixture is a REAL current-format session written by the live engine through the ordinary engine.saveWorld path, and generation REFUSED to save until the page actually carried placed location instances (--require-lua on world.listPlacedLocations) -- so the appended list is really present, once per instance, inside bytes the 'save migrations' gate decodes end to end on every run. A codec, adapter or staging change that mis-framed it would desynchronise the rest of the world-pages payload and fail that decode; the canonical summary does not itself enumerate location instances, so the decode is where this fixture's coverage of the new field lives. Every slot in it is EMPTY, and that is the honest state of the build rather than a gap in the fixture: no shipped location definition authors a 'kind: container' entry yet, because PLC-10 owns the wooden crate and the ruin_small entry that will carry it, and a fixture is meant to be a session a player could really have written. A POPULATED slot -- derived at placement, bound by world.spawnLocationContainer, and round-tripped through this exact wire shape -- is covered by the hspec group 'Location container shells' (Test.Headless.Location.ContainerShells), which also proves the frozen v11 shape migrates forward with no slots at all. Every earlier payload stays tracked by the baselines above; their pages decode through World.Save.Component.PageCore.migrateWorldPagesV11, whose own frozen WorldGenParamsDTOv8 is where #2471's v10 freeze had its gen-params field repointed, leaving those bytes unchanged.",
+      "declaredAt": "2026-09-14",
+      "declaredByIssue": 2505,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "identity for world-pages v12 (this baseline IS that shape); World.Save.Component.PageCore.migrateWorldPagesV11 decodes every earlier payload with NO container slots, which is what those saves actually recorded -- container content did not exist when they were written",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 12,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 9,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z2-pending-container-shells",
+          "path": "test-headless/data/save-compat/z2-pending-container-shells.bin",
+          "kind": "complete-session",
+          "sha256": "968bbc0fd68b171929d45674f2cb9cd19042c9fd7943a7ab6757233e4d83ccae",
+          "sizeBytes": 908583,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), settled 3.0s and held until `#world.listPlacedLocations('generated_page') > 0`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z2-pending-container-shells.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

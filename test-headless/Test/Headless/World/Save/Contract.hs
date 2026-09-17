@@ -489,6 +489,7 @@ richLocationInstances = LocationInstances
                     , lsiInstanceId  = Just 8802
                     , lsiTaken       = False }
                 ]
+            , liContainers = []
             , liClearEventEmitted = False
             })
         , (LocationInstanceId 2, LocationInstance
@@ -513,6 +514,7 @@ richLocationInstances = LocationInstances
                     , lsiInstanceId  = Nothing
                     , lsiTaken       = False }
                 ]
+            , liContainers = []
             , liClearEventEmitted = False
             })
         ]

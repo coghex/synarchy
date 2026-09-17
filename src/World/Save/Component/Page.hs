@@ -107,6 +107,8 @@ module World.Save.Component.Page
     , WorldPagesDTOv9(..)
     , PageCoreDTOv10(..)
     , WorldPagesDTOv10(..)
+    , PageCoreDTOv11(..)
+    , WorldPagesDTOv11(..)
     , PageEditsDTOv1(..)
     , WorldEditsDTOv1(..)
     , PageEditsDTOv2(..)
@@ -125,6 +127,7 @@ module World.Save.Component.Page
     , migrateWorldPagesV8
     , migrateWorldPagesV9
     , migrateWorldPagesV10
+    , migrateWorldPagesV11
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)
@@ -147,6 +150,7 @@ module World.Save.Component.Page
     , WorldGenParamsDTOv5(..)
     , WorldGenParamsDTOv6(..)
     , WorldGenParamsDTOv7(..)
+    , WorldGenParamsDTOv8(..)
     , RiverNameDTO(..)
     , RiverNamesDTO(..)
     , EtymologySourceDTO(..)
@@ -199,6 +203,8 @@ module World.Save.Component.Page
     , toWorldGenParamsDTOv6
     , fromWorldGenParamsDTOv7
     , toWorldGenParamsDTOv7
+    , fromWorldGenParamsDTOv8
+    , toWorldGenParamsDTOv8
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toItemInstanceDTO

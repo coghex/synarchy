@@ -58,6 +58,8 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , renderMissingPortableItemDefRef
                         , missingSignificantItemReferences
                         , renderMissingSignificantItemRef
+                        , missingContainerProfileReferences
+                        , renderMissingContainerProfileRef
                         , missingRecipeReferences, renderMissingRecipeRef
                         , missingBillOutputItemReferences
                         , renderMissingBillOutputItemRef
@@ -74,6 +76,7 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , renderMissingInfectionRef)
 import Location.Instance (locationGeometryErrorText)
 import Location.Types (LocationRegistry(..), LocationDef(..))
+import LootProfile.Types (lootProfileIds)
 import Building.Types (BuildingManager(..))
 import Unit.Types (UnitManager(..))
 import Item.Types (ItemManager(..))
@@ -915,6 +918,7 @@ continueLoad env logger requestId saveName descriptors = do
             let matReg = mergeMaterialRegistry baseMatReg liveMatReg
             floraCat ← Lua.liftIO $ readIORef (floraCatalogRef env)
             locReg ← Lua.liftIO $ readIORef (locationDefsRef env)
+            lpr ← Lua.liftIO $ readIORef (lootProfileRegistryRef env)
             infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
                 locationDefIds = HS.fromList (map ldId (lrDefs locReg))
@@ -945,6 +949,20 @@ continueLoad env logger requestId saveName descriptors = do
                 missingSignificant =
                     missingSignificantItemReferences
                         (HM.keysSet (imDefs im)) pages
+                -- #2505: a PENDING container slot names the loot profile
+                -- PLC-15 will realize its shell from. If that profile is
+                -- gone the realization can never complete, and design
+                -- D-23 makes an incompletable realization REFUSE the
+                -- pickup — so the shell becomes a crate nobody can ever
+                -- lift. Refused here rather than published into that
+                -- state, before the replacement session is staged.
+                --
+                -- Bound AND unbound slots, unlike the significant check
+                -- above: a bound obligation's def name is history, while
+                -- a bound shell's profile is still a future draw.
+                missingContainerProfiles =
+                    missingContainerProfileReferences
+                        (HS.fromList (lootProfileIds lpr)) pages
                 missingRecipes =
                     missingRecipeReferences (HM.keysSet (rmDefs rm)) pages
                 missingBillOutputItems =
@@ -963,6 +981,7 @@ continueLoad env logger requestId saveName descriptors = do
                 allMissing = length missing + length missingItems
                     + length missingPortableItems
                     + length missingSignificant
+                    + length missingContainerProfiles
                     + length missingRecipes
                     + length missingBillOutputItems
                     + length missingConstruct
@@ -975,6 +994,8 @@ continueLoad env logger requestId saveName descriptors = do
                     ⧺ map renderMissingItemDefRef missingItems
                     ⧺ map renderMissingPortableItemDefRef missingPortableItems
                     ⧺ map renderMissingSignificantItemRef missingSignificant
+                    ⧺ map renderMissingContainerProfileRef
+                          missingContainerProfiles
                     ⧺ map renderMissingRecipeRef missingRecipes
                     ⧺ map renderMissingBillOutputItemRef
                           missingBillOutputItems

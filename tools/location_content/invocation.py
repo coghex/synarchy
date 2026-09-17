@@ -12,7 +12,7 @@ threads from one scenario owner to the next.
 Split out of the probe itself by #2095. Nothing here decides what a
 scenario proves, and nothing here boots on its own behalf --
 `location_content_probe.run` owns the process sequence and calls
-`boot_isolated` at each of its seven call sites.
+`boot_isolated` at each of its ten call sites.
 """
 from __future__ import annotations
 
@@ -387,7 +387,7 @@ class ScenarioState:
     across its phases.
 
     Deliberately NOT here: the probe's import-time `FAILURE` emitter,
-    `REPO`, `ROOT_PREFIX` and the five fixture bodies. Those are
+    `REPO`, `ROOT_PREFIX` and the nine fixture bodies. Those are
     infrastructure and immutable configuration -- not state one scenario
     produces for another -- and moving them into this record would
     rebuild them per run for no gain.
@@ -419,5 +419,18 @@ class ScenarioState:
     #: Whether each fresh-process phase has a save to read.
     saved_content: bool = False
     saved_naming: bool = False
+    saved_crate: bool = False
     #: instance id -> (name, gloss) on the named world (#1101).
     named: dict = field(default_factory=dict)
+    #: #2505: how many container slots the crate world derived at
+    #: placement, and how many shells reached its ground. Both are
+    #: whole-scenario expectations rather than per-ruin ones -- crate_ruin
+    #: is a DENSE definition, so the count depends on the generated
+    #: world's land, and the later phases compare against what the first
+    #: one actually saw rather than against a number written here.
+    crate_slots: int = 0
+    crate_shells: int = 0
+    #: The save slot the crate world published, so the two fresh
+    #: processes that read it — the round-trip and the missing-profile
+    #: refusal — name the same one the façade created.
+    crate_slot_name: str = ""

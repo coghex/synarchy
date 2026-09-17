@@ -457,6 +457,7 @@ owedInstance = LocationInstance
             , lsiItemDefName = "ration"
             , lsiInstanceId  = Nothing
             , lsiTaken       = False } ]
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 

@@ -1346,8 +1346,9 @@ jobs:
       # supported mode: `run_probes.py --jobs N`) collided on all six,
       # and a developer's same-named file was truncated outright. The log
       # collision is the sharp one: the probe ASSERTS against that log
-      # twice — the integrity diagnostic in phase 2 and the two
-      # unknown-content warnings in phase 3 — so a foreign truncation
+      # three times — the integrity diagnostic in phase 2, the two
+      # unknown-content warnings in phase 3, and #2505's load rejection
+      # in the last phase — so a foreign truncation
       # could turn a passing phase into a failure or a failure into a
       # pass. All six now live under the one directory the invocation
       # already owned for its save slots. It drives the probe's real
@@ -1366,18 +1367,18 @@ jobs:
       # still proves, scanning the COMPLETE reorganized surface (#2095 —
       # the facade plus every scenario owner under
       # `tools/location_content/`, so an exclusion-style check cannot go
-      # vacuous once the bodies leave `run`): all seven boot CALL SITES
+      # vacuous once the bodies leave `run`): all ten boot CALL SITES
       # through the one funnel that hands each this invocation's log and
       # registers its process as it is launched, the regeneration site
-      # still a loop over the two visit orders so a run LAUNCHES eight
-      # processes, both log-reading ASSERTIONS reading that same log,
-      # the five fixture bodies by sha256 resolved at their single
-      # source, their registration order and loaders,
-      # `load_fixture_yaml` still guarding every one of them, and the
-      # three helpers `portal_ghost_probe` imports still the same
-      # function objects. That probe is manual-only and launches eight
-      # engine processes; the companion boots nothing and runs in about
-      # a second.
+      # still a loop over the two visit orders so a run LAUNCHES eleven
+      # engine processes, every log-reading ASSERTION reading that same
+      # log, the nine fixture bodies by sha256 resolved at their single
+      # source, their registration sequence and loaders,
+      # `load_fixture_yaml` still guarding every registration, the
+      # topology PROSE naming the current counts, and the three helpers
+      # `portal_ghost_probe` imports still the same function objects.
+      # That probe is manual-only and launches eleven engine processes;
+      # the companion boots nothing and runs in about a second.
       # test_movement_probe is #1586's: `tools/movement_probe.py --list`
       # is a metadata query, answered from scripts/movement_arena.lua
       # before any boot() and for every --mode, with the derived view

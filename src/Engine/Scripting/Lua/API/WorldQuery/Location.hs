@@ -43,7 +43,7 @@ import Location.Discovery (AwarenessHit(..), UnitSight(..), findAwareness)
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstanceId(..), LocationInstances
-    , LocationSignificantItem(..)
+    , LocationSignificantItem(..), LocationContainerSlot(..)
     , instancesToList, instancesInChunk, lookupLocationInstance
     , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances
     , locationAuthorsClearance, locationClearanceSatisfied )
@@ -102,6 +102,15 @@ instancesForPage env mPage =
 --                          --   `item_instance_id` once one is spawned
 --                          --   (OMITTED before that). Always present,
 --                          --   empty when the location owes none.
+--       containers,        -- #2505: array of this instance's PENDING
+--                          --   container shells, in slot order:
+--                          --   { slot, item, profile, realized } plus
+--                          --   `item_instance_id` once a shell is
+--                          --   spawned (OMITTED before that). The whole
+--                          --   FIELD is omitted for an instance with no
+--                          --   container slots — unlike `significant`,
+--                          --   because a container confers no clearance
+--                          --   obligation whose cardinality matters.
 --       authors_clearance, -- does it author ANY clearance condition?
 --       clearance_satisfied, -- is the compound predicate satisfied?
 --       clear_event_emitted } -- has its one clearance notice been spent?
@@ -319,6 +328,36 @@ pushInstanceTable inst = do
             Lua.setfield (-2) "taken"
             Lua.rawseti (-2) index
     Lua.setfield (-2) "significant"
+    -- #2505: this instance's PENDING container shells, in slot order.
+    -- OMITTED entirely (not an empty table) for an instance that has
+    -- none, unlike `significant` above — and deliberately so. An
+    -- obligation list is a CARDINALITY a caller must be able to read as
+    -- "owes zero", because zero is what makes the clearance predicate
+    -- vacuous; a container list confers nothing (design D-18), so
+    -- "carries no slots" and "carries an empty slot list" are the same
+    -- fact, and every historical instance is the first of those.
+    -- Omitting keeps `#entry.containers` off a table that never had any.
+    unless (null (liContainers inst)) $ do
+        Lua.newtable
+        forM_ (zip [1 ..] (sortOn lcsSlot (liContainers inst)))
+            $ \(index, slot) → do
+                Lua.newtable
+                pushIntField "slot" (lcsSlot slot)
+                Lua.pushstring (TE.encodeUtf8 (lcsItemDefName slot))
+                Lua.setfield (-2) "item"
+                Lua.pushstring (TE.encodeUtf8 (lcsProfile slot))
+                Lua.setfield (-2) "profile"
+                -- OMITTED until the content spawn binds a shell,
+                -- mirroring `significant`'s own id: absence means "not
+                -- spawned yet", which is exactly what
+                -- scripts/locations.lua reads to decide whether to try.
+                forM_ (lcsInstanceId slot) $ \shellId → do
+                    Lua.pushinteger (fromIntegral shellId)
+                    Lua.setfield (-2) "item_instance_id"
+                Lua.pushboolean (lcsRealized slot)
+                Lua.setfield (-2) "realized"
+                Lua.rawseti (-2) index
+        Lua.setfield (-2) "containers"
     -- The compound clearance predicate, reported rather than left for
     -- every caller to re-derive from `encounter` and `significant` — a
     -- second implementation is what would drift. `authors_clearance`

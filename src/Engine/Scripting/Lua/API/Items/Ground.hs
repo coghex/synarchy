@@ -16,6 +16,7 @@ module Engine.Scripting.Lua.API.Items.Ground
     , pickupGroundOnPage
     , spawnSalvageOnPage
     , worldSpawnLocationSignificantItemFn
+    , worldSpawnLocationContainerFn
     ) where
 
 import UPrelude
@@ -49,8 +50,11 @@ import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
 import World.Weather.Ambient (ambientTempAt)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
-    , LocationSignificantItem(..), latchLocationSignificantTaken
-    , lookupLocationInstance, registerLocationSignificantSpawn )
+    , LocationSignificantItem(..), LocationContainerSlot(..)
+    , LocationInstances(..)
+    , latchLocationSignificantTaken
+    , lookupLocationInstance, registerLocationSignificantSpawn
+    , pendingContainerSlotFor, registerLocationContainerSpawn )
 import Data.List (find)
 
 -- | Resolve which world page a ground-item op targets: a named page
@@ -371,6 +375,109 @@ worldSpawnLocationSignificantItemFn env = do
                     (Just p { wgpLocationInstances = instances' }, True)
                 Nothing → (mP, False)
 
+-- | world.spawnLocationContainer(instanceId, slot, x, y [, pageId])
+--   → bool (#2505). Spawn the PENDING container shell one placed
+--   location's slot describes, AND bind it to that slot, in a single
+--   engine call.
+--
+--   Shaped exactly like 'worldSpawnLocationSignificantItemFn', and for
+--   the same reason: a separate public binding verb would let a caller
+--   bind an unrelated crate of the right definition to an unbound slot.
+--   The location would then never mint its own shell —
+--   @scripts\/locations.lua@ skips a bound slot — while the substitute
+--   carried the slot's pending status, including the pickup refusal.
+--   So Lua never chooses WHICH item fills a slot. It chooses only WHERE:
+--   the definition comes from the slot's own persisted
+--   'Location.Instance.lcsItemDefName', the item is materialized here,
+--   and the binding names the instance this call just created.
+--
+--   The shell is ordinary ground salvage through the same
+--   'spawnSalvageOnPage' core @item.spawnGround@ uses (design D-22): a
+--   paired container definition mints through the materializer
+--   unchanged, authored default contents included. "Unrolled" means no
+--   profile draw has happened — and NONE happens here. This verb never
+--   reads 'Location.Instance.lcsProfile', never consults the loot-profile
+--   registry, and never touches the RNG beyond the two salvage rolls
+--   every ground item gets. PLC-15 (#2510) owns realization.
+--
+--   Answers whether the slot was filled: false for an unresolvable page,
+--   an unknown instance or slot, a slot already bound (which is how a
+--   resuming content spawn tells "still pending" from "already placed"),
+--   a slot whose stored definition is no longer registered, a
+--   materialization failure, and a binding that is refused. Nothing is
+--   left behind in any of those cases — the slot is read BEFORE the item
+--   exists, and a failed binding takes its shell back off the ground
+--   rather than leaving an unowned crate.
+--
+--   …and false, too, for an x or a y outside 'groundSpawnCoord''s
+--   domain: a missing or unconvertible argument, NaN, either infinity,
+--   or a finite Lua number that becomes an infinite 'Float' when stored.
+--   That check sits with the argument decode, so it runs before the slot
+--   is read, before the definition lookup, before either salvage roll
+--   and before any id is allocated — a refused call leaves the ground
+--   map, @gisNextId@, the item-instance counter, the shared stat RNG and
+--   the slot's binding exactly as they were.
+worldSpawnLocationContainerFn
+    ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSpawnLocationContainerFn env = do
+    idArg   ← Lua.tointeger 1
+    slotArg ← Lua.tointeger 2
+    xArg    ← Lua.tonumber 3
+    yArg    ← Lua.tonumber 4
+    pageArg ← Lua.tostring 5
+    spawned ← case (idArg, slotArg, groundSpawnCoords xArg yArg) of
+        (Just rawId, Just slot, Just (x, y))
+            | rawId ≥ 0 → Lua.liftIO $ do
+                mWs ← resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
+                case mWs of
+                    Nothing → pure False
+                    Just ws → do
+                        let iid = LocationInstanceId (fromIntegral rawId)
+                        -- Decided from the CURRENT table before anything
+                        -- is created: an unknown or already-bound slot
+                        -- must cost no item.
+                        mPending ← pendingSlotDef ws iid (fromIntegral slot)
+                        im ← readReadOnlyRef (crvItemManagerRef
+                                 (toContentRegistriesViewCapability env))
+                        case mPending ⌦ \d → (,) d ⊚ HM.lookup d (imDefs im) of
+                            Nothing → pure False
+                            Just (defName, iDef) → do
+                                mSpawned ← spawnSalvageOnPage env ws iDef
+                                    defName x y
+                                    Nothing Nothing Nothing Nothing
+                                case mSpawned of
+                                    Nothing → pure False
+                                    Just (gid, inst) → do
+                                        bound ← bindShell ws iid
+                                            (fromIntegral slot) defName inst
+                                        -- A binding that loses a race
+                                        -- takes its shell back off the
+                                        -- ground rather than leaving an
+                                        -- unowned crate nothing can
+                                        -- realize.
+                                        unless bound $ void $
+                                            takeGroundItemOnPage ws gid
+                                        pure bound
+        _ → pure False
+    Lua.pushboolean spawned
+    return 1
+  where
+    pendingSlotDef ws iid slot = do
+        mParams ← readIORef (wsGenParamsRef ws)
+        pure $ do
+            p ← mParams
+            slotEntry ← pendingContainerSlotFor iid slot
+                            (wgpLocationInstances p)
+            pure (lcsItemDefName slotEntry)
+    bindShell ws iid slot defName inst =
+        atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
+            Nothing → (mP, False)
+            Just p → case registerLocationContainerSpawn iid slot defName
+                              (iiInstanceId inst) (wgpLocationInstances p) of
+                Just instances' →
+                    (Just p { wgpLocationInstances = instances' }, True)
+                Nothing → (mP, False)
+
 -- | Push ONE @{id, instanceId, defName, kind, x, y, fill, quality,
 --   qualityTier, condition, sharpness, weight}@ ground-item row,
 --   leaving it on top of the stack.
@@ -683,6 +790,60 @@ itemPickupGroundFn env = do
 --   from" true by construction rather than by inspection.
 pickupGroundOnPage ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
 pickupGroundOnPage env ws uid gid = do
+    -- #2505: a bound UNREALIZED container shell may not leave the
+    -- ground, and the refusal has to be decided BEFORE
+    -- 'takeGroundItemOnPage' — this function is remove-first, so
+    -- deciding afterwards would mean putting the crate back, which is a
+    -- different physical event (a fresh ground id) rather than a refusal.
+    --
+    -- Read through the ground map rather than the removal, for the same
+    -- reason: the id this keys on is the shell's durable
+    -- 'iiInstanceId', which the removal would already have decoupled
+    -- from @gid@.
+    --
+    -- TEMPORARY, and only until PLC-15 (#2510) lands the atomic
+    -- @Pending → Realized@ transition in this very function. Until then
+    -- it is what keeps the strict pending-slot provenance rule
+    -- (@World.Save.Integrity.containerProvenanceErrors@) satisfiable:
+    -- an unrealized shell is required to be an OUTER GROUND item on its
+    -- owning page, and this is the only path by which one could stop
+    -- being that without being destroyed. Faction-blind and
+    -- command-blind, exactly like the #917 latch below, because every
+    -- carry path in the tree — player and AI alike — arrives here.
+    pending ← pendingShellOnGround ws gid
+    if pending then pure False else pickupUnguarded env ws uid gid
+
+-- | Is the ground item @gid@ on @ws@ a shell bound to a PENDING (bound,
+--   unrealized) container slot on that same page?
+--
+--   Pure inspection: reads the ground map and the page's own
+--   'wgpLocationInstances', writes nothing. A page with no live gen
+--   params, a @gid@ that is not there, and an id no slot claims all
+--   answer 'False', so ordinary salvage pays one map lookup and a walk
+--   of whatever container slots the page's locations declare.
+pendingShellOnGround ∷ WorldState → Int → IO Bool
+pendingShellOnGround ws gid = do
+    gis ← readIORef (wsGroundItemsRef ws)
+    case HM.lookup gid (gisItems gis) of
+        Nothing → pure False
+        Just gi → do
+            mParams ← readIORef (wsGenParamsRef ws)
+            let itemId = iiInstanceId (giInst gi)
+            pure $ case mParams of
+                Nothing → False
+                Just p → or
+                    [ lcsInstanceId slot ≡ Just itemId
+                    | inst ← HM.elems (lisById (wgpLocationInstances p))
+                    , slot ← liContainers inst
+                    , not (lcsRealized slot) ]
+
+-- | The original remove → insert → rollback core, with no pending-shell
+--   guard in front of it. Split out so the guard above reads as one
+--   decision rather than as an extra branch woven through the rollback,
+--   and so PLC-15 has an obvious seam to replace: its realization runs
+--   where the guard now refuses, and then calls this.
+pickupUnguarded ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
+pickupUnguarded env ws uid gid = do
     mGi ← takeGroundItemOnPage ws gid
     case mGi of
         -- Nothing was removed, so there is nothing to deselect either:
