@@ -608,11 +608,31 @@ unitKillFn env = do
 -- | unit.transitionTo(uid, poseName, stride?) — initiate a pose
 --   transition. poseName is any value `parsePose` accepts: "standing",
 --   "crouching", "crawling", "collapsed", "climbing", "falling",
---   "sleeping". "dead" is refused — `Dead` is terminal and is entered
---   only via `UnitKill`, never via a pose transition. Optional stride
---   defaults to 1; pass 2 (or higher) to skip frames when chaining
---   transitions back-to-back. No-op if the unit is already in that pose
---   or mid-transition.
+--   "sleeping". Optional stride defaults to 1; pass 2 (or higher) to
+--   skip frames when chaining transitions back-to-back. No-op if the
+--   unit is already in that pose or mid-transition.
+--
+--   Terminal death is refused at BOTH ends, and the two refusals are
+--   different things happening at different times (#2651):
+--
+--   * As a DESTINATION, "dead" is refused HERE: `parsePose` has no
+--     "dead" case, so the argument is invalid, nothing is enqueued,
+--     and this returns `false`. `Dead` is entered only via
+--     `UnitKill` (`unit.kill`), never via a pose transition.
+--   * LEAVING an already-dead unit is refused later, by
+--     `Unit.Thread.Command.Pose.handleUnitTransitionToCommand` when
+--     the command executes against authoritative `usPose`. That
+--     refusal does NOT change this function's return value: the
+--     return reports only whether the request was ACCEPTED onto
+--     `unitQueue`, so a well-formed request naming a live destination
+--     returns `true` even when the unit is already dead and the
+--     transition will be discarded on execution. The corpse's pose,
+--     activity, transition deadline and stride are left untouched, so
+--     `unit.getPose` keeps reporting "dead" and `unit.getActivity`
+--     keeps reporting "idle" however many such requests are made.
+--
+--   `false` therefore means "bad arguments" (no unit id, unparseable
+--   pose name, or the destination "dead"), never "the unit refused".
 unitTransitionToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitTransitionToFn env = do
     idArg     ← Lua.tointeger 1
@@ -632,6 +652,12 @@ unitTransitionToFn env = do
             Lua.pushboolean False
             return 1
 
+-- | Pose names `unit.transitionTo` accepts as a DESTINATION.
+--
+--   "dead" is deliberately absent (#2651): `Dead` is terminal and is
+--   entered only via `UnitKill`. Leaving `Dead` is a separate rule,
+--   enforced against authoritative state in
+--   `Unit.Thread.Command.Pose.handleUnitTransitionToCommand`.
 parsePose ∷ Text → Maybe Pose
 parsePose "standing"  = Just Standing
 parsePose "crouching" = Just Crouching
