@@ -110,6 +110,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 from __future__ import annotations
 
 import ast
+import re
 import contextlib
 import hashlib
 import importlib
@@ -1161,7 +1162,7 @@ def test_every_log_assertion_reads_this_invocations_log() -> None:
                and isinstance(node.args[0].value, ast.Name)
                and node.args[0].value.id == "art"
                for _path, node in reads),
-           "and both read this invocation's own log")
+           "and every one of them reads this invocation's own log")
     expect(len(writes) == len(FIXTURE_NAMES)
            and all(isinstance(node.args[0], ast.Name)
                    and node.args[0].id.endswith("_yaml")
@@ -1233,6 +1234,18 @@ NUMBER_WORDS = {
 #: quoting a stale claim would be found and reported as one.
 ALSO_MEANS = {2: ("both", "twice")}
 
+#: How many words may sit between a number and the subject it counts. A
+#: count followed by an adjective, or by a backticked symbol, before its
+#: subject is the same claim as the bare pair — and a guard that demanded
+#: adjacency read neither, which is how one such sentence survived five
+#: review rounds. Three is generous enough for an adjective plus a
+#: backticked symbol, and tight enough that two unrelated sentences
+#: cannot be joined across it.
+#:
+#: No example is written out here: this file scans itself, so a specimen
+#: stale sentence would be found and reported as a live claim.
+MAX_INTERVENING_WORDS = 3
+
 #: `tools/README.md` documents every probe, so only the parts that
 #: describe THIS one may be read: the companion's own section, and the
 #: probe's row in the index table. Scanning the whole file would judge
@@ -1258,49 +1271,99 @@ def topology_prose() -> tuple[tuple[str, str], ...]:
 
     The README is included deliberately: it is the tools index a reader
     reaches first, and it carried the stale counts through two review
-    rounds of #2505 while every structural check below stayed green.
+    rounds of #2505 while every structural check below stayed green. So is
+    THIS file: it is the checker, but its module docstring and its
+    comments are contracts too, and two stale counts survived in them —
+    one written as a bare quantity word, one capitalized with a modifier
+    between it and its subject — while every check here passed. Neither
+    is quoted, because a quotation would be found and reported as a live
+    claim.
     """
     return tuple(
         [(path.name, module_source(path)) for path in SURFACE]
         + [(README.name, readme_prose())]
-        # THIS file too. It is the checker, but it is also a contract:
-        # its module docstring and its failure messages tell a reader what
-        # the probe's shape is, and round 4 of #2505 found a stale "both"
-        # in exactly those sentences while every check here passed.
         + [(Path(__file__).name,
             Path(__file__).read_text(encoding="utf-8"))]
     )
 
-#: The quantities those files state in words, each with the phrases that
-#: introduce it. A phrase is matched against the whole prose body, and the
-#: number word immediately before it must be the current one.
-def topology_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
-    """(label, current value, phrases the number is spelled BEFORE).
 
-    Prose that puts the number AFTER its subject ("ASSERTS against that
-    log three times") is covered by 'TRAILING_CLAIMS' instead — the two
-    shapes both occur, and a guard that knew only one would keep passing
-    over the other.
+def normalized_prose(body: str) -> str:
+    """Prose as a reader hears it: lowercase, one line, no comment marks.
+
+    Three normalizations, each closing a way a stale claim stayed
+    invisible to a literal scan:
+
+    * CASE — a sentence-initial "Seven" is the same claim as "seven".
+    * LINE BREAKS — a comment or docstring wraps wherever the margin
+      falls, so the number and its subject are routinely on different
+      lines with a `#` between them.
+    * COMMENT MARKERS — `#`, `--`, `#:` and a leading `*` are punctuation
+      of the medium, not words of the sentence.
+    """
+    without_marks = re.sub(r"(?m)^\s*(?:#:|#|--|\*)+\s?", " ", body)
+    return re.sub(r"\s+", " ", without_marks).lower()
+
+
+def claim_pattern(number: str, phrase: str, *, trailing: bool) -> re.Pattern:
+    """A regex for `number` counting `phrase`, allowing a bounded run of
+    intervening words in whichever order the prose puts them.
+
+    The gap may not span ANOTHER count word. Without that, a sentence
+    pairing two quantities correctly — a run launching so many processes
+    from so many call sites — reads as each number claiming the other's
+    subject, and the guard reports two failures against prose that is
+    right. A second number ends the first one's reach.
+    """
+    others = "|".join(re.escape(word) for word in sorted(
+        set(NUMBER_WORDS.values())
+        | {alias for aliases in ALSO_MEANS.values() for alias in aliases},
+        key=len, reverse=True))
+    gap = r"(?:\s+(?!(?:%s)\b)[\w`'/-]+){0,%d}\s+" % (
+        others, MAX_INTERVENING_WORDS)
+    # The SUBJECT tolerates the same intervening words as the approach to
+    # it. A phrase listed here names a quantity, not a fixed string, and
+    # prose routinely qualifies it mid-way; requiring its own words to be
+    # adjacent left one such sentence unmatched through a review round.
+    subject = gap.join(re.escape(word) for word in phrase.split())
+    if trailing:
+        return re.compile(subject + gap + r"\b" + re.escape(number) + r"\b")
+    return re.compile(r"\b" + re.escape(number) + r"\b" + gap + subject)
+
+
+def topology_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """(label, current value, subjects the number is spelled BEFORE).
+
+    The subjects are deliberately the SHORTEST phrase that names the
+    quantity — `claim_pattern` allows the modifiers between, so listing
+    "call sites" covers "static call sites" and "`boot_isolated` call
+    sites" without either having to be foreseen.
     """
     return (
-        ("boot call sites", BOOT_CALL_SITES,
-         ("boot_isolated` call sites", "boot_isolated` CALL SITES",
-          "call sites", "boot CALL SITES")),
+        ("boot call sites", BOOT_CALL_SITES, ("call sites",)),
+        # NOT the bare word "launches": the regeneration loop
+        # legitimately describes its OWN two, and a probe-wide subject
+        # that also matched that would force a true sentence to be
+        # rewritten into a false one.
         ("process launches", PROCESS_LAUNCHES,
-         ("engine processes", "launches", "processes from")),
+         ("engine processes", "engine launches", "processes from")),
         ("scenario owners", len(SCENARIO_OWNERS), ("scenario owners",)),
         ("log assertions", LOG_ASSERTION_SITES,
-         ("checks ASSERT against", "checks below ASSERT against",
-          "places that assert", "log-reading ASSERTION",
-          "owners that read it")),
+         ("checks assert against", "places that assert",
+          "log-reading assertion", "owners that read it",
+          "read this invocation", "sit with the owners")),
     )
 
 
 def trailing_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
-    """(label, current value, phrases the number is spelled AFTER)."""
+    """(label, current value, subjects the number is spelled AFTER).
+
+    Prose that puts the number after its subject is the other shape both
+    the README and these docstrings use, and a guard that knew only the
+    leading one kept passing over it.
+    """
     return (
         ("log assertions", LOG_ASSERTION_SITES,
-         ("ASSERTS against that log",)),
+         ("asserts against that log",)),
     )
 
 
@@ -1324,19 +1387,20 @@ def owner_fixture_counts() -> dict[Path, int]:
 def test_the_topology_prose_states_the_current_counts() -> None:
     """A stale number word is a contract stating something false.
 
-    Every check in this file reads the CODE; none of them reads the
+    Every other check in this file reads the CODE; none of them reads the
     sentences around it. #2505 renumbered the probe and left the owner
-    docstrings and `tools/README.md` describing the pre-change shape
-    through two review rounds, with this suite green the whole time —
-    which is exactly the gap a structural scan cannot see.
+    docstrings, `tools/README.md` and this file's own comments describing
+    the pre-change shape through FIVE review rounds, with this suite green
+    the whole time — which is exactly the gap a structural scan cannot
+    see, and why each fix that only corrected the sentence a reviewer
+    happened to quote was followed by another round.
 
-    The rule is deliberately narrow: wherever one of these quantities is
-    spelled as a WORD immediately before a phrase that names it, the word
+    The rule: wherever one of these quantities is spelled as a word near
+    the subject it counts, in either order and whatever the case, the word
     must be the current one. It says nothing about prose that gives no
     count, and nothing about a historical note that names an older number
-    in the past tense — those are qualified by their own sentence, which
-    is why the phrases below are matched with the number attached rather
-    than the number alone.
+    in the past tense — those qualify themselves in a clause this never
+    reads, which is the deliberate limit of a lexical guard.
     """
     print("\ntest_the_topology_prose_states_the_current_counts")
     stale: list[str] = []
@@ -1347,58 +1411,44 @@ def test_the_topology_prose_states_the_current_counts() -> None:
            "the owners really stage fixtures — an empty derivation would "
            "make the per-owner fixture claim below vacuous")
     bodies = topology_prose()
-    expect(any(README.name == name for name, _ in bodies),
-           "the README's own section is among the prose scanned — it is "
-           "where the stale counts survived longest")
+    names = {name for name, _ in bodies}
+    expect(README.name in names and Path(__file__).name in names,
+           f"the README's own section and this file are both among the "
+           f"prose scanned — each is where a stale count survived longest "
+           f"(got {sorted(names)})")
+
+    def spellings_other_than(current: int) -> list[str]:
+        wanted = NUMBER_WORDS[current]
+        words = [word for word in NUMBER_WORDS.values() if word != wanted]
+        words += [alias for value, aliases in ALSO_MEANS.items()
+                  if value != current for alias in aliases]
+        return words
+
     for name, body in bodies:
-        claims = list(topology_claims())
+        prose = normalized_prose(body)
+        claims = [(label, current, subjects, False)
+                  for label, current, subjects in topology_claims()]
+        claims += [(label, current, subjects, True)
+                   for label, current, subjects in trailing_claims()]
         # An owner's WHOLE fixture set, checked only in that owner's file.
         # Restricted to the phrasings that mean the whole set: an owner
-        # legitimately also counts a SUBSET ("phase 3's four fixtures"),
-        # and elsewhere a number before "fixtures" may be the probe-wide
-        # total or a qualified historical note.
+        # legitimately also counts a SUBSET, and elsewhere a number before
+        # "fixtures" may be the probe-wide total or a historical note.
         if name in owner_fixtures:
             claims.append(("its own fixture set", owner_fixtures[name],
-                           ("inline YAML fixtures", "YAML fixtures are")))
-        for label, current, phrases in claims:
+                           ("inline yaml fixtures", "yaml fixtures are"),
+                           False))
+        for label, current, subjects, trailing in claims:
             wanted = NUMBER_WORDS[current]
-            spellings = [
-                number for value, number in NUMBER_WORDS.items()
-                if number != wanted
-            ] + [
-                alias
-                for value, aliases in ALSO_MEANS.items() if value != current
-                for alias in aliases
-            ]
-            for phrase in phrases:
-                for number in spellings:
-                    # Only a number word DIRECTLY before the phrase is a
-                    # claim about this quantity. "eight" elsewhere in the
-                    # file (another probe's rule, a historical aside) is
-                    # not one, and must not be rewritten by this check.
-                    for sep in (" ", " `"):
-                        needle = f"{number}{sep}{phrase}"
-                        checked += 1
-                        if needle in body:
-                            stale.append(
-                                f"{name}: {label} is {current} "
-                                f"({wanted}), but the prose says "
-                                f"{needle!r}")
-        for label, current, phrases in trailing_claims():
-            wanted = NUMBER_WORDS[current]
-            spellings = [number for number in NUMBER_WORDS.values()
-                         if number != wanted]
-            spellings += [alias
-                          for value, aliases in ALSO_MEANS.items()
-                          if value != current for alias in aliases]
-            for phrase in phrases:
-                for number in spellings:
-                    needle = f"{phrase} {number}"
+            for subject in subjects:
+                for number in spellings_other_than(current):
                     checked += 1
-                    if needle in body:
+                    found = claim_pattern(number, subject,
+                                          trailing=trailing).search(prose)
+                    if found:
                         stale.append(
                             f"{name}: {label} is {current} ({wanted}), but "
-                            f"the prose says {needle!r}")
+                            f"the prose says {found.group(0).strip()!r}")
     expect(checked > 0,
            "the prose scan really looked at something — an empty sweep "
            "would report OK having read nothing")
@@ -1464,7 +1514,7 @@ def test_the_facade_keeps_one_run_entry_point() -> None:
 
 def test_the_regeneration_boot_runs_once_per_visit_order() -> None:
     print("\ntest_the_regeneration_boot_runs_once_per_visit_order")
-    # #2095 requirement 11. Seven static call sites, eight LAUNCHES,
+    # #2095 requirement 11. Ten static call sites, eleven LAUNCHES,
     # because one site is the body of a two-element loop. Asserting only
     # the call-site count would accept that loop being unrolled,
     # flattened to a single iteration, or grown to three — each of which

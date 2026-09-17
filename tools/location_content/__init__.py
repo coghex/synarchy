@@ -33,7 +33,7 @@ means growing a single 980-line `run`.
     fixtures, on the same rule as `dispatch` — nine across the package.
 
 No module here boots an engine: `location_content_probe.run` owns the
-process sequence (ten `boot_isolated` call sites, eleven launches,
-because the loot-stability site runs once for same order and once for
-reversed) and hands each owner the live port it opened.
+process sequence (ten `boot_isolated` call sites, eleven engine
+launches, because the loot-stability site runs once for same order and
+once for reversed) and hands each owner the live port it opened.
 """
