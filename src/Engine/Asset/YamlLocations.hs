@@ -11,6 +11,7 @@ module Engine.Asset.YamlLocations
     , loadLocationYaml
     , loadLocationYamlOutcome
     , significantItemErrors
+    , containerContentErrors
     ) where
 
 import UPrelude
@@ -78,6 +79,13 @@ data LocationYamlContent = LocationYamlContent
       --   it anywhere else, which is what keeps a @loot_table@ draw out
       --   of the predicate no matter what it rolls. Defaults to
       --   'False', so an entry is incidental unless it says otherwise.
+    , lycProfile ∷ !(Maybe Text)
+      -- ^ #2505: the loot profile a @kind: container@ entry's pending
+      --   shell will one day be realized from. REQUIRED on that kind and
+      --   rejected on every other, both by 'LocationYamlDef''s 'FromJSON'
+      --   instance — a container with no profile has no descriptor to
+      --   persist, and a profile on an @item@ or @loot_table@ entry
+      --   would be authored data nothing reads.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON LocationYamlContent where
@@ -91,6 +99,7 @@ instance FromJSON LocationYamlContent where
         ⊛ v .:? "count_range"
         ⊛ v .:? "clearance"
         ⊛ v .:? "significant" .!= False
+        ⊛ v .:? "profile"
 
 -- | The authoritative spatial contract (#777): an inclusive,
 --   axis-aligned tile box relative to the location's anchor. Required
@@ -176,8 +185,8 @@ relBoundsContains ∷ LocationYamlBounds → Int → Int → Bool
 relBoundsContains b x y =
     x ≥ lybMinX b ∧ x ≤ lybMaxX b ∧ y ≥ lybMinY b ∧ y ≤ lybMaxY b
 
--- | The authoritative content-kind vocabulary (#1708): the four kinds
---   'scripts/locations.lua' can actually spawn. Closed here, at the
+-- | The authoritative content-kind vocabulary (#1708, #2505): the FIVE
+--   kinds 'scripts/locations.lua' can actually spawn. Closed here, at the
 --   same entry point that already validates bounds, fixed content
 --   positions, and anchor tags below, so an unrecognized kind fails
 --   the whole file's load rather than reaching a stamp-time warning
@@ -196,8 +205,16 @@ relBoundsContains b x y =
 --   schema break, not a no-op.
 --   Reintroducing nested content needs its own relative-bounds model,
 --   not a re-listing here.
+--   @container@ (#2505, epic #1231 PLC-14) is the fifth: a PENDING
+--   container shell — an ordinary item instance on the ground paired
+--   with the loot profile it will later be realized from (design D-2,
+--   D-17). It is the one kind carrying a second authored id, and the
+--   def parser below is where that pairing is made structural: a
+--   @container@ entry without a @profile@ is refused, and a @profile@
+--   on any other kind is refused too.
 validContentKinds ∷ [Text]
-validContentKinds = [ "unit", "item", "loot_table", "building" ]
+validContentKinds =
+    [ "unit", "item", "loot_table", "building", "container" ]
 
 -- | Parse one authored anchor tag into the closed vocabulary
 --   ('Location.Anchor', #801\/#1681), attributing a rejection to the
@@ -418,6 +435,32 @@ instance FromJSON LocationYamlDef where
                     <> " ('" <> lycId c <> "'): 'significant' is "
                     <> "supported only for item content, not '"
                     <> lycKind c <> "'"))
+            -- #2505: a PENDING container entry is a PAIR — the container
+            -- item definition and the loot profile its shell will be
+            -- realized from (D-2/D-17) — so neither half is optional and
+            -- neither belongs anywhere else.
+            --
+            -- Missing 'profile' is refused rather than defaulted: the
+            -- descriptor is PERSISTED on the placed instance, so an entry
+            -- with no profile would mint a shell that could never be
+            -- realized, and nothing downstream could tell that from a
+            -- shell whose profile was deregistered later.
+            --
+            -- 'profile' on another kind is refused for the same reason
+            -- 'significant' is refused off an item: it is authored data
+            -- no spawn path reads, so accepting it would let a file
+            -- silently mean something it does not.
+            when (lycKind c ≡ "container" ∧ isNothing (lycProfile c)) $
+                fail (T.unpack ("location '" <> lid
+                    <> "': content entry " <> tshow entryIx
+                    <> " ('" <> lycId c <> "'): container content "
+                    <> "requires a 'profile'"))
+            when (lycKind c ≢ "container" ∧ isJust (lycProfile c)) $
+                fail (T.unpack ("location '" <> lid
+                    <> "': content entry " <> tshow entryIx
+                    <> " ('" <> lycId c <> "'): 'profile' is supported "
+                    <> "only for container content, not '"
+                    <> lycKind c <> "'"))
             when (isNothing (lycCountRange c) ∧ isJust (lycClearance c)) $
                 fail (T.unpack ("location '" <> lid
                     <> "': content entry " <> tshow entryIx
@@ -507,4 +550,48 @@ significantItemErrors registered defs =
     , c ← lydContents d
     , lycSignificant c
     , not (HS.member (lycId c) registered)
+    ]
+
+-- | Every @kind: container@ content entry (#2505) whose container item
+--   id or loot-profile id is not registered, one message per offending
+--   id — so an entry naming two unknown ids reports both rather than
+--   the first.
+--
+--   Registry-parameterised, and rejecting the whole file, for the same
+--   reason 'significantItemErrors' is: the authored shape lives here
+--   while the registries live in the API loader
+--   ("Engine.Scripting.Lua.API.Locations"), which calls this and
+--   rejects the file on any result.
+--
+--   STRICTER than an ordinary incidental content id even though D-18
+--   makes a container entry incidental. That is not a contradiction:
+--   the incidental lifecycle governs what happens when a SPAWN fails at
+--   stamp time, while these two ids are the PERSISTED descriptor
+--   ('Location.Instance.LocationContainerSlot'). A slot naming an
+--   unknown profile is the exact state the save-side check
+--   ('World.Save.Types.missingContainerProfileReferences') refuses a
+--   LOAD over, so admitting it from authored data would materialize a
+--   world this build would then decline to reload. The container id is
+--   checked beside it because a slot whose definition does not exist can
+--   mint no shell at all, ever.
+--
+--   The KIND restriction and the required @profile@ are structural rules
+--   the definition parser above already enforces, so anything reaching
+--   here is a @kind: container@ entry; an entry that somehow carried no
+--   profile contributes no profile message rather than a fabricated one.
+containerContentErrors
+    ∷ HS.HashSet Text        -- ^ registered item definition names
+    → HS.HashSet Text        -- ^ registered loot-profile ids
+    → [LocationYamlDef] → [Text]
+containerContentErrors items profiles defs = concat
+    [ [ "location '" <> lydId d <> "': container content '" <> lycId c
+          <> "' names no registered item definition"
+      | not (HS.member (lycId c) items) ]
+      ⧺
+      [ "location '" <> lydId d <> "': container content '" <> lycId c
+          <> "' names no registered loot profile '" <> profile <> "'"
+      | Just profile ← [lycProfile c], not (HS.member profile profiles) ]
+    | d ← defs
+    , c ← lydContents d
+    , lycKind c ≡ "container"
     ]

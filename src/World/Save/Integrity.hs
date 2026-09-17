@@ -103,7 +103,7 @@ import Item.Types (ItemInstance(..))
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
-    , LocationSignificantItem(..)
+    , LocationSignificantItem(..), LocationContainerSlot(..)
     , LocationInstance(..), LocationInstanceId(..), instancesToList )
 import World.Generate.Types (WorldGenParams(..))
 
@@ -234,6 +234,7 @@ sessionIntegrityErrors snap = concat
     , billStationErrors, billClaimantErrors, nodeBuildingErrors
     , locationOccupantErrors
     , significantProvenanceErrors snap
+    , containerProvenanceErrors snap
     , orderRefErrors snap
     ]
   where
@@ -719,6 +720,224 @@ significantDanglingWarnings snap =
                (HM.elems (snapshotPageEntities snap)))
     ]
 
+-- Pending container shells (#2505) -----------------------------------
+
+-- | One placed location's PENDING container slot, flattened with the
+--   page it belongs to and the data path a diagnostic needs — the
+--   container half of 'significantRefs', and THE single enumeration the
+--   rules below walk.
+--
+--   Restricted to UNREALIZED slots. After realization (PLC-15) the slot
+--   keeps only its latch and its bound id (design D-3): the shell is an
+--   ordinary item that may be carried, stored, nested, dropped or
+--   destroyed like any other, so every rule below would be asserting
+--   something about it that is no longer true. That is the same carve-out
+--   'lsiTaken' gets from the significant rules, one state earlier.
+containerRefs
+    ∷ SessionSnapshot
+    → [(WorldPageId, LocationInstance, LocationContainerSlot, Text)]
+containerRefs snap =
+    [ (pid, inst, slot, path)
+    | (pid, page) ← L.sortOn fst (HM.toList (snapPages snap))
+    , inst ← instancesToList (wgpLocationInstances (pgsGenParams page))
+    , slot ← liContainers inst
+    , not (lcsRealized slot)
+    , let path = "world-pages[page=" <> unWorldPageId pid
+              <> "].locations[" <> tshow (unLocationInstanceId (liId inst))
+              <> "].containers[" <> tshow (lcsSlot slot) <> "].item"
+    ]
+
+-- | The BLOCKING provenance rules for PENDING container shells (#2505).
+--   The #917 rules applied to the other slot family, and they hold at
+--   exactly the same strength for one structural reason: an unrealized
+--   shell has nowhere else it could legitimately be.
+--
+--   * a bound unrealized shell must be an OUTER GROUND item on its own
+--     page. Resolving on another page means the durable
+--     @(page, instance, slot)@ source (design D-2\/D-17) is wrong.
+--     Resolving in an inventory, in a building's store, or nested inside
+--     another container means it was picked up — and this slice REFUSES
+--     to pick a pending shell up
+--     ('Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'), so
+--     that state is unreachable by play and a payload claiming it is
+--     claiming something the engine cannot do. "Outer" is
+--     'PageEntities.peGroundItems' rather than the flattened
+--     'peItems' for the same reason it is there: an id that exists only
+--     INSIDE a ground container is not pickable as its own ground item,
+--     so PLC-15 could never realize it.
+--   * the shell must BE the container definition the slot names.
+--     Otherwise realization would one day pour a profile's cargo into
+--     whatever item happened to be bound.
+--   * one physical identity is owned by at most ONE slot, ACROSS both
+--     families and the whole session. Item ids come from a global
+--     allocator, so two claims on one id can never be two real items —
+--     and a shell that was also a significant obligation would be an
+--     item the pickup boundary must simultaneously refuse (pending) and
+--     latch (owed). Reported here for every group containing at least
+--     one CONTAINER claim; a group of significant claims alone stays
+--     'significantProvenanceErrors'', so the two walks partition the
+--     cases instead of double-reporting the overlap.
+--   * a bound identity is BELOW the session's item-id cursor — the only
+--     ids the monotonic allocator can have minted. Unlike the #917
+--     version this needs no taken-obligation carve-out, because an
+--     unrealized slot has no state that excuses its shell from existing.
+containerProvenanceErrors ∷ SessionSnapshot → [IntegrityError]
+containerProvenanceErrors snap =
+    resolutionErrors ⧺ ownershipErrors ⧺ allocatorErrors
+  where
+    entitiesByPage = snapshotPageEntities snap
+    refs = containerRefs snap
+
+    resolutionErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = path
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "an outer ground '" <> lcsItemDefName slot
+                <> "' on the owning page ('" <> unWorldPageId pid
+                <> "') while pending"
+            , ieActual        = actual
+            , ieCode          = "wrong-scope-reference"
+            , ieMessage       = "pending container shell " <> tshow itemId
+                <> " owed by location #"
+                <> tshow (unLocationInstanceId (liId inst))
+                <> " slot " <> tshow (lcsSlot slot)
+                <> " on page '" <> unWorldPageId pid <> "' " <> actual
+            }
+        | (pid, inst, slot, path) ← refs
+        , Just itemId ← [lcsInstanceId slot]
+        , Just actual ← [misresolution pid (lcsItemDefName slot) itemId]
+        ]
+
+    -- 'Nothing' when the shell is exactly where a pending slot requires
+    -- and is the thing the slot names, or absent from the session
+    -- entirely ('containerDanglingWarnings' reports and tolerates that).
+    misresolution pid ownedDef itemId = case onOwnGround of
+        Just actualDef
+            | actualDef ≡ ownedDef → Nothing
+            | otherwise → Just ("is a '" <> actualDef
+                <> "' lying on that page's ground, not the '" <> ownedDef
+                <> "' the slot names")
+        Nothing → case pagesHolding of
+            [] → Nothing
+            ps | pid `elem` ps →
+                   Just "is held in an inventory, in storage, or nested \
+                        \inside a container on that page"
+               | otherwise →
+                   Just ("resolves on page(s) "
+                       <> T.intercalate ", " (map unWorldPageId ps))
+      where
+        onOwnGround = HM.lookup itemId ∘ peGroundItems
+                          =≪ HM.lookup pid entitiesByPage
+        pagesHolding = L.sort
+            [ p | (p, pe) ← HM.toList entitiesByPage
+                , HS.member itemId (peItems pe) ]
+
+    -- Every claim on the page's items, BOTH families, so the walk can
+    -- see a shell that is also an obligation. The significant side is
+    -- unrestricted by 'lsiTaken' on purpose: a taken obligation still
+    -- OWNS its id, and a pending shell must not be able to claim it.
+    claims =
+        [ (itemId, [(True, address (liId inst) "container slot"
+                                   (lcsSlot slot) pid)])
+        | (pid, inst, slot, _) ← refs
+        , Just itemId ← [lcsInstanceId slot] ]
+        ⧺
+        [ (itemId, [(False, address (liId inst) "significant slot"
+                                    (lsiSlot entry) pid)])
+        | (pid, inst, entry, _) ← significantRefs snap
+        , Just itemId ← [lsiInstanceId entry] ]
+    address iid label slot pid = unWorldPageId pid <> "#"
+        <> tshow (unLocationInstanceId iid) <> " " <> label <> " "
+        <> tshow slot
+
+    ownershipErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = "item-instance#" <> tshow itemId
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "owned by at most one location slot of \
+                                \either family (item ids are one global \
+                                \allocator)"
+            , ieActual        = "claimed by " <> ownersText
+            , ieCode          = "duplicate-identity"
+            , ieMessage       = "pending container shell " <> tshow itemId
+                <> " is owned by more than one location slot: " <> ownersText
+            }
+        | (itemId, owners) ← L.sortOn fst
+            (HM.toList (HM.fromListWith (flip (⧺)) claims))
+        , length owners > 1
+        , any fst owners
+        , let ownersText = T.intercalate ", " (map snd owners)
+        ]
+
+    allocatorErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = path
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "an item identity the global allocator "
+                <> "has actually minted (below the saved cursor "
+                <> tshow cursor <> ")"
+            , ieActual        = "at or above that cursor, so no such "
+                <> "item was ever created"
+            , ieCode          = "unmintable-identity"
+            , ieMessage       = "pending container shell " <> tshow itemId
+                <> " owed by location #"
+                <> tshow (unLocationInstanceId (liId inst))
+                <> " slot " <> tshow (lcsSlot slot)
+                <> " on page '" <> unWorldPageId pid
+                <> "' is at or above the session's item-id cursor ("
+                <> tshow cursor <> "), so the allocator never minted it"
+            }
+        | let cursor = snapNextItemId snap
+        , (pid, inst, slot, path) ← refs
+        , Just itemId ← [lcsInstanceId slot]
+        , itemId ≥ cursor
+        ]
+
+-- | The TOLERATED half of #2505's provenance rules: a pending slot whose
+--   bound shell is absent from the whole session.
+--
+--   Reachable by ordinary play, unlike every hard rule above:
+--   @item.removeGround@ deletes a ground item outright rather than
+--   moving it, so a scripted or debug removal of a pending shell leaves
+--   exactly this state. The honest outcome is that the slot stays
+--   pending for ever — its location's @contents_spawned@ is already set,
+--   so nothing re-spawns it — and no shell is ever realized from it.
+--   Refusing the whole save over a crate someone deleted would lose far
+--   more than it protects, which is the same judgement
+--   'significantDanglingWarnings' makes.
+containerDanglingWarnings ∷ SessionSnapshot → [IntegrityError]
+containerDanglingWarnings snap =
+    [ IntegrityError
+        { ieComponent     = worldPagesComponentId
+        , ieVersion       = worldPagesVersion
+        , iePath          = path
+        , ieRefKind       = RefItemInstance
+        , ieRefValue      = tshow itemId
+        , ieExpectedScope = "same page ('" <> unWorldPageId pid <> "')"
+        , ieActual        = "not found in the loaded session"
+        , ieCode          = "dangling-reference"
+        , ieMessage       = "pending container shell " <> tshow itemId
+            <> " owed by location #"
+            <> tshow (unLocationInstanceId (liId inst)) <> " slot "
+            <> tshow (lcsSlot slot) <> " on page '"
+            <> unWorldPageId pid <> "' does not resolve (tolerated: the \
+               \slot stays pending)"
+        }
+    | (pid, inst, slot, path) ← containerRefs snap
+    , Just itemId ← [lcsInstanceId slot]
+    , not (any (HS.member itemId ∘ peItems)
+               (HM.elems (snapshotPageEntities snap)))
+    ]
+
 -- | The NON-BLOCKING half of the session integrity graph (#1246): every
 --   finding that must be surfaced as a diagnostic and must never fail a
 --   boundary. Deliberately a sibling of 'sessionIntegrityErrors' rather
@@ -735,6 +954,7 @@ significantDanglingWarnings snap =
 sessionIntegrityWarnings ∷ SessionSnapshot → [IntegrityError]
 sessionIntegrityWarnings snap =
     orderWarnings ⧺ locationWarnings ⧺ significantDanglingWarnings snap
+        ⧺ containerDanglingWarnings snap
   where entitiesByPage = snapshotPageEntities snap
         orderWarnings =
             [ e

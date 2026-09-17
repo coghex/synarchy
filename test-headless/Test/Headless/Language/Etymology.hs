@@ -773,6 +773,7 @@ instanceOf e lc = LocationInstance
     , liContentsSpawned = False
     , liEncounter       = Nothing
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 

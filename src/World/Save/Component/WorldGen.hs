@@ -112,6 +112,7 @@ module World.Save.Component.WorldGen
     , WorldGenParamsDTOv4(..)
     , WorldGenParamsDTOv5(..)
     , WorldGenParamsDTOv6(..)
+    , WorldGenParamsDTOv8(..)
     , WorldGenParamsDTOv7(..)
     , NameExprDTO(..)
     , EtymologySourceDTO(..)
@@ -130,6 +131,9 @@ module World.Save.Component.WorldGen
     , LocationInstancesDTOv3(..)
     , LocationEncounterDTOv1(..)
     , LocationSignificantItemDTO(..)
+    , LocationContainerSlotDTO(..)
+    , LocationInstanceDTOv6(..)
+    , LocationInstancesDTOv6(..)
     , LocationInstanceDTOv5(..)
     , LocationInstancesDTOv5(..)
     , LocationInstanceDTOv4(..)
@@ -171,6 +175,8 @@ module World.Save.Component.WorldGen
     , toWorldGenParamsDTOv5
     , fromWorldGenParamsDTOv6
     , toWorldGenParamsDTOv6
+    , toWorldGenParamsDTOv8
+    , fromWorldGenParamsDTOv8
     , toWorldGenParamsDTOv7
     , fromWorldGenParamsDTOv7
     , toEtymologySourceDTO
@@ -178,6 +184,8 @@ module World.Save.Component.WorldGen
     , toRiverNamesDTO
     , toLocationInstancesDTOv3
     , toLocationInstancesDTOv4
+    , toLocationInstancesDTOv6
+    , fromLocationInstancesDTOv6
     , toLocationInstancesDTOv5
     , fromLocationInstancesDTOv5
     ) where

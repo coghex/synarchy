@@ -233,7 +233,7 @@ pureSpec = describe "generated world identity (#2021)" $ do
            \current one all decode, so each bump added a reader rather \
            \than replacing one" $
             worldPagesInputVersions
-                `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+                `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     describe "metadata v3" $ do
         it "still accepts every historical version — v1 and v2 both \

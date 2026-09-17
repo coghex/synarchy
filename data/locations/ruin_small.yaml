@@ -9,14 +9,27 @@
 # `contents` ids are resolved at spawn time (#90), not here — an unknown
 # id logs a warning and is skipped rather than crashing. A content
 # `kind`, by contrast, is checked HERE at load: the vocabulary is closed
-# to unit / item / loot_table / building (#1708), and anything else
-# fails this whole file's load rather than registering and warning later.
+# to unit / item / loot_table / building / container (#1708, #2505), and
+# anything else fails this whole file's load rather than registering and
+# warning later.
 #
-# ONE content id is checked at load too: a `significant: true` item
-# (#917). It must already be in the item registry — hence "after items"
-# above being load-bearing rather than incidental — because an
-# obligation that can never spawn leaves the location permanently
-# unclearable, which a spawn-time warning could not recover from.
+# TWO content shapes have their ids checked at load too, both because
+# they are PERSISTED rather than merely spawned:
+#
+#   * a `significant: true` item (#917) must already be in the item
+#     registry — hence "after items" above being load-bearing rather
+#     than incidental — because an obligation that can never spawn
+#     leaves the location permanently unclearable, which a spawn-time
+#     warning could not recover from;
+#   * a `kind: container` entry (#2505) must name a registered item
+#     definition AND a registered loot `profile:` (required on that kind
+#     and refused on every other). Its pair becomes a pending shell slot
+#     on the placed instance, and the LOAD boundary refuses a save whose
+#     pending slot names an unregistered profile — so a file admitted
+#     with a bad one would materialize a world this build then declines
+#     to reload. Loot profiles load after items and before locations.
+#     Nothing in this file authors one yet: the wooden crate and the
+#     entry that carries it belong to PLC-10 (epic #1231).
 locations:
   - id: ruin_small
     label: "Small Ruin"

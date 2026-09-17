@@ -18,6 +18,7 @@ module Engine.Scripting.Lua.API.Locations
 import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Control.Monad (foldM)
@@ -42,6 +43,7 @@ import Location.Naming (locationNamingErrors)
 import Location.Types
 import Location.Bounds (RelBounds(..))
 import Item.Types (ItemManager(..))
+import LootProfile.Types (LootProfileRegistry, lootProfileIds)
 
 -- | Fallback texture substituted when a location def's declared
 --   @map_icon@ path doesn't exist on disk (#781) — the same generic
@@ -50,6 +52,13 @@ import Item.Types (ItemManager(..))
 --   'resolveTexturePath' rather than failing the whole YAML load.
 missingLocationIconTexture ∷ FilePath
 missingLocationIconTexture = "assets/textures/utility/notexture.png"
+
+-- | The registered loot-profile ids as a set, for #2505's container
+--   content check. Derived from 'lootProfileIds' rather than from the
+--   registry's internal map so this module holds no second opinion
+--   about what "registered" means.
+profileIds ∷ LootProfileRegistry → HS.HashSet Text
+profileIds = HS.fromList ∘ lootProfileIds
 
 -- | engine.loadLocationYaml(path) — parses a YAML file of location
 --   defs, registers each into the LocationRegistry, returns the count.
@@ -104,9 +113,24 @@ loadLocationYamlFn core regs env backendState = do
                 -- Locations load AFTER items (see the header comment on
                 -- data/locations/*.yaml), so the registry this reads is
                 -- the complete one.
+                --
+                -- #2505: a PENDING container entry's two ids are checked
+                -- in the SAME pass and against the same all-or-nothing
+                -- outcome. Its container definition and loot profile are
+                -- both persisted onto the placed instance, and the load
+                -- boundary refuses a save whose pending slot names an
+                -- unregistered profile — so a file admitted here with a
+                -- bad profile would materialize a world this build
+                -- declines to reload. Loot profiles load after items and
+                -- BEFORE locations (scripts/startup_loader.lua), so both
+                -- registries this reads are complete.
                 itemErrs ← if null defs then pure [] else do
                     im ← readIORef (crItemManagerRef regs)
-                    pure (significantItemErrors (HM.keysSet (imDefs im)) defs)
+                    lpr ← readIORef (crLootProfileRegistryRef regs)
+                    let itemIds = HM.keysSet (imDefs im)
+                    pure (significantItemErrors itemIds defs
+                          ⧺ containerContentErrors itemIds
+                                (profileIds lpr) defs)
                 case namingErrs ⧺ itemErrs of
                   (_:_) → do
                     forM_ (namingErrs ⧺ itemErrs) $ \e →
@@ -185,6 +209,7 @@ loadLocationYamlFn core regs env backendState = do
         , lconCountRange = (\r → (lycrMin r, lycrMax r)) ⊚ lycCountRange c
         , lconClearance = lycClearance c
         , lconSignificant = lycSignificant c
+        , lconProfile     = lycProfile c
         }
     toBounds b = RelBounds
         { rbMinX = lybMinX b, rbMinY = lybMinY b
@@ -283,6 +308,14 @@ locationListDefsFn regs = do
             -- path an entry takes.
             Lua.pushboolean (lconSignificant c)
             Lua.setfield (-2) "significant"
+            -- #2505: OMITTED (not a Lua nil value) on every kind but
+            -- @container@, mirroring `position` / `faction` above —
+            -- the YAML boundary already refuses it anywhere else, so an
+            -- always-present key would claim every entry has a profile
+            -- slot that could be filled.
+            forM_ (lconProfile c) $ \profile → do
+                Lua.pushstring (TE.encodeUtf8 profile)
+                Lua.setfield (-2) "profile"
             case lconPosition c of
                 Just (px, py) → do
                     Lua.newtable

@@ -107,7 +107,7 @@ data WorldState = WorldState
       --   restores it to a whole minute) and @WorldSetDate@ (which
       --   leaves it alone), and load staging.
       --
-      --   The remainder is persisted (@world-pages@ v11), unlike
+      --   The remainder is persisted (@world-pages@ since v11), unlike
       --   'wsTimeScaleRef' below: it is real elapsed calendar progress,
       --   not a load policy.
     , wsDateRef      ∷ IORef WorldDate

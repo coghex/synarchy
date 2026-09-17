@@ -14,7 +14,7 @@ import Engine.Scripting.Lua.API.Forage
 import Engine.Scripting.Lua.API.Flora
 import Engine.Scripting.Lua.API.Plant (worldGetPlantSuitabilityFn)
 import Engine.Scripting.Lua.API.Items.Ground
-    (worldSpawnLocationSignificantItemFn)
+    (worldSpawnLocationSignificantItemFn, worldSpawnLocationContainerFn)
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
@@ -157,6 +157,8 @@ registerWorldAPI callStats env backendState = do
     (worldMarkLocationContentsSpawnedByIdFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "spawnLocationSignificantItem"
     (worldSpawnLocationSignificantItemFn env)
+  registerLuaFunction callStats "world" "spawnLocationContainer"
+    (worldSpawnLocationContainerFn env)
   registerLuaFunction callStats "world" "registerLocationEncounterOccupants"
     (worldRegisterLocationEncounterOccupantsFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "setLocationEncounterOccupantState"

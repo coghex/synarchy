@@ -59,6 +59,7 @@ encounterDef = (mkDef "ruin_small" "Small Ruin"
     { ldContents =
         [ LocationContent "unit" "nomad_primitive" 1 Nothing
             (Just "hostile") 1 (Just (0, 3)) (Just "death_only") False
+            Nothing
         ]
     }
 

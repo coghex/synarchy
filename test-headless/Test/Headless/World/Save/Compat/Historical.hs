@@ -51,6 +51,8 @@ import World.Save.Component.Page
     , PageCoreDTOv7(..), WorldPagesDTOv7(..)
     , PageCoreDTOv8(..), WorldPagesDTOv8(..)
     , PageCoreDTOv10(..), WorldPagesDTOv10(..)
+    , PageCoreDTOv11(..), WorldPagesDTOv11(..)
+    , toWorldGenParamsDTOv8
     , WorldGenParamsDTOv5(..), toWorldGenParamsDTOv5
     , toWorldGenParamsDTOv6
     , WorldGenParamsDTOv7(..), toWorldGenParamsDTOv7
@@ -59,7 +61,8 @@ import World.Save.Component.Page
     , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
     , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6
-    , migrateWorldPagesV7, migrateWorldPagesV8, migrateWorldPagesV10 )
+    , migrateWorldPagesV7, migrateWorldPagesV8, migrateWorldPagesV10
+    , migrateWorldPagesV11 )
 import World.Save.Component.WorldGen
     ( LocationInstanceDTOv3(..), LocationInstancesDTOv3(..)
     , LocationInstanceDTOv5(..), LocationInstancesDTOv5(..)
@@ -553,6 +556,33 @@ languageProvenanceSpec =
                     -- becoming the format's honest answer.
                     wpIdsFromPayload pages `shouldBe` True
 
+        it "a frozen pre-#2505 v11 page keeps its whole-minute clock, \
+           \sub-minute remainder, identity and generated-world id, and \
+           \gains NO container slots" $ do
+            -- Empty is what a v11 save actually recorded: container
+            -- content did not exist, so no such payload could hold a
+            -- pending shell. Deriving one from today's YAML would owe a
+            -- materialized world a crate it never spawned — the same
+            -- rule migrateWorldPagesV9 applies to #917's obligations.
+            let dto = WorldPagesDTOv11 [legacyPageCoreV11]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv11 of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV11 dto'
+                        page = HM.lookup (WorldPageId "legacy_page")
+                                         (wpBase pages)
+                    concatMap liContainers
+                        (instancesOf pages "legacy_page") `shouldBe` []
+                    (pgsTimeRemainder <$> page) `shouldBe` Just 0.25
+                    (pgsTimeHour <$> page) `shouldBe` Just 12
+                    (pgsTimeMinute <$> page) `shouldBe` Just 30
+                    (wiName <$> (pgsIdentity =≪ page))
+                        `shouldBe` Just "Legacy World"
+                    (pgsGeneratedId <$> page) `shouldBe`
+                        Just (Just (fixtureGeneratedWorldIdForPage
+                                        (WorldPageId "legacy_page")))
+                    wpIdsFromPayload pages `shouldBe` True
+
         it "the CURRENT page core round-trips a NONZERO sub-minute \
            \remainder, so the v10 migration's zero above is a real \
            \decode outcome" $ do
@@ -675,6 +705,7 @@ legacyNamedInstances = LocationInstances
         , liContentsSpawned = True
         , liEncounter       = Nothing
         , liSignificant     = []
+        , liContainers      = []
         , liClearEventEmitted = False
         }
     , lisPendingLegacy = Nothing
@@ -761,6 +792,7 @@ richInstances = LocationInstances
         , liContentsSpawned = True
         , liEncounter       = Nothing
         , liSignificant     = []
+        , liContainers      = []
         , liClearEventEmitted = False
         }
     , lisPendingLegacy = Nothing
@@ -860,6 +892,7 @@ significantInstances = richInstances
             [ LocationSignificantItem 1 "processing_unit" (Just 6101) True
             , LocationSignificantItem 2 "processing_unit" (Just 6102) False
             ]
+        , liContainers = []
         , liClearEventEmitted = True
         }) (lisById richInstances)
     }
@@ -983,10 +1016,15 @@ keepSource = EtymologySource
 -- | The frozen pre-#2471 (v10) shape of 'currentPageCore': every field
 --   it has except the appended sub-minute remainder, which v10 has no
 --   place for at all.
+--
+--   Its gen params are built through 'toWorldGenParamsDTOv8' rather than
+--   copied from 'currentPageCore': #2505 appended a field to the live
+--   location instance, so the current gen-params type is no longer the
+--   shape a v10 payload holds.
 legacyPageCoreV10 ∷ PageCoreDTOv10
 legacyPageCoreV10 = PageCoreDTOv10
     { pc10PageId     = pcPageId currentPageCore
-    , pc10GenParams  = pcGenParams currentPageCore
+    , pc10GenParams  = toWorldGenParamsDTOv8 defaultWorldGenParams
     , pc10CameraX    = pcCameraX currentPageCore
     , pc10CameraY    = pcCameraY currentPageCore
     , pc10TimeHour   = pcTimeHour currentPageCore
@@ -997,6 +1035,26 @@ legacyPageCoreV10 = PageCoreDTOv10
     , pc10MapMode    = pcMapMode currentPageCore
     , pc10Identity   = pcIdentity currentPageCore
     , pc10GeneratedId = pcGeneratedId currentPageCore
+    }
+
+-- | The frozen pre-#2505 (v11) shape of 'currentPageCore': byte-identical
+--   field list, but its gen params are the frozen 'WorldGenParamsDTOv8',
+--   whose location instances carry no container slots at all.
+legacyPageCoreV11 ∷ PageCoreDTOv11
+legacyPageCoreV11 = PageCoreDTOv11
+    { pc11PageId     = pcPageId currentPageCore
+    , pc11GenParams  = toWorldGenParamsDTOv8 defaultWorldGenParams
+    , pc11CameraX    = pcCameraX currentPageCore
+    , pc11CameraY    = pcCameraY currentPageCore
+    , pc11TimeHour   = pcTimeHour currentPageCore
+    , pc11TimeMinute = pcTimeMinute currentPageCore
+    , pc11TimeRemainder = pcTimeRemainder currentPageCore
+    , pc11DateYear   = pcDateYear currentPageCore
+    , pc11DateMonth  = pcDateMonth currentPageCore
+    , pc11DateDay    = pcDateDay currentPageCore
+    , pc11MapMode    = pcMapMode currentPageCore
+    , pc11Identity   = pcIdentity currentPageCore
+    , pc11GeneratedId = pcGeneratedId currentPageCore
     }
 
 currentPageCore ∷ PageCoreDTO

@@ -740,7 +740,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `injury_log_probe.py` | logging arc (general) | arena | Injury-log stream roundtrip: `injury.emit`/`drainEvents`, `unit.injure`, `emitEventForUnit` tagging. |
 | `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
-| `location_content_probe.py` | #90, #91, #915, #1101, #1230, #917 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. Since #917 it also covers guaranteed SIGNIFICANT contents and the compound clearance predicate: every ruin owes exactly one `processing_unit` bound at spawn to its own physical `iiInstanceId` (distinct across obligations), no ruin is clearance-satisfied while that item is still on the floor — including a zero-nomad roll, whose encounter half is already complete — and a NON-PLAYER faction's pickup latches the same durable `taken` state without clearing a ruin whose roster is still alive. The file itself is the façade (CLI, artifact guard, the eight-process sequence, the helpers other probes import); the scenario owners — content/persistence, discovery/knowledge, content dispatch/rejection, naming — live under `tools/location_content/` beside the shared invocation infrastructure (#2095). |
+| `location_content_probe.py` | #90, #91, #915, #1101, #1230, #917, #2505 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. Since #917 it also covers guaranteed SIGNIFICANT contents and the compound clearance predicate: every ruin owes exactly one `processing_unit` bound at spawn to its own physical `iiInstanceId` (distinct across obligations), no ruin is clearance-satisfied while that item is still on the floor — including a zero-nomad roll, whose encounter half is already complete — and a NON-PLAYER faction's pickup latches the same durable `taken` state without clearing a ruin whose roster is still alive. Since #2505 it also covers PENDING CONTAINER SHELLS: a location authoring a `kind: container` entry mints one unrolled shell per occurrence on first chunk load — bound to its persisted slot, carrying the container definition's authored default contents and no profile draw — revisiting the same chunks mints no second, an ordinary pickup of a pending shell is REFUSED with the shell keeping its ground id and the unit's inventory untouched, a load whose pending slot names a DEREGISTERED profile is refused with the old session left live, and the whole pending slot survives save → quit → fresh restart → load. Its own crate item, loot profile and DENSE location fixtures are the probe's, because no shipped location authors a container entry yet (PLC-10 owns the wooden crate). The file itself is the façade (CLI, artifact guard, the eleven-process sequence, the helpers other probes import); the scenario owners — content/persistence, discovery/knowledge, content dispatch/rejection, naming, pending containers — live under `tools/location_content/` beside the shared invocation infrastructure (#2095). |
 | `location_embark_probe.py` | #782, #1230, #1569, #1746, #1770, #1982 | worldgen fixture + `--offscreen` x3 (needs-gpu, manual-only) | **The embark-to-discovery arc's integrated gate.** One headless phase generates a world holding at least two `ruin_small` locations — trying `--seed` then each `--alt-seeds` candidate in turn, every rejected seed discarded with its own headless process — and publishes it as the durable `SAVE_BASE` every later session loads. Three OFFSCREEN sessions then run in order against it, each in its own booted-and-quit engine: (a) both ruins' shared unknown markers before any portal exists, ghost validity over an ordinary and an overlapping position, and both branches of the remote-settlement modal — never saved back, so (b) starts from the same clean fixture; (b) canonical local placement, the portal's own roster, and discovery driven by a REAL click-select plus right-click move order (never `unitAi.commandMove`/`unit.setPos`), the leave-and-return no-duplicate-event check, the lifecycle-icon comparisons against (a)'s own baselines, and a durable `SAVE_LOCAL`; (c) a genuinely fresh process that loads only that save and proves the location count, both discovery states and the restored icons survived. A save that never reaches `SaveCaptureComplete` suppresses every session that would read it, rather than resurfacing as a load timeout later (#1746). Every artifact — four engine logs, two save slots, the screenshots — lives under ONE invocation-owned directory with its own resource root, removed on every exit path unless `--keep-artifacts` (#1569). The file itself is the façade (CLI, the ordered process lifecycle, phase dispatch, the single aggregate result and cleanup); the phase owners — the invocation's failure ledger, artifact tree and save publication, the shared engine/real-input support, the fallback-seed fixture, and sessions (a), (b) and (c) — live under `tools/location_embark/` (#2164), which registers no probe of its own. |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
 | `location_stamp_idempotent_probe.py` | #424, #1575 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load; and the 5x5 footprint under the tested room really materialized level, with no levelling edit the engine refused. |
@@ -1412,16 +1412,18 @@ python3 tools/test_flora_growth_probe.py
 
 The same split, one probe over. `location_content_probe.py` already owned
 an isolated resource root and removed it on every exit path (#1620) — but
-again only its SAVE slots had moved there. Its five fixture YAMLs and its
-engine log stayed at the fixed, process-global names
+again only its SAVE slots had moved there. Its five fixture YAMLs — #2505
+has since taken it to nine — and its engine log stayed at the fixed,
+process-global names
 `/tmp/loc_content_probe_bogus.yaml`, `…_bogus_loot.yaml`, `…_quinoa.yaml`,
 `…_quinoa_loot.yaml`, `…_dense.yaml` and
 `/tmp/location_content_engine.log`, each written with a truncating
 `open(..., "w")`, none carrying any invocation identity, and none removed
 by anything. Two concurrent runs collided on all six. The log collision is
-the sharp one here: this probe ASSERTS against that log twice — the
-integrity diagnostic after phase 2's load, and phase 3's two
-unknown-content warnings — so a foreign truncation could turn a passing
+the sharp one here: this probe ASSERTS against that log three times — the
+integrity diagnostic after phase 2's load, phase 3's two unknown-content
+warnings, and #2505's load rejection in the last phase — so a foreign
+truncation could turn a passing
 phase into a failure or a failure into a pass, not merely muddle a
 post-mortem. All six now live inside the directory the invocation already
 owned.
@@ -1429,7 +1431,7 @@ owned.
 `python3 tools/test_location_content_probe.py` drives the probe's REAL
 `main()` with `run` substituted, so the guard's own paths are exercised
 without an engine: two invocations share no fixture, log or root path;
-all five fixture paths are absolute (the engine is chdir'd into the
+every fixture path is absolute (the engine is chdir'd into the
 isolated root, so a relative one would resolve elsewhere) and inside the
 run's own tree; no `/tmp` literal is left in the module at all, and a
 real run leaves each of the six legacy paths exactly as it found it —
@@ -1445,13 +1447,15 @@ that was never created says so rather than being called empty); a default
 failing run says its log went with the tree and points at the flag; and a
 cleanup that cannot finish makes an otherwise passing run non-zero,
 through #1620's own `remove_isolated_root` reporting. It also pins what
-the probe still proves after the move: all seven boot CALL SITES go
+the probe still proves after the move: all ten boot CALL SITES go
 through the one funnel that hands each this invocation's log and
-registers its process as it is launched; both log-reading ASSERTIONS
-read that same log; the five fixture bodies are pinned by `sha256`;
-their registration order and loaders are unchanged (placement and loot
-draws are order- and content-sensitive); `load_fixture_yaml` still
-guards every one of them (#1342); and `make_isolated_root`,
+registers its process as it is launched; every log-reading ASSERTION
+reads that same log; the fixture bodies are pinned by `sha256`; the
+registration SEQUENCE and its loaders are unchanged (placement and loot
+draws are order- and content-sensitive, and one fixture is legitimately
+registered by two phases in two processes, so the sequence rather than a
+per-fixture count is what is pinned); `load_fixture_yaml` still guards
+every registration (#1342); and `make_isolated_root`,
 `remove_isolated_root` and `save_and_wait` are still the shapes
 `portal_ghost_probe.py` imports.
 
@@ -1463,15 +1467,15 @@ because an exclusion-style property ("no bare `boot`", "no raw fixture
 node set and would otherwise report OK while inspecting nothing once the
 assertion bodies left `run`. It also pins the scenario split itself:
 only the façade boots; the regeneration call site is still a loop over
-the same and reversed visit orders, so the run still LAUNCHES eight
-processes from seven call sites; each fixture constant has exactly one
+the same and reversed visit orders, so the run still LAUNCHES eleven
+processes from ten call sites; each fixture constant has exactly one
 definition, resolved wherever its owner keeps it; the façade offers one
 `run(args, art, token)`; every PASS diagnostic and recorded failure
 belongs to an owner rather than the façade; and no owner keeps
 cross-scenario state in a mutable module global.
 
-The probe is manual-only. It boots from seven call sites and launches
-eight engine processes across several generated worlds, so without this
+The probe is manual-only. It boots from ten call sites and launches
+eleven engine processes across several generated worlds, so without this
 companion the contract is only ever observed by a run nothing in CI can
 make. Engine-free, GPU-free, network-free, about a second; blocking CI
 step alongside `test_flora_growth_probe.py`.

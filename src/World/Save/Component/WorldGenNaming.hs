@@ -46,8 +46,11 @@ module World.Save.Component.WorldGenNaming
     , LocationEncounterDTO(..)
     , LocationEncounterDTOv1(..)
     , LocationSignificantItemDTO(..)
+    , LocationContainerSlotDTO(..)
     , LocationInstanceDTO(..)
     , LocationInstancesDTO(..)
+    , LocationInstanceDTOv6(..)
+    , LocationInstancesDTOv6(..)
     , LocationInstanceDTOv5(..)
     , LocationInstancesDTOv5(..)
     , LocationInstanceDTOv4(..)
@@ -78,6 +81,8 @@ module World.Save.Component.WorldGenNaming
     , toLocationInstancesDTOv4
     , toLocationInstancesDTOv5
     , fromLocationInstancesDTOv5
+    , toLocationInstancesDTOv6
+    , fromLocationInstancesDTOv6
     , fromLocationInstancesDTOv4
     , fromLocationInstanceDTOv1
     , toLocationInstancesDTOv1
@@ -113,7 +118,8 @@ import World.River.Naming (RiverName(..), RiverNames(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstances(..), LocationInstanceId
-    , LocationSignificantItem(..), LocationLifecycle )
+    , LocationSignificantItem(..), LocationContainerSlot(..)
+    , LocationLifecycle )
 import World.Chunk.Types (ChunkCoord)
 import Unit.Types.Manager (UnitId)
 import World.Save.Reference (SamePageRef(..))
@@ -332,6 +338,40 @@ fromLocationSignificantItemDTO d = LocationSignificantItem
     , lsiTaken       = lsidTaken d
     }
 
+-- | Frozen mirror of one 'Location.Instance.LocationContainerSlot'
+--   (#2505). @lcsdInstanceId@ is a typed same-page reference to the
+--   PHYSICAL shell ('Item.Types.iiInstanceId'), absent until the content
+--   spawn binds one — the same reference kind and the same scope
+--   'LocationSignificantItemDTO' declares, because it is the same
+--   allocator's identity pointing at the same page's ground.
+data LocationContainerSlotDTO = LocationContainerSlotDTO
+    { lcsdSlot        ∷ !Int
+    , lcsdItemDefName ∷ !Text
+    , lcsdProfile     ∷ !Text
+    , lcsdInstanceId  ∷ !(Maybe (SamePageRef Word64))
+    , lcsdRealized    ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationContainerSlotDTO
+    ∷ LocationContainerSlot → LocationContainerSlotDTO
+toLocationContainerSlotDTO e = LocationContainerSlotDTO
+    { lcsdSlot        = lcsSlot e
+    , lcsdItemDefName = lcsItemDefName e
+    , lcsdProfile     = lcsProfile e
+    , lcsdInstanceId  = SamePageRef <$> lcsInstanceId e
+    , lcsdRealized    = lcsRealized e
+    }
+
+fromLocationContainerSlotDTO
+    ∷ LocationContainerSlotDTO → LocationContainerSlot
+fromLocationContainerSlotDTO d = LocationContainerSlot
+    { lcsSlot        = lcsdSlot d
+    , lcsItemDefName = lcsdItemDefName d
+    , lcsProfile     = lcsdProfile d
+    , lcsInstanceId  = unSamePageRef <$> lcsdInstanceId d
+    , lcsRealized    = lcsdRealized d
+    }
+
 toLocationEncounterDTO ∷ LocationEncounter → LocationEncounterDTO
 toLocationEncounterDTO e = LocationEncounterDTO
     { ledRolledCount        = leRolledCount e
@@ -367,12 +407,13 @@ fromLocationEncounterDTO d = LocationEncounter
 --   id and 'LocationLifecycle' a payload-free append-only enum, both
 --   reused as-is exactly like 'ChunkCoord' / 'ZoomMapMode'.
 --
---   This is the CURRENT shape, carried by @world-pages@ v10: #1101's
+--   This is the CURRENT shape, carried by @world-pages@ v12: #1101's
 --   English gloss beside the display name and #1104's optional
 --   etymology source, no discovery margin since #1230, #916's optional
 --   persistent encounter, and #917's guaranteed significant-item
 --   obligations plus the generalized clearance-notice latch.
---   'LocationInstanceDTOv5' below is the frozen pre-#917 shape (v8 and
+--   'LocationInstanceDTOv6' below is the frozen pre-#2505 shape (v10
+--   and v11), 'LocationInstanceDTOv5' the pre-#917 one (v8 and
 --   v9), 'LocationInstanceDTOv4' the pre-#916 one (v7),
 --   'LocationInstanceDTOv3' the pre-#1230 shape (v6),
 --   'LocationInstanceDTOv2' the pre-#1104 one and
@@ -392,6 +433,13 @@ data LocationInstanceDTO = LocationInstanceDTO
     , lidEncounter       ∷ !(Maybe LocationEncounterDTO)
     , lidSignificant     ∷ ![LocationSignificantItemDTO]
     , lidClearEventEmitted ∷ !Bool
+    , lidContainers      ∷ ![LocationContainerSlotDTO]
+      -- ^ #2505's pending container shells. APPENDED, which is what
+      --   makes this a distinct wire shape rather than a compatible
+      --   one: a @Generic Serialize@ record's fields are positional, so
+      --   a v11 payload read as this type would take the list's length
+      --   prefix from whatever followed the flag above. Hence
+      --   'LocationInstanceDTOv6' below and @migrateWorldPagesV11@.
     } deriving (Show, Eq, Generic, Serialize)
 
 toLocationInstanceDTO ∷ LocationInstance → LocationInstanceDTO
@@ -410,6 +458,7 @@ toLocationInstanceDTO i = LocationInstanceDTO
     , lidEncounter       = toLocationEncounterDTO <$> liEncounter i
     , lidSignificant     = map toLocationSignificantItemDTO (liSignificant i)
     , lidClearEventEmitted = liClearEventEmitted i
+    , lidContainers      = map toLocationContainerSlotDTO (liContainers i)
     }
 
 fromLocationInstanceDTO ∷ LocationInstanceDTO → LocationInstance
@@ -427,6 +476,7 @@ fromLocationInstanceDTO d = LocationInstance
     , liEncounter       = fromLocationEncounterDTO <$> lidEncounter d
     , liSignificant     = map fromLocationSignificantItemDTO (lidSignificant d)
     , liClearEventEmitted = lidClearEventEmitted d
+    , liContainers      = map fromLocationContainerSlotDTO (lidContainers d)
     }
 
 -- | Frozen mirror of the per-page instance table: its allocator plus
@@ -449,6 +499,102 @@ fromLocationInstancesDTO ∷ LocationInstancesDTO → LocationInstances
 fromLocationInstancesDTO d = LocationInstances
     { lisNextId        = lisdNextId d
     , lisById          = HM.map fromLocationInstanceDTO (lisdById d)
+    , lisPendingLegacy = Nothing
+    }
+
+-- | The FROZEN pre-#2505 location shape (@world-pages@ v10 and v11),
+--   preserved verbatim: every current field except #2505's pending
+--   container shells.
+--
+--   Historical instances migrate with @liContainers = []@, for exactly
+--   the reason 'fromLocationInstanceDTOv5' migrates with no obligations:
+--   deriving shells from today's YAML would hand a materialized world
+--   pending containers it never spawned, bound to no item and realizable
+--   by nobody — and since those instances already carry
+--   @contents_spawned@, nothing would ever spawn them either. A world
+--   that never had a crate in it does not acquire one by being loaded.
+--
+--   Its encounter, significant obligations and clearance latch are the
+--   CURRENT types on purpose: #2505 changed none of them, so repointing
+--   them would fabricate a difference between two shapes whose bytes for
+--   those fields are identical. Never edited; a further schema change
+--   freezes the current shape as 'LocationInstanceDTOv7' instead
+--   (frozen-DTO boundary rule).
+data LocationInstanceDTOv6 = LocationInstanceDTOv6
+    { lid6Id              ∷ !LocationInstanceId
+    , lid6DefId           ∷ !Text
+    , lid6Chunk           ∷ !ChunkCoord
+    , lid6AnchorX         ∷ !Int
+    , lid6AnchorY         ∷ !Int
+    , lid6Bounds          ∷ !AbsBoundsDTO
+    , lid6DisplayName     ∷ !Text
+    , lid6Gloss           ∷ !(Maybe Text)
+    , lid6Etymology       ∷ !(Maybe EtymologySourceDTO)
+    , lid6Lifecycle       ∷ !LocationLifecycle
+    , lid6ContentsSpawned ∷ !Bool
+    , lid6Encounter       ∷ !(Maybe LocationEncounterDTO)
+    , lid6Significant     ∷ ![LocationSignificantItemDTO]
+    , lid6ClearEventEmitted ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+fromLocationInstanceDTOv6 ∷ LocationInstanceDTOv6 → LocationInstance
+fromLocationInstanceDTOv6 d = LocationInstance
+    { liId              = lid6Id d
+    , liDefId           = lid6DefId d
+    , liChunk           = lid6Chunk d
+    , liAnchor          = (lid6AnchorX d, lid6AnchorY d)
+    , liBounds          = fromAbsBoundsDTO (lid6Bounds d)
+    , liDisplayName     = lid6DisplayName d
+    , liGloss           = lid6Gloss d
+    , liEtymology       = fromEtymologySourceDTO <$> lid6Etymology d
+    , liLifecycle       = lid6Lifecycle d
+    , liContentsSpawned = lid6ContentsSpawned d
+    , liEncounter       = fromLocationEncounterDTO <$> lid6Encounter d
+    , liSignificant     = map fromLocationSignificantItemDTO (lid6Significant d)
+    , liContainers      = []
+    , liClearEventEmitted = lid6ClearEventEmitted d
+    }
+
+-- | The v10\/v11 table: exactly 'LocationInstancesDTO' but over the
+--   frozen per-instance shape.
+data LocationInstancesDTOv6 = LocationInstancesDTOv6
+    { lisd6NextId ∷ !Int
+    , lisd6ById   ∷ !(HM.HashMap LocationInstanceId LocationInstanceDTOv6)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Exists for the same reason 'toLocationInstancesDTOv5' does: nothing
+--   in the engine WRITES this shape any more, but the migration tests
+--   have to build real v10\/v11 bytes to decode. Every container slot
+--   an instance carries is dropped, which is faithful — no payload of
+--   that vintage could hold one.
+toLocationInstancesDTOv6 ∷ LocationInstances → LocationInstancesDTOv6
+toLocationInstancesDTOv6 l = LocationInstancesDTOv6
+    { lisd6NextId = lisNextId l
+    , lisd6ById   = HM.map toV6 (lisById l)
+    }
+  where
+    toV6 i = LocationInstanceDTOv6
+        { lid6Id              = liId i
+        , lid6DefId           = liDefId i
+        , lid6Chunk           = liChunk i
+        , lid6AnchorX         = fst (liAnchor i)
+        , lid6AnchorY         = snd (liAnchor i)
+        , lid6Bounds          = toAbsBoundsDTO (liBounds i)
+        , lid6DisplayName     = liDisplayName i
+        , lid6Gloss           = liGloss i
+        , lid6Etymology       = toEtymologySourceDTO <$> liEtymology i
+        , lid6Lifecycle       = liLifecycle i
+        , lid6ContentsSpawned = liContentsSpawned i
+        , lid6Encounter       = toLocationEncounterDTO <$> liEncounter i
+        , lid6Significant     =
+            map toLocationSignificantItemDTO (liSignificant i)
+        , lid6ClearEventEmitted = liClearEventEmitted i
+        }
+
+fromLocationInstancesDTOv6 ∷ LocationInstancesDTOv6 → LocationInstances
+fromLocationInstancesDTOv6 d = LocationInstances
+    { lisNextId        = lisd6NextId d
+    , lisById          = HM.map fromLocationInstanceDTOv6 (lisd6ById d)
     , lisPendingLegacy = Nothing
     }
 
@@ -495,6 +641,7 @@ fromLocationInstanceDTOv5 d = LocationInstance
     , liContentsSpawned = lid5ContentsSpawned d
     , liEncounter       = fromLocationEncounterDTOv1 <$> lid5Encounter d
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted =
         maybe False led1ClearEventEmitted (lid5Encounter d)
     }
@@ -565,6 +712,7 @@ fromLocationInstanceDTOv4 d = LocationInstance
     , liContentsSpawned = lid4ContentsSpawned d
     , liEncounter       = Nothing
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 
@@ -643,6 +791,7 @@ fromLocationInstanceDTOv1 d = LocationInstance
     , liContentsSpawned = lid1ContentsSpawned d
     , liEncounter       = Nothing
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 
@@ -724,6 +873,7 @@ fromLocationInstanceDTOv2 d = LocationInstance
     , liContentsSpawned = lid2ContentsSpawned d
     , liEncounter       = Nothing
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 
@@ -807,6 +957,7 @@ fromLocationInstanceDTOv3 d = LocationInstance
     , liContentsSpawned = lid3ContentsSpawned d
     , liEncounter       = Nothing
     , liSignificant     = []
+    , liContainers      = []
     , liClearEventEmitted = False
     }
 

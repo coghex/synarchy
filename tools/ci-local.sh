@@ -513,7 +513,7 @@ python3 tools/world_check.py --quick
 # identity and cleaned up by nothing, so two concurrent runs collided on
 # all six while a developer's same-named file was truncated outright.
 # The log collision is the sharp one: the probe ASSERTS against that log
-# twice, so a foreign truncation could turn a passing phase into a
+# three times, so a foreign truncation could turn a passing phase into a
 # failure or a failure into a pass. All six now live under the one
 # directory the invocation already owned for its save slots. This drives
 # the probe's real main() with run substituted: disjoint paths for two
@@ -530,15 +530,17 @@ python3 tools/world_check.py --quick
 # scanning the COMPLETE reorganized surface (#2095 -- the facade plus
 # every scenario owner under tools/location_content/, so an
 # exclusion-style check cannot go vacuous once the bodies leave run):
-# all seven boot CALL SITES through the one funnel that hands each this
+# all ten boot CALL SITES through the one funnel that hands each this
 # invocation's log and registers its process as it is launched, the
 # regeneration site still a loop over the two visit orders so a run
-# LAUNCHES eight processes, both log-reading ASSERTIONS reading that
-# same log, the five fixture bodies by sha256 resolved at their single
-# source, their registration order and loaders, load_fixture_yaml still
-# guarding every one of them, and the three helpers portal_ghost_probe
-# imports still the same function objects. That probe is manual-only and
-# launches eight engine processes; the companion boots nothing.
+# LAUNCHES eleven engine processes, every log-reading ASSERTION reading
+# that same log, the nine fixture bodies by sha256 resolved at their
+# single source, their registration sequence and loaders,
+# load_fixture_yaml still guarding every registration, the topology
+# PROSE naming the current counts, and the three helpers
+# portal_ghost_probe imports still the same function objects. That probe
+# is manual-only and launches eleven engine processes; the companion
+# boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any
 # boot(), for every --mode, and the derived view is held to the runtime
