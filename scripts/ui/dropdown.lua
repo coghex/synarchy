@@ -1315,6 +1315,28 @@ function dropdown.isOpen(id)
     return dd.open
 end
 
+-- The id of an open dropdown, or nil when none is open (#2627).
+--
+-- Ids come from a monotonic counter that dropdown.destroy never
+-- reclaims, so any caller probing a FIXED numeric range stops finding
+-- live dropdowns once a session has rebuilt its menus enough times —
+-- settings and create-world destroy and recreate their dropdowns on
+-- every resize. Enumerate the live registry instead, the way
+-- dropdown.onClickOutside already does.
+--
+-- openList closes every other open dropdown, so at most one is open in
+-- practice; the lowest id wins anyway so the choice stays deterministic
+-- (pairs order is not) and matches the ascending scan this replaced.
+function dropdown.findOpenId()
+    local openId = nil
+    for id, dd in pairs(dropdowns) do
+        if dd.open and (openId == nil or id < openId) then
+            openId = id
+        end
+    end
+    return openId
+end
+
 function dropdown.getSize(id)
     local dd = dropdowns[id]
     if not dd then return 0, 0 end

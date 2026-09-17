@@ -1735,6 +1735,89 @@ spec = around withMenusEngine $ do
                     drpPendingAfter p `shouldBe` "10"
                     drpRawAfter p `shouldBe` "10"
 
+    -- #2627: uiManager.onUIEscape dismissed an open but unfocused
+    -- dropdown by probing dropdown.isOpen(id) for the literal range
+    -- 1..100. Dropdown ids come from a monotonic counter that
+    -- dropdown.destroy never reclaims (only destroyAll resets it, and
+    -- nothing under scripts/ calls that), while settings and
+    -- create-world destroy and recreate their dropdowns on every
+    -- resize — so after roughly a hundred creations every LIVE
+    -- dropdown sat above the probed range, Escape skipped it and ran
+    -- the menu fallback instead, leaving the option list open on a
+    -- menu the player had just left.
+    --
+    -- Freshly initialized ids never reproduce that, so this case
+    -- deliberately burns the counter past 100 first, then asserts on a
+    -- survivor whose id is above the old range.
+    describe "Escape dismisses an open dropdown whatever its id (#2627)" $
+        it "closes a >100-id dropdown instead of running the settings menu's Back fallback" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local dropdown = require('scripts.ui.dropdown');"
+                , "dropdown.init();"
+                , "local uiManager = require('scripts.ui_manager');"
+                , "uiManager.currentMenu = 'settings';"
+                , "local page = UI.newPage('escape_dropdown_page', 'hud');"
+                , "UI.showPage(page);"
+                -- Exactly what a long session's menu rebuilds do: create
+                -- and destroy owned dropdowns without ever resetting the
+                -- id counter.
+                , "for i = 1, 120 do"
+                , "  local churn = dropdown.new({ name = 'churn_' .. i, page = page,"
+                , "    font = 0, uiscale = 1, options = {{ text = 'A', value = 1 }} });"
+                , "  dropdown.destroy(churn);"
+                , "end;"
+                , "local survivor = dropdown.new({ name = 'survivor', page = page,"
+                , "  font = 0, uiscale = 1,"
+                , "  options = {{ text = 'A', value = 1 }, { text = 'B', value = 2 }} });"
+                , "dropdown.openList(survivor);"
+                -- The menu fallback is observed by counting real
+                -- showMenu calls; nothing else in the fallback branch
+                -- for currentMenu == 'settings' is visible headless.
+                , "local menuBackCalls = 0;"
+                , "local realShowMenu = uiManager.showMenu;"
+                , "uiManager.showMenu = function(target)"
+                , "  if target == 'back' then menuBackCalls = menuBackCalls + 1 end"
+                , "end;"
+                , "local openBefore = dropdown.isOpen(survivor);"
+                -- Requirement 2: none of the earlier Escape branches
+                -- may be the one that handles this press.
+                , "local textbox = require('scripts.ui.textbox');"
+                , "local randbox = require('scripts.ui.randbox');"
+                , "local unfocusedBefore = dropdown.getFocusedId() == nil"
+                    <> " and randbox.getFocusedId() == nil"
+                    <> " and textbox.getFocusedId() == nil;"
+                , "local handledFirst = uiManager.onUIEscape();"
+                , "local openAfterFirst = dropdown.isOpen(survivor);"
+                , "local backAfterFirst = menuBackCalls;"
+                -- Requirement 3: with nothing left open, the next
+                -- Escape must still reach the menu fallback.
+                , "local handledSecond = uiManager.onUIEscape();"
+                , "local backAfterSecond = menuBackCalls;"
+                , "uiManager.showMenu = realShowMenu;"
+                , "dropdown.destroy(survivor);"
+                , "return {id = survivor, openBefore = openBefore,"
+                    <> " unfocusedBefore = unfocusedBefore,"
+                    <> " handledFirst = handledFirst,"
+                    <> " openAfterFirst = openAfterFirst,"
+                    <> " backAfterFirst = backAfterFirst,"
+                    <> " handledSecond = handledSecond,"
+                    <> " backAfterSecond = backAfterSecond}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe EscapeDropdownProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- The id is past the range the old loop probed, so a
+                    -- reintroduced fixed scan cannot pass this case.
+                    edpId p `shouldSatisfy` (> 100)
+                    edpOpenBefore p `shouldBe` True
+                    edpUnfocusedBefore p `shouldBe` True
+                    edpHandledFirst p `shouldBe` True
+                    edpOpenAfterFirst p `shouldBe` False
+                    edpBackAfterFirst p `shouldBe` 0
+                    edpHandledSecond p `shouldBe` True
+                    edpBackAfterSecond p `shouldBe` 1
+
 -- * Boot helpers (synthetic texture/font handles — nothing renders
 --   headless, so their numeric values are never inspected)
 
@@ -2078,6 +2161,21 @@ instance FromJSON RebuildFocusProbe where
         <$> o .: "hadFocusBefore" <*> o .: "handleChanged"
         <*> o .: "hasFocusAfter" <*> o .: "focusedName"
         <*> o .: "actionRuns"
+
+-- #2627 decode target
+
+data EscapeDropdownProbe = EscapeDropdownProbe
+    { edpId ∷ Int, edpOpenBefore ∷ Bool, edpUnfocusedBefore ∷ Bool
+    , edpHandledFirst ∷ Bool, edpOpenAfterFirst ∷ Bool
+    , edpBackAfterFirst ∷ Int, edpHandledSecond ∷ Bool
+    , edpBackAfterSecond ∷ Int
+    } deriving Show
+instance FromJSON EscapeDropdownProbe where
+    parseJSON = withObject "EscapeDropdownProbe" $ \o → EscapeDropdownProbe
+        <$> o .: "id" <*> o .: "openBefore" <*> o .: "unfocusedBefore"
+        <*> o .: "handledFirst" <*> o .: "openAfterFirst"
+        <*> o .: "backAfterFirst" <*> o .: "handledSecond"
+        <*> o .: "backAfterSecond"
 
 data NilFocusProbe = NilFocusProbe
     { nfpFocusBeforeNil ∷ Bool, nfpFocusAfterNil ∷ Bool } deriving Show
