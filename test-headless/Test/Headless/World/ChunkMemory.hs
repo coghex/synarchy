@@ -178,3 +178,19 @@ spec = describe "chunk residency accounting" $ do
             length afterLoad `shouldBe` 1
             mapM_ (handleSimCommand env logger sim) afterLoad
             check ls "assert(world.getChunkMemory().simulation.available)"
+
+    it "sums independent pages globally and retires dropped page high-water rows" $
+        withIsolatedResourceRoot $ withHeadlessEngineNoWorld $ \env → withBackend env $ \ls → do
+            first ← page
+            seed first coord (depthChunk 8)
+            second ← page
+            let other = WorldPageId "other"
+                otherCoord = ChunkCoord 1 0
+            claims ← claimChunkGeneration second other params [coord,otherCoord]
+            publishSeedChunks second claims emptyWorldTileData
+                { wtdChunks = HM.fromList [(coord,depthChunk 8),(otherCoord,depthChunk 80)] }
+            writeIORef (worldManagerRef env) emptyWorldManager
+                { wmWorlds = [(pid,first),(other,second)] }
+            check ls "local s=world.getChunkMemory(); assert(s.resident==3 and s.peakResident==3 and #s.pages==2 and #s.pageHighWater==2); assert(s.logicalEstimatedBytes==s.pages[1].logicalEstimatedBytes.total+s.pages[2].logicalEstimatedBytes.total)"
+            writeIORef (worldManagerRef env) emptyWorldManager { wmWorlds = [(pid,first)] }
+            check ls "local s=world.getChunkMemory(); assert(s.resident==1 and s.peakResident==3 and #s.pages==1 and #s.pageHighWater==1); assert(s.pageHighWater[1].page=='memory'); world.resetChunkMemoryWindow(); assert(world.getChunkMemory().peakResident==1)"

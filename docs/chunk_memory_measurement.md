@@ -30,8 +30,9 @@ The schema-1 response contains:
   and per-page incarnation/count/estimate. `currentIncarnation` identifies a
   match with the current world snapshot. `notInTileCache` is the set difference
   against that incarnation's tile keys; it is absent for an unmatched/retired
-  incarnation. Unmatched simulation pages remain visible separately because
-  their process memory has not disappeared.
+  incarnation. Unmatched simulation pages remain visible separately as evidence
+  of what that owner retained at its sample time; a delayed reply does not prove
+  those allocations remain live when the Lua response is read.
 
 The first query requests a simulation snapshot and returns immediately with
 `available=false`. Subsequent queries consume a completed snapshot and schedule
@@ -81,6 +82,24 @@ GPU resources are outside this model. Consequently **never subtract these
 estimates from RSS and call the residual measured non-chunk memory**, or add
 world and sim estimates as if shared buffers were proven independent.
 
+### Deterministic examples
+
+The deterministic 64-bit fixtures in `Test.Headless.World.ChunkMemory` give
+these model values (bytes). Each has 256 columns; the deep-air case replaces
+materials with air without removing stored cells. The rich case adds 256 fluid
+and ice cells, one flora instance, one edited structure and one magma-cap entry.
+
+| Fixture | Columns | Derived maps | Overlays | Containers | Total |
+|---|---:|---:|---:|---:|---:|
+| Depth 8 | 61,496 | 8,728 | 2,120 | 224 | 72,568 |
+| Depth 80, solid or interior air | 116,792 | 8,728 | 2,120 | 224 | 127,864 |
+| Depth 8, rich overlays | 61,496 | 18,968 | 12,800 | 224 | 93,488 |
+
+These deliberately replicated fixtures share Haskell values, so their logical
+totals must not be described as measured physical allocation sizes. In the rich
+fixture, fluid adds 10,240 bytes; ice adds 10,240, flora 160, the structure 128,
+and magma 152 under model v1. The equal-count depth change adds 55,296 bytes.
+
 ## Reproduction
 
 Build production code with `cabal build all`. Record `cabal list-bin exe:synarchy`
@@ -103,6 +122,31 @@ canonical chunks, then a real save/load transaction. Offscreen also loads the
 ordinary content catalog, establishes a five-unit scenario on a requested
 10-by-10 chunk footprint, and observes 30 seconds of unpaused simulation.
 
+The complete serial workload matrix, after selecting the committed binary, is:
+
+```sh
+MEMORY_BINARY=/absolute/path/to/synarchy
+MEMORY_OUT=/absolute/new/matrix-directory
+for size in 64 256; do
+  for rts in production small-nursery; do
+    for rep in 1 2 3; do
+      python3 tools/chunk_memory_measure.py --binary "$MEMORY_BINARY" \
+        --output "$MEMORY_OUT/w$size-$rts-$rep" --size "$size" --rts "$rts" || exit
+    done
+  done
+done
+for rts in production small-nursery; do
+  python3 tools/chunk_memory_measure.py --binary "$MEMORY_BINARY" \
+    --output "$MEMORY_OUT/w64-$rts-1-offscreen" \
+    --size 64 --rts "$rts" --mode offscreen || exit
+done
+```
+
+In the coordinated lab, wrap each invocation in `profile_coordinator.py exec
+--run-id <claimed-run> --phase measure --timeout 1800 -- <command>`; only the
+last planned invocation uses `--final`. A failure ends that coordinated run
+for reporting. Any repaired driver needs a new committed follow-up run.
+
 Production defaults remain the binary's baked `-N -A128M`; the control adds only
 `+RTS -A8M -RTS`, retaining the same capability count. Neither is substituted for
 the other. The control tests whether nursery capacity masks chunk allocations;
@@ -117,12 +161,43 @@ offscreen runs retain `vmmap -summary` separately. Shared/driver resources must
 be assessed without blindly adding overlapping figures. An unavailable graphics
 attribution cannot support a whole-game pass.
 
+Apple's [Metal memory analysis guide](https://developer.apple.com/documentation/xcode/analyzing-the-memory-usage-of-your-metal-app)
+distinguishes allocations, resident size, and dirty plus compressed/swapped
+footprint. Its [VM guide](https://developer.apple.com/library/archive/documentation/Performance/Conceptual/ManagingMemory/Articles/VMPages.html)
+also distinguishes virtual reservations from physical pages and explains shared
+mappings. Accordingly the report keeps `vmmap` footprint, region residency and
+RSS separate: adding those overlapping totals would double-count memory.
+
 The driver uses a private resource root and save slot, launches only its own
 headless/offscreen process on a non-8008 port, and retains one JSON file plus a
 compressed engine log per run. JSON includes raw console replies, query elapsed
 times (instrumentation cost), all RSS samples, phase boundaries, completion
 checks, metadata and failures. A failed run stops and is preserved; it is not a
 passing matrix cell. No forced collection or implicit retry is performed.
+
+## WorldSize-1024 projection
+
+The approved WML product target is worldSize 1024. A bounded detailed working
+set does not automatically grow with total world area: 200 chunks with the
+fixture shapes above cost the same logical amount in a 64, 256 or 1024 world.
+World size can still change actual terrain, required simultaneous footprints,
+generation state and map storage; those effects are not held constant by this
+illustration.
+
+| Illustrative resident set | Depth-8 fixture | Depth-80 fixture |
+|---|---:|---:|
+| 200 detailed chunks | 13.841 MiB | 24.388 MiB |
+| 1,000 detailed chunks | 69.206 MiB | 121.941 MiB |
+| All 524,288 chunks of a size-1024 world | 35.434 GiB | 62.434 GiB |
+
+These are logical model projections, excluding simulation and every other
+subsystem, with neither an uncertainty bound nor a physical allocation claim.
+The last row illustrates why visiting a world must not imply keeping all its
+detail resident; it is not the workload demanded by ordinary streaming.
+Measured size-64/256 RSS cannot be multiplied into a safe size-1024 budget.
+Generation and the current map representation have separate limits and gates
+under #2017; this experiment does not run or validate size 1024. The map
+format's addressing plans through 8192 are not whole-engine support evidence.
 
 ## Validation and results
 

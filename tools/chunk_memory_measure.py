@@ -11,6 +11,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -73,6 +74,14 @@ def require_json(raw):
         return json.loads(raw)
     except (ValueError, TypeError) as e:
         raise RuntimeError(f"console did not return JSON: {raw[:200]!r}") from e
+
+
+def require_unit_id(value):
+    # Lua pushes this identifier as a number, so JSON may spell it 8.0.
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value < 1 or int(value) != value):
+        raise RuntimeError(f'unit spawn failed: {value!r}')
+    return int(value)
 
 
 class Sampler:
@@ -242,9 +251,7 @@ def run(args):
                 ids = []
                 for site in sites:
                     uid = query(f'return unit.spawn("acolyte",{site["x"]},{site["y"]},{site["z"]},"player")')
-                    if not isinstance(uid, int) or uid <= 0:
-                        raise RuntimeError('unit spawn failed')
-                    ids.append(uid)
+                    ids.append(require_unit_id(uid))
                 record['colony'] = {'unitIds': ids, 'requestedBaseChunks': 100, 'durationSeconds': 30}
                 query('engine.setPaused(false); return true')
                 for i in range(10):

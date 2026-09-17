@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import unittest
-from chunk_memory_measure import canonical, traversal, rss_bytes, require_json, require_region, require_samples
+from chunk_memory_measure import canonical, traversal, rss_bytes, require_json, require_region, require_samples, require_unit_id
 
 
 class MeasurementContract(unittest.TestCase):
@@ -37,6 +37,13 @@ class MeasurementContract(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 require_samples(samples, ['generation'])
         require_samples([{'phase':'generation','rssBytes':123}], ['generation'])
+
+    def test_lua_numeric_unit_ids_and_rejections(self):
+        for value in (8, 8.0):
+            self.assertEqual(require_unit_id(value), 8)
+        for value in (-1, 0, True, None, '8', 1.5, float('inf'), float('nan')):
+            with self.assertRaises(RuntimeError):
+                require_unit_id(value)
 
 
 if __name__ == '__main__':
