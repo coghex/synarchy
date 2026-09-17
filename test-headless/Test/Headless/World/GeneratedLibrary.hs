@@ -42,6 +42,7 @@ import System.Process
 import World.GeneratedLibrary
 import World.GeneratedLibrary.Layout
 import World.GeneratedLibrary.Types (RegistryFile(..), emptyReconcileReport)
+import World.GeneratedLibrary.Entry (readEntryDirectory, verifyEntryDirectory)
 import World.Save.Storage.Durable (WriteStep(..), durableFlush, writeBytesDurably)
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
 import World.Save.Storage
@@ -143,6 +144,35 @@ finalDir root gid = libraryRoot root </> entryDirectoryName gid
 
 registryPath ∷ FilePath → FilePath
 registryPath root = libraryRoot root </> registryFileName
+
+-- | The directory passes the CHEAP completeness check — present, right
+--   sized, correctly named files — which says nothing about their bytes.
+shouldReadAsComplete ∷ FilePath → Expectation
+shouldReadAsComplete dir = do
+    r ← readEntryDirectory dir
+    case r of
+        Right _     → pure ()
+        Left reason → expectationFailure
+            ("expected a complete entry at " <> dir <> ", got " <> T.unpack reason)
+
+-- | The directory passes the DEEP check: every listed payload file
+--   hashes to its recorded digest.
+shouldVerify ∷ FilePath → Expectation
+shouldVerify dir = do
+    r ← verifyEntryDirectory dir
+    case r of
+        Right _     → pure ()
+        Left reason → expectationFailure
+            ("deep verification of " <> dir <> " failed: " <> T.unpack reason)
+
+-- | The directory fails the DEEP check.
+shouldNotVerify ∷ FilePath → Expectation
+shouldNotVerify dir = do
+    r ← verifyEntryDirectory dir
+    case r of
+        Left _  → pure ()
+        Right _ → expectationFailure
+            ("expected deep verification of " <> dir <> " to reject the payload")
 
 copyEntryDirectory ∷ FilePath → FilePath → IO ()
 copyEntryDirectory source target = do
@@ -502,6 +532,35 @@ publishSpec = describe "publication" $ do
             names `shouldBe` L.sort [entryDirectoryName gidA, registryFileName, lockFileName]
             inv ← listEntries lib ≫= orFail "listEntries"
             map rrInventoryDigest (liRows inv) `shouldBe` [digestOf payload2]
+
+    it "republishing over a final whose payload bytes were corrupted in place replaces it rather than reporting it unchanged" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            let entry = finalDir root gidA
+                page  = entry </> "root.page"
+            intact ← BS.readFile page
+            -- Same LENGTH, different bytes: the record's descriptors are
+            -- untouched, so the inventory digest the reuse decision
+            -- compares still matches and the cheap check still calls
+            -- this a complete entry. Only the deep check sees it.
+            BS.writeFile page (flipByteAt 3 intact)
+            shouldReadAsComplete entry
+            shouldNotVerify entry
+            report ← publishOK lib gidA payload1
+            prOutcome report `shouldBe` PublishedReplaced
+            prWarnings report `shouldBe` []
+            -- Requirement 3: correct bytes published under an id leave
+            -- an entry that deep-verifies.
+            BS.readFile page `shouldReturn` intact
+            shouldVerify entry
+            e ← committed lib gidA
+            leDigest e `shouldBe` Just (digestOf payload1)
+            -- The displacement left nothing behind, as for any replacement.
+            names ← rootNames root
+            names `shouldBe` L.sort [entryDirectoryName gidA, registryFileName, lockFileName]
+            inv2 ← listEntries lib ≫= orFail "listEntries"
+            map rrInventoryDigest (liRows inv2) `shouldBe` [digestOf payload1]
 
     it "interrupted before the commit rename: no final entry, and a staging directory cleanup identifies and sweeps" $
         withScratch $ \root → do
