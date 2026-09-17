@@ -47,6 +47,8 @@ import Data.IORef (readIORef, writeIORef)
 import qualified System.Random as Random
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.API.Units.Medical
+    ( TreatResult(..), commitTreatBleeding, commitTreatInfection )
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Infection.Types
     (InfectionDef(..), InfectionManager(..), emptyInfectionManager)
@@ -263,6 +265,62 @@ suppliesOf env = do
     pure ( length [ () | c ← cs, iiDefName c ≡ "bandage" ]
          , fillOf "antiseptic", fillOf "antibiotics" )
 
+-- * The transaction surface
+--
+--   \'commitTreatBleeding\' and \'commitTreatInfection\' ARE the
+--   functions the verbs hand to @atomicModifyIORef\'@ — the IO
+--   wrappers compute the medic\'s knowledge level and the treatment
+--   generator and then do nothing else. Applying one directly is the
+--   only way to hand a treatment a manager its verb\'s preflight read
+--   never saw, which is the property §5 is about: a single-threaded
+--   caller of the IO verb cannot make the two managers differ.
+
+-- | A manager holding the medic (with the given kit) and a patient
+--   with the given wounds — the same roster \'resetScene\' installs,
+--   built as a VALUE so a case can hold two different ones at once.
+managerWith ∷ ItemInstance → [Wound] → UnitManager
+managerWith kit wounds = emptyUnitManager
+    { umDefs = HM.singleton "acolyte" acolyteDef
+    , umInstances = HM.fromList
+        [ (medicUid, acolyte (10, 10) medicKnowledge [kit] [])
+        , (patientUid, acolyte (11, 10) [] [] wounds) ] }
+
+-- | The fixture\'s own curability and cure-rate answers, derived from
+--   \'fixtureInfections\' exactly as \'treatInfectionIO\' derives them
+--   from the live registry.
+fixtureCurable ∷ Wound → Bool
+fixtureCurable w = case HM.lookup (woundInfectionType w) defs of
+    Nothing  → True
+    Just inf → "antibiotics" `elem` infCurableBy inf
+  where InfectionManager defs = fixtureInfections
+
+fixtureCureRate ∷ Wound → Float
+fixtureCureRate w = maybe 1.0 infCureRate
+                        (HM.lookup (woundInfectionType w) defs)
+  where InfectionManager defs = fixtureInfections
+
+-- | The medic knows both treatments at 100, so @nLevel@ is 1 — the
+--   value the IO wrappers compute from \'medicKnowledge\'.
+fullLevel ∷ Float
+fullLevel = 1
+
+-- | Apply the bleeding transaction at game time zero with the pinned
+--   generator, exactly as \'treatBleedingIO\' does.
+runBleedingCommit ∷ UnitManager → (UnitManager, Either Text TreatResult)
+runBleedingCommit =
+    let (gStat, gLoop) = Random.splitGen (Random.mkStdGen treatSeed)
+    in commitTreatBleeding 0 gStat gLoop fullLevel medicUid patientUid medicUid
+
+runInfectionCommit ∷ UnitManager → (UnitManager, Either Text TreatResult)
+runInfectionCommit =
+    commitTreatInfection 0 (Random.mkStdGen treatSeed) fullLevel
+                         fixtureCurable fixtureCureRate
+                         medicUid patientUid medicUid
+
+-- | The patient's wounds in a manager VALUE.
+woundsIn ∷ UnitManager → [Wound]
+woundsIn um = maybe [] uiWounds (HM.lookup patientUid (umInstances um))
+
 -- * Lua plumbing
 
 uid ∷ UnitId → Text
@@ -354,6 +412,44 @@ spec = describe "treatment wound identity (#2638)" $ do
             map woundBandage after `shouldBe` [0, 1.0]
             drop 1 after `shouldBe` [other]
             -- One bandage, one antiseptic dose, no antibiotics.
+            suppliesOf env `shouldReturn` (b0 - 1, s0 - 0.05, a0)
+
+        -- The bleeding verb's own version of the same-key pair, with
+        -- the wounds differing ONLY in infection type. Severity, kind,
+        -- part and inflicted time are identical, so a key that swapped
+        -- woundAt for severity — or for anything else clinical —
+        -- aliases exactly as the original triple did.
+        it "treatBleeding separates two wounds differing only in \
+           \infection type" $ \env → do
+            let target = slash 0.5 0.4 staph
+                other  = slash 0.5 0.4 strep
+            resetScene env stockedKit [target, other]
+            ls ← newBareLuaBackend env
+            (b0, s0, a0) ← suppliesOf env
+            treat ls "treatBleeding" `shouldReturn` q "true|0.0000|treated"
+            after ← woundsOf env
+            map woundDressing after `shouldBe` ["bandage", ""]
+            map woundBandage after `shouldBe` [0, 1.0]
+            -- The non-target keeps its infection type, its infection,
+            -- its dirt and its seep: the whole record.
+            drop 1 after `shouldBe` [other]
+            suppliesOf env `shouldReturn` (b0 - 1, s0 - 0.05, a0)
+
+        -- And the tie. Two wounds equal in every field score equally,
+        -- and the shipped ranking keeps the EARLIER one; whichever it
+        -- keeps, it must dress exactly one of them.
+        it "treatBleeding separates two wounds identical in every \
+           \clinical field, dressing the tie winner alone" $ \env → do
+            let w = slash 0.5 0.4 staph
+            resetScene env stockedKit [w, w]
+            ls ← newBareLuaBackend env
+            (b0, s0, a0) ← suppliesOf env
+            treat ls "treatBleeding" `shouldReturn` q "true|0.0000|treated"
+            after ← woundsOf env
+            -- The tie goes to the first, and the second is the
+            -- untouched original entire.
+            map woundDressing after `shouldBe` ["bandage", ""]
+            drop 1 after `shouldBe` [w]
             suppliesOf env `shouldReturn` (b0 - 1, s0 - 0.05, a0)
 
         -- The hardest shape for any clinical key: the two wounds are
@@ -537,10 +633,87 @@ spec = describe "treatment wound identity (#2638)" $ do
             woundsOf env `shouldReturn` [target, other]
             suppliesOf env `shouldReturn` before
 
-    -- §5 The single-wound common case, unchanged. Without this every
+    -- §5 The property the IO verb cannot demonstrate on its own.
+    --
+    -- Every case above resets the scene to its final state and then
+    -- calls the verb, so the preflight snapshot and the commit-time
+    -- manager are the same value — and the OLD implementation, which
+    -- also selected immediately before committing, would pass them.
+    -- What actually changed is that the treatment now decides
+    -- everything from the manager 'atomicModifyIORef'' applies it to.
+    --
+    -- These apply that transaction — the exact function the verbs hand
+    -- to 'atomicModifyIORef'' — to a manager no preflight ever saw. A
+    -- single-threaded caller of the IO verb cannot produce that
+    -- divergence, so this is where it is shown.
+    describe "the transaction decides from the manager it mutates (§5)" $ do
+
+        it "treats the wound present at COMMIT time, not the one a \
+           \snapshot held" $ \_ → do
+            -- What a preflight would have seen: one light wound.
+            let stale = managerWith stockedKit [slash 0.2 0 ""]
+                -- What the write actually lands on: the light wound is
+                -- gone and a heavy one has been appended behind a
+                -- same-key sibling.
+                live  = managerWith stockedKit
+                            [slash 0.3 0 "", slash 0.9 0 ""]
+            -- The transaction is the same function in both cases; only
+            -- its argument differs, and the target moves with it.
+            let (staleOut, _) = runBleedingCommit stale
+                (liveOut,  _) = runBleedingCommit live
+            map woundDressing (woundsIn staleOut) `shouldBe` ["bandage"]
+            map woundDressing (woundsIn liveOut) `shouldBe` ["", "bandage"]
+
+        it "refuses when the selected wound is gone at commit time, \
+           \leaving the manager and its supplies untouched" $ \_ → do
+            -- A preflight that saw a treatable wound, and a commit-time
+            -- manager where it has healed away entirely.
+            let gone = managerWith stockedKit []
+                (out, res) = runBleedingCommit gone
+            res `shouldBe` Left "no bleeding wound to treat"
+            -- The manager is returned AS GIVEN: no dressing, no spent
+            -- bandage, no rolled stat cached on the medic. The verb
+            -- skips 'publishTreatGen' on a Left, so the treatment
+            -- generator is not advanced either -- §4 asserts that half
+            -- through the real ref.
+            out `shouldBe` gone
+
+            let goneInf = managerWith stockedKit [slash 0.5 0.01 staph]
+                (outI, resI) = runInfectionCommit goneInf
+            resI `shouldBe` Left "no infected wound to treat"
+            outI `shouldBe` goneInf
+
+        it "subtracts the cure from the COMMIT-time infection, not a \
+           \snapshot value" $ \_ → do
+            -- The same wound, at two different points of a healing
+            -- curve. A treatment that wrote back an absolute value
+            -- derived from the higher reading would leave the healed
+            -- manager at the same number as the sick one -- and, where
+            -- the healing had gone further than the cure, would undo
+            -- it. The reduction here is 0.8 (capability 1, cure rate
+            -- 1), so the two answers are 0.1 and 0.
+            let sick   = managerWith stockedKit [slash 0.5 0.9 staph]
+                healed = managerWith stockedKit [slash 0.5 0.5 staph]
+                (sickOut,   _) = runInfectionCommit sick
+                (healedOut, _) = runInfectionCommit healed
+            map (r4 . woundInfection) (woundsIn sickOut) `shouldBe` [0.1]
+            map (r4 . woundInfection) (woundsIn healedOut) `shouldBe` [0]
+
+        -- The same divergence for the wound the cure lands ON: a
+        -- reordering between snapshot and commit must move the write,
+        -- not leave it on a remembered position.
+        it "follows a reordering that happened after a snapshot" $ \_ → do
+            let a = slash 0.5 0.9 staph
+                b = slash 0.5 0.2 strep
+                (fstOut, _) = runInfectionCommit (managerWith stockedKit [a, b])
+                (sndOut, _) = runInfectionCommit (managerWith stockedKit [b, a])
+            map (r4 . woundInfection) (woundsIn fstOut) `shouldBe` [0.1, 0.2]
+            map (r4 . woundInfection) (woundsIn sndOut) `shouldBe` [0.2, 0.1]
+
+    -- §6 The single-wound common case, unchanged. Without this every
     -- assertion above could hold on a verb that had stopped treating
     -- anything.
-    describe "the single-wound case is unchanged (§5)" $ do
+    describe "the single-wound case is unchanged (§6)" $ do
 
         it "still dresses and disinfects a lone bleeding wound" $ \env → do
             resetScene env stockedKit [slash 0.6 0 ""]
