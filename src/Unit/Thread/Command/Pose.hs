@@ -298,6 +298,27 @@ handleUnitTransitionToCommand env utsRef uid target stride = do
     -- Initiate a pose transition. Stride ≥ 2 skips frames at render
     -- time and proportionally shortens the duration — used by the AI
     -- when chaining multiple transitions back-to-back.
+    --
+    -- Two SEPARATE terminal-death rules meet on this command, and both
+    -- are needed (#2651):
+    --
+    --   * 'Dead' is refused as a DESTINATION, and that is enforced one
+    --     layer up — @Engine.Scripting.Lua.API.Units.Spawn.parsePose@
+    --     has no "dead" case, so @unit.transitionTo(uid, "dead")@
+    --     never reaches this handler at all. 'UnitKill' is the only
+    --     way in.
+    --   * Leaving an ALREADY-dead state is refused HERE, against
+    --     authoritative @usPose@, in the atomic update below. It
+    --     cannot live in Lua or at enqueue time: 'unitQueue' is FIFO,
+    --     so an ordinary AI transition (the sleep / water-source /
+    --     source-phase chains) enqueued while the unit was still alive
+    --     drains AFTER a 'UnitKill' enqueued ahead of it, by which
+    --     point the caller's precondition is stale and only the
+    --     executing handler can still see the corpse.
+    --
+    -- The sibling pose commands make the same distinction where it
+    -- applies to them: 'handleUnitCrawlCommand' no-ops on 'Dead', and
+    -- 'handleUnitReviveCommand' acts only on 'Collapsed'/'Crawling'.
     let s = max 1 stride
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     uts0 ← readIORef utsRef
@@ -342,6 +363,13 @@ handleUnitTransitionToCommand env utsRef uid target stride = do
         in case HM.lookup uid simStates of
             Nothing → (uts, ())
             Just ss
+                | usPose ss ≡ Dead → (uts, ())
+                    -- Terminal (#2651). Refused BEFORE the branch split
+                    -- so neither the zero-duration snap nor the
+                    -- 'TransitioningTo' install can touch the corpse's
+                    -- pose, activity, transition deadline or stride —
+                    -- 'handleUnitKillCommand' has already cleared all
+                    -- four, and they stay cleared.
                 | usPose ss ≡ target → (uts, ())  -- already there
                 | isTransitioning (usState ss) → (uts, ())  -- already mid-transition
                 | duration ≤ 0 →
