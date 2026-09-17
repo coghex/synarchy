@@ -76,6 +76,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
+import Control.Concurrent.STM (atomically, modifyTVar', writeTVar)
+import qualified HsLua as Lua
 import Engine.Asset.Handle (FontHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -84,7 +86,11 @@ import Engine.Graphics.Font.Data (defaultFontCache)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
+import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaMsg(..), LuaScript(..))
+import Engine.Load.Status
+    ( LoadPhase(..), LoadOutcome(..), LoadStatus(..)
+    , ReconciliationFailure(..), beginLoad, readLoadStatus, loadInProgress )
 import Test.Headless.Harness (withHeadlessEngine, installHudWorldPage)
 import UI.Manager (createPage, showPage)
 import UI.Tooltip
@@ -92,6 +98,7 @@ import UI.Tooltip
     , isTooltipVisible )
 import UI.Types
 import World.Load.Publish (resetTransientState)
+import World.Save.Payload (emptyLoadReconcileContext)
 
 -----------------------------------------------------------
 -- Fixture
@@ -108,6 +115,11 @@ withSharedFixture action = withHeadlessEngine $ \env → do
 resetFixture ∷ EngineEnv → LuaBackendState → IO ()
 resetFixture env ls = do
     writeIORef (uiManagerRef env) emptyUIPageManager
+    -- The #2645 cases below register modules against this shared
+    -- backend so the dispatcher's broadcast can reach them; a leftover
+    -- registration would hold a module ref into the PREVIOUS case's
+    -- package.loaded, which the wipe below has just orphaned.
+    atomically $ writeTVar (lbsScripts ls) Map.empty
     atomicModifyIORef' (videoConfigRef env) $ \c → (c { vcUIScale = 1.0 }, ())
     -- #1366: hud.lua is loaded by ui_manager and addresses hud.worldId
     -- ("main_world") — see 'installHudWorldPage'.
@@ -312,6 +324,102 @@ reusedUidLua = luaLines
     , "         battles = #CL.battles,"
     , "         injury7 = #IL.unitEntries(7), logId = IL.unitLogs[1] and IL.unitLogs[1].id or -1,"
     , "         logs = #IL.unitLogs }"
+    ]
+
+-----------------------------------------------------------
+-- #2645: the sweep's failures as the transaction's outcome
+-----------------------------------------------------------
+
+-- | Register one already-loaded module against @ls@ under @scriptId@
+--   and @path@, so the dispatcher's @onSaveLoaded@ broadcast reaches it.
+--   @chunk@ must @return@ the module table — for the real UI singleton
+--   that is a bare @require@, which resolves the SAME table
+--   'bootLua' installed, so the broadcast drives the production
+--   @uiManager.onSaveLoaded@ and not a copy of it.
+--
+--   'scriptPath' is the identity the aggregated load status records
+--   ('Engine.Scripting.Lua.Util.broadcastToModulesReportingErrors'
+--   pairs every raise with it), so it is spelled exactly as
+--   @scripts/init_loader.lua@ loads the module.
+registerLiveModule ∷ LuaBackendState → Word32 → FilePath → Text → IO ()
+registerLiveModule ls sid path chunk = do
+    ref ← Lua.runWith (lbsLuaState ls) $ do
+        status ← Lua.dostring (TE.encodeUtf8 chunk)
+                     ∷ Lua.LuaE Lua.Exception Lua.Status
+        case status of
+            Lua.OK → Lua.ref Lua.registryindex
+            _      → error ("fixture chunk failed to load: " ⧺ path)
+    atomically $ modifyTVar' (lbsScripts ls) $ Map.insert sid LuaScript
+        { scriptId        = sid
+        , scriptPath      = path
+        , scriptTickRate  = 1000000
+        , scriptNextTick  = 1000000
+        , scriptModuleRef = ref
+        , scriptPaused    = False
+        }
+
+-- | Start a real load transaction on the shared env's status ref, so
+--   the dispatcher's terminal call has a live request to end.
+beginLoadOrFail ∷ EngineEnv → IO Int
+beginLoadOrFail env = do
+    started ← beginLoad (loadStatusRef env) "replacement_teardown_spec"
+    case started of
+        Right requestId → pure requestId
+        Left err → fail ("could not begin a load transaction: " ⧺ T.unpack err)
+
+-- | Two failing @saveLoaded@ hooks in one sweep, with successful hooks
+--   BOTH between and around them: @combat_log@ is the second of the six
+--   and @thought_log@ the last, so the case proves a raise stops
+--   neither the hooks after it nor the sweep's completion. Every hook
+--   is counted (the four survivors keep their real clear, wrapped), and
+--   @engine.logError@ is counted too — the per-hook log is the isolation
+--   this issue must not trade away for the new outcome.
+faultLua ∷ Text
+faultLua = luaLines
+    [ "_G.__hookCalls, _G.__errors = {}, 0;"
+    , "engine.logError = function() _G.__errors = _G.__errors + 1 end;"
+    , "local function mark(k) _G.__hookCalls[k] = (_G.__hookCalls[k] or 0) + 1 end;"
+    , "local function wrap(mod, key, name)"
+    , "  local orig = mod[key];"
+    , "  mod[key] = function(...) mark(name); return orig(...) end end;"
+    , "wrap(EL, 'clearSession', 'event');"
+    , "wrap(IL, 'clearSession', 'injury');"
+    , "wrap(UL, 'clearSession', 'unit');"
+    , "wrap(P,  'dismissAll',   'popup');"
+    , "CL.clearSession = function()"
+    , "  mark('combat'); error('combat clearSession blew up', 0) end;"
+    , "TL.clearSession = function()"
+    , "  mark('thought'); error('thought clearSession blew up', 0) end;"
+    , "return 'ok'"
+    ]
+
+-- | The same two modules made to fail, on the @hudHide@ sweep this time
+--   (@hide@ / @dismissAll@ rather than @clearSession@), plus counters
+--   for two hooks ordered after them. Requirement 4: an ordinary view
+--   transition keeps logging and continuing, and propagates nothing to
+--   its caller.
+hudHideFaultLua ∷ Text
+hudHideFaultLua = luaLines
+    [ "_G.__hookCalls, _G.__errors = {}, 0;"
+    , "engine.logError = function() _G.__errors = _G.__errors + 1 end;"
+    , "local function mark(k) _G.__hookCalls[k] = (_G.__hookCalls[k] or 0) + 1 end;"
+    , "local function wrap(mod, key, name)"
+    , "  local orig = mod[key];"
+    , "  mod[key] = function(...) mark(name); return orig(...) end end;"
+    , "wrap(IL, 'hide', 'injury');"
+    , "wrap(UL, 'hide', 'unit');"
+    , "EL.hide = function() mark('event'); error('event hide blew up', 0) end;"
+    , "CL.hide = function() mark('combat'); error('combat hide blew up', 0) end;"
+    , "return 'ok'"
+    ]
+
+-- | @true@ only if every one of the six @saveLoaded@ hooks ran exactly
+--   once — the four that completed and the two that raised.
+allSixHooksRanLua ∷ Text
+allSixHooksRanLua = luaLines
+    [ "local c = _G.__hookCalls;"
+    , "return c.event == 1 and c.combat == 1 and c.injury == 1"
+    , "  and c.popup == 1 and c.unit == 1 and c.thought == 1"
     ]
 
 -----------------------------------------------------------
@@ -571,3 +679,132 @@ spec = aroundAll withSharedFixture $
             blocked `shouldBe` "false"
             calls ← evalOk ls "return _G.__effects.sendTextures"
             calls `shouldBe` "2"
+
+    describe "a failing saveLoaded hook as the load transaction's own \
+             \outcome (#2645)" $ do
+
+        it "reports LoadReconciliationFailed through the production \
+           \LuaSaveLoaded path, in ONE scripts/ui_manager.lua entry \
+           \naming every failing hook, while the remaining hooks, a \
+           \module broadcast after it and the rebinding all still run" $ \(env, ls) → do
+            resetFixture env ls
+            evalStep ls bootLua
+            evalStep ls sceneLua
+            evalStep ls faultLua
+            -- The real singleton, under the identity init_loader gives
+            -- it, plus a module ordered after it: the broadcast walks
+            -- 'lbsScripts' in key order, so id 2 proves a raise inside
+            -- the UI module stops nothing downstream of it either.
+            registerLiveModule ls 1 "scripts/ui_manager.lua"
+                "return require('scripts.ui_manager')"
+            registerLiveModule ls 2 "scripts/reconcile_after.lua"
+                "return { onSaveLoaded = function() _G.__afterRan = true end }"
+            stateRef ← newIORef ThreadRunning
+            requestId ← beginLoadOrFail env
+
+            -- The production path, not a direct call: this is the
+            -- message World.Load.Publish queues, and the handler that
+            -- decides the transaction's terminal disposition.
+            processLuaMsg env ls stateRef
+                (LuaSaveLoaded requestId [7, 9] [11] emptyLoadReconcileContext)
+
+            -- Requirement 2/3: isolation is intact. Both faults raised,
+            -- all six hooks ran exactly once, each failure was logged
+            -- individually, and the module after this one still ran.
+            evalOk ls allSixHooksRanLua `shouldReturn` "true"
+            evalOk ls "return _G.__errors" `shouldReturn` "2"
+            evalOk ls "return _G.__afterRan == true" `shouldReturn` "true"
+            -- The four surviving hooks really cleared: a failure is not
+            -- being reported in place of the work the sweep still did.
+            evalOk ls "return P.activeCount() + P.queueLength()"
+                `shouldReturn` "0"
+            evalOk ls "return EL.isVisible() or IL.isVisible() or UL.isVisible()"
+                `shouldReturn` "false"
+            -- Requirement 2: the rebinding that PRECEDES the sweep is
+            -- untouched — the re-raise happens after it, not instead.
+            evalOk ls "return tostring(WM.currentWorld)"
+                `shouldReturn` "\"main_world\""
+            evalOk ls "return tostring(HUD.worldId)"
+                `shouldReturn` "\"main_world\""
+            evalOk ls "return _G.__effects.sendTextures" `shouldReturn` "1"
+            evalOk ls "return _G.__effects.containerClose" `shouldReturn` "1"
+
+            status ← readLoadStatus (loadStatusRef env)
+            -- Requirement 1: the terminal disposition, not an
+            -- unqualified success.
+            lsPhase <$> status `shouldBe` Just LoadReconciliationFailed
+            lsPhase <$> status `shouldNotBe` Just LoadPublished
+            -- Unchanged for a nested failure exactly as for a direct
+            -- one: 'failedAtPhase' stays unset (its presence would
+            -- claim the old session survived) and the transaction is
+            -- over rather than wedged.
+            lsFailedAtPhase <$> status `shouldBe` Just Nothing
+            loadInProgress (loadStatusRef env) `shouldReturn` False
+
+            -- Requirement 1/3: ONE per-module entry, because
+            -- 'reconciliationFailures' is keyed per module — so its
+            -- error text is where both hook identities and both hook
+            -- errors have to survive.
+            case maybe [] lsReconciliationFailures status of
+                [ui] → do
+                    rfModule ui `shouldBe` "scripts/ui_manager.lua"
+                    rfError ui `shouldSatisfy` T.isInfixOf "combat_log"
+                    rfError ui `shouldSatisfy`
+                        T.isInfixOf "combat clearSession blew up"
+                    rfError ui `shouldSatisfy` T.isInfixOf "thought_log"
+                    rfError ui `shouldSatisfy`
+                        T.isInfixOf "thought clearSession blew up"
+                    -- A hook that SUCCEEDED is not reported as failing.
+                    rfError ui `shouldNotSatisfy` T.isInfixOf "injury_log_panel"
+                other → expectationFailure $
+                    "expected exactly one scripts/ui_manager.lua failure, got "
+                    ⧺ show other
+
+            case lsOutcome =≪ status of
+                Just (LoadReconciliationIncomplete summary) → do
+                    summary `shouldSatisfy` T.isInfixOf "scripts/ui_manager.lua"
+                    summary `shouldSatisfy` T.isInfixOf "combat_log"
+                    summary `shouldSatisfy` T.isInfixOf "thought_log"
+                other → expectationFailure $
+                    "expected a LoadReconciliationIncomplete outcome, got "
+                    ⧺ show other
+
+        it "still reports a clean sweep as LoadPublished / LoadSucceeded \
+           \with no recorded failure" $ \(env, ls) → do
+            resetFixture env ls
+            evalStep ls bootLua
+            evalStep ls sceneLua
+            registerLiveModule ls 1 "scripts/ui_manager.lua"
+                "return require('scripts.ui_manager')"
+            stateRef ← newIORef ThreadRunning
+            requestId ← beginLoadOrFail env
+
+            processLuaMsg env ls stateRef
+                (LuaSaveLoaded requestId [7, 9] [11] emptyLoadReconcileContext)
+
+            status ← readLoadStatus (loadStatusRef env)
+            lsPhase <$> status `shouldBe` Just LoadPublished
+            lsOutcome <$> status `shouldBe` Just (Just LoadSucceeded)
+            lsReconciliationFailures <$> status `shouldBe` Just []
+            loadInProgress (loadStatusRef env) `shouldReturn` False
+
+        it "leaves the other view transitions logging and continuing: a \
+           \failing hudHide hook propagates nothing to its caller" $ \(env, ls) → do
+            resetFixture env ls
+            evalStep ls bootLua
+            evalStep ls sceneLua
+            evalStep ls hudHideFaultLua
+            -- The sweep's own boundary, called the way hud.hide() calls
+            -- it — under pcall, so a propagated error would be visible
+            -- as a false here instead of failing the whole chunk.
+            swept ← evalOk ls
+                "return pcall(function() \
+                \  require('scripts.ui.view_teardown').run('hudHide') end)"
+            swept `shouldBe` "true"
+            -- Both faults raised and were logged, and the hooks after
+            -- them ran regardless.
+            evalOk ls "return _G.__errors >= 2" `shouldReturn` "true"
+            evalOk ls
+                "return _G.__hookCalls.event ~= nil and _G.__hookCalls.combat ~= nil \
+                \  and _G.__hookCalls.injury ~= nil and _G.__hookCalls.unit ~= nil"
+                `shouldReturn` "true"

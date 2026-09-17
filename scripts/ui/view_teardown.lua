@@ -58,13 +58,20 @@
 --     transfers, tools, selections and the container stack, all of
 --     which the load transaction reconciles through its own paths and
 --     must not be cleared a second time here. ctx = { worldId = the
---     published active page id (may be nil) }.
+--     published active page id (may be nil) }. This is the ONE
+--     transition whose caller re-raises a failing hook, because it is
+--     the ONE whose caller sits inside a transaction that has a terminal
+--     disposition for an incompletely reconciled session (#2645).
 --
 -- Rules for entries:
 --   * Hooks MUST be idempotent — they run on every transition of their
 --     kind, almost always with nothing to tear down.
 --   * Hooks are pcall-wrapped: a failing hook logs and never blocks the
---     rest of the sweep (the page swap has already happened).
+--     rest of the sweep (the page swap has already happened). What the
+--     CALLER then does with that failure differs by transition: the
+--     four view transitions drop it, while "saveLoaded" re-raises the
+--     whole set so the load transaction reports an incompletely
+--     reconciled session (#2645) -- see run() below.
 --   * require() the widget module inside the hook, not at file scope,
 --     so widget modules keep loading lazily.
 --   * A new overlay / popup / armed tool mode gets an entry HERE, not a
@@ -377,18 +384,39 @@ local registry = {
 
 -- Sweep every registered hook for one transition, in registry order.
 -- ctx is forwarded to each hook (zoomBand passes worldId/newView).
+--
+-- RETURNS, in registry order, every hook that raised, as
+-- { name = <the registry entry's name>, err = <its error text> }
+-- records -- an empty table when the whole sweep completed (#2645).
+-- Isolation is UNCHANGED: each hook is still pcall'd, still logged
+-- individually, and one that raises still cannot stop the ones after
+-- it. Only the caller's VIEW of the sweep is new.
+--
+-- Who reads it: "saveLoaded" only. That sweep runs inside the load
+-- transaction's last step, and a failure there leaves the replacement
+-- session incompletely reconciled, which the transaction has a terminal
+-- disposition for -- see uiManager.onSaveLoaded, which re-raises what
+-- comes back here. The other transitions ("zoomBand", "hudHide",
+-- "menu", "resize") deliberately keep their log-and-continue behavior
+-- and ignore this value: their page swap has already happened, there is
+-- no transaction to report to, and failing them louder would only
+-- propagate a widget's teardown error into an ordinary view change.
 function viewTeardown.run(transition, ctx)
     ctx = ctx or {}
+    local failures = {}
     for _, entry in ipairs(registry) do
         local hook = entry[transition]
         if hook then
             local ok, err = pcall(hook, ctx)
             if not ok then
+                local text = tostring(err)
                 engine.logError("view_teardown: " .. entry.name
-                    .. " failed on " .. transition .. ": " .. tostring(err))
+                    .. " failed on " .. transition .. ": " .. text)
+                failures[#failures + 1] = { name = entry.name, err = text }
             end
         end
     end
+    return failures
 end
 
 return viewTeardown

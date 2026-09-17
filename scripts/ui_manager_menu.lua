@@ -213,8 +213,39 @@ function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
     -- nor the rebinding above. The Haskell-owned half (input, focus,
     -- the event streams, the locked tooltip) ran in
     -- World.Load.Publish.resetTransientState before this broadcast.
-    require("scripts.ui.view_teardown").run("saveLoaded",
+    local failures = require("scripts.ui.view_teardown").run("saveLoaded",
         { worldId = activeId })
+
+    -- #2645: that isolation kept a failing clear from suppressing
+    -- another -- and kept it out of the load transaction's outcome
+    -- entirely. viewTeardown.run logged and returned, this function
+    -- returned normally, and the dispatcher's empty failure list made
+    -- the load report LoadPublished / LoadSucceeded while, say, the
+    -- replaced session's thought history survived under unit ids the
+    -- replacement REUSES. That silently half-reconciled session is
+    -- exactly what #1204 added LoadReconciliationFailed to make
+    -- visible, so re-raise here.
+    --
+    -- AFTER the whole sweep, and after every effect above: isolation,
+    -- the world/HUD rebinding, the latch release, the tool reset and
+    -- the container close are all untouched, and only the transaction's
+    -- OUTCOME changes. ONE aggregated error rather than one per hook,
+    -- because the dispatcher's reconciliationFailures list is keyed per
+    -- MODULE ('Engine.Scripting.Lua.Util.broadcastToModulesReportingErrors'
+    -- pairs each raise with its script path), so this whole module gets
+    -- a single entry and its text is the only place a failing hook's
+    -- identity can survive. Level 0 like unit_ai_reconcile's own
+    -- post-load refusal: the "file:line:" a default raise prepends would
+    -- name THIS line, not any of the hooks that actually failed.
+    if #failures > 0 then
+        local parts = {}
+        for i, failure in ipairs(failures) do
+            parts[i] = failure.name .. ": " .. failure.err
+        end
+        error("uiManager.onSaveLoaded: " .. #failures
+            .. " saveLoaded teardown hook(s) failed: "
+            .. table.concat(parts, "; "), 0)
+    end
 end
 
 function uiManager.onCreateWorld()
