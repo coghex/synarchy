@@ -236,6 +236,7 @@ import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
 import qualified Test.Headless.UI.Clipping as UIClipping
+import qualified Test.Headless.UI.ListScrollSync as UIListScrollSync
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PlayerEventProgress as PlayerEventProgress
@@ -1050,6 +1051,7 @@ main = hspec $ do
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
     describe "UI.FocusNavigation" UIFocusNavigation.spec
     describe "UI.Clipping" UIClipping.spec
+    describe "List scrollbar sync" UIListScrollSync.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
     -- #1714: its own engine per example (the event store's sequence

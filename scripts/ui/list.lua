@@ -322,6 +322,13 @@ function list.new(params)
         scrollbarId = nil,
         scrollOffset = 0,
         needsScroll = #items > maxVisible,
+        -- The list's OWN visibility (#2628). list.setVisible is the
+        -- only thing that changes it, and a freshly created list is
+        -- visible (its elements are added to the page shown). Tracked
+        -- because list.setItems has to decide whether the scrollbar's
+        -- controls may reappear, and "needs scrolling" alone would
+        -- un-hide the chrome of a list the caller had hidden.
+        visible = true,
         -- Element handles
         slotElements = {},  -- { hitId, textId, highlightId, slot }
         viewportId = nil,
@@ -808,11 +815,35 @@ function list.setItems(id, items)
     ls.needsScroll = needsScroll
 
     if ls.scrollbarId then
-        if needsScroll then
-            scrollbar.setContentSize(ls.scrollbarId, #ls.items, ls.visibleCount)
-        else
-            scrollbar.setVisible(ls.scrollbarId, false)
-        end
+        -- #2628: resync the scrollbar UNCONDITIONALLY, in all three
+        -- respects, for every replacement including a short or empty
+        -- one.
+        --
+        -- Content range: scrollbar.setContentSize is what teaches the
+        -- scrollbar the new item count, and skipping it for a
+        -- non-scrolling replacement left the OLD range in place — still
+        -- reachable through list.setScrollOffset, which routes straight
+        -- into scrollbar.setScrollOffset and clamps against
+        -- totalItems - visibleItems.
+        --
+        -- Offset: setContentSize only CLAMPS a stored offset into the
+        -- new range and never fires onScroll, so a scrolled list whose
+        -- items were replaced kept the scrollbar at the old offset while
+        -- the rows above had already snapped back to the top; the next
+        -- wheel tick or down-button press then asked for old + 1 and the
+        -- rows jumped. Routing the reset through setScrollOffset (rather
+        -- than assigning the field) is deliberate: it repositions the
+        -- thumb and fires onScroll, which is the same path a real scroll
+        -- takes, so list.scrollOffset and the scrollbar cannot desync.
+        --
+        -- Visibility: a replacement that grows a list from a
+        -- non-scrolling count back to a scrolling one has to get its
+        -- controls back (the plant panel's filter-then-clear), but only
+        -- when the list itself is visible — list.setVisible remains the
+        -- sole owner of that fact.
+        scrollbar.setContentSize(ls.scrollbarId, #ls.items, ls.visibleCount)
+        scrollbar.setScrollOffset(ls.scrollbarId, 0)
+        scrollbar.setVisible(ls.scrollbarId, ls.visible and needsScroll)
     end
 
     list.refreshSlots(id)
@@ -825,6 +856,10 @@ end
 function list.setVisible(id, visible)
     local ls = lists[id]
     if not ls then return end
+
+    -- #2628: remember it, so a later list.setItems can tell a list that
+    -- merely stopped needing a scrollbar from one the caller hid.
+    ls.visible = not not visible
 
     -- The clipping viewport (#747) is itself a real, sized element, so
     -- it must follow the list's own visibility toggle: left visible
