@@ -222,14 +222,24 @@ data PublishOutcome
     = PublishedNew
         -- ^ No entry existed for the id; the staged one is now final.
     | PublishedUnchanged
-        -- ^ A complete entry with an identical inventory digest already
-        --   existed; the staged copy was discarded and nothing on disk
-        --   changed (D-17's "compatible regeneration republishes under
-        --   the saved ID" is idempotent for equal content).
+        -- ^ An entry with an identical inventory digest already existed
+        --   AND its payload bytes on disk still hashed to their
+        --   recorded digests; the staged copy was discarded and nothing
+        --   on disk changed (D-17's "compatible regeneration
+        --   republishes under the saved ID" is idempotent for equal
+        --   content). The byte-level condition is part of the
+        --   guarantee, not an optimisation detail: this outcome asserts
+        --   that what remains on disk is the content just published, so
+        --   a 'verifyEntryDirectory' of the entry succeeds afterwards.
+        --   A matching inventory digest alone is never enough, because
+        --   it is computed from the record's descriptors and a
+        --   same-size corruption satisfies it (issue #2646).
     | PublishedReplaced
-        -- ^ A complete entry with DIFFERENT content existed; it was
-        --   displaced to a recovery name, the staged one committed, and
-        --   the displaced copy removed once the registry was durable.
+        -- ^ An entry that could not be retained existed: DIFFERENT
+        --   content, an incomplete entry, or one whose retained payload
+        --   bytes failed byte-level verification. It was displaced to a
+        --   recovery name, the staged one committed, and the displaced
+        --   copy removed once the registry was durable.
     deriving (Show, Eq, Ord)
 
 data PublishReport = PublishReport

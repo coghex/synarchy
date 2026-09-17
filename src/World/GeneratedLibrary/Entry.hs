@@ -18,14 +18,24 @@
 --      has exactly its recorded size.
 --
 --   That is the CHEAP check ('readEntryDirectory'), run over every
---   final on every reconciliation; it never reads payload bytes. The
---   DEEP check ('verifyEntryDirectory') additionally hashes every
---   listed file against its recorded digest and is run where the
---   library is about to PROMOTE a directory — restoring a displaced
---   copy to final — and is offered to the map loader (WML-9) for the
---   same reason. Files the record does not list are ignored by both:
---   the library does not own them, so it neither trusts nor removes
---   them.
+--   final on every reconciliation; it never reads payload bytes. Note
+--   what step 4 does and does not establish: the "digest" it returns is
+--   the INVENTORY digest, computed from the record's descriptors, so it
+--   is a statement about what the record claims, never about the bytes
+--   on disk. Two directories with the same inventory digest can hold
+--   different payload bytes, as long as the lengths agree.
+--
+--   The DEEP check ('verifyEntryDirectory') additionally hashes every
+--   listed file against its recorded digest. It is run wherever the
+--   library is about to stand behind an existing directory's CONTENT
+--   rather than its shape: promoting a directory — restoring a
+--   displaced copy to final — and deciding, in
+--   "World.GeneratedLibrary.Publish", whether an existing final may be
+--   retained as 'World.GeneratedLibrary.Types.PublishedUnchanged'
+--   instead of being replaced by the freshly verified staging copy
+--   (issue #2646). It is offered to the map loader (WML-9) for the same
+--   reason. Files the record does not list are ignored by both: the
+--   library does not own them, so it neither trusts nor removes them.
 module World.GeneratedLibrary.Entry
     ( readEntryDirectory
     , verifyEntryDirectory

@@ -23,15 +23,30 @@
 --   5. Examine the existing final, if any:
 --
 --      * none — commit (step 6) as 'PublishedNew';
---      * a complete entry with the SAME inventory digest — the staged
---        copy is discarded and nothing on disk changes:
---        'PublishedUnchanged';
---      * anything else (different content, or a final that is not a
---        complete entry) — the existing directory is renamed to a
+--      * an entry that passes the DEEP check
+--        ('verifyEntryDirectory' — every listed file present, the
+--        right size, AND hashing to its recorded digest) and carries
+--        the SAME inventory digest — the staged copy is discarded and
+--        nothing on disk changes: 'PublishedUnchanged';
+--      * anything else — the existing directory is renamed to a
 --        @displaced@ recovery name and the root synced, so the old
---        complete entry survives, under an identifiable name, until
---        the new one AND the registry are durable; then commit as
+--        entry survives, under an identifiable name, until the new one
+--        AND the registry are durable; then commit as
 --        'PublishedReplaced'.
+--
+--        "Anything else" includes different content, a final that is
+--        not a complete entry, and — the reason the reuse decision is
+--        the one place publication pays for the deep check — a final
+--        whose inventory digest matches but whose payload bytes on
+--        disk no longer do. The inventory digest is computed from the
+--        record's descriptors, so it says nothing about the bytes; a
+--        same-size corruption is indistinguishable from intact content
+--        to the cheap check. Retaining those bytes as an unchanged
+--        success would make D-17's republish-under-the-saved-id a
+--        silent no-op exactly where it is being used to repair damage
+--        (issue #2646). Every other caller of the completeness
+--        judgement — reconciliation, listing, lookup, cleanup — keeps
+--        using the cheap check.
 --   6. Commit: rename the staging directory onto the final name — a
 --      single atomic filesystem operation that either fully installs
 --      the entry or does not happen — then @fsync@ the root. THAT sync
@@ -210,7 +225,12 @@ publishUnlocked cfg hooks gid files =
     examineExisting descriptors staging rec = do
         exists ← doesDirectoryExist finalDir
         if not exists then commit staging rec (newDigest descriptors) Nothing PublishedNew else do
-            existing ← readEntryDirectory finalDir
+            -- The DEEP check, not the cheap one: an existing entry
+            -- may only be retained as unchanged when its payload bytes
+            -- still hash to their recorded digests. Same-size damage
+            -- passes 'readEntryDirectory' and would otherwise be kept
+            -- as a silent success (issue #2646).
+            existing ← verifyEntryDirectory finalDir
             case existing of
                 Right (oldRec, oldDigest) | oldDigest ≡ newDigest descriptors → do
                     discardWarnings ← removeTransientDirectory staging
