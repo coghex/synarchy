@@ -120,11 +120,14 @@ function uiManager.onUIEscape()
     end
     local handled = textbox.onEscape()
     if handled then return true end
-    for id = 1, 100 do
-        if dropdown.isOpen(id) then
-            dropdown.closeList(id)
-            return true
-        end
+    -- #2627: ask the live registry which dropdown is open rather than
+    -- probing a fixed id range — ids grow monotonically across a
+    -- session's menu rebuilds, so a range check silently stops
+    -- dismissing anything and Escape falls through to the menu.
+    local openDropdownId = dropdown.findOpenId()
+    if openDropdownId then
+        dropdown.closeList(openDropdownId)
+        return true
     end
 
     -- Ghost-focus recovery: no widget claimed this escape, so any
