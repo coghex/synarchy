@@ -193,8 +193,45 @@ deferred, or reshaped:
   since that ratio decides what `BaseChunkV1` should even contain;
 - whether the count ceiling or a byte ceiling is the binding constraint.
 
-Until those numbers exist, statements about how much memory the cache uses are
-assumptions, and this document marks them as such rather than building on them.
+### CRS-2 measured result (#2625), 2026-09-17
+
+The [measurement report](chunk_memory_measurement.md) and its retained raw
+archive provide the accounting model, deterministic depth/overlay fixtures,
+14 complete fresh-process cells, all failed attempts and exact reproduction.
+Production and smaller-nursery controls use the same engine binary, seed 42,
+three plates and verified traversals of 1,088/1,089 distinct canonical chunks.
+This is development-Mac evidence under D-27; the 8-GB laptop is unvalidated.
+
+At worldSize 256, all three production runs exceed D-25's 4-GiB envelope in
+generation and loading: sampled phase peaks range from 6.660 to 7.451 GiB and
+6.708 to 7.416 GiB respectively. All three smaller-nursery controls also fail
+those phases. At size 64, normal-content offscreen gameplay with five added
+player units reaches 3.022 GiB RSS, and loading 3.031 GiB. A separate graphics
+snapshot reports owned-unmapped allocations; unresolved counter overlap and
+external phase peaks prevent claiming complete whole-game compliance.
+
+Headless traversal holds a sampled maximum of 200 tile chunks; the offscreen
+base scenario reaches 235. Peak logical world estimates are 13.977–17.273 MiB,
+with separately sampled simulation estimates up to 1.978 MiB. These are
+unshared logical estimates with explicit object allowances, not a physical
+retained-heap census. Shared buffers and capacity prevent subtracting them
+from RSS or treating world/simulation totals as independent allocations.
+
+**Proposed disposition, awaiting owner:** retain 200 as today's locality policy,
+without blessing it as a memory-safe limit; leave the hard count/byte ceiling
+unresolved. A physical attribution experiment and representative simultaneous
+page/reservation workloads must establish non-chunk headroom first. Count alone
+does not represent variable-depth/overlay costs, but the new logical model is
+not calibrated for enforcement either. CRS-4 remains gated on a justified
+ceiling. Keep Arc B and D-20's hibernation revival deferred: the whole-process
+failure has not been attributed to the required detailed working set.
+
+The report projects fixed detailed footprints through the approved size-1024
+target without extrapolating whole-process RSS or asserting current generation/
+map support. Size 8192 remains an addressing design horizon, not supported
+whole-engine behavior. No budget, RTS default, eviction or admission behavior
+changes in this measurement slice. Processing checklist disposition remains
+the responsibility of the design-processing workflow.
 
 ## Current state and evidence
 
@@ -757,10 +794,11 @@ reconstruction, avoiding disk latency on ordinary camera movement.
 ### D-17. Measurement precedes the capacity arc
 
 Arc B's justification is that resident detailed chunks are the memory problem.
-That is currently an assumption; the only measurement taken shows 289 resident
-chunks sitting underneath a peak set by world generation itself. CRS-2 produces
-the real numbers, and Arc B does not begin until they show resident bytes at the
-targeted world sizes exceeding an acceptable ceiling.
+That remains unproven. The initial measurement showed 289 resident chunks
+underneath a world-generation peak; the CRS-2 result above adds process phase
+measurements and logical accounting without attributing the physical excess to
+detail. Arc B does not begin until the required detailed working set itself is
+shown to exceed its allowance at targeted world sizes.
 
 If they do not, Arc A still stands on its own: it fixes observed correctness
 defects that have nothing to do with how much memory a chunk costs.
@@ -1030,7 +1068,9 @@ must preserve the dependency order and update both this plan and the ledger.
 - Report whether count or bytes is the binding constraint.
 - **Propose both of D-11's numbers** — the streaming trim target and the hard
   residency ceiling — with the measured evidence for each, for the maintainer to
-  set under Q-3. CRS-4 cannot be implemented until they exist.
+  set under Q-3. As accepted in #2625, if safe numbers cannot be justified,
+  explicitly retain them as unresolved and name the missing experiment instead
+  of inventing a limit. CRS-4 cannot be implemented until they exist.
 - Project detailed residency at the supported WML world-size range against
   D-25's approved 4-GiB whole-process envelope, accounting for non-chunk memory.
   Specify the resident-memory counter and graphics/shared-memory accounting;

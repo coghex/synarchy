@@ -207,5 +207,185 @@ retention, registered console queries, window reset, incarnation isolation and
 load-discard cancellation. The Python tests reject missing phases, incomplete
 terrain, malformed console results and counter-unit errors.
 
-Measurement results and owner disposition will be recorded here before final PR
-review. The 8 GB target-machine validation remains outstanding.
+### Development-host results, 2026-09-17
+
+Host: Apple M3 Max, Mac15,9, 16 physical/logical CPUs, 64 GiB RAM; macOS 26.6
+build 25G5065a. GHC 9.12.2 and Cabal 3.16.1.0 built production code with
+`dev=false`, `profile=false`, `-O2 -optc-O3`; every diagnostic sample reported
+16 RTS capabilities. `GHCRTS`, `ENGINE_DEBUG`, `SYNARCHY_RESOURCE_ROOT`,
+`DYLD_INSERT_LIBRARIES` and `MallocStackLogging` were unset. No forced GC,
+eventlog, cost-centre profiling or sanitizer was used. Power/thermal conditions
+and other host activity were not isolated. A focused test rebuild overlapped
+size-64/small-nursery repetition 2; that run is retained without exclusion.
+
+The twelve headless cells measured revision
+`7650862c6b9f48102e5ae17e036615e678cec9f3`. The repaired offscreen driver is at
+`b279123fb684795d1e8d6a48a5ea439e2fd6a057`. Both use the identical engine binary,
+SHA256 `9bf5a5905dc1121125eb387b8020ba2b34d0c310055f0c6f3e0e69fd1e15d491`.
+Later report-only changes do not alter that measured binary.
+
+Each entry below is a **sampled phase peak in GiB**, not an exact maximum or a
+phase's incremental allocation. Memory from earlier phases can remain resident
+in later phases. No complete cell or outlier was removed. Every size-64 run
+verified 1,088 distinct canonical chunks; size 256 verified 1,089.
+
+| Headless size | RTS nursery | Repetition | Generation | Traversal | Loading |
+|---|---|---:|---:|---:|---:|
+| 64 | Production 128 MiB | 1 | 2.5215 | 2.5238 | 2.5251 |
+| 64 | Production 128 MiB | 2 | 2.5487 | 2.5513 | 2.5526 |
+| 64 | Production 128 MiB | 3 | 2.5186 | 2.5212 | 2.5224 |
+| 64 | Control 8 MiB | 1 | 0.5438 | 0.5461 | 0.5473 |
+| 64 | Control 8 MiB | 2 | 0.5742 | 0.5763 | 0.3569 |
+| 64 | Control 8 MiB | 3 | 0.5508 | 0.5529 | 0.5541 |
+| 256 | Production 128 MiB | 1 | 6.9994 | 7.0080 | 7.0123 |
+| 256 | Production 128 MiB | 2 | 6.6599 | 6.6702 | 6.7082 |
+| 256 | Production 128 MiB | 3 | 7.4509 | 7.4514 | 7.4161 |
+| 256 | Control 8 MiB | 1 | 5.1207 | 5.1223 | 4.5815 |
+| 256 | Control 8 MiB | 2 | 5.3474 | 5.1373 | 5.2530 |
+| 256 | Control 8 MiB | 3 | 5.3256 | 5.3275 | 5.3226 |
+
+Size-256 production median peaks are 6.9994 GiB for generation, 7.0080 GiB
+for traversal and 7.0123 GiB for loading. All six size-256 processes exceed
+4 GiB in all three phases, including the nursery control. All size-64 headless
+observations are below 4 GiB; this is not a whole-game or minimum-machine pass.
+The control establishes sensitivity to RTS nursery configuration, without
+measuring exact nursery residency or authorizing a default change.
+
+### Offscreen gameplay and graphics accounting
+
+Both size-64 offscreen runs completed normal startup, generation, the same
+1,088-chunk traversal, the five-player-unit scenario, save/load and clean exit.
+The normal catalog loaded 202 flora definitions and eight unit definitions;
+world generation captured 16 worldgen flora entries. Five player acolytes
+(IDs 8–12) were added to seven naturally present units. All twelve were present
+after the 30-second unpaused interval. This is a small scenario without a busy
+50-unit colony, production chains or real audio-device output.
+
+| RTS nursery | Generation GiB | Traversal GiB | Gameplay GiB | Loading GiB |
+|---|---:|---:|---:|---:|
+| Production 128 MiB | 2.8353 | 3.0215 | 3.0221 | 3.0310 |
+| Control 8 MiB | 0.9757 | 0.9879 | 0.9884 | 0.9895 |
+
+The base requested 100 chunks. Both gameplay captures actually held **235 tile
+chunks**, with a 17.273 MiB logical world estimate and 1.978 MiB maximum sampled
+simulation estimate. This also demonstrates that today's 200-chunk cache target
+is not an enforced total ceiling. At the final gameplay sample, world columns
+were 14,602,568 bytes, maps 2,527,200, overlays 929,448 and containers 52,640.
+Requested/in-flight counters were zero and owner keys agreed at that sample.
+
+Each `vmmap -summary` succeeded after gameplay. Values below preserve its
+rounded display units; they are not additional amounts to add to RSS.
+
+| `vmmap` observation | Production | Control |
+|---|---:|---:|
+| Physical footprint | 3.4G | 1.4G |
+| Lifetime physical-footprint peak | 3.5G | 1.5G |
+| `VM_ALLOCATE` resident | 2.9G | 901.0M |
+| `IOAccelerator (graphics)` resident | 17.4M | 17.4M |
+| `owned unmapped (graphics)` resident | 421.8M | 421.8M |
+| Other `owned unmapped` resident | 3840K | 4096K |
+| Shared-library read-only resident | 438.9M | 438.9M |
+| All reported regions, resident total | 3.9G | 1.9G |
+
+The owned-unmapped rows expose game-owned allocations outside ordinary mapped
+regions. They are retained separately because a simple RSS value does not
+provide their attribution. Their exact overlap with the RSS/footprint counters
+has not been established; no subtraction or addition is used to manufacture a
+combined peak. The large `VM_ALLOCATE` region is not automatically all GHC live
+objects, and the graphics rows are not a complete renderer allocation census.
+The reported 1.0T reserved address space has zero residency and is not memory
+consumption. Shared library pages are not privately charged a second time.
+
+**Phase verdicts:** size-64 generation, gameplay and loading were below 4 GiB in
+sampled RSS, including normal offscreen content. Complete whole-game compliance
+remains unproven: the graphics/footprint snapshot is at one point, external
+phase-specific peaks and counter overlap are unresolved, and these are single
+offscreen observations per RTS setting. Size-256 generation and loading
+definitively fail the RSS envelope in all repetitions; rendering can provide
+no exemption from that failure. A size-256 gameplay measurement was not run.
+
+### Instrumentation and retained evidence
+
+The 14 completed processes retain **5,942 RSS samples**. Maximum observed
+sampling gaps were 0.256–0.270 seconds across runs. Per-process median memory
+query round trips were 37.342–40.432 ms; the largest individual round trip was
+82.810 ms. These include transport, its 25-ms idle boundary, JSON conversion
+and owner sampling, not just the pure cost function. No instrument-off control
+was run, so the net CPU/RSS distortion is unknown. `vmmap` inspection adds work
+at the end of gameplay. Phase tagging at sampling boundaries is approximate;
+neither the phase labels nor polling capture exact instantaneous peaks.
+
+[Evidence inventory and reproduction](evidence/chunk_memory_2625/README.md)
+links the checksum-verified archive, per-process tables and recomputation script.
+Raw commands, replies, RSS timestamps, owner observations, metadata, engine logs
+and `vmmap` output are retained. The successful headless and offscreen runs have
+separate exact source revisions and an identical binary hash.
+
+Three failed attempts remain visible and do not count as completed matrix cells:
+
+- Initial diagnostic `85583c`: console banner/prompt framing caused a false
+  chunk-queue failure. Its result, timeline, log and driver remain in the archive.
+  Corrected diagnostic `d4df58` completed three held-region processes at base
+  revision `064a255f06b5`; that earlier workload is not interchangeable with
+  the traversal matrix.
+- Instrumented attempt `fe3390` at `a68ab4ca9`: a multi-return generation query
+  was incorrectly parsed as one JSON object. Partial samples and log remain.
+- Offscreen cell in `969a01` at `7650862c6`: valid Lua unit ID `8.0` failed an
+  overly strict Python integer check. Its completed traversal and partial
+  gameplay-labelled samples remain; they are not five-unit gameplay evidence.
+  Follow-up `696c70` at `b279123fb` repaired numeric-ID validation and completed
+  both offscreen cells. It did not replace any successful headless sample.
+
+### Detailed and simulation estimates
+
+Every headless process sampled a peak of 200 resident tile chunks while visiting
+over 1,000. The current cache evicts along the traversal; this is distinct from
+the earlier bulk-region diagnostic which held 1,088 at once. Across all six
+size-64 cells the maximum logical world estimate was 14.612 MiB and simulation
+estimate 1.807 MiB; at size 256 they were 13.977 MiB and 1.399 MiB respectively.
+These separately sampled, potentially shared values must not be added into a
+physical retained-memory total.
+
+Representative final-traversal world field groups (bytes), production run 1:
+
+| Size | Resident | Columns | Derived maps | Overlays | Containers | Total | Individual range |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 200 | 12,457,120 | 2,037,400 | 631,184 | 44,800 | 15,170,504 | 66,488–94,688 |
+| 256 | 200 | 12,321,640 | 1,782,960 | 424,000 | 44,800 | 14,573,400 | 72,568–82,808 |
+
+Columns dominate this logical model. The depth/overlay fixtures show why a
+count alone does not describe memory: an unchanged count can change estimated
+bytes substantially. Neither the sampled individual range nor the depth-80
+fixture is a worst-case bound for arbitrary terrain or edits.
+
+Some current-incarnation simulation replies contained up to 43 (size 64) or 44
+(size 256) keys absent from the independently read tile map. Traversal and reply
+latency can explain set differences; these are observations, not a persistent
+leak finding. Settled post-load headless observations show the new incarnation
+with 25 tile and simulation chunks and no unmatched current-incarnation keys.
+Old simulation replies visible during cutover remain explicitly unmatched.
+
+### Proposed disposition — awaiting owner
+
+- **Streaming trim target:** retain today's 200 solely as the existing locality
+  policy while Arc A proceeds. This measurement does not validate it as a
+  memory-safe global limit or change the policy.
+- **Hard residency ceiling:** unresolved. No safe new chunk count or byte
+  allowance can be justified against a process already exceeding 4 GiB during
+  generation with only 25 detailed chunks sampled at completion. Physical
+  retained-heap/native/graphics attribution and representative simultaneous
+  page/reservation footprints are missing; logical estimates cannot be
+  subtracted from RSS to invent non-chunk headroom.
+- **Count versus bytes:** count remains useful operationally; variable depth
+  and overlays require a calibrated byte constraint for memory safety. Model
+  v1 is diagnostic and is not itself a safe enforcement charge.
+- **Chunk-storage/hibernation gate:** keep deferred. Detailed residency has not
+  been established as the cause of the envelope failure. First separate
+  generation/map/runtime/native costs from retained detail with a physical
+  census and bounded simultaneous workloads. A whole-process failure alone
+  does not open Arc B or revive D-20's background-simulation hibernation.
+- **Minimum machine:** four-core/8-GB laptop validation remains outstanding,
+  as do a representative busy 50-unit colony and measured size-1024 behavior.
+
+The owner must disposition this proposal before final PR review. All measurement
+cells are complete; required documentation and evidence stay in this code PR.
