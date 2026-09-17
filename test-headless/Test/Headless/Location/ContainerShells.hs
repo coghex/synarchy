@@ -1181,6 +1181,37 @@ luaSpec = describe "Location container shells (#2505) — incidental dispatch" $
             , "assert(rec.spawns[2] == '3@fixture_locker')"
             ]
 
+    it "spawns nothing for a MIGRATED instance that carries no slots, \
+       \even though today's YAML authors container entries" $
+        -- The joined half of requirement 2's historical rule. The wire
+        -- test above proves `migrateWorldPagesV11` produces an empty slot
+        -- list; this proves what that emptiness MEANS when the live
+        -- content pass meets it against a definition that does author
+        -- containers — the exact pairing a materialized pre-#2505 world
+        -- reaches on its next chunk load. Neither half implies the other:
+        -- a dispatch that fell back to the authored entries when the
+        -- instance offered no slot would pass the wire test and still
+        -- hand that world crates it never spawned.
+        --
+        -- The instance is PLACED (it has an instance_id), unlike the
+        -- hand-stamped case below — so "no slots" is the migration's
+        -- doing rather than the absence of an owner.
+        runsOk $ lns
+            [ harness
+            , "defs = { craeDef() }"
+            , "migrated = true"
+            , "local L = require('scripts.locations')"
+            , "L.spawnContents('crate_site', 0, 0, 'p')"
+            , "assert(#rec.spawns == 0,"
+            , "       'a migrated no-slot instance gained a shell from "
+              <> "today\\'s YAML')"
+            -- …and the incidental lifecycle is otherwise untouched: the
+            -- marker is written exactly as it is for any other pass, so
+            -- the location does not retry for ever.
+            , "assert(rec.marked == 1, 'contents_spawned was withheld')"
+            , "assert(#rec.warns >= 1, 'the skipped entries were silent')"
+            ]
+
     it "spawns nothing and says why for a hand-stamped location with no \
        \placed instance" $
         runsOk $ lns
@@ -1226,6 +1257,10 @@ harness = lns
     , "failSlot = nil"
     , "boundSlots = {}"
     , "placed = true"
+    -- #2505: a PLACED instance carrying no container slots — what a
+    -- world materialized before this slice looks like after
+    -- migrateWorldPagesV11, which adds none.
+    , "migrated = false"
     , "engine = {"
     , "  logWarn = function(m) rec.warns[#rec.warns + 1] = m end,"
     , "  logInfo = function() end,"
@@ -1233,6 +1268,7 @@ harness = lns
     , "  listLocationDefs = function() return defs end,"
     , "}"
     , "local function containersOf()"
+    , "  if migrated then return {} end"
     , "  local out = {}"
     , "  for _, s in ipairs({ { 1, 'fixture_crate' }, { 2, 'fixture_locker' },"
     , "                       { 3, 'fixture_locker' } }) do"

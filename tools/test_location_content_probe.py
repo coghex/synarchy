@@ -1254,6 +1254,61 @@ README = TOOLS / "README.md"
 README_SECTION_HEADING = "### `test_location_content_probe.py`"
 README_TABLE_ROW = "| `location_content_probe.py` |"
 
+#: Repository-owned CI metadata that ALSO describes this probe's shape:
+#: the probe-status reason a developer reads from `--status`, and the two
+#: mirrored gate descriptions. None of them is on the scanned surface, so
+#: all three sat stale through six review rounds — which is precisely why
+#: they are named here rather than left to the next reader to notice.
+#:
+#: Each documents many probes, so only the part mentioning THIS one is
+#: read; `passage_mentioning` does that extraction.
+CI_PROSE = (
+    TOOLS / "ci_probes.py",
+    TOOLS / "ci-local.sh",
+    TOOLS.parent / ".github" / "workflows" / "ci.yml",
+)
+
+#: What every such passage mentions when it is about this probe.
+PROBE_MENTION = "location_content"
+
+
+def passage_mentioning(path: Path, needle: str) -> str:
+    """The contiguous passages of `path` that mention `needle`.
+
+    A comment block is expanded outward while its neighbours are comment
+    lines, so a wrapped sentence is read whole; a code entry is expanded
+    to the end of its own parenthesised value. Everything else in the
+    file — every OTHER probe's description — stays out, because judging
+    one probe's sentences by another's counts is what made the first
+    attempt at this check report failures against correct prose.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    keep: set[int] = set()
+    for index, line in enumerate(lines):
+        if needle not in line:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            start = index
+            while start > 0 and lines[start - 1].strip().startswith("#"):
+                start -= 1
+            end = index
+            while end + 1 < len(lines) and lines[end + 1].strip().startswith("#"):
+                end += 1
+        else:
+            # A code entry: to the end of its own value, which is the
+            # next line at the same indentation that opens a new one.
+            start = index
+            end = index
+            indent = len(line) - len(line.lstrip())
+            while end + 1 < len(lines):
+                nxt = lines[end + 1]
+                if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                    break
+                end += 1
+        keep.update(range(start, end + 1))
+    return "\n".join(lines[index] for index in sorted(keep))
+
 
 def readme_prose() -> str:
     """The README text that is ABOUT this probe, and nothing else."""
@@ -1282,6 +1337,8 @@ def topology_prose() -> tuple[tuple[str, str], ...]:
     return tuple(
         [(path.name, module_source(path)) for path in SURFACE]
         + [(README.name, readme_prose())]
+        + [(path.name, passage_mentioning(path, PROBE_MENTION))
+           for path in CI_PROSE]
         + [(Path(__file__).name,
             Path(__file__).read_text(encoding="utf-8"))]
     )
@@ -1345,7 +1402,10 @@ def topology_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
         # that also matched that would force a true sentence to be
         # rewritten into a false one.
         ("process launches", PROCESS_LAUNCHES,
-         ("engine processes", "engine launches", "processes from")),
+         ("engine processes", "engine launches", "processes from",
+          # `ci_probes.py` spells the same quantity as a hyphenated
+          # compound, which no phrase built from separate words reaches.
+          "real-engine-process")),
         ("scenario owners", len(SCENARIO_OWNERS), ("scenario owners",)),
         ("log assertions", LOG_ASSERTION_SITES,
          ("checks assert against", "places that assert",
@@ -1412,10 +1472,16 @@ def test_the_topology_prose_states_the_current_counts() -> None:
            "make the per-owner fixture claim below vacuous")
     bodies = topology_prose()
     names = {name for name, _ in bodies}
-    expect(README.name in names and Path(__file__).name in names,
-           f"the README's own section and this file are both among the "
-           f"prose scanned — each is where a stale count survived longest "
-           f"(got {sorted(names)})")
+    required = {README.name, Path(__file__).name} | {p.name for p in CI_PROSE}
+    expect(required <= names,
+           f"the README, this file and the CI metadata are all among the "
+           f"prose scanned — each is somewhere a stale count survived a "
+           f"review round (missing {sorted(required - names)})")
+    empty = [name for name, body in bodies if not body.strip()]
+    expect(not empty,
+           f"every scanned passage really has text — an extraction that "
+           f"silently found nothing would report OK having read nothing "
+           f"(empty: {empty})")
 
     def spellings_other_than(current: int) -> list[str]:
         wanted = NUMBER_WORDS[current]
