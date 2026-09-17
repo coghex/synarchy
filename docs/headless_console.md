@@ -147,6 +147,12 @@ of intervening selection requests passes the same `pageId` to both.
 
 ## Query API (returns JSON)
 
+`world.getChunkMemory()` reports per-page/incarnation resident counts, logical
+byte estimates and sampled high-water values, with an asynchronous simulation
+owner snapshot. `world.resetChunkMemoryWindow()` resets the observation window.
+See [chunk memory measurement](chunk_memory_measurement.md) for consistency,
+sharing limitations and the reproducible whole-process experiment.
+
 ```bash
 echo 'return world.getRivers()' | nc -w 5 localhost 9008          # rivers with segments
 echo 'return world.getChunkInfo(cx, cy)' | nc -w 2 localhost 9008

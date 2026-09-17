@@ -49,6 +49,7 @@ module World.Chunk.Residency
     , emptyChunkOwner
     , chunkOwnerGeneration
     , chunkOwnerSize
+    , chunkOwnerStates
     , ChunkState(..)
     , chunkStateOf
     , mintChunkRequest
@@ -248,6 +249,11 @@ chunkOwnerGeneration = coGeneration
 --   are not entries, so this is requested + in flight + resident.
 chunkOwnerSize ∷ ChunkOwner → Int
 chunkOwnerSize = HM.size . coEntries
+
+-- | A diagnostic snapshot of canonical keys and lifecycle states. Unlike
+-- 'chunkOwnerSize', this lets observers distinguish pending from resident.
+chunkOwnerStates ∷ ChunkOwner → [(ChunkKey, ChunkState)]
+chunkOwnerStates owner = [(key, chunkStateOf key owner) | key ← HM.keys (coEntries owner)]
 
 -- | The four-valued residency of one key.
 chunkStateOf ∷ ChunkKey → ChunkOwner → ChunkState

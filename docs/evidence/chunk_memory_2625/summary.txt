@@ -1,0 +1,74 @@
+Validated 14 complete fresh processes; no excluded complete cells.
+Revisions: ['7650862c6b9f48102e5ae17e036615e678cec9f3', 'b279123fb684795d1e8d6a48a5ea439e2fd6a057']
+Binary SHA256: 9bf5a5905dc1121125eb387b8020ba2b34d0c310055f0c6f3e0e69fd1e15d491
+
+Per-process sampled phase peaks, GiB (not exact transition maxima):
+cell,generation,traversal,gameplay,save,loading,verifiedChunks,worldPeakMiB,simPeakMiB,residentPeak
+w64-production-1,2.5215,2.5238,,2.5247,2.5251,1088,14.6115,1.8073,200
+w64-production-2,2.5487,2.5513,,2.5521,2.5526,1088,14.6115,1.8073,200
+w64-production-3,2.5186,2.5212,,2.5216,2.5224,1088,14.6115,1.8073,200
+w64-small-nursery-1,0.5438,0.5461,,0.5469,0.5473,1088,14.6115,1.8073,200
+w64-small-nursery-2,0.5742,0.5763,,0.3245,0.3569,1088,14.6115,1.8073,200
+w64-small-nursery-3,0.5508,0.5529,,0.5537,0.5541,1088,14.6115,1.8073,200
+w256-production-1,6.9994,7.0080,,6.8862,7.0123,1089,13.9767,1.3988,200
+w256-production-2,6.6599,6.6702,,6.7074,6.7082,1089,13.9767,1.3988,200
+w256-production-3,7.4509,7.4514,,7.4019,7.4161,1089,13.9767,1.3988,200
+w256-small-nursery-1,5.1207,5.1223,,4.6206,4.5815,1089,13.9767,1.3988,200
+w256-small-nursery-2,5.3474,5.1373,,5.1387,5.2530,1089,13.9767,1.3988,200
+w256-small-nursery-3,5.3256,5.3275,,5.0937,5.3226,1089,13.9767,1.3988,200
+w64-production-1-offscreen,2.8353,3.0215,3.0221,3.0229,3.0310,1088,17.2728,1.9780,235
+w64-small-nursery-1-offscreen,0.9757,0.9879,0.9884,0.9892,0.9895,1088,17.2728,1.9780,235
+
+Peak median [min,max] GiB for headless repetitions:
+64 production generation 2.5215 [2.5186,2.5487]; traversal 2.5238 [2.5212,2.5513]; loading 2.5251 [2.5224,2.5526]
+64 small-nursery generation 0.5508 [0.5438,0.5742]; traversal 0.5529 [0.5461,0.5763]; loading 0.5473 [0.3569,0.5541]
+256 production generation 6.9994 [6.6599,7.4509]; traversal 7.0080 [6.6702,7.4514]; loading 7.0123 [6.7082,7.4161]
+256 small-nursery generation 5.3256 [5.1207,5.3474]; traversal 5.1373 [5.1223,5.3275]; loading 5.2530 [4.5815,5.3226]
+
+Console memory-query round-trip milliseconds (includes transport idle boundary):
+w64-production-1 n 84 median 38.887 max 50.92 RSS n 308 max gap seconds 0.258
+w64-production-2 n 80 median 37.998 max 49.779 RSS n 302 max gap seconds 0.258
+w64-production-3 n 87 median 38.957 max 49.28 RSS n 298 max gap seconds 0.258
+w64-small-nursery-1 n 83 median 39.546 max 51.628 RSS n 326 max gap seconds 0.263
+w64-small-nursery-2 n 86 median 38.569 max 82.81 RSS n 341 max gap seconds 0.262
+w64-small-nursery-3 n 87 median 39.931 max 78.923 RSS n 380 max gap seconds 0.261
+w256-production-1 n 74 median 37.408 max 50.489 RSS n 451 max gap seconds 0.258
+w256-production-2 n 74 median 37.342 max 50.315 RSS n 464 max gap seconds 0.27
+w256-production-3 n 74 median 37.375 max 49.435 RSS n 452 max gap seconds 0.266
+w256-small-nursery-1 n 74 median 38.767 max 55.949 RSS n 552 max gap seconds 0.259
+w256-small-nursery-2 n 74 median 39.636 max 74.898 RSS n 582 max gap seconds 0.261
+w256-small-nursery-3 n 74 median 39.913 max 48.037 RSS n 533 max gap seconds 0.256
+w64-production-1-offscreen n 110 median 38.308 max 51.12 RSS n 472 max gap seconds 0.257
+w64-small-nursery-1-offscreen n 112 median 40.432 max 52.137 RSS n 481 max gap seconds 0.256
+
+Final traversal field groups and individual chunk estimate range, bytes:
+w64-production-1 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 631184, "total": 15170504}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1825987.164147}]
+w64-production-2 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 631184, "total": 15170504}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826200.933444}]
+w64-production-3 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 631184, "total": 15170504}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826291.657622}]
+w64-small-nursery-1 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 631184, "total": 15170504}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826374.438945}]
+w64-small-nursery-2 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 631184, "total": 15170504}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826461.049996}]
+w64-small-nursery-3 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 631184, "total": 15170504}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826558.275252}]
+w256-production-1 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12321640, "containers": 44800, "derivedMaps": 1782960, "overlays": 424000, "total": 14573400}, "maxChunkBytes": 82808, "minChunkBytes": 72568, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826643.995197}]
+w256-production-2 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12321640, "containers": 44800, "derivedMaps": 1782960, "overlays": 424000, "total": 14573400}, "maxChunkBytes": 82808, "minChunkBytes": 72568, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826761.260808}]
+w256-production-3 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12321640, "containers": 44800, "derivedMaps": 1782960, "overlays": 424000, "total": 14573400}, "maxChunkBytes": 82808, "minChunkBytes": 72568, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1826876.925779}]
+w256-small-nursery-1 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12321640, "containers": 44800, "derivedMaps": 1782960, "overlays": 424000, "total": 14573400}, "maxChunkBytes": 82808, "minChunkBytes": 72568, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1827011.148958}]
+w256-small-nursery-2 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12321640, "containers": 44800, "derivedMaps": 1782960, "overlays": 424000, "total": 14573400}, "maxChunkBytes": 82808, "minChunkBytes": 72568, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1827163.534118}]
+w256-small-nursery-3 [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12321640, "containers": 44800, "derivedMaps": 1782960, "overlays": 424000, "total": 14573400}, "maxChunkBytes": 82808, "minChunkBytes": 72568, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1827298.297777}]
+w64-production-1-offscreen [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 862928, "total": 15402248}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1827701.463208}]
+w64-small-nursery-1-offscreen [{"inFlight": 0, "incarnation": 1, "logicalEstimatedBytes": {"columns": 12457120, "containers": 44800, "derivedMaps": 2037400, "overlays": 862928, "total": 15402248}, "maxChunkBytes": 94688, "minChunkBytes": 66488, "ownerKeysAgree": true, "ownerResident": 200, "page": "measurement", "requested": 0, "resident": 200, "sampleTimeSeconds": 1827823.06586}]
+
+Source measurement.json SHA256:
+16127417f0ed3eebafe6ff7d59ed5b4360b05422a6405b042dbce574eab44d02 w64-production-1/measurement.json
+87ce6c4c249f3423933572b2d8de5336e3659fbe761539721e016899b600f633 w64-production-2/measurement.json
+f76e16e943044ff0ca4e8e4c4896a29f10f25970004240a8592f71fcaa140d7e w64-production-3/measurement.json
+51e1d3942b60a5c9306086b4def9fe60a036e708823a77507b6599483f6214e3 w64-small-nursery-1/measurement.json
+b165f3259e412d7028492a3003424f68d2087358329bcc04409c4809bc0730a3 w64-small-nursery-2/measurement.json
+b92c2dcfeb9d574e5b3f1c0fd18a58704ef5e032fc2e0ec2e00df1edacb2bc4e w64-small-nursery-3/measurement.json
+a6dc30db918d09383e332ecd7a0814b4674f6c4db7a005113d65b11ca89b9e94 w256-production-1/measurement.json
+fa7fb4b4c478d62f8ff73b1520c5d1eadc15de870f5b3e3dd8ff55cbdfaafb9c w256-production-2/measurement.json
+f3d5874fdceb29415aab3a11eb233b9c8884d85d5b1b030a284b35dc2b60dfc7 w256-production-3/measurement.json
+971de1a0fdf4e55994cea5b945f8bd3a74f80812e0db616eedd729f575c2da64 w256-small-nursery-1/measurement.json
+0a104310ed2ec32db12c6dfc9106442ec7445fdfe05dfcd70cffe0914f55b2a4 w256-small-nursery-2/measurement.json
+db00c345b435de62b8737587e475468643f41e44967d276ead2cf2c721f9cfbd w256-small-nursery-3/measurement.json
+01dd1708225f9b138682d0a432515b19d1d2930f68fe92e5873755e98fa702bf w64-production-1-offscreen/measurement.json
+a72702a54d84d11588702e6d3ad71b008e9848d5d63eb91bd277b7b7dc2842d4 w64-small-nursery-1-offscreen/measurement.json

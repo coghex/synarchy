@@ -163,6 +163,24 @@ observed rather than assumed.
 
 ### What CRS-2 must measure
 
+Development diagnostic on 2026-09-17, committed revision `064a255f06b5`:
+three fresh production headless processes generated seed 42, worldSize 64,
+three plates, then loaded regions with 25, 289 and 1,088 unique requested
+chunks. Every region was verified resident before and after its eight-second
+measurement interval. macOS process RSS medians were approximately 2.52–2.57 GiB;
+the increase from 25 to 1,088 chunks was only 1.109–1.281 MiB within each process,
+while the initial medians differed by 48.031 MiB across processes.
+
+This is a process-memory observation, not a retained bytes-per-chunk estimate.
+There was no forced GC, no renderer, no initialized flora catalog and no colony
+workload. Existing runtime capacity can mask new allocations. It neither proves
+D-25's whole-game budget nor opens Arc B's gate. The validated local profile is
+`20260917T140207Z-chunk-residency-w64-seed42-p3-post-init-rss-stai-d4df58` under
+the common Git directory's `codex-profile/reports/`; its driver, transcript and
+all raw samples are retained under `codex-profile/artifacts/`. The prior run
+ending `85583c` is retained as inconclusive after a console-framing error in the
+driver. The profiling worktree was restored cleanly after both runs.
+
 The per-chunk figure needs a counter at the right moment, not `+RTS -s`. CRS-2
 exists to produce it, and its results decide whether Arc B is justified,
 deferred, or reshaped:
@@ -175,8 +193,45 @@ deferred, or reshaped:
   since that ratio decides what `BaseChunkV1` should even contain;
 - whether the count ceiling or a byte ceiling is the binding constraint.
 
-Until those numbers exist, statements about how much memory the cache uses are
-assumptions, and this document marks them as such rather than building on them.
+### CRS-2 measured result (#2625), 2026-09-17
+
+The [measurement report](chunk_memory_measurement.md) and its retained raw
+archive provide the accounting model, deterministic depth/overlay fixtures,
+14 complete fresh-process cells, all failed attempts and exact reproduction.
+Production and smaller-nursery controls use the same engine binary, seed 42,
+three plates and verified traversals of 1,088/1,089 distinct canonical chunks.
+This is development-Mac evidence under D-27; the 8-GB laptop is unvalidated.
+
+At worldSize 256, all three production runs exceed D-25's 4-GiB envelope in
+generation and loading: sampled phase peaks range from 6.660 to 7.451 GiB and
+6.708 to 7.416 GiB respectively. All three smaller-nursery controls also fail
+those phases. At size 64, normal-content offscreen gameplay with five added
+player units reaches 3.022 GiB RSS, and loading 3.031 GiB. A separate graphics
+snapshot reports owned-unmapped allocations; unresolved counter overlap and
+external phase peaks prevent claiming complete whole-game compliance.
+
+Headless traversal holds a sampled maximum of 200 tile chunks; the offscreen
+base scenario reaches 235. Peak logical world estimates are 13.977–17.273 MiB,
+with separately sampled simulation estimates up to 1.978 MiB. These are
+unshared logical estimates with explicit object allowances, not a physical
+retained-heap census. Shared buffers and capacity prevent subtracting them
+from RSS or treating world/simulation totals as independent allocations.
+
+**Owner-accepted disposition, 2026-09-17:** retain 200 as today's locality policy,
+without blessing it as a memory-safe limit; leave the hard count/byte ceiling
+unresolved. A physical attribution experiment and representative simultaneous
+page/reservation workloads must establish non-chunk headroom first. Count alone
+does not represent variable-depth/overlay costs, but the new logical model is
+not calibrated for enforcement either. CRS-4 remains gated on a justified
+ceiling. Keep Arc B and D-20's hibernation revival deferred: the whole-process
+failure has not been attributed to the required detailed working set.
+
+The report projects fixed detailed footprints through the approved size-1024
+target without extrapolating whole-process RSS or asserting current generation/
+map support. Size 8192 remains an addressing design horizon, not supported
+whole-engine behavior. No budget, RTS default, eviction or admission behavior
+changes in this measurement slice. Processing checklist disposition remains
+the responsibility of the design-processing workflow.
 
 ## Current state and evidence
 
@@ -739,10 +794,11 @@ reconstruction, avoiding disk latency on ordinary camera movement.
 ### D-17. Measurement precedes the capacity arc
 
 Arc B's justification is that resident detailed chunks are the memory problem.
-That is currently an assumption; the only measurement taken shows 289 resident
-chunks sitting underneath a peak set by world generation itself. CRS-2 produces
-the real numbers, and Arc B does not begin until they show resident bytes at the
-targeted world sizes exceeding an acceptable ceiling.
+That remains unproven. The initial measurement showed 289 resident chunks
+underneath a world-generation peak; the CRS-2 result above adds process phase
+measurements and logical accounting without attributing the physical excess to
+detail. Arc B does not begin until the required detailed working set itself is
+shown to exceed its allowance at targeted world sizes.
 
 If they do not, Arc A still stands on its own: it fixes observed correctness
 defects that have nothing to do with how much memory a chunk costs.
@@ -800,6 +856,69 @@ The complete global map, fallback behavior, and absence of map cache holes are
 WML contracts. This arc neither duplicates those outcomes nor makes them depend
 on detailed chunks.
 
+### D-25. Target 4 GiB of whole-process resident memory in every supported phase
+
+On 2026-09-17 the owner approved **4 GiB of whole-process resident memory
+during ordinary gameplay**, then approved the same target for **world generation
+and save loading**, accepting slower generation or loading when needed to stay
+within it. These phases have no separately approved higher transient allowance.
+This is the memory envelope for the four-core laptop with 8 GB total RAM already
+selected in `gameplay_timing_design.md`, and a design target whose feasibility
+must be measured.
+
+The allowance covers the process across all resident pages and subsystems.
+CRS-2 must account for non-chunk memory before proposing the portion available
+to detailed residency. D-15's per-page implementation and its trigger for
+revisiting multi-page enforcement remain unchanged; they do not grant another
+4 GiB to each page. D-11's two chunk limits remain to be selected from evidence.
+
+Measurements must name the platform's resident-memory counter and its treatment
+of graphics/shared memory, report any game-attributable memory outside that
+counter separately, and distinguish gameplay, generation and loading peaks.
+Heap residency alone does not establish whole-process compliance. The accounting
+method and representative workloads remain CRS-2 delivery work; this decision
+does not claim a passing measurement, select a heap cap, or open Arc B's gate.
+
+### D-26. Wait for temporary pressure; refuse a footprint that cannot fit
+
+The owner approved this distinction on 2026-09-17. When a gameplay operation's
+complete required footprint can fit within the hard residency ceiling but
+competing reservations temporarily prevent admission, defer the operation and
+retry when capacity becomes available. Remove eligible unreserved chunks first
+under the existing pressure precedence. Existing reservations remain intact.
+
+If an indivisible operation's required footprint cannot fit even after eligible
+unreserved chunks are removed and competing temporary reservations are released,
+refuse it with an understandable reason rather than leaving it waiting forever.
+The low-level admission API still refuses the current attempt with its numbers;
+the gameplay caller distinguishes temporary contention from an intrinsically
+oversized request. A long journey is not permission to reserve its entire route
+at once: movement retains the finite prepared-footprint contract from the timing
+design.
+
+Waiting defers the affected operation without blocking a simulation worker or
+pausing the rest of the game. A waiting unit continues its other applicable
+simulation, including physiology and combat. CRS-4 must specify bounded pending
+state, cancellation, retry scheduling and safe reservation acquisition for each
+caller; it must demonstrate progress and avoid cycles where waiting operations
+retain reservations needed by one another. Unsupported cases return for a design
+decision. The existing dump/tooling contract remains explicit refusal with no
+partial result.
+
+### D-27. Measure on the development Mac first; validate the minimum machine later
+
+On 2026-09-17 the owner selected initial memory accounting on the development
+Mac, followed by separate validation on the 8-GB laptop target. The development
+host reports an Apple M3 Max, 16 physical CPU cores and 64 GiB RAM. Record the
+actual machine and runtime settings with every experiment; this host identity
+does not prescribe benchmark parallelism.
+
+Development measurements may identify memory owners and inform proposed chunk
+limits within D-25's unchanged 4-GiB envelope. They cannot establish acceptable
+behavior on the minimum machine. Target-machine validation remains a later
+explicit evidence step, with its machine and result retained; a workstation run
+with a heap cap is not a substitute. No target-machine pass is claimed here.
+
 ## Open questions
 
 ### Q-1. Which fields belong in `BaseChunkV1`? *(Arc B, gates CRS-10)*
@@ -826,31 +945,33 @@ stop-and-ask rule as Q-1.
 
 ### Q-3. What are the streaming target and the hard residency ceiling, numerically?
 
-Status: open. The platform memory envelope must be owner-approved before CRS-2
-can close Arc B's gate; CRS-2 then supplies the measurements used to tune the
-two runtime numbers inside that envelope.
+Status: partly resolved by D-25. The owner-approved platform memory envelope is
+4 GiB whole-process resident memory during ordinary gameplay, world generation
+and save loading. CRS-2 still supplies the accounting method and measurements
+used to tune the two runtime numbers inside that envelope.
 
 D-11 fixes the shape — two numbers, different jobs — but not their values. The
 streaming target is today's 200 and may stay there; it is a locality choice, and
 CRS-2 should confirm it is not accidentally the wrong order of magnitude. The
 hard residency ceiling must be large enough that a legitimate `--dump` region
 and every gameplay reservation fit comfortably, and small enough to prevent
-process death. Before measuring, the maintainer approves a platform memory
-envelope and the supported WML world-size range. CRS-2 measures per-chunk cost,
-projects the detailed working set against that independent envelope, and
-proposes the target and ceiling. Arc B opens only if the supported working set
-cannot remain within the approved envelope; the measurement does not choose its
-own pass threshold.
+process death. Use D-25's independently selected envelope and identify the
+applicable owner-approved WML world-size range before measuring. CRS-2 measures
+per-chunk cost and non-chunk memory, projects the detailed working set against
+the remaining allowance, and proposes the target and ceiling. Arc B opens only
+if measurements establish that detailed residency is the cause of the supported
+working set exceeding that allowance. A generation or map-memory peak alone
+does not justify chunk storage. The measurement does not choose its own pass
+threshold.
 
 ### Q-4. Should a refused reservation block or fail? *(Gates CRS-4)*
 
-Status: open, to be resolved inside CRS-4 with the callers in hand.
-
-D-11 settles that a reservation is refused rather than trimmed. It does not
-settle whether a gameplay caller that cannot fit should receive an immediate
-failure, or wait until headroom appears. A dump should fail; a unit's movement
-footprint probably should wait. CRS-4 must enumerate the callers and choose per
-caller, stopping for a decision if any caller has no safe answer.
+Status: behavior resolved by D-26. Gameplay operations defer and retry under
+temporary contention; intrinsically oversized operations fail with a clear
+reason. Dump/tooling callers retain explicit refusal. CRS-4 enumerates callers
+and establishes bounded, cancellable waiting and safe progress without revoking
+existing reservations or blocking simulation workers. Any caller for which this
+policy has no safe implementation returns for a design decision.
 
 ### Q-5. Must save capture active fluid mid-settle or force it to quiesce?
 
@@ -873,6 +994,11 @@ final stress probe.
 - Pressure-precedence tests prove the unreserved set is trimmed toward zero
   before any reservation is refused, and that an existing reservation is never
   revoked to admit a new one.
+- Gameplay pressure tests distinguish temporary contention from intrinsically
+  oversized footprints: the former retries after capacity is released, the
+  latter fails clearly. Cancellation releases pending state, retries remain
+  bounded, unrelated simulation continues, and competing acquisitions do not
+  deadlock while retaining reservations needed by each other.
 - Regression coverage proves a bare `--dump` still emits its complete 289-chunk
   default region under enforcement, and that a region exceeding the hard ceiling
   is refused rather than silently truncated. This is the specific defect that
@@ -942,10 +1068,18 @@ must preserve the dependency order and update both this plan and the ledger.
 - Report whether count or bytes is the binding constraint.
 - **Propose both of D-11's numbers** — the streaming trim target and the hard
   residency ceiling — with the measured evidence for each, for the maintainer to
-  set under Q-3. CRS-4 cannot be implemented until they exist.
+  set under Q-3. As accepted in #2625, if safe numbers cannot be justified,
+  explicitly retain them as unresolved and name the missing experiment instead
+  of inventing a limit. CRS-4 cannot be implemented until they exist.
 - Project detailed residency at the supported WML world-size range against
-  Q-3's independently approved platform memory envelope. Write the results into
-  this document and record whether Arc B's gate opens.
+  D-25's approved 4-GiB whole-process envelope, accounting for non-chunk memory.
+  Specify the resident-memory counter and graphics/shared-memory accounting;
+  report gameplay, generation and save-loading peaks separately against the
+  same target. Write the results into this document and record whether Arc B's
+  gate opens under Q-3's attribution rule.
+- Follow D-27: obtain initial accounting on the development Mac and retain
+  minimum-machine validation as separate evidence. State which conclusions the
+  development experiment supports and which still require the 8-GB laptop.
 - **Depends on:** CRS-1. **Independent** of every other Arc A slice and **can
   land first** among them.
 
@@ -975,8 +1109,11 @@ must preserve the dependency order and update both this plan and the ledger.
   hard ceiling, with its numbers, and never partially admitted. Implement the
   three-step pressure precedence, so streaming is sacrificed before any
   reservation is refused and no existing reservation is ever revoked.
-- Resolve Q-4 per caller, and migrate every existing caller of
-  `world.loadChunksInRegion` to handle a refusal rather than a count.
+- Apply D-26/Q-4 per caller, and migrate every existing caller of
+  `world.loadChunksInRegion` to handle a refusal rather than a count. Distinguish
+  temporary contention from oversized requests, specify bounded cancellation
+  and retries, and prove progress without blocking simulation workers or
+  revoking existing reservations.
 - Bound pending requests so a huge region call cannot consume unbounded memory
   before admission even runs.
 - Prove a bare `--dump` still emits its complete 289-chunk default region, and

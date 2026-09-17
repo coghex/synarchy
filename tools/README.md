@@ -4,6 +4,18 @@ Python scripts for auditing/regression-testing world generation, and for
 driving/verifying engine and game-logic behavior against a real headless
 engine instance.
 
+## Manual chunk memory measurement (#2625)
+
+`chunk_memory_measure.py` drives one fresh headless or offscreen process through
+generation, a verified traversal and save loading. Supply a committed production
+binary with `--binary`, a new `--output` directory, `--size 64|256`, and
+`--rts production|small-nursery`. Offscreen adds a five-unit gameplay interval.
+It records sampled process RSS, application accounting and raw replies; it does
+not build, enforce a budget or change runtime defaults. This is a manual
+experiment, not a CI probe. Run `python3 tools/test_chunk_memory_measure.py` for
+its focused checks. The [protocol and results](../docs/chunk_memory_measurement.md)
+define the matrix, limitations and owner disposition.
+
 ## Manual map-page codec measurement (#2303)
 
 `python3 tools/map_page_codec_measure.py --corpus-only` generates and verifies

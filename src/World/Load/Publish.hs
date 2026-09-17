@@ -35,6 +35,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (atomically, modifyTVar')
+import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Core.State (EngineEnv(..), ZoomAtlasUpload(..))
 import Engine.PlayerEvent (clearEventStoreRows)
 import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
@@ -349,12 +350,17 @@ discardStaleQueues env logger = do
     discard "unit"      (unitQueue env)
     discard "building"  (buildingQueue env)
     discard "combat"    (combatQueue env)
-    discard "simulation" (simQueue env)
+    discardWith "simulation" (simQueue env) $ \cmd → case cmd of
+        SimReadMemory reply → void (tryPutMVar reply Nothing)
+        _ → pure ()
     discard "input"     (inputQueue env)
   where
     discard ∷ Text → Q.Queue α → IO ()
-    discard label q = do
+    discard label q = discardWith label q (const (pure ()))
+    discardWith ∷ Text → Q.Queue α → (α → IO ()) → IO ()
+    discardWith label q onDiscard = do
         stale ← Q.flushQueue q
+        mapM_ onDiscard stale
         unless (null stale) $
             logWarn logger CatWorld $
                 "Load publish discarded " <> tshow (length stale)
