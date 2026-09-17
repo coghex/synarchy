@@ -4312,8 +4312,8 @@ advancing; a retired id is never reissued), and there is deliberately
 no public `power.removeNode`. Gates: `power_probe.py`,
 `power_workshop_probe.py`, `machine_shop_probe.py`, hspec
 `--match "power node demolition"`; pure algorithm in
-`Test.Headless.Power.Network`, whose seam group pairs every
-seam-crossing case with a non-wrapping control.
+`Test.Headless.Power.Network`, whose seam group restates every
+seam-crossing case at a non-wrapping world size as its control.
 
 ---
 

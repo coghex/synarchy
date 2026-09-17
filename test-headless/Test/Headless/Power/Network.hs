@@ -158,6 +158,19 @@ membershipFor wire =
 -- cardinal step) and let the shared coordinate rules name the result;
 -- a change to the wrap can't leave a hand-copied literal behind.
 
+-- | A synthetic wire tile named in the CANONICAL storage frame, from
+--   the raw coordinate that states where it physically sits.
+--
+--   Every wire set in this file goes through this, because that is the
+--   frame 'pageWireTiles' hands the real topology: a size-4 world stores
+--   chunk-u in [-2, 2), so a hand-written tile at u = 32 or beyond names
+--   an ALIAS rather than the key production would use. NODE positions
+--   are deliberately left raw — 'localSunAngle' reads u directly and an
+--   alias names the same longitude, so the #794 fixtures keep saying
+--   "one circumference apart" in the frame that makes that legible.
+canonWire ∷ (Int, Int) → (Int, Int)
+canonWire (gx, gy) = canonicalTile testWorldSize gx gy
+
 -- | The canonical name of the tile one step EAST of @(gx, gy)@.
 eastOf ∷ (Int, Int) → (Int, Int)
 eastOf (gx, gy) = canonicalTile testWorldSize (gx + 1) gy
@@ -168,10 +181,9 @@ southOf (gx, gy) = canonicalTile testWorldSize gx (gy + 1)
 
 -- | A world that does not wrap at all: 'canonicalTile' is the identity
 --   here, so the seam frame degenerates to exactly the raw cardinal
---   offsets that shipped before #2634. The two wire-run claims below
---   are each restated at this size, so the seam — and not some
---   incidental coordinate arithmetic — is demonstrably what changed the
---   answer.
+--   offsets that shipped before #2634. Every seam-CROSSING claim below
+--   is restated at this size, so the wrap — and not some incidental
+--   coordinate arithmetic — is demonstrably what changed the answer.
 nonWrappingWorldSize ∷ Int
 nonWrappingWorldSize = 0
 
@@ -584,7 +596,10 @@ spec = do
             let (n1, noonId)     = addPowerNode panel    PowerSource 400 emptyPowerNodes
                 (n2, midnightId) = addPowerNode farPanel PowerSource 400 n1
                 positions = HM.fromList [ (noonId, (32, 0)), (midnightId, (0, 0)) ]
-                wire      = HS.fromList [(33, 0), (1, 0)]  -- two disjoint single-node networks
+                -- Two disjoint single-node networks, in the storage
+                -- frame: (33, 0) is a u-alias at this world size and is
+                -- stored as (1, 32).
+                wire      = HS.fromList (map canonWire [(33, 0), (1, 0)])
                 nets = computeSnapshots testWorldSize midnight HM.empty wire n2 positions HM.empty
             case ( find (elem noonId . pnwNodeIds) nets
                  , find (elem midnightId . pnwNodeIds) nets ) of
@@ -606,7 +621,10 @@ spec = do
                 (n2, dawnId) = addPowerNode farPanel  PowerSource 150 n1
                 (n3, noonId) = addPowerNode battery   PowerSource 200 n2
                 positions = HM.fromList [ (midId, (0, 0)), (dawnId, (16, 0)), (noonId, (32, 0)) ]
-                wire = HS.fromList [ (x, 1) | x ← [0 .. 32] ]  -- one contiguous run touching all 3
+                -- One contiguous run touching all 3, canonicalised the
+                -- way the page would store it — its last tile crosses
+                -- the seam, so (32, 1) is stored as (0, 33).
+                wire = HS.fromList [ canonWire (x, 1) | x ← [0 .. 32] ]
                 nets = computeSnapshots testWorldSize midnight HM.empty wire n3 positions HM.empty
             case nets of
                 [net] → pnwGenerationW net `shouldBe` 200
@@ -616,7 +634,7 @@ spec = do
             let (n1, aId) = addPowerNode panel    PowerSource 300 emptyPowerNodes
                 (n2, bId) = addPowerNode farPanel PowerSource 300 n1
                 positions = HM.fromList [ (aId, (5, 0)), (bId, (5 + 64, 0)) ]
-                wire        = HS.fromList [(6, 0), (6 + 64, 0)]
+                wire        = HS.fromList (map canonWire [(6, 0), (6 + 64, 0)])
                 globalAngle = 0.375  -- an arbitrary non-breakpoint angle
                 nets = computeSnapshots testWorldSize globalAngle HM.empty wire n2 positions HM.empty
             case (find (elem aId . pnwNodeIds) nets, find (elem bId . pnwNodeIds) nets) of
@@ -631,7 +649,7 @@ spec = do
                 (n4, midBat)  = addPowerNode battery2 PowerStorage 5000 n3
                 positions = HM.fromList [ (noonSrc, (32, 0)), (noonBat, (32, 2))
                                         , (midSrc,  (0, 0)),  (midBat,  (0, 2)) ]
-                wire   = HS.fromList [(32, 1), (0, 1)]
+                wire   = HS.fromList (map canonWire [(32, 1), (0, 1)])
                 ticked = tickPowerNodes testWorldSize midnight HM.empty 3600 wire positions HM.empty n4
             pnStoredWh ⊚ lookupPowerNode noonBat ticked `shouldBe` Just 100
             pnStoredWh ⊚ lookupPowerNode midBat  ticked `shouldBe` Just 0
@@ -703,6 +721,12 @@ spec = do
             -- 100 W at local noon for one hour. Before #2634 the battery
             -- sat on its own sourceless component and stayed at 0.
             (pnStoredWh ⊚ lookupPowerNode batId ticked) `shouldBeStored` 100
+            -- The non-wrapping control: the identical layout in a world
+            -- with no seam leaves the battery on its own component, so
+            -- the wrap is what joined them.
+            length (computeSnapshots nonWrappingWorldSize angle HM.empty
+                        wire n2 positions HM.empty)
+                `shouldBe` 2
 
         it "the same layout away from the seam charges identically" $ do
             -- The control the seam scenario is measured against: same
@@ -735,6 +759,11 @@ spec = do
                 _     → expectationFailure
                             ("expected one network holding both nodes, got " <> show nets)
             (pnStoredWh ⊚ lookupPowerNode batId ticked) `shouldBeStored` 100
+            -- The non-wrapping control: with no seam the battery reaches
+            -- no wire at all, so only the source is on a network.
+            map pnwNodeIds (computeSnapshots nonWrappingWorldSize angle
+                                HM.empty wire n2 positions HM.empty)
+                `shouldBe` [[srcId]]
 
         it "a node SHARING a seam-canonical wire tile is still attached" $ do
             -- The tile-itself branch of attachment, exercised at the
@@ -767,6 +796,12 @@ spec = do
                             `shouldBe` HS.fromList [srcAId, batId, srcBId]
                 _     → expectationFailure
                             ("expected one seam-bridged network, got " <> show nets)
+            -- The non-wrapping control: with no seam the battery reaches
+            -- only the western stub, so there is nothing to bridge and
+            -- the two stubs stay two networks.
+            length (computeSnapshots nonWrappingWorldSize noon HM.empty
+                        wire n3 positions HM.empty)
+                `shouldBe` 2
 
         it "a consumer touching both stubs across the seam joins one of them and merges neither" $ do
             -- The paired CONTROL for the bridging case above, at the
@@ -821,3 +856,10 @@ spec = do
             -- stores over the very same tick.
             (pnStoredWh ⊚ lookupPowerNode batId withConsumer) `shouldBeStored` 60
             (pnStoredWh ⊚ lookupPowerNode batId without) `shouldBeStored` 100
+            -- The non-wrapping control: with no seam the workshop
+            -- touches no wire, so it is dropped and the network draws
+            -- nothing.
+            map (\net → (pnwConsumerIds net, pnwDrainW net))
+                (computeSnapshots nonWrappingWorldSize angle HM.empty
+                    wire n2 positions consumers)
+                `shouldBe` [([], 0)]
