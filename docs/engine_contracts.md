@@ -3358,6 +3358,27 @@ outcome aggregates every failing module, and `reconciliationFailures`
 carries the per-module `{module, error}` breakdown. Callback isolation is
 unchanged: the broadcast still attempts every module.
 
+**A failure inside the `saveLoaded` teardown sweep is part of that
+aggregated outcome (#2645).** `uiManager.onSaveLoaded` ends by running
+the `"saveLoaded"` transition of `scripts/ui/view_teardown.lua`, which
+clears the session-bound UI surfaces a load replaces (#2156). Those hooks
+stay pcall-isolated and individually logged, and every one of them still
+runs when an earlier one raises — but the sweep now RETURNS its failures
+and `onSaveLoaded` re-raises them, so an incompletely cleared surface
+reaches `LoadReconciliationFailed` instead of being logged under an
+unqualified `LoadPublished` / `LoadSucceeded`. The re-raise happens after
+the whole sweep and after the world/HUD rebinding, latch release, tool
+reset and container close, so only the OUTCOME changes. Because
+`reconciliationFailures` is keyed per module, the whole sweep is ONE
+entry whose `module` is `scripts/ui_manager.lua` and whose `error` names
+every failing registry hook with its own error text; there are no
+separate per-hook entries. `LoadReconciliationIncomplete`, the unset
+`failedAtPhase` and the completed (non-blocking) transaction status are
+exactly as they are for any other reconciliation failure. The registry's
+other transitions — `hudHide`, `zoomBand`, `menu`, `resize`, and the
+#1610 Exit-to-Menu registry — keep their log-and-continue behavior: they
+sit inside no transaction and propagate nothing.
+
 **Storage failures name their `StoragePhase`** through
 `engine.getSaveStatus()`. A corrupt authoritative file falls back to
 `.prev` and says so loudly (`recovered` in `engine.listSaves()`); an
@@ -3445,7 +3466,10 @@ likewise runs inside the publish itself.
 Gates: hspec `--match "save snapshot barrier"` (the bare-barrier park
 protocol in `Test.Headless.Save.Barrier`, and the owner-loop
 consequences driven through the real tick entry points in
-`Test.Headless.Save.OwnerPark`); `tools/save_barrier_probe.py`,
+`Test.Headless.Save.OwnerPark`); `--match "LuaSaveLoaded reconciliation
+failure disposition"` and `--match "load replacement clears transient
+session surfaces"` (the reconciliation terminal itself, and the
+`saveLoaded` sweep's contribution to it); `tools/save_barrier_probe.py`,
 `tools/transactional_load_probe.py`.
 
 ---
