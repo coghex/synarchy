@@ -27,6 +27,7 @@ import World.Edit.Apply (replayEdits)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
+import World.Generate.Coordinates (canonicalTile)
 import World.Tile.Types (WorldTileData(..))
 
 panel, battery, battery2, farPanel, workshop, workshop2 ∷ BuildingId
@@ -146,6 +147,60 @@ membershipFor wire =
     in map (HS.fromList . pnwNodeIds)
            (computeSnapshots testWorldSize noon HM.empty wire n2 positions HM.empty)
 
+-- Cylindrical-seam fixtures (#2634) ------------------------------------
+--
+-- 'testWorldSize' = 4 chunks wraps u = gx - gy with a period of
+-- 4 * 'chunkSize' = 64 tiles, so canonical chunk-u lives in [-2, 2) and
+-- the seam falls between tile (31, 0) and its EASTERN neighbour, whose
+-- canonical name is (0, 32) — a whole world away in raw coordinates.
+-- Every seam coordinate below is DERIVED through 'canonicalTile' rather
+-- than written out, so the fixtures state the physical layout (take one
+-- cardinal step) and let the shared coordinate rules name the result;
+-- a change to the wrap can't leave a hand-copied literal behind.
+
+-- | The canonical name of the tile one step EAST of @(gx, gy)@.
+eastOf ∷ (Int, Int) → (Int, Int)
+eastOf (gx, gy) = canonicalTile testWorldSize (gx + 1) gy
+
+-- | The canonical name of the tile one step SOUTH of @(gx, gy)@.
+southOf ∷ (Int, Int) → (Int, Int)
+southOf (gx, gy) = canonicalTile testWorldSize gx (gy + 1)
+
+-- | A world that does not wrap at all: 'canonicalTile' is the identity
+--   here, so the seam frame degenerates to exactly the raw cardinal
+--   offsets that shipped before #2634. The two wire-run claims below
+--   are each restated at this size, so the seam — and not some
+--   incidental coordinate arithmetic — is demonstrably what changed the
+--   answer.
+nonWrappingWorldSize ∷ Int
+nonWrappingWorldSize = 0
+
+-- | The global sun angle at which @(gx, gy)@ reads LOCAL noon.
+--
+--   A seam fixture cannot put its source at u = 0 the way the
+--   pre-#794 tests do — it has to stand beside the seam, at u ≈ ±32 —
+--   so the global clock is solved for instead. Phasing the SOURCE
+--   (never the battery, whose tile has no bearing on generation) keeps
+--   every seam scenario at full output, and the away-from-seam control
+--   is phased through this same helper for its own u, so the two
+--   differ only in where they sit. All the values involved are exact
+--   multiples of 1/64, so this is not an approximation.
+globalAngleForLocalNoon ∷ (Int, Int) → Float
+globalAngleForLocalNoon (gx, gy) =
+    let circumference = fromIntegral (testWorldSize * chunkSize) ∷ Float
+        raw = noon - fromIntegral (gx - gy) / circumference
+    in raw - fromIntegral (floor raw ∷ Int)
+
+-- | Stored charge to within a tolerance — generation rides on a cosine
+--   of a solved-for angle, so an exact literal would be asserting the
+--   float arithmetic rather than the connectivity.
+shouldBeStored ∷ Maybe Float → Float → Expectation
+shouldBeStored actual expected = case actual of
+    Just got | abs (got - expected) < 1.0e-3 → pure ()
+    _ → expectationFailure
+            ("expected stored charge of about " <> show expected
+              <> ", got " <> show actual)
+
 spec ∷ Spec
 spec = do
     describe "solarIntensity" $ do
@@ -161,18 +216,20 @@ spec = do
 
     describe "wireComponents" $ do
         it "an empty tile set has no components" $
-            wireComponents HS.empty `shouldBe` []
+            wireComponents testWorldSize HS.empty `shouldBe` []
 
         it "a straight run of wire is one component" $
-            wireComponents (HS.fromList [(0,0), (1,0), (2,0)])
+            wireComponents testWorldSize (HS.fromList [(0,0), (1,0), (2,0)])
                 `shouldBe` [HS.fromList [(0,0), (1,0), (2,0)]]
 
         it "two disjoint runs are two components" $
-            length (wireComponents (HS.fromList [(0,0), (1,0), (10,10), (11,10)]))
+            length (wireComponents testWorldSize
+                        (HS.fromList [(0,0), (1,0), (10,10), (11,10)]))
                 `shouldBe` 2
 
         it "diagonal-only tiles do NOT connect (4-dir adjacency only)" $
-            length (wireComponents (HS.fromList [(0,0), (1,1)])) `shouldBe` 2
+            length (wireComponents testWorldSize (HS.fromList [(0,0), (1,1)]))
+                `shouldBe` 2
 
     describe "computeSnapshots — connectivity" $ do
         it "a source and a battery joined by ONE wire tile share a network" $ do
@@ -578,3 +635,189 @@ spec = do
                 ticked = tickPowerNodes testWorldSize midnight HM.empty 3600 wire positions HM.empty n4
             pnStoredWh ⊚ lookupPowerNode noonBat ticked `shouldBe` Just 100
             pnStoredWh ⊚ lookupPowerNode midBat  ticked `shouldBe` Just 0
+
+    describe "cylindrical seam connectivity (#2634)" $ do
+        -- The seam pair every scenario below is built from: (31, 0) and
+        -- the tile one step EAST of it, whose canonical name is a whole
+        -- world away. Before #2634 power connectivity compared raw
+        -- (x + 1, y) keys, so these two were never neighbours and a wire
+        -- run, node, or consumer crossing here split in half — while
+        -- placement and autotiling, which already resolved the same
+        -- neighbours canonically, drew it as one continuous run.
+        let seamWest = (31, 0) ∷ (Int, Int)
+            seamEast = eastOf seamWest
+
+        it "the two tiles the seam separates really do have distant canonical keys" $ do
+            -- Guards every fixture below: if these ever became ordinary
+            -- (x, y)/(x + 1, y) neighbours, the rest of this group would
+            -- pass without exercising the seam at all.
+            seamEast `shouldSatisfy` (\(ex, ey) → abs (ex - 31) > 1 ∨ ey ≢ 0)
+            canonicalTile testWorldSize 31 0 `shouldBe` seamWest
+
+        it "a wire run crossing the seam is ONE component" $
+            length (wireComponents testWorldSize (HS.fromList [seamWest, seamEast]))
+                `shouldBe` 1
+
+        it "the same two tiles are TWO components in a non-wrapping world" $
+            -- The control for the assertion above: with no wrap the
+            -- canonical step is the identity, so the distant keys stay
+            -- distant and the pre-#2634 answer is the right one.
+            length (wireComponents nonWrappingWorldSize
+                        (HS.fromList [seamWest, seamEast]))
+                `shouldBe` 2
+
+        it "a wire run crossing the seam along the OTHER axis is one component too" $ do
+            -- The wrap is on u = gx - gy, so a southward step crosses it
+            -- at a different place than an eastward one; cardinal
+            -- adjacency has to hold on both axes.
+            let vWest = (0, 47) ∷ (Int, Int)
+                vEast = southOf vWest
+            vEast `shouldSatisfy` (\(ex, ey) → ex ≢ 0 ∨ abs (ey - 47) > 1)
+            length (wireComponents testWorldSize (HS.fromList [vWest, vEast]))
+                `shouldBe` 1
+            length (wireComponents nonWrappingWorldSize
+                        (HS.fromList [vWest, vEast]))
+                `shouldBe` 2
+
+        it "diagonal-only tiles still do NOT connect across the seam" $
+            -- Seam-awareness widens WHICH keys count as cardinal
+            -- neighbours; it must not widen the 4-dir shape itself.
+            length (wireComponents testWorldSize
+                        (HS.fromList [seamWest, southOf seamEast]))
+                `shouldBe` 2
+
+        it "a source and battery on opposite sides of a seam-crossing run share a network, and it charges" $ do
+            let source    = (30, 0)
+                batteryAt = eastOf seamEast
+                (n1, srcId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, batId) = addPowerNode battery PowerStorage 5000 n1
+                positions   = HM.fromList [(srcId, source), (batId, batteryAt)]
+                wire        = HS.fromList [seamWest, seamEast]
+                angle       = globalAngleForLocalNoon source
+                nets = computeSnapshots testWorldSize angle HM.empty wire n2 positions HM.empty
+                ticked = tickPowerNodes testWorldSize angle HM.empty 3600 wire positions HM.empty n2
+            case nets of
+                [net] → HS.fromList (pnwNodeIds net) `shouldBe` HS.fromList [srcId, batId]
+                _     → expectationFailure
+                            ("expected exactly one network across the seam, got " <> show nets)
+            -- 100 W at local noon for one hour. Before #2634 the battery
+            -- sat on its own sourceless component and stayed at 0.
+            (pnStoredWh ⊚ lookupPowerNode batId ticked) `shouldBeStored` 100
+
+        it "the same layout away from the seam charges identically" $ do
+            -- The control the seam scenario is measured against: same
+            -- shape, same wattage, same one-hour tick, ordinary interior
+            -- coordinates, and its source phased to its OWN local noon
+            -- (u differs, so the global angle must).
+            let source      = (1, 0)
+                (n1, srcId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, batId) = addPowerNode battery PowerStorage 5000 n1
+                positions   = HM.fromList [(srcId, source), (batId, (4, 0))]
+                wire        = HS.fromList [(2, 0), (3, 0)]
+                angle       = globalAngleForLocalNoon source
+                ticked = tickPowerNodes testWorldSize angle HM.empty 3600 wire positions HM.empty n2
+            (pnStoredWh ⊚ lookupPowerNode batId ticked) `shouldBeStored` 100
+
+        it "a node attaches to a wire tile that is only its neighbour across the seam" $ do
+            -- One wire tile, no run: the battery's attachment is the
+            -- whole question, and the source stands on the other side of
+            -- that same tile away from the seam.
+            let source      = (30, 0)
+                (n1, srcId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, batId) = addPowerNode battery PowerStorage 5000 n1
+                positions   = HM.fromList [(srcId, source), (batId, seamEast)]
+                wire        = HS.singleton seamWest
+                angle       = globalAngleForLocalNoon source
+                nets = computeSnapshots testWorldSize angle HM.empty wire n2 positions HM.empty
+                ticked = tickPowerNodes testWorldSize angle HM.empty 3600 wire positions HM.empty n2
+            case nets of
+                [net] → HS.fromList (pnwNodeIds net) `shouldBe` HS.fromList [srcId, batId]
+                _     → expectationFailure
+                            ("expected one network holding both nodes, got " <> show nets)
+            (pnStoredWh ⊚ lookupPowerNode batId ticked) `shouldBeStored` 100
+
+        it "a node SHARING a seam-canonical wire tile is still attached" $ do
+            -- The tile-itself branch of attachment, exercised at the
+            -- seam: canonicalising the neighbours must not cost a node
+            -- the overlay it is standing on.
+            let (n1, srcId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                positions   = HM.singleton srcId seamEast
+                wire        = HS.singleton seamEast
+                nets = computeSnapshots testWorldSize noon HM.empty wire n1 positions HM.empty
+            map pnwNodeIds nets `shouldBe` [[srcId]]
+
+        it "a node bridges two wire stubs that only the seam frame puts on either side of it" $ do
+            -- (30, 0) and the tile two steps east of it are separate
+            -- components; the battery between them touches one by an
+            -- ordinary step and the other only across the seam, and must
+            -- merge them into ONE network rather than attach twice.
+            let stubWest = (30, 0)
+                stubEast = eastOf seamWest
+                (n1, srcAId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, srcBId) = addPowerNode farPanel PowerSource 100 n1
+                (n3, batId)  = addPowerNode battery PowerStorage 5000 n2
+                positions = HM.fromList [ (srcAId, (29, 0))
+                                        , (batId,  seamWest)
+                                        , (srcBId, eastOf stubEast) ]
+                wire = HS.fromList [stubWest, stubEast]
+                nets = computeSnapshots testWorldSize noon HM.empty wire n3 positions HM.empty
+            length (wireComponents testWorldSize wire) `shouldBe` 2
+            case nets of
+                [net] → HS.fromList (pnwNodeIds net)
+                            `shouldBe` HS.fromList [srcAId, batId, srcBId]
+                _     → expectationFailure
+                            ("expected one seam-bridged network, got " <> show nets)
+
+        it "a consumer touching both stubs across the seam joins one of them and merges neither" $ do
+            -- The paired CONTROL for the bridging case above, at the
+            -- identical geometry with a workshop in the bridging tile
+            -- instead of a node. A consumer is a passive tap, so the two
+            -- stubs must stay two networks and its drain be counted
+            -- exactly once — an answer seam-awareness must NOT change,
+            -- which is the point: it holds before and after #2634, while
+            -- the node in the same tile only merges afterwards.
+            let stubWest = (30, 0)
+                stubEast = eastOf seamWest
+                (n1, srcAId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, srcBId) = addPowerNode farPanel PowerSource 100 n1
+                positions = HM.fromList [ (srcAId, (29, 0))
+                                        , (srcBId, eastOf stubEast) ]
+                wire      = HS.fromList [stubWest, stubEast]
+                consumers = HM.singleton workshop (seamWest, 40)
+                nets = computeSnapshots testWorldSize noon HM.empty wire n2 positions consumers
+            length nets `shouldBe` 2
+            concatMap pnwConsumerIds nets `shouldBe` [workshop]
+            sum (map pnwDrainW nets) `shouldBe` 40
+            HS.fromList (concatMap pnwNodeIds nets)
+                `shouldBe` HS.fromList [srcAId, srcBId]
+
+        it "a consumer attaches across the seam: its drain lands in the snapshot AND in the battery" $ do
+            -- Requirement 2 for consumers, stated so that omitting the
+            -- consumer could not also pass: the snapshot must NAME it and
+            -- carry its drain, and the same layout with and without it
+            -- must charge the battery by exactly that drain's worth less
+            -- under otherwise identical surplus generation.
+            let source      = (30, 0)
+                (n1, srcId) = addPowerNode panel PowerSource 100 emptyPowerNodes
+                (n2, batId) = addPowerNode battery PowerStorage 5000 n1
+                positions   = HM.fromList [(srcId, source), (batId, southOf seamWest)]
+                wire        = HS.singleton seamWest
+                consumers   = HM.singleton workshop (seamEast, 40)
+                angle       = globalAngleForLocalNoon source
+                nets = computeSnapshots testWorldSize angle HM.empty wire n2 positions consumers
+                withConsumer = tickPowerNodes testWorldSize angle HM.empty 3600
+                                              wire positions consumers n2
+                without = tickPowerNodes testWorldSize angle HM.empty 3600
+                                         wire positions HM.empty n2
+            case nets of
+                [net] → do
+                    pnwConsumerIds net `shouldBe` [workshop]
+                    pnwDrainW net `shouldBe` 40
+                    pnwGenerationW net `shouldBe` 100
+                _ → expectationFailure
+                        ("expected exactly one network, got " <> show nets)
+            -- 100 W generated, 40 W drawn, one hour => 60 Wh stored, a
+            -- full 40 Wh below the 100 Wh the consumer-free control
+            -- stores over the very same tick.
+            (pnStoredWh ⊚ lookupPowerNode batId withConsumer) `shouldBeStored` 60
+            (pnStoredWh ⊚ lookupPowerNode batId without) `shouldBeStored` 100
