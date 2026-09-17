@@ -217,7 +217,7 @@ unshared logical estimates with explicit object allowances, not a physical
 retained-heap census. Shared buffers and capacity prevent subtracting them
 from RSS or treating world/simulation totals as independent allocations.
 
-**Proposed disposition, awaiting owner:** retain 200 as today's locality policy,
+**Owner-accepted disposition, 2026-09-17:** retain 200 as today's locality policy,
 without blessing it as a memory-safe limit; leave the hard count/byte ceiling
 unresolved. A physical attribution experiment and representative simultaneous
 page/reservation workloads must establish non-chunk headroom first. Count alone

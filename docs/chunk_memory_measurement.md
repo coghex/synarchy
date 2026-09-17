@@ -365,7 +365,10 @@ leak finding. Settled post-load headless observations show the new incarnation
 with 25 tile and simulation chunks and no unmatched current-incarnation keys.
 Old simulation replies visible during cutover remain explicitly unmatched.
 
-### Proposed disposition — awaiting owner
+### Owner-accepted disposition, 2026-09-17
+
+The owner accepted the following measured outcome and authorized continuing
+through review and merge. The 4-GiB whole-process target remains unchanged.
 
 - **Streaming trim target:** retain today's 200 solely as the existing locality
   policy while Arc A proceeds. This measurement does not validate it as a
@@ -387,5 +390,6 @@ Old simulation replies visible during cutover remain explicitly unmatched.
 - **Minimum machine:** four-core/8-GB laptop validation remains outstanding,
   as do a representative busy 50-unit colony and measured size-1024 behavior.
 
-The owner must disposition this proposal before final PR review. All measurement
-cells are complete; required documentation and evidence stay in this code PR.
+All measurement cells and the required owner disposition are complete. Required
+documentation and evidence stay in this code PR; later enforcement and minimum-
+machine validation remain separate work.
