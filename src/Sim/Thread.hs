@@ -67,6 +67,7 @@ import Sim.Fluid.Active (simulateActiveTick)
 import Sim.Fluid.Reaction (ReactionResult(..), groupReactionResults)
 import Sim.Chunk (applyChunkEdit, applyReactionCommit, loadedChunkState
                  , reactivateSettleTicks)
+import Sim.Memory (captureSimMemory)
 
 -- | Hard cap on synchronous settle iterations for 'SimFastSettleAll'
 --   (the dump path) — a safety net against runaway settling, not
@@ -228,6 +229,7 @@ handleSimCommand ∷ EngineEnv → LoggerState → IORef SimState → SimCommand
 handleSimCommand env logger simStateRef cmd = do
     ss ← readIORef simStateRef
     case cmd of
+        SimReadMemory reply → captureSimMemory ss ≫= putMVar reply . Just
         SimActivateWorld pid epoch topo → do
             -- Re-trigger settle so this world's existing chunks get
             -- simulated now that writeback is possible. Activation is

@@ -484,6 +484,12 @@ one for documentation's sake.
 |---|---|---|---|---|
 | `LuaCallStats` local `IORef CallWindow` (reset epoch, sequence, per-verb counts and inclusive durations) | `Engine.Scripting.Lua.API.registerLuaAPI` allocates one ref shared by registration closures; only the owning Lua thread reads/writes it | Exclude | Diagnostic runtime state, never serialized. Starts empty on runtime creation, retains its observation window across game-session replacement, clears rows and advances epoch/sequence on explicit `debug.resetLuaCallStats()`, and is released with the runtime. No gameplay identities or arguments are retained. | Hspec `Lua.CallStats` |
 
+### Chunk memory observation window (#2625)
+
+| State | Owner | Classification | Lifetime and restoration | Gate |
+|---|---|---|---|---|
+| `ChunkMemoryWindow` local ref (sample window, scalar page high-water rows, one pending simulation reply and last scalar snapshot) | `Engine.Scripting.Lua.API.Register.World`; owning Lua thread only, simulation thread fills its reply | Exclude | Created per Lua runtime; explicit `world.resetChunkMemoryWindow()` clears samples. Page rows are pruned on the next sample and keyed by incarnation. Process peaks retain the explicitly named window across session replacement. No terrain/fluid payload is retained. A load-discarded `SimReadMemory` receives cancellation, allowing the next query to resume; replies from old incarnations never count as current-page simulation. Released with the runtime. | Hspec `chunk residency accounting` |
+
 ## 7. Lua persistence registry (`scripts/lib/save_modules.lua`)
 
 Since issue #761 (save-overhaul B3) this is a versioned, scoped,

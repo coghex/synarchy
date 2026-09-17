@@ -14,6 +14,7 @@ import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Internal (FluidMap)
 import Sim.Topology (SimTopology)
+import Sim.Memory (SimMemory)
 
 data SimCommand
     = SimActivateWorld !WorldPageId !ChunkGeneration !SimTopology
@@ -116,6 +117,9 @@ data SimCommand
         --   ssPaused, and publishes the 'FastSettleOutcome'. Used by dump
         --   mode to get a stable simulation state without waiting for the
         --   live sim loop.
+    | SimReadMemory !(MVar (Maybe SimMemory))
+        -- ^ Observational, scalar-only snapshot; never changes simulation.
+        -- Nothing cancels a request discarded at load publication.
 
 -- | One participating chunk of a committed reaction result (#2485).
 data ReactionChunkSync = ReactionChunkSync
@@ -190,3 +194,4 @@ instance Show SimCommand where
     show SimPause  = "SimPause"
     show SimResume = "SimResume"
     show (SimFastSettleAll _) = "SimFastSettleAll"
+    show (SimReadMemory _) = "SimReadMemory"

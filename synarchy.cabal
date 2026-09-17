@@ -387,6 +387,7 @@ library
                      Engine.Scripting.Lua.API.Descriptor
                      Engine.Scripting.Lua.CallStats
                      Engine.Scripting.Lua.API.CallStats
+                     Engine.Scripting.Lua.API.ChunkMemory
                      Engine.Scripting.Lua.API.Internal
                      Engine.Scripting.Lua.API.Namespaces
                      Engine.Scripting.Lua.API.PageBinding
@@ -776,6 +777,7 @@ library
                      Combat.Wounds.Sever
                      Combat.Wounds.Tick
                      Sim.State.Types
+                     Sim.Memory
                      Sim.Topology
                      Sim.Chunk
                      Sim.Fluid.Types
@@ -787,6 +789,7 @@ library
                      World.Chunk.Types
                      World.Chunk.Queue
                      World.Chunk.Residency
+                     World.Chunk.Memory
                      World.Chunk.Admit
                      World.Cursor.Types
                      World.GroundItems
@@ -1546,6 +1549,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkIdentity
+                   Test.Headless.World.ChunkMemory
                    Test.Headless.World.ChunkPageBinding
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam

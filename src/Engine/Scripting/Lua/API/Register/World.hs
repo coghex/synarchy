@@ -6,6 +6,8 @@ import Engine.Core.Capability.Core (toCoreCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
+import Engine.Scripting.Lua.API.ChunkMemory
+    (newChunkMemoryWindow, getChunkMemoryFn, resetChunkMemoryWindowFn)
 import Engine.Scripting.Lua.API.World
 import Engine.Scripting.Lua.API.WorldQuery
 import Engine.Scripting.Lua.API.Forage
@@ -26,7 +28,10 @@ import qualified HsLua as Lua
 --   already takes it.
 registerWorldAPI ∷ LuaCallStats → EngineEnv → LuaBackendState → Lua.LuaE Lua.Exception ()
 registerWorldAPI callStats env backendState = do
+  chunkMemory ← Lua.liftIO newChunkMemoryWindow
   Lua.newtable
+  registerLuaFunction callStats "world" "getChunkMemory" (getChunkMemoryFn chunkMemory (toWorldSimCapability env))
+  registerLuaFunction callStats "world" "resetChunkMemoryWindow" (resetChunkMemoryWindowFn chunkMemory)
   registerLuaFunction callStats "world" "getGenDefaults" (worldGetGenDefaultsFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "setGenConfig" (worldSetGenConfigFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "init" (worldInitFn env)

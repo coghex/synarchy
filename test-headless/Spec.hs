@@ -138,6 +138,7 @@ import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispa
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ChunkIdentity as ChunkIdentity
+import qualified Test.Headless.World.ChunkMemory as ChunkMemory
 import qualified Test.Headless.World.ChunkPageBinding as ChunkPageBinding
 import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
@@ -1086,6 +1087,7 @@ main = hspec $ do
     UISlider.spec
     UIBarFillColor.spec
     LuaCallStats.spec
+    ChunkMemory.spec
     LuaUiDescriptors.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
