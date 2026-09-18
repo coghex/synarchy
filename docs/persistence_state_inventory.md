@@ -523,8 +523,10 @@ one: a separate id namespace, its own invocation path
 independence is what lets the durable `unit_ai` and `building_spawn`
 COMPONENTS opt in — `registerResetHook` refuses an id a save component
 already owns — without touching their registration, payload version, or
-load rollback semantics. Five modules register today: `unit_ai`,
-`building_spawn`, `build_tool`, `mine_tool`, `transfer_session`. The
+load rollback semantics. Six modules register today: `unit_ai`,
+`building_spawn`, `build_tool`, `mine_tool`, `transfer_session`, and
+`unit_resources` (#2633, registered under the id its `resetHooks` entry
+already uses — one clear shared by both boundaries). The
 boundary runs BEFORE `world.destroyAll` so every callback still sees a
 live session, each callback is independently `pcall`ed, and it adds
 nothing at all to the load path. It is NOT scanned by
