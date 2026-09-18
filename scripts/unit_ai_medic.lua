@@ -166,6 +166,15 @@ end
 -- the patient itself, the dead/collapsed, NON-allies, medics in combat,
 -- and medics already committed to a different patient. Returns the uid,
 -- or nil if nobody can help. `params` supplies treat_scan_range.
+--
+-- #2643: treat_scan_range is also a HARD cutoff here, not just the
+-- discount's denominator. findPatient applies the same inclusive
+-- boundary when a medic looks for work, so a medic ranked from beyond
+-- it can never discover the patient that ranked it -- and because
+-- treatAllyUtility silences every medic but this one, the nearby medic
+-- would stand down for a helper that never arrives and the patient
+-- would go untreated for as long as that arrangement held. Ranking the
+-- same set discovery does keeps the two halves in agreement.
 local function bestMedicFor(patientUid, params)
     local pinfo = unit.getInfo(patientUid)
     -- #2297: a patient whose own projection cannot be read has no page
@@ -188,9 +197,14 @@ local function bestMedicFor(patientUid, params)
                 if cap > 0 then
                     local d = distance(pinfo.gridX, pinfo.gridY,
                                        minfo.gridX, minfo.gridY)
-                    local score = cap * (1 - 0.5 * math.min(1, d / range))
-                    if score > bestScore then
-                        bestUid, bestScore = uid, score
+                    -- Inclusive, matching findPatient's own `d <= bestD`
+                    -- against the same range: a medic exactly on the
+                    -- boundary discovers the patient, so it ranks too.
+                    if d <= range then
+                        local score = cap * (1 - 0.5 * math.min(1, d / range))
+                        if score > bestScore then
+                            bestUid, bestScore = uid, score
+                        end
                     end
                 end
             end
