@@ -102,24 +102,44 @@ end
 -- say so, and the only Lua-reachable writes into `uiStats` are these
 -- verbs.
 --
--- Split by what the verb knows: the two that name a stat drop only
--- that entry, the three that rewrite a unit's stats wholesale drop the
--- unit's. `commitStamina` is absent deliberately -- stamina never takes
--- this path at all (unit_resource_tick.lua) and so never has an entry
--- to invalidate. `unit.spawn` is absent because a new unit's pool is
--- filled by tickResource's own first-tick branch, which writes through
--- `setStat` and therefore through this barrier.
+-- Each wrapper drops ONLY what its verb actually writes. Nothing here
+-- may invalidate more than that: a verb that runs every cadence and
+-- clears the whole unit would discard the previous cadence's remainder
+-- before it could ever be used, silently restoring the very
+-- cadence-dependence this module exists to remove. `recoverStance` is
+-- exactly that shape -- unit_resource_injury.tickStance calls it on
+-- every unit on every tick, before the resources tick -- which is why
+-- it is scoped to the one stat it writes rather than to the unit.
 --
--- Read verbs are NOT wrapped: over-invalidating would quietly turn the
--- carry back off, which is the defect this module exists to fix.
+-- The verbs deliberately absent, and why none of them can carry a
+-- remainder away:
+--
+--   * `commitStamina` -- stamina never takes this path at all
+--     (unit_resource_tick.lua), so it never has an entry.
+--   * `recoverStance` -- writes only `stance`, which no resource
+--     config ticks, so there is never an entry under that name.
+--   * `recomputeBody` -- writes `strength`, `strength_base`,
+--     `strength_body`, `carrying_capacity` and the `max_*` pool SIZES
+--     (Unit.Thread.Command.Body.recomputeBodyDerivedStats). A pool's
+--     maximum is not the pool, and none of those names is a ticked
+--     resource.
+--   * `spawn` -- a new unit's pool is filled by tickResource's own
+--     first-tick branch, which writes through `setStat` and therefore
+--     through this barrier.
+--
+-- Read verbs are NOT wrapped, for the same reason: over-invalidating
+-- quietly turns the carry back off.
 -----------------------------------------------------------
 
---: `unit.<verb>(uid, statName, ...)` -- invalidates that one resource.
+--: `unit.<verb>(uid, statName, ...)` -- the caller names the stat, so
+--: only that resource's remainder goes.
 local NAME_SCOPED_WRITERS = { "setStat", "addXP" }
 
---: `unit.<verb>(uid, ...)` -- rewrites stats this module cannot name
---: individually, so the whole unit's remainders go.
-local UNIT_SCOPED_WRITERS = { "feed", "recomputeBody", "recoverStance" }
+--: `unit.<verb>(uid, ...)` -- writes a fixed stat the caller does not
+--: name. `unit.feed` credits `hunger`
+--: (Engine.Scripting.Lua.API.Units.Survival), a resource the acolyte
+--: config ticks.
+local FIXED_STAT_WRITERS = { feed = "hunger" }
 
 --: verb name → true once wrapped. Also the assertable record of what
 --: the barrier actually covers in a live VM.
@@ -141,11 +161,11 @@ function M.installWriteBarrier()
             wrapped[verb] = true
         end
     end
-    for _, verb in ipairs(UNIT_SCOPED_WRITERS) do
+    for verb, statName in pairs(FIXED_STAT_WRITERS) do
         local raw = unit[verb]
         if not wrapped[verb] and type(raw) == "function" then
             unit[verb] = function(uid, ...)
-                M.forget(uid)
+                M.forget(uid, statName)
                 return raw(uid, ...)
             end
             wrapped[verb] = true
@@ -159,12 +179,17 @@ end
 -- than only through the arithmetic they protect.
 function M.writeBarrierStatus()
     local declared, missing = {}, {}
-    for _, list in ipairs({ NAME_SCOPED_WRITERS, UNIT_SCOPED_WRITERS }) do
-        for _, verb in ipairs(list) do
-            declared[#declared + 1] = verb
-            if not wrapped[verb] then missing[#missing + 1] = verb end
-        end
+    local function note(verb)
+        declared[#declared + 1] = verb
+        if not wrapped[verb] then missing[#missing + 1] = verb end
     end
+    for _, verb in ipairs(NAME_SCOPED_WRITERS) do note(verb) end
+    -- Sorted so the reported order is the table's content, not its
+    -- hash order.
+    local fixed = {}
+    for verb in pairs(FIXED_STAT_WRITERS) do fixed[#fixed + 1] = verb end
+    table.sort(fixed)
+    for _, verb in ipairs(fixed) do note(verb) end
     return { declared = declared, missing = missing }
 end
 

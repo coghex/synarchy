@@ -43,7 +43,8 @@ import Data.IORef (readIORef, writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Test.Headless.Harness
+    (installHudWorldPage, withHeadlessEngineNoWorld)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Command.Types (UnitCommand(..))
@@ -162,6 +163,31 @@ resetSceneWith env stats = do
 resetScene ∷ EngineEnv → Float → IO ()
 resetScene env start = resetSceneWith env (statsWith start)
 
+-- | @installHudWorldPage@'s page id. @unit.getAllIds@ — which
+--   @unitResources.update@ iterates — answers for the ACTIVE page only,
+--   so §9's unit has to stand on it.
+activePageId ∷ WorldPageId
+activePageId = WorldPageId "main_world"
+
+-- | §9's scene: the same unit, on the page the real update loop can
+--   see. @max_stamina@ is left undefined on purpose — the squirrel's
+--   stamina entry then returns before any engine call, so the one pool
+--   these examples measure is the sub-threshold @sleep_pressure@ one.
+resetSceneOnActivePage ∷ EngineEnv → IO ()
+resetSceneOnActivePage env = do
+    installHudWorldPage env
+    -- The shipped update loop early-returns on scripts.pause, which
+    -- defers to this flag; a headless engine boots paused.
+    writeIORef (enginePausedRef env) False
+    writeIORef (gameTimeRef env) 0
+    writeIORef (unitManagerRef env) emptyUnitManager
+        { umDefs = HM.singleton "red_squirrel"
+                       (minimalDef "red_squirrel" "Red Squirrel")
+        , umInstances = HM.singleton squirrelUid
+            (mkSquirrel (statsWith maxPool)) { uiPage = activePageId } }
+    _ ← Q.flushQueue (unitQueue env)
+    pure ()
+
 -- * Live readers
 
 storedStat ∷ EngineEnv → Text → IO (Maybe Float)
@@ -260,6 +286,33 @@ externalWrite ∷ LuaBackendState → Float → IO ()
 externalWrite ls v = do
     r ← evalDebug ls $ T.concat
         [ "unit.setStat(1, 'sleep_pressure', ", tshow v, "); return true" ]
+    r `shouldBe` "true"
+
+-- | §9's plumbing: the real @scripts.unit_resources@ orchestration
+--   module, plus a counter on @unit.recoverStance@ so the examples can
+--   show the cadence-per-tick write really is happening while the
+--   remainder survives it. The counter is installed AFTER the modules
+--   load, so it wraps whatever the carry barrier left in place.
+setupUpdateLoop ∷ EngineEnv → IO LuaBackendState
+setupUpdateLoop env = do
+    ls ← setupLua env
+    r ← evalDebug ls $ T.concat
+        [ "_G.__res = require('scripts.unit_resources'); "
+        , "_G.__stanceCalls = 0; "
+        , "local rawStance = unit.recoverStance; "
+        , "unit.recoverStance = function(uid, amt) "
+        , "  _G.__stanceCalls = _G.__stanceCalls + 1; "
+        , "  return rawStance(uid, amt); "
+        , "end; return type(_G.__res.update) == 'function'" ]
+    r `shouldBe` "true"
+    pure ls
+
+-- | @n@ whole physiology cadences of the SHIPPED update loop.
+updateN ∷ LuaBackendState → Double → Int → IO ()
+updateN ls dt n = do
+    r ← evalDebug ls $ T.concat
+        [ "for _ = 1, ", tshow n, " do _G.__res.update(", tshow dt
+        , ") end; return true" ]
     r `shouldBe` "true"
 
 -- | Record every @engine.emitEventForUnit@ call. The alerts module
@@ -494,8 +547,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
             evalDebug ls
                 "return table.concat(_G.__carry.writeBarrierStatus()\
                 \.declared, ',')"
-                `shouldReturn` q "setStat,addXP,feed,recomputeBody,\
-                                 \recoverStance"
+                `shouldReturn` q "setStat,addXP,feed"
 
         it "a load's reset hook discards it, so the same second tick no \
            \longer moves storage" $ \env → do
@@ -586,4 +638,38 @@ spec = aroundAll withHeadlessEngineNoWorld $
                     \p.drain_constant_frac = 0; p.drain_constant = 3e-7; "
             tickResourceN ls "hydration" creeping "idle" "standing" fineDt 60
             evalDebug ls "return #_G.__events" `shouldReturn` "1"
+
+    -- §9 The orchestration path, not just the per-resource tick. The
+    -- barrier above sits on verbs the rest of unitResources.update
+    -- calls FIRST on every cadence — unit_resource_injury.tickStance
+    -- runs unit.recoverStance on every unit, every tick, before any
+    -- resource ticks — so a wrapper scoped more widely than the stat it
+    -- guards would discard each cadence's remainder before the next one
+    -- could use it, and quietly restore the cadence-dependent rounding
+    -- §2 rejects. This drives the real update loop to prove it does not.
+    describe "the real update loop keeps the remainder (§9)" $ do
+        it "sees the fixture unit at all, so the loop below is not \
+           \iterating an empty page" $ \env → do
+            resetSceneOnActivePage env
+            ls ← setupUpdateLoop env
+            evalDebug ls "return #unit.getAllIds()" `shouldReturn` "1"
+
+        it "2,000 unitResources.update ticks track the analytic value \
+           \to the same 3e-6, where a remainder discarded once per \
+           \cadence would drift by ~1.5e-4" $ \env → do
+            resetSceneOnActivePage env
+            ls ← setupUpdateLoop env
+            updateN ls fineDt 2000
+            shouldBeNear env (analytic 200) scheduleTol
+
+        it "still recovers stance every cadence, so the barrier is \
+           \being exercised rather than bypassed" $ \env → do
+            resetSceneOnActivePage env
+            ls ← setupUpdateLoop env
+            updateN ls fineDt 10
+            -- tickStance drives unit.recoverStance on every tick; an
+            -- absent stance is reported as a full 1.0 and materialises
+            -- nothing, which is exactly the write that must not clear
+            -- another stat's remainder.
+            evalDebug ls "return _G.__stanceCalls >= 10" `shouldReturn` "true"
 
