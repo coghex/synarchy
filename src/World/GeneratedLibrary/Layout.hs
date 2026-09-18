@@ -210,6 +210,17 @@ pinFileName gid a b =
 --   component: non-empty, bounded, no separators, no traversal, not
 --   hidden, no control characters, and not a name the library reserves
 --   for itself inside or beside an entry.
+--
+--   The reserved-name check folds case the same way 'validatePayload'
+--   folds it for sibling duplicates (#2647): two names are equivalent
+--   exactly when they are equal after 'Data.Text.toLower', which is the
+--   equivalence the case-insensitive filesystem the tree is tested on
+--   imposes. So @ENTRY.RECORD@ and @Entry.Record@ are the entry record
+--   and are refused, naming the spelling the caller supplied. This is
+--   deliberately ASCII-and-simple-case folding, not full Unicode case
+--   folding or normalization: it is the SAME policy as the duplicate
+--   check, and widening one without the other would let a payload pass
+--   one gate and collide at the other.
 validatePayloadName ∷ Text → Either Text ()
 validatePayloadName name
     | T.null name             = Left "payload name cannot be empty"
@@ -218,12 +229,13 @@ validatePayloadName name
     | name ≡ "." ∨ name ≡ ".." = Left ("payload name cannot be '.' or '..': " <> name)
     | T.head name ≡ '.'       = Left ("payload name cannot start with '.': " <> name)
     | T.any isControl name    = Left ("payload name cannot contain control characters: " <> name)
-    | T.unpack name `elem` reserved
+    | T.toLower name `elem` reserved
                               = Left ("payload name is reserved by the library: " <> name)
     | otherwise               = Right ()
   where
     isSep c = c ≡ '/' ∨ c ≡ '\\'
-    reserved = [entryRecordFileName, registryFileName, lockFileName]
+    reserved = map (T.toLower . T.pack)
+                   [entryRecordFileName, registryFileName, lockFileName]
 
 -- | Validate a whole payload and return its descriptors in canonical
 --   (ascending-name) order. Rejects an empty payload — an entry must
