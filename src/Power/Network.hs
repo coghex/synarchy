@@ -1,8 +1,9 @@
 {-# LANGUAGE Strict #-}
 -- | Power-grid connectivity + energy balance (#360): the core sim on top
 --   of #358's placed nodes and #359's wire tiles. A "network" is a
---   connected component of wire tiles (4-dir cardinal adjacency, matching
---   scripts/wire.lua's autotile shape) plus whichever power nodes sit on
+--   connected component of wire tiles (4-dir cardinal adjacency in the
+--   CANONICAL seam frame since #2634, matching scripts/wire.lua's
+--   autotile shape on both counts) plus whichever power nodes sit on
 --   or orthogonally beside it — two nodes that don't share a wire path
 --   are NOT on the same network even if their tiles happen to be
 --   adjacent to each other directly. A node touching two otherwise-
@@ -10,6 +11,17 @@
 --   ('groupByComponent') rather than attaching to both independently —
 --   a proper connected-components partition can't put one node in two
 --   groups at once.
+--
+--   Cardinal adjacency is resolved through
+--   'World.Generate.Coordinates.canonicalTile' (#1175's stored frame),
+--   not raw @(x ± 1, y)@ keys, so a wire run, node, or consumer that
+--   crosses the cylindrical seam stays ONE network — placement and
+--   autotiling already resolved the same neighbours that way
+--   ('World.Construct.Art.wireNeighborsAt'), and before #2634 a seam-
+--   crossing run rendered continuous while being electrically split.
+--   Every entry point therefore takes the page's @worldSize@ in chunks;
+--   away from the seam, and for a non-wrapping (arena / zero-size)
+--   world, the whole step is the identity.
 --
 --   Connectivity and a network's generation/drain numbers are recomputed
 --   fresh every call — nothing about network MEMBERSHIP is persisted,
@@ -80,6 +92,7 @@ import Structure.Types (StructureSlot(..))
 import World.Chunk.Types (LoadedChunk(..))
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Page.Types (WorldPageId)
+import World.Generate.Coordinates (canonicalTile)
 import World.Tile.Types (WorldTileData(..))
 import World.Time.Local (localSunAngle)
 import Power.Types
@@ -112,14 +125,49 @@ data PowerNetworkSnapshot = PowerNetworkSnapshot
 solarIntensity ∷ Float → Float
 solarIntensity sunAngle = max 0 (negate (cos (2 * pi * sunAngle)))
 
-neighborsOf ∷ (Int, Int) → [(Int, Int)]
-neighborsOf (x, y) = [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)]
+-- | The four cardinal neighbours of a tile, named in the CANONICAL
+--   (u-wrapped) frame wire tiles are stored under (#1175,
+--   'World.Generate.Coordinates.canonicalTile') rather than as raw
+--   @(x ± 1, y)@ / @(x, y ± 1)@ offsets (#2634).
+--
+--   The raw offsets are the geometry — a tile's neighbours are always
+--   its four cardinal ones — but the NAME the wire set holds them under
+--   is the stored frame, and across the cylindrical seam the two
+--   disagree: @(31, 0)@'s eastern neighbour in a size-4 world is stored
+--   as @(0, 32)@, a whole world away in raw coordinates. Taking the
+--   step first and canonicalising after is what reconciles them, and it
+--   matches how placement already resolves the same neighbours
+--   ('World.Construct.Art.wireNeighborsAt'), so the electrical topology
+--   and the autotiled one finally agree.
+--
+--   'canonicalTile' is invariant under u-aliasing, so this is correct
+--   for an aliased input tile as well as a canonical one, and it is the
+--   identity away from the seam and in non-wrapping (arena /
+--   zero-size) worlds — where it degenerates to exactly the four raw
+--   offsets this replaced.
+neighborsOf ∷ Int → (Int, Int) → [(Int, Int)]
+neighborsOf worldSize (x, y) =
+    [ canonicalTile worldSize nx ny
+    | (nx, ny) ← [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)] ]
 
 -- | Flood-fill connected components of a set of wire tiles (4-dir
---   cardinal adjacency).
-wireComponents ∷ HS.HashSet (Int, Int) → [HS.HashSet (Int, Int)]
-wireComponents tiles = go (HS.toList tiles) HS.empty []
+--   cardinal adjacency, resolved in the canonical seam frame — see
+--   'neighborsOf'). @worldSize@ is the page's own
+--   'World.Generate.Types.wgpWorldSize', the same value the callers
+--   already thread through for solar phasing; pass @0@ for a
+--   non-wrapping world.
+--
+--   The tile set is canonicalised on the way in so that membership
+--   lookups can be exact: a neighbour is named canonically, so the set
+--   it is looked up in must be too. That folds any u-alias in the input
+--   onto the one key naming that physical tile, which is a no-op for
+--   the stored wire sets 'pageWireTiles' produces and makes the
+--   function total over any caller-supplied frame. It changes nothing
+--   about how wire is keyed or stored.
+wireComponents ∷ Int → HS.HashSet (Int, Int) → [HS.HashSet (Int, Int)]
+wireComponents worldSize rawTiles = go (HS.toList tiles) HS.empty []
   where
+    tiles = HS.map (uncurry (canonicalTile worldSize)) rawTiles
     go [] _ acc = acc
     go (t : ts) seen acc
         | HS.member t seen = go ts seen acc
@@ -128,22 +176,30 @@ wireComponents tiles = go (HS.toList tiles) HS.empty []
             in go ts (HS.union seen comp) (comp : acc)
     bfs visited [] = visited
     bfs visited (cur : rest) =
-        let fresh = [ n | n ← neighborsOf cur
+        let fresh = [ n | n ← neighborsOf worldSize cur
                          , HS.member n tiles
                          , not (HS.member n visited) ]
         in bfs (foldl' (flip HS.insert) visited fresh) (rest ++ fresh)
 
 -- | Which wire components (by index into @comps@) a tile touches — the
 --   tile itself (rare — a building could share a tile with a wire
---   overlay) or any of its 4 orthogonal neighbours. A tile that only
---   ever touches wire is attached to at most one component (BFS already
---   guarantees that); a NODE's tile can legitimately touch two or more
---   otherwise-disconnected wire stubs at once (e.g. a panel sitting
---   between two separate short runs) — that's the case 'mergedRoots'
---   below resolves.
-touchedComponents ∷ HM.HashMap (Int, Int) Int → (Int, Int) → [Int]
-touchedComponents tileToIdx tile =
-    nub [ i | t ← tile : neighborsOf tile, Just i ← [HM.lookup t tileToIdx] ]
+--   overlay) or any of its 4 orthogonal neighbours, all named in the
+--   canonical seam frame (see 'neighborsOf'), so a node or consumer
+--   standing across the seam from a wire tile attaches to it. A tile
+--   that only ever touches wire is attached to at most one component
+--   (BFS already guarantees that); a NODE's tile can legitimately touch
+--   two or more otherwise-disconnected wire stubs at once (e.g. a
+--   panel sitting between two separate short runs) — that's the case
+--   'mergedRoots' below resolves.
+touchedComponents ∷ Int → HM.HashMap (Int, Int) Int → (Int, Int) → [Int]
+touchedComponents worldSize tileToIdx tile =
+    nub [ i | t ← here : neighborsOf worldSize tile
+            , Just i ← [HM.lookup t tileToIdx] ]
+  where
+    -- The tile's OWN canonical name, for the share-a-tile case: a node
+    -- or consumer position is not guaranteed to arrive in the stored
+    -- frame, and @tileToIdx@ is keyed canonically ('wireComponents').
+    here = uncurry (canonicalTile worldSize) tile
 
 -- | Bare-bones union-find over component indices @[0 .. n-1]@: 'ufFind'
 --   walks parent pointers to the representative; 'ufUnion' points one
@@ -188,21 +244,21 @@ ufUnion uf@(UnionFind m) a b =
 --   dropped from the result entirely (silently unpowered — the correct
 --   answer, since 'isBuildingPowered' treats "not attached to any
 --   network" the same as Brownout).
-groupByComponent ∷ [HS.HashSet (Int, Int)] → PowerNodes
+groupByComponent ∷ Int → [HS.HashSet (Int, Int)] → PowerNodes
                  → HM.HashMap PowerNodeId (Int, Int)
                  → HM.HashMap BuildingId ((Int, Int), Float)
                  → [([PowerNode], [(BuildingId, Float)])]
-groupByComponent comps nodes positions consumers =
+groupByComponent worldSize comps nodes positions consumers =
     let tileToIdx = HM.fromList [ (t, i) | (i, comp) ← zip [0 ..] comps
                                           , t ← HS.toList comp ]
         nodeList  = HM.toList positions
         uf0       = ufNew (length comps)
         -- Every node that touches 2+ components unions them together.
-        mergedUf  = foldl' (\uf (_, tile) → case touchedComponents tileToIdx tile of
+        mergedUf  = foldl' (\uf (_, tile) → case touchedComponents worldSize tileToIdx tile of
                         (i : is@(_ : _)) → foldl' (\u j → ufUnion u i j) uf is
                         _                → uf
                     ) uf0 nodeList
-        rootFor tile = case touchedComponents tileToIdx tile of
+        rootFor tile = case touchedComponents worldSize tileToIdx tile of
             (i : _) → Just (ufFind mergedUf i)
             []      → Nothing
         byRoot = HM.fromListWith (++)
@@ -302,7 +358,8 @@ tickGroup worldSize globalSunAngle positions drainByNode dtHours nodes consumers
 
 -- | Every connected network's current numbers, read-only (no charge
 --   mutation) — what a Lua query reports at any instant between ticks.
---   @worldSize@ (in chunks) + @globalSunAngle@ resolve each source's own
+--   @worldSize@ (in chunks) resolves canonical wire adjacency (#2634,
+--   see 'neighborsOf') and, with @globalSunAngle@, each source's own
 --   longitude-local sun angle (#794) — pass the same per-page
 --   'World.Generate.Types.wgpWorldSize' / clock-derived angle that
 --   'World.getSunAngleAt' itself reads, so a live query agrees with it.
@@ -315,16 +372,17 @@ computeSnapshots ∷ Int → Float → HM.HashMap PowerNodeId Float → HS.HashS
                  → [PowerNetworkSnapshot]
 computeSnapshots worldSize globalSunAngle drainByNode wireTiles nodes positions consumers =
     [ snd (tickGroup worldSize globalSunAngle positions drainByNode 0 grp cons)
-    | (grp, cons) ← groupByComponent (wireComponents wireTiles) nodes
-                                      positions consumers ]
+    | (grp, cons) ← groupByComponent worldSize (wireComponents worldSize wireTiles)
+                                      nodes positions consumers ]
 
 -- | Advance every network on a page by @dtGameSeconds@ of generation vs.
 --   registered drain (node-synthetic AND #361's real consumer
 --   buildings), folding each network's updated battery charge back into
 --   the node registry. Nodes not attached to any wire network are
 --   untouched. A no-op for @dtGameSeconds ≤ 0@ (paused / no time passed).
---   @worldSize@ + @globalSunAngle@ are threaded straight to 'tickGroup'
---   (see 'computeSnapshots' — same source of truth as 'world.getSunAngleAt').
+--   @worldSize@ resolves canonical wire adjacency (#2634) and, with
+--   @globalSunAngle@, is threaded straight to 'tickGroup' (see
+--   'computeSnapshots' — same source of truth as 'world.getSunAngleAt').
 tickPowerNodes ∷ Int → Float → HM.HashMap PowerNodeId Float → Float
               → HS.HashSet (Int, Int) → HM.HashMap PowerNodeId (Int, Int)
               → HM.HashMap BuildingId ((Int, Int), Float)
@@ -333,8 +391,9 @@ tickPowerNodes worldSize globalSunAngle drainByNode dtGameSeconds wireTiles posi
     | dtGameSeconds ≤ 0 = nodes
     | otherwise =
         let dtHours   = dtGameSeconds / 3600
-            groups    = groupByComponent (wireComponents wireTiles) nodes
-                                          positions consumers
+            groups    = groupByComponent worldSize
+                                          (wireComponents worldSize wireTiles)
+                                          nodes positions consumers
             updates   = concatMap (\(grp, cons) →
                             fst (tickGroup worldSize globalSunAngle positions
                                             drainByNode dtHours grp cons))
