@@ -11,6 +11,12 @@ local aiState        = core.aiState
 local distance        = core.distance
 local chebToFootprint = core.chebToFootprint
 
+-- The dead/collapsed census rule, shared with unit_ai_core.lua's
+-- countAdjacentBuilders (#2641). Requires stall directly rather than
+-- through core: core re-exports only the stall entry points its own
+-- callers already used.
+local stall = require("scripts.unit_ai_stall")
+
 local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
 local page = require("scripts.unit_ai_page")
@@ -229,13 +235,23 @@ local function findNearestUnbuilt(fromX, fromY, maxRange, myPage)
     return best
 end
 
--- Acolytes currently in build_nearby targeting this bid, excluding
--- excludeUid (so utility can ask "what'd the count be if I joined").
+-- ABLE-BODIED acolytes currently in build_nearby targeting this bid,
+-- excluding excludeUid (so utility can ask "what'd the count be if I
+-- joined").
+--
+-- This is the RECRUITMENT count -- saturation, not progress -- so it
+-- deliberately keeps counting healthy workers still walking in, and is
+-- not footprint-gated the way unit_ai_core.lua's contribution census
+-- is. Only the incapacitation rule is shared (#2641): a reservation
+-- held by a corpse or a knocked-down worker made a site look full and
+-- turned healthy workers away, and that unit is not coming back to it
+-- until it stands up -- at which point this count sees it again,
+-- because the cached action survives the collapse.
 local function countBuildersAt(bid, excludeUid)
     local count = 0
     local ids = unit.getAllIds() or {}
     for _, uid in ipairs(ids) do
-        if uid ~= excludeUid then
+        if uid ~= excludeUid and not stall.isIncapacitated(uid) then
             local s = aiState[uid]
             if s and s.currentAction == "build_nearby"
                and s.buildTarget == bid then
