@@ -131,19 +131,35 @@ end
 -- quietly turns the carry back off.
 -----------------------------------------------------------
 
---: `unit.<verb>(uid, statName, ...)` -- the caller names the stat, so
---: only that resource's remainder goes.
-local NAME_SCOPED_WRITERS = { "setStat", "addXP" }
-
---: `unit.<verb>(uid, ...)` -- writes a fixed stat the caller does not
---: name. `unit.feed` credits `hunger`
---: (Engine.Scripting.Lua.API.Units.Survival), a resource the acolyte
---: config ticks.
-local FIXED_STAT_WRITERS = { feed = "hunger" }
+--: The verbs this barrier covers, in the order it reports them. The
+--: installs below are this list's implementation; they name each verb
+--: LITERALLY because tools/lua_registration_audit.py refuses a
+--: computed key on an engine namespace -- `unit[verb]` would name a
+--: verb it cannot check against the registrar -- and spelling them out
+--: is also what lets that audit prove each one still exists.
+local DECLARED_WRITERS = { "setStat", "addXP", "feed" }
 
 --: verb name → true once wrapped. Also the assertable record of what
 --: the barrier actually covers in a live VM.
 local wrapped = {}
+
+-- `unit.<verb>(uid, statName, ...)`: the caller names the stat, so only
+-- that resource's remainder goes.
+local function nameScoped(raw)
+    return function(uid, statName, ...)
+        M.forget(uid, statName)
+        return raw(uid, statName, ...)
+    end
+end
+
+-- `unit.<verb>(uid, ...)`: always writes one stat the caller does not
+-- name, so that one goes.
+local function fixedStat(raw, statName)
+    return function(uid, ...)
+        M.forget(uid, statName)
+        return raw(uid, ...)
+    end
+end
 
 -- Idempotent, and safe to call before the engine API exists: it reports
 -- false and leaves `wrapped` empty, so a later call can still install.
@@ -151,25 +167,20 @@ local wrapped = {}
 -- `unit` table after this module is required.
 function M.installWriteBarrier()
     if type(unit) ~= "table" then return false end
-    for _, verb in ipairs(NAME_SCOPED_WRITERS) do
-        local raw = unit[verb]
-        if not wrapped[verb] and type(raw) == "function" then
-            unit[verb] = function(uid, name, ...)
-                M.forget(uid, name)
-                return raw(uid, name, ...)
-            end
-            wrapped[verb] = true
-        end
+    if not wrapped.setStat and type(unit.setStat) == "function" then
+        unit.setStat = nameScoped(unit.setStat)
+        wrapped.setStat = true
     end
-    for verb, statName in pairs(FIXED_STAT_WRITERS) do
-        local raw = unit[verb]
-        if not wrapped[verb] and type(raw) == "function" then
-            unit[verb] = function(uid, ...)
-                M.forget(uid, statName)
-                return raw(uid, ...)
-            end
-            wrapped[verb] = true
-        end
+    if not wrapped.addXP and type(unit.addXP) == "function" then
+        unit.addXP = nameScoped(unit.addXP)
+        wrapped.addXP = true
+    end
+    -- unit.feed credits `hunger`
+    -- (Engine.Scripting.Lua.API.Units.Survival), a resource the acolyte
+    -- config ticks.
+    if not wrapped.feed and type(unit.feed) == "function" then
+        unit.feed = fixedStat(unit.feed, "hunger")
+        wrapped.feed = true
     end
     return true
 end
@@ -179,17 +190,10 @@ end
 -- than only through the arithmetic they protect.
 function M.writeBarrierStatus()
     local declared, missing = {}, {}
-    local function note(verb)
+    for _, verb in ipairs(DECLARED_WRITERS) do
         declared[#declared + 1] = verb
         if not wrapped[verb] then missing[#missing + 1] = verb end
     end
-    for _, verb in ipairs(NAME_SCOPED_WRITERS) do note(verb) end
-    -- Sorted so the reported order is the table's content, not its
-    -- hash order.
-    local fixed = {}
-    for verb in pairs(FIXED_STAT_WRITERS) do fixed[#fixed + 1] = verb end
-    table.sort(fixed)
-    for _, verb in ipairs(fixed) do note(verb) end
     return { declared = declared, missing = missing }
 end
 
