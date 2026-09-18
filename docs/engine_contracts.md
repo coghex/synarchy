@@ -2709,6 +2709,14 @@ verbs a worker FINISHES a job with (`world.getDigInfoAt`/`digTile`,
 — use CANONICAL coords and accept any alias, so pre-#1175 saved job
 coords need no migration.
 
+ADJACENCY between stored tiles belongs to the same frame: a cardinal
+step is taken raw and the RESULT canonicalised, because the step is
+geometry and the key is storage. `World.Construct.Art.wireNeighborsAt`
+does that for wire placement/autotiling, and since #2634
+`Power.Network` does it for electrical connectivity too — flood-fill and
+node/consumer attachment alike — so the two topologies can no longer
+disagree about a run crossing the seam.
+
 `harvestFloraInstance` belongs in that list on the same terms as the
 coordinate verb: it canonicalizes through `canonicalTile` before the
 tile read (`src/Engine/Scripting/Lua/API/Forage/Harvest.hs`), and the
@@ -4283,7 +4291,13 @@ nothing here is a serialization change.
 Solar/battery nodes are item-consuming placements (`power.placeNode`
 via `buildTool.commitPlacement`); networks (wire 4-adjacency +
 nodes/consumers) are recomputed fresh every tick — only battery
-`storedWh` persists. Solar follows the sun angle and
+`storedWh` persists. That 4-adjacency is resolved in the CANONICAL seam
+frame (§Tile-coordinate seam frame), not on raw `(x ± 1, y)` keys, so a
+wire run — or a node or consumer attaching to one — stays a single
+network across the cylindrical seam, matching the topology placement and
+autotiling already draw (#2634). Every `Power.Network` entry point takes
+the page's world size for it; away from the seam and in arenas the step
+is the identity. Solar follows the sun angle and
 `world.setTimeScale`. Electrical load lives on the RECIPE
 (`power_draw`), not the building: a bill draws only while claimed AND
 `cbWorking`; `power.isStationPoweredForRecipe(bid, recipeId[, billId])`
@@ -4298,7 +4312,8 @@ advancing; a retired id is never reissued), and there is deliberately
 no public `power.removeNode`. Gates: `power_probe.py`,
 `power_workshop_probe.py`, `machine_shop_probe.py`, hspec
 `--match "power node demolition"`; pure algorithm in
-`Test.Headless.Power.Network`.
+`Test.Headless.Power.Network`, whose seam group restates every
+seam-crossing case at a non-wrapping world size as its control.
 
 ---
 
