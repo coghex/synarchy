@@ -297,6 +297,31 @@ function M.suspendOrders(s, uid)
     end
 end
 
+-- Is this unit incapacitated -- dead or collapsed (#2641)?
+--
+-- The companion to the suspension above, for the CENSUS side. That
+-- suspension (scripts/unit_ai.lua's collapsed/dead return, which calls
+-- M.suspendOrders) deliberately leaves `currentAction` and
+-- `buildTarget` where they are, and the engine keeps enumerating a
+-- killed instance through unit.getAllIds. So a worker that dies or is
+-- knocked down beside its site still reads as "build_nearby targeting
+-- bid" to anything that only inspects AI state -- and the two builder
+-- counts did exactly that, letting a corpse pour full construction
+-- work and inflate the coordination multiplier of the living workers
+-- next to it.
+--
+-- Answered from the unit's CURRENT pose at each census rather than by
+-- clearing the cached action, so a worker that is revived beside its
+-- site resumes contributing on the next tick with no re-selection --
+-- and so nothing else that reads those two fields changes meaning.
+-- The two poses are exactly the pair that return through
+-- M.suspendOrders; a unit the engine no longer knows (no pose) is not
+-- working either.
+function M.isIncapacitated(uid)
+    local pose = unit.getPose(uid)
+    return pose == nil or pose == "dead" or pose == "collapsed"
+end
+
 -- The interval ending at `now` that may be charged as WORK, given the
 -- last sample stamp `last`: the elapsed time when it is one
 -- uninterrupted stretch of AI ticking, and zero when it is not.

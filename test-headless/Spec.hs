@@ -400,6 +400,7 @@ import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiYieldProximity as LuaUnitAiYieldProximity
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
+import qualified Test.Headless.Lua.BuilderEligibility as LuaBuilderEligibility
 import qualified Test.Headless.Lua.UnitAiPageTargets as LuaUnitAiPageTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
 import qualified Test.Headless.Lua.FarmDesignationClaim as LuaFarmDesignationClaim
@@ -955,6 +956,7 @@ main = hspec $ do
     LuaUnitAiHarvest.spec
     LuaUnitAiYieldProximity.spec
     LuaUnitAiLogisticsTargets.spec
+    LuaBuilderEligibility.spec
     LuaUnitAiPageTargets.spec
     LuaUnitAiLoadReset.spec
     -- #2534: its own headless engine and a synthetic page, so the

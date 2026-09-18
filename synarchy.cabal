@@ -1811,6 +1811,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiHarvest
                    Test.Headless.Lua.UnitAiYieldProximity
                    Test.Headless.Lua.UnitAiLogisticsTargets
+                   Test.Headless.Lua.BuilderEligibility
                    Test.Headless.Lua.UnitAiPageTargets
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.FarmDesignationClaim

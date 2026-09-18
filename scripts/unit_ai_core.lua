@@ -306,10 +306,10 @@ function unitAi.getRole(uid)
     return s and s.role or nil
 end
 
--- | Public: how many acolytes are currently standing within Chebyshev
---   distance 1 of building bid with currentAction == "build_nearby"
---   targeting that bid. Used by the construction tick in
---   scripts/building_spawn.lua to drive worker-rate progress.
+-- | Public: how many ABLE-BODIED acolytes (stall.isIncapacitated --
+--   #2641: a corpse keeps its cached action) are within Chebyshev
+--   distance 1 of bid with currentAction == "build_nearby" targeting
+--   it. Drives scripts/building_spawn.lua's worker-rate progress.
 function unitAi.countAdjacentBuilders(bid)
     local binfo = building.getInfo(bid)
     if not binfo then return 0 end
@@ -320,7 +320,7 @@ function unitAi.countAdjacentBuilders(bid)
     for _, uid in ipairs(ids) do
         local s = aiState[uid]
         if s and s.currentAction == "build_nearby"
-           and s.buildTarget == bid then
+           and s.buildTarget == bid and not stall.isIncapacitated(uid) then
             local info = unit.getInfo(uid)
             if info then
                 local utx  = math.floor(info.gridX)
