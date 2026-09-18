@@ -444,6 +444,26 @@ layoutSpec = describe "layout" $ do
         fmap (map pdName) (validatePayload (reverse payload2))
             `shouldBe` Right ["coarse.page", "map.manifest", "root.page"]
 
+    it "refuses a case alias of every reserved name, folding case exactly as the duplicate check does" $ do
+        let reservedNames = map T.pack [entryRecordFileName, registryFileName, lockFileName]
+            capitalise seg = T.toUpper (T.take 1 seg) <> T.drop 1 seg
+            titled = T.intercalate "." . map capitalise . T.splitOn "."
+            aliasesOf n = [T.toUpper n, titled n]
+        forM_ reservedNames $ \reservedName → do
+            -- The exact spelling is still refused — the policy widened, it did not move.
+            validatePayloadName reservedName `shouldSatisfy` isLeft'
+            forM_ (aliasesOf reservedName) $ \alias → do
+                -- The alias genuinely differs from the reserved spelling…
+                (reservedName, alias) `shouldSatisfy` uncurry (≢)
+                -- …and is refused, naming the spelling the caller supplied.
+                (alias, validatePayloadName alias)
+                    `shouldBe` (alias, Left ("payload name is reserved by the library: " <> alias))
+                -- validatePayload refuses it at the same boundary.
+                validatePayload [PayloadFile alias "x"] `shouldSatisfy` isLeft'
+        -- A name that merely CONTAINS a reserved name is not an alias of one.
+        validatePayloadName "Entry.Records" `shouldBe` Right ()
+        validatePayloadName "my.Entry.Record" `shouldBe` Right ()
+
     it "digests an inventory independently of descriptor order" $ do
         digestOf payload2 `shouldBe` digestOf (reverse payload2)
         digestOf payload1 `shouldNotBe` digestOf payload2
@@ -513,8 +533,47 @@ publishSpec = describe "publication" $ do
             publishEntry lib gidA [PayloadFile "../escape" "x"] `shouldReturn'` LibPayloadIdentity
             publishEntry lib gidA [PayloadFile (T.pack entryRecordFileName) "x"]
                 `shouldReturn'` LibPayloadIdentity
+            -- A case alias of a reserved name is the reserved name (#2647):
+            -- on the case-insensitive filesystem this tree is tested on it
+            -- would BE the entry record, so it is refused just as early.
+            publishEntry lib gidA [PayloadFile "ENTRY.RECORD" "payload"]
+                `shouldReturn'` LibPayloadIdentity
+            publishEntry lib gidA [PayloadFile "Registry.Synlib" "payload"]
+                `shouldReturn'` LibPayloadIdentity
+            publishEntry lib gidA [PayloadFile "Library.Lock" "payload"]
+                `shouldReturn'` LibPayloadIdentity
+            -- Nothing was created for the fresh id: no final entry, no staging.
             names ← rootNames root
             names `shouldBe` [lockFileName]
+            lookupEntry lib gidA `shouldReturn` Right Nothing
+
+    it "refuses a reserved-name alias under an existing id, leaving that entry complete and readable" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            recordBefore ← BS.readFile (finalDir root gidA </> entryRecordFileName)
+            attempted ← publishEntry lib gidA [PayloadFile "ENTRY.RECORD" "payload"]
+            case attempted of
+                Right report → expectationFailure
+                    ("expected a validation failure, published " <> show report)
+                Left f → do
+                    glfPhase f `shouldBe` LibPayloadIdentity
+                    glfId f `shouldBe` Just gidA
+                    glfReason f `shouldSatisfy` T.isInfixOf "ENTRY.RECORD"
+            -- No staging residue beside the entry it would have replaced.
+            names ← rootNames root
+            names `shouldBe` L.sort [entryDirectoryName gidA, registryFileName, lockFileName]
+            -- The prior entry is byte-for-byte what it was, and still verifies.
+            BS.readFile (finalDir root gidA </> entryRecordFileName)
+                `shouldReturn` recordBefore
+            forM_ payload1 $ \f →
+                BS.readFile (finalDir root gidA </> T.unpack (pfName f))
+                    `shouldReturn` pfBytes f
+            verified ← verifyEntryDirectory (finalDir root gidA)
+            fmap (erId . fst) verified `shouldBe` Right gidA
+            e ← committed lib gidA
+            leStatus e `shouldBe` EntryCommitted
+            leDigest e `shouldBe` Just (digestOf payload1)
 
     it "republishing identical content is idempotent; different content replaces and leaves no displaced copy" $
         withScratch $ \root → do
