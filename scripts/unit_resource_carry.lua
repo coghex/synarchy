@@ -31,10 +31,16 @@
 --   * The remainder is only ever the last write's sub-binary32 residue,
 --     never a whole pending change, so a caller that stops ticking a
 --     resource loses at most half an ulp.
---   * It is only reused when storage still holds exactly what this
---     module last wrote there. ANY intervening write -- a drink, a
---     debug setStat, a load restoring a snapshot, a reused unit id --
---     discards it rather than replaying stale arithmetic over it.
+--   * Ownership is established two independent ways, because neither
+--     alone is complete. A WRITE BARRIER (installWriteBarrier below)
+--     wraps every `unit.*` verb that can write a stat this module
+--     carries, so any other writer -- a drink, a debug console
+--     setStat, a feed, an AI sip -- discards the remainder as it
+--     writes, INCLUDING one that happens to commit the identical
+--     Float, which a value comparison cannot see. On top of that, the
+--     remainder is reused only while storage still holds exactly what
+--     this module last wrote there, which catches an engine-side write
+--     that reaches `uiStats` without passing a wrapped verb.
 --   * The remainder is taken from the value that was WRITTEN, which is
 --     already clamped, so a change the pool could not absorb is
 --     discarded at the bound rather than saved up and repaid the moment
@@ -67,6 +73,7 @@ local pending = {}
 -- and when the unit dies, so nothing survives to be re-applied to a
 -- pool this module is no longer the author of.
 function M.forget(uid, resourceName)
+    if uid == nil then return end
     if resourceName == nil then
         pending[uid] = nil
         return
@@ -84,6 +91,83 @@ function M.resetOnLoad()
     for k in pairs(pending) do pending[k] = nil end
 end
 
+-----------------------------------------------------------
+-- Write barrier
+--
+-- A remainder belongs to the last value THIS module wrote. Comparing
+-- against the stored value catches a writer that moved it, but not one
+-- that re-committed the same Float -- and "the same Float" is exactly
+-- what a debug `unit.setStat(uid, name, <what it already is>)`, or a
+-- sip that rounds to no change, produces. So the write itself has to
+-- say so, and the only Lua-reachable writes into `uiStats` are these
+-- verbs.
+--
+-- Split by what the verb knows: the two that name a stat drop only
+-- that entry, the three that rewrite a unit's stats wholesale drop the
+-- unit's. `commitStamina` is absent deliberately -- stamina never takes
+-- this path at all (unit_resource_tick.lua) and so never has an entry
+-- to invalidate. `unit.spawn` is absent because a new unit's pool is
+-- filled by tickResource's own first-tick branch, which writes through
+-- `setStat` and therefore through this barrier.
+--
+-- Read verbs are NOT wrapped: over-invalidating would quietly turn the
+-- carry back off, which is the defect this module exists to fix.
+-----------------------------------------------------------
+
+--: `unit.<verb>(uid, statName, ...)` -- invalidates that one resource.
+local NAME_SCOPED_WRITERS = { "setStat", "addXP" }
+
+--: `unit.<verb>(uid, ...)` -- rewrites stats this module cannot name
+--: individually, so the whole unit's remainders go.
+local UNIT_SCOPED_WRITERS = { "feed", "recomputeBody", "recoverStance" }
+
+--: verb name → true once wrapped. Also the assertable record of what
+--: the barrier actually covers in a live VM.
+local wrapped = {}
+
+-- Idempotent, and safe to call before the engine API exists: it reports
+-- false and leaves `wrapped` empty, so a later call can still install.
+-- `integrate` calls it, which is what covers a VM that registers the
+-- `unit` table after this module is required.
+function M.installWriteBarrier()
+    if type(unit) ~= "table" then return false end
+    for _, verb in ipairs(NAME_SCOPED_WRITERS) do
+        local raw = unit[verb]
+        if not wrapped[verb] and type(raw) == "function" then
+            unit[verb] = function(uid, name, ...)
+                M.forget(uid, name)
+                return raw(uid, name, ...)
+            end
+            wrapped[verb] = true
+        end
+    end
+    for _, verb in ipairs(UNIT_SCOPED_WRITERS) do
+        local raw = unit[verb]
+        if not wrapped[verb] and type(raw) == "function" then
+            unit[verb] = function(uid, ...)
+                M.forget(uid)
+                return raw(uid, ...)
+            end
+            wrapped[verb] = true
+        end
+    end
+    return true
+end
+
+-- What the barrier declares it must cover, and what it has covered in
+-- this VM. Public so the two can be asserted against each other rather
+-- than only through the arithmetic they protect.
+function M.writeBarrierStatus()
+    local declared, missing = {}, {}
+    for _, list in ipairs({ NAME_SCOPED_WRITERS, UNIT_SCOPED_WRITERS }) do
+        for _, verb in ipairs(list) do
+            declared[#declared + 1] = verb
+            if not wrapped[verb] then missing[#missing + 1] = verb end
+        end
+    end
+    return { declared = declared, missing = missing }
+end
+
 -- Integrate one tick of `amount` onto `current` and commit the result.
 --
 -- `current` is what the caller read from storage this tick; `maxVal` is
@@ -93,6 +177,7 @@ end
 -- never one the rounding moved to the other side of the line. Returns
 -- nil if the unit went away under the write, leaving nothing to decide.
 function M.integrate(uid, resourceName, current, amount, maxVal)
+    M.installWriteBarrier()
     local byUnit = pending[uid]
     local entry  = byUnit and byUnit[resourceName]
     local exact  = current
@@ -133,5 +218,11 @@ function M.integrate(uid, resourceName, current, amount, maxVal)
     byUnit[resourceName] = { stored = stored, residue = value - stored }
     return stored
 end
+
+-- Best effort at load: in the engine the `unit` table is registered
+-- before any script runs, so the barrier is up before anything can
+-- write. A VM that has not registered it yet simply gets the install
+-- from the first `integrate`, before any remainder exists to lose.
+M.installWriteBarrier()
 
 return M
