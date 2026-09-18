@@ -294,7 +294,7 @@ prelude = lns
     ]
 
 spec ∷ Spec
-spec = pageSpec >> reachSpec
+spec = pageSpec >> reachSpec >> rankReachSpec
 
 pageSpec ∷ Spec
 pageSpec = describe "AI page pairing" $ do
@@ -1170,3 +1170,74 @@ reachSpec = describe "AI medic treat reach" $ do
             , "assert(TREATS == 1,"
             , "  'a patient beyond the engine reach must not be treated')"
             ]
+
+-- #2643: the squad ranking and patient discovery have to consider the
+-- SAME set of medics. bestMedicFor used treat_scan_range only as the
+-- distance discount's denominator, so a medic with more than twice a
+-- nearby medic's capability won the ranking from anywhere on the page --
+-- while findPatient's own inclusive `d <= treat_scan_range` cutoff meant
+-- that winner could never discover the patient that ranked it. Because
+-- treatAllyUtility returns -inf for every medic the ranking does not
+-- name, the nearby medic stood down for a helper that never took the
+-- job and the patient went untreated for as long as that held.
+--
+-- The boundary is what separates the fix from the bug, so each case is
+-- the same two medics and the same one patient with only the expert's
+-- distance moved: just inside it, exactly on it, and one tile past it.
+rankReachSpec ∷ Spec
+rankReachSpec = describe "AI medic ranking reach (#2643)" $ do
+    it "ranks a more capable medic just inside the discovery boundary" $
+        runsOk (boundaryCase 59 3)
+
+    it "ranks a more capable medic exactly on the discovery boundary" $
+        runsOk (boundaryCase 60 3)
+
+    it "gives the patient to the nearby medic when the expert is one tile past it" $
+        runsOk (boundaryCase 61 1)
+
+-- | One eligible patient and two fresh, unclaimed medics: uid 1 three
+--   tiles away with capability 50, and the expert uid 3 at @gap@ tiles
+--   with capability 100. Both are put through the REAL
+--   @treatAllyUtility@ before either executes, so no claim exists and
+--   the claim-lock shortcut cannot decide the outcome — what is measured
+--   is the ranking and the discovery scan agreeing. @winner@ is the uid
+--   expected to nominate the patient; the other must score @-inf@, which
+--   is what makes "exactly one medic takes it" an assertion rather than
+--   an assumption.
+boundaryCase ∷ Int → Int → Text
+boundaryCase gap winner = lns
+    [ prelude
+    , "local GAP, WINNER = " <> tshow gap <> ", " <> tshow winner
+    , "local core = require('scripts.unit_ai_core')"
+    , "-- The patient: one bleeding ally at (3, 0), beside medic 1."
+    , "woundedAlly(2, HOME)"
+    , "KNOW[1] = 50.0"
+    , "-- The expert: twice the capability, GAP tiles from the PATIENT,"
+    , "-- which is the distance BOTH the ranking and the scan measure."
+    , "unitRow(3, 'acolyte', 3 + GAP, 0, HOME)"
+    , "KNOW[3] = 100.0"
+    , "-- The case is only about GAP if the range it is measured against"
+    , "-- is the shipped one; a retuned range would move the boundary"
+    , "-- out from under all three cases at once."
+    , "assert(PARAMS.treat_scan_range == 60.0,"
+    , "  'these cases are written against a 60-tile scan range, got '"
+    , "  .. tostring(PARAMS.treat_scan_range))"
+    , "local s1, s3 = newState(), newState()"
+    , "local u1 = medic.treatAllyUtility(1, s1, PARAMS)"
+    , "local u3 = medic.treatAllyUtility(3, s3, PARAMS)"
+    , "assert(core.aiState[1] == nil and core.aiState[3] == nil,"
+    , "  'scoring alone must not have claimed the patient')"
+    , "local won, lost, sw, sl = u1, u3, s1, s3"
+    , "if WINNER == 3 then won, lost, sw, sl = u3, u1, s3, s1 end"
+    , "assert(won > 0,"
+    , "  'medic ' .. WINNER .. ' must nominate the patient, got '"
+    , "  .. tostring(won))"
+    , "assert(sw.treatPending and sw.treatPending.uid == 2,"
+    , "  'the winning medic must nominate patient 2, got '"
+    , "  .. tostring(sw.treatPending and sw.treatPending.uid))"
+    , "assert(lost == -math.huge,"
+    , "  'exactly one medic may nominate the patient; the other scored '"
+    , "  .. tostring(lost))"
+    , "assert(sl.treatPending == nil,"
+    , "  'the medic standing down must leave no pending target')"
+    ]
