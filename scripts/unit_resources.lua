@@ -38,6 +38,7 @@ local resourceConfig = require("scripts.unit_resource_config")
 local alerts          = require("scripts.unit_resource_alerts")
 local energy          = require("scripts.unit_resource_energy")
 local resourceTick    = require("scripts.unit_resource_tick")
+local resourceCarry   = require("scripts.unit_resource_carry")
 local injuryTick      = require("scripts.unit_resource_injury")
 local failureMeters   = require("scripts.unit_resource_failure")
 local starvation      = require("scripts.starvation")
@@ -65,9 +66,15 @@ function unitResources.init(scriptId)
     -- its hook unconditionally on every applyAll, regardless of what
     -- the save contains) prevents stale suppression state from
     -- attaching to a reused id.
+    -- unit_resource_carry rides the same hook for the same reason
+    -- (#2633): its per-uid sub-binary32 remainders are meaningless
+    -- once a load has replaced the stored values they are remainders
+    -- of, and a rewound umNextId can hand the same uid to a different
+    -- unit.
     local saveMods = require("scripts.lib.save_modules")
     saveMods.registerResetHook("unit_resources", function()
         alerts.resetOnLoad()
+        resourceCarry.resetOnLoad()
     end)
 end
 

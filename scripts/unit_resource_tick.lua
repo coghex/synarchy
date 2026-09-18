@@ -8,6 +8,7 @@ local injuries        = require("scripts.injuries")
 local brain           = require("scripts.brain")
 local alerts          = require("scripts.unit_resource_alerts")
 local energy          = require("scripts.unit_resource_energy")
+local carry           = require("scripts.unit_resource_carry")
 
 local M = {}
 
@@ -162,6 +163,9 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     -- `current`, so leaving it nil until the commit is safe.
     local current = unit.getStat(uid, resourceName)
     if current == nil and not isStamina then
+        -- A full tank is a fresh authorship of the pool, so any
+        -- remainder held for the old one is void (#2633).
+        carry.forget(uid, resourceName)
         unit.setStat(uid, resourceName, maxVal)
         return
     end
@@ -318,19 +322,20 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
         -- did.
         if res.initialized then return end
     else
-        next = current + amount
-
-        if next < 0     then next = 0     end
-        if next > maxVal then next = maxVal end
-
-        -- Only write if it actually changed by a meaningful amount.
-        -- Avoids hammering the unit manager IORef for sub-pixel
-        -- updates. Stamina's equivalent elision lives INSIDE the engine
-        -- transaction, where skipping the write cannot also skip the
-        -- threshold checks or hide a debit from them.
-        if math.abs(next - current) > 1e-4 then
-            unit.setStat(uid, resourceName, next)
-        end
+        -- #2633: this used to skip the write whenever the change was at
+        -- or below 1e-4 and keep no remainder for it, which made that
+        -- figure a minimum drain/regen RATE -- a pool moving more
+        -- slowly than it froze outright, while the same configuration
+        -- integrated at a coarser dt depleted normally. Stamina's
+        -- equivalent elision lives INSIDE the engine transaction, where
+        -- skipping the write cannot also skip the threshold checks.
+        -- unit_resource_carry writes every tick instead and carries the
+        -- part binary32 could not hold, so integration is exact at any
+        -- dt; what it returns is what storage actually holds, which is
+        -- what every check below has to judge.
+        next = carry.integrate(uid, resourceName, current, amount, maxVal)
+        -- The unit went away under the write; nothing left to decide.
+        if next == nil then return end
     end
 
     -- Survival warnings (player events). Debounced per-unit with
@@ -364,11 +369,13 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
            and (current / maxVal < params.death_threshold
                 or next / maxVal < params.death_threshold) then
             alerts.emitDeathAlert(uid, alerts.deathCauseFor(resourceName))
+            carry.forget(uid)
             unit.kill(uid)
             return
         end
         if params.kill_on_zero and (current <= 0 or next <= 0) then
             alerts.emitDeathAlert(uid, alerts.deathCauseFor(resourceName))
+            carry.forget(uid)
             unit.kill(uid)
             return
         end
