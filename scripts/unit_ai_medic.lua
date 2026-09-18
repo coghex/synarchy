@@ -13,9 +13,21 @@
 -- (drawing from the kit now in the medic's own inventory), repeating
 -- until the patient stops bleeding or the kit runs dry.
 --
+-- #2644 makes the fetch answer PER MEDICINE. An infected wound is cured
+-- with antibiotics, which need not travel with bandages at all: the
+-- medic fetches whichever of the two this patient needs and it does not
+-- already carry, from whichever holder stocks it. And because a cure
+-- has no improvised substitute the way a bleeder has the tourniquet, a
+-- medic that finds no antibiotics anywhere on the page RELEASES the
+-- claim and defers the patient instead of re-selecting the same futile
+-- treatment at lock utility forever. scripts/unit_ai_medic_supply.lua
+-- owns that whole question.
+--
 -- State on s:
 --   treatClaim   = { patient = uid }   -- lock-in, visible to others
 --   treatPending = patient table       -- utility → execute handoff
+--   treatDefer   = { [patient] = t }   -- #2644 futile-supply deferral,
+--                                      -- transient (never persisted)
 --
 -- Non-external kinds (concussion / fracture / internal) aren't
 -- bandageable, so they don't make a unit a patient.
@@ -30,6 +42,23 @@ local mv = require("scripts.movement_speed")
 local page = require("scripts.unit_ai_page")
 -- Exact-instance medical supply discovery, shared with the context menu.
 local supply = require("scripts.medical_supply")
+-- The supply phase: who on this page can hand over which medicine, and
+-- what a medic remembers when nobody can (#2644).
+local medsupply = require("scripts.unit_ai_medic_supply")
+local findKitHolder  = medsupply.findKitHolder
+local deferralLifted = medsupply.deferralLifted
+local deferPatient   = medsupply.deferPatient
+
+-- A usable kit the unit already carries (a container holding ≥1
+-- bandage), as { defName, instanceId }, or nil. Exact identity (#2302):
+-- the scan asks each inventory row about ITS OWN container, so a
+-- stocked kit behind an empty same-definition sibling is found -- and
+-- the fetch can name the instance discovery chose instead of popping
+-- whichever same-defName item the holder happens to reach first. Shared
+-- with the context menu so the greyed row and the treatment commit
+-- answer the same question. `ownAntibiotics` is the cure's half of it.
+local ownKit         = supply.bandageKit
+local ownAntibiotics = supply.antibioticsKit
 
 local M = {}
 
@@ -61,14 +90,18 @@ local CLOT_ENOUGH = 0.85
 -- to ANY wound kind (even the skip-kinds: a closed fracture can still
 -- fester), so it's checked outside the bleeder gate.
 local INFECT_TREAT_MIN = 0.15
-local function needsTreatment(uid, minSeep)
+
+-- Does the patient have a wound worth DRESSING? Split out of
+-- needsTreatment (#2644) because the two needs no longer share one
+-- answer at the supply phase: a bandage need can always be improvised
+-- (the makeshift tourniquet), an infection need cannot be met without
+-- antibiotics, and the executor has to tell them apart to know which
+-- medicine to fetch and which unmet need is futile.
+local function needsDressing(uid, minSeep)
     for _, w in ipairs(unit.getWounds(uid) or {}) do
         if not TREAT_SKIP_KINDS[w.kind] and (w.bandage or 1) > minSeep
            and (w.clot or 0) < CLOT_ENOUGH then
             return true
-        end
-        if (w.infection or 0) >= INFECT_TREAT_MIN then
-            return true   -- needs antibiotics
         end
     end
     return false
@@ -80,6 +113,13 @@ local function hasInfection(uid)
         if (w.infection or 0) >= INFECT_TREAT_MIN then return true end
     end
     return false
+end
+
+-- Anything at all to do for this patient: a bleeder to dress, or an
+-- infection to cure. Unchanged in meaning from the single loop this
+-- replaced -- the two halves are simply separately callable now.
+local function needsTreatment(uid, minSeep)
+    return needsDressing(uid, minSeep) or hasInfection(uid)
 end
 
 -- A medic treats its own side. Which factions count as "its own side"
@@ -105,12 +145,17 @@ end
 -- spoken for — either way it's unavailable, which is what lets a free
 -- lesser medic step in. (A medic already claiming THIS patient is still
 -- "available" for it — that's the one re-confirming its own claim.)
+-- #2644 adds its own deferral to that list, and for the same reason the
+-- combat case is on it: a medic sitting out a patient it cannot supply
+-- must not keep ranking as that patient's best medic, or a second medic
+-- who DOES hold antibiotics would be shut out for the whole window.
 local function medicAvailable(uid, patientUid)
     if medicBusyInCombat(uid) then return false end
     local st = aiState[uid]
     if st and st.treatClaim and st.treatClaim.patient ~= patientUid then
         return false
     end
+    if not deferralLifted(st, patientUid) then return false end
     return true
 end
 
@@ -187,7 +232,12 @@ local function patientClaimed(patientUid, excludeUid)
 end
 
 -- Nearest treatable, currently-unclaimed bleeding ally, or nil.
-local function findPatient(uid, info, params)
+-- `s` is the scanning medic's own state: #2644's deferral is skipped
+-- HERE as well as in medicAvailable, because this scan returns the
+-- single nearest candidate -- without the skip a deferred patient
+-- standing closest would shadow every other patient the medic could
+-- still help, and the ranking below would then reject the whole tick.
+local function findPatient(uid, s, info, params)
     local myFaction = unit.getFaction(uid)
     -- #2297: page-qualified against the scanning medic, same rule and
     -- same reason as findKitHolder below. `info` is the medic's own
@@ -198,6 +248,7 @@ local function findPatient(uid, info, params)
     for _, pid in ipairs(unit.getAllIds() or {}) do
         if pid ~= uid and isAlly(pid, myFaction)
            and needsTreatment(pid, params.treat_min_seep)
+           and deferralLifted(s, pid)
            and not patientClaimed(pid, uid) then
             local pinfo = unit.getInfo(pid)
             if pinfo and page.same(myPage, pinfo.page)
@@ -225,7 +276,7 @@ local function treatAllyUtility(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
 
-    local patient = findPatient(uid, info, params)
+    local patient = findPatient(uid, s, info, params)
     if not patient then return -math.huge end
 
     -- Squad ranking: only the best AVAILABLE allied medic takes the
@@ -239,42 +290,6 @@ local function treatAllyUtility(uid, s, params)
 
     s.treatPending = patient
     return params.treat_base_utility
-end
-
--- A usable kit the unit already carries (a container holding ≥1
--- bandage), as { defName, instanceId }, or nil. Exact identity (#2302):
--- the scan asks each inventory row about ITS OWN container, so a
--- stocked kit behind an empty same-definition sibling is found -- and
--- the fetch below can name the instance discovery chose instead of
--- popping whichever same-defName item the holder happens to reach
--- first. Shared with the context menu so the greyed row and the
--- treatment commit answer the same question.
-local ownKit = supply.bandageKit
-
--- Nearest unit carrying a usable kit (the technomule), to fetch from.
--- Page-qualified against the asking medic (#1673), same rule and same
--- reason as fetch.findTechnomule: unit.getAllIds reads the ACTIVE page,
--- which is not necessarily the medic's own.
-local function findKitHolder(medicUid, fromX, fromY)
-    local myPage = page.ofUnit(medicUid)
-    if not myPage then return nil end
-    local best, bestD = nil, math.huge
-    for _, uid in ipairs(unit.getAllIds() or {}) do
-        local kit = ownKit(uid)
-        if kit then
-            local info = unit.getInfo(uid)
-            if info and page.same(myPage, info.page) then
-                local d = distance(fromX, fromY, info.gridX, info.gridY)
-                if d < bestD then
-                    best = { uid = uid, gridX = info.gridX,
-                             gridY = info.gridY, kit = kit.defName,
-                             kitInstance = kit.instanceId }
-                    bestD = d
-                end
-            end
-        end
-    end
-    return best
 end
 
 local function treatExecute(uid, s, params)
@@ -305,17 +320,27 @@ local function treatExecute(uid, s, params)
         return
     end
 
-    -- Phase 1: make sure I'm carrying a kit with bandages; if not,
-    -- fetch one off the nearest kit-holder (the technomule). (The
-    -- no-kit-anywhere fallback — a makeshift tourniquet — is a later
-    -- chunk; for now, release so the unit re-evaluates.)
-    -- Phase 1: secure supplies. If I'm not carrying a kit, fetch one
-    -- off the nearest holder (the technomule). If there's NO kit
-    -- anywhere, don't give up — rush to the patient and improvise a
-    -- makeshift tourniquet there (the treatBleeding fallback). Better a
-    -- crude stopgap than letting them bleed.
-    if not ownKit(uid) then
-        local holder = findKitHolder(uid, info.gridX, info.gridY)
+    -- Phase 1: secure supplies. Fetch whichever medicine THIS patient
+    -- needs and I am not carrying, off the nearest holder that stocks
+    -- it (the technomule). If there's NO bandage anywhere, don't give
+    -- up — rush to the patient and improvise a makeshift tourniquet
+    -- there (the treatBleeding fallback). Better a crude stopgap than
+    -- letting them bleed.
+    --
+    -- #2644: the need is read per medicine rather than as one "have I
+    -- got a kit" question. An infected patient who is not bleeding
+    -- needs ANTIBIOTICS, and a kit whose last bandage has been spent —
+    -- or one stocked with nothing but antibiotics — used to be
+    -- invisible here, so the medic walked over empty-handed and
+    -- treatInfection failed on every tick forever.
+    local needDress = needsDressing(patient, params.treat_min_seep)
+    local needCure  = hasInfection(patient)
+    local wants = {}
+    if needDress and not ownKit(uid) then wants.bandage = true end
+    if needCure and not ownAntibiotics(uid) then wants.antibiotics = true end
+
+    if wants.bandage or wants.antibiotics then
+        local holder = findKitHolder(uid, info.gridX, info.gridY, wants)
         if holder then
             if distance(info.gridX, info.gridY, holder.gridX, holder.gridY)
                > params.mule_fetch_arrival then
@@ -331,7 +356,24 @@ local function treatExecute(uid, s, params)
                                     holder.kitInstance)
             return   -- re-evaluate next tick now that I hold the kit
         end
-        -- no kit reachable → fall through to the patient (tourniquet)
+        -- Nothing on this page stocks a medicine I still need.
+        --
+        -- A missing BANDAGE is not futile: the tourniquet fallback
+        -- below improvises one, so fall through exactly as before —
+        -- and do that even when the cure is missing too, so an
+        -- unavailable antibiotic never costs the patient the bleeding
+        -- stabilization that IS possible.
+        --
+        -- A missing CURE has no improvisation at all. Once dressing is
+        -- either done or not needed, holding on would re-select
+        -- treat_ally at lock utility on every subsequent decision and
+        -- displace ordinary work forever, so release the claim and
+        -- defer this patient for the supply-retry window (#2644).
+        if wants.antibiotics and not needDress then
+            deferPatient(s, patient)
+            s.treatClaim = nil
+            return
+        end
     end
 
     -- Phase 2: rush to the patient. Target a tile ~1 away (toward me),
@@ -372,7 +414,13 @@ local function treatExecute(uid, s, params)
     -- already-infected wound needs the antibiotics cure). Requires the
     -- INFECTION-CONTROL knowledge; re-fires until the infection is knocked
     -- down or the kit's pills run out.
-    if hasInfection(patient) and unit.getKnowledge(uid, "infection_control") then
+    -- #2644 adds the supply half of that gate. Without it the mixed
+    -- case -- a bleeding, infected patient the medic can dress but not
+    -- cure -- fired treatInfection with no antibiotics on every tick
+    -- and reported the same failure each time. The claim is released by
+    -- the supply phase above once the dressing is done, not here.
+    if hasInfection(patient) and ownAntibiotics(uid)
+       and unit.getKnowledge(uid, "infection_control") then
         local ir = unit.treatInfection(uid, patient)
         if ir and not ir.ok then
             reportFailure(patient, "Infection untreated: "

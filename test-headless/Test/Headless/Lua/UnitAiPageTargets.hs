@@ -970,6 +970,44 @@ pageSpec = describe "AI page pairing" $ do
                 , "  'a same-page kit holder must still be selected')"
                 ]
 
+        -- #2644 gave the same search an ANTIBIOTICS question, and the
+        -- page guard has to hold for it too. This is the only place it
+        -- can be measured: the real unit.getAllIds answers for the
+        -- ACTIVE page alone, so against a live engine an off-page
+        -- holder is filtered before findKitHolder ever sees it and the
+        -- two guards cannot be told apart. Here the listing is stubbed
+        -- to return every unit, so what refuses the holder is the page
+        -- check inside the search itself.
+        it "findKitHolder refuses an off-page ANTIBIOTICS holder (#2644)" $
+            runsOk $ lns
+                [ prelude
+                , "local WANT = { antibiotics = true }"
+                , "local function pillHolder(uid, pg)"
+                , "  local u = unitRow(uid, 'technomule', 5, 0, pg,"
+                , "    { { defName = 'medkit', kind = 'container' } })"
+                , "  u.contents['medkit'] = { { defName = 'antibiotics',"
+                , "                             count = 1, fill = 5 } }"
+                , "end"
+                , "pillHolder(2, AWAY)"
+                , "assert(medic.findKitHolder(1, 0, 0, WANT) == nil,"
+                , "  'an off-page antibiotics holder must not be selected')"
+                , "-- The same holder, same stock, on the medic's page."
+                , "UNITS[2] = nil"
+                , "pillHolder(2, HOME)"
+                , "local h = medic.findKitHolder(1, 0, 0, WANT)"
+                , "assert(h and h.uid == 2 and h.kit == 'medkit',"
+                , "  'a same-page antibiotics holder must be selected')"
+                , "-- And a bandage-only holder answers NO to the same"
+                , "-- question, so the case above cannot be passing on a"
+                , "-- search that ignored `wants` altogether."
+                , "UNITS[2] = nil"
+                , "local u = unitRow(2, 'technomule', 5, 0, HOME,"
+                , "  { { defName = 'medkit', kind = 'container' } })"
+                , "u.contents['medkit'] = { { defName = 'bandage', count = 3 } }"
+                , "assert(medic.findKitHolder(1, 0, 0, WANT) == nil,"
+                , "  'a bandage-only holder must not answer the cure')"
+                ]
+
     describe "treat_ally (#2297)" $ do
         it "ignores a bleeding ally on another page, and takes the same one on its own" $
             runsOk $ lns

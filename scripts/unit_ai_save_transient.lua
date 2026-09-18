@@ -83,9 +83,31 @@ local TRANSIENT_ORDER_FIELDS = { "transferOrder" }
 -- unit_ai_source_phase.expire re-arms a full budget on the first tick
 -- after a load, which is the honest answer for an interval the AI
 -- could not tick through.
+--
+-- #2644 adds the medic's futile-supply deferral (treatDefer, owned by
+-- scripts/unit_ai_medic_supply.lua) for BOTH of the reasons already
+-- stated above, which happen to coincide here:
+--
+--   * it is a CLOCK, like sourcePhaseAt and constructJob.staking -- a
+--     wait cannot outlive the session whose clock it was measured
+--     against, and engine.gameTime() on the other side of a load is not
+--     the clock these deadlines were taken from;
+--   * its KEYS are live unit ids, and persisting bare unit ids is the
+--     hazard the chopJob.iid and TRANSIENT_ORDER_FIELDS notes record --
+--     a reference kind unit_ai_save_refs.lua does not declare and the
+--     integrity graph could not check. Declaring a whole new keyed-by-
+--     reference family (and spending a schema version on it) would buy
+--     nothing, because restarting is the honest answer anyway.
+--
+-- Restarting costs one decision and cannot reinstate the bug: the first
+-- tick after a load re-scans the page, and if the medicine really is
+-- still unavailable the executor defers the patient again immediately,
+-- before any move or transfer. A row saved by an older build simply has
+-- no such field, which loads back as nil -- exactly what a stripped one
+-- looks like.
 local TRANSIENT_WORK_FIELDS =
     { "harvestProgress", "harvestProgressAt", "lastHarvestAt",
-      "harvestCollect", "forageCollect", "sourcePhaseAt" }
+      "harvestCollect", "forageCollect", "sourcePhaseAt", "treatDefer" }
 
 -- A shallow copy of one unit's aiState entry with every transient
 -- candidate field stripped (requirement 13/14) -- see
