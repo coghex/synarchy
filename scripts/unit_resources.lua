@@ -71,17 +71,38 @@ function unitResources.init(scriptId)
     -- once a load has replaced the stored values they are remainders
     -- of, and a rewound umNextId can hand the same uid to a different
     -- unit.
-    local saveMods = require("scripts.lib.save_modules")
-    saveMods.registerResetHook("unit_resources", function()
+    local function clearSessionCaches()
         alerts.resetOnLoad()
         resourceCarry.resetOnLoad()
-    end)
+    end
+    local saveMods = require("scripts.lib.save_modules")
+    saveMods.registerResetHook("unit_resources", clearSessionCaches)
+
+    -- Exit to Menu is a SECOND session-replacement path and it runs
+    -- NONE of the load machinery above (#1610): no applyAll, so no
+    -- reset hook, and no onSaveLoaded broadcast. It replaces the entity
+    -- managers and can rewind umNextId exactly as a load does, so both
+    -- caches have precisely the same reason to be cleared there, and
+    -- the same clear does it. Registered with the id these caches
+    -- already use; the two registries are independent namespaces
+    -- (scripts/lib/session_teardown.lua).
+    require("scripts.lib.session_teardown")
+        .register("unit_resources", clearSessionCaches)
 end
 
 -----------------------------------------------------------
 -- Update (called at tick interval by engine.loadScript)
 -----------------------------------------------------------
 function unitResources.update(dt)
+    -- #1610's drain window: between Exit to Menu and the next session
+    -- the engine's UnitClearAll is still draining, so unit.getAllIds
+    -- below still reports the destroyed session's units. Ticking them
+    -- would re-enter both caches the teardown just cleared -- a fresh
+    -- alert-debounce row and a fresh sub-binary32 remainder, per unit,
+    -- against a manager that is about to be replaced. unitAi.update and
+    -- buildingSpawn.update hold off on the same latch for the same
+    -- reason.
+    if require("scripts.lib.session_teardown").isTornDown() then return end
     if require("scripts.pause").isPaused() then return end
     local ids = unit.getAllIds()
     if not ids or #ids == 0 then return end

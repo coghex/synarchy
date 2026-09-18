@@ -315,6 +315,35 @@ updateN ls dt n = do
         , ") end; return true" ]
     r `shouldBe` "true"
 
+-- | §6's lifecycle plumbing: the real orchestration module with its
+--   real @init@, so both session-boundary registrations are made the
+--   way boot makes them.
+setupLifecycle ∷ EngineEnv → IO LuaBackendState
+setupLifecycle env = do
+    ls ← setupLua env
+    r ← evalDebug ls $ T.concat
+        [ "_G.__res = require('scripts.unit_resources'); "
+        , "_G.__res.init(0); return true" ]
+    r `shouldBe` "true"
+    pure ls
+
+-- | Fire the hook @unit_resources@ registered with @saveModules@,
+--   looked up in the registry @applyAll@ itself iterates.
+runRegisteredLoadReset ∷ LuaBackendState → IO ()
+runRegisteredLoadReset ls = do
+    r ← evalDebug ls
+        "require('scripts.lib.save_modules')\
+        \.resetHooks['unit_resources'](); return true"
+    r `shouldBe` "true"
+
+-- | The Exit-to-Menu boundary, run the way @pauseMenu.onExitToMenu@
+--   runs it.
+runSessionTeardown ∷ LuaBackendState → IO ()
+runSessionTeardown ls = do
+    r ← evalDebug ls
+        "return require('scripts.lib.session_teardown').runAll()"
+    r `shouldBe` "0"
+
 -- | Record every @engine.emitEventForUnit@ call. The alerts module
 --   resolves it off the global @engine@ table at call time, so this is
 --   the real emission path, counted rather than suppressed.
@@ -549,18 +578,43 @@ spec = aroundAll withHeadlessEngineNoWorld $
                 \.declared, ',')"
                 `shouldReturn` q "setStat,addXP,feed"
 
-        it "a load's reset hook discards it, so the same second tick no \
-           \longer moves storage" $ \env → do
+        it "the reset hook unit_resources REGISTERS discards it, so the \
+           \same second tick no longer moves storage" $ \env → do
             resetScene env 1.5
-            ls ← setupLua env
+            ls ← setupLifecycle env
             let creeping = paramsExpr
                     "p.drain_constant_frac = 0; p.drain_constant = 3e-7; "
             tickN ls creeping "idle" "standing" fineDt 1
-            cleared ← evalDebug ls
-                "_G.__carry.resetOnLoad(); return true"
-            cleared `shouldBe` "true"
+            -- Through the registry, not through the module: wiring that
+            -- stopped registering the carry clear has to fail here.
+            runRegisteredLoadReset ls
             tickN ls creeping "idle" "standing" fineDt 1
             readPressure env `shouldReturn` 1.5
+
+        it "Exit to Menu discards it too, which runs none of the load \
+           \machinery" $ \env → do
+            resetScene env 1.5
+            ls ← setupLifecycle env
+            let creeping = paramsExpr
+                    "p.drain_constant_frac = 0; p.drain_constant = 3e-7; "
+            tickN ls creeping "idle" "standing" fineDt 1
+            runSessionTeardown ls
+            tickN ls creeping "idle" "standing" fineDt 1
+            readPressure env `shouldReturn` 1.5
+
+        it "registers the same id on BOTH session boundaries" $ \env → do
+            resetScene env 1.5
+            ls ← setupLifecycle env
+            evalDebug ls
+                "return require('scripts.lib.save_modules')\
+                \.resetHooks['unit_resources'] ~= nil"
+                `shouldReturn` "true"
+            evalDebug ls
+                "local ids = require('scripts.lib.session_teardown')\
+                \.registeredIds(); for _, id in ipairs(ids) do \
+                \if id == 'unit_resources' then return true end end; \
+                \return false"
+                `shouldReturn` "true"
 
     -- §7 Requirement 2 bounds the other way: a change the pool cannot
     -- absorb is discarded at the bound, never banked up to be repaid
@@ -661,6 +715,26 @@ spec = aroundAll withHeadlessEngineNoWorld $
             ls ← setupUpdateLoop env
             updateN ls fineDt 2000
             shouldBeNear env (analytic 200) scheduleTol
+
+        it "holds off entirely inside Exit to Menu's drain window, so \
+           \the destroyed session's units cannot re-enter the cache" $
+          \env → do
+            resetSceneOnActivePage env
+            ls ← setupUpdateLoop env
+            evalDebug ls "_G.__res.init(0); return true" `shouldReturn` "true"
+            -- The units are still there — that is the whole point of
+            -- the window — so only the latch can stop the tick.
+            runSessionTeardown ls
+            evalDebug ls "return #unit.getAllIds()" `shouldReturn` "1"
+            updateN ls fineDt 500
+            readPressure env `shouldReturn` maxPool
+            -- The next session releases it and the loop resumes.
+            evalDebug ls
+                "require('scripts.lib.session_teardown').beginSession(); \
+                \return true" `shouldReturn` "true"
+            updateN ls fineDt 500
+            resumed ← readPressure env
+            resumed `shouldSatisfy` (< maxPool)
 
         it "still recovers stance every cadence, so the barrier is \
            \being exercised rather than bypassed" $ \env → do
