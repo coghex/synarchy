@@ -6,7 +6,8 @@
 -- scrollbar-grab/list), raw mouse down/up dispatch, and hover
 -- enter/leave routing. M.handleNonTextBoxClick is shared with
 -- scripts/ui_manager_menu.lua (menu-level clicks also need to drop
--- textbox/randbox/dropdown focus).
+-- textbox/randbox/dropdown focus); M.handleDropdownFamilyClick is the
+-- dropdown's own non-committing variant (#2636).
 local uiManager = package.loaded["scripts.ui_manager"]
 local M = {}
 
@@ -32,6 +33,25 @@ function M.handleNonTextBoxClick()
     -- dd.focused == true after the engine-side focus moved on, and the
     -- input dispatch below routes by dd.focused first — so keystrokes
     -- meant for a later-focused textbox landed in the stale dropdown.
+    --
+    -- #2636: this cleanup runs BEFORE the clicked control's own
+    -- callback, so an Apply-style handler must see the typed edit the
+    -- user just committed by clicking it. submitAll selects the best
+    -- match (firing onChange once) and reverts when nothing matches,
+    -- which is what unfocusAll did unconditionally before.
+    dropdown.submitAll()
+end
+
+-- #2636: the dropdown family's own click routes must NOT commit a
+-- pending edit. Clicking an option is a selection of THAT option:
+-- submitting the typed text first would fire onChange for a different
+-- option and close the list, destroying the very option handle the
+-- click is about to resolve. Clicking the arrow likewise just toggles
+-- the list. Both still drop the OTHER families' focus exactly as
+-- before.
+function M.handleDropdownFamilyClick()
+    textbox.unfocusAll()
+    randbox.unfocusAll()
     dropdown.unfocusAll()
 end
 
@@ -144,7 +164,10 @@ end
 function uiManager.onTextBoxClick(elemHandle)
     -- Clear the other widget families (textbox.focus handles its own
     -- family) so their focused flags can't go stale and steal keys.
-    dropdown.unfocusAll()
+    -- #2636: a textbox is "another control" too — focus leaving the
+    -- dropdown for it commits the typed edit rather than discarding it,
+    -- same as every other non-dropdown control route.
+    dropdown.submitAll()
     randbox.unfocusAll()
     textbox.handleClickByElement(elemHandle)
 end
@@ -172,12 +195,12 @@ function uiManager.onItemListRightClick(elemHandle)
 end
 
 function uiManager.onDropdownClick(elemHandle)
-    M.handleNonTextBoxClick()
+    M.handleDropdownFamilyClick()
     return dropdown.handleCallback("onDropdownClick", elemHandle)
 end
 
 function uiManager.onDropdownOptionClick(elemHandle)
-    M.handleNonTextBoxClick()
+    M.handleDropdownFamilyClick()
     return dropdown.handleCallback("onDropdownOptionClick", elemHandle)
 end
 

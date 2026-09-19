@@ -1469,6 +1469,30 @@ the FULL interactive size incl. scrollbar); `UI.fitVisibleRows` backs
 oversized-list row reduction. Tooltips keep their own cursor-relative
 clamp.
 
+**Editable-dropdown commit on focus loss (#2636).** A pending typed edit
+in a focused editable dropdown is COMMITTED — best match selected,
+`onChange` fired once — whenever focus leaves it by POINTER, and reverts
+to the previous selection (silently) when the text matches no option.
+That covers both pointer routes, because the engine reaches them
+differently: a left-click miss queues `LuaUIFocusLost` BEFORE the outside
+`LuaMouseDownEvent` (`Engine.Input.Thread.Mouse`), so
+`uiManager.onUIFocusLost` commits via `dropdown.submitAll` and the later
+`dropdown.onClickOutside` finds nothing left to submit; a click on
+another control fires no focus-lost at all, so `ui_manager_widgets`'
+shared `handleNonTextBoxClick` commits there instead — BEFORE the clicked
+control's own callback runs, which is what lets an Apply-style handler
+read the new selection.
+
+Three routes deliberately do NOT commit. Escape (`dropdown.onEscape`),
+destruction, and `dropdown.setOptions` share `dropdown.unfocus`, which
+stays cancel-only and callback-silent so a geometry rebuild fires nothing
+(§Responsive UI lifecycle). The dropdown family's own clicks — the arrow
+and an option row — go through `handleDropdownFamilyClick` instead:
+clicking an option selects THAT option exactly once, rather than first
+submitting a typed match that closes the list and destroys the very
+option handle the click is resolving. Gate: hspec
+`--match "dropdown commit on focus loss"`.
+
 **Interactive bounds (#749).** Three rects per element — LOGICAL
 (`uePosition`+`ueSize`), VISUAL (overflow-expanded render rect), and
 INTERACTIVE (what all hit-testing uses,

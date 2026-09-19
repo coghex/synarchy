@@ -453,6 +453,35 @@ function dropdown.unfocusAll()
     end
 end
 
+-- #2636: focus leaving an editable dropdown by POINTER must commit the
+-- typed edit rather than discard it. The input thread queues
+-- LuaUIFocusLost before the outside LuaMouseDownEvent
+-- (Engine.Input.Thread.Mouse), and clicking another control runs that
+-- control's cleanup before its own callback — so with unfocusAll on
+-- those routes the raw edit was overwritten with the selected option's
+-- text and dropdown.onClickOutside found nothing focused left to
+-- submit.
+--
+-- submitInput keeps the revert half intact: findBestMatch returning nil
+-- falls through to dropdown.unfocus, so an edit matching no option
+-- still restores the previous selection and fires no onChange.
+--
+-- Deliberately NOT folded into unfocus/unfocusAll. Escape
+-- (dropdown.onEscape), dropdown.destroy/destroyAll, and
+-- dropdown.setOptions all share unfocus and must stay cancel-only and
+-- callback-silent — geometry rebuilds included (engine contracts
+-- "Responsive UI lifecycle"). The dropdown's own click routes keep
+-- unfocusAll too, so clicking an option selects THAT option once
+-- instead of first submitting a typed match that closes the list out
+-- from under the clicked handle.
+function dropdown.submitAll()
+    for id, dd in pairs(dropdowns) do
+        if dd.focused then
+            dropdown.submitInput(id)
+        end
+    end
+end
+
 function dropdown.isFocused(id)
     local dd = dropdowns[id]
     if not dd then return false end

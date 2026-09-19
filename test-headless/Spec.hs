@@ -239,6 +239,7 @@ import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
 import qualified Test.Headless.UI.HierarchyOwnership as UIHierarchyOwnership
 import qualified Test.Headless.UI.FocusNavigation as UIFocusNavigation
+import qualified Test.Headless.UI.DropdownCommit as UIDropdownCommit
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.ListScrollSync as UIListScrollSync
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
@@ -1062,6 +1063,7 @@ main = hspec $ do
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
     describe "UI.FocusNavigation" UIFocusNavigation.spec
+    describe "UI.DropdownCommit" UIDropdownCommit.spec
     describe "UI.Clipping" UIClipping.spec
     describe "List scrollbar sync" UIListScrollSync.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
