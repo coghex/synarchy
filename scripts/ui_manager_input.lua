@@ -153,7 +153,13 @@ function uiManager.onUIEscape()
 end
 
 function uiManager.onUIFocusLost()
-    dropdown.unfocusAll()
+    -- #2636: the input thread queues LuaUIFocusLost BEFORE the outside
+    -- LuaMouseDownEvent that reaches dropdown.onClickOutside, so an
+    -- unfocusAll here overwrote the raw edit with the selected option's
+    -- text and left nothing focused for the click to submit. Commit it
+    -- instead; an edit matching no option still reverts, exactly as
+    -- unfocusAll did.
+    dropdown.submitAll()
     randbox.unfocusAll()
     textbox.unfocusAll()
 end

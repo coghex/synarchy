@@ -1660,6 +1660,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ControlActivation
                    Test.Headless.UI.HierarchyOwnership
                    Test.Headless.UI.FocusNavigation
+                   Test.Headless.UI.DropdownCommit
                    Test.Headless.UI.Clipping
                    Test.Headless.UI.ListScrollSync
                    Test.Headless.UI.InteractiveBounds

@@ -1469,6 +1469,39 @@ the FULL interactive size incl. scrollbar); `UI.fitVisibleRows` backs
 oversized-list row reduction. Tooltips keep their own cursor-relative
 clamp.
 
+**Editable-dropdown commit on focus loss (#2636).** A pending typed edit
+in a focused editable dropdown is COMMITTED — best match selected,
+`onChange` fired once — whenever focus leaves it by POINTER, and reverts
+to the previous selection (silently) when the text matches no option.
+That covers both pointer routes, because the engine reaches them
+differently: a left-click miss queues `LuaUIFocusLost` BEFORE the outside
+`LuaMouseDownEvent` (`Engine.Input.Thread.Mouse`), so
+`uiManager.onUIFocusLost` commits via `dropdown.submitAll` and the later
+`dropdown.onClickOutside` finds nothing left to submit; a click on
+another control fires no focus-lost at all, so `ui_manager_widgets`'
+shared `handleNonTextBoxClick` commits there instead — BEFORE the clicked
+control's own callback runs, which is what lets an Apply-style handler
+read the new selection. Another dropdown is the third pointer route and
+reports focus loss on neither channel, so `onDropdownDisplayClick` and
+`handleDropdownFamilyClick` commit every focused dropdown EXCEPT the
+click's own target (`dropdown.submitAll(exceptId)`); without that,
+`dropdown.focus` and the family's `unfocusAll` silently discarded the
+edit of the dropdown being left. Clicking the display box of the
+ALREADY-focused dropdown keeps its pending text, which is what the
+exception is for.
+
+What does NOT commit is the dropdown the click LANDS on, and the
+keyboard/lifecycle routes. Escape (`dropdown.onEscape`), destruction, and
+`dropdown.setOptions` share `dropdown.unfocus`, which stays cancel-only
+and callback-silent so a geometry rebuild fires nothing (§Responsive UI
+lifecycle). The dropdown family's own clicks — the arrow and an option
+row — go through `handleDropdownFamilyClick`, which commits the dropdowns
+being left and then applies the pre-existing revert to the target alone:
+clicking an option selects THAT option exactly once, rather than first
+submitting a typed match that closes the list and destroys the very
+option handle the click is resolving. Gate: hspec
+`--match "dropdown commit on focus loss"`.
+
 **Interactive bounds (#749).** Three rects per element — LOGICAL
 (`uePosition`+`ueSize`), VISUAL (overflow-expanded render rect), and
 INTERACTIVE (what all hit-testing uses,
