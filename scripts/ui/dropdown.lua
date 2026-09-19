@@ -474,9 +474,14 @@ end
 -- unfocusAll too, so clicking an option selects THAT option once
 -- instead of first submitting a typed match that closes the list out
 -- from under the clicked handle.
-function dropdown.submitAll()
+--
+-- exceptId (optional) leaves that one dropdown focused and untouched:
+-- the pointer moving focus BETWEEN dropdowns commits the one being
+-- left, but the click's own target keeps whatever it already had (see
+-- uiManager.onDropdownDisplayClick).
+function dropdown.submitAll(exceptId)
     for id, dd in pairs(dropdowns) do
-        if dd.focused then
+        if dd.focused and id ~= exceptId then
             dropdown.submitInput(id)
         end
     end

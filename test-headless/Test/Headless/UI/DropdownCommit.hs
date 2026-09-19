@@ -17,8 +17,8 @@
 --   than calling @dropdown.onClickOutside@ directly (which was green
 --   throughout the defect): @manager.onUIFocusLost()@ followed by the
 --   outside click, and @manager.onButtonClick@ /
---   @manager.onCheckboxClick@ / @manager.onDropdownOptionClick@ with
---   real widget element handles.
+--   @manager.onCheckboxClick@ / @manager.onDropdownOptionClick@ /
+--   @manager.onDropdownDisplayClick@ with real widget element handles.
 --
 --   Reachable on its own as
 --   @--match \"dropdown commit on focus loss\"@.
@@ -115,6 +115,38 @@ spec = around withHeadlessEngine $
                 \return __changed..'|'..dropdown.getValue(__dd)"
                 `shouldReturn` "1|1920x1080"
 
+        it "commits the edit of the dropdown being LEFT when the pointer \
+           \moves focus to another dropdown's display box" $ \env → do
+            ls ← dropdownBackend env
+            eval ls
+                "dropdown.focus(__dd); dropdown.setRawText(__dd,'1920x1080'); \
+                \manager.onDropdownDisplayClick(dropdown.getElementHandle(__other)); \
+                \return __changed..'|'..dropdown.getValue(__dd) \
+                \..'|'..tostring(__lastValue)..'|'..tostring(dropdown.isFocused(__dd)) \
+                \..'|'..tostring(dropdown.isFocused(__other))"
+                `shouldReturn` "1|1920x1080|1920x1080|false|true"
+
+        it "commits the edit of the dropdown being LEFT when the pointer \
+           \opens another dropdown by its arrow" $ \env → do
+            ls ← dropdownBackend env
+            eval ls
+                "dropdown.focus(__dd); dropdown.setRawText(__dd,'1920x1080'); \
+                \manager.onDropdownClick(dropdown.getArrowHandle(__other)); \
+                \return __changed..'|'..dropdown.getValue(__dd) \
+                \..'|'..tostring(__lastValue)..'|'..tostring(dropdown.isOpen(__other))"
+                `shouldReturn` "1|1920x1080|1920x1080|true"
+
+        it "keeps the pending edit of the dropdown whose OWN display box is \
+           \clicked, committing nothing" $ \env → do
+            ls ← dropdownBackend env
+            eval ls
+                "dropdown.focus(__dd); dropdown.setRawText(__dd,'1920x1080'); \
+                \manager.onDropdownDisplayClick(dropdown.getElementHandle(__dd)); \
+                \return __changed..'|'..dropdown.getValue(__dd) \
+                \..'|'..dropdown.getRawText(__dd) \
+                \..'|'..tostring(dropdown.isFocused(__dd))"
+                `shouldReturn` "0|1280x720|1920x1080|true"
+
         it "selects the CLICKED option exactly once when the pending text \
            \matches a different option" $ \env → do
             ls ← dropdownBackend env
@@ -183,6 +215,14 @@ dropdownBackend env = do
         , "    {value='1600x900',text='1600x900'},"
         , "    {value='1920x1080',text='1920x1080'}},"
         , "  default='1280x720',"
+        , "  onChange=function(v) __changed=__changed+1; __lastValue=v end});"
+        -- A second editable dropdown, so a pointer click can move focus
+        -- from one dropdown straight to another (review round 1).
+        , "_G.__other=dropdown.new({name='display',page=__page,font=1,"
+        , "  uiscale=1,x=0,y=150,options={"
+        , "    {value='windowed',text='Windowed'},"
+        , "    {value='fullscreen',text='Fullscreen'}},"
+        , "  default='windowed',"
         , "  onChange=function(v) __changed=__changed+1; __lastValue=v end});"
         , "return 'ready'"
         ]

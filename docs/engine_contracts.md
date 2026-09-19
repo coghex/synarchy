@@ -1481,13 +1481,22 @@ differently: a left-click miss queues `LuaUIFocusLost` BEFORE the outside
 another control fires no focus-lost at all, so `ui_manager_widgets`'
 shared `handleNonTextBoxClick` commits there instead — BEFORE the clicked
 control's own callback runs, which is what lets an Apply-style handler
-read the new selection.
+read the new selection. Another dropdown is the third pointer route and
+reports focus loss on neither channel, so `onDropdownDisplayClick` and
+`handleDropdownFamilyClick` commit every focused dropdown EXCEPT the
+click's own target (`dropdown.submitAll(exceptId)`); without that,
+`dropdown.focus` and the family's `unfocusAll` silently discarded the
+edit of the dropdown being left. Clicking the display box of the
+ALREADY-focused dropdown keeps its pending text, which is what the
+exception is for.
 
-Three routes deliberately do NOT commit. Escape (`dropdown.onEscape`),
-destruction, and `dropdown.setOptions` share `dropdown.unfocus`, which
-stays cancel-only and callback-silent so a geometry rebuild fires nothing
-(§Responsive UI lifecycle). The dropdown family's own clicks — the arrow
-and an option row — go through `handleDropdownFamilyClick` instead:
+What does NOT commit is the dropdown the click LANDS on, and the
+keyboard/lifecycle routes. Escape (`dropdown.onEscape`), destruction, and
+`dropdown.setOptions` share `dropdown.unfocus`, which stays cancel-only
+and callback-silent so a geometry rebuild fires nothing (§Responsive UI
+lifecycle). The dropdown family's own clicks — the arrow and an option
+row — go through `handleDropdownFamilyClick`, which commits the dropdowns
+being left and then applies the pre-existing revert to the target alone:
 clicking an option selects THAT option exactly once, rather than first
 submitting a typed match that closes the list and destroys the very
 option handle the click is resolving. Gate: hspec

@@ -7,7 +7,8 @@
 -- enter/leave routing. M.handleNonTextBoxClick is shared with
 -- scripts/ui_manager_menu.lua (menu-level clicks also need to drop
 -- textbox/randbox/dropdown focus); M.handleDropdownFamilyClick is the
--- dropdown's own non-committing variant (#2636).
+-- dropdown's own variant, which does not commit the edit of the
+-- dropdown the click lands on (#2636).
 local uiManager = package.loaded["scripts.ui_manager"]
 local M = {}
 
@@ -42,16 +43,22 @@ function M.handleNonTextBoxClick()
     dropdown.submitAll()
 end
 
--- #2636: the dropdown family's own click routes must NOT commit a
--- pending edit. Clicking an option is a selection of THAT option:
--- submitting the typed text first would fire onChange for a different
--- option and close the list, destroying the very option handle the
--- click is about to resolve. Clicking the arrow likewise just toggles
--- the list. Both still drop the OTHER families' focus exactly as
--- before.
-function M.handleDropdownFamilyClick()
+-- #2636: the dropdown family's own click routes must not COMMIT the
+-- edit of the dropdown they land on. Clicking an option is a selection
+-- of THAT option: submitting the typed text first would fire onChange
+-- for a different option and close the list, destroying the very option
+-- handle the click is about to resolve. Clicking the arrow likewise
+-- just toggles the list, keeping the pre-#2636 revert.
+--
+-- A DIFFERENT focused dropdown is another matter: it is losing focus by
+-- pointer exactly as it would to a button, so it commits (review round
+-- 1 found the same gap on the display-box route below). submitAll
+-- excepts the click's own target, and the unfocusAll after it then
+-- applies the family's own revert to that target alone.
+function M.handleDropdownFamilyClick(elemHandle)
     textbox.unfocusAll()
     randbox.unfocusAll()
+    dropdown.submitAll(dropdown.findByElementHandle(elemHandle))
     dropdown.unfocusAll()
 end
 
@@ -195,12 +202,12 @@ function uiManager.onItemListRightClick(elemHandle)
 end
 
 function uiManager.onDropdownClick(elemHandle)
-    M.handleDropdownFamilyClick()
+    M.handleDropdownFamilyClick(elemHandle)
     return dropdown.handleCallback("onDropdownClick", elemHandle)
 end
 
 function uiManager.onDropdownOptionClick(elemHandle)
-    M.handleDropdownFamilyClick()
+    M.handleDropdownFamilyClick(elemHandle)
     return dropdown.handleCallback("onDropdownOptionClick", elemHandle)
 end
 
@@ -211,6 +218,15 @@ function uiManager.onDropdownDisplayClick(elemHandle)
     -- when clicking the display box of an already-focused dropdown.
     textbox.unfocusAll()
     randbox.unfocusAll()
+    -- #2636 review round 1: moving focus BETWEEN dropdowns by pointer is
+    -- focus loss for the one being left, and nothing else on this route
+    -- reports it — dropdown.focus silently unfocuses the others, which
+    -- discarded their pending edit. Commit every focused dropdown except
+    -- this click's own target, which keeps its text per the exception
+    -- above (and, being the one dropdown.focus would not have unfocused
+    -- anyway, is the only one that could keep it).
+    local targetId = dropdown.findByElementHandle(elemHandle)
+    dropdown.submitAll(targetId)
     return dropdown.handleCallback("onDropdownDisplayClick", elemHandle)
 end
 
