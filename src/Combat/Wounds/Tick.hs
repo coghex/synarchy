@@ -5,6 +5,7 @@
 module Combat.Wounds.Tick
     ( tickAllWounds
     , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
+    , WoundTickOutcome(..) -- exposed for unit testing (the tick's verdict)
     ) where
 
 import UPrelude
@@ -41,7 +42,7 @@ import Combat.Wounds.Constants
     )
 import Combat.Wounds.Healing
     ( healBaseRate, healClotFloor, sleepHealMult, scarSeverityThreshold
-    , calorieHealMultiplier
+    , calorieHealMultiplier, bloodRecoveryDelta
     )
 import Combat.Wounds.Infection
     ( infectionBaseRate, infectionGraceSec, testInfectionBaseRate
@@ -55,7 +56,8 @@ import Combat.Wounds.Infection
     , infectionLoadThreshold, immGainRate, immunityDecayRate, immunityFloor
     )
 import Combat.Wounds.Bleed
-    (kindBleedFactor, isExternallyBleedingKind, externalBleedRateFor)
+    ( kindBleedFactor, isExternallyBleedingKind, externalBleedRateFor
+    , bleedRateFor )
 import Combat.Wounds.Sever (propagateSevering)
 
 -- ----- Entry point -----
@@ -174,17 +176,27 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
     | null (uiWounds inst)  =
         -- No wounds → no infection, but the immune response must still wind
         -- down and acquired immunity fade (else a recovered unit would keep a
-        -- maxed response forever). Skip the allocation when both are already
-        -- at rest (the common case for a healthy unit).
-        if uiImmuneResponse inst ≤ 0 ∧ HM.null (uiImmunities inst)
-          then (inst, NoChange, gen0)
-          else let r'   = max 0 (uiImmuneResponse inst - immuneDecayRate * dt)
-                   imm' = HM.filter (> immunityFloor)
-                        $ HM.map (\v → max 0 (min 1
-                                    (v - immunityDecayRate * dt)))
-                                 (uiImmunities inst)
-               in (inst { uiImmuneResponse = r', uiImmunities = imm' }
-                  , NoChange, gen0)
+        -- maxed response forever). Blood recovery (#2639) also continues
+        -- here: a unit whose last wound has been removed has an aggregate
+        -- bleed rate of exactly zero, which is the whole eligibility test,
+        -- so recovery carries on uninterrupted across the moment the wound
+        -- list empties. Skip the allocation when blood is already settled
+        -- AND both are at rest (the common case for a healthy unit).
+        let blood' = recoveredBloodVolume (uiStats inst) dt 0 (uiBlood inst)
+            atRest = uiImmuneResponse inst ≤ 0 ∧ HM.null (uiImmunities inst)
+        in if atRest ∧ blood' ≡ uiBlood inst
+             then (inst, NoChange, gen0)
+             -- Both decays are no-ops when `atRest` holds (a response at or
+             -- below 0 stays 0, an empty map stays empty), so the blood-only
+             -- case can share this branch without a second spelling.
+             else let r'   = max 0 (uiImmuneResponse inst - immuneDecayRate * dt)
+                      imm' = HM.filter (> immunityFloor)
+                           $ HM.map (\v → max 0 (min 1
+                                       (v - immunityDecayRate * dt)))
+                                    (uiImmunities inst)
+                  in (inst { uiImmuneResponse = r', uiImmunities = imm'
+                           , uiBlood = blood' }
+                     , NoChange, gen0)
     | otherwise =
         let parts = HM.fromList [(bpId p, p) | p ← udBodyParts def]
             con   = HM.lookupDefault 1.0 "constitution" (uiStats inst)
@@ -466,12 +478,34 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                 | newBlood < unconsCut, uiPose inst ≢ "collapsed"
                                      = UnconsciousNow worstPart
                 | otherwise          = NoChange
+            -- #2639 blood recovery. The eligibility rate is the
+            -- AGGREGATE post-tick bleed over EVERY wound kind (internal
+            -- bleeding and fractures included), read through the same
+            -- per-wound term the fold above applied — so the tick in
+            -- which the last clot completes drains nothing and is
+            -- already eligible, and a single still-seeping wound
+            -- anywhere blocks recovery even when the unit's externally
+            -- visible bleeding has stopped.
+            bleedAfter = bleedRateFor def (inst { uiWounds = newWoundsR })
+            -- Gross blood-loss accounting stays independent of recovery
+            -- (requirement 3): `outcome`, `actualDrain` and the trail
+            -- accumulator above are all derived from `newBlood`, before
+            -- a litre of this is added. A tick that drained anything at
+            -- all recovers nothing, so an exsanguinating tick still
+            -- publishes zero blood and cannot be rescued, and a tick
+            -- that kills by gangrene does not top the corpse up either.
+            postDrain = max 0 newBlood
+            newBloodR = case outcome of
+                DiedNow _ _      → postDrain
+                _ | totalDrain > 0 → postDrain
+                  | otherwise      →
+                      recoveredBloodVolume (uiStats inst) dt bleedAfter postDrain
             inst' = inst
                 { uiWounds = newWoundsR
                 , uiScars  = newScars <> uiScars inst
                 , uiImmuneResponse = newR
                 , uiImmunities = newImm
-                , uiBlood  = max 0 newBlood
+                , uiBlood  = newBloodR
                 -- Death is terminal for the trail too (#882 requirement
                 -- 5): no leaked emitter state once exsanguination/
                 -- gangrene fires this tick.
@@ -480,3 +514,40 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                     _           → newTrailState
                 }
         in (propagateSevering def inst', outcome, genFinal)
+
+-- | Blood volume after #2639 recovery, given the unit's stats, the tick
+--   step, the AGGREGATE post-tick bleed rate over every wound kind, and
+--   the volume left once this tick's drain has been taken.
+--
+--   Three things gate it, and all three are decided here so the two
+--   'tickOneUnit' paths cannot drift apart:
+--
+--     * A unit with no @body_mass@ stat never recovers. Units whose YAML
+--       declares no body block are spawn-seeded at 0 L precisely so they
+--       will not bleed ('Unit.Thread.Command.Body.bloodSeedFromStats'),
+--       while the maximum below defaults body mass to 70 kg — so without
+--       this guard a tiller or a deer would regenerate from 0 toward
+--       5.25 L over three days and drift its blood-derived speed
+--       multiplier from 0.5 up to 1.0.
+--     * Any positive aggregate bleed blocks recovery outright. Stabilized
+--       wounds may remain present; what must be zero is the rate.
+--     * The maximum-volume clamp bounds the recovery from ABOVE ONLY. A
+--       unit already at or over its derived maximum has zero headroom and
+--       is returned untouched, so no tick can ever LOWER blood through
+--       this path — fixtures seeded above the derived maximum stay put.
+--
+--   Collapse is deliberately not a gate: rebuilding blood while
+--   unconscious is exactly what lets a stabilized unit cross the 50 %
+--   revive threshold. Nor is sleep — resting is not a condition.
+recoveredBloodVolume
+    ∷ HM.HashMap Text Float → Float → Float → Float → Float
+recoveredBloodVolume stats dt bleedAfter postDrain =
+    case HM.lookup "body_mass" stats of
+        Nothing → postDrain
+        Just bodyMass
+            | bleedAfter > 0 → postDrain
+            | otherwise →
+                let maxBlood = bodyMass * bloodMassRatio
+                    headroom = maxBlood - postDrain
+                in postDrain
+                     + max 0 (min (bloodRecoveryDelta stats maxBlood dt) headroom)

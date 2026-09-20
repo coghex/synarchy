@@ -121,7 +121,7 @@ local function unitConditions(uid)
             local blood = unit.getBlood(uid)
             if blood and blood.max > 0 and blood.current / blood.max < 0.5 then
                 out[#out + 1] = { name = "Unconscious (blood loss)", icon = "blood",
-                    hint = "Out cold from blood loss. Wakes once blood recovers above 50%." }
+                    hint = "Out cold from blood loss. Rebuilds blood once the bleeding stops; wakes at 50%." }
             elseif lowFrac(uid, "hydration", "max_hydration", 0.5) then
                 out[#out + 1] = { name = "Collapsed (dehydrated)", icon = "hydration",
                     hint = "Collapsed from thirst. Rises once hydration recovers above 50%." }

@@ -2,7 +2,8 @@
 --   (the combat thread itself runs at 60 Hz but only ticks wounds on
 --   every 6th iteration — finer resolution buys nothing visible to
 --   the player). Mutates `uiWounds` (severity decay) and `uiBlood`
---   (bleeding drain), promotes alive→Collapsed at the 30%-blood
+--   (bleeding drain, and replenishment once nothing bleeds — #2639),
+--   promotes alive→Collapsed at the 30%-blood
 --   threshold, and alive→Dead at ≤0 blood, emitting an
 --   "exsanguination" CombatEvent.
 --
@@ -19,6 +20,15 @@
 --   clotted); woundClot itself advances elsewhere in this module
 --   (bandages/dressings/time), and infection/calorie state gate the
 --   rate further.
+--
+-- blood_recovery_per_sec(unit) =
+--     max_blood × 0.70 / (3 × 1440) × nutritionMult × constitutionMult
+--   Applied only on a tick whose own drain is zero AND whose aggregate
+--   post-tick bleed rate over EVERY wound kind is exactly zero, to a
+--   living unit that has a body_mass stat; clamped upward to max_blood
+--   and never lowering blood. See "Combat.Wounds.Healing" for the
+--   multipliers and @recoveredBloodVolume@ in "Combat.Wounds.Tick" for the
+--   eligibility gates.
 --
 -- Wounds with severity < woundCleanupThreshold are dropped from the
 -- list to keep the per-tick scan cheap.
@@ -44,6 +54,7 @@ module Combat.Wounds
     ( tickAllWounds
     , propagateSevering   -- exposed for unit testing
     , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
+    , WoundTickOutcome(..) -- exposed for unit testing (the tick's verdict)
     , bleedRateFor        -- current L/sec blood loss (for the info panel)
     , kindBleedFactor     -- per-kind bleed multiplier (treat-action ranking)
     , isExternallyBleedingKind  -- external- vs internal-only wound kinds (#882)
@@ -52,7 +63,8 @@ module Combat.Wounds
     , destroyThreshold    -- the "structurally destroyed" severity (#607 impact blood)
     ) where
 
-import Combat.Wounds.Tick (tickAllWounds, tickOneUnit)
+import Combat.Wounds.Tick
+    (tickAllWounds, tickOneUnit, WoundTickOutcome(..))
 import Combat.Wounds.Sever (propagateSevering, destroyThreshold)
 import Combat.Wounds.Bleed
     ( bleedRateFor, kindBleedFactor, isExternallyBleedingKind
