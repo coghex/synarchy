@@ -3153,11 +3153,17 @@ ground items already ride into the save through the `world-activity`
 component's `GroundItemsDTO`/`GroundItemDTO`, which preserves gids, the
 allocator, instances and coordinates.
 
-Gate: hspec `--match "Ground item move"`, whose destination fixtures put
-the terrain surface, the camera slice and the pointer elevation at three
-DIFFERENT z values so an implementation reading the wrong one accepts and
-refuses exactly the opposite set, and whose frame-bound case names a
-coordinate pair that wraps onto a loaded chunk when the bound is removed.
+Gate: hspec `--match "Ground item move"`. Its destination fixtures put
+the three candidate elevations at three DIFFERENT z values, each of the
+two wrong ones really in force: the terrain surface at 12, a REAL pointer
+hit at 14 — found by locating the screen pixel that resolves to the decoy
+tile, driving the shipped `world.pickTile` at it, and installing the
+answer into `worldSelectedTile`/`worldHoverTile`/`worldHoverPos` — and the
+camera's own installed z-slice at 16. One column carries material only at
+each, so an implementation reading the pointer hit or the camera slice
+accepts a destination this verb must refuse, and refuses the one it must
+accept. The frame-bound case names a coordinate pair that wraps onto a
+loaded chunk when the bound is removed.
 Move-specific persistence evidence is `tools/item_instance_probe.py`'s
 PERSIST phase (`python3 tools/run_probes.py --only item_instance`), which
 relocates a ground item and asserts it restores at the relocated

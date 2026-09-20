@@ -22,16 +22,29 @@
 --   hand-built chunks, so two live worlds with discriminating terrain
 --   cost no worldgen.
 --
---   The terrain fixture is built so the three candidate elevations
---   DIFFER. 'surfaceZ' is each column's own @lcTerrainSurfaceMap@
---   entry — the elevation
---   'World.Render.GroundItemQuads.itemGeometry' rests a ground item at,
---   and by requirement 4 the only input to destination validity.
---   'decoyZ' is the camera's z-slice (really installed on the engine's
---   camera) and stands in for a pointer hit as well. 'restColumn' has
---   material ONLY at 'surfaceZ' and 'decoyColumn' ONLY at 'decoyZ', so
---   an implementation that validated against the camera slice or a
---   pointer elevation would accept and refuse exactly the opposite set.
+--   The terrain fixture is built so the three candidate elevations are
+--   three DIFFERENT numbers, and so that each of the two wrong ones is
+--   really in force rather than merely named:
+--
+--   * 'surfaceZ' (12) is every fixture column's own
+--     @lcTerrainSurfaceMap@ entry — the elevation
+--     'World.Render.GroundItemQuads.itemGeometry' rests a ground item
+--     at, and by requirement 4 the only input to destination validity;
+--   * 'pointerZ' (14) is what a REAL pointer hit resolves to. The
+--     fixture installs a camera, a window and a framebuffer, finds the
+--     screen pixel that actually hits the decoy tile, drives the
+--     shipped @world.pickTile@ at that pixel, asserts the z it answers
+--     is 'pointerZ', and records it through @world.selectTile@ — so
+--     'World.Cursor.Types.worldSelectedTile' carries a genuine
+--     pointer hit at that elevation while the move under test runs;
+--   * 'cameraZ' (16) is the camera's own z-slice, really installed on
+--     'Engine.Core.State.cameraRef'.
+--
+--   'restColumn' has material ONLY at 'surfaceZ', 'pointerDecoyColumn'
+--   ONLY at 'pointerZ' and 'cameraDecoyColumn' ONLY at 'cameraZ', so an
+--   implementation reading the pointer hit, or the camera slice, accepts
+--   a column this verb must refuse — including one that consults the
+--   pointer only when real pointer state is present, because it is.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Ground item move"'@.
@@ -45,9 +58,12 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.List (sort)
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), activeWorldStateFrom)
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Camera (Camera2D(..), defaultCamera)
+import World.Generate (viewDepth)
+import World.Render.HitTest (pickWorldTile)
+import World.Render.ViewBounds (computeViewBounds)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
@@ -84,10 +100,18 @@ worldSize = 64
 surfaceZ ∷ Int
 surfaceZ = 12
 
--- | The camera's z-slice, installed for real, and the elevation a
---   pointer hit would have reported. Deliberately not 'surfaceZ'.
-decoyZ ∷ Int
-decoyZ = 10
+-- | The elevation a REAL pointer hit resolves to on
+--   'pointerDecoyColumn': below the camera slice, above the terrain
+--   surface, and equal to neither.
+pointerZ ∷ Int
+pointerZ = 14
+
+-- | The camera's own z-slice, really installed on
+--   'Engine.Core.State.cameraRef'. Above everything else, so
+--   'World.Render.HitTest.pickWorldTile''s downward search from it
+--   reaches each fixture column's single material band.
+cameraZ ∷ Int
+cameraZ = 16
 
 -- | Column z-range every fixture column spans.
 columnDepth ∷ Int
@@ -108,10 +132,15 @@ columnWith zs = ColumnTiles
 restColumn ∷ ColumnTiles
 restColumn = columnWith [surfaceZ]
 
--- | Material at the camera slice / pointer elevation and nowhere else.
---   An implementation reading either of those would accept this.
-decoyColumn ∷ ColumnTiles
-decoyColumn = columnWith [decoyZ]
+-- | Material at the elevation a real pointer hit reports, and nowhere
+--   else. An implementation validating at the pointer's z accepts this.
+pointerDecoyColumn ∷ ColumnTiles
+pointerDecoyColumn = columnWith [pointerZ]
+
+-- | Material at the camera's z-slice and nowhere else. An
+--   implementation validating at the camera slice accepts this.
+cameraDecoyColumn ∷ ColumnTiles
+cameraDecoyColumn = columnWith [cameraZ]
 
 -- | A column whose stored z-range is trimmed to @[5, 8)@ while its
 --   terrain surface still reads 'surfaceZ' — the out-of-range index
@@ -125,19 +154,25 @@ trimmedColumn = ColumnTiles
     , ctVeg    = VU.replicate 3 0
     }
 
--- | Local coords, within any loaded chunk, of the two columns that must
---   refuse. Everything else in a fixture chunk is a 'restColumn'.
-decoyLocal, trimmedLocal ∷ (Int, Int)
-decoyLocal   = (1, 0)
-trimmedLocal = (2, 0)
+-- | Local coords, within any loaded chunk, of the three columns that
+--   must refuse. Everything else in a fixture chunk is a 'restColumn',
+--   including local (0, 0) — the one destination that must be accepted.
+pointerDecoyLocal, cameraDecoyLocal, trimmedLocal ∷ (Int, Int)
+pointerDecoyLocal = (1, 0)
+cameraDecoyLocal  = (2, 0)
+trimmedLocal      = (3, 0)
 
 fixtureChunk ∷ ChunkCoord → LoadedChunk
 fixtureChunk coord = LoadedChunk
     { lcCoord = coord
     , lcTiles = V.generate area $ \i →
-        if      i ≡ uncurry columnIndex decoyLocal   then decoyColumn
-        else if i ≡ uncurry columnIndex trimmedLocal then trimmedColumn
-        else                                              restColumn
+        if      i ≡ uncurry columnIndex pointerDecoyLocal
+            then pointerDecoyColumn
+        else if i ≡ uncurry columnIndex cameraDecoyLocal
+            then cameraDecoyColumn
+        else if i ≡ uncurry columnIndex trimmedLocal
+            then trimmedColumn
+        else     restColumn
     , lcSurfaceMap        = VU.replicate area surfaceZ
     , lcTerrainSurfaceMap = VU.replicate area surfaceZ
     , lcFluidMap = V.replicate area Nothing
@@ -394,27 +429,47 @@ spec = around (withIsolatedResourceRoot . withHeadlessEngineNoWorld) $ do
             refusalLeavesEverything sc $
                 move ls movedGid activeIid 100.5 100.5 Nothing
 
-        it "refuses when material exists only at the camera slice and \
-           \the pointer elevation, and takes when it exists only at the \
-           \destination's own terrain surface" $ \env → do
+        it "refuses a column whose material sits only at the elevation a \
+           \REAL pointer hit reports, with that hit established and \
+           \three elevations in play" $ \env → do
             (ls, sc) ← moveBackend env
-            let (dx, dy) = decoyLocal
-            refusalLeavesEverything sc $
-                move ls movedGid activeIid
-                     (fromIntegral dx + 0.5) (fromIntegral dy + 0.5) Nothing
-            -- The accepting column has material at surfaceZ and NOTHING
-            -- at the camera slice, so this is the same discrimination
-            -- taken the other way.
-            move ls movedGid activeIid 0.5 0.5 Nothing `shouldReturn` "true"
+            -- A genuine hit-test, through the shipped verb, at the
+            -- pixel that really resolves to this tile — then recorded
+            -- as the pointer's selection, so worldSelectedTile carries
+            -- a live pointer hit at pointerZ while the move runs.
+            hitZ ← establishPointerHit env ls pointerDecoyLocal
+            hitZ `shouldBe` pointerZ
+            -- Three DIFFERENT numbers, which is what makes the verdict
+            -- below attributable.
+            sort [surfaceZ, pointerZ, cameraZ] `shouldBe` [12, 14, 16]
+            refusalLeavesEverything sc $ moveToLocal ls pointerDecoyLocal
+
+        it "refuses a column whose material sits only at the camera's \
+           \z-slice" $ \env → do
+            (ls, sc) ← moveBackend env
+            -- On this column the downward search from the slice stops
+            -- at the slice itself, so the pointer hit and the camera
+            -- slice coincide here and the terrain surface is the odd
+            -- one out.
+            hitZ ← establishPointerHit env ls cameraDecoyLocal
+            hitZ `shouldBe` cameraZ
+            refusalLeavesEverything sc $ moveToLocal ls cameraDecoyLocal
+
+        it "takes when material sits at the destination's own terrain \
+           \surface, with the same pointer hit and camera slice \
+           \standing" $ \env → do
+            (ls, sc) ← moveBackend env
+            -- The pointer's recorded hit is left pointing at the DECOY
+            -- tile, at pointerZ, so acceptance here cannot be read off
+            -- the pointer state either.
+            _ ← establishPointerHit env ls pointerDecoyLocal
+            moveToLocal ls restLocal `shouldReturn` "true"
             positionOf (scActive sc) movedGid `shouldReturn` Just (0.5, 0.5)
 
         it "refuses a column whose terrain surface is outside its stored \
            \z-range, without raising" $ \env → do
             (ls, sc) ← moveBackend env
-            let (tx, ty) = trimmedLocal
-            refusalLeavesEverything sc $
-                move ls movedGid activeIid
-                     (fromIntegral tx + 0.5) (fromIntegral ty + 0.5) Nothing
+            refusalLeavesEverything sc $ moveToLocal ls trimmedLocal
 
     describe "canonical destinations" $ do
 
@@ -493,6 +548,99 @@ spec = around (withIsolatedResourceRoot . withHeadlessEngineNoWorld) $ do
             (sort ∘ HM.keys ∘ gisItems <$> groundOf ws)
                 `shouldReturn` [bystanderGid]
             (gisNextId <$> groundOf ws) `shouldReturn` 2
+
+-- * Destinations and the pointer hit
+
+-- | The one local column a move may land on.
+restLocal ∷ (Int, Int)
+restLocal = (0, 0)
+
+-- | Move the item onto the centre of a local column of the origin
+--   chunk, whose local coords are also its global tile coords.
+moveToLocal ∷ LuaBackendState → (Int, Int) → IO Text
+moveToLocal ls (lx, ly) = move ls movedGid activeIid
+    (fromIntegral lx + 0.5) (fromIntegral ly + 0.5) Nothing
+
+-- | Establish a REAL pointer hit on the given local tile and answer the
+--   elevation it resolved to.
+--
+--   Not a hand-written number: it finds the screen pixel that the
+--   shipped hit-test actually resolves to that tile, then drives the
+--   shipped @world.pickTile@ verb at that pixel — the synchronous
+--   screen-pixel hit-test a click path runs — and asserts the tile and
+--   the z it answers.
+--
+--   That answer is then installed into the cursor fields a click
+--   leaves behind: 'World.Cursor.Types.worldSelectedTile' (carrying the
+--   hit's own z), 'worldHoverTile' and 'worldHoverPos'. Written
+--   directly rather than through @world.selectTile@ because that verb
+--   only ENQUEUES @WorldSelectTileByCoord@ for the world thread, which
+--   this fixture does not run; the state installed here is the state
+--   that handler writes. So a live pointer hit, at an elevation that is
+--   neither the terrain surface nor the camera slice, is present for
+--   the whole of the move that follows.
+establishPointerHit ∷ EngineEnv → LuaBackendState → (Int, Int) → IO Int
+establishPointerHit env ls tile = do
+    mPix ← pixelForTile env tile
+    case mPix of
+        Nothing → do
+            expectationFailure ("no screen pixel resolves to tile "
+                                   ⧺ show tile)
+            error "unreachable"
+        Just (px, py) → do
+            got ← evalOk ls $
+                "local gx, gy, z = world.pickTile(" <> tshow px <> ", "
+                    <> tshow py <> "); if not gx then return 'none' end; "
+                    <> "return gx .. ',' .. gy .. ',' .. z"
+            (gx, gy, z) ← case T.splitOn "," (T.filter (≢ '"') got) of
+                [a, b, c] → pure ( read (T.unpack a) ∷ Int
+                                 , read (T.unpack b) ∷ Int
+                                 , read (T.unpack c) ∷ Int )
+                _ → do
+                    expectationFailure
+                        ("world.pickTile answered " ⧺ show got)
+                    error "unreachable"
+            (gx, gy) `shouldBe` tile
+            ws ← activePage env
+            atomicModifyIORef' (wsCursorRef ws) $ \cs →
+                ( cs { worldSelectedTile = Just (gx, gy, z)
+                     , worldHoverTile    = Just (gx, gy)
+                     , worldHoverPos     = Just ( fromIntegral gx + 0.5
+                                                , fromIntegral gy + 0.5 ) }
+                , () )
+            pure z
+
+-- | The screen pixel whose hit-test resolves to @tile@, found by
+--   running the very function @world.pickTile@ runs over the installed
+--   viewport. Coarse steps: any pixel inside the tile answers.
+pixelForTile ∷ EngineEnv → (Int, Int) → IO (Maybe (Int, Int))
+pixelForTile env tile = do
+    camera ← readIORef (cameraRef env)
+    (winW, winH) ← readIORef (windowSizeRef env)
+    (fbW, fbH) ← readIORef (framebufferSizeRef env)
+    let zoom = camZoom camera
+        (camX, camY) = camPosition camera
+        effectiveDepth = min viewDepth
+            (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+        vb = computeViewBounds camera fbW fbH effectiveDepth
+        hits = [ (px, py)
+               | py ← [0 .. winH - 1], px ← [0 .. winW - 1]
+               , Just (gx, gy, _, _, _) ←
+                     [pickWorldTile (camFacing camera) zoom
+                          (camZSlice camera) camX camY fbW fbH winW winH
+                          worldSize effectiveDepth vb fixtureTiles px py]
+               , (gx, gy) ≡ tile ]
+    pure $ listToMaybe hits
+
+-- | The page @world.pickTile@ and the verb under test both resolve to.
+activePage ∷ EngineEnv → IO WorldState
+activePage env = do
+    mWs ← activeWorldStateFrom (worldManagerRef env)
+    case mWs of
+        Just ws → pure ws
+        Nothing → do
+            expectationFailure "the fixture has no active page"
+            error "unreachable"
 
 -- * Refusal discipline
 
@@ -602,10 +750,13 @@ installPages env = do
         { wmWorlds  = [(pageActive, wsA), (pageHidden, wsH)]
         , wmVisible = [pageActive] }
     writeIORef (itemManagerRef env) emptyItemManager
-    -- The camera slice is really installed, at the elevation the decoy
-    -- column has its material at: a verb reading it would accept that
-    -- column and refuse the resting one.
-    writeIORef (cameraRef env) defaultCamera { camZSlice = decoyZ }
+    -- The camera's z-slice is really installed, at the elevation
+    -- 'cameraDecoyColumn' has its material at, and a viewport goes with
+    -- it so the shipped hit-test can run for real against this page.
+    writeIORef (cameraRef env) defaultCamera
+        { camZSlice = cameraZ, camZoom = fixtureZoom }
+    writeIORef (windowSizeRef env) (viewportW, viewportH)
+    writeIORef (framebufferSizeRef env) (viewportW, viewportH)
     pure (Scene wsA wsH)
 
 moveBackend ∷ EngineEnv → IO (LuaBackendState, Scene)
@@ -617,6 +768,17 @@ moveBackend env = do
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
     pure (ls, sc)
+
+-- | The installed viewport. Square, so the hit-test's aspect is 1 and
+--   the scan below covers the same span on both axes.
+viewportW, viewportH ∷ Int
+viewportW = 640
+viewportH = 640
+
+-- | Zoomed in far enough that one tile spans many pixels, so the scan
+--   above lands inside the small cluster of fixture columns.
+fixtureZoom ∷ Float
+fixtureZoom = 8.0
 
 -- | Every field is carried over by a move, so they are all given
 --   distinguishable values rather than defaults.
