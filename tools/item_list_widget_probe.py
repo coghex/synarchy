@@ -162,8 +162,9 @@ Verifies, in order:
      extends the path, offering the inspection entry and no transfer
      gesture; and removing the real crate from the floor changes
      nothing the remembered level draws. One screenshot of the open,
-     populated level is captured as #2527's visual evidence
-     (`--shot`).
+     populated level is captured as #2527's visual evidence (`--shot`);
+     the retained copy is
+     `docs/pr-proofs/issue-2527-portable-container-level.png`.
 
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py` per
 CLAUDE.md; the CI-blocking gates for this feature are

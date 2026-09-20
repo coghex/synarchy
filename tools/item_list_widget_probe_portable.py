@@ -21,8 +21,11 @@ manufacture its own states would be asserting the opposite of the
 contract.
 
 One screenshot is captured with the level open on a known-contents
-crate: this is the visual evidence #2527's acceptance asks for, and the
-path is reported so the run's caller can attach it.
+crate: this is the visual evidence #2527's acceptance asks for. Point
+`--shot` at `docs/pr-proofs/issue-2527-portable-container-level.png` to
+refresh the retained capture, whose companion `.md` says what the frame
+shows and how it was taken; the default writes to a temporary path, which
+is fine for a run that is only checking, not recording.
 """
 from __future__ import annotations
 
