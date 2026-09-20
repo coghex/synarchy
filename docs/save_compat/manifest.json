@@ -2697,9 +2697,9 @@
           "id": "z3-exact-fluid-units",
           "path": "test-headless/data/save-compat/z3-exact-fluid-units.bin",
           "kind": "complete-session",
-          "sha256": "06bba9ffb50cfe88e438e941f7dade7c85c7f601f4afef88e551b062023e26c4",
-          "sizeBytes": 909940,
-          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then for dx=-4,4 do for dy=-4,4 do world.setFluidTile('generated_page', dx, dy, 'water') end end return 'ok', settled 15.0s and held until `world.getFluidAt(0, 0) ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "sha256": "9298f9429a941d33abf619eff9ead157c358e640078554c8a9a8b22a02b45470",
+          "sizeBytes": 909962,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then local kinds={'ocean','river','water'} for dx=-4,4 do for dy=-4,4 do world.setFluidTile('generated_page', dx, dy, kinds[math.floor((dy+4)/3)+1]) end end return 'ok', settled 15.0s and held until `world.getFluidAt(0, 0) ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z3-exact-fluid-units.expected.json"
         }
       ]

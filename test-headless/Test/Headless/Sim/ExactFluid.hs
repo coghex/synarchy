@@ -52,7 +52,8 @@ import Sim.Fluid.Active (simulateActiveTick)
 import Sim.Chunk (activateChunk, loadedChunkState)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..), emptySimWorldState)
 import Sim.Thread (fastSettleWorld)
-import Sim.Topology (SimTopology(..))
+import Sim.Topology (SimTopology(..), simTopologyForParams)
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 
 -- * Fixtures
 
@@ -73,16 +74,105 @@ oneCell ∷ Int → Maybe FluidCell → V.Vector (Maybe FluidCell)
 oneCell idx mfc = V.replicate n Nothing V.// [(idx, mfc)]
 
 worldOf ∷ [(ChunkCoord, SimChunkState)] → SimWorldState
-worldOf chunks = emptySimWorldState
+worldOf = worldOnTopology SimFlatTopology
+
+worldOnTopology ∷ SimTopology → [(ChunkCoord, SimChunkState)] → SimWorldState
+worldOnTopology topo chunks = emptySimWorldState
     { swsChunks   = HM.fromList chunks
     , swsActive   = True
-    , swsTopology = SimFlatTopology
+    , swsTopology = topo
     }
 
--- | Every volume that has to round-trip exactly: each remainder inside
---   one level, several whole-multi-z depths, and the 'Word16' brim.
+-- * Pressure fixtures
+--
+-- Terrain is WALLED everywhere except the cells an example names, so
+-- only the named pair can exchange anything and the assertion is about
+-- that pair alone.
+
+wallZ ∷ Int
+wallZ = 64
+
+walledTerrain ∷ [(Int, Int)] → VU.Vector Int
+walledTerrain placed = VU.replicate n wallZ VU.// placed
+
+-- | An ACTIVE chunk from an explicit terrain vector and volume grid.
+activeChunk ∷ VU.Vector Int → V.Vector (Maybe ActiveFluidCell) → SimChunkState
+activeChunk terrain active = SimChunkState
+    { scsFluid       = V.replicate n Nothing
+    , scsTerrain     = terrain
+    , scsSettleTicks = 0
+    , scsActive      = True
+    , scsActiveFluid = active
+    , scsEquilTicks  = 0
+    , scsSideDeco    = VU.replicate n 0
+    , scsEditGen     = 0
+    }
+
+volumeGrid ∷ [(Int, Maybe ActiveFluidCell)] → V.Vector (Maybe ActiveFluidCell)
+volumeGrid placed = V.replicate n Nothing V.// placed
+
+water ∷ Word16 → Maybe ActiveFluidCell
+water v = Just (ActiveFluidCell Lake v 0)
+
+volumeAt ∷ ChunkCoord → Int → SimWorldState → Maybe Word16
+volumeAt cc idx sws = case HM.lookup cc (swsChunks sws) of
+    Nothing  → Nothing
+    Just scs → fmap afcVolume (scsActiveFluid scs V.! idx)
+
+-- | A cylindrical page, so the wrapped-seam pair below really wraps.
+cylTopo ∷ Int → SimTopology
+cylTopo worldSize =
+    simTopologyForParams defaultWorldGenParams { wgpWorldSize = worldSize }
+
+-- | The #2044 wrap fixture's own stored keys: @seamXA@ sits at the
+--   maximum u on a worldSize-64 page, so its raw +X neighbour is past
+--   the seam and is STORED as @seamXB@.
+seamWorldSize ∷ Int
+seamWorldSize = 64
+
+seamXA, seamXB ∷ ChunkCoord
+seamXA = ChunkCoord 16 (-15)
+seamXB = ChunkCoord (-15) 17
+
+-- | The east-edge pair of a chunk and its +X neighbour, at row 8.
+eastEdgeIdx, westEdgeIdx ∷ Int
+eastEdgeIdx = 8 * chunkSize + (chunkSize - 1)
+westEdgeIdx = 8 * chunkSize
+
+-- | THE discriminating pair (#2520). Source terrain 1 holding 8 units,
+--   destination terrain 0 holding 9: exact surfaces 16 and 9, integer
+--   ceilings 2 and 2.
+--
+--   Three wrong implementations each give a different answer, so this
+--   one number separates all of them from the right one:
+--
+--     * comparing the integer CEILINGS sees no difference and moves 0;
+--     * reading the SOURCE's volume for the neighbour's surface sees
+--       @16 - 8 = 8@ and moves 2;
+--     * re-multiplying the exact difference by the scale sees @7 * 8@
+--       and moves the source's whole 8 units;
+--     * comparing exact surfaces sees @16 - 9 = 7@ and moves
+--       @7 `div` 4@ = 1.
+pressureSrcTerrain, pressureDstTerrain :: Int
+pressureSrcTerrain = 1
+pressureDstTerrain = 0
+
+pressureSrcVolume, pressureDstVolume, pressureMoved ∷ Word16
+pressureSrcVolume = 8
+pressureDstVolume = 9
+pressureMoved     = 1
+
+-- | EVERY non-zero volume a 'Word16' can hold, 1 through 65535 —
+--   not a sample. The identity is promised over the whole
+--   representable domain, and a sampled list cannot rule out an
+--   intermediate-volume regression between two sampled points.
 roundTripVolumes ∷ [Word16]
-roundTripVolumes =
+roundTripVolumes = [1 .. maxBound]
+
+-- | A cheap sample of the same domain, for the cases that also cross a
+--   list of terrain tops and would otherwise multiply out.
+sampleVolumes ∷ [Word16]
+sampleVolumes =
     [1 .. fromIntegral fluidUnitsPerZ]
     ⧺ [ fromIntegral (k * fluidUnitsPerZ) + r
       | k ← [1, 2, 7, 1000 ∷ Int], r ← [0, 1, 7] ]
@@ -164,9 +254,19 @@ spec = do
             map clampFluidVolume [-1, -65536] `shouldBe` [0, 0]
 
     describe "active to passive and back is the identity" $ do
-        it "preserves every volume over every terrain top" $
+        it "preserves EVERY representable volume, 1 through 65535" $
+            -- The whole non-zero 'Word16' domain at one terrain top, so
+            -- no intermediate volume can regress between two samples.
+            ( [ v
+              | v ← roundTripVolumes
+              , let afc = ActiveFluidCell Lake v 0
+              , (fluidCellToActive 0 =≪ activeToFluidCell 0 afc)
+                  ≢ Just afc ]
+                `shouldBe` [] )
+
+        it "preserves it over every terrain top, negatives included" $
             ( [ (t, v)
-              | t ← roundTripTerrains, v ← roundTripVolumes
+              | t ← roundTripTerrains, v ← sampleVolumes
               , let afc = ActiveFluidCell Lake v 0
               , (fluidCellToActive t =≪ activeToFluidCell t afc)
                   ≢ Just afc { afcFlowDir = 0 } ]
@@ -335,6 +435,88 @@ spec = do
             -- expressions in 'Sim.Fluid.Active' still see the difference.
             surfaceCeilZOf 4 1 `shouldBe` surfaceCeilZOf 4 7
             (exactSurfaceOf 4 1 < exactSurfaceOf 4 7) `shouldBe` True
+
+    -- The pressure examples below drive the REAL 'simulateActiveTick',
+    -- not a helper: the whole point is that the production gravity and
+    -- seam paths read the exact plane, which no pure comparison can
+    -- establish.
+    describe "unequal-terrain gravity reads the exact surface" $ do
+        let srcIdx = 8 * chunkSize + 8
+            dstIdx = 8 * chunkSize + 9
+            terrain = walledTerrain [ (srcIdx, pressureSrcTerrain)
+                                    , (dstIdx, pressureDstTerrain) ]
+            worldWith srcV dstV = worldOf
+                [ (homeChunk, activeChunk terrain
+                      (volumeGrid [ (srcIdx, water srcV)
+                                  , (dstIdx, water dstV) ])) ]
+
+        it "pins the fixture: the two ceilings really do coincide" $ do
+            surfaceCeilZOf pressureSrcTerrain pressureSrcVolume
+                `shouldBe` surfaceCeilZOf pressureDstTerrain pressureDstVolume
+            (exactSurfaceOf pressureSrcTerrain pressureSrcVolume
+                > exactSurfaceOf pressureDstTerrain pressureDstVolume)
+                `shouldBe` True
+
+        it "moves what the EXACT difference asks for, and only that" $ do
+            let after = simulateActiveTick
+                            (worldWith pressureSrcVolume pressureDstVolume)
+            volumeAt homeChunk srcIdx after
+                `shouldBe` Just (pressureSrcVolume - pressureMoved)
+            volumeAt homeChunk dstIdx after
+                `shouldBe` Just (pressureDstVolume + pressureMoved)
+
+        it "stops once the lower cell's exact surface has caught up" $ do
+            -- Destination one unit ABOVE the source on the exact plane,
+            -- and on the SAME ceiling (both read as z 2) -- pinned here
+            -- so this cannot quietly stop being the interesting case.
+            -- Reading the source's own volume for the neighbour's
+            -- surface would see a whole z of head and drain it.
+            surfaceCeilZOf pressureSrcTerrain 1
+                `shouldBe` surfaceCeilZOf pressureDstTerrain 10
+            (exactSurfaceOf pressureSrcTerrain 1
+                < exactSurfaceOf pressureDstTerrain 10) `shouldBe` True
+            let after = simulateActiveTick (worldWith 1 10)
+            volumeAt homeChunk srcIdx after `shouldBe` Just 1
+            volumeAt homeChunk dstIdx after `shouldBe` Just 10
+
+    describe "unequal-terrain seam flow reads the exact surface" $ do
+        let terrainAt z = walledTerrain [ (eastEdgeIdx, z), (westEdgeIdx, z) ]
+            pairWorld topo a b srcV dstV = worldOnTopology topo
+                [ (a, activeChunk (terrainAt pressureSrcTerrain)
+                          (volumeGrid [(eastEdgeIdx, water srcV)]))
+                , (b, activeChunk (terrainAt pressureDstTerrain)
+                          (volumeGrid [(westEdgeIdx, water dstV)])) ]
+            ordinary = pairWorld SimFlatTopology
+                           (ChunkCoord 0 0) (ChunkCoord 1 0)
+            wrapped  = pairWorld (cylTopo seamWorldSize) seamXA seamXB
+
+        it "pins the wrap fixture: the +X neighbour really is stored \
+           \across the seam" $
+            (seamXA ≢ seamXB) `shouldBe` True
+
+        it "moves the exact difference across an ordinary seam" $ do
+            let after = simulateActiveTick
+                    (ordinary pressureSrcVolume pressureDstVolume)
+            volumeAt (ChunkCoord 0 0) eastEdgeIdx after
+                `shouldBe` Just (pressureSrcVolume - pressureMoved)
+            volumeAt (ChunkCoord 1 0) westEdgeIdx after
+                `shouldBe` Just (pressureDstVolume + pressureMoved)
+
+        it "moves the same amount across the WRAPPED seam" $ do
+            let after = simulateActiveTick
+                    (wrapped pressureSrcVolume pressureDstVolume)
+            volumeAt seamXA eastEdgeIdx after
+                `shouldBe` Just (pressureSrcVolume - pressureMoved)
+            volumeAt seamXB westEdgeIdx after
+                `shouldBe` Just (pressureDstVolume + pressureMoved)
+
+        it "stops at the seam once the lower side has caught up" $ do
+            -- Same same-ceiling, destination-higher pair as in-chunk.
+            surfaceCeilZOf pressureSrcTerrain 1
+                `shouldBe` surfaceCeilZOf pressureDstTerrain 10
+            let after = simulateActiveTick (ordinary 1 10)
+            volumeAt (ChunkCoord 0 0) eastEdgeIdx after `shouldBe` Just 1
+            volumeAt (ChunkCoord 1 0) westEdgeIdx after `shouldBe` Just 10
 
 -- * The world-edits wire contract
 

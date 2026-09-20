@@ -281,9 +281,11 @@ version. `docs/persistence_state_inventory.md` records `world-edits` v4 and the
 precision promise.
 
 The canonical summary each tracked fixture is validated against carries the
-exact plane's own aggregates (`count`, `partialCount`, `exactSum`) per page,
-because the whole-z Lua and dump views round and therefore cannot be the
-precision oracle for this format.
+exact plane per page, and PER FLUID TYPE as a histogram of how many cells sit
+at each top fill level 1..8 beside that type's count and exact sum. Page
+totals alone would not be an oracle — a type swap leaves all of them unchanged,
+and so does any compensating pair of remainder corruptions — and the whole-z
+Lua and dump views cannot see a remainder at all.
 
 When CRS-12 later replaces resident snapshots with a sparse versioned fluid
 component, its migration input includes both pre-v4 whole-z snapshots and v4

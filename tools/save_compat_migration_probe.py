@@ -720,10 +720,17 @@ LUA_UPDATE_ERROR_MARKER = "Lua error in update()"
 #: The two engine sources `LUA_UPDATE_ERROR_MARKER` is composed from, and
 #: the fragment each must still contain: the format string that words the
 #: warning, and the scheduler call that names `update` as the callback.
+#:
+#: The scheduler half moved out of `Thread.hs` into `Thread/Scheduler.hs`
+#: when the Lua thread was split; the fragment itself is unchanged, so
+#: the marker the engine emits never moved -- only the file that words
+#: it. Re-derived here (#2520) rather than left pointing at the old
+#: path, which made this check fail loudly on every run and take the
+#: whole probe down with it.
 LUA_ERROR_MARKER_SOURCES: list[tuple[str, str]] = [
     ("src/Engine/Scripting/Lua/Script.hs",
      '"Lua error in " <> funcName <> "(): "'),
-    ("src/Engine/Scripting/Lua/Thread.hs",
+    ("src/Engine/Scripting/Lua/Thread/Scheduler.hs",
      'callModuleFunction ls (scriptModuleRef script) "update"'),
 ]
 

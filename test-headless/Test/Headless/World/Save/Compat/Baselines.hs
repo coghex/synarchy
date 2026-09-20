@@ -40,6 +40,7 @@ import World.Save.Envelope
     (decodeSessionEnvelope, encodeSessionSnapshot, LuaComponentSpec(..))
 import World.Edit.Types (WorldEdit(..))
 import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
+import World.Fluid.Types (FluidType(..))
 import World.Flora.CropPlot (CropPlotOf(..))
 import World.Flora.Reference (FloraRef(..), renderFloraRef)
 import World.Plant.Types (PlantDesignationOf(..))
@@ -219,26 +220,46 @@ data ExpectedPage = ExpectedPage
     , epFluidSnapshots ∷ !(Maybe ExpectedFluidSnapshots)
     }
 
--- | The same three aggregates, read off a DECODED page. Kept beside
---   the type it is compared against so the two cannot drift; the
---   emitting half lives in @app-save-codec/Main.hs@'s canonical
---   summary.
+-- | The same aggregates, read off a DECODED page. Kept beside the type
+--   it is compared against so the two cannot drift; the emitting half
+--   lives in @app-save-codec/Main.hs@'s canonical summary.
 fluidSnapshotAggregate ∷ PageSnapshot → ExpectedFluidSnapshots
 fluidSnapshotAggregate page = ExpectedFluidSnapshots
     { efsCount        = length surfaces
     , efsPartialCount =
         length [ () | z ← surfaces, exactTopLevel z ≢ fluidUnitsPerZ ]
     , efsExactSum     = sum surfaces
+    , efsByType       = map perType fluidTypeNames
     }
   where
-    surfaces = [ z | edits ← HM.elems (pgsEdits page)
-                   , WeSetFluidSnapshot _ _ _ z ← edits ]
+    cells = [ (ft, z) | edits ← HM.elems (pgsEdits page)
+                      , WeSetFluidSnapshot _ _ ft z ← edits ]
+    surfaces = map snd cells
+    fluidTypeNames = [ (Ocean, "ocean"), (Lake, "lake")
+                     , (River, "river"), (Lava, "lava") ]
+    perType (ft, name) =
+        let mine = [ z | (t, z) ← cells, t ≡ ft ]
+        in ExpectedFluidType
+            { eftType     = name
+            , eftCount    = length mine
+            , eftExactSum = sum mine
+            , eftLevels   = [ length [ () | z ← mine, exactTopLevel z ≡ k ]
+                            | k ← [1 .. fluidUnitsPerZ] ]
+            }
 
--- | #2520: the EXACT fluid plane a fixture's page carries, as three
---   aggregates over its @WeSetFluidSnapshot@ log. The whole-z Lua and
---   dump views round, so they cannot serve as the precision oracle for
---   a format whose entire point is the remainder; these numbers can,
---   and a resave that rounded one cell moves at least one of them.
+-- | #2520: the EXACT fluid plane a fixture's page carries. The whole-z
+--   Lua and dump views round, so they cannot serve as the precision
+--   oracle for a format whose entire point is the remainder; these
+--   numbers can.
+--
+--   The three page totals alone would not be enough — a type swap
+--   leaves all three unchanged, and so does any pair of compensating
+--   remainder corruptions that keeps the sum. 'efsByType' is what
+--   actually pins the format: per fluid type, how many cells sit at
+--   each top fill level 1..8. A one-unit cell is a level-1 row, a
+--   seven-unit cell a level-7 row, a partial Ocean cell a non-level-8
+--   row under @ocean@ — each pinned individually and under its own
+--   type.
 --
 --   OPTIONAL, and absent means "this fixture pins nothing here" rather
 --   than "zero": every summary generated before world-edits v4 predates
@@ -247,12 +268,33 @@ data ExpectedFluidSnapshots = ExpectedFluidSnapshots
     { efsCount        ∷ !Int
     , efsPartialCount ∷ !Int
     , efsExactSum     ∷ !Int
+    , efsByType       ∷ ![ExpectedFluidType]
+    } deriving (Show, Eq)
+
+-- | One fluid type's own share of that plane.
+data ExpectedFluidType = ExpectedFluidType
+    { eftType     ∷ !Text
+    , eftCount    ∷ !Int
+    , eftExactSum ∷ !Int
+    , eftLevels   ∷ ![Int]
+      -- ^ @levels !! (k - 1)@ cells at top fill level @k@. Index 7
+      --   (level 8) is the FULL-level population; every other index is
+      --   a remainder class the pre-#2520 plane could not represent.
     } deriving (Show, Eq)
 
 instance Aeson.FromJSON ExpectedFluidSnapshots where
     parseJSON = Aeson.withObject "fluidSnapshots" $ \o →
         ExpectedFluidSnapshots
             <$> o .: "count" <*> o .: "partialCount" <*> o .: "exactSum"
+            -- A v4 summary always emits every type; an older one that
+            -- somehow carried the outer object without this key pins
+            -- only the totals rather than asserting no fluid exists.
+            <*> o .:? "byType" .!= []
+
+instance Aeson.FromJSON ExpectedFluidType where
+    parseJSON = Aeson.withObject "fluidType" $ \o → ExpectedFluidType
+        <$> o .: "type" <*> o .: "count" <*> o .: "exactSum"
+        <*> o .: "levels"
 
 instance Aeson.FromJSON ExpectedPage where
     parseJSON = Aeson.withObject "page" $ \o → ExpectedPage
@@ -509,8 +551,13 @@ manifestFixturesSpec =
                                     -- fixture proves its partial cells
                                     -- survive decode to the unit.
                                     forM_ (epFluidSnapshots ep) $ \efs →
-                                        fluidSnapshotAggregate page
-                                            `shouldBe` efs
+                                        let got = fluidSnapshotAggregate page
+                                        in if null (efsByType efs)
+                                           -- A summary pinning only the
+                                           -- totals compares only those.
+                                           then got { efsByType = [] }
+                                                    `shouldBe` efs
+                                           else got `shouldBe` efs
 
                                     -- Entity-level values (round-3 review):
                                     -- an aggregate count can't catch a

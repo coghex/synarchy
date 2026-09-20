@@ -93,6 +93,7 @@ import World.Save.Types
 import World.Page.Types (WorldPageId(..))
 import World.Edit.Types (WorldEdit(..))
 import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
+import World.Fluid.Types (FluidType(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..))
@@ -347,19 +348,30 @@ dumpPage (WorldPageId pid, page) = Aeson.object
         (sortOn cbId (HM.elems (cbsBills (pgsCraftBills page))))
     , "powerNodes" .= map dumpNode
         (sortOn pnId (HM.elems (pnsNodes (pgsPowerNodes page))))
-    -- #2520: the EXACT fluid plane, as an aggregate the summary can
-    -- carry. A rounded writeback, a lost remainder or a second
-    -- migration rescale all move at least one of these three numbers,
-    -- and none of them is reachable through the whole-z Lua or dump
-    -- views. Absent from every summary generated before world-edits
-    -- v4, which the Baselines reader treats as "this fixture pins
-    -- nothing here" rather than as zero.
+    -- #2520: the EXACT fluid plane. Neither the whole-z Lua queries nor
+    -- the dump's `fluidSurf` can express a remainder, so neither can
+    -- serve as this format's precision oracle; these values can.
+    --
+    -- The three page totals alone would NOT be enough. A type swap
+    -- leaves all three unchanged, and so does any pair of compensating
+    -- remainder corruptions that keeps the sum. So the real oracle is
+    -- `byType`: per fluid type, a histogram of how many cells sit at
+    -- each top fill level 1..8, beside that type's own count and exact
+    -- sum. A one-unit Lake cell is a level-1 row under "lake", a
+    -- seven-unit one a level-7 row, a partial Ocean cell a non-level-8
+    -- row under "ocean" — each pinned individually, and no swap or
+    -- compensating pair can leave the histogram alone.
+    --
+    -- Absent from every summary generated before world-edits v4, which
+    -- the Baselines reader treats as "this fixture pins nothing here"
+    -- rather than as zero.
     , "fluidSnapshots" .= dumpFluidSnapshots page
     ]
   where
     dumpFluidSnapshots pg =
-        let surfaces = [ z | edits ← HM.elems (pgsEdits pg)
-                           , WeSetFluidSnapshot _ _ _ z ← edits ]
+        let cells = [ (ft, z) | edits ← HM.elems (pgsEdits pg)
+                              , WeSetFluidSnapshot _ _ ft z ← edits ]
+            surfaces = map snd cells
         in Aeson.object
             [ "count" .= length surfaces
               -- Every cell whose TOP z is only partly filled: the
@@ -367,7 +379,28 @@ dumpPage (WorldPageId pid, page) = Aeson.object
             , "partialCount" .= length
                 [ () | z ← surfaces, exactTopLevel z ≢ fluidUnitsPerZ ]
               -- Exact to the unit, so a rescale of even one cell shows.
-            , "exactSum" .= sum surfaces ]
+            , "exactSum" .= sum surfaces
+            , "byType" .= map (dumpFluidType cells) fluidTypeNames ]
+
+    -- Every type is emitted, present or not, so a type that VANISHES
+    -- from a resave is a row going to zero rather than a row going
+    -- missing — which a reader comparing lists would have to special-
+    -- case, and a reader comparing sets would not see at all.
+    fluidTypeNames ∷ [(FluidType, T.Text)]
+    fluidTypeNames = [ (Ocean, "ocean"), (Lake, "lake")
+                     , (River, "river"), (Lava, "lava") ]
+
+    dumpFluidType cells (ft, name) =
+        let mine = [ z | (t, z) ← cells, t ≡ ft ]
+        in Aeson.object
+            [ "type" .= name
+            , "count" .= length mine
+            , "exactSum" .= sum mine
+              -- levels !! (k - 1) is how many of this type's cells have
+              -- top fill level k. Index 7 (level 8) is the full-level
+              -- population; every other index is a remainder class.
+            , "levels" .= [ length [ () | z ← mine, exactTopLevel z ≡ k ]
+                          | k ← [1 .. fluidUnitsPerZ] ] ]
 
 -- * set-timestamp
 

@@ -5224,18 +5224,31 @@ inventing no remainder it has no bytes for. v1 and v2 payloads reach
 that hop through the migrations above it, so every accepted version is
 scaled exactly ONCE and a v4 payload is not scaled at all.
 
-Gates: hspec `--match "Sim.Fluid.Exact"` (the helper laws, the `Word16`
-conversion domain, the identity through the real activation, per-tick
-derivation, seam re-derivation and equilibrium deactivation, and the
-sub-terrain preservation rules), `--match "Sim.Fluid.Conservation"`,
-`--match "Sim.Fluid.Seam"`, `--match "unlike-fluid reaction"`,
-`--match "save migrations"` (the v1/v2/v3 → v4 scaling and the exact
-round trip), `python3 tools/save_compat_audit.py`, and
-`python3 tools/save_compat_migration_probe.py`. The tracked
-`z3-exact-fluid-units` fixture is a real saved session carrying partial
-top levels, and its canonical summary pins their `count`,
-`partialCount` and `exactSum` — the whole-z Lua and dump views round, so
-they cannot serve as the precision oracle.
+Gates: hspec `--match "Sim.Fluid.Exact"` (the helper laws; the `Word16`
+conversion domain, with the active↔passive identity proved over EVERY
+representable volume 1..65535 rather than a sample; the identity through
+the real activation, per-tick derivation, seam re-derivation and
+equilibrium deactivation; the sub-terrain preservation rules; and the
+exact-pressure behavior driven through the real `simulateActiveTick`,
+in-chunk and across both an ordinary and a WRAPPED seam, on a pair whose
+two exact surfaces share one integer ceiling — a fixture that separates
+the exact comparison from a ceiling comparison, from reading the
+source's volume for the neighbour's surface, and from re-multiplying the
+difference by the scale, each of which yields a different number),
+`--match "Sim.Fluid.Conservation"`, `--match "Sim.Fluid.Seam"`,
+`--match "unlike-fluid reaction"`, `--match "save migrations"` (the
+v1/v2/v3 → v4 scaling and the exact round trip),
+`python3 tools/save_compat_audit.py`, and
+`python3 tools/save_compat_migration_probe.py`.
+
+The tracked `z3-exact-fluid-units` fixture is a real saved session whose
+snapshots carry partial top levels under several fluid types, Ocean
+included. Its canonical summary pins the plane PER TYPE as a histogram
+of how many cells sit at each top fill level 1..8, beside that type's
+count and exact sum. Page totals alone would not be an oracle: a type
+swap leaves all of them unchanged, and so does any compensating pair of
+remainder corruptions. The whole-z Lua and dump views cannot see a
+remainder at all, so neither can stand in for this.
 
 ---
 
