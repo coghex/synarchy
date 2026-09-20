@@ -456,10 +456,16 @@ function M.checkRevive(uid, defConfig)
     -- the unit flickers between its injured idle anim and the
     -- collapsed pose (T-pose if no collapsed-idle is registered).
     --
-    -- Hysteresis: collapse fires at 30%, revive needs ≥ 50%. Since
-    -- blood doesn't passively regen — only wound closure refills
-    -- it indirectly — a bleeding-out unit stays down until the
-    -- wounds heal or first-aid lands.
+    -- Hysteresis: collapse fires at 30%, revive needs ≥ 50%. Blood
+    -- rebuilds itself (#2639) once the unit's AGGREGATE bleed rate
+    -- reaches exactly zero — every wound kind counted, internal
+    -- bleeding and fractures included — whether that is because the
+    -- wounds clotted, first aid dressed them, or they healed away
+    -- entirely. Recovery runs while collapsed and needs no rest, so a
+    -- stabilized unit climbs the 30%→50% band on its own; it takes
+    -- about 6/7 of a game day at full nutrition and constitution 1.0,
+    -- longer when calories or hydration are low. A unit that is still
+    -- seeping anywhere recovers nothing and stays down.
     local blood = unit.getBlood(uid)
     if blood and blood.max > 0 and blood.current / blood.max < 0.5 then
         return

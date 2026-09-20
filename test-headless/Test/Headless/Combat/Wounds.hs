@@ -10,12 +10,21 @@ import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import qualified Data.List as L
+import Data.IORef (writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.Types (LuaBackendState)
+import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Test.Headless.Unit.TransferApi
+    (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
-import Combat.Wounds (tickOneUnit, bleedRateFor)
+import Combat.Wounds
+    ( tickOneUnit, bleedRateFor, externalBleedRateFor
+    , WoundTickOutcome(..) )
 import Combat.Wounds.Constants (woundCleanupThreshold)
 import Infection.Types (InfectionManager(..), InfectionDef(..)
                        , emptyInfectionManager)
@@ -103,6 +112,8 @@ spec ∷ Spec
 spec = do
   effSeveritySpec
   tickEffSeverityLockstepSpec
+  bloodRecoverySpec
+  reviveGateSpec
   describe "Combat.Wounds infection" $ do
 
     it "a dirty open wound accrues infection after the grace period" $ do
@@ -254,3 +265,333 @@ tickEffSeverityLockstepSpec = describe "Combat.Wounds tick effective severity" $
             ws   → expectationFailure
                      ("the necrotic wound should have survived cleanup; got "
                       <> show (length ws) <> " wounds")
+
+-- ----------------------------------------------------------------------
+-- Blood recovery and revival (#2639)
+-- ----------------------------------------------------------------------
+--
+-- Before this, blood only ever went DOWN in the wound tick: the drain was
+-- subtracted and nothing added any back, so a unit that collapsed from
+-- blood loss (below 30 % of maximum) could never reach the 50 % the
+-- shipped revive gate demands, however completely it was stabilized.
+--
+-- The pure half of this group drives the REAL 'tickOneUnit'; the engine
+-- half drives the SHIPPED @scripts/unit_resource_tick.lua@ @checkRevive@
+-- against a real unit manager, so the 30 %→50 % band is crossed and then
+-- acted on by production code rather than by a restatement of it.
+
+-- | The 70 kg fixture's derived maximum blood volume, 5.25 L.
+maxBlood ∷ Float
+maxBlood = 70 * bloodMassRatio
+
+-- | The tick step every recovery example uses.
+recoveryDt ∷ Float
+recoveryDt = 10
+
+-- | Litres recovered in ONE 'recoveryDt' tick at full nutrition and
+--   constitution 1.0. Restated from the issue's own policy rather than
+--   imported, so a silent change to the rate constants fails here.
+fullGain ∷ Float
+fullGain = maxBlood * 0.70 / (3 * 1440) * recoveryDt
+
+-- | The fixture's stat map with arbitrary extra entries merged in.
+statsWith ∷ [(Text, Float)] → HM.HashMap Text Float
+statsWith extra =
+    HM.union (HM.fromList extra)
+             (HM.fromList [("body_mass", 70), ("constitution", 1.0)])
+
+-- | A collapsed patient at @blood@ litres carrying @ws@, with @extra@
+--   merged over the base stats. Collapsed rather than standing because
+--   recovery must run while unconscious — that is the whole point — and
+--   because it keeps 'UnconsciousNow' from re-firing every tick.
+patient ∷ Float → [(Text, Float)] → [Wound] → UnitInstance
+patient blood extra ws =
+    (inst ws) { uiBlood = blood, uiStats = statsWith extra
+              , uiPose = "collapsed" }
+
+-- | One tick of the real per-unit wound tick, with no infection
+--   catalogue or climate so only the clot/heal/bleed/recovery math runs.
+step ∷ Float → UnitInstance → UnitInstance
+step dt i = let (i', _, _) = tickOneUnit 100 def dt emptyInfectionManager
+                                 Nothing (Random.mkStdGen 1) i False
+            in i'
+
+-- | One tick, keeping the verdict as a comparable label.
+stepOutcome ∷ Float → UnitInstance → (UnitInstance, Text)
+stepOutcome dt i =
+    let (i', o, _) = tickOneUnit 100 def dt emptyInfectionManager
+                         Nothing (Random.mkStdGen 1) i False
+    in (i', label o)
+  where
+    label NoChange            = "none"
+    label (UnconsciousNow p)  = "collapsed:" <> p
+    label (DiedNow p cause)   = "died:" <> p <> ":" <> cause
+
+-- | @n@ ticks of 'recoveryDt' seconds each.
+steps ∷ Int → UnitInstance → UnitInstance
+steps n i = L.foldl' (\acc _ → step recoveryDt acc) i [1 .. n]
+
+-- | Blood gained by one 'recoveryDt' tick of a WOUND-FREE unit with the
+--   given extra stats — the isolated recovery rate, with no drain, no
+--   clot and no heal in the way.
+gainWith ∷ [(Text, Float)] → Float
+gainWith extra =
+    let before = patient 1.0 extra []
+    in uiBlood (step recoveryDt before) - uiBlood before
+
+-- | A fully clotted (stabilized) wound: present, treated, and bleeding
+--   at exactly zero because @1 − woundClot@ is zero.
+stabilized ∷ Wound
+stabilized = (mkWound "slash" 0.5 0.0 0.0 True) { woundClot = 1.0 }
+
+nearly ∷ Float → Float → Expectation
+nearly actual expected
+    | abs (actual - expected) < 1e-5 = pure ()
+    | otherwise = expectationFailure $
+        "expected " <> show expected <> ", got " <> show actual
+
+bloodRecoverySpec ∷ Spec
+bloodRecoverySpec = describe "Combat.Wounds blood recovery and revival" $ do
+
+  describe "the recovery rate" $ do
+
+    it "a wound-free unit with no live nutrition pools recovers at the \
+       \full base rate" $
+        -- Absent pools are UNGATED (wildlife, and acolytes before their
+        -- first resource tick): the factor is 1.0, not "starving".
+        gainWith [] `nearly` fullGain
+
+    it "recovery continues with a stabilized wound still PRESENT" $ do
+        -- The wound has not healed out — what matters is that its bleed
+        -- rate is zero, not that it is gone.
+        let before = patient 1.0 [] [stabilized]
+            after  = step recoveryDt before
+        uiWounds after `shouldSatisfy` (not ∘ null)
+        (uiBlood after - uiBlood before) `nearly` fullGain
+
+    it "recovery continues after the final wound is removed" $ do
+        -- The wound-free early return is a SEPARATE code path; a unit
+        -- whose last wound heals away must keep recovering across it.
+        let healedOut = patient 1.0 [] []
+        uiWounds healedOut `shouldBe` []
+        (uiBlood (step recoveryDt healedOut) - uiBlood healedOut)
+            `nearly` fullGain
+
+    it "the gain is clamped to the derived maximum volume" $ do
+        -- A step far larger than the remaining headroom lands exactly on
+        -- the maximum rather than overshooting it.
+        let before = patient (maxBlood - 0.01) [] []
+        uiBlood (step 100000 before) `nearly` maxBlood
+
+    it "a unit already ABOVE its derived maximum is not lowered" $ do
+        -- The clamp bounds recovery from above only. Fixtures elsewhere
+        -- in this suite seed uiBlood = 100 against a 5.25 L maximum, and
+        -- a tick that "clamped" them down would silently break every one.
+        let before = patient 100 [] []
+        uiBlood (step recoveryDt before) `shouldBe` 100
+
+    it "a unit with no body_mass stat never recovers" $ do
+        -- Units whose YAML declares no body block are spawn-seeded at
+        -- 0 L precisely so they cannot bleed; the tick's maximum-volume
+        -- formula defaults body mass to 70 kg, so without an explicit
+        -- guard a tiller or a deer would regenerate toward 5.25 L.
+        let bodiless = (inst []) { uiBlood = 0, uiPose = "collapsed"
+                                 , uiStats = HM.fromList [("constitution", 1.0)] }
+        uiBlood (step recoveryDt bodiless) `shouldBe` 0
+        uiBlood (steps 500 bodiless) `shouldBe` 0
+
+  describe "nutrition and constitution scaling" $ do
+
+    it "calories at zero block recovery entirely" $
+        gainWith [("calories", 0), ("max_calories", 2000)] `shouldBe` 0
+
+    it "a positive calorie fraction scales the rate linearly" $
+        gainWith [("calories", 1000), ("max_calories", 2000)]
+            `nearly` (0.5 * fullGain)
+
+    it "a present calorie pool with no usable maximum blocks recovery" $
+        -- Present but unevaluable is NOT the same as absent.
+        gainWith [("calories", 1500), ("max_calories", 0)] `shouldBe` 0
+
+    it "hydration just below 25 % blocks recovery" $
+        gainWith [("hydration", 24), ("max_hydration", 100)] `shouldBe` 0
+
+    it "hydration at exactly 25 % permits recovery, scaled to 0.25" $
+        -- The survival-alert boundary itself is on the PERMITTED side.
+        gainWith [("hydration", 25), ("max_hydration", 100)]
+            `nearly` (0.25 * fullGain)
+
+    it "calorie and hydration scaling are independent, and the LOWER \
+       \factor governs" $ do
+        -- Full hydration, half calories → calories governs …
+        gainWith [ ("calories", 1000), ("max_calories", 2000)
+                 , ("hydration", 100), ("max_hydration", 100) ]
+            `nearly` (0.5 * fullGain)
+        -- … full calories, 40 % hydration → hydration governs.
+        gainWith [ ("calories", 2000), ("max_calories", 2000)
+                 , ("hydration", 40), ("max_hydration", 100) ]
+            `nearly` (0.4 * fullGain)
+
+    it "a missing constitution stat defaults to 1.0" $ do
+        let noCon = (inst []) { uiBlood = 1.0, uiPose = "collapsed"
+                              , uiStats = HM.fromList [("body_mass", 70)] }
+        (uiBlood (step recoveryDt noCon) - uiBlood noCon) `nearly` fullGain
+
+    it "distinct constitutions produce the specified distinct rates" $ do
+        -- 1 + 0.25 × (con − 1), clamped to [0.75, 1.5].
+        gainWith [("constitution", 2.0)] `nearly` (1.25 * fullGain)
+        gainWith [("constitution", 0.5)] `nearly` (0.875 * fullGain)
+        -- Both ends of the clamp, from values that would otherwise
+        -- overshoot it in either direction.
+        gainWith [("constitution", 5.0)] `nearly` (1.5 * fullGain)
+        gainWith [("constitution", 0.0)] `nearly` (0.75 * fullGain)
+
+  describe "eligibility: any bleeding at all blocks recovery" $ do
+
+    it "positive EXTERNAL bleeding blocks recovery" $ do
+        let w      = (mkWound "slash" 0.5 0.0 0.0 True) { woundBandage = 1.0 }
+            before = patient 3.0 [] [w]
+            after  = step recoveryDt before
+        -- Strictly down, and down by the full gross drain the post-tick
+        -- wound predicts — no recovery netted off it.
+        uiBlood after `shouldSatisfy` (< uiBlood before)
+        (uiBlood before - uiBlood after)
+            `nearly` (bleedRateFor def after * recoveryDt)
+
+    it "positive INTERNAL bleeding blocks recovery even though nothing \
+       \bleeds externally" $ do
+        -- The discriminating case: `internal` contributes nothing to the
+        -- external rate, so an eligibility test written against external
+        -- bleeding alone would wrongly top this unit up.
+        let w      = (mkWound "internal" 0.5 0.0 0.0 True) { woundBandage = 1.0 }
+            before = patient 3.0 [] [w]
+            after  = step recoveryDt before
+        externalBleedRateFor def after `shouldBe` 0
+        bleedRateFor def after `shouldSatisfy` (> 0)
+        uiBlood after `shouldSatisfy` (< uiBlood before)
+
+    it "a fracture's internal seep blocks recovery too" $ do
+        let w      = (mkWound "fracture" 0.8 0.0 0.0 True) { woundBandage = 1.0 }
+            before = patient 3.0 [] [w]
+            after  = step recoveryDt before
+        uiBlood after `shouldSatisfy` (< uiBlood before)
+
+  describe "gross blood-loss accounting is independent of recovery" $ do
+
+    it "a truly exsanguinating tick dies at zero blood and is not rescued" $ do
+        let w        = (mkWound "arterial" 1.0 0.0 0.0 True) { woundBandage = 1.0 }
+            before   = patient 0.2 [] [w]
+            (after, verdict) = stepOutcome recoveryDt before
+        verdict `shouldBe` "died:l_thigh:exsanguination"
+        uiBlood after `shouldBe` 0
+        uiTrailState after `shouldBe` Nothing
+
+    it "a dead unit is returned completely unchanged" $ do
+        let corpse = (patient 1.0 [] []) { uiPose = "dead" }
+        uiBlood (step recoveryDt corpse) `shouldBe` 1.0
+        uiBlood (steps 500 corpse) `shouldBe` 1.0
+
+    it "the external trail accumulates the GROSS volume actually lost" $ do
+        let w        = (mkWound "slash" 0.5 0.0 0.0 True) { woundBandage = 1.0 }
+            before   = patient 3.0 [] [w]
+            after    = step recoveryDt before
+            lost     = uiBlood before - uiBlood after
+        lost `shouldSatisfy` (> 0)
+        case uiTrailState after of
+            Nothing → expectationFailure
+                "an externally bleeding unit should have a trail state"
+            Just ts → tsPendingVolume ts `nearly` lost
+
+  describe "the 30 %-to-50 % band" $ do
+
+    it "a unit bled below 30 % climbs back past 50 % once stabilized" $ do
+        -- Phase 1: bleed it down until the tick itself calls the collapse.
+        let bleeding = (mkWound "slash" 0.6 0.0 0.0 True) { woundBandage = 1.0 }
+            wounded  = ((inst [bleeding]) { uiBlood = maxBlood * 0.35
+                                          , uiStats = statsWith [] })
+            bleedDown i n
+                | n ≤ (0 ∷ Int) = (i, "none")
+                | otherwise = case stepOutcome 1 i of
+                    (i', "none") → bleedDown i' (n - 1)
+                    r            → r
+            (collapsed, verdict) = bleedDown wounded 60
+        verdict `shouldBe` "collapsed:l_thigh"
+        uiBlood collapsed `shouldSatisfy` (< maxBlood * 0.30)
+        -- Phase 2: first aid lands — the wound clots shut and stays put.
+        let stable = collapsed
+                { uiPose = "collapsed"
+                , uiWounds = map (\w → w { woundClot = 1.0 }) (uiWounds collapsed) }
+        bleedRateFor def stable `shouldBe` 0
+        -- Phase 3: recovery alone carries it across the revive threshold,
+        -- monotonically, and through the moment the wound heals away.
+        let recovering = scanSteps 200 stable
+            volumes    = map uiBlood recovering
+        and (zipWith (≤) volumes (drop 1 volumes)) `shouldBe` True
+        uiWounds (last recovering) `shouldBe` []
+        uiBlood (last recovering) `shouldSatisfy` (≥ maxBlood * 0.50)
+
+  where
+    -- Every intermediate state of @n@ ticks, so monotonicity can be
+    -- asserted over the whole run rather than at its endpoints.
+    scanSteps ∷ Int → UnitInstance → [UnitInstance]
+    scanSteps n i = L.scanl' (\acc _ → step recoveryDt acc) i [1 .. n]
+
+-- | The SHIPPED cross-resource revive gate, driven against a real unit
+--   manager. Requirement 4 is a claim about production Lua, so it is
+--   asserted through production Lua: @checkRevive@ is called with an
+--   EMPTY resource config, which leaves the blood gate as the only
+--   threshold in play, and @unit.revive@ is counted rather than stubbed.
+reviveGateSpec ∷ Spec
+reviveGateSpec = aroundAll withHeadlessEngineNoWorld $
+  describe "Combat.Wounds blood recovery and revival — the shipped \
+           \revive gate" $ do
+
+    it "revives a stabilized unit at EXACTLY 50 % of maximum blood" $ \env → do
+        ls ← reviveScene env (maxBlood * 0.5)
+        checkReviveNow ls `shouldReturn` "true"
+        evalDebug ls "return _G.__revived" `shouldReturn` "1"
+
+    it "does NOT revive just below 50 %" $ \env → do
+        ls ← reviveScene env (maxBlood * 0.5 - 0.01)
+        checkReviveNow ls `shouldReturn` "true"
+        evalDebug ls "return _G.__revived" `shouldReturn` "0"
+
+    it "revives a unit the wound tick itself carried across the \
+       \threshold" $ \env → do
+        -- End to end: a collapsed, stabilized unit below 30 % is ticked
+        -- by the REAL wound tick until recovery lifts it over 50 %, and
+        -- the SHIPPED gate is what stands it up. Neither half restates
+        -- the other's threshold.
+        let start = (inst [stabilized]) { uiBlood = maxBlood * 0.29
+                                        , uiStats = statsWith []
+                                        , uiPose = "collapsed" }
+            ended = steps 250 start
+        uiBlood start `shouldSatisfy` (< maxBlood * 0.30)
+        uiBlood ended `shouldSatisfy` (≥ maxBlood * 0.50)
+        ls ← reviveScene env (uiBlood ended)
+        checkReviveNow ls `shouldReturn` "true"
+        evalDebug ls "return _G.__revived" `shouldReturn` "1"
+
+-- | A one-unit collapsed scene at the given blood volume, with
+--   @unit.revive@ counted into @_G.__revived@.
+reviveScene ∷ EngineEnv → Float → IO LuaBackendState
+reviveScene env blood = do
+    writeIORef (unitManagerRef env) emptyUnitManager
+        { umDefs = HM.singleton "acolyte" (minimalDef "acolyte" "Acolyte")
+        , umInstances = HM.singleton (UnitId 1)
+            ((inst []) { uiDefName = "acolyte", uiPose = "collapsed"
+                       , uiBlood = blood
+                       , uiStats = statsWith [] }) }
+    ls ← newBareLuaBackend env
+    r ← evalDebug ls
+          "_G.__revived = 0; local v = unit.revive; \
+          \unit.revive = function(...) \
+          \  _G.__revived = _G.__revived + 1; return v(...) end; return true"
+    r `shouldBe` "true"
+    pure ls
+
+-- | Drive the shipped gate with an EMPTY resource config, so blood is
+--   the only threshold that can refuse.
+checkReviveNow ∷ LuaBackendState → IO Text
+checkReviveNow ls = evalDebug ls
+    "require('scripts.unit_resource_tick').checkRevive(1, {}); return true"
