@@ -22,10 +22,16 @@ item APIs target by it. This probe verifies, headless and without a GPU:
                  exact kit asked for.
   4. PERSIST   — save + load preserves instanceIds and the allocator
                  continues above every loaded id (a fresh item gets a new,
-                 non-colliding id). The save and the load are each tied to
-                 THEIR OWN request id, and run against a throwaway resource
-                 root, so the assertions cannot read a generation this
-                 invocation did not write. Skipped with --no-save.
+                 non-colliding id), AND a ground item relocated with
+                 `item.debugMoveGround` (issue #2486) comes back at its
+                 relocated coordinates under the SAME ground id and the
+                 same instance id — the move-specific evidence the
+                 headless harness structurally cannot produce, since it
+                 cannot run engine.saveWorld end to end. The save and the
+                 load are each tied to THEIR OWN request id, and run
+                 against a throwaway resource root, so the assertions
+                 cannot read a generation this invocation did not write.
+                 Skipped with --no-save.
 
 Exit 0 = all enabled checks passed.
 
@@ -203,6 +209,30 @@ def inventory(port: int, uid: int) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def ground_rows(port: int) -> list[dict]:
+    """item.listGround() as a list of dicts (id, instanceId, x, y).
+
+    ACTIVE-page scoped, exactly like the verb: every ground assertion
+    below runs with PAGE shown, so the rows it answers are that page's.
+    """
+    raw = send(port,
+               "local t=item.listGround() or {}; local o={}; "
+               "for i,g in ipairs(t) do o[i]={id=g.id,"
+               "instanceId=g.instanceId,x=g.x,y=g.y} end; return o").strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def ground_row(port: int, gid: int) -> dict | None:
+    for row in ground_rows(port):
+        if row.get("id") == gid:
+            return row
+    return None
+
+
 def as_int(s: str) -> int:
     """Coerce a console numeric reply ('1', '1.0', '"2"') to int."""
     return int(float(s.strip().strip('"')))
@@ -256,7 +286,71 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  [{mark}] {name}" + (f" — {detail}" if detail else ""))
 
 
-def persist_phase(port: int, uid: int, slot: str) -> None:
+def stage_moved_ground_item(port: int, gx: int, gy: int):
+    """Drop one ground item and relocate it with `item.debugMoveGround`,
+    answering what the post-load assertions have to find again (#2486).
+
+    The destination is chosen from terrain this run has already proved
+    resident rather than from a fixed offset: `world.getTerrainAt`
+    answering a surface for the neighbouring column is what says the
+    chunk is loaded, which is the verb's own precondition, so the move
+    under test is exercised on a real generated page without the probe
+    guessing at worldgen output. Answers `None` — with the reason
+    already reported as a failed check — when the staging itself could
+    not be completed, so the caller skips the save rather than saving a
+    session whose premise did not hold.
+
+    The sub-tile fractions are dyadic (.25 / .75), so the stored Float,
+    the JSON the console answers with, and the expectation here are the
+    same number on both sides of a save.
+    """
+    dest = None
+    for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+        probe = send(port,
+                     f"local z = world.getTerrainAt({gx + dx}, {gy + dy}); "
+                     "if z then return 'yes' end return 'no'").strip().strip('"')
+        if probe == "yes":
+            dest = (gx + dx, gy + dy)
+            break
+    check("a loaded neighbouring column is available to move onto",
+          dest is not None, f"origin=({gx},{gy})")
+    if dest is None:
+        return None
+
+    gid = as_int(send(port,
+        f"return item.spawnGround('{WEAPON}', {gx} + 0.5, {gy} + 0.5)"))
+    check("a ground item is spawned to relocate", gid >= 0, f"gid={gid}")
+    if gid < 0:
+        return None
+    row = ground_row(port, gid)
+    check("the spawned ground item is listed", row is not None,
+          f"gid={gid}")
+    if row is None:
+        return None
+    iid = row["instanceId"]
+
+    dx, dy = dest
+    want_x, want_y = dx + 0.25, dy + 0.75
+    moved = send(port,
+                 f"return item.debugMoveGround({gid}, {iid}, "
+                 f"{want_x}, {want_y})").strip()
+    check("item.debugMoveGround relocates the item onto the loaded "
+          "neighbour", moved == "true",
+          f"returned {moved!r}; ({gx},{gy}) -> ({want_x},{want_y})")
+    if moved != "true":
+        return None
+
+    row = ground_row(port, gid)
+    ok = row is not None and row["instanceId"] == iid \
+        and abs(row["x"] - want_x) < 1e-4 and abs(row["y"] - want_y) < 1e-4
+    check("the relocated row keeps its gid and instance id before the "
+          "save", ok, f"gid={gid} row={row} want=({want_x},{want_y})")
+    if not ok:
+        return None
+    return gid, iid, want_x, want_y
+
+
+def persist_phase(port: int, uid: int, slot: str, gx: int, gy: int) -> None:
     """PERSIST: a save and a load, each tied to ITS OWN request id.
 
     Both `engine.saveWorld` and `engine.loadSave` only ACCEPT
@@ -276,6 +370,15 @@ def persist_phase(port: int, uid: int, slot: str) -> None:
     """
     print("\n== PERSIST (save / load) ==")
     ids_before = sorted({it["instanceId"] for it in picks(inventory(port, uid))})
+    # #2486's move-specific evidence: a ground item RELOCATED through
+    # the registered verb, whose identity and relocated coordinates the
+    # post-load assertions below have to find again. Staged before the
+    # save for the obvious reason, and short-circuiting for the same
+    # reason every other step here does.
+    staged = stage_moved_ground_item(port, gx, gy)
+    if staged is None:
+        return
+    moved_gid, moved_iid, moved_x, moved_y = staged
 
     accepted = send(port, f"return engine.saveWorld('{PAGE}', '{slot}')").strip()
     check(f"engine.saveWorld('{PAGE}', '{slot}') accepted the request",
@@ -331,6 +434,25 @@ def persist_phase(port: int, uid: int, slot: str) -> None:
     check("post-load fresh item id continues above loaded ids",
           bool(fresh) and min(fresh) > allmax,
           f"fresh={fresh} loaded_max={allmax}")
+
+    # #2486: the relocated GROUND item, restored through the production
+    # save/load path. Inventory identities and allocator continuation
+    # above say nothing about it: ground items ride into the save in the
+    # world-activity component's GroundItemsDTO/GroundItemDTO, which is
+    # a different representation, and a move that had written a new gid
+    # or re-spawned the item would leave every check above green.
+    row = ground_row(port, moved_gid)
+    check("the relocated ground item survives the load under its OWN "
+          "gid", row is not None, f"gid={moved_gid} rows={ground_rows(port)}")
+    if row is None:
+        return
+    check("the restored ground item keeps its instance id",
+          row["instanceId"] == moved_iid,
+          f"before={moved_iid} after={row['instanceId']}")
+    check("the restored ground item is at its RELOCATED canonical "
+          "coordinates",
+          abs(row["x"] - moved_x) < 1e-4 and abs(row["y"] - moved_y) < 1e-4,
+          f"want=({moved_x},{moved_y}) got=({row['x']},{row['y']})")
 
 
 def run_probe(args, tmpdir: str, slot: str, adopt) -> int:
@@ -576,7 +698,7 @@ def run_probe(args, tmpdir: str, slot: str, adopt) -> int:
                       f"{sorted(k['instanceId'] for k in kits3)} vs {sorted(ids2)}")
 
     if not args.no_save:
-        persist_phase(args.port, uid, slot)
+        persist_phase(args.port, uid, slot, gx, gy)
 
     return summarize()
 

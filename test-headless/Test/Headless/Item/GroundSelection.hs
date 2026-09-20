@@ -21,7 +21,7 @@
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match \"ground item selection\"'@.
-module Test.Headless.Item.GroundSelection (spec) where
+module Test.Headless.Item.GroundSelection (spec, runUnderHeldLock) where
 
 import UPrelude
 import Test.Hspec

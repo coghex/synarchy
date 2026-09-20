@@ -65,6 +65,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Position hold (#1216)](#position-hold-1216)
 - [Player transfers: the three player-facing modes](#player-transfers-the-three-player-facing-modes)
 - [Nested ownership moves (#2487)](#nested-ownership-moves-2487)
+- [Ground-item relocation (#2486)](#ground-item-relocation-2486)
 - [Portable container knowledge (#2512)](#portable-container-knowledge-2512)
 - [Commanded-order stall budget (#920/#1291)](#commanded-order-stall-budget-9201291)
 - [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
@@ -3093,6 +3094,96 @@ Gate: hspec `--match "Item.Ownership"`, whose capacity cases are each
 mutation-tested by loosening the fixture bound one unit past the guard
 and asserting the verdict flips, and whose structural writer guard holds
 the allowlist above.
+
+## Ground-item relocation (#2486)
+
+`item.debugMoveGround(gid, instanceId, x, y [, pageId])` repositions one
+ground item IN PLACE and is the only way to move one. Remove-then-respawn
+is not an alternative: `Item.Ground.spawnGroundItem` always mints a new
+gid, so the round trip retires the id the caller, the selection and every
+persisted reference already name. The verb answers exactly one boolean
+and never raises; `false` means nothing at all changed — no row, no
+`gisNextId`, no selection, and neither involved page.
+
+**The destination rule is the RESTING elevation, and nothing else.** A
+move is accepted only when the final canonical destination column, on
+the resolved page, is already loaded AND indexes a nonzero material at
+that column's own `lcTerrainSurfaceMap` z. That is the elevation
+`World.Render.GroundItemQuads.itemGeometry` rests a ground item at — a
+ground item stores no z, so its drawn height is whatever the terrain
+surface says the moment it is drawn. The camera's z-slice, the z a
+pointer hit reported, and `World.Render.HitTest.pickWorldTile`'s
+downward search from the camera slice are all about where a CLICK was,
+not where the item would come to rest, and validating against one of
+them accepts destinations the renderer then resolves to empty air. The
+same rule applies to an explicitly named hidden page. The verb never
+loads or generates a chunk, and never edits terrain, to make a
+destination valid. `World.GroundItems.groundRestShift` owns the
+predicate; its material index is bounds-checked against the column's
+trimmed z-range (§Tile-coordinate seam frame), so a surface z outside
+that range counts as no material and refuses rather than raising.
+
+**The frame comes from the page's own params, not from a world size.**
+`groundRestShift` canonicalizes through
+`World.Chunk.Residency.canonicalChunkCoord` — the ONE canonicalization
+chunk storage keys are built with (#2001) — via
+`World.Generate.Coordinates.canonicalTileFrameWith`. An ARENA records a
+sentinel `wgpWorldSize` of 100000 rather than an extent, and that
+function answers identity for it; wrapping by the sentinel instead would
+take arena chunk `(50000, -50000)` (u = 100000, an exact multiple) onto
+`ChunkCoord 0 0` and accept a destination 800000 tiles from the one the
+caller named, on a page with no wrap at all. Absent params are identity
+for the same reason they are elsewhere: the chunk loader bails out on
+them and has stored nothing.
+
+**Coordinates are canonicalized, fractions preserved.** `x` and `y` take
+`item.spawnGround`'s conversions and its finite-`Float` domain, plus a
+frame bound at 2^24 — the magnitude where a `Float`'s spacing reaches a
+whole tile, so the value stops naming one tile and `floor` into an `Int`
+stops being safe. Without it a large coordinate's wrapped chunk can land
+on a LOADED chunk and fabricate a destination the caller never named.
+What is stored is the narrowed value plus the whole-tile shift into the
+stored frame (#1135), so a seam alias and a negative destination both
+rest at the same point inside the physical tile the caller named, and an
+accepted coordinate always floors to the tile the destination rule
+passed.
+
+**Identity is checked at commit time, under the page's lock.**
+`World.GroundItems.moveGroundItemOnPage` takes `wsGroundItemLock` for
+the whole read-decide-write, like selection and removal, and re-reads the
+live row inside that hold. It must: unlike those two it edits a FIELD of
+a row whose OTHER fields have unlocked writers — `item.setGroundTemp`
+and the per-page temperature tick rewrite `giInst` with a bare
+`atomicModifyIORef'` — so writing back a copy captured before the lock
+would silently revert whichever landed in between. A row whose
+`iiInstanceId` no longer matches the caller's refuses, which is what
+distinguishes moving the item the caller meant from moving whatever is
+wearing that page-local gid now. A pickup between two moves therefore
+makes the second refuse; it never recreates the item or undoes the
+pickup.
+
+No `EngineEnv` field, capability, persisted state or save-format change:
+ground items already ride into the save through the `world-activity`
+component's `GroundItemsDTO`/`GroundItemDTO`, which preserves gids, the
+allocator, instances and coordinates.
+
+Gate: hspec `--match "Ground item move"`. Its destination fixtures put
+the three candidate elevations at three DIFFERENT z values, each of the
+two wrong ones really in force: the terrain surface at 12, a REAL pointer
+hit at 14 — found by locating the screen pixel that resolves to the decoy
+tile, driving the shipped `world.pickTile` at it, and installing the
+answer into `worldSelectedTile`/`worldHoverTile`/`worldHoverPos` — and the
+camera's own installed z-slice at 16. One column carries material only at
+each, so an implementation reading the pointer hit or the camera slice
+accepts a destination this verb must refuse, and refuses the one it must
+accept. The frame-bound case names a coordinate pair that wraps onto a
+loaded chunk when the bound is removed, and the arena case names one that
+does so when the sentinel is wrapped instead of treated as identity.
+Move-specific persistence evidence is `tools/item_instance_probe.py`'s
+PERSIST phase (`python3 tools/run_probes.py --only item_instance`), which
+relocates a ground item and asserts it restores at the relocated
+coordinates under the same gid and instance id — the headless harness
+cannot run `engine.saveWorld` end to end.
 
 ## Portable container knowledge (#2512)
 

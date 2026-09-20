@@ -148,18 +148,30 @@ local function drinkExecute(uid, s, params)
                          deficit / k)
     if sip <= 0 then return end
 
-    -- Apply effects synchronously — engine drink command is just for
-    -- the anim + state-block. If the anim is interrupted (it shouldn't
-    -- be, since Drinking blocks movement) the unit still drank.
-    --
     -- Drain the EXACT instance the sip was computed from (#1220), the
     -- same reason consumable.lua does: unit.modifyItemFill drains the
     -- first item matching defName, so an earlier already-empty canteen
     -- would swallow the drain (clamped to zero) while the hydration
     -- below is still credited — conjuring water and leaving the sipped
     -- canteen full.
-    unit.modifyItemFillById(uid, canteen.instanceId, -sip)
-    unit.setStat(uid, "hydration", hyd + sip * k)
+    --
+    -- `sip` is only a REQUEST (#2631): the snapshot is a COPY and the
+    -- drain is a separate transaction, so the SIGNED applied delta the
+    -- engine answers with — negative for a real drain, smaller than
+    -- asked when the fill moved, nil when the unit or that instance is
+    -- gone — is what the credit and the anim are derived from, as in
+    -- consumable.lua since #1744. Negate rather than abs(): a fill
+    -- INCREASE is not consumption. The drain commits before it returns,
+    -- so refusing withholds the credit; it undoes nothing.
+    local applied = unit.modifyItemFillById(uid, canteen.instanceId, -sip)
+    if type(applied) ~= "number" then return end
+    local drank = -applied
+    if drank <= 0 then return end
+
+    -- Apply effects synchronously — engine drink command is just for
+    -- the anim + state-block. If the anim is interrupted (it shouldn't
+    -- be, since Drinking blocks movement) the unit still drank.
+    unit.setStat(uid, "hydration", math.min(maxHyd, hyd + drank * k))
     unit.drink(uid)
 end
 
