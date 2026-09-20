@@ -5201,8 +5201,19 @@ erased: `derivePassiveFluid` crosses it through with its type and its
 exact plane intact, until DFL-5 repairs generated channel terrain
 (D-11). The test is on the PRIOR cell's own height, so a positive-volume
 cell that drained or was annihilated can never be resurrected that way.
-A sub-terrain cell is still an ordinary empty destination a neighbour
-may fill.
+
+**Passthrough applies only where the tick changed nothing.** A
+sub-terrain cell holds no volume, which makes it an ordinary EMPTY
+destination a neighbour may fill — and fluid that arrives there can be
+drained or annihilated again before the same tick ends, leaving the slot
+empty a second time with the location's identity genuinely changed. The
+prior cell's own height cannot see that, so the tick RECORDS where fluid
+arrived (an arrival being the only way a cell the grid does not hold can
+stop being untouched: nothing can be drained from or react with an empty
+cell) and clears those indices from the prior map before deriving, in
+both the per-chunk phases and the seam pass. A caller deriving BETWEEN
+ticks — the writeback, deactivation — already holds a map the last tick
+corrected, so it needs no such record.
 
 **Integer consumers are documented compatibility views.** Rendering,
 `lcSurfaceMap` and the rendered-surface rule (§Flora visual state and

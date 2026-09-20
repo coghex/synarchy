@@ -7,6 +7,7 @@ module Sim.Fluid.Types
     , fluidCellToActive
     , activeToFluidCell
     , derivePassiveFluid
+    , clearTouchedCells
     ) where
 
 import UPrelude
@@ -108,6 +109,17 @@ activeToFluidCell terrainZ afc
 --   carried, and it crosses through unchanged with its type and its
 --   exact plane (requirement 5). That test is on the PRIOR cell's own
 --   height, so an ordinary positive-volume cell can never qualify.
+--
+--   The @prior@ map must describe the location as it stands NOW, not as
+--   it stood before whatever is being derived. A sub-terrain cell holds
+--   no volume, which makes it an ordinary EMPTY destination a neighbour
+--   may fill — and fluid that arrives there can be drained or
+--   annihilated again before the same tick ends, leaving the slot empty
+--   a second time with the location's identity genuinely changed.
+--   A stale @prior@ would restore the old cell over that, so a caller
+--   deriving MID-TICK runs its prior through 'clearTouchedCells' first.
+--   A caller deriving BETWEEN ticks — the writeback, deactivation —
+--   already holds a map the last tick corrected.
 derivePassiveFluid ∷ VU.Vector Int                  -- ^ terrain tops
                    → V.Vector (Maybe FluidCell)     -- ^ prior passive map
                    → V.Vector (Maybe ActiveFluidCell)
@@ -121,3 +133,21 @@ derivePassiveFluid terrainV prior active =
                 Just (Just fc) | fluidVolumeOverTerrain terrainZ fc ≡ 0 → Just fc
                 _ → Nothing
         ) active
+
+-- | Forget the prior passive cell at every index the tick actually
+--   wrote fluid into.
+--
+--   'derivePassiveFluid' preserves a sub-terrain cell on the strength of
+--   the prior map alone, which cannot tell an UNTOUCHED slot from one
+--   that was filled and emptied again within the same tick. The tick
+--   records the difference as it happens — an arrival is the only way a
+--   preserved slot can stop being untouched, since a cell holding
+--   nothing can be neither drained nor reacted with — and this applies
+--   that record, so a location the tick really changed derives as the
+--   tick left it rather than as it began.
+clearTouchedCells ∷ VU.Vector Bool → V.Vector (Maybe FluidCell)
+                  → V.Vector (Maybe FluidCell)
+clearTouchedCells touched prior
+    | not (VU.or touched) = prior
+    | otherwise = V.imap
+        (\idx cell → if touched VU.! idx then Nothing else cell) prior

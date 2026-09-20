@@ -424,6 +424,47 @@ spec = do
             derivePassiveFluid (VU.replicate n 3) prior emptied V.! idx
                 `shouldBe` Nothing
 
+        it "cannot resurrect one that was FILLED and emptied again in \
+           \the same tick" $ do
+            -- The case the prior cell's own height cannot see: a
+            -- sub-terrain cell holds no volume, so it is an ordinary
+            -- EMPTY destination. Fluid arrives from a neighbour, an
+            -- unlike-fluid reaction annihilates it the same tick, and
+            -- the slot is empty a second time -- but the location's
+            -- identity really did change, so the old cell must not come
+            -- back over it.
+            --
+            -- Driven through the REAL tick, so it is the production
+            -- arrival record under test and not a hand-built one.
+            let sunkIdx = 8 * chunkSize + 9
+                lakeIdx = 8 * chunkSize + 8
+                lavaIdx = 8 * chunkSize + 10
+                -- All three on one flat shelf, walls elsewhere, so the
+                -- only moves available are the two into the middle.
+                terrain = walledTerrain
+                    [ (lakeIdx, 0), (sunkIdx, 0), (lavaIdx, 0) ]
+                -- The middle cell's PASSIVE identity stands at its own
+                -- terrain, so activation takes no slot for it.
+                sunk = FluidCell River (exactSurfaceOfZ 0)
+                passive = oneCell sunkIdx (Just sunk)
+                chunk = (activateChunk (passiveChunk 0 passive))
+                    { scsTerrain     = terrain
+                    , scsActiveFluid = volumeGrid
+                        [ (lakeIdx, water 40)
+                        , (lavaIdx, Just (ActiveFluidCell Lava 40 0)) ]
+                    }
+                after = simulateActiveTick (worldOf [(homeChunk, chunk)])
+                scs = swsChunks after HM.! homeChunk
+
+            -- Pin the premise: activation really did leave the middle
+            -- out of the active grid, and the tick really did fill it.
+            scsActiveFluid chunk V.! sunkIdx `shouldBe` Nothing
+            scsFluid chunk V.! sunkIdx `shouldBe` Just sunk
+
+            -- Whatever the tick left there, it is NOT the stale River
+            -- identity: the location was written this tick.
+            scsFluid scs V.! sunkIdx `shouldNotBe` Just sunk
+
     describe "the whole-z compatibility view of an active cell" $
         it "reads a dry cell at its terrain and any partial level as one z" $
             ( [ surfaceCeilZOf 4 v | v ← [0, 1, 7, 8, 9] ]
