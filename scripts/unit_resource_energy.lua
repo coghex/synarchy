@@ -56,6 +56,22 @@ local MUSCLE_CATABOLISM_FRACTION = 0.05
 -- check share one tolerance as well as one floor.
 M.FAT_FLOOR_TOL = 1e-4
 
+-- Tolerance for lean-at-floor comparisons — the same Float32/Float64
+-- round-trip as FAT_FLOOR_TOL above, with sharper teeth. The
+-- respiratory-failure check below compares the STORED lean_mass
+-- against a freshly recomputed Lua floor, and catabolism's clamp
+-- writes lean_mass back through that same Float32 store: at frame
+-- mass 100.1 the clamp stores 20.020000457764 for a floor of
+-- 20.019999694824, so `lean <= minLean` stays false forever, the
+-- clamp rewrites the same rounded value every tick, and a unit that
+-- has wasted to its floor never dies. 1e-4 kg = 0.1 g of muscle —
+-- orders of magnitude above the ~1e-7 Float32 noise but biologically
+-- negligible against a floor measured in kilograms. Applied to BOTH
+-- forms of the lean floor below: the frame-proportional one and the
+-- legacy height-only fallback round identically, so neither can be
+-- left comparing exactly.
+M.LEAN_FLOOR_TOL = 1e-4
+
 -- The fat floor itself, as fractions of frame mass / height², matching
 -- seedBodyComposition's minFatFrac (src/Unit/Thread/Command/Body.hs).
 -- frame_mass = 22·h²·bulk is the stable structural size, so the frame
@@ -179,7 +195,8 @@ end
 -- digesting never catabolizes.
 --
 -- Three outcomes per tick:
---   1. lean ≤ min_lean → respiratory failure: unit.kill, return.
+--   1. lean ≤ min_lean (within LEAN_FLOOR_TOL) → respiratory
+--      failure: unit.kill, return.
 --      (Lungs and heart are skeletal-or-cardiac muscle; once those
 --       waste below the floor, biology ends.)
 --   2. calories > 0 → no catabolism (the store has slack).
@@ -213,8 +230,11 @@ function M.tickStarvation(uid, dt)
     local minLean = frame and (0.20 * frame) or (4.4  * h * h)
 
     -- Respiratory failure: sharp death when skeletal muscle (which
-    -- includes the diaphragm) hits its floor.
-    if lean <= minLean then
+    -- includes the diaphragm) hits its floor. Compared within
+    -- M.LEAN_FLOOR_TOL because the clamp below writes lean_mass
+    -- through Float32 storage and it can round back ABOVE minLean;
+    -- without the tolerance a clamped unit is stuck alive forever.
+    if lean <= minLean + M.LEAN_FLOOR_TOL then
         alerts.emitDeathAlert(uid, "starvation")
         unit.kill(uid)
         return
