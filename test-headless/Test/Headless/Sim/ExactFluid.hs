@@ -60,9 +60,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 n ∷ Int
 n = chunkSize * chunkSize
 
-homeChunk, eastChunk ∷ ChunkCoord
+homeChunk ∷ ChunkCoord
 homeChunk = ChunkCoord 0 0
-eastChunk = ChunkCoord 1 0
 
 -- | A passive chunk at a uniform terrain height, carrying one fluid map.
 passiveChunk ∷ Int → V.Vector (Maybe FluidCell) → SimChunkState
@@ -161,6 +160,20 @@ pressureSrcVolume, pressureDstVolume, pressureMoved ∷ Word16
 pressureSrcVolume = 8
 pressureDstVolume = 9
 pressureMoved     = 1
+
+-- | Two chunks meeting at a seam, walled everywhere except the one
+--   facing pair, holding the discriminating volumes above. Shared by
+--   the seam pressure examples and the seam re-derivation ones, so both
+--   are talking about a transfer that really happens.
+seamPressureWorld ∷ SimTopology → ChunkCoord → ChunkCoord
+                  → Word16 → Word16 → SimWorldState
+seamPressureWorld topo a b srcV dstV = worldOnTopology topo
+    [ (a, activeChunk (terrainAt pressureSrcTerrain)
+              (volumeGrid [(eastEdgeIdx, water srcV)]))
+    , (b, activeChunk (terrainAt pressureDstTerrain)
+              (volumeGrid [(westEdgeIdx, water dstV)])) ]
+  where
+    terrainAt z = walledTerrain [ (eastEdgeIdx, z), (westEdgeIdx, z) ]
 
 -- | EVERY non-zero volume a 'Word16' can hold, 1 through 65535 —
 --   not a sample. The identity is promised over the whole
@@ -350,21 +363,57 @@ spec = do
             scsFluid scs V.! idx
                 `shouldBe` Just (FluidCell Ocean (exactSurfaceOfZ 3 + 1))
 
+        -- NOTE: an interior cell in two adjacent active chunks does NOT
+        -- exercise this path. With every seam edge dry, 'seamFlow' is
+        -- zero for every pair, no chunk is touched, and 'reconcileSeams'
+        -- returns both chunks untouched WITHOUT re-deriving either --
+        -- so such a test passes whether or not the seam re-derivation
+        -- rounds. The fixture below forces a real transfer across the
+        -- shared edge, which is what puts both sides through
+        -- 'derivePassiveFluid' for real.
         it "survives the seam pass's re-derivation unrounded" $ do
-            -- Two adjacent ACTIVE chunks, so 'reconcileSeams' runs and
-            -- re-derives both sides. The cell under test is in the
-            -- middle of its chunk, far from the shared edge.
-            let idx = 5 * chunkSize + 5
-                passive = oneCell idx
-                    (Just (FluidCell Lake (exactSurfaceOfZ 3 + 5)))
-                st = worldOf
-                    [ (homeChunk, activateChunk (passiveChunk 3 passive))
-                    , (eastChunk, activateChunk (passiveChunk 3 passive)) ]
-                after = simulateActiveTick st
-            ( [ scsFluid (swsChunks after HM.! cc) V.! idx
-              | cc ← [homeChunk, eastChunk] ]
-                `shouldBe`
-              replicate 2 (Just (FluidCell Lake (exactSurfaceOfZ 3 + 5))) )
+            let after = simulateActiveTick
+                    (seamPressureWorld SimFlatTopology
+                        (ChunkCoord 0 0) (ChunkCoord 1 0)
+                        pressureSrcVolume pressureDstVolume)
+                passiveAt cc idx =
+                    scsFluid (swsChunks after HM.! cc) V.! idx
+
+            -- Pin that the seam really moved fluid: without a transfer
+            -- neither side is re-derived at all.
+            volumeAt (ChunkCoord 0 0) eastEdgeIdx after
+                `shouldBe` Just (pressureSrcVolume - pressureMoved)
+            volumeAt (ChunkCoord 1 0) westEdgeIdx after
+                `shouldBe` Just (pressureDstVolume + pressureMoved)
+
+            -- Both sides' passive planes carry their own EXACT surface,
+            -- remainder and all: 8 - 1 = 7 units over terrain 1 on the
+            -- source side, 9 + 1 = 10 over terrain 0 on the far side.
+            -- Neither is a whole level, so a rounding re-derivation
+            -- cannot produce these.
+            passiveAt (ChunkCoord 0 0) eastEdgeIdx
+                `shouldBe` Just (FluidCell Lake
+                    (exactSurfaceOf pressureSrcTerrain
+                        (pressureSrcVolume - pressureMoved)))
+            passiveAt (ChunkCoord 1 0) westEdgeIdx
+                `shouldBe` Just (FluidCell Lake
+                    (exactSurfaceOf pressureDstTerrain
+                        (pressureDstVolume + pressureMoved)))
+
+        it "survives the WRAPPED seam's re-derivation unrounded too" $ do
+            let after = simulateActiveTick
+                    (seamPressureWorld (cylTopo seamWorldSize)
+                        seamXA seamXB pressureSrcVolume pressureDstVolume)
+                passiveAt cc idx =
+                    scsFluid (swsChunks after HM.! cc) V.! idx
+            passiveAt seamXA eastEdgeIdx
+                `shouldBe` Just (FluidCell Lake
+                    (exactSurfaceOf pressureSrcTerrain
+                        (pressureSrcVolume - pressureMoved)))
+            passiveAt seamXB westEdgeIdx
+                `shouldBe` Just (FluidCell Lake
+                    (exactSurfaceOf pressureDstTerrain
+                        (pressureDstVolume + pressureMoved)))
 
     describe "a passive cell at or below its terrain (requirement 5)" $ do
         let idx = 5 * chunkSize + 5
@@ -521,15 +570,10 @@ spec = do
             volumeAt homeChunk dstIdx after `shouldBe` Just 10
 
     describe "unequal-terrain seam flow reads the exact surface" $ do
-        let terrainAt z = walledTerrain [ (eastEdgeIdx, z), (westEdgeIdx, z) ]
-            pairWorld topo a b srcV dstV = worldOnTopology topo
-                [ (a, activeChunk (terrainAt pressureSrcTerrain)
-                          (volumeGrid [(eastEdgeIdx, water srcV)]))
-                , (b, activeChunk (terrainAt pressureDstTerrain)
-                          (volumeGrid [(westEdgeIdx, water dstV)])) ]
-            ordinary = pairWorld SimFlatTopology
+        let ordinary = seamPressureWorld SimFlatTopology
                            (ChunkCoord 0 0) (ChunkCoord 1 0)
-            wrapped  = pairWorld (cylTopo seamWorldSize) seamXA seamXB
+            wrapped  = seamPressureWorld (cylTopo seamWorldSize)
+                           seamXA seamXB
 
         it "pins the wrap fixture: the +X neighbour really is stored \
            \across the seam" $

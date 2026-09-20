@@ -90,8 +90,10 @@ Verified on master `5dc077ffd1` and the tracker on 2026-08-31:
 - Saves enumerate each loaded `lcFluidMap` into `WeSetFluidSnapshot` edits that
   carry only fluid type and integer surface
   (`src/World/Thread/Command/Save/WriteWorld.hs:572-597`,
-  `src/World/Edit/Types.hs:97-102`). The wire shape is `world-edits` v1's frozen
-  `WorldEditDTO` (`src/World/Save/Component/Page.hs:354-400,1361-1384`).
+  `src/World/Edit/Types.hs:97-102`). The wire shape is the `world-edits`
+  frozen `WorldEditDTO` (`src/World/Save/Component/Page.hs:354-400,1361-1384`),
+  which was at v1 when this survey was taken and had reached v3 by the time
+  DFL-2 landed.
 - `world.getFluidAt`, `world.getSurfaceAt`, the area query, cursor text, and the
   dump expose integer surfaces. There are 41 production `fcSurface` uses across
   18 modules, so changing the meaning must go through named conversion helpers
@@ -523,10 +525,13 @@ simulation does not require a representation migration.
 - Existing #2042 conservation and #2044 seam cases remain green. Unlike-fluid
   reaction tests, once landed, prove type/reaction semantics survive the scale
   migration.
-- `world-edits` v1 fixture bytes migrate to v2 full-level units, publish,
-  resave, restart, and reload. Current v2 saves round-trip partial levels.
-  Component hashes, manifest entries, persistence inventory, and the selective
-  save-compat reproducibility gate follow repository policy.
+- Every accepted pre-v4 `world-edits` fixture's bytes migrate to full-level
+  units, publish, resave, restart, and reload. Current v4 saves round-trip
+  partial levels. (As landed this is v3→v4, not the v1→v2 this section first
+  planned: #1854 and #2243 had already taken the component to v3, so their
+  migrations chain THROUGH the new hop and each payload is scaled exactly
+  once.) Component hashes, manifest entries, persistence inventory, and the
+  selective save-compat reproducibility gate follow repository policy.
 - Pure renderer tests assert flat top face-map selection, no production
   `waterSlopeAt` use, one-z whole-step sides, each partial level's vertex y,
   full-plus-partial side decomposition, in-chunk/cross-chunk parity, U-seam
@@ -578,9 +583,12 @@ simulation does not require a representation migration.
   edit replay, and save/load without rounding or volume creation.
 - **Scope:** Introduce the exact type/helpers; set eight units per z; migrate
   `FluidCell`, active/passive conversion, gravity/seam comparisons, render and
-  gameplay integer consumers; bump `world-edits` v1→v2 with frozen DTO and
-  migration; update persistence inventory and compatibility fixtures; preserve
-  existing Lua arity; forbid an integer-only Ocean path.
+  gameplay integer consumers; bump `world-edits` to v4 with the then-current
+  v3 shape frozen as its own DTO and a v3→v4 migration the older v1/v2
+  migrations chain through (this section originally planned v1→v2, before
+  #1854 and #2243 advanced the component); update persistence inventory and
+  compatibility fixtures; preserve existing Lua arity; forbid an integer-only
+  Ocean path.
 - **Phase:** 2 — state foundation
 - **Depends on:** external #2042 and #2044
 - **Ordering:** critical path
