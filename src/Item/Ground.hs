@@ -28,12 +28,21 @@
 --     destroying whatever lay on the cell it turned to stone. That lock
 --     is what keeps a removal from landing between a selection's check
 --     and its commit; see that module.
+--   * RELOCATION (#2486) takes the same lock, through
+--     'World.GroundItems.moveGroundItemOnPage'. It belongs to neither
+--     class above: it neither allocates an id nor retires one, so the
+--     spawn argument does not cover it, and unlike a removal it has to
+--     agree with the UNLOCKED writers as well — a temperature tick
+--     rewrites @giInst@ of the very row it repositions — which is why
+--     the commit re-reads the live row under the lock rather than
+--     writing back a copy captured before it.
 module Item.Ground
     ( GroundItem(..)
     , GroundItems(..)
     , emptyGroundItems
     , spawnGroundItem
     , removeGroundItem
+    , moveGroundItem
     , groundPositionIsFinite
     , sanitizeGroundItems
     ) where
@@ -68,6 +77,42 @@ spawnGroundItem inst x y gis =
     in ( gis { gisNextId = gid + 1
              , gisItems  = HM.insert gid gi (gisItems gis) }
        , gid )
+
+-- | Relocate @gid@'s row to @(x, y)@ in place, reporting whether it
+--   took (#2486).
+--
+--   The identity-preserving counterpart of a remove-then-respawn, which
+--   is NOT an alternative: 'spawnGroundItem' always mints a fresh gid,
+--   so the round trip retires the id every caller, selection and
+--   persisted reference already names. This rewrites the two position
+--   fields of the row that is there and nothing else — 'gisNextId' is
+--   untouched (it allocates; it does not describe), 'giInst' is carried
+--   over WHOLE (contents, fill, quality, condition, temperature), and
+--   every other row is left alone.
+--
+--   @iid@ is the instance the caller believes it is moving, and the
+--   match against 'Item.Types.iiInstanceId' is what makes this safe to
+--   call on a live page: a gid is a page-local SLOT, so between the
+--   caller's read and this commit the row it named can have been picked
+--   up and the number reused by nothing — or, once an id is retired,
+--   the caller's stale gid can simply miss. Refusing an id whose
+--   instance no longer matches is the difference between moving the
+--   item the caller meant and moving whatever is wearing that number
+--   now, which is the same substitution hazard
+--   @world.spawnLocationSignificantItem@ exists to close.
+--
+--   False changes nothing at all, which is what lets a caller treat a
+--   refusal as "nothing happened": a picked-up item is not recreated
+--   here, and a pickup is never undone.
+moveGroundItem ∷ Int → Word64 → Float → Float → GroundItems
+               → (GroundItems, Bool)
+moveGroundItem gid iid x y gis =
+    case HM.lookup gid (gisItems gis) of
+        Just gi | iiInstanceId (giInst gi) ≡ iid →
+            ( gis { gisItems = HM.insert gid
+                        gi { giX = x, giY = y } (gisItems gis) }
+            , True )
+        _ → (gis, False)
 
 -- | Remove by id; returns the removed item (for pickup flows).
 removeGroundItem ∷ Int → GroundItems → (GroundItems, Maybe GroundItem)

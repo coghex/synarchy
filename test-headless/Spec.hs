@@ -79,6 +79,7 @@ import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.ArenaSeed as ArenaSeed
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
+import qualified Test.Headless.Item.GroundMove as GroundMove
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.GroundSelection as GroundSelection
 import qualified Test.Headless.Lua.FoodHarvestTarget as LuaFoodHarvestTarget
@@ -1063,6 +1064,7 @@ main = hspec $ do
     describe "Unit Info row selection gate" UIUnitInfoRowSelection.spec
     describe "Item Info row selection gate" UIItemInfoRowSelection.spec
     describe "ground item selection" GroundSelection.spec
+    describe "Ground item move" GroundMove.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec

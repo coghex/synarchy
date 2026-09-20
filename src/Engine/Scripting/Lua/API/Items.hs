@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.API.Items
     , itemSpawnGroundFn
     , itemListGroundFn
     , itemRemoveGroundFn
+    , itemDebugMoveGroundFn
     , itemGroundCountFn
     , itemGetGroundTempFn
     , itemSetGroundTempFn

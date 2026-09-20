@@ -8,6 +8,7 @@ module Engine.Scripting.Lua.API.Items.Ground
     ( itemSpawnGroundFn
     , itemListGroundFn
     , itemRemoveGroundFn
+    , itemDebugMoveGroundFn
     , itemGroundCountFn
     , itemGetGroundTempFn
     , itemSetGroundTempFn
@@ -44,7 +45,8 @@ import Item.Temperature (effectiveItemTemp)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import World.Cursor.Types (CursorState(..))
-import World.GroundItems (takeGroundItemOnPage)
+import World.GroundItems
+    (groundRestShift, moveGroundItemOnPage, takeGroundItemOnPage)
 import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
                    , WorldGenParams(..), wmWorlds)
 import World.Weather.Ambient (ambientTempAt)
@@ -667,6 +669,136 @@ itemRemoveGroundFn env = do
                     Lua.pushboolean (isJust mGi)
                     return 1
         _ → Lua.pushboolean False >> return 1
+
+-- | The largest coordinate magnitude that still names ONE tile.
+--
+--   At @2^24@ a 'Float''s spacing reaches 1.0, so from there up a
+--   coordinate and its successor tile are the same number: @floor@ is
+--   no longer a frame, it is a guess, and the value names every tile in
+--   a run equally. Below it the whole part is exact and @floor@ fits an
+--   'Int' with room to spare, which is what makes the arithmetic in
+--   'World.Generate.Coordinates.canonicalTileFrame' — and the whole-world
+--   shift it answers — safe to perform at all.
+--
+--   Without this bound @floor@ on a merely-large finite 'Float' (a
+--   @3e38@ that 'groundSpawnCoord' accepts, since it is a perfectly
+--   finite 'Float') overflows 'Int', and the wrapped chunk coord that
+--   falls out of the overflowed value is not the destination the caller
+--   named: it is whichever canonical chunk the wrap happens to land on,
+--   which on a live page is frequently a LOADED one. That is the
+--   fabricated destination requirement 3 of #2486 refuses.
+groundMoveTileLimit ∷ Float
+groundMoveTileLimit = 16777216   -- 2 ^ 24
+
+-- | The whole tile a ground-move coordinate names, or 'Nothing' when it
+--   names none. See 'groundMoveTileLimit'.
+groundMoveTile ∷ Float → Maybe Int
+groundMoveTile f
+    | abs f < groundMoveTileLimit = Just (floor f)
+    | otherwise                   = Nothing
+
+-- | item.debugMoveGround(gid, instanceId, x, y [, pageId]) → bool
+--
+--   Relocate ONE ground item that is already lying in the world, in
+--   place: same gid, same 'Item.Types.ItemInstance', new position
+--   (#2486). The primitive #2484's F8 grab gesture drives, and the only
+--   way to move a ground item at all — a remove-then-respawn is not an
+--   alternative, because 'Item.Ground.spawnGroundItem' always mints a
+--   NEW gid and so retires the id the caller, the selection and every
+--   persisted reference already name.
+--
+--   Debug-named like its neighbours because it is an engine primitive
+--   with no cost, no reach check and no actor: it teleports an object.
+--   The gameplay rules about who may move what, and how far, belong to
+--   the gesture above it.
+--
+--   Answers exactly ONE boolean, and never raises. @true@ means the row
+--   was repositioned; @false@ means NOTHING happened — no row moved, no
+--   row appeared, @gisNextId@ did not move, the selection is exactly as
+--   it was, and neither the resolved page nor any other page changed.
+--   That shape is what lets a caller poll: an item picked up between
+--   two grabs makes the second call refuse, and a refusal never
+--   recreates it or undoes the pickup.
+--
+--   The page is resolved exactly as @item.spawnGround@ resolves it —
+--   the named page when @pageId@ is given (any live page, hidden
+--   included), else the active world, re-resolved on EVERY call, so an
+--   active-page switch between two calls moves the item on the page
+--   that is active now. Ground ids are page-local (#1208), so a gid
+--   that is live on another page is simply absent here and refused;
+--   nothing about this verb ever reaches across pages.
+--
+--   @gid@ and @instanceId@ must be actual Lua NUMBERS ('numberArgAt',
+--   as @item.getGroundForUnit@ requires): 'HsLua.tointeger' would
+--   coerce the numeric string @"3"@, and a verb whose whole refusal
+--   contract is "exactly one false, nothing changed" must not accept a
+--   type-confused id. @instanceId@ is checked against the row's own
+--   'Item.Types.iiInstanceId' at COMMIT time — it is what distinguishes
+--   moving the item the caller meant from moving whatever now wears
+--   that ground id.
+--
+--   @x@ and @y@ keep @item.spawnGround@'s conversions and its finite
+--   'Float' domain ('groundSpawnCoords'), and add
+--   'groundMoveTileLimit''s frame bound on top. Their sub-tile fraction
+--   is PRESERVED: the stored coordinate is the narrowed value plus the
+--   whole-tile shift into the canonical frame (#1135), so a seam alias
+--   and a negative destination both come to rest at the same point
+--   inside the same physical tile the caller named.
+--
+--   A destination is valid iff the FINAL canonical column — the one the
+--   coordinate resolves to after that shift, on the resolved page — is
+--   already loaded and has material at its own terrain surface z
+--   ('groundRestShift'). That is the elevation
+--   'World.Render.GroundItemQuads.itemGeometry' rests a ground item at,
+--   and it is the only input: the camera's z-slice, the z a pointer hit
+--   reported, and 'World.Render.HitTest.pickWorldTile''s downward
+--   search are all about where a CLICK was, not where the item would
+--   come to rest. This verb never loads or generates a chunk and never
+--   edits terrain to make a destination valid — an unloaded column
+--   refuses, on an explicitly named hidden page exactly as on the
+--   active one.
+itemDebugMoveGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemDebugMoveGroundFn env = do
+    gidArg  ← numberArgAt 1
+    instArg ← numberArgAt 2
+    xArg    ← Lua.tonumber 3
+    yArg    ← Lua.tonumber 4
+    pageArg ← Lua.tostring 5
+    moved ← case (gidArg, instArg, groundSpawnCoords xArg yArg) of
+        (Just gid, Just iid, Just (x, y))
+            -- A negative instance id is no instance: 'iiInstanceId' is a
+            -- 'Word64', and letting the conversion wrap would make
+            -- @-1@ name the largest one.
+            | iid ≥ 0
+            , Just rawTX ← groundMoveTile x
+            , Just rawTY ← groundMoveTile y → Lua.liftIO $ do
+                mWs ← resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
+                case mWs of
+                    Nothing → pure False
+                    Just ws → do
+                        params ← readIORef (wsGenParamsRef ws)
+                        td ← readIORef (wsTilesRef ws)
+                        case groundRestShift params td rawTX rawTY of
+                            Nothing → pure False
+                            Just (dgx, dgy) → do
+                                let cx = x + fromIntegral dgx
+                                    cy = y + fromIntegral dgy
+                                -- The shift is whole tiles, so the
+                                -- canonical coordinate must still floor
+                                -- to the tile just validated. It does
+                                -- for every accepted magnitude; the
+                                -- check is here so a stored coordinate
+                                -- can never name a tile OTHER than the
+                                -- one the destination rule passed.
+                                if (floor cx, floor cy)
+                                       ≡ (rawTX + dgx, rawTY + dgy)
+                                    then moveGroundItemOnPage ws
+                                             (fromIntegral gid)
+                                             (fromIntegral iid) cx cy
+                                    else pure False
+        _ → pure False
+    Lua.pushboolean moved
+    return 1
 
 -- | item.groundCount() → n (headless tests / HUD readouts)
 itemGroundCountFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
