@@ -138,10 +138,12 @@ homeAt ∷ Int → Int → SimWorldState → Maybe ActiveFluidCell
 homeAt lx ly = cellAt homeChunk (idxOf lx ly)
 
 -- | Total ACTIVE fluid volume across every chunk. Only meaningful while
---   no chunk has deactivated: 'deactivateInPlace' bakes rounded surfaces
---   through 'volumeToSurface' and discards the exact grid, so an
---   after-deactivation total is a different representation, not a
---   conservation result.
+--   no chunk has deactivated — not because anything is lost to
+--   rounding (since #2520 'deactivateInPlace' bakes the EXACT passive
+--   plane, unit for unit), but because it CLEARS the active grid once
+--   it has: this sum reads that grid, so after deactivation it reads
+--   zero regardless of how much fluid the chunk still holds passively.
+--   An after-deactivation total is therefore not a conservation result.
 activeVolume ∷ SimWorldState → Int
 activeVolume sws = sum
     [ fromIntegral (afcVolume afc)

@@ -1108,7 +1108,10 @@ spec = describe "solidification (#2485)" $ do
 
         -- …and the sim handoff the commit published, applied through the
         -- REAL command handler to a sim chunk holding that exact
-        -- remainder, leaves it at 1 rather than rounding it back to 7.
+        -- remainder, leaves it at 1. Before #2520 the passive plane
+        -- could only carry whole levels and this arrived back as a
+        -- rounded-up level; it is exact now, so the assertion is that
+        -- the commit keeps the live grid rather than re-seeding it.
         cmds ← simCommands env
         logger ← readIORef (loggerRef env)
         case [ c | c@(SimReactionCommitted p _ _ _) ← cmds

@@ -245,8 +245,9 @@ states whether it wants ceiling, floor, or render height.
 
 `ActiveFluidCell.afcVolume` remains integer quantity. The scale changes from
 seven to eight units per z. For ordinary cells, the exact absolute surface is
-`terrainZ * 8 + volume`; unlike the current `volumeToSurface`, gravity and seam
-pressure compare that exact value. Equal-terrain lateral equalisation continues
+`terrainZ * 8 + volume`; unlike the whole-z surface the pre-#2520
+`volumeToSurface` published, gravity and seam pressure compare that exact
+value. Equal-terrain lateral equalisation continues
 to compare volumes, now under the same eight-unit scale.
 
 No active/passive boundary may round. An active cell writes a `FluidCell` whose
@@ -281,11 +282,14 @@ version. `docs/persistence_state_inventory.md` records `world-edits` v4 and the
 precision promise.
 
 The canonical summary each tracked fixture is validated against carries the
-exact plane per page, and PER FLUID TYPE as a histogram of how many cells sit
-at each top fill level 1..8 beside that type's count and exact sum. Page
-totals alone would not be an oracle — a type swap leaves all of them unchanged,
-and so does any compensating pair of remainder corruptions — and the whole-z
-Lua and dump views cannot see a remainder at all.
+exact plane per page, PER FLUID TYPE as a histogram of how many cells sit at
+each top fill level 1..8, and as a digest over every snapshot in canonical
+coordinate order carrying each cell's coordinate, type and exact surface. The
+layers are cumulative because each closes a hole the one above leaves open: a
+type swap survives the page totals, and a compensating `+8`/`-8` pair or a
+permutation of two cells' surfaces survives the histogram too, a histogram
+being a multiset. The whole-z Lua and dump views cannot see a remainder at
+all.
 
 When CRS-12 later replaces resident snapshots with a sparse versioned fluid
 component, its migration input includes both pre-v4 whole-z snapshots and v4

@@ -74,8 +74,9 @@ mkChunk spec' = LoadedChunk
 
 -- | A River column whose terrain protrudes TWO levels above the water.
 --   Two, not one: after a single dig a one-level protrusion collapses
---   to terrain == fcSurface, where the old buggy @max@ coincidentally
---   agrees with the rule and the regression would pass unfixed.
+--   to terrain == the fluid's own ceiling, where the old buggy @max@
+--   coincidentally agrees with the rule and the regression would
+--   pass unfixed.
 riverSurfZ, riverTerrainZ ∷ Int
 riverSurfZ    = 10
 riverTerrainZ = 12
@@ -143,7 +144,8 @@ spec = do
         it "stays flat after a second dig" $ do
             -- A three-level protrusion, so two digs still leave terrain
             -- ABOVE the water: from the two-level fixture the second dig
-            -- lands exactly on fcSurface, where a bare max agrees with
+            -- lands exactly on the fluid's own ceiling, where a bare
+            -- max agrees with
             -- the rule and the assertion stops discriminating.
             let tall  = mkChunk [(riverSurfZ + 3, Just (fluidCellAtZ River riverSurfZ))]
                 twice = replayEdits
@@ -189,7 +191,7 @@ spec = do
 
     describe "WeAddTile keeps its displacement guard" $ do
         -- Filling BELOW the fluid surface leaves the cell in place; the
-        -- guard means surviving fluid always has newTopZ < fcSurface,
+        -- guard means surviving fluid always stands above newTopZ,
         -- so River and non-River agree here.
         let filled = applyEdit (WeAddTile 0 0 stone)
                                (mkChunk [(5, Just (fluidCellAtZ River riverSurfZ))])

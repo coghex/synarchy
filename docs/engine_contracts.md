@@ -5243,12 +5243,33 @@ v1/v2/v3 → v4 scaling and the exact round trip),
 
 The tracked `z3-exact-fluid-units` fixture is a real saved session whose
 snapshots carry partial top levels under several fluid types, Ocean
-included. Its canonical summary pins the plane PER TYPE as a histogram
-of how many cells sit at each top fill level 1..8, beside that type's
-count and exact sum. Page totals alone would not be an oracle: a type
-swap leaves all of them unchanged, and so does any compensating pair of
-remainder corruptions. The whole-z Lua and dump views cannot see a
-remainder at all, so neither can stand in for this.
+included. Its canonical summary pins the plane in three layers, because
+each closes a hole the one above it leaves open:
+
+- the page totals (`count`, `partialCount`, `exactSum`) catch a rescale
+  of the whole plane, but a TYPE SWAP leaves all three unchanged, and so
+  does any compensating pair of remainder corruptions that keeps the sum;
+- `byType` adds, per fluid type, a histogram of how many cells sit at
+  each top fill level 1..8 — so a swap moves a row, and a one-unit cell
+  is a level-1 row under its own type. A histogram is still a MULTISET
+  though: two same-type cells moved by `+8` and `-8` keep both their
+  levels and the sum, and a permutation of two cells' surfaces is
+  invisible to it;
+- `digest` closes both. It is an `fnv1a64` over EVERY snapshot in
+  canonical coordinate order, each carrying its own coordinate, type and
+  exact surface, so any change to any cell — value, type, position or
+  ordering — moves it. `samples` then makes a mismatch legible: the
+  coordinate-first witness of each (type, level) present, which is where
+  the mandated one-unit, seven-unit and partial-Ocean cells are pinned
+  individually and by coordinate.
+
+What the save records is the exact SURFACE, not volume-over-terrain:
+terrain is regenerated from the page's own gen params rather than
+stored. Surface is the durable quantity, and against the deterministic
+terrain a given seed regenerates it fixes the volume too; the
+volume-over-terrain identity itself is proved at a KNOWN terrain by the
+hspec round trip. The whole-z Lua and dump views cannot see a remainder
+at all, so neither can stand in for any of this.
 
 ---
 
