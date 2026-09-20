@@ -49,7 +49,9 @@ import Item.Ground
     (GroundItem, GroundItems(..), moveGroundItem, removeGroundItem)
 import World.Chunk.Types (ColumnTiles(..), LoadedChunk(..), columnIndex)
 import World.Cursor.Types (CursorState(..))
-import World.Generate.Coordinates (canonicalTileFrame)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Generate.Coordinates (canonicalTileFrameWith)
+import World.Generate.Types (WorldGenParams)
 import World.State.Types (WorldState(..))
 import World.Tile.Types (WorldTileData, lookupChunk)
 
@@ -201,12 +203,24 @@ moveGroundItemOnPage ws gid iid x y =
 --   apply it to the float coordinate it is storing: the shift moves
 --   whole chunks, so it carries the sub-tile fraction across unchanged
 --   (#1135).
-groundRestShift ∷ Int             -- ^ world size in chunks
-                → WorldTileData   -- ^ the page's loaded chunks
-                → Int → Int       -- ^ raw destination tile
+--
+--   The frame comes from the page's own params through
+--   'World.Chunk.Residency.canonicalChunkCoord', the ONE canonicalisation
+--   chunk storage keys are built with (#2001), rather than from a bare
+--   world size. An ARENA records a sentinel @wgpWorldSize@ of 100000
+--   instead of an extent, so wrapping by that number would map a far
+--   arena coord onto a chunk the loader stored under its own identity
+--   coord — fabricating a loaded destination out of a wrap the page does
+--   not have. 'Nothing' params is identity for the same reason it is
+--   elsewhere: "World.Thread.ChunkLoading" bails out on it and has
+--   inserted no chunk, so the lookup below misses anyway.
+groundRestShift ∷ Maybe WorldGenParams  -- ^ the page's generation params
+                → WorldTileData         -- ^ the page's loaded chunks
+                → Int → Int             -- ^ raw destination tile
                 → Maybe (Int, Int)
-groundRestShift worldSize td rawTX rawTY = do
-    let (coord, (lx, ly), shift) = canonicalTileFrame worldSize rawTX rawTY
+groundRestShift mParams td rawTX rawTY = do
+    let canon = maybe id canonicalChunkCoord mParams
+        (coord, (lx, ly), shift) = canonicalTileFrameWith canon rawTX rawTY
     lc ← lookupChunk coord td
     let idx = columnIndex lx ly
         tz  = lcTerrainSurfaceMap lc VU.! idx

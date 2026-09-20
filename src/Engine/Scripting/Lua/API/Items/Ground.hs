@@ -48,7 +48,7 @@ import World.Cursor.Types (CursorState(..))
 import World.GroundItems
     (groundRestShift, moveGroundItemOnPage, takeGroundItemOnPage)
 import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
-                   , WorldGenParams(..), pageWrapWorldSize, wmWorlds)
+                   , WorldGenParams(..), wmWorlds)
 import World.Weather.Ambient (ambientTempAt)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
@@ -776,9 +776,9 @@ itemDebugMoveGroundFn env = do
                 case mWs of
                     Nothing → pure False
                     Just ws → do
-                        worldSize ← pageWrapWorldSize ws
+                        params ← readIORef (wsGenParamsRef ws)
                         td ← readIORef (wsTilesRef ws)
-                        case groundRestShift worldSize td rawTX rawTY of
+                        case groundRestShift params td rawTX rawTY of
                             Nothing → pure False
                             Just (dgx, dgy) → do
                                 let cx = x + fromIntegral dgx

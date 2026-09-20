@@ -5,6 +5,7 @@ module World.Generate.Coordinates
     , chunkWorldBounds
     , cameraChunkCoord
     , canonicalTileFrame
+    , canonicalTileFrameWith
     , canonicalTile
     , tileAliasStep
     , localizeTileToAnchor
@@ -73,9 +74,32 @@ canonicalTileFrame ∷ Int                -- ^ world size in chunks
                    → Int → Int          -- ^ global tile (gx, gy), raw frame
                    → (ChunkCoord, (Int, Int), (Int, Int))
                       -- ^ (stored chunk, local (lx, ly), tile shift (dgx, dgy))
-canonicalTileFrame worldSize gx gy =
+canonicalTileFrame worldSize = canonicalTileFrameWith (wrapChunkCoordU worldSize)
+
+-- | 'canonicalTileFrame' against a caller-supplied chunk
+--   canonicalisation rather than a bare world size.
+--
+--   The size is not always enough to decide the frame. An ARENA records
+--   a sentinel @wgpWorldSize@ of 100000 rather than an extent, and
+--   'World.Chunk.Residency.canonicalChunkCoord' — the ONE
+--   canonicalisation chunk storage keys are built through (#2001) —
+--   therefore answers identity for it. Handing that sentinel to
+--   'wrapChunkCoordU' instead would wrap an arena coord past
+--   @u = ±50000@ that the loader never wrapped, resolving a frame no
+--   chunk was ever stored in. A caller that can reach the page's
+--   'World.Generate.Types.WorldGenParams' passes
+--   @canonicalChunkCoord params@ here and inherits that guard, and the
+--   @worldSize ≤ 0@ one, instead of re-deriving either.
+--
+--   The tile shift is computed from whatever the function answers, so
+--   it stays the whole-chunk displacement between the two frames and
+--   the local index is unchanged, exactly as above.
+canonicalTileFrameWith ∷ (ChunkCoord → ChunkCoord)
+                       → Int → Int
+                       → (ChunkCoord, (Int, Int), (Int, Int))
+canonicalTileFrameWith canon gx gy =
     let (ccRaw@(ChunkCoord rcx rcy), local) = globalToChunk gx gy
-        ChunkCoord ccx ccy = wrapChunkCoordU worldSize ccRaw
+        ChunkCoord ccx ccy = canon ccRaw
     in ( ChunkCoord ccx ccy
        , local
        , ((ccx - rcx) * chunkSize, (ccy - rcy) * chunkSize) )

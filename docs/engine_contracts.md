@@ -3122,6 +3122,19 @@ predicate; its material index is bounds-checked against the column's
 trimmed z-range (§Tile-coordinate seam frame), so a surface z outside
 that range counts as no material and refuses rather than raising.
 
+**The frame comes from the page's own params, not from a world size.**
+`groundRestShift` canonicalizes through
+`World.Chunk.Residency.canonicalChunkCoord` — the ONE canonicalization
+chunk storage keys are built with (#2001) — via
+`World.Generate.Coordinates.canonicalTileFrameWith`. An ARENA records a
+sentinel `wgpWorldSize` of 100000 rather than an extent, and that
+function answers identity for it; wrapping by the sentinel instead would
+take arena chunk `(50000, -50000)` (u = 100000, an exact multiple) onto
+`ChunkCoord 0 0` and accept a destination 800000 tiles from the one the
+caller named, on a page with no wrap at all. Absent params are identity
+for the same reason they are elsewhere: the chunk loader bails out on
+them and has stored nothing.
+
 **Coordinates are canonicalized, fractions preserved.** `x` and `y` take
 `item.spawnGround`'s conversions and its finite-`Float` domain, plus a
 frame bound at 2^24 — the magnitude where a `Float`'s spacing reaches a
@@ -3163,7 +3176,8 @@ camera's own installed z-slice at 16. One column carries material only at
 each, so an implementation reading the pointer hit or the camera slice
 accepts a destination this verb must refuse, and refuses the one it must
 accept. The frame-bound case names a coordinate pair that wraps onto a
-loaded chunk when the bound is removed.
+loaded chunk when the bound is removed, and the arena case names one that
+does so when the sentinel is wrapped instead of treated as identity.
 Move-specific persistence evidence is `tools/item_instance_probe.py`'s
 PERSIST phase (`python3 tools/run_probes.py --only item_instance`), which
 relocates a ground item and asserts it restores at the relocated

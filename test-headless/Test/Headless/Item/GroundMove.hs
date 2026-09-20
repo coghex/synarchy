@@ -79,7 +79,8 @@ import World.Chunk.Types
 import World.Cursor.Types (CursorState(..))
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
-import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Generate.Types
+    (WorldGenParams(..), defaultWorldGenParams, isArenaParams)
 import World.GroundItems (moveGroundItemOnPage, takeGroundItemOnPage)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
@@ -209,9 +210,15 @@ fixtureTiles = WorldTileData
 
 -- * Fixture identities
 
-pageActive, pageHidden ∷ WorldPageId
+pageActive, pageHidden, pageArena ∷ WorldPageId
 pageActive = WorldPageId "ground_move_active"
 pageHidden = WorldPageId "ground_move_hidden"
+
+-- | A live page whose params are a real ARENA's: seed 0 and an empty
+--   timeline, so 'World.Generate.Types.isArenaParams' recognises it,
+--   and a @wgpWorldSize@ of 100000 that is a SENTINEL rather than an
+--   extent.
+pageArena = WorldPageId "ground_move_arena"
 
 -- | The item under test, and a bystander that must never move. Both
 --   pages allocate from their own zero, so the SAME gids live on both —
@@ -224,10 +231,11 @@ bystanderGid = 1
 -- | Instance ids. The hidden page's row wears the same gid as the
 --   active page's and a DIFFERENT instance, which is what a cross-page
 --   lookup would confuse.
-activeIid, bystanderIid, hiddenIid ∷ Word64
+activeIid, bystanderIid, hiddenIid, arenaIid ∷ Word64
 activeIid = 700
 bystanderIid = 701
 hiddenIid = 900
+arenaIid = 1100
 
 -- | Where both pages' items start: an ordinary interior tile of the
 --   loaded origin chunk.
@@ -471,6 +479,32 @@ spec = around (withIsolatedResourceRoot . withHeadlessEngineNoWorld) $ do
             (ls, sc) ← moveBackend env
             refusalLeavesEverything sc $ moveToLocal ls trimmedLocal
 
+        it "refuses a far ARENA destination rather than wrapping it by \
+           \the arena's sentinel world size onto a loaded chunk" $
+            \env → do
+                (ls, sc) ← moveBackend env
+                -- An arena's wgpWorldSize is the sentinel 100000, not an
+                -- extent, and the chunk loader stores an arena's chunks
+                -- under their own coords: canonicalChunkCoord answers
+                -- identity for it. Wrapping by the sentinel instead
+                -- takes chunk (50000, -50000) — u = 100000, an exact
+                -- multiple of it — straight onto ChunkCoord 0 0, which
+                -- this page HAS loaded, at local (0, 0), a resting
+                -- column. So tile (800000, -800000) would be accepted
+                -- and the item stored 800000 tiles away from where the
+                -- caller put it, at (0, 0), on a page with no wrap at
+                -- all.
+                (arenaFarX, arenaFarY) `shouldBe` (800000, -800000)
+                refusalLeavesEverything sc $ move ls movedGid arenaIid
+                    (fromIntegral arenaFarX + 0.5)
+                    (fromIntegral arenaFarY + 0.5) (Just pageArena)
+                -- The arena page is otherwise perfectly usable, so the
+                -- refusal above is the coordinate's and not the page's.
+                move ls movedGid arenaIid 0.5 0.5 (Just pageArena)
+                    `shouldReturn` "true"
+                positionOf (scArena sc) movedGid
+                    `shouldReturn` Just (0.5, 0.5)
+
     describe "canonical destinations" $ do
 
         it "stores a seam alias in the canonical frame, keeping its \
@@ -674,8 +708,9 @@ instance Show PageSnapshot where
             ⧺ show (sort (HM.keys (wtdChunks (psChunks ps))))
             ⧺ ", initQueue = " ⧺ show (psQueue ps) ⧺ " }"
 
-snapshot ∷ Scene → IO (PageSnapshot, PageSnapshot)
-snapshot sc = (,) <$> onePage (scActive sc) <*> onePage (scHidden sc)
+snapshot ∷ Scene → IO (PageSnapshot, PageSnapshot, PageSnapshot)
+snapshot sc = (,,) <$> onePage (scActive sc) <*> onePage (scHidden sc)
+                   <*> onePage (scArena sc)
   where
     onePage ws = PageSnapshot
         <$> readIORef (wsGroundItemsRef ws)
@@ -714,7 +749,11 @@ selectionOn ws = selectedGroundItem <$> readIORef (wsCursorRef ws)
 
 -- * Fixture
 
-data Scene = Scene { scActive ∷ WorldState, scHidden ∷ WorldState }
+data Scene = Scene
+    { scActive ∷ WorldState
+    , scHidden ∷ WorldState
+    , scArena  ∷ WorldState
+    }
 
 -- | Make @pid@ the only visible page, which is how the active page is
 --   switched between two calls.
@@ -726,10 +765,17 @@ installPages ∷ EngineEnv → IO Scene
 installPages env = do
     wsA ← emptyWorldState
     wsH ← emptyWorldState
-    forM_ [wsA, wsH] $ \ws → do
+    wsR ← emptyWorldState
+    forM_ [wsA, wsH, wsR] $ \ws →
         writeIORef (wsTilesRef ws) fixtureTiles
+    forM_ [wsA, wsH] $ \ws →
         writeIORef (wsGenParamsRef ws) $
+            -- Seed 42, so 'isArenaParams' is False and these are
+            -- ordinary wrapping pages.
             Just defaultWorldGenParams { wgpWorldSize = worldSize }
+    -- The arena's params verbatim from
+    -- 'World.Thread.Command.Init.handleWorldInitArenaCommand'.
+    writeIORef (wsGenParamsRef wsR) $ Just arenaParams
     -- Both pages allocate from their own zero, so the same gids are
     -- live on both by default rather than by contrivance.
     aIds ← forM [activeIid, bystanderIid] $ \iid →
@@ -738,16 +784,24 @@ installPages env = do
     hIds ← forM [hiddenIid, hiddenIid + 1] $ \iid →
         atomicModifyIORef' (wsGroundItemsRef wsH) $
             spawnGroundItem (mkItem iid) originX originY
+    rIds ← forM [arenaIid, arenaIid + 1] $ \iid →
+        atomicModifyIORef' (wsGroundItemsRef wsR) $
+            spawnGroundItem (mkItem iid) originX originY
     -- Pins what every identity below assumes about a fresh page's
     -- allocator.
     aIds `shouldBe` [movedGid, bystanderGid]
     hIds `shouldBe` [movedGid, bystanderGid]
+    rIds `shouldBe` [movedGid, bystanderGid]
+    -- The fixture really is an arena by the engine's own predicate, not
+    -- by resembling one.
+    isArenaParams arenaParams `shouldBe` True
     -- A standing selection every refusal — and every success — has to
     -- leave exactly as it is.
     atomicModifyIORef' (wsCursorRef wsA) $ \cs →
         (cs { selectedGroundItem = Just movedGid }, ())
     writeIORef (worldManagerRef env) emptyWorldManager
-        { wmWorlds  = [(pageActive, wsA), (pageHidden, wsH)]
+        { wmWorlds  = [ (pageActive, wsA), (pageHidden, wsH)
+                      , (pageArena, wsR) ]
         , wmVisible = [pageActive] }
     writeIORef (itemManagerRef env) emptyItemManager
     -- The camera's z-slice is really installed, at the elevation
@@ -757,7 +811,7 @@ installPages env = do
         { camZSlice = cameraZ, camZoom = fixtureZoom }
     writeIORef (windowSizeRef env) (viewportW, viewportH)
     writeIORef (framebufferSizeRef env) (viewportW, viewportH)
-    pure (Scene wsA wsH)
+    pure (Scene wsA wsH wsR)
 
 moveBackend ∷ EngineEnv → IO (LuaBackendState, Scene)
 moveBackend env = do
@@ -768,6 +822,23 @@ moveBackend env = do
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
     pure (ls, sc)
+
+-- | A far arena tile whose chunk, wrapped by the arena SENTINEL, lands
+--   exactly on the loaded origin chunk: chunk (50000, -50000) has
+--   u = 100000, an exact multiple of the sentinel, so it wraps to
+--   ChunkCoord 0 0 at local (0, 0).
+arenaFarX, arenaFarY ∷ Int
+arenaFarX = 50000 * chunkSize
+arenaFarY = (-50000) * chunkSize
+
+-- | A real arena's generation params.
+arenaParams ∷ WorldGenParams
+arenaParams = defaultWorldGenParams
+    { wgpSeed = 0, wgpWorldSize = arenaSentinelSize }
+
+-- | The sentinel an arena records instead of an extent.
+arenaSentinelSize ∷ Int
+arenaSentinelSize = 100000
 
 -- | The installed viewport. Square, so the hit-test's aspect is 1 and
 --   the scan below covers the same span on both axes.
