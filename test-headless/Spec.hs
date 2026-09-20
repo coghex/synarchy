@@ -394,6 +394,7 @@ import qualified Test.Headless.Lua.SaveBridge as LuaSaveBridge
 import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
+import qualified Test.Headless.Lua.UnitAiCanteenDrain as LuaUnitAiCanteenDrain
 import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
 import qualified Test.Headless.Lua.UnitAiWaterCanteens as LuaUnitAiWaterCanteens
 import qualified Test.Headless.Lua.CombatLogRefusal as LuaCombatLogRefusal
@@ -953,6 +954,7 @@ main = hspec $ do
     LuaTutorialProgress.spec
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
+    LuaUnitAiCanteenDrain.spec
     LuaUnitAiHold.spec
     LuaUnitAiWaterCanteens.spec
     LuaCombatLogRefusal.spec

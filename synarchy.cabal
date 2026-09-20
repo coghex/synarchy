@@ -1806,6 +1806,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TutorialProgress
                    Test.Headless.Lua.TutorialEvaluation
                    Test.Headless.Lua.UnitAiLocations
+                   Test.Headless.Lua.UnitAiCanteenDrain
                    Test.Headless.Lua.UnitAiHold
                    Test.Headless.Lua.UnitAiWaterCanteens
                    Test.Headless.Lua.UnitAiCombatMove
