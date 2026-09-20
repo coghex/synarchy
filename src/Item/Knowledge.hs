@@ -27,8 +27,11 @@
 --   'PortableObservation' and the world thread MERGES it
 --   ('World.Thread.Command.Basic'), which is why the merge rules live
 --   in 'applyPortableObservation' rather than in either caller. Nothing
---   in gameplay observes a container yet (PLC-8 is what calls these
---   from pickup and open).
+--   in gameplay observed a container until #2527 (PLC-17), whose
+--   container window reads a crate's record at every depth and records
+--   one contents observation when a level opens on a container a
+--   player-commandable unit is holding (D-26). Pickup's weight
+--   observation is PLC-16's and the @Open@ order's is PLC-18's.
 --
 --   __Four states, never conflated__ ('PortableKnowledgeState'):
 --   never-inspected (nothing is known), weight-only (it has been

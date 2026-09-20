@@ -378,6 +378,7 @@ import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
 import qualified Test.Headless.Item.PortableKnowledge as PortableKnowledge
 import qualified Test.Headless.Item.NestedContents as NestedContents
+import qualified Test.Headless.Item.PortableWindow as PortableWindow
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.SignificantContents as LocationSignificantContents
 import qualified Test.Headless.Location.ContainerShells as LocationContainerShells
@@ -686,6 +687,11 @@ main = hspec $ do
     -- stack opens a level from, driven through the registered Lua API
     -- against real live refs.
     aroundAll withHeadlessEngine NestedContents.spec
+    -- #2527: the portable level of the same stack. Its own engine, for
+    -- the reason PortableKnowledge.LuaApi has one — it installs a whole
+    -- synthetic page set, an item registry and the real HUD, and it
+    -- drives real world ticks to drain the observation queue.
+    PortableWindow.spec
     -- Own engine for the same reason (#1206): the demolition gate
     -- installs its own two-page world manager and drives the real
     -- building-command drain, which would disturb the shared engine.

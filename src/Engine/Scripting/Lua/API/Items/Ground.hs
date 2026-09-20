@@ -520,6 +520,12 @@ pushGroundRow im gid gi = do
     Lua.setfield (Lua.nth 2) "instanceId"
     Lua.pushstring (TE.encodeUtf8 (iiDefName (giInst gi)))
     Lua.setfield (Lua.nth 2) "defName"
+    -- The authored display name (#2527), so a window opened FROM a
+    -- ground row can title itself the way the player saw the row named.
+    -- Falls back to the def name for an item whose def does not
+    -- resolve, exactly as `kind` falls back to "misc" below.
+    Lua.pushstring (TE.encodeUtf8 (maybe (iiDefName inst) idDisplayName mDef))
+    Lua.setfield (Lua.nth 2) "displayName"
     Lua.pushnumber (Lua.Number (realToFrac (giX gi)))
     Lua.setfield (Lua.nth 2) "x"
     Lua.pushnumber (Lua.Number (realToFrac (giY gi)))
@@ -550,6 +556,20 @@ pushGroundRow im gid gi = do
     Lua.setfield (Lua.nth 2) "sharpness"
     Lua.pushstring (TE.encodeUtf8 (maybe "misc" idKind mDef))
     Lua.setfield (Lua.nth 2) "kind"
+    -- Does the DEFINITION declare the optional @storage:@ component
+    -- (#2527)? The authoritative answer, and deliberately not derivable
+    -- from anything else this row carries: @kind@ is a free-form
+    -- authoring label, and @container:@/'iiCurrentFill' describe a
+    -- homogeneous FLUID capacity that has nothing to do with internal
+    -- item storage (@docs/portable_loot_containers.md@ D-12). The
+    -- ground context menu offers "Contents" on exactly this, so a
+    -- substitute test would open a portable level on a canteen.
+    --
+    -- Read off the DEF rather than the instance's own 'iiStorage':
+    -- the question is whether this KIND of item is an item-container at
+    -- all, and a pre-#1233 instance was never stamped.
+    Lua.pushboolean (maybe False (isJust ∘ idStorage) mDef)
+    Lua.setfield (Lua.nth 2) "hasStorage"
     -- True live mass: empty weight + fill (at the
     -- container's per-unit fill weight) + everything
     -- nested in iiContents, computed recursively. A
@@ -559,12 +579,15 @@ pushGroundRow im gid gi = do
         (itemTotalWeight im (giInst gi))))
     Lua.setfield (Lua.nth 2) "weight"
 
--- | item.listGround() → array of {id, instanceId, defName, kind, x, y,
---   fill, quality, qualityTier, condition, sharpness, weight}.
+-- | item.listGround() → array of {id, instanceId, defName, displayName,
+--   kind, x, y, fill, quality, qualityTier, condition, sharpness,
+--   hasStorage, weight}.
 --   `weight` is the live total mass (itemTotalWeight: empty weight +
 --   fill + nested contents), not the static def weight. `qualityTier`
 --   (#345) is present only when the def declares a quality spec;
---   `condition`, `sharpness` (#1737) and `kind` are always present.
+--   `condition`, `sharpness` (#1737), `kind` and `hasStorage` (#2527 —
+--   the def's own @storage:@ declaration, which nothing else on the row
+--   implies) are always present.
 --
 --   ACTIVE-page scoped, deliberately: this is the UI's listing, and
 --   the UI only ever shows the world the player is looking at. A

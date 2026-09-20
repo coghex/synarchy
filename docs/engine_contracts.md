@@ -1527,22 +1527,26 @@ cards); the F8 overlay hit-tests itself through a parallel
 `tryClaimClick`.
 
 Enforced by hspec `--match "container window stack"` /
-`"Container knowledge"` / `"Nested item contents"` / `"Item list widget"` /
+`"Container knowledge"` / `"Nested item contents"` (whose portable
+describe drives the whole gesture against a live engine with the real
+`hud.lua` booted) / `"Item list widget"` /
 `"Transfer context menu"` / `"cargo_inventory_panel"` (the last reaching
 `Test.Headless.UI.ResponsiveGameplay.Container`'s three describes — the
 framebuffer cap, tab shrink-to-fit, resize tab preservation, #1234
 endpoint agnosticism and the #1237 age indicator), plus
 `tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
 
-**The four level kinds.** `endpoint` (a storage building or a unit);
+**The five level kinds.** `endpoint` (a storage building or a unit);
 `unitItem` (LIVE, `unit.getItemContents`, which searches loose inventory,
 equipment AND accessories — the three the unit-info list merges);
 `buildingItem` (the player's REMEMBERED contents,
 `building.getRememberedItemContents`, carrying the PARENT record's own
-`revealedAt` — never a live storage read, never a knowledge write); and
-`escort` (#1250's Mode A pair).
+`revealedAt` — never a live storage read, never a knowledge write);
+`portableItem` (#2527, PLC-17 — a PORTABLE container keyed by its own
+`iiInstanceId`, with no unit, building or page in its identity; see
+**The portable level** below); and `escort` (#1250's Mode A pair).
 
-The two item kinds descend by EXACT INSTANCE IDENTITY along a path of
+The three item kinds descend by EXACT INSTANCE IDENTITY along a path of
 instance ids, and a path that stops resolving closes that level AND every
 level below it rather than retargeting a same-def sibling. An
 item-container level is RENDER-ONLY (D-5): no transfer endpoint, no
@@ -1552,10 +1556,64 @@ building row keeps its Retrieve gestures and merely GAINS "Contents".
 it; the row's transfer entries are Mode B's Retrieve 1 / Retrieve all.)
 
 `scripts/item_contents_panel.lua` no longer owns a window lifecycle
-(D-13): it supplies the two item-level kinds and nothing else — no page,
-no panel, no singleton, no `setup()`, no `update()`.
+(D-13): it supplies the three item-level kinds and nothing else — no
+page, no panel, no singleton, no `setup()`, no `update()`.
 `scripts/transfer_session_panels.lua` supplies the `escort` kind the same
 way and owns no lifecycle either.
+
+**The portable level (#2527).** Addressed by the crate's own
+`iiInstanceId` and drawn entirely from the player's remembered knowledge
+(`docs/portable_loot_containers.md` D-7/D-26/D-27):
+
+- The BASE level reads `item.getContainerKnowledge` for the crate's
+  state, its remembered whole mass and its LIVE internal capacity, and
+  `item.getRememberedItemContents` (no path) for the grouped rows. It
+  opens for ANY instance id, so a never-inspected crate opens and says
+  so; absent rows never close it.
+- A NESTED level reads `item.getRememberedItemContents` with a path,
+  which descends the ROOT observation's own stored copies. A nested
+  crate has no record of its own, so the level keeps the root's instance
+  id and merely extends the path, and reports the root's `revealedAt`.
+  nil closes that level and every deeper one — which is how forgetting
+  or re-observing the root invalidates the descent.
+- Entry is the ground-item context menu's `Contents`, offered for a
+  ground item whose DEFINITION declares `storage:` (`hasStorage` on
+  `item.listGround`'s rows) and for nothing else. Neither
+  `kind == "container"` nor a `container:` fluid capacity may stand in
+  for that declaration (D-12). The menu resolves the captured ground id
+  to the crate's INSTANCE id while the row is in hand, because a ground
+  id is page-local. No unit is involved and nothing is written, in every
+  knowledge state.
+
+**The `knowledge` sub-table is the whole presentation contract.** A
+level kind declares staleness by returning `{ state, revealedAt,
+weighedAt }`; `cargo_inventory_endpoints.lua`'s `knowledgeState` /
+`ageText` / `weightText` / `emptyText` branch on that and never on a
+level or endpoint kind. The portable layer adds `weight-only` to
+`unknown` / `empty` / `known` (`live` for a non-remembering source), and
+the second stamp: a `weight-only` view ages from `weighedAt`, every
+other state from `revealedAt`, so a later weighing can never make
+remembered rows read as fresher than the look that produced them.
+`weightText` renders `stored` against `capacity` as a RATIO only for a
+view whose `weightMeasure` is the default `"contents"`; a portable view
+declares `"whole"` — its `stored` is the crate's entire mass while
+`capacity` bounds only its internal storage — so the two are reported as
+separate facts, and either may be absent rather than zero.
+
+**One knowledge WRITE exists in the stack, and it is D-26's.** Opening a
+`unitItem` level for a container a PLAYER-COMMANDABLE unit is holding
+records one contents observation, through the level kind's `onOpen`
+hook — the mirror of `onClose`, dispatched by `openLevel` after the
+panes are built and never for `reason == "layout"`. Nothing else in the
+manager re-opens a level, so a resize restore, the per-tick rebuild, a
+scroll and a tab change all reach `buildLevel` without reaching it. It
+is additionally skipped for a DESCENT (a non-empty `path`), for an open
+with no exact instance id (`openFor`'s by-defName fallback), and for a
+unit that is not player-commandable — which the level kind asks
+`unit.transferEndpointInfo`, the window's one definition of that. A
+refused open never reaches the hook at all. Every remembered level, at
+any depth, writes nothing; `portableItem` declares no `onOpen`, which is
+what makes that true by construction.
 
 **Module ownership inside the manager (#2155).**
 `scripts/cargo_inventory_panel.lua` stays the public module, the
@@ -3281,12 +3339,34 @@ session.
 every field but `state` present ONLY when known — reading a missing
 field as `0` is the conflation the four states exist to prevent, and an
 OBSERVED-empty crate answers an EMPTY `items` table rather than none.
+Its `items` are INDIVIDUAL instance projections (`pushItemInstance`),
+which is a different shape from the grouped rows the shared item-list
+host consumes.
+`getRememberedItemContents(instanceId[, path])` → `{items, revealedAt}`
+| nil (#2527) is the GROUPED, descendable view of the same record and
+the read the `portableItem` window level draws every row from: no path
+answers the crate's own remembered contents, a path descends the ROOT
+observation's stored copies by exact instance identity, and both report
+the root's `revealedAt`. nil for a crate with no contents observation at
+all (never-inspected or weight-only — an absence, never an empty list),
+for a malformed path, and for one that does not resolve. Asking the map
+about a NESTED crate's own id is not equivalent and is not what this
+does: a container inside an observed one has no record until it is
+itself observed.
 `observeContainerWeight` / `observeContainerContents` locate the
 instance and record, answering false when it cannot be found;
 `forgetContainerKnowledge` drops a record and does NOT require locating
 anything, since a destroyed crate's memory is the one a caller most
 needs to clear. Each verb refuses a non-number argument outright:
 `Lua.tointeger` coerces, so the string `"47"` must not act on crate 47.
+
+**Definition-storage eligibility** is reported on every ground row as
+`hasStorage` (`item.listGround` / `item.getGroundForUnit`), read off the
+DEF's own optional `storage:` block. It is the only authoritative answer
+to "is this an item-container?": `kind` is a free-form authoring label
+and `container:` is the homogeneous FLUID component (D-12), so neither
+may stand in for it. The ground context menu's `Contents` entry keys on
+it and on nothing else.
 
 **Who writes the map.** The three mutating verbs MEASURE on the calling
 thread and ENQUEUE a `WorldRecordPortableKnowledge` command; the world
@@ -3331,13 +3411,19 @@ mirror-image reason an observation does: it must not reach across a
 boundary and delete a same-numbered record the next session
 legitimately owns.
 
-PLC-7 ships no gameplay caller — pickup and open are PLC-8's, the window
-is PLC-9's.
+PLC-7 shipped no gameplay caller. Since #2527 (PLC-17) the container
+window is one: it READS the record at every depth without ever writing,
+and takes exactly one write — D-26's contents observation when a level
+opens on a container a player-commandable unit is holding. See
+§Container window stack for that hook's full conditions. Pickup and the
+`Open` order remain PLC-16's and PLC-18's.
 
 Gate: hspec `--match "Portable container knowledge"`, plus
 `python3 tools/persistence_inventory_audit.py` and
 `python3 tools/save_compat_audit.py` for the component's inventory rows
-and fixture.
+and fixture. The window's own use of it is gated by
+`--match "Nested item contents"` and, manually, by
+`tools/item_list_widget_probe.py`'s portable scenario.
 
 ## Commanded-order stall budget (#920/#1291)
 

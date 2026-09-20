@@ -127,6 +127,33 @@ TEST_EMPTY_BOX = f"""\
     category: Medical
 """
 
+# #2527's PORTABLE fixture: a crate that stands on the FLOOR and
+# declares the optional `storage:` block. That declaration is the whole
+# point — the ground context menu offers "Contents" on `storage:` and on
+# nothing else, so a fixture that merely said `kind: container` (as
+# every other item fixture here does, and as every SHIPPED item still
+# does) would prove the wrong thing.
+#
+# Its authored contents include a real `first_aid_kit`, which is itself
+# a container, so a portable level has somewhere to descend to; and two
+# bandages, so a grouped row has a count above one.
+DEF_GROUND_CRATE = "probe_ground_crate"
+TEST_GROUND_CRATE = f"""\
+  - name: "{DEF_GROUND_CRATE}"
+    display_name: "Probe Ground Crate"
+    sprite: "assets/textures/items/medical/first_aid_kit.png"
+    weight: 6.0
+    bulk: 30.0
+    kind: container
+    category: Tools
+    storage:
+      weight_capacity: 60.0
+      bulk_capacity: 40.0
+    contents:
+      - {{ item: first_aid_kit, count: 1 }}
+      - {{ item: bandage, count: 2 }}
+"""
+
 TEST_ITEMS = "items:\n" + f"""\
   - name: "{DEF_DEEP_KIT}"
     display_name: "Probe Deep Kit"
@@ -138,7 +165,8 @@ TEST_ITEMS = "items:\n" + f"""\
     contents:
 """ + "".join(f"      - {{ item: {d}, count: 1 }}\n"
               for d in DEEP_KIT_CONTENTS) + \
-    "      - { item: first_aid_kit, count: 1 }\n" + TEST_EMPTY_BOX
+    "      - { item: first_aid_kit, count: 1 }\n" + TEST_EMPTY_BOX \
+    + TEST_GROUND_CRATE
 
 TEST_UNIT_YAML = os.path.join(SPROOT, "item_list_widget_probe_units.yaml")
 DEF_CARRIER = "probe_kit_carrier"
@@ -181,10 +209,11 @@ class Fixtures:
     """The staged world state, built once by the facade and passed to
     the scenarios explicitly (requirement 8).
 
-    Site coordinates are kept beside the ids they belong to because two
-    scenarios need them for their own camera and spawn work — the cargo
-    building's anchor for the hit test, and the acolyte's for the
-    unit-to-unit escort's spawn pair."""
+    Site coordinates are kept beside the ids they belong to because
+    three scenarios need them for their own camera and spawn work — the
+    cargo building's anchor for the hit test, the acolyte's for the
+    unit-to-unit escort's spawn pair, and the never-inspected cargo's as
+    the neighbourhood #2527's ground items are dropped in."""
     bid: int
     empty_bid: int
     unseen_bid: int
@@ -194,6 +223,7 @@ class Fixtures:
     building_site: tuple[int, int]
     acolyte_site: tuple[int, int]
     carrier_site: tuple[int, int]
+    unseen_site: tuple[int, int]
     bpixel: object
 
 
@@ -212,7 +242,8 @@ def stage_fixture_defs(port: int) -> None:
     with open(TEST_ITEM_YAML, "w") as f:
         f.write(TEST_ITEMS)
     ni = send(port, f"return engine.loadItemYaml('{TEST_ITEM_YAML}')")
-    check("probe deep-kit item def loaded", float(ni) >= 1.0, f"got {ni!r}")
+    check("probe item defs loaded (deep kit, empty box, ground crate)",
+          float(ni) >= 3.0, f"got {ni!r}")
     with open(TEST_UNIT_YAML, "w") as f:
         f.write(TEST_UNITS)
     nu = send(port, f"return engine.loadUnitYaml('{TEST_UNIT_YAML}')")

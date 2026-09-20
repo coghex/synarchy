@@ -12,7 +12,8 @@ import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Forage (itemGetFoodFn)
 import Engine.Scripting.Lua.API.Items.Knowledge
   ( itemGetContainerKnowledgeFn, itemObserveContainerWeightFn
-  , itemObserveContainerContentsFn, itemForgetContainerKnowledgeFn )
+  , itemObserveContainerContentsFn, itemForgetContainerKnowledgeFn
+  , itemGetRememberedItemContentsFn )
 import Engine.Core.State (EngineEnv, statRNGRef)
 import Engine.Core.Capability.ContentRegistries
   (toContentRegistriesCapability)
@@ -100,13 +101,20 @@ registerItemAPI callStats env = do
   registerLuaFunction callStats "item" "debugQuads"   (itemDebugQuadsFn env)
   -- PORTABLE container knowledge (#2512) — what the player remembers
   -- about a crate, keyed by its own instance id and carried across
-  -- pages and owners with it. The read verb answers the same field
+  -- pages and owners with it. The state read answers the same field
   -- names `building.getContainerKnowledge` does, so one window renders
-  -- either; the two observe verbs are what PLC-8's pickup and open will
-  -- call, and nothing in the shipped game calls them yet. See
+  -- either. Since #2527 the container window is a real caller: it reads
+  -- through both read verbs and writes exactly one contents
+  -- observation, D-26's, when a level opens on a carried container. The
+  -- weight observation and the forget verb still have no shipped caller
+  -- — pickup is PLC-16's and the `Open` order PLC-18's. See
   -- Engine.Scripting.Lua.API.Items.Knowledge.
   registerLuaFunction callStats "item" "getContainerKnowledge"
                                      (itemGetContainerKnowledgeFn env)
+  -- The GROUPED, descendable view of the same record (#2527): the
+  -- `portableItem` window level's every row, base and nested alike.
+  registerLuaFunction callStats "item" "getRememberedItemContents"
+                                     (itemGetRememberedItemContentsFn env)
   registerLuaFunction callStats "item" "observeContainerWeight"
                                      (itemObserveContainerWeightFn env)
   registerLuaFunction callStats "item" "observeContainerContents"

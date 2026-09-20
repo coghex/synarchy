@@ -12,7 +12,7 @@ module Test.Headless.Item.PortableKnowledge.Fixture
     , crateId, kitId, bandageId, looseId, unlocatableId
     , testItems
     , crate, crateEmpty, kit, bandage, loose
-    , mkBuilding, mkUnit, groundWith
+    , mkBuilding, mkUnit, mkUnitOfFaction, groundWith
     , storageDef, plainDef
     ) where
 
@@ -54,12 +54,19 @@ testItems = ItemManager $ HM.fromList
         { idContainer = Just ItemContainer
             { icCapacity = 20, icHolds = "supplies"
             , icFillWeight = 0.5, icDefaultFill = 0 }
-        , idStorage = Just (ItemStorage 60 40) })
+        , idStorage = Just (ItemStorage 60 40)
+        -- The UI's own "this row can open a deeper level" signal
+        -- (#2527): both of these ARE item-containers, and the window
+        -- stack's row rule keys on the def's @kind@. Orthogonal to
+        -- @idStorage@, which is what the ground menu keys on — the two
+        -- questions are deliberately different (D-12).
+        , idKind = "container" })
     , ("first_aid_kit", (bareItemDef "first_aid_kit" 1.25)
         { idContainer = Just ItemContainer
             { icCapacity = 10, icHolds = "supplies"
             , icFillWeight = 0.5, icDefaultFill = 0 }
-        , idStorage = Just (ItemStorage 8 6) })
+        , idStorage = Just (ItemStorage 8 6)
+        , idKind = "container" })
     , ("bandage", bareItemDef "bandage" 0.05)
     , ("pry_bar", bareItemDef "pry_bar" 2.5)
     ]
@@ -191,7 +198,16 @@ mkBuilding page defName delivered storage = BuildingInstance
 mkUnit
     ∷ WorldPageId → [ItemInstance] → HM.HashMap Text ItemInstance
     → [ItemInstance] → UnitInstance
-mkUnit page inventory equipment accessories = UnitInstance
+mkUnit = mkUnitOfFaction FactionPlayer
+
+-- | The same unit under an explicit faction. #2527's D-26 observation
+--   is gated on the unit being PLAYER-COMMANDABLE, so the "a hostile's
+--   container is never observed by looking at it" case needs a unit
+--   that is otherwise identical and merely is not one.
+mkUnitOfFaction
+    ∷ Faction → WorldPageId → [ItemInstance] → HM.HashMap Text ItemInstance
+    → [ItemInstance] → UnitInstance
+mkUnitOfFaction faction page inventory equipment accessories = UnitInstance
     { uiDefName = "acolyte", uiName = "", uiPage = page
     , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
     , uiBaseWidth = 0, uiGridX = 0, uiGridY = 0, uiGridZ = 0
@@ -201,7 +217,7 @@ mkUnit page inventory equipment accessories = UnitInstance
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = inventory
     , uiEquipment = equipment
-    , uiAccessories = accessories, uiFactionId = FactionPlayer, uiWounds = []
+    , uiAccessories = accessories, uiFactionId = faction, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

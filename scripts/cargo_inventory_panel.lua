@@ -55,7 +55,7 @@
 -- container ROW inside level N opens at level N+1.
 --
 -- Where a level's data comes from is the LEVEL KIND's business
--- (LEVELS below), and there are four:
+-- (LEVELS below), and there are five:
 --
 --   endpoint      — a storage building or a unit, the pre-#1238 window.
 --   unitItem      — an item-container a unit carries, wears or has
@@ -64,12 +64,19 @@
 --                   the REMEMBERED contents recorded by the last
 --                   reveal, carrying the parent record's own
 --                   "as of…" age. Never a live read, never a write.
+--   portableItem  — a PORTABLE container keyed by its own item-instance
+--                   id (#2527, PLC-17): a crate on the floor, opened
+--                   with no unit and no building involved. Entirely the
+--                   REMEMBERED view from the item-keyed knowledge layer
+--                   (item.getContainerKnowledge /
+--                   item.getRememberedItemContents), in all four of its
+--                   states. Never a live read, never a write.
 --   escort        — a Mode A transfer session (#1250): D-9's stated
 --                   exception, ONE level owning TWO flanking panes,
 --                   one per endpoint of the session.
 --
 -- `endpoint` is scripts/cargo_inventory_endpoints.lua's since #2155,
--- unitItem/buildingItem are `scripts/item_contents_panel.lua`'s (D-13)
+-- the three item kinds are `scripts/item_contents_panel.lua`'s (D-13)
 -- and escort is `scripts/transfer_session_panels.lua`'s: none of those
 -- modules owns a window lifecycle at all — each supplies its level's
 -- data and presentation, and this file drives the shared renderer so
@@ -281,13 +288,23 @@ cargoInventoryPanel.formatAge = endpoints.formatAge
 --   onClose(src, reason)              #1250: state that outlives the
 --                                     level's own elements. Never fires
 --                                     for reason == "layout"
+--   onOpen(src, reason)               #2527: the effect of a REAL open,
+--                                     fired once the level's panes are
+--                                     built. Never fires for
+--                                     reason == "layout", and nothing
+--                                     else in this file re-opens a
+--                                     level, so a resize restore, a
+--                                     per-tick rebuild, a scroll and a
+--                                     tab change all reach buildLevel
+--                                     without reaching this
 --
 -- Everything else — panel sizing, header baselines, the "as of…" line,
 -- scrolling — is scripts/cargo_inventory_render.lua's and level-kind
 -- blind; modality, teardown and restore are this file's.
 --
 -- The endpoint kind lives in scripts/cargo_inventory_endpoints.lua
--- (#2155), the two item kinds in scripts/item_contents_panel.lua (D-13)
+-- (#2155), the three item kinds in scripts/item_contents_panel.lua
+-- (D-13)
 -- and the escort kind in scripts/transfer_session_panels.lua; the
 -- latter two are required lazily so the modules can reference each
 -- other without a load-order cycle.
@@ -509,6 +526,16 @@ function cargoInventoryPanel.openLevel(src, mx, my, parentIndex, reason)
     end
     ls[index] = level
     buildLevel(level, views)
+    -- The mirror of destroyLevel's `onClose` dispatch (#2527): a level
+    -- kind may own an effect that belongs to a REAL open, and D-26's
+    -- contents observation on a carried container is the first one.
+    -- Fired LAST, so it never runs for a level that failed to resolve
+    -- or failed to build; and skipped for "layout" for exactly the
+    -- reason onClose is — a resize destroys and rebuilds every level,
+    -- and a rebuild is not the player opening anything.
+    if (reason or "replaced") ~= "layout" and kind.onOpen then
+        kind.onOpen(src, reason or "replaced")
+    end
     return true
 end
 
@@ -798,6 +825,12 @@ function cargoInventoryPanel.dump()
                 title      = view and view.title or nil,
                 subtitle   = view and view.subtitle or nil,
                 ageText    = view and endpoints.ageText(view) or nil,
+                -- What an EMPTY row list means in this pane's own
+                -- state (#2527): the four portable knowledge states
+                -- differ in their empty text and in nothing a row
+                -- count can see, so a gate proving "never-inspected is
+                -- not drawn as known-empty" has to read this.
+                emptyText  = view and view.emptyText or nil,
                 activeTab  = pane.activeTab,
                 scroll     = pane.scroll,
                 maxScroll  = pane.listId
@@ -825,6 +858,8 @@ function cargoInventoryPanel.dump()
             title        = view and view.title or nil,
             subtitle     = view and view.subtitle or nil,
             ageText      = view and endpoints.ageText(view) or nil,
+            emptyText    = view and view.emptyText or nil,
+            knowledgeState = view and endpoints.knowledgeState(view) or nil,
             revealedAt   = view and view.knowledge
                              and view.knowledge.revealedAt or nil,
             activeTab    = level.activeTab,
