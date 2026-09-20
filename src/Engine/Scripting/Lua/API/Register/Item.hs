@@ -86,6 +86,7 @@ registerItemAPI callStats env = do
   registerLuaFunction callStats "item" "spawnGround"  (itemSpawnGroundFn env)
   registerLuaFunction callStats "item" "listGround"   (itemListGroundFn env)
   registerLuaFunction callStats "item" "removeGround" (itemRemoveGroundFn env)
+  registerLuaFunction callStats "item" "debugMoveGround" (itemDebugMoveGroundFn env)
   registerLuaFunction callStats "item" "groundCount"  (itemGroundCountFn env)
   registerLuaFunction callStats "item" "getGroundTemp" (itemGetGroundTempFn env)
   registerLuaFunction callStats "item" "setGroundTemp" (itemSetGroundTempFn env)

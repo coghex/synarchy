@@ -1,5 +1,5 @@
 {-# LANGUAGE Strict #-}
--- | The two ground-item operations that have to agree with the
+-- | The ground-item operations that have to agree with the
 --   ground-item SELECTION, and therefore cannot be a bare
 --   'atomicModifyIORef'' on @wsGroundItemsRef@ (#2300).
 --
@@ -13,32 +13,45 @@
 --   no longer exists, which is the stale-selection defect from the
 --   other side of the same window.
 --
---   So both halves take 'World.State.Types.wsGroundItemLock' for their
+--   So every half takes 'World.State.Types.wsGroundItemLock' for its
 --   whole read-decide-write, exactly as 'World.Chunk.Queue' takes
 --   'World.State.Types.wsInitQueueLock' for the init queue and its load
---   phase (#2001). Removal is the only mutation that has to
---   participate: a spawn cannot invalidate a gid a selection just
---   validated, and 'Item.Ground.spawnGroundItem' never reuses an id, so
---   an item that was present at the moment the lock was held stays
---   present-or-removed and never becomes a different item.
+--   phase (#2001). A spawn still does NOT have to participate: it
+--   cannot invalidate a gid a selection just validated, and
+--   'Item.Ground.spawnGroundItem' never reuses an id, so an item that
+--   was present at the moment the lock was held stays
+--   present-or-removed and never becomes a different item. Removal is
+--   one mutation that does; 'moveGroundItemOnPage' (#2486) is the
+--   other, and it is in for a second reason as well — it edits a FIELD
+--   of a live row, beside unlocked writers that edit other fields of
+--   the same row, so its decision and its edit must both see the map
+--   as it is at commit time.
 --
---   Neither function reads or writes anything but the page it is given,
---   which is what keeps the page-local ground-item contract (#1208)
---   true here by construction.
+--   No function here reads or writes anything but the page it is
+--   given, which is what keeps the page-local ground-item contract
+--   (#1208) true here by construction.
 module World.GroundItems
     ( selectGroundItemOnPage
     , takeGroundItemOnPage
     , takeGroundItemsOnPage
+    , moveGroundItemOnPage
+    , groundRestShift
     ) where
 
 import UPrelude
 import Control.Concurrent.MVar (withMVar)
 import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, atomicModifyIORef')
-import Item.Ground (GroundItem, GroundItems(..), removeGroundItem)
+import Item.Ground
+    (GroundItem, GroundItems(..), moveGroundItem, removeGroundItem)
+import World.Chunk.Types (ColumnTiles(..), LoadedChunk(..), columnIndex)
 import World.Cursor.Types (CursorState(..))
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.State.Types (WorldState(..))
+import World.Tile.Types (WorldTileData, lookupChunk)
 
 -- | Select ground item @gid@ on @ws@, reporting whether it took.
 --
@@ -124,3 +137,81 @@ takeGroundItemsOnPage ws gids =
                     _ → cs
                 , () )
         pure removed
+
+-- | Relocate ground item @gid@ on @ws@ to @(x, y)@, reporting whether
+--   it took (#2486).
+--
+--   The third writer that has to participate in the page's ground-item
+--   lock, and the only one that is neither an addition nor a removal.
+--   It takes the lock for the whole read-decide-write for the reason
+--   the two above do — a pickup landing between the caller's read and
+--   this commit would otherwise relocate a row that is already gone,
+--   or, worse, a row a later spawn happened to be handed the same
+--   number for.
+--
+--   The re-read inside the hold is load-bearing beyond that. Unlike a
+--   selection, this writes a FIELD of the row rather than a separate
+--   ref, and the row's OTHER fields have writers that take no lock at
+--   all: @item.setGroundTemp@ and the per-page temperature tick both
+--   rewrite @giInst@ with a bare 'atomicModifyIORef''. Writing back a
+--   'Item.Ground.GroundItem' captured before the lock was acquired
+--   would silently revert whichever of those landed in between, so the
+--   decision and the edit are both made against the map as it is at
+--   commit time, inside 'Item.Ground.moveGroundItem'.
+--
+--   @iid@ is checked there, not here: an id whose instance no longer
+--   matches is refused, and a refusal writes nothing — no row, no
+--   'gisNextId', no selection. Like the rest of this module it reads
+--   and writes only the page it is given, so a gid live on another page
+--   is simply absent here (#1208).
+--
+--   Destination validity is NOT this function's business and is decided
+--   by the caller, against 'groundRestShift'. Terrain is not guarded by
+--   this lock and never could be: holding it across a chunk read would
+--   order this against removals and nothing else.
+moveGroundItemOnPage ∷ WorldState → Int → Word64 → Float → Float → IO Bool
+moveGroundItemOnPage ws gid iid x y =
+    withMVar (wsGroundItemLock ws) $ \_ →
+        atomicModifyIORef' (wsGroundItemsRef ws) (moveGroundItem gid iid x y)
+
+-- | The whole-tile shift carrying raw tile @(rawTX, rawTY)@ into the
+--   frame chunks are STORED under, answered only when the column it
+--   lands in is loaded AND has material at its own terrain surface
+--   (#2486). 'Nothing' means "no ground item can rest there".
+--
+--   This is deliberately the elevation
+--   'World.Render.GroundItemQuads.itemGeometry' rests a ground item at,
+--   read from the same two vectors of the same column: a ground item
+--   stores no z, so the height it is drawn at is whatever
+--   @lcTerrainSurfaceMap@ says the moment it is drawn. Anything else —
+--   the camera's z-slice, the elevation a pointer hit — describes where
+--   a CLICK was, not where the item would come to rest, and validating
+--   against one of those would accept a destination the renderer then
+--   resolves to empty air.
+--
+--   The material index is bounds-checked rather than assumed, because
+--   'World.Chunk.Types.ColumnTiles' stores only a trimmed contiguous
+--   z-range: a surface z outside @[ctStartZ, ctStartZ + length ctMats)@
+--   is an unbuilt or fully-trimmed column, which counts as no material
+--   and refuses. 'itemGeometry' guards the parallel @ctSlopes@ index
+--   for the same reason, and 'World.Render.HitTest.pickWorldTile'
+--   guards the same range.
+--
+--   Answers the SHIFT rather than the canonical tile so the caller can
+--   apply it to the float coordinate it is storing: the shift moves
+--   whole chunks, so it carries the sub-tile fraction across unchanged
+--   (#1135).
+groundRestShift ∷ Int             -- ^ world size in chunks
+                → WorldTileData   -- ^ the page's loaded chunks
+                → Int → Int       -- ^ raw destination tile
+                → Maybe (Int, Int)
+groundRestShift worldSize td rawTX rawTY = do
+    let (coord, (lx, ly), shift) = canonicalTileFrame worldSize rawTX rawTY
+    lc ← lookupChunk coord td
+    let idx = columnIndex lx ly
+        tz  = lcTerrainSurfaceMap lc VU.! idx
+        col = lcTiles lc V.! idx
+        mi  = tz - ctStartZ col
+    guard (mi ≥ 0 ∧ mi < VU.length (ctMats col))
+    guard (ctMats col VU.! mi ≢ 0)
+    pure shift

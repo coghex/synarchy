@@ -1460,6 +1460,7 @@ test-suite synarchy-test-headless
                        Test.Headless.Unit.MedicAntibioticSupply
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
+                   Test.Headless.Item.GroundMove
                    Test.Headless.Item.GroundPageOwnership
                    Test.Headless.Item.GroundSelection
                    Test.Headless.Item.Materialize
