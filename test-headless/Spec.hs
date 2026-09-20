@@ -56,6 +56,7 @@ import qualified Test.Headless.Unit.StopTransition as StopTransition
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.StanceRecovery as StanceRecovery
 import qualified Test.Headless.Unit.FrameOrganFailure as FrameOrganFailure
+import qualified Test.Headless.Unit.LeanFloorDeath as LeanFloorDeath
 import qualified Test.Headless.Unit.SourceDrinkingHydration as SourceDrinkingHydration
 import qualified Test.Headless.Unit.ResourceTickCarry as ResourceTickCarry
 import qualified Test.Headless.Unit.SourceDrinkPose as SourceDrinkPose
@@ -902,6 +903,7 @@ main = hspec $ do
     describe "Unit.Stats" StatsTest.spec
     StanceRecovery.spec
     FrameOrganFailure.spec
+    LeanFloorDeath.spec
     SourceDrinkingHydration.spec
     ResourceTickCarry.spec
     SourceDrinkPose.spec
