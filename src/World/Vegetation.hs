@@ -163,7 +163,7 @@ computeChunkVegetation seed worldSize coord surfMap surfMats surfSlopes
             -- Shallow fresh water (1-2) gets marsh/wetland vegetation
             -- instead of bare dark terrain.
             fluidInfo = case fluidMap V.! idx of
-                Just fc → let d = max 0 (fcSurface fc - elev)
+                Just fc → let d = max 0 (fluidSurfaceCeilZ fc - elev)
                           in (d, fcType fc)
                 Nothing → (0, Ocean)  -- dummy type, depth 0 = no fluid
             fluidDepth = fst fluidInfo

@@ -16,10 +16,12 @@ import Data.Maybe (mapMaybe)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (ChunkCoord, chunkSize)
-import World.Fluid.Types (FluidCell(..))
 import World.SideFace.Base (SideDecoType(..), sideDecoBase)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
-import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
+import World.Fluid.Exact (fluidUnitsPerZ, exactSurfaceOfZ)
+import Sim.Fluid.Types
+    ( ActiveFluidCell(..), exactSurfaceOf, derivePassiveFluid
+    , clearTouchedCells )
 import Sim.Fluid.Reaction
     (CellSite(..), SolidificationEvent, TransferOutcome(..)
     , applyTransfer, dedupeEvents)
@@ -78,16 +80,14 @@ simulateActiveTick sws =
                        }
 
 -- | Deactivate a chunk: bake active volumes back to passive fluid.
+--   The bake is EXACT (#2520): every remaining unit is written to the
+--   exact plane through the shared 'derivePassiveFluid', so a one-unit
+--   cell deactivates as one unit rather than as a whole level, and the
+--   sub-terrain cells activation never took up cross through unchanged.
 deactivateInPlace ∷ SimChunkState → SimChunkState
 deactivateInPlace scs =
     let terrV = scsTerrain scs
-        bakedFluid = V.imap (\idx mafc →
-            case mafc of
-                Nothing  → Nothing
-                Just afc → case volumeToSurface (terrV VU.! idx) (afcVolume afc) of
-                    s | afcVolume afc ≡ 0 → Nothing
-                      | otherwise → Just (FluidCell (afcType afc) s)
-            ) (scsActiveFluid scs)
+        bakedFluid = derivePassiveFluid terrV (scsFluid scs) (scsActiveFluid scs)
         sz = V.length bakedFluid
     in scs { scsActive      = False
            , scsActiveFluid = V.replicate sz Nothing
@@ -110,20 +110,28 @@ simulateActiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
                     → (SimChunkState, Bool, [SolidificationEvent])
 simulateActiveChunk _allChunks coord scs =
     let terrainV = scsTerrain scs
-        (newActive, newDeco, changed, events) = runST $ do
+        (newActive, newDeco, changed, events, touched) = runST $ do
             mv ← V.thaw (scsActiveFluid scs)
             decoMv ← VU.thaw (scsSideDeco scs)
             changedRef ← newSTRef False
             eventsRef ← newSTRef ([] ∷ [SolidificationEvent])
+            -- Which cells fluid ARRIVED in this tick. A cell that was
+            -- empty at activation and is empty again at the end is
+            -- indistinguishable from one nothing ever touched, so the
+            -- derivation below cannot tell a preserved sub-terrain cell
+            -- from one that was filled and drained again without this
+            -- (#2520).
+            touchedMv ← MVU.replicate (V.length (scsActiveFluid scs)) False
 
             -- Phase A: Gravity (downhill flow)
-            phaseGravity coord mv terrainV changedRef eventsRef
+            phaseGravity coord mv terrainV touchedMv changedRef eventsRef
 
             -- Phase B: Lateral pressure equalization
-            phaseLateral coord mv terrainV changedRef eventsRef
+            phaseLateral coord mv terrainV touchedMv changedRef eventsRef
 
             -- Phase C: Waterfall detection + downward transfer
-            phaseWaterfall coord mv decoMv terrainV changedRef eventsRef
+            phaseWaterfall coord mv decoMv terrainV touchedMv changedRef
+                           eventsRef
 
             -- Phase D: Dry-out (remove zero-volume cells)
             phaseDryOut mv changedRef
@@ -132,40 +140,38 @@ simulateActiveChunk _allChunks coord scs =
             decoResult ← VU.freeze decoMv
             ch ← readSTRef changedRef
             evs ← readSTRef eventsRef
-            pure (result, decoResult, ch, reverse evs)
+            tch ← VU.freeze touchedMv
+            pure (result, decoResult, ch, reverse evs, tch)
 
-        -- Also derive passive FluidMap for writeback
-        newFluid = deriveFluidMap terrainV newActive
+        -- Also derive passive FluidMap for writeback, against a prior
+        -- map this tick's own arrivals have already been cleared from.
+        newFluid = derivePassiveFluid terrainV
+                       (clearTouchedCells touched (scsFluid scs)) newActive
 
     in (scs { scsActiveFluid = newActive
             , scsFluid       = newFluid
             , scsSideDeco    = newDeco
             }, changed, events)
 
--- | Record one applied request's outcome: any event it produced, and
---   whether it changed the grid at all (a reaction counts).
-noteOutcome ∷ STRef s Bool → STRef s [SolidificationEvent] → TransferOutcome
+-- | Record one applied request's outcome: any event it produced,
+--   whether it changed the grid at all (a reaction counts), and — when
+--   fluid actually arrived — that the DESTINATION cell was touched.
+--
+--   An arrival is the only way a cell the active grid does not hold can
+--   stop being untouched: a cell holding nothing can be neither drained
+--   nor reacted with. So marking on @toMoved > 0@ at the destination is
+--   enough for 'clearTouchedCells' to be exact (#2520).
+noteOutcome ∷ MVU.MVector s Bool → Int
+            → STRef s Bool → STRef s [SolidificationEvent] → TransferOutcome
             → ST s ()
-noteOutcome changedRef eventsRef outcome = do
+noteOutcome touchedMv dstIdx changedRef eventsRef outcome = do
     when (toMoved outcome > 0 ∨ toConsumed outcome > 0) $
         writeSTRef changedRef True
+    when (toMoved outcome > 0) $ MVU.write touchedMv dstIdx True
     case toEvent outcome of
         Nothing → pure ()
         Just ev → modifySTRef' eventsRef (ev :)
 {-# INLINE noteOutcome #-}
-
--- | Derive the passive fluid map (surfaces) from an active-volume grid.
-deriveFluidMap ∷ VU.Vector Int → V.Vector (Maybe ActiveFluidCell)
-               → V.Vector (Maybe FluidCell)
-deriveFluidMap terrainV active =
-    V.imap (\idx mafc →
-        case mafc of
-            Nothing  → Nothing
-            Just afc | afcVolume afc ≡ 0 → Nothing
-                     | otherwise →
-                Just (FluidCell (afcType afc)
-                        (volumeToSurface (terrainV VU.! idx) (afcVolume afc)))
-        ) active
 
 -- * Seam exchange: cross-chunk fluid transfer
 --
@@ -179,6 +185,14 @@ deriveFluidMap terrainV active =
 --   interior: lateral volume-equalisation at equal terrain (with the
 --   >1 guard that stops 1-unit oscillation), gravity by surface drop at
 --   unequal terrain. Dry (Nothing) cells count as volume 0 at terrain.
+--
+--   The unequal-terrain pressure compares EXACT absolute surfaces
+--   (#2520), so two cells whose integer ceilings coincide still see the
+--   real difference between them. That difference is ALREADY in fluid
+--   units — 'exactSurfaceOf' is terrain-on-the-exact-plane plus volume
+--   — so the quarter-pressure request divides it and never re-scales
+--   it; a dry side contributes its bare terrain top,
+--   'exactSurfaceOfZ' of it.
 seamFlow ∷ Int → Maybe ActiveFluidCell → Int → Maybe ActiveFluidCell → Int
 seamFlow terrA mca terrB mcb =
     let volA = maybe 0 (fromIntegral . afcVolume) mca ∷ Int
@@ -189,15 +203,15 @@ seamFlow terrA mca terrB mcb =
                else if diff < (-1) ∧ volB > 0 then negate (max 1 ((negate diff) `div` 4))
                else 0
        else if terrB < terrA ∧ volA > 0                  -- gravity A → lower B
-       then let surfDiff = volumeToSurface terrA (fromIntegral volA)
-                         - volumeToSurface terrB (fromIntegral volB)
+       then let surfDiff = exactSurfaceOf terrA (fromIntegral volA)
+                         - exactSurfaceOf terrB (fromIntegral volB)
             in if surfDiff > 0
-               then max 1 (min volA (surfDiff * volumePerLevel `div` 4)) else 0
+               then max 1 (min volA (surfDiff `div` 4)) else 0
        else if terrA < terrB ∧ volB > 0                  -- gravity B → lower A
-       then let surfDiff = volumeToSurface terrB (fromIntegral volB)
-                         - volumeToSurface terrA (fromIntegral volA)
+       then let surfDiff = exactSurfaceOf terrB (fromIntegral volB)
+                         - exactSurfaceOf terrA (fromIntegral volA)
             in if surfDiff > 0
-               then negate (max 1 (min volB (surfDiff * volumePerLevel `div` 4))) else 0
+               then negate (max 1 (min volB (surfDiff `div` 4))) else 0
        else 0
 
 -- | Apply a signed seam flow (positive = A → B) live through the shared
@@ -249,8 +263,18 @@ reconcileSeams ∷ SimTopology
 reconcileSeams topo results
     | HM.size results < 2 = (results, [])
     | otherwise =
-        let (grids', touched, events) = runST $ do
+        let (grids', touched, arrivals, events) = runST $ do
                 mgrids ← traverse (\(scs, _) → V.thaw (scsActiveFluid scs)) results
+                -- Where fluid ARRIVED, per chunk: the same record the
+                -- in-chunk phases keep, and for the same reason -- a
+                -- seam can fill a sub-terrain cell whose fluid a later
+                -- pair on the same seam then annihilates, and the
+                -- re-derivation below must not restore the old cell
+                -- over that (#2520).
+                marrivals ← traverse
+                    (\(scs, _) →
+                        MVU.replicate (V.length (scsActiveFluid scs)) False)
+                    results
                 touchedRef ← newSTRef HS.empty
                 eventsRef ← newSTRef ([] ∷ [SolidificationEvent])
                 -- Chunk-key order: the seam pass mutates live grids, so
@@ -263,6 +287,8 @@ reconcileSeams topo results
                             Just (scsB, _) → do
                                 let mA = mgrids HM.! coord
                                     mB = mgrids HM.! nbr
+                                    aA = marrivals HM.! coord
+                                    aB = marrivals HM.! nbr
                                     terrA = scsTerrain scsA
                                     terrB = scsTerrain scsB
                                 anyRef ← newSTRef False
@@ -277,6 +303,13 @@ reconcileSeams topo results
                                         when (toMoved outcome > 0
                                               ∨ toConsumed outcome > 0) $
                                             writeSTRef anyRef True
+                                        -- The destination is whichever
+                                        -- side the signed flow pointed
+                                        -- at, and only an arrival marks.
+                                        when (toMoved outcome > 0) $
+                                            if flow > 0
+                                            then MVU.write aB ib True
+                                            else MVU.write aA ia True
                                         case toEvent outcome of
                                             Nothing → pure ()
                                             Just ev → modifySTRef' eventsRef (ev :)
@@ -284,27 +317,39 @@ reconcileSeams topo results
                                 when didMove $ modifySTRef' touchedRef
                                     (HS.insert coord . HS.insert nbr)
                 frozen ← traverse V.freeze mgrids
+                arrived ← traverse VU.freeze marrivals
                 t ← readSTRef touchedRef
                 evs ← readSTRef eventsRef
-                pure (frozen, t, reverse evs)
+                pure (frozen, t, arrived, reverse evs)
         in ( HM.mapWithKey (\coord (scs, changed) →
                 if HS.member coord touched
                 then let active' = grids' HM.! coord
+                         prior' = clearTouchedCells (arrivals HM.! coord)
+                                                    (scsFluid scs)
                      in (scs { scsActiveFluid = active'
-                             , scsFluid = deriveFluidMap (scsTerrain scs) active' }, True)
+                             , scsFluid = derivePassiveFluid (scsTerrain scs)
+                                              prior' active' }, True)
                 else (scs, changed)
                 ) results
            , events )
 
 -- * Phase A: Gravity — downhill flow
 
+-- | Downhill flow into a lower-terrain neighbour, sized by the EXACT
+--   surface difference between the two cells (#2520). The neighbour's
+--   own volume is what stands over the neighbour's terrain, so a lower
+--   neighbour that has already filled to the source's surface exerts
+--   matching pressure and takes nothing more; a dry one contributes its
+--   bare terrain top. The difference is already in fluid units, so the
+--   quarter-pressure request divides it without re-scaling.
 phaseGravity ∷ ChunkCoord
              → MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
+             → MVU.MVector s Bool
              → STRef s Bool
              → STRef s [SolidificationEvent]
              → ST s ()
-phaseGravity coord mv terrainV changedRef eventsRef = do
+phaseGravity coord mv terrainV touchedMv changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -322,14 +367,14 @@ phaseGravity coord mv terrainV changedRef eventsRef = do
                         then let nIdx = ny * chunkSize + nx
                                  nTerrZ = terrainV VU.! nIdx
                              in if nTerrZ < terrZ
-                                then let srcSurf = volumeToSurface terrZ (afcVolume afc)
+                                then let srcSurf = exactSurfaceOf terrZ (afcVolume afc)
                                          nbrSurf = case snap V.! nIdx of
-                                             Nothing  → nTerrZ
-                                             Just nfc → volumeToSurface nTerrZ (afcVolume nfc)
+                                             Nothing  → exactSurfaceOfZ nTerrZ
+                                             Just nfc → exactSurfaceOf nTerrZ (afcVolume nfc)
                                          surfDiff = srcSurf - nbrSurf
                                      in if surfDiff > 0
                                         then let outflow = min (fromIntegral (afcVolume afc))
-                                                               (surfDiff * volumePerLevel `div` 4)
+                                                               (surfDiff `div` 4)
                                              in Just (nIdx, max 1 outflow)
                                         else Nothing
                                 else Nothing
@@ -358,17 +403,18 @@ phaseGravity coord mv terrainV changedRef eventsRef = do
                                 mv (siteIn coord terrainV nIdx)
                                 actual
                             writeSTRef totalRef (soFar + toMoved outcome)
-                            noteOutcome changedRef eventsRef outcome
+                            noteOutcome touchedMv nIdx changedRef eventsRef outcome
 
 -- * Phase B: Lateral pressure equalization
 
 phaseLateral ∷ ChunkCoord
              → MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
+             → MVU.MVector s Bool
              → STRef s Bool
              → STRef s [SolidificationEvent]
              → ST s ()
-phaseLateral coord mv terrainV changedRef eventsRef = do
+phaseLateral coord mv terrainV touchedMv changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -418,8 +464,8 @@ phaseLateral coord mv terrainV changedRef eventsRef = do
                                                 transfer
                                             writeSTRef spentRef
                                                 (spent + toMoved outcome)
-                                            noteOutcome changedRef eventsRef outcome
-                                Nothing | srcVol > volumePerLevel → do
+                                            noteOutcome touchedMv nIdx changedRef eventsRef outcome
+                                Nothing | srcVol > fluidUnitsPerZ → do
                                     spent ← readSTRef spentRef
                                     let transfer = min (max 1 (srcVol `div` 4))
                                                        (srcVol - spent)
@@ -439,19 +485,32 @@ phaseLateral coord mv terrainV changedRef eventsRef = do
                                             transfer
                                         writeSTRef spentRef
                                             (spent + toMoved outcome)
-                                        noteOutcome changedRef eventsRef outcome
+                                        noteOutcome touchedMv nIdx changedRef eventsRef outcome
                                 _ → pure ()
 
 -- * Phase C: Waterfall detection
 
+-- | A cell falls into a cardinal neighbour whose TERRAIN sits more than
+--   one z below it. That eligibility is unchanged, and so is the fixed
+--   half-level cap on what one fall carries — derived from the scale
+--   constant rather than written as a literal since #2520.
+--
+--   #2520 adds the pressure condition the drop test never made: the
+--   source's EXACT absolute surface must stand above the destination's.
+--   A pool that has already risen to (or past) the falling cell's own
+--   surface is no longer downhill of it, however deep the terrain step
+--   between them is, and nothing falls — so no waterfall decoration is
+--   painted for it either, since the marker still follows a successful
+--   transfer and nothing else.
 phaseWaterfall ∷ ChunkCoord
                → MV.MVector s (Maybe ActiveFluidCell)
                → MVU.MVector s Word8
                → VU.Vector Int
+               → MVU.MVector s Bool
                → STRef s Bool
                → STRef s [SolidificationEvent]
                → ST s ()
-phaseWaterfall coord mv decoMv terrainV changedRef eventsRef = do
+phaseWaterfall coord mv decoMv terrainV touchedMv changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -470,8 +529,13 @@ phaseWaterfall coord mv decoMv terrainV changedRef eventsRef = do
                         then let nIdx = ny * chunkSize + nx
                                  nTerrZ = terrainV VU.! nIdx
                                  drop' = terrZ - nTerrZ
-                             in if drop' > 1
-                                then Just (nIdx, dirBit, min avail (volumePerLevel `div` 2))
+                                 srcSurf = exactSurfaceOf terrZ (afcVolume afc)
+                                 dstSurf = case snap V.! nIdx of
+                                     Nothing  → exactSurfaceOfZ nTerrZ
+                                     Just nfc → exactSurfaceOf nTerrZ (afcVolume nfc)
+                             in if drop' > 1 ∧ srcSurf > dstSurf
+                                then Just (nIdx, dirBit
+                                          , min avail (fluidUnitsPerZ `div` 2))
                                 else Nothing
                         else Nothing
                         ) (zip [0∷Int ..] nbrs)
@@ -494,7 +558,7 @@ phaseWaterfall coord mv decoMv terrainV changedRef eventsRef = do
                                 mv (siteIn coord terrainV nIdx)
                                 actual
                             writeSTRef totalRef (soFar + toMoved outcome)
-                            noteOutcome changedRef eventsRef outcome
+                            noteOutcome touchedMv nIdx changedRef eventsRef outcome
                             -- A reaction moves no fluid, so nothing fell
                             -- here: the waterfall marker and flow direction
                             -- describe transfers only.

@@ -996,7 +996,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                   generateChunk registry catalog pid params centerCoord
               seededSurf = VU.imap (\idx surfZ →
                   case cf V.! idx of
-                      Just fc → max surfZ (fcSurface fc)
+                      Just fc → max surfZ (fluidSurfaceCeilZ fc)
                       Nothing → surfZ
                   ) cs
               centerChunkRaw = LoadedChunk

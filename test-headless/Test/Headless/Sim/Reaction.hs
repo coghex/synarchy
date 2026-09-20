@@ -66,7 +66,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import Sim.State.Types
     (SimWorldState(..), SimChunkState(..), emptySimWorldState)
 import Sim.Topology (SimTopology(..), simTopologyForParams, simSeamNeighbor)
-import Sim.Fluid.Types (ActiveFluidCell(..), volumeToSurface)
+import Sim.Fluid.Types
+    (ActiveFluidCell(..), exactSurfaceOf, surfaceCeilZOf)
 import Sim.Fluid.Active (simulateActiveTick)
 import Sim.Fluid.Reaction
     (SolidProduct(..), SolidificationEvent(..))
@@ -137,10 +138,12 @@ homeAt ∷ Int → Int → SimWorldState → Maybe ActiveFluidCell
 homeAt lx ly = cellAt homeChunk (idxOf lx ly)
 
 -- | Total ACTIVE fluid volume across every chunk. Only meaningful while
---   no chunk has deactivated: 'deactivateInPlace' bakes rounded surfaces
---   through 'volumeToSurface' and discards the exact grid, so an
---   after-deactivation total is a different representation, not a
---   conservation result.
+--   no chunk has deactivated — not because anything is lost to
+--   rounding (since #2520 'deactivateInPlace' bakes the EXACT passive
+--   plane, unit for unit), but because it CLEARS the active grid once
+--   it has: this sum reads that grid, so after deactivation it reads
+--   zero regardless of how much fluid the chunk still holds passively.
+--   An after-deactivation total is therefore not a conservation result.
 activeVolume ∷ SimWorldState → Int
 activeVolume sws = sum
     [ fromIntegral (afcVolume afc)
@@ -274,7 +277,7 @@ spec = do
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 2
-                        , sevWaterSurface = volumeToSurface 0 2
+                        , sevWaterSurface = surfaceCeilZOf 0 2
                         , sevProduct      = SolidObsidian
                         } ]
 
@@ -300,7 +303,7 @@ spec = do
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 1
-                        , sevWaterSurface = volumeToSurface 1 2
+                        , sevWaterSurface = surfaceCeilZOf 1 2
                         , sevProduct      = SolidBasalt
                         } ]
 
@@ -336,13 +339,17 @@ spec = do
                 [ (idxOf 8 8, cell srcT srcV), (idxOf 9 8, cell dstT dstV) ]
 
         describe "water moving into lava" $ do
-            let before = lateralWorld River 10 Lava 2
+            -- The 10 units the water keeps stand ABOVE the new stone
+            -- top on the whole-z ceiling view (#2520 scaled that view
+            -- from seven units per z to eight), which is D-5's second
+            -- basalt clause.
+            let before = lateralWorld River 12 Lava 2
                 after  = simulateActiveTick before
 
             it "reacts instead of adding to the destination" $ do
-                -- Master: River 8 / Lava 4 (destination keeps its type
+                -- Master: River 10 / Lava 4 (destination keeps its type
                 -- and gains the 2-unit transfer).
-                homeAt 8 8 after `shouldBe` cell River 8
+                homeAt 8 8 after `shouldBe` cell River 10
                 homeAt 9 8 after `shouldBe` Nothing
 
             it "balances the per-side consumption" $
@@ -357,7 +364,7 @@ spec = do
                         , sevWaterType    = River
                         , sevConsumed     = 2
                         , sevStoneTop     = 1
-                        , sevWaterSurface = volumeToSurface 0 8
+                        , sevWaterSurface = surfaceCeilZOf 0 10
                         , sevProduct      = SolidBasalt
                         } ]
 
@@ -416,20 +423,22 @@ spec = do
                     `shouldBe` [(homeChunk, idxOf 9 8, 3)]
 
         describe "water fills the cell, lava arrives second" $ do
-            -- 40 `div` 4 = 10 units of Lake reach the middle, so the
-            -- 8-unit lava source that follows is the smaller side and is
-            -- itself exhausted — the same branch, the other ordering,
-            -- and the event lands on the incoming source instead.
-            let before = laneWorld Lake 40 Lava 8
+            -- 52 `div` 4 = 13 units of Lake reach the middle, so the
+            -- 12-unit lava source that follows is the smaller side and
+            -- is itself exhausted — the same branch, the other
+            -- ordering, and the event lands on the incoming source
+            -- instead. Both sources clear the spill-into-dry threshold,
+            -- which #2520 rescaled to 'fluidUnitsPerZ'.
+            let before = laneWorld Lake 52 Lava 12
                 after  = simulateActiveTick before
 
             it "reacts and exhausts the arriving lava" $ do
-                homeAt 8 8 after `shouldBe` cell Lake 30
-                homeAt 9 8 after `shouldBe` cell Lake 2
+                homeAt 8 8 after `shouldBe` cell Lake 39
+                homeAt 9 8 after `shouldBe` cell Lake 1
                 homeAt 10 8 after `shouldBe` Nothing
 
             it "balances the per-side consumption" $
-                consumptionBalances before after 8
+                consumptionBalances before after 12
 
             it "emits an obsidian event naming the arriving lava cell" $
                 events after `shouldBe`
@@ -438,39 +447,58 @@ spec = do
                         , sevIndex        = idxOf 10 8
                         , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = Lake
-                        , sevConsumed     = 8
+                        , sevConsumed     = 12
                         , sevStoneTop     = 1
-                        , sevWaterSurface = volumeToSurface 0 2
+                        , sevWaterSurface = surfaceCeilZOf 0 1
                         , sevProduct      = SolidObsidian
                         } ]
 
     -- * Branch 5 of 5: phaseWaterfall
     --
-    -- A drop of 3 makes the waterfall branch eligible; the destination
-    -- is deep enough that its fluid surface stands at or above the
-    -- source's, which is what keeps gravity from firing at the same
-    -- pair first.
+    -- The falling cell (8,8) is EMPTY when gravity takes its snapshot
+    -- and is filled from its equal-terrain neighbour (7,8) by the
+    -- lateral phase, so the unlike contact at the drop is first reached
+    -- by the waterfall phase — which is what makes this branch the one
+    -- under test.
+    --
+    -- #2520 gave that phase an exact-pressure condition of its own (the
+    -- source's exact absolute surface must stand above the
+    -- destination's). That condition is strictly implied by gravity's
+    -- own guard, so a pair gravity has already seen can no longer reach
+    -- phase C at all; the pre-fill above is what keeps the two apart.
     describe "waterfall into an occupied unlike destination" $ do
+        -- 'srcV' stands on (7,8); the lateral phase spills a quarter of
+        -- it into the empty (8,8), which is what then falls.
         let fallWorld srcT srcV dstT dstV = oneChunk
-                [ (idxOf 8 8, 3), (idxOf 9 8, 0) ]
-                [ (idxOf 8 8, cell srcT srcV), (idxOf 9 8, cell dstT dstV) ]
+                [ (idxOf 7 8, 3), (idxOf 8 8, 3), (idxOf 9 8, 0) ]
+                [ (idxOf 7 8, cell srcT srcV), (idxOf 9 8, cell dstT dstV) ]
+            spilled = 5 ∷ Word16   -- 20 `div` 4
 
         describe "lava falling into water" $ do
-            let before = fallWorld Lava 1 Lake 22
+            let before = fallWorld Lava 20 Lake 22
                 after  = simulateActiveTick before
 
-            it "pins the isolation: gravity cannot fire at this pair" $
-                -- Source surface 3 + 1 = 4; destination surface 4. A
-                -- non-positive surface difference is gravity's own
-                -- guard, so the fall is the only eligible transfer.
-                volumeToSurface 3 1 `shouldBe` volumeToSurface 0 22
+            it "pins the isolation: gravity never sees this pair" $ do
+                -- The falling cell is empty at gravity's snapshot, so
+                -- phase A has nothing to move out of it, and the lateral
+                -- refill arrives only in phase B.
+                homeAt 8 8 before `shouldBe` Nothing
+                homeAt 7 8 before `shouldBe` cell Lava 20
+
+            it "pins the isolation: the fall really is under pressure" $
+                -- What the lateral phase leaves at (8,8) stands above
+                -- the destination on the exact plane, which is the
+                -- condition phase C now checks for itself.
+                (exactSurfaceOf 3 spilled > exactSurfaceOf 0 22)
+                    `shouldBe` True
 
             it "reacts instead of pouring into the destination" $ do
+                homeAt 7 8 after `shouldBe` cell Lava (20 - spilled)
                 homeAt 8 8 after `shouldBe` Nothing
-                homeAt 9 8 after `shouldBe` cell Lake 21
+                homeAt 9 8 after `shouldBe` cell Lake (22 - spilled)
 
             it "balances the per-side consumption" $
-                consumptionBalances before after 1
+                consumptionBalances before after (fromIntegral spilled)
 
             it "emits an obsidian event for the exhausted lava" $
                 events after `shouldBe`
@@ -479,9 +507,9 @@ spec = do
                         , sevIndex        = idxOf 8 8
                         , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = Lake
-                        , sevConsumed     = 1
+                        , sevConsumed     = spilled
                         , sevStoneTop     = 4
-                        , sevWaterSurface = volumeToSurface 0 21
+                        , sevWaterSurface = surfaceCeilZOf 0 (22 - spilled)
                         , sevProduct      = SolidObsidian
                         } ]
 
@@ -489,18 +517,36 @@ spec = do
                 decoAt homeChunk (idxOf 8 8) after `shouldBe` 0
 
         describe "water falling into lava" $ do
-            let before = fallWorld Lake 1 Lava 22
+            let before = fallWorld Lake 20 Lava 22
                 after  = simulateActiveTick before
 
             it "reacts, consuming the smaller (water) side entirely" $ do
                 homeAt 8 8 after `shouldBe` Nothing
-                homeAt 9 8 after `shouldBe` cell Lava 21
+                homeAt 9 8 after `shouldBe` cell Lava (22 - spilled)
 
             it "balances the per-side consumption" $
-                consumptionBalances before after 1
+                consumptionBalances before after (fromIntegral spilled)
 
             it "emits nothing, because the lava destination survived" $
                 events after `shouldBe` []
+
+        -- #2520: a destination that has already backed up to (or past)
+        -- the falling cell's own exact surface is no longer downhill of
+        -- it, however deep the terrain step between them is.
+        describe "a destination standing at or above the source" $ do
+            let before = fallWorld Lava 20 Lake 40
+                after  = simulateActiveTick before
+
+            it "pins the fixture: the destination is NOT below" $
+                (exactSurfaceOf 3 spilled ≤ exactSurfaceOf 0 40)
+                    `shouldBe` True
+
+            it "does not fall, so nothing reacts at the drop" $ do
+                homeAt 8 8 after `shouldBe` cell Lava spilled
+                homeAt 9 8 after `shouldBe` cell Lake 40
+
+            it "marks no waterfall side-deco" $
+                decoAt homeChunk (idxOf 8 8) after `shouldBe` 0
 
     -- * Branch 1 of 5: the cross-chunk seam (transferCell)
     describe "seam exchange between unlike chunks" $ do
@@ -530,7 +576,7 @@ spec = do
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 2
-                        , sevWaterSurface = volumeToSurface 0 2
+                        , sevWaterSurface = surfaceCeilZOf 0 2
                         , sevProduct      = SolidObsidian
                         } ]
 
@@ -559,7 +605,7 @@ spec = do
                         , sevWaterType    = Ocean
                         , sevConsumed     = 3
                         , sevStoneTop     = 1
-                        , sevWaterSurface = volumeToSurface 0 17
+                        , sevWaterSurface = surfaceCeilZOf 0 17
                         , sevProduct      = SolidBasalt
                         } ]
 
@@ -692,7 +738,7 @@ spec = do
                     , sevWaterType    = Lake
                     , sevConsumed     = 1
                     , sevStoneTop     = 1
-                    , sevWaterSurface = volumeToSurface 1 6
+                    , sevWaterSurface = surfaceCeilZOf 1 6
                     , sevProduct      = SolidBasalt
                     } ]
 
@@ -711,11 +757,13 @@ spec = do
     -- * Requirement 6: ordinary transfers are preserved and bounded
     describe "compatible and empty destinations still take a transfer" $ do
         it "an empty destination takes the SOURCE's type" $ do
+            -- 12 clears the spill-into-dry threshold #2520 rescaled to
+            -- 'fluidUnitsPerZ'; `12 div 4` = 3 crosses.
             let after = simulateActiveTick (oneChunk
                     [ (idxOf 8 8, 0), (idxOf 9 8, 0) ]
-                    [ (idxOf 8 8, cell Lava 8) ])
-            homeAt 8 8 after `shouldBe` cell Lava 6
-            homeAt 9 8 after `shouldBe` cell Lava 2
+                    [ (idxOf 8 8, cell Lava 12) ])
+            homeAt 8 8 after `shouldBe` cell Lava 9
+            homeAt 9 8 after `shouldBe` cell Lava 3
             events after `shouldBe` []
 
         it "a compatible occupied destination keeps its OWN type" $ do
@@ -746,16 +794,26 @@ spec = do
             activeVolume after `shouldBe` activeVolume before
 
         it "a waterfall moves only what fits below maxBound" $ do
-            -- Gravity is suppressed (the destination's surface towers
-            -- over the source's), so this is the waterfall branch alone:
-            -- it requests 3 and only 1 fits.
+            -- The falling cell (8,8) is EMPTY at gravity's snapshot and
+            -- is filled by the lateral phase from (7,8), so phase C is
+            -- the first to touch the pair (#2520: the exact-pressure
+            -- condition the waterfall now applies is implied by
+            -- gravity's own guard, so nothing else isolates it).
+            --
+            -- The destination is one unit below 'maxBound' AND its
+            -- exact surface must still sit below the falling cell's.
+            -- Eight units per z means a near-brim Word16 column only
+            -- clears that if its terrain lies ~8191 z lower, which is
+            -- what the depth below is for. The fall then requests 4 and
+            -- exactly one fits.
             let before = oneChunk
-                    [ (idxOf 8 8, 3), (idxOf 9 8, 0) ]
-                    [ (idxOf 8 8, cell Lake 10)
+                    [ (idxOf 7 8, 0), (idxOf 8 8, 0), (idxOf 9 8, -8191) ]
+                    [ (idxOf 7 8, cell Lake 40)
                     , (idxOf 9 8, cell Lake (maxBound - 1)) ]
                 after  = simulateActiveTick before
             -- One unit really fell, so the source carries the east
             -- outflow bit ('cardinalNeighbors' order: N, E, S, W).
+            homeAt 7 8 after `shouldBe` cell Lake 30
             homeAt 8 8 after
                 `shouldBe` Just (ActiveFluidCell Lake 9 2)
             homeAt 9 8 after `shouldBe` cell Lake maxBound
@@ -794,11 +852,13 @@ spec = do
             let closing = simulateActiveTick (setEquilTicks 199 once)
             isActiveAt homeChunk closing `shouldBe` False
             homeAt 9 8 closing `shouldBe` Nothing
-            -- The rounded passive representation, NOT an exact
-            -- active-volume equality: 'deactivateInPlace' discards the
-            -- volume grid on purpose.
+            -- The passive representation, NOT an active-volume
+            -- equality: 'deactivateInPlace' discards the volume grid on
+            -- purpose. Since #2520 that passive value is EXACT — the
+            -- two units the reaction left are two units on the exact
+            -- plane, not a whole rounded-up level.
             passiveAt homeChunk (idxOf 9 8) closing
-                `shouldBe` Just (FluidCell Lake (volumeToSurface 0 2))
+                `shouldBe` Just (FluidCell Lake (exactSurfaceOf 0 2))
             events closing `shouldBe` events once
 
         it "the real fast-settle loop keeps the event, exactly once" $ do

@@ -59,7 +59,7 @@ computeChunkFlora pageKey seed worldSize coord surfMap surfMats surfSlopes
                         slopeId  = surfSlopes VU.! idx
                         surfZ    = surfMap    VU.! idx
                         hasFluid = case fluidMap V.! idx of
-                            Just fc → surfZ ≤ fcSurface fc
+                            Just fc → surfZ ≤ fluidSurfaceCeilZ fc
                             Nothing → False
                         LocalClimate{lcTemp=temp, lcPrecip=precip
                                     , lcHumidity=humidity} =

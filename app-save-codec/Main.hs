@@ -73,6 +73,8 @@ import qualified Data.Aeson.Key as AK
 import Data.Aeson ((.=))
 import qualified Data.Serialize as S
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Text.Printf (printf)
 import Data.List (sortOn)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
@@ -83,7 +85,7 @@ import World.Save.Envelope (decodeSessionEnvelope, currentEnvelopeVersion
                            , metadataComponentId, LuaComponentSpec(..))
 import World.Save.Envelope.Codec (DecodedEnvelope(..), decodeEnvelope
                                  , encodeEnvelope)
-import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..)
+import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..), fnv1a64
                                  , EnvelopeManifest(..)
                                  , defaultEnvelopeLimits)
 import World.Save.Component (componentKnownIds)
@@ -91,6 +93,9 @@ import World.Save.Compat.SessionV90 (sessionComponentId)
 import World.Save.Snapshot
 import World.Save.Types
 import World.Page.Types (WorldPageId(..))
+import World.Edit.Types (WorldEdit(..))
+import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
+import World.Fluid.Types (FluidType(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..))
@@ -345,7 +350,145 @@ dumpPage (WorldPageId pid, page) = Aeson.object
         (sortOn cbId (HM.elems (cbsBills (pgsCraftBills page))))
     , "powerNodes" .= map dumpNode
         (sortOn pnId (HM.elems (pnsNodes (pgsPowerNodes page))))
+    -- #2520: the EXACT fluid plane. Neither the whole-z Lua queries nor
+    -- the dump's `fluidSurf` can express a remainder, so neither can
+    -- serve as this format's precision oracle; these values can.
+    --
+    -- Three layers, because each closes a hole the one above it
+    -- leaves open:
+    --
+    --   * the page totals catch a rescale of the whole plane, but a
+    --     TYPE SWAP leaves all three unchanged, and so does any pair of
+    --     compensating remainder corruptions that keeps the sum;
+    --   * `byType` adds, per fluid type, a histogram of how many cells
+    --     sit at each top fill level 1..8 — so a swap moves a row and a
+    --     one-unit cell is a level-1 row under its own type. But a
+    --     histogram is still a MULTISET: two same-type cells moved by
+    --     +8 and -8 keep their levels AND the sum, and a permutation of
+    --     two cells' surfaces is invisible to it;
+    --   * `digest` closes both. It is an fnv1a64 over EVERY snapshot in
+    --     canonical coordinate order, carrying each cell's own
+    --     coordinate, type and exact surface, so any change to any cell
+    --     — value, type, position, or ordering — moves it.
+    --
+    -- `samples` then makes the digest legible: a deterministic,
+    -- coordinate-ordered witness per (type, level), so a mismatch names
+    -- real cells with their real exact surfaces instead of only a
+    -- changed hash. Those are the mandated one-unit, seven-unit and
+    -- partial-Ocean cells, pinned individually and by coordinate.
+    --
+    -- What the save records is the exact SURFACE, not volume-over-
+    -- terrain: terrain is regenerated from the page's own gen params
+    -- rather than stored, so it is not available here. Surface is the
+    -- durable quantity, and against the deterministic terrain a given
+    -- seed regenerates it fixes the volume too; the volume-over-terrain
+    -- identity itself is proved at a KNOWN terrain by the hspec round
+    -- trip ("Sim.Fluid.Exact" / "save migrations").
+    --
+    -- Absent from every summary generated before world-edits v4, which
+    -- the Baselines reader treats as "this fixture pins nothing here"
+    -- rather than as zero.
+    , "fluidSnapshots" .= dumpFluidSnapshots page
     ]
+  where
+    dumpFluidSnapshots pg =
+        let ordered = fluidSnapshotCells pg
+            cells = [ (ft, z) | (_, _, ft, z) ← ordered ]
+            surfaces = [ z | (_, _, _, z) ← ordered ]
+        in Aeson.object
+            [ "count" .= length surfaces
+              -- Every cell whose TOP z is only partly filled: the
+              -- state the pre-#2520 whole-z plane could not express.
+            , "partialCount" .= length
+                [ () | z ← surfaces, exactTopLevel z ≢ fluidUnitsPerZ ]
+              -- Exact to the unit, so a rescale of even one cell shows.
+            , "exactSum" .= sum surfaces
+            , "byType" .= map (dumpFluidType cells) fluidTypeNames
+            , "digest" .= fluidSnapshotDigest ordered
+            , "samples" .= map dumpFluidSample (fluidSnapshotSamples ordered) ]
+
+    -- Every type is emitted, present or not, so a type that VANISHES
+    -- from a resave is a row going to zero rather than a row going
+    -- missing — which a reader comparing lists would have to special-
+    -- case, and a reader comparing sets would not see at all.
+    dumpFluidType cells (ft, name) =
+        let mine = [ z | (t, z) ← cells, t ≡ ft ]
+        in Aeson.object
+            [ "type" .= name
+            , "count" .= length mine
+            , "exactSum" .= sum mine
+              -- levels !! (k - 1) is how many of this type's cells have
+              -- top fill level k. Index 7 (level 8) is the full-level
+              -- population; every other index is a remainder class.
+            , "levels" .= [ length [ () | z ← mine, exactTopLevel z ≡ k ]
+                          | k ← [1 .. fluidUnitsPerZ] ] ]
+
+-- | Every fluid snapshot a page carries, in CANONICAL coordinate order
+--   (@gx@ then @gy@) rather than hashmap order, so the sequence below
+--   is a function of the page's content alone.
+fluidSnapshotCells ∷ PageSnapshot → [(Int, Int, FluidType, Int)]
+fluidSnapshotCells pg = sortOn (\(gx, gy, _, _) → (gx, gy))
+    [ (gx, gy, ft, z)
+    | edits ← HM.elems (pgsEdits pg)
+    , WeSetFluidSnapshot gx gy ft z ← edits ]
+
+-- | fnv1a64 over the whole coordinate-ordered sequence, each cell
+--   contributing its coordinate, its type and its EXACT surface.
+--
+--   This is the layer that makes the plane's per-cell values durable
+--   evidence rather than a multiset: two cells whose surfaces moved by
+--   @+8@ and @-8@, or whose surfaces were swapped between them, leave
+--   every count, sum and histogram entry identical and move this.
+--
+--   Hashed from the decimal rendering of the tuple, which is total for
+--   every 'Int' including negatives — the plane is signed, and a
+--   fixed-width encoder would have to pick a width this does not need.
+fluidSnapshotDigest ∷ [(Int, Int, FluidType, Int)] → T.Text
+fluidSnapshotDigest ordered =
+    T.pack (printf "%016x" (fnv1a64 (TE.encodeUtf8 rendered)))
+  where
+    rendered = T.intercalate ";"
+        [ T.pack (show gx) <> "," <> T.pack (show gy) <> ","
+          <> fluidTypeName ft <> "," <> T.pack (show z)
+        | (gx, gy, ft, z) ← ordered ]
+
+-- | A deterministic, legible WITNESS for each (type, top fill level)
+--   the page actually carries: the coordinate-FIRST cell of that class.
+--
+--   Bounded by construction — four types times eight levels — and
+--   ordered, so the list is a function of the page's content. Its job
+--   is to make a digest mismatch readable and to pin the mandated
+--   cases (a one-unit cell, a seven-unit cell, a partial Ocean cell)
+--   by coordinate and exact value, not to enumerate the plane: the
+--   digest above is what covers every cell.
+fluidSnapshotSamples
+    ∷ [(Int, Int, FluidType, Int)] → [(Int, Int, FluidType, Int)]
+fluidSnapshotSamples ordered =
+    [ cell
+    | (ft, _) ← fluidTypeNames
+    , level ← [1 .. fluidUnitsPerZ]
+    , cell ← take 1 [ c | c@(_, _, t, z) ← ordered
+                        , t ≡ ft, exactTopLevel z ≡ level ] ]
+
+dumpFluidSample ∷ (Int, Int, FluidType, Int) → Aeson.Value
+dumpFluidSample (gx, gy, ft, z) = Aeson.object
+    [ "gx" .= gx, "gy" .= gy
+    , "type" .= fluidTypeName ft
+    , "exactSurface" .= z
+      -- Derivable from exactSurface, emitted anyway so a mismatch reads
+      -- as "this cell's TOP LEVEL changed" without the reader doing
+      -- modular arithmetic in its head.
+    , "topLevel" .= exactTopLevel z ]
+
+fluidTypeName ∷ FluidType → T.Text
+fluidTypeName Ocean = "ocean"
+fluidTypeName Lake  = "lake"
+fluidTypeName River = "river"
+fluidTypeName Lava  = "lava"
+
+fluidTypeNames ∷ [(FluidType, T.Text)]
+fluidTypeNames = [ (ft, fluidTypeName ft)
+                 | ft ← [Ocean, Lake, River, Lava] ]
 
 -- * set-timestamp
 

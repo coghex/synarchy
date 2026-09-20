@@ -1076,6 +1076,7 @@ library
                      World.Flora.Harvest
                      World.Flora.CropPlot
                      World.Fluid.Types
+                     World.Fluid.Exact
                      World.Fluid.Internal
                      World.Fluid.Ocean
                      World.Fluid.River
@@ -1589,6 +1590,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.DumpSettleWait
                    Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
+                   Test.Headless.Sim.ExactFluid
                    Test.Headless.Sim.Reaction
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames

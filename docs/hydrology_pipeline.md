@@ -223,6 +223,17 @@ equilibrium; results are emitted back to the world thread.
 Nothing under `World.Fluid` or `World.Hydrology` participates in this stage
 beyond supplying the initial `FluidCell` map that stage 4 composed.
 
+Since #2520 that map's height is EXACT: `FluidCell.fcExactSurface` is a signed
+fixed-point absolute surface in eighths of a z (`World.Fluid.Exact`,
+`fluidUnitsPerZ`), for every `FluidType` including Ocean. Every plane stages 1
+to 4 produce is still a whole z — `fluidCellAtZ` writes it as `z * 8`, a full
+top level — and only this stage creates a remainder. Activation, the per-tick
+writeback and equilibrium deactivation all go through
+`Sim.Fluid.Types.derivePassiveFluid` and round nothing, so a partial cell
+survives back into the map and into the save. Integer consumers (the surface
+map, flora, ice, soil gates, the renderer) read the documented ceiling view,
+`fluidSurfaceCeilZ`. See engine contracts §The exact fluid plane.
+
 ## 8. The two carving mechanisms
 
 Both exist deliberately; they operate on different inputs and do not

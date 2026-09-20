@@ -443,7 +443,7 @@ perturbed ∷ ChunkCoord → LoadedChunk → FluidWriteback
 perturbed coord lc = FluidWriteback
     { fwCoord    = coord
     , fwEditGen  = 0
-    , fwFluid    = V.replicate chunkCells (Just (FluidCell Lava 7))
+    , fwFluid    = V.replicate chunkCells (Just (fluidCellAtZ Lava 7))
     , fwTerrain  = VU.map (+ 11) (lcTerrainSurfaceMap lc)
     , fwSurf     = VU.map (+ 13) (lcSurfaceMap lc)
     , fwSideDeco = VU.replicate chunkCells 5
@@ -528,7 +528,7 @@ seededPage env pageId epoch coord lc = do
     simRef ← freshSimState
     drive env simRef
         (SimChunkLoaded pageId epoch topo coord
-            (V.replicate chunkCells (Just (FluidCell Lava 7)))
+            (V.replicate chunkCells (Just (fluidCellAtZ Lava 7)))
             (VU.map (+ 11) (lcTerrainSurfaceMap lc)))
     sws ← simWorld simRef pageId
     pure sws { swsDirtyChunks = HS.singleton coord }
@@ -547,7 +547,7 @@ seedTopologyFor env pageId = do
 --   them by the one shared rule.
 appliedSeed ∷ WorldState → ChunkCoord → LoadedChunk → IO ()
 appliedSeed ws coord before = do
-    let seedFluid   = V.replicate chunkCells (Just (FluidCell Lava 7))
+    let seedFluid   = V.replicate chunkCells (Just (fluidCellAtZ Lava 7))
         seedTerrain = VU.map (+ 11) (lcTerrainSurfaceMap before)
     (_, now) ← chunkNamed ws coord
     lcFluidMap now          `shouldBe` seedFluid

@@ -214,7 +214,8 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                             (gx, gy) = chunkToGlobal coord lx ly
                             (rawX, rawY) = gridToScreen facing gx gy
                             isUnderLava = case mFluid of
-                                Just fc → fcType fc ≡ Lava ∧ fcSurface fc > zSlice - effectiveDepth
+                                Just fc → fcType fc ≡ Lava
+                                                     ∧ fluidSurfaceCeilZ fc > zSlice - effectiveDepth
                                 Nothing → False
 
                             zLo = max (ctStartZ col) (zSlice - effectiveDepth)
@@ -237,7 +238,7 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
 
                                             -- Vegetation: only on surface tile, only when
                                             -- surface is above the fluid level
-                                            vegQ = if z ≡ surfZ ∧ maybe True (\fc → surfZ > fcSurface fc) mFluid
+                                            vegQ = if z ≡ surfZ ∧ maybe True (\fc → surfZ > fluidSurfaceCeilZ fc) mFluid
                                                    then let i = z - ctStartZ col
                                                             slopeId = ctSlopes col VU.! i
                                                         in case HM.lookup (gx, gy) cropPlots of

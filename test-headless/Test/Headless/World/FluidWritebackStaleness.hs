@@ -412,7 +412,7 @@ perturbed ∷ ChunkCoord → Word64 → LoadedChunk → FluidWriteback
 perturbed coord gen lc = FluidWriteback
     { fwCoord    = coord
     , fwEditGen  = gen
-    , fwFluid    = V.replicate chunkCells (Just (FluidCell Lava 7))
+    , fwFluid    = V.replicate chunkCells (Just (fluidCellAtZ Lava 7))
     , fwTerrain  = VU.map (+ 11) (lcTerrainSurfaceMap lc)
     , fwSurf     = VU.map (+ 13) (lcSurfaceMap lc)
     , fwSideDeco = VU.replicate chunkCells 5

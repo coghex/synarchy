@@ -56,6 +56,7 @@ import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
 import World.Generate.Arena (generateFlatChunk)
 import World.Edit.Apply (replayEdits)
 import World.Fluid.Types (FluidType(..))
+import World.Fluid.Exact (exactSurfaceOfZ)
 import World.Flora.Types (FloraId(..))
 import World.Material.Id (MaterialId(..))
 import World.Edit.Types
@@ -950,7 +951,7 @@ spec = describe "canonical chunk identity" $ do
             aliasGY = ay * chunkSize + 2
             saved = appendEdit aliasCoord (WeDeleteTile aliasGX aliasGY)
                         (appendEdit aliasCoord
-                            (WeSetFluidSnapshot aliasGX aliasGY River 3)
+                            (WeSetFluidSnapshot aliasGX aliasGY River (exactSurfaceOfZ 3))
                             emptyWorldEdits)
         canon aliasCoord `shouldBe` canonCoord
         fst (globalToChunk aliasGX aliasGY) `shouldBe` aliasCoord
@@ -1003,7 +1004,7 @@ spec = describe "canonical chunk identity" $ do
                 , WePlaceFlora 1 2 (FloraId 3) 4 1.5
                 , WePlaceFloraWithId 1 2 (FloraId 3) 4 1.5
                       (plantedFloraInstanceId 1)
-                , WeSetFluidSnapshot 1 2 River 3
+                , WeSetFluidSnapshot 1 2 River (exactSurfaceOfZ 3)
                 , WeClearFluidSnapshot 1 2
                 ]
         map (editCoords . shiftWorldEdit d (2 * d)) every

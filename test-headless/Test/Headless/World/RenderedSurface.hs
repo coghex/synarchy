@@ -23,7 +23,7 @@ import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), chunkSize, columnInd
 import World.Edit.Apply (applyEdit, replayEdits)
 import World.Edit.Types (WorldEdit(..))
 import World.Flora.Types (FloraChunkData(..))
-import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap, renderedSurfaceZ)
+import World.Fluid.Types (fluidCellAtZ, FluidCell(..), FluidType(..), emptyIceMap, renderedSurfaceZ)
 import World.Material.Id (MaterialId(..))
 import World.Types (ChunkCoord(..))
 
@@ -74,14 +74,15 @@ mkChunk spec' = LoadedChunk
 
 -- | A River column whose terrain protrudes TWO levels above the water.
 --   Two, not one: after a single dig a one-level protrusion collapses
---   to terrain == fcSurface, where the old buggy @max@ coincidentally
---   agrees with the rule and the regression would pass unfixed.
+--   to terrain == the fluid's own ceiling, where the old buggy @max@
+--   coincidentally agrees with the rule and the regression would
+--   pass unfixed.
 riverSurfZ, riverTerrainZ ∷ Int
 riverSurfZ    = 10
 riverTerrainZ = 12
 
 riverChunk ∷ LoadedChunk
-riverChunk = mkChunk [(riverTerrainZ, Just (FluidCell River riverSurfZ))]
+riverChunk = mkChunk [(riverTerrainZ, Just (fluidCellAtZ River riverSurfZ))]
 
 surfaceAt, terrainSurfaceAt ∷ LoadedChunk → Int → Int → Int
 surfaceAt        lc lx ly = lcSurfaceMap        lc VU.! columnIndex lx ly
@@ -94,17 +95,17 @@ spec = do
             renderedSurfaceZ 7 Nothing `shouldBe` 7
 
         it "River renders flat at the fluid surface, hiding a protrusion" $
-            renderedSurfaceZ 12 (Just (FluidCell River 10)) `shouldBe` 10
+            renderedSurfaceZ 12 (Just (fluidCellAtZ River 10)) `shouldBe` 10
 
         it "River renders flat at the fluid surface below terrain too" $
-            renderedSurfaceZ 3 (Just (FluidCell River 10)) `shouldBe` 10
+            renderedSurfaceZ 3 (Just (fluidCellAtZ River 10)) `shouldBe` 10
 
         it "every other fluid type renders at max(terrain, fluid)" $
-            [ renderedSurfaceZ 12 (Just (FluidCell ft 10)) | ft ← [Ocean, Lake, Lava] ]
+            [ renderedSurfaceZ 12 (Just (fluidCellAtZ ft 10)) | ft ← [Ocean, Lake, Lava] ]
               `shouldBe` [12, 12, 12]
 
         it "every other fluid type still floods above terrain" $
-            [ renderedSurfaceZ 3 (Just (FluidCell ft 10)) | ft ← [Ocean, Lake, Lava] ]
+            [ renderedSurfaceZ 3 (Just (fluidCellAtZ ft 10)) | ft ← [Ocean, Lake, Lava] ]
               `shouldBe` [10, 10, 10]
 
     describe "digging a River tile whose terrain protrudes (#1112)" $ do
@@ -123,7 +124,7 @@ spec = do
 
         it "keeps the river fluid cell (digging never displaces fluid)" $
             (lcFluidMap dug V.! columnIndex 0 0)
-              `shouldBe` Just (FluidCell River riverSurfZ)
+              `shouldBe` Just (fluidCellAtZ River riverSurfZ)
 
     describe "the dug flat surface survives an eviction/reload replay" $ do
         -- Chunk eviction and the load path both regenerate the chunk
@@ -143,9 +144,10 @@ spec = do
         it "stays flat after a second dig" $ do
             -- A three-level protrusion, so two digs still leave terrain
             -- ABOVE the water: from the two-level fixture the second dig
-            -- lands exactly on fcSurface, where a bare max agrees with
+            -- lands exactly on the fluid's own ceiling, where a bare
+            -- max agrees with
             -- the rule and the assertion stops discriminating.
-            let tall  = mkChunk [(riverSurfZ + 3, Just (FluidCell River riverSurfZ))]
+            let tall  = mkChunk [(riverSurfZ + 3, Just (fluidCellAtZ River riverSurfZ))]
                 twice = replayEdits
                     (HM.singleton (ChunkCoord 0 0)
                                   [WeDeleteTile 0 0, WeDeleteTile 0 0])
@@ -157,7 +159,7 @@ spec = do
         -- recomputeColumnSurface is only reached via WeSetCell; it had
         -- no River case at all.
         let carved = applyEdit (WeSetCell 0 0 (riverSurfZ + 4) stone)
-                               (mkChunk [(3, Just (FluidCell River riverSurfZ))])
+                               (mkChunk [(3, Just (fluidCellAtZ River riverSurfZ))])
 
         it "puts the terrain surface at the new terrain top" $
             terrainSurfaceAt carved 0 0 `shouldBe` riverSurfZ + 4
@@ -167,14 +169,14 @@ spec = do
 
         it "still renders non-River fluid at max(terrain, fluid)" $ do
             let lakeCarved = applyEdit (WeSetCell 0 0 (riverSurfZ + 4) stone)
-                                 (mkChunk [(3, Just (FluidCell Lake riverSurfZ))])
+                                 (mkChunk [(3, Just (fluidCellAtZ Lake riverSurfZ))])
             surfaceAt lakeCarved 0 0 `shouldBe` riverSurfZ + 4
 
     describe "WeSetFluidTile measures against terrain, not the old surface" $ do
         -- The column carries a stale rendered surface from a deep fluid
         -- cell this edit REPLACES; folding that height back in would
         -- keep the superseded cell's surface alive.
-        let deep    = mkChunk [(5, Just (FluidCell Ocean 20))]
+        let deep    = mkChunk [(5, Just (fluidCellAtZ Ocean 20))]
             refilled = applyEdit (WeSetFluidTile 0 0 Lake) deep
 
         it "seeds the stale surface the edit must not reuse" $
@@ -189,10 +191,10 @@ spec = do
 
     describe "WeAddTile keeps its displacement guard" $ do
         -- Filling BELOW the fluid surface leaves the cell in place; the
-        -- guard means surviving fluid always has newTopZ < fcSurface,
+        -- guard means surviving fluid always stands above newTopZ,
         -- so River and non-River agree here.
         let filled = applyEdit (WeAddTile 0 0 stone)
-                               (mkChunk [(5, Just (FluidCell River riverSurfZ))])
+                               (mkChunk [(5, Just (fluidCellAtZ River riverSurfZ))])
 
         it "raises the terrain top under the water" $
             terrainSurfaceAt filled 0 0 `shouldBe` 6
@@ -203,6 +205,6 @@ spec = do
         it "displaces the fluid entirely once the fill reaches it" $ do
             let buried = applyEdit (WeAddTile 0 0 stone)
                              (mkChunk [(riverSurfZ - 1,
-                                        Just (FluidCell River riverSurfZ))])
+                                        Just (fluidCellAtZ River riverSurfZ))])
             lcFluidMap buried V.! columnIndex 0 0 `shouldBe` Nothing
             surfaceAt buried 0 0 `shouldBe` riverSurfZ

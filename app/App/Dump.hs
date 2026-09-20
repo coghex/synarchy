@@ -556,7 +556,7 @@ dumpTilesJSON layers registry worldSize climate td region =
                                   River → "river"
                                   Lava  → "lava"
                           in [ "fluidType" .= (ftype ∷ Text)
-                             , "fluidSurf" .= fcSurface fc ]
+                             , "fluidSurf" .= fluidSurfaceCeilZ fc ]
                       Nothing → [ "fluidType" .= Null, "fluidSurf" .= Null ]
               | otherwise = []
             iceFields ∷ [Pair]

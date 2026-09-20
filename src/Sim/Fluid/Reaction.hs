@@ -69,7 +69,7 @@ import Control.Monad.ST (ST)
 import World.Chunk.Types (ChunkCoord)
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidType(..))
-import Sim.Fluid.Types (ActiveFluidCell(..), volumeToSurface)
+import Sim.Fluid.Types (ActiveFluidCell(..), surfaceCeilZOf)
 
 -- | The stone an exhausted lava column will become (D-2/D-5). Resolved
 --   at the reaction, from the two contacting cells and the page-wide
@@ -117,8 +117,13 @@ data SolidificationEvent = SolidificationEvent
     , sevStoneTop     ∷ !Int
       -- ^ The new stone's top z: the lava column's terrain top plus one.
     , sevWaterSurface ∷ !Int
-      -- ^ The contacting water cell's fluid surface AFTER annihilation
-      --   ('volumeToSurface' of its terrain and remaining volume).
+      -- ^ The contacting water cell's fluid surface AFTER annihilation,
+      --   as a WHOLE z: the integer-ceiling view
+      --   ('Sim.Fluid.Types.surfaceCeilZOf') of its terrain and
+      --   remaining volume. Whole-z on purpose — 'sevStoneTop' and the
+      --   'seaLevel' it is weighed against in 'solidProductFor' are
+      --   whole z too, and #2520 changed the scale underneath it
+      --   without changing that predicate.
     , sevProduct      ∷ !SolidProduct
       -- ^ D-5 evaluated at the reaction from the three fields above.
     } deriving (Show, Eq)
@@ -233,7 +238,7 @@ eventAt ∷ CellSite → FluidType → Word16 → CellSite → Word16
         → SolidificationEvent
 eventAt lavaSite waterType consumed waterSite waterVol' =
     let stoneTop      = csTerrain lavaSite + 1
-        waterSurface  = volumeToSurface (csTerrain waterSite) waterVol'
+        waterSurface  = surfaceCeilZOf (csTerrain waterSite) waterVol'
     in SolidificationEvent
         { sevChunk        = csChunk lavaSite
         , sevIndex        = csIndex lavaSite

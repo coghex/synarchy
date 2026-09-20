@@ -2,6 +2,11 @@
 module World.Fluid.Types
     ( FluidType(..)
     , FluidCell(..)
+    , fluidCellAtZ
+    , fluidSurfaceCeilZ
+    , fluidSurfaceFloorZ
+    , fluidTopLevel
+    , fluidVolumeOverTerrain
     , IceMode(..)
     , IceCell(..)
     , IceMap
@@ -17,6 +22,9 @@ import qualified Data.Serialize as Serialize
 import Data.Serialize (Serialize(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import World.Fluid.Exact
+    ( exactSurfaceOfZ, exactSurfaceCeilZ, exactSurfaceFloorZ, exactTopLevel
+    , exactVolumeOverTerrain )
 
 data FluidType = Ocean | Lake | River | Lava
     deriving (Show, Eq, Generic, Serialize)
@@ -28,12 +36,56 @@ instance NFData FluidType where
 
 -- | Per-column fluid info, stored in LoadedChunk.
 --   Only present for tiles that have fluid above them.
+--
+--   Since #2520 the height is THE authoritative fluid surface for every
+--   'FluidType', Ocean included: a signed fixed-point ABSOLUTE surface
+--   in eighths of a z-level ("World.Fluid.Exact"). There is no integer
+--   surface beside it and no ocean-only branch; every integer consumer
+--   reads one of the named compatibility views below.
 data FluidCell = FluidCell
-    { fcType    ∷ !FluidType   -- ^ What kind of fluid
-    , fcSurface ∷ !Int         -- ^ Z-level of the fluid surface
+    { fcType         ∷ !FluidType
+      -- ^ What kind of fluid.
+    , fcExactSurface ∷ !Int
+      -- ^ Absolute fluid surface in exact units
+      --   ('World.Fluid.Exact.fluidUnitsPerZ' per z). A whole-z plane
+      --   is @z * 8@; a partial one carries its own remainder and
+      --   survives activation, writeback, deactivation, save and load
+      --   without being rounded to a level.
     } deriving (Show, Eq)
 instance NFData FluidCell where
     rnf (FluidCell t s) = rnf t `seq` rnf s
+
+-- | A fluid cell whose surface is a WHOLE z — the brim of level @z@,
+--   fill level 8, exact surface @z * 8@. Every generated plane, every
+--   ocean fill and every whole-level player edit produces one of these;
+--   only the simulation and the saves it writes carry a remainder.
+fluidCellAtZ ∷ FluidType → Int → FluidCell
+fluidCellAtZ t z = FluidCell t (exactSurfaceOfZ z)
+{-# INLINE fluidCellAtZ #-}
+
+-- | Compatibility view: the lowest whole z at or above this cell's
+--   exact surface. THE integer height every pre-#2520 consumer reads,
+--   so a partially filled top level still renders and gates as one
+--   occupied z.
+fluidSurfaceCeilZ ∷ FluidCell → Int
+fluidSurfaceCeilZ = exactSurfaceCeilZ . fcExactSurface
+{-# INLINE fluidSurfaceCeilZ #-}
+
+-- | Compatibility view: the highest COMPLETELY filled whole z of this
+--   cell, i.e. the floor of its exact surface.
+fluidSurfaceFloorZ ∷ FluidCell → Int
+fluidSurfaceFloorZ = exactSurfaceFloorZ . fcExactSurface
+{-# INLINE fluidSurfaceFloorZ #-}
+
+-- | How full this cell's TOP z is, in @1 .. 8@ (a whole-z plane is 8).
+fluidTopLevel ∷ FluidCell → Int
+fluidTopLevel = exactTopLevel . fcExactSurface
+{-# INLINE fluidTopLevel #-}
+
+-- | The exact same-footprint volume this cell holds over a terrain top.
+fluidVolumeOverTerrain ∷ Int → FluidCell → Int
+fluidVolumeOverTerrain terrainZ = exactVolumeOverTerrain terrainZ . fcExactSurface
+{-# INLINE fluidVolumeOverTerrain #-}
 
 -- | THE rendered-surface rule (#1112): given a column's terrain top z
 --   and whatever fluid cell sits over it, the z the column's surface
@@ -59,11 +111,16 @@ instance NFData FluidCell where
 --   (@lcTerrainSurfaceMap@), never a previously rendered surface —
 --   feeding back a rendered value keeps a superseded fluid cell's
 --   height alive.
+--   Since #2520 the fluid height it reads is the INTEGER CEILING view
+--   ('fluidSurfaceCeilZ') of the cell's exact surface. Rendering stays
+--   whole-z in this slice (DFL-3/DFL-4 own fractional placement), and
+--   the ceiling is what keeps a partially filled top level visible
+--   instead of vanishing below its own brim.
 renderedSurfaceZ ∷ Int → Maybe FluidCell → Int
 renderedSurfaceZ terrainZ Nothing = terrainZ
 renderedSurfaceZ terrainZ (Just fc)
-    | fcType fc ≡ River = fcSurface fc
-    | otherwise         = max terrainZ (fcSurface fc)
+    | fcType fc ≡ River = fluidSurfaceCeilZ fc
+    | otherwise         = max terrainZ (fluidSurfaceCeilZ fc)
 
 -- | Ice deposition mode.
 data IceMode = BasinIce   -- ^ Flat sheet filling a valley/basin

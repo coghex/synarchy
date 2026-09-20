@@ -533,7 +533,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             generateChunk registry catalog pageId params centerCoord
         seededSurf = VU.imap (\idx surfZ →
             case cf V.! idx of
-                Just fc → max surfZ (fcSurface fc)
+                Just fc → max surfZ (fluidSurfaceCeilZ fc)
                 Nothing → surfZ
             ) cs
         centerChunkRaw = LoadedChunk

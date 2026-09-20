@@ -25,8 +25,16 @@
 --                             decoupled from the live sum's constructor
 --                             order, so REORDERING the live type can no
 --                             longer silently corrupt v1 bytes; the
---                             pre-#2243 shape stays as 'WorldEditDTOv2'
+--                             pre-#2520 shape stays as 'WorldEditDTOv3',
+--                             the pre-#2243 one as 'WorldEditDTOv2'
 --                             and the pre-#1854 one as 'WorldEditDTOv1')
+--
+--   v4 (#2520) is a MEANING change, not a shape change: a fluid
+--   snapshot's surface is now an exact eighth-z absolute surface
+--   ("World.Fluid.Exact") rather than a whole z. Current payloads
+--   record exact units, including a partial top level; every accepted
+--   older version is scaled to @surfaceZ * 8@ once, by
+--   'migrateWorldEditDTOv3'.
 --
 --   Its leaf payload references — 'FluidType', 'MaterialId', 'FloraId',
 --   the durable authored 'World.Flora.Reference.FloraRef', and the
@@ -38,6 +46,7 @@ module World.Save.Component.PageEdits
       WorldEditDTO(..)
     , WorldEditDTOv1(..)
     , WorldEditDTOv2(..)
+    , WorldEditDTOv3(..)
       -- * The @"world-edits"@ wire shapes
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
@@ -45,12 +54,15 @@ module World.Save.Component.PageEdits
     , WorldEditsDTOv1(..)
     , PageEditsDTOv2(..)
     , WorldEditsDTOv2(..)
+    , PageEditsDTOv3(..)
+    , WorldEditsDTOv3(..)
       -- * The component
     , worldEditsCodec
     , validateWorldEdits
     , applyWorldEdits
     , migrateWorldEditsV1
     , migrateWorldEditsV2
+    , migrateWorldEditsV3
     ) where
 
 import UPrelude
@@ -63,6 +75,7 @@ import World.Chunk.Types (ChunkCoord(..), wrapChunkCoordU)
 import World.Page.Types (WorldPageId)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Fluid.Types (FluidType)
+import World.Fluid.Exact (exactSurfaceOfZ)
 import World.Material.Id (MaterialId)
 import World.Flora.Types (FloraId)
 import World.Flora.Reference (FloraRef(..))
@@ -109,6 +122,33 @@ data WorldEditDTO
       -- v2 log (tools/enum_append_only_audit.py records each
       -- constructor's payload, not just its name).
     | WePlaceFloraRefD !Int !Int !FloraRef !Int !Float !FloraInstanceId
+    deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN pre-#2520 edit sum (@world-edits@ v3), preserved
+--   verbatim for decode-only backward compatibility. Byte-identical to
+--   'WorldEditDTO' (nothing was appended, moved or retyped by #2520),
+--   and frozen anyway on the discipline 'WorldEditDTOv1' established.
+--
+--   What #2520 changed is not this shape but the MEANING of
+--   @WeSetFluidSnapshotDv3@'s last field: a v3 log records a whole-z
+--   fluid surface, where the current one records an exact eighth-z
+--   surface. 'migrateWorldEditDTOv3' is the one place that scale change
+--   is applied, so a v1, v2 or v3 payload is scaled exactly once on its
+--   way in and a v4 payload is not scaled at all.
+data WorldEditDTOv3
+    = WeDeleteTileDv3 !Int !Int
+    | WeSetFluidTileDv3 !Int !Int !FluidType
+    | WeAddTileDv3 !Int !Int !MaterialId
+    | WeSetSlopeDv3 !Int !Int !Int !Word8
+    | WeSetCellDv3 !Int !Int !Int !MaterialId
+    | WeSetStructureDv3 !Int !Int !Word8 !Int !Int !Int
+    | WeClearStructureDv3 !Int !Int !Word8
+    | WeSetVegDv3 !Int !Int !Int !Word8
+    | WePlaceFloraDv3 !Int !Int !FloraId !Int !Float
+    | WeSetFluidSnapshotDv3 !Int !Int !FluidType !Int
+    | WeClearFluidSnapshotDv3 !Int !Int
+    | WePlaceFloraWithIdDv3 !Int !Int !FloraId !Int !Float !FloraInstanceId
+    | WePlaceFloraRefDv3 !Int !Int !FloraRef !Int !Float !FloraInstanceId
     deriving (Show, Eq, Generic, Serialize)
 
 -- | The FROZEN pre-#2243 edit sum (@world-edits@ v2), preserved
@@ -196,22 +236,49 @@ migrateWorldEditDTOv1 e = case e of
 --   always had: 'applyWorldEdits' allocates its 'FloraInstanceId' below,
 --   and does so for the named constructor exactly as it did for
 --   'WePlaceFloraWithIdD'.
-migrateWorldEditDTOv2 ∷ WorldEditDTOv2 → WorldEditDTO
+migrateWorldEditDTOv2 ∷ WorldEditDTOv2 → WorldEditDTOv3
 migrateWorldEditDTOv2 e = case e of
-    WeDeleteTileDv2 a b            → WeDeleteTileD a b
-    WeSetFluidTileDv2 a b f        → WeSetFluidTileD a b f
-    WeAddTileDv2 a b m             → WeAddTileD a b m
-    WeSetSlopeDv2 a b c w          → WeSetSlopeD a b c w
-    WeSetCellDv2 a b c m           → WeSetCellD a b c m
-    WeSetStructureDv2 a b w c d f  → WeSetStructureD a b w c d f
-    WeClearStructureDv2 a b w      → WeClearStructureD a b w
-    WeSetVegDv2 a b c w            → WeSetVegD a b c w
+    WeDeleteTileDv2 a b            → WeDeleteTileDv3 a b
+    WeSetFluidTileDv2 a b f        → WeSetFluidTileDv3 a b f
+    WeAddTileDv2 a b m             → WeAddTileDv3 a b m
+    WeSetSlopeDv2 a b c w          → WeSetSlopeDv3 a b c w
+    WeSetCellDv2 a b c m           → WeSetCellDv3 a b c m
+    WeSetStructureDv2 a b w c d f  → WeSetStructureDv3 a b w c d f
+    WeClearStructureDv2 a b w      → WeClearStructureDv3 a b w
+    WeSetVegDv2 a b c w            → WeSetVegDv3 a b c w
     WePlaceFloraDv2 a b fl d fx    →
-        WePlaceFloraRefD a b (FloraByLegacyId fl) d fx floraInstanceIdNone
-    WeSetFluidSnapshotDv2 a b f z  → WeSetFluidSnapshotD a b f z
-    WeClearFluidSnapshotDv2 a b    → WeClearFluidSnapshotD a b
+        WePlaceFloraRefDv3 a b (FloraByLegacyId fl) d fx floraInstanceIdNone
+    WeSetFluidSnapshotDv2 a b f z  → WeSetFluidSnapshotDv3 a b f z
+    WeClearFluidSnapshotDv2 a b    → WeClearFluidSnapshotDv3 a b
     WePlaceFloraWithIdDv2 a b fl d fx i →
-        WePlaceFloraRefD a b (FloraByLegacyId fl) d fx i
+        WePlaceFloraRefDv3 a b (FloraByLegacyId fl) d fx i
+
+-- | v3 → current (#2520). Every constructor crosses unchanged except
+--   the fluid snapshot, whose whole-z surface becomes the EXACT
+--   eighth-z surface of exactly that plane: a historical @surfaceZ@
+--   migrates to @surfaceZ * 8@ — a FULL top level — and never invents a
+--   fractional remainder it has no bytes to record. Scaling lives HERE
+--   and only here, so a v1 or v2 payload reaching this hop through the
+--   two migrations above is scaled once, on this step, and a v4 payload
+--   does not take the hop at all.
+migrateWorldEditDTOv3 ∷ WorldEditDTOv3 → WorldEditDTO
+migrateWorldEditDTOv3 e = case e of
+    WeDeleteTileDv3 a b            → WeDeleteTileD a b
+    WeSetFluidTileDv3 a b f        → WeSetFluidTileD a b f
+    WeAddTileDv3 a b m             → WeAddTileD a b m
+    WeSetSlopeDv3 a b c w          → WeSetSlopeD a b c w
+    WeSetCellDv3 a b c m           → WeSetCellD a b c m
+    WeSetStructureDv3 a b w c d f  → WeSetStructureD a b w c d f
+    WeClearStructureDv3 a b w      → WeClearStructureD a b w
+    WeSetVegDv3 a b c w            → WeSetVegD a b c w
+    WePlaceFloraDv3 a b fl d fx    → WePlaceFloraD a b fl d fx
+    WeSetFluidSnapshotDv3 a b f z  →
+        WeSetFluidSnapshotD a b f (exactSurfaceOfZ z)
+    WeClearFluidSnapshotDv3 a b    → WeClearFluidSnapshotD a b
+    WePlaceFloraWithIdDv3 a b fl d fx i →
+        WePlaceFloraWithIdD a b fl d fx i
+    WePlaceFloraRefDv3 a b ref d fx i →
+        WePlaceFloraRefD a b ref d fx i
 
 toWorldEditDTO ∷ WorldEdit → WorldEditDTO
 toWorldEditDTO (WeDeleteTile a b)              = WeDeleteTileD a b
@@ -282,6 +349,15 @@ data PageEditsDTOv2 = PageEditsDTOv2
     , ped2PlantedFloraCursor ∷ !Word64
     } deriving (Show, Generic, Serialize)
 
+-- | The FROZEN @world-edits@ v3 page slice (#2520): the v3 shape
+--   verbatim — page id, edit log at 'WorldEditDTOv3', and the
+--   allocator cursor.
+data PageEditsDTOv3 = PageEditsDTOv3
+    { ped3PageId ∷ !WorldPageId
+    , ped3Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv3])
+    , ped3PlantedFloraCursor ∷ !Word64
+    } deriving (Show, Generic, Serialize)
+
 newtype WorldEditsDTO = WorldEditsDTO { wedPages ∷ [PageEditsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
@@ -293,6 +369,11 @@ newtype WorldEditsDTOv1 = WorldEditsDTOv1 { wed1Pages ∷ [PageEditsDTOv1] }
 
 -- | The FROZEN @world-edits@ v2 component payload (#2243).
 newtype WorldEditsDTOv2 = WorldEditsDTOv2 { wed2Pages ∷ [PageEditsDTOv2] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN @world-edits@ v3 component payload (#2520).
+newtype WorldEditsDTOv3 = WorldEditsDTOv3 { wed3Pages ∷ [PageEditsDTOv3] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -319,12 +400,31 @@ migrateWorldEditsV1 (WorldEditsDTOv1 slices) = migrateWorldEditsV2 $
 -- | v2 → v3 (#2243): every edit crosses through
 --   'migrateWorldEditDTOv2' — which names the two planting forms by
 --   their legacy ordinal — and the cursor crosses verbatim.
+--
+--   #2520: this lands on the FROZEN v3 shape and then crosses into the
+--   current one through 'migrateWorldEditsV3', so a v2 payload takes
+--   exactly the same fluid-surface rescale a v3 payload does rather
+--   than a second copy of it — and takes it exactly once.
 migrateWorldEditsV2 ∷ WorldEditsDTOv2 → WorldEditsDTO
-migrateWorldEditsV2 (WorldEditsDTOv2 slices) = WorldEditsDTO
+migrateWorldEditsV2 (WorldEditsDTOv2 slices) = migrateWorldEditsV3 $
+    WorldEditsDTOv3
+        [ PageEditsDTOv3
+            { ped3PageId = ped2PageId s
+            , ped3Edits  = HM.map (map migrateWorldEditDTOv2) (ped2Edits s)
+            , ped3PlantedFloraCursor = ped2PlantedFloraCursor s
+            }
+        | s ← slices ]
+
+-- | v3 → v4 (#2520): every edit crosses through
+--   'migrateWorldEditDTOv3', which rescales each fluid snapshot's
+--   whole-z surface onto the exact eighth-z plane, and the cursor
+--   crosses verbatim.
+migrateWorldEditsV3 ∷ WorldEditsDTOv3 → WorldEditsDTO
+migrateWorldEditsV3 (WorldEditsDTOv3 slices) = WorldEditsDTO
     [ PageEditsDTO
-        { pedPageId = ped2PageId s
-        , pedEdits  = HM.map (map migrateWorldEditDTOv2) (ped2Edits s)
-        , pedPlantedFloraCursor = ped2PlantedFloraCursor s
+        { pedPageId = ped3PageId s
+        , pedEdits  = HM.map (map migrateWorldEditDTOv3) (ped3Edits s)
+        , pedPlantedFloraCursor = ped3PlantedFloraCursor s
         }
     | s ← slices ]
 
@@ -362,7 +462,7 @@ validateWorldEdits (WorldEditsDTO slices) =
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
 worldEditsCodec = componentCodec ComponentSpec
     { csComponent     = worldEditsComponentId
-    , csVersion       = 3
+    , csVersion       = 4
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap → WorldEditsDTO
@@ -370,7 +470,8 @@ worldEditsCodec = componentCodec ComponentSpec
                        (pgsPlantedFloraCursor p)
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 2 migrateWorldEditsV2
+    , csOlderVersions = [ atVersion 3 migrateWorldEditsV3
+                        , atVersion 2 migrateWorldEditsV2
                         , atVersion 1 migrateWorldEditsV1 ]
     , csValidate      = validateWorldEdits
     }

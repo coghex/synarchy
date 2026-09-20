@@ -26,7 +26,7 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState, emptyWorldManager)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..), IceMode(..))
+import World.Fluid.Types (fluidCellAtZ, FluidType(..), IceCell(..), IceMode(..))
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..), FloraId(..))
 import World.Flora.Identity (plantedFloraInstanceId)
 import World.Magma.Overlay (MagmaOverlay(..))
@@ -89,7 +89,7 @@ spec = describe "chunk residency accounting" $ do
 
     it "includes fluid, ice, flora, structures and sparse magma overlays" $ do
         let base = depthChunk 8
-            wet = base { lcFluidMap = V.replicate 256 (Just (FluidCell Lake 12)) }
+            wet = base { lcFluidMap = V.replicate 256 (Just (fluidCellAtZ Lake 12)) }
             plant = FloraInstance (FloraId 1) 0 0 0 0 8 1 1 0 16
                         (plantedFloraInstanceId 1) False
             rich = wet { lcIceMap = V.replicate 256 (Just (IceCell 13 BasinIce))

@@ -12,7 +12,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
                                            , tileWorldUV)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..), fluidSurfaceCeilZ)
 import World.Material (matOcean, matLava, unMaterialId)
 import World.Generate (chunkToGlobal)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
@@ -53,7 +53,7 @@ waterSideFaceQuads ctx coord
     , let idx = columnIndex lx ly
     , Just fc ← [fluidMap V.! idx]
     , fcType fc ≢ Ocean
-    , let mySurf = fcSurface fc
+    , let mySurf = fluidSurfaceCeilZ fc
           -- Smallest drop this fluid draws a side face for, in whole z.
           --
           -- River and Lake: 1 — their tops are flat steps (#2517), so
@@ -75,7 +75,8 @@ waterSideFaceQuads ctx coord
           --   Water neighbor: draw from neighbor water surface
           --   Dry neighbor: draw from neighbor terrain surface
           (bottomZ, shouldDraw) = case nFluid of
-              Just nfc | fcSurface nfc ≤ mySurf - minDrop → (fcSurface nfc, True)
+              Just nfc | fluidSurfaceCeilZ nfc ≤ mySurf - minDrop →
+                             (fluidSurfaceCeilZ nfc, True)
               Just _                                      → (mySurf, False)
               Nothing | nTerrZ ≤ mySurf - minDrop         → (nTerrZ, True)
               Nothing                                     → (mySurf, False)

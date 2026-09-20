@@ -81,6 +81,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Loot profiles (#2499)](#loot-profiles-2499)
 - [Loot realization (#2502)](#loot-realization-2502)
 - [Farming (#331-#336)](#farming-331-336)
+- [The exact fluid plane (#2520)](#the-exact-fluid-plane-2520)
 - [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485-2490)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
@@ -5232,6 +5233,148 @@ gives it a fixture.
 
 ---
 
+## The exact fluid plane (#2520)
+
+Design record:
+[`docs/discrete_fluid_levels_design.md`](discrete_fluid_levels_design.md)
+(§Exact surface vocabulary, §Active simulation and conservation,
+§Persistence and migration; D-1, D-2, D-4, D-5, D-11, D-12). DFL-2 of
+epic #2514 makes one fixed-point surface authoritative for every fluid
+type, so a partial quantity survives activation, writeback,
+deactivation, save and load without gaining or losing fluid. It changes
+no visible geometry: rendering still places whole z.
+
+**One scale, one owner.** `World.Fluid.Exact.fluidUnitsPerZ` is eight,
+and it is the only place the number is written. Every conversion
+between the exact plane, whole z and same-footprint volume goes through
+a named total helper there — `exactSurfaceOfZ`, `exactSurfaceCeilZ`,
+`exactSurfaceFloorZ`, `exactTopLevel`, `exactVolumeOverTerrain` — never
+ad-hoc arithmetic at the call site. Flow rates and thresholds in
+`Sim.Fluid.Active` derive from that constant; no literal seven remains.
+
+**`FluidCell` carries one height, for every type.** `fcExactSurface` is
+a SIGNED fixed-point ABSOLUTE surface in eighths of a z. There is no
+integer surface beside it, no surface-plus-sublevel pair and no
+ocean-only branch. A whole-z plane is `z * 8` (`fluidCellAtZ`), which is
+what generation, the ocean fill and whole-level player edits produce;
+only the simulation and the saves it writes carry a remainder.
+
+**Volume and the plane share one unit.** `afcVolume` stays a `Word16`
+count of the units standing over the cell's OWN terrain top, so an
+active cell's exact surface is `terrainZ * 8 + volume` and a difference
+of two exact surfaces is ALREADY a volume. Gravity, seam and waterfall
+pressure compare that exact value and divide the difference; none of
+them may re-multiply it by the scale. A dry side contributes its bare
+terrain top. Equal-terrain lateral equalisation keeps comparing volume
+directly.
+
+**The waterfall has a pressure condition of its own.** Terrain-drop
+eligibility and the fixed half-level cap are unchanged, and the
+waterfall marker still follows a successful transfer and nothing else —
+but a destination that has already risen to or past the falling cell's
+exact surface is no longer downhill of it, however deep the terrain step
+is, and nothing falls.
+
+**No active/passive boundary rounds.** `fluidCellToActive` takes exactly
+the units the passive cell stands above the terrain;
+`activeToFluidCell` writes exactly the units that remain. Active →
+passive → active is the identity for every volume the `Word16` can
+hold, and a partial cell can never become a full one through
+deactivation or save. `Sim.Fluid.Types.derivePassiveFluid` is the ONE
+definition of the active → passive direction, shared by the per-tick
+derivation, the seam re-derivation, equilibrium deactivation and the
+`Sim.Thread` writeback.
+
+**A sub-terrain passive cell keeps its identity.** A cell whose exact
+surface stands at or below its terrain holds no volume, takes no slot in
+the active grid, and is neither inflated into a shallow level nor
+erased: `derivePassiveFluid` crosses it through with its type and its
+exact plane intact, until DFL-5 repairs generated channel terrain
+(D-11). The test is on the PRIOR cell's own height, so a positive-volume
+cell that drained or was annihilated can never be resurrected that way.
+
+**Passthrough applies only where the tick changed nothing.** A
+sub-terrain cell holds no volume, which makes it an ordinary EMPTY
+destination a neighbour may fill — and fluid that arrives there can be
+drained or annihilated again before the same tick ends, leaving the slot
+empty a second time with the location's identity genuinely changed. The
+prior cell's own height cannot see that, so the tick RECORDS where fluid
+arrived (an arrival being the only way a cell the grid does not hold can
+stop being untouched: nothing can be drained from or react with an empty
+cell) and clears those indices from the prior map before deriving, in
+both the per-chunk phases and the seam pass. A caller deriving BETWEEN
+ticks — the writeback, deactivation — already holds a map the last tick
+corrected, so it needs no such record.
+
+**Integer consumers are documented compatibility views.** Rendering,
+`lcSurfaceMap` and the rendered-surface rule (§Flora visual state and
+fallback names the same rule for flora), flora placement, vegetation
+depth, ice, soil gates, ground-item and tile quads, side faces and the
+cursor all read `fluidSurfaceCeilZ` — the lowest whole z at or above the
+exact surface — so a partially filled top level still reads as one
+occupied z. `world.getFluidAt`, `world.getSurfaceAt` and
+`world.getAreaFluid` keep their arity and integer returns, and the
+dump's `fluidSurf` stays that same ceiling.
+
+**Persistence.** `WeSetFluidSnapshot`'s surface is the exact plane, and
+the `world-edits` component is at v4. The wire SHAPE did not change —
+the constructor's four fields are the same — so what a version bump
+buys is the MEANING: `World.Save.Component.PageEdits.WorldEditDTOv3` is
+the frozen pre-#2520 shape, and `migrateWorldEditDTOv3` scales a
+historical `surfaceZ` to exactly `surfaceZ * 8` (a full top level),
+inventing no remainder it has no bytes for. v1 and v2 payloads reach
+that hop through the migrations above it, so every accepted version is
+scaled exactly ONCE and a v4 payload is not scaled at all.
+
+Gates: hspec `--match "Sim.Fluid.Exact"` (the helper laws; the `Word16`
+conversion domain, with the active↔passive identity proved over EVERY
+representable volume 1..65535 rather than a sample; the identity through
+the real activation, per-tick derivation, seam re-derivation and
+equilibrium deactivation; the sub-terrain preservation rules; and the
+exact-pressure behavior driven through the real `simulateActiveTick`,
+in-chunk and across both an ordinary and a WRAPPED seam, on a pair whose
+two exact surfaces share one integer ceiling — a fixture that separates
+the exact comparison from a ceiling comparison, from reading the
+source's volume for the neighbour's surface, and from re-multiplying the
+difference by the scale, each of which yields a different number),
+`--match "Sim.Fluid.Conservation"`, `--match "Sim.Fluid.Seam"`,
+`--match "unlike-fluid reaction"`, `--match "save migrations"` (the
+v1/v2/v3 → v4 scaling and the exact round trip),
+`python3 tools/save_compat_audit.py`, and
+`python3 tools/save_compat_migration_probe.py`.
+
+The tracked `z3-exact-fluid-units` fixture is a real saved session whose
+snapshots carry partial top levels under several fluid types, Ocean
+included. Its canonical summary pins the plane in three layers, because
+each closes a hole the one above it leaves open:
+
+- the page totals (`count`, `partialCount`, `exactSum`) catch a rescale
+  of the whole plane, but a TYPE SWAP leaves all three unchanged, and so
+  does any compensating pair of remainder corruptions that keeps the sum;
+- `byType` adds, per fluid type, a histogram of how many cells sit at
+  each top fill level 1..8 — so a swap moves a row, and a one-unit cell
+  is a level-1 row under its own type. A histogram is still a MULTISET
+  though: two same-type cells moved by `+8` and `-8` keep both their
+  levels and the sum, and a permutation of two cells' surfaces is
+  invisible to it;
+- `digest` closes both. It is an `fnv1a64` over EVERY snapshot in
+  canonical coordinate order, each carrying its own coordinate, type and
+  exact surface, so any change to any cell — value, type, position or
+  ordering — moves it. `samples` then makes a mismatch legible: the
+  coordinate-first witness of each (type, level) present, which is where
+  the mandated one-unit, seven-unit and partial-Ocean cells are pinned
+  individually and by coordinate.
+
+What the save records is the exact SURFACE, not volume-over-terrain:
+terrain is regenerated from the page's own gen params rather than
+stored. Surface is the durable quantity, and against the deterministic
+terrain a given seed regenerates it fixes the volume too; the
+volume-over-terrain identity itself is proved at a KNOWN terrain by the
+hspec round trip. The whole-z Lua and dump views cannot see a remainder
+at all, so neither can stand in for any of this.
+
+---
+
 ## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)
 
 Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
@@ -5410,12 +5553,16 @@ acknowledges `FluidAckApplied`.
 
 **Exact active volumes survive the handoff.** `SimChunkEdited` rebuilds a
 chunk's active grid from the passive `FluidMap` through
-`fluidCellToActive`, whose `depth * volumePerLevel` rounding turns the 1
-unit a reaction left in the contacting water cell into 7.
-`SimReactionCommitted` therefore does NOT re-seed an active chunk: it
-adopts the post-edit terrain and generation and KEEPS the live grid
+`fluidCellToActive`. Before #2520 that conversion rounded — it
+reconstructed whole levels and handed the 1 unit a reaction left in the
+contacting water cell back as 7. The passive plane is exact now
+(§The exact fluid plane), so the round trip is an identity and that is
+no longer why the commit path exists. `SimReactionCommitted` still does
+NOT re-seed an ACTIVE chunk: its live grid is AHEAD of the passive map
+the commit carries, and re-seeding would discard the rest of the tick.
+It adopts the post-edit terrain and generation and KEEPS the live grid
 (`Sim.Chunk.applyReactionCommit`). An inactive or absent chunk has no
-exact volumes to keep and re-seeds from the passive map as before.
+live grid to keep and re-seeds from the passive map as before.
 
 An ACTIVE chunk's solidified cell is DISPLACED, not emptied. One z of
 terrain arrived under it, so exactly one level's worth of volume no

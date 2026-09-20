@@ -35,10 +35,15 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Text.Printf (printf)
 
 import World.Save.Envelope
     (decodeSessionEnvelope, encodeSessionSnapshot, LuaComponentSpec(..))
 import World.Edit.Types (WorldEdit(..))
+import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
+import World.Fluid.Types (FluidType(..))
+import World.Save.Envelope.Types (fnv1a64)
 import World.Flora.CropPlot (CropPlotOf(..))
 import World.Flora.Reference (FloraRef(..), renderFloraRef)
 import World.Plant.Types (PlantDesignationOf(..))
@@ -215,7 +220,158 @@ data ExpectedPage = ExpectedPage
     , epUnitSimStates ∷ ![ExpectedUnitSimState]
     , epCraftBills ∷ ![ExpectedCraftBill]
     , epPowerNodes ∷ ![ExpectedPowerNode]
+    , epFluidSnapshots ∷ !(Maybe ExpectedFluidSnapshots)
     }
+
+-- | The same aggregates, read off a DECODED page. Kept beside the type
+--   it is compared against so the two cannot drift; the emitting half
+--   lives in @app-save-codec/Main.hs@'s canonical summary.
+fluidSnapshotAggregate ∷ PageSnapshot → ExpectedFluidSnapshots
+fluidSnapshotAggregate page = ExpectedFluidSnapshots
+    { efsCount        = length surfaces
+    , efsPartialCount =
+        length [ () | z ← surfaces, exactTopLevel z ≢ fluidUnitsPerZ ]
+    , efsExactSum     = sum surfaces
+    , efsByType       = map perType fluidTypeNames
+    , efsDigest       = fluidSnapshotDigest ordered
+    , efsSamples      = map sample (fluidSnapshotSamples ordered)
+    }
+  where
+    -- CANONICAL coordinate order, never hashmap order, so the digest
+    -- and the witnesses are a function of the page's content alone.
+    ordered = L.sortOn (\(gx, gy, _, _) → (gx, gy))
+        [ (gx, gy, ft, z)
+        | edits ← HM.elems (pgsEdits page)
+        , WeSetFluidSnapshot gx gy ft z ← edits ]
+    cells = [ (ft, z) | (_, _, ft, z) ← ordered ]
+    surfaces = [ z | (_, _, _, z) ← ordered ]
+    fluidTypeNames = [ (Ocean, "ocean"), (Lake, "lake")
+                     , (River, "river"), (Lava, "lava") ]
+    sample (gx, gy, ft, z) = ExpectedFluidSample
+        { efmGx = gx, efmGy = gy
+        , efmType = fluidTypeName ft
+        , efmExactSurface = z
+        , efmTopLevel = exactTopLevel z
+        }
+    perType (ft, name) =
+        let mine = [ z | (t, z) ← cells, t ≡ ft ]
+        in ExpectedFluidType
+            { eftType     = name
+            , eftCount    = length mine
+            , eftExactSum = sum mine
+            , eftLevels   = [ length [ () | z ← mine, exactTopLevel z ≡ k ]
+                            | k ← [1 .. fluidUnitsPerZ] ]
+            }
+
+-- | #2520: the EXACT fluid plane a fixture's page carries. The whole-z
+--   Lua and dump views round, so they cannot serve as the precision
+--   oracle for a format whose entire point is the remainder; these
+--   numbers can.
+--
+--   The three page totals alone would not be enough — a type swap
+--   leaves all three unchanged, and so does any pair of compensating
+--   remainder corruptions that keeps the sum. 'efsByType' is what
+--   actually pins the format: per fluid type, how many cells sit at
+--   each top fill level 1..8. A one-unit cell is a level-1 row, a
+--   seven-unit cell a level-7 row, a partial Ocean cell a non-level-8
+--   row under @ocean@ — each pinned individually and under its own
+--   type.
+--
+--   OPTIONAL, and absent means "this fixture pins nothing here" rather
+--   than "zero": every summary generated before world-edits v4 predates
+--   the key, and their pages really do carry snapshots.
+data ExpectedFluidSnapshots = ExpectedFluidSnapshots
+    { efsCount        ∷ !Int
+    , efsPartialCount ∷ !Int
+    , efsExactSum     ∷ !Int
+    , efsByType       ∷ ![ExpectedFluidType]
+    , efsDigest       ∷ !Text
+      -- ^ fnv1a64 over EVERY snapshot in coordinate order. The counts,
+      --   sums and histograms above are all multiset views; this is the
+      --   one that sees a permutation or a compensating @+8@/@-8@ pair.
+    , efsSamples      ∷ ![ExpectedFluidSample]
+      -- ^ A legible witness per (type, level) — what makes a digest
+      --   mismatch name real cells with their real exact surfaces.
+    } deriving (Show, Eq)
+
+-- | One witness cell, pinned by COORDINATE and exact value.
+data ExpectedFluidSample = ExpectedFluidSample
+    { efmGx           ∷ !Int
+    , efmGy           ∷ !Int
+    , efmType         ∷ !Text
+    , efmExactSurface ∷ !Int
+    , efmTopLevel     ∷ !Int
+    } deriving (Show, Eq)
+
+-- | The engine-side spelling of a fluid type, matching what the
+--   canonical summary emits.
+fluidTypeName ∷ FluidType → Text
+fluidTypeName Ocean = "ocean"
+fluidTypeName Lake  = "lake"
+fluidTypeName River = "river"
+fluidTypeName Lava  = "lava"
+
+-- | fnv1a64 over every snapshot in canonical coordinate order, each
+--   carrying its coordinate, type and EXACT surface. This is what makes
+--   the plane's PER-CELL values durable evidence rather than a
+--   multiset: two same-type cells moved by @+8@ and @-8@, or two whose
+--   surfaces were swapped, leave every count, sum and histogram entry
+--   identical and move this.
+fluidSnapshotDigest ∷ [(Int, Int, FluidType, Int)] → Text
+fluidSnapshotDigest ordered =
+    T.pack (printf "%016x" (fnv1a64 (TE.encodeUtf8 rendered)))
+  where
+    rendered = T.intercalate ";"
+        [ T.pack (show gx) <> "," <> T.pack (show gy) <> ","
+          <> fluidTypeName ft <> "," <> T.pack (show z)
+        | (gx, gy, ft, z) ← ordered ]
+
+-- | The coordinate-FIRST cell of each (type, top fill level) present.
+--   Bounded by construction (four types times eight levels) and
+--   ordered, so the list is a function of the page's content.
+fluidSnapshotSamples
+    ∷ [(Int, Int, FluidType, Int)] → [(Int, Int, FluidType, Int)]
+fluidSnapshotSamples ordered =
+    [ cell
+    | ft ← [Ocean, Lake, River, Lava]
+    , level ← [1 .. fluidUnitsPerZ]
+    , cell ← take 1 [ c | c@(_, _, t, z) ← ordered
+                        , t ≡ ft, exactTopLevel z ≡ level ] ]
+
+-- | One fluid type's own share of that plane.
+data ExpectedFluidType = ExpectedFluidType
+    { eftType     ∷ !Text
+    , eftCount    ∷ !Int
+    , eftExactSum ∷ !Int
+    , eftLevels   ∷ ![Int]
+      -- ^ @levels !! (k - 1)@ cells at top fill level @k@. Index 7
+      --   (level 8) is the FULL-level population; every other index is
+      --   a remainder class the pre-#2520 plane could not represent.
+    } deriving (Show, Eq)
+
+instance Aeson.FromJSON ExpectedFluidSnapshots where
+    parseJSON = Aeson.withObject "fluidSnapshots" $ \o →
+        ExpectedFluidSnapshots
+            <$> o .: "count" <*> o .: "partialCount" <*> o .: "exactSum"
+            -- A v4 summary always emits every type; an older one that
+            -- somehow carried the outer object without this key pins
+            -- only the totals rather than asserting no fluid exists.
+            <*> o .:? "byType" .!= []
+            -- Both default to "pins nothing", so a summary written
+            -- before this evidence existed compares only what it
+            -- actually recorded rather than asserting an empty plane.
+            <*> o .:? "digest" .!= ""
+            <*> o .:? "samples" .!= []
+
+instance Aeson.FromJSON ExpectedFluidSample where
+    parseJSON = Aeson.withObject "fluidSample" $ \o → ExpectedFluidSample
+        <$> o .: "gx" <*> o .: "gy" <*> o .: "type"
+        <*> o .: "exactSurface" <*> o .: "topLevel"
+
+instance Aeson.FromJSON ExpectedFluidType where
+    parseJSON = Aeson.withObject "fluidType" $ \o → ExpectedFluidType
+        <$> o .: "type" <*> o .: "count" <*> o .: "exactSum"
+        <*> o .: "levels"
 
 instance Aeson.FromJSON ExpectedPage where
     parseJSON = Aeson.withObject "page" $ \o → ExpectedPage
@@ -237,6 +393,7 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .:? "unitSimStates" .!= []
         <*> o .:? "craftBills" .!= []
         <*> o .:? "powerNodes" .!= []
+        <*> o .:? "fluidSnapshots"
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -465,6 +622,32 @@ manifestFixturesSpec =
                                     pgsDateDay page `shouldBe` epDateDay ep
                                     T.pack (show (pgsMapMode page))
                                         `shouldBe` epMapMode ep
+
+                                    -- #2520: pinned exactly when the
+                                    -- fixture declares it, so a v4
+                                    -- fixture proves its partial cells
+                                    -- survive decode to the unit.
+                                    forM_ (epFluidSnapshots ep) $ \efs → do
+                                        -- Each layer is compared only
+                                        -- when the fixture recorded it,
+                                        -- so an older summary pins the
+                                        -- totals alone rather than
+                                        -- asserting an empty plane.
+                                        let got = fluidSnapshotAggregate page
+                                        efsCount got `shouldBe` efsCount efs
+                                        efsPartialCount got
+                                            `shouldBe` efsPartialCount efs
+                                        efsExactSum got
+                                            `shouldBe` efsExactSum efs
+                                        unless (null (efsByType efs)) $
+                                            efsByType got
+                                                `shouldBe` efsByType efs
+                                        unless (T.null (efsDigest efs)) $
+                                            efsDigest got
+                                                `shouldBe` efsDigest efs
+                                        unless (null (efsSamples efs)) $
+                                            efsSamples got
+                                                `shouldBe` efsSamples efs
 
                                     -- Entity-level values (round-3 review):
                                     -- an aggregate count can't catch a

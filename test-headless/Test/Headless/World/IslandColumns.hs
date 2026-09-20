@@ -18,7 +18,7 @@ import Test.Hspec
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (chunkSize)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (fluidCellAtZ, FluidCell(..), FluidType(..))
 import World.Generate.Chunk.Fluid (maxColumnPeek, smoothIslandColumns)
 
 -- Fixture ---------------------------------------------------------
@@ -44,7 +44,7 @@ mkMaps
     → (VU.Vector Int, V.Vector (Maybe FluidCell))
 mkMaps terrs lakes =
     ( VU.generate area (\i → fromMaybe 0 (lookup i terrIdx))
-    , V.generate area (\i → FluidCell Lake ⊚ lookup i lakeIdx) )
+    , V.generate area (\i → fluidCellAtZ Lake ⊚ lookup i lakeIdx) )
   where
     terrIdx = [ (li c, z) | (c, z) ← terrs ]
     lakeIdx = [ (li c, z) | (c, z) ← lakes ]
@@ -81,7 +81,7 @@ spec = do
                 [(west, lakeSurf), (north, lakeSurf), (south, lakeSurf)]
 
         it "renders as Lake at the neighbors' surface" $
-            fluidAt fluid target `shouldBe` Just (FluidCell Lake lakeSurf)
+            fluidAt fluid target `shouldBe` Just (fluidCellAtZ Lake lakeSurf)
 
         it "drops its terrain to one below that surface" $
             terrainAt terr target `shouldBe` lakeSurf - 1
@@ -115,7 +115,7 @@ spec = do
                 , (north, lakeSurf), (south, lakeSurf) ]
 
         it "still finds the surface shared by three neighbors" $
-            fluidAt fluid target `shouldBe` Just (FluidCell Lake lakeSurf)
+            fluidAt fluid target `shouldBe` Just (fluidCellAtZ Lake lakeSurf)
 
         it "drops the terrain against that surface" $
             terrainAt terr target `shouldBe` lakeSurf - 1
@@ -125,7 +125,7 @@ spec = do
 
         it "smooths a column exactly maxColumnPeek above the surface" $ do
             let (terr, fluid) = smoothTarget (lakeSurf + maxColumnPeek) ring
-            fluidAt fluid target `shouldBe` Just (FluidCell Lake lakeSurf)
+            fluidAt fluid target `shouldBe` Just (fluidCellAtZ Lake lakeSurf)
             terrainAt terr target `shouldBe` lakeSurf - 1
 
         it "leaves a column one z above the window" $ do
@@ -151,11 +151,11 @@ spec = do
                 , ((4, 4), lakeSurf), ((4, 6), lakeSurf) ]
 
         it "smooths the first-pass column" $ do
-            fluidAt fluid target `shouldBe` Just (FluidCell Lake lakeSurf)
+            fluidAt fluid target `shouldBe` Just (fluidCellAtZ Lake lakeSurf)
             terrainAt terr target `shouldBe` lakeSurf - 1
 
         it "smooths the column that only qualified afterwards" $ do
-            fluidAt fluid west `shouldBe` Just (FluidCell Lake lakeSurf)
+            fluidAt fluid west `shouldBe` Just (fluidCellAtZ Lake lakeSurf)
             terrainAt terr west `shouldBe` lakeSurf - 1
 
         it "never re-lowers a column it already smoothed" $

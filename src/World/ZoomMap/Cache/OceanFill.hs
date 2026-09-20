@@ -27,11 +27,12 @@ import qualified Data.Vector.Unboxed as VU
 import World.Fluid.Internal (FluidMap)
 import World.Chunk.Types (chunkSize)
 import World.Constants (seaLevel)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (FluidCell(..), FluidType(..), fluidCellAtZ)
 
 -- | One cardinal dilation of a chunk's composed ocean mask.
 --
---   A tile is promoted to @'FluidCell' 'Ocean' seaLevel@ when all of:
+--   A tile is promoted to @'fluidCellAtZ' 'Ocean' seaLevel@ — the
+--   whole-z sea plane (#2520) — when all of:
 --
 --     * it composed dry,
 --     * its surface z is real and at most @seaLevel + 2@, and
@@ -56,7 +57,8 @@ extendOceanBoundary neighborHasOcean elevs composed = V.imap extend composed
   where
     extend idx cell
       | isJust cell                       = cell
-      | admits idx ∧ adjacentToOcean idx  = Just (FluidCell Ocean seaLevel)
+      | admits idx ∧ adjacentToOcean idx  =
+          Just (fluidCellAtZ Ocean seaLevel)
       | otherwise                         = cell
 
     -- The admission bound is unchanged: tiles up to two above sea

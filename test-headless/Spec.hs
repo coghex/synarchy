@@ -160,6 +160,7 @@ import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Admission as SimAdmission
+import qualified Test.Headless.Sim.ExactFluid as SimExactFluid
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Sim.Conservation as SimConservation
 import qualified Test.Headless.Sim.Reaction as SimReaction
@@ -930,6 +931,7 @@ main = hspec $ do
     describe "save envelope" SaveEnvelope.spec
     describe "save components" SaveComponents.spec
     describe "save migrations" SaveCompat.spec
+    describe "save migrations" SimExactFluid.saveSpec
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "persistence reference integrity" LuaSaveBridge.spec
     describe "atomic save storage" SaveStorage.spec
@@ -1001,6 +1003,7 @@ main = hspec $ do
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Sim.Fluid.Conservation" SimConservation.spec
+    describe "Sim.Fluid.Exact" SimExactFluid.spec
     describe "unlike-fluid reaction" SimReaction.spec
     Solidification.pureSpec
     SolidificationOccupants.pureSpec
