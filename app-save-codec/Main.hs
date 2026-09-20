@@ -91,6 +91,8 @@ import World.Save.Compat.SessionV90 (sessionComponentId)
 import World.Save.Snapshot
 import World.Save.Types
 import World.Page.Types (WorldPageId(..))
+import World.Edit.Types (WorldEdit(..))
+import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
 import Unit.Sim.Types (UnitSimState(..))
@@ -345,7 +347,27 @@ dumpPage (WorldPageId pid, page) = Aeson.object
         (sortOn cbId (HM.elems (cbsBills (pgsCraftBills page))))
     , "powerNodes" .= map dumpNode
         (sortOn pnId (HM.elems (pnsNodes (pgsPowerNodes page))))
+    -- #2520: the EXACT fluid plane, as an aggregate the summary can
+    -- carry. A rounded writeback, a lost remainder or a second
+    -- migration rescale all move at least one of these three numbers,
+    -- and none of them is reachable through the whole-z Lua or dump
+    -- views. Absent from every summary generated before world-edits
+    -- v4, which the Baselines reader treats as "this fixture pins
+    -- nothing here" rather than as zero.
+    , "fluidSnapshots" .= dumpFluidSnapshots page
     ]
+  where
+    dumpFluidSnapshots pg =
+        let surfaces = [ z | edits ← HM.elems (pgsEdits pg)
+                           , WeSetFluidSnapshot _ _ _ z ← edits ]
+        in Aeson.object
+            [ "count" .= length surfaces
+              -- Every cell whose TOP z is only partly filled: the
+              -- state the pre-#2520 whole-z plane could not express.
+            , "partialCount" .= length
+                [ () | z ← surfaces, exactTopLevel z ≢ fluidUnitsPerZ ]
+              -- Exact to the unit, so a rescale of even one cell shows.
+            , "exactSum" .= sum surfaces ]
 
 -- * set-timestamp
 

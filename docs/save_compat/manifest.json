@@ -2616,6 +2616,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z2-pending-container-shells.expected.json"
         }
       ]
+    },
+    {
+      "id": "z3-exact-fluid-units",
+      "description": "The #2520 shape (world-edits v4, epic #2514 DFL-2): a fluid snapshot's surface is an EXACT absolute height in eighths of a z-level (World.Fluid.Exact), not a whole z. The wire SHAPE is unchanged -- WeSetFluidSnapshotD's fields are the same four -- so nothing here is caught by a layout check; what changed is the MEANING of the last field, and a v1/v2/v3 payload must be scaled to surfaceZ * 8 exactly once on its way in (migrateWorldEditDTOv3). This fixture is a REAL current-format session written by the live engine through the ordinary engine.saveWorld path, and generation deliberately re-seats a 9x9 patch of the basin at (0,0) with world.setFluidTile before settling -- which wakes those chunks and their neighbours, so the live solver really moves fluid and the saved snapshots carry PARTIAL top levels, the state the pre-v4 whole-z plane could not express at all. Its canonical summary carries the three exact-plane aggregates the whole-z Lua and dump views cannot reach (count, partialCount, exactSum), which is where this fixture's coverage of the precision promise lives: a rounding writeback, a lost remainder or a second migration rescale moves at least one of them.",
+      "declaredAt": "2026-09-20",
+      "declaredByIssue": 2520,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.PageEdits.migrateWorldEditsV3",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 12,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 9,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z3-exact-fluid-units",
+          "path": "test-headless/data/save-compat/z3-exact-fluid-units.bin",
+          "kind": "complete-session",
+          "sha256": "06bba9ffb50cfe88e438e941f7dade7c85c7f601f4afef88e551b062023e26c4",
+          "sizeBytes": 909940,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then for dx=-4,4 do for dy=-4,4 do world.setFluidTile('generated_page', dx, dy, 'water') end end return 'ok', settled 15.0s and held until `world.getFluidAt(0, 0) ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z3-exact-fluid-units.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

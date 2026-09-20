@@ -30,7 +30,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..)
                        , emptySimWorldState)
 import Sim.Chunk (applyChunkEdit, loadedChunkState)
-import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
+import World.Fluid.Exact (fluidUnitsPerZ, exactSurfaceOfZ)
+import Sim.Fluid.Types (ActiveFluidCell(..), surfaceCeilZOf)
 import Sim.Fluid.Active (simulateActiveTick)
 import Sim.Topology
     (SimTopology(..), simTopologyForParams, simCanonChunk, simSeamNeighbor)
@@ -114,13 +115,14 @@ activeGrid cc ss = maybe V.empty scsActiveFluid (HM.lookup cc (swsChunks ss))
 isActiveAt ∷ ChunkCoord → SimWorldState → Bool
 isActiveAt cc ss = maybe False scsActive (HM.lookup cc (swsChunks ss))
 
--- | Water surface of the cell at (lx,ly) in a chunk (terrain z=0).
+-- | Water surface of the cell at (lx,ly) in a chunk (terrain z=0),
+--   as the WHOLE-z ceiling view these examples have always compared.
 surfAt ∷ ChunkCoord → Int → Int → SimWorldState → Int
 surfAt cc lx ly ss = case HM.lookup cc (swsChunks ss) of
     Nothing  → 0
     Just scs → case scsActiveFluid scs V.! (ly * chunkSize + lx) of
         Nothing  → 0
-        Just afc → volumeToSurface 0 (afcVolume afc)
+        Just afc → surfaceCeilZOf 0 (afcVolume afc)
 
 -- * Wrap-boundary fixtures (#2044)
 --
@@ -144,12 +146,12 @@ flatTerrain = VU.replicate n 0
 
 dryFluid, wetFluid ∷ V.Vector (Maybe FluidCell)
 dryFluid = V.replicate n Nothing
-wetFluid = V.replicate n (Just (FluidCell Lake 5))
+wetFluid = V.replicate n (Just (FluidCell Lake (exactSurfaceOfZ 5)))
 
 spec ∷ Spec
 spec = do
     let full = V.replicate n (Just (ActiveFluidCell Lake
-                                       (fromIntegral (5 * volumePerLevel)) 0))
+                                       (fromIntegral (5 * fluidUnitsPerZ)) 0))
         dry  = V.replicate n Nothing
         topo = cylTopo seamWorldSize
         st0  = mkState topo [ (ChunkCoord 0 0, mkChunk full)

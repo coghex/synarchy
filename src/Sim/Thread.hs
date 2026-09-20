@@ -62,7 +62,7 @@ import Sim.Command.Types (SimCommand(..), ReactionChunkSync(..)
                          , FastSettleOutcome(..))
 import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
                        , emptySimState, emptySimWorldState)
-import Sim.Fluid.Types (activeToFluidCell)
+import Sim.Fluid.Types (derivePassiveFluid)
 import Sim.Fluid.Active (simulateActiveTick)
 import Sim.Fluid.Reaction (ReactionResult(..), groupReactionResults)
 import Sim.Chunk (applyChunkEdit, applyReactionCommit, loadedChunkState
@@ -513,11 +513,11 @@ emitWorldDirtyFluids env pid sws results mAck = do
                 (FluidWritebackBatch pid (swsIncarnation sws) writebacks
                                      results mAck))
 
+-- | The writeback's passive view of one chunk. Shares ONE definition
+--   of the active → passive direction with the tick, the seam pass and
+--   deactivation (#2520), so the map the world thread receives carries
+--   exactly the units the sim holds — including a partial top level —
+--   and keeps the sub-terrain cells activation never took up.
 deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)
 deriveFluidMap scs =
-    let terrV = scsTerrain scs
-    in V.imap (\idx mafc →
-        case mafc of
-            Nothing  → Nothing
-            Just afc → activeToFluidCell (terrV VU.! idx) afc
-        ) (scsActiveFluid scs)
+    derivePassiveFluid (scsTerrain scs) (scsFluid scs) (scsActiveFluid scs)

@@ -39,6 +39,7 @@ import qualified Data.Text as T
 import World.Save.Envelope
     (decodeSessionEnvelope, encodeSessionSnapshot, LuaComponentSpec(..))
 import World.Edit.Types (WorldEdit(..))
+import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
 import World.Flora.CropPlot (CropPlotOf(..))
 import World.Flora.Reference (FloraRef(..), renderFloraRef)
 import World.Plant.Types (PlantDesignationOf(..))
@@ -215,7 +216,43 @@ data ExpectedPage = ExpectedPage
     , epUnitSimStates ∷ ![ExpectedUnitSimState]
     , epCraftBills ∷ ![ExpectedCraftBill]
     , epPowerNodes ∷ ![ExpectedPowerNode]
+    , epFluidSnapshots ∷ !(Maybe ExpectedFluidSnapshots)
     }
+
+-- | The same three aggregates, read off a DECODED page. Kept beside
+--   the type it is compared against so the two cannot drift; the
+--   emitting half lives in @app-save-codec/Main.hs@'s canonical
+--   summary.
+fluidSnapshotAggregate ∷ PageSnapshot → ExpectedFluidSnapshots
+fluidSnapshotAggregate page = ExpectedFluidSnapshots
+    { efsCount        = length surfaces
+    , efsPartialCount =
+        length [ () | z ← surfaces, exactTopLevel z ≢ fluidUnitsPerZ ]
+    , efsExactSum     = sum surfaces
+    }
+  where
+    surfaces = [ z | edits ← HM.elems (pgsEdits page)
+                   , WeSetFluidSnapshot _ _ _ z ← edits ]
+
+-- | #2520: the EXACT fluid plane a fixture's page carries, as three
+--   aggregates over its @WeSetFluidSnapshot@ log. The whole-z Lua and
+--   dump views round, so they cannot serve as the precision oracle for
+--   a format whose entire point is the remainder; these numbers can,
+--   and a resave that rounded one cell moves at least one of them.
+--
+--   OPTIONAL, and absent means "this fixture pins nothing here" rather
+--   than "zero": every summary generated before world-edits v4 predates
+--   the key, and their pages really do carry snapshots.
+data ExpectedFluidSnapshots = ExpectedFluidSnapshots
+    { efsCount        ∷ !Int
+    , efsPartialCount ∷ !Int
+    , efsExactSum     ∷ !Int
+    } deriving (Show, Eq)
+
+instance Aeson.FromJSON ExpectedFluidSnapshots where
+    parseJSON = Aeson.withObject "fluidSnapshots" $ \o →
+        ExpectedFluidSnapshots
+            <$> o .: "count" <*> o .: "partialCount" <*> o .: "exactSum"
 
 instance Aeson.FromJSON ExpectedPage where
     parseJSON = Aeson.withObject "page" $ \o → ExpectedPage
@@ -237,6 +274,7 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .:? "unitSimStates" .!= []
         <*> o .:? "craftBills" .!= []
         <*> o .:? "powerNodes" .!= []
+        <*> o .:? "fluidSnapshots"
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -465,6 +503,14 @@ manifestFixturesSpec =
                                     pgsDateDay page `shouldBe` epDateDay ep
                                     T.pack (show (pgsMapMode page))
                                         `shouldBe` epMapMode ep
+
+                                    -- #2520: pinned exactly when the
+                                    -- fixture declares it, so a v4
+                                    -- fixture proves its partial cells
+                                    -- survive decode to the unit.
+                                    forM_ (epFluidSnapshots ep) $ \efs →
+                                        fluidSnapshotAggregate page
+                                            `shouldBe` efs
 
                                     -- Entity-level values (round-3 review):
                                     -- an aggregate count can't catch a

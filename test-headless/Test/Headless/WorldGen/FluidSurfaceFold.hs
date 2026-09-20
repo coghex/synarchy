@@ -28,7 +28,7 @@ import World.Fluid.River.Types
     ( RiverChunkEntry(..), WorldRivers(..) )
 -- 'Lake' is a constructor of both 'FluidType' and the lake table's
 -- own record type, so take only the classifier this suite asserts on.
-import World.Fluid.Types (FluidCell(..), FluidType(River))
+import World.Fluid.Types (fluidCellAtZ, FluidType(River))
 import World.Generate.Chunk.Fluid
     ( chunkWaterSurfMap, composeFluidMap, lakeSurfaceMap
     , riverSurfaceMap )
@@ -218,6 +218,6 @@ spec = do
                 terrain = VU.replicate chunkAreaT terrZ
                 cells = composeFluidMap params coordT terrain
             cells V.! lakeLowerT
-                `shouldBe` Just (FluidCell River riverSurf)
+                `shouldBe` Just (fluidCellAtZ River riverSurf)
             chunkWaterSurfMap params coordT VU.! lakeLowerT
                 `shouldBe` lakeSurf

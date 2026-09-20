@@ -175,15 +175,17 @@ spec = do
             totalVolume after `shouldBe` 12
 
         it "spills a quarter of its volume into an empty neighbour" $ do
-            -- Source 8 (> volumePerLevel), empty neighbour: `8 div 4` = 2.
+            -- Source 12 (> fluidUnitsPerZ, the spill-into-dry threshold
+            -- #2520 rescaled from seven units to eight), empty
+            -- neighbour: `12 div 4` = 3.
             let basin = [idxOf 8 8, idxOf 9 8]
-                fluid = V.replicate n Nothing V.// [(idxOf 8 8, water 8)]
+                fluid = V.replicate n Nothing V.// [(idxOf 8 8, water 12)]
                 before = mkState (mkChunk (basinTerrain basin) fluid)
                 after  = simulateActiveTick before
-            totalVolume before `shouldBe` 8
-            volumeAt 8 8 after `shouldBe` 6
-            volumeAt 9 8 after `shouldBe` 2
-            totalVolume after `shouldBe` 8
+            totalVolume before `shouldBe` 12
+            volumeAt 8 8 after `shouldBe` 9
+            volumeAt 9 8 after `shouldBe` 3
+            totalVolume after `shouldBe` 12
 
     describe "randomized total-volume conservation" $
         it "conserves volume across one tick for every fixed seed" $ do

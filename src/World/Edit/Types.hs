@@ -121,6 +121,16 @@ data WorldEdit
     | WeSetFluidSnapshot !Int !Int !FluidType !Int
                                            -- ^ Exact fluid state emitted by
                                            --   the simulation at save time.
+                                           --   The last field is the column's
+                                           --   ABSOLUTE fluid surface on the
+                                           --   exact eighth-z plane
+                                           --   ("World.Fluid.Exact"), so a
+                                           --   partially filled top level
+                                           --   survives the round trip
+                                           --   (#2520). @world-edits@ v3 and
+                                           --   older recorded a whole z here;
+                                           --   their migration scales it to
+                                           --   @surfaceZ * 8@ exactly once.
     | WeClearFluidSnapshot !Int !Int
                                            -- ^ Exact fluid state emitted by
                                            --   the simulation at save time:

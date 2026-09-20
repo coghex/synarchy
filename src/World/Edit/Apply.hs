@@ -24,7 +24,9 @@ import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import Structure.Types (StructurePieceData(..))
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
-import World.Fluid.Types (FluidCell(..), FluidType(..), renderedSurfaceZ)
+import World.Fluid.Types
+    ( FluidCell(..), FluidType(..), renderedSurfaceZ, fluidSurfaceCeilZ
+    , fluidCellAtZ )
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Generate.Coordinates (globalToChunk)
 import World.Material.Id (MaterialId(..))
@@ -73,7 +75,7 @@ applyEdit (WeDeleteTile gx gy) lc
                    newFluid = case curFluid of
                        Just _                        → curFluid
                        Nothing | newTopZ ≤ wt        →
-                           Just (FluidCell Lake wt)
+                           Just (fluidCellAtZ Lake wt)
                        _                             → Nothing
                    -- Digging preserves an existing fluid cell
                    -- unconditionally, so a River tile whose terrain
@@ -133,12 +135,12 @@ applyEdit (WeAddTile gx gy mat) lc
                    -- excludes fluid tiles, but replay must stay
                    -- total for resilience).
                    newFluid = case curFluid of
-                       Just fc | newTopZ ≥ fcSurface fc → Nothing
+                       Just fc | newTopZ ≥ fluidSurfaceCeilZ fc → Nothing
                        _                                → curFluid
                    -- The guard directly above displaces any fluid the
-                   -- fill reaches, so surviving fluid necessarily has
-                   -- newTopZ < fcSurface — River and non-River both
-                   -- collapse to fcSurface here. Routed through the
+                   -- fill reaches, so surviving fluid necessarily stands
+                   -- above newTopZ — River and non-River both collapse
+                   -- to the fluid's own ceiling here. Routed through the
                    -- shared rule anyway so the decision stays in one
                    -- place rather than being re-derived (#1112).
                    newSurface = renderedSurfaceZ newTopZ newFluid
@@ -154,8 +156,9 @@ applyEdit (WeSetFluidTile gx gy ft) lc
     | otherwise =
         let idx        = columnIdx gx gy
             surfZ      = lcTerrainSurfaceMap lc VU.! idx
-            newSurface = surfZ + 1
-            cell       = FluidCell { fcType = ft, fcSurface = newSurface }
+            -- One whole z of fluid over the terrain top: a FULL level
+            -- on the exact plane (#2520), not a partial one.
+            cell       = fluidCellAtZ ft (surfZ + 1)
             -- Against the TERRAIN top, not the old rendered surface:
             -- this edit REPLACES the column's fluid cell, so folding in
             -- the height the superseded cell used to render at would
@@ -170,7 +173,11 @@ applyEdit (WeSetFluidSnapshot gx gy ft surface) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =
         let idx = columnIdx gx gy
-            cell = FluidCell { fcType = ft, fcSurface = surface }
+            -- The snapshot's surface is already on the EXACT plane
+            -- (#2520): world-edits v4 records exact units, and every
+            -- older version's whole-z surface was scaled to @z * 8@
+            -- once, by its own migration.
+            cell = FluidCell { fcType = ft, fcExactSurface = surface }
             renderedSurf =
                 renderedSurfaceZ (lcTerrainSurfaceMap lc VU.! idx) (Just cell)
         in lc { lcFluidMap = lcFluidMap lc V.// [(idx, Just cell)]

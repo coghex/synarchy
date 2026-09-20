@@ -204,17 +204,17 @@ composeFluidMap params coord terrainMap =
                -- shoreline tile both tables claim — lava wins and
                -- the shell mask downstream turns the rim to basalt.
                else if lvSurf ≢ minBound ∧ lvSurf ≥ terrZ
-                    then Just (FluidCell Lava lvSurf)
+                    then Just (fluidCellAtZ Lava lvSurf)
                else if isOcean
-                    then Just (FluidCell Ocean seaLevel)
+                    then Just (fluidCellAtZ Ocean seaLevel)
                     else
                       -- River > Lake. By construction river tiles
                       -- aren't inside any lake, but defensive priority
                       -- keeps the picture consistent at edges.
                       if rvSurf ≢ minBound ∧ rvSurf ≥ terrZ
-                      then Just (FluidCell River rvSurf)
+                      then Just (fluidCellAtZ River rvSurf)
                       else if lkSurf ≢ minBound ∧ lkSurf ≥ terrZ
-                           then Just (FluidCell Lake lkSurf)
+                           then Just (fluidCellAtZ Lake lkSurf)
                            else Nothing
 
     -- Surface lava comes entirely from the pool table above; the
@@ -443,7 +443,7 @@ applyLavaShell shell terrain isOceanic fluid
         | shell VU.! idx =
             let terrZ = terrain VU.! idx
             in if isOceanic ∧ terrZ ≤ seaLevel ∧ terrZ ≢ minBound
-               then Just (FluidCell Ocean seaLevel)
+               then Just (fluidCellAtZ Ocean seaLevel)
                else Nothing
         | otherwise = cell
 
@@ -460,7 +460,9 @@ maxColumnPeek = 5
 --
 --     * It currently renders dry ('fluidMap[idx] = Nothing'), and
 --     * Three or four of its cardinal in-chunk neighbors render as
---       Lake at the same 'fcSurface', and
+--       Lake at the same whole-z surface ('fluidSurfaceCeilZ' — every
+--       generated plane is a whole z, stored as @z * 8@ on the exact
+--       plane since #2520), and
 --     * The tile's terrain is between @surface + 1@ and @surface +
 --       maxColumnPeek@ inclusive.
 --
@@ -482,7 +484,7 @@ smoothIslandColumns terr fluid = runST $ do
             | otherwise = do
                 c ← MV.read mFluid (ny * chunkSize + nx)
                 pure $ case c of
-                    Just fc | fcType fc ≡ Lake → Just (fcSurface fc)
+                    Just fc | fcType fc ≡ Lake → Just (fluidSurfaceCeilZ fc)
                     _                          → Nothing
         -- Iterate until convergence (in practice 1-2 passes): a tile
         -- that gets smoothed becomes a Lake neighbor for tiles
@@ -525,7 +527,7 @@ smoothIslandColumns terr fluid = runST $ do
                             Just s
                               | t > s ∧ t ≤ s + maxColumnPeek → do
                                   MV.write mFluid idx
-                                           (Just (FluidCell Lake s))
+                                           (Just (fluidCellAtZ Lake s))
                                   VUM.write mTerr  idx (s - 1)
                                   modifySTRef' changedRef (+1)
                             _ → pure ()

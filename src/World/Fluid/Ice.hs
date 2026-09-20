@@ -11,6 +11,7 @@ import Control.Monad.ST (runST)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), IceCell(..), IceMode(..), IceMap
+                         , fluidSurfaceCeilZ
                          , IceLevelGrid)
 import World.Fluid.IceLevel (lookupIceLevel)
 import World.Plate (TectonicPlate, isBeyondGlacier, isGlacierZone
@@ -73,7 +74,7 @@ computeChunkIce seed plates climate worldSize coord ilGrid terrainSurfMap fluidM
                 when (hasIce ∧ terrainZ > minBound) $ do
                     let inGlacierZone = isGlacierZone worldSize gx' gy'
                         fluidZ = case fluidMap V.! idx of
-                            Just fc → fcSurface fc
+                            Just fc → fluidSurfaceCeilZ fc
                             Nothing → minBound
                         baseZ = max terrainZ fluidZ
                         mIceLevel = lookupIceLevel ilGrid worldSize gx' gy'

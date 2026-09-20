@@ -69,7 +69,7 @@ import Unit.Thread.Command.Pose
 import Unit.Types
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
 import World.Flora.Types (emptyFloraChunkData)
-import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
+import World.Fluid.Types (fluidCellAtZ, FluidType(..), emptyIceMap)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
@@ -168,7 +168,7 @@ bankChunk wet =
         terrV = VU.replicate area (0 ∷ Int)
         idx   = lakeY * chunkSize + lakeX
         fluid = V.replicate area Nothing
-        fluid' | wet       = fluid V.// [(idx, Just (FluidCell Lake 0))]
+        fluid' | wet       = fluid V.// [(idx, Just (fluidCellAtZ Lake 0))]
                | otherwise = fluid
     in LoadedChunk
         { lcCoord             = ChunkCoord 0 0

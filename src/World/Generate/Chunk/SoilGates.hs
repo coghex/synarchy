@@ -138,7 +138,7 @@ applyFluidWt fluid wtBase = VU.generate (chunkSize * chunkSize) $ \idx →
     in if wt0 ≡ minBound
        then wt0
        else case fluid V.! idx of
-            Just fc | fcType fc ≢ Lava → max wt0 (fcSurface fc)
+            Just fc | fcType fc ≢ Lava → max wt0 (fluidSurfaceCeilZ fc)
                     | otherwise        → wt0
             Nothing → case haloSurfs idx of
                         [] → wt0
@@ -147,7 +147,7 @@ applyFluidWt fluid wtBase = VU.generate (chunkSize * chunkSize) $ \idx →
     haloSurfs idx =
         let lx = idx `mod` chunkSize
             ly = idx `div` chunkSize
-        in [ fcSurface fc + 1 - d
+        in [ fluidSurfaceCeilZ fc + 1 - d
            | dy ← [-wtHaloRadius .. wtHaloRadius]
            , dx ← [-wtHaloRadius .. wtHaloRadius]
            , let d = max (abs dx) (abs dy)

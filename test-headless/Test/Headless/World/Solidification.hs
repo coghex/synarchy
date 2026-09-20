@@ -75,6 +75,7 @@ import Sim.Fluid.Reaction
     , applyTransfer, groupReactionResults, solidProductFor )
 import Sim.Fluid.Types
     (ActiveFluidCell(..), activeToFluidCell, fluidCellToActive)
+import World.Fluid.Exact (fluidUnitsPerZ)
 import Sim.State.Types
     (SimChunkState(..), SimState(..), SimWorldState(..)
     , emptySimState, emptySimWorldState)
@@ -329,7 +330,7 @@ pureSpec = describe "solidification (#2485)" $ do
     -- * Requirement 6: the exact-volume handoff.
     describe "handing a committed result back to the sim" $ do
         -- 1 unit of water — deliberately not a multiple of
-        -- 'Sim.Fluid.Types.volumePerLevel' — beside a cell that just
+        -- 'World.Fluid.Exact.fluidUnitsPerZ' — beside a cell that just
         -- became stone.
         let waterIdx = 5
             stoneIdx = 6
@@ -338,9 +339,9 @@ pureSpec = describe "solidification (#2485)" $ do
                 [ (chunkA, activeChunk 3
                     [ (waterIdx, Just remainder)
                     , (stoneIdx, Nothing) ]) ]
-            -- What the world's tiles say: the passive map the edit left,
-            -- in which the remainder can only be expressed as a whole
-            -- surface level.
+            -- What the world's tiles say: the passive map the edit
+            -- left. Since #2520 that map is EXACT, so the remainder is
+            -- expressible there too.
             passive = V.replicate cellsPerChunk Nothing
                         V.// [(waterIdx, activeToFluidCell 0 remainder)]
             terrain = VU.replicate cellsPerChunk 0 VU.// [(stoneIdx, 1)]
@@ -349,17 +350,22 @@ pureSpec = describe "solidification (#2485)" $ do
                             (HM.lookup chunkA (swsChunks sws))
 
         it "keeps the contacting cell's EXACT active volume, including a \
-           \remainder that is not a multiple of seven" $
+           \remainder that is not a whole level" $
             gridOf after V.! waterIdx `shouldBe` Just remainder
 
-        it "is what the passive round trip would have destroyed" $ do
-            -- The guard for this example: routing the same state through
-            -- the ordinary edit re-seed hands the reaction's 1 unit back
-            -- as 7, which is the volume the contact consumed.
+        it "is what the passive round trip used to destroy, and no \
+           \longer does" $ do
+            -- Before #2520 the ordinary edit re-seed handed the
+            -- reaction's 1 unit back as 7, because the passive plane
+            -- could only carry whole levels. The plane is exact now, so
+            -- the same route preserves it — this example pins the
+            -- identity rather than the old rounding, and the commit
+            -- path above exists to keep the rest of the LIVE tick, not
+            -- to dodge a conversion.
             let reseeded = applyChunkEdit chunkA 4 passive terrain before
             fmap afcVolume (scsActiveFluid
                 (swsChunks reseeded HM.! chunkA) V.! waterIdx)
-                `shouldBe` Just 7
+                `shouldBe` Just 1
 
         it "leaves the solidified cell empty and adopts the post-commit \
            \generation and terrain" $ do
@@ -383,13 +389,16 @@ pureSpec = describe "solidification (#2485)" $ do
                 grid = scsActiveFluid (swsChunks committed HM.! chunkA)
             -- One z of terrain arrived under it, so exactly one level's
             -- worth of volume no longer fits.
-            grid V.! stoneIdx `shouldBe` Just deep { afcVolume = 20 - 7 }
+            grid V.! stoneIdx
+                `shouldBe` Just deep
+                    { afcVolume = 20 - fromIntegral fluidUnitsPerZ }
 
         it "empties a solidified cell whose fluid the new stone reaches" $ do
             -- …and the other side of the same rule: a cell no deeper
             -- than the level just filled is displaced entirely, which is
             -- what 'World.Edit.Apply' does to the passive cell.
-            let shallow = ActiveFluidCell Lake 7 0
+            let shallow = ActiveFluidCell Lake
+                              (fromIntegral fluidUnitsPerZ) 0
                 refilled = simWorldWith
                     [ (chunkA, activeChunk 3 [ (stoneIdx, Just shallow) ]) ]
                 committed = applyReactionCommit chunkA 4 passive terrain
@@ -427,7 +436,10 @@ pureSpec = describe "solidification (#2485)" $ do
                 committed = applyReactionCommit chunkA 4 passive terrain
                                                 [stoneIdx] inactive
                 grid = scsActiveFluid (swsChunks committed HM.! chunkA)
-            fmap afcVolume (grid V.! waterIdx) `shouldBe` Just 7
+            -- EXACTLY what the passive map holds (#2520): the re-seed
+            -- reconstructs the remainder rather than rounding it up to
+            -- a whole level.
+            fmap afcVolume (grid V.! waterIdx) `shouldBe` Just 1
             grid V.! stoneIdx `shouldBe` Nothing
 
     describe "queueing a page's zoom atlas upload" $ do
@@ -829,7 +841,7 @@ spec = describe "solidification (#2485)" $ do
                      { sevWaterType = Ocean }
             rr = ReactionResult [(lpLava lp, 0), (lpWater lp, 0)] [ev]
             -- One unit of water is left on the far side — deliberately
-            -- not a multiple of 'volumePerLevel'.
+            -- not a whole level ('fluidUnitsPerZ').
             remainder = ActiveFluidCell Ocean 1 0
             lavaWb = FluidWriteback
                 { fwCoord    = lpLava lp
@@ -1069,7 +1081,7 @@ spec = describe "solidification (#2485)" $ do
             -- What the sim really sends alongside a reaction: the
             -- post-annihilation fluid for the reacting chunk. One unit
             -- of water is left beside the exhausted lava — deliberately
-            -- not a multiple of 'volumePerLevel', which is the whole
+            -- not a whole level ('fluidUnitsPerZ'), which is the whole
             -- point of the handoff below.
             remainder = ActiveFluidCell Lake 1 0
             postFluid = V.replicate cellsPerChunk Nothing

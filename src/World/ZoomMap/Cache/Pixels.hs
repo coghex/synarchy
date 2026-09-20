@@ -11,7 +11,8 @@ import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Vector as V
 import World.Chunk.Types (chunkSize)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceMap)
+import World.Fluid.Types
+    (FluidCell(..), FluidType(..), IceMap, fluidSurfaceCeilZ)
 import World.ZoomMap.Types (zoomTileSize, zoomTexelTile)
 import World.Fluid.Internal (FluidMap)
 import World.Vegetation (vegVariants)
@@ -56,7 +57,7 @@ generateChunkPixels palette hasLava _worldSize fluidMap iceMap tileVec =
                     in BB.word8 gr <> BB.word8 gg <> BB.word8 gb <> BB.word8 ga
                else
                 let tileIsOcean = case fluidMap V.! idx of
-                        Just (FluidCell Ocean surf) → elev ≤ surf
+                        Just fc@(FluidCell Ocean _) → elev ≤ fluidSurfaceCeilZ fc
                         _ → False
                     hasIce = isJust (iceMap V.! idx)
                     baseColor

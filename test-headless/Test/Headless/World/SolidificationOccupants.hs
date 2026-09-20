@@ -75,6 +75,7 @@ import World.Generate.Coordinates (canonicalTile)
 import World.Plate.Wrap (worldWidthTiles)
 import World.Reaction.Occupants (occupiesTile)
 import World.Types
+import World.Fluid.Exact (exactSurfaceOfZ)
 import Test.Headless.Harness (getWorldState, sendWorldCommand)
 import Test.Headless.World.Solidification
     ( LivePage(..), ackTimeoutMicros, chunkAt, deliver, livePage
@@ -344,7 +345,11 @@ floodTileDeep ∷ WorldState → ChunkCoord → (Int, Int) → (Int, Int) → IO
 floodTileDeep ws coord (gx, gy) cell = do
     lc ← chunkAt ws coord
     let top = terrainTopAt lc cell
-        lc' = applyEdit (WeSetFluidSnapshot gx gy Lake (top + 3)) lc
+        -- The snapshot's surface is EXACT units since #2520; three
+        -- whole z above the terrain top is that plane times eight.
+        lc' = applyEdit
+                  (WeSetFluidSnapshot gx gy Lake
+                       (exactSurfaceOfZ (top + 3))) lc
     replaceChunkForgettingFlora ws lc lc'
 
 surfaceAt ∷ LoadedChunk → (Int, Int) → Int

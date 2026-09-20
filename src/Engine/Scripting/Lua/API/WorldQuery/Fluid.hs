@@ -51,7 +51,7 @@ worldGetFluidAtFn wsc = do
                                     River → "river"
                                     Lava  → "lava"
                             Lua.pushstring typeStr
-                            Lua.pushinteger (fromIntegral (fcSurface fc))
+                            Lua.pushinteger (fromIntegral (fluidSurfaceCeilZ fc))
                             return 2
         _ → do
             Lua.pushnil
@@ -90,7 +90,7 @@ worldGetSurfaceAtFn wsc = do
                                     River → "river"
                                     Lava  → "lava"
                             Lua.pushstring typeStr
-                            Lua.pushinteger (fromIntegral (fcSurface fc))
+                            Lua.pushinteger (fromIntegral (fluidSurfaceCeilZ fc))
                     return 4
         _ → do
             Lua.pushnil
@@ -141,7 +141,7 @@ worldGetAreaFluidFn wsc = do
                                                 Lua.setfield (Lua.nth 2) "y"
                                                 Lua.pushstring typeStr
                                                 Lua.setfield (Lua.nth 2) "type"
-                                                Lua.pushinteger (fromIntegral (fcSurface fc))
+                                                Lua.pushinteger (fromIntegral (fluidSurfaceCeilZ fc))
                                                 Lua.setfield (Lua.nth 2) "surface"
                                                 Lua.pushinteger (fromIntegral terrZ)
                                                 Lua.setfield (Lua.nth 2) "terrainZ"

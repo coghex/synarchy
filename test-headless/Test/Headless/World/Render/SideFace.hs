@@ -34,7 +34,7 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
 import Engine.Scene.Types (SortableQuad(..))
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell(..)
+import World.Fluid.Types (fluidCellAtZ, FluidCell(..), FluidType(..), IceCell(..)
                          , IceMode(..))
 import World.Material (matOcean, matLava, unMaterialId)
 import World.Render.ChunkLookup (canonicalChunkLookup)
@@ -169,8 +169,8 @@ flatTopSpec = describe "fluidTopQuads selects a flat fluid top (#2517)" $ do
         -- neighbours one z LOWER. Before #2517 each such neighbour set a
         -- pair of slope bits, so 15 of these 16 topologies picked a ramp.
         topology ft dirs = fluidMapWith $
-            ((8, 8), FluidCell ft 10)
-              : [ (p, FluidCell ft 9) | p ← dirs ]
+            ((8, 8), fluidCellAtZ ft 10)
+              : [ (p, fluidCellAtZ ft 9) | p ← dirs ]
         cardinals = [(8, 7), (9, 8), (8, 9), (7, 8)]
 
     it "is flat for River under every lower-neighbour topology" $
@@ -208,9 +208,9 @@ flatTopSpec = describe "fluidTopQuads selects a flat fluid top (#2517)" $ do
         faceMaps fresh `shouldSatisfy` all (≢ 13.0)
 
     it "keeps Ocean and Lava tops flat and unchanged" $ do
-        let fm = fluidMapWith [ ((4, 4), FluidCell Ocean 10)
-                              , ((6, 6), FluidCell Lava 10)
-                              , ((6, 7), FluidCell Lava 9) ]
+        let fm = fluidMapWith [ ((4, 4), fluidCellAtZ Ocean 10)
+                              , ((6, 6), fluidCellAtZ Lava 10)
+                              , ((6, 7), fluidCellAtZ Lava 9) ]
             (ocean, lava, fresh) = topsOf fm noIce
         length ocean `shouldBe` 1
         length lava `shouldBe` 2
@@ -222,9 +222,9 @@ flatTopSpec = describe "fluidTopQuads selects a flat fluid top (#2517)" $ do
         -- Requirement 4 / the reviewer's clarification: ice ELIGIBILITY
         -- is unchanged. Ocean and Lake yield their top to the ice
         -- overlay; River has always kept drawing under ice.
-        let fm = fluidMapWith [ ((1, 1), FluidCell Ocean 10)
-                              , ((2, 2), FluidCell Lake 10)
-                              , ((3, 3), FluidCell River 10) ]
+        let fm = fluidMapWith [ ((1, 1), fluidCellAtZ Ocean 10)
+                              , ((2, 2), fluidCellAtZ Lake 10)
+                              , ((3, 3), fluidCellAtZ River 10) ]
             im = iceMapWith [((1, 1), 10), ((2, 2), 10), ((3, 3), 10)]
             (ocean, lava, fresh) = topsOf fm im
         length ocean `shouldBe` 0
@@ -235,16 +235,16 @@ flatTopSpec = describe "fluidTopQuads selects a flat fluid top (#2517)" $ do
     it "clips fluid tops to the z-slice window" $ do
         -- zSlice 10, effective depth 2 → only surfaces in [8, 10].
         let ctx = testCtx { qcEffectiveDepth = EffectiveDepth 2 }
-            fm = fluidMapWith [ ((1, 1), FluidCell Lake 11)   -- above
-                              , ((2, 2), FluidCell Lake 10)   -- in
-                              , ((3, 3), FluidCell Lake 8)    -- in
-                              , ((4, 4), FluidCell Lake 7) ]  -- below
+            fm = fluidMapWith [ ((1, 1), fluidCellAtZ Lake 11)   -- above
+                              , ((2, 2), fluidCellAtZ Lake 10)   -- in
+                              , ((3, 3), fluidCellAtZ Lake 8)    -- in
+                              , ((4, 4), fluidCellAtZ Lake 7) ]  -- below
             (_, _, fresh) = fluidTopQuads ctx (ChunkCoord 0 0) fm noIce allVisible
         length fresh `shouldBe` 2
 
     it "emits no top for a tile the view bounds reject" $ do
         let offscreen = ViewBounds 1.0e9 1.0e9 1.0e9 1.0e9
-            fm = fluidMapWith [((8, 8), FluidCell Lake 10)]
+            fm = fluidMapWith [((8, 8), fluidCellAtZ Lake 10)]
             (_, _, fresh) = fluidTopQuads testCtx (ChunkCoord 0 0) fm noIce offscreen
         length fresh `shouldBe` 0
 
@@ -255,11 +255,11 @@ oneZSpec = describe "waterSideFaceQuads owns a one-z drop (#2517)" $ do
     -- Home water at the interior tile (5,8), surface 10, flat terrain at
     -- 10. Under FaceSouth the two camera-visible neighbours are (5,9)
     -- and (6,8); only the one a case overrides ever drops.
-    let waterAt ft = fluidMapWith [((5, 8), FluidCell ft 10)]
+    let waterAt ft = fluidMapWith [((5, 8), fluidCellAtZ ft 10)]
         flatTerr  = terrMapWith 10 []
         dryDropTo z = terrMapWith 10 [((6, 8), z)]
-        wetDropTo z = fluidMapWith [ ((5, 8), FluidCell Lake 10)
-                                   , ((6, 8), FluidCell Lake z) ]
+        wetDropTo z = fluidMapWith [ ((5, 8), fluidCellAtZ Lake 10)
+                                   , ((6, 8), fluidCellAtZ Lake z) ]
         noLookup ∷ ChunkCoord → Maybe a
         noLookup = const Nothing
 
@@ -303,8 +303,8 @@ oneZSpec = describe "waterSideFaceQuads owns a one-z drop (#2517)" $ do
         sequence_
             [ let ctx = testCtx { qcFacing = f }
                   fm = fluidMapWith
-                          ( ((5, 8), FluidCell Lake 10)
-                          : [ (p, FluidCell Lake 9)
+                          ( ((5, 8), fluidCellAtZ Lake 10)
+                          : [ (p, fluidCellAtZ Lake 9)
                             | p ← [(5, 7), (6, 8), (5, 9), (4, 8)] ] )
               in length (waterSideFaceQuads ctx (ChunkCoord 0 0) fm flatTerr
                             noLookup noLookup allVisible)
@@ -337,13 +337,13 @@ oneZSpec = describe "waterSideFaceQuads owns a one-z drop (#2517)" $ do
     it "emits one quad each side of a one-z drop across a loaded seam" $ do
         -- Requirement 3, ordinary (non-U) chunk seam: the east edge tile
         -- steps into chunk (1,0). Dry and wet, each exactly one quad.
-        let edgeWater = fluidMapWith [((chunkSize - 1, 8), FluidCell Lake 10)]
+        let edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
             fluidDry (ChunkCoord 1 0) = Just (fluidMapWith [])
             fluidDry _                = Nothing
             terrOne  (ChunkCoord 1 0) = Just (terrMapWith 9 [])
             terrOne  _                = Nothing
             fluidWet (ChunkCoord 1 0) =
-                Just (fluidMapWith [((0, 8), FluidCell Lake 9)])
+                Just (fluidMapWith [((0, 8), fluidCellAtZ Lake 9)])
             fluidWet _                = Nothing
             terrFlat (ChunkCoord 1 0) = Just (terrMapWith 10 [])
             terrFlat _                = Nothing
@@ -356,19 +356,19 @@ oneZSpec = describe "waterSideFaceQuads owns a one-z drop (#2517)" $ do
             seamStored = ChunkCoord (-15) 17
             lookupVia m = canonicalChunkLookup 64
                               (HM.fromList [(seamStored, m)])
-            edgeWater = fluidMapWith [((chunkSize - 1, 8), FluidCell Lake 10)]
+            edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
             runAt fl tl = waterSideFaceQuads testCtx seamHome edgeWater
                               flatTerr fl tl allVisible
         length (runAt (lookupVia (fluidMapWith [])) (lookupVia (terrMapWith 9 [])))
             `shouldBe` 1
-        length (runAt (lookupVia (fluidMapWith [((0, 8), FluidCell Lake 9)]))
+        length (runAt (lookupVia (fluidMapWith [((0, 8), fluidCellAtZ Lake 9)]))
                       (lookupVia (terrMapWith 10 [])))
             `shouldBe` 1
 
     it "draws nothing for a one-z drop into an UNLOADED seam neighbour" $ do
         -- The conservative default must survive the ownership transfer:
         -- an unknown neighbour is still not a drop.
-        let edgeWater = fluidMapWith [((chunkSize - 1, 8), FluidCell Lake 10)]
+        let edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
         length (run edgeWater flatTerr (const Nothing) (const Nothing))
             `shouldBe` 0
 
@@ -382,8 +382,8 @@ preservedSideSpec = describe "waterSideFaceQuads leaves non-drops alone" $ do
         runIn fm tm = run fm tm noLookup noLookup
 
     it "draws nothing for an equal-height wet neighbour" $
-        length (runIn (fluidMapWith [ ((5, 8), FluidCell Lake 10)
-                                    , ((6, 8), FluidCell Lake 10) ]) flatTerr)
+        length (runIn (fluidMapWith [ ((5, 8), fluidCellAtZ Lake 10)
+                                    , ((6, 8), fluidCellAtZ Lake 10) ]) flatTerr)
             `shouldBe` 0
 
     it "draws nothing for a HIGHER wet neighbour" $
@@ -391,29 +391,29 @@ preservedSideSpec = describe "waterSideFaceQuads leaves non-drops alone" $ do
         -- under FaceSouth) are raised to its surface too, so the count
         -- below isolates the tile under test: without that, the pool at
         -- 12 draws its own two-z sides and the fixture is vacuous.
-        length (runIn (fluidMapWith [ ((5, 8), FluidCell Lake 10)
-                                    , ((6, 8), FluidCell Lake 12) ])
+        length (runIn (fluidMapWith [ ((5, 8), fluidCellAtZ Lake 10)
+                                    , ((6, 8), fluidCellAtZ Lake 12) ])
                       (terrMapWith 10 [((6, 9), 12), ((7, 8), 12)]))
             `shouldBe` 0
 
     it "draws nothing for equal or higher dry terrain" $ do
-        length (runIn (fluidMapWith [((5, 8), FluidCell Lake 10)]) flatTerr)
+        length (runIn (fluidMapWith [((5, 8), fluidCellAtZ Lake 10)]) flatTerr)
             `shouldBe` 0
-        length (runIn (fluidMapWith [((5, 8), FluidCell Lake 10)])
+        length (runIn (fluidMapWith [((5, 8), fluidCellAtZ Lake 10)])
                       (terrMapWith 10 [((6, 8), 12)]))
             `shouldBe` 0
 
     it "draws nothing for enclosed equal-height water" $
         -- A 3×3 block of Lake at one surface on level terrain: no cell
         -- has a lower neighbour, so the whole block has no side at all.
-        length (runIn (fluidMapWith [ ((x, y), FluidCell Lake 10)
+        length (runIn (fluidMapWith [ ((x, y), fluidCellAtZ Lake 10)
                                     | x ← [4 .. 6], y ← [7 .. 9] ]) flatTerr)
             `shouldBe` 0
 
     it "keeps one quad per z, sorted a fixed step apart" $ do
         -- Sort ordering is unchanged: one quad per z-level of the drop,
         -- keys ascending in 0.001 steps as they always were.
-        let quads = runIn (fluidMapWith [((5, 8), FluidCell Lake 10)])
+        let quads = runIn (fluidMapWith [((5, 8), fluidCellAtZ Lake 10)])
                           (terrMapWith 10 [((6, 8), 6)])
             keys = map sqSortKey quads
             steps = zipWith (-) (drop 1 keys) keys
@@ -427,7 +427,7 @@ inChunkSpec = describe "waterSideFaceQuads across chunk seams" $ do
     -- Flat terrain at z=10 everywhere, so the in-chunk (left) neighbor is
     -- level with the water and never draws — every emitted quad therefore
     -- comes from the cross-chunk (right) neighbor.
-    let homeFluid = fluidMapWith [((15, 8), FluidCell Lake 10)]
+    let homeFluid = fluidMapWith [((15, 8), fluidCellAtZ Lake 10)]
         homeTerr  = terrMapWith 10 []
 
     it "renders side faces over a DRY drop in the adjacent chunk (the bug)" $ do
@@ -444,7 +444,7 @@ inChunkSpec = describe "waterSideFaceQuads across chunk seams" $ do
         -- Neighbor (0,8) holds water at surface 5, so the stack bottoms
         -- out on that surface: faces from z=5..9 (five quads).
         let fluidLookup (ChunkCoord 1 0) =
-                Just (fluidMapWith [((0, 8), FluidCell Lake 5)])
+                Just (fluidMapWith [((0, 8), fluidCellAtZ Lake 5)])
             fluidLookup _                = Nothing
             terrLookup  (ChunkCoord 1 0) = Just (terrMapWith 0 [])
             terrLookup  _                = Nothing
@@ -459,7 +459,7 @@ inChunkSpec = describe "waterSideFaceQuads across chunk seams" $ do
     it "still renders a waterfall face WITHIN a chunk (regression guard)" $ do
         -- Water at interior tile (5,8); the in-chunk right neighbor (6,8)
         -- is a dry 10-tile drop. No cross-chunk lookup is consulted.
-        let inFluid = fluidMapWith [((5, 8), FluidCell Lake 10)]
+        let inFluid = fluidMapWith [((5, 8), fluidCellAtZ Lake 10)]
             inTerr  = terrMapWith 10 [((6, 8), 0)]
         length (run inFluid inTerr (const Nothing) (const Nothing))
             `shouldBe` 10
@@ -485,7 +485,7 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
         seamWorld  = 64
         -- One Lake tile on the home chunk's EAST edge at z=10, flat
         -- terrain at 10, so every emitted quad comes from the seam step.
-        homeFluid = fluidMapWith [((chunkSize - 1, 8), FluidCell Lake 10)]
+        homeFluid = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
         homeTerr  = terrMapWith 10 []
         lookupVia m = canonicalChunkLookup seamWorld
                           (HM.fromList [(seamStored, m)])
@@ -501,7 +501,7 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
 
     it "renders side faces over a LOWER-WATER drop across the seam" $
         length (runAt seamHome
-                    (lookupVia (fluidMapWith [((0, 8), FluidCell Lake 5)]))
+                    (lookupVia (fluidMapWith [((0, 8), fluidCellAtZ Lake 5)]))
                     (lookupVia (terrMapWith 0 [])))
             `shouldBe` 5
 

@@ -647,7 +647,8 @@ appendFluidSnapshot edits tiles =
             ly = idx `div` chunkSize
             (gx, gy) = chunkToGlobal coord lx ly
             edit = case mCell of
-                Just cell → WeSetFluidSnapshot gx gy (fcType cell) (fcSurface cell)
+                Just cell → WeSetFluidSnapshot gx gy (fcType cell)
+                                               (fcExactSurface cell)
                 Nothing   → WeClearFluidSnapshot gx gy
         in appendEdit coord edit acc
 

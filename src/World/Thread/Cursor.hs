@@ -335,7 +335,7 @@ sendTileInfo env worldState _mParams gx gy z = do
                     fluidStr = case mFluid of
                         Nothing → ""
                         Just fc → "Fluid: " <> tshow (fcType fc)
-                                <> " (surface z=" <> tshow (fcSurface fc) <> ")"
+                                <> " (surface z=" <> tshow (fluidSurfaceCeilZ fc) <> ")"
                 in ( mpName props
                    , tshow surfZ
                    , fluidStr

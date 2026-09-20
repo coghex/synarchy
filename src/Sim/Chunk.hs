@@ -23,7 +23,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Internal (FluidMap)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
-import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, volumePerLevel)
+import World.Fluid.Exact (fluidUnitsPerZ)
+import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive)
 import Sim.Topology (simCardinalNeighbors)
 
 -- | Settle-tick countdown for a freshly generated/loaded chunk. Newly
@@ -125,12 +126,14 @@ applyChunkEdit coord editGen fluidMap terrainMap sws =
 --
 --   This is the whole reason the commit does not reuse 'applyChunkEdit'.
 --   That path re-seeds the active grid from the passive
---   'World.Fluid.Internal.FluidMap' through 'fluidCellToActive', whose
---   @depth * volumePerLevel@ rounding turns the 1 unit a reaction left
---   in the contacting water cell into 7 — volume the reaction destroyed,
---   handed straight back. So an ACTIVE chunk keeps the grid it already
---   holds and only empties the cells that became stone; the exact
---   remainder survives because it is never converted at all.
+--   'World.Fluid.Internal.FluidMap' through 'fluidCellToActive'. Before
+--   #2520 that conversion rounded — it reconstructed @depth@ whole
+--   levels and handed the 1 unit a reaction left in the contacting
+--   water cell back as 7. Since #2520 the passive plane is exact and the
+--   round trip is an identity, so this branch no longer exists to
+--   dodge a rounding step; it exists because an ACTIVE chunk's live
+--   grid is AHEAD of the passive map the commit carries, and re-seeding
+--   from that map would discard the rest of the tick.
 --
 --   An INACTIVE or absent chunk has no exact volumes to keep — its
 --   grid is empty and its truth is the passive map — so it re-seeds
@@ -195,9 +198,9 @@ applyReactionCommit coord editGen fluidMap terrainMap solidified sws =
                                      , i ≥ 0, i < V.length grid ]
     displace Nothing = Nothing
     displace (Just afc)
-        | afcVolume afc ≤ fromIntegral volumePerLevel = Nothing
+        | afcVolume afc ≤ fromIntegral fluidUnitsPerZ = Nothing
         | otherwise = Just afc
-            { afcVolume = afcVolume afc - fromIntegral volumePerLevel }
+            { afcVolume = afcVolume afc - fromIntegral fluidUnitsPerZ }
 
     withSelf = HM.insert coord committed (swsChunks sws)
     withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m) withSelf

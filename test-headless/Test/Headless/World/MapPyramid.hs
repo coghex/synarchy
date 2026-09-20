@@ -40,7 +40,7 @@ import World.Map.ImagePlan
     ( MapImageCeiling(..), MapImageFormat(..), MapImagePlan(..)
     , MapImageSource(..), admitMapImage, mapImageRefusalText, planMapImage )
 import World.Constants (seaLevel)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (fluidCellAtZ, FluidType(..))
 import World.ZoomMap.Cache.ChunkPass
     ( ZoomChunkPass(..), zoomChunkHaloNeighbours, zoomChunkInWorld
     , zoomChunkPass )
@@ -1093,7 +1093,7 @@ haloDependence env size = do
     let honest = mapCellHaloTable params registry Nothing
                      [ coord | (_, _, coord) ← placed ]
         allOcean = V.replicate (chunkSize * chunkSize)
-                       (Just (FluidCell Ocean seaLevel))
+                       (Just (fluidCellAtZ Ocean seaLevel))
         -- One chunk's table, with and without its neighbours; and the
         -- neighbours it does have flooded, so a chunk with a shoreline
         -- gap on any edge shows the difference.
@@ -1149,7 +1149,7 @@ haloIntegration env size = do
 
     let realPass coord = zoomChunkPass params registry Nothing coord
         allOcean = V.replicate (chunkSize * chunkSize)
-                       (Just (FluidCell Ocean seaLevel))
+                       (Just (fluidCellAtZ Ocean seaLevel))
         -- This world's own pass one, except that every chunk OTHER than
         -- the one being rendered composed as open ocean. Nothing else
         -- about the chunk changes, so the only thing that can move its

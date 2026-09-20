@@ -46,10 +46,10 @@ fluidWith cells =
     in V.generate chunkArea $ \idx → Map.lookup idx m
 
 ocean, lake, river, lava ∷ FluidCell
-ocean = FluidCell Ocean seaLevel
-lake  = FluidCell Lake  seaLevel
-river = FluidCell River seaLevel
-lava  = FluidCell Lava  seaLevel
+ocean = fluidCellAtZ Ocean seaLevel
+lake  = fluidCellAtZ Lake  seaLevel
+river = fluidCellAtZ River seaLevel
+lava  = fluidCellAtZ Lava  seaLevel
 
 -- | No adjacent chunk carries ocean.
 noNeighborOcean ∷ Int → Int → Bool

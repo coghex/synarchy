@@ -56,7 +56,7 @@ import World.Flora.Types
     , FloraId(..), FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
     , LifePhase(..), LifePhaseTag(..), LifecycleType(..), emptyFloraCatalog
     , findSpeciesByName, insertSpecies, insertWorldGen, newFloraSpecies )
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (fluidCellAtZ, FluidType(..))
 import World.Material
     (MaterialId(..), MaterialRegistry, materialIdByName)
 import World.Weather.Types
@@ -642,7 +642,7 @@ assertCattailPlacement registry def =
                 surfaceSlopes = VU.replicate area 0
                 exposedFluid = V.replicate area Nothing
                 standingFluid = exposedFluid V.//
-                    [(target, Just (FluidCell Lake surfZ))]
+                    [(target, Just (fluidCellAtZ Lake surfZ))]
                 climate = cattailClimate worldSize
                 -- Seed 10, not the original 7: #2241 re-salted the
                 -- placement roll off the species' authored NAME instead

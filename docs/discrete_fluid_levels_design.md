@@ -264,21 +264,31 @@ unchanged rather than overwrite it.
 
 ### Persistence and migration
 
-`world-edits` v1 is frozen. The exact-state slice introduces a v2 DTO and an
-explicit v1 migration. Every historical `WeSetFluidSnapshot ... surfaceZ`
-becomes exact `surfaceZ * 8`, preserving the old save's displayed whole-z plane
-and treating it as level 8. No old save fabricates a fractional remainder.
+`world-edits` had already reached v3 by the time this slice landed (#2243's
+authored-name flora species), so the exact-state slice is v4 rather than the v2
+this section originally planned: it freezes the CURRENT v3 shape as
+`WorldEditDTOv3` and adds an explicit v3 migration, and #1854's v1 and #2243's
+v2 migrations keep working by chaining THROUGH it. Every historical
+`WeSetFluidSnapshot ... surfaceZ` becomes exact `surfaceZ * 8`, preserving the
+old save's displayed whole-z plane and treating it as level 8. No old save
+fabricates a fractional remainder, and — because the rescale lives at exactly
+one hop — no payload is scaled twice.
 
 Current saves write exact units, not a float and not an integer ceiling. The
 tracked compatibility fixture corpus, component hash/size guards,
 `save_compat_audit.py`, and the fresh-process migration probe cover the new
-version. `docs/persistence_state_inventory.md` records `world-edits` v2 and the
+version. `docs/persistence_state_inventory.md` records `world-edits` v4 and the
 precision promise.
 
+The canonical summary each tracked fixture is validated against carries the
+exact plane's own aggregates (`count`, `partialCount`, `exactSum`) per page,
+because the whole-z Lua and dump views round and therefore cannot be the
+precision oracle for this format.
+
 When CRS-12 later replaces resident snapshots with a sparse versioned fluid
-component, its migration input includes both v1 whole-z snapshots and v2 exact
-snapshots. It must preserve exact units and `needsSettlement`; it may not derive
-authority from `lcSurfaceMap` or another rounded cache.
+component, its migration input includes both pre-v4 whole-z snapshots and v4
+exact snapshots. It must preserve exact units and `needsSettlement`; it may not
+derive authority from `lcSurfaceMap` or another rounded cache.
 
 ### Flat step presentation
 

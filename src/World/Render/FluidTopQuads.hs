@@ -18,7 +18,8 @@ import UPrelude
 import qualified Data.Vector as V
 import Engine.Scene.Types (SortableQuad(..))
 import World.Chunk.Types (ChunkCoord, chunkSize)
-import World.Fluid.Types (FluidCell(..), FluidType(..), IceCell)
+import World.Fluid.Types
+    (FluidCell(..), FluidType(..), IceCell, fluidSurfaceCeilZ)
 import World.Generate (chunkToGlobal)
 import World.Grid (gridToScreen, tileSideHeight)
 import World.Render.QuadContext (QuadContext(..), ZSlice(..)
@@ -65,27 +66,27 @@ fluidTopQuads ctx coord fluidMap iceMap vb =
     step (!oAcc, !lAcc, !fAcc) idx mFluid = case mFluid of
         Nothing → (oAcc, lAcc, fAcc)
         Just fc →
-            if fcSurface fc > zSlice ∨ fcSurface fc < (zSlice - effDepth)
+            if fluidSurfaceCeilZ fc > zSlice ∨ fluidSurfaceCeilZ fc < (zSlice - effDepth)
             then (oAcc, lAcc, fAcc)
             else
                 let lx = idx `mod` chunkSize
                     ly = idx `div` chunkSize
                     (gx, gy) = chunkToGlobal coord lx ly
                     (rawX, rawY) = gridToScreen facing gx gy
-                    relativeZ = fcSurface fc - zSlice
+                    relativeZ = fluidSurfaceCeilZ fc - zSlice
                     heightOffset = fromIntegral relativeZ * tileSideHeight
                     drawX = rawX + wrapX
                     drawY = rawY + wrapY - heightOffset
                     -- Skip ocean/lake rendering where ice covers the surface
                     hasIce = isJust (iceMap V.! idx)
                     ocean = oceanTileToQuad lookupSlot lookupFmSlot textures
-                                facing gx gy (fcSurface fc) zSlice effDepth
+                                facing gx gy (fluidSurfaceCeilZ fc) zSlice effDepth
                                 zoomAlpha (wrapX, wrapY)
                     lava = lavaTileToQuad lookupSlot lookupFmSlot textures
-                               facing gx gy (fcSurface fc) zSlice effDepth
+                               facing gx gy (fluidSurfaceCeilZ fc) zSlice effDepth
                                zoomAlpha (wrapX, wrapY)
                     fresh ft = freshwaterTileToQuad lookupSlot lookupFmSlot
-                                   textures facing gx gy (fcSurface fc) ft
+                                   textures facing gx gy (fluidSurfaceCeilZ fc) ft
                                    zSlice effDepth zoomAlpha (wrapX, wrapY)
                 in if not (isTileVisible vb drawX drawY)
                    then (oAcc, lAcc, fAcc)

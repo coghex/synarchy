@@ -46,7 +46,7 @@ import qualified Data.Vector.Unboxed as VU
 import Data.List (sort)
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..)
                          , chunkSize, columnIndex)
-import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Types (fluidCellAtZ, FluidCell(..), FluidType(..))
 import World.Material (MaterialId(..), MaterialProps(..), MaterialRegistry
                       , defaultMaterialProps, emptyMaterialRegistry
                       , matLoam, registerMaterial)
@@ -85,7 +85,7 @@ dryMap = fluidMapWith []
 
 -- | A neighbour cell at (6,5) that is itself wet.
 wetNeighborMap ∷ V.Vector (Maybe FluidCell)
-wetNeighborMap = fluidMapWith [((6, 5), FluidCell Lake 9)]
+wetNeighborMap = fluidMapWith [((6, 5), fluidCellAtZ Lake 9)]
 
 nbr ∷ (Int, Int)
 nbr = (6, 5)
@@ -129,7 +129,7 @@ flatChunkAt coord z wets =
             , lcSurfaceMap        = VU.replicate area z
             , lcTerrainSurfaceMap = VU.replicate area z
             , lcFluidMap          = fluidMapWith
-                  [ ((x, y), FluidCell Lake z) | (x, y) ← wets ]
+                  [ ((x, y), fluidCellAtZ Lake z) | (x, y) ← wets ]
             }
 
 -- | The stored slope bitmask of local column @(lx,ly)@ in chunk @coord@.

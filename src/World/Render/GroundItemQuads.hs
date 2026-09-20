@@ -131,7 +131,7 @@ itemGeometry tileData im texSizes facing zSlice worldSize gi = do
         drop' = dropAt slopeMask fx fy
 
         underwaterDepth = case lcFluidMap lc V.! idx of
-            Just fc | tz < fcSurface fc → fcSurface fc - tz
+            Just fc | tz < fluidSurfaceCeilZ fc → fluidSurfaceCeilZ fc - tz
             _ → 0
 
         texHandle = idTexture itemDef

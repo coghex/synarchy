@@ -46,6 +46,7 @@ import qualified Engine.Core.Queue as Q
 import Sim.Chunk (applyChunkEdit, loadedChunkState)
 import Sim.Command.Types (SimCommand(..))
 import Sim.Fluid.Active (simulateActiveTick)
+import World.Fluid.Exact (exactSurfaceOfZ)
 import Sim.Fluid.Types (ActiveFluidCell(..))
 import Sim.State.Types (SimChunkState(..), SimWorldState(..)
                        , emptySimWorldState)
@@ -288,7 +289,8 @@ floodEdit surfaceZ coord sws = applyChunkEdit coord 1 flooded terrain sws
     terrain = case HM.lookup coord (swsChunks sws) of
         Just scs → scsTerrain scs
         Nothing  → VU.replicate cells 0
-    flooded = V.replicate cells (Just (FluidCell Lake surfaceZ))
+    flooded = V.replicate cells
+        (Just (FluidCell Lake (exactSurfaceOfZ surfaceZ)))
 
 -- | An absolute water surface clear of every terrain height AND every
 --   generated water surface in the fixture, so the flooded chunk always
@@ -300,7 +302,7 @@ floodSurface sws = 8 + maximum (0 : concatMap heights (HM.elems (swsChunks sws))
   where
     heights scs =
         [ VU.maximum (scsTerrain scs) | not (VU.null (scsTerrain scs)) ]
-        ⧺ [ fcSurface fc | Just fc ← V.toList (scsFluid scs) ]
+        ⧺ [ fluidSurfaceCeilZ fc | Just fc ← V.toList (scsFluid scs) ]
 
 tick ∷ Int → SimWorldState → SimWorldState
 tick k sws = iterate simulateActiveTick sws !! k

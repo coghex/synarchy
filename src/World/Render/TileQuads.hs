@@ -75,7 +75,8 @@ tileToQuad ctx wx wy wz tile mFluid chunkHasFluid =
 
         underwaterDepth = case mFluid of
             Just fc
-                | fcType fc ≡ Ocean ∧ worldZ < fcSurface fc → fcSurface fc - worldZ
+                | fcType fc ≡ Ocean ∧ worldZ < fluidSurfaceCeilZ fc →
+                    fluidSurfaceCeilZ fc - worldZ
             _ | chunkHasFluid ∧ worldZ < seaLevel → seaLevel - worldZ
             _ → 0
 

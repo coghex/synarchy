@@ -2198,6 +2198,151 @@
         }
       ]
     },
+    "World.Save.Component.PageEdits.WorldEditDTOv3": {
+      "source": "src/World/Save/Component/PageEdits.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
+          "via": "WorldEditsDTOv3 → PageEditsDTOv3 → WorldEditDTOv3"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "WeDeleteTileDv3",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeSetFluidTileDv3",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
+        },
+        {
+          "name": "WeAddTileDv3",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetSlopeDv3",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetCellDv3",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetStructureDv3",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearStructureDv3",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetVegDv3",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WePlaceFloraDv3",
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
+        },
+        {
+          "name": "WeSetFluidSnapshotDv3",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearFluidSnapshotDv3",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WePlaceFloraWithIdDv3",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        },
+        {
+          "name": "WePlaceFloraRefDv3",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraRef",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        }
+      ]
+    },
     "World.Save.Component.Transfer.TransferEndpointDTO": {
       "source": "src/World/Save/Component/Transfer.hs",
       "onSaveWire": true,

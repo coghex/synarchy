@@ -203,7 +203,7 @@ preliminary blocking behavior.
 
 Owner decision 2026-08-31, amended 2026-09-07 (resolves Q-5). The sim and
 the world model fluid per column on top of the terrain surface
-(`Sim.Fluid.Types.volumeToSurface`, `World.Chunk.Types.lcTerrainSurfaceMap`
+(`Sim.Fluid.Types.surfaceCeilZOf`, `World.Chunk.Types.lcTerrainSurfaceMap`
 = topmost non-air z), and the reaction consumes the solidifying column's
 own lava, so the original wording — water "directly above the new stone
 top", or a stone top "below the column's terrain surface" — could never
@@ -214,10 +214,14 @@ annihilation, from the two contacting cells plus the page-wide constant
 top plus one. The stone forms as **basalt** when any of these holds:
 
 - the water side of the contact was `Ocean`;
-- the contacting water cell's fluid surface after annihilation
-  (`volumeToSurface` of its terrain and remaining volume) is above the new
-  stone top — the stone will be under the lake or river once the water
-  equalizes onto it;
+- the contacting water cell's fluid surface after annihilation is above the
+  new stone top — the stone will be under the lake or river once the water
+  equalizes onto it. That surface is a WHOLE z on purpose, because the two
+  values it is weighed against here (the stone top, `seaLevel`) are whole z
+  too: it is `surfaceCeilZOf` of the cell's terrain and remaining volume, the
+  documented integer-ceiling view of the exact plane #2520 put underneath it.
+  The predicate is the one this decision has always named; #2520 changed the
+  scale beneath it and not the rule;
 - the new stone top is at or below `seaLevel`, the codebase's own subsea
   test.
 
@@ -361,7 +365,7 @@ Resolved by D-7.
   save→load in a fresh process; a stale in-flight writeback cannot erase
   new stone; submerged and subaerial contacts yield their respective
   materials per D-5; a water remainder that is not a multiple of
-  `volumePerLevel` survives the commit handoff; both live presentations
+  `fluidUnitsPerZ` survives the commit handoff; both live presentations
   show the stone without a reload (FR-4's evidence, folded in here per
   D-7's 2026-09-08 correction).
 - **Out of scope:** entity handling; contact effects and side-deco markers.

@@ -11,7 +11,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), ColumnTiles(..), chunkSize)
 import World.Tile.Types (WorldTileData(..))
-import World.Fluid.Types (FluidCell(..), FluidType(..), emptyIceMap)
+import World.Fluid.Types (fluidCellAtZ, FluidType(..), emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
 import Structure.Types (emptyChunkStructures)
 import World.Material ( MaterialRegistry, MaterialProps(..), emptyMaterialRegistry
@@ -61,7 +61,7 @@ customChunk f =
         fluidV = V.generate area $ \i →
             let (lx, ly) = (i `mod` chunkSize, i `div` chunkSize)
             in case snd (f (lx, ly)) of
-                Just ft → Just (FluidCell ft (fst (f (lx, ly))))
+                Just ft → Just (fluidCellAtZ ft (fst (f (lx, ly))))
                 Nothing → Nothing
     in LoadedChunk
         { lcCoord             = ChunkCoord 0 0
