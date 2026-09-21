@@ -12,7 +12,7 @@
 --   Three layers own three halves of the fix, and this module pins each
 --   against the real production code:
 --
---   * the thirteen @engine.load*Yaml@ BINDINGS answer a decode failure
+--   * the fourteen @engine.load*Yaml@ BINDINGS answer a decode failure
 --     distinguishably — but only when asked, so the single numeric
 --     result every other caller reads is untouched;
 --   * @scripts\/startup_loader.lua@ turns a family that discovered no
@@ -69,7 +69,7 @@ data Fam = Fam
     , famVerb ∷ Text
     }
 
--- | @queueNormalProfile@'s thirteen, in its own order.
+-- | @queueNormalProfile@'s fourteen, in its own order.
 normalFams ∷ [Fam]
 normalFams =
     [ Fam "data/materials"   "material"   "loadMaterialYaml"
@@ -81,13 +81,14 @@ normalFams =
     , Fam "data/items"       "item"       "loadItemYaml"
     , Fam "data/equipment"   "equipment"  "loadEquipmentYaml"
     , Fam "data/buildings"   "building"   "loadBuildingYaml"
+    , Fam "data/factions"    "faction"    "loadFactionYaml"
     , Fam "data/units"       "unit"       "loadUnitYaml"
     , Fam "data/loot_tables" "loot_table" "loadLootTableYaml"
     , Fam "data/loot_profiles" "loot_profile" "loadLootProfileYaml"
     , Fam "data/locations"   "location"   "loadLocationYaml"
     ]
 
--- | @queueArenaProfile@'s twelve: the same inventory minus flora.
+-- | @queueArenaProfile@'s thirteen: the same inventory minus flora.
 arenaFams ∷ [Fam]
 arenaFams = [ f | f ← normalFams, famId f ≢ "flora" ]
 
@@ -458,7 +459,7 @@ runBootThen after sc profile = do
               | otherwise                       = -1
 
 -----------------------------------------------------------------------
--- The engine half: the thirteen real bindings
+-- The engine half: the fourteen real bindings
 -----------------------------------------------------------------------
 
 -- | A private headless engine plus a real Lua backend with the whole
@@ -543,6 +544,7 @@ shippedFile verb = case verb of
     "loadItemYaml"       → "data/items/axe_steel.yaml"
     "loadEquipmentYaml"  → "data/equipment/humanoid.yaml"
     "loadBuildingYaml"   → "data/buildings/furnace.yaml"
+    "loadFactionYaml"    → "data/factions/base.yaml"
     "loadUnitYaml"       → "data/units/acolyte.yaml"
     "loadLootTableYaml"  → "data/loot_tables/ruin_common.yaml"
     "loadLootProfileYaml" → "data/loot_profiles/ruin_industrial_salvage.yaml"
@@ -565,6 +567,12 @@ shippedPrereqs "loadLootProfileYaml" =
     | item ← [ "steel_bar", "electric_motor", "steel_hardware"
              , "high_voltage_battery", "steel_plate", "processing_unit"
              , "wiring", "rations" ] ]
+-- A unit definition's `faction_tags:` are resolved against the declared
+-- catalogue at load (#2506, D-30) and an undeclared id refuses the whole
+-- file, so the shipped catalogue is registered first — production's own
+-- order (factions before units in both profiles), not a convenience.
+shippedPrereqs "loadUnitYaml" =
+    [("loadFactionYaml", "data/factions/base.yaml")]
 shippedPrereqs _ = []
 
 -- | The top-level key each list family decodes, so an EMPTY one can be
@@ -583,6 +591,7 @@ emptyListFile verb = case verb of
     "loadEquipmentYaml"  → Just "classes: []\n"
     "loadBuildingYaml"   → Just "buildings: []\n"
     "loadUnitYaml"       → Just "units: []\n"
+    "loadFactionYaml"    → Just "faction_tags: []\n"
     "loadLocationYaml"   → Just "locations: []\n"
     _                    → Nothing
 
@@ -883,7 +892,7 @@ spec = describe "Startup readiness" $ do
             (rDone r, rFailed r, rFamily r) `shouldBe` (False, True, "unit")
             -- arena has no flora family, so its aggregates stop one
             -- family earlier than normal's would
-            length (aggregatesOf r) `shouldBe` 9
+            length (aggregatesOf r) `shouldBe` 10
 
     ------------------------------------------------------------------
     describe "the boot surfaces it and refuses to finish (requirement 3)"

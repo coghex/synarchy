@@ -24,6 +24,8 @@
 units:
   - name: white_tailed_deer
     sprite: "assets/textures/units/white_tailed_deer/animations/idle/south/frame_000.png"
+    # Default faction tags (#2506, D-29).
+    faction_tags: ["wildlife"]
     animations:
       alert:
         fps: 8

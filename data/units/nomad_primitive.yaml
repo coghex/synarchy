@@ -3,6 +3,11 @@ units:
     name_pool: "humanoid"
     display_name: "Nomad"
     sprite: "assets/textures/units/nomad_primitive/animations/idle/south/frame_000.png"
+    # Default faction tags (#2506, D-7/D-29). Hostility toward acolytes
+    # comes from the symmetric acolyte/nomad relation in
+    # data/factions/base.yaml -- not from the generic `hostile` value
+    # this unit still SPAWNS with until FTS-3 (#2515).
+    faction_tags: ["nomad"]
     base_width: 8
     max_speed: 1.4
     equipment_class: "humanoid"

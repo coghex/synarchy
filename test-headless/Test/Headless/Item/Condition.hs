@@ -212,6 +212,7 @@ minimalUnitDef = UnitDef
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 mkItem ∷ Text → Word64 → Float → ItemInstance

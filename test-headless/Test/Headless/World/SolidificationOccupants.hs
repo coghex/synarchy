@@ -149,7 +149,7 @@ occupantDef = UnitDef
     , udStartingAccessories = []
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 occupantDefName ∷ Text
 occupantDefName = "solidification_dummy"

@@ -170,7 +170,7 @@ minimalDef name = UnitDef
     , udStartingAccessories = []
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 mkUnit ∷ Text → WorldPageId → (Float, Float) → Float → [ItemInstance]
        → UnitInstance

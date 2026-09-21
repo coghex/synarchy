@@ -47,6 +47,7 @@ exactly why the detail could move out of the always-loaded file.
 
 - [Lua random streams (#1330)](#lua-random-streams-1330)
 - [Startup readiness: the YAML fail-fast rule (#2203)](#startup-readiness-the-yaml-fail-fast-rule-2203)
+- [The faction tag catalogue (#2506)](#the-faction-tag-catalogue-2506)
 
 **World and naming**
 
@@ -1794,6 +1795,17 @@ not as success. The loot-table family bypasses
 `Engine.Asset.YamlList.loadYamlList` entirely and follows the same rule
 through `Engine.Asset.YamlLootTables`.
 
+**A post-decode SEMANTIC refusal is terminal too, and says why.** A
+binding that decoded its file and then refused the whole of it (#2241's
+duplicate flora name; #2506's faction-tag rules) answers
+`(0, true, detail, reason)` — the offending identifier and the short
+phrase naming the rule — and only a refusal ever answers with four
+values, so no healthy caller's arity moves. `startupLoader.fail`
+carries both into its one error line, quoting the identifier under the
+binding's own reason; a binding that states no reason keeps #2241's
+original "duplicate definition name" wording. That fourth value is what
+stops an undeclared faction tag being reported as a duplicate name.
+
 `scripts/loading_screen.lua` shows the retained message in place of
 "Complete!", freezes the bar, and settles in phase `"failed"` — never
 `"done"`, which is what `scripts/ui_manager_boot.lua` keys its
@@ -1804,6 +1816,71 @@ path and returns false instead of running `finishArenaBoot`.
 
 Gates: hspec `--match "Startup readiness"` and `--match "Startup asset
 logging"`.
+
+---
+
+## The faction tag catalogue (#2506)
+
+`data/factions/*.yaml` is the ONE authority for which faction tags
+AUTHORED data may name and for the standing relations between them
+(`docs/faction_tag_system_design.md` D-4, D-8, D-28, D-30). It is an
+ordinary startup family under the fail-fast rule above, queued in both
+profiles **before `data/units`** — a unit definition's `faction_tags:`
+are resolved against the declared tags, so a units file loaded first
+would be refused for naming tags nothing had declared yet.
+
+**Six rules, each refusing the WHOLE file** and each naming the
+offending id in its diagnostic: a tag declared twice, a malformed tag id
+(empty, or carrying whitespace), a relation naming an undeclared tag, a
+`relation:` outside `ally`/`neutral`/`hostile`, the same ORDERED pair
+declared more than once by any mix of `pair:` and `from:`/`to:` entries
+whether or not the values agree, and a relation whose two endpoints are
+the same tag. The uniqueness rules span the whole directory, not one
+document; re-reading ONE path replaces that path's own contribution
+rather than colliding with it, which is what keeps
+`engine.loadFactionYaml` as repeatable as its nine sibling verbs.
+
+**Same-tag alliance and the neutral default are engine rules, never
+rows.** `Unit.Faction.Profile.relationFromTo` answers ally for a shared
+tag and neutral for an unrelated pair before the base table is consulted
+at all, which is why a self-paired row is refused rather than merged.
+
+**Declaring a tag does not close the namespace** (D-12). A
+syntactically valid tag no file declares is still a legitimate RUNTIME
+tag — teams, scenarios and temporary conflict groups mint their own —
+and evaluates under the same precedence. The catalogue restricts
+authored data, not the model.
+
+**Unit defaults.** `faction_tags:` on a unit definition is optional;
+omitted means the definition declares NO defaults, which is not the same
+as declaring `wildlife`. A list with a duplicate, a malformed id, or an
+id the catalogue does not declare refuses the whole unit file, and that
+refusal is decided for every definition in the file BEFORE any of them
+is registered — the registration loop publishes incrementally, so a
+refusal decided partway through would already have allocated handles and
+queued uploads for the definitions ahead of it. The resolved set is
+carried on `UnitDef` only; no `UnitInstance` field, spawn argument,
+snapshot, DTO or save byte changes here.
+
+**The legacy mapping is a pure function** of a legacy `Faction` value
+and a definition's authored defaults (D-26): `player` = local controller
++ defaults, `wildlife` = no controller + defaults falling back to
+`wildlife` when the definition declares none, `hostile` = no controller
++ `legacy_hostile`, `neutral` = the empty inert profile, `debug` = no
+controller, no tags, both capabilities. It never reads a unit name or
+any live relation.
+
+**Capabilities.** `factionCatalogueRef` is a `content-registries` field,
+written only by `Engine.Scripting.Lua.API.Factions` through
+`ContentRegistriesCapability`, and classified `Rebuild` from data in
+`docs/persistence_state_inventory.md`.
+
+Gates: hspec `--match "Faction tag catalogue"` (every refusal through
+the real loaders and the real Lua bindings, the shipped corpus, and the
+D-26 mapping), `--match "Unit faction profile policy"` (both five-by-five
+legacy matrices re-asserted against the shipped catalogue),
+`--match "Startup readiness"` / `"Startup asset logging"`, and
+`tools/startup_asset_logging_probe.py`.
 
 ---
 
@@ -5023,8 +5100,9 @@ entries, every rejection rule at the tightest value its guard admits and
 refuses, the loader's three outcomes, insert/replace, and the two
 queries), `tools/content_registry_probe.py` (the family end to end
 against the real item tree), `tools/startup_asset_logging_probe.py` and
-hspec `--match "Startup"` (the thirteenth normal family and twelfth
-arena one).
+hspec `--match "Startup"` (the loot-profile family in both profiles'
+queues; #2506 added a fourteenth normal and thirteenth arena family
+after it).
 
 ---
 

@@ -159,7 +159,7 @@ unitDefWithClass cls = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 -- | The equipment map every drift example starts from: one entry that
 --   is still correct, one under a slot id the class retired, and one

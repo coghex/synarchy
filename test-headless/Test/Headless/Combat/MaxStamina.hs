@@ -81,7 +81,7 @@ targetDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 -- | The game-time instant every example resolves against — the stand-in
 --   for the single sample Combat.Resolution.resolveAttack captures and

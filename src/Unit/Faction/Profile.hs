@@ -63,7 +63,9 @@
 --   __The legacy matrix.__ Under the compatibility base table of D-28
 --   (symmetric @hostile@ for @acolyte@\/@nomad@, @acolyte@\/@wildlife@,
 --   @legacy_hostile@\/@acolyte@, and @legacy_hostile@\/@wildlife@, and
---   nothing else), the D-26 profiles built by 'legacyProfile' give this
+--   nothing else — since #2506 the SHIPPED @data\/factions\/base.yaml@
+--   rather than a test-local table), the D-26 profiles built by
+--   'legacyProfile' from an @acolyte@-defaulted definition give this
 --   deterministic table. Rows are the subject, columns the target;
 --   @A@ = ally, @N@ = neutral, @H@ = hostile:
 --
@@ -97,10 +99,15 @@
 --   'CapUnrestrictedCombat' instead, which is exactly the capability's
 --   purpose, and neutral\/neutral was already forbidden.
 --
---   Anything data-authored — the YAML tag catalogue, unit-definition
---   defaults, and the shipped base table — is FTS-2. The 'FactionPolicy'
---   here is built in code by its callers, and its only shipped caller is
---   this slice's spec.
+--   __Where the data comes from.__ FTS-2 (#2506) made the tag
+--   catalogue, the base relation table and each unit definition's
+--   default tags authored data: "Unit.Faction.Catalogue" holds the
+--   loaded authority and builds this module's 'FactionPolicy' from it
+--   through 'mkFactionPolicy'. Nothing here reads that registry —
+--   'FactionPolicy' is still a value its caller supplies — and the tag
+--   namespace stays OPEN either way: a syntactically valid tag the
+--   catalogue never declared still evaluates under the precedence
+--   above, because runtime systems mint their own (D-12).
 module Unit.Faction.Profile
     ( -- * Controller identity
       ControllerKind(..)
@@ -152,11 +159,6 @@ module Unit.Faction.Profile
     , canProfileAttack
       -- * Legacy compatibility profiles
     , legacyProfile
-    , legacyPlayerProfile
-    , legacyWildlifeProfile
-    , legacyHostileProfile
-    , legacyNeutralProfile
-    , legacyDebugProfile
     ) where
 
 import UPrelude
@@ -493,33 +495,42 @@ canProfileAttack pol subject target =
 -- * Legacy compatibility profiles
 
 -- | The D-26 profile for each legacy 'Faction' value, given the local
---   controller. See the module header for the matrix these produce.
-legacyProfile ∷ ControllerId → Faction → FactionProfile
-legacyProfile local f = case f of
-    FactionPlayer   → legacyPlayerProfile local
-    FactionWildlife → legacyWildlifeProfile
-    FactionHostile  → legacyHostileProfile
-    FactionNeutral  → legacyNeutralProfile
-    FactionDebug    → legacyDebugProfile
-
--- | Local controller plus 'tagAcolyte'.
-legacyPlayerProfile ∷ ControllerId → FactionProfile
-legacyPlayerProfile local = mkProfile (Just local) [tagAcolyte] []
-
--- | No controller, 'tagWildlife'.
-legacyWildlifeProfile ∷ FactionProfile
-legacyWildlifeProfile = mkProfile Nothing [tagWildlife] []
-
--- | No controller, 'tagLegacyHostile'.
-legacyHostileProfile ∷ FactionProfile
-legacyHostileProfile = mkProfile Nothing [tagLegacyHostile] []
-
--- | The inert profile: 'emptyProfile' exactly.
-legacyNeutralProfile ∷ FactionProfile
-legacyNeutralProfile = emptyProfile
-
--- | No controller and no tags — diplomatically inert (D-27) — carrying
---   both capabilities, which is what preserves every attack direction the
---   debug overlay allows today.
-legacyDebugProfile ∷ FactionProfile
-legacyDebugProfile = mkProfile Nothing [] allFactionCapabilities
+--   controller and the unit DEFINITION's authored default tags
+--   (@faction_tags:@, resolved against the catalogue by
+--   "Unit.Faction.Catalogue"). See the module header for the matrix
+--   these produce.
+--
+--   __A pure function of those two inputs and nothing else__ (D-26): it
+--   never reads a unit name, a live relation, or any registry. Two of
+--   the five rows consult the defaults at all —
+--
+--   * @player@ — the local controller plus the definition's defaults,
+--     whatever they are. An acolyte definition supplies @acolyte@; a
+--     definition that declares none yields a controlled profile with no
+--     affiliation, which is exactly what "the player owns it and it has
+--     no culture" should mean.
+--   * @wildlife@ — no controller plus the definition's defaults,
+--     falling back to 'tagWildlife' only when the definition declares
+--     NONE. This is what keeps a tag-less animal hostile to acolytes
+--     the way it is today without every animal definition having to
+--     repeat the tag.
+--
+--   — and the other three ignore them entirely: @hostile@ is the
+--   migration artifact 'tagLegacyHostile' regardless of what the
+--   definition says, @neutral@ is 'emptyProfile', and @debug@ is
+--   diplomatically inert with both capabilities (D-27).
+--
+--   This replaces FTS-1's five fixed per-value constructors rather than
+--   sitting beside them: each of those hard-coded the tag set that is
+--   now authored data, so keeping them would leave two answers to one
+--   question.
+legacyProfile ∷ ControllerId → [FactionTag] → Faction → FactionProfile
+legacyProfile local defaults f = case f of
+    FactionPlayer   → mkProfile (Just local) defaults []
+    FactionWildlife → mkProfile Nothing orWildlife []
+    FactionHostile  → mkProfile Nothing [tagLegacyHostile] []
+    FactionNeutral  → emptyProfile
+    FactionDebug    → mkProfile Nothing [] allFactionCapabilities
+  where
+    orWildlife | null defaults = [tagWildlife]
+               | otherwise     = defaults

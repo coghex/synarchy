@@ -68,6 +68,7 @@ import Engine.Scripting.Lua.API.Craft (loadRecipeYamlFn)
 import Engine.Scripting.Lua.API.Locations (loadLocationYamlFn, locationListDefsFn)
 import Engine.Scripting.Lua.API.LootTables (loadLootTableYamlFn)
 import Engine.Scripting.Lua.API.LootProfiles (loadLootProfileYamlFn)
+import Engine.Scripting.Lua.API.Factions (loadFactionYamlFn)
 import Engine.Scripting.Lua.API.Tutorial (loadTutorialDirFn, getTutorialTreeFn)
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Core.State (EngineEnv)
@@ -160,6 +161,12 @@ registerEngineAPI callStats env backendState = do
   registerLuaFunction callStats "engine" "loadMaterialYaml" (loadMaterialYamlFn env backendState)
   registerLuaFunction callStats "engine" "loadVegetationYaml" (loadVegetationYamlFn env backendState)
   registerLuaFunction callStats "engine" "loadFloraYaml" (loadFloraYamlFn env backendState)
+  -- The faction-tag catalogue loads BEFORE units (#2506, D-30): a unit
+  -- definition's `faction_tags:` are validated against it, so a unit
+  -- file loaded first would be refused for naming tags nothing had
+  -- declared yet. `scripts/startup_loader.lua` queues them in that
+  -- order; registration order here is alphabetical-ish and immaterial.
+  registerLuaFunction callStats "engine" "loadFactionYaml" (loadFactionYamlFn core regs)
   registerLuaFunction callStats "engine" "loadUnitYaml" (loadUnitYamlFn env backendState)
   registerLuaFunction callStats "engine" "loadBuildingYaml" (loadBuildingYamlFn env backendState)
   registerLuaFunction callStats "engine" "loadItemYaml" (loadItemYamlFn core regs env backendState)

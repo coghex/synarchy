@@ -27,7 +27,7 @@ import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logDebug, logError, logWarn)
 import Engine.Scripting.Lua.API.YamlResult
-    (pushYamlRefusal, pushYamlResult)
+    (YamlRefusal(..), pushYamlRefusal, pushYamlResult)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
@@ -293,7 +293,8 @@ loadFloraYamlFn env backendState = do
                         return (Right (isJust mDefs, total))
 
             case outcome of
-                Left clash          → pushYamlRefusal clash
+                Left clash          → pushYamlRefusal
+                    (YamlRefusal "duplicate definition name" clash)
                 Right (parsed, cnt) → pushYamlResult parsed cnt
 
 -- | The first authored name in @defs@ that cannot be admitted: one

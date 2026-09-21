@@ -407,6 +407,19 @@ data UnitYamlDef = UnitYamlDef
       --   (technomule: carrying_capacity +50% "cybernetic
       --   enhancements"). Visible in the stat tooltip like any
       --   other modifier.
+    , uydFactionTags        ∷ ![Text]
+      -- ^ optional: this unit type's DEFAULT faction tags (#2506), as
+      --   authored. Omitted (or an empty list) means the definition
+      --   declares no defaults at all, which is a real and different
+      --   thing from declaring @wildlife@ — see
+      --   'Unit.Faction.Profile.legacyProfile'.
+      --
+      --   Kept as raw text here because this module has no registry
+      --   access; every id is resolved and validated against the loaded
+      --   catalogue by
+      --   'Engine.Scripting.Lua.API.Units.Yaml.registerUnitDefs', which
+      --   refuses the WHOLE file on a duplicate, a malformed id, or an
+      --   id the catalogue does not declare (D-30).
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -435,6 +448,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "natural_resistance"  .!= defaultUnitYamlNaturalResistance
         ⊛ v .:? "natural_weapon"
         ⊛ v .:? "modifiers"           .!= []
+        ⊛ v .:? "faction_tags"        .!= []
 
 -- | Read a unit def's optional @max_speed@ as a FINITE, STRICTLY
 --   POSITIVE number of tiles per second, diagnosing every rejection by

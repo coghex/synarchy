@@ -59,6 +59,7 @@ local yamlFamilies = {
     ["data/items"]       = "item",
     ["data/equipment"]   = "equipment",
     ["data/buildings"]   = "building",
+    ["data/factions"]    = "faction",
     ["data/units"]       = "unit",
     ["data/loot_tables"] = "loot_table",
     ["data/loot_profiles"] = "loot_profile",
@@ -118,7 +119,7 @@ local function addYamlFamily(dir, label, loaderFn, paths)
             -- well -- so the arity a healthy call answers with is
             -- unchanged at two, and twelve of the thirteen families
             -- never push a third value at all.
-            local n, parsed, refusal = loaderFn(path, true)
+            local n, parsed, refusal, reason = loaderFn(path, true)
             total = total + asCount(n)
             seen  = seen + 1
             -- `~= true`, not `== false`: a queued YAML binding that
@@ -127,8 +128,15 @@ local function addYamlFamily(dir, label, loaderFn, paths)
             if parsed ~= true then
                 failed[#failed + 1] = path
             elseif refusal then
-                refused[#refused + 1] = { path = path,
-                                          name = tostring(refusal) }
+                refused[#refused + 1] = {
+                    path = path,
+                    name = tostring(refusal),
+                    -- #2506: the binding's own fourth value, so a
+                    -- family that refuses for its OWN reason is not
+                    -- reported as a duplicate definition name. A
+                    -- binding that pushes no reason keeps the original
+                    -- wording, which is exactly what flora means.
+                    reason = reason and tostring(reason) or nil }
             end
         end)
     end
@@ -156,6 +164,7 @@ local function addYamlFamily(dir, label, loaderFn, paths)
                                  kind = "duplicate",
                                  path = refused[1].path,
                                  name = refused[1].name,
+                                 reason = refused[1].reason,
                                  paths = refused,
                                  failedCount = #refused,
                                  files = seen })
@@ -412,6 +421,12 @@ local function queueNormalProfile()
     addYamlTree("data/items",     "Loading items...",      engine.loadItemYaml)
     addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
+    -- The faction-tag catalogue MUST come before data/units (#2506,
+    -- D-30): a unit definition's `faction_tags:` are validated against
+    -- the declared tags, and a unit file naming one nothing has
+    -- declared yet is refused entire. Both profiles load it, and both
+    -- load it here, because both load data/units.
+    addYamlDir("data/factions",   "Loading factions...",   engine.loadFactionYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
     -- Loot PROFILES (#2499) after loot tables and before locations. The
@@ -465,6 +480,12 @@ local function queueArenaProfile()
     addYamlTree("data/items",     "Loading items...",      engine.loadItemYaml)
     addYamlDir("data/equipment",  "Loading equipment...",  engine.loadEquipmentYaml)
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
+    -- The faction-tag catalogue MUST come before data/units (#2506,
+    -- D-30): a unit definition's `faction_tags:` are validated against
+    -- the declared tags, and a unit file naming one nothing has
+    -- declared yet is refused entire. Both profiles load it, and both
+    -- load it here, because both load data/units.
+    addYamlDir("data/factions",   "Loading factions...",   engine.loadFactionYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
     addYamlDir("data/loot_profiles", "Loading loot profiles...",
@@ -573,10 +594,15 @@ function startupLoader.failureMessage(info)
             info.family, info.dir)
     end
     if info.kind == "duplicate" then
+        -- #2241 had one refusal vocabulary and named it here. #2506
+        -- made the reason the BINDING's to state, because a unit file
+        -- refused for an undeclared faction tag is not a duplicate
+        -- name. A binding that states none keeps the original wording.
         return string.format(
-            "Startup failed: %s refused %s (duplicate definition name "
-            .. "'%s'; %d of %d file(s) refused)",
-            info.family, info.path, info.name, info.failedCount, info.files)
+            "Startup failed: %s refused %s (%s '%s'; %d of %d file(s) "
+            .. "refused)",
+            info.family, info.path, info.reason or "duplicate definition name",
+            info.name, info.failedCount, info.files)
     end
     return string.format(
         "Startup failed: %s could not parse %s (%d of %d file(s) failed)",
@@ -599,9 +625,12 @@ function startupLoader.isFailed()
 end
 
 -- The retained failure, or nil. Fields: `family`, `dir`, `kind`
--- ("empty" | "parse"), `files` (how many were discovered),
--- `failedCount`, `message`, and for a parse failure `path` (the first
--- failure in the family's own queue order) and `paths` (all of them).
+-- ("empty" | "parse" | "duplicate"), `files` (how many were
+-- discovered), `failedCount`, `message`, and for a parse failure `path`
+-- (the first failure in the family's own queue order) and `paths` (all
+-- of them). A "duplicate" (post-decode semantic refusal) also carries
+-- `name` — the offending identifier — and, when the binding stated one,
+-- `reason`.
 function startupLoader.getFailure()
     return startupLoader.failure
 end

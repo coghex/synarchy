@@ -365,7 +365,7 @@ minimalDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 minimalInst ∷ WorldPageId → Maybe TrailState → UnitInstance
 minimalInst page ts = UnitInstance

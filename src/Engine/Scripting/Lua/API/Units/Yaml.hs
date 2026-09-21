@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.Units.Yaml
   ( loadUnitYamlFn
   , AtlasResolver
   , registerUnitDefs
+  , resolveUnitFactionTags
   , resolveUnitAtlases
   , surfaceZInWorld
   )
@@ -11,6 +12,8 @@ module Engine.Scripting.Lua.API.Units.Yaml
 import UPrelude
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -25,7 +28,8 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
 import Engine.Asset.Types (AssetPool)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
-import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
+import Engine.Scripting.Lua.API.YamlResult
+    (YamlRefusal(..), pushYamlRefusal, pushYamlResult)
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool
                                              , loadAndRegisterAtlasWithPool
                                              , resolveTexturePath)
@@ -40,6 +44,10 @@ import Unit.Direction (Direction(..), parseDirectionName)
 import World.Types (WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Generate (globalToChunk)
 import Engine.Scripting.Lua.API.Units.List (unknownUnitTexture)
+import Unit.Faction.Catalogue
+    ( FactionCatalogue, FactionTagRejection, rejectionDetail
+    , rejectionReason, resolveDeclaredTags )
+import Unit.Faction.Profile (FactionTag)
 
 -- * YAML loading
 
@@ -52,18 +60,23 @@ loadUnitYamlFn env backendState = do
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
                 (lteq, _) = lbsMsgQueues backendState
-            (parsed, count) ← Lua.liftIO $ do
+            outcome ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 mDefs ← loadUnitYamlOutcome logger filePath
                 let defs = fromMaybe [] mDefs
-                total ← registerUnitDefs env (lbsAssetPool backendState) lteq
-                            resolveUnitAtlases filePath defs
-                logDebug logger CatAsset $
-                    "loadUnitYaml: loaded " <> tshow total
-                    <> " unit definitions from " <> T.pack filePath
-                return (isJust mDefs, total)
+                result ← registerUnitDefs env (lbsAssetPool backendState) lteq
+                             resolveUnitAtlases filePath defs
+                case result of
+                    Left refusal → return (Left refusal)
+                    Right total  → do
+                        logDebug logger CatAsset $
+                            "loadUnitYaml: loaded " <> tshow total
+                            <> " unit definitions from " <> T.pack filePath
+                        return (Right (isJust mDefs, total))
 
-            pushYamlResult parsed count
+            case outcome of
+                Left refusal        → pushYamlRefusal refusal
+                Right (parsed, cnt) → pushYamlResult parsed cnt
 
 -- | How a unit's atlas-backed animations are resolved. Production
 --   passes 'resolveUnitAtlases', which reads the compiled index off
@@ -89,10 +102,27 @@ registerUnitDefs
     → AtlasResolver
     → FilePath                    -- ^ the YAML's own path (name pools sit beside it)
     → [UnitYamlDef]
-    → IO Int
+    → IO (Either YamlRefusal Int)
 registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
     logger ← readIORef (loggerRef env)
-    foldM (\acc def → do
+    catalogue ← readIORef (crFactionCatalogueRef (toContentRegistriesCapability env))
+    -- FACTION-TAG PREFLIGHT (#2506, requirement 4). Resolved for the
+    -- WHOLE file before a single definition is registered, because the
+    -- loop below publishes incrementally: a refusal decided partway
+    -- through would already have allocated handles, queued uploads and
+    -- inserted the definitions ahead of the offending one, and the
+    -- "registers nothing" half of whole-file rejection would be a
+    -- claim rather than a fact.
+    case resolveUnitFactionTags catalogue defs of
+      Left (unitName, rejection) → do
+        logError logger CatAsset $
+            "loadUnitYaml: refused " <> T.pack filePath
+            <> " entirely: " <> rejectionReason rejection <> " '"
+            <> rejectionDetail rejection <> "' on unit definition '"
+            <> unitName <> "'"
+        return (Left (YamlRefusal (rejectionReason rejection)
+                                  (rejectionDetail rejection)))
+      Right tagsByDef → Right <$> foldM (\acc (def, factionTags) → do
 
         let name      = uydName def
             spritePath = T.unpack (uydSprite def)
@@ -295,6 +325,7 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                     , udNaturalResistance = natRes
                     , udNaturalWeapon    = natWeapon
                     , udModifiers        = defMods
+                    , udFactionTags      = factionTags
                     }
             atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -308,7 +339,27 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                 <> " animations)"
 
             return (acc + 1)
-        ) (0 ∷ Int) defs
+        ) (0 ∷ Int) (zip defs tagsByDef)
+
+-- | Resolve every definition's authored @faction_tags:@ against the
+--   loaded catalogue, in the file's own order.
+--
+--   'Left' on the FIRST definition that fails, naming that definition
+--   and the offending id, so the diagnostic points at the unit an
+--   author would look for rather than at the file alone. 'Right'
+--   preserves the definition order, so @zip@ against the same list is
+--   the resolved tag set for each.
+--
+--   Split out and exported so the rule is reachable without an engine,
+--   an asset pool or a Lua state — the registration path needs all
+--   three, and this is pure.
+resolveUnitFactionTags ∷ FactionCatalogue → [UnitYamlDef]
+                       → Either (Text, FactionTagRejection) [[FactionTag]]
+resolveUnitFactionTags catalogue = traverse one
+  where
+    one def = case resolveDeclaredTags catalogue (uydFactionTags def) of
+        Left rejection → Left (uydName def, rejection)
+        Right tags     → Right tags
 
 -- | Surface Z at a tile in ONE specific world. The unit's height must
 --   come from the same page the unit is stamped into — walking wmVisible

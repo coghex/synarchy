@@ -72,6 +72,7 @@ import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
 import LootProfile.Types (LootProfileRegistry)
+import Unit.Faction.Catalogue (FactionCatalogue)
 import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible
@@ -698,6 +699,18 @@ data EngineEnv = EngineEnv
     --   `loot.profile` / `loot.listProfiles`. Pure authored data; its
     --   one roller is `LootProfile.Realize` (#2502, PLC-13), reached
     --   from here through `loot.simulate`.
+  , factionCatalogueRef ∷ IORef FactionCatalogue
+    -- ^ The faction-tag catalogue loaded from data/factions/*.yaml at
+    --   boot (#2506, FTS-2 of epic #2496): the declared tag vocabulary
+    --   and the authored base relation table behind
+    --   'Unit.Faction.Profile''s policy. Loaded BEFORE data/units,
+    --   because a unit definition's `faction_tags:` are validated
+    --   against it and a file naming an undeclared tag is refused
+    --   entire (D-30). Populated by `engine.loadFactionYaml`; it has no
+    --   reader verb yet — the live profiles that will consult it are
+    --   FTS-3 and later. Declaring a tag does NOT close the namespace:
+    --   runtime systems still mint valid tags nobody declared, and
+    --   those evaluate under the same precedence (D-12).
   , tutorialRegistryRef ∷ IORef TutorialRegistry
     -- ^ The one active tutorial definition tree, loaded from
     --   data/tutorials/*.yaml at boot (#957). Pure authored data —

@@ -44,6 +44,7 @@ mkUnitDef mods = UnitDef
     , udNaturalResistance  = defaultNaturalResistance
     , udNaturalWeapon      = Nothing
     , udModifiers          = mods
+    , udFactionTags = []
     }
 
 -- | Minimal ItemDef — only idBuffs (and the name key) matter here.

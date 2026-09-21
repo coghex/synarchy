@@ -59,6 +59,7 @@ YAML_LOADERS = [
     ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
     ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
     ("data/flora/*.yaml",      "engine.loadFloraYaml"),
+    ("data/factions/*.yaml", "engine.loadFactionYaml"),
     ("data/units/*.yaml",      "engine.loadUnitYaml"),
 ]
 

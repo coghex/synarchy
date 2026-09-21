@@ -82,6 +82,9 @@ FAMILIES: list[tuple[str, str, str, str]] = [
      r"loadEquipmentYaml: loaded (\d+) equipment classes from (\S+)"),
     ("building", "loadBuildingYaml", "data/buildings",
      r"loadBuildingYaml: loaded (\d+) building definitions from (\S+)"),
+    ("faction", "loadFactionYaml", "data/factions",
+     r"loadFactionYaml: loaded (\d+) faction declarations "
+     r"\[\d+ tags, \d+ relations\] from (\S+)"),
     ("unit", "loadUnitYaml", "data/units",
      r"loadUnitYaml: loaded (\d+) unit definitions from (\S+)"),
     ("loot_table", "loadLootTableYaml", "data/loot_tables",

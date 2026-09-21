@@ -645,7 +645,7 @@ immunityUnitDefs = HM.singleton "test_unit" UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 -- | A wound whose infection type is @iid@ — the reference
 --   'missingInfectionReferences' does inventory.

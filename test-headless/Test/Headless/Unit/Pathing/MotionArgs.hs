@@ -130,7 +130,7 @@ motionDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 -- | An uninjured instance at a FULL blood pool, so 'injurySpeedMult'
 --   is exactly 1.0 and an accepted speed reaches the sim state

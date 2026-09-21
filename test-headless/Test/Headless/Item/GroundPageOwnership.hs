@@ -129,7 +129,7 @@ minimalDef name = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 mkUnit ∷ WorldPageId → (Float, Float) → [ItemInstance]
        → HM.HashMap Text ItemInstance → UnitInstance

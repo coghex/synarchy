@@ -125,6 +125,7 @@ minimalUnitDef = UnitDef
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 -- | Distinctive quality/condition so a survivor can be told apart from

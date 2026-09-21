@@ -72,6 +72,7 @@ def bootstrap(port):
         ("data/items/*.yaml",      "engine.loadItemYaml"),
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
+        ("data/factions/*.yaml", "engine.loadFactionYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
     ]
     for pattern, fn in loaders:

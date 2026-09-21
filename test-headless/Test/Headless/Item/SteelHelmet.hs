@@ -107,6 +107,7 @@ minimalAcolyteDef = UnitDef
     , udStartingAccessories = [], udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 helmetInstance ∷ Float → ItemInstance

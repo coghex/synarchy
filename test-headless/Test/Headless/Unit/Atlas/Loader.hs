@@ -28,11 +28,15 @@ import Control.Exception (finally)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
-import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (nub)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.Types (defaultAssetPool)
+import Engine.Asset.YamlFactions
+    (admitFactionYamlDoc, loadFactionYamlOutcome)
 import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv, loggerRef)
@@ -44,6 +48,8 @@ import System.FilePath ((</>))
 import Unit.Atlas.Index (AtlasLoadError(..))
 import Unit.Atlas.Types
 import Unit.Atlas.Yaml (resolveUnitAtlases)
+import Unit.Faction.Catalogue
+    (catalogueDeclarations, extendFactionCatalogue)
 import Unit.Direction (Direction(..))
 import Unit.Types
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
@@ -122,8 +128,16 @@ runLoader env resolver = withFixtureYaml $ \yamlPath → do
     length defs `seq` pure ()
     poolRef ← newIORef =<< defaultAssetPool
     q ← Q.newQueue
-    n ← registerUnitDefs env poolRef q resolver yamlPath defs
+    result ← registerUnitDefs env poolRef q resolver yamlPath defs
     msgs ← Q.flushQueue q
+    -- The fixture declares no `faction_tags:` (#2506), so the loader's
+    -- faction preflight admits it and the count is what it always was.
+    -- A Left here would mean the preflight refused a file this spec
+    -- never asked it to judge.
+    n ← either (\_ → expectationFailure
+                    "the loader refused the fixture's faction tags"
+                  ≫ pure 0)
+               pure result
     pure (n, msgs)
 
 atlasRequests ∷ [LuaToEngineMsg] → [(TextureHandle, FilePath)]
@@ -136,6 +150,33 @@ plainRequests msgs = [ (h, p) | LuaLoadTextureRequest h p _ ← msgs ]
 --   declared (#2075).
 plainPolicies ∷ [LuaToEngineMsg] → [(FilePath, UploadSampler)]
 plainPolicies msgs = [ (p, pol) | LuaLoadTextureRequest _ p pol ← msgs ]
+
+-- | Register the shipped faction catalogue into this engine, once.
+--
+--   Every shipped unit declares `faction_tags:` since #2506, and the
+--   loader refuses a whole file that names a tag no catalogue declares
+--   (D-30) — so without this the shipped examples below would register
+--   nothing at all. Guarded on the registry being EMPTY rather than run
+--   unconditionally, because re-registering the same file is itself a
+--   duplicate-declaration refusal; the engine is shared across every
+--   example here by `aroundAll`.
+ensureFactionCatalogue ∷ EngineEnv → IO ()
+ensureFactionCatalogue env = do
+    let catRef = crFactionCatalogueRef (toContentRegistriesCapability env)
+    cat ← readIORef catRef
+    when (null (catalogueDeclarations cat)) $ do
+        logger ← readIORef (loggerRef env)
+        mDoc ← loadFactionYamlOutcome logger shippedCataloguePath
+        case mDoc ⌦ \doc → either (const Nothing) Just
+                                 (admitFactionYamlDoc cat doc) of
+            Nothing → error (shippedCataloguePath
+                             ⧺ " could not be loaded for this spec")
+            Just (decls, entries) →
+                writeIORef catRef (extendFactionCatalogue
+                                       shippedCataloguePath decls entries cat)
+
+shippedCataloguePath ∷ FilePath
+shippedCataloguePath = "data" </> "factions" </> "base.yaml"
 
 publishedDef ∷ EngineEnv → IO (Maybe UnitDef)
 publishedDef env = do
@@ -160,6 +201,7 @@ runShipped
     ∷ EngineEnv → Text
     → IO ([UnitYamlDef], [LuaToEngineMsg], Maybe UnitDef)
 runShipped env unitName = do
+    ensureFactionCatalogue env
     let defsRef = ucUnitManagerRef (toUnitCombatCapability env)
     um0 ← readIORef defsRef
     let restore = atomicModifyIORef' defsRef $ \um →
@@ -169,6 +211,9 @@ runShipped env unitName = do
         defs ← loadUnitYaml logger (unitYamlPath unitName)
         poolRef ← newIORef =≪ defaultAssetPool
         q ← Q.newQueue
+        -- Every shipped unit declares `faction_tags:` (#2506), so the
+        -- shipped catalogue has to be registered before this runs; the
+        -- spec's own `aroundAll` engine gets it once, below.
         _ ← registerUnitDefs env poolRef q resolveUnitAtlases
                 (unitYamlPath unitName) defs
         msgs ← Q.flushQueue q
