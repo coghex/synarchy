@@ -2703,6 +2703,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z3-exact-fluid-units.expected.json"
         }
       ]
+    },
+    {
+      "id": "z4-medic-claim-order",
+      "description": "The #2642 shape (lua.unit_ai v10): a treatClaim carries the ORDER it was taken in (treatClaim.serial), which is the only thing that later tells a revived medic's stale claim from the replacement claim taken while it was down. The claim here is a REAL one the shipped executor wrote: a capable medic (bleed_control 90) at the origin and a three-times-stabbed player-faction ally six tiles out, left to tick until treat_ally locked the patient in and stamped the serial -- so the field rides through unit_ai_save.lua's ordinary snapshot and the production codec rather than being hand-built, and the claim's patient edge is a real resolvable unit reference beside it. A v1-v9 payload has the field ABSENT, which is the correct v10 value rather than a default: unit_ai_medic.lua reads an absent serial as 0, so two such claims tie and neither supersedes the other -- exactly the arbitration those sessions already had.",
+      "declaredAt": "2026-09-21",
+      "declaredByIssue": 2642,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 12,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z4-medic-claim-order",
+          "path": "test-headless/data/save-compat/z4-medic-claim-order.bin",
+          "kind": "complete-session",
+          "sha256": "9ffe55566d08b6251f2a076d079193a8b77557ebf018f5998273450dfe757160",
+          "sizeBytes": 912055,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 6, 0, 0, 'player') >= 0, settled 3.0s and held until `(function() local ws = unit.getWounds(2); if not ws or #ws == 0 then unit.setKnowledge(1,'bleed_control',90); unit.setKnowledge(2,'bleed_control',0); unit.injure(2,'l_thigh','stab',0.25,1.0); unit.injure(2,'r_thigh','stab',0.25,1.0); unit.injure(2,'l_shin','stab',0.25,1.0); return false end; local c=require('scripts.unit_ai_core'); for _,s in pairs(c.aiState) do if s.treatClaim and (tonumber(s.treatClaim.serial) or 0) >= 1 then return true end end; return false end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z4-medic-claim-order.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -35,6 +35,14 @@
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "AI page pairing"'@.
+--
+--   'claimPoseSpec' rides the same harness for a sibling question
+--   (#2642): which treatment claims HOLD a patient against another
+--   medic. It belongs here because the two share one rule and one
+--   predicate — a claim whose owner is off-page, fighting, dead or
+--   collapsed does not reserve anybody — and rebuilding this prelude
+--   elsewhere would let the page half and the pose half drift. Run it
+--   with @--match "AI medic claim arbitration"@.
 module Test.Headless.Lua.UnitAiPageTargets (spec) where
 
 import UPrelude
@@ -294,7 +302,7 @@ prelude = lns
     ]
 
 spec ∷ Spec
-spec = pageSpec >> reachSpec >> rankReachSpec
+spec = pageSpec >> reachSpec >> rankReachSpec >> claimPoseSpec
 
 pageSpec ∷ Spec
 pageSpec = describe "AI page pairing" $ do
@@ -1241,3 +1249,188 @@ boundaryCase gap winner = lns
     , "assert(sl.treatPending == nil,"
     , "  'the medic standing down must leave no pending target')"
     ]
+
+-- | #2642: a medic killed or knocked unconscious mid-treatment keeps
+--   its @treatClaim@ — @unit_ai@ suspends it before @treat_ally@ runs,
+--   so it never reaches the executor that would release it, and death
+--   retains the unit instance, so it keeps resolving forever. Until the
+--   claim filter learned the pose, every other medic scored that
+--   patient at @-inf@ for as long as the corpse existed.
+--
+--   The living control is deliberately a WEAKER medic than the one
+--   under test: the filter runs before the ranking, so a control that
+--   could out-rank the replacement would pass on capability alone and
+--   prove nothing about the claim.
+claimPoseSpec ∷ Spec
+claimPoseSpec = describe "AI medic claim arbitration (#2642)" $ do
+
+    -- Per-uid poses; the shared prelude answers one pose for everybody,
+    -- which is the whole variable here.
+    let poses = lns
+            [ "POSES = {}"
+            , "unit.getPose = function(uid) return POSES[uid] or 'standing' end" ]
+        -- Patient 2 three tiles out, and a claimant that would LOSE the
+        -- ranking to the acting medic if it were ranked at all.
+        rival = lns
+            [ "local core = require('scripts.unit_ai_core')"
+            , "woundedAlly(2, HOME)"
+            , "unitRow(3, 'acolyte', 5, 0, HOME)"
+            , "KNOW[3] = 1.0"
+            , "core.aiState[3] = { treatClaim = { patient = 2, serial = 1 } }" ]
+
+    it "never lets a claim held by a DEAD medic suppress a living one" $
+        runsOk $ lns
+            [ prelude, poses, rival
+            , "POSES[3] = 'dead'"
+            , "local s = newState()"
+            , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+            , "assert(u > 0,"
+            , "  'a dead claimer must not hold the patient, got ' .. tostring(u))"
+            , "assert(s.treatPending and s.treatPending.uid == 2,"
+            , "  'the living medic must be nominated for the patient, got '"
+            , "  .. tostring(s.treatPending and s.treatPending.uid))"
+            ]
+
+    it "never lets a claim held by a COLLAPSED medic suppress a conscious one" $
+        runsOk $ lns
+            [ prelude, poses, rival
+            , "POSES[3] = 'collapsed'"
+            , "local s = newState()"
+            , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+            , "assert(u > 0,"
+            , "  'a collapsed claimer must not hold the patient, got ' .. tostring(u))"
+            , "assert(s.treatPending and s.treatPending.uid == 2,"
+            , "  'the conscious medic must be nominated for the patient, got '"
+            , "  .. tostring(s.treatPending and s.treatPending.uid))"
+            ]
+
+    -- The control both cases above are measured against, and the one
+    -- that proves the exclusion is the CLAIM: the same claimant, same
+    -- place, same (weaker) capability, still reserves the patient while
+    -- it can act — and deleting only its claim frees the patient at
+    -- once, so the two halves differ in nothing else.
+    it "still lets a living claimant reserve the patient, on the claim alone" $
+        runsOk $ lns
+            [ prelude, poses, rival
+            , "local s = newState()"
+            , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+            , "assert(u == -math.huge,"
+            , "  'a living claimer must still hold the patient, got ' .. tostring(u))"
+            , "core.aiState[3].treatClaim = nil"
+            , "local t = newState()"
+            , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+            , "assert(v > 0,"
+            , "  'removing only the claim must free the patient, got ' .. tostring(v))"
+            , "assert(t.treatPending and t.treatPending.uid == 2,"
+            , "  'the patient must be nominated once unclaimed, got '"
+            , "  .. tostring(t.treatPending and t.treatPending.uid))"
+            ]
+
+    -- #306's exception, unchanged: a claimer that has been pulled into
+    -- a fight cannot honour its claim, so it does not hold the slot.
+    it "never lets a claim held by a medic in combat suppress a free one" $
+        runsOk $ lns
+            [ prelude, poses, rival
+            , "core.aiState[3].currentAction = 'attack_target'"
+            , "local s = newState()"
+            , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+            , "assert(u > 0,"
+            , "  'a fighting claimer must not hold the patient, got ' .. tostring(u))"
+            , "assert(s.treatPending and s.treatPending.uid == 2,"
+            , "  'the free medic must be nominated for the patient')"
+            ]
+
+    -- A claim is stamped with its place in the order claims were taken,
+    -- which is the only thing that later tells a revived medic's stale
+    -- claim from the replacement's live one.
+    it "stamps a new claim after every claim already held" $
+        runsOk $ lns
+            [ prelude, poses
+            , "local core = require('scripts.unit_ai_core')"
+            , "woundedAlly(2, HOME)"
+            , "woundedAlly(4, HOME, 6)"
+            , "unitRow(3, 'acolyte', 6, 0, HOME)"
+            , "core.aiState[3] = { treatClaim = { patient = 4, serial = 7 } }"
+            , "local s = newState()"
+            , "s.treatPending = { uid = 2, distance = 3 }"
+            , "core.aiState[1] = s"
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(s.treatClaim and s.treatClaim.serial == 8,"
+            , "  'a new claim must follow the highest serial held, got '"
+            , "  .. tostring(s.treatClaim and s.treatClaim.serial))"
+            ]
+
+    -- Requirement 3. Both medics resolve, both stand on the patient's
+    -- page and both claim it, so the release has to be decided by the
+    -- recorded order and not by whoever runs first -- which is why the
+    -- two orders are two separate cases over identical state.
+    let revived = lns
+            [ "local core = require('scripts.unit_ai_core')"
+            , "woundedAlly(2, HOME)"
+            , "unitRow(3, 'acolyte', 4, 0, HOME)"
+            , "local s = newState()"
+            , "-- Claimed before I was knocked out; the replacement's"
+            , "-- claim was taken while I was down, so it is the later one."
+            , "s.treatClaim = { patient = 2, serial = 1 }"
+            , "core.aiState[1] = s"
+            , "core.aiState[3] = { treatClaim = { patient = 2, serial = 2 } }" ]
+
+    it "releases a recovered medic's superseded claim before any walk, fetch or treat" $
+        runsOk $ lns
+            [ prelude, poses, revived
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(s.treatClaim == nil,"
+            , "  'the recovered medic must release its superseded claim')"
+            , "assert(MOVES == 0 and STOPS == 0,"
+            , "  'it must steer neither a walk nor a stop')"
+            , "assert(TO_UNIT == 0, 'it must not fetch a kit')"
+            , "assert(TREATS == 0 and INFECT_TREATS == 0, 'it must not treat')"
+            , "medic.treatExecute(3, core.aiState[3], PARAMS)"
+            , "assert(core.aiState[3].treatClaim ~= nil,"
+            , "  'the replacement must keep the claim it took')"
+            ]
+
+    it "keeps the replacement's claim when the replacement executes first" $
+        runsOk $ lns
+            [ prelude, poses, revived
+            , "medic.treatExecute(3, core.aiState[3], PARAMS)"
+            , "assert(core.aiState[3].treatClaim ~= nil,"
+            , "  'the replacement must keep its own claim')"
+            , "local m, st = MOVES, STOPS"
+            , "local tr, inf, tu = TREATS, INFECT_TREATS, TO_UNIT"
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(s.treatClaim == nil,"
+            , "  'the recovered medic must still release its superseded claim')"
+            , "assert(MOVES == m and STOPS == st and TO_UNIT == tu,"
+            , "  'it must add no walk, stop or fetch of its own')"
+            , "assert(TREATS == tr and INFECT_TREATS == inf,"
+            , "  'it must add no treatment of its own')"
+            , "assert(core.aiState[3].treatClaim ~= nil,"
+            , "  'the replacement must still hold its claim afterwards')"
+            ]
+
+    -- The other half of requirement 3: nothing to yield to, nothing
+    -- released. A rival that has ITSELF gone down does not evict the
+    -- recovered medic either -- superseding is decided by the same
+    -- does-this-claim-hold rule as the exclusion above.
+    it "keeps a recovered medic's claim when no live replacement took it over" $
+        runsOk $ lns
+            [ prelude, poses
+            , "local core = require('scripts.unit_ai_core')"
+            , "woundedAlly(2, HOME)"
+            , "local s = newState()"
+            , "s.treatClaim = { patient = 2, serial = 1 }"
+            , "core.aiState[1] = s"
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(s.treatClaim ~= nil,"
+            , "  'an unchallenged claim must survive the tick')"
+            , "assert(MOVES == 1,"
+            , "  'the unchallenged claim must still draw the walk, got '"
+            , "  .. tostring(MOVES))"
+            , "unitRow(3, 'acolyte', 4, 0, HOME)"
+            , "core.aiState[3] = { treatClaim = { patient = 2, serial = 2 } }"
+            , "POSES[3] = 'dead'"
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(s.treatClaim ~= nil,"
+            , "  'a later claim held by a dead medic must not evict mine')"
+            ]
