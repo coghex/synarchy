@@ -49,8 +49,10 @@ import Structure.Palette (TexPalette, emptyTexPalette, internPath, lookupPath)
 import Structure.Render (structurePieceQuads)
 import Structure.Types (StructurePieceData(..), StructureSlot(..))
 import Structure.Wire (WireShape(..), allWireShapes)
-import World.Chunk.Types (chunkSize)
+import World.Chunk.Types (ChunkCoord, chunkSize)
 import World.Generate (viewDepth)
+import World.Generate.Coordinates (globalToChunk, tileAliasStep)
+import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Grid (gridToWorld)
 import World.Page.Types (WorldPageId(..))
 import World.Render.StructureDestruction (structureDestructionQuads)
@@ -97,10 +99,24 @@ fixturePage = WorldPageId "destruction_frames_page"
 --   home chunk off screen at three of the four facings and the rotation
 --   examples would pass by drawing nothing.
 camera ∷ CameraFacing → Camera2D
-camera facing =
-    let (wx, wy) = gridToWorld facing (fst homeTile) (snd homeTile)
+camera = cameraAtTile homeTile
+
+cameraAtTile ∷ (Int, Int) → CameraFacing → Camera2D
+cameraAtTile (gx, gy) facing =
+    let (wx, wy) = gridToWorld facing gx gy
     in defaultCamera { camPosition = (wx, wy), camZoom = zoom
                      , camFacing = facing, camZSlice = zSlice }
+
+-- | The chunk 'homeTile' lives in.
+homeChunk ∷ ChunkCoord
+homeChunk = fst (globalToChunk (fst homeTile) (snd homeTile))
+
+-- | The same physical tile named one wrap away: shifting u by the
+--   world's half-width moves (gx, gy) by (+step, -step), preserving
+--   @v = gx + gy@.
+aliasOfHome ∷ (Int, Int)
+aliasOfHome = ( fst homeTile + tileAliasStep worldSize
+              , snd homeTile - tileAliasStep worldSize )
 
 viewBounds ∷ CameraFacing → ViewBounds
 viewBounds facing = computeViewBounds (camera facing) fbW fbH effDepth
@@ -245,6 +261,7 @@ spec = describe "structure destruction presentation lifecycle" $ do
     timingSpec
     renderSpec
     rotationSpec
+    seamSpec
     refusalSpec
 
 -- * What a pack declares, and what resolves it
@@ -581,6 +598,71 @@ renderSpec = describe "an effect's quads" $ do
         let base = effectFor (AppearanceKey Nothing ApFloor)
             orphan = base { sdeAppearance = AppearanceKey Nothing ApCeiling }
         effectQuadsAt FaceSouth 0 orphan `shouldSatisfy` null
+
+-- * The cylindrical seam
+
+seamSpec ∷ Spec
+seamSpec = describe "an effect across the cylindrical seam" $ do
+
+    it "is drawn through the WRAPPED alias the culler chose, at every \
+       \facing" $
+        forM_ allFacings $ \facing → do
+            -- The camera sits a whole world-wrap away from the tile, so
+            -- the chunk's nearest image is the one across the seam and
+            -- the pass must emit its quads THERE. Chunks are stored
+            -- u-wrapped, and this is the case #1706 exists for: without
+            -- it an effect would be drawn a whole world away from the
+            -- terrain it belongs to.
+            let ak   = AppearanceKey Nothing ApFloor
+                eff  = effectFor ak
+                cam  = cameraAtTile aliasOfHome facing
+                vb   = computeViewBounds cam fbW fbH effDepth
+                (cx, cy) = camPosition cam
+                off  = fromJust' (isChunkVisibleWrapped facing worldSize vb
+                                      cx cy homeChunk)
+                drawn = structureDestructionQuads wreckCatalog
+                            fixtureWallCatalog fixtureHandles lookupSlotId
+                            wreckTexSizes facing zSlice effDepth tileAlpha
+                            worldSize vb cx cy 0 [eff]
+                plain = placedQuadsAt facing ak
+            -- The alias really is a different image of the same chunk…
+            aliasOfHome `shouldNotBe` homeTile
+            off `shouldNotBe` (0, 0)
+            drawn `shouldNotSatisfy` null
+            -- …the quads are the untranslated producer's, moved by
+            -- exactly that offset…
+            positionsOf drawn
+                `shouldBe` map (shiftBy off) (positionsOf plain)
+            -- …and NOTHING else moved. Painter depth stays
+            -- grid-derived, which is what keeps the front-wall clearance
+            -- reproducible across the seam.
+            map sqSortKey drawn `shouldBe` map sqSortKey plain
+
+    it "is not drawn at all when no alias of its chunk is on screen" $ do
+        -- The same producer, with the camera parked a quarter-world away
+        -- from every image of the tile: the culler resolves no alias, so
+        -- the effect emits nothing rather than being drawn at its raw
+        -- canonical position.
+        let ak  = AppearanceKey Nothing ApFloor
+            eff = effectFor ak
+            far = ( fst homeTile + tileAliasStep worldSize `div` 2
+                  , snd homeTile + tileAliasStep worldSize `div` 2 )
+            cam = cameraAtTile far FaceSouth
+            vb  = computeViewBounds cam fbW fbH effDepth
+            (cx, cy) = camPosition cam
+        isChunkVisibleWrapped FaceSouth worldSize vb cx cy homeChunk
+            `shouldBe` Nothing
+        structureDestructionQuads wreckCatalog fixtureWallCatalog
+            fixtureHandles lookupSlotId wreckTexSizes FaceSouth zSlice
+            effDepth tileAlpha worldSize vb cx cy 0 [eff]
+            `shouldSatisfy` null
+
+positionsOf ∷ [SortableQuad] → [(Float, Float)]
+positionsOf = concatMap (map posOf ∘ quadVerts)
+  where posOf v = let Vec2 x y = pos v in (x, y)
+
+shiftBy ∷ (Float, Float) → (Float, Float) → (Float, Float)
+shiftBy (ox, oy) (x, y) = (x + ox, y + oy)
 
 -- * Rotation
 

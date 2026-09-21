@@ -235,6 +235,19 @@ refusalSpec = describe "a malformed destruction block" $ do
         _ ← loadPiecePack env "df_scalar" scalarPack
         registered env "df_scalar" `shouldReturn` False
 
+    it "refuses a `frames:` that is not an array, with a VALID fps beside \
+       \it" $ \env → do
+        -- Isolated deliberately. A block malformed in BOTH halves is
+        -- rejected on the fps, which runs first, so it proves nothing
+        -- about the frame-array check — which could then regress to
+        -- accepting a non-array unnoticed.
+        _ ← loadPiecePack env "df_notarray" notAnArrayPack
+        registered env "df_notarray" `shouldReturn` False
+
+    it "refuses a clip that states an fps and NO frames at all" $ \env → do
+        _ ← loadPiecePack env "df_noframes" noFramesPack
+        registered env "df_noframes" `shouldReturn` False
+
     it "refuses a wall family that declares SOME directions but not all \
        \four" $ \env → do
         _ ← loadPiecePack env "df_partial" partialWallPack
@@ -256,12 +269,19 @@ refusalSpec = describe "a malformed destruction block" $ do
 --   OMITTED key, which is a different state from a present-but-wrong
 --   one — the distinction every refusal example turns on.
 data Clip = Clip
-    { clFps    ∷ Maybe Text
-    , clFrames ∷ Maybe [Text]
+    { clFps       ∷ Maybe Text
+    , clFrames    ∷ Maybe [Text]
+    , clRawFrames ∷ Maybe Text
+      -- ^ Emit @frames:@ as this raw SCALAR instead of a list — not an
+      --   array at all. Separate from 'clFrames' because the frame-array
+      --   rule has to be reachable with a VALID fps beside it: a block
+      --   that is malformed in both halves is rejected on the fps and
+      --   proves nothing about the array check.
     }
 
 clip ∷ Text → Text → Int → Text → Clip
-clip pack stem n fps = Clip (Just fps) (Just (framesFor pack stem n))
+clip pack stem n fps =
+    Clip (Just fps) (Just (framesFor pack stem n)) Nothing
 
 data PackSpec = PackSpec
     { psPieces  ∷ [(Text, Maybe Clip)]
@@ -319,14 +339,25 @@ withFloorClip pack c = (defaultPack pack)
     { psPieces = [ ("floor", Just c), ("ceiling", Nothing), ("post", Nothing) ] }
 
 noFpsPack, textFpsPack, zeroFpsPack, gappedPack, emptyListPack ∷ Text → PackSpec
-noFpsPack p   = withFloorClip p (Clip Nothing (Just (framesFor p "floor" 3)))
-textFpsPack p = withFloorClip p (Clip (Just "\"fast\"")
-                                     (Just (framesFor p "floor" 3)))
-zeroFpsPack p = withFloorClip p (Clip (Just "0") (Just (framesFor p "floor" 3)))
+noFpsPack p   = withFloorClip p
+                    (Clip Nothing (Just (framesFor p "floor" 3)) Nothing)
+textFpsPack p = withFloorClip p
+                    (Clip (Just "\"fast\"") (Just (framesFor p "floor" 3))
+                          Nothing)
+zeroFpsPack p = withFloorClip p
+                    (Clip (Just "0") (Just (framesFor p "floor" 3)) Nothing)
 gappedPack p  = withFloorClip p (Clip (Just "12")
                   (Just [ artDirFor p <> "floor_break_0.png", yamlNull
-                        , artDirFor p <> "floor_break_2.png" ]))
-emptyListPack p = withFloorClip p (Clip (Just "12") (Just []))
+                        , artDirFor p <> "floor_break_2.png" ])
+                  Nothing)
+emptyListPack p = withFloorClip p (Clip (Just "12") (Just []) Nothing)
+
+-- | A VALID fps beside a `frames:` that is not an array at all, and one
+--   with no `frames:` key at all. Both isolate the frame-array rule from
+--   the fps rule, which is checked first.
+notAnArrayPack, noFramesPack ∷ Text → PackSpec
+notAnArrayPack p = withFloorClip p (Clip (Just "12") Nothing (Just "false"))
+noFramesPack   p = withFloorClip p (Clip (Just "12") Nothing Nothing)
 
 scalarPack ∷ Text → PackSpec
 scalarPack p = (defaultPack p) { psRawFloorDestruction = Just "false" }
@@ -406,7 +437,9 @@ destructionLines indent mc = case mc of
     Nothing → []
     Just c  → (pad <> "destruction:")
                 : maybe [] (\f → [pad <> "  fps: " <> f]) (clFps c)
-                ⧺ framesLines (clFrames c)
+                ⧺ maybe (framesLines (clFrames c))
+                        (\raw → [pad <> "  frames: " <> raw])
+                        (clRawFrames c)
   where
     pad = T.replicate indent " "
     framesLines Nothing   = []

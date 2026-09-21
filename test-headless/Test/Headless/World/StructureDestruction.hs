@@ -60,8 +60,7 @@ import Structure.Types
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Command.Types (WorldCommand(..))
-import World.Edit.Types (WorldEdit(..), emptyWorldEdits)
-import World.Edit.Apply (applyEdit)
+import World.Edit.Types (WorldEdit(..), WorldEdits, emptyWorldEdits)
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Coordinates (globalToChunk, tileAliasStep)
@@ -69,6 +68,7 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Grid (gridToWorld)
 import World.Plate.Generation (generatePlates)
 import World.Page.Types (WorldPageId(..))
+import World.Page.GeneratedId (GeneratedWorldId)
 import World.Render (updateWorldTiles)
 import World.Save.Component.Page (blankPageSnapshot)
 import World.Save.Envelope
@@ -757,8 +757,91 @@ telemetrySpec = describe "ScStructures telemetry" $ do
 
 -- * Persistence
 
+-- | A page snapshot of @edits@, framed so the REAL staging path makes
+--   'targetChunk' the restored session's resident centre.
+--
+--   Staging builds exactly one live chunk — the one the SAVED camera
+--   sits over ('World.Load.Stage' derives it from @wpsCameraX/Y@) — and
+--   replays the edit log into it. Framing the camera on the target tile
+--   is therefore what makes the published page's own @wsTilesRef@ an
+--   answer about this piece rather than an empty map that would agree
+--   with anything.
+snapshotPageFrom ∷ WorldEdits → GeneratedWorldId → PageSnapshot
+snapshotPageFrom edits generated =
+    let (wx, wy) = gridToWorld FaceSouth (fst targetTile) (snd targetTile)
+    in (blankPageSnapshot mainPage genParams)
+           { pgsEdits       = edits
+           -- #2021: every persistable page carries one, minted by
+           -- 'emptyWorldState'. Taken from the LIVE page rather than
+           -- invented, so the snapshot is this page's.
+           , pgsGeneratedId = Just generated
+           , pgsCameraX     = wx
+           , pgsCameraY     = wy }
+
+-- | Put one page snapshot through the REAL codec, staging and
+--   publication, and answer the published 'WorldState'.
+restoreThroughProduction ∷ EngineEnv → PageSnapshot → IO WorldState
+restoreThroughProduction env page = do
+    palette ← readIORef (texPaletteRef env)
+    let globals = SessionGlobals
+            { sgGameTime          = 1
+            , sgTexPalette        = palette
+            , sgNextItemId        = 1
+            , sgNextBuildingId    = 1
+            , sgNextUnitId        = 1
+            , sgActivePage        = mainPage
+            , sgVisiblePages      = [mainPage]
+            , sgLiveCamera        = LiveCameraSnapshot
+                { lcsOwnerPage = Just mainPage, lcsX = 0, lcsY = 0
+                , lcsZoom = 1, lcsFacing = FaceSouth }
+            , sgPortableKnowledge = emptyPortableKnowledge
+            }
+        req = SaveRequestMeta { srmSlotName = "teardown_test"
+                              , srmTimestamp = "ts", srmAutosave = False }
+    snap ← case captureSessionSnapshot globals [page] of
+        Right s   → pure s
+        Left errs → fail ("snapshot invalid: " <> show errs)
+    let meta = snapshotSaveMetadata req snap
+        encoded = encodeSessionSnapshot meta snap ([] ∷ [LuaComponentSpec])
+    restored ← case decodeSessionEnvelope HS.empty HS.empty encoded of
+        Left err → fail (show err)
+        Right (_meta, decoded, _lua, _migrated) → pure decoded
+    logger ← readIORef (loggerRef env)
+    matReg ← readIORef (materialRegistryRef env)
+    staged ← stageSession env logger (snapshotToSaveData req restored)
+                          matReg ⌦ either
+        (\e → fail ("staging failed: " <> T.unpack (renderStageError e)))
+        pure
+    stagedPage ← case [ sp | sp ← ssPages staged, spPageId sp ≡ mainPage ] of
+        (sp : _) → pure sp
+        []       → fail "the staged session has no page for the save"
+    -- A staged page carries no effect, because no save field could have
+    -- carried one (requirement 9).
+    effectKeys (spWorldState stagedPage) `shouldReturn` []
+    publishStagedSession env logger 1 staged
+    mgr ← readIORef (worldManagerRef env)
+    case lookup mainPage (wmWorlds mgr) of
+        Just ws → pure ws
+        Nothing → fail "the published session has no page for the save"
+
 persistenceSpec ∷ SpecWith (EngineEnv, LuaBackendState)
 persistenceSpec = describe "a save taken mid-playback" $ do
+
+    it "restores the piece when it was NEVER cleared — the control that \
+       \makes the next example an answer" $ \(env, ls) → do
+        -- Without this, "no piece after a clear" would also pass if
+        -- staging simply never restored a structure piece at all.
+        (wsMain, _) ← resetScene env
+        _ ← placeAndCommit env ls floorAppearance targetTile
+        overlayAt wsMain floorAppearance `shouldNotReturn'` Nothing
+        edits     ← readIORef (wsEditsRef wsMain)
+        generated ← readIORef (wsGeneratedIdRef wsMain)
+        published ← restoreThroughProduction env
+                        (snapshotPageFrom edits generated)
+        -- The restored centre really is the target's chunk, so the
+        -- overlay read below is about this piece.
+        residentChunks published `shouldSatisfy'` elem targetChunk
+        overlayAt published floorAppearance `shouldNotReturn'` Nothing
 
     it "restores neither the piece nor its effect, through the real codec \
        \AND the real staging and publication path" $ \(env, ls) → do
@@ -770,77 +853,32 @@ persistenceSpec = describe "a save taken mid-playback" $ do
         effectKeys wsMain `shouldReturn` [keyOf floorAppearance]
         overlayAt wsMain floorAppearance `shouldReturn` Nothing
 
-        edits   ← readIORef (wsEditsRef wsMain)
-        palette ← readIORef (texPaletteRef env)
-        -- #2021: every persistable page carries one, minted by
-        -- 'emptyWorldState'. Taken from the LIVE page rather than
-        -- invented, so the snapshot is this page's.
+        edits     ← readIORef (wsEditsRef wsMain)
         generated ← readIORef (wsGeneratedIdRef wsMain)
-        let page = (blankPageSnapshot mainPage genParams)
-                       { pgsEdits = edits
-                       , pgsGeneratedId = Just generated }
-            globals = SessionGlobals
-                { sgGameTime          = 1
-                , sgTexPalette        = palette
-                , sgNextItemId        = 1
-                , sgNextBuildingId    = 1
-                , sgNextUnitId        = 1
-                , sgActivePage        = mainPage
-                , sgVisiblePages      = [mainPage]
-                , sgLiveCamera        = LiveCameraSnapshot
-                    { lcsOwnerPage = Just mainPage, lcsX = 0, lcsY = 0
-                    , lcsZoom = 1, lcsFacing = FaceSouth }
-                , sgPortableKnowledge = emptyPortableKnowledge
-                }
-        snap ← case captureSessionSnapshot globals [page] of
-            Right s   → pure s
-            Left errs → fail ("mid-playback snapshot invalid: " <> show errs)
-        let req = SaveRequestMeta { srmSlotName = "teardown_test"
-                                  , srmTimestamp = "ts", srmAutosave = False }
-            meta = snapshotSaveMetadata req snap
-            encoded = encodeSessionSnapshot meta snap ([] ∷ [LuaComponentSpec])
-        restored ← case decodeSessionEnvelope HS.empty HS.empty encoded of
-            Left err → fail (show err)
-            Right (_meta, decoded, _lua, _migrated) → pure decoded
+        published ← restoreThroughProduction env
+                        (snapshotPageFrom edits generated)
 
-        -- …and on through the REAL restoration path, not a hand-rolled
-        -- stand-in: the decoded snapshot becomes SaveData, staging
-        -- rebuilds a WorldState from it, and publication installs it as
-        -- the session. This module owns its own engine, so a publish
-        -- replaces only its own pages.
-        logger ← readIORef (loggerRef env)
-        matReg ← readIORef (materialRegistryRef env)
-        staged ← stageSession env logger (snapshotToSaveData req restored)
-                              matReg ⌦ either
-            (\e → fail ("staging failed: " <> T.unpack (renderStageError e)))
-            pure
-        stagedPage ← case [ sp | sp ← ssPages staged
-                              , spPageId sp ≡ mainPage ] of
-            (sp : _) → pure sp
-            []       → fail "the staged session has no page for the save"
-        -- A staged page carries no effect, because no save field could
-        -- have carried one (requirement 9).
-        effectKeys (spWorldState stagedPage) `shouldReturn` []
-
-        publishStagedSession env logger 1 staged
-        mgr ← readIORef (worldManagerRef env)
-        publishedPage ← case lookup mainPage (wmWorlds mgr) of
-            Just ws → pure ws
-            Nothing → fail "the published session has no page for the save"
         -- The published page holds no effect…
-        effectKeys publishedPage `shouldReturn` []
-        -- …and no piece: its restored edit log still ends in the clear,
-        -- so replaying it rebuilds nothing at the cleared slot.
-        restoredEdits ← readIORef (wsEditsRef publishedPage)
+        effectKeys published `shouldReturn` []
+        -- …and no piece in its LIVE overlay. Staging replayed the whole
+        -- edit log — the clear included — into the chunk it made
+        -- resident, so this is the restored session's own answer rather
+        -- than a replay this test performed.
+        residentChunks published `shouldSatisfy'` elem targetChunk
+        overlayAt published floorAppearance `shouldReturn` Nothing
+        -- …and the durable record still ends in the clear.
+        restoredEdits ← readIORef (wsEditsRef published)
         restoredEdits `shouldNotBe` emptyWorldEdits
-        let replayed = foldl (flip applyEdit) (flatChunkAt targetChunk)
-                             [ e | (_, es) ← sortOn fst (HM.toList restoredEdits)
-                                 , e ← es ]
-        HM.lookup (keyOf floorAppearance) (lcStructures replayed)
-            `shouldBe` Nothing
-        lcStructures replayed `shouldBe` emptyChunkStructures
+        [ e | (_, es) ← sortOn fst (HM.toList restoredEdits), e ← es ]
+            `shouldSatisfy` any isClear
 
 -- * Small helpers
+
+-- | Which chunks the page actually holds. Named so an example can state
+--   the precondition its overlay read depends on.
+residentChunks ∷ WorldState → IO [ChunkCoord]
+residentChunks ws = HM.keys ∘ wtdChunks <$> readIORef (wsTilesRef ws)
+
 
 -- | Is this edit the authoritative removal? Top level rather than a
 --   local @where@, because it is asked by two examples in two different
