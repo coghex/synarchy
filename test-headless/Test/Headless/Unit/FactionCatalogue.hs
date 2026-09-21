@@ -108,6 +108,9 @@ tag t = fromMaybe (error ("invalid fixture tag: " ⧺ show t)) (mkFactionTag t)
 localPlayer ∷ ControllerId
 localPlayer = humanController "local"
 
+quoted ∷ FilePath → Text
+quoted path = "'" <> T.pack path <> "'"
+
 -- | A catalogue file body, written to a temp path.
 catalogueYaml ∷ [Text] → [Text] → String
 catalogueYaml tags relations = T.unpack ∘ T.unlines $
@@ -211,6 +214,14 @@ refused ∷ Text → Text → LoadOutcome → Expectation
 refused reason detail outcome = outcome `shouldBe`
     LoadOutcome { loCount = "0", loParsed = "true"
                 , loDetail = detail, loReason = reason }
+
+-- | How many values the real binding actually pushed. @select('#',
+--   ...)@ counts them, which is the only way to tell a pushed @nil@
+--   from a value that was never pushed at all.
+arityOf ∷ FactionEngine → Text → Text → IO Text
+arityOf eng verb call =
+    evalLua eng ("return tostring(select('#', engine." <> verb <> "("
+                 <> call <> ")))")
 
 catalogueOf ∷ FactionEngine → IO FactionCatalogue
 catalogueOf eng =
@@ -361,6 +372,28 @@ catalogueRefusalSpec = describe "catalogue refusals (requirement 2)" $ do
                         out ← loadCatalogue eng path
                         refused "self-paired faction relation" "acolyte" out
 
+    it "answers a refusal with exactly FOUR values and a healthy call \
+       \with the one or two it always did — the fourth is this \
+       \family's own reason, and only a refusal pushes it" $
+        withFactionEngine $ \eng → do
+            -- Arity is published contract: `executeDebugLua` tab-joins
+            -- every value a chunk returns, so a value appended to a
+            -- HEALTHY call would rewrite what a bare
+            -- `return engine.loadFactionYaml(p)` reads back. Flora's
+            -- own three-value refusal is pinned in
+            -- "Test.Headless.Asset.FloraContent".
+            withFixture "arity-refused"
+                (catalogueYaml ["acolyte", "acolyte"] []) $ \path → do
+                    arityOf eng "loadFactionYaml" (quoted path <> ", true")
+                        `shouldReturn` "4"
+                    arityOf eng "loadFactionYaml" (quoted path)
+                        `shouldReturn` "1"
+            withFixture "arity-healthy" (catalogueYaml ["acolyte"] []) $ \path → do
+                arityOf eng "loadFactionYaml" (quoted path <> ", true")
+                    `shouldReturn` "2"
+                arityOf eng "loadFactionYaml" (quoted path)
+                    `shouldReturn` "1"
+
     it "answers a DECODE failure as a parse failure, not a refusal, so \
        \the startup loader tells the two apart" $
         withFactionEngine $ \eng →
@@ -447,6 +480,22 @@ unitTagRefusalSpec = describe "unit faction_tags refusals (requirement 4)" $ do
                 (unitYaml [("spec_2506_unit", Just ["acolyte", "acolyte"])]) $ \path → do
                     out ← loadUnits eng path
                     refused "duplicate faction tag" "acolyte" out
+
+    it "answers a unit refusal with exactly FOUR values too, and a \
+       \healthy unit file with the one or two it always did" $
+        withShippedCatalogue $ \eng → do
+            withFixture "unit-arity-refused"
+                (unitYaml [("spec_2506_arity", Just ["red_tribe"])]) $ \path → do
+                    arityOf eng "loadUnitYaml" (quoted path <> ", true")
+                        `shouldReturn` "4"
+                    arityOf eng "loadUnitYaml" (quoted path)
+                        `shouldReturn` "1"
+            withFixture "unit-arity-healthy"
+                (unitYaml [("spec_2506_arity_ok", Just ["acolyte"])]) $ \path → do
+                    arityOf eng "loadUnitYaml" (quoted path <> ", true")
+                        `shouldReturn` "2"
+                    arityOf eng "loadUnitYaml" (quoted path)
+                        `shouldReturn` "1"
 
     it "refuses a malformed tag id in a unit's list" $
         withShippedCatalogue $ \eng →

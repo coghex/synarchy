@@ -149,6 +149,21 @@ spec = do
                 refusal `shouldBe` "probe_2241_twice"
                 snapshotFlora eng `shouldReturn` before
 
+        it "answers a refusal with exactly THREE values through the \
+           \real binding — flora states no reason, so #2506's optional \
+           \fourth is not pushed (#2241 requirement 3)" $
+            withFloraEngine $ \eng → do
+            -- The arity is published contract, not an implementation
+            -- detail: `executeDebugLua` tab-joins every value a chunk
+            -- returns, so a value appended here silently rewrites what
+            -- a bare `return engine.loadFloraYaml(p)` reads back.
+            withFloraFixture "arity-refused" selfDuplicateYaml $ \path → do
+                floraArity eng ("'" <> path <> "', true") `shouldReturn` "3"
+                floraArity eng ("'" <> path <> "'") `shouldReturn` "1"
+            withFloraFixture "arity-healthy" uniqueFloraYaml $ \path → do
+                floraArity eng ("'" <> path <> "', true") `shouldReturn` "2"
+                floraArity eng ("'" <> path <> "'") `shouldReturn` "1"
+
         it "accepts the same file once its collision is gone, so the \
            \refusal is about the duplicate and not about the fixture" $
             withFloraEngine $ \eng → do
@@ -246,6 +261,14 @@ loadFloraOutcome eng path = do
     case T.splitOn "|" out of
         [n, parsed, refusal] → pure (n, parsed, refusal)
         _                    → pure (out, out, out)
+
+-- | How many values the real binding actually pushed for this call.
+--   @select('#', ...)@ counts them, which is the only way to tell a
+--   pushed @nil@ from a value that was never pushed at all.
+floraArity ∷ FloraEngine → Text → IO Text
+floraArity eng call =
+    evalLua eng ("return tostring(select('#', engine.loadFloraYaml("
+                 <> call <> ")))")
 
 -- | Everything a flora registration touches, captured together: a
 --   refusal must move none of it.

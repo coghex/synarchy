@@ -293,8 +293,12 @@ loadFloraYamlFn env backendState = do
                         return (Right (isJust mDefs, total))
 
             case outcome of
+                -- No reason: flora's published arity is #2241's three
+                -- values, and the terminal line's "duplicate definition
+                -- name" wording is the startup loader's own default for
+                -- a binding that states none.
                 Left clash          → pushYamlRefusal
-                    (YamlRefusal "duplicate definition name" clash)
+                    (YamlRefusal Nothing clash)
                 Right (parsed, cnt) → pushYamlResult parsed cnt
 
 -- | The first authored name in @defs@ that cannot be admitted: one

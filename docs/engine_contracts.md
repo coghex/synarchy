@@ -1795,16 +1795,22 @@ not as success. The loot-table family bypasses
 `Engine.Asset.YamlList.loadYamlList` entirely and follows the same rule
 through `Engine.Asset.YamlLootTables`.
 
-**A post-decode SEMANTIC refusal is terminal too, and says why.** A
-binding that decoded its file and then refused the whole of it (#2241's
-duplicate flora name; #2506's faction-tag rules) answers
-`(0, true, detail, reason)` — the offending identifier and the short
-phrase naming the rule — and only a refusal ever answers with four
-values, so no healthy caller's arity moves. `startupLoader.fail`
-carries both into its one error line, quoting the identifier under the
-binding's own reason; a binding that states no reason keeps #2241's
-original "duplicate definition name" wording. That fourth value is what
-stops an undeclared faction tag being reported as a duplicate name.
+**A post-decode SEMANTIC refusal is terminal too, and may say why.** A
+binding that decoded its file and then refused the whole of it answers
+`(0, true, detail)` — #2241's shape, with the offending identifier —
+and a binding with a refusal vocabulary of its own appends a FOURTH
+value, the short phrase naming the rule that fired. The fourth is
+optional exactly so the arity of the bindings that came before does not
+move: flora states no reason and still answers with three, while the
+faction and unit refusals state theirs and answer with four. A healthy
+call is unaffected either way, at one value bare and two when the
+outcome is asked for. `startupLoader.fail` leads its one error line
+with the binding's reason and falls back to #2241's original
+"duplicate definition name" for a binding that states none — which is
+what stops an undeclared faction tag being reported as a duplicate
+name. Both arities are pinned against the REAL bindings: hspec
+`--match "duplicate authored names"` for flora's three,
+`--match "Faction tag catalogue"` for the faction and unit four.
 
 `scripts/loading_screen.lua` shows the retained message in place of
 "Complete!", freezes the bar, and settles in phase `"failed"` — never

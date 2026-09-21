@@ -132,7 +132,7 @@ loadFactionYamlFn core regs = do
                                     <> refusalReason refusal <> " '"
                                     <> refusalDetail refusal <> "'"
                                 return (Left (YamlRefusal
-                                    (refusalReason refusal)
+                                    (Just (refusalReason refusal))
                                     (refusalDetail refusal)))
                             Right (decls, entries, proposed) → do
                                 -- Nothing was written on the refusal

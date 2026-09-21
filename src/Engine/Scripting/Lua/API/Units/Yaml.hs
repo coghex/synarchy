@@ -120,7 +120,7 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
             <> " entirely: " <> rejectionReason rejection <> " '"
             <> rejectionDetail rejection <> "' on unit definition '"
             <> unitName <> "'"
-        return (Left (YamlRefusal (rejectionReason rejection)
+        return (Left (YamlRefusal (Just (rejectionReason rejection))
                                   (rejectionDetail rejection)))
       Right tagsByDef → Right <$> foldM (\acc (def, factionTags) → do
 
