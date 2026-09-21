@@ -13,7 +13,7 @@
 -- this popup and the cargo popup were independent singletons that
 -- could both be open at once.
 --
--- Two kinds, one presentation:
+-- Three kinds, one presentation:
 --
 --   unitItem      — a container a unit CARRIES, WEARS or has EQUIPPED.
 --                   LIVE contents through unit.getItemContents, which
@@ -29,18 +29,44 @@
 --                   and carrying the parent record's own `revealedAt`
 --                   so the level shows the same "as of…" age as the
 --                   window it was opened from.
+--   portableItem  — a PORTABLE container the player knows about: a
+--                   crate on the floor, opened with no unit involved
+--                   (#2527, epic #1231 PLC-17). Entirely the player's
+--                   REMEMBERED view, through PLC-7's item-keyed
+--                   knowledge layer: `item.getContainerKnowledge` for
+--                   the crate's state, its remembered whole mass and
+--                   its LIVE internal capacity, and
+--                   `item.getRememberedItemContents` for the grouped
+--                   rows at any depth. Never a live contents read and
+--                   never a knowledge write at all — the crate's four
+--                   states (never-inspected, weight-only, known-empty,
+--                   known-contents) are presentation, not lifecycle.
 --
--- Both descend by EXACT INSTANCE IDENTITY along a `path` of instance
--- ids, so two same-def kits inside one toolbox never show each other's
--- contents, and a path that stops resolving closes its level instead of
--- retargeting a sibling (the manager's update() does that).
+-- The ONE knowledge WRITE in this module is D-26's, and it is the
+-- `unitItem` kind's `onOpen`: opening the live level of a container a
+-- PLAYER-COMMANDABLE unit is holding records one contents observation,
+-- because the unit is holding it open and the player has seen inside.
+-- It fires once per real open — never on a layout rebuild, a per-tick
+-- refresh, a scroll, a tab change or a descent into a nested container
+-- — and never for a unit the player does not command. Every remembered
+-- level, at any depth, writes nothing.
+--
+-- All three descend by EXACT INSTANCE IDENTITY along a `path` of
+-- instance ids, so two same-def kits inside one toolbox never show each
+-- other's contents, and a path that stops resolving closes its level
+-- instead of retargeting a sibling (the manager's update() does that).
 --
 -- The rows are ALREADY GROUPED by defName on the Haskell side, so this
 -- host hands them to the widget pre-grouped: the finer stack key the
 -- endpoint level uses must not re-split them, and their order (a
--- hashmap enumeration) must not be re-sorted. Both engine reads answer
--- that same grouped shape (Engine.Scripting.Lua.API.Items.Contents), so
--- a live level and a remembered one render identically.
+-- hashmap enumeration) must not be re-sorted. All three engine reads
+-- answer that same grouped shape
+-- (Engine.Scripting.Lua.API.Items.Contents' pushGroupedContents), so a
+-- live level and a remembered one render identically. That is why the
+-- portable base level reads `item.getRememberedItemContents` for its
+-- rows rather than `item.getContainerKnowledge`'s own `items`: the
+-- latter are INDIVIDUAL instance projections, not grouped rows, and
+-- handing them straight to the widget would break `preGrouped`.
 --
 -- A level here is RENDER-ONLY (D-5): not a transfer endpoint, and it
 -- offers no transfer operation. It supplies no `transferMenu` at all —
@@ -57,6 +83,11 @@
 --                                             — the unit-info
 --                                               "Contents" gesture:
 --                                               opens at the BASE level
+--   openForGround(instanceId, mx, my[, displayName[, defName]])
+--                                             — the ground-item
+--                                               "Contents" gesture
+--                                               (#2527): the BASE
+--                                               portable level, no unit
 --   closeIfOpen() / isOpen()                  — stack delegates, kept
 --                                               so existing callers and
 --                                               teardown paths still
@@ -82,6 +113,16 @@ local scale    = require("scripts.ui.scale")
 -- cycle.
 local function manager()
     return require("scripts.cargo_inventory_panel")
+end
+
+-- The single owner of the knowledge presentation (#2155): the
+-- stored-weight header and the per-state empty text. Required lazily
+-- for the same reason the manager is — the manager injects that
+-- module's style at load, so reaching it on demand keeps this file free
+-- of any assumption about which of the three loaded first. It never
+-- requires this one, so the edge is acyclic.
+local function endpoints()
+    return require("scripts.cargo_inventory_endpoints")
 end
 
 -----------------------------------------------------------
@@ -172,8 +213,17 @@ local function listParams(_src, view)
         end,
         -- The header/subtitle the widget cannot see, so a piece count
         -- or a title change rebuilds the level.
-        presentationKey = string.format("%s|%s|%s", tostring(view.title),
+        -- The knowledge STATE rides in the key alongside the
+        -- observation stamps (#2527): a crate that goes from
+        -- never-inspected to weight-only gains a header and an empty
+        -- text without gaining a single row, and a key that watched
+        -- only `revealedAt` would leave the old wording on screen.
+        presentationKey = string.format("%s|%s|%s|%s|%s",
+                                        tostring(view.title),
                                         tostring(view.subtitle),
+                                        tostring(view.emptyText),
+                                        tostring(view.knowledge
+                                                 and view.knowledge.state),
                                         tostring(view.knowledge
                                                  and view.knowledge.revealedAt)),
     }
@@ -219,6 +269,49 @@ local KINDS = {
                      path = extendPath(src.path, row.instanceId),
                      displayName = row.displayName }
         end,
+        -- D-26 (#2527): opening this level IS a contents observation.
+        -- The unit is holding the container open and the player is
+        -- looking inside, so PLC-7's record gets one write and the
+        -- "as of…" age it feeds stays honest.
+        --
+        -- Four conditions, each one load-bearing:
+        --
+        --   * The manager never calls this for reason == "layout", so a
+        --     resize's destroy-and-rebuild pass writes nothing. Nor is
+        --     it reached by refreshLevel, the per-tick staleness
+        --     rebuild, a scroll or a tab change: all of those go
+        --     straight to buildLevel and never re-open a level.
+        --   * A DESCENT writes nothing (`path` non-empty). A container
+        --     nested inside an observed one gets no record of its own
+        --     until it is itself observed — the same rule
+        --     item.observeContainerContents documents — and the level
+        --     the player descended FROM has already recorded the whole
+        --     tree it is looking at.
+        --   * Only an EXACT instance is observed. `openFor` still
+        --     supports the by-defName fallback with no instance id
+        --     (#67's pre-instance callers), and that path names no
+        --     particular crate, so it renders without writing rather
+        --     than guessing which of two same-def kits to stamp.
+        --   * The unit must be PLAYER-COMMANDABLE. Reusing the transfer
+        --     endpoint's own eligibility read is deliberate: that is
+        --     already this window's one definition of "a unit the
+        --     player commands" (the `unit` endpoint kind gates its whole
+        --     view on it), so a hostile's container can never be
+        --     observed by looking at it.
+        --
+        -- `view` has already resolved for this src by the time the
+        -- manager calls this — a refused open never reaches here — so a
+        -- write means the unit demonstrably holds that exact instance.
+        onOpen = function(src)
+            if #(src.path or {}) > 0 then return end
+            if type(src.instanceId) ~= "number" or src.instanceId <= 0 then
+                return
+            end
+            local info = unit.transferEndpointInfo({ kind = "unit",
+                                                     id = src.uid })
+            if not info or info.eligible ~= true then return end
+            item.observeContainerContents(src.instanceId)
+        end,
     },
 
     buildingItem = {
@@ -249,6 +342,97 @@ local KINDS = {
                      displayName = row.displayName }
         end,
     },
+
+    -- A PORTABLE container the player knows about (#2527, PLC-17),
+    -- addressed by the crate's own `instanceId` — the key PLC-7's
+    -- session-scoped record is filed under, which is why this level
+    -- needs no owner at all: no unit, no building, no page. That is
+    -- exactly what lets a ground crate have a window.
+    --
+    -- Two reads, and a deliberate asymmetry between the BASE level and
+    -- a nested one:
+    --
+    --   base (`path` empty) — `item.getContainerKnowledge` answers the
+    --       crate's STATE, its remembered whole mass and its LIVE
+    --       internal capacity, and it answers for ANY id, so a crate
+    --       nobody has ever touched still opens and says so. Absent
+    --       rows are therefore NOT a reason to close: never-inspected
+    --       and weight-only are legitimate things to be looking at, and
+    --       the empty text says which.
+    --   nested (`path` non-empty) — `item.getRememberedItemContents`
+    --       descends the ROOT observation's own stored copies by exact
+    --       instance identity, and nil CLOSES the level and every
+    --       deeper one. A nested crate has no record of its own, so
+    --       asking the map about its id would answer "unknown" about a
+    --       container the player is demonstrably looking into; and a
+    --       forgotten or re-observed root legitimately invalidates
+    --       every path beneath it.
+    --
+    -- Both carry the ROOT observation's `revealedAt`, for the same
+    -- reason `buildingItem` carries the parent record's: a nested
+    -- container was never observed separately, so its age IS the
+    -- snapshot's.
+    --
+    -- Never a live contents read, and never a knowledge write at any
+    -- depth (D-7): opening a remembered level must not change what is
+    -- remembered. There is no `onOpen` here at all, which is what makes
+    -- that true by construction rather than by a test.
+    portableItem = {
+        panelWidthBase = PANEL_W_BASE,
+        maxRows        = MAX_ROWS,
+        tabs           = false,
+        view = function(src)
+            local path = src.path or {}
+            if #path > 0 then
+                local res = item.getRememberedItemContents(src.instanceId,
+                                                           path)
+                if not res then return nil end
+                local rows = res.items or {}
+                return {
+                    title     = containerTitle(src),
+                    subtitle  = pieceCountText(rows),
+                    contents  = rows,
+                    emptyText = "(empty)",
+                    knowledge = { state = "known",
+                                  revealedAt = res.revealedAt },
+                }
+            end
+            local k = item.getContainerKnowledge(src.instanceId)
+            if not k then return nil end
+            local res = item.getRememberedItemContents(src.instanceId)
+            local view = {
+                title    = containerTitle(src),
+                contents = (res and res.items) or {},
+                -- The crate's WHOLE remembered mass against its LIVE
+                -- internal capacity: two separate facts, never a ratio
+                -- (see cargo_inventory_endpoints.weightText). Either
+                -- may be absent — a never-weighed crate has no mass to
+                -- report and an unlocatable one has no capacity — and
+                -- an absence is rendered as such rather than as 0.
+                weightLabel   = "Weight",
+                weightMeasure = "whole",
+                stored   = k.storedWeight,
+                capacity = k.capacity,
+                knowledge = { state      = k.state or "unknown",
+                              revealedAt = k.revealedAt,
+                              weighedAt  = k.weighedAt },
+            }
+            view.subtitle  = endpoints().weightText(nil, view)
+            view.emptyText = endpoints().emptyText(view)
+            return view
+        end,
+        listParams = listParams,
+        -- A descent stays rooted at the crate that owns the RECORD and
+        -- extends the path, because that is the only observation there
+        -- is: the nested container's own id is a step inside it, never
+        -- a second record to address.
+        childOf = function(src, row)
+            return { kind = "portableItem", instanceId = src.instanceId,
+                     defName = src.defName,
+                     path = extendPath(src.path, row.instanceId),
+                     displayName = row.displayName }
+        end,
+    },
 }
 
 function itemContentsPanel.levelKinds()
@@ -272,6 +456,29 @@ function itemContentsPanel.openFor(uid, defName, mx, my, instanceId, displayName
     return manager().openLevel(
         { kind = "unitItem", uid = uid, defName = defName,
           instanceId = instanceId, path = {}, displayName = displayName },
+        mx, my, 0)
+end
+
+-- The ground-item "Contents" gesture (#2527,
+-- scripts/init_context_menu_item.lua). Like openFor above, an EXTERNAL
+-- request targets the BASE level and replaces whatever stack was open.
+--
+-- Takes the crate's own INSTANCE id, never the ground id the menu was
+-- hit-tested with: a ground id is page-local and the active page can
+-- change between a menu opening and its entry firing, while an instance
+-- id names one crate for the life of the session. The caller resolves
+-- one to the other while it still has the row in hand.
+--
+-- NO unit is involved and NOTHING is written: a remembered level is a
+-- pure read at every depth, so this opens in all four knowledge states
+-- — including a crate the player has never touched, which opens and
+-- says exactly that.
+function itemContentsPanel.openForGround(instanceId, mx, my, displayName,
+                                         defName)
+    if type(instanceId) ~= "number" or instanceId <= 0 then return false end
+    return manager().openLevel(
+        { kind = "portableItem", instanceId = instanceId, path = {},
+          defName = defName, displayName = displayName },
         mx, my, 0)
 end
 

@@ -333,6 +333,30 @@ The unified widget additionally *renders* item-container contents (so
 `item_contents_panel.lua` collapses into it) and could later render ground
 piles, but neither is a transfer endpoint in this arc.
 
+> **Amended 2026-09-20 by [#2527]** (epic #1231 PLC-17). The "later" arrived:
+> the window now has a FIFTH level kind, `portableItem`, which renders a
+> PORTABLE container — a crate on the floor — from the player's remembered
+> item-keyed knowledge, opened from the ground-item context menu with no unit
+> and no building involved. The exclusion in the sentence above is
+> **unchanged**: a portable level is render-only exactly as the two item kinds
+> are, declares no `transferMenu`, and is not a transfer endpoint. Portable
+> endpoints and their gestures remain PLC-9's.
+>
+> The five level kinds are therefore `endpoint` (a storage building or a unit),
+> `unitItem` (live, `unit.getItemContents`), `buildingItem` (remembered,
+> `building.getRememberedItemContents`), `portableItem` (remembered,
+> `item.getContainerKnowledge` + `item.getRememberedItemContents`) and `escort`
+> (#1250's Mode A pair). All three item kinds descend by exact instance
+> identity, and a path that stops resolving closes that level and every level
+> below it.
+>
+> One knowledge WRITE exists in the stack, and it is D-26's: opening a
+> `unitItem` level for a container a PLAYER-COMMANDABLE unit is holding records
+> one contents observation, through the level kind's `onOpen` hook. It never
+> fires for a layout rebuild, a refresh, a scroll, a tab change, a descent, a
+> refused open, or a unit the player does not command; every remembered level,
+> at any depth, writes nothing.
+
 ### D-6. Equipped and accessory items stay non-transferable
 
 The player unequips first, as A1 has it.

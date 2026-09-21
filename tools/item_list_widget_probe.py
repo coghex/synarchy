@@ -151,6 +151,21 @@ Verifies, in order:
      a deposited exact instance carries its temperature into the
      container window on both endpoint kinds.
 
+ 11. the PORTABLE container level (#2527): a ground crate whose
+     DEFINITION declares `storage:` offers "Contents" on a real
+     right-click while an ordinary ground item does not; that entry
+     opens a level naming no unit and no building, addressed by the
+     crate's own instance id; the four knowledge states render as four
+     different screens (never-inspected is not an empty list, and
+     weight-only ages from the weighing); a container row pushes a
+     nested level that keeps the ROOT crate's identity and merely
+     extends the path, offering the inspection entry and no transfer
+     gesture; and removing the real crate from the floor changes
+     nothing the remembered level draws. One screenshot of the open,
+     populated level is captured as #2527's visual evidence (`--shot`);
+     the retained copy is
+     `docs/pr-proofs/issue-2527-portable-container-level.png`.
+
 Manual-only (needs-gpu) unless promoted through `tools/ci_probes.py` per
 CLAUDE.md; the CI-blocking gates for this feature are
 `cabal test synarchy-test-headless --test-options='--match "Item list
@@ -170,6 +185,8 @@ generates a world, opens a port or spawns a subprocess.
                     two-sided hold
   `..._nesting`     the container-window stack, row scrolling, Contents
                     gestures, deepest-level wheel routing
+  `..._portable`    the ground crate's portable level, its four
+                    knowledge states and its remembered descent
 
   `..._fixtures`    the authored defs, the stock lists, the staged
                     `Fixtures` state
@@ -193,13 +210,14 @@ with `from item_list_widget_probe_checks import failures` — that binds a
 stale 0 and turns every failed check into a green run.
 
 Usage: python3 tools/item_list_widget_probe.py
-       [--port 9428] [--size 1280x900]
+       [--port 9428] [--size 1280x900] [--shot PATH]
 """
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -213,14 +231,19 @@ from item_list_widget_probe_escort import (escort_session_scenario,
 from item_list_widget_probe_fixtures import (CARGO_BULK_STOCK, CARGO_STOCK,
                                              DEF_CARGO, DEF_CARRIER,
                                              DEF_DEEP_KIT, DEF_EMPTY,
-                                             DEF_UNSEEN, Fixtures,
-                                             stage_fixture_defs)
+                                             DEF_GROUND_CRATE, DEF_UNSEEN,
+                                             Fixtures, stage_fixture_defs)
 from item_list_widget_probe_inventory import (store_gesture_scenario,
                                               temperature_scenario,
                                               unit_inventory_scenario)
 from item_list_widget_probe_nesting import nesting_stack_scenario
+from item_list_widget_probe_portable import portable_scenario
 from item_list_widget_probe_oracle import click_widget_center, find_widget
-from item_list_widget_probe_terrain import allocate_dry_anchors, focus_building
+from item_list_widget_probe_terrain import (allocate_dry_anchors,
+                                            focus_building,
+                                            focus_ground_item,
+                                            locate_ground_item_pixel,
+                                            tile_surface)
 from probelib import boot, poll_until, quit_engine, send, send_json, viewport
 
 
@@ -228,6 +251,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9428)
     ap.add_argument("--size", default="1280x900")
+    # #2527's visual evidence: the portable level, rendered and open.
+    ap.add_argument("--shot",
+                    default=os.path.join(tempfile.gettempdir(),
+                                         "item_list_widget_probe_portable.png"),
+                    help="where to write the portable-level screenshot")
     args = ap.parse_args()
     port = args.port
 
@@ -372,7 +400,71 @@ def stage_fixtures(port: int, vp: dict):
     return Fixtures(bid=bid, empty_bid=empty_bid, unseen_bid=unseen_bid,
                     uid=uid, mule_uid=mule_uid, wild_uid=wild_uid,
                     building_site=(bax, bay), acolyte_site=(aax, aay),
-                    carrier_site=(cax, cay), bpixel=bpixel)
+                    carrier_site=(cax, cay), unseen_site=(uax, uay),
+                    bpixel=bpixel)
+
+
+def dry_pair_near(port: int, ox: int, oy: int):
+    """The first tile in a small ring around `(ox, oy)` that is dry and
+    whose EAST neighbour is dry too, or None.
+
+    Offsets start three tiles out so the anchor's own building sprite is
+    not drawn over the items, and stay inside the 12-tile separation
+    `allocate_dry_anchors` guarantees, so nothing here can land on
+    another fixture."""
+    for dx, dy in ((3, 0), (0, 3), (-3, 0), (0, -3), (3, 3), (-3, 3),
+                   (3, -3), (-3, -3), (4, 0), (0, 4), (-4, 0), (0, -4)):
+        tx, ty = ox + dx, oy + dy
+        here, east = tile_surface(port, tx, ty), tile_surface(port, tx + 1, ty)
+        if here and here[1] and east and east[1]:
+            return tx, ty
+    return None
+
+
+def stage_ground_crate(port: int, fx: Fixtures, vp: dict):
+    """#2527: drop the portable fixture — a `storage:`-declaring crate —
+    and an ordinary item beside it, then put the crate on a targetable
+    pixel.
+
+    Two ground items, deliberately: the whole eligibility claim is that
+    "Contents" follows the DEFINITION's storage declaration and nothing
+    else, and only a negative item standing under the same camera can
+    show that. They go down one tile apart so a single camera framing
+    reaches both, and both pixels are localized through the real
+    `item.hitTestAt`.
+
+    Answers (crate gid, crate pixel, bar pixel); the gid is None when
+    the crate could not be spawned at all."""
+    # No eighth ANCHOR: `allocate_dry_anchors` enforces a 12-tile
+    # separation between sites and an eighth one is not always there to
+    # find, which turned a healthy world into a failed run. A ground
+    # item needs far less than a building does — a dry tile and a clear
+    # camera framing — so it is placed a few tiles off the
+    # never-inspected cargo's anchor, which nothing touches again after
+    # the knowledge scenario and which the anchor rule already keeps 12
+    # tiles from every other fixture. Two ADJACENT dry tiles are needed:
+    # the crate and its negative-case neighbour.
+    site = dry_pair_near(port, *fx.unseen_site)
+    if not check("found two adjacent dry tiles for the ground fixtures",
+                 site is not None):
+        return None, None, None
+    gax, gay = site
+    raw = send(port, f"return item.spawnGround('{DEF_GROUND_CRATE}', "
+                     f"{gax}, {gay})")
+    if not check("the portable ground crate spawned",
+                 raw.strip() not in ("", "nil", "null"), f"got {raw!r}"):
+        return None, None, None
+    crate_gid = int(float(raw))
+    bar_raw = send(port, f"return item.spawnGround('steel_bar', "
+                         f"{gax + 1}, {gay})")
+    bar_gid = (int(float(bar_raw))
+               if bar_raw.strip() not in ("", "nil", "null") else None)
+    crate_pixel = focus_ground_item(port, crate_gid, gax, gay, vp)
+    # The bar is one tile away under the SAME camera, so it needs no
+    # second framing — only its own pixel.
+    bar_pixel = (locate_ground_item_pixel(port, bar_gid, vp)
+                 if bar_gid is not None else None)
+    return crate_gid, crate_pixel, bar_pixel
 
 
 def stage_nesting_stock(port: int, fx: Fixtures):
@@ -448,6 +540,18 @@ def _run(port: int, args) -> int:
     kit_iid = stage_nesting_stock(port, fx)
     if kit_iid is not None:
         nesting_stack_scenario(port, fx.bid, kit_iid, fx.mule_uid, vp)
+
+    # -- #2527 after the nesting stack and before the escorts: it drops
+    #    its own two ground items and moves the camera onto them, so it
+    #    must not run before any scenario that frames the cargo
+    #    building; it leaves the stack closed, so the escort scenarios
+    #    below still open at the base level; and it hands the simulation
+    #    back RUNNING, because localizing its crate freezes the world
+    #    and the escorts wait on the real AI.
+    crate_gid, crate_pixel, bar_pixel = stage_ground_crate(port, fx, vp)
+    if crate_gid is not None:
+        portable_scenario(port, crate_gid, crate_pixel, bar_pixel,
+                          args.shot)
 
     # -- #1250 LAST: it spawns its own escort, opens a window at the base
     #    level (replacing anything above), commits real items into the

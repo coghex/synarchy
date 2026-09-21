@@ -27,7 +27,14 @@
 -- endpoint kind or a level kind, which is exactly why
 -- scripts/item_contents_panel.lua's `buildingItem` level gets its
 -- "as of…" line by handing back the same sub-table for a level kind
--- this module does not own.
+-- this module does not own. Since #2527 the same is true of that
+-- module's `portableItem` level: it supplies the portable layer's
+-- fifth state ("weight-only") and the second stamp (`weighedAt`) in
+-- that one sub-table, and `knowledgeState` / `ageText` / `emptyText`
+-- answer for it without learning what a crate is. `weightText` is
+-- exported for the same reason — it is the single owner of the
+-- stored-weight header, and a portable level must not grow a second
+-- copy of it.
 
 local qualityTier = require("scripts.ui.quality_tier")
 local scale       = require("scripts.ui.scale")
@@ -202,9 +209,16 @@ local ENDPOINTS = {
 -- "as of…" line simply by supplying the same sub-table.
 -----------------------------------------------------------
 
--- "unknown" / "empty" / "known" for a remembering endpoint, "live" for
--- one that reports the truth. Distinct strings for all four so a
--- presentation key can never conflate never-inspected with known-empty.
+-- "unknown" / "weight-only" / "empty" / "known" for a remembering
+-- source, "live" for one that reports the truth. Distinct strings for
+-- all five so a presentation key can never conflate never-inspected
+-- with known-empty.
+--
+-- "weight-only" is the PORTABLE layer's fifth answer (#2527, PLC-7's
+-- `item.getContainerKnowledge`): a crate that has been hefted but never
+-- opened, so its mass is remembered and its contents are not. It is
+-- read verbatim off the sub-table like every other state — these
+-- helpers gained it without learning what a portable container is.
 local function knowledgeState(view)
     local k = view.knowledge
     if not k then return "live" end
@@ -259,23 +273,69 @@ cargoInventoryEndpoints.formatAge = formatAge
 -- `ageLineHeight` comment names.
 local function ageText(view)
     local k = view.knowledge
-    if not k or type(k.revealedAt) ~= "number" then return nil end
-    if knowledgeState(view) == "unknown" then return nil end
+    if not k then return nil end
+    local st = knowledgeState(view)
+    if st == "unknown" then return nil end
+    -- The two stamps are kept DISTINCT (#2527). A portable record holds
+    -- a weighing and an opening, independently stamped: "weight-only"
+    -- means hefted and never opened, so the only observation there is
+    -- to date is the weighing and the line ages from `weighedAt`. Every
+    -- other state ages from `revealedAt` — the CONTENTS stamp — which a
+    -- later weighing deliberately does not move, so re-hefting a crate
+    -- can never make its remembered rows read as fresher than the look
+    -- that produced them. A source carrying only `revealedAt` (every
+    -- building-side view) is unaffected.
+    -- Spelled out rather than as `cond and a or b`: that idiom falls
+    -- through to `revealedAt` when `weighedAt` is absent, which would
+    -- silently age a weight-only view off the CONTENTS stamp — the one
+    -- thing this branch exists to prevent.
+    local at
+    if st == "weight-only" then at = k.weighedAt else at = k.revealedAt end
+    if type(at) ~= "number" then return nil end
     if type(engine.gameTime) ~= "function" then return nil end
     local now = engine.gameTime()
     if type(now) ~= "number" then return nil end
-    return "as of " .. formatAge(now - k.revealedAt)
+    return "as of " .. formatAge(now - at)
 end
 
 cargoInventoryEndpoints.ageText = ageText
 
 -- The stored-weight half of the header. A never-inspected container's
 -- remembered weight is not 0 kg — it is not known at all, and the
--- engine's own numeric 0 there must never be rendered as a measurement.
--- Capacity is always shown: the player knows how big a thing they built.
+-- engine's own absent field there must never be rendered as a
+-- measurement. An endpoint's capacity is always shown: the player knows
+-- how big a thing they built.
+--
+-- `weightMeasure` names what `stored` MEASURES, and it is the one thing
+-- that decides whether the two numbers may be written as a RATIO:
+--
+--   "contents" (the default, and every endpoint kind) — `stored` is the
+--       weight of what is INSIDE and `capacity` bounds exactly that, so
+--       "12.00 / 400.00 kg" reads as used storage, which is what it is.
+--   "whole" (#2527's portable crate) — `stored` is the WHOLE object's
+--       remembered mass: its own case, its fill and everything nested,
+--       because that is what a unit lifting it feels. It is NOT a
+--       fraction of `capacity`, which bounds only the crate's INTERNAL
+--       storage, so the two are reported as separate facts and never
+--       divided. `capacity` is also NIL-ABLE here: it is read live off
+--       the located instance, and a crate that cannot be located at all
+--       has no capacity to report — an absence, never a fabricated 0.
+--
+-- A source kind is never consulted: `kind` only selects the label, and
+-- a kind this module does not own supplies its own `weightLabel`.
 local function weightText(kind, view)
     local def = ENDPOINTS[kind]
-    local wlabel = (def and def.weightLabel) or "Storage"
+    local wlabel = (def and def.weightLabel) or view.weightLabel or "Storage"
+    if view.weightMeasure == "whole" then
+        local text = (view.stored == nil)
+            and string.format("%s: unknown", wlabel)
+            or  string.format("%s: %.2f kg", wlabel, view.stored)
+        if view.capacity ~= nil then
+            text = text .. string.format(" - holds up to %.2f kg",
+                                         view.capacity)
+        end
+        return text
+    end
     if view.stored == nil then
         return string.format("%s: unknown / %.2f kg", wlabel, view.capacity)
     end
@@ -283,12 +343,17 @@ local function weightText(kind, view)
                          view.capacity)
 end
 
+cargoInventoryEndpoints.weightText = weightText
+
 -- What an empty row list MEANS, which is a different fact in each
 -- state. A live endpoint keeps its pre-#1237 blank (nothing here claims
 -- to know anything about a unit's inventory it did not render).
 local function emptyText(view)
     local st = knowledgeState(view)
     if st == "unknown" then return "Contents unknown (never inspected)" end
+    -- Hefted, never opened (#2527): the header above already reports the
+    -- remembered mass, so the list says only that nobody has looked in.
+    if st == "weight-only" then return "Contents unknown (never opened)" end
     if st == "empty"   then return "(empty)" end
     return nil
 end

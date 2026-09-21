@@ -455,12 +455,13 @@ def test_the_exit_status_follows_the_accumulator() -> None:
 # --------------------------------------------------------------------------
 # The split's own contract (#2046)
 # --------------------------------------------------------------------------
-# The facade is one registered probe over eight libraries. Every claim
+# The facade is one registered probe over nine libraries. Every claim
 # in that sentence is checkable without an engine, so it is checked here
 # rather than left to a reviewer re-deriving it from the imports.
 FACADE = "item_list_widget_probe"
 SCENARIO_MODULES = {f"{FACADE}_endpoints", f"{FACADE}_inventory",
-                    f"{FACADE}_escort", f"{FACADE}_nesting"}
+                    f"{FACADE}_escort", f"{FACADE}_nesting",
+                    f"{FACADE}_portable"}
 SUPPORT_MODULES = {f"{FACADE}_fixtures", f"{FACADE}_oracle",
                    f"{FACADE}_terrain", f"{FACADE}_checks"}
 
@@ -469,9 +470,11 @@ SUPPORT_MODULES = {f"{FACADE}_fixtures", f"{FACADE}_oracle",
 # body's enumeration omits): inventory and knowledge assert their
 # fixtures before temperature strips or restocks them; temperature runs
 # before item contents, whose first-aid kit it leaves carried; the
-# nesting stock lands only after every exact row/count assertion;
-# building escort follows every exact cargo assertion; unit-to-unit
-# escort is last of all.
+# nesting stock lands only after every exact row/count assertion; the
+# portable scenario (#2527) drops its own ground items and moves the
+# camera onto them, so it follows every scenario that frames the cargo
+# building; building escort follows every exact cargo assertion;
+# unit-to-unit escort is last of all.
 SCENARIO_ORDER = (
     "cargo_scenario",
     "knowledge_scenario",
@@ -481,6 +484,7 @@ SCENARIO_ORDER = (
     "temperature_scenario",
     "item_contents_scenario",
     "nesting_stack_scenario",
+    "portable_scenario",
     "escort_session_scenario",
     "unit_escort_session_scenario",
 )
@@ -507,7 +511,7 @@ def test_the_facade_is_the_only_registered_probe() -> None:
     expect(registered == [("item_list_widget", f"{FACADE}.py")],
            f"exactly one registration, of the facade ({registered!r})")
     libraries = [name for name in _split_modules() if name != FACADE]
-    expect(len(libraries) == 8, f"eight libraries ({libraries!r})")
+    expect(len(libraries) == 9, f"nine libraries ({libraries!r})")
     expect(not [name for name in libraries if name.endswith("_probe")],
            f"none of them is named like a registered probe ({libraries!r})")
 
@@ -582,11 +586,12 @@ def test_the_facade_holds_the_order_and_no_scenario_body() -> None:
                    key=lambda node: (node.lineno, node.col_offset))
     called = [node.func.id for node in calls]
     expect(tuple(called) == SCENARIO_ORDER,
-           f"the ten scenarios run in the documented order ({called!r})")
-    # Requirement 6 as amended: the guard is part of the order. The
+           f"the eleven scenarios run in the documented order ({called!r})")
+    # Requirement 6 as amended: the guards are part of the order. The
     # nesting scenario runs only when its fixture came out stocked deeply
-    # enough, and both fixture-staging failures above it end the run
-    # rather than grading the scenarios behind them.
+    # enough and the portable one only when its crate actually spawned,
+    # and both fixture-staging failures above them end the run rather
+    # than grading the scenarios behind them.
     guarded = [node.func.id
                for statement in ast.walk(run)
                if isinstance(statement, ast.If)
@@ -594,8 +599,9 @@ def test_the_facade_holds_the_order_and_no_scenario_body() -> None:
                                     else statement)
                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                and node.func.id.endswith("_scenario")]
-    expect(guarded == ["nesting_stack_scenario"],
-           f"the nesting scenario is the one guarded call ({guarded!r})")
+    expect(guarded == ["nesting_stack_scenario", "portable_scenario"],
+           f"the nesting and portable scenarios are the guarded calls "
+           f"({guarded!r})")
     early_exits = [node for node in ast.walk(run)
                    if isinstance(node, ast.Return) and isinstance(node.value,
                                                                   ast.Constant)

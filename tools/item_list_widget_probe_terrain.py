@@ -6,8 +6,9 @@ Two jobs, both about placing a fixture somewhere the rendered checks can
 reach it.
 
 `allocate_dry_anchors` scans generated terrain outward from the origin
-for separated dry sites, so the run's seven fixtures never land in water
-or on top of each other. `focus_building` is #1286's fix: a bare
+for separated dry sites, so the run's eight fixtures never land in water
+or on top of each other. `focus_building` — and `focus_ground_item`,
+its #2527 twin for a dropped crate — is #1286's fix: a bare
 `camera.goToTile` leaves z-tracking ON, which pins the z-slice 25 levels
 above the surface and pushes the tile it just went to off the bottom of
 the viewport, so the slice has to be re-pinned to the target's own
@@ -95,6 +96,68 @@ def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
             if len(picked) == n:
                 return picked
     return None
+
+
+def locate_ground_item_pixel(port: int, gid: int, vp: dict, step: int = 3):
+    """WINDOW-space pixel where `item.hitTestAt` really reports `gid`
+    (#2527), searched outward from the screen centre.
+
+    The ground-item twin of `probelib.locate_building_pixel`, and for
+    the same reason: the right-click router
+    (`scripts/init_context_menu.lua`'s `tryItemMenu`) asks exactly this
+    hit test, so it is the only question that predicts where the menu
+    will go. A computed tile-centre pixel is not good enough — a ground
+    item's sprite is anchored to the tile's diamond bottom and extends
+    upward — and a dropped item is SMALL, so the ring step is finer than
+    the building scan's.
+
+    Runs engine-side in ONE debug-console statement: a per-pixel round
+    trip over a window is thousands of them."""
+    cx, cy = vp["win_w"] // 2, vp["win_h"] // 2
+    sw, sh = vp["win_w"], vp["win_h"]
+    raw = send(port,
+               f"local g, cx, cy, sw, sh, st = {gid}, {cx}, {cy}, {sw}, {sh}, {step};"
+               " local function hit(x, y) return x >= 0 and y >= 0 and x <= sw"
+               "  and y <= sh and item.hitTestAt(x, y) == g end;"
+               " if hit(cx, cy) then return cx .. ',' .. cy end;"
+               " local maxr = math.max(cx, sw - cx, cy, sh - cy);"
+               " for r = st, maxr + st, st do"
+               "  for dx = -r, r, st do"
+               "   if hit(cx + dx, cy - r) then return (cx + dx) .. ',' .. (cy - r) end;"
+               "   if hit(cx + dx, cy + r) then return (cx + dx) .. ',' .. (cy + r) end"
+               "  end;"
+               "  for dy = -r + st, r - st, st do"
+               "   if hit(cx - r, cy + dy) then return (cx - r) .. ',' .. (cy + dy) end;"
+               "   if hit(cx + r, cy + dy) then return (cx + r) .. ',' .. (cy + dy) end"
+               "  end"
+               " end; return 'none'", timeout=120.0).strip().strip('"')
+    if "," not in raw:
+        return None
+    sx, sy = raw.split(",")
+    return int(sx), int(sy)
+
+
+def focus_ground_item(port: int, gid: int, gx: int, gy: int, vp: dict):
+    """Put a dropped ground item on a targetable screen pixel (#2527).
+
+    Same #1286 discipline `focus_building` documents: `goToTile` leaves
+    z-tracking on, so the slice has to be re-pinned to the tile's own
+    elevation afterwards or both the render and the hit test offset the
+    sprite off-screen. A ground item has no `getInfo`, so the elevation
+    comes from the tile it was dropped on."""
+    surface = tile_surface(port, gx, gy)
+    gz = int(surface[0]) if surface else 0
+    set_paused(port, True)
+    pixel = focus_and_locate(port, gx, gy, gz, vp,
+                             lambda: locate_ground_item_pixel(port, gid, vp))
+    if pixel is None:
+        print(targeting_report(port, vp, "item", gid, site=(gx, gy)))
+    else:
+        check("the camera centres on the ground crate "
+              "(its hit-test pixel is near the screen centre)",
+              centred_within(vp, pixel),
+              f"got {pixel!r} for a {vp['win_w']}x{vp['win_h']} window")
+    return pixel
 
 
 def focus_building(port: int, bid: int, gx: int, gy: int, vp: dict):

@@ -29,14 +29,20 @@
 --   synchronously — locatability is a read, and a verb that cannot find
 --   the instance enqueues nothing at all.
 --
---   __PLC-7 ships no caller.__ Nothing in the shipped game observes a
---   container yet — pickup and open are PLC-8's, the window is PLC-9's
---   — so these verbs exist to be driven by tests, the console, and
---   those later slices. Registering them now is what lets the
---   persistence contract they carry be proven before any gameplay
---   depends on it.
+--   __The container window is the first caller (#2527, PLC-17).__ It
+--   READS the record at every depth — the @portableItem@ level draws a
+--   ground crate's whole window from 'itemGetContainerKnowledgeFn' and
+--   'itemGetRememberedItemContentsFn', and writes nothing doing it —
+--   and it takes exactly ONE write: D-26's contents observation when a
+--   level opens on a container a PLAYER-COMMANDABLE unit is holding.
+--   Pickup is PLC-16's and the @Open@ order PLC-18's; nothing else in
+--   the shipped game touches these verbs yet, so the weight
+--   observation and the forget verb are still driven only by tests and
+--   the console. Registering them all before any of that is what let
+--   the persistence contract they carry be proven first.
 module Engine.Scripting.Lua.API.Items.Knowledge
     ( itemGetContainerKnowledgeFn
+    , itemGetRememberedItemContentsFn
     , itemObserveContainerWeightFn
     , itemObserveContainerContentsFn
     , itemForgetContainerKnowledgeFn
@@ -57,6 +63,8 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
+import Engine.Scripting.Lua.API.Items.Contents
+    (pushGroupedContents, readInstanceIdPath, resolveContainedItem)
 import Item.Knowledge
 import Item.Types (ItemInstance(..), ItemManager, ItemStorage(..))
 import qualified Engine.Core.Queue as Q
@@ -128,6 +136,84 @@ itemGetContainerKnowledgeFn env = do
             forM_ (mLocated ⌦ (iiStorage ∘ liInstance)) $ \st →
                 pushNumberField "capacity" (realToFrac (isWeightCapacity st))
             return 1
+
+-- | @item.getRememberedItemContents(instanceId[, path])@ →
+--   @{ items, revealedAt }@ | nil (#2527, PLC-17).
+--
+--   The portable counterpart of @building.getRememberedItemContents@,
+--   and the read the @portableItem@ window level draws every one of its
+--   rows from — the BASE level with no @path@, a nested level with one.
+--   'itemGetContainerKnowledgeFn' above deliberately keeps its
+--   one-argument projection unchanged: it answers the record's four
+--   states and its two stamps as INDIVIDUAL item projections, which is
+--   a different shape from the GROUPED rows the shared item-list host
+--   consumes, and it can only reach a crate's direct children. This
+--   verb is the grouped, descendable view of the very same record.
+--
+--   Four properties, each load-bearing and each shared with the
+--   building-side verb:
+--
+--     * __It is the MEMORY, never the live crate.__ Every row comes out
+--       of the record's own 'ContentsObservation' copies, so a level
+--       keeps showing what the player last saw after the real crate has
+--       been emptied, refilled, carried away or destroyed. No live
+--       'World.Item.Locate' lookup happens here at all.
+--     * __It reveals nothing.__ A pure read; opening a window at any
+--       depth never writes knowledge.
+--     * __It descends by exact instance identity__ through the ROOT
+--       record's stored copies. A nested crate has no record of its own
+--       (see 'itemObserveContainerContentsFn'), so asking the map about
+--       a child id would answer @"unknown"@ about a container the
+--       player is demonstrably looking into; the descent walks the root
+--       observation instead. Two same-def kits side by side answer with
+--       their own contents, and an id that is no longer in the record
+--       answers nil rather than a sibling's — the caller closes that
+--       level and every deeper one.
+--     * __Every level reports the ROOT observation's @revealedAt@__,
+--       because that is genuinely when this whole snapshot was taken.
+--       It is what lets a nested level wear the same \"as of…\" age as
+--       the level it was opened from.
+--
+--   nil when the id is not a positive number, when the crate has no
+--   contents observation at all (never-inspected or weight-only — an
+--   absence, which the caller must not draw as an empty list; the base
+--   level's own state comes from 'itemGetContainerKnowledgeFn'), when
+--   @path@ is malformed, or when @path@ does not resolve. An OBSERVED
+--   empty crate answers an empty @items@ table, which is the distinction
+--   the close-on-nil rule turns on.
+itemGetRememberedItemContentsFn
+    ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemGetRememberedItemContentsFn env = do
+    idArg ← argInstanceId 1
+    mPath ← readInstanceIdPath 2
+    case (idArg, mPath) of
+        (Just iid, Just path) → do
+            (mRecord, itemMgr) ← Lua.liftIO $ do
+                mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+                im  ← readReadOnlyRef (crvItemManagerRef
+                                      (toContentRegistriesViewCapability env))
+                pure (lookupPortable iid (wmPortableKnowledge mgr), im)
+            case mRecord ⌦ prContents of
+                Nothing → Lua.pushnil >> return 1
+                Just obs → case resolveFrom path (coItems obs) of
+                    Nothing → Lua.pushnil >> return 1
+                    Just items → do
+                        Lua.newtable
+                        pushGroupedContents itemMgr items
+                        Lua.setfield (-2) "items"
+                        pushNumberField "revealedAt" (coAt obs)
+                        return 1
+        _ → Lua.pushnil >> return 1
+  where
+    -- An EMPTY path names the observed crate ITSELF, whose contents are
+    -- the observation's own top-level copies. That is the one place
+    -- this verb's contract differs from the building-side one, and it
+    -- differs because the two are asked different questions: a building
+    -- level reads its own @building.getContainerKnowledge@ rows for the
+    -- base and this verb only for a descent, while a portable base
+    -- level has no grouped projection of its own to fall back on.
+    resolveFrom [] items = Just items
+    resolveFrom path items = iiContents <$> resolveContainedItem path items
 
 -- | @item.observeContainerWeight(instanceId)@ → bool. Record that the
 --   player has just HEFTED this container: its whole recursive weight
