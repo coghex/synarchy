@@ -119,6 +119,10 @@ luaPrelude enumeration = T.unlines
     , "  loadRecipeYaml = healthyYaml,"
     , "  loadEquipmentYaml = healthyYaml,"
     , "  loadBuildingYaml = healthyYaml,"
+    -- #2506: the faction catalogue is a queued family too, and this
+    -- fixture drains the WHOLE queue, so an absent stub is a call to a
+    -- nil value rather than a missing assertion.
+    , "  loadFactionYaml = healthyYaml,"
     , "  loadUnitYaml = healthyYaml,"
     , "  loadLootTableYaml = healthyYaml,"
     , "  loadLootProfileYaml = healthyYaml,"
