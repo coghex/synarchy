@@ -192,6 +192,8 @@ def run(check) -> None:
               stated_range.group(0) if stated_range else "absent")
         check("the player contract names one ordinary wheel notch",
               f"one notch is {engine_mod.SCROLL_DY_NOTCH:g}" in prompt)
+        check("the player contract refuses a scroll without dy",
+              "A scroll without dy is refused." in prompt)
         schema_dy = agent_mod.TURN_SCHEMA["properties"]["action"][
             "properties"]["dy"]
         schema_range = re.search(r"between (-?[\d.]+) and (-?[\d.]+)",
@@ -327,10 +329,49 @@ def run(check) -> None:
                   f"note ({sorted(companion)})",
                   raised is not None and bad_notes == [],
                   f"{type(raised).__name__ if raised else None} {bad_notes}")
-        absent, _, absent_notes = scroll_calls({"do": "scroll", "dx": 2})
-        check("an absent dy still defaults to a zero vertical delta",
-              scroll_dy_of(absent) == [0.0] and absent_notes == [],
-              str(absent))
+        dy_range = (f"[{engine_mod.SCROLL_DY_MIN:g}, "
+                    f"{engine_mod.SCROLL_DY_MAX:g}]")
+
+        def refused_scroll(act):
+            notes: list[str] = []
+            raised = None
+            calls = None
+            try:
+                calls, _ = translate_action(act, (1280, 720), notes=notes)
+            except ActionError as e:
+                raised = str(e)
+            return raised, calls, notes
+
+        for label, act in (
+                ("missing dy", {"do": "scroll", "dx": -5}),
+                ("dy None", {"do": "scroll", "dx": -5, "dy": None}),
+                ("missing dy with cursor",
+                 {"do": "scroll", "dx": -5, "x": 640, "y": 360}),
+                ("dy None with cursor",
+                 {"do": "scroll", "dx": -5, "dy": None, "x": 640, "y": 360})):
+            raised, calls, notes = refused_scroll(act)
+            check(f"a scroll with {label} is refused atomically",
+                  raised is not None and calls is None and notes == []
+                  and "dy" in raised and "wheel field" in raised
+                  and dy_range in raised
+                  and "no scroll was sent" in raised, str(raised))
+
+        provider_turn = agent_mod.normalize_turn({
+            "observation": "too far",
+            "expectation": "zoom in",
+            "note": "",
+            "action": {"do": "scroll", "dx": -5, "dy": None}})
+        check("normalize_turn drops a null dy from a provider-shaped scroll",
+              provider_turn["action"] == {"do": "scroll", "dx": -5},
+              str(provider_turn["action"]))
+        raised, calls, notes = refused_scroll(provider_turn["action"])
+        check("a provider-shaped scroll with dy null is refused after "
+              "normalize_turn",
+              raised is not None and calls is None and notes == []
+              and "dy" in raised and "wheel field" in raised
+              and dy_range in raised
+              and "no scroll was sent" in raised, str(raised))
+
         aimed, _, _ = scroll_calls(
             {"do": "scroll", "dy": -2, "x": 640, "y": 360})
         check("cursor-aimed scrolling still pre-moves, then scrolls once",
@@ -374,6 +415,52 @@ def run(check) -> None:
                   engine_mod.SCROLL_DY_MAX]
               and "600" not in cturn["injected"][0],
               str(cturn["injected"]))
+        # A missing dy is recorded as a refusal, and the next turn still
+        # sees the dy field/range guidance even when the provider's own
+        # note already filled the 120-character memory budget (#2652).
+        long_note = "x" * 130
+
+        class MissingDyWitness(agent_mod.ScriptedAgent):
+            def __init__(self):
+                super().__init__([{"do": "scroll", "dx": -5},
+                                  {"do": "wait"}])
+                self.seen_memory: list[list[str]] = []
+
+            def decide(self, screenshot_path, fb_size, memory_lines, turn,
+                       timeout_seconds=None):
+                self.seen_memory.append(list(memory_lines))
+                result = super().decide(
+                    screenshot_path, fb_size, memory_lines, turn,
+                    timeout_seconds=timeout_seconds)
+                if turn == 1:
+                    result["note"] = long_note
+                return result
+
+        mdir = os.path.join(tmp, "scroll-missing-dy")
+        mtrace = SessionTrace(mdir, {"mode": "selftest-scroll-missing-dy"})
+        witness = MissingDyWitness()
+        run_session(FakeEngine(), witness, mtrace, turns=2, dt=0.0,
+                    max_seconds=None, memory_turns=4, stuck_k=99,
+                    settle=0.0)
+        mtrace.finish("turn_budget_exhausted")
+        mturns = load_turns(mdir)
+        check("a missing-dy scroll retains the action and injects nothing",
+              mturns[0]["player"]["action"] == {"do": "scroll", "dx": -5}
+              and mturns[0]["injected"] == [],
+              f"{mturns[0]['player']['action']} {mturns[0]['injected']}")
+        check("the missing-dy turn's recorded note names dy and its range",
+              long_note in mturns[0]["player"]["note"]
+              and "dy" in mturns[0]["player"]["note"]
+              and "wheel field" in mturns[0]["player"]["note"]
+              and dy_range in mturns[0]["player"]["note"],
+              mturns[0]["player"]["note"])
+        next_memory = (witness.seen_memory[1][0]
+                       if len(witness.seen_memory) > 1
+                       and witness.seen_memory[1] else "")
+        check("the next turn's memory still carries the dy refusal "
+              "despite a long provider note",
+              "dy" in next_memory and "wheel field" in next_memory
+              and dy_range in next_memory, next_memory)
         # --- hover: the pointer-only move (#2050) --------------------
         # The vocabulary is published in three surfaces a player or a
         # lenient provider actually reaches, and every one of them has

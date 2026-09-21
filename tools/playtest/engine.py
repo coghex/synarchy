@@ -495,9 +495,18 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
         # and the player-facing notch vocabulary are about dy alone.
         # NOT `action.get("dy") or 0`: that turns a `false` into 0 and so
         # coerces a contract violation into a silently valid gesture
-        # before it can be rejected. Only an absent dy defaults.
+        # before it can be rejected. An absent dy (including a provider
+        # null that normalize_turn dropped) is a refusal, not a silent
+        # zero: the camera reads only dy, so forwarding dx with dy=0 is
+        # a no-op for the zoom the player narrated (#2652).
         raw_dy = action.get("dy")
-        dy, dy_note = bound_scroll_dy(0 if raw_dy is None else raw_dy)
+        if raw_dy is None:
+            raise ActionError(
+                f"action 'scroll' rejected: dy (the wheel field) is "
+                f"required and must be a number in "
+                f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}]; "
+                f"no scroll was sent")
+        dy, dy_note = bound_scroll_dy(raw_dy)
         calls = []
         if action.get("x") is not None and action.get("y") is not None:
             x, y = xy()

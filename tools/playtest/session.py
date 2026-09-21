@@ -42,6 +42,32 @@ def _action_sig(action: dict) -> str:
     return json.dumps(action, sort_keys=True)
 
 
+_MEMORY_NOTE_LIMIT = 120
+_HARNESS_NOTE_MARK = " [harness: "
+
+
+def _memory_note(note: str, limit: int = _MEMORY_NOTE_LIMIT) -> str:
+    """The rolling-memory fragment of a turn note.
+
+    Player-authored text is truncated to `limit`. A trailing harness
+    remark is kept in full so a refusal still names the field that
+    failed even when the player's own note already filled the budget
+    (#2652).
+    """
+    if not note:
+        return ""
+    if note.startswith("[harness: "):
+        return note
+    idx = note.rfind(_HARNESS_NOTE_MARK)
+    if idx < 0:
+        return note[:limit]
+    prefix, suffix = note[:idx], note[idx:]
+    kept_prefix = prefix[: max(0, limit - len(suffix))]
+    if not kept_prefix:
+        return suffix.lstrip()
+    return kept_prefix + suffix
+
+
 def _allocate_trace_dir(base: str) -> str:
     """Atomically reserve a fresh default session directory. Parallel
     sessions — the offscreen mode's whole point (#650) — can start the
@@ -460,7 +486,7 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         memory.append(
             f"turn {turn}: saw: {decision.get('observation', '')[:160]} | "
             f"did: {json.dumps(action)} | expected: {decision.get('expectation', '')[:120]}"
-            + (f" | note: {note[:120]}" if note else ""))
+            + (f" | note: {_memory_note(note)}" if note else ""))
         memory[:] = memory[-memory_turns:]
 
     return stop_reason
