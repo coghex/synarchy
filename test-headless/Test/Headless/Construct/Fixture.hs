@@ -79,6 +79,7 @@ registerArtOnlyPack env =
         , parKinds   = [(KFloor, False, Nothing)]
         , parEntries = [(AkFloor, art "artonly_floor")]
         , parFrames  = []
+        , parDestruction = []
         , parSizes   = HM.empty
         }
 
@@ -100,6 +101,7 @@ dungeonRegistration = PackArtRegistration
           | e ← [WallNE, WallNW, WallSE, WallSW]
           , c ← [ WallCaps l r | l ← [False, True], r ← [False, True] ] ]
     , parFrames  = []
+    , parDestruction = []
     , parSizes   = HM.empty
     }
 
@@ -109,6 +111,7 @@ wireRegistration = PackArtRegistration
     , parKinds = [(KWire, True, Just fixtureWireCost)]
     , parEntries = [ (AkWire s, art "wire") | s ← allWireShapes ]
     , parFrames  = []
+    , parDestruction = []
     , parSizes   = HM.empty
     }
 

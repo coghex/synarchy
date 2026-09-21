@@ -14,6 +14,8 @@ import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
+import Engine.Core.Capability.RenderHandoff
+    (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.State (EngineEnv)
 import World.Construct.Revalidate
     (ConstructScope(..), revalidateConstructDesignations)
@@ -23,8 +25,12 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import Structure.Types
-    ( StructureStageToken, dropStagedAttempt, recordDeclinedAttempt
-    , emptyChunkStructures )
+    ( StructurePieceData, StructureStageToken, dropStagedAttempt
+    , recordDeclinedAttempt, emptyChunkStructures )
+import Structure.ArtCatalog (noteMissingDestruction)
+import Structure.Destruction
+    ( DestructionCapture(..), captureStructureDestruction
+    , emptyStructureDestructions, insertDestructionEffect )
 import World.Flora.Designation (replaceChunkForgettingFlora)
 
 -- | Place a structure piece (floor/wall/post/ceiling) at (gx,gy,slot-tag) via
@@ -103,6 +109,23 @@ handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z to
 --   reload / after save/load. The live lcStructures overlay is additionally
 --   updated when the chunk happens to be loaded. (Replaying a clear with no
 --   matching set is a harmless no-op — a HM.delete on an absent key.)
+--
+--   __#2491: this is also where a teardown PRESENTATION is captured.__
+--   The piece's identity is read out of the resident overlay BEFORE the
+--   edit is applied to it — it is the last moment anything can see what
+--   was there — and the render-only effect is published AFTER the
+--   authoritative removal has landed, so no ordering of the two ever
+--   exposes an effect over a piece that is still present. The persistent
+--   authority is unchanged: the @WeClearStructure@ edit is recorded
+--   first and on every path, and every structure query reads the overlay
+--   and the staging cache, neither of which an effect touches.
+--
+--   Two clears capture nothing at all. A clear that finds no PRESENT
+--   piece has nothing to capture (so a second clear of the same slot is
+--   silent, and so is a clear of an empty one), and a clear whose chunk
+--   is NOT resident cannot see the piece: it records the edit exactly as
+--   before and captures nothing, because the overlay is where a piece's
+--   palette ids live and an unloaded chunk has none in memory.
 handleWorldClearStructureCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → Word8 → IO ()
 handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
@@ -118,15 +141,22 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
             atomicModifyIORef' (wsEditsRef ws) $ \es →
                 (appendEdit coord edit es, ())
             td ← readIORef (wsTilesRef ws)
-            case lookupChunk coord td of
-                Nothing → pure ()
+            removed ← case lookupChunk coord td of
+                Nothing → pure Nothing
                 Just lc → do
-                    let lc' = applyEdit edit lc
+                    -- Read the piece out FIRST: 'applyEdit' deletes the
+                    -- entry, and after that nothing in the session knows
+                    -- what stood here.
+                    let was = HM.lookup (gx, gy, slotTag) (lcStructures lc)
+                        lc' = applyEdit edit lc
                     -- #1854 requirement 16: an edit that takes the tile's
                     -- rooted flora with it must take that plant's
                     -- designation and regrowth timer too, or an orphan
                     -- entry outlives the plant it addressed.
                     replaceChunkForgettingFlora ws lc lc'
+                    pure was
+            forM_ removed $ publishStructureDestruction env logger ws pageId
+                                gx gy slotTag
             -- #1844: a CLEAR can free a slot a designation wanted, and
             -- can remove the floor a post designation stands on. Fired
             -- whatever the chunk's residency, since the clear is
@@ -134,6 +164,40 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
             _ ← revalidateConstructDesignations env logger ws
                     (ConstructKeys [(gx, gy)])
             pure ()
+
+-- | #2491: resolve and publish the teardown presentation of one piece
+--   that has just been removed, or report the gap that stopped it.
+--
+--   Called only after the authoritative removal. The catalogue, palette
+--   and handle map are read here rather than passed in because a clear
+--   is a rare, player-driven event; the cost is one triple of 'IORef'
+--   reads on a path that has already written the edit log and re-run
+--   designation revalidation.
+--
+--   The MISSING-declaration report is settled inside the catalogue's own
+--   atomic update ('noteMissingDestruction'), which is what makes it one
+--   line per (pack, appearance) rather than one per clear — a player can
+--   demolish the same kind of wall indefinitely, so the dedup has to be
+--   state and not an event property.
+publishStructureDestruction
+    ∷ EngineEnv → LoggerState → WorldState → WorldPageId
+    → Int → Int → Word8 → StructurePieceData → IO ()
+publishStructureDestruction env logger ws pageId gx gy slotTag spd = do
+    let handoff = toRenderHandoffCapability env
+    now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+    catalog ← readIORef (rhStructureArtCatalogRef handoff)
+    palette ← readIORef (rhTexPaletteRef handoff)
+    handles ← readIORef (rhTexPaletteHandlesRef handoff)
+    case captureStructureDestruction catalog palette handles now pageId
+             gx gy slotTag spd of
+        CaptureSilent → pure ()
+        CaptureUndeclared pack ak → do
+            mMessage ← atomicModifyIORef' (rhStructureArtCatalogRef handoff) $
+                \c → noteMissingDestruction pack ak c
+            forM_ mMessage $ logWarn logger CatWorld
+        CapturedEffect eff →
+            atomicModifyIORef' (wsStructureDestructionsRef ws) $ \ds →
+                (insertDestructionEffect eff ds, ())
 
 -- | Remove EVERY structure piece in the world. Clears the live per-chunk
 --   'lcStructures' overlay on all loaded chunks AND strips the structure
@@ -158,6 +222,12 @@ handleWorldClearAllStructuresCommand env logger pageId = do
                 , () )
             atomicModifyIORef' (wsEditsRef ws) $ \es →
                 (HM.map (filter (not . isStructureEdit)) es, ())
+            -- #2491: the bulk wipe is immediate and SILENT. It captures
+            -- nothing — there is no per-piece boundary here to capture
+            -- at — and it drops every effect still playing, so a page
+            -- whose structures were wiped has none left over.
+            atomicModifyIORef' (wsStructureDestructionsRef ws) $ \_ →
+                (emptyStructureDestructions, ())
             -- #1844: a wholesale wipe changes every tile's occupancy at
             -- once, which is the one structure write whose scope really
             -- is the page.

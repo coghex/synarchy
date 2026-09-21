@@ -35,6 +35,8 @@ module Test.Headless.Structure.ConstructionFixture
     , allWallEdges
     , allCaps
     , framedWireShapes
+    , allAppearances
+    , artAsset
     , frameCount
     , framePathsFor
     , staticPathFor
@@ -168,6 +170,10 @@ fixtureRegistration = PackArtRegistration
                        <> ".png") )
           | e ← allWallEdges, c ← allCaps ]
     , parFrames = declaredSequences [KFloor, KCeiling, KPost, KWall]
+      -- #2491's teardown declarations are this fixture's SIBLING's
+      -- business ("Test.Headless.Structure.DestructionFixture"), so the
+      -- construction suite keeps resolving exactly what it always did.
+    , parDestruction = []
     , parSizes  = fixtureSizes
     }
 
@@ -182,6 +188,7 @@ fixtureWireRegistration = PackArtRegistration
                              "fx/floorface.png" )
                    | w ← allWireShapes ]
     , parFrames  = declaredSequences [KWire]
+    , parDestruction = []
     , parSizes   = fixtureSizes
     }
 

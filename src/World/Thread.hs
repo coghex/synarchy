@@ -30,6 +30,7 @@ import World.Thread.Cursor (pollCursorInfo)
 import World.Thread.Time (tickWorldTime)
 import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
+import World.Thread.Destruction (pruneStructureDestructions)
 import World.Command.Types (WorldCommand(..))
 import World.State.Types (settleSelectionProjection)
 import World.Types (WorldManager(..))
@@ -108,6 +109,13 @@ worldTickWith clock env lastTimeRef = do
             -- only once every side-effect-producing step
             -- below has actually completed.
             drainInitQueues env logger
+            -- #2491: retire every page's out-of-time structure teardown
+            -- presentations, against the game clock and before it
+            -- advances, so an effect's lifetime is decided by the same
+            -- reading its capture was stamped with. Never in a render
+            -- pass: expiry must not depend on the effect having been
+            -- drawn (requirement 7).
+            pruneStructureDestructions env
             tickWorldTime env (realToFrac dt)
             updateChunkLoading env logger
             pollCursorInfo env

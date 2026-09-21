@@ -309,6 +309,8 @@ import qualified Test.Headless.World.StructurePaletteResidue as StructurePalette
 import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
 import qualified Test.Headless.Structure.ConstructionFrames as StructureConstructionFrames
 import qualified Test.Headless.Structure.ConstructionPacks as StructureConstructionPacks
+import qualified Test.Headless.Structure.DestructionFrames as StructureDestructionFrames
+import qualified Test.Headless.World.StructureDestruction as WorldStructureDestruction
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -1181,6 +1183,8 @@ main = hspec $ do
     StructureArtCatalog.spec
     StructureConstructionFrames.spec
     StructureConstructionPacks.spec
+    StructureDestructionFrames.spec
+    WorldStructureDestruction.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and

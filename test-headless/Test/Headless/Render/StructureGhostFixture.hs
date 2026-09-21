@@ -145,6 +145,7 @@ parsePiecePack = withObject "structure pack" $ \o → do
                 , a ← artFor kind ]
                 ⧺ wallEntries
             , parFrames  = []
+            , parDestruction = []
             , parSizes   = HM.empty
             }
         , pfWallEntries =
@@ -172,6 +173,7 @@ parseWirePack = withObject "wire pack" $ \o → do
                             , M.lookup KWire costs) ]
             , parEntries = entries
             , parFrames  = []
+            , parDestruction = []
             , parSizes   = HM.empty
             }
         , pfWallEntries = []

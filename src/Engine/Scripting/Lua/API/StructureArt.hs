@@ -86,6 +86,25 @@ import World.Types
 --   last frame whose pixel dimensions differ from the static sprite's,
 --   or a conflicting repeat.
 --
+--   @destruction@ (#2491) is OPTIONAL in exactly the same way and is
+--   keyed to the same appearances, with one extra field — the clip's own
+--   @fps@, because a teardown is timed by the game clock rather than
+--   driven by a site's progress:
+--
+--   > destruction = { { kind = "wall", edge = "ne", variant = nil,
+--   >                   texture = <the appearance's static sprite>,
+--   >                   texHandle = h, fps = 12,
+--   >                   frames = { { texture = p1, texHandle = h1 }, … } } }
+--
+--   The refusals are the construction list's, minus the two rules a
+--   teardown has no use for (it hands off to nothing, so there is no
+--   static-sprite cross-check and no final-frame canvas rule) and plus
+--   two of its own: a missing, non-finite or non-positive @fps@, and a
+--   WALL family that declares some directions but not all four, or whose
+--   directions disagree about frame count or fps. Every direction is
+--   reachable by turning the camera, so an incomplete family would make
+--   a wall's teardown depend on where the player happened to be looking.
+--
 --   @kinds@ is the EXPLICIT declared-kind inventory the completeness
 --   check runs against: declaring a kind obliges the payload to carry
 --   every one of its art slots (one each for @floor@\/@ceiling@\/@post@,
@@ -185,8 +204,13 @@ structureRegisterPackArtFn env = do
                     -- tables, like `art`.
                     eFrames ← optionalArrayField pack "construction"
                                   "construction frames" (readSequence pack)
+                    -- #2491: the teardown half, under exactly the same
+                    -- optionality rule and for the same reason — every
+                    -- shipped pack declares none today.
+                    eWreck ← optionalArrayField pack "destruction"
+                                 "destruction frames" (readDestruction pack)
                     pure (PackArtRegistration pack <$> eKinds <*> eArt
-                            <*> eFrames <*> pure HM.empty)
+                            <*> eFrames <*> eWreck <*> pure HM.empty)
 
     -- Push spec[name], read it as a dense array, pop. A non-table field
     -- is malformed rather than empty: an absent `art` list is not a pack
@@ -428,6 +452,97 @@ structureRegisterPackArtFn env = do
                                 else role <> " (construction frames "
                                        <> tshow i <> ")")
 
+    -- #2491: one appearance's DESTRUCTION sequence. The selectors are
+    -- the appearance's, exactly as a construction entry's are, and the
+    -- one extra field is the clip's own rate: a teardown is timed by the
+    -- game clock rather than driven by a site's progress, so it has to
+    -- say how fast it plays. An absent, non-numeric, non-finite or
+    -- non-positive `fps` is a refusal of the pack and never a default —
+    -- a clip whose rate the engine had to invent is not the clip the
+    -- pack authored, and its duration decides when the piece's visual
+    -- stops existing.
+    readDestruction ∷ Text → Int
+                    → Lua.LuaE Lua.Exception
+                          (Either ArtFault (AppearanceKey, DestructionSequence))
+    readDestruction pack i = do
+        mKind    ← fieldString (-1) "kind"
+        mEdge    ← fieldString (-1) "edge"
+        mCaps    ← fieldString (-1) "caps"
+        mShape   ← fieldString (-1) "shape"
+        mVariant ← fieldString (-1) "variant"
+        mTex     ← fieldString (-1) "texture"
+        mTexH    ← fieldHandle (-1) "texHandle"
+        fpsTy    ← Lua.getfield (-1) "fps"
+        mFps     ← Lua.tonumber (-1)
+        Lua.pop 1
+        eFrames  ← readWreckFrames pack i
+        pure $ case mKind ⌦ pieceKindFromText of
+            Nothing → Left $ wreckFault Nothing ""
+                "the entry names no recognised piece kind"
+            Just kind → case appearanceSlotFor kind mEdge mCaps mShape of
+                Nothing → Left $ wreckFault (Just kind) ""
+                    "the entry's edge/shape selectors do not name one of \
+                    \this kind's appearances"
+                Just aslot →
+                    let ak   = AppearanceKey mVariant aslot
+                        role = appearanceKeyRole ak <> " destruction"
+                        need ∷ Text → Maybe α → Either ArtFault α
+                        need what = maybe
+                            (Left (wreckFault (Just kind) (role <> " " <> what)
+                                     ("the entry has no `" <> what <> "`")))
+                            Right
+                    in do tex    ← need "texture"   mTex
+                          when (escapingPath tex) $
+                              Left (escapeFault pack role tex)
+                          texH   ← need "texHandle" mTexH
+                          fps    ← case (fpsTy, mFps) of
+                              (Lua.TypeNumber, Just (Lua.Number f)) →
+                                  Right (realToFrac f ∷ Double)
+                              _ → Left (wreckFault (Just kind)
+                                          (role <> " fps")
+                                          "the entry has no `fps` number")
+                          frames ← eFrames
+                          pure ( ak
+                               , DestructionSequence
+                                   { dsStatic = ArtAsset tex texH
+                                   , dsFrames = V.fromList frames
+                                   , dsFps    = fps } )
+      where
+        wreckFault mKind role =
+            fault pack mKind
+                  (if role ≡ "" then "destruction frames " <> tshow i
+                                else role <> " (destruction frames "
+                                       <> tshow i <> ")")
+
+    -- The teardown clip's ORDERED frame list, on the same density rule:
+    -- a sparse `frames` would silently drop stages, and a clip missing a
+    -- stage is not a shorter clip, it is wrong.
+    readWreckFrames ∷ Text → Int
+                    → Lua.LuaE Lua.Exception (Either ArtFault [ArtAsset])
+    readWreckFrames pack i = do
+        ty ← Lua.getfield (-1) "frames"
+        r ← if ty ≢ Lua.TypeTable
+              then pure ∘ Left $ fault pack Nothing
+                       ("destruction frames " <> tshow i)
+                       "the entry's `frames` is not an array"
+              else readArray pack ("destruction frames " <> tshow i)
+                             (readWreckFrame pack i)
+        Lua.pop 1
+        pure r
+
+    readWreckFrame ∷ Text → Int → Int
+                   → Lua.LuaE Lua.Exception (Either ArtFault ArtAsset)
+    readWreckFrame pack i j = do
+        mTex  ← fieldString (-1) "texture"
+        mTexH ← fieldHandle (-1) "texHandle"
+        pure $ case (mTex, mTexH) of
+            (Just tex, _) | escapingPath tex → Left (escapeFault pack role tex)
+            (Just tex, Just h) → Right (ArtAsset tex h)
+            _ → Left $ fault pack Nothing role
+                    "the frame has no `texture` string and `texHandle` number"
+      where
+        role = "destruction frames " <> tshow i <> " frame " <> tshow j
+
     -- The ORDERED frame list. Dense-array-checked like every other array
     -- in this payload: a sparse `frames` would silently drop stages, and
     -- a sequence missing a stage is not a shorter sequence, it is wrong.
@@ -507,6 +622,9 @@ declaredAssets reg =
     [ a
     | (_, cs) ← parFrames reg
     , a ← csStatic cs : V.toList (csFrames cs) ]
+    ⧺ [ a
+      | (_, ds) ← parDestruction reg
+      , a ← dsStatic ds : V.toList (dsFrames ds) ]
 
 -- | Measure every image a declared sequence's dimension check needs:
 --   the appearance's static sprite and the sequence's LAST frame.
