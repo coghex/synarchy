@@ -832,7 +832,7 @@ delivery plan. Repository evidence for why PLC-8 was not one PR:
 - **No open job exists.** A unit order that walks to a ground item, checks a
   floating arrival range, charges a stall budget, and cancels through
   `unit_ai_core.reportFailure` exists only as `pickupOrder`. A second order
-  kind is persisted by `scripts/unit_ai_save.lua` (schema v9), whose
+  kind is persisted by `scripts/unit_ai_save.lua` (schema v10), whose
   `unitAiReferences` declares the `ground_item` reference kind, so an
   `openOrder` is a Lua component schema bump with a migration and a
   save-compat fixture.

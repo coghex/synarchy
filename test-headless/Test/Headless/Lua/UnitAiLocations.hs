@@ -431,11 +431,11 @@ spec = describe "unit location knowledge" $ do
                 , "assert(captured ~= nil)"
                 ]
 
-        it "declares the current version (v9 since #1845) while still \
+        it "declares the current version (v10 since #2642) while still \
            \accepting every historical input version" $
             runsOk $ lns
                 [ registered
-                , "assert(captured.version == 9)"
+                , "assert(captured.version == 10)"
                 , "local accepted = {}"
                 , "for _, v in ipairs(captured.inputVersions) do"
                 , "  accepted[v] = true end"
@@ -443,9 +443,10 @@ spec = describe "unit location knowledge" $ do
                 -- included: #915's memory rides payloads that predate
                 -- #1291's stall accounting (v5), #1216's position hold
                 -- (v6), #1737's ground-repair provenance (v7) and
-                -- #1844's construct-job attempt identity (v8) and
-                -- #1845's staked-building reference (v9) alike.
-                , "for v = 1, 9 do assert(accepted[v], 'v' .. v"
+                -- #1844's construct-job attempt identity (v8),
+                -- #1845's staked-building reference (v9) and #2642's
+                -- treatment-claim order (v10) alike.
+                , "for v = 1, 10 do assert(accepted[v], 'v' .. v"
                 , "  .. ' must still decode') end"
                 ]
 
