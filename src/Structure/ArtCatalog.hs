@@ -74,6 +74,9 @@ module Structure.ArtCatalog
     , ConstructionSequence(..)
     , constructionFrameIndex
     , constructionFrameAt
+      -- * Destruction appearances (#2491)
+    , DestructionSequence(..)
+    , destructionSequenceDuration
       -- * Build cost
     , BuildCost(..)
     , mkBuildCost
@@ -102,6 +105,12 @@ module Structure.ArtCatalog
     , resolveConstructionFrame
     , undeclaredConstructionAppearances
     , missingConstructionMessage
+    , appearanceForTexturePath
+    , ambiguousAppearancePaths
+    , ambiguousAppearanceMessage
+    , resolveDestructionSequence
+    , missingDestructionMessage
+    , noteMissingDestruction
     , packKindBuildable
     , packKindBuild
     , packArtResolves
@@ -237,6 +246,13 @@ appearanceSlotRole s = case s of
     ApWall e  → "wall " <> wallEdgeCode e
     ApWire w  → "wire connection " <> wireShapeName w
 
+-- | The four authored wall directions. Every one of them is reachable
+--   on screen by turning the camera ('Structure.Facing.screenWallEdge'
+--   is a bijection at every facing), which is why #2491 requires a
+--   declared destruction family to cover all of them.
+allWallEdges ∷ [WallEdge]
+allWallEdges = [minBound .. maxBound]
+
 wallEdgeCode ∷ WallEdge → Text
 wallEdgeCode e = case e of
     WallNE → "ne"
@@ -309,6 +325,45 @@ constructionFrameAt ∷ Float → ConstructionSequence → ArtAsset
 constructionFrameAt progress cs =
     csFrames cs V.! constructionFrameIndex (V.length (csFrames cs)) progress
 
+-- * Destruction appearances (#2491)
+
+-- | One appearance's authored TEARDOWN playback: the ordered forward
+--   frames a piece's removal plays once, and the rate they play at.
+--
+--   Keyed by the same 'AppearanceKey' a construction sequence is, and
+--   carrying the same 'csStatic'-shaped static sprite for the same
+--   reason: a VARIANT's appearance has no entry in 'pkArt' at all, so
+--   the sprite is what identifies the appearance a PLACED piece of it
+--   resolves back to ('appearanceForTexturePath').
+--
+--   The two differences from 'ConstructionSequence' are the whole
+--   difference between the two lifecycles. A construction sequence is
+--   driven by a site's own @cdProgress@ and has no rate; a destruction
+--   clip is driven by the GAME CLOCK, so it declares its own finite
+--   positive @fps@ and runs for a fixed 'destructionSequenceDuration'.
+--   And it hands off to nothing: the piece is already gone when the
+--   first frame draws, so there is no final-frame canvas rule.
+data DestructionSequence = DestructionSequence
+    { dsStatic ∷ !ArtAsset
+      -- ^ The appearance's STATIC sprite — the identity, not a frame.
+      --   Never drawn by the playback: requirement 6 forbids
+      --   substituting it for a missing clip, and a clip that has one
+      --   never shows it.
+    , dsFrames ∷ !(V.Vector ArtAsset)
+      -- ^ Ordered, NON-EMPTY (registration refuses an empty list).
+    , dsFps    ∷ !Double
+      -- ^ Finite and positive (registration refuses anything else).
+    } deriving (Show, Eq)
+
+-- | The clip's full length in game seconds: @frameCount / fps@, so every
+--   frame — the last included — gets its whole @1 / fps@ interval.
+--   Mirrors 'Building.Destruction.destructionDuration' exactly, because
+--   the two lifecycles are timed by the same clock and must not drift
+--   apart in how they round.
+destructionSequenceDuration ∷ DestructionSequence → Double
+destructionSequenceDuration ds =
+    fromIntegral (V.length (dsFrames ds)) / dsFps ds
+
 -- * Build cost
 
 -- | One kind's COMPLETE @build:@ entry, as the engine needs it (#1844):
@@ -366,6 +421,40 @@ data PackArt = PackArt
       --   never inherited, never substituted. An appearance absent here
       --   resolves no sequence, which is requirement 8's "the site draws
       --   nothing" and is what every shipped pack does today.
+    , pkVariantArt ∷ !(M.Map AppearanceKey ArtAsset)
+      -- ^ #2491: every authored VARIANT appearance's static sprite.
+      --
+      --   The catalogue otherwise stores default art only, because a
+      --   construction designation carries no variant and #1842 never
+      --   needed one. A teardown does: a placed piece's sprite PATH is
+      --   the whole of its appearance identity, so an appearance the
+      --   catalogue has never heard of is a piece whose clip cannot be
+      --   resolved AND whose missing declaration cannot be reported.
+      --
+      --   Carried for every appearance a variant HAS, whether it
+      --   overrides the sprite or inherits the default's — an inherited
+      --   one is what makes the path ambiguous, and the index has to see
+      --   both claimants to know that ('indexAppearances').
+    , pkDestruction ∷ !(M.Map AppearanceKey DestructionSequence)
+      -- ^ #2491: the TEARDOWN playback each authored appearance
+      --   declares, under the same keying and the same never-inherited,
+      --   never-substituted rule as 'pkFrames'. An appearance absent
+      --   here resolves no clip, which is requirement 6's "captures
+      --   nothing" and is what every shipped pack does today.
+    , pkMissingDestruction ∷ !(S.Set AppearanceKey)
+      -- ^ The appearances of this pack whose missing destruction
+      --   declaration has ALREADY been reported ('noteMissingDestruction').
+      --
+      --   Requirement 6 asks for one report per (pack, appearance), and
+      --   a clear is a player action that can repeat indefinitely, so
+      --   the dedup has to be state rather than an event property. It
+      --   lives here for the same reason 'pkFailures' does: the
+      --   catalogue is the only thing that knows what a (pack,
+      --   appearance) IS, and a per-page set would report the same gap
+      --   once per page instead of once.
+      --
+      --   Not part of what a registration DECLARES — see
+      --   'sameDeclaration'.
     , pkFailures  ∷ !(HM.HashMap Text Text)
       -- ^ Terminal texture-load failures: the failed PATH → its reason,
       --   recorded once each. Non-empty means the whole pack resolves
@@ -377,12 +466,29 @@ data PackArt = PackArt
 --   read by the render pass; never cleared, and — like the wall
 --   catalogue — deliberately not session-replaced, because it is keyed
 --   by pack name and holds paths, neither of which a load invalidates.
-newtype StructureArtCatalog = StructureArtCatalog
-    { sacPacks ∷ HM.HashMap Text PackArt
+data StructureArtCatalog = StructureArtCatalog
+    { sacPacks ∷ !(HM.HashMap Text PackArt)
+    , sacAppearanceByPath ∷ !(HM.HashMap Text (Maybe (Text, AppearanceKey)))
+      -- ^ #2491: static texture PATH → the (pack, appearance) that
+      --   declares it, which is how a PLACED piece resolves back to the
+      --   appearance whose clip it should play. A placed piece stores
+      --   palette ids and z and nothing else, so the path its texture id
+      --   resolves to is the only appearance identity it carries.
+      --
+      --   'Nothing' is a path two different appearances both claim —
+      --   contradictory pack data about what a piece drawn with it IS —
+      --   and resolves nothing at all, exactly as
+      --   'Structure.WallCatalog.swcTexOwner' treats a contested sprite.
+      --   Every wall CAP of one edge claims the same path for the same
+      --   appearance, which agrees and is not contested.
+      --
+      --   Derived from the stored packs and rebuilt by nothing: packs
+      --   are never removed, so the index only ever grows alongside
+      --   'sacPacks'.
     } deriving (Show, Eq)
 
 emptyStructureArtCatalog ∷ StructureArtCatalog
-emptyStructureArtCatalog = StructureArtCatalog HM.empty
+emptyStructureArtCatalog = StructureArtCatalog HM.empty HM.empty
 
 -- * Failure
 
@@ -429,6 +535,20 @@ data PackArtRegistration = PackArtRegistration
       -- ^ #2488: the construction sequences this pack declares, at most
       --   one per appearance. Empty for a pack that declares none, which
       --   is every shipped pack today.
+    , parVariants ∷ ![(AppearanceKey, ArtAsset)]
+      -- ^ #2491: every authored VARIANT appearance and the static sprite
+      --   it is placed with, overridden or inherited. Empty for a pack
+      --   with no variants. A DEFAULT-variant entry here is refused:
+      --   default art is 'parEntries'' business and stating it twice
+      --   would let the two disagree.
+    , parDestruction ∷ ![(AppearanceKey, DestructionSequence)]
+      -- ^ #2491: the destruction sequences this pack declares, at most
+      --   one per appearance. Empty for a pack that declares none, which
+      --   is every shipped pack today (BDA-15\/BDA-16 author the art).
+      --
+      --   Unlike 'parFrames' these need no measurement: a destruction
+      --   clip hands off to nothing, so there is no final-frame canvas
+      --   rule and 'parSizes' is never consulted for one.
     , parSizes   ∷ !(HM.HashMap Text (Int, Int))
       -- ^ Measured pixel dimensions, by path, for requirement 6's
       --   final-frame check. The caller measures because the catalogue is
@@ -460,7 +580,9 @@ registerPackArt ∷ PackArtRegistration → StructureArtCatalog
 registerPackArt reg cat = case validate of
     Left fault → (cat, ArtRegistrationRefused fault)
     Right pack → case HM.lookup name (sacPacks cat) of
-        Nothing → ( StructureArtCatalog (HM.insert name pack (sacPacks cat))
+        Nothing → ( StructureArtCatalog
+                        (HM.insert name pack (sacPacks cat))
+                        (indexAppearances name pack (sacAppearanceByPath cat))
                   , ArtRegistered )
         Just existing
             | sameDeclaration existing pack → (cat, ArtAlreadyRegistered)
@@ -478,6 +600,8 @@ registerPackArt reg cat = case validate of
                         ∧ pkBuild a ≡ pkBuild b
                         ∧ pkArt a ≡ pkArt b
                         ∧ pkFrames a ≡ pkFrames b
+                        ∧ pkVariantArt a ≡ pkVariantArt b
+                        ∧ pkDestruction a ≡ pkDestruction b
 
     -- Name WHAT differs rather than dumping both declarations: the
     -- kinds usually match and the art is where a conflicting repeat
@@ -499,7 +623,10 @@ registerPackArt reg cat = case validate of
                 , ("buildable kinds", pkBuildable existing ≢ pkBuildable pack)
                 , ("build costs", pkBuild existing ≢ pkBuild pack)
                 , ("art", pkArt existing ≢ pkArt pack)
-                , ("construction frames", pkFrames existing ≢ pkFrames pack) ]
+                , ("construction frames", pkFrames existing ≢ pkFrames pack)
+                , ("variant art", pkVariantArt existing ≢ pkVariantArt pack)
+                , ("destruction frames"
+                  , pkDestruction existing ≢ pkDestruction pack) ]
             , differs ]
 
     fault mKind role mPath reason = ArtFault
@@ -542,11 +669,20 @@ registerPackArt reg cat = case validate of
         -- pack that is short of a sprite is reported as that rather than
         -- as a sequence pointing at a slot it never declared.
         frameMap ← validateFrames kindSet artMap
+        -- #2491: the VARIANT inventory, then the TEARDOWN declarations,
+        -- last, so a pack that is short of a sprite or has a malformed
+        -- build sequence is reported as that rather than as one of
+        -- these.
+        variantMap ← validateVariants kindSet
+        wreckMap ← validateDestruction kindSet
         pure PackArt { pkKinds     = kindSet
                      , pkBuildable = buildable
                      , pkBuild     = buildMap
                      , pkArt       = artMap
                      , pkFrames    = frameMap
+                     , pkVariantArt = variantMap
+                     , pkDestruction = wreckMap
+                     , pkMissingDestruction = S.empty
                      , pkFailures  = HM.empty }
 
     -- #2488's registration rules, in a fixed order so the reported fault
@@ -627,6 +763,118 @@ registerPackArt reg cat = case validate of
             [ (apVariant ak, [(e, V.length (csFrames cs))])
             | (ak, cs) ← parFrames reg, ApWall e ← [apSlot ak] ]
 
+    -- #2491's VARIANT inventory: every authored variant appearance and
+    -- the sprite it is placed with. Shape checks only — a variant's
+    -- sprite has nothing to be cross-checked against, since the
+    -- catalogue stores default art alone — and deliberately no rule
+    -- against a variant sharing the default's path: that is the
+    -- AMBIGUITY 'indexAppearances' exists to notice, not a malformed
+    -- payload.
+    validateVariants ∷ S.Set PieceKind
+                     → Either ArtFault (M.Map AppearanceKey ArtAsset)
+    validateVariants kindSet = do
+        forM_ (parVariants reg) $ \(ak, asset) → do
+            let kind = appearanceSlotKind (apSlot ak)
+                role = appearanceKeyRole ak <> " variant art"
+            when (isNothing (apVariant ak)) $
+                Left (fault (Just kind) role Nothing
+                        "the default art is declared through `art`, not as \
+                        \a variant")
+            unless (kind `S.member` kindSet) $
+                Left (fault (Just kind) role Nothing
+                        "variant art was supplied for a kind the \
+                        \registration does not declare")
+            checkFramePath kind role "sprite" asset
+        let variantMap = M.fromList (parVariants reg)
+        when (M.size variantMap ≢ length (parVariants reg)) $
+            Left (fault Nothing "variant art" Nothing
+                        "the same variant appearance is supplied more than \
+                        \once")
+        pure variantMap
+
+    -- #2491's registration rules. Deliberately NOT a copy of
+    -- 'validateFrames': a destruction clip hands off to nothing (so
+    -- there is no static-sprite cross-check and no final-frame canvas
+    -- rule), it is timed rather than progress-driven (so it declares an
+    -- fps), and its wall families must be COMPLETE rather than merely
+    -- consistent.
+    --
+    -- That last rule is the one a reviewer should read twice. A wall's
+    -- authored edge does not move but the screen edge it occupies does
+    -- ('Structure.Facing.screenWallEdge'), and every one of the four is
+    -- reachable by turning the camera. A placed wall's teardown
+    -- therefore has to answer at all four — with the SAME frame count
+    -- and the SAME fps, or one elapsed time would select different
+    -- stages at different facings, and the clip would expire at
+    -- different moments depending on where the camera happened to be.
+    -- So a family that declares ANY direction must declare all four,
+    -- identically shaped, and the whole pack is refused otherwise.
+    validateDestruction ∷ S.Set PieceKind
+                        → Either ArtFault (M.Map AppearanceKey DestructionSequence)
+    validateDestruction kindSet = do
+        forM_ (parDestruction reg) $ \(ak, ds) → do
+            let kind  = appearanceSlotKind (apSlot ak)
+                role  = appearanceKeyRole ak <> " destruction"
+                sFault = fault (Just kind) role
+            unless (kind `S.member` kindSet) $
+                Left (sFault Nothing
+                        "destruction frames were supplied for a kind the \
+                        \registration does not declare")
+            when (V.null (dsFrames ds)) $
+                Left (sFault Nothing "the destruction frame list is empty")
+            when (isNaN (dsFps ds) ∨ isInfinite (dsFps ds)) $
+                Left (sFault Nothing
+                        ("the declared fps is not finite (" <> tshow (dsFps ds)
+                           <> "); a destruction clip needs a finite positive \
+                              \fps"))
+            when (dsFps ds ≤ 0) $
+                Left (sFault Nothing
+                        ("the declared fps is " <> tshow (dsFps ds)
+                           <> "; a destruction clip needs a finite positive \
+                              \fps"))
+            checkFramePath kind role "static sprite" (dsStatic ds)
+            forM_ (zip [1 ∷ Int ..] (V.toList (dsFrames ds))) $ \(i, a) →
+                checkFramePath kind (role <> " frame " <> tshow i) "frame" a
+            let paths = map aaPath (V.toList (dsFrames ds))
+            when (S.size (S.fromList paths) ≢ length paths) $
+                Left (sFault Nothing
+                        "the destruction frame list names the same image \
+                        \more than once")
+        forM_ (M.toList wreckWalls) $ \(variant, declared) → do
+            let named = M.fromList declared
+                role  = appearanceKeyRole (AppearanceKey variant (ApWall WallNE))
+                          <> " destruction"
+                missing = [ e | e ← allWallEdges, not (M.member e named) ]
+            unless (null missing) $
+                Left (fault (Just KWall) role Nothing
+                        ("this wall family declares destruction frames for \
+                         \some directions but not "
+                           <> T.intercalate ", " (map wallEdgeCode missing)
+                           <> "; every direction a camera turn can reach \
+                              \must declare its own clip"))
+            when (S.size (S.fromList (M.elems named)) > 1) $
+                Left (fault (Just KWall) role Nothing
+                        ("this wall family's declared directions disagree ("
+                           <> T.intercalate ", "
+                                [ wallEdgeCode e <> ": " <> tshow n
+                                    <> " frame(s) at " <> tshow f <> " fps"
+                                | (e, (n, f)) ← M.toAscList named ]
+                           <> "), so one elapsed time would select different \
+                              \stages at different facings"))
+        let wreckMap = M.fromList (parDestruction reg)
+        when (M.size wreckMap ≢ length (parDestruction reg)) $
+            Left (fault Nothing "destruction frames" Nothing
+                        "the same appearance declares destruction frames \
+                        \more than once")
+        pure wreckMap
+      where
+        -- Per variant: the declared directions with the (length, fps)
+        -- pair each runs to. Ordered by edge so the diagnostic reads
+        -- the same way every run.
+        wreckWalls = M.fromListWith (++)
+            [ (apVariant ak, [(e, (V.length (dsFrames ds), dsFps ds))])
+            | (ak, ds) ← parDestruction reg, ApWall e ← [apSlot ak] ]
+
     dims (w, h) = tshow w <> "x" <> tshow h
 
     measured sFault path = case HM.lookup path (parSizes reg) of
@@ -662,6 +910,54 @@ registerPackArt reg cat = case validate of
                         (Just (aaPath asset))
                         ("the texture handle is not a loaded handle ("
                           <> tshow h <> ")"))
+
+-- | Fold one freshly stored pack's appearance claims into the
+--   catalogue's static-path index (#2491).
+--
+--   A claim is @(static texture path, (pack, appearance))@. Two claims
+--   that AGREE collapse — which is what every wall does, since one
+--   sprite serves an edge's four cap facemaps and all four resolve to
+--   the same @ApWall@ appearance — and two that DISAGREE mark the path
+--   contested ('Nothing'), so nothing placed with it resolves an
+--   appearance at all.
+--
+--   Contested is the honest answer, not a failure to try harder: the
+--   path is the ONLY appearance identity a placed piece carries, so two
+--   appearances claiming it means the catalogue genuinely cannot say
+--   which clip a piece drawn with it should play. Never guessing is
+--   requirement 6's rule as much as requirement 4's.
+indexAppearances ∷ Text → PackArt
+                 → HM.HashMap Text (Maybe (Text, AppearanceKey))
+                 → HM.HashMap Text (Maybe (Text, AppearanceKey))
+indexAppearances pack p index0 = foldr claim index0 (appearanceClaims pack p)
+  where
+    claim (path, owner) = HM.insertWith merge path (Just owner)
+    merge new old
+        | old ≡ new = old
+        | otherwise = Nothing
+
+-- | Every (static texture path, appearance) pair one stored pack
+--   declares.
+--
+--   The DEFAULT appearances come from the registered art, which is the
+--   only place they exist. A VARIANT's static sprite has no entry in
+--   'pkArt' at all — the catalogue stores default art only — so it is
+--   taken from whichever lifecycle sequence carries it, exactly as
+--   'failPackArtPath' already has to.
+appearanceClaims ∷ Text → PackArt → [(Text, (Text, AppearanceKey))]
+appearanceClaims pack p =
+    [ (aaPath (paTexture art), (pack, defaultAppearance key))
+    | (key, art) ← M.toList (pkArt p) ]
+    ⧺ [ (aaPath asset, (pack, ak)) | (ak, asset) ← M.toList (pkVariantArt p) ]
+    -- A hand-built registration may declare a variant's sequence without
+    -- listing its static art (the production loader sends both). Taking
+    -- the sequence's own sprite keeps such a payload indexed rather than
+    -- silently unresolvable; a claim that agrees with the inventory
+    -- above collapses into it.
+    ⧺ [ (aaPath (csStatic cs), (pack, ak))
+      | (ak, cs) ← M.toList (pkFrames p), isJust (apVariant ak) ]
+    ⧺ [ (aaPath (dsStatic ds), (pack, ak))
+      | (ak, ds) ← M.toList (pkDestruction p), isJust (apVariant ak) ]
 
 -- | Does this path leave the resource root? A leading separator, a
 --   Windows separator, a scheme\/drive colon or any @.@ \/ @..@ segment
@@ -726,7 +1022,7 @@ data ArtFailureReport = ArtFailureReport
 failPackArtPath ∷ Text → Text → StructureArtCatalog
                 → (StructureArtCatalog, ArtFailureReport)
 failPackArtPath path reason cat =
-    ( StructureArtCatalog (HM.union (HM.fromList updated) (sacPacks cat))
+    ( cat { sacPacks = HM.union (HM.fromList updated) (sacPacks cat) }
     , ArtFailureReport
         { afrTracked = not (null affected)
         , afrFailure = if null fresh then Nothing else Just ArtAssetFailure
@@ -736,7 +1032,8 @@ failPackArtPath path reason cat =
     -- sees a deterministic order rather than the hash map's.
     affected = sortOn fst
         [ (n, p) | (n, p) ← HM.toList (sacPacks cat)
-                 , isJust (slotFor p) ∨ isJust (frameSlotFor p) ]
+                 , isJust (slotFor p) ∨ isJust (frameSlotFor p)
+                     ∨ isJust (wreckSlotFor p) ∨ isJust (variantSlotFor p) ]
     fresh = [ (n, kindFor p, roleFor p)
             | (n, p) ← affected, not (HM.member path (pkFailures p)) ]
     updated = [ (n, p { pkFailures = HM.insert path reason (pkFailures p) })
@@ -746,7 +1043,12 @@ failPackArtPath path reason cat =
     -- unchanged for every pack that declares no frames (#2488).
     kindFor p = case slotFor p of
         Just (key, _) → Just (artKeyKind key)
-        Nothing       → appearanceSlotKind ∘ apSlot ∘ fst <$> frameSlotFor p
+        Nothing → case frameSlotFor p of
+            Just (ak, _) → Just (appearanceSlotKind (apSlot ak))
+            Nothing → case wreckSlotFor p of
+                Just (ak, _) → Just (appearanceSlotKind (apSlot ak))
+                Nothing      → appearanceSlotKind ∘ apSlot
+                                 <$> variantSlotFor p
     roleFor p = case slotFor p of
         Just (key, half) → artKeyRole key <> " " <> half
         Nothing → case frameSlotFor p of
@@ -754,7 +1056,14 @@ failPackArtPath path reason cat =
                                    <> tshow i
             Just (ak, Nothing) → appearanceKeyRole ak
                                    <> " construction static sprite"
-            Nothing            → "registered art"
+            Nothing → case wreckSlotFor p of
+                Just (ak, Just i)  → appearanceKeyRole ak
+                                       <> " destruction frame " <> tshow i
+                Just (ak, Nothing) → appearanceKeyRole ak
+                                       <> " destruction static sprite"
+                Nothing → case variantSlotFor p of
+                    Just ak → appearanceKeyRole ak <> " variant art"
+                    Nothing → "registered art"
     -- The first slot of this pack that names the path, and whether the
     -- path is that slot's texture, its facemap, or both — so the warning
     -- can say WHICH kind lost WHICH half. A path shared by several slots
@@ -770,6 +1079,12 @@ failPackArtPath path reason cat =
         , let half | isTex ∧ isFace = "texture and facemap"
                    | isTex          = "texture"
                    | otherwise      = "facemap" ]
+    -- The lowest VARIANT appearance whose own sprite is the path. A
+    -- variant's static art is registered art of this pack since #2491,
+    -- so a terminal failure on it invalidates the pack exactly as a
+    -- default sprite's does.
+    variantSlotFor p = listToMaybe
+        [ ak | (ak, a) ← M.toAscList (pkVariantArt p), aaPath a ≡ path ]
     -- The lowest appearance whose construction sequence names the path,
     -- and WHICH of its assets that is: a 1-based frame position, or
     -- 'Nothing' for the sequence's own static sprite.
@@ -789,6 +1104,16 @@ failPackArtPath path reason cat =
         , (mIndex, a) ← (Nothing, csStatic cs)
                           : [ (Just i, f)
                             | (i, f) ← zip [1 ∷ Int ..] (V.toList (csFrames cs)) ]
+        , aaPath a ≡ path ]
+    -- #2491's teardown half of the same lookup, on the same terms: a
+    -- destruction frame that will not load invalidates the whole pack,
+    -- because a clip is only meaningful as a complete sequence.
+    wreckSlotFor p = listToMaybe
+        [ (ak, mIndex)
+        | (ak, ds) ← M.toAscList (pkDestruction p)
+        , (mIndex, a) ← (Nothing, dsStatic ds)
+                          : [ (Just i, f)
+                            | (i, f) ← zip [1 ∷ Int ..] (V.toList (dsFrames ds)) ]
         , aaPath a ≡ path ]
 
 -- * Resolution
@@ -896,6 +1221,114 @@ missingConstructionMessage pack ak = mconcat
     [ "structure art: pack '", pack, "' appearance '", appearanceKeyRole ak
     , "' declares no construction frames -- a paid site of it draws "
     , "nothing until the piece appears" ]
+
+-- * Destruction resolution (#2491)
+
+-- | Which (pack, appearance) a PLACED piece drawn with this static
+--   texture path belongs to, or 'Nothing'.
+--
+--   The whole bridge between a placed piece and its authored identity. A
+--   'Structure.Types.StructurePieceData' stores palette ids and a z;
+--   'Structure.Palette.lookupPath' turns the texture id back into the
+--   path, and this turns the path back into the appearance whose
+--   lifecycle art it is. Nothing is interned, written or read on the
+--   save side by either step.
+--
+--   'Nothing' for a path no registered pack declares (a hand-placed
+--   arbitrary sprite, or art from a pack that was never registered),
+--   for a path two appearances contest, and for a pack whose art has
+--   terminally failed — the same three silences 'resolveUnplacedArt'
+--   keeps.
+appearanceForTexturePath ∷ StructureArtCatalog → Text
+                         → Maybe (Text, AppearanceKey)
+appearanceForTexturePath cat path = do
+    owner ← join (HM.lookup path (sacAppearanceByPath cat))
+    guard (packArtResolves cat (fst owner))
+    pure owner
+
+-- | The destruction playback this pack declares for that exact
+--   appearance, or 'Nothing'.
+--
+--   Requirement 6's silence, on the same terms as
+--   'resolveConstructionSequence': an unregistered pack, a pack whose
+--   art has terminally failed, and an appearance with no declaration all
+--   resolve NOTHING — never the static sprite, never a fade, never a
+--   reversed construction sequence, and never another appearance's
+--   frames.
+resolveDestructionSequence ∷ StructureArtCatalog → Text → AppearanceKey
+                           → Maybe DestructionSequence
+resolveDestructionSequence cat pack ak = do
+    p ← HM.lookup pack (sacPacks cat)
+    guard (HM.null (pkFailures p))
+    M.lookup ak (pkDestruction p)
+
+-- | Every static sprite of this pack that TWO or more appearances
+--   claim, ascending — the paths 'appearanceForTexturePath' answers
+--   nothing for.
+--
+--   In practice this is a variant that INHERITS the default's sprite
+--   for some appearance (the shipped @dungeon_1.damaged@ overrides its
+--   floor, post and four walls but not its ceiling). A piece placed
+--   with such a path is byte-identically the default's art, so the
+--   catalogue genuinely cannot say which appearance it is — and
+--   answering "the default" would let a variant's piece play the
+--   default's clip, which requirement 1 forbids outright. Nothing plays
+--   instead, for BOTH claimants.
+--
+--   Reported so that is a fact an author can see rather than a silence
+--   they have to infer. The fix is authoring, not code: give the
+--   variant its own sprite for that appearance.
+ambiguousAppearancePaths ∷ StructureArtCatalog → Text → [Text]
+ambiguousAppearancePaths cat pack = case HM.lookup pack (sacPacks cat) of
+    Nothing → []
+    Just p  → S.toAscList $ S.fromList
+        [ path
+        | (path, _) ← appearanceClaims pack p
+        -- 'Just Nothing' is the contested marker; a path this pack does
+        -- not claim is not in the list at all, and an uncontested one
+        -- answers 'Just (Just owner)'.
+        , HM.lookup path (sacAppearanceByPath cat) ≡ Just Nothing ]
+
+-- | The ONE line an ambiguous sprite emits.
+ambiguousAppearanceMessage ∷ Text → Text → Text
+ambiguousAppearanceMessage pack path = mconcat
+    [ "structure art: pack '", pack, "' sprite '", path
+    , "' is the static art of more than one appearance, so a piece "
+    , "placed with it identifies none -- neither claimant's lifecycle "
+    , "frames will play. Give the variant its own sprite for that "
+    , "appearance." ]
+
+-- | The ONE line a missing destruction declaration emits.
+missingDestructionMessage ∷ Text → AppearanceKey → Text
+missingDestructionMessage pack ak = mconcat
+    [ "structure art: pack '", pack, "' appearance '", appearanceKeyRole ak
+    , "' declares no destruction frames -- clearing a piece of it removes "
+    , "it with no visual" ]
+
+-- | Record that this (pack, appearance) was cleared with no destruction
+--   declaration, and hand back the ONE warning that gap owes — or
+--   'Nothing' if it has already been reported.
+--
+--   Requirement 6's "one report per (pack, appearance)". Shaped exactly
+--   like 'failPackArtPath': pure, catalogue in and catalogue out, so the
+--   caller settles the dedup in the same atomic update that reads it and
+--   two threads clearing the same appearance cannot both warn.
+--
+--   A pack this catalogue does not hold records nothing and says
+--   nothing: 'appearanceForTexturePath' is the only thing that names a
+--   pack here, and it only names a stored one.
+noteMissingDestruction ∷ Text → AppearanceKey → StructureArtCatalog
+                       → (StructureArtCatalog, Maybe Text)
+noteMissingDestruction pack ak cat = case HM.lookup pack (sacPacks cat) of
+    Nothing → (cat, Nothing)
+    Just p
+        | S.member ak (pkMissingDestruction p) → (cat, Nothing)
+        | otherwise →
+            ( cat { sacPacks = HM.insert pack
+                        p { pkMissingDestruction =
+                                S.insert ak (pkMissingDestruction p) }
+                        (sacPacks cat) }
+            , Just (missingDestructionMessage pack ak) )
 
 -- | Does this pack's kind have COMPLETE build metadata (@build_work@ and
 --   @materials@)? Deliberately independent of 'resolveUnplacedArt': a

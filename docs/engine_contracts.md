@@ -4392,6 +4392,83 @@ ghost"`, `--match "Structure.ArtCatalog"`; probes
 `construction_probe.py`, `wire_probe.py`, `structure_rotation_probe.py`,
 and the offscreen pixel gate `structure_construction_probe.py`.
 
+### Structure teardown presentation (#2491)
+
+`structure.clear` is THE removal boundary for one piece, and it stays
+immediate. "Immediate" means at WORLD-COMMAND APPLICATION, not at the
+Lua verb's return: `structure.clear` retracts staging and queues
+`WorldClearStructure`, and the overlay stands until the world thread
+runs `handleWorldClearStructureCommand`. That handler records the
+`WeClearStructure` edit — always, resident chunk or not — deletes the
+resident overlay entry, and revalidates designations, exactly as
+before. `structure.hasAt`, `structure.count`, `structure.floorZAt`,
+construct-designation revalidation, wall-cap resolution and the power
+network's edit-history walk all read `lcStructures` and the staging
+cache, so the piece is absent from that instant however long anything
+is still playing over the tile. Nothing here re-caps a neighbour or
+reroutes a Wire run: removal handling stays placement-driven and #359's
+removal flow stays deferred.
+
+What the handler captures FIRST, out of the resident overlay and before
+the edit is applied to it, is a `Structure.Destruction.StructureDestructionEffect`
+— render-only, owning nothing — published after the authoritative
+removal has landed. Two clears capture nothing at all: one that finds no
+PRESENT piece (so a second clear of the same slot is silent), and one
+whose chunk is not resident (the overlay is where a piece's palette ids
+live). Effects are page state (`wsStructureDestructionsRef`), not chunk
+state, so a chunk evicted mid-playback changes nothing.
+
+A pack declares a clip per authored APPEARANCE, keyed exactly as a
+construction sequence is, with one extra field — its own `fps`, since a
+teardown is timed by the game clock rather than driven by a site's
+progress. The rules:
+
+* the frame index is `floor (elapsed * fps)`, clamped, played ONCE and
+  forward; the clip lasts `frames / fps` game seconds and the effect is
+  pruned at that instant;
+* a placed piece resolves its appearance from the palette PATH its
+  texture id maps back to (`appearanceForTexturePath`). Every authored
+  VARIANT appearance is registered for this, not only the ones declaring
+  frames, or a variant piece with a static override and no clip would be
+  silent AND unreportable; a path two appearances claim — a variant
+  placed with the default's own sprite — resolves nothing for either,
+  like a contested wall sprite, and is reported once at registration;
+* a wall plays the clip of the edge whose art is really DRAWN —
+  `drawnWallEdge` asks the same `rotatedWallArt` the placed piece does,
+  from the captured STATIC identity, never from an animation frame path
+  — so a declared wall family must cover all four directions at the same
+  frame count and fps or registration refuses the pack; the index stays
+  facing-blind because of it;
+* an appearance with no clip captures NOTHING and is reported once per
+  (pack, appearance); nothing substitutes the static sprite, a fade, a
+  reversed construction sequence, or another appearance's frames;
+* expiry is independent of render success — hidden page, evicted chunk,
+  unresolved handles, no texture system at all — because the world tick
+  prunes every page against the game clock, never a render pass. A
+  paused clock freezes an effect at its phase;
+* a missing palette HANDLE delays the first drawn frame and nothing
+  else: the effect exists, keeps its clip and keeps its start time;
+* bulk paths stay immediate and silent. `structure.clearAll`,
+  `WorldClearAllStructures`, load replacement, world teardown and debug
+  resets capture nothing and leave no pending effect, and every freshly
+  constructed page starts with none.
+
+No save field is added: `StructurePieceData`, the edit log and the page
+snapshot are unchanged, and a save taken mid-playback restores neither
+the piece nor its effect (`wsStructureDestructionsRef` is
+`Exclude (session-transient)` in
+[persistence_state_inventory.md](persistence_state_inventory.md)).
+Effects are measured inside the existing `ScStructures` scene category
+and counted on every page, visible or not, so a frame holding only
+effects is not reported as an empty pass. Gates: hspec `--match
+"structure destruction presentation lifecycle"`, `--match
+"Structure.ArtCatalog"`, `--match "World.Render.StructureRotation"`,
+`--match "Power.Network"`, `--match "persistence contract"`;
+`tools/persistence_inventory_audit.py`; probes `power_probe.py`,
+`structure_rotation_probe.py`, `location_stamp_idempotent_probe.py`,
+`multiworld_save_probe.py` (the shipped packs declare no clips, so those
+four guard the no-declaration and bulk paths).
+
 ---
 
 ## Roles (#265)

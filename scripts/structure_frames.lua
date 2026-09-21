@@ -74,6 +74,46 @@ function M.load(paths)
     return frames
 end
 
+-- One authored `destruction:` declaration -> the entry
+-- `structure.registerPackArt` takes (#2491).
+--
+-- SHAPE IS PRESERVED here too, and the rule matters more than it does
+-- for `construction:` because this declaration has a second half. A
+-- teardown is timed by the game clock, so it declares its own `fps`
+-- beside its frame list:
+--
+--     destruction:
+--       fps: 12
+--       frames:
+--         - .../wall_ne_break_0.png
+--         - .../wall_ne_break_1.png
+--
+-- nil in -> nil out: the appearance declares no clip, which is every
+-- shipped appearance's state.
+--
+-- Anything that is NOT a table goes over unchanged, for the engine's own
+-- reader to refuse as malformed. A table is forwarded with its `fps`
+-- EXACTLY as authored -- not defaulted, not coerced, not dropped when it
+-- is absent or a string -- because the engine refuses a clip whose rate
+-- it would otherwise have to invent, and inventing one here would turn
+-- that refusal into a silently wrong duration. `frames` goes through
+-- `M.load` so a hole or a non-string entry is preserved for the engine
+-- to see.
+function M.loadDestruction(decl)
+    if decl == nil then return nil end
+    if type(decl) ~= "table" then return decl end
+    return { fps = decl.fps, frames = M.load(decl.frames) }
+end
+
+-- Which destruction declaration an appearance uses. A VARIANT reads its
+-- own override's and nothing else, for exactly the reason `declaredBy`
+-- below spells out: a damaged wall must not collapse into the intact
+-- wall's rubble.
+function M.destructionDeclaredBy(variant, over, base)
+    if variant then return over.destruction end
+    return base.destruction
+end
+
 -- Which construction declaration an appearance uses. A VARIANT reads its
 -- own override's and nothing else: inheriting the default's would build a
 -- damaged wall out of the intact wall's frames, which requirement 1

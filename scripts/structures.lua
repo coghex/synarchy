@@ -77,7 +77,11 @@ local function handles(variant)
                     -- appearance. An override's own list or none —
                     -- never the default's, which would show a variant
                     -- being built out of the default's art.
-                    build = frames.load(frames.declaredBy(variant, o, p)) }
+                    build = frames.load(frames.declaredBy(variant, o, p)),
+                    -- #2491: the teardown clip for THIS appearance,
+                    -- under the same never-inherited rule.
+                    wreck = frames.loadDestruction(
+                                frames.destructionDeclaredBy(variant, o, p)) }
     end
     -- walls: one sprite + the 4 cap facemap variants (handles + paths).
     -- `own*` records whether THIS variant declared the path or inherited
@@ -100,7 +104,9 @@ local function handles(variant)
                        face = faces, facePath = facePaths,
                        ownTex = (variant == nil) or (o.texture ~= nil),
                        ownFace = ownFace,
-                       build = frames.load(frames.declaredBy(variant, o, w)) }
+                       build = frames.load(frames.declaredBy(variant, o, w)),
+                       wreck = frames.loadDestruction(
+                                   frames.destructionDeclaredBy(variant, o, w)) }
     end
     registerWallFamily(h, key)
     cache[key] = h
@@ -214,6 +220,71 @@ local function appendConstruction(out, h, variant)
     end
 end
 
+-- One variant's STATIC appearances (#2491), appended to `out`.
+--
+-- Every appearance the variant has, whether it overrides the sprite or
+-- inherits the default's. Both matter and for opposite reasons: an
+-- OVERRIDDEN sprite is the only thing that identifies a placed variant
+-- piece, and an INHERITED one is what makes a sprite ambiguous between
+-- the variant and the default -- which the engine has to be told about,
+-- because answering "the default" would let a variant's piece play the
+-- default's clip.
+--
+-- Default art is NOT sent here; it travels in `art`, and the engine
+-- refuses a variant entry that omits its `variant` name.
+local function appendVariantArt(out, h, variant)
+    if not variant then return end
+    for _, k in ipairs(PIECE_KINDS) do
+        local p = h[k]
+        if p and p.texPath then
+            out[#out + 1] = { kind = k, variant = variant,
+                              texture = p.texPath, texHandle = p.tex }
+        end
+    end
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        if w and w.texPath then
+            out[#out + 1] = { kind = "wall", edge = e, variant = variant,
+                              texture = w.texPath, texHandle = w.tex }
+        end
+    end
+end
+
+-- One variant's destruction entries (#2491), appended to `out`. Same
+-- shape and the same `~= nil` rule as the construction half above, plus
+-- the clip's own `fps`, which is forwarded exactly as authored so the
+-- engine refuses a missing or nonsensical rate rather than playing a
+-- duration nobody wrote.
+--
+-- A `wreck` that is not a table (a malformed `destruction:` the loader
+-- deliberately passed through unchanged) still goes over: the engine's
+-- reader names it, and dropping it here would let the pack register as
+-- though it had declared nothing.
+local function appendDestruction(out, h, variant)
+    for _, k in ipairs(PIECE_KINDS) do
+        local p = h[k]
+        if p and p.texPath and p.wreck ~= nil then
+            out[#out + 1] = { kind = k, variant = variant,
+                              texture = p.texPath, texHandle = p.tex,
+                              fps = (type(p.wreck) == "table") and p.wreck.fps
+                                      or nil,
+                              frames = (type(p.wreck) == "table")
+                                         and p.wreck.frames or p.wreck }
+        end
+    end
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        if w and w.texPath and w.wreck ~= nil then
+            out[#out + 1] = { kind = "wall", edge = e, variant = variant,
+                              texture = w.texPath, texHandle = w.tex,
+                              fps = (type(w.wreck) == "table") and w.wreck.fps
+                                      or nil,
+                              frames = (type(w.wreck) == "table")
+                                         and w.wreck.frames or w.wreck }
+        end
+    end
+end
+
 local function registerPackArtCatalog(h, variantHandles)
     if registeredArt or not structure.registerPackArt then return end
     local pack = packDef()
@@ -251,8 +322,16 @@ local function registerPackArtCatalog(h, variantHandles)
     for _, name in ipairs(names) do
         appendConstruction(construction, variantHandles[name], name)
     end
+    local destruction, variants = {}, {}
+    appendDestruction(destruction, h, nil)
+    for _, name in ipairs(names) do
+        appendDestruction(destruction, variantHandles[name], name)
+        appendVariantArt(variants, variantHandles[name], name)
+    end
     structure.registerPackArt{ pack = M.pack, kinds = kinds, art = art,
-                               construction = construction }
+                               construction = construction,
+                               destruction = destruction,
+                               variants = variants }
 end
 
 -- Register every variant's wall art up front. A wall replayed from a save

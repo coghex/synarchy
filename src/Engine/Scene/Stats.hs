@@ -82,7 +82,13 @@ import GHC.Clock (getMonotonicTimeNSec)
 --     filtering. A frame holding only effects is therefore still
 --     measured, not reported as an empty pass.
 --   * 'ScStructures' — structure-piece records examined after their
---     loaded chunk passes chunk-visibility culling.
+--     loaded chunk passes chunk-visibility culling, PLUS every teardown
+--     presentation retained by any page (#2491's transient, render-only
+--     presentation of a cleared structure piece), visible or not and
+--     before texture, residency or Z filtering. A frame holding only
+--     effects — the chunk evicted since the capture, the page hidden,
+--     the session headless — is therefore still measured, not reported
+--     as an empty pass.
 --   * 'ScGhost' — the optional building-ghost candidate: zero or one,
 --     before definition, texture-system or other rejection.
 --   * 'ScZoomMap' — baked zoom entries, location instances, and present

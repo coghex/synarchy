@@ -48,7 +48,9 @@ local frames = require("scripts.structure_frames")
 --
 --   isolated: assets/.../isolated.png                  -- legacy scalar
 --   cross:  { texture: assets/.../cross.png,           -- #2488
---             construction: [ .../cross_0.png, … ] }
+--             construction: [ .../cross_0.png, … ],
+--             destruction: { fps: 12,                  -- #2491
+--                            frames: [ .../cross_break_0.png, … ] } }
 --
 -- The scalar form is not deprecated: a connection with no construction
 -- sequence has nothing to say beyond its texture, and every shipped
@@ -58,30 +60,34 @@ local frames = require("scripts.structure_frames")
 -- engine refuse the whole pack with a less specific complaint.
 local function connectionEntry(name, entry)
     if type(entry) == "string" then
-        return entry, nil
+        return entry, nil, nil
     elseif type(entry) == "table" and type(entry.texture) == "string" then
-        return entry.texture, entry.construction
+        return entry.texture, entry.construction, entry.destruction
     end
     engine.logWarn("wire: connection '" .. tostring(name) ..
         "' is neither a texture path nor a table with a `texture` path")
-    return nil, nil
+    return nil, nil, nil
 end
 
 local handleCache = nil
 local function handles()
     if handleCache then return handleCache end
     local pack = packDef()
-    if not pack then return { conn = {}, connPath = {}, connBuild = {} } end
-    local conn, connPath, connBuild = {}, {}, {}
+    if not pack then
+        return { conn = {}, connPath = {}, connBuild = {}, connWreck = {} }
+    end
+    local conn, connPath, connBuild, connWreck = {}, {}, {}, {}
     for name, entry in pairs(pack.connections or {}) do
-        local path, construction = connectionEntry(name, entry)
+        local path, construction, destruction = connectionEntry(name, entry)
         if path then
             conn[name] = engine.loadTexture(path)
             connPath[name] = path
             connBuild[name] = frames.load(construction)
+            connWreck[name] = frames.loadDestruction(destruction)
         end
     end
     handleCache = { conn = conn, connPath = connPath, connBuild = connBuild,
+                    connWreck = connWreck,
                     face = engine.loadTexture(pack.facemap),
                     facePath = pack.facemap }
     return handleCache
@@ -140,7 +146,7 @@ function M.registerPackArt()
     registeredArt = true
     local h = handles()
     local b = pack.build and pack.build.wire
-    local art, construction = {}, {}
+    local art, construction, destruction = {}, {}, {}
     for _, name in ipairs(WIRE_SHAPES) do
         if h.connPath[name] and h.facePath then
             art[#art + 1] = { kind = "wire", shape = name,
@@ -162,6 +168,17 @@ function M.registerPackArt()
                   texture = h.connPath[name], texHandle = h.conn[name],
                   frames = h.connBuild[name] }
         end
+        -- #2491: the same, for the teardown clip. A connection with none
+        -- resolves none — a cut wire never plays another shape's
+        -- collapse — and the `fps` is forwarded exactly as authored.
+        if h.connPath[name] and h.connWreck[name] ~= nil then
+            local wreck = h.connWreck[name]
+            destruction[#destruction + 1] =
+                { kind = "wire", shape = name,
+                  texture = h.connPath[name], texHandle = h.conn[name],
+                  fps = (type(wreck) == "table") and wreck.fps or nil,
+                  frames = (type(wreck) == "table") and wreck.frames or wreck }
+        end
     end
     -- #1844: a buildable kind states its exact cost, which is what the
     -- engine charges and what a refund receipt records.
@@ -177,6 +194,7 @@ function M.registerPackArt()
         kinds        = { kindEntry },
         art          = art,
         construction = construction,
+        destruction  = destruction,
     }
 end
 

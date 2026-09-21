@@ -40,6 +40,8 @@ import World.Render.BloodQuads (renderBloodDecalQuadsScanned)
 import Unit.Render (renderUnitQuadsScanned)
 import Building.Render (renderBuildingQuadsScanned, renderGhostQuadScanned)
 import Structure.Render (renderStructureQuadsScanned)
+import World.Render.StructureDestruction
+    (countStructureDestructions, renderStructureDestructionQuadsScanned)
 
 -- * Surface Headroom
 
@@ -213,16 +215,34 @@ updateWorldTiles env = do
 
     -- Structures (walls / floors / ceilings) — same iso-sorted quad path
     -- as buildings, with each piece's own facemap slot.
+    --
+    -- TWO producers, one category (#2491). The placed pieces come from
+    -- the visible pages' chunk overlays, exactly as before. The
+    -- teardown presentations are page state rather than chunk state, so
+    -- they are gathered from EVERY page: a hidden page's effects are
+    -- counted (they are retained, and the world tick is still
+    -- responsible for retiring them) and never drawn, which is
+    -- requirement 7. Both halves are measured as 'ScStructures'; no new
+    -- category is added.
     (structureStat, structureQuads) ← measureCategory ScStructures forcedQuadCount $
       if tileAlpha ≤ 0.001
         then return (0, V.empty)
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            perVisiblePage worldManager $ \pageId worldState →
+            pieces ← perVisiblePage worldManager $ \pageId worldState →
                 stampPageQuads (solarSlotOf pageId) ⊚
                     renderStructureQuadsScanned env worldState facing zSlice
                                                 effDepth tileAlpha
+            effects ← perPage worldManager $ \pageId worldState visible →
+                if visible
+                    then stampPageQuads (solarSlotOf pageId) ⊚
+                             renderStructureDestructionQuadsScanned env
+                                 worldState facing zSlice effDepth tileAlpha
+                    else (\n → (n, V.empty))
+                             ⊚ countStructureDestructions worldState
+            return ( fst pieces + fst effects
+                   , snd pieces <> snd effects )
 
     (ghostStat, ghostQuads) ← measureCategory ScGhost forcedQuadCount $
       if tileAlpha ≤ 0.001
@@ -309,6 +329,29 @@ perVisiblePage worldManager produce = do
         case lookup pageId (wmWorlds worldManager) of
             Just worldState → produce pageId worldState
             Nothing         → return (0, V.empty)
+    return (sum (map fst results), V.concat (map snd results))
+
+-- | 'perVisiblePage' over EVERY page, telling the producer whether that
+--   page is visible.
+--
+--   For page state whose telemetry is not conditional on being on
+--   screen (#2491's structure teardown effects are the first): a hidden
+--   page's effects are retained and expiring, so a pass that only
+--   walked 'wmVisible' would report a frame holding them as holding
+--   nothing. The producer decides what a hidden page contributes;
+--   nothing here assumes it contributes no quads, only that it is told.
+--
+--   Page ORDER is 'wmWorlds'', which is the registration order, not the
+--   visible order — the two agree on the quads because a hidden page
+--   emits none.
+perPage
+    ∷ WorldManager
+    → (WorldPageId → WorldState → Bool → IO (Int, V.Vector SortableQuad))
+    → IO (Int, V.Vector SortableQuad)
+perPage worldManager produce = do
+    let visible = wmVisible worldManager
+    results ← forM (wmWorlds worldManager) $ \(pageId, worldState) →
+        produce pageId worldState (pageId `elem` visible)
     return (sum (map fst results), V.concat (map snd results))
 
 -- | Stamp a per-page producer's quads with that page's solar slot

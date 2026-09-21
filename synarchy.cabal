@@ -648,6 +648,7 @@ library
                      Structure.WallCatalog
                      Structure.Wire
                      Structure.Render
+                     Structure.Destruction
                      Engine.Asset.YamlBuildings
                      Engine.Scripting.Lua.API.Buildings
                      Engine.Scripting.Lua.API.Buildings.Yaml
@@ -837,6 +838,7 @@ library
                      World.Thread.Command.Edit.Dig
                      World.Thread.Command.Edit.Fluid
                      World.Thread.Command.Location
+                     World.Thread.Destruction
                      World.Grid
                      World.Render
                      World.Render.Camera
@@ -851,6 +853,7 @@ library
                      World.Render.FluidTopQuads
                      World.Render.CursorQuads
                      World.Render.StructureGhost
+                     World.Render.StructureDestruction
                      World.Render.TileQuads
                      World.Render.FloraQuads
                      World.Render.FloraProjection
@@ -1570,11 +1573,15 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.ChopFellXp
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
+                   Test.Headless.World.StructureDestruction
                    Test.Headless.World.StructurePaletteResidue
                    Test.Headless.Structure.ArtCatalog
                    Test.Headless.Structure.ConstructionFixture
                    Test.Headless.Structure.ConstructionFrames
                    Test.Headless.Structure.ConstructionPacks
+                   Test.Headless.Structure.DestructionFixture
+                   Test.Headless.Structure.DestructionFrames
+                   Test.Headless.Structure.DestructionPacks
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns

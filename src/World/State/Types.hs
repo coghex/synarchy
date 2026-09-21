@@ -50,6 +50,8 @@ import World.Time.Types (WorldDate(..), PreciseWorldTime(..),
                          defaultPreciseWorldTime, defaultWorldDate)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (StructureStage, emptyStructureStage)
+import Structure.Destruction
+    (StructureDestructions, emptyStructureDestructions)
 import World.Mine.Types (MineDesignations)
 import World.Construct.Types (ConstructDesignations)
 import World.Construct.Attempt (ConstructAttemptId, firstConstructAttemptId)
@@ -331,6 +333,24 @@ data WorldState = WorldState
       --   WorldSetStructure carries the same token, so the world thread
       --   can undo exactly the attempt it declines (an unloaded target
       --   chunk) without touching a newer placement at the same key.
+    , wsStructureDestructionsRef ∷ IORef StructureDestructions
+      -- ^ #2491: this page's live structure TEARDOWN presentations —
+      --   render-only, owning no gameplay state.
+      --
+      --   Captured by @WorldClearStructure@ in the same handler that
+      --   records the authoritative @WeClearStructure@ edit and deletes
+      --   the resident overlay entry, and pruned by the world tick
+      --   against the game clock. Every structure query — @hasAt@,
+      --   @count@, @floorZAt@, construct-designation revalidation, wall
+      --   cap recomputation, the power network's edit-history walk —
+      --   walks 'lcStructures' and 'wsStructureStageRef' and never this,
+      --   so a piece reads as absent the instant its clear applies,
+      --   whatever is still playing over the tile.
+      --
+      --   PER PAGE, so a page that disappears takes its pending effects
+      --   with it and a freshly constructed one starts with none. Never
+      --   persisted: a save taken mid-playback restores neither the
+      --   piece nor its effect (see docs\/persistence_state_inventory.md).
     , wsConstructDesignationsRef ∷ IORef ConstructDesignations
       -- ^ Construction-designation set: tile (gx, gy) → designation
       --   (surface z, build target, status, progress; see
@@ -580,6 +600,7 @@ emptyWorldState = do
     wsGroundItemLock ← newMVar ()
     wsSpoilRef ← newIORef emptySpoilPiles
     wsStructureStageRef ← newIORef emptyStructureStage
+    wsStructureDestructionsRef ← newIORef emptyStructureDestructions
     wsConstructDesignationsRef ← newIORef HM.empty
     wsConstructAttemptRef ← newIORef firstConstructAttemptId
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
@@ -619,6 +640,7 @@ emptyWorldState = do
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsGroundItemLock
                         wsSpoilRef wsStructureStageRef
+                        wsStructureDestructionsRef
                         wsConstructDesignationsRef wsConstructAttemptRef
                         wsFloraHarvestsRef
                         wsChopDesignationsRef

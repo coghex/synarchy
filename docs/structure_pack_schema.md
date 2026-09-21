@@ -1,4 +1,4 @@
-# Structure pack schema: static art and construction frames (#2488)
+# Structure pack schema: static art, construction and destruction frames (#2488, #2491)
 
 The as-built reference for what a `data/structure_packs/<pack>.yaml`
 declares, how the two Lua loaders hand it to the engine, and what the
@@ -14,12 +14,17 @@ declaration-to-payload rule both share),
 (the `structure.registerPackArt` payload and the image measurement),
 `Structure.ArtCatalog` (the vocabulary, the registration rules and
 resolution), `World.Render.StructureGhost` (the one consumer that draws
-construction frames), `Structure.Render` (the shared geometry).
+construction frames), `World.Render.StructureDestruction` (the one
+consumer that draws destruction frames), `Structure.Destruction` (the
+teardown effect, its capture and its timing), `Structure.Render` (the
+shared geometry).
 
 Gates: hspec `--match "structure construction frames"`,
-`--match "Structure.ArtCatalog"`, `--match "structure ghost"`; probes
+`--match "Structure.ArtCatalog"`, `--match "structure ghost"`,
+`--match "structure destruction presentation lifecycle"`; probes
 `construction_probe.py`, `wire_probe.py`, `structure_rotation_probe.py`,
-and the offscreen pixel gate `structure_construction_probe.py`.
+`power_probe.py`, and the offscreen pixel gate
+`structure_construction_probe.py`.
 
 ## 1. The two pack shapes
 
@@ -127,6 +132,75 @@ truthiness test would drop it, the payload would be indistinguishable
 from one that declared nothing, and the pack would register — a malformed
 declaration quietly downgraded to an absent one. Only `nil` is absence.
 
+## 3a. Declaring destruction frames (#2491)
+
+Any appearance may also add a `destruction:` block. It is keyed to the
+same appearances, under the same never-inherited rule, and differs from
+`construction:` in exactly one authored way: it declares its own `fps`,
+because a teardown is timed by the GAME CLOCK rather than driven by a
+site's progress.
+
+```yaml
+pieces:
+  floor:
+    texture: assets/textures/buildings/dungeon_1/floor.png
+    facemap: assets/textures/facemap/floorface.png
+    destruction:
+      fps: 12
+      frames:
+        - assets/textures/buildings/dungeon_1/break/floor_0.png
+        - assets/textures/buildings/dungeon_1/break/floor_1.png
+
+connections:                         # the wire pack's declaring form
+  cross:
+    texture: assets/textures/structures/wire/cross.png
+    destruction:
+      fps: 15
+      frames:
+        - assets/textures/structures/wire/break/cross_0.png
+```
+
+`scripts/structure_frames.lua`'s `loadDestruction` forwards `fps`
+EXACTLY as authored — never defaulted, never coerced, never dropped when
+it is absent or a string — and puts `frames` through the same shape
+preserving `load` the construction half uses. The engine refuses a clip
+whose rate it would otherwise have to invent, and inventing one in Lua
+would turn that refusal into a silently wrong duration.
+
+A clip plays ONCE and FORWARD, at `floor (elapsed * fps)` clamped, and
+lasts `frames / fps` game seconds. There is no static handoff: the piece
+is already gone when the first frame draws, which is why a destruction
+block has no final-frame canvas rule and its `texture:` is only the
+appearance's IDENTITY.
+
+That identity is load-bearing. A placed piece stores palette ids and a z
+and nothing else, so `Structure.ArtCatalog.appearanceForTexturePath`
+resolves a cleared piece's sprite PATH back to the (pack, appearance)
+whose clip it should play.
+
+**Every authored VARIANT appearance is registered, not only the ones
+declaring lifecycle frames.** `scripts/structures.lua` sends a `variants`
+list beside `art` — one entry per variant appearance, carrying the sprite
+that variant is placed with — because the catalogue otherwise stores
+default art alone. Without it a variant piece with a static override and
+no clip is an appearance the engine has never heard of: its teardown is
+silent AND the missing declaration cannot be reported.
+
+**A sprite two appearances share identifies neither.** That happens when
+a variant does NOT override some appearance and is therefore placed with
+the default's own image — the shipped `dungeon_1.damaged` overrides its
+floor, post and four walls but not its ceiling. Answering "the default"
+would let a variant's piece play the default's clip, which the
+never-inherited rule forbids, so the path resolves NOTHING, for both
+claimants, exactly as a contested wall sprite does. Registration reports
+each such sprite once
+(`Structure.ArtCatalog.ambiguousAppearanceMessage`); the fix is
+authoring, not code — give the variant its own image for that
+appearance.
+
+Every shipped pack declares no `destruction:` today; authoring
+production frames is BDA-15/BDA-16.
+
 ## 4. What the engine refuses
 
 `structure.registerPackArt` is all-or-nothing per pack, and construction
@@ -147,6 +221,21 @@ leaves the catalogue exactly as it was.
 | the same appearance declared twice | registration order would decide what the pack means |
 | frames for a kind the pack does not declare | the appearance does not exist |
 | a conflicting repeat (frames included) | the STORED declaration is kept |
+
+Destruction clips are under the same all-or-nothing rule, minus the two
+checks a teardown has no use for (there is no static-sprite cross-check
+and no final-frame canvas rule, because it hands off to nothing) and plus
+two of its own:
+
+| Refusal | Why |
+|---|---|
+| an empty `frames:` list | an authored empty list is a typo, not an absent declaration |
+| the same image twice in one list | a clip that repeats a stage was not authored that way |
+| an escaping path, or a frame handle that is not a loaded handle | as above |
+| a missing, non-numeric, non-finite or non-positive `fps` | a clip whose rate the engine invented is not the clip the pack authored, and the rate decides when the visual stops existing |
+| a wall family that declares SOME directions but not all four | every direction is reachable by turning the camera, so an incomplete family makes a wall's teardown depend on where the player is looking — see §5 |
+| a wall family whose directions disagree about frame count or fps | one elapsed time would select different stages, and expire at different instants, at different facings |
+| the same appearance declared twice, or frames for an undeclared kind | as above |
 
 An identical repeat is an idempotent no-op and stays silent.
 
@@ -199,6 +288,20 @@ it resolves, so the frame and the cap mask always name ONE appearance. A
 screen-edge frame over an authored-edge mask is the exact pairing the
 shared-rotation discipline exists to prevent.
 
+**A destruction clip follows the same answer, through the same helper,
+with one stricter registration rule.**
+`World.Render.StructureDestruction` resolves the drawn edge from the
+CAPTURED static texture and cap facemap — the identity the effect stored,
+never an animation frame path, which is not registered art and could not
+name a family at all — and only then asks the catalogue for that edge's
+clip. Where a construction family may leave a direction undeclared, a
+destruction family may not: a build site is drawn at one authored
+appearance whose designation named it, but a PLACED wall is already
+standing at every facing the player can turn to, so a family that
+declares any direction must declare all four, at the same frame count and
+the same fps. That is what keeps the elapsed-time index — and therefore
+the moment the effect expires — facing-blind.
+
 ## 6. The handoff
 
 Progress is `cdProgress` (0.0 → 1.0), advanced by
@@ -238,6 +341,16 @@ level, by
 naturally once per appearance, it needs no per-frame or per-candidate
 dedup state, and an idempotent repeat says nothing.
 
+The same holds for a missing `destruction:` block: clearing a piece of
+that appearance removes it with NO visual — no static sprite left
+standing, no fade, no reversed construction sequence, no other
+appearance's frames. That gap is reported at CAPTURE rather than at
+registration, because a teardown has no registration-time candidate set
+the way a construction designation does, and it is deduplicated to one
+line per (pack, appearance) by `Structure.ArtCatalog.noteMissingDestruction`
+— state in the catalogue, shaped exactly like `failPackArtPath`, because
+a player can demolish the same kind of wall indefinitely.
+
 ## 8. Lighting: the lifecycle alpha flag
 
 A construction frame reuses the finished piece's facemap for LIGHTING —
@@ -265,3 +378,15 @@ addition to it.
 Saved designations carry no new field. A designation loaded at progress
 `p` renders the same frame it did before saving, derived from
 `cdProgress` and the current pack declaration alone.
+
+Nor does a teardown add one. `StructurePieceData`, the edit log and the
+page snapshot are unchanged, and a save taken mid-playback restores
+neither the piece (the `WeClearStructure` edit already removed it) nor
+its effect (`wsStructureDestructionsRef` is
+`Exclude (session-transient)`). Effects own no gameplay state at all:
+they are in no chunk overlay and no staging cache, are not selectable,
+are not a pathing or placement obstacle, are not a wall neighbour for cap
+or Wire shape resolution, and are never interned into the saved palette.
+Requirement 4's "never read from the palette" is satisfied by reading
+only EXISTING entries: capture resolves the two ids the piece already
+stored and interns nothing.

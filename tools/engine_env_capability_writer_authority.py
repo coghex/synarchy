@@ -458,7 +458,19 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "texPaletteRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
     "texPaletteHandlesRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
     "structureWallCatalogRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
-    "structureArtCatalogRef": frozenset({"Engine.Scripting.Lua.API.StructureArt"}),
+    "structureArtCatalogRef": frozenset({
+        "Engine.Scripting.Lua.API.StructureArt",
+        # #2491: the world thread records, once per (pack, appearance),
+        # that a cleared piece's appearance declared no destruction clip
+        # (`noteMissingDestruction`). The catalogue is where that write
+        # belongs for the same reason `pkFailures` lives there: it is the
+        # only owner that knows what a (pack, appearance) IS, and the
+        # dedup has to be state rather than an event property because a
+        # player can demolish the same kind of piece indefinitely. It
+        # adds no art and removes none -- the stored declaration is
+        # untouched -- so the field stays accumulate-only.
+        "World.Thread.Command.Edit.Structure",
+    }),
     "buildingQueue": frozenset(),
     "combatQueue": frozenset(),
     "combatEventsRef": frozenset({
