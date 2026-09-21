@@ -160,10 +160,19 @@ data Scenario = Scenario
       --   way "the load order is a transformation over what the OS
       --   enumerated" can be told from "the OS happened to enumerate it
       --   that way" (#1232 requirement 11, #2241 requirement 1).
+    , scBroken ∷ [Text]
+      -- ^ full paths whose loader reports a failed DECODE.
+    , scRefused ∷ [(Text, (Text, Text))]
+      -- ^ full paths whose loader DECODED and then refused the whole
+      --   file, each with the @(detail, reason)@ #2506's fourth value
+      --   carries. A path here answers with four values; flora's
+      --   #2241 shape — three values and no reason — is covered in
+      --   "Test.Headless.Startup.Readiness", which owns the wording of
+      --   the terminal line either way.
     }
 
 fullScenario ∷ Scenario
-fullScenario = Scenario [] [] []
+fullScenario = Scenario [] [] [] [] []
 
 -- | What @engine.listFiles@ hands this family back under this scenario.
 scenarioRels ∷ Scenario → Fam → [Text]
@@ -188,6 +197,11 @@ luaPrelude sc = T.unlines $
     [ "local infos, warns, calls, errors = {}, {}, {}, {}"
     , "local files = " <> filesTable
     , "local counts = " <> countsTable
+    , "local broken = " <> luaTable
+          [ (b, "true") | b ← scBroken sc ]
+    , "local refused = " <> luaTable
+          [ (path, "{ " <> luaQuoted detail <> ", " <> luaQuoted reason <> " }")
+          | (path, (detail, reason)) ← scRefused sc ]
     , "engine = {}"
     , "engine.logInfo = function(m) infos[#infos + 1] = m end"
     , "engine.logWarn = function(m) warns[#warns + 1] = m end"
@@ -201,9 +215,14 @@ luaPrelude sc = T.unlines $
     , "    calls[#calls + 1] = p"
     , "    local n = counts[p]"
     , "    if n == nil then error('unexpected path: ' .. tostring(p)) end"
-    -- Every file here parses; #2203's failure shapes are
-    -- 'Test.Headless.Startup.Readiness''s subject, not this module's.
-    , "    if wantOutcome then return n + 0.0, true end"
+    -- Most files here parse; #2203's failure SHAPES are
+    -- 'Test.Headless.Startup.Readiness''s subject. What this module
+    -- owns of them is the LOG side — the one error-level line, and
+    -- which loaders ran before it — which is why the two failing
+    -- shapes are reachable from here at all (#2506).
+    , "    if wantOutcome and refused[p] then"
+    , "      return 0.0, true, refused[p][1], refused[p][2] end"
+    , "    if wantOutcome then return n + 0.0, not broken[p] end"
     , "    return n + 0.0"
     , "  end"
     , "end"
@@ -224,7 +243,8 @@ luaPrelude sc = T.unlines $
       , "  end"
       , "  return table.concat(infos, '\\n') .. '\\n@@WARNS@@\\n'"
       , "      .. table.concat(warns, '\\n') .. '\\n@@CALLS@@\\n'"
-      , "      .. table.concat(calls, '\\n')"
+      , "      .. table.concat(calls, '\\n') .. '\\n@@ERRORS@@\\n'"
+      , "      .. table.concat(errors, '\\n')"
       , "end"
       ]
   where
@@ -245,9 +265,10 @@ luaPrelude sc = T.unlines $
 
 -- | One profile run's observable output.
 data RunResult = RunResult
-    { rrInfos ∷ [Text]  -- ^ every @engine.logInfo@ message, in order
-    , rrWarns ∷ [Text]  -- ^ every @engine.logWarn@ message, in order
-    , rrCalls ∷ [Text]  -- ^ every path handed to a loader, in order
+    { rrInfos  ∷ [Text]  -- ^ every @engine.logInfo@ message, in order
+    , rrWarns  ∷ [Text]  -- ^ every @engine.logWarn@ message, in order
+    , rrCalls  ∷ [Text]  -- ^ every path handed to a loader, in order
+    , rrErrors ∷ [Text]  -- ^ every @engine.logError@ message, in order
     } deriving (Show, Eq)
 
 -- | Drive one profile end to end. A Lua failure surfaces as a
@@ -273,14 +294,16 @@ runProfile sc profile = do
         pure (maybe "<no message>" TE.decodeUtf8Lenient err)
 
 parseRun ∷ Text → RunResult
-parseRun out =
-    RunResult (nonEmpty infoPart) (nonEmpty warnPart) (nonEmpty callPart)
+parseRun out = RunResult (nonEmpty infoPart) (nonEmpty warnPart)
+                         (nonEmpty callPart) (nonEmpty errorPart)
   where
     (infoPart, rest0) = T.breakOn warnMark out
     (warnPart, rest1) = T.breakOn callMark (T.drop (T.length warnMark) rest0)
-    callPart          = T.drop (T.length callMark) rest1
-    warnMark = "@@WARNS@@"
-    callMark = "@@CALLS@@"
+    (callPart, rest2) = T.breakOn errorMark (T.drop (T.length callMark) rest1)
+    errorPart         = T.drop (T.length errorMark) rest2
+    warnMark  = "@@WARNS@@"
+    callMark  = "@@CALLS@@"
+    errorMark = "@@ERRORS@@"
     nonEmpty t = [ l | l ← T.lines t, not (T.null l) ]
 
 -- | The shipped @data\/flora@ file names, in canonical byte order.
@@ -288,6 +311,29 @@ shippedFloraRels ∷ IO [Text]
 shippedFloraRels =
     map T.pack ∘ L.sort ∘ filter ((≡ ".yaml") ∘ takeExtension)
         <$> listDirectory "data/flora"
+
+-- | Just the @data\/units@ loader calls one run made. Empty is the
+--   assertion a faction-catalogue failure earns: the catalogue is
+--   queued immediately before units, so the queue has to stop with the
+--   unit loader never invoked.
+unitCalls ∷ RunResult → [Text]
+unitCalls = filter ("data/units/" `T.isPrefixOf`) ∘ rrCalls
+
+-- | The faction family. Both profiles queue it, with the same index
+--   and the same files, so it needs no profile argument.
+factionFam ∷ Fam
+factionFam = case [ f | f ← normalFams, famId f ≡ "faction" ] of
+    (f : _) → f
+    []      → error "both profiles queue the faction family"
+
+-- | The SECOND of the faction family's two synthetic files, by path —
+--   the one the failing scenarios below break or refuse. Named through
+--   'famRels' rather than written out so it cannot drift from the file
+--   set the prelude actually hands the loader.
+factionSecondPath ∷ Text
+factionSecondPath = case drop 1 (famRels factionFam) of
+    (rel : _) → famDir factionFam <> "/" <> rel
+    []        → error "the faction family is given two files"
 
 -- | Just the @data\/flora@ loader calls one run made, in order.
 floraCalls ∷ RunResult → [Text]
@@ -580,10 +626,50 @@ spec = describe "Startup asset logging" $ do
             r ← runProfile fullScenario "arena"
             rrCalls r `shouldBe` concatMap famPaths arenaFams
 
+        forM_ ["normal", "arena"] $ \profile →
+            it ("logs exactly one error line for a faction catalogue \
+                \file that did not PARSE on the " ⧺ T.unpack profile
+                ⧺ " profile, and no data/units loader ran (#2506)") $ do
+                let sc = Scenario [] [] [] [factionSecondPath] []
+                r ← runProfile sc profile
+                rrErrors r `shouldBe`
+                    [ "Startup failed: faction could not parse "
+                      <> factionSecondPath <> " (1 of 2 file(s) failed)" ]
+                -- The catalogue is queued immediately before units
+                -- (D-30), so a catalogue failure has to stop the queue
+                -- with the unit loader never invoked.
+                unitCalls r `shouldBe` []
+                rrWarns r `shouldBe` []
+
+        forM_ ["normal", "arena"] $ \profile →
+            it ("logs one error line naming the faction family's OWN \
+                \refusal reason and the offending tag on the "
+                ⧺ T.unpack profile ⧺ " profile, and no data/units \
+                \loader ran (#2506)") $ do
+                let sc = Scenario [] [] [] []
+                             [ (factionSecondPath
+                               , ("nomad", "undeclared faction tag")) ]
+                r ← runProfile sc profile
+                -- Before #2506's fourth value this line called an
+                -- undeclared faction tag a duplicate definition name.
+                rrErrors r `shouldBe`
+                    [ "Startup failed: faction refused " <> factionSecondPath
+                      <> " (undeclared faction tag 'nomad'; 1 of 2 \
+                         \file(s) refused)" ]
+                unitCalls r `shouldBe` []
+                -- The family's own aggregate still went out first,
+                -- carrying only what actually loaded.
+                [ l | l ← aggregates r, "faction " `T.isInfixOf` l ]
+                    `shouldBe`
+                    [ "Startup assets: faction loaded "
+                      <> tshow (sum [ famCount (famIndex factionFam) rel
+                                    | rel ← take 1 (famRels factionFam) ])
+                      <> " from 2 file(s)" ]
+
         it "reports a family whose files all return zero as a zero \
            \aggregate over the files it still loaded — and warns about \
            \nothing (requirements 4 and 5)" $ do
-            let sc = Scenario [] ["data/recipes"] []
+            let sc = Scenario [] ["data/recipes"] [] [] []
             r ← runProfile sc "normal"
             [ l | l ← aggregates r, "recipe " `T.isInfixOf` l ]
                 `shouldBe` [ "Startup assets: recipe loaded 0 from 2 file(s)" ]
@@ -591,7 +677,7 @@ spec = describe "Startup asset logging" $ do
 
         it "still emits an aggregate for a family whose directory yields \
            \NO files at all (requirement 4)" $ do
-            let sc = Scenario ["data/infections"] [] []
+            let sc = Scenario ["data/infections"] [] [] [] []
             r ← runProfile sc "normal"
             [ l | l ← aggregates r, "infection " `T.isInfixOf` l ]
                 `shouldBe`
@@ -622,7 +708,7 @@ spec = describe "Startup asset logging" $ do
             length rels `shouldSatisfy` (> 2)
             let expected = [ "data/flora/" <> r | r ← rels ]
                 enumeration order' =
-                    Scenario [] [] [("data/flora", order')]
+                    Scenario [] [] [("data/flora", order')] [] []
             forwardRun  ← runProfile (enumeration rels) "normal"
             backwardRun ← runProfile (enumeration (reverse rels)) "normal"
             floraCalls forwardRun  `shouldBe` expected

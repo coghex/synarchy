@@ -33,7 +33,8 @@ import Data.List (nub)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlFactions
-    (admitFactionYamlDoc, loadFactionYamlOutcome)
+    ( admitFactionYamlDoc, loadFactionYamlOutcome
+    , scanFactionTagVocabulary )
 import Engine.Asset.YamlUnits (UnitYamlDef(..), loadUnitYaml)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
@@ -166,9 +167,10 @@ ensureFactionCatalogue env = do
     cat ← readIORef catRef
     when (null (catalogueDeclarations cat)) $ do
         logger ← readIORef (loggerRef env)
+        vocab ← scanFactionTagVocabulary shippedCataloguePath
         mDoc ← loadFactionYamlOutcome logger shippedCataloguePath
         case mDoc ⌦ \doc → either (const Nothing) Just
-                                 (admitFactionYamlDoc cat doc) of
+                                 (admitFactionYamlDoc vocab cat doc) of
             Nothing → error (shippedCataloguePath
                              ⧺ " could not be loaded for this spec")
             Just (decls, entries) →

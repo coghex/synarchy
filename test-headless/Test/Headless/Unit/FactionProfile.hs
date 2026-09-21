@@ -30,7 +30,8 @@ import Test.Hspec
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Engine.Asset.YamlFactions
-    (admitFactionYamlDoc, loadFactionYamlOutcome)
+    ( admitFactionYamlDoc, loadFactionYamlOutcome
+    , scanFactionTagVocabulary )
 import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), defaultLogConfig, initLogger )
 import System.FilePath ((</>))
@@ -839,10 +840,11 @@ loadShippedCatalogue = do
     logger ← initLogger defaultLogConfig
         { lcBackend = LogToCallback (\_ → pure ()) }
     let path = "data" </> "factions" </> "base.yaml"
+    vocab ← scanFactionTagVocabulary path
     mDoc ← loadFactionYamlOutcome logger path
     case mDoc of
         Nothing  → error (path ⧺ " did not decode")
-        Just doc → case admitFactionYamlDoc emptyFactionCatalogue doc of
+        Just doc → case admitFactionYamlDoc vocab emptyFactionCatalogue doc of
             Left _ → error (path ⧺ " was refused by its own loader")
             Right (decls, entries) →
                 pure (extendFactionCatalogue path decls entries

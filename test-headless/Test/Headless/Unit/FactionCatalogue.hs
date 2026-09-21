@@ -131,10 +131,22 @@ unitYaml defs = T.unpack ∘ T.unlines $ "units:" : concatMap one defs
 
 withFixture ∷ String → String → (FilePath → Expectation) → Expectation
 withFixture label body action =
+    withFixtureDir label [("probe.yaml", body)] $ \at →
+        action (at "probe.yaml")
+
+-- | Several files in ONE directory, which is what a catalogue family
+--   actually is — and the only way to exercise the rules that span it.
+--
+--   The body is handed a lookup BY NAME rather than a list, because
+--   every example here cares which file is which and none of them cares
+--   what order they were written in; the loader's own enumeration order
+--   is the thing under test.
+withFixtureDir ∷ String → [(String, String)]
+               → ((String → FilePath) → Expectation) → Expectation
+withFixtureDir label files action =
     withExclusiveTempDirectory ("synarchy-2506-" ⧺ label) $ \dir → do
-        let path = dir </> "probe.yaml"
-        writeFile path body
-        action path
+        forM_ files $ \(name, body) → writeFile (dir </> name) body
+        action (dir </>)
 
 -----------------------------------------------------------------------
 -- The live headless engine
@@ -259,6 +271,7 @@ spec = describe "Faction tag catalogue" $ do
     unitTagRefusalSpec
     unitTagAdmissionSpec
     shippedCorpusSpec
+    directoryScopeSpec
     openNamespaceSpec
     legacyMappingSpec
 
@@ -662,3 +675,95 @@ legacyMappingSpec = describe "the D-26 legacy mapping (requirement 5)" $ do
                         `shouldBe` Set.fromList [tag "acolyte"]
                 Right _         →
                     expectationFailure "acolyte.yaml declares one definition"
+
+-----------------------------------------------------------------------
+-- The family is a DIRECTORY, not a file
+-----------------------------------------------------------------------
+
+directoryScopeSpec ∷ Spec
+directoryScopeSpec = describe "the family spans its whole directory" $ do
+
+    -- One tag file and one relations-only file. `engine.listFiles`
+    -- hands back RAW filesystem order, so the only thing that makes
+    -- this tree mean the same on two machines is that admission does
+    -- not depend on which of the two is enumerated first.
+    let tagsFile = catalogueYaml ["acolyte", "nomad"] []
+        relFile  = T.unpack (T.unlines
+            [ "relations:"
+            , "  - { pair: [acolyte, nomad], relation: hostile }" ])
+
+        expectBothLoaded eng first second = do
+            (loParsed <$> loadCatalogue eng first) `shouldReturn` "true"
+            (loParsed <$> loadCatalogue eng second) `shouldReturn` "true"
+            cat ← catalogueOf eng
+            sort (map (factionTagText ∘ ftdTag) (catalogueDeclarations cat))
+                `shouldBe` ["acolyte", "nomad"]
+            let pol = cataloguePolicy cat
+            baseRelationFor pol (tag "acolyte") (tag "nomad")
+                `shouldBe` Just RelHostile
+            baseRelationFor pol (tag "nomad") (tag "acolyte")
+                `shouldBe` Just RelHostile
+
+    it "admits a relations-only file loaded AFTER the file declaring \
+       \its tags" $
+        withFactionEngine $ \eng →
+            withFixtureDir "order-forward"
+                [("a_tags.yaml", tagsFile), ("b_relations.yaml", relFile)] $
+                \at → expectBothLoaded eng (at "a_tags.yaml")
+                                          (at "b_relations.yaml")
+
+    it "admits the same two files in the OPPOSING enumeration order — \
+       \a relations-only file loaded BEFORE the file declaring its \
+       \tags" $
+        withFactionEngine $ \eng →
+            withFixtureDir "order-reverse"
+                [("a_tags.yaml", tagsFile), ("b_relations.yaml", relFile)] $
+                \at → expectBothLoaded eng (at "b_relations.yaml")
+                                          (at "a_tags.yaml")
+
+    it "still refuses an endpoint NO file in the directory declares, \
+       \whichever order the two are loaded in" $
+        withFactionEngine $ \eng →
+            withFixtureDir "order-undeclared"
+                [ ("a_tags.yaml", catalogueYaml ["acolyte"] [])
+                , ("b_relations.yaml", relFile) ] $ \at → do
+                    (loParsed <$> loadCatalogue eng (at "a_tags.yaml"))
+                        `shouldReturn` "true"
+                    out ← loadCatalogue eng (at "b_relations.yaml")
+                    refused "undeclared faction tag" "nomad" out
+
+    it "refuses a RELOAD that drops a tag another file's relation \
+       \names, and leaves the registered catalogue exactly as it was" $
+        withFactionEngine $ \eng →
+            withFixtureDir "reload-integrity"
+                [ ("a_tags.yaml", tagsFile), ("b_relations.yaml", relFile) ] $
+                \at → do
+                    let tags = at "a_tags.yaml"
+                    expectBothLoaded eng tags (at "b_relations.yaml")
+                    before ← catalogueOf eng
+                    -- The replacement document is FAULTLESS in itself —
+                    -- one well-formed tag, no relations — and the
+                    -- catalogue it would produce is not, because
+                    -- b_relations.yaml still names `nomad`.
+                    writeFile tags (catalogueYaml ["acolyte"] [])
+                    out ← loadCatalogue eng tags
+                    refused "undeclared faction tag" "nomad" out
+                    catalogueOf eng `shouldReturn` before
+
+    it "accepts a reload that drops nothing anyone depends on, \
+       \replacing that file's own contribution rather than colliding \
+       \with it" $
+        withFactionEngine $ \eng →
+            withFixtureDir "reload-clean"
+                [("a_tags.yaml", catalogueYaml ["acolyte", "nomad"] [])] $
+                \at → do
+                    let tags = at "a_tags.yaml"
+                    (loParsed <$> loadCatalogue eng tags) `shouldReturn` "true"
+                    writeFile tags (catalogueYaml ["acolyte", "wildlife"] [])
+                    out ← loadCatalogue eng tags
+                    loParsed out `shouldBe` "true"
+                    loDetail out `shouldBe` "nil"
+                    cat ← catalogueOf eng
+                    sort (map (factionTagText ∘ ftdTag)
+                              (catalogueDeclarations cat))
+                        `shouldBe` ["acolyte", "wildlife"]

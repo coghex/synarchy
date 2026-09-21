@@ -35,17 +35,23 @@ module Engine.Asset.YamlFactions
       -- * Loading
     , loadFactionYaml
     , loadFactionYamlOutcome
+    , scanFactionTagVocabulary
       -- * Post-decode validation
     , CatalogueRefusal(..)
     , refusalReason
     , refusalDetail
     , factionCatalogueRefusal
     , admitFactionYamlDoc
+    , catalogueIntegrityRefusal
     ) where
 
 import UPrelude
 import Control.Monad (foldM)
+import Data.List (sort)
+import Data.Set (Set)
 import GHC.Generics (Generic)
+import System.Directory (doesDirectoryExist, listDirectory)
+import System.FilePath (takeDirectory, takeExtension, (</>))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -56,9 +62,9 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 import Unit.Faction (FactionRelation(..))
 import Unit.Faction.Catalogue
     ( FactionCatalogue, FactionTagDecl(..), catalogueDeclaredPairs
-    , declaresTag, extendFactionCatalogue, renderTagPair )
+    , catalogueEntries, catalogueTags, declaresTag, renderTagPair )
 import Unit.Faction.Profile
-    (BaseRelationEntry(..), mkFactionTag)
+    (BaseRelationEntry(..), FactionTag, factionTagText, mkFactionTag)
 
 -- * The authored shapes
 
@@ -152,6 +158,51 @@ loadFactionYaml ∷ LoggerState → FilePath → IO FactionYamlDoc
 loadFactionYaml logger path =
     fromMaybe (FactionYamlDoc [] []) <$> loadFactionYamlOutcome logger path
 
+-- | Every faction tag declared ANYWHERE in the directory @path@ sits
+--   in, as a vocabulary and nothing more.
+--
+--   __Why a per-file loader reads its siblings.__ A catalogue family is
+--   a DIRECTORY, so a relation's endpoints may legitimately be declared
+--   in another file — a new culture's file relating it to @acolyte@ is
+--   the obvious case. Resolving endpoints against only what is already
+--   REGISTERED would make that file's admission depend on the order the
+--   family's files happened to be enumerated in: the same tree would
+--   boot on one machine and refuse on another. Staging the vocabulary
+--   ahead of admission is what removes that, and it is the same reason
+--   @engine.loadTutorialDir@ enumerates its own directory — the
+--   question being asked simply is not answerable from inside one file.
+--
+--   Strictly a VOCABULARY: nothing here registers, refuses, or
+--   validates. Each sibling is still decoded, judged and registered by
+--   its own queue entry. A sibling that fails to decode contributes no
+--   tags (its own entry reports that parse failure terminally), and a
+--   malformed id contributes nothing (its own entry refuses it).
+--
+--   Read in sorted order purely so the work is deterministic; the
+--   result is a 'Set' and order cannot reach an answer. It takes no
+--   logger for the same reason it warns about nothing.
+scanFactionTagVocabulary ∷ FilePath → IO (Set FactionTag)
+scanFactionTagVocabulary path = do
+    let dir = takeDirectory path
+    present ← doesDirectoryExist dir
+    if not present then pure Set.empty else do
+        names ← sort ∘ filter ((≡ ".yaml") ∘ takeExtension) <$> listDirectory dir
+        docs ← mapM (siblingDoc ∘ (dir </>)) names
+        pure (Set.fromList
+                  [ tag
+                  | doc ← catMaybes docs
+                  , t ← fydTags doc
+                  , Just tag ← [mkFactionTag (fytId t)] ])
+  where
+    -- Quiet on failure: the sibling's OWN queue entry is what reports a
+    -- parse failure, and warning twice for one broken file would put a
+    -- second diagnostic in front of the one that names the family.
+    siblingDoc p = do
+        result ← Yaml.decodeFileEither p
+        pure $ case result ∷ Either Yaml.ParseException FactionYamlDoc of
+            Left _    → Nothing
+            Right doc → Just doc
+
 -- * Post-decode validation
 
 -- | Why a decoded catalogue file was refused entire. Each constructor
@@ -205,18 +256,16 @@ parseRelationValue t = case t of
     "hostile" → Just RelHostile
     _         → Nothing
 
--- | Requirement 2's five rules plus requirement 3's self-relation rule,
---   applied against @cat@ — the catalogue as already registered — in the
---   author's own document order.
+-- | Requirement 2's rules plus requirement 3's self-relation rule,
+--   applied against @cat@ — the catalogue as already registered — with
+--   endpoints resolved against @vocab@, the whole directory's declared
+--   tag vocabulary ('scanFactionTagVocabulary').
 --
---   Tags are settled BEFORE relations because a relation's endpoints are
---   checked against the tags this same file declares, which is what lets
---   one file be self-contained. 'Nothing' means the whole document may
---   be admitted.
-factionCatalogueRefusal ∷ FactionCatalogue → FactionYamlDoc
+--   'Nothing' means the whole document may be admitted.
+factionCatalogueRefusal ∷ Set FactionTag → FactionCatalogue → FactionYamlDoc
                         → Maybe CatalogueRefusal
-factionCatalogueRefusal cat doc =
-    either Just (const Nothing) (admitFactionYamlDoc cat doc)
+factionCatalogueRefusal vocab cat doc =
+    either Just (const Nothing) (admitFactionYamlDoc vocab cat doc)
 
 -- | The validated document, ready for
 --   'Unit.Faction.Catalogue.extendFactionCatalogue', or the first
@@ -226,20 +275,21 @@ factionCatalogueRefusal cat doc =
 --   resolved into 'FactionTag's to be checked at all, and resolving them
 --   twice — once to judge, once to register — is how the two drift.
 --
---   Tags are settled BEFORE relations because a relation's endpoints are
---   checked against the tags this same file declares, which is what lets
---   one file be self-contained.
-admitFactionYamlDoc ∷ FactionCatalogue → FactionYamlDoc
+--   __Two different sets, deliberately.__ A DUPLICATE declaration is
+--   judged against what is REGISTERED plus what this document has said
+--   so far, because that is what "declared twice" means and because a
+--   file must not collide with its own vocabulary entry. A relation
+--   ENDPOINT is judged against @vocab@ — every tag the directory
+--   declares, loaded or not — plus those same two, because a relation
+--   may legitimately name a tag a sibling file declares and a rule that
+--   said otherwise would depend on enumeration order.
+admitFactionYamlDoc ∷ Set FactionTag → FactionCatalogue → FactionYamlDoc
                     → Either CatalogueRefusal
                              ([FactionTagDecl], [BaseRelationEntry])
-admitFactionYamlDoc cat doc = do
+admitFactionYamlDoc vocab cat doc = do
     declared ← reverse <$> foldM addDecl [] (fydTags doc)
-    -- A THROWAWAY catalogue, never stored and never returned: it exists
-    -- only so `declaresTag` below sees this file's own declarations
-    -- beside everything already registered. Its source path is a label
-    -- nothing keys off, because this value does not outlive the call.
-    let known = extendFactionCatalogue "<the document being admitted>"
-                                       declared [] cat
+    let known = Set.unions [ vocab, catalogueTags cat
+                           , Set.fromList (map ftdTag declared) ]
     (entries, _) ← foldM (addRelation known)
                          ([], Map.keysSet (catalogueDeclaredPairs cat))
                          (fydRelations doc)
@@ -279,5 +329,34 @@ admitFactionYamlDoc cat doc = do
     endpoint known raw = case mkFactionTag raw of
         Nothing  → Left (MalformedTagId raw)
         Just tag
-            | declaresTag known tag → Right tag
-            | otherwise             → Left (UndeclaredEndpoint raw)
+            | Set.member tag known → Right tag
+            | otherwise            → Left (UndeclaredEndpoint raw)
+
+-- | Does the WHOLE proposed catalogue still hold together?
+--
+--   Admitting one document proves that document is well formed against
+--   everything else; it does not prove everything else is still well
+--   formed against IT. Re-reading a file that dropped a tag another
+--   file's relation names is exactly that case: the replacement
+--   document is faultless and the catalogue it would produce is not.
+--
+--   So a write is gated on the complete proposed catalogue, and the
+--   refusal names the endpoint that no longer resolves. Endpoints are
+--   resolved against @vocab@ for the same reason they are during
+--   admission — a relation may name a tag a sibling declares that has
+--   not been registered yet, and mid-family that is the normal state.
+--
+--   Only the endpoint rule is re-run here. Duplicate declarations and
+--   duplicate ordered pairs are decided pairwise at admission and no
+--   removal can create one.
+catalogueIntegrityRefusal ∷ Set FactionTag → FactionCatalogue
+                          → Maybe CatalogueRefusal
+catalogueIntegrityRefusal vocab cat =
+    case [ t | t ← concatMap endpoints (catalogueEntries cat)
+             , not (Set.member t known) ] of
+        (t : _) → Just (UndeclaredEndpoint (factionTagText t))
+        []      → Nothing
+  where
+    known = Set.union vocab (catalogueTags cat)
+    endpoints (DirectedBase s t _)  = [s, t]
+    endpoints (SymmetricBase a b _) = [a, b]

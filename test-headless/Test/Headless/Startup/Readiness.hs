@@ -117,10 +117,15 @@ data Scenario = Scenario
       -- ^ full file paths whose loader DECODED the file and then refused
       --   the whole of it on a duplicate authored name (#2241), each
       --   paired with the colliding name it reports back
+    , scReasons ∷ [(Text, Text)]
+      -- ^ refusal REASONS (#2506's fourth value), for the paths in
+      --   'scRefused' whose binding states one. A path absent here
+      --   answers with #2241's original three values, which is exactly
+      --   what flora still does.
     } deriving (Show, Eq)
 
 healthy ∷ Scenario
-healthy = Scenario [] [] []
+healthy = Scenario [] [] [] []
 
 quoted ∷ Text → Text
 quoted t = "'" <> t <> "'"
@@ -146,6 +151,7 @@ enginePrelude sc =
     , "local files  = " <> filesTable
     , "local broken = " <> luaSet (scBroken sc)
     , "local refused = " <> luaTable (scRefused sc)
+    , "local reasons = " <> luaTable (scReasons sc)
     , "engine = {}"
     , "engine.logInfo  = function(m) infos[#infos + 1] = m end"
     , "engine.logWarn  = function(m) warns[#warns + 1] = m end"
@@ -161,6 +167,11 @@ enginePrelude sc =
     -- #2241's refusal: the file DECODED (so the second value stays
     -- true), registered nothing, and reports the colliding name as an
     -- extra third value that only a refusal ever pushes.
+    -- #2506 appended a FOURTH value, the refusal reason. A binding that
+    -- states none still answers with three, so flora's terminal wording
+    -- is unchanged and only a binding with its own vocabulary moves.
+    , "  if wantOutcome and refused[p] and reasons[p] then"
+    , "    return 0.0, true, refused[p], reasons[p] end"
     , "  if wantOutcome and refused[p] then return 0.0, true, refused[p] end"
     , "  if wantOutcome then return "
         <> tshow perFileCount <> ".0, not broken[p] end"
@@ -224,6 +235,13 @@ data Run = Run
     , rCalls    ∷ Int   -- ^ loader invocations
     , rInfos    ∷ [Text]
     } deriving (Show, Eq)
+
+-- | The faction family as the given profile queues it. Both do.
+factionFam ∷ Text → Fam
+factionFam profile = case [ f | f ← profileFams profile
+                              , famId f ≡ "faction" ] of
+    (f : _) → f
+    []      → error "both profiles queue the faction family"
 
 aggregatesOf ∷ Run → [Text]
 aggregatesOf = filter ("Startup assets: " `T.isPrefixOf`) ∘ rInfos
@@ -696,9 +714,9 @@ spec = describe "Startup readiness" $ do
             r `shouldBe` "ok"
 
         it "preserves real family aggregates, terminal failures and queue order" $ do
-            forM_ [healthy, Scenario ["data/recipes"] [] [],
-                   Scenario [] ["data/recipes/b.yaml"] [],
-                   Scenario [] [] [("data/flora/b.yaml", "saguaro")]] $ \sc → do
+            forM_ [healthy, Scenario ["data/recipes"] [] [] [],
+                   Scenario [] ["data/recipes/b.yaml"] [] [],
+                   Scenario [] [] [("data/flora/b.yaml", "saguaro")] []] $ \sc → do
                 let run budget = inVM (loaderPrelude sc) $ T.unlines
                         [ "SL.build('normal')"
                         , "local guard = 0"
@@ -725,7 +743,7 @@ spec = describe "Startup readiness" $ do
 
         it "fails on a family whose directory yields NO files, naming \
            \the family and the DIRECTORY it looked in" $ do
-            r ← runProfile (Scenario ["data/recipes"] [] []) "normal"
+            r ← runProfile (Scenario ["data/recipes"] [] [] []) "normal"
             (rDone r, rFailed r) `shouldBe` (False, True)
             (rFamily r, rKind r, rWhere r)
                 `shouldBe` ("recipe", "empty", "data/recipes")
@@ -736,7 +754,7 @@ spec = describe "Startup readiness" $ do
 
         it "emits that family's own zero aggregate BEFORE failing, and \
            \no later family's" $ do
-            r ← runProfile (Scenario ["data/recipes"] [] []) "normal"
+            r ← runProfile (Scenario ["data/recipes"] [] [] []) "normal"
             let upTo = takeWhile ((≢ "recipe") ∘ famId) normalFams
             aggregatesOf r `shouldBe`
                 [ aggregateLine f (perFileCount * length famFiles)
@@ -754,7 +772,7 @@ spec = describe "Startup readiness" $ do
             -- is untouched. What makes it terminal is that it registered
             -- NOTHING, and a boot that continues here reaches the main
             -- menu over a flora catalog the author believes is loaded.
-            let sc = Scenario [] [] [("data/flora/b.yaml", "saguaro")]
+            let sc = Scenario [] [] [("data/flora/b.yaml", "saguaro")] []
             r ← runProfile sc "normal"
             (rDone r, rFailed r) `shouldBe` (False, True)
             (rFamily r, rKind r, rWhere r)
@@ -780,6 +798,75 @@ spec = describe "Startup readiness" $ do
                     <> " from 2 file(s)" ]
             rCalls r `shouldBe` perFileCount' (length upTo) + 2
 
+        forM_ ["normal", "arena"] $ \profile →
+            it ("fails the " ⧺ T.unpack profile ⧺ " profile on a faction \
+                \catalogue file that did not parse, BEFORE data/units \
+                \ran at all (#2506)") $ do
+                -- Both profiles queue data/factions immediately before
+                -- data/units, because a unit definition's faction_tags
+                -- are validated against the declared catalogue (D-30).
+                -- What proves the ordering is not the queue's source but
+                -- that the unit loader was never invoked.
+                let sc = Scenario [] ["data/factions/b.yaml"] [] []
+                r ← runProfile sc profile
+                (rDone r, rFailed r) `shouldBe` (False, True)
+                (rFamily r, rKind r, rWhere r)
+                    `shouldBe` ("faction", "parse", "data/factions/b.yaml")
+                rMessage r `shouldBe`
+                    "Startup failed: faction could not parse \
+                    \data/factions/b.yaml (1 of 2 file(s) failed)"
+                let upTo = takeWhile ((≢ "faction") ∘ famId)
+                                     (profileFams profile)
+                rCalls r `shouldBe` perFileCount' (length upTo) + 2
+                -- The family's own aggregate still goes out FIRST,
+                -- and no later family's does.
+                aggregatesOf r `shouldBe`
+                    [ aggregateLine f (perFileCount * length famFiles)
+                                      (length famFiles)
+                    | f ← upTo ⧺ [factionFam profile] ]
+
+        forM_ ["normal", "arena"] $ \profile →
+            it ("fails the " ⧺ T.unpack profile ⧺ " profile on a faction \
+                \catalogue file the binding REFUSED, naming its OWN \
+                \reason and the offending tag, still before \
+                \data/units (#2506)") $ do
+                let sc = Scenario [] []
+                             [("data/factions/b.yaml", "nomad")]
+                             [("data/factions/b.yaml", "undeclared faction tag")]
+                r ← runProfile sc profile
+                (rDone r, rFailed r) `shouldBe` (False, True)
+                (rFamily r, rKind r, rWhere r)
+                    `shouldBe` ("faction", "duplicate", "data/factions/b.yaml")
+                rName r `shouldBe` "nomad"
+                -- The point of #2506's fourth value: this is NOT a
+                -- duplicate definition name, and before it the terminal
+                -- line said it was.
+                rMessage r `shouldBe`
+                    "Startup failed: faction refused data/factions/b.yaml \
+                    \(undeclared faction tag 'nomad'; 1 of 2 file(s) \
+                    \refused)"
+                rErrors r `shouldBe` 1
+                let upTo = takeWhile ((≢ "faction") ∘ famId)
+                                     (profileFams profile)
+                rCalls r `shouldBe` perFileCount' (length upTo) + 2
+
+        it "leaves flora's legacy THREE-value refusal saying exactly \
+           \what it always said, beside a faction refusal that states \
+           \its own reason (#2506)" $ do
+            -- Same run, two families with different refusal vocabularies:
+            -- flora pushes no reason and keeps #2241's wording, and the
+            -- faction family — queued later — would have stated its own.
+            let sc = Scenario [] []
+                         [ ("data/flora/b.yaml", "saguaro")
+                         , ("data/factions/b.yaml", "nomad") ]
+                         [("data/factions/b.yaml", "undeclared faction tag")]
+            r ← runProfile sc "normal"
+            (rFamily r, rKind r) `shouldBe` ("flora", "duplicate")
+            rMessage r `shouldBe`
+                "Startup failed: flora refused data/flora/b.yaml \
+                \(duplicate definition name 'saguaro'; 1 of 2 file(s) \
+                \refused)"
+
         it "keeps a refusal out of the ELEVEN other families' way: the \
            \same scenario against a family that refuses nothing runs to \
            \the end" $ do
@@ -790,7 +877,7 @@ spec = describe "Startup readiness" $ do
         it "fails on a file that did not parse, naming the family and \
            \the FILE — after the family's aggregate carries its healthy \
            \count and its original discovered-file count" $ do
-            r ← runProfile (Scenario [] ["data/recipes/b.yaml"] []) "normal"
+            r ← runProfile (Scenario [] ["data/recipes/b.yaml"] [] []) "normal"
             (rDone r, rFailed r) `shouldBe` (False, True)
             (rFamily r, rKind r, rWhere r)
                 `shouldBe` ("recipe", "parse", "data/recipes/b.yaml")
@@ -812,12 +899,13 @@ spec = describe "Startup readiness" $ do
         it "counts EVERY failing file in the family and reports the \
            \first in queue order" $ do
             r ← runProfile (Scenario []
-                    ["data/recipes/a.yaml", "data/recipes/b.yaml"] []) "normal"
+                    ["data/recipes/a.yaml", "data/recipes/b.yaml"] [] [])
+                    "normal"
             (rWhere r, rFailed' r, rFiles r)
                 `shouldBe` ("data/recipes/a.yaml", "2", "2")
             paths ← inVM (loaderPrelude
                               (Scenario [] [ "data/recipes/a.yaml"
-                                           , "data/recipes/b.yaml" ] []))
+                                           , "data/recipes/b.yaml" ] [] []))
                         "SL.build('normal') drain() \
                         \return table.concat(SL.getFailure().paths, ',')"
             paths `shouldBe` "data/recipes/a.yaml,data/recipes/b.yaml"
@@ -850,7 +938,7 @@ spec = describe "Startup readiness" $ do
 
         it "keeps isDone false and never advances progress or re-logs, \
            \however many more ticks arrive" $ do
-            let sc = Scenario [] ["data/recipes/b.yaml"] []
+            let sc = Scenario [] ["data/recipes/b.yaml"] [] []
             -- 200 further ticks past the failure change nothing: not
             -- progress, not the loader calls made, not the one error.
             after ← inVM (loaderPrelude sc)
@@ -869,14 +957,14 @@ spec = describe "Startup readiness" $ do
 
         it "lets runAll RETURN on a failure instead of spinning on done \
            \(the arena profile's only exit)" $ do
-            out ← inVM (loaderPrelude (Scenario [] ["data/buildings/a.yaml"] []))
+            out ← inVM (loaderPrelude (Scenario [] ["data/buildings/a.yaml"] [] []))
                 "SL.build('arena') SL.runAll() \
                 \return string.format('%s/%s/%s', tostring(SL.isDone()), \
                 \  tostring(SL.isFailed()), SL.getFailure().family)"
             out `shouldBe` "false/true/building"
 
         it "clears the failure on build and on reset" $ do
-            out ← inVM (loaderPrelude (Scenario [] ["data/recipes/b.yaml"] []))
+            out ← inVM (loaderPrelude (Scenario [] ["data/recipes/b.yaml"] [] []))
                 "SL.build('normal') drain() \
                 \local afterFail = SL.isFailed() \
                 \SL.reset() \
@@ -888,7 +976,7 @@ spec = describe "Startup readiness" $ do
             out `shouldBe` "true/false/false"
 
         it "fails the arena profile on ITS own family inventory" $ do
-            r ← runProfile (Scenario ["data/units"] [] []) "arena"
+            r ← runProfile (Scenario ["data/units"] [] [] []) "arena"
             (rDone r, rFailed r, rFamily r) `shouldBe` (False, True, "unit")
             -- arena has no flora family, so its aggregates stop one
             -- family earlier than normal's would
@@ -911,7 +999,7 @@ spec = describe "Startup readiness" $ do
 
         it "normal boot: a parse failure stops at 'failed', logs no \
            \completion, runs no finishStartupBoot and shows no menu" $ do
-            b ← runBoot (Scenario [] ["data/recipes/b.yaml"] []) "normal"
+            b ← runBoot (Scenario [] ["data/recipes/b.yaml"] [] []) "normal"
             bPhase b    `shouldBe` "failed"
             bMenus b    `shouldBe` []
             bBootDone b `shouldBe` False
@@ -928,7 +1016,7 @@ spec = describe "Startup readiness" $ do
             bShown b    `shouldBe` "shown"
 
         it "normal boot: an empty family directory does the same" $ do
-            b ← runBoot (Scenario ["data/units"] [] []) "normal"
+            b ← runBoot (Scenario ["data/units"] [] [] []) "normal"
             (bPhase b, bMenus b, bBootDone b) `shouldBe` ("failed", [], False)
             bMessage b `shouldBe`
                 "Startup failed: unit discovered no YAML files in data/units"
@@ -941,7 +1029,7 @@ spec = describe "Startup readiness" $ do
 
         it "arena boot: a failure in the SYNCHRONOUS drain shows the \
            \retained message and never runs finishArenaBoot" $ do
-            b ← runBoot (Scenario [] ["data/buildings/a.yaml"] []) "arena"
+            b ← runBoot (Scenario [] ["data/buildings/a.yaml"] [] []) "arena"
             bPhase b    `shouldBe` "failed"
             bMenus b    `shouldBe` []
             bBootDone b `shouldBe` False
@@ -961,8 +1049,8 @@ spec = describe "Startup readiness" $ do
         -- widgets carry statusText and an empty bar -- so a failed
         -- startup came back as a hidden page that, if shown, would have
         -- read like a boot still in progress.
-        forM_ [ ("normal", Scenario [] ["data/recipes/b.yaml"] [])
-              , ("arena",  Scenario [] ["data/buildings/a.yaml"] []) ]
+        forM_ [ ("normal", Scenario [] ["data/recipes/b.yaml"] [] [])
+              , ("arena",  Scenario [] ["data/buildings/a.yaml"] [] []) ]
             $ \(profile, sc) →
             it (T.unpack profile ⧺ " boot: a resize after the failure \
                 \keeps the message, the frozen bar and the page on \

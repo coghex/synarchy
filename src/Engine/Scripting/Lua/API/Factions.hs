@@ -30,8 +30,9 @@ import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.API.YamlResult
     (YamlRefusal(..), pushYamlRefusal, pushYamlResult)
 import Engine.Asset.YamlFactions
-    ( admitFactionYamlDoc, loadFactionYamlOutcome
-    , refusalDetail, refusalReason )
+    ( admitFactionYamlDoc, catalogueIntegrityRefusal
+    , loadFactionYamlOutcome, refusalDetail, refusalReason
+    , scanFactionTagVocabulary )
 import Unit.Faction.Catalogue (extendFactionCatalogue, withoutSource)
 
 -- | @engine.loadFactionYaml(path)@ — parse one @data\/factions\/@ file
@@ -68,7 +69,18 @@ import Unit.Faction.Catalogue (extendFactionCatalogue, withoutSource)
 --   every other @engine.load*Yaml@, so it judges the file against the
 --   catalogue MINUS whatever that same path contributed before
 --   ('withoutSource'). Re-reading one file therefore replaces its own
---   declarations; two different files colliding is still a refusal.
+--   declarations; two different files colliding is still a refusal. The
+--   write is then gated on the COMPLETE proposed catalogue
+--   ('catalogueIntegrityRefusal'), because a replacement document can
+--   be faultless in itself and still leave another file's relation
+--   naming a tag nothing declares any more. On that refusal nothing is
+--   written, so the previously registered catalogue survives intact.
+--
+--   __Order-independent.__ Relation endpoints resolve against the whole
+--   directory's declared vocabulary ('scanFactionTagVocabulary'), not
+--   against what happens to be registered, so a relations-only file is
+--   admitted whether it is enumerated before or after the file
+--   declaring its tags.
 loadFactionYamlFn ∷ CoreCapability → ContentRegistriesCapability
                   → Lua.LuaE Lua.Exception Lua.NumResults
 loadFactionYamlFn core regs = do
@@ -88,13 +100,31 @@ loadFactionYamlFn core regs = do
                         return (Right (False, 0 ∷ Int))
                     Just doc → do
                         registered ← readIORef (crFactionCatalogueRef regs)
+                        -- The directory's whole declared vocabulary,
+                        -- staged BEFORE admission so a relation naming a
+                        -- sibling's tag is admitted whether that sibling
+                        -- has loaded yet or not.
+                        vocab ← scanFactionTagVocabulary filePath
                         -- Judge this file against the REST of the
                         -- directory: re-reading one path replaces what
                         -- that path said rather than colliding with it,
                         -- which is what keeps this verb as repeatable
                         -- as its nine siblings.
                         let cat = withoutSource filePath registered
-                        case admitFactionYamlDoc cat doc of
+                            admitted = do
+                                (decls, entries) ← admitFactionYamlDoc
+                                                       vocab cat doc
+                                let proposed = extendFactionCatalogue
+                                                   filePath decls entries cat
+                                -- The write is gated on the COMPLETE
+                                -- proposed catalogue, not just on this
+                                -- document: a replacement that drops a
+                                -- tag another file's relation names is
+                                -- a faultless document and a broken
+                                -- registry.
+                                maybe (Right (decls, entries, proposed)) Left
+                                      (catalogueIntegrityRefusal vocab proposed)
+                        case admitted of
                             Left refusal → do
                                 logError logger CatAsset $
                                     "loadFactionYaml: refused "
@@ -104,10 +134,13 @@ loadFactionYamlFn core regs = do
                                 return (Left (YamlRefusal
                                     (refusalReason refusal)
                                     (refusalDetail refusal)))
-                            Right (decls, entries) → do
-                                writeIORef (crFactionCatalogueRef regs)
-                                    (extendFactionCatalogue filePath decls
-                                                            entries cat)
+                            Right (decls, entries, proposed) → do
+                                -- Nothing was written on the refusal
+                                -- branch, so a refused reload leaves the
+                                -- previously registered catalogue —
+                                -- `registered`, not `cat` — exactly as
+                                -- it was.
+                                writeIORef (crFactionCatalogueRef regs) proposed
                                 let n = length decls + length entries
                                 logDebug logger CatAsset $
                                     "loadFactionYaml: loaded " <> tshow n

@@ -1840,6 +1840,28 @@ document; re-reading ONE path replaces that path's own contribution
 rather than colliding with it, which is what keeps
 `engine.loadFactionYaml` as repeatable as its nine sibling verbs.
 
+**Admission does not depend on enumeration order.** A relation's
+endpoints may legitimately be declared in a SIBLING file — a new
+culture relating itself to `acolyte` is the obvious case — so endpoints
+resolve against the whole directory's declared tag vocabulary, staged
+by `Engine.Asset.YamlFactions.scanFactionTagVocabulary` before the
+document is judged. Resolving them against only what is already
+registered would make the same tree boot on one machine and refuse on
+another, because `engine.listFiles` hands back raw filesystem order.
+The pre-scan registers nothing, refuses nothing and warns about
+nothing: every sibling is still decoded, judged and registered by its
+own queue entry, and a sibling that fails to decode contributes no tags
+while its own entry reports that parse failure terminally.
+
+**The write is gated on the COMPLETE proposed catalogue.** Admitting
+one document proves that document is well formed against everything
+else; it does not prove everything else is still well formed against
+it. Re-reading a file that dropped a tag another file's relation names
+is exactly that case — a faultless replacement document and a broken
+registry — so `catalogueIntegrityRefusal` re-runs the endpoint rule
+over every registered source before anything is written, and on refusal
+the previously registered catalogue survives untouched.
+
 **Same-tag alliance and the neutral default are engine rules, never
 rows.** `Unit.Faction.Profile.relationFromTo` answers ally for a shared
 tag and neutral for an unrelated pair before the base table is consulted
