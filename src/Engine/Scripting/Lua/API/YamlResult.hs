@@ -18,6 +18,7 @@
 --   back from a bare @return engine.loadRecipeYaml(path)@.
 module Engine.Scripting.Lua.API.YamlResult
     ( pushYamlResult
+    , YamlRefusal(..)
     , pushYamlRefusal
     ) where
 
@@ -43,29 +44,59 @@ pushYamlResult parsed count = do
             return 2
         else return 1
 
+-- | One post-decode SEMANTIC refusal, as Lua receives it (#2241,
+--   widened by #2506).
+--
+--   @yrDetail@ is the offending identifier. @yrReason@ is the short
+--   phrase the terminal startup line leads with — \"undeclared faction
+--   tag\", \"duplicate faction relation\" — and it is OPTIONAL,
+--   because the arity a binding answers with is part of its published
+--   contract. A binding that states no reason answers with #2241's
+--   three values exactly as it always has; only a binding with a
+--   refusal vocabulary of its own pushes the fourth.
+--
+--   The two travel separately rather than as one pre-rendered sentence
+--   because @scripts\/startup_loader.lua@ owns the spelling of that
+--   line and quotes the identifier itself.
+data YamlRefusal = YamlRefusal
+    { yrReason ∷ !(Maybe Text)
+    , yrDetail ∷ !Text
+    } deriving (Show, Eq)
+
 -- | Answer one @engine.load*Yaml@ call that DECODED its file and then
 --   refused the whole of it on a semantic collision (#2241): a
---   duplicate definition name, today only in @data\/flora@.
+--   duplicate flora name, or — since #2506 — a faction-tag rule.
 --
 --   The count is zero, because a refusal registers nothing. @parsed@ is
 --   'True', because the file parsed — that field's meaning is not
 --   widened here, for the same reason it was narrowed in the first
---   place: eleven other families rely on it meaning exactly \"the
---   decode produced a definition list\".
+--   place: the other families rely on it meaning exactly \"the decode
+--   produced a definition list\".
 --
---   What carries the refusal is a THIRD value, @detail@ — the colliding
---   name — pushed only when the caller opted in to the outcome at all.
---   A healthy call still answers with one value bare and two when
---   asked; only a refusal answers with three, so
---   @scripts\/startup_loader.lua@ can name the file AND the name in its
---   terminal diagnostic without any other caller's arity moving.
-pushYamlRefusal ∷ Text → Lua.LuaE Lua.Exception Lua.NumResults
-pushYamlRefusal detail = do
+--   What carries the refusal is a THIRD value, @detail@ — the offending
+--   identifier — pushed only when the caller opted in to the outcome at
+--   all. A healthy call still answers with one value bare and two when
+--   asked; only a refusal answers with three.
+--
+--   A FOURTH value, @reason@, is pushed only by a binding that states
+--   one ('yrReason'). That is what #2506 added, and it is optional
+--   precisely so it changes nothing about the bindings that came
+--   before: flora states no reason and still answers with three, while
+--   the faction and unit refusals state theirs and answer with four, so
+--   @scripts\/startup_loader.lua@ can lead its terminal line with the
+--   rule that actually fired rather than calling every refusal a
+--   duplicate definition name.
+pushYamlRefusal ∷ YamlRefusal → Lua.LuaE Lua.Exception Lua.NumResults
+pushYamlRefusal refusal = do
     wantOutcome ← Lua.toboolean 2
     Lua.pushnumber (Lua.Number 0)
     if wantOutcome
         then do
             Lua.pushboolean True
-            Lua.pushstring (TE.encodeUtf8 detail)
-            return 3
+            Lua.pushstring (TE.encodeUtf8 (yrDetail refusal))
+            case yrReason refusal of
+                Nothing     → return 3
+                Just reason → do
+                    Lua.pushstring (TE.encodeUtf8 reason)
+                    return 4
         else return 1

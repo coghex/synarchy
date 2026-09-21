@@ -185,6 +185,11 @@ STARTUP_LOADER_PATH = REPO / "scripts" / "startup_loader.lua"
 #: come after it, which is why locations are LAST (their content ids,
 #: incl. loot_table ids, reference the registries above; #90).
 #:
+#: The faction catalogue (#2506) is the one ordering constraint added
+#: since: a unit definition's `faction_tags:` are validated against the
+#: declared tags, so data/factions must precede data/units or every unit
+#: file is refused for naming a tag nothing declared.
+#:
 #: `recursive` mirrors production's addYamlTree/addYamlDir split:
 #: items are the one family whose definitions may live in
 #: subdirectories (#1232), enumerated at any depth in the canonical
@@ -199,6 +204,7 @@ BOOTSTRAP_LOADERS: list[tuple[str, str, bool]] = [
     ("data/items",       "engine.loadItemYaml",       True),
     ("data/equipment",   "engine.loadEquipmentYaml",  False),
     ("data/buildings",   "engine.loadBuildingYaml",   False),
+    ("data/factions",    "engine.loadFactionYaml",    False),
     ("data/units",       "engine.loadUnitYaml",       False),
     ("data/loot_tables", "engine.loadLootTableYaml",  False),
     ("data/loot_profiles", "engine.loadLootProfileYaml", False),

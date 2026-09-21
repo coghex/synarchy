@@ -11,9 +11,15 @@
 --   "Test.Headless.Lua.Faction"; both stay green and untouched by this
 --   slice, and later slices port them.
 --
---   The base relation table below is TEST-LOCAL on purpose. FTS-2 moves
---   it into validated YAML; until then the only thing that knows the
---   shipped D-28 compatibility relations is this file.
+--   The base relation table below is written out LOCALLY on purpose: it
+--   states D-28's compatibility relations as this gate's own
+--   expectation, so a precedence regression cannot move the expectation
+--   with the implementation. Since FTS-2 (#2506) it is no longer the
+--   only thing that knows them — @data\/factions\/base.yaml@ is the
+--   shipped authority — and the final group below loads that file
+--   through the real loader and proves the two agree, then re-asserts
+--   both five-by-five matrices against the shipped table rather than
+--   this one.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Unit faction profile policy"'@.
@@ -23,6 +29,15 @@ import UPrelude
 import Test.Hspec
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import Engine.Asset.YamlFactions
+    ( admitFactionYamlDoc, loadFactionYamlOutcome
+    , scanFactionTagVocabulary )
+import Engine.Core.Log
+    ( LogBackend(..), LogConfig(..), defaultLogConfig, initLogger )
+import System.FilePath ((</>))
+import Unit.Faction.Catalogue
+    ( FactionCatalogue, catalogueDeclaredPairs, cataloguePolicy
+    , catalogueTags, emptyFactionCatalogue, extendFactionCatalogue )
 import Unit.Faction
     ( Faction(..), FactionRelation(..), allFactions, canAttack
     , factionRelation, hasUnrestrictedCombat, isPlayerCommandable
@@ -85,8 +100,16 @@ legacyOrder ∷ [Faction]
 legacyOrder = [ FactionPlayer, FactionWildlife, FactionHostile
               , FactionNeutral, FactionDebug ]
 
+-- | The definition defaults each legacy value migrates with (D-26).
+--   Only @player@ supplies any: @wildlife@'s row falls back to
+--   'tagWildlife' precisely BECAUSE the definition declares none, and
+--   the other three ignore defaults entirely.
+legacyDefaults ∷ Faction → [FactionTag]
+legacyDefaults FactionPlayer = [tagAcolyte]
+legacyDefaults _             = []
+
 profileOf ∷ Faction → FactionProfile
-profileOf = legacyProfile localPlayer
+profileOf f = legacyProfile localPlayer (legacyDefaults f) f
 
 -- | The expected 5×5 relation matrix, written out rather than derived,
 --   so a precedence regression cannot move the expectation with the
@@ -135,6 +158,8 @@ spec = describe "Unit faction profile policy" $ do
     emptyProfileSpec
     desiredExperienceSpec
     legacyMatrixSpec
+    shippedCatalogue ← runIO loadShippedCatalogue
+    shippedCatalogueSpec shippedCatalogue
 
 -- * Tag validation
 
@@ -799,3 +824,90 @@ legacyMatrixSpec = describe "legacy compatibility" $ do
             `shouldBe` map isPlayerCommandable legacyOrder
         map (profileHasUnrestrictedCombat ∘ profileOf) legacyOrder
             `shouldBe` map hasUnrestrictedCombat legacyOrder
+
+-- * The shipped catalogue (#2506, FTS-2)
+
+-- | @data\/factions\/base.yaml@ through its REAL loader and its real
+--   admission rules — not a restatement of them.
+--
+--   Loaded once with 'runIO' at spec-construction time. A file that
+--   fails to decode or is refused raises here rather than degrading to
+--   an empty catalogue, because an empty one would make every matrix
+--   below pass for the wrong reason: with no relations declared, the
+--   base tier never fires and the profiles fall through to neutral.
+loadShippedCatalogue ∷ IO FactionCatalogue
+loadShippedCatalogue = do
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\_ → pure ()) }
+    let path = "data" </> "factions" </> "base.yaml"
+    vocab ← scanFactionTagVocabulary path
+    mDoc ← loadFactionYamlOutcome logger path
+    case mDoc of
+        Nothing  → error (path ⧺ " did not decode")
+        Just doc → case admitFactionYamlDoc vocab emptyFactionCatalogue doc of
+            Left _ → error (path ⧺ " was refused by its own loader")
+            Right (decls, entries) →
+                pure (extendFactionCatalogue path decls entries
+                          emptyFactionCatalogue)
+
+-- | Both five-by-five matrices, re-asserted against the table the game
+--   actually ships instead of the one written at the top of this file.
+--
+--   The first example is what keeps the two from drifting: it compares
+--   the shipped ordered pairs against 'legacyBase'\'s own expansion, so
+--   an edit to @data\/factions\/base.yaml@ that changes the
+--   compatibility table fails HERE, naming the difference, rather than
+--   somewhere downstream in a relation nobody expected to move.
+shippedCatalogueSpec ∷ FactionCatalogue → Spec
+shippedCatalogueSpec cat =
+    describe "the shipped catalogue" $ do
+
+    it "declares exactly the four D-28 tags" $
+        Set.map factionTagText (catalogueTags cat)
+            `shouldBe` Set.fromList
+                [ "acolyte", "legacy_hostile", "nomad", "wildlife" ]
+
+    it "declares exactly the ordered pairs this spec's own table does" $
+        catalogueDeclaredPairs cat `shouldBe` shippedPairsFromLocalTable
+
+    it "reproduces the documented 5x5 relation matrix" $
+        map (\a → map (\b → relate (cataloguePolicy cat)
+                                   (profileOf a) (profileOf b))
+                      legacyOrder)
+            legacyOrder
+            `shouldBe` expectedLegacyRelations
+
+    it "reproduces canAttack on all 25 ordered pairs" $
+        map (\(a, b) → canProfileAttack (cataloguePolicy cat)
+                            (profileOf a) (profileOf b))
+            legacyPairs
+            `shouldBe` map (\(a, b) → canAttack a b) legacyPairs
+
+    it "differs from the scalar model in exactly the same eight pairs" $ do
+        let differing = [ (a, b)
+                        | (a, b) ← legacyPairs
+                        , relate (cataloguePolicy cat)
+                                 (profileOf a) (profileOf b)
+                            ≢ factionRelation a b ]
+        differing `shouldBe` expectedLegacyDifferences
+
+    it "leaves nomad/wildlife and nomad/legacy_hostile neutral by \
+       \silence, so a tag is unrelated until something says otherwise" $ do
+        let nomadOnly = mkProfile Nothing [tagNomad] []
+            wild      = mkProfile Nothing [tagWildlife] []
+            legacyH   = mkProfile Nothing [tagLegacyHostile] []
+            pol       = cataloguePolicy cat
+        relate pol nomadOnly wild    `shouldBe` RelNeutral
+        relate pol wild nomadOnly    `shouldBe` RelNeutral
+        relate pol nomadOnly legacyH `shouldBe` RelNeutral
+        relate pol legacyH nomadOnly `shouldBe` RelNeutral
+
+-- | 'legacyBase' expanded to the ordered-pair map the catalogue keeps,
+--   so the two representations can be compared directly.
+shippedPairsFromLocalTable ∷ Map.Map (FactionTag, FactionTag) FactionRelation
+shippedPairsFromLocalTable = Map.fromList
+    [ ((s, t), RelHostile)
+    | (a, b) ← [ (tagAcolyte, tagNomad), (tagAcolyte, tagWildlife)
+               , (tagLegacyHostile, tagAcolyte)
+               , (tagLegacyHostile, tagWildlife) ]
+    , (s, t) ← [(a, b), (b, a)] ]

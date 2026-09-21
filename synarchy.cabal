@@ -277,6 +277,7 @@ library
                      Engine.Asset.YamlMaterials
                      Engine.Asset.YamlVegetation
                      Engine.Asset.YamlFlora
+                     Engine.Asset.YamlFactions
                      Engine.Asset.YamlUnits
                      Engine.Asset.YamlNames
                      Engine.Asset.YamlNotifications
@@ -612,6 +613,7 @@ library
                      Unit.Command.Types
                      Unit.Direction
                      Unit.Faction
+                     Unit.Faction.Catalogue
                      Unit.Faction.Profile
                      Unit.Sim.Types
                      Unit.Thread
@@ -736,6 +738,7 @@ library
                      LootProfile.Simulate
                      Engine.Asset.YamlLootProfiles
                      Engine.Scripting.Lua.API.LootProfiles
+                     Engine.Scripting.Lua.API.Factions
                      Engine.Scripting.Lua.API.LootSimulate
                      Tutorial.Types
                      Engine.Asset.YamlTutorials
@@ -1772,6 +1775,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.Discovery
                    Test.Headless.Location.Fixture
                    Test.Headless.Unit.Faction
+                   Test.Headless.Unit.FactionCatalogue
                    Test.Headless.Unit.FactionProfile
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance

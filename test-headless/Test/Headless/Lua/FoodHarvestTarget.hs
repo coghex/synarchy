@@ -272,7 +272,7 @@ minimalDef name = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
 
 -- | Hungry, carrying nothing, ample capacity. The hunger numbers are
 --   what put the forage rung above its own @forage_max_fraction@ gate;

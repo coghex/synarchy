@@ -43,6 +43,7 @@ def load_yaml_dir(port: int, directory: str, loader: str) -> None:
 
 def load_registries(port: int) -> None:
     load_yaml_dir(port, "data/items", "engine.loadItemYaml")
+    load_yaml_dir(port, "data/factions", "engine.loadFactionYaml")
     load_yaml_dir(port, "data/units", "engine.loadUnitYaml")
     load_yaml_dir(port, "data/buildings", "engine.loadBuildingYaml")
     load_yaml_dir(port, "data/loot_tables", "engine.loadLootTableYaml")

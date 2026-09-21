@@ -166,6 +166,7 @@ minimalUnitDef = UnitDef
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 -- | The holder carries one kit LOOSE, wears another in an equipment

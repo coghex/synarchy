@@ -2,6 +2,10 @@ units:
   - name: "technomule"
     display_name: "Technomule"
     sprite: "assets/textures/units/technomule/animations/idle/south/frame_000.png"
+    # Default faction tags (#2506, D-29). The hauler carries the COLONY
+    # culture, not a machine tag of its own: that is what keeps nomads
+    # and wildlife hostile to it exactly as they are today.
+    faction_tags: ["acolyte"]
     # Big pack quadruped — bear-class footprint.
     base_width: 16
     # Loaded pack animal: brisk but no sprinter. Faster than a

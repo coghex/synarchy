@@ -163,6 +163,7 @@ atlasDef = UnitDef
     , udStartingEquipment = HM.empty, udStartingAccessories = []
     , udBodyParts = [], udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 quadUVs ∷ SortableQuad → [(Float, Float)]

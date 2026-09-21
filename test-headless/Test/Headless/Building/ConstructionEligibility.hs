@@ -207,6 +207,7 @@ acolyteDef = UnitDef
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 mkUnit ∷ (Float, Float) → UnitInstance

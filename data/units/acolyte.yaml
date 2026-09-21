@@ -4,6 +4,10 @@ units:
     name_pool: "humanoid"
     display_name: "Acolyte"
     sprite: "assets/textures/units/acolyte/animations/idle/south/frame_000.png"
+    # Default faction tags (#2506, D-29). The colony culture; every
+    # relation an acolyte has comes from data/factions/base.yaml,
+    # never from this unit's name.
+    faction_tags: ["acolyte"]
     base_width: 8
     # Top sprint speed in tiles/sec. AI candidates derive walk /
     # commanded / retreat speeds as fractions of this. Stat-based

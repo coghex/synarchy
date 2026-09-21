@@ -1,0 +1,65 @@
+# The faction-tag catalogue (#2506, FTS-2 of epic #2496 — design
+# docs/faction_tag_system_design.md, decisions D-4, D-8, D-28, D-30).
+#
+# This file is the ONE authority for which faction tags authored data may
+# name, and for the standing relations between them. It loads before
+# data/units: a unit definition's `faction_tags:` is checked against the
+# ids declared here, and a unit file naming one that is not declared is
+# refused entire (D-30).
+#
+# WHAT DOES NOT BELONG HERE
+#
+#   * Same-tag alliance. Two profiles sharing any tag are allies by
+#     engine rule, before this table is consulted. A row saying so is
+#     REFUSED, because it could only restate or contradict the rule.
+#   * The neutral default. An undeclared pair is neutral by engine rule;
+#     silence is how you author that, not a `neutral` row.
+#   * Runtime-minted tags. Teams, scenarios and temporary conflict
+#     groups are created by the systems that own them and are never
+#     declared here (D-12). An undeclared but syntactically valid tag
+#     still evaluates normally at runtime — the catalogue restricts
+#     authored data, not the namespace.
+#
+# RULES THE LOADER ENFORCES, each refusing the whole file:
+#   * a tag declared twice (here or by another file in this directory);
+#   * a malformed tag id (empty, or carrying whitespace);
+#   * a relation naming a tag no catalogue file declares;
+#   * a `relation:` outside ally / neutral / hostile;
+#   * the same ORDERED pair declared more than once, by any mix of
+#     `pair:` and `from:`/`to:` entries, whether or not the values agree;
+#   * a relation whose two endpoints are the same tag.
+
+faction_tags:
+  - id: acolyte
+    description: >
+      The colony's own culture. Every unit the player's settlement
+      fields carries it, including the technomule (D-29) — the cargo
+      hauler is colony property, and giving it the colony's tag is what
+      keeps nomads and wildlife hostile to it exactly as they are today.
+  - id: nomad
+    description: >
+      The wandering peoples the acolytes displaced. Mutually hostile
+      with acolytes by D-4, and deliberately NOT related to wildlife or
+      to legacy_hostile — a nomad and a bear have no standing quarrel.
+  - id: wildlife
+    description: >
+      Animals. One affiliation for now, which is why every animal is
+      allied with every other through the shared-tag rule; predator and
+      prey needing to differ is aggression work, not catalogue work.
+  - id: legacy_hostile
+    description: >
+      A MIGRATION ARTIFACT, not a culture. It is what the old scalar
+      `hostile` faction becomes (D-26), and it exists so ruin occupants
+      keep fighting acolytes and wildlife while the arc lands. Authored
+      content should name a real culture instead; this tag is here to be
+      migrated away from.
+
+relations:
+  # D-28: symmetric hostility for exactly these four pairs and nothing
+  # else. nomad/wildlife and nomad/legacy_hostile are left undeclared
+  # and are therefore neutral (D-8) — that is authored, not an
+  # oversight.
+  - { pair: [acolyte, nomad], relation: hostile }
+  - { pair: [acolyte, wildlife], relation: hostile }
+  - { pair: [legacy_hostile, acolyte], relation: hostile }
+  - { pair: [legacy_hostile, wildlife], relation: hostile }

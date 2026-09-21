@@ -1114,8 +1114,8 @@ def test_record_counts_against_the_real_repo():
     expect(size_violations == [],
            f"every live capability record's field list must be readable, "
            f"got: {size_violations}")
-    expect(len(sizes) == 15 and sum(sizes.values()) == 119,
-           f"the live tree should be the 15 records and 119 projected "
+    expect(len(sizes) == 15 and sum(sizes.values()) == 120,
+           f"the live tree should be the 15 records and 120 projected "
            f"fields the aggregate reports, got {len(sizes)} record(s) "
            f"totalling {sum(sizes.values())}")
 

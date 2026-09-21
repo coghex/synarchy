@@ -19,6 +19,7 @@ import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
+import Unit.Faction.Profile (FactionTag)
 import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..))
 
 -- | A single UNIT animation: per-direction frame sequences, addressed
@@ -195,4 +196,22 @@ data UnitDef = UnitDef
       --   `uiModifiers` at spawn — the species' innate buffs
       --   (technomule: carrying_capacity +50% "cybernetic
       --   enhancements"). Show in tooltips like any other modifier.
+    , udFactionTags ∷ ![FactionTag]
+      -- ^ The species' DEFAULT faction tags (#2506), resolved from
+      --   YAML `faction_tags:` against the loaded catalogue at
+      --   registration time — so every tag here is one
+      --   `data/factions/` declares, and the whole file was refused if
+      --   any was not (D-30). Authored order, duplicates already
+      --   refused.
+      --
+      --   An EMPTY list means the definition declares no defaults, and
+      --   that is not the same as declaring `wildlife`:
+      --   `Unit.Faction.Profile.legacyProfile` falls back to the
+      --   wildlife tag only for a definition with none (D-26). `tiller`
+      --   and `unknown_unit` are the two shipped definitions that are
+      --   empty here.
+      --
+      --   Template-only. Nothing live reads it yet: the `UnitInstance`
+      --   profile that will is FTS-3 (#2515), and no spawn argument,
+      --   snapshot, DTO or save byte changes for this field.
     } deriving (Show, Eq)

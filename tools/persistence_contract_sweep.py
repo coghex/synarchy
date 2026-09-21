@@ -303,6 +303,7 @@ def bootstrap_defs(port: int) -> None:
         ("data/items/*.yaml",      "engine.loadItemYaml"),
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
+        ("data/factions/*.yaml", "engine.loadFactionYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
         ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),

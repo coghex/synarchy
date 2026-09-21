@@ -24,6 +24,10 @@
 units:
   - name: tiller
     sprite: "assets/textures/units/tiller/animations/idle/south/frame_000.png"
+    # No `faction_tags:` (#2506, D-29), deliberately: this is a minimal runtime declaration promoted for the asset inventory
+    # (#1261) and never spawned in play,
+    # so it has no affiliation to declare. An omitted list is NOT the
+    # same as declaring `wildlife` -- see Unit.Faction.Profile.
     animations:
       idle:
         fps: 8

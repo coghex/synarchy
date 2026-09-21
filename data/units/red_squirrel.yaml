@@ -2,6 +2,8 @@ units:
   - name: "red_squirrel"
     display_name: "Red Squirrel"
     sprite: "assets/textures/units/red_squirrel/animations/idle/south/frame_000.png"
+    # Default faction tags (#2506, D-29).
+    faction_tags: ["wildlife"]
     portrait: "assets/textures/units/red_squirrel/portrait.png"
     # Tiny critter. Acolyte = 8 (48px), bear = 16 (92px); the squirrel
     # sprite is 36px and the animal itself is hand-sized.

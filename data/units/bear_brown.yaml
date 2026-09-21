@@ -4,6 +4,8 @@ units:
     # label below is shown in its place.
     display_name: "Brown Bear"
     sprite: "assets/textures/units/bear_brown/animations/idle/south/frame_000.png"
+    # Default faction tags (#2506, D-29).
+    faction_tags: ["wildlife"]
     # Bears are wider than humans. Acolyte = 8; bear roughly 2x that.
     base_width: 16
     # Top sprint speed in tiles/sec. ~2× human max (acolyte 3.0)

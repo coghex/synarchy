@@ -27,7 +27,7 @@ import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logDebug, logError, logWarn)
 import Engine.Scripting.Lua.API.YamlResult
-    (pushYamlRefusal, pushYamlResult)
+    (YamlRefusal(..), pushYamlRefusal, pushYamlResult)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
@@ -293,7 +293,12 @@ loadFloraYamlFn env backendState = do
                         return (Right (isJust mDefs, total))
 
             case outcome of
-                Left clash          → pushYamlRefusal clash
+                -- No reason: flora's published arity is #2241's three
+                -- values, and the terminal line's "duplicate definition
+                -- name" wording is the startup loader's own default for
+                -- a binding that states none.
+                Left clash          → pushYamlRefusal
+                    (YamlRefusal Nothing clash)
                 Right (parsed, cnt) → pushYamlResult parsed cnt
 
 -- | The first authored name in @defs@ that cannot be admitted: one

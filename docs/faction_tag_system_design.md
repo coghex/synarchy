@@ -325,9 +325,17 @@ relations:
   - { pair: [acolyte, nomad], relation: hostile }
 ```
 
-The exact filename and schema remain open. The loader must reject duplicate or
-malformed static tag declarations, contradictory pair declarations, invalid
-relation values, and ambiguous mixtures of directed and symmetric declarations.
+**Settled by FTS-2 (#2506).** The file is `data/factions/*.yaml`, an ordinary
+startup family queued before `data/units` in both profiles. Its schema is a
+`faction_tags:` list of `{id, description?}` and a `relations:` list whose
+entries carry either `pair: [a, b]` (the symmetric shorthand) or `from:`/`to:`
+(directed), plus a `relation:` of `ally`/`neutral`/`hostile`. The loader
+rejects the whole file — naming the offending id — for a duplicate tag
+declaration, a malformed tag id, a relation naming an undeclared tag, a
+relation value outside those three, the same ordered pair declared more than
+once by any mix of the two forms whether or not the values agree, and a
+relation whose two endpoints are the same tag. See engine contracts
+§The faction tag catalogue.
 Same-tag alliance and the neutral default must be explicit engine contracts,
 never accidental map fallbacks. The engine does not need to classify a tag as
 `team` or `affiliation`; the precedence follows relation source—live override,

@@ -222,6 +222,7 @@ acolyteDef = UnitDef
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
+    , udFactionTags = []
     }
 
 -- * Scene
