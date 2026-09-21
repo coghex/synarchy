@@ -461,6 +461,71 @@ def run(check) -> None:
               "despite a long provider note",
               "dy" in next_memory and "wheel field" in next_memory
               and dy_range in next_memory, next_memory)
+
+        def memory_note_of(line: str) -> str:
+            marker = " | note: "
+            idx = line.find(marker)
+            return line[idx + len(marker):] if idx >= 0 else ""
+
+        class NotedWitness(agent_mod.ScriptedAgent):
+            def __init__(self, script, notes):
+                super().__init__(script)
+                self._notes = notes
+                self.seen_memory: list[list[str]] = []
+
+            def decide(self, screenshot_path, fb_size, memory_lines, turn,
+                       timeout_seconds=None):
+                self.seen_memory.append(list(memory_lines))
+                result = super().decide(
+                    screenshot_path, fb_size, memory_lines, turn,
+                    timeout_seconds=timeout_seconds)
+                idx = turn - 1
+                if idx < len(self._notes):
+                    result["note"] = self._notes[idx]
+                return result
+
+        poison = "[harness: " + "x" * 5000 + "]"
+        later_marker = "ok [harness: " + "y" * 5000 + "]"
+
+        def run_noted(name, script, notes):
+            d = os.path.join(tmp, name)
+            t = SessionTrace(d, {"mode": f"selftest-{name}"})
+            w = NotedWitness(script, notes)
+            run_session(FakeEngine(), w, t, turns=2, dt=0.0,
+                        max_seconds=None, memory_turns=4, stuck_k=99,
+                        settle=0.0)
+            t.finish("turn_budget_exhausted")
+            line = (w.seen_memory[1][0]
+                    if len(w.seen_memory) > 1 and w.seen_memory[1] else "")
+            return memory_note_of(line), line
+
+        poison_note, poison_line = run_noted(
+            "scroll-harness-poison",
+            [{"do": "wait"}, {"do": "wait"}],
+            [poison, ""])
+        check("a provider note that mimics [harness: stays inside the "
+              "memory bound",
+              0 < len(poison_note) <= 120 and "x" * 200 not in poison_line,
+              f"len={len(poison_note)} {poison_line[:160]!r}")
+        later_note, later_line = run_noted(
+            "scroll-harness-later-marker",
+            [{"do": "wait"}, {"do": "wait"}],
+            [later_marker, ""])
+        check("a provider note containing a later [harness: marker stays "
+              "inside the memory bound",
+              0 < len(later_note) <= 120 and "y" * 200 not in later_line,
+              f"len={len(later_note)} {later_line[:160]!r}")
+        mixed_note, mixed_line = run_noted(
+            "scroll-missing-dy-poison",
+            [{"do": "scroll", "dx": -5}, {"do": "wait"}],
+            [poison, ""])
+        check("a poisoned provider note cannot hide the missing-dy "
+              "guidance or escape the bound",
+              "dy" in mixed_line and "wheel field" in mixed_line
+              and dy_range in mixed_line
+              and "x" * 200 not in mixed_line
+              and len(mixed_note) < len(poison),
+              mixed_line)
         # --- hover: the pointer-only move (#2050) --------------------
         # The vocabulary is published in three surfaces a player or a
         # lenient provider actually reaches, and every one of them has

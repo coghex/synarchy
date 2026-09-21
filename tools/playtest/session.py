@@ -43,26 +43,24 @@ def _action_sig(action: dict) -> str:
 
 
 _MEMORY_NOTE_LIMIT = 120
-_HARNESS_NOTE_MARK = " [harness: "
 
 
-def _memory_note(note: str, limit: int = _MEMORY_NOTE_LIMIT) -> str:
+def _memory_note(player_note: str, harness_remarks: list[str],
+                 limit: int = _MEMORY_NOTE_LIMIT) -> str:
     """The rolling-memory fragment of a turn note.
 
-    Player-authored text is truncated to `limit`. A trailing harness
-    remark is kept in full so a refusal still names the field that
-    failed even when the player's own note already filled the budget
-    (#2652).
+    Player-authored text is truncated to `limit`. Trusted harness
+    remarks (ActionError refusals and clamp notes) are kept in full so
+    a refusal still names the field that failed even when the player's
+    own note already filled the budget (#2652). They are passed in
+    separately: the player note is untrusted text and is never parsed
+    for a `[harness:` marker.
     """
-    if not note:
-        return ""
-    if note.startswith("[harness: "):
-        return note
-    idx = note.rfind(_HARNESS_NOTE_MARK)
-    if idx < 0:
-        return note[:limit]
-    prefix, suffix = note[:idx], note[idx:]
-    kept_prefix = prefix[: max(0, limit - len(suffix))]
+    suffix = "".join(f" [harness: {r}]" for r in harness_remarks)
+    text = player_note or ""
+    if not suffix:
+        return text[:limit]
+    kept_prefix = text[: max(0, limit - len(suffix))]
     if not kept_prefix:
         return suffix.lstrip()
     return kept_prefix + suffix
@@ -307,17 +305,20 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
         # injected, while a collected note means the request was honoured
         # in an adjusted form the note describes (#1980). Either way the
         # requested action itself stays in the record verbatim.
+        player_note = decision.get("note") or ""
         harness_notes: list[str] = []
+        harness_remarks: list[str] = []
         try:
             calls, post_calls = translate_action(action, fb_size,
                                                  notes=harness_notes)
         except Exception as e:  # unusable action: record it, inject nothing
-            decision["note"] = (decision.get("note", "")
-                                + f" [harness: {e}]").strip()
+            harness_remarks.append(str(e))
             calls, post_calls = [], []
-        for harness_note in harness_notes:
-            decision["note"] = (decision.get("note", "")
-                                + f" [harness: {harness_note}]").strip()
+        else:
+            harness_remarks.extend(harness_notes)
+        if harness_remarks:
+            decision["note"] = (player_note + "".join(
+                f" [harness: {r}]" for r in harness_remarks)).strip()
 
         # Everything from the first injected call to the last post-step
         # call runs under one record-in-finally (#698): however the
@@ -483,10 +484,11 @@ def run_session(eng: PlaytestEngine, player, trace: SessionTrace, *,
             break
 
         # rolling memory for the next turn (the player's own notes)
+        mem_note = _memory_note(player_note, harness_remarks)
         memory.append(
             f"turn {turn}: saw: {decision.get('observation', '')[:160]} | "
             f"did: {json.dumps(action)} | expected: {decision.get('expectation', '')[:120]}"
-            + (f" | note: {_memory_note(note)}" if note else ""))
+            + (f" | note: {mem_note}" if mem_note else ""))
         memory[:] = memory[-memory_turns:]
 
     return stop_reason
