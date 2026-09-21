@@ -24,7 +24,8 @@
 -- owns that whole question.
 --
 -- State on s:
---   treatClaim   = { patient = uid }   -- lock-in, visible to others
+--   treatClaim   = { patient = uid, serial = n }  -- lock-in, visible
+--                                      -- to others; #2642 orders rivals
 --   treatPending = patient table       -- utility → execute handoff
 --   treatDefer   = { [patient] = t }   -- #2644 futile-supply deferral,
 --                                      -- transient (never persisted)
@@ -230,19 +231,55 @@ end
 -- claim -- it would pin the patient forever against a medic standing
 -- right beside them. Unknown on either side reads as "not this
 -- claimer's", which fails toward letting the on-page medic work.
-local function patientClaimed(patientUid, excludeUid)
+-- #2642: nor does a claimer that CANNOT ACT -- one killed or knocked
+-- unconscious mid-treatment. unit_ai.lua suspends those actors before
+-- treat_ally runs, so like the off-page claimer they never reach
+-- treatExecute to release, and death RETAINS the unit instance, so
+-- unit.getInfo keeps resolving the corpse forever. The test is
+-- canActAsMedic, the same pose rule bestMedicFor ranks by, so every
+-- other pose (crouching, crawling) holds its claim as before.
+--
+-- Returns the claimant's uid so the executor below can ask the same
+-- question with `after` set: one definition of a claim that holds.
+local function claimantFor(patientUid, excludeUid, after)
     local pinfo = unit.getInfo(patientUid)
     for otherUid, st in pairs(aiState) do
-        if otherUid ~= excludeUid and st.treatClaim
-           and st.treatClaim.patient == patientUid then
+        local claim = otherUid ~= excludeUid and st.treatClaim
+        if claim and claim.patient == patientUid
+           and (not after or (tonumber(claim.serial) or 0) > after) then
             local oinfo = unit.getInfo(otherUid)
             if oinfo and page.same(pinfo and pinfo.page, oinfo.page)
-               and not medicBusyInCombat(otherUid) then
-                return true
+               and not medicBusyInCombat(otherUid)
+               and canActAsMedic(otherUid) then
+                return otherUid
             end
         end
     end
-    return false
+    return nil
+end
+
+local function patientClaimed(patientUid, excludeUid)
+    return claimantFor(patientUid, excludeUid) ~= nil
+end
+
+-- #2642: the order claims were taken in. On revival the fallen medic
+-- and its replacement BOTH resolve, stand on the page and claim the
+-- same patient; nothing else tells them apart, so "release if somebody
+-- else claims this too" is symmetric and evicts whichever executes
+-- first -- the replacement half the time. The serial breaks that tie
+-- the one way that is right: the claim taken while the other medic was
+-- down wins, whoever runs first. Read off the live claims rather than a
+-- counter, so it keeps no module state and survives a load -- the next
+-- serial continues from the highest one the save restored. A claim
+-- written before this field reads as 0; two of those tie and neither
+-- supersedes, which is what those builds already did.
+local function nextClaimSerial()
+    local highest = 0
+    for _, st in pairs(aiState) do
+        local n = st.treatClaim and tonumber(st.treatClaim.serial)
+        if n and n > highest then highest = n end
+    end
+    return highest + 1
 end
 
 -- Nearest treatable, currently-unclaimed bleeding ally, or nil.
@@ -312,7 +349,7 @@ local function treatExecute(uid, s, params)
     if not s.treatClaim then
         local p = s.treatPending
         if not p then return end
-        s.treatClaim   = { patient = p.uid }
+        s.treatClaim   = { patient = p.uid, serial = nextClaimSerial() }
         s.treatPending = nil
     end
     local patient = s.treatClaim.patient
@@ -330,6 +367,15 @@ local function treatExecute(uid, s, params)
     if not pinfo or unit.getPose(patient) == "dead"
        or not page.same(info.page, pinfo.page)
        or not needsTreatment(patient, params.treat_min_seep) then
+        s.treatClaim = nil
+        return
+    end
+
+    -- #2642: a claim taken while I was down belongs to the medic who
+    -- took it. Release mine ahead of the fetch, the walk and both
+    -- treatments, so a revived medic spends neither kit nor sprint on a
+    -- patient somebody else already covers.
+    if claimantFor(patient, uid, tonumber(s.treatClaim.serial) or 0) then
         s.treatClaim = nil
         return
     end

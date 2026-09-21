@@ -145,8 +145,25 @@ function M.register(aiState)
         -- typed `building` edge with its own drop path, so a v9 payload
         -- whose stake did not survive the load has that job released and
         -- its designation handed back to `pending`.
-        version = 9,
-        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8, 9 },
+        -- v10 (issue #2642): a treatClaim carries the ORDER it was
+        -- taken in (treatClaim.serial). Durable rather than derived:
+        -- when a medic is killed or knocked out mid-treatment its claim
+        -- survives, a replacement takes its own, and on revival the two
+        -- are indistinguishable -- both resolve, both stand on the
+        -- patient's page, both claim it -- so only a recorded order can
+        -- say which one was taken while the other medic was down, and
+        -- releasing "whichever notices first" evicts the replacement
+        -- half the time. A v1-v9 payload predates the field and decodes
+        -- with it ABSENT, which is the honest reading rather than a
+        -- default: those sessions never arbitrated rival claims at all.
+        -- unit_ai_medic.lua reads an absent serial as 0, so two legacy
+        -- claims tie and neither supersedes the other -- exactly the
+        -- behaviour the payload was written under. It is a plain
+        -- ordinal, not a reference, so unit_ai_ref_schema.lua declares
+        -- nothing for it; the reconcile drops the whole treatClaim
+        -- table, serial included, when its `patient` edge dangles.
+        version = 10,
+        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's

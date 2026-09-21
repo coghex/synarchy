@@ -1068,7 +1068,7 @@ spec = describe "harvest collection proximity" $ do
                 ]
 
         it "classifies the approach records transient, so the \
-           \lua.unit_ai component stays at v9" $
+           \lua.unit_ai component moves no version of its own" $
             runsOk $ lns
                 [ "engine = { logWarn = function() end, logInfo = function() end }"
                 , "unit = { exists = function() return true end }"
@@ -1078,7 +1078,7 @@ spec = describe "harvest collection proximity" $ do
                 , "local aiState = {}"
                 , "unitAiSave.register(aiState)"
                 , "local spec = saveModules.registry.unit_ai"
-                , "assert(spec.version == 9,"
+                , "assert(spec.version == 10,"
                 , "  'the retained-yield approach must move no component '"
                 , "  .. 'version; got ' .. tostring(spec.version))"
                 , "aiState[1] = { currentAction = 'auto_harvest',"
