@@ -26,7 +26,8 @@ if _HERE not in sys.path:
 
 from engine import ActionError, FakeEngine, translate_action  # noqa: E402
 from personas import load_persona  # noqa: E402
-from session import run_replay, run_session  # noqa: E402
+from session import (  # noqa: E402
+    _MEMORY_HARNESS_LIMIT, run_replay, run_session)
 from trace import SessionTrace, load_replay, load_turns  # noqa: E402
 import agent as agent_mod  # noqa: E402
 import engine as engine_mod  # noqa: E402
@@ -526,6 +527,18 @@ def run(check) -> None:
               and "x" * 200 not in mixed_line
               and len(mixed_note) < len(poison),
               mixed_line)
+        huge_dy = "x" * 5000
+        huge_note, huge_line = run_noted(
+            "scroll-oversized-dy",
+            [{"do": "scroll", "dy": huge_dy}, {"do": "wait"}],
+            ["", ""])
+        check("a malformed oversized dy stays inside the harness "
+              "memory bound and still names the field and range",
+              0 < len(huge_note) <= _MEMORY_HARNESS_LIMIT
+              and "dy" in huge_note and dy_range in huge_note
+              and "x" * 200 not in huge_note
+              and f"({len(repr(huge_dy))} chars)" in huge_note,
+              f"len={len(huge_note)} {huge_note}")
         # --- hover: the pointer-only move (#2050) --------------------
         # The vocabulary is published in three surfaces a player or a
         # lenient provider actually reaches, and every one of them has

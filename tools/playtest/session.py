@@ -43,20 +43,27 @@ def _action_sig(action: dict) -> str:
 
 
 _MEMORY_NOTE_LIMIT = 120
+# Sized to hold the missing-dy refusal and a #1980 clamp note in full.
+# ActionError text can still interpolate a provider value, so the suffix
+# itself is bounded rather than trusted as unbounded.
+_MEMORY_HARNESS_LIMIT = 200
 
 
 def _memory_note(player_note: str, harness_remarks: list[str],
-                 limit: int = _MEMORY_NOTE_LIMIT) -> str:
+                 limit: int = _MEMORY_NOTE_LIMIT,
+                 harness_limit: int = _MEMORY_HARNESS_LIMIT) -> str:
     """The rolling-memory fragment of a turn note.
 
-    Player-authored text is truncated to `limit`. Trusted harness
-    remarks (ActionError refusals and clamp notes) are kept in full so
-    a refusal still names the field that failed even when the player's
-    own note already filled the budget (#2652). They are passed in
-    separately: the player note is untrusted text and is never parsed
-    for a `[harness:` marker.
+    Player-authored text is truncated to `limit`. Harness remarks
+    (ActionError refusals and clamp notes) are passed in separately so
+    the player note is never parsed for a `[harness:` marker, then
+    bounded to `harness_limit`. That limit is large enough to keep the
+    missing-dy field/range guidance (#2652) and an ordinary clamp note,
+    but not a provider payload interpolated into an error.
     """
     suffix = "".join(f" [harness: {r}]" for r in harness_remarks)
+    if len(suffix) > harness_limit:
+        suffix = suffix[:harness_limit]
     text = player_note or ""
     if not suffix:
         return text[:limit]

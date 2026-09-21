@@ -286,6 +286,16 @@ def _lua_number(value: float) -> str:
     return repr(float(value))
 
 
+def _error_value(value, limit: int = 24) -> str:
+    """A compact rendering of a rejected payload for an ActionError.
+
+    The message is copied into the player's rolling memory, so an
+    oversized provider value must not be spelled out in full.
+    """
+    text = repr(value)
+    return text if len(text) <= limit else f"{text[:12]}...({len(text)} chars)"
+
+
 def _requested_repr(value) -> str:
     """The delta the player asked for, as text for its own turn note.
 
@@ -345,7 +355,7 @@ def bound_scroll_dy(dy):
     if isinstance(dy, bool) or not isinstance(dy, (int, float)):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a number in "
-            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {dy!r}; "
+            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {_error_value(dy)}; "
             f"no scroll was sent")
     if isinstance(dy, int):
         # Python ints are arbitrary precision, so a schema-valid FINITE
@@ -363,7 +373,7 @@ def bound_scroll_dy(dy):
     if not math.isfinite(value):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a finite number in "
-            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {value!r}; "
+            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {_error_value(value)}; "
             f"no scroll was sent")
     if SCROLL_DY_MIN <= value <= SCROLL_DY_MAX:
         return value, None
