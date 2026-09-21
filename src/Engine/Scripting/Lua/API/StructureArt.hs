@@ -170,6 +170,13 @@ structureRegisterPackArtFn env = do
             logger ← Lua.liftIO $ readIORef (loggerRef env)
             forM_ (undeclaredConstructionAppearances stored) $ \ak →
                 logInfo logger CatLua (missingConstructionMessage pack ak)
+            -- #2491: a sprite two appearances share identifies neither,
+            -- so neither claimant's lifecycle frames can play. Reported
+            -- at registration, once per path, on a FRESH registration
+            -- only — it is a property of the pack's authoring, not of
+            -- anything a later clear does.
+            forM_ (ambiguousAppearancePaths cat pack) $ \path →
+                logWarn logger CatLua (ambiguousAppearanceMessage pack path)
 
     -- A payload that cannot even be READ still reports through the same
     -- one-warning channel, and still names as much of pack / kind /
@@ -209,8 +216,13 @@ structureRegisterPackArtFn env = do
                     -- shipped pack declares none today.
                     eWreck ← optionalArrayField pack "destruction"
                                  "destruction frames" (readDestruction pack)
+                    -- #2491: the VARIANT inventory, also optional — a
+                    -- pack with no variants declares none.
+                    eVars ← optionalArrayField pack "variants"
+                                "variant art" (readVariantArt pack)
                     pure (PackArtRegistration pack <$> eKinds <*> eArt
-                            <*> eFrames <*> eWreck <*> pure HM.empty)
+                            <*> eFrames <*> eVars <*> eWreck
+                            <*> pure HM.empty)
 
     -- Push spec[name], read it as a dense array, pop. A non-table field
     -- is malformed rather than empty: an absent `art` list is not a pack
@@ -452,6 +464,53 @@ structureRegisterPackArtFn env = do
                                 else role <> " (construction frames "
                                        <> tshow i <> ")")
 
+    -- #2491: one VARIANT appearance and the sprite it is placed with.
+    -- The selectors are the appearance's, exactly as a lifecycle entry's
+    -- are, and `variant` is MANDATORY — the default art travels in
+    -- `art`, and an entry that omitted it would silently redeclare a
+    -- default slot from the wrong list.
+    readVariantArt ∷ Text → Int
+                   → Lua.LuaE Lua.Exception
+                         (Either ArtFault (AppearanceKey, ArtAsset))
+    readVariantArt pack i = do
+        mKind    ← fieldString (-1) "kind"
+        mEdge    ← fieldString (-1) "edge"
+        mCaps    ← fieldString (-1) "caps"
+        mShape   ← fieldString (-1) "shape"
+        mVariant ← fieldString (-1) "variant"
+        mTex     ← fieldString (-1) "texture"
+        mTexH    ← fieldHandle (-1) "texHandle"
+        pure $ case mKind ⌦ pieceKindFromText of
+            Nothing → Left $ varFault Nothing ""
+                "the entry names no recognised piece kind"
+            Just kind → case appearanceSlotFor kind mEdge mCaps mShape of
+                Nothing → Left $ varFault (Just kind) ""
+                    "the entry's edge/shape selectors do not name one of \
+                    \this kind's appearances"
+                Just aslot → case mVariant of
+                    Nothing → Left $ varFault (Just kind) ""
+                        "the entry names no `variant`"
+                    Just variant →
+                        let ak   = AppearanceKey (Just variant) aslot
+                            role = appearanceKeyRole ak <> " variant art"
+                            need ∷ Text → Maybe α → Either ArtFault α
+                            need what = maybe
+                                (Left (varFault (Just kind)
+                                         (role <> " " <> what)
+                                         ("the entry has no `" <> what <> "`")))
+                                Right
+                        in do tex  ← need "texture"   mTex
+                              when (escapingPath tex) $
+                                  Left (escapeFault pack role tex)
+                              texH ← need "texHandle" mTexH
+                              pure (ak, ArtAsset tex texH)
+      where
+        varFault mKind role =
+            fault pack mKind
+                  (if role ≡ "" then "variant art " <> tshow i
+                                else role <> " (variant art "
+                                       <> tshow i <> ")")
+
     -- #2491: one appearance's DESTRUCTION sequence. The selectors are
     -- the appearance's, exactly as a construction entry's are, and the
     -- one extra field is the clip's own rate: a teardown is timed by the
@@ -625,6 +684,7 @@ declaredAssets reg =
     ⧺ [ a
       | (_, ds) ← parDestruction reg
       , a ← dsStatic ds : V.toList (dsFrames ds) ]
+    ⧺ map snd (parVariants reg)
 
 -- | Measure every image a declared sequence's dimension check needs:
 --   the appearance's static sprite and the sequence's LAST frame.

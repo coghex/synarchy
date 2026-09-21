@@ -4427,8 +4427,12 @@ progress. The rules:
   forward; the clip lasts `frames / fps` game seconds and the effect is
   pruned at that instant;
 * a placed piece resolves its appearance from the palette PATH its
-  texture id maps back to (`appearanceForTexturePath`); a path two
-  appearances claim resolves nothing, like a contested wall sprite;
+  texture id maps back to (`appearanceForTexturePath`). Every authored
+  VARIANT appearance is registered for this, not only the ones declaring
+  frames, or a variant piece with a static override and no clip would be
+  silent AND unreportable; a path two appearances claim — a variant
+  placed with the default's own sprite — resolves nothing for either,
+  like a contested wall sprite, and is reported once at registration;
 * a wall plays the clip of the edge whose art is really DRAWN —
   `drawnWallEdge` asks the same `rotatedWallArt` the placed piece does,
   from the captured STATIC identity, never from an animation frame path

@@ -310,6 +310,7 @@ import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
 import qualified Test.Headless.Structure.ConstructionFrames as StructureConstructionFrames
 import qualified Test.Headless.Structure.ConstructionPacks as StructureConstructionPacks
 import qualified Test.Headless.Structure.DestructionFrames as StructureDestructionFrames
+import qualified Test.Headless.Structure.DestructionPacks as StructureDestructionPacks
 import qualified Test.Headless.World.StructureDestruction as WorldStructureDestruction
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
@@ -1184,6 +1185,7 @@ main = hspec $ do
     StructureConstructionFrames.spec
     StructureConstructionPacks.spec
     StructureDestructionFrames.spec
+    StructureDestructionPacks.spec
     WorldStructureDestruction.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued

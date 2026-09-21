@@ -39,6 +39,8 @@ module Test.Headless.Structure.DestructionFixture
     , wreckSequenceFor
     , wreckAppearances
       -- * The registrations
+    , wreckVariantArt
+    , wreckOverriddenNoClip
     , wreckRegistration
     , wreckWireRegistration
     , wreckCatalog
@@ -133,11 +135,41 @@ declaredWrecks kinds =
 
 -- * The registrations
 
+-- | The @damaged@ variant's AUTHORED static appearances, as the
+--   production loader sends them.
+--
+--   Three deliberately different states, because #2491's appearance
+--   index has to answer for all three:
+--
+--     * @floor@ — overridden AND declaring its own teardown clip;
+--     * @wall ne@ — overridden, declaring a CONSTRUCTION sequence and no
+--       teardown one;
+--     * @post@ — overridden and declaring NO lifecycle frames at all,
+--       which is the state a variant is invisible in unless its static
+--       art is registered ('wreckOverriddenNoClip').
+--
+--   The INHERITED case — a variant sharing the default's sprite — is
+--   deliberately NOT here: it makes that sprite ambiguous for both
+--   claimants, so it is built per-example rather than poisoning the
+--   shared fixture.
+wreckVariantArt ∷ [(AppearanceKey, ArtAsset)]
+wreckVariantArt =
+    [ (ak, artAsset (staticPathFor ak))
+    | slot ← [ApFloor, ApPost, ApWall WallNE]
+    , let ak = AppearanceKey (Just damagedVariant) slot ]
+
+-- | The variant appearance that is overridden but declares no lifecycle
+--   frames of any kind — requirement 6's report is owed for it, and was
+--   unreachable before its static art was registered.
+wreckOverriddenNoClip ∷ AppearanceKey
+wreckOverriddenNoClip = AppearanceKey (Just damagedVariant) ApPost
+
 -- | The piece pack's construction declaration, unchanged, plus its
---   teardown clips.
+--   teardown clips and its variant inventory.
 wreckRegistration ∷ PackArtRegistration
 wreckRegistration = fixtureRegistration
-    { parDestruction = declaredWrecks [KFloor, KCeiling, KPost, KWall] }
+    { parDestruction = declaredWrecks [KFloor, KCeiling, KPost, KWall]
+    , parVariants    = wreckVariantArt }
 
 wreckWireRegistration ∷ PackArtRegistration
 wreckWireRegistration = fixtureWireRegistration

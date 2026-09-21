@@ -176,8 +176,27 @@ appearance's IDENTITY.
 That identity is load-bearing. A placed piece stores palette ids and a z
 and nothing else, so `Structure.ArtCatalog.appearanceForTexturePath`
 resolves a cleared piece's sprite PATH back to the (pack, appearance)
-whose clip it should play. A path that two appearances claim resolves
-nothing at all, exactly as a contested wall sprite does.
+whose clip it should play.
+
+**Every authored VARIANT appearance is registered, not only the ones
+declaring lifecycle frames.** `scripts/structures.lua` sends a `variants`
+list beside `art` — one entry per variant appearance, carrying the sprite
+that variant is placed with — because the catalogue otherwise stores
+default art alone. Without it a variant piece with a static override and
+no clip is an appearance the engine has never heard of: its teardown is
+silent AND the missing declaration cannot be reported.
+
+**A sprite two appearances share identifies neither.** That happens when
+a variant does NOT override some appearance and is therefore placed with
+the default's own image — the shipped `dungeon_1.damaged` overrides its
+floor, post and four walls but not its ceiling. Answering "the default"
+would let a variant's piece play the default's clip, which the
+never-inherited rule forbids, so the path resolves NOTHING, for both
+claimants, exactly as a contested wall sprite does. Registration reports
+each such sprite once
+(`Structure.ArtCatalog.ambiguousAppearanceMessage`); the fix is
+authoring, not code — give the variant its own image for that
+appearance.
 
 Every shipped pack declares no `destruction:` today; authoring
 production frames is BDA-15/BDA-16.

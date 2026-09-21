@@ -106,6 +106,8 @@ module Structure.ArtCatalog
     , undeclaredConstructionAppearances
     , missingConstructionMessage
     , appearanceForTexturePath
+    , ambiguousAppearancePaths
+    , ambiguousAppearanceMessage
     , resolveDestructionSequence
     , missingDestructionMessage
     , noteMissingDestruction
@@ -419,6 +421,20 @@ data PackArt = PackArt
       --   never inherited, never substituted. An appearance absent here
       --   resolves no sequence, which is requirement 8's "the site draws
       --   nothing" and is what every shipped pack does today.
+    , pkVariantArt ∷ !(M.Map AppearanceKey ArtAsset)
+      -- ^ #2491: every authored VARIANT appearance's static sprite.
+      --
+      --   The catalogue otherwise stores default art only, because a
+      --   construction designation carries no variant and #1842 never
+      --   needed one. A teardown does: a placed piece's sprite PATH is
+      --   the whole of its appearance identity, so an appearance the
+      --   catalogue has never heard of is a piece whose clip cannot be
+      --   resolved AND whose missing declaration cannot be reported.
+      --
+      --   Carried for every appearance a variant HAS, whether it
+      --   overrides the sprite or inherits the default's — an inherited
+      --   one is what makes the path ambiguous, and the index has to see
+      --   both claimants to know that ('indexAppearances').
     , pkDestruction ∷ !(M.Map AppearanceKey DestructionSequence)
       -- ^ #2491: the TEARDOWN playback each authored appearance
       --   declares, under the same keying and the same never-inherited,
@@ -519,6 +535,12 @@ data PackArtRegistration = PackArtRegistration
       -- ^ #2488: the construction sequences this pack declares, at most
       --   one per appearance. Empty for a pack that declares none, which
       --   is every shipped pack today.
+    , parVariants ∷ ![(AppearanceKey, ArtAsset)]
+      -- ^ #2491: every authored VARIANT appearance and the static sprite
+      --   it is placed with, overridden or inherited. Empty for a pack
+      --   with no variants. A DEFAULT-variant entry here is refused:
+      --   default art is 'parEntries'' business and stating it twice
+      --   would let the two disagree.
     , parDestruction ∷ ![(AppearanceKey, DestructionSequence)]
       -- ^ #2491: the destruction sequences this pack declares, at most
       --   one per appearance. Empty for a pack that declares none, which
@@ -578,6 +600,7 @@ registerPackArt reg cat = case validate of
                         ∧ pkBuild a ≡ pkBuild b
                         ∧ pkArt a ≡ pkArt b
                         ∧ pkFrames a ≡ pkFrames b
+                        ∧ pkVariantArt a ≡ pkVariantArt b
                         ∧ pkDestruction a ≡ pkDestruction b
 
     -- Name WHAT differs rather than dumping both declarations: the
@@ -601,6 +624,7 @@ registerPackArt reg cat = case validate of
                 , ("build costs", pkBuild existing ≢ pkBuild pack)
                 , ("art", pkArt existing ≢ pkArt pack)
                 , ("construction frames", pkFrames existing ≢ pkFrames pack)
+                , ("variant art", pkVariantArt existing ≢ pkVariantArt pack)
                 , ("destruction frames"
                   , pkDestruction existing ≢ pkDestruction pack) ]
             , differs ]
@@ -645,15 +669,18 @@ registerPackArt reg cat = case validate of
         -- pack that is short of a sprite is reported as that rather than
         -- as a sequence pointing at a slot it never declared.
         frameMap ← validateFrames kindSet artMap
-        -- #2491: the TEARDOWN declarations, last, so a pack that is
-        -- short of a sprite or has a malformed build sequence is
-        -- reported as that rather than as a destruction fault.
+        -- #2491: the VARIANT inventory, then the TEARDOWN declarations,
+        -- last, so a pack that is short of a sprite or has a malformed
+        -- build sequence is reported as that rather than as one of
+        -- these.
+        variantMap ← validateVariants kindSet
         wreckMap ← validateDestruction kindSet
         pure PackArt { pkKinds     = kindSet
                      , pkBuildable = buildable
                      , pkBuild     = buildMap
                      , pkArt       = artMap
                      , pkFrames    = frameMap
+                     , pkVariantArt = variantMap
                      , pkDestruction = wreckMap
                      , pkMissingDestruction = S.empty
                      , pkFailures  = HM.empty }
@@ -735,6 +762,35 @@ registerPackArt reg cat = case validate of
         wallLengths = M.fromListWith (++)
             [ (apVariant ak, [(e, V.length (csFrames cs))])
             | (ak, cs) ← parFrames reg, ApWall e ← [apSlot ak] ]
+
+    -- #2491's VARIANT inventory: every authored variant appearance and
+    -- the sprite it is placed with. Shape checks only — a variant's
+    -- sprite has nothing to be cross-checked against, since the
+    -- catalogue stores default art alone — and deliberately no rule
+    -- against a variant sharing the default's path: that is the
+    -- AMBIGUITY 'indexAppearances' exists to notice, not a malformed
+    -- payload.
+    validateVariants ∷ S.Set PieceKind
+                     → Either ArtFault (M.Map AppearanceKey ArtAsset)
+    validateVariants kindSet = do
+        forM_ (parVariants reg) $ \(ak, asset) → do
+            let kind = appearanceSlotKind (apSlot ak)
+                role = appearanceKeyRole ak <> " variant art"
+            when (isNothing (apVariant ak)) $
+                Left (fault (Just kind) role Nothing
+                        "the default art is declared through `art`, not as \
+                        \a variant")
+            unless (kind `S.member` kindSet) $
+                Left (fault (Just kind) role Nothing
+                        "variant art was supplied for a kind the \
+                        \registration does not declare")
+            checkFramePath kind role "sprite" asset
+        let variantMap = M.fromList (parVariants reg)
+        when (M.size variantMap ≢ length (parVariants reg)) $
+            Left (fault Nothing "variant art" Nothing
+                        "the same variant appearance is supplied more than \
+                        \once")
+        pure variantMap
 
     -- #2491's registration rules. Deliberately NOT a copy of
     -- 'validateFrames': a destruction clip hands off to nothing (so
@@ -892,6 +948,12 @@ appearanceClaims ∷ Text → PackArt → [(Text, (Text, AppearanceKey))]
 appearanceClaims pack p =
     [ (aaPath (paTexture art), (pack, defaultAppearance key))
     | (key, art) ← M.toList (pkArt p) ]
+    ⧺ [ (aaPath asset, (pack, ak)) | (ak, asset) ← M.toList (pkVariantArt p) ]
+    -- A hand-built registration may declare a variant's sequence without
+    -- listing its static art (the production loader sends both). Taking
+    -- the sequence's own sprite keeps such a payload indexed rather than
+    -- silently unresolvable; a claim that agrees with the inventory
+    -- above collapses into it.
     ⧺ [ (aaPath (csStatic cs), (pack, ak))
       | (ak, cs) ← M.toList (pkFrames p), isJust (apVariant ak) ]
     ⧺ [ (aaPath (dsStatic ds), (pack, ak))
@@ -971,7 +1033,7 @@ failPackArtPath path reason cat =
     affected = sortOn fst
         [ (n, p) | (n, p) ← HM.toList (sacPacks cat)
                  , isJust (slotFor p) ∨ isJust (frameSlotFor p)
-                     ∨ isJust (wreckSlotFor p) ]
+                     ∨ isJust (wreckSlotFor p) ∨ isJust (variantSlotFor p) ]
     fresh = [ (n, kindFor p, roleFor p)
             | (n, p) ← affected, not (HM.member path (pkFailures p)) ]
     updated = [ (n, p { pkFailures = HM.insert path reason (pkFailures p) })
@@ -983,8 +1045,10 @@ failPackArtPath path reason cat =
         Just (key, _) → Just (artKeyKind key)
         Nothing → case frameSlotFor p of
             Just (ak, _) → Just (appearanceSlotKind (apSlot ak))
-            Nothing      → appearanceSlotKind ∘ apSlot ∘ fst
-                             <$> wreckSlotFor p
+            Nothing → case wreckSlotFor p of
+                Just (ak, _) → Just (appearanceSlotKind (apSlot ak))
+                Nothing      → appearanceSlotKind ∘ apSlot
+                                 <$> variantSlotFor p
     roleFor p = case slotFor p of
         Just (key, half) → artKeyRole key <> " " <> half
         Nothing → case frameSlotFor p of
@@ -997,7 +1061,9 @@ failPackArtPath path reason cat =
                                        <> " destruction frame " <> tshow i
                 Just (ak, Nothing) → appearanceKeyRole ak
                                        <> " destruction static sprite"
-                Nothing            → "registered art"
+                Nothing → case variantSlotFor p of
+                    Just ak → appearanceKeyRole ak <> " variant art"
+                    Nothing → "registered art"
     -- The first slot of this pack that names the path, and whether the
     -- path is that slot's texture, its facemap, or both — so the warning
     -- can say WHICH kind lost WHICH half. A path shared by several slots
@@ -1013,6 +1079,12 @@ failPackArtPath path reason cat =
         , let half | isTex ∧ isFace = "texture and facemap"
                    | isTex          = "texture"
                    | otherwise      = "facemap" ]
+    -- The lowest VARIANT appearance whose own sprite is the path. A
+    -- variant's static art is registered art of this pack since #2491,
+    -- so a terminal failure on it invalidates the pack exactly as a
+    -- default sprite's does.
+    variantSlotFor p = listToMaybe
+        [ ak | (ak, a) ← M.toAscList (pkVariantArt p), aaPath a ≡ path ]
     -- The lowest appearance whose construction sequence names the path,
     -- and WHICH of its assets that is: a 1-based frame position, or
     -- 'Nothing' for the sequence's own static sprite.
@@ -1189,6 +1261,42 @@ resolveDestructionSequence cat pack ak = do
     p ← HM.lookup pack (sacPacks cat)
     guard (HM.null (pkFailures p))
     M.lookup ak (pkDestruction p)
+
+-- | Every static sprite of this pack that TWO or more appearances
+--   claim, ascending — the paths 'appearanceForTexturePath' answers
+--   nothing for.
+--
+--   In practice this is a variant that INHERITS the default's sprite
+--   for some appearance (the shipped @dungeon_1.damaged@ overrides its
+--   floor, post and four walls but not its ceiling). A piece placed
+--   with such a path is byte-identically the default's art, so the
+--   catalogue genuinely cannot say which appearance it is — and
+--   answering "the default" would let a variant's piece play the
+--   default's clip, which requirement 1 forbids outright. Nothing plays
+--   instead, for BOTH claimants.
+--
+--   Reported so that is a fact an author can see rather than a silence
+--   they have to infer. The fix is authoring, not code: give the
+--   variant its own sprite for that appearance.
+ambiguousAppearancePaths ∷ StructureArtCatalog → Text → [Text]
+ambiguousAppearancePaths cat pack = case HM.lookup pack (sacPacks cat) of
+    Nothing → []
+    Just p  → S.toAscList $ S.fromList
+        [ path
+        | (path, _) ← appearanceClaims pack p
+        -- 'Just Nothing' is the contested marker; a path this pack does
+        -- not claim is not in the list at all, and an uncontested one
+        -- answers 'Just (Just owner)'.
+        , HM.lookup path (sacAppearanceByPath cat) ≡ Just Nothing ]
+
+-- | The ONE line an ambiguous sprite emits.
+ambiguousAppearanceMessage ∷ Text → Text → Text
+ambiguousAppearanceMessage pack path = mconcat
+    [ "structure art: pack '", pack, "' sprite '", path
+    , "' is the static art of more than one appearance, so a piece "
+    , "placed with it identifies none -- neither claimant's lifecycle "
+    , "frames will play. Give the variant its own sprite for that "
+    , "appearance." ]
 
 -- | The ONE line a missing destruction declaration emits.
 missingDestructionMessage ∷ Text → AppearanceKey → Text

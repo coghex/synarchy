@@ -174,6 +174,7 @@ fixtureRegistration = PackArtRegistration
       -- business ("Test.Headless.Structure.DestructionFixture"), so the
       -- construction suite keeps resolving exactly what it always did.
     , parDestruction = []
+    , parVariants = []
     , parSizes  = fixtureSizes
     }
 
@@ -189,6 +190,7 @@ fixtureWireRegistration = PackArtRegistration
                    | w ← allWireShapes ]
     , parFrames  = declaredSequences [KWire]
     , parDestruction = []
+    , parVariants = []
     , parSizes   = fixtureSizes
     }
 

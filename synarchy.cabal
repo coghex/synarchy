@@ -1581,6 +1581,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Structure.ConstructionPacks
                    Test.Headless.Structure.DestructionFixture
                    Test.Headless.Structure.DestructionFrames
+                   Test.Headless.Structure.DestructionPacks
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns

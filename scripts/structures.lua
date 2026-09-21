@@ -220,6 +220,36 @@ local function appendConstruction(out, h, variant)
     end
 end
 
+-- One variant's STATIC appearances (#2491), appended to `out`.
+--
+-- Every appearance the variant has, whether it overrides the sprite or
+-- inherits the default's. Both matter and for opposite reasons: an
+-- OVERRIDDEN sprite is the only thing that identifies a placed variant
+-- piece, and an INHERITED one is what makes a sprite ambiguous between
+-- the variant and the default -- which the engine has to be told about,
+-- because answering "the default" would let a variant's piece play the
+-- default's clip.
+--
+-- Default art is NOT sent here; it travels in `art`, and the engine
+-- refuses a variant entry that omits its `variant` name.
+local function appendVariantArt(out, h, variant)
+    if not variant then return end
+    for _, k in ipairs(PIECE_KINDS) do
+        local p = h[k]
+        if p and p.texPath then
+            out[#out + 1] = { kind = k, variant = variant,
+                              texture = p.texPath, texHandle = p.tex }
+        end
+    end
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        if w and w.texPath then
+            out[#out + 1] = { kind = "wall", edge = e, variant = variant,
+                              texture = w.texPath, texHandle = w.tex }
+        end
+    end
+end
+
 -- One variant's destruction entries (#2491), appended to `out`. Same
 -- shape and the same `~= nil` rule as the construction half above, plus
 -- the clip's own `fps`, which is forwarded exactly as authored so the
@@ -292,14 +322,16 @@ local function registerPackArtCatalog(h, variantHandles)
     for _, name in ipairs(names) do
         appendConstruction(construction, variantHandles[name], name)
     end
-    local destruction = {}
+    local destruction, variants = {}, {}
     appendDestruction(destruction, h, nil)
     for _, name in ipairs(names) do
         appendDestruction(destruction, variantHandles[name], name)
+        appendVariantArt(variants, variantHandles[name], name)
     end
     structure.registerPackArt{ pack = M.pack, kinds = kinds, art = art,
                                construction = construction,
-                               destruction = destruction }
+                               destruction = destruction,
+                               variants = variants }
 end
 
 -- Register every variant's wall art up front. A wall replayed from a save

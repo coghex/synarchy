@@ -327,6 +327,54 @@ declarationSpec = describe "a declared clip" $ do
         appearanceForTexturePath wreckCatalog "fx/not_a_pack_sprite.png"
             `shouldBe` Nothing
 
+    it "maps an AUTHORED variant appearance back to itself even when it \
+       \declares no lifecycle frames at all" $ do
+        -- The state a variant is invisible in unless its static art is
+        -- registered: overridden sprite, no construction sequence and no
+        -- teardown clip. Without it a clear of such a piece is silent
+        -- and requirement 6's report is never owed, which is the whole
+        -- point of carrying 'parVariants'.
+        apVariant wreckOverriddenNoClip `shouldBe` Just damagedVariant
+        wreckFrameCount wreckOverriddenNoClip `shouldBe` Nothing
+        appearanceForTexturePath wreckCatalog
+                (staticPathFor wreckOverriddenNoClip)
+            `shouldBe` Just (fixturePack, wreckOverriddenNoClip)
+        resolveDestructionSequence wreckCatalog fixturePack
+            wreckOverriddenNoClip `shouldBe` Nothing
+
+    it "never resolves an INHERITED variant sprite as the default \
+       \appearance, so neither claimant's clip plays" $ do
+        -- A variant that does NOT override this appearance is placed
+        -- with the default's own sprite, so a palette id cannot tell the
+        -- two apart. Answering "the default" would play the default's
+        -- clip for a variant's piece, which requirement 1 forbids — so
+        -- the path answers NOTHING, for both claimants.
+        let inherited = AppearanceKey (Just damagedVariant) ApCeiling
+            shared    = staticPathFor (AppearanceKey Nothing ApCeiling)
+            reg = wreckRegistration
+                    { parVariants = (inherited, artAsset shared)
+                                      : parVariants wreckRegistration }
+            cat = registerOrFail reg emptyStructureArtCatalog
+        appearanceForTexturePath cat shared `shouldBe` Nothing
+        -- …and the pack says so, once, naming the sprite.
+        ambiguousAppearancePaths cat fixturePack `shouldBe` [shared]
+        ambiguousAppearanceMessage fixturePack shared
+            `shouldSatisfy` T.isInfixOf shared
+
+    it "leaves every UNSHARED sprite resolving exactly as it did" $ do
+        -- The ambiguity above is per-PATH, not per-pack: a contested
+        -- ceiling must not stop a floor from resolving.
+        let inherited = AppearanceKey (Just damagedVariant) ApCeiling
+            shared    = staticPathFor (AppearanceKey Nothing ApCeiling)
+            reg = wreckRegistration
+                    { parVariants = (inherited, artAsset shared)
+                                      : parVariants wreckRegistration }
+            cat = registerOrFail reg emptyStructureArtCatalog
+            full = registerOrFail wreckWireRegistration cat
+        forM_ wreckAppearances $ \ak →
+            appearanceForTexturePath full (staticPathFor ak)
+                `shouldBe` Just (packOf ak, ak)
+
 -- * Capture
 
 captureSpec ∷ Spec
@@ -619,6 +667,44 @@ refusalSpec = describe "registering a destruction clip" $ do
                 (Just (wreckOf ApFloor) { dsFps = bad })
                 `shouldSatisfy`
                     faultSays ["fixture_dungeon", "finite positive"]
+
+    it "refuses variant art for a kind the registration never declared" $ do
+        let reg = wreckRegistration
+                    { parVariants = [ ( AppearanceKey (Just damagedVariant)
+                                            (ApWire WireCross)
+                                      , artAsset "fx/wire_cross.png" ) ] }
+        outcomeOf reg `shouldSatisfy`
+            faultSays ["fixture_dungeon", "does not declare"]
+
+    it "refuses a variant entry that names no variant" $ do
+        let reg = wreckRegistration
+                    { parVariants = [ ( AppearanceKey Nothing ApFloor
+                                      , artAsset "fx/floor.png" ) ] }
+        outcomeOf reg `shouldSatisfy`
+            faultSays ["fixture_dungeon", "not as a variant"]
+
+    it "refuses the same variant appearance twice" $ do
+        let ak  = AppearanceKey (Just damagedVariant) ApFloor
+            reg = wreckRegistration
+                    { parVariants = (ak, artAsset (staticPathFor ak))
+                                      : parVariants wreckRegistration }
+        outcomeOf reg `shouldSatisfy`
+            faultSays ["fixture_dungeon", "more than once"]
+
+    it "refuses a variant sprite whose handle was never loaded" $ do
+        let ak  = AppearanceKey (Just damagedVariant) ApFloor
+            reg = wreckRegistration
+                    { parVariants = [ (ak, ArtAsset (staticPathFor ak)
+                                               (TextureHandle 0)) ] }
+        outcomeOf reg `shouldSatisfy`
+            faultSays ["fixture_dungeon", "not a loaded handle"]
+
+    it "names variant art when a repeat CONFLICTS on it alone" $ do
+        let (stored, _) = registerPackArt wreckRegistration
+                              emptyStructureArtCatalog
+            altered = wreckRegistration { parVariants = [] }
+        snd (registerPackArt altered stored) `shouldSatisfy`
+            faultSays ["variant art"]
 
     it "refuses clips for a kind the registration never declared" $ do
         let reg = wreckRegistration
