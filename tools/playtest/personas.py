@@ -67,9 +67,9 @@ REQUIRED_FIELDS = ("name", "temperament", "goal", "tendencies")
 TEMPLATE_AXES = ("experience", "patience", "reads_guidance", "play_style",
                  "persistence")
 
-# Cheap + configurable — the blurb is one paragraph of prose (#649
-# design call; claude-sonnet-5 is the other suggested choice).
-DEFAULT_FLAVOR_MODEL = "claude-haiku-4-5"
+# Configurable one-paragraph blurb, using the same Claude model family as
+# the player and critic.
+DEFAULT_FLAVOR_MODEL = "claude-opus-5-5"
 
 FLAVOR_SCHEMA = {
     "type": "object",

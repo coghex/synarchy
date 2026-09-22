@@ -34,9 +34,9 @@ PLAYER_PROFILES = {
         "effort": "medium",
         "binary": "codex",
     },
-    "claude-sonnet": {
+    "claude-opus": {
         "backend": "claude-cli",
-        "model": "claude-sonnet-5",
+        "model": "claude-opus-5-5",
         "effort": "medium",
         "binary": "claude",
     },
@@ -289,7 +289,7 @@ def _build_claude_command(claude_bin: str, workspace: str,
     image-attachment flag in print mode; its permission rule names that one
     relative path exactly, so a guessed absolute repository path is denied.
     """
-    profile = profile or PLAYER_PROFILES["claude-sonnet"]
+    profile = profile or PLAYER_PROFILES["claude-opus"]
     return [
         claude_bin, "-p",
         "--safe-mode",

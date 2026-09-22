@@ -23,8 +23,8 @@ records everything into a replayable **session trace** for the critic
 python3 tools/playtest/run.py
 python3 tools/playtest/run.py --persona impatient_imogen --dt 3
 
-# Sonnet 5 medium through an existing Claude Code subscription login
-python3 tools/playtest/run.py --player claude-sonnet
+# Opus 5.5 medium through an existing Claude Code subscription login
+python3 tools/playtest/run.py --player claude-opus
 
 # Same session, but unattended: windowless offscreen render (#650) —
 # no focus steal, and several sessions can run in parallel on
@@ -49,8 +49,8 @@ input-plus-output player-token ceiling, stuck detection after 3 identical
 no-change turns, and a 1800-second `--setup-timeout` watchdog for
 everything *before* the session starts (see
 [Budgets and the player-ready boundary](#budgets-and-the-player-ready-boundary)). `--player` selects one complete audited medium-effort profile:
-`codex-sol` (the default, `gpt-6-sol`) or `claude-sonnet`
-(`claude-sonnet-5`). Arbitrary provider/model/effort strings are not accepted.
+`codex-sol` (the default, `gpt-6-sol`) or `claude-opus`
+(`claude-opus-5-5`). Arbitrary provider/model/effort strings are not accepted.
 
 After every decision the console shows compact `K`/`M`/`G` values for tokens
 used that turn, cumulative player tokens, and remaining session budget. The
@@ -328,8 +328,8 @@ reproducible per seed) and **`--coverage`** (a balanced
 Latin-hypercube-style spread across the axis space, reproducible from
 `(seed, count)`, so a campaign deliberately spans combinations instead
 of clustering). The default blurb is a deterministic template;
-**`--llm`** rewrites the name + blurb with a cheap model
-(`claude-haiku-4-5` by default, `--model` to change — needs an
+**`--llm`** rewrites the name + blurb with a configurable model
+(`claude-opus-5-5` by default, `--model` to change — needs an
 Anthropic key). LLM prose is **frozen into the spec at generation
 time** — files, the H1 trace, and replay always reuse the stored text,
 never regenerate — so the prose can't drift between runs while the
@@ -498,7 +498,7 @@ destination does not discard historical rows.
 
 ```bash
 python3 tools/playtest/critic.py tools/playtest/sessions/<dir>
-python3 tools/playtest/critic.py <dir> --model claude-opus-5 --effort high
+python3 tools/playtest/critic.py <dir> --model claude-opus-5-5 --effort high
 python3 tools/playtest/critic.py --selftest   # offline, no API key
 python3 tools/playtest/critic.py --eval       # REAL model vs the canned
                                               # planted-issue trace (needs a key)
@@ -538,7 +538,7 @@ shown-but-disabled affordance, the one case that still correlates to
 itself). Right/middle clicks and drags keep the older
 `(paintKey, paintOrder)` topmost-eligible join, and so does any trace
 recorded before those fields existed.
-Adjudication (default `claude-opus-5`, high effort — cost is
+Adjudication (default `claude-opus-5-5`, high effort — cost is
 per-session, not per-turn) is **batched** so that every candidate's
 own screenshot is actually shown in the call that judges it:
 `--max-frames` is a per-call budget, and a tight budget means more

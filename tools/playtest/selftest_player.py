@@ -69,8 +69,8 @@ def run(check) -> None:
                   "codex-sol": {
                       "backend": "codex-cli", "model": "gpt-6-sol",
                       "effort": "medium", "binary": "codex"},
-                  "claude-sonnet": {
-                      "backend": "claude-cli", "model": "claude-sonnet-5",
+                  "claude-opus": {
+                      "backend": "claude-cli", "model": "claude-opus-5-5",
                       "effort": "medium", "binary": "claude"},
               })
         codex_cmd = agent_mod._build_codex_command(
@@ -89,9 +89,9 @@ def run(check) -> None:
                       ("shell_tool", "multi_agent", "plugins", "skill_search")))
         claude_cmd = agent_mod._build_claude_command(
             "/usr/bin/claude", os.path.join(tmp, "empty"), "SYSTEM")
-        check("Claude profile invokes claude-sonnet-5 medium in safe mode",
+        check("Claude profile invokes claude-opus-5-5 medium in safe mode",
               claude_cmd[:2] == ["/usr/bin/claude", "-p"]
-              and "claude-sonnet-5" in claude_cmd
+              and "claude-opus-5-5" in claude_cmd
               and claude_cmd[claude_cmd.index("--effort") + 1] == "medium"
               and "--safe-mode" in claude_cmd
               and "--no-session-persistence" in claude_cmd)
@@ -511,11 +511,11 @@ def run(check) -> None:
                 "observation": "menu", "action": {"do": "wait"},
                 "expectation": "", "note": ""},
             "modelUsage": {
-                "claude-sonnet-5": {
+                "claude-opus-5-5": {
                     "inputTokens": 2, "outputTokens": 52,
                     "cacheReadInputTokens": 1085,
                     "cacheCreationInputTokens": 0},
-                "claude-haiku-4-5": {
+                "helper-model": {
                     "inputTokens": 897, "outputTokens": 12,
                     "cacheReadInputTokens": 0,
                     "cacheCreationInputTokens": 0},
@@ -546,7 +546,7 @@ def run(check) -> None:
         codex_expected_usage = {"input_tokens": 123, "output_tokens": 67,
                                 "cache_read_input_tokens": 45}
         claude_model_usage = {
-            "claude-sonnet-5": {
+            "claude-opus-5-5": {
                 "inputTokens": 2, "outputTokens": 52,
                 "cacheReadInputTokens": 1085, "cacheCreationInputTokens": 0}}
         claude_expected_usage = {
@@ -556,7 +556,7 @@ def run(check) -> None:
         def decide_with_reply(backend, stdout="", file_text=None):
             """One real decide() turn against a faked provider process."""
             profile_name = ("codex-sol" if backend == "codex-cli"
-                            else "claude-sonnet")
+                            else "claude-opus")
             player = object.__new__(agent_mod.PlayerAgent)
             player.provider_bin = "/nonexistent/provider"
             player.player_profile = profile_name
