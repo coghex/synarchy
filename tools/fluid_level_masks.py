@@ -87,18 +87,15 @@ def read_masks(directory: Path) -> list[Image.Image]:
 @contextlib.contextmanager
 def build_hold():
     import probe_resource_lock as lock
-    start = time.monotonic()
-    while True:
-        try:
-            hold = lock.acquire(exclusive={"cabal-build"},
-                                namespace=lock.repository_namespace(ROOT),
-                                purpose="fluid-level mask exporter #2525")
-            break
-        except lock.ResourceBusy as busy:
-            print(busy, flush=True)
-            if time.monotonic() - start >= 1800:
-                raise RuntimeError("30-minute build-lock timeout") from busy
-            time.sleep(60)
+    try:
+        hold = lock.wait_acquire(
+            exclusive={"cabal-build"},
+            namespace=lock.repository_namespace(ROOT),
+            purpose="fluid-level mask exporter #2525",
+            poll=60, announce=lambda busy: print(busy, flush=True),
+            announce_interval=60, deadline=time.monotonic() + 1800)
+    except lock.ResourceBusy as busy:
+        raise RuntimeError("30-minute build-lock timeout") from busy
     with hold:
         yield
 

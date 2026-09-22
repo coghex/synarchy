@@ -19,6 +19,10 @@ Covered:
   * complete-set acquisition: a partly-available set is refused whole
     and leaves nothing held, so no other acquirer is blocked by the
     wreckage;
+  * conflict-aware queueing: a waiting writer stops later readers from
+    barging, conflicting writers run in queue order, unrelated resources
+    remain available, and killed or timed-out waiters leave no stale
+    obstruction;
   * deadlock-freedom: two acquirers asking for the same pair in
     opposite orders never block each other, because the plan is sorted
     and every attempt is non-blocking;
@@ -91,6 +95,34 @@ HOLDER_SRC = textwrap.dedent("""\
     hold.release()
 """)
 
+WAITER_SRC = textwrap.dedent("""\
+    import json, sys, time
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[1])
+    import probe_resource_lock as lock
+    root, namespace, ready, release = sys.argv[2:6]
+    plan = json.loads(sys.argv[6])
+    def announce(busy):
+        Path(ready).write_text(json.dumps({"state": "queued",
+                                           "busy": busy.to_document()}))
+    try:
+        hold = lock.wait_acquire(exclusive=plan.get("exclusive", []),
+                                 shared=plan.get("shared", []),
+                                 namespace=namespace, root=Path(root),
+                                 purpose=plan.get("purpose", "waiter"),
+                                 poll=0.02, announce=announce,
+                                 announce_interval=0.0)
+    except lock.ResourceLockError as error:
+        Path(ready).write_text(json.dumps({"state": "error",
+                                           "error": str(error)}))
+        raise SystemExit(4)
+    Path(ready).write_text(json.dumps({"state": "held"}))
+    deadline = time.time() + 120
+    while not Path(release).exists() and time.time() < deadline:
+        time.sleep(0.02)
+    hold.release()
+""")
+
 
 class Scratch:
     """A throwaway lock root with `/tmp`'s own mode.
@@ -107,13 +139,21 @@ class Scratch:
         self.namespace = f"selftest{uuid.uuid4().hex[:12]}"
         self.script = self.root / "holder.py"
         self.script.write_text(HOLDER_SRC)
-        self._holders: list[Holder] = []
+        self.waiter_script = self.root / "waiter.py"
+        self.waiter_script.write_text(WAITER_SRC)
+        self._holders: list[Holder | Waiter] = []
 
     def holder(self, *, exclusive=(), shared=(), purpose="holder") -> "Holder":
         holder = Holder(self, exclusive=exclusive, shared=shared,
                         purpose=purpose)
         self._holders.append(holder)
         return holder
+
+    def waiter(self, *, exclusive=(), shared=(), purpose="waiter") -> "Waiter":
+        waiter = Waiter(self, exclusive=exclusive, shared=shared,
+                        purpose=purpose)
+        self._holders.append(waiter)
+        return waiter
 
     def cleanup(self) -> None:
         for holder in self._holders:
@@ -146,6 +186,58 @@ class Holder:
 
     def took_it(self, seconds: float = 30.0) -> bool:
         return bool(self.outcome(seconds).get("held"))
+
+    def kill(self) -> None:
+        try:
+            self.proc.kill()
+            self.proc.wait(timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def stop(self) -> None:
+        try:
+            self.release_flag.write_text("go")
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.kill()
+
+
+class Waiter:
+    def __init__(self, scratch: Scratch, *, exclusive=(), shared=(),
+                 purpose="waiter") -> None:
+        self.scratch = scratch
+        token = uuid.uuid4().hex[:8]
+        self.ready = scratch.root / f"waiter-ready-{token}"
+        self.release_flag = scratch.root / f"waiter-release-{token}"
+        self.proc = subprocess.Popen(
+            [sys.executable, str(scratch.waiter_script), TOOLS_DIR,
+             str(scratch.root), scratch.namespace, str(self.ready),
+             str(self.release_flag),
+             json.dumps({"exclusive": sorted(exclusive),
+                         "shared": sorted(shared), "purpose": purpose})])
+
+    def outcome(self, seconds: float = 30.0) -> dict:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                return json.loads(self.ready.read_text())
+            except (OSError, ValueError):
+                time.sleep(0.02)
+        return {}
+
+    def queued(self, seconds: float = 30.0) -> bool:
+        return self.outcome(seconds).get("state") == "queued"
+
+    def took_it(self, seconds: float = 30.0) -> bool:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if self.outcome(0.05).get("state") == "held":
+                return True
+            time.sleep(0.02)
+        return False
 
     def kill(self) -> None:
         try:
@@ -295,6 +387,143 @@ def test_a_killed_holder_owns_nothing() -> None:
                f"(busy={busy}, error={error})")
         if hold is not None:
             hold.release()
+    finally:
+        scratch.cleanup()
+
+
+# --------------------------------------------------------------------------
+# Conflict-aware admission queue
+# --------------------------------------------------------------------------
+def test_a_waiting_writer_stops_later_readers_from_barging() -> None:
+    print("\n-- a queued writer closes admission to later readers, then runs")
+    scratch = Scratch()
+    try:
+        reader = scratch.holder(shared={"cabal-build"},
+                                purpose="existing reader")
+        expect(reader.took_it(), "the existing reader took the resource")
+        writer = scratch.waiter(exclusive={"cabal-build"},
+                                purpose="queued writer")
+        expect(writer.queued(), "the writer published its queued request")
+
+        late, busy, error = taking(scratch, shared={"cabal-build"})
+        expect(late is None and busy is not None,
+               f"a later reader is refused while the writer waits "
+               f"(busy={busy}, error={error})")
+        if busy is not None:
+            expect(any(holder.get("state") == "queued"
+                       and holder.get("purpose") == "queued writer"
+                       for holder in busy.holders),
+                   f"and the refusal identifies the queued writer "
+                   f"({busy.holders})")
+
+        reader.stop()
+        expect(writer.took_it(5.0),
+               "the writer runs once the reader that preceded it drains")
+        writer.stop()
+        after, after_busy, after_error = taking(
+            scratch, shared={"cabal-build"})
+        expect(after is not None,
+               f"readers enter again after the writer releases "
+               f"(busy={after_busy}, error={after_error})")
+        if after is not None:
+            after.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_conflicting_waiters_run_in_queue_order() -> None:
+    print("\n-- conflicting queued writers run oldest first")
+    scratch = Scratch()
+    try:
+        reader = scratch.holder(shared={"cabal-build"})
+        expect(reader.took_it(), "an existing reader keeps both writers queued")
+        first = scratch.waiter(exclusive={"cabal-build"}, purpose="first")
+        expect(first.queued(), "the first writer joined the queue")
+        second = scratch.waiter(exclusive={"cabal-build"}, purpose="second")
+        expect(second.queued(), "the second writer joined behind it")
+
+        reader.stop()
+        expect(first.took_it(5.0), "the first writer acquires first")
+        expect(second.outcome(0.2).get("state") == "queued",
+               "the second writer remains queued while the first holds")
+        first.stop()
+        expect(second.took_it(5.0),
+               "the second writer acquires after the first releases")
+        second.stop()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_queue_blocks_only_conflicting_resources() -> None:
+    print("\n-- a queued writer does not serialize an unrelated resource")
+    scratch = Scratch()
+    try:
+        reader = scratch.holder(shared={"cabal-build"})
+        expect(reader.took_it(), "the existing reader took cabal-build")
+        writer = scratch.waiter(exclusive={"cabal-build"})
+        expect(writer.queued(), "the cabal-build writer is queued")
+        unrelated, busy, error = taking(scratch, shared={"repo-config"})
+        expect(unrelated is not None,
+               f"unrelated repo-config work still starts "
+               f"(busy={busy}, error={error})")
+        if unrelated is not None:
+            unrelated.release()
+        unrelated_waiter = scratch.waiter(exclusive={"repo-config"})
+        expect(unrelated_waiter.took_it(5.0),
+               "a later non-conflicting queued request also bypasses it")
+        unrelated_waiter.stop()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_killed_waiter_leaves_no_queue_obstruction() -> None:
+    print("\n-- a killed waiter leaves no stale admission entry")
+    scratch = Scratch()
+    try:
+        reader = scratch.holder(shared={"cabal-build"})
+        expect(reader.took_it(), "the existing reader took the resource")
+        writer = scratch.waiter(exclusive={"cabal-build"})
+        expect(writer.queued(), "the writer is queued behind it")
+        writer.kill()
+
+        later, busy, error = taking(scratch, shared={"cabal-build"})
+        expect(later is not None,
+               f"a later reader ignores and reaps the dead waiter "
+               f"(busy={busy}, error={error})")
+        if later is not None:
+            later.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_a_timed_out_waiter_withdraws_before_returning() -> None:
+    print("\n-- a queued deadline preserves its timeout and leaves no priority")
+    scratch = Scratch()
+    try:
+        reader = scratch.holder(shared={"cabal-build"})
+        expect(reader.took_it(), "the existing reader took the resource")
+        started = time.monotonic()
+        raised = None
+        try:
+            lock.wait_acquire(
+                exclusive={"cabal-build"}, namespace=scratch.namespace,
+                root=scratch.root, poll=0.01,
+                deadline=time.monotonic() + 0.1)
+        except lock.ResourceBusy as busy:
+            raised = busy
+        elapsed = time.monotonic() - started
+        expect(raised is not None,
+               "the deadline returns the final resource conflict")
+        expect(0.08 <= elapsed < 1.0,
+               f"the original bounded-wait behavior is preserved "
+               f"({elapsed:.3f} s)")
+
+        later, busy, error = taking(scratch, shared={"cabal-build"})
+        expect(later is not None,
+               f"the timed-out writer no longer blocks later readers "
+               f"(busy={busy}, error={error})")
+        if later is not None:
+            later.release()
     finally:
         scratch.cleanup()
 
@@ -549,6 +778,54 @@ def test_a_planted_lock_file_is_refused_loudly() -> None:
         scratch.cleanup()
 
 
+def test_a_planted_queue_mutex_is_refused_loudly() -> None:
+    print("\n-- an unsafe admission mutex refuses every resource acquisition")
+    scratch = Scratch()
+    try:
+        path = lock.queue_mutex_path(namespace=scratch.namespace,
+                                     root=scratch.root)
+        target = scratch.root / "planted-queue-target"
+        target.write_text("")
+        path.symlink_to(target)
+        hold, busy, error = taking(scratch, shared={"repo-config"})
+        expect(hold is None and error is not None,
+               f"a symlinked queue mutex raises ResourceLockError "
+               f"(busy={busy})")
+        expect(busy is None,
+               "and is not downgraded to a transient resource conflict")
+        if error is not None:
+            expect(str(path) in str(error),
+                   f"the diagnostic names the queue mutex ({error})")
+    finally:
+        scratch.cleanup()
+
+
+def test_a_failed_wait_withdraws_its_queue_entry() -> None:
+    print("\n-- a hard acquisition refusal withdraws the queued request")
+    scratch = Scratch()
+    try:
+        path = lock.lock_path("repo-config", namespace=scratch.namespace,
+                              root=scratch.root)
+        target = scratch.root / "planted-resource-target"
+        target.write_text("")
+        path.symlink_to(target)
+        raised = None
+        try:
+            lock.wait_acquire(shared={"repo-config"},
+                              namespace=scratch.namespace,
+                              root=scratch.root, poll=0.01)
+        except lock.ResourceLockError as error:
+            raised = error
+        expect(raised is not None,
+               "the unsafe resource path is still a hard refusal")
+        queued = list(scratch.root.glob(
+            lock._queue_entry_glob(scratch.namespace)))
+        expect(queued == [],
+               f"and the failed waiter withdrew its queue entry ({queued})")
+    finally:
+        scratch.cleanup()
+
+
 def test_a_non_sticky_scratch_directory_is_refused() -> None:
     print("\n-- the scratch directory's safety properties are checked, never "
           "repaired")
@@ -654,6 +931,11 @@ def main() -> int:
     test_an_exclusive_holder_blocks_a_shared_acquirer()
     test_two_exclusive_holders_conflict()
     test_a_killed_holder_owns_nothing()
+    test_a_waiting_writer_stops_later_readers_from_barging()
+    test_conflicting_waiters_run_in_queue_order()
+    test_a_queue_blocks_only_conflicting_resources()
+    test_a_killed_waiter_leaves_no_queue_obstruction()
+    test_a_timed_out_waiter_withdraws_before_returning()
     test_a_partly_available_set_is_refused_whole()
     test_opposite_orders_cannot_deadlock()
     test_an_empty_interest_set_is_a_hold_that_owns_nothing()
@@ -663,6 +945,8 @@ def main() -> int:
     test_a_checkout_git_cannot_answer_for_is_refused()
     test_the_default_root_is_the_host_shared_directory()
     test_a_planted_lock_file_is_refused_loudly()
+    test_a_planted_queue_mutex_is_refused_loudly()
+    test_a_failed_wait_withdraws_its_queue_entry()
     test_a_non_sticky_scratch_directory_is_refused()
     test_names_are_validated_before_they_become_paths()
     test_an_exclusive_declaration_wins_over_a_shared_one()

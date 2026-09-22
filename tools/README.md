@@ -1163,6 +1163,17 @@ which is what lets `persistence_contract_sweep`'s own nested
 `run_probes.py` run inside its ancestor's `cabal-build` hold instead of
 deadlocking against it.
 
+Cross-process waiters use a conflict-aware FIFO admission queue. Once an
+exclusive `cabal-build` preflight is queued, later shared measurements are
+refused at admission while the readers that already hold the resource drain;
+the preflight then acquires the build state instead of being starved by a
+continuous succession of `/deflake` runs. Queue entries are immutable files
+held live by `flock`, just like holder notes, so killing a waiter removes its
+authority immediately and the next admission pass reaps its stale name.
+Requests that do not conflict still proceed without waiting for each other.
+Callers with a preparation watchdog keep their existing absolute deadline;
+timing out withdraws their queue entry before the error is returned.
+
 **Reserved port spans (#1571).** A probe is handed one `--port`, but two
 registered probes derive a second, concurrently live listener from it:
 `debug_console_boot_probe.py` boots its successful-bind and

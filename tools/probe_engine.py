@@ -440,30 +440,30 @@ def _build_state_hold(namespace, *, deadline, announce, lock_root,
         return
     root = lock_root if lock_root is not None else PREPARE_LOCK_ROOT
     announced = False
-    while True:
-        try:
-            hold = probe_resource_lock.acquire(
-                exclusive={BUILD_RESOURCE}, namespace=namespace,
-                root=root, purpose=f"probe {target} preparation")
-            break
-        except probe_resource_lock.ResourceBusy as busy:
-            if time.monotonic() >= deadline:
-                raise EnginePreparationError(
-                    f"the engine executable could not be prepared: "
-                    f"{busy.describe()}; nothing was built, because "
-                    f"building beside another writer is the defect this "
-                    f"lock exists to prevent") from None
-            if announce is not None and not announced:
-                announce(f"waiting for {BUILD_RESOURCE!r}, held outside this "
-                         f"probe, before preparing {target} ...")
-                announced = True
-            time.sleep(max(0.0, min(PREPARE_LOCK_POLL,
-                                    deadline - time.monotonic())))
-        except probe_resource_lock.ResourceLockError as error:
-            raise EnginePreparationError(
-                f"the engine executable could not be prepared: the "
-                f"{BUILD_RESOURCE!r} interest could not be established "
-                f"({error})") from None
+
+    def waiting(_busy) -> None:
+        nonlocal announced
+        if announce is not None and not announced:
+            announce(f"waiting for {BUILD_RESOURCE!r}, held outside this "
+                     f"probe, before preparing {target} ...")
+            announced = True
+
+    try:
+        hold = probe_resource_lock.wait_acquire(
+            exclusive={BUILD_RESOURCE}, namespace=namespace,
+            root=root, purpose=f"probe {target} preparation",
+            poll=PREPARE_LOCK_POLL, announce=waiting, deadline=deadline)
+    except probe_resource_lock.ResourceBusy as busy:
+        raise EnginePreparationError(
+            f"the engine executable could not be prepared: "
+            f"{busy.describe()}; nothing was built, because "
+            f"building beside another writer is the defect this "
+            f"lock exists to prevent") from None
+    except probe_resource_lock.ResourceLockError as error:
+        raise EnginePreparationError(
+            f"the engine executable could not be prepared: the "
+            f"{BUILD_RESOURCE!r} interest could not be established "
+            f"({error})") from None
     try:
         yield hold
     finally:
