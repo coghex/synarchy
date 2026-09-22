@@ -188,6 +188,11 @@ SEQUENCE = (
     ("migration", "portal_location", "TESTS"),
     ("migration", "crop", "TESTS"),
     ("migration", "item_temp", "TESTS"),
+    ("migration", "movement", "TESTS"),
+    ("migration", "bleeding_trail", "TESTS"),
+    ("migration", "multiworld_save", "TESTS"),
+    ("migration", "persistence_integrity", "TESTS"),
+    ("migration", "plant", "TESTS"),
     ("harness", "runner", "TESTS"),
     ("harness", "composition", "TESTS"),
 )

@@ -77,6 +77,7 @@ Exit 0 = every saved entity survived on its correct page.
 """
 from __future__ import annotations
 
+import probe_protocol
 import argparse
 import glob
 import json
@@ -98,6 +99,48 @@ SAVE_PREFIX = "mw_probe_"  # save dirs this probe owns (cleanup is scoped to it)
 MW_NAME = "Aldermoor Deep"
 MW_GLOSS = "the deep home"
 SW_NAME = "Squally Isles"
+
+
+CHECKS = [
+    ('primary_name', 'primary name'),
+    ('primary_gloss', 'primary gloss'),
+    ('arena_unnamed', 'arena unnamed'),
+    ('secondary_name', 'secondary name'),
+    ('secondary_gloss_omitted', 'secondary gloss omitted'),
+    ('missing_page_unnamed', 'missing page unnamed'),
+    ('primary_unit_restored', 'primary unit restored'),
+    ('secondary_unit_restored', 'secondary unit restored'),
+    ('primary_active', 'primary active'),
+    ('primary_owns_unit', 'primary owns unit'),
+    ('primary_excludes_secondary_unit', 'primary excludes secondary unit'),
+    ('primary_building_restored', 'primary building restored'),
+    ('secondary_active', 'secondary active'),
+    ('secondary_owns_unit', 'secondary owns unit'),
+    ('secondary_excludes_primary_unit', 'secondary excludes primary unit'),
+    ('secondary_building_restored', 'secondary building restored'),
+    ('arena_edit_restored', 'arena edit restored'),
+    ('arena_vegetation_readable', 'arena vegetation readable'),
+    ('arena_vegetation_restored', 'arena vegetation restored'),
+    ('primary_identity_restored', 'primary identity restored'),
+    ('arena_identity_restored', 'arena identity restored'),
+    ('secondary_identity_restored', 'secondary identity restored'),
+    ('save_listed', 'save listed'),
+    ('listed_world_name', 'listed world name'),
+    ('listed_world_gloss', 'listed world gloss'),
+    ('slot_name_distinct', 'slot name distinct'),
+    ('unnamed_page', 'unnamed page'),
+]
+def descriptor(arena=False):
+    arena_only = {"arena_unnamed", "arena_edit_restored", "arena_vegetation_readable",
+                  "arena_vegetation_restored", "arena_identity_restored"}
+    generated_only = {"secondary_name", "secondary_gloss_omitted",
+                      "secondary_identity_restored"}
+    excluded = generated_only if arena else arena_only
+    return probe_protocol.build_descriptor("multiworld_save",
+        [(cid, label) for cid, label in CHECKS if cid not in excluded])
+
+
+DESCRIPTOR = descriptor()
 
 
 def get_identity(port: int, page: str):
@@ -396,11 +439,12 @@ def populate_arena(port: int, page: str) -> tuple[int, int, int, list[int]]:
 
 
 class Checks:
-    def __init__(self) -> None:
+    def __init__(self, rep) -> None:
+        self.rep = rep
         self.failed = 0
 
-    def ok(self, cond: bool, label: str) -> None:
-        print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
+    def ok(self, check_id: str, cond: bool, label: str) -> None:
+        self.rep.check(check_id, bool(cond), label, {"observed": label})
         if not cond:
             self.failed += 1
 
@@ -416,7 +460,20 @@ def main() -> int:
                     help="second_world is a world.initArena page "
                          "(#365 regression: arena pages must survive "
                          "the save -> restart -> load round-trip)")
+    ap.add_argument("--describe", action="store_true",
+                    help="print the check contract without booting an engine")
     args = ap.parse_args()
+    if args.describe:
+        print(descriptor(args.arena).to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(descriptor(args.arena))
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
 
     # Unique per run (random, NOT pid-derived): a reused pid could collide
     # with a stale dir left by an interrupted run, making engine B load OLD
@@ -428,14 +485,14 @@ def main() -> int:
     # existing directory, so file existence below is proof THIS run wrote it.
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
-    logA = "/tmp/mw_save_probe_A.log"
-    logB = "/tmp/mw_save_probe_B.log"
+    logA = rep.engine_log_path("multiworld_save_a.log", "/tmp/mw_save_probe_A.log")
+    logB = rep.engine_log_path("multiworld_save_b.log", "/tmp/mw_save_probe_B.log")
     procA = procB = None
-    chk = Checks()
+    chk = Checks(rep)
 
     try:
         # ── Engine A: build the two pages, populate them, save ──────────
-        procA = boot(args.port, log=logA, label="engine A")
+        procA = boot(args.port, log=logA, label="engine A", args=rep.engine_args())
         bootstrap_defs(args.port)
 
         # Identity args (#707): padded name proves the trim rule; the
@@ -455,20 +512,20 @@ def main() -> int:
 
         print("\n--- world identity checks (engine A, #707) ---")
         ident = get_identity(args.port, "main_world")
-        chk.ok(isinstance(ident, dict) and ident.get("name") == MW_NAME,
+        chk.ok('primary_name', isinstance(ident, dict) and ident.get("name") == MW_NAME,
                f"main_world display name stored trimmed ({ident})")
-        chk.ok(isinstance(ident, dict) and ident.get("gloss") == MW_GLOSS,
+        chk.ok('primary_gloss', isinstance(ident, dict) and ident.get("gloss") == MW_GLOSS,
                f"main_world gloss stored ({ident})")
         if args.arena:
-            chk.ok(get_identity(args.port, "second_world") is None,
+            chk.ok('arena_unnamed', get_identity(args.port, "second_world") is None,
                    "arena second_world is unnamed (getIdentity nil)")
         else:
             ident2 = get_identity(args.port, "second_world")
-            chk.ok(isinstance(ident2, dict) and ident2.get("name") == SW_NAME,
+            chk.ok('secondary_name', isinstance(ident2, dict) and ident2.get("name") == SW_NAME,
                    f"second_world display name stored ({ident2})")
-            chk.ok(isinstance(ident2, dict) and "gloss" not in ident2,
+            chk.ok('secondary_gloss_omitted', isinstance(ident2, dict) and "gloss" not in ident2,
                    f"whitespace-only gloss omitted on second_world ({ident2})")
-        chk.ok(get_identity(args.port, "no_such_page") is None,
+        chk.ok('missing_page_unnamed', get_identity(args.port, "no_such_page") is None,
                "getIdentity of a missing page is nil")
 
         # Leave only main_world visible so the post-load show toggles are
@@ -503,7 +560,7 @@ def main() -> int:
         procA = None
 
         # ── Engine B: fresh process, load, assert survival ─────────────
-        procB = boot(args.port, log=logB, label="engine B")
+        procB = boot(args.port, log=logB, label="engine B", args=rep.engine_args())
         bootstrap_defs(args.port)
         # A truly fresh engine: prove there are zero pre-load worlds, so
         # anything we see after the load provably came from disk.
@@ -524,13 +581,13 @@ def main() -> int:
 
         print("\n--- multi-world restore checks ---")
         # Both units survive (global existence).
-        chk.ok(send(args.port, f"return unit.exists({u_mw})") == "true",
+        chk.ok('primary_unit_restored', send(args.port, f"return unit.exists({u_mw})") == "true",
                f"main_world unit #{u_mw} survived the load")
-        chk.ok(send(args.port, f"return unit.exists({u_sw})") == "true",
+        chk.ok('secondary_unit_restored', send(args.port, f"return unit.exists({u_sw})") == "true",
                f"second_world unit #{u_sw} survived the load")
 
         # main_world should be the active page right after load.
-        chk.ok(wait_active(args.port, "main_world"),
+        chk.ok('primary_active', wait_active(args.port, "main_world"),
                "main_world is the active page after load")
         mw_units = id_list(args.port, "return unit.getAllIds()")
         # Parenthesised so Lua truncates to the ids alone: getActiveIds
@@ -538,24 +595,24 @@ def main() -> int:
         # under (#1686), and the debug console tab-joins every returned
         # value into one reply.
         mw_bldgs = id_list(args.port, "return (building.getActiveIds())")
-        chk.ok(u_mw in mw_units,
+        chk.ok('primary_owns_unit', u_mw in mw_units,
                f"main_world unit #{u_mw} is on main_world ({mw_units})")
-        chk.ok(u_sw not in mw_units,
+        chk.ok('primary_excludes_secondary_unit', u_sw not in mw_units,
                f"second_world unit #{u_sw} is NOT on main_world ({mw_units})")
-        chk.ok(b_mw in mw_bldgs,
+        chk.ok('primary_building_restored', b_mw in mw_bldgs,
                f"main_world building #{b_mw} is on main_world ({mw_bldgs})")
 
         # Switch to the secondary page (hidden -> show promotes cleanly).
         send(args.port, "world.show('second_world'); return 'ok'")
-        chk.ok(wait_active(args.port, "second_world"),
+        chk.ok('secondary_active', wait_active(args.port, "second_world"),
                "second_world restored and can be shown")
         sw_units = id_list(args.port, "return unit.getAllIds()")
         sw_bldgs = id_list(args.port, "return (building.getActiveIds())")
-        chk.ok(u_sw in sw_units,
+        chk.ok('secondary_owns_unit', u_sw in sw_units,
                f"second_world unit #{u_sw} is on second_world ({sw_units})")
-        chk.ok(u_mw not in sw_units,
+        chk.ok('secondary_excludes_primary_unit', u_mw not in sw_units,
                f"main_world unit #{u_mw} is NOT on second_world ({sw_units})")
-        chk.ok(b_sw in sw_bldgs,
+        chk.ok('secondary_building_restored', b_sw in sw_bldgs,
                f"second_world building #{b_sw} is on second_world ({sw_bldgs})")
 
         if args.arena and arena_z is not None:
@@ -564,7 +621,7 @@ def main() -> int:
             ex, ey = ARENA_EDIT_TILE
             got = as_int(send(args.port,
                 f"local s = world.getTerrainAt({ex}, {ey}); return s"))
-            chk.ok(got == arena_z,
+            chk.ok('arena_edit_restored', got == arena_z,
                    f"arena edit at ({ex},{ey}) replayed on load "
                    f"(z={got}, expected {arena_z})")
 
@@ -574,27 +631,30 @@ def main() -> int:
             # vector must come back identical. A short read, a nil tile
             # (-1), or one differing variant fails.
             after = read_arena_veg(args.port)
-            chk.ok(isinstance(after, list) and len(after) == 256
+            chk.ok('arena_vegetation_readable', isinstance(after, list) and len(after) == 256
                    and -1 not in after,
                    "arena base vegetation is fully readable after load "
                    f"({'nil' if after is None else f'{len(after)} values'})")
+            if not isinstance(after, list) and rep.protocol_mode:
+                rep.abort("arena vegetation unavailable; dependent checks were not reached")
+                return 1
             if isinstance(after, list):
                 differing = sum(1 for a, b in zip(arena_veg, after) if a != b)
-                chk.ok(after == arena_veg,
+                chk.ok('arena_vegetation_restored', after == arena_veg,
                        "arena base vegetation survives the save/load round "
                        f"trip unchanged ({differing}/256 tiles differ)")
 
         print("\n--- world identity restore checks (#707) ---")
         ident = get_identity(args.port, "main_world")
-        chk.ok(isinstance(ident, dict) and ident.get("name") == MW_NAME
+        chk.ok('primary_identity_restored', isinstance(ident, dict) and ident.get("name") == MW_NAME
                and ident.get("gloss") == MW_GLOSS,
                f"primary identity followed its page to main_world ({ident})")
         if args.arena:
-            chk.ok(get_identity(args.port, "second_world") is None,
+            chk.ok('arena_identity_restored', get_identity(args.port, "second_world") is None,
                    "arena second_world restored unnamed")
         else:
             ident2 = get_identity(args.port, "second_world")
-            chk.ok(isinstance(ident2, dict) and ident2.get("name") == SW_NAME
+            chk.ok('secondary_identity_restored', isinstance(ident2, dict) and ident2.get("name") == SW_NAME
                    and "gloss" not in ident2,
                    f"secondary identity stayed on second_world ({ident2})")
 
@@ -606,16 +666,19 @@ def main() -> int:
         if isinstance(saves, list):
             entry = next((s for s in saves if isinstance(s, dict)
                           and s.get("name") == save_name), None)
-        chk.ok(entry is not None,
+        chk.ok('save_listed', entry is not None,
                f"listSaves has an entry for slot '{save_name}'")
+        if entry is None and rep.protocol_mode:
+            rep.abort("listSaves entry absent; dependent checks were not reached")
+            return 1
         if entry is not None:
-            chk.ok(entry.get("worldName") == MW_NAME,
+            chk.ok('listed_world_name', entry.get("worldName") == MW_NAME,
                    f"listSaves worldName is the display name "
                    f"({entry.get('worldName')!r})")
-            chk.ok(entry.get("worldGloss") == MW_GLOSS,
+            chk.ok('listed_world_gloss', entry.get("worldGloss") == MW_GLOSS,
                    f"listSaves worldGloss is the gloss "
                    f"({entry.get('worldGloss')!r})")
-            chk.ok(entry.get("name") != entry.get("worldName"),
+            chk.ok('slot_name_distinct', entry.get("name") != entry.get("worldName"),
                    "save-slot name and world name are distinct")
 
         # A 4-argument world.init page stays unnamed end to end. Tiny w8
@@ -626,7 +689,7 @@ def main() -> int:
                           lambda: page_registered(args.port, 'unnamed_w8'),
                           interval=0.2):
             sys.exit("FAIL: unnamed_w8 page never registered")
-        chk.ok(get_identity(args.port, "unnamed_w8") is None,
+        chk.ok('unnamed_page', get_identity(args.port, "unnamed_w8") is None,
                "4-argument world.init page is unnamed (getIdentity nil)")
 
         print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: "

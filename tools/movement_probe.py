@@ -29,6 +29,7 @@ Exit code 0 = all checks for the course passed.
 """
 from __future__ import annotations
 
+import probe_protocol
 import argparse
 import glob
 import json
@@ -65,6 +66,16 @@ _LONG_BRACKET = re.compile(r"\[(=*)\[")
 # keeps the `if` inside `elseif` from matching.
 _BLOCK_WORD = re.compile(r"\b(function|if|do|end|repeat|until)\b")
 _BRACKET_PAIRS = {")": "(", "]": "[", "}": "{"}
+
+
+# The registry invokes the default corner_trap course. Other courses and
+# stamina/pacing remain standalone modes with their existing assertions.
+CHECKS = [
+    ("course_inventory", "source and runtime course inventories agree"),
+    ("reached_goal", "reached the goal by routing around the wall"),
+    ("not_frozen", "did not freeze in walking"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor("movement", CHECKS)
 
 
 def _blank(run: str) -> str:
@@ -776,7 +787,15 @@ def main() -> int:
     ap.add_argument("--list", action="store_true",
                     help="list available courses and exit (no engine boot; "
                          "honoured for every --mode)")
+    ap.add_argument("--describe", action="store_true",
+                    help="describe the registered default corner_trap invocation")
     args = ap.parse_args()
+    canonical = args.mode == "move" and args.course == "corner_trap"
+    if args.describe:
+        if not canonical:
+            ap.error("protocol describes only --mode move --course corner_trap")
+        print(DESCRIPTOR.to_json())
+        return 0
 
     # #1586: listing is a metadata query, so it must not depend on a build,
     # a free port or a resource root. Answered from the Lua source before
@@ -792,11 +811,23 @@ def main() -> int:
         print("courses:", ", ".join(names))
         return 0
 
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        if rep.protocol_mode and not canonical:
+            rep.abort("protocol supports only --mode move --course corner_trap")
+            return 2
+        return _run(args, rep)
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
     args.speed_explicit = args.speed is not None
     if args.seconds is None:
         args.seconds = COURSE_SECONDS.get(args.course, 14.0)
 
-    proc = boot(args.port, log=LOG)
+    proc = boot(args.port, log=rep.engine_log_path("movement_engine.log", LOG),
+                args=rep.engine_args())
     try:
         if args.mode == "stamina":
             return run_stamina_mode(args.port, args)
@@ -808,6 +839,8 @@ def main() -> int:
         # This run has an engine, so it is where the cheap --list view is
         # held to the runtime authority (#1586).
         drift = check_course_inventory(args.port)
+        if rep.protocol_mode:
+            rep.check("course_inventory", drift == 0, "source/runtime course inventory")
         if drift:
             return drift
 
@@ -895,8 +928,11 @@ def main() -> int:
         checks = validator(course, samples, reached, moved, poses, acts)
         print("\n--- checks ---")
         all_ok = True
-        for label, ok in checks:
-            print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
+        for index, (label, ok) in enumerate(checks):
+            if rep.protocol_mode:
+                rep.check(DESCRIPTOR.ids[index + 1], ok, label)
+            else:
+                print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
             all_ok = all_ok and ok
         return 0 if all_ok else 1
     finally:

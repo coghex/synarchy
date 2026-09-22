@@ -1606,15 +1606,16 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-The 31 migrated probes are `blood_decal`, `blood_impact`, `circadian`,
+The 36 migrated probes are `bleeding_trail`, `blood_decal`, `blood_impact`, `circadian`,
 `circadian_species`, `collapse_crawl`, `concussion_revive`, `config_migration`,
 `config_state`, `crop`, `disarm`, `injury_log`, `item_temp`, `lua_orphan_prune`,
-`machine_shop`, `meal_waste`, `mental_efficiency`, `pause_speed`,
+`machine_shop`, `meal_waste`, `mental_efficiency`, `movement`, `multiworld_save`,
+`pause_speed`, `persistence_integrity`, `plant`,
 `portal_location`, `position_hold`, `remote_warning_page_guard`,
 `resource_root`, `retaliation_swap`, `river_naming`, `role`, `save_barrier`,
 `save_pause`, `state_of_mind`, `text_encoding`, `thermo_altitude`, `thought`,
 and `wire`. Migrations normally land one at a time; the operator explicitly
-requested this batch of ten additional probes in one pull request.
+requested the latest batch of five additional probes in one pull request.
 
 The new batch preserves its CLI options, scenarios, thresholds and manual-only
 classification. Each engine boot gets the requested RTS capabilities and its
@@ -1624,6 +1625,18 @@ an unreached suffix of `MISSING` checks; protocol mode stops before dependent
 checks if continuing would jump over an unobserved check. Teardown failures
 are diagnostics plus a nonzero exit, never an out-of-order check. Focused
 migration tests cover these paths without an engine.
+
+The latest five are `movement`, `bleeding_trail`, `multiworld_save`,
+`persistence_integrity`, and `plant`. `movement` declares the registry's default
+`--mode move --course corner_trap` invocation; its other course, stamina, and
+pacing modes retain their standalone CLI and are refused before boot in protocol
+mode. `--list` remains a no-engine query for every mode. `multiworld_save
+--describe --arena` declares the arena variant's own ordered checks; the lab's
+registered default continues to test two generated worlds. Blood-trail checks
+aggregate each existing scenario's fail-fast assertions under one stable ID;
+its final spawn-surface log guard is a separate check. The save and planting
+probes retain their existing fixtures, isolated roots where present, and
+cleanup behavior. No CI classifications or census tolerances change.
 
 After merge, `$flake` seeds the census and selects from these probes normally.
 Pre-merge harness validation does not seed, record, or change the live census;

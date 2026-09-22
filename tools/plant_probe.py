@@ -64,12 +64,31 @@ exist yet).
 Usage: python3 tools/plant_probe.py [--port 9179] [--seed 42]
        [--size 64] [--plates 3]
 """
+import probe_protocol
 import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
 from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
+
+
+CHECKS = [
+    ('preferred_soil_positive', 'preferred soil positive'),
+    ('crop_suitability_inventory', 'crop suitability inventory'),
+    ('factor_breakdown', 'factor breakdown'),
+    ('nonpreferred_soil_zero', 'nonpreferred soil zero'),
+    ('untilled_not_plantable', 'untilled not plantable'),
+    ('untilled_refused', 'untilled refused'),
+    ('unknown_crop_refused', 'unknown crop refused'),
+    ('tilled_designation', 'tilled designation'),
+    ('nearest_designation', 'nearest designation'),
+    ('cancel_designation', 'cancel designation'),
+    ('row_crop_designation', 'row crop designation'),
+    ('replace_crop', 'replace crop'),
+    ('designation_restored', 'designation restored'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('plant', CHECKS)
 
 
 def make_isolated_root(base: str) -> str:
@@ -289,27 +308,45 @@ def select_positive_fixture(port, page):
     return None, notes
 
 
+def check(rep, check_id, passed, human):
+    rep.check(check_id, passed, human, {"observed": human})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9179)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the check contract without booting an engine")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
     port = args.port
     passed = True
 
     tmpdir = tempfile.mkdtemp(prefix="plant_probe_")
     try:
         root = make_isolated_root(tmpdir)
-        proc = boot(port, f"{SPROOT}/plant_probe_engine.log",
-                    args=["--resource-root", root])
-        return _run(port, proc, args, passed)
+        proc = boot(port, rep.engine_log_path("plant_engine.log",
+                    f"{SPROOT}/plant_probe_engine.log"),
+                    args=["--resource-root", root] + rep.engine_args())
+        return _exercise(port, proc, args, passed, rep)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _run(port, proc, args, passed):
+def _exercise(port, proc, args, passed, rep):
     try:
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
@@ -329,12 +366,12 @@ def _run(port, proc, args, passed):
         for note in notes:
             print(f"  (skipped candidate) {note}")
         if fixture is None:
-            print("  [FAIL] no tillable tile in the loaded region carries a "
-                  "crop that scores above zero on preferred soil, so the "
-                  "granite contrast would prove nothing. Either every "
-                  "preferred-soil score regressed to zero, or this seed's "
-                  "tillable tiles are all climatically unsuitable — the "
-                  "skipped-candidate lines above name which.")
+            rep.abort("no tillable tile in the loaded region carries a "
+                      "crop that scores above zero on preferred soil, so the "
+                      "granite contrast would prove nothing. Either every "
+                      "preferred-soil score regressed to zero, or this seed's "
+                      "tillable tiles are all climatically unsuitable — the "
+                      "skipped-candidate lines above name which.")
             return 1
         tx, ty, z, crop, rows = fixture
         print(f"  fixture tile ({tx},{ty}), surfaceZ={z}, crop={crop!r} "
@@ -346,9 +383,7 @@ def _run(port, proc, args, passed):
                and okL_row["score"] > 0.0
                and okL_fits.get("soil") == 1.0)
         passed &= okL
-        print(f"  [{'PASS' if okL else 'FAIL'}] on loam, {crop} scores "
-              f"{okL_row['score'] if okL_row else None} > 0 with soil fit "
-              f"{okL_fits.get('soil')}")
+        check(rep, 'preferred_soil_positive', okL, f"on loam, {crop} scores {(okL_row['score'] if okL_row else None)} > 0 with soil fit {okL_fits.get('soil')}")
         if not okL:
             # Requirement 4: the breakdown is what separates "soil
             # gating regressed" from "this tile is climatically
@@ -365,8 +400,7 @@ def _run(port, proc, args, passed):
                and all(0.0 <= r["score"] <= 1.0 for r in rows)
                and rows == sorted(rows, key=lambda r: -r["score"]))
         passed &= ok1
-        print(f"  [{'PASS' if ok1 else 'FAIL'}] getPlantSuitability lists "
-              f"both shipped crops, sorted best-first: {rows}")
+        check(rep, 'crop_suitability_inventory', ok1, f'getPlantSuitability lists both shipped crops, sorted best-first: {rows}')
 
         ok1b = all(
             isinstance(r.get("factors"), list)
@@ -375,8 +409,7 @@ def _run(port, proc, args, passed):
             for r in rows
         ) if isinstance(rows, list) else False
         passed &= ok1b
-        print(f"  [{'PASS' if ok1b else 'FAIL'}] each row's factors cover "
-              f"all 6 labels with fit in [0,1]")
+        check(rep, 'factor_breakdown', ok1b, f"each row's factors cover all 6 labels with fit in [0,1]")
 
         # --- 2. Soil actually gates suitability (not just parses) ---
         #     The SAME crop that just scored positive on loam must fall
@@ -398,9 +431,7 @@ def _run(port, proc, args, passed):
                and all(by_bad.get(n) is not None and by_bad[n]["score"] == 0.0
                        for n in ("wheat", "tomato_plant")))
         passed &= ok2
-        print(f"  [{'PASS' if ok2 else 'FAIL'}] granite (non-preferred soil) "
-              f"drops {crop} from a positive score to 0.0 with soil fit 0.0, "
-              f"and zeroes both shipped crops: {rows_bad}")
+        check(rep, 'nonpreferred_soil_zero', ok2, f'granite (non-preferred soil) drops {crop} from a positive score to 0.0 with soil fit 0.0, and zeroes both shipped crops: {rows_bad}')
 
         # Restore loam so the rest of this probe (designation checks
         # below) runs against a species-preferred soil, matching the
@@ -411,8 +442,7 @@ def _run(port, proc, args, passed):
         pre = send_json(port, f"return world.isPlantable({tx},{ty})")
         ok2a = pre is False
         passed &= ok2a
-        print(f"  [{'PASS' if ok2a else 'FAIL'}] isPlantable is false before "
-              f"tilling: {pre}")
+        check(rep, 'untilled_not_plantable', ok2a, f'isPlantable is false before tilling: {pre}')
 
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
                    f"return 'ok'")
@@ -420,8 +450,7 @@ def _run(port, proc, args, passed):
         d0 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok2 = not isinstance(d0, dict)
         passed &= ok2
-        print(f"  [{'PASS' if ok2 else 'FAIL'}] designate refused on an "
-              f"untilled tile: {d0}")
+        check(rep, 'untilled_refused', ok2, f'designate refused on an untilled tile: {d0}')
 
         till_and_wait(port, "probe", tx, ty, z)
 
@@ -432,8 +461,7 @@ def _run(port, proc, args, passed):
         d1 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok3 = not isinstance(d1, dict)
         passed &= ok3
-        print(f"  [{'PASS' if ok3 else 'FAIL'}] designate refused for an "
-              f"unregistered crop name: {d1}")
+        check(rep, 'unknown_crop_refused', ok3, f'designate refused for an unregistered crop name: {d1}')
 
         # --- 5. Designation succeeds on a tilled tile ---
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
@@ -445,8 +473,7 @@ def _run(port, proc, args, passed):
                and isinstance(d2, dict) and d2.get("crop") == "wheat"
                and isinstance(d2.get("z"), (int, float)))
         passed &= ok4
-        print(f"  [{'PASS' if ok4 else 'FAIL'}] designate marks a tilled "
-              f"tile: count={n} at-tile={d2}")
+        check(rep, 'tilled_designation', ok4, f'designate marks a tilled tile: count={n} at-tile={d2}')
 
         # plant.nearestDesignation returns MULTIPLE Lua values (gx, gy,
         # dist), not a table — the debug console prints them
@@ -460,16 +487,14 @@ def _run(port, proc, args, passed):
                 and int(float(near_parts[0])) == tx
                 and int(float(near_parts[1])) == ty)
         passed &= ok4b
-        print(f"  [{'PASS' if ok4b else 'FAIL'}] nearestDesignation finds "
-              f"it: {near_raw!r}")
+        check(rep, 'nearest_designation', ok4b, f'nearestDesignation finds it: {near_raw!r}')
 
         send(port, f"plant.cancelDesignation({tx},{ty}); return 'ok'")
         time.sleep(0.5)
         d3 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok4c = not isinstance(d3, dict)
         passed &= ok4c
-        print(f"  [{'PASS' if ok4c else 'FAIL'}] cancelDesignation clears "
-              f"it: {d3}")
+        check(rep, 'cancel_designation', ok4c, f'cancelDesignation clears it: {d3}')
 
         # --- 6. Designating a row_crop works too (designation is
         #     category-symmetric; only execution is #336's asymmetry) ---
@@ -479,8 +504,7 @@ def _run(port, proc, args, passed):
         d4 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok5 = isinstance(d4, dict) and d4.get("crop") == "tomato_plant"
         passed &= ok5
-        print(f"  [{'PASS' if ok5 else 'FAIL'}] designate accepts a "
-              f"row_crop name too: {d4}")
+        check(rep, 'row_crop_designation', ok5, f'designate accepts a row_crop name too: {d4}')
 
         # --- 7. Replace semantics: designating again overwrites ---
         send(port, f"plant.designate('probe',{tx},{ty},'wheat'); "
@@ -489,8 +513,7 @@ def _run(port, proc, args, passed):
         d5 = send_json(port, f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok6 = isinstance(d5, dict) and d5.get("crop") == "wheat"
         passed &= ok6
-        print(f"  [{'PASS' if ok6 else 'FAIL'}] re-designating the same "
-              f"tile replaces the crop: {d5}")
+        check(rep, 'replace_crop', ok6, f're-designating the same tile replaces the crop: {d5}')
 
         # --- 8. Save/load round-trip ---
         send(port, "engine.saveWorld('probe', 'plant_v78_check'); "
@@ -499,7 +522,7 @@ def _run(port, proc, args, passed):
         send(port, "engine.loadSave('plant_v78_check'); return 'ok'")
         published, load_status = wait_load_published(port, 200)
         if not published:
-            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            rep.abort(f'load transaction did not publish: {load_status}')
             return 1
         send(port, "world.show('probe'); return 'ok'")
         send(port, "engine.setPaused(false); return 'ok'")
@@ -509,8 +532,7 @@ def _run(port, proc, args, passed):
                        f"return plant.getDesignationAt('probe',{tx},{ty})")
         ok7 = isinstance(d6, dict) and d6.get("crop") == "wheat"
         passed &= ok7
-        print(f"  [{'PASS' if ok7 else 'FAIL'}] designation (with crop) "
-              f"survives save/load: {d6}")
+        check(rep, 'designation_restored', ok7, f'designation (with crop) survives save/load: {d6}')
 
         print("\n" + ("ALL PLANT CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
