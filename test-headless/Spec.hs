@@ -250,6 +250,7 @@ import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PlayerEventProgress as PlayerEventProgress
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
 import qualified Test.Headless.UI.PopupQueueTeardown as UIPopupQueueTeardown
+import qualified Test.Headless.UI.RandboxContainment as UIRandboxContainment
 import qualified Test.Headless.UI.ResponsiveMenus as UIResponsiveMenus
 import qualified Test.Headless.UI.ResponsiveGameplay as UIResponsiveGameplay
 import qualified Test.Headless.UI.SettingsDefaultsKeybinds
@@ -1100,6 +1101,7 @@ main = hspec $ do
     -- popup state it exercises is a once-per-process condition, so a
     -- shared module table would destroy it.
     UIPopupQueueTeardown.spec
+    describe "UI.RandboxContainment" UIRandboxContainment.spec
     describe "UI.ResponsiveMenus" UIResponsiveMenus.spec
     describe "UI.ResponsiveGameplay" UIResponsiveGameplay.spec
     UISettingsDefaultsKeybinds.spec

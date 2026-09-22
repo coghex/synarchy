@@ -1682,6 +1682,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Event.PlayerEventProgress
                    Test.Headless.Event.PopupCoordPage
                    Test.Headless.UI.PopupQueueTeardown
+                   Test.Headless.UI.RandboxContainment
                    Test.Headless.UI.ResponsiveMenus
                    Test.Headless.UI.ResponsiveMenus.Fixture
                    Test.Headless.UI.ResponsiveMenus.DebugConsole
