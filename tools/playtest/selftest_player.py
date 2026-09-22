@@ -66,8 +66,8 @@ def run(check) -> None:
               str(player_params))
         check("approved player profiles pin both medium-effort models",
               agent_mod.PLAYER_PROFILES == {
-                  "codex-luna": {
-                      "backend": "codex-cli", "model": "gpt-5.6-luna",
+                  "codex-sol": {
+                      "backend": "codex-cli", "model": "gpt-6-sol",
                       "effort": "medium", "binary": "codex"},
                   "claude-sonnet": {
                       "backend": "claude-cli", "model": "claude-sonnet-5",
@@ -76,9 +76,9 @@ def run(check) -> None:
         codex_cmd = agent_mod._build_codex_command(
             "/usr/bin/codex", "frame.png", os.path.join(tmp, "empty"),
             os.path.join(tmp, "turn.schema.json"), os.path.join(tmp, "turn.json"))
-        check("Codex profile invokes gpt-5.6-luna medium",
+        check("Codex profile invokes gpt-6-sol medium",
               codex_cmd[:2] == ["/usr/bin/codex", "exec"]
-              and "gpt-5.6-luna" in codex_cmd
+              and "gpt-6-sol" in codex_cmd
               and 'model_reasoning_effort="medium"' in codex_cmd)
         check("Codex player cannot inspect the repo or acquire oracle data",
               "--ignore-user-config" in codex_cmd
@@ -555,7 +555,7 @@ def run(check) -> None:
 
         def decide_with_reply(backend, stdout="", file_text=None):
             """One real decide() turn against a faked provider process."""
-            profile_name = ("codex-luna" if backend == "codex-cli"
+            profile_name = ("codex-sol" if backend == "codex-cli"
                             else "claude-sonnet")
             player = object.__new__(agent_mod.PlayerAgent)
             player.provider_bin = "/nonexistent/provider"

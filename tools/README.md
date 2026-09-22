@@ -3918,7 +3918,7 @@ in CI.
 
 `tools/playtest/` is the naive-player UX playtest harness (H1, #647 —
 epic #641): a lockstep runner that drives a **windowed** instance, hands
-each frame to a Codex `gpt-5.6-luna`/medium naive player (screenshot-only,
+each frame to a Codex `gpt-6-sol`/medium naive player (screenshot-only,
 persona-driven, oracle-blind), injects its chosen `input.*` action, and
 records a replayable session trace for the critic (H2). Unlike everything else in
 tools/ it deliberately launches a graphical instance (focus-stealing —

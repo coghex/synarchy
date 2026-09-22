@@ -28,9 +28,9 @@ from engine import (ACTION_KINDS, SCROLL_DY_MAX, SCROLL_DY_MIN,
 # model or a different effort level. The critic and optional persona-flavor
 # generator are separate workflows with their own model choices.
 PLAYER_PROFILES = {
-    "codex-luna": {
+    "codex-sol": {
         "backend": "codex-cli",
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-sol",
         "effort": "medium",
         "binary": "codex",
     },
@@ -41,7 +41,7 @@ PLAYER_PROFILES = {
         "binary": "claude",
     },
 }
-DEFAULT_PLAYER_PROFILE = "codex-luna"
+DEFAULT_PLAYER_PROFILE = "codex-sol"
 DEFAULT_DECISION_TIMEOUT = 90.0
 CLAUDE_SCREENSHOT_READ_RULE = "Read(./screenshot.png)"
 
@@ -247,7 +247,7 @@ def _build_codex_command(codex_bin: str, screenshot_path: str, workspace: str,
     the player can reason over the attached screenshot and prompt, but cannot
     inspect the game repository or acquire outside information.
     """
-    profile = profile or PLAYER_PROFILES["codex-luna"]
+    profile = profile or PLAYER_PROFILES["codex-sol"]
     return [
         codex_bin, "exec",
         "--model", profile["model"],

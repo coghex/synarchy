@@ -49,7 +49,7 @@ input-plus-output player-token ceiling, stuck detection after 3 identical
 no-change turns, and a 1800-second `--setup-timeout` watchdog for
 everything *before* the session starts (see
 [Budgets and the player-ready boundary](#budgets-and-the-player-ready-boundary)). `--player` selects one complete audited medium-effort profile:
-`codex-luna` (the default, `gpt-5.6-luna`) or `claude-sonnet`
+`codex-sol` (the default, `gpt-6-sol`) or `claude-sonnet`
 (`claude-sonnet-5`). Arbitrary provider/model/effort strings are not accepted.
 
 After every decision the console shows compact `K`/`M`/`G` values for tokens
