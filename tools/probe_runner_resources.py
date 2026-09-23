@@ -125,9 +125,9 @@ import save_compat_audit_codec
 #     asks for the reason to be recorded here. The sweep is a probe that
 #     runs a NESTED `tools/run_probes.py`, and its default nested
 #     selection includes `save_compat_migration` — an exclusive holder.
-#     `descendant_hold_env` below exports only what an ancestor holds
-#     EXCLUSIVELY, so a sweep holding `cabal-build` merely shared would
-#     hand its nested runner nothing to inherit; that runner would then
+#     `descendant_hold_env` below exports both interests, but an ancestor's
+#     SHARED hold cannot cover a nested EXCLUSIVE request. A sweep holding
+#     `cabal-build` merely shared would still let its nested runner
 #     request the resource exclusively for its `save_compat_migration`
 #     child and wait forever on its own ancestor's shared hold. The
 #     sweep is manual-only and long, so it loses nothing by staying
@@ -292,22 +292,23 @@ def resource_hold(key: str, namespace, *, announce=None):
 # nested runner would then wait forever for a holder that is itself blocked
 # waiting on the nested runner.
 #
-# So a runner exports what it holds EXCLUSIVELY to every probe it launches,
-# and a nested runner drops those names from its CROSS-PROCESS requests: it
-# is inside its ancestor's exclusion, not competing with it. Its own
-# in-process ledger is untouched, so a nested sweep still serialises its own
-# probes against each other exactly as before.
+# So a runner exports both interests it holds to every probe it launches.
+# A nested runner drops an inherited EXCLUSIVE hold from either kind of
+# CROSS-PROCESS request, and an inherited SHARED hold from a SHARED request.
+# Its own in-process ledger is untouched, so a nested sweep still serialises
+# its own probes against each other exactly as before.
 #
-# Only EXCLUSIVE holds are exported, and that is the whole rule. An
-# ancestor's exclusive hold already excludes every foreign process, so a
-# descendant inside it needs nothing further. An ancestor's SHARED hold
-# cannot stand in for a descendant's exclusive request and must not be
-# skipped — while a descendant's SHARED request against it is granted by the
-# kernel anyway (LOCK_SH beside LOCK_SH), so there is nothing to export.
+# An ancestor's SHARED hold cannot stand in for a descendant's EXCLUSIVE
+# request. Its SHARED descendants may use the existing hold, however: a
+# queued foreign writer now prevents a fresh SHARED request from entering,
+# even though the kernel would grant LOCK_SH beside the ancestor's LOCK_SH.
+# The ancestor keeps its hold until its child exits, so this inheritance
+# cannot let the writer overlap the child.
 #
 # The namespace rides along and is compared before anything is inherited: a
 # name means nothing outside the repository it was taken in.
 ENV_HELD_EXCLUSIVE = "SYNARCHY_PROBE_HELD_EXCLUSIVE"
+ENV_HELD_SHARED = "SYNARCHY_PROBE_HELD_SHARED"
 ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
 
 #: Every variable THIS runner owns in a probe's environment, so
@@ -319,24 +320,29 @@ ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
 RUNNER_ENV_VARS: tuple[str, ...] = (probe_engine.ENV_ENGINE_EXE,
                                     save_compat_audit_codec.ENV_CODEC_EXE,
                                     ENV_HELD_EXCLUSIVE,
+                                    ENV_HELD_SHARED,
                                     ENV_HELD_NAMESPACE)
 
 
 def descendant_hold_env(key: str, namespace: str | None) -> dict[str, str]:
-    """What probe `key`'s own descendants may treat as already excluded.
+    """What probe `key`'s own descendants may treat as already held.
 
-    The probe's own exclusive declarations PLUS whatever this runner
-    itself inherited, so the rule survives a second level of nesting.
-    Empty when there is nothing to inherit, which is the ordinary case
-    and passes no environment override at all.
+    The probe's own declarations plus whatever this runner inherited,
+    so the rule survives a second level of nesting. Exclusive interest
+    wins if the probe holds a resource in a stronger mode.
     """
     if namespace is None:
         return {}
-    held = exclusive_resources(key) | inherited_exclusive_resources(namespace)
-    if not held:
+    exclusive = exclusive_resources(key) | inherited_exclusive_resources(namespace)
+    shared = (shared_resources(key) | inherited_shared_resources(namespace)) - exclusive
+    if not exclusive and not shared:
         return {}
-    return {ENV_HELD_EXCLUSIVE: ",".join(sorted(held)),
-            ENV_HELD_NAMESPACE: namespace}
+    env = {ENV_HELD_NAMESPACE: namespace}
+    if exclusive:
+        env[ENV_HELD_EXCLUSIVE] = ",".join(sorted(exclusive))
+    if shared:
+        env[ENV_HELD_SHARED] = ",".join(sorted(shared))
+    return env
 
 
 def inherited_exclusive_resources(namespace: str | None,
@@ -349,17 +355,28 @@ def inherited_exclusive_resources(namespace: str | None,
     return {name.strip() for name in raw.split(",") if name.strip()}
 
 
+def inherited_shared_resources(namespace: str | None,
+                               environ=None) -> set[str]:
+    """Resources an ancestor process already holds shared for us."""
+    env = os.environ if environ is None else environ
+    if namespace is None or env.get(ENV_HELD_NAMESPACE) != namespace:
+        return set()
+    raw = env.get(ENV_HELD_SHARED) or ""
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
 def cross_process_interests(key: str, namespace: str | None,
                             environ=None) -> tuple[set[str], set[str]]:
     """`key`'s (exclusive, shared) interests for the CROSS-PROCESS layer.
 
     The in-process ledger keeps using `exclusive_resources` /
     `shared_resources` unchanged; only the flocks drop what an ancestor
-    is already holding exclusively on this process's behalf.
+    is already holding on this process's behalf.
     """
-    inherited = inherited_exclusive_resources(namespace, environ)
-    return (exclusive_resources(key) - inherited,
-            shared_resources(key) - inherited)
+    inherited_exclusive = inherited_exclusive_resources(namespace, environ)
+    inherited_shared = inherited_shared_resources(namespace, environ)
+    return (exclusive_resources(key) - inherited_exclusive,
+            shared_resources(key) - inherited_exclusive - inherited_shared)
 
 
 # ---------------------------------------------------------------------------

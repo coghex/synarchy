@@ -177,14 +177,14 @@ def test_persistence_contract_declares_no_exclusive_interest() -> None:
            f"(shared: {sorted(shared)})")
     # The inheritance rule the sweep's retained hold turns on, stated
     # here so the reason survives beside the declaration it explains:
-    # only an EXCLUSIVE ancestor hold is exported, so a nested runner
-    # selecting an exclusive child needs its ancestor to be exclusive
-    # too.
+    # a SHARED ancestor hold cannot cover an exclusive child, so a
+    # nested runner selecting one needs its ancestor to be exclusive too.
     namespace = "selftest-persistence-contract"
     expect(probe_runner_resources.descendant_hold_env(
-               "persistence_contract", namespace) == {},
-           "so it exports nothing to a descendant -- it has no nested "
-           "runner, which is why it may be shared where the sweep may not")
+               "persistence_contract", namespace)
+           .get(probe_runner_resources.ENV_HELD_EXCLUSIVE) is None,
+           "it exports no exclusive hold -- it has no nested runner, "
+           "which is why it may be shared where the sweep may not")
     expect(probe_runner_resources.descendant_hold_env(
                "persistence_contract_sweep", namespace)
            .get(probe_runner_resources.ENV_HELD_EXCLUSIVE)

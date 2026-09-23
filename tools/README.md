@@ -1127,10 +1127,10 @@ runner to hand it the helper, that resolution freshness-builds
 Cabal command of its own any more, and RETAINS the hold for a different
 reason: it is a probe that runs a nested `run_probes.py`, its default
 nested selection includes `save_compat_migration`, and
-`probe_runner_resources.descendant_hold_env` exports only what an
-ancestor holds EXCLUSIVELY — so a sweep holding `cabal-build` merely
-shared would hand its nested runner nothing to inherit, and that runner
-would then wait forever on its own ancestor. Both therefore declare the
+`probe_runner_resources.descendant_hold_env` exports both interests, but
+an ancestor's shared hold cannot cover an exclusive child — so a sweep
+holding `cabal-build` merely shared would leave its nested runner waiting
+forever on its own ancestor. Both therefore declare the
 `cabal-build` resource EXCLUSIVELY in the reader/writer tables below,
 while every other probe holds it SHARED. They cannot overlap
 each other, nor a probe reading the binary they may be relinking — the
@@ -1158,10 +1158,26 @@ themselves. Shared holders coexist; an exclusive holder runs alone.
 `tools/probe_resource_lock.py` (#1436) enforces the same two tables
 BETWEEN processes, so a second sweep or a `/deflake` measurement cannot
 overlap what this one holds either. A runner tells each probe what it
-holds exclusively on that probe's behalf (`SYNARCHY_PROBE_HELD_EXCLUSIVE`),
-which is what lets `persistence_contract_sweep`'s own nested
-`run_probes.py` run inside its ancestor's `cabal-build` hold instead of
-deadlocking against it.
+holds on that probe's behalf (`SYNARCHY_PROBE_HELD_EXCLUSIVE` and
+`SYNARCHY_PROBE_HELD_SHARED`). This lets
+`persistence_contract_sweep`'s nested `run_probes.py` use its ancestor's
+`cabal-build` and `repo-config` holds, even while a foreign exclusive
+request is queued, instead of deadlocking against the ancestor.
+
+Cross-process waiters use a conflict-aware FIFO admission queue. Once an
+exclusive `cabal-build` preflight is queued, later shared measurements are
+refused at admission while the readers that already hold the resource drain;
+the preflight then acquires the build state instead of being starved by a
+continuous succession of `/deflake` runs. Queue entries are immutable files
+held live by `flock`, just like holder notes, so killing a waiter removes its
+authority immediately and the next admission pass reaps its stale name.
+Requests that do not conflict still proceed without waiting for each other.
+An inherited shared hold covers only a descendant's shared request; an
+exclusive request still needs its own lock.
+The non-waiting `acquire` operation may briefly return `ResourceBusy` with
+no named holders while another admission pass owns the queue mutex.
+Callers with a preparation watchdog keep their existing absolute deadline;
+timing out withdraws their queue entry before the error is returned.
 
 **Reserved port spans (#1571).** A probe is handed one `--port`, but two
 registered probes derive a second, concurrently live listener from it:
