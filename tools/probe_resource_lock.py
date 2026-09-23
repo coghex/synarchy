@@ -102,7 +102,9 @@ probe runner). It publishes one immutable, flock-backed queue entry for
 its complete interest set. Conflicting waiters are admitted in queue order;
 non-conflicting waiters may proceed together. While an older exclusive
 request is queued, a later shared `acquire` is refused instead of repeatedly
-barging ahead of the writer. Existing holders drain naturally, so a Cabal
+barging ahead of the writer. A descendant covered by an existing ancestor
+hold inherits that hold through `probe_runner_resources` rather than making
+a new request. Existing holders drain naturally, so a Cabal
 preflight cannot be starved by a continuous succession of `/deflake`
 readers.
 
@@ -974,7 +976,10 @@ def acquire(*, exclusive=(), shared=(), namespace: str,
 
     The namespace queue mutex is also attempted non-blockingly. Under it,
     every live queued request gets priority over this unqueued caller when
-    their interests conflict. Non-conflicting work remains independent.
+    their interests conflict. If another admission pass briefly owns that
+    mutex, this call raises ResourceBusy with no named holders even when its
+    resources do not conflict. Non-conflicting work remains independent
+    once the mutex is available.
 
     An empty interest set is a legitimate hold that owns nothing, so a
     caller never has to branch on whether its probe declared anything.

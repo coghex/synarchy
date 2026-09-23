@@ -59,6 +59,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probe_resource_lock as lock  # type: ignore
+import probe_runner_resources as resources  # type: ignore
 
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
@@ -427,6 +428,42 @@ def test_a_waiting_writer_stops_later_readers_from_barging() -> None:
                f"(busy={after_busy}, error={after_error})")
         if after is not None:
             after.release()
+    finally:
+        scratch.cleanup()
+
+
+def test_nested_reader_uses_ancestors_shared_hold_ahead_of_writer() -> None:
+    print("\n-- a nested reader enters under its ancestor's shared hold "
+          "while a foreign writer waits")
+    scratch = Scratch()
+    try:
+        ancestor = scratch.holder(exclusive={"cabal-build"},
+                                  shared={"repo-config"},
+                                  purpose="persistence sweep ancestor")
+        expect(ancestor.took_it(), "the ancestor holds both resources")
+        writer = scratch.waiter(exclusive={"repo-config"},
+                                purpose="foreign config writer")
+        expect(writer.queued(), "the foreign writer waits for the ancestor")
+
+        env = resources.descendant_hold_env(
+            "persistence_contract_sweep", scratch.namespace)
+        expect(env.get(resources.ENV_HELD_SHARED) == "repo-config",
+               f"the ancestor exports its shared hold ({env!r})")
+        exclusive, shared = resources.cross_process_interests(
+            "chop", scratch.namespace, env)
+        expect(not exclusive and not shared,
+               f"the child inherits both holds ({exclusive}, {shared})")
+        nested = lock.wait_acquire(
+            exclusive=exclusive, shared=shared, namespace=scratch.namespace,
+            root=scratch.root, purpose="nested child",
+            deadline=time.monotonic() + 0.5, poll=0.01)
+        nested.release()
+        expect(writer.outcome(0.2).get("state") == "queued",
+               "the writer remains queued while the ancestor holds shared")
+        ancestor.stop()
+        expect(writer.took_it(5.0),
+               "the writer acquires when the ancestor and child finish")
+        writer.stop()
     finally:
         scratch.cleanup()
 
@@ -932,6 +969,7 @@ def main() -> int:
     test_two_exclusive_holders_conflict()
     test_a_killed_holder_owns_nothing()
     test_a_waiting_writer_stops_later_readers_from_barging()
+    test_nested_reader_uses_ancestors_shared_hold_ahead_of_writer()
     test_conflicting_waiters_run_in_queue_order()
     test_a_queue_blocks_only_conflicting_resources()
     test_a_killed_waiter_leaves_no_queue_obstruction()

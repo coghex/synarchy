@@ -21,9 +21,8 @@ This sweep nonetheless RETAINS its exclusive ``cabal-build``
 declaration, and requirement 3 of #2274 asks the reason to be recorded:
 its default cross-probe selection includes ``save_compat_migration``,
 which still declares that resource exclusively on its own direct path,
-and ``probe_runner_resources.descendant_hold_env`` exports only what an
-ancestor holds EXCLUSIVELY. A sweep holding it merely shared would hand
-its nested runner nothing to inherit, and that runner would then wait
+and an ancestor's SHARED hold cannot cover that child's EXCLUSIVE request.
+A sweep holding it merely shared would leave its nested runner waiting
 forever on its own ancestor. See that module's comment for the full
 argument.
 
