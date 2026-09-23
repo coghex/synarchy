@@ -36,7 +36,7 @@ turns.
 
 Usage:
   python3 tools/playtest/run.py                       # LLM player, defaults
-  python3 tools/playtest/run.py --player claude-sonnet
+  python3 tools/playtest/run.py --player claude-opus
   python3 tools/playtest/run.py --render-mode offscreen  # no window (#650)
   python3 tools/playtest/run.py --smoke               # 3 scripted turns, no LLM
   python3 tools/playtest/run.py --replay <trace_dir>  # re-inject a session

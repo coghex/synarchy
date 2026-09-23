@@ -9,6 +9,7 @@ local brain           = require("scripts.brain")
 local alerts          = require("scripts.unit_resource_alerts")
 local energy          = require("scripts.unit_resource_energy")
 local carry           = require("scripts.unit_resource_carry")
+local regrowth        = require("scripts.unit_resource_regrowth")
 
 local M = {}
 
@@ -370,12 +371,14 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
                 or next / maxVal < params.death_threshold) then
             alerts.emitDeathAlert(uid, alerts.deathCauseFor(resourceName))
             carry.forget(uid)
+            regrowth.forget(uid)
             unit.kill(uid)
             return
         end
         if params.kill_on_zero and (current <= 0 or next <= 0) then
             alerts.emitDeathAlert(uid, alerts.deathCauseFor(resourceName))
             carry.forget(uid)
+            regrowth.forget(uid)
             unit.kill(uid)
             return
         end

@@ -1,8 +1,10 @@
 -- Body-energy tick for scripts/unit_resources.lua: surplus regrowth,
 -- digestion, and starvation catabolism (Phase 3/4 of the survival math).
 
-local stats  = require("scripts.unit_stats")
-local alerts = require("scripts.unit_resource_alerts")
+local stats    = require("scripts.unit_stats")
+local alerts   = require("scripts.unit_resource_alerts")
+local regrowth = require("scripts.unit_resource_regrowth")
+local carry    = require("scripts.unit_resource_carry")
 
 local M = {}
 
@@ -127,6 +129,15 @@ end
 -- unit.recomputeBody so the engine refreshes strength / max_hydration
 -- / max_hunger / carrying_capacity from the new composition.
 -- Otherwise a fattening unit would have a stale strength stat.
+--
+-- The masses and the calorie spend are not written as raw floats.
+-- Tissue deltas at this rate are below a binary32 step for a
+-- default-scale body at the 0.1 s cadence, so each stat would round
+-- back to its old value (#2637). unit_resource_regrowth keeps the
+-- sub-step residue and the organ baseline; the calorie store goes
+-- through unit_resource_carry, which already carries that pool for
+-- the metabolic drain earlier in the same tick. Rates, the activity
+-- split and the 75% gate are unchanged.
 -----------------------------------------------------------
 function M.applyRegrowth(uid, activity, dt)
     local body   = unit.getStat(uid, "body_mass")
@@ -147,15 +158,15 @@ function M.applyRegrowth(uid, activity, dt)
     local fatDelta  = fatKcal  / KCAL_PER_KG_FAT
     local leanDelta = leanKcal / KCAL_PER_KG_LEAN
 
-    local newFat    = math.max(0, fat  + fatDelta)
-    local newLean   = math.max(0, lean + leanDelta)
-    local newBody   = math.max(0, body + fatDelta + leanDelta)
-    local newStore  = math.max(0, store - REGROWTH_RATE_KCAL_PER_SEC * dt)
-
-    unit.setStat(uid, "fat_mass",  newFat)
-    unit.setStat(uid, "lean_mass", newLean)
-    unit.setStat(uid, "body_mass", newBody)
-    unit.setStat(uid, "calories",  newStore)
+    -- Composition before the spend: a unit that disappears under the
+    -- mass write must not also lose the calories.
+    if not regrowth.commitComposition(uid, fatDelta, leanDelta) then return end
+    -- No finite upper bound. Regrowth only spends, and a store that is
+    -- already above its pool maximum must not be pulled down to it.
+    -- The floor at 0, and the decision to drop whatever could not be
+    -- spent, belong to the carry.
+    carry.integrate(uid, "calories", store,
+        -REGROWTH_RATE_KCAL_PER_SEC * dt, math.huge)
     unit.recomputeBody(uid)
 end
 

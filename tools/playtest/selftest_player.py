@@ -26,7 +26,8 @@ if _HERE not in sys.path:
 
 from engine import ActionError, FakeEngine, translate_action  # noqa: E402
 from personas import load_persona  # noqa: E402
-from session import run_replay, run_session  # noqa: E402
+from session import (  # noqa: E402
+    _MEMORY_HARNESS_LIMIT, run_replay, run_session)
 from trace import SessionTrace, load_replay, load_turns  # noqa: E402
 import agent as agent_mod  # noqa: E402
 import engine as engine_mod  # noqa: E402
@@ -66,19 +67,19 @@ def run(check) -> None:
               str(player_params))
         check("approved player profiles pin both medium-effort models",
               agent_mod.PLAYER_PROFILES == {
-                  "codex-luna": {
-                      "backend": "codex-cli", "model": "gpt-5.6-luna",
+                  "codex-sol": {
+                      "backend": "codex-cli", "model": "gpt-6-sol",
                       "effort": "medium", "binary": "codex"},
-                  "claude-sonnet": {
-                      "backend": "claude-cli", "model": "claude-sonnet-5",
+                  "claude-opus": {
+                      "backend": "claude-cli", "model": "claude-opus-5-5",
                       "effort": "medium", "binary": "claude"},
               })
         codex_cmd = agent_mod._build_codex_command(
             "/usr/bin/codex", "frame.png", os.path.join(tmp, "empty"),
             os.path.join(tmp, "turn.schema.json"), os.path.join(tmp, "turn.json"))
-        check("Codex profile invokes gpt-5.6-luna medium",
+        check("Codex profile invokes gpt-6-sol medium",
               codex_cmd[:2] == ["/usr/bin/codex", "exec"]
-              and "gpt-5.6-luna" in codex_cmd
+              and "gpt-6-sol" in codex_cmd
               and 'model_reasoning_effort="medium"' in codex_cmd)
         check("Codex player cannot inspect the repo or acquire oracle data",
               "--ignore-user-config" in codex_cmd
@@ -89,9 +90,9 @@ def run(check) -> None:
                       ("shell_tool", "multi_agent", "plugins", "skill_search")))
         claude_cmd = agent_mod._build_claude_command(
             "/usr/bin/claude", os.path.join(tmp, "empty"), "SYSTEM")
-        check("Claude profile invokes claude-sonnet-5 medium in safe mode",
+        check("Claude profile invokes claude-opus-5-5 medium in safe mode",
               claude_cmd[:2] == ["/usr/bin/claude", "-p"]
-              and "claude-sonnet-5" in claude_cmd
+              and "claude-opus-5-5" in claude_cmd
               and claude_cmd[claude_cmd.index("--effort") + 1] == "medium"
               and "--safe-mode" in claude_cmd
               and "--no-session-persistence" in claude_cmd)
@@ -192,6 +193,8 @@ def run(check) -> None:
               stated_range.group(0) if stated_range else "absent")
         check("the player contract names one ordinary wheel notch",
               f"one notch is {engine_mod.SCROLL_DY_NOTCH:g}" in prompt)
+        check("the player contract refuses a scroll without dy",
+              "A scroll without dy is refused." in prompt)
         schema_dy = agent_mod.TURN_SCHEMA["properties"]["action"][
             "properties"]["dy"]
         schema_range = re.search(r"between (-?[\d.]+) and (-?[\d.]+)",
@@ -327,10 +330,49 @@ def run(check) -> None:
                   f"note ({sorted(companion)})",
                   raised is not None and bad_notes == [],
                   f"{type(raised).__name__ if raised else None} {bad_notes}")
-        absent, _, absent_notes = scroll_calls({"do": "scroll", "dx": 2})
-        check("an absent dy still defaults to a zero vertical delta",
-              scroll_dy_of(absent) == [0.0] and absent_notes == [],
-              str(absent))
+        dy_range = (f"[{engine_mod.SCROLL_DY_MIN:g}, "
+                    f"{engine_mod.SCROLL_DY_MAX:g}]")
+
+        def refused_scroll(act):
+            notes: list[str] = []
+            raised = None
+            calls = None
+            try:
+                calls, _ = translate_action(act, (1280, 720), notes=notes)
+            except ActionError as e:
+                raised = str(e)
+            return raised, calls, notes
+
+        for label, act in (
+                ("missing dy", {"do": "scroll", "dx": -5}),
+                ("dy None", {"do": "scroll", "dx": -5, "dy": None}),
+                ("missing dy with cursor",
+                 {"do": "scroll", "dx": -5, "x": 640, "y": 360}),
+                ("dy None with cursor",
+                 {"do": "scroll", "dx": -5, "dy": None, "x": 640, "y": 360})):
+            raised, calls, notes = refused_scroll(act)
+            check(f"a scroll with {label} is refused atomically",
+                  raised is not None and calls is None and notes == []
+                  and "dy" in raised and "wheel field" in raised
+                  and dy_range in raised
+                  and "no scroll was sent" in raised, str(raised))
+
+        provider_turn = agent_mod.normalize_turn({
+            "observation": "too far",
+            "expectation": "zoom in",
+            "note": "",
+            "action": {"do": "scroll", "dx": -5, "dy": None}})
+        check("normalize_turn drops a null dy from a provider-shaped scroll",
+              provider_turn["action"] == {"do": "scroll", "dx": -5},
+              str(provider_turn["action"]))
+        raised, calls, notes = refused_scroll(provider_turn["action"])
+        check("a provider-shaped scroll with dy null is refused after "
+              "normalize_turn",
+              raised is not None and calls is None and notes == []
+              and "dy" in raised and "wheel field" in raised
+              and dy_range in raised
+              and "no scroll was sent" in raised, str(raised))
+
         aimed, _, _ = scroll_calls(
             {"do": "scroll", "dy": -2, "x": 640, "y": 360})
         check("cursor-aimed scrolling still pre-moves, then scrolls once",
@@ -374,6 +416,129 @@ def run(check) -> None:
                   engine_mod.SCROLL_DY_MAX]
               and "600" not in cturn["injected"][0],
               str(cturn["injected"]))
+        # A missing dy is recorded as a refusal, and the next turn still
+        # sees the dy field/range guidance even when the provider's own
+        # note already filled the 120-character memory budget (#2652).
+        long_note = "x" * 130
+
+        class MissingDyWitness(agent_mod.ScriptedAgent):
+            def __init__(self):
+                super().__init__([{"do": "scroll", "dx": -5},
+                                  {"do": "wait"}])
+                self.seen_memory: list[list[str]] = []
+
+            def decide(self, screenshot_path, fb_size, memory_lines, turn,
+                       timeout_seconds=None):
+                self.seen_memory.append(list(memory_lines))
+                result = super().decide(
+                    screenshot_path, fb_size, memory_lines, turn,
+                    timeout_seconds=timeout_seconds)
+                if turn == 1:
+                    result["note"] = long_note
+                return result
+
+        mdir = os.path.join(tmp, "scroll-missing-dy")
+        mtrace = SessionTrace(mdir, {"mode": "selftest-scroll-missing-dy"})
+        witness = MissingDyWitness()
+        run_session(FakeEngine(), witness, mtrace, turns=2, dt=0.0,
+                    max_seconds=None, memory_turns=4, stuck_k=99,
+                    settle=0.0)
+        mtrace.finish("turn_budget_exhausted")
+        mturns = load_turns(mdir)
+        check("a missing-dy scroll retains the action and injects nothing",
+              mturns[0]["player"]["action"] == {"do": "scroll", "dx": -5}
+              and mturns[0]["injected"] == [],
+              f"{mturns[0]['player']['action']} {mturns[0]['injected']}")
+        check("the missing-dy turn's recorded note names dy and its range",
+              long_note in mturns[0]["player"]["note"]
+              and "dy" in mturns[0]["player"]["note"]
+              and "wheel field" in mturns[0]["player"]["note"]
+              and dy_range in mturns[0]["player"]["note"],
+              mturns[0]["player"]["note"])
+        next_memory = (witness.seen_memory[1][0]
+                       if len(witness.seen_memory) > 1
+                       and witness.seen_memory[1] else "")
+        check("the next turn's memory still carries the dy refusal "
+              "despite a long provider note",
+              "dy" in next_memory and "wheel field" in next_memory
+              and dy_range in next_memory, next_memory)
+
+        def memory_note_of(line: str) -> str:
+            marker = " | note: "
+            idx = line.find(marker)
+            return line[idx + len(marker):] if idx >= 0 else ""
+
+        class NotedWitness(agent_mod.ScriptedAgent):
+            def __init__(self, script, notes):
+                super().__init__(script)
+                self._notes = notes
+                self.seen_memory: list[list[str]] = []
+
+            def decide(self, screenshot_path, fb_size, memory_lines, turn,
+                       timeout_seconds=None):
+                self.seen_memory.append(list(memory_lines))
+                result = super().decide(
+                    screenshot_path, fb_size, memory_lines, turn,
+                    timeout_seconds=timeout_seconds)
+                idx = turn - 1
+                if idx < len(self._notes):
+                    result["note"] = self._notes[idx]
+                return result
+
+        poison = "[harness: " + "x" * 5000 + "]"
+        later_marker = "ok [harness: " + "y" * 5000 + "]"
+
+        def run_noted(name, script, notes):
+            d = os.path.join(tmp, name)
+            t = SessionTrace(d, {"mode": f"selftest-{name}"})
+            w = NotedWitness(script, notes)
+            run_session(FakeEngine(), w, t, turns=2, dt=0.0,
+                        max_seconds=None, memory_turns=4, stuck_k=99,
+                        settle=0.0)
+            t.finish("turn_budget_exhausted")
+            line = (w.seen_memory[1][0]
+                    if len(w.seen_memory) > 1 and w.seen_memory[1] else "")
+            return memory_note_of(line), line
+
+        poison_note, poison_line = run_noted(
+            "scroll-harness-poison",
+            [{"do": "wait"}, {"do": "wait"}],
+            [poison, ""])
+        check("a provider note that mimics [harness: stays inside the "
+              "memory bound",
+              0 < len(poison_note) <= 120 and "x" * 200 not in poison_line,
+              f"len={len(poison_note)} {poison_line[:160]!r}")
+        later_note, later_line = run_noted(
+            "scroll-harness-later-marker",
+            [{"do": "wait"}, {"do": "wait"}],
+            [later_marker, ""])
+        check("a provider note containing a later [harness: marker stays "
+              "inside the memory bound",
+              0 < len(later_note) <= 120 and "y" * 200 not in later_line,
+              f"len={len(later_note)} {later_line[:160]!r}")
+        mixed_note, mixed_line = run_noted(
+            "scroll-missing-dy-poison",
+            [{"do": "scroll", "dx": -5}, {"do": "wait"}],
+            [poison, ""])
+        check("a poisoned provider note cannot hide the missing-dy "
+              "guidance or escape the bound",
+              "dy" in mixed_line and "wheel field" in mixed_line
+              and dy_range in mixed_line
+              and "x" * 200 not in mixed_line
+              and len(mixed_note) < len(poison),
+              mixed_line)
+        huge_dy = "x" * 5000
+        huge_note, huge_line = run_noted(
+            "scroll-oversized-dy",
+            [{"do": "scroll", "dy": huge_dy}, {"do": "wait"}],
+            ["", ""])
+        check("a malformed oversized dy stays inside the harness "
+              "memory bound and still names the field and range",
+              0 < len(huge_note) <= _MEMORY_HARNESS_LIMIT
+              and "dy" in huge_note and dy_range in huge_note
+              and "x" * 200 not in huge_note
+              and f"({len(repr(huge_dy))} chars)" in huge_note,
+              f"len={len(huge_note)} {huge_note}")
         # --- hover: the pointer-only move (#2050) --------------------
         # The vocabulary is published in three surfaces a player or a
         # lenient provider actually reaches, and every one of them has
@@ -511,11 +676,11 @@ def run(check) -> None:
                 "observation": "menu", "action": {"do": "wait"},
                 "expectation": "", "note": ""},
             "modelUsage": {
-                "claude-sonnet-5": {
+                "claude-opus-5-5": {
                     "inputTokens": 2, "outputTokens": 52,
                     "cacheReadInputTokens": 1085,
                     "cacheCreationInputTokens": 0},
-                "claude-haiku-4-5": {
+                "helper-model": {
                     "inputTokens": 897, "outputTokens": 12,
                     "cacheReadInputTokens": 0,
                     "cacheCreationInputTokens": 0},
@@ -546,7 +711,7 @@ def run(check) -> None:
         codex_expected_usage = {"input_tokens": 123, "output_tokens": 67,
                                 "cache_read_input_tokens": 45}
         claude_model_usage = {
-            "claude-sonnet-5": {
+            "claude-opus-5-5": {
                 "inputTokens": 2, "outputTokens": 52,
                 "cacheReadInputTokens": 1085, "cacheCreationInputTokens": 0}}
         claude_expected_usage = {
@@ -555,8 +720,8 @@ def run(check) -> None:
 
         def decide_with_reply(backend, stdout="", file_text=None):
             """One real decide() turn against a faked provider process."""
-            profile_name = ("codex-luna" if backend == "codex-cli"
-                            else "claude-sonnet")
+            profile_name = ("codex-sol" if backend == "codex-cli"
+                            else "claude-opus")
             player = object.__new__(agent_mod.PlayerAgent)
             player.provider_bin = "/nonexistent/provider"
             player.player_profile = profile_name

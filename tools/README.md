@@ -1127,10 +1127,10 @@ runner to hand it the helper, that resolution freshness-builds
 Cabal command of its own any more, and RETAINS the hold for a different
 reason: it is a probe that runs a nested `run_probes.py`, its default
 nested selection includes `save_compat_migration`, and
-`probe_runner_resources.descendant_hold_env` exports only what an
-ancestor holds EXCLUSIVELY — so a sweep holding `cabal-build` merely
-shared would hand its nested runner nothing to inherit, and that runner
-would then wait forever on its own ancestor. Both therefore declare the
+`probe_runner_resources.descendant_hold_env` exports both interests, but
+an ancestor's shared hold cannot cover an exclusive child — so a sweep
+holding `cabal-build` merely shared would leave its nested runner waiting
+forever on its own ancestor. Both therefore declare the
 `cabal-build` resource EXCLUSIVELY in the reader/writer tables below,
 while every other probe holds it SHARED. They cannot overlap
 each other, nor a probe reading the binary they may be relinking — the
@@ -1158,10 +1158,26 @@ themselves. Shared holders coexist; an exclusive holder runs alone.
 `tools/probe_resource_lock.py` (#1436) enforces the same two tables
 BETWEEN processes, so a second sweep or a `/deflake` measurement cannot
 overlap what this one holds either. A runner tells each probe what it
-holds exclusively on that probe's behalf (`SYNARCHY_PROBE_HELD_EXCLUSIVE`),
-which is what lets `persistence_contract_sweep`'s own nested
-`run_probes.py` run inside its ancestor's `cabal-build` hold instead of
-deadlocking against it.
+holds on that probe's behalf (`SYNARCHY_PROBE_HELD_EXCLUSIVE` and
+`SYNARCHY_PROBE_HELD_SHARED`). This lets
+`persistence_contract_sweep`'s nested `run_probes.py` use its ancestor's
+`cabal-build` and `repo-config` holds, even while a foreign exclusive
+request is queued, instead of deadlocking against the ancestor.
+
+Cross-process waiters use a conflict-aware FIFO admission queue. Once an
+exclusive `cabal-build` preflight is queued, later shared measurements are
+refused at admission while the readers that already hold the resource drain;
+the preflight then acquires the build state instead of being starved by a
+continuous succession of `/deflake` runs. Queue entries are immutable files
+held live by `flock`, just like holder notes, so killing a waiter removes its
+authority immediately and the next admission pass reaps its stale name.
+Requests that do not conflict still proceed without waiting for each other.
+An inherited shared hold covers only a descendant's shared request; an
+exclusive request still needs its own lock.
+The non-waiting `acquire` operation may briefly return `ResourceBusy` with
+no named holders while another admission pass owns the queue mutex.
+Callers with a preparation watchdog keep their existing absolute deadline;
+timing out withdraws their queue entry before the error is returned.
 
 **Reserved port spans (#1571).** A probe is handed one `--port`, but two
 registered probes derive a second, concurrently live listener from it:
@@ -1606,15 +1622,16 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-The 31 migrated probes are `blood_decal`, `blood_impact`, `circadian`,
+The 36 migrated probes are `bleeding_trail`, `blood_decal`, `blood_impact`, `circadian`,
 `circadian_species`, `collapse_crawl`, `concussion_revive`, `config_migration`,
 `config_state`, `crop`, `disarm`, `injury_log`, `item_temp`, `lua_orphan_prune`,
-`machine_shop`, `meal_waste`, `mental_efficiency`, `pause_speed`,
+`machine_shop`, `meal_waste`, `mental_efficiency`, `movement`, `multiworld_save`,
+`pause_speed`, `persistence_integrity`, `plant`,
 `portal_location`, `position_hold`, `remote_warning_page_guard`,
 `resource_root`, `retaliation_swap`, `river_naming`, `role`, `save_barrier`,
 `save_pause`, `state_of_mind`, `text_encoding`, `thermo_altitude`, `thought`,
 and `wire`. Migrations normally land one at a time; the operator explicitly
-requested this batch of ten additional probes in one pull request.
+requested the latest batch of five additional probes in one pull request.
 
 The new batch preserves its CLI options, scenarios, thresholds and manual-only
 classification. Each engine boot gets the requested RTS capabilities and its
@@ -1624,6 +1641,18 @@ an unreached suffix of `MISSING` checks; protocol mode stops before dependent
 checks if continuing would jump over an unobserved check. Teardown failures
 are diagnostics plus a nonzero exit, never an out-of-order check. Focused
 migration tests cover these paths without an engine.
+
+The latest five are `movement`, `bleeding_trail`, `multiworld_save`,
+`persistence_integrity`, and `plant`. `movement` declares the registry's default
+`--mode move --course corner_trap` invocation; its other course, stamina, and
+pacing modes retain their standalone CLI and are refused before boot in protocol
+mode. `--list` remains a no-engine query for every mode. `multiworld_save
+--describe --arena` declares the arena variant's own ordered checks; the lab's
+registered default continues to test two generated worlds. Blood-trail checks
+aggregate each existing scenario's fail-fast assertions under one stable ID;
+its final spawn-surface log guard is a separate check. The save and planting
+probes retain their existing fixtures, isolated roots where present, and
+cleanup behavior. No CI classifications or census tolerances change.
 
 After merge, `$flake` seeds the census and selects from these probes normally.
 Pre-merge harness validation does not seed, record, or change the live census;
@@ -3918,7 +3947,7 @@ in CI.
 
 `tools/playtest/` is the naive-player UX playtest harness (H1, #647 —
 epic #641): a lockstep runner that drives a **windowed** instance, hands
-each frame to a Codex `gpt-5.6-luna`/medium naive player (screenshot-only,
+each frame to a Codex `gpt-6-sol`/medium naive player (screenshot-only,
 persona-driven, oracle-blind), injects its chosen `input.*` action, and
 records a replayable session trace for the critic (H2). Unlike everything else in
 tools/ it deliberately launches a graphical instance (focus-stealing —

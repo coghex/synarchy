@@ -29,7 +29,7 @@ Pipeline:
 
 Usage:
   python3 tools/playtest/critic.py <trace_dir>            # writes into the trace dir
-  python3 tools/playtest/critic.py <trace_dir> --out DIR --model claude-opus-5
+  python3 tools/playtest/critic.py <trace_dir> --out DIR --model claude-opus-5-5
   python3 tools/playtest/critic.py --selftest             # offline, no API key
   python3 tools/playtest/critic.py --eval                 # canned trace + REAL model
                                                           # (needs ANTHROPIC_API_KEY)
