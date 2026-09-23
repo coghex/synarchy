@@ -1,0 +1,193 @@
+## Role and delivery
+
+Owner decision, 2026-09-10: this is a **tracking-only epic**, not a
+one-PR implementation issue. Review its plan and cross-child contracts for
+consistency; review each implementation child independently before solving
+it. Approval of this epic does not approve its children. Do not close the
+epic from an individual implementation PR: close it after every child and
+the integrated acceptance below are complete.
+
+Each code child delivers its implementation, tests, required documentation,
+and owner evidence in the same PR, completed before final review and merge.
+EFM-1 remains standalone documentation delivered through its specified docs
+lane. Each new image has its own issue, PR, and owner signoff.
+
+## Background
+
+Verified against `master` `5b677136fdac` (2026-09-10):
+
+- `World.Flora.Growth` derives age, natural death, and reseeding from
+  placement age, habitat health, and world time. It does not store an
+  occurrence's condition or cause; habitat health scales growth rather
+  than directly killing plants. Evergreens do not die through this path.
+- `deadWindowDays = 60` is **60 effective growth-days**. Growth rate is
+  `0.25 + 0.75 * clamp(health, 0, 1)`, so the legacy dead window spans
+  60 world days at health 1 and 240 world days at health 0. Omitted-policy
+  compatibility must preserve the existing death and reseed boundaries.
+- `World.Flora.Render` already falls back among phase, annual-stage,
+  override, and base textures. It lacks independent condition, cause,
+  context, and phase-at-death inputs and the proposed semantic fallback.
+- Stable wild and planted `FloraInstanceId` values already exist in
+  `World.Flora.Identity`. Generated IDs use canonical placement provenance;
+  planted IDs use a persisted allocator. Harvest timers, chop designations,
+  and their consumers already distinguish same-tile occurrences.
+- Groundcover `CropPlot`s are tile-keyed. Their synthetic growth instance
+  deliberately has no flora instance ID. Explicit render context and crop
+  replacement identity remain missing; neither justifies replacing the
+  wild/planted ID scheme.
+- The landed saguaro family has living juvenile/adult textures and generic
+  dead art. The pilot still needs `sprout_dead.png` and `charred.png`.
+  Approved wheat art exists under `wheat/{wild,cultivated}`; wiring that
+  shipped species to its art remains a separate content-integration task.
+
+## Arc contract
+
+1. A selector describes context (`wild`/`cultivated`), life phase, annual
+   stage, condition (`alive`/`dead`), and cause (`natural`, `drought`,
+   `frost`, `fire`, `disease`, `damage`, `unknown`, or no cause).
+   Sparse variants are explicitly declared in YAML, never discovered by
+   filename. Resolution is pure, deterministic, finite, and returns the
+   selected handle and diagnostic candidate trace. A valid base texture
+   makes every representable request renderable; `unknown_flora.png`
+   remains an error fallback for an invalid or missing base.
+2. Fallback enumerates candidates; it does not irreversibly discard axes.
+   At **each** candidate, try cultivated then equivalent wild for a
+   cultivated request; wild requests never borrow cultivated art.
+   For a dead request, the semantic order is:
+   - exact phase, stage, and cause;
+   - phase and cause without stage;
+   - phase and stage, generic dead;
+   - phase, generic dead;
+   - generic cause-specific dead, reconsidering cause after phase relaxes;
+   - stage-specific generic dead;
+   - generic dead;
+   - the corresponding living fallback, then the species base.
+   Equivalent candidates are not retried. Death outranks phase, which
+   outranks cause, which outranks annual-stage specificity. Thus dead
+   juvenile art beats generic charred adult art; if juvenile dead art is
+   absent, available generic dead art beats living juvenile art.
+3. Cultivated presentation shares the lifecycle and uses explicit creation
+   context. A corpse freezes its last living phase and annual stage and
+   snapshots its retention outcome at death. Persist semantic state and
+   re-resolve textures after loading content; never save texture handles.
+4. Repository-owned species declare corpse policies. Explicit transient
+   `durationDays` measures world days; wild successors are `reseed` or
+   `absent`, while cultivated remains become empty and await replanting.
+   Mature trees and cacti use persistent remains with transient juvenile
+   overrides; current small plants and the bracken/red-raspberry bush
+   policies use explicit 60-world-day transient remains. Saguaro retains
+   its perennial growth lifecycle, persistent mature remains, and a
+   transient 60-world-day sprout policy. An omitted legacy policy preserves
+   the existing health-scaled natural-death/reseed behavior, not a silently
+   substituted 60-world-day duration. Keep omitted and explicit policy
+   paths distinguishable in contracts and tests.
+5. Preserve existing wild/planted identities, canonical-coordinate rules,
+   allocator persistence, harvest timers, and chop consumers. EFM-4 adds
+   explicit render context over that infrastructure; EFM-6 adds durable
+   crop replacement identity so replanting cannot inherit an old corpse.
+   Same-tile siblings remain independent across regeneration and saves.
+6. Persistent state changes include inventory classification, frozen
+   outgoing DTOs, explicit component migrations, and save-compat coverage.
+   A global save-version bump is not a substitute for component migration.
+7. No hazard producer ships in this arc. It ends at the condition mutation
+   and query seam, retention behavior, and one integrated saguaro pilot.
+   Drought, frost, fire spread, disease, and damage producers remain later
+   work, as do other species' mortality art and wheat content integration.
+
+## Children and dependencies
+
+| Slice | Deliverable | Issue | Depends on |
+|---|---|---|---|
+| EFM-1 | Canonical visual-state and fallback contract | #2530 | None |
+| EFM-2 | Sparse declarations, validation, and corpse policies | #2539 | EFM-1 |
+| EFM-3 | Pure fallback resolver | #2544 | EFM-2 |
+| EFM-4 | Explicit context, preserving existing occurrence IDs | #2547 | EFM-1 |
+| EFM-5 | Wild and row-flora condition persistence | #2549 | EFM-4 |
+| EFM-6 | Crop conditions and replacement identity | #2552 | EFM-5 |
+| EFM-7 | Condition mutation/query and rendering integration | #2555 | EFM-3, EFM-5, EFM-6 |
+| EFM-10 | Retention and successors | #2557 | EFM-7 |
+| EFM-8A | Saguaro dead-sprout image only | #2559 | EFM-1 |
+| EFM-8B | Saguaro charred-remains image only | #2596 | EFM-1 |
+| EFM-9 | Integrated saguaro pilot and evidence | #2562 | EFM-10, EFM-8A, EFM-8B |
+
+The loader/resolver and identity/context branches may proceed independently
+until EFM-7 joins them. Both art children may proceed after EFM-1, each in
+its own PR; neither includes the other's image. EFM-9 waits for both
+approved, landed assets. `sprout_charred.png` remains deliberately absent
+to exercise phase-before-cause fallback.
+
+Before readiness approval of an affected child, its standalone body must
+carry the corresponding corrected contract: EFM-1/2/10 distinguish legacy
+growth-days from explicit world-day retention; EFM-1/3 enumerate fallback
+candidates and cover the regressions below; EFM-4 preserves existing IDs
+and leaves crop replacement to EFM-6. This epic does not silently substitute
+for those child revisions or their individual reviews.
+
+## Completion and evidence
+
+- All eleven children are complete, with required docs and evidence landed
+  through each child's delivery lane. One canonical visual-state contract
+  is referenced by YAML, loader, resolver, audit, tests, and art workflow;
+  contradictory design narrative is reconciled without changing its
+  workflow-status ledger as part of an implementation PR.
+- Existing YAML remains accepted; duplicate/unknown selectors and invalid
+  retention/successor combinations fail clearly. Every authored variant
+  path is audited and every repository-owned species has a valid policy.
+- Resolver tests include living juvenile plus generic dead art with no
+  juvenile dead art (generic dead wins), and cultivated art available only
+  at a less-specific candidate (cultivated is reconsidered there). They
+  prove the full order, phase-before-cause behavior, and base-only totality.
+- Omitted-policy tests use health 1 and non-unit health, including health 0,
+  and compare death/reseed boundaries with the pre-change growth behavior.
+  Separate explicit-policy tests prove 60 world days regardless of growth
+  rate. Test immediately before, at, and after each boundary.
+- Condition, cause, frozen phase/stage, identity, retention, and expiry
+  survive real save/load, migration, and chunk eviction/regeneration for
+  wild flora, row flora, and crop plots. Killing one same-tile occurrence
+  leaves siblings alive; replacing a crop inherits no old death.
+- Each transient corpse takes its successor exactly once and does not
+  revive merely because a record is removed. Persistent remains survive
+  the same elapsed time, eviction, and reload.
+- Each image receives native/enlarged and real-preview owner signoff in
+  its own art PR. The integrated pilot records exact/fallback traces,
+  four rendered mortality states, retention boundaries, and owner verdicts.
+
+Each child runs its own specified gates. The integrated closure evidence
+must include these commands from the completed implementation checkout:
+
+```bash
+cabal build all
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "World.FloraVisualResolver"'
+cabal test synarchy-test-headless --test-options='--match "flora instance identity"'
+cabal test synarchy-test-headless --test-options='--match "flora instance persistence"'
+cabal test synarchy-test-headless --test-options='--match "flora corpse retention"'
+cabal test synarchy-test-headless --test-options='--match "saguaro mortality pilot"'
+python3 tools/texture_subset_audit.py
+python3 tools/persistence_inventory_audit.py
+python3 tools/save_compat_audit.py
+python3 tools/run_probes.py --only flora_condition_probe
+python3 tools/run_probes.py --only flora_growth_probe
+cabal run exe:synarchy -- --preview flora/saguaro
+```
+
+Expected: successful builds, passing nonempty groups, clean audits, and
+passing probes run serially, plus retained owner preview/offscreen evidence
+from EFM-9. These are closure requirements, not prerequisites to reviewing
+this tracking epic. A child changing worldgen output also runs the full
+worldgen tier, generates baselines, runs `world_check`, and applies the
+required save bookkeeping; content/schema work makes no automatic claim
+that worldgen output changed.
+
+## Related
+
+- #1854: existing occurrence IDs and per-instance mutable consumers.
+- #2236, #2241, #2243: stable authored species names and persisted references.
+- #332 and #334: growth, row flora, and crop plots extended by this arc.
+- #1688 / PR #1725: existing saguaro family; EFM-8A/B add one image each.
+- #1787 / PR #2136: existing wheat art. Selector/context foundations belong
+  here; its shipped YAML, grain icon, density, and tuning remain separate.
+- #1781: tomato art; mortality backfill is outside this pilot.
+- Supporting design: `docs/environmental_flora_mortality_design.md`.
+
+<!-- issue-origin:claude -->

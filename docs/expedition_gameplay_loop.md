@@ -33,6 +33,9 @@ Design state: `ready for issue processing`
 > **Processing state (2026-09-02).** EXP-1 (#916) and EXP-2 (#917) both closed
 > by merged PRs, discharging EXP-5's deferral. EXP-5 is filed as #2301. EXP-3 is
 > the one remaining unprocessed entry, dependency-blocked behind #2301.
+>
+> **Processing state (2026-09-17).** EXP-5 (#2301) closed by a merged PR. EXP-3 is
+> filed as #2640. Every ledger entry is terminal.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -45,7 +48,7 @@ concrete precondition
 - [x] EXP-4. Mark every location unknown and reveal its type by unit sight — [#1230]
 - [x] EXP-2. Gate location clearing on guaranteed significant loot — [#917]
 - [x] EXP-5. Extend the first-session tutorial through confrontation and advancement — [#2301]
-- [ ] EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
+- [x] EXP-3. Extend the integrated expedition gate to cover confrontation and advancement — [#2640]
 
 ## Epic contract
 
@@ -1221,6 +1224,8 @@ type icon its reveal resolves to.
 - **Open questions:** None
 
 ### EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
+
+> Filed as #2640 (2026-09-17). Owner decisions folded into the issue: two ruins in one session (the calibrated zero-occupant survival control is unchanged; a second occupied `ruin_small` hosts confront → recover → clear), map state observed through lifecycle with the pure `Location map icons` spec as icon evidence, and the natural clearing order only.
 
 - **Outcome:** The existing end-to-end scenario proves the completed prepare →
   travel → discover → confront → extract → return → invest loop across two

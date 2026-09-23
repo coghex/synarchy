@@ -52,18 +52,18 @@ preparing this draft.
 
 ## Status
 
-- [ ] CT9-1. Playtest scroll actions silently accept a missing vertical delta
-- [ ] CT9-2. River-naming phase synchronization can observe the wrong page
-- [ ] CT9-3. Blueprint screenshot grading saturates on whole-frame luma noise
-- [ ] CT9-4. Coordinator cancellation closes its log before output draining completes
-- [ ] CT9-5. Randbox text escapes into the adjacent randomize control
-- [ ] CT9-6. The main-menu title is clipped at the supported 800×600 minimum
+- [x] CT9-1. Playtest scroll actions silently accept a missing vertical delta — [#2652]
+- [x] CT9-2. River-naming phase synchronization can observe the wrong page — [#2653]
+- [x] CT9-3. Blueprint screenshot grading saturates on whole-frame luma noise — [#2654]
+- [ ] CT9-4. Coordinator cancellation closes its log before output draining completes — [deferred]: coordinator code has no tracked repo
+- [x] CT9-5. Randbox text escapes into the adjacent randomize control — [#2655]
+- [x] CT9-6. The main-menu title is clipped at the supported 800×600 minimum — [#2656]
 
 ---
 
 ## Test-system reliability
 
-### CT9-1. Playtest scroll actions silently accept a missing vertical delta
+### [#2652] CT9-1. Playtest scroll actions silently accept a missing vertical delta
 
 The playtest action contract permits a provider to describe a zoom attempt
 using horizontal `dx` while supplying `null` for vertical `dy`. Normalization
@@ -109,7 +109,7 @@ the game's camera zoom is broken or that the prompt states the wrong polarity.
   translator rejection, or a corrective retry contract. The evidence does not
   select among those designs.
 
-### CT9-2. River-naming phase synchronization can observe the wrong page
+### [#2653] CT9-2. River-naming phase synchronization can observe the wrong page
 
 The river-naming probe initializes a requested page, waits for whichever page
 is currently active, and only then requests that the new page be shown. During
@@ -158,7 +158,7 @@ changes river identities or that unnamed worlds receive names.
   payload cannot affirmatively identify which page answered that particular
   query.
 
-### CT9-3. Blueprint screenshot grading saturates on whole-frame luma noise
+### [#2654] CT9-3. Blueprint screenshot grading saturates on whole-frame luma noise
 
 The construction-blueprint footprint probe treats every nonzero luminance
 difference between frames as meaningful. Its live scene is not paused between
@@ -208,7 +208,16 @@ or visible placement jump.
   established. Pausing, thresholding, spatial segmentation, or a combination
   may be appropriate; the retained run does not choose the robust design.
 
-### CT9-4. Coordinator cancellation closes its log before output draining completes
+### [deferred] CT9-4. Coordinator cancellation closes its log before output draining completes
+
+> **Deferred:** The `$test` coordinator
+> (`~/.codex/skills/test/scripts/test_coordinator.py`) lives in an untracked
+> local skill directory with no remote and no tracker, so no repository issue
+> can own the fix — `~/.codex/skills/test` becomes Git-tracked in a repository
+> with a GitHub remote (or the owner names the tracker that owns Codex skill
+> code), at which point this files as one issue there: terminate the child,
+> drain and join the reader, then close the log, with an interrupt regression
+> test.
 
 The installed `$test` coordinator starts a background output reader inside an
 open-log context, but joins that reader only after normal process completion.
@@ -255,7 +264,7 @@ and emitted an uncaptured thread exception.
 
 ## Player-visible UI containment
 
-### CT9-5. Randbox text escapes into the adjacent randomize control
+### [#2655] CT9-5. Randbox text escapes into the adjacent randomize control
 
 The Create World randbox renders its complete value from fixed left padding
 without clipping, elision, or horizontal scrolling. When a generated or typed
@@ -299,7 +308,7 @@ that the underlying name or seed value is corrupted.
   elision while unfocused, or horizontal scrolling while editing, nor does it
   establish the complete width/scale range affected.
 
-### CT9-6. The main-menu title is clipped at the supported 800×600 minimum
+### [#2656] CT9-6. The main-menu title is clipped at the supported 800×600 minimum
 
 At the formally supported 800×600 framebuffer, the main menu places the
 `Ecce Homo` title at approximately the top-edge margin but does not account for

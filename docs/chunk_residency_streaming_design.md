@@ -1059,12 +1059,31 @@ must preserve the dependency order and update both this plan and the ledger.
 
 - Add per-page resident count and estimated-byte accounting to the CRS-1 owner,
   and expose it to the debug console.
+- Publish one coherent, read-only per-page/incarnation snapshot: resident,
+  requested and in-flight counts; resident estimated bytes by field group; and
+  windowed high-water marks. Include a process-wide summary so pages do not
+  appear to receive independent 4-GiB allowances. Canonical aliases count once;
+  pending generation does not count as resident; admissions, eviction, seed
+  publication, replacement, edits and session/page-incarnation replacement must
+  all update the account without retired state leaking into a current page.
 - Measure a materialized `LoadedChunk`'s resident cost by field group at
   representative terrain complexities, using a counter at a defined moment rather
   than `+RTS -s` maxima, which sample only at major GCs and report world
   generation's peak instead of the cache's.
+- Cover shallow/deep columns, interior air, fluids, flora and edited structures.
+  Distinguish logical payload estimates from physically retained memory; document
+  shared buffers, capacity, boxed/container overhead and exclusions without
+  double-counting shared storage. Account for simulation-retained state even when
+  it is no longer present in the tile cache.
 - Measure residency high-water across a traversal at the world sizes actually
   targeted, not only at 64.
+- Retain a reproducible development-Mac matrix: three fresh-process repetitions
+  at world sizes 64 and 256, seed 42 and three plates; separate generation, a
+  traversal of at least 1,000 verified-resident canonical chunks, and save
+  loading. Record revision, binary/build profile, OS/hardware, RTS settings,
+  workload, sampling interval, completion checks, raw samples and incomplete or
+  failed runs. Include an offscreen normal-content scenario with five controlled
+  units, clearly bounded against the eventual 5–50-unit target.
 - Report whether count or bytes is the binding constraint.
 - **Propose both of D-11's numbers** — the streaming trim target and the hard
   residency ceiling — with the measured evidence for each, for the maintainer to
@@ -1080,6 +1099,22 @@ must preserve the dependency order and update both this plan and the ledger.
 - Follow D-27: obtain initial accounting on the development Mac and retain
   minimum-machine validation as separate evidence. State which conclusions the
   development experiment supports and which still require the 8-GB laptop.
+- Keep this slice observational: it changes neither generation output, gameplay,
+  admission/eviction policy nor save compatibility. Classify diagnostic state and
+  document its lifecycle, preserve capability boundaries, and document the
+  console query and reproduction commands. Deliver instrumentation, tests,
+  driver, retained evidence, conclusions and owner disposition of proposed
+  limits in one implementation PR; numerical enforcement remains later work.
+- **Acceptance:** add a `chunk residency accounting` Hspec group covering
+  transitions, field costs, changed-content/same-count accounting, canonical
+  aliases, simulation retention and page/session isolation, plus the public
+  debug query against real engine state. Preserve the focused canonical-key,
+  init-queue, page-binding and fluid-incarnation tests; run the applicable
+  persistence-inventory, EngineEnv-capability and Lua-registration audits. The
+  measurement driver must reject incomplete workloads, console failures, missing
+  samples and bad unit conversions. Its evidence must show per-phase samples,
+  limitations and an explicit verdict for each proposed limit and the
+  hibernation gate; failed required scenarios remain visible blockers.
 - **Depends on:** CRS-1. **Independent** of every other Arc A slice and **can
   land first** among them.
 

@@ -1,0 +1,118 @@
+## Background
+
+Epic #2526, slice EFM-9, the arc's closing proof. With the contract
+(#2530), loader (#2539), resolver (#2544), context (#2547), stores (#2549,
+#2552), seam (#2555), retention (#2557), and both separately delivered pilot assets (#2559 and #2596)
+landed, saguaro is the first species that can be killed, drawn from exact or
+fallback art, and retained per its cactus-class policy. Verified on master
+`7680c9ef6`:
+
+- `data/flora/saguaro.yaml` declares `sprout`, `matured`, and `dead` phases,
+  a five-stage annual cycle with flowering/fruiting art, and `phase: dead`
+  overrides for every stage; #2539 adds its persistent-with-transient-sprout
+  `corpsePolicy` (D-20). No `textureVariants` are declared anywhere yet.
+- EFM-8A (#2559) supplies `sprout_dead.png` (48×48); EFM-8B
+  (#2596) supplies `charred.png` (128×128) in a separate art PR.
+  Both deliberately omit `sprout_charred.png`, so a fire-killed sprout must take
+  the phase-before-cause rung (D-11, D-17).
+- `tools/flora_condition_probe.py` (#2555, extended by #2557) already kills,
+  inspects the trace with `world.getFloraVisualAt`, saves/loads, and drives
+  the calendar; `--offscreen` scenes are scripted per the recipe in
+  `tools/offscreen_probe.py` and need the owner's GPU machine.
+- `docs/flora_visual_state_contract.md` describes the fallback order
+  abstractly; no worked trace from real content exists.
+
+## Requirements
+
+Deliver the implementation, required documentation, capture artifacts, and
+owner verdicts together in this PR before final review and merge. This PR
+closes this child; #2526 is closed separately after every child is complete.
+
+1. `data/flora/saguaro.yaml` declares exactly two `textureVariants`:
+   `{phase: sprout, condition: dead, texture: sprout_dead.png}` and
+   `{condition: dead, cause: fire, texture: charred.png}`. No other shipped
+   species changes.
+2. Headlessly, on a real saguaro placed in a real page: a natural or
+   drought death of a sprout resolves `sprout_dead.png`; a fire death of a
+   sprout resolves `sprout_dead.png` with a trace showing the exact
+   `sprout+fire` candidate tried and missed; a fire death of a mature plant
+   resolves `charred.png`; a drought death of a mature plant resolves the
+   stage-specific `dead.png` override for that day; every living state
+   resolves exactly what it resolves today.
+3. A base-only fixture species (one `matured.png`, no phases, cycle,
+   variants, or policy) resolves its base for every representable selector
+   and takes the omitted-policy legacy behavior, preserving its health-scaled
+   natural-death/reseed boundaries; this is distinct from the explicit
+   60-world-day sprout policy below.
+4. The cactus-class policy is proven at both boundaries: a mature saguaro
+   killed by fire is still charred after 60, 600, and 6000 days, chunk
+   eviction, and save/load; a dead saguaro sprout is still dead the day
+   before its 60-day expiry, reseeds on the expiry day, and grows as a new
+   generation afterwards.
+5. `tools/flora_condition_probe.py` gains a pilot phase that runs
+   requirements 2 and 4 against shipped saguaro content and prints the
+   resolved texture names and winning candidates, and stays CI-eligible.
+6. Visual evidence: the owner runs `cabal run exe:synarchy -- --preview
+   flora/saguaro` and an `--offscreen` scene script checked in under
+   `tools/` that places a saguaro, kills it in each of the four states of
+   requirement 2, and screenshots each; the PR embeds the screenshots and
+   records the owner's verdict. Follow the repository sprite-signoff workflow in the isolated worktree
+   after `cabal build all`; record both assets' prior individual approvals
+   and the separate integrated-scene verdict in this PR.
+7. `docs/flora_visual_state_contract.md` gains a worked example section
+   quoting the probe's real traces for the four states, and
+   `docs/engine_contracts.md` §Flora visual state and fallback lists the
+   pilot phase and the offscreen script as the arc's end-to-end gate.
+
+## Acceptance
+
+```bash
+cabal build all
+cabal build synarchy-test-headless
+# Pilot group on shipped saguaro content plus the base-only fixture.
+cabal test synarchy-test-headless --test-options='--match "saguaro mortality pilot"'
+cabal test synarchy-test-headless --test-options='--match "World.FloraVisualResolver"'
+cabal test synarchy-test-headless --test-options='--match "Asset.FloraVisualSchema"'
+cabal test synarchy-test-headless --test-options='--match "Asset.FloraContent"'
+cabal test synarchy-test-headless --test-options='--match "flora corpse retention"'
+# Content and audits.
+python3 tools/texture_subset_audit.py
+python3 tools/fruiting_texture_audit.py
+python3 tools/unicode_operator_audit.py
+python3 tools/lua_module_budget.py
+# Probes, one at a time; the pilot phase prints four "resolved:" lines.
+python3 tools/run_probes.py --only flora_condition_probe
+python3 tools/run_probes.py --only flora_growth_probe
+python3 tools/test_run_probes.py
+# No worldgen-output claim: only textureVariants changed in the YAML.
+git diff origin/master -- data/flora | grep '^[-+]' | grep -v '^[-+][-+]' | grep -v -i 'textureVariants\|phase:\|condition:\|cause:\|texture:' | grep -v '^[-+]\s*$'   # empty
+```
+
+Expected: every hspec group green with a non-zero example count; audits
+clean; both probes passing with the four resolved lines
+(`sprout_dead.png`, `sprout_dead.png` via fallback, `charred.png`,
+`dead.png`); the YAML grep empty; and, recorded in the PR, the owner's
+preview and offscreen verdicts.
+
+## Out of scope
+
+- Real drought, frost, fire, disease, or damage producers; the pilot kills
+  through `world.setFloraCondition`.
+- `sprout_charred.png` or any further saguaro art, and every other texture
+  family (the design's backfill list becomes separate art issues after this
+  lands).
+- Pointing wheat at its wild/cultivated art (separate content-integration
+  issue after the arc).
+
+## Related
+
+- Epic #2526 (child EFM-9, closes the arc). Phase 4, critical path;
+  `depends on #2557`, `#2559`, and `#2596`; also on `#2555`
+  for the probe it extends. Both asset issues must be approved and landed;
+  completion of only one does not unblock this pilot.
+- #1688 / PR #1725 (closed) — the base saguaro set.
+- Design record: `docs/environmental_flora_mortality_design.md` (D-2
+  through D-17, D-19 through D-21); supporting pointer, not required
+  context.
+
+<!-- issue-origin:claude -->

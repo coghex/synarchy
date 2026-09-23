@@ -154,7 +154,7 @@ Resume after these drafts with the shared gameplay-clock design and its overload
 
 ## Gameplay timing follow-up — 2026-09-05
 
-The owner requested a comprehensive timing check and report, authorizing bounded Sol/Terra/Luna assistance. Two bounded reviews (Sol for Lua, Terra for engine gameplay) supported the [gameplay timing audit](gameplay_timing_audit_2026-09-05.md), verified at `2922bb476be795c9fd3d33eb65962b7eccca39ed`. It inventories elapsed session time, nominal Lua allowances, AI work/deadline policies, combat iteration timing, fluid iteration timing, calendar time and scaled world-process durations, including persistence and pause/load constraints.
+The owner requested a comprehensive timing check and report, authorizing bounded Sol/Terra/Luna assistance. Two bounded reviews (Sol for Lua, Terra for engine gameplay) supplied the evidence absorbed by the [shared gameplay timing design](gameplay_timing_design.md), verified at `2922bb476be795c9fd3d33eb65962b7eccca39ed`. It inventories elapsed session time, nominal Lua allowances, AI work/deadline policies, combat iteration timing, fluid iteration timing, calendar time and scaled world-process durations, including persistence and pause/load constraints.
 
 Direct production-function executions confirmed two additional bugs: fractional minutes disappear on every calendar update (default-speed calendar advancement is impossible), and waypoint arrival discards unused movement duration. They are recorded as CH-4 and CH-5 in the canonical report, with retained inputs/results. The timing report distinguishes these executions from source-derived wound/fluid workload examples and does not claim a live saturation benchmark.
 

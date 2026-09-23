@@ -4,9 +4,9 @@ Synarchy should advance movement, survival, combat, work and the world by an agr
 
 Design state: `ready for issue processing`
 
-**Ready for issue processing following the owner's 2026-09-05 readiness/publication instruction.** D-1 through D-11 record established direction. Whole-simulation fast-forward, 5–50 controlled units, a tentative 10 × 10-chunk base, a four-core/8-GB minimum laptop class, and responsive input/UI during even severe simulation slowdown are established. Ordinary movement prepares its required chunks before starting; rare forced movement into unknown terrain uses best-effort estimates, with the unit phased out of world interaction until reconciliation. Cooperative presentation service within long gameplay steps remains the recommended mechanism. Q-1 is resolved in direction. Q-2 through Q-4 are deliberately open engineering decisions with explicit slice gates below; readiness does not approve numerical budgets or an unspecified reconciliation algorithm.
+**Ready for issue processing following the owner's 2026-09-05 readiness/publication instruction.** D-1 through D-13 record established direction. Whole-simulation fast-forward, 5–50 controlled units, a tentative 10 × 10-chunk base, a four-core/8-GB minimum laptop class, and responsive input/UI during even severe simulation slowdown are established. Ordinary movement prepares its required chunks before starting; rare forced movement into unknown terrain uses best-effort estimates, with the unit phased out of world interaction until reconciliation. The owner accepted the concrete GT-1 phase/wait graph on 2026-09-16, made UI service categorically more important than simulation throughput, and selected the scoped single-Lua-owner scheduler rewrite for this repository. Q-1, the phase/wait part of Q-2 and Q-5 are resolved. Q-2's power policy and Q-3/Q-4 remain deliberately open engineering decisions with explicit slice gates below; readiness does not approve numerical budgets, an unspecified reconciliation algorithm, or a multi-threaded Lua runtime.
 
-Created 2026-09-05. Evidence comes from the [timing audit](gameplay_timing_audit_2026-09-05.md), verified at `2922bb476be795c9fd3d33eb65962b7eccca39ed`. Rechecked against `ece7dc6dd88ccb62b70bfd9716135089611e38de`: intervening changes only affect `tools/lunge_probe.py`, not the audited timing paths. The owner expanded publication to the pending documentation batch, including this design, the supplemental audit, findings and retained reproductions. No issue or label is created by publishing them.
+Created 2026-09-05. The initial timing audit's verified source map and controlled reproductions are absorbed here: direct calls established the calendar's fractional-minute loss and waypoint residual-time loss, while Lua physiology, AI-work and combat discrepancies were source-verified rather than measured under an overloaded live engine. The concrete calendar and waypoint defects are retained as CH-4/#2471 and CH-5/#2473 in `simulation_consistency_findings.md`; this design owns the coordinated migration. The source map was verified at `2922bb476be795c9fd3d33eb65962b7eccca39ed` and rechecked against `ece7dc6dd88ccb62b70bfd9716135089611e38de`: intervening changes only affect `tools/lunge_probe.py`, not the audited timing paths. The owner expanded publication to the pending documentation batch, including this design, findings and retained reproductions. No issue or label is created by publishing them.
 
 Follow-up source check at `7242a132a7332affdc2d2590a15724a303c7830d`: subsequent changes affect construction-probe/CI wiring, not these runtime paths. Current Lua resource/AI entry points still loop over the unit roster in one callback, and `usLocalPath` still stores x/y waypoints rather than a precomputed terrain/stat timeline.
 
@@ -18,7 +18,7 @@ Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]` del
 
 - [x] EPIC. Advance coupled gameplay through one coordinated simulation clock — [#2478]
 - [x] GT-1. Define the step protocol and pure clock accounting — [#2482]
-- [ ] GT-2. Add lifecycle and transaction coordination at completed-step boundaries — [deferred]: #2482 must merge with docs/gameplay_timing_protocol.md on master, and Q-2 must record the owner's acceptance of its phase/wait graph
+- [ ] GT-2. Add lifecycle and transaction coordination at completed-step boundaries
 - [ ] GT-3. Bound unit and combat command service for granted work
 - [ ] GT-4. Separate world and fluid control work from timed advancement
 - [ ] GT-5. Separate Lua gameplay callbacks from ordinary script scheduling
@@ -150,7 +150,21 @@ Q-4 retains the estimate horizon, collision/consequence rules, persistence and l
 
 The owner wants all load-bearing gameplay either in scripts or called from scripts, with gameplay looping slowing under load while input and UI keep getting service. Native calculations need not be rewritten in Lua, but they must participate in the same controlled advancement and cannot independently run ahead when gameplay scripts fall behind. Input responsiveness is the minimum requirement; Lua-based UI responsiveness remains the desired outcome.
 
-Do not implement this by adding delay to the entire Lua owner: that would delay UI too. Separate gameplay admission from interaction service and yield long gameplay work cooperatively. Q-2 must reconcile the requested script-driven entry points with the previously approved unit-worker coordinator; the coordinator can retain clock/permit ownership while native workers execute explicit phase work. The exact orchestration boundary remains a proposal, not permission to silently relocate all engine ownership into Lua.
+Do not implement this by adding delay to the entire Lua owner: that would delay UI too. Separate gameplay admission from interaction service and yield long gameplay work cooperatively. D-12 reconciles the requested script-driven entry points with the previously approved unit-worker coordinator: the coordinator retains clock/permit ownership while native workers execute explicit phase work requested by the Lua driver. This does not authorize silently relocating all engine ownership into Lua.
+
+### D-12. Accept the concrete phase graph and give UI service precedence
+
+On 2026-09-16 the owner accepted the concrete graph recorded in `docs/gameplay_timing_protocol.md`: the unit worker owns pacing, permits and completion; one resumable Lua driver requests finite native phases without synchronously waiting; current-step edges move forward through the ordered graph; backward effects target the next step; blocking lifecycle work runs only at completed boundaries; and presentation uses completed read views plus queued, revalidated intents while gameplay is suspended.
+
+The owner further clarified that the game may slow down as much as necessary, but UI service should always take precedence over simulation throughput. This strengthens D-9/D-11 rather than choosing a numerical response-time target. A non-yielding callback still has to be split at a safe boundary; no scheduler may report unfinished gameplay as complete or run a second gameplay step merely to service the UI.
+
+The owner's possible broader scripting-engine redesign—priorities, scheduling rules and perhaps multiple threads—is resolved for this repository by D-13. It remains a separate architectural question for the parallel Hetoimasia runtime and does not expand this epic.
+
+### D-13. Use the scoped cooperative scheduler in Synarchy
+
+On 2026-09-16 the owner accepted the recommended staged scheduler direction for this repository: retain one Lua state and its single owner; introduce explicit gameplay, presentation/control and background/ordinary lanes; make gameplay work deterministic and resumable at safe batch boundaries; let native workers perform independent calculations behind request/acknowledgement interfaces; and consider a separate UI Lua state only after completed-state views, intent-only mutations and measurement exist.
+
+Do not turn GT-5/GT-5A into a general multi-state Lua rewrite, arbitrary callback preemption or concurrent mutation of today's shared Lua tables. A separate advanced runtime under development in Hetoimasia may choose a clean-slate threading architecture, but that codebase and decision are outside this Synarchy design. The bounded Synarchy work remains useful as a semantic and measurement pilot rather than an attempt to retrofit the final clean-slate runtime here.
 
 ## Proposed architecture
 
@@ -175,11 +189,11 @@ Preserve the current fresh-session epoch contract (#2291): boot and Exit to Menu
 
 **Recommended first implementation:** host the coordinator in the existing unit worker, which already owns the session clock. Keep the world, combat, fluid and Lua workers as execution owners. The coordinator executes its own unit stages directly and grants bounded work to the other owners. There is no request followed by a wait on itself.
 
-D-11 adds a script-driven orchestration requirement to this baseline. GT-1 must explicitly map which gameplay entry points are Lua routines and which invoke native work, including currently independent movement, wounds and world/fluid advancement. A possible arrangement keeps pacing and completion accounting in the unit worker while a resumable Lua gameplay driver requests the native phases under that permit. This is not yet the agreed concrete graph: native requests must yield control rather than block Lua while an owner waits for another Lua callback. GT-1 may investigate and test this protocol without migrating workers; settle the resulting mapping under Q-2 before drafting GT-2 through GT-6 as implementation-ready issues. An engine-owned grant loop alone does not establish that every load-bearing operation is called from scripts.
+D-11 adds a script-driven orchestration requirement to this baseline. GT-1 mapped which gameplay entry points are Lua routines and which invoke native work, including currently independent movement, wounds and world/fluid advancement. D-12 accepts the resulting arrangement: pacing and completion accounting stay in the unit worker while a resumable Lua gameplay driver requests native phases under that permit, returns to its event loop instead of blocking, and resumes after acknowledgement. GT-2 through GT-6 must implement and verify that graph without silently relocating all engine ownership into Lua. An engine-owned grant loop alone does not establish that every load-bearing operation is called from scripts.
 
 Start with an explicit phase order. Independent units within an owner may retain their current ordering. Permit overlap only when a declared read/write dependency analysis and tests show it safe. A shared IORef is not evidence of independence merely because each write is atomic.
 
-This sacrifices some current overlap to establish correct boundaries. It is a recommendation, not a measured speed improvement. GT-15 must measure its cost before default activation. D-9 allows lower simulation throughput under strain, but not unacceptable input/presentation delay. If serial phases or individual work segments violate that service target, revise batching or phase grouping under Q-2; do not hide the failure by skipping one owner's time. Waiting for a phase acknowledgement must not occupy CPU in a busy loop.
+This sacrifices some current overlap to establish correct boundaries. It is a recommendation, not a measured speed improvement. GT-15 must measure its cost before default activation. D-9 allows lower simulation throughput under strain, but not unacceptable input/presentation delay. If serial phases or individual work segments violate that service target, revise batching within D-13's scoped scheduler or return a material phase-grouping change to design; do not hide the failure by skipping one owner's time. Waiting for a phase acknowledgement must not occupy CPU in a busy loop.
 
 Keep scheduling debt, in-flight grants and acknowledgements in worker-local runtime state. Construct shared transport handles during startup and pass them to worker owners. Use existing managers/capabilities for domain state. Do not scatter clock refs over `EngineEnv` or invent a new capability/role without following `docs/engineenv_capability_inventory.md` §6.4. GT-1 must map the actual state/transport placement before infrastructure issues are ready to implement.
 
@@ -200,7 +214,7 @@ Proposed initial phase order:
 | Decisions and scheduled events | Run due AI decisions and spawn polling once for their scheduled opportunity. Their commands normally target the next step. Advance no additional continuous time here. |
 | Completion | Finish required world-owned writebacks, publish completed time/motion, record acknowledgements and offer a control/UI service turn before another step. |
 
-These are semantic stages, not necessarily six modules or six messages. Work intent/power admission may require splitting today's world/Lua routines. GT-1 records the concrete acyclic phase graph; Q-2 must be resolved before treating this table as a fixed implementation order.
+These are semantic stages, not necessarily six modules or six messages. Work intent/power admission may require splitting today's world/Lua routines. GT-1 records the concrete acyclic phase graph, and D-12 accepts this table as the fixed implementation baseline. A material ordering change returns to design.
 
 For every cross-owner effect, classify it as **current-step forward handoff** or **next-step command**. A forward handoff must be applied or explicitly refused before its dependent phase acknowledges. An effect emitted toward an already completed phase belongs to the next step, unless the graph has an explicit bounded settlement stage. Never drain queues until a cross-system cycle happens to become quiet.
 
@@ -260,7 +274,7 @@ On ordinary pause, load or a global infrastructure hold, stop admitting steps an
 
 The coordinator has explicit modes: `Boundary`, `RunningStep`, `Paused`, `Transaction`, and `Faulted`. Ordinary gameplay work requires a step grant. Queue service and authorized save/load work must remain possible without one.
 
-**Pause:** a pause request immediately prevents new admission. A running step finishes its already granted phases using its immutable running context; reading the newly set global pause flag halfway through and skipping the remaining physiology would produce a half-step. Migrated gameplay entry points use the grant's admission state instead of their current `pause.isPaused()`/global-flag early returns. Public control/UI queries may report the pending pause immediately; they must not be reused to revoke part of an admitted interval. Pause becomes a settled gameplay boundary when that step completes. Expose requested versus settled state to diagnostics; preserve the existing rejection and pause-epoch semantics. Finishing the admitted step is accepted under D-6; its concrete service/wait graph remains subject to Q-2's verification.
+**Pause:** a pause request immediately prevents new admission. A running step finishes its already granted phases using its immutable running context; reading the newly set global pause flag halfway through and skipping the remaining physiology would produce a half-step. Migrated gameplay entry points use the grant's admission state instead of their current `pause.isPaused()`/global-flag early returns. Public control/UI queries may report the pending pause immediately; they must not be reused to revoke part of an admitted interval. Pause becomes a settled gameplay boundary when that step completes. Expose requested versus settled state to diagnostics; preserve the existing rejection and pause-epoch semantics. Finishing the admitted step and the concrete service/wait graph are accepted under D-6/D-12; GT-2 must verify the behavior against real lifecycle schedules.
 
 **Save/load:** acquire a completed gameplay boundary first, then use the existing multi-pass save barrier and its per-owner parking protocol. Do not begin parking individual save owners while another phase of the same gameplay step is still owed. Quiescence drains still operate; save/load remains mutually exclusive; publication and post-load `LuaSaveLoaded` reconciliation retain their current ordering and failure dispositions. Do not reuse step acknowledgements as save acknowledgements: the two protocols have different authorized work and lifecycle.
 
@@ -337,7 +351,7 @@ Build the coordinated path dormant first. Every production owner stays on the le
 - **Just share a tick counter:** rejected as sufficient architecture; it records desired time but does not establish completed work or bound worker drift.
 - **Pass wall elapsed time into every Lua callback:** unsuitable as the general fix; large gaps cross thresholds and activity changes, and cannot safely replay commands or discrete fluid transitions.
 - **Run all simulation on the render thread:** rejected as the baseline because rendering and controls should remain independently paced. It also changes established ownership unnecessarily.
-- **Immediately move all gameplay into one new thread:** still a possible simplification, but entails moving Lua/world/unit ownership and save behavior at once. The proposed existing-owner coordinator keeps those boundaries explicit; Q-2 remains open if its coordination cost is excessive.
+- **Immediately move all gameplay into one new thread:** rejected as the accepted baseline because it entails moving Lua/world/unit ownership and save behavior at once. The D-12 existing-owner coordinator keeps those boundaries explicit. If measured coordination cost later makes that untenable, return the material ownership change to design.
 - **Independent fixed-step accumulators per worker:** better local integration, but without a common completion/backlog rule they can still advance different amounts. Not sufficient for D-1.
 - **Unbounded catch-up or skipping the expensive owner:** rejected; the former can prevent control service, the latter recreates balance changes.
 - **Require every current detail to be replay deterministic:** unnecessary for the owner's goal and not a condition of completion.
@@ -348,10 +362,11 @@ These questions are deliberately open at document readiness. They are not delega
 
 | Question | Work that resolves it | Stop before proceeding |
 | --- | --- | --- |
-| Q-2: script/native phase, wait and presentation-access graph | GT-1 maps the actual call sites, owner transitions, safe yields and required read views, and tests the pure protocol. No worker migration occurs in that slice. | Do not draft GT-2 through GT-6 as implementation-ready until that concrete graph is recorded and reviewed. If satisfying D-11 requires changing the accepted ownership baseline, return that material change to the owner. |
+| Q-2: script/native phase, wait and presentation-access graph — **resolved by D-12** | GT-1 mapped the actual call sites, owner transitions, safe yields and required read views and tested the pure protocol; the owner accepted the result on 2026-09-16. | No remaining stop. A later material ownership or graph change returns to design. |
 | Q-2: partial-interval power/work policy | GT-1 records the alternatives and affected handoffs; settle the choice before the productive-work adapters are specified. | Ask the owner to choose or approve the recommended behavior before GT-10/GT-12 are implementation-ready. Do not silently select partial credit or full-quantum refusal. |
 | Q-3: service target and shipping parameters | Early pure/isolated tests use explicit fixture values. GT-15 measures the full migrated backend on the stated workload and machine class. | Agree the numerical responsiveness target with the owner before treating GT-15 results as pass/fail. A failure or material cadence change returns to design; GT-16 stays blocked. |
 | Q-4: currently reachable missing-terrain paths | GT-1 inventories reachable displacement/readiness paths and records the timing-state interface. Relevant adapters preserve their supported behavior until an explicit disposition exists. | Do not remove a protective guard or activate an unhandled reachable path. Ask for any unresolved current-path behavior before the affected child; future throwing details stay with the separate movement design. |
+| Q-5: Lua scheduler redesign scope — **resolved by D-13** | GT-5/GT-5A implement explicit lanes and resumable batches on the existing single Lua owner. A multi-state/threaded Lua runtime is a separate future architecture. | No remaining stop for GT-5/GT-5A. Several Lua states or concurrent Lua mutation require a new design rather than an implementation detail. |
 
 GT-1 also assigns each presentation read view and AI action family to its delivery owner. GT-5A supplies the shared suspension/read-view/intent mechanism with a real fixture; the domain adapters supply their domain-specific publication and yielding. It does not absorb a rewrite of every UI panel. If the access map requires separately changing existing panels, or one AI family needs a separate migration, add a bounded stable slice through design before processing that work. This is a scope-change gate, not authorization for an oversized catch-all PR.
 
@@ -361,11 +376,19 @@ Resolved in direction by D-7: support whole-simulation fast-forward by executing
 
 ### Q-2. Is the proposed coordinator, phase graph and boundary behavior the accepted baseline?
 
-Baseline resolved by D-6: unit-worker coordinator, one in-flight step, initially ordered owner phases, explicit forward handoffs, finish an admitted step before settling pause, and boundary-only blocking lifecycle APIs. Remaining specification work: choose the work/power partial-interval policy and complete the concrete dependency/wait graph. This affects nearly every adapter and the save deadlock proof. GT-1 must map owner read/write dependencies and every synchronous wait; if a cycle or unsupported ownership transfer remains, revise the affected design before implementation issue readiness. Do not reopen the accepted baseline merely because its final graph still needs that verification.
+Resolved by D-12 for the phase/wait graph. The accepted baseline is the unit-worker coordinator, one in-flight step, ordered owner phases, explicit forward handoffs, a resumable Lua driver that returns rather than blocking on native work, completion of an admitted step before pause settles, boundary-only blocking lifecycle APIs, and restricted presentation service over completed views. GT-1's concrete graph and wait inventory are the reference. If implementation discovers a cycle or unsupported ownership transfer, return that material change to design rather than improvising a new graph.
 
-D-9 additionally requires safe presentation/input service during an incomplete phase. P-8/GT-5A propose cooperative batches and restricted read/intent access. Complete that access map and safe suspension protocol as part of the graph review; arbitrary UI callbacks cannot be allowed to mutate a suspended gameplay phase's state.
+D-9/D-12 require safe presentation/input service during an incomplete phase, with UI service taking precedence over simulation throughput. P-8/GT-5A implement this through cooperative batches and restricted read/intent access; arbitrary UI callbacks cannot mutate a suspended gameplay phase's state.
 
-D-11 supplies new steering on script-driven orchestration. Preserve the accepted clock/worker ownership where possible, but map the Lua driver/native phase entry points in P-2 and prove their wait graph before treating that arrangement as resolved. This is a focused consequence of new owner input, not a request to reapprove the entire baseline.
+The partial-interval power/work choice remains open under the same historical Q-2 identifier and still gates GT-10/GT-12. Accepting the graph does not select powered-fraction credit or full-quantum refusal.
+
+### Q-5. How far should the Lua scheduler redesign go?
+
+**Verified current state:** one dedicated OS thread owns one canonical Lua state. The loader currently registers about 35 separately timed modules. A scheduler round bounds engine-message and console batches and gives due timers a service opportunity, but every due `update` callback in the captured pass runs sequentially and is non-preemptible. `unit_resources.update` and `unit_ai.update` each walk the full unit roster. Different intervals are already rudimentary scheduling; they are not priority isolation or a resumable task model.
+
+**Resolved by D-13:** keep one Lua state and redesign its service contract around explicit `gameplay`, `presentation/control`, and `background/ordinary` lanes; deterministic gameplay grants; bounded resumable batches; and a hard opportunity for presentation service between safe batches. Native workers may still execute independent calculations behind request/acknowledgement boundaries. Prefer explicit batch cursors or tightly controlled coroutines over arbitrary instruction-count preemption.
+
+**Deferred alternative:** several Lua states on several OS threads could isolate UI from gameplay more strongly, but they cannot share Lua globals, module singletons, coroutine state, gameplay RNG state or ordinary mutable tables safely. That route first needs immutable completed-state views, intent-only mutation APIs, duplicated/partitioned module loading, explicit save ownership and cross-state message ordering. It is a separate runtime architecture rather than a small scheduler option and is not part of this epic.
 
 ### Q-3. What workload and responsiveness envelope should select the cadence?
 
@@ -424,13 +447,11 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Depends on:** none.
 - **Ordering:** critical path.
 - **Relevant decisions:** D-1, D-2, D-3, D-10, D-11; proposals P-1 through P-7.
-- **Acceptance signals:** Pure state-machine tests; no duplicate/partial completion; documented acyclic handoffs, safe presentation access and all state owners; parameterized cadence. Record the Q-2/Q-4 dispositions or the exact owner decision still needed before dependent implementation issues can proceed.
+- **Acceptance signals:** Pure state-machine tests; no duplicate/partial completion; documented acyclic handoffs, safe presentation access and all state owners; parameterized cadence. Record the Q-4 disposition and the owner decisions needed before dependent implementation issues can proceed. D-12 records the phase/wait disposition.
 - **Out of scope:** Shipping parameter selection and live world updates.
-- **Open questions:** Q-2/Q-4 are deliberately investigated here under the gate table; Q-3 values remain parameterized. Q-1's behavioral direction is resolved by D-7.
+- **Open questions:** Q-4 remains with its separate movement-design gate; Q-3 values remain parameterized. Q-1's behavioral direction is resolved by D-7 and the phase/wait part of Q-2 by D-12.
 
 ### GT-2. Add lifecycle and transaction coordination at completed-step boundaries
-
-> Deferred 2026-09-07: the Q-2 gate blocks this slice until GT-1 (#2482) has merged with `docs/gameplay_timing_protocol.md` on master and the owner has accepted its recorded phase and wait graph. Checkable precondition: #2482 closed as merged, the file present on master, and the owner's acceptance recorded under Q-2 through `/design-epic`. Remove this note when the slice advances.
 
 - **Outcome:** A boundary/control permit protocol that cannot deadlock on Lua save or park halfway through an admitted step.
 - **Scope:** Pause intent versus settlement, owner control service, transaction entry, fault/shutdown modes and in-step blocking-call refusal. Existing production save path remains active.
@@ -440,7 +461,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Relevant decisions:** D-1, D-5; P-7.
 - **Acceptance signals:** Controlled pause/save/load/failure schedules, including Lua holding a callback; existing save-owner park and failure contracts remain intact.
 - **Out of scope:** New save DTOs or successful production activation.
-- **Open questions:** Q-2.
+- **Open questions:** None. D-12 resolves the phase/wait prerequisite; Q-2's power policy does not affect this boundary slice.
 
 ### GT-3. Bound unit and combat command service for granted work
 
@@ -452,7 +473,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Relevant decisions:** D-2, D-4; P-3, P-7.
 - **Acceptance signals:** Replenished queues, same-step consequences, next-step commands, duplicate/old-epoch grants and shutdown replies.
 - **Out of scope:** Changing combat formulas or elapsed integration.
-- **Open questions:** Q-2 phase assignment.
+- **Open questions:** None. D-12 resolves the phase assignment.
 
 ### GT-4. Separate world and fluid control work from timed advancement
 
@@ -464,7 +485,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Relevant decisions:** D-3, D-4; P-3, P-9.
 - **Acceptance signals:** Delayed publications cannot acknowledge early; paused transaction/preparation work progresses; stale fluid results are rejected.
 - **Out of scope:** Residency enforcement, async worldgen redesign, new fluid algorithms.
-- **Open questions:** Q-2, Q-4.
+- **Open questions:** Q-4. D-12 resolves the phase/wait assignment.
 
 ### GT-5. Separate Lua gameplay callbacks from ordinary script scheduling
 
@@ -473,10 +494,10 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Phase:** A.
 - **Depends on:** GT-1, GT-2.
 - **Ordering:** independent of GT-3/GT-4; required before GT-6.
-- **Relevant decisions:** D-1, D-2; P-1, P-7, P-8.
+- **Relevant decisions:** D-1, D-2, D-12; P-1, P-7, P-8.
 - **Acceptance signals:** Gameplay receives only grants; UI remains ordinary; replenished queues cannot starve grants; save reconciliation wins over normal work.
 - **Out of scope:** Parallel Lua, callback preemption and physiology formula changes.
-- **Open questions:** Q-2. Reconcile the actual implementation of #2415 before drafting; reuse its ordinary fairness helpers rather than duplicate them.
+- **Open questions:** None. D-13 resolves the runtime scope. Reconcile the actual implementation of #2415 during drafting and reuse its ordinary fairness helpers rather than duplicate them.
 
 ### GT-5A. Add resumable gameplay batches and responsive presentation service
 
@@ -485,10 +506,10 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Phase:** A.
 - **Depends on:** GT-1, GT-2, GT-5.
 - **Ordering:** critical path before GT-6; independent of GT-3/GT-4 implementation.
-- **Relevant decisions:** D-1, D-2, D-9, D-11; P-3, P-6, P-7, P-8.
+- **Relevant decisions:** D-1, D-2, D-9, D-11, D-12; P-3, P-6, P-7, P-8.
 - **Acceptance signals:** A delayed phase spans several input/presentation service turns without duplicate/skipped actors; reads use the completed view; UI actions cannot mutate suspended gameplay state; intents revalidate when admitted. Long atomic work is identified rather than hidden by a nominal batch-count limit.
 - **Out of scope:** Arbitrary Lua preemption, a second Lua state, unrestricted console execution mid-phase, converting every gameplay family or rewriting existing UI panels in this infrastructure PR.
-- **Open questions:** Q-2's access/suspension graph and Q-3's numerical feedback target. Split read-view/API coverage into a follow-up stable slice before issue readiness if its verified surface cannot fit this PR.
+- **Open questions:** Q-3's numerical feedback target. Split read-view/API coverage into a follow-up stable slice before issue readiness if its verified surface cannot fit this PR.
 
 ### GT-6. Assemble the coordinated runner behind an internal test mode
 
@@ -500,7 +521,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Relevant decisions:** D-1, D-2; P-2, P-3, P-6, P-7.
 - **Acceptance signals:** Injected owner delays never advance the published clock early or create a second in-flight step; presentation/input is serviced while a phase remains incomplete as well as at complete boundaries.
 - **Out of scope:** Selecting coordinated timing in ordinary gameplay or mutating a shadow live session.
-- **Open questions:** Q-2; Q-3 shipping parameters remain open.
+- **Open questions:** Q-3 shipping parameters remain open; D-12 resolves the phase/wait graph and D-13 the scheduler-runtime scope.
 
 ### GT-7. Move unit timing and motion publication onto granted steps
 
@@ -512,7 +533,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Relevant decisions:** D-1, D-4; P-1, P-4, P-8.
 - **Acceptance signals:** Equal-duration movement/deadline tests, pause/load publication, hazardous crossings and waypoint budget regression.
 - **Out of scope:** Frame interpolation enhancements and unrelated path planning.
-- **Open questions:** None beyond Q-2's resolved protocol. CH-5's movement repair is an external prerequisite if still unimplemented; link/reuse it during processing.
+- **Open questions:** None beyond D-12's resolved protocol. CH-5's movement repair is an external prerequisite if still unimplemented; link/reuse it during processing.
 
 ### GT-8. Advance combat wounds and deadlines through step context
 
@@ -524,7 +545,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Relevant decisions:** D-1, D-2, D-4; P-3, P-4.
 - **Acceptance signals:** Fixed attacks/wounds under delayed combat service preserve integrated duration, admission and death/collapse ordering.
 - **Out of scope:** Combat rebalance or deterministic random draws across arbitrary schedules.
-- **Open questions:** None beyond resolved Q-2; integration cadence remains the test profile until GT-15.
+- **Open questions:** None beyond D-12's resolved graph; integration cadence remains the test profile until GT-15.
 
 ### GT-9. Advance physiology through credited simulation intervals
 
@@ -624,7 +645,7 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 
 ## Handoff and next discussion
 
-The design is ready for issue processing under the owner's 2026-09-05 instruction to mark it ready if it passes review and publish it. D-6 approves the architectural baseline; D-7 through D-11 settle fast-forward, the tentative 100-chunk footprint and hardware class, interaction priority, phased-unit isolation and script-driven progression. The remaining Q-2/Q-3/Q-4 choices have explicit resolving slices and stop conditions in the gate table. Do not ask the owner to restate the footprint or isolation decision; the suggested 100-ms target remains a proposal. There are 17 delivery slices, including GT-5A.
+The design is ready for issue processing under the owner's 2026-09-05 instruction to mark it ready if it passes review and publish it. D-6 approves the architectural baseline; D-7 through D-11 settle fast-forward, the tentative 100-chunk footprint and hardware class, interaction priority, phased-unit isolation and script-driven progression; D-12 accepts GT-1's concrete phase/wait graph and makes UI service categorically more important than simulation throughput; D-13 selects the scoped single-owner cooperative scheduler rewrite for Synarchy. The remaining Q-2 power policy and Q-3/Q-4 engineering choices have explicit resolving slices and stop conditions in the gate table. Do not ask the owner to restate the footprint, isolation, phase-graph or scheduler-scope decisions; the suggested 100-ms target remains a proposal. There are 17 delivery slices, including GT-5A.
 
 Readiness assessment: the epic has observable outcomes, explicit non-goals, dependency-ordered PR slices, persistence/migration requirements and focused validation. The protocol/access investigation is a bounded first delivery, not an unstated prerequisite to every possible tracker artifact. Implementation-specific policy choices remain gated rather than presumed. Detailed future throwing mechanics do not block this timing design unless an equivalent exceptional path is already supported and lacks a defined disposition. Readiness does not certify production activation or the one-PR size of an unforeseen scope expansion.
 

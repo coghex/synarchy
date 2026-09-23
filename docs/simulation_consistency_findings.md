@@ -1,6 +1,6 @@
 # Simulation consistency bug findings
 
-Recorded during the owner's plain-language architecture audit on 2026-09-05, initially against `da96202c863b7d563f4968d34cb685d2e622e73c`; follow-up findings name their own reviewed revision. This file contains concrete bugs; broader design discussion and audit coverage live in [the conversation audit](architecture_conversation_audit_2026-09-05.md) and [the gameplay timing audit](gameplay_timing_audit_2026-09-05.md).
+Recorded during the owner's plain-language architecture audit on 2026-09-05, initially against `da96202c863b7d563f4968d34cb685d2e622e73c`; follow-up findings name their own reviewed revision. This file contains concrete bugs; broader design discussion and absorbed timing-audit coverage live in [the conversation audit](architecture_conversation_audit_2026-09-05.md) and [the shared gameplay timing design](gameplay_timing_design.md).
 
 Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` deliberately not filed · `[deferred]` blocked on a stated precondition.
 

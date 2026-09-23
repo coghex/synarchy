@@ -38,25 +38,25 @@ No GitHub duplicate search was performed; that belongs to `process-report`.
 - [x] BUG-4. Dump CLI silently substitutes defaults for malformed arguments — [#1191]
 - [x] BUG-5. Action-outcome audit fails strict Python warning compilation — [#1192]
 - [x] BUG-6. Adding a concept id can change an existing concept's generated root — [#1868]
-- [ ] BUG-7. Escape stops dismissing dropdowns after their IDs exceed 100
-- [ ] BUG-8. Replacing list items leaves scrollbar position and visibility stale
-- [ ] BUG-9. Resizing the save browser discards its scroll position
-- [ ] BUG-10. Crawling restores hydration without a water source
-- [ ] BUG-11. Organ-failure stamina drain uses the wrong body-size floor
-- [ ] BUG-12. Float rounding can prevent the starvation death threshold from firing
-- [ ] BUG-13. Autonomous drinking credits water that was not drained
-- [ ] BUG-14. Injury recovery interrupts source drinking and leaves its action locked
-- [ ] BUG-15. Small resource changes are discarded forever instead of accumulated
-- [ ] BUG-16. Electrical networks disconnect at the cylindrical seam
-- [ ] BUG-17. Focus cleanup discards typed dropdown choices before submission
-- [ ] BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass
-- [ ] BUG-19. Treatment aliases separate wounds inflicted at the same game time
-- [ ] BUG-20. Healing does not restore blood needed for revival
-- [ ] BUG-21. Ground-repair return retries never end after the item leaves its worker
-- [ ] BUG-22. Dead and collapsed builders continue producing building progress
-- [ ] BUG-23. Dead and collapsed medics retain claims that block replacement treatment
-- [ ] BUG-24. An out-of-range preferred medic prevents nearby medics from treating
-- [ ] BUG-25. Autonomous infection treatment ignores antibiotic kits without bandages
+- [x] BUG-7. Escape stops dismissing dropdowns after their IDs exceed 100 — [#2627]
+- [x] BUG-8. Replacing list items leaves scrollbar position and visibility stale — [#2628]
+- [x] BUG-9. Resizing the save browser discards its scroll position — [#2629]
+- [x] BUG-10. Crawling restores hydration without a water source — [no-issue]
+- [x] BUG-11. Organ-failure stamina drain uses the wrong body-size floor — [no-issue]
+- [x] BUG-12. Float rounding can prevent the starvation death threshold from firing — [#2630]
+- [x] BUG-13. Autonomous drinking credits water that was not drained — [#2631]
+- [x] BUG-14. Injury recovery interrupts source drinking and leaves its action locked — [no-issue]
+- [x] BUG-15. Small resource changes are discarded forever instead of accumulated — [#2633]
+- [x] BUG-16. Electrical networks disconnect at the cylindrical seam — [#2634]
+- [x] BUG-17. Focus cleanup discards typed dropdown choices before submission — [#2636]
+- [x] BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass — [#2637]
+- [x] BUG-19. Treatment aliases separate wounds inflicted at the same game time — [#2638]
+- [x] BUG-20. Healing does not restore blood needed for revival — [#2639]
+- [x] BUG-21. Ground-repair return retries never end after the item leaves its worker — [no-issue]
+- [x] BUG-22. Dead and collapsed builders continue producing building progress — [#2641]
+- [x] BUG-23. Dead and collapsed medics retain claims that block replacement treatment — [#2642]
+- [x] BUG-24. An out-of-range preferred medic prevents nearby medics from treating — [#2643]
+- [x] BUG-25. Autonomous infection treatment ignores antibiotic kits without bandages — [#2644]
 
 ---
 
@@ -374,7 +374,7 @@ loading temporarily returned handle `1` while `dropdown.init()` or
 `list.init()` initialized the widget family. No graphical window was opened.
 The results establish input decisions and UI state, not rendered appearance.
 
-### BUG-7. Escape stops dismissing dropdowns after their IDs exceed 100
+### [#2627] BUG-7. Escape stops dismissing dropdowns after their IDs exceed 100
 
 **Verification:** Verified. The same Escape handler closes dropdown ID 1 but
 skips an otherwise identical open dropdown with ID 101 and invokes the
@@ -423,7 +423,7 @@ testing only freshly initialized IDs cannot expose this defect. The probe
 intercepted navigation to observe it safely; it did not render a complete
 settings-menu transition.
 
-### BUG-8. Replacing list items leaves scrollbar position and visibility stale
+### [#2628] BUG-8. Replacing list items leaves scrollbar position and visibility stale
 
 **Verification:** Verified. Replacing the data of a scrolled list resets its
 row offset to zero while its scrollbar retains offset 10; scrolling down
@@ -480,7 +480,7 @@ crop catalogue has only two entries, so the planting-panel manifestation
 requires a viewport small enough to scroll those entries or additional crop
 data. Loss of the scrollbar does not itself prove loss of wheel scrolling.
 
-### BUG-9. Resizing the save browser discards its scroll position
+### [#2629] BUG-9. Resizing the save browser discards its scroll position
 
 **Verification:** Verified. With 30 saves at 1280×720 and the list scrolled to
 offset 10, resizing to 1200×720 resets the offset to zero. Both dimensions are
@@ -544,7 +544,15 @@ execution or an interleaving was simulated, that boundary is stated below.
 Existing local reports were checked for equivalent concerns. No issues were
 created, and no engine code or authored content was changed.
 
-### BUG-10. Crawling restores hydration without a water source
+### [no-issue] BUG-10. Crawling restores hydration without a water source
+
+> **Disposition:** No issue — already fixed by #2541 (PR #2609, merged
+> 2026-09-11). Hydration's fast recovery is now `regen_factor_source_drinking`,
+> gated by `unit_resource_tick.sourceDrinkingEligible` on the live `drinking`
+> phase plus an adjacent lake or river tile re-read every tick; no definition
+> declares `regen_factor_crawling`. `Test.Headless.Unit.SourceDrinkingHydration`
+> covers injured crawling, both sleep legs, and a positive source-drinking
+> control.
 
 **Verification:** Verified at the production resource-tick boundary.
 Starting with hydration 10, maximum hydration 40, and endurance 1, one
@@ -582,7 +590,14 @@ needed. Cover injured crawling and both sleep transitions on dry land, plus
 a positive source-drinking control. This probe establishes the unconditional
 gain, not how much an entire sleep animation would award in a live session.
 
-### BUG-11. Organ-failure stamina drain uses the wrong body-size floor
+### [no-issue] BUG-11. Organ-failure stamina drain uses the wrong body-size floor
+
+> **Disposition:** No issue — already fixed by #2556 (PR #2617, merged
+> 2026-09-12). `unit_resource_energy.minFatFor` is now the single fat-floor
+> policy (`0.02 * frame_mass`, height-only fallback for pre-`frame_mass` units)
+> and `unit_resource_tick` reads it through `energy.atFatFloor` with the shared
+> tolerance. `Test.Headless.Unit.FrameOrganFailure` covers slim, bulky, and
+> bulk-1.0 frames at and above the floor.
 
 **Verification:** Verified with real stat storage. The stamina path both
 starts organ failure above the intended fat floor for a smaller frame and
@@ -623,7 +638,7 @@ provided for fat. Cover bulk below and above 1, exact exhaustion, and legacy
 units without `frame_mass`. This does not imply that a large-frame unit can
 never die; dehydration, injury, or lean-tissue loss remain other death paths.
 
-### BUG-12. Float rounding can prevent the starvation death threshold from firing
+### [#2630] BUG-12. Float rounding can prevent the starvation death threshold from firing
 
 **Verification:** Verified through real Float stat writes. At frame mass
 100.1, 100 consecutive starvation ticks of 10 seconds each left lean mass at
@@ -669,7 +684,7 @@ Test upward- and downward-rounded floors with real stored values, an exact
 floor, and a clearly above-floor living control. Other resource death paths
 may mask this fault in a full simulation; they do not repair it.
 
-### BUG-13. Autonomous drinking credits water that was not drained
+### [#2631] BUG-13. Autonomous drinking credits water that was not drained
 
 **Verification:** Verified with the real autonomous action and real hydration
 storage, injecting the inventory/drain boundary. A nil, zero, or short drain
@@ -716,7 +731,15 @@ from the already-recorded coffee finding in `project_review_1642-1631.md` and
 its fix: that code path is now correct. The injected cases establish response
 handling, not a measured frequency of live inventory races.
 
-### BUG-14. Injury recovery interrupts source drinking and leaves its action locked
+### [no-issue] BUG-14. Injury recovery interrupts source drinking and leaves its action locked
+
+> **Disposition:** No issue — already fixed by #2545 (PR #2620, merged
+> 2026-09-12). `unit_resource_injury` now exempts an active `sourcePhase` from
+> the healthy-crawler revive alongside the sleep chain, and
+> `unit_ai_source_phase` bounds the phase lock and abandons it (unwinding
+> Crouching) when a revive, preemption, or lost water stops progress.
+> `Test.Headless.Unit.SourceDrinkPose` covers the composed injury/resource/AI
+> path including interruption and dried-up water.
 
 **Verification:** Verified by composing the real source-drinking and injury
 modules under a controlled command-execution schedule. A healthy unit reaches
@@ -764,7 +787,7 @@ including losing water or being interrupted, rather than only testing each
 transition helper alone. The exact live symptom depends on scheduling:
 injury recovery may also interrupt the descent before the AI observes it.
 
-### BUG-15. Small resource changes are discarded forever instead of accumulated
+### [#2633] BUG-15. Small resource changes are discarded forever instead of accumulated
 
 **Verification:** Verified with the real resource tick, shipped squirrel
 sleep-pressure configuration, and real Float storage. Equal simulated time
@@ -820,7 +843,7 @@ implementation files did not change between those revisions. Reproductions
 use the existing headless test component's REPL and real production helpers.
 No implementation or test files were edited.
 
-### BUG-16. Electrical networks disconnect at the cylindrical seam
+### [#2634] BUG-16. Electrical networks disconnect at the cylindrical seam
 
 **Verification:** A two-tile wire run crossing the cylindrical seam becomes
 two electrical networks, leaving its attached battery uncharged. A comparable
@@ -871,7 +894,7 @@ wire adjacency and node/consumer attachment. Cover each of those boundaries,
 including a single wire touching a node across the seam, independently of the
 already passing solar-phase and chunk-residency tests.
 
-### BUG-17. Focus cleanup discards typed dropdown choices before submission
+### [#2636] BUG-17. Focus cleanup discards typed dropdown choices before submission
 
 **Verification:** The real dropdown, button, and UI-manager Lua handlers
 produce different results for a direct outside-click callback and the actual
@@ -929,7 +952,7 @@ clicks, Apply/Save, and explicit Escape cancellation. A test that calls
 
 ## Body composition: extended September 7, 2026 audit
 
-### BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass
+### [#2637] BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass
 
 **Verification:** With ordinary acolyte-sized body stats, the real regrowth
 helper at its routine 0.1-second cadence spends calories but produces no idle
@@ -1016,7 +1039,7 @@ end-to-end stabilization observations. The two findings below establish
 specific current implementation defects beyond that broader coverage gap;
 SURV-9's owner-approved above-collapse locomotion policy is unaffected.
 
-### BUG-19. Treatment aliases separate wounds inflicted at the same game time
+### [#2638] BUG-19. Treatment aliases separate wounds inflicted at the same game time
 
 **Verification:** One real antibiotic treatment changed two wounds after
 consuming one dose. Worse, the less-infected wound increased from 0.1 to 0.4
@@ -1076,7 +1099,7 @@ types and a less-infected non-target whose infection must never increase.
 If the chosen solution changes persisted wound records, follow the save
 schema/migration contract.
 
-### BUG-20. Healing does not restore blood needed for revival
+### [#2639] BUG-20. Healing does not restore blood needed for revival
 
 **Verification:** After the real wound tick removed a patient's final healed
 wound, 10,000 ticks left blood at 1 L of a 5.25 L maximum. The real revival
@@ -1138,7 +1161,15 @@ asserts only wound removal misses the blocked recovery step.
 
 ## Repair ownership: September 7, 2026 continuation
 
-### BUG-21. Ground-repair return retries never end after the item leaves its worker
+### [no-issue] BUG-21. Ground-repair return retries never end after the item leaves its worker
+
+> **Disposition:** No issue — already fixed by #2531 (PR #2601, merged
+> 2026-09-10). `abortRepairJob` parks a failed ground return in `returning` only
+> while `targets.ownsLooseInstance` confirms the exact instance is still loose
+> on this worker, and `execute` releases the job in every phase once it has
+> left, before refreshing the claim. `Test.Headless.Lua.UnitAiRepairGround`
+> covers the transferred target, the in-retry handoff, a successor's claim, and
+> the still-held page-loss retry.
 
 **Verification:** After a real pickup and a real transfer of the target to
 another unit, aborting its repair entered `returning`. One hundred further
@@ -1200,7 +1231,7 @@ still preempt it, but ordinary work stays displaced whenever repair resumes.
 
 ## Building work eligibility: September 7, 2026 continuation
 
-### BUG-22. Dead and collapsed builders continue producing building progress
+### [#2641] BUG-22. Dead and collapsed builders continue producing building progress
 
 **Verification:** The real construction update and real building-progress
 API added `10.000001907349` worker-seconds in each of three cases: the sole
@@ -1285,7 +1316,7 @@ same-page conditions below uncovered. Source freshness was checked again at
 `cfd30002dde1901f91ad7db251a07f1e01889330`; the only intervening source
 change was an unrelated worker-shutdown comment. No full suite was run.
 
-### BUG-23. Dead and collapsed medics retain claims that block replacement treatment
+### [#2642] BUG-23. Dead and collapsed medics retain claims that block replacement treatment
 
 **Verification:** A dead or collapsed medic's retained claim made a nearby
 healthy medic return utility `-inf` for a still-wounded ally. Calling the
@@ -1338,7 +1369,7 @@ claim exclusivity for a living, available owner and the existing page/combat
 exceptions. Avoid relying solely on new-candidate ranking, which this path
 never reaches.
 
-### BUG-24. An out-of-range preferred medic prevents nearby medics from treating
+### [#2643] BUG-24. An out-of-range preferred medic prevents nearby medics from treating
 
 **Verification:** With a patient one tile from a novice medic and 100 tiles
 from an expert, BOTH medics returned treatment utility `-inf`. Moving only
@@ -1395,7 +1426,7 @@ Test just inside, exactly on and outside the discovery boundary, differing
 capabilities, and a nearby fallback. Retain the intended preference for a
 better medic who can actually take the job.
 
-### BUG-25. Autonomous infection treatment ignores antibiotic kits without bandages
+### [#2644] BUG-25. Autonomous infection treatment ignores antibiotic kits without bandages
 
 **Verification:** A medic with infection-control knowledge repeatedly failed
 to treat infection 0.6 despite a same-page supplier one tile away holding

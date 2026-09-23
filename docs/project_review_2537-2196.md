@@ -36,13 +36,13 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Propagate nested session-reset failures to load reconciliation
-- [ ] PRR-2. Verify retained payload integrity before reporting unchanged publication
-- [ ] PRR-3. Reject case aliases of reserved generated-library payload names
+- [x] PRR-1. Propagate nested session-reset failures to load reconciliation — [#2645]
+- [x] PRR-2. Verify retained payload integrity before reporting unchanged publication — [#2646]
+- [x] PRR-3. Reject case aliases of reserved generated-library payload names — [#2647]
 
 ## 1. Load reconciliation
 
-### PRR-1. Propagate nested session-reset failures to load reconciliation
+### [#2645] PRR-1. Propagate nested session-reset failures to load reconciliation
 
 > **Captured note:** PR #2238 adds correctness-relevant session resets under
 > a registry that logs and swallows each failure. The outer load callback
@@ -77,7 +77,7 @@ and pre-bootstrap behavior, not this nested error.
 
 ## 2. Generated-library publication integrity
 
-### PRR-2. Verify retained payload integrity before reporting unchanged publication
+### [#2646] PRR-2. Verify retained payload integrity before reporting unchanged publication
 
 > **Captured note:** PR #2133's idempotent publication branch compares
 > descriptor digests after a size-only check of the existing payload. It
@@ -123,7 +123,7 @@ withSystemTempDirectory "pr2133-corruption" $ \root -> do { let { cfg = L.defaul
 - **Deduplication:** Open/closed searches for generated-library publication, republish integrity, and `PublishedUnchanged` found #2024 and umbrella #2017, but no separate defect owner; local findings contain no duplicate.
 - **Remaining uncertainty:** None about the reproduced API behavior. Runtime integration and ordinary corruption frequency are not measured.
 
-### PRR-3. Reject case aliases of reserved generated-library payload names
+### [#2647] PRR-3. Reject case aliases of reserved generated-library payload names
 
 > **Captured note:** PR #2133 rejects the literal reserved name
 > `entry.record` but accepts `ENTRY.RECORD`. On a case-insensitive filesystem

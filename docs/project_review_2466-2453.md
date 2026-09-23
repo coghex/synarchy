@@ -22,11 +22,11 @@ Status legend: `[ ]` unprocessed · `[#N]` filed as issue N · `[no-issue]` revi
 
 ## Status
 
-- [ ] PRR-1. Pose transitions can revive a dead unit despite the terminal-death contract
+- [x] PRR-1. Pose transitions can revive a dead unit despite the terminal-death contract — [#2651]
 
 ## 1. Terminal unit death
 
-### PRR-1. Pose transitions can revive a dead unit despite the terminal-death contract
+### [#2651] PRR-1. Pose transitions can revive a dead unit despite the terminal-death contract
 
 > **Captured note:** Enforce terminal death when executing an ordinary pose
 > transition. PR #2453 / issue #1967 documents `Dead` as terminal but accepts
