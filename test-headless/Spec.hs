@@ -59,6 +59,7 @@ import qualified Test.Headless.Unit.FrameOrganFailure as FrameOrganFailure
 import qualified Test.Headless.Unit.LeanFloorDeath as LeanFloorDeath
 import qualified Test.Headless.Unit.SourceDrinkingHydration as SourceDrinkingHydration
 import qualified Test.Headless.Unit.ResourceTickCarry as ResourceTickCarry
+import qualified Test.Headless.Unit.RegrowthPrecision as RegrowthPrecision
 import qualified Test.Headless.Unit.SourceDrinkPose as SourceDrinkPose
 import qualified Test.Headless.Unit.TerminalDeathPose as TerminalDeathPose
 import qualified Test.Headless.Unit.StaminaCommit as StaminaCommit
@@ -919,6 +920,7 @@ main = hspec $ do
     LeanFloorDeath.spec
     SourceDrinkingHydration.spec
     ResourceTickCarry.spec
+    RegrowthPrecision.spec
     SourceDrinkPose.spec
     TerminalDeathPose.spec
     StaminaCommit.spec

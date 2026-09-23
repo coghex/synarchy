@@ -39,6 +39,7 @@ local alerts          = require("scripts.unit_resource_alerts")
 local energy          = require("scripts.unit_resource_energy")
 local resourceTick    = require("scripts.unit_resource_tick")
 local resourceCarry   = require("scripts.unit_resource_carry")
+local regrowth        = require("scripts.unit_resource_regrowth")
 local injuryTick      = require("scripts.unit_resource_injury")
 local failureMeters   = require("scripts.unit_resource_failure")
 local starvation      = require("scripts.starvation")
@@ -70,10 +71,15 @@ function unitResources.init(scriptId)
     -- (#2633): its per-uid sub-binary32 remainders are meaningless
     -- once a load has replaced the stored values they are remainders
     -- of, and a rewound umNextId can hand the same uid to a different
-    -- unit.
+    -- unit. unit_resource_regrowth (#2637) is the same kind of cache
+    -- for fat/lean/body residues plus the implicit organ baseline:
+    -- each residue is at most half an ulp, and the baseline is
+    -- reconstructed from the stored masses on the next regrowth tick,
+    -- so a load owes nothing across the boundary.
     local function clearSessionCaches()
         alerts.resetOnLoad()
         resourceCarry.resetOnLoad()
+        regrowth.resetOnLoad()
     end
     local saveMods = require("scripts.lib.save_modules")
     saveMods.registerResetHook("unit_resources", clearSessionCaches)
@@ -81,7 +87,7 @@ function unitResources.init(scriptId)
     -- Exit to Menu is a SECOND session-replacement path and it runs
     -- NONE of the load machinery above (#1610): no applyAll, so no
     -- reset hook, and no onSaveLoaded broadcast. It replaces the entity
-    -- managers and can rewind umNextId exactly as a load does, so both
+    -- managers and can rewind umNextId exactly as a load does, so these
     -- caches have precisely the same reason to be cleared there, and
     -- the same clear does it. Registered with the id these caches
     -- already use; the two registries are independent namespaces
@@ -97,7 +103,7 @@ function unitResources.update(dt)
     -- #1610's drain window: between Exit to Menu and the next session
     -- the engine's UnitClearAll is still draining, so unit.getAllIds
     -- below still reports the destroyed session's units. Ticking them
-    -- would re-enter both caches the teardown just cleared -- a fresh
+    -- would re-enter the caches the teardown just cleared -- a fresh
     -- alert-debounce row and a fresh sub-binary32 remainder, per unit,
     -- against a manager that is about to be replaced. unitAi.update and
     -- buildingSpawn.update hold off on the same latch for the same
