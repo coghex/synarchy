@@ -210,9 +210,9 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
                     if ledger.blocked(need_exclusive, need_shared):
                         continue
                     # The flock request drops whatever an ancestor already
-                    # holds exclusively for us (#1570); the ledger above
-                    # keeps the full declarations, so this runner still
-                    # serialises its own probes.
+                    # holds on our behalf in a sufficient mode (#1570);
+                    # the ledger keeps the full declarations, so this
+                    # runner still serialises its own probes.
                     lock_exclusive, lock_shared = resources.cross_process_interests(
                         probe[0], namespace)
                     # The cross-process half, taken at the SAME point and in
