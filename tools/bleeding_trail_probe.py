@@ -82,6 +82,7 @@ PASS  = all checks hold.
 FAIL  = any check violated (bug in the emitters or their wiring).
 """
 from __future__ import annotations
+import probe_protocol
 import argparse
 import glob
 import math
@@ -119,6 +120,24 @@ UNLOADED_SPAWN_WARNING = "unit.spawn: chunk not loaded"
 # Float slop for comparing positions the engine reports back as JSON
 # numbers (they round-trip through a Lua double and a text encoding).
 EPS = 1e-3
+
+
+CHECKS = [
+    ('moving_trail', 'moving trail'),
+    ('scaled_trail', 'scaled trail'),
+    ('internal_wound_dry', 'internal wound dry'),
+    ('death_stops_trail', 'death stops trail'),
+    ('clot_stops_trail', 'clot stops trail'),
+    ('stationary_pool', 'stationary pool'),
+    ('pool_bound', 'pool bound'),
+    ('clot_stops_pool', 'clot stops pool'),
+    ('walk_then_pool', 'walk then pool'),
+    ('collapsed_pool_and_death', 'collapsed pool and death'),
+    ('independent_pools', 'independent pools'),
+    ('pool_time_scale', 'pool time scale'),
+    ('loaded_spawn_surfaces', 'loaded spawn surfaces'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('bleeding_trail', CHECKS)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -429,14 +448,36 @@ def wait_arrival(uid: int, target_x: float, timeout: float = 90.0,
     return poll_until(timeout, arrived, interval=1.0) is not None
 
 
+def _check(rep, check_id, passed, human):
+    """Preserve the legacy bare PASS/FAIL text outside the lab."""
+    if rep.protocol_mode:
+        rep.check(check_id, passed, human, {"observed": human})
+    else:
+        print(human)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9041)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the check contract without booting an engine")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
     global PORT
     PORT = args.port
 
-    proc = boot(PORT, log=LOG)
+    log = rep.engine_log_path("bleeding_trail_engine.log", LOG)
+    proc = boot(PORT, log=log, args=rep.engine_args())
     try:
         bootstrap_defs(PORT)
         init_arena(PORT)
@@ -476,18 +517,18 @@ def main() -> int:
             return 2
         ds = route_marks(uid, impact_ids)
         if not ds:
-            print("FAIL: no trail decals appeared along a bled, moved route")
+            _check(rep, 'moving_trail', False, "FAIL: no trail decals appeared along a bled, moved route")
             return 1
         xs = [d["x"] for d in ds]
         if max(xs) - min(xs) < MIN_DISTANCE:
-            print(f"FAIL: marks not spread along the route (x span "
+            _check(rep, 'moving_trail', False, f"FAIL: marks not spread along the route (x span "
                   f"{max(xs) - min(xs):.3f} < {MIN_DISTANCE})")
             return 1
         if not (lower_bound <= len(ds) <= upper_bound):
-            print(f"FAIL: mark count {len(ds)} outside documented bounds "
+            _check(rep, 'moving_trail', False, f"FAIL: mark count {len(ds)} outside documented bounds "
                   f"[{lower_bound},{upper_bound}] for a {route}-tile route")
             return 1
-        print(f"PASS: {len(ds)} marks spread along the route "
+        _check(rep, 'moving_trail', True, f"PASS: {len(ds)} marks spread along the route "
               f"(bounds [{lower_bound},{upper_bound}], x span "
               f"{max(xs) - min(xs):.2f})")
         destroy(uid)
@@ -511,10 +552,10 @@ def main() -> int:
                   f"gridX={grid_x(uid)})")
             return 2
         if not (lower_bound <= len(ds) <= upper_bound):
-            print(f"FAIL: mark count {len(ds)} outside bounds "
+            _check(rep, 'scaled_trail', False, f"FAIL: mark count {len(ds)} outside bounds "
                   f"[{lower_bound},{upper_bound}] at world.setTimeScale(5.0)")
             return 1
-        print(f"PASS: {len(ds)} marks at world.setTimeScale(5.0) — "
+        _check(rep, 'scaled_trail', True, f"PASS: {len(ds)} marks at world.setTimeScale(5.0) — "
               f"same bounds hold (trail cadence ignores the world calendar)")
         destroy(uid)
 
@@ -529,12 +570,12 @@ def main() -> int:
         ds = trail_decals(impact_ids)
         after = blood_of(uid)
         if ds:
-            print(f"FAIL: internal-only wound produced {len(ds)} trail marks")
+            _check(rep, 'internal_wound_dry', False, f"FAIL: internal-only wound produced {len(ds)} trail marks")
             return 1
         if not (after < before):
-            print(f"FAIL: internal wound did not drain blood ({before} -> {after})")
+            _check(rep, 'internal_wound_dry', False, f"FAIL: internal wound did not drain blood ({before} -> {after})")
             return 1
-        print(f"PASS: internal-only wound moved with zero trail marks "
+        _check(rep, 'internal_wound_dry', True, f"PASS: internal-only wound moved with zero trail marks "
               f"(blood {before:.3f} -> {after:.3f})")
         destroy(uid)
 
@@ -557,17 +598,17 @@ def main() -> int:
         # uiTrailState synchronously with the kill) rather than assuming
         # a single immediate check lands after that has happened.
         if poll_until(5.0, lambda: trail_state(uid) is None, interval=0.2) is None:
-            print(f"FAIL: trail state still active after death: "
+            _check(rep, 'death_stops_trail', False, f"FAIL: trail state still active after death: "
                   f"{trail_state(uid)!r}")
             return 1
         before_n = len(trail_decals(impact_ids))
         time.sleep(2.0)
         after_n = len(trail_decals(impact_ids))
         if after_n != before_n:
-            print(f"FAIL: a dead unit kept adding trail marks "
+            _check(rep, 'death_stops_trail', False, f"FAIL: a dead unit kept adding trail marks "
                   f"({before_n} -> {after_n})")
             return 1
-        print("PASS: death stops the trail cleanly (no crash, no further "
+        _check(rep, 'death_stops_trail', True, "PASS: death stops the trail cleanly (no crash, no further "
               "marks, getTrailState clears)")
         destroy(uid)
 
@@ -603,7 +644,7 @@ def main() -> int:
             patrol()
         early_n = len(trail_decals(impact_ids))
         if early_n == 0:
-            print("FAIL: no marks appeared while the wound was fresh/bleeding")
+            _check(rep, 'clot_stops_trail', False, "FAIL: no marks appeared while the wound was fresh/bleeding")
             return 1
 
         def clotted() -> bool:
@@ -627,12 +668,12 @@ def main() -> int:
             return trail_state(uid) is None
 
         if poll_until(10.0, trail_cleared, interval=0.5) is None:
-            print(f"FAIL: getTrailState still active long after full clot: "
+            _check(rep, 'clot_stops_trail', False, f"FAIL: getTrailState still active long after full clot: "
                   f"{trail_state(uid)!r}")
             return 1
         cleared_n = len(trail_decals(impact_ids))
         if cleared_n != mid_n:
-            print(f"FAIL: a mark was emitted AFTER bleedRate already read "
+            _check(rep, 'clot_stops_trail', False, f"FAIL: a mark was emitted AFTER bleedRate already read "
                   f"zero, between clot detection and getTrailState "
                   f"clearing ({mid_n} -> {cleared_n})")
             return 1
@@ -644,10 +685,10 @@ def main() -> int:
             patrol()
         late_n = len(trail_decals(impact_ids))
         if not (late_n == cleared_n):
-            print(f"FAIL: marks kept appearing after getTrailState cleared "
+            _check(rep, 'clot_stops_trail', False, f"FAIL: marks kept appearing after getTrailState cleared "
                   f"({cleared_n} -> {late_n})")
             return 1
-        print(f"PASS: marks stopped once clot drove external bleed to zero "
+        _check(rep, 'clot_stops_trail', True, f"PASS: marks stopped once clot drove external bleed to zero "
               f"(early={early_n}, mid={mid_n}, cleared={cleared_n}, "
               f"late={late_n}); getTrailState cleared")
         destroy(uid)
@@ -667,12 +708,12 @@ def main() -> int:
         impact_ids = impact_decal_ids()
 
         if poll_until(20.0, lambda: cluster_layers(uid) >= 2, interval=0.5) is None:
-            print(f"FAIL: a stationary bleeding unit never grew a pool "
+            _check(rep, 'stationary_pool', False, f"FAIL: a stationary bleeding unit never grew a pool "
                   f"(getTrailState={trail_state(uid)!r})")
             return 1
         anchor = cluster_anchor(uid)
         if anchor is None:
-            print("FAIL: getTrailState reports no cluster anchor while layering")
+            _check(rep, 'stationary_pool', False, "FAIL: getTrailState reports no cluster anchor while layering")
             return 1
         # The anchor sits ON the unit, checked against the unit's own
         # reported position rather than the anchor's self-report — the
@@ -682,7 +723,7 @@ def main() -> int:
         # full tile away.
         ux, uy = unit_pos(uid)
         if dist(anchor[0], anchor[1], ux, uy) > POOL_JITTER_RADIUS + EPS:
-            print(f"FAIL: cluster anchored {dist(anchor[0], anchor[1], ux, uy):.3f} "
+            _check(rep, 'stationary_pool', False, f"FAIL: cluster anchored {dist(anchor[0], anchor[1], ux, uy):.3f} "
                   f"tiles from the unit at ({ux}, {uy}) (> {POOL_JITTER_RADIUS})")
             return 1
         early_layers = cluster_layers(uid)
@@ -693,12 +734,12 @@ def main() -> int:
         target = early_layers + 2
         if poll_until(20.0, lambda: cluster_layers(uid) >= target,
                        interval=0.5) is None:
-            print(f"FAIL: pool stopped growing at {cluster_layers(uid)} layers "
+            _check(rep, 'stationary_pool', False, f"FAIL: pool stopped growing at {cluster_layers(uid)} layers "
                   f"well before the {POOL_MAX_LAYERS}-layer bound")
             return 1
         later_marks = pool_marks(anchor, impact_ids, uid)
         if len(later_marks) <= len(early_marks):
-            print(f"FAIL: pool mark count did not grow "
+            _check(rep, 'stationary_pool', False, f"FAIL: pool mark count did not grow "
                   f"({len(early_marks)} -> {len(later_marks)})")
             return 1
 
@@ -707,20 +748,20 @@ def main() -> int:
         txs = textures()
         for d in later_marks:
             if d.get("sourceUnit") != uid:
-                print(f"FAIL: pool mark {d['id']} has sourceUnit="
+                _check(rep, 'stationary_pool', False, f"FAIL: pool mark {d['id']} has sourceUnit="
                       f"{d.get('sourceUnit')!r}, expected {uid}")
                 return 1
             tex = txs.get(d["texture"])
             if tex is None:
-                print(f"FAIL: pool mark {d['id']} references unknown texture "
+                _check(rep, 'stationary_pool', False, f"FAIL: pool mark {d['id']} references unknown texture "
                       f"{d['texture']}")
                 return 1
             if tex["style"] not in POOL_STYLES:
-                print(f"FAIL: pool mark {d['id']} style={tex['style']!r}, "
+                _check(rep, 'stationary_pool', False, f"FAIL: pool mark {d['id']} style={tex['style']!r}, "
                       f"expected one of {POOL_STYLES}")
                 return 1
             if tex["footprint"] != "small":
-                print(f"FAIL: pool mark {d['id']} footprint="
+                _check(rep, 'stationary_pool', False, f"FAIL: pool mark {d['id']} footprint="
                       f"{tex['footprint']!r}, expected 'small' (a pool grows "
                       f"by layering, never by one bigger mark)")
                 return 1
@@ -730,17 +771,17 @@ def main() -> int:
         after = stable_snapshot(decals())
         for did, fields in before.items():
             if did not in after:
-                print(f"FAIL: decal {did} vanished while the pool grew")
+                _check(rep, 'stationary_pool', False, f"FAIL: decal {did} vanished while the pool grew")
                 return 1
             if after[did] != fields:
-                print(f"FAIL: decal {did} was MUTATED by pool growth: "
+                _check(rep, 'stationary_pool', False, f"FAIL: decal {did} was MUTATED by pool growth: "
                       f"{fields!r} -> {after[did]!r}")
                 return 1
         if len(after) <= len(before):
-            print(f"FAIL: pool growth added no new decal ids "
+            _check(rep, 'stationary_pool', False, f"FAIL: pool growth added no new decal ids "
                   f"({len(before)} -> {len(after)})")
             return 1
-        print(f"PASS: stationary bleeder grew a clustered pool "
+        _check(rep, 'stationary_pool', True, f"PASS: stationary bleeder grew a clustered pool "
               f"({len(early_marks)} -> {len(later_marks)} marks within "
               f"{POOL_JITTER_RADIUS} of anchor {anchor}); growth strictly "
               f"additive ({len(before)} -> {len(after)} decals, none mutated)")
@@ -751,12 +792,12 @@ def main() -> int:
         # cannot fast-forward the dwell.
         if poll_until(60.0, lambda: (trail_state(uid) or {}).get("clusterAtBound"),
                        interval=0.5) is None:
-            print(f"FAIL: pool never reached the {POOL_MAX_LAYERS}-layer bound "
+            _check(rep, 'pool_bound', False, f"FAIL: pool never reached the {POOL_MAX_LAYERS}-layer bound "
                   f"within 60s (getTrailState={trail_state(uid)!r})")
             return 1
         at_bound = trail_state(uid) or {}
         if at_bound.get("clusterLayers") != POOL_MAX_LAYERS:
-            print(f"FAIL: clusterAtBound is set at "
+            _check(rep, 'pool_bound', False, f"FAIL: clusterAtBound is set at "
                   f"{at_bound.get('clusterLayers')} layers, expected exactly "
                   f"{POOL_MAX_LAYERS}")
             return 1
@@ -772,7 +813,7 @@ def main() -> int:
             time.sleep(0.5)
             n = len(pool_marks(anchor, impact_ids, uid))
             if n != bound_n:
-                print(f"FAIL: pool kept growing past the bound "
+                _check(rep, 'pool_bound', False, f"FAIL: pool kept growing past the bound "
                       f"({bound_n} -> {n} marks, layers="
                       f"{cluster_layers(uid)})")
                 return 1
@@ -783,7 +824,7 @@ def main() -> int:
                   f"external bleed after the bound — the wound clotted too "
                   f"fast to prove the bound actually holds it back")
             return 2
-        print(f"PASS: pooling saturates at exactly {POOL_MAX_LAYERS} layers "
+        _check(rep, 'pool_bound', True, f"PASS: pooling saturates at exactly {POOL_MAX_LAYERS} layers "
               f"({bound_n} marks) and adds nothing further across "
               f"{bleeding_samples} samples with a live bleed")
         destroy(uid)
@@ -797,7 +838,7 @@ def main() -> int:
         injure(uid, "slash", 0.06)
         impact_ids = impact_decal_ids()
         if poll_until(25.0, lambda: cluster_layers(uid) >= 1, interval=0.5) is None:
-            print("FAIL: a fresh low-severity bleed never pooled at all")
+            _check(rep, 'clot_stops_pool', False, "FAIL: a fresh low-severity bleed never pooled at all")
             return 1
         peak = [cluster_layers(uid)]
 
@@ -817,17 +858,17 @@ def main() -> int:
         # cluster would have cleared before it ever layered), and a peak
         # AT the bound would prove the bound stopped it, not the clot.
         if not (1 <= peak[0] < POOL_MAX_LAYERS):
-            print(f"FAIL: clot case peaked at {peak[0]} layers, outside "
+            _check(rep, 'clot_stops_pool', False, f"FAIL: clot case peaked at {peak[0]} layers, outside "
                   f"[1, {POOL_MAX_LAYERS}) — the clot, not the bound, has to "
                   f"be what stopped the layering here")
             return 1
         cleared_n = len(trail_decals(impact_ids))
         time.sleep(6.0)
         if len(trail_decals(impact_ids)) != cleared_n:
-            print(f"FAIL: marks kept appearing after the bleed clotted to zero "
+            _check(rep, 'clot_stops_pool', False, f"FAIL: marks kept appearing after the bleed clotted to zero "
                   f"({cleared_n} -> {len(trail_decals(impact_ids))})")
             return 1
-        print(f"PASS: clot stopped layering at {peak[0]} layers, short of the "
+        _check(rep, 'clot_stops_pool', True, f"PASS: clot stopped layering at {peak[0]} layers, short of the "
               f"{POOL_MAX_LAYERS}-layer bound; getTrailState cleared and no "
               f"further marks appeared")
         destroy(uid)
@@ -845,13 +886,13 @@ def main() -> int:
             return 2
         stop_anchor = cluster_anchor(uid)
         if stop_anchor is None:
-            print("FAIL: no cluster anchored after the unit stopped")
+            _check(rep, 'walk_then_pool', False, "FAIL: no cluster anchored after the unit stopped")
             return 1
         route_ds = route_marks(uid, impact_ids)
         stop_pos = unit_pos(uid)
         route_xs = [d["x"] for d in route_ds]
         if len(route_ds) < 2 or max(route_xs) - min(route_xs) < walk / 2:
-            print(f"FAIL: the walked leg left no real trail "
+            _check(rep, 'walk_then_pool', False, f"FAIL: the walked leg left no real trail "
                   f"({len(route_ds)} marks, x span "
                   f"{(max(route_xs) - min(route_xs)) if route_xs else 0:.2f})")
             return 1
@@ -860,7 +901,7 @@ def main() -> int:
                        lambda: len(pool_marks(stop_anchor, impact_ids, uid))
                                > before_stop + 1,
                        interval=0.5) is None:
-            print(f"FAIL: no pool grew at the stop point after the walk "
+            _check(rep, 'walk_then_pool', False, f"FAIL: no pool grew at the stop point after the walk "
                   f"(getTrailState={trail_state(uid)!r})")
             return 1
         # The pool must sit under the STOPPED unit. The anchor
@@ -872,11 +913,11 @@ def main() -> int:
         settled_anchor = cluster_anchor(uid)
         settled_pos = unit_pos(uid)
         if settled_anchor is None:
-            print("FAIL: the stop-point cluster lost its anchor while growing")
+            _check(rep, 'walk_then_pool', False, "FAIL: the stop-point cluster lost its anchor while growing")
             return 1
         drift = dist(settled_anchor[0], settled_anchor[1], *settled_pos)
         if drift > POOL_JITTER_RADIUS + EPS:
-            print(f"FAIL: the pool grew {drift:.3f} tiles from the stopped unit "
+            _check(rep, 'walk_then_pool', False, f"FAIL: the pool grew {drift:.3f} tiles from the stopped unit "
                   f"(anchor {settled_anchor}, unit {settled_pos}) — a "
                   f"walk-then-stop must pool AT the stop point, not back at "
                   f"the last radius crossing")
@@ -885,10 +926,10 @@ def main() -> int:
         far = [d for d in stop_marks
                if dist(d["x"], d["y"], *settled_pos) > POOL_JITTER_RADIUS + EPS]
         if far:
-            print(f"FAIL: {len(far)} stop-point marks landed further than "
+            _check(rep, 'walk_then_pool', False, f"FAIL: {len(far)} stop-point marks landed further than "
                   f"{POOL_JITTER_RADIUS} tiles from the unit at {settled_pos}")
             return 1
-        print(f"PASS: walk-then-stop used ONE accumulator — {len(route_ds)} "
+        _check(rep, 'walk_then_pool', True, f"PASS: walk-then-stop used ONE accumulator — {len(route_ds)} "
               f"trail marks spanning "
               f"{max(route_xs) - min(route_xs):.2f} tiles, then a "
               f"{len(stop_marks)}-mark cluster on the stopped unit "
@@ -909,7 +950,7 @@ def main() -> int:
         injure(uid, "slash", 0.2)
         impact_ids = impact_decal_ids()
         if poll_until(25.0, lambda: cluster_layers(uid) >= 3, interval=0.5) is None:
-            print(f"FAIL: a COLLAPSED bleeding unit did not pool "
+            _check(rep, 'collapsed_pool_and_death', False, f"FAIL: a COLLAPSED bleeding unit did not pool "
                   f"(getTrailState={trail_state(uid)!r})")
             return 1
         pose_now = send(PORT, f"return unit.getPose({uid})")
@@ -927,27 +968,27 @@ def main() -> int:
         # a layer legitimately landing between the pre-kill read and the
         # command being processed is the feature working, not a leak.
         if poll_until(6.0, lambda: trail_state(uid) is None, interval=0.2) is None:
-            print(f"FAIL: cluster state survived death: {trail_state(uid)!r}")
+            _check(rep, 'collapsed_pool_and_death', False, f"FAIL: cluster state survived death: {trail_state(uid)!r}")
             return 1
         dead_n = len(pool_marks(collapsed_anchor, impact_ids, uid))
         sample = decals()[-1]
         time.sleep(3.0 * POOL_MIN_CADENCE)
         after_death = len(pool_marks(collapsed_anchor, impact_ids, uid))
         if after_death != dead_n:
-            print(f"FAIL: a dead unit's pool kept growing "
+            _check(rep, 'collapsed_pool_and_death', False, f"FAIL: a dead unit's pool kept growing "
                   f"({dead_n} -> {after_death})")
             return 1
         # The marks themselves persist and keep aging.
         aged = [d for d in decals() if d["id"] == sample["id"]]
         if not aged:
-            print(f"FAIL: pool mark {sample['id']} disappeared when its source "
+            _check(rep, 'collapsed_pool_and_death', False, f"FAIL: pool mark {sample['id']} disappeared when its source "
                   f"unit died — marks must outlive their source")
             return 1
         if not (aged[0]["age"] > sample["age"]):
-            print(f"FAIL: pool mark {sample['id']} stopped aging after its "
+            _check(rep, 'collapsed_pool_and_death', False, f"FAIL: pool mark {sample['id']} stopped aging after its "
                   f"source died ({sample['age']} -> {aged[0]['age']})")
             return 1
-        print(f"PASS: a collapsed unit pooled ({collapsed_n} marks, {dead_n} by "
+        _check(rep, 'collapsed_pool_and_death', True, f"PASS: a collapsed unit pooled ({collapsed_n} marks, {dead_n} by "
               f"the time the kill landed); death dropped the cluster state with "
               f"no leak, and its marks persist and keep aging "
               f"({sample['age']:.2f}s -> {aged[0]['age']:.2f}s)")
@@ -966,13 +1007,13 @@ def main() -> int:
                        for u in (uid_a, uid_b))
 
         if poll_until(70.0, both_at_bound, interval=0.5) is None:
-            print(f"FAIL: two adjacent bleeders did not both reach the bound "
+            _check(rep, 'independent_pools', False, f"FAIL: two adjacent bleeders did not both reach the bound "
                   f"(A={trail_state(uid_a)!r}, B={trail_state(uid_b)!r})")
             return 1
         anchor_a = cluster_anchor(uid_a)
         anchor_b = cluster_anchor(uid_b)
         if anchor_a is None or anchor_b is None:
-            print("FAIL: one of the two bleeders reports no cluster anchor")
+            _check(rep, 'independent_pools', False, "FAIL: one of the two bleeders reports no cluster anchor")
             return 1
         # Farther apart than the CLUSTER radius, not merely the jitter
         # radius: two anchors closer than POOL_CLUSTER_RADIUS are within
@@ -981,7 +1022,7 @@ def main() -> int:
         # demonstrates two independent clusters.
         anchor_gap = dist(*anchor_a, *anchor_b)
         if anchor_gap <= POOL_CLUSTER_RADIUS + EPS:
-            print(f"FAIL: the two clusters anchored {anchor_gap:.3f} tiles "
+            _check(rep, 'independent_pools', False, f"FAIL: the two clusters anchored {anchor_gap:.3f} tiles "
                   f"apart ({anchor_a} vs {anchor_b}), within the "
                   f"{POOL_CLUSTER_RADIUS}-tile cluster radius — they must be "
                   f"independent")
@@ -990,14 +1031,14 @@ def main() -> int:
         marks_b = pool_marks(anchor_b, impact_ids, uid_b)
         for label, ms in (("A", marks_a), ("B", marks_b)):
             if not (0 < len(ms) <= POOL_MAX_LAYERS):
-                print(f"FAIL: bleeder {label}'s cluster holds {len(ms)} marks, "
+                _check(rep, 'independent_pools', False, f"FAIL: bleeder {label}'s cluster holds {len(ms)} marks, "
                       f"outside (0, {POOL_MAX_LAYERS}]")
                 return 1
         if {d["id"] for d in marks_a} & {d["id"] for d in marks_b}:
-            print("FAIL: the two clusters share marks — grouping by sourceUnit "
+            _check(rep, 'independent_pools', False, "FAIL: the two clusters share marks — grouping by sourceUnit "
                   "and anchor should make them disjoint")
             return 1
-        print(f"PASS: two adjacent bleeders grew two independent bounded "
+        _check(rep, 'independent_pools', True, f"PASS: two adjacent bleeders grew two independent bounded "
               f"clusters (A: {len(marks_a)} marks at {anchor_a}, "
               f"B: {len(marks_b)} marks at {anchor_b}, anchors "
               f"{anchor_gap:.2f} tiles apart > {POOL_CLUSTER_RADIUS})")
@@ -1031,20 +1072,27 @@ def main() -> int:
         expected = int(dwell_secs / POOL_MIN_CADENCE)
         for scale, n in counts.items():
             if not (expected - 1 <= n <= expected + 1):
-                print(f"FAIL: {n} layers in {dwell_secs}s at "
+                _check(rep, 'pool_time_scale', False, f"FAIL: {n} layers in {dwell_secs}s at "
                       f"world.setTimeScale({scale}), expected "
                       f"{expected}+/-1 — pool cadence is following the world "
                       f"calendar instead of the unpaused game clock")
                 return 1
-        print(f"PASS: pool density is time-scale invariant "
+        _check(rep, 'pool_time_scale', True, f"PASS: pool density is time-scale invariant "
               f"({counts[1.0]} layers at 1x vs {counts[5.0]} at 5x over "
               f"{dwell_secs}s real, expected {expected}+/-1)")
 
         # Nothing above can report success until the engine's own log
         # agrees every spawn landed on loaded arena terrain (#1395).
-        assert_no_unloaded_spawns()
+        try:
+            assert_no_unloaded_spawns(log)
+        except SystemExit:
+            if rep.protocol_mode:
+                rep.check("loaded_spawn_surfaces", False, "spawn surface log guard failed")
+            raise
+        if rep.protocol_mode:
+            rep.check("loaded_spawn_surfaces", True, "all spawns used loaded terrain")
 
-        print("\nPASS: all bleeding-trail and pooling checks held")
+        rep.note("\nPASS: all bleeding-trail and pooling checks held")
         return 0
     finally:
         quit_engine(PORT, proc)

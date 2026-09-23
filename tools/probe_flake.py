@@ -75,6 +75,7 @@ RESULT_SCHEMA = "probe-flake-result/v1"
 # harness works on a checkout with no docs worktree. Later migration
 # issues add one key each.
 PROTOCOL_PROBES: dict[str, str] = {
+    "bleeding_trail": probe_protocol.PROTOCOL_VERSION,
     "blood_decal": probe_protocol.PROTOCOL_VERSION,
     "blood_impact": probe_protocol.PROTOCOL_VERSION,
     "circadian": probe_protocol.PROTOCOL_VERSION,
@@ -91,7 +92,11 @@ PROTOCOL_PROBES: dict[str, str] = {
     "machine_shop": probe_protocol.PROTOCOL_VERSION,
     "meal_waste": probe_protocol.PROTOCOL_VERSION,
     "mental_efficiency": probe_protocol.PROTOCOL_VERSION,
+    "movement": probe_protocol.PROTOCOL_VERSION,
+    "multiworld_save": probe_protocol.PROTOCOL_VERSION,
     "pause_speed": probe_protocol.PROTOCOL_VERSION,
+    "persistence_integrity": probe_protocol.PROTOCOL_VERSION,
+    "plant": probe_protocol.PROTOCOL_VERSION,
     "portal_location": probe_protocol.PROTOCOL_VERSION,
     "position_hold": probe_protocol.PROTOCOL_VERSION,
     "remote_warning_page_guard": probe_protocol.PROTOCOL_VERSION,

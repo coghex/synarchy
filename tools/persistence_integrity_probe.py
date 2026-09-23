@@ -57,6 +57,7 @@ Exit 0 = every check above passed.
 """
 from __future__ import annotations
 
+import probe_protocol
 import argparse
 import glob
 import os
@@ -77,6 +78,27 @@ BUILD_SITE_DEF = "cargo_hold_S"
 BUILD_SITE_YAML = f"data/buildings/{BUILD_SITE_DEF}.yaml"
 
 
+CHECKS = [
+    ('build_site_destroyed', 'build site destroyed'),
+    ('build_target_cleared', 'build target cleared'),
+    ('save_integrity_diagnostic', 'save integrity diagnostic'),
+    ('save_dangling_reference', 'save dangling reference'),
+    ('no_stale_build_target', 'no stale build target'),
+    ('load_accepted', 'load accepted'),
+    ('load_published', 'load published'),
+    ('unit_restored', 'unit restored'),
+    ('load_integrity_diagnostic', 'load integrity diagnostic'),
+    ('load_dangling_reference', 'load dangling reference'),
+    ('destroyed_unit_named', 'destroyed unit named'),
+    ('corrupt_load_rejected', 'corrupt load rejected'),
+    ('corrupt_load_failed', 'corrupt load failed'),
+    ('rejected_load_paused', 'rejected load paused'),
+    ('active_page_unchanged', 'active page unchanged'),
+    ('unit_state_unchanged', 'unit state unchanged'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('persistence_integrity', CHECKS)
+
+
 def make_isolated_root(base: str) -> str:
     """A throwaway resource root: real scripts/assets/data/config
     (symlinked -- read-only content, safe to share) plus its OWN empty
@@ -92,8 +114,8 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
-def boot_probe(root: str, port: int, log: str):
-    return boot(port, log=log, args=["--resource-root", root], ready_timeout=180)
+def boot_probe(root: str, port: int, log: str, rep):
+    return boot(port, log=log, args=["--resource-root", root] + rep.engine_args(), ready_timeout=180)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -188,11 +210,12 @@ def dangling_build_target_lines(log_text: str, uid: int, bid: int) -> list[str]:
 
 
 class Checks:
-    def __init__(self) -> None:
+    def __init__(self, rep) -> None:
+        self.rep = rep
         self.failed = 0
 
-    def ok(self, cond: bool, label: str) -> None:
-        print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
+    def ok(self, check_id: str, cond: bool, label: str) -> None:
+        self.rep.check(check_id, bool(cond), label, {"observed": label})
         if not cond:
             self.failed += 1
 
@@ -210,19 +233,34 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9264)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=48)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the check contract without booting an engine")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
 
     tmp = tempfile.mkdtemp(prefix="synarchy_persistence_integrity_probe_")
     root = make_isolated_root(tmp)
-    log_a = os.path.join(tmp, "engineA.log")
-    log_b = os.path.join(tmp, "engineB.log")
-    chk = Checks()
+    log_a = rep.engine_log_path("persistence_integrity_a.log",
+                                     os.path.join(tmp, "engineA.log"))
+    log_b = rep.engine_log_path("persistence_integrity_b.log",
+                                     os.path.join(tmp, "engineB.log"))
+    chk = Checks(rep)
     proc_a = proc_b = proc_c = None
 
     try:
         # ── Engine A: build a valid session carrying a genuinely dangling
         #    Lua AI reference, save it ──────────────────────────────────
-        proc_a = boot_probe(root, args.port, log_a)
+        proc_a = boot_probe(root, args.port, log_a, rep)
         bootstrap_defs(args.port)
         load_ai_stack(args.port)
         send(args.port,
@@ -327,11 +365,11 @@ def main() -> int:
         # while the site still resolved.
         gone = poll_until(30.0, lambda: send(
             args.port, f"return building.getInfo({bid}) == nil") == "true")
-        chk.ok(bool(gone), f"build site #{bid} is observably destroyed")
+        chk.ok('build_site_destroyed', bool(gone), f"build site #{bid} is observably destroyed")
 
         cleared = poll_until(45.0,
             lambda: ai_build_target(args.port, c) == "nil")
-        chk.ok(bool(cleared),
+        chk.ok('build_target_cleared', bool(cleared),
                f"unit #{c}'s cached buildTarget is cleared at runtime, without "
                f"waiting for a save and load "
                f"(buildTarget={ai_build_target(args.port, c)!r})")
@@ -386,9 +424,9 @@ def main() -> int:
         # check reports -- proving save and load share one graph rather
         # than only the load boundary being checked.
         log_a_text = read_log(log_a)
-        chk.ok("integrity diagnostic" in log_a_text,
+        chk.ok('save_integrity_diagnostic', "integrity diagnostic" in log_a_text,
                "engine A's log records an integrity diagnostic AT SAVE TIME")
-        chk.ok("unit_ai" in log_a_text and "dangling-reference" in log_a_text,
+        chk.ok('save_dangling_reference', "unit_ai" in log_a_text and "dangling-reference" in log_a_text,
                "the save-time diagnostic names unit_ai and is coded "
                "'dangling-reference'")
 
@@ -399,26 +437,26 @@ def main() -> int:
         # tuple -- check 1's own attackTargetUid diagnostic is in here
         # too and must not satisfy it.
         stale = dangling_build_target_lines(log_a_text, c, bid)
-        chk.ok(not stale,
+        chk.ok('no_stale_build_target', not stale,
                f"the save carries NO 'unit[{c}].buildTarget -> building "
                f"{bid}' dangling-reference diagnostic"
                + (f" (found: {stale[0]!r})" if stale else ""))
 
         # ── Engine B: fresh restart. Load the valid save; the dangling
         #    reference must be diagnosed, never load-blocking ─────────
-        proc_b = boot_probe(root, args.port, log_b)
+        proc_b = boot_probe(root, args.port, log_b, rep)
         bootstrap_defs(args.port)
         load_ai_stack(args.port)
 
         print("\n--- tolerated dangling Lua reference ---")
         loaded = send(args.port, f"return engine.loadSave('{SLOT}')")
-        chk.ok(loaded.strip() == "true",
+        chk.ok('load_accepted', loaded.strip() == "true",
                f"engine.loadSave accepted the request ({loaded!r})")
         published, status = wait_load_published(args.port)
-        chk.ok(published,
+        chk.ok('load_published', published,
                f"a dangling (tolerated) Lua reference does NOT block the "
                f"load ({status})")
-        chk.ok(send(args.port, f"return unit.exists({a})") == "true",
+        chk.ok('unit_restored', send(args.port, f"return unit.exists({a})") == "true",
                f"unit #{a} survived the load despite carrying a dangling "
                f"reference")
 
@@ -432,12 +470,12 @@ def main() -> int:
         quit_engine(args.port, proc_b)
         proc_b = None
         log_text = read_log(log_b)
-        chk.ok("integrity diagnostic" in log_text,
+        chk.ok('load_integrity_diagnostic', "integrity diagnostic" in log_text,
                "engine B's log records at least one integrity diagnostic")
-        chk.ok("unit_ai" in log_text and "dangling-reference" in log_text,
+        chk.ok('load_dangling_reference', "unit_ai" in log_text and "dangling-reference" in log_text,
                "the diagnostic names the unit_ai component and is coded "
                "'dangling-reference'")
-        chk.ok(f" {b} " in log_text or f" {b}\n" in log_text or f"unit {b}" in log_text,
+        chk.ok('destroyed_unit_named', f" {b} " in log_text or f" {b}\n" in log_text or f"unit {b}" in log_text,
                f"the diagnostic names the destroyed unit's id (#{b})")
 
         # ── Engine C: fresh restart, re-establish the SAME live session
@@ -445,8 +483,9 @@ def main() -> int:
         #    save is rejected WITHOUT touching that already-loaded
         #    session — leaving it unchanged and paused ─────────────────
         print("\n--- corrupted save is rejected without touching the live session ---")
-        log_c = os.path.join(tmp, "engineC.log")
-        proc_c = boot_probe(root, args.port, log_c)
+        log_c = rep.engine_log_path("persistence_integrity_c.log",
+                                     os.path.join(tmp, "engineC.log"))
+        proc_c = boot_probe(root, args.port, log_c, rep)
         bootstrap_defs(args.port)
         load_ai_stack(args.port)
         loaded_c = send(args.port, f"return engine.loadSave('{SLOT}')")
@@ -473,18 +512,18 @@ def main() -> int:
         # the assertion below doesn't race a slower failure path.
         if bad_load.strip() == "true":
             _, bad_status = wait_load_published(args.port)
-        chk.ok(bad_load.strip() != "true"
+        chk.ok('corrupt_load_rejected', bad_load.strip() != "true"
                or (isinstance(bad_status, dict) and bad_status.get("phase") == "LoadFailed"),
                f"engine.loadSave rejects a truncated save (loadSave={bad_load!r}, "
                f"status={bad_status})")
-        chk.ok(isinstance(bad_status, dict) and bad_status.get("phase") == "LoadFailed",
+        chk.ok('corrupt_load_failed', isinstance(bad_status, dict) and bad_status.get("phase") == "LoadFailed",
                f"engine.getLoadStatus() reports LoadFailed ({bad_status})")
-        chk.ok(send(args.port, "return engine.isPaused()") == "true",
+        chk.ok('rejected_load_paused', send(args.port, "return engine.isPaused()") == "true",
                "the engine stays paused after a rejected load")
-        chk.ok(send(args.port, "return world.getActiveWorldId()") == marker_active,
+        chk.ok('active_page_unchanged', send(args.port, "return world.getActiveWorldId()") == marker_active,
                "the live session's active page is UNCHANGED after the "
                "rejected load")
-        chk.ok(send(args.port, f"return unit.exists({a})") == marker_unit_a,
+        chk.ok('unit_state_unchanged', send(args.port, f"return unit.exists({a})") == marker_unit_a,
                "the live session's unit state is UNCHANGED after the "
                "rejected load")
 
