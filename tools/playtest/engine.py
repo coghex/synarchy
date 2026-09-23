@@ -286,6 +286,16 @@ def _lua_number(value: float) -> str:
     return repr(float(value))
 
 
+def _error_value(value, limit: int = 24) -> str:
+    """A compact rendering of a rejected payload for an ActionError.
+
+    The message is copied into the player's rolling memory, so an
+    oversized provider value must not be spelled out in full.
+    """
+    text = repr(value)
+    return text if len(text) <= limit else f"{text[:12]}...({len(text)} chars)"
+
+
 def _requested_repr(value) -> str:
     """The delta the player asked for, as text for its own turn note.
 
@@ -345,7 +355,7 @@ def bound_scroll_dy(dy):
     if isinstance(dy, bool) or not isinstance(dy, (int, float)):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a number in "
-            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {dy!r}; "
+            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {_error_value(dy)}; "
             f"no scroll was sent")
     if isinstance(dy, int):
         # Python ints are arbitrary precision, so a schema-valid FINITE
@@ -363,7 +373,7 @@ def bound_scroll_dy(dy):
     if not math.isfinite(value):
         raise ActionError(
             f"action 'scroll' rejected: dy must be a finite number in "
-            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {value!r}; "
+            f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}], got {_error_value(value)}; "
             f"no scroll was sent")
     if SCROLL_DY_MIN <= value <= SCROLL_DY_MAX:
         return value, None
@@ -495,9 +505,18 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
         # and the player-facing notch vocabulary are about dy alone.
         # NOT `action.get("dy") or 0`: that turns a `false` into 0 and so
         # coerces a contract violation into a silently valid gesture
-        # before it can be rejected. Only an absent dy defaults.
+        # before it can be rejected. An absent dy (including a provider
+        # null that normalize_turn dropped) is a refusal, not a silent
+        # zero: the camera reads only dy, so forwarding dx with dy=0 is
+        # a no-op for the zoom the player narrated (#2652).
         raw_dy = action.get("dy")
-        dy, dy_note = bound_scroll_dy(0 if raw_dy is None else raw_dy)
+        if raw_dy is None:
+            raise ActionError(
+                f"action 'scroll' rejected: dy (the wheel field) is "
+                f"required and must be a number in "
+                f"[{SCROLL_DY_MIN:g}, {SCROLL_DY_MAX:g}]; "
+                f"no scroll was sent")
+        dy, dy_note = bound_scroll_dy(raw_dy)
         calls = []
         if action.get("x") is not None and action.get("y") is not None:
             x, y = xy()

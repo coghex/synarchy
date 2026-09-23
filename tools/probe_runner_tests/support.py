@@ -219,7 +219,7 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         # #2274):
         # the resolved engine executable, the compiled save codec, and
         # the resources an ancestor
-        # already holds exclusively on its behalf. One line per attempt,
+        # already holds on its behalf. One line per attempt,
         # empty when the variable was absent -- which is itself the
         # assertion for a probe that must be left on the direct-invocation
         # fallback.
@@ -227,6 +227,7 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         "print(os.environ.get('SYNARCHY_PROBE_ENGINE_EXE', ''),"
         " os.environ.get('SYNARCHY_SAVE_CODEC_EXE', ''),"
         " os.environ.get('SYNARCHY_PROBE_HELD_EXCLUSIVE', ''),"
+        " os.environ.get('SYNARCHY_PROBE_HELD_SHARED', ''),"
         " os.environ.get('SYNARCHY_PROBE_HELD_NAMESPACE', ''),"
         " sep='|', file=_ef)",
         "_ef.flush()",
@@ -360,8 +361,8 @@ class Tree:
         self.codec.write_text("#!/bin/sh\nexit 0\n")
         self.codec.chmod(0o755)
 
-    def env_lines(self, name: str) -> list[tuple[str, str, str, str]]:
-        """`(engine, codec, held-exclusive, held-namespace)` per attempt."""
+    def env_lines(self, name: str) -> list[tuple[str, str, str, str, str]]:
+        """`(engine, codec, held-exclusive, held-shared, namespace)` per attempt."""
         try:
             raw = (self.root / f"{name}.env").read_text()
         except OSError:
@@ -369,17 +370,17 @@ class Tree:
         out = []
         for line in raw.splitlines():
             parts = line.split("|")
-            if len(parts) == 4:
-                out.append((parts[0], parts[1], parts[2], parts[3]))
+            if len(parts) == 5:
+                out.append((parts[0], parts[1], parts[2], parts[3], parts[4]))
         return out
 
     def engine_exes(self, name: str) -> list[str]:
         """The engine executable each attempt of this probe was handed."""
-        return [exe for exe, _, _, _ in self.env_lines(name)]
+        return [exe for exe, _, _, _, _ in self.env_lines(name)]
 
     def codec_exes(self, name: str) -> list[str]:
         """The save codec each attempt of this probe was handed (#2274)."""
-        return [codec for _, codec, _, _ in self.env_lines(name)]
+        return [codec for _, codec, _, _, _ in self.env_lines(name)]
 
     def add(self, name: str, **kw) -> str:
         script = f"{name}_probe.py"

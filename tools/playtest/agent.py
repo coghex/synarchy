@@ -63,7 +63,7 @@ SCROLL_ACTION_LINE = (
     f'Ask for several notches at once (e.g. "dy":{SCROLL_MULTI_NOTCH:g}) '
     'to travel further in one go — the wheel moves further per notch the '
     'further out you already are. Optional "x","y" to aim the pointer '
-    'first.'
+    'first. A scroll without dy is refused.'
 )
 SCROLL_SCHEMA_DESCRIPTION = (
     f'Vertical wheel delta in notches: one notch is {SCROLL_DY_NOTCH:g}, '

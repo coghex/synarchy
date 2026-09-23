@@ -88,8 +88,8 @@ helper without a cycle.
 The path is hashed rather than embedded, so a lock file name is a fixed
 length whatever the checkout is called and holds no path separators.
 
-Acquisition is ALL-OR-NOTHING and never waits while holding
------------------------------------------------------------
+Acquisition is ALL-OR-NOTHING; waiters use a conflict-aware queue
+----------------------------------------------------------------
 `acquire` takes the whole interest set or none of it. The set is taken
 in sorted name order and every attempt is non-blocking, so no process
 ever holds one resource while waiting for another and a deadlock cycle
@@ -97,10 +97,27 @@ cannot form. A conflict rolls back everything already taken and raises
 `ResourceBusy`, naming the resource, the interest that was refused, and
 whatever live holders could be identified.
 
-`wait_acquire` is the polling wrapper for a caller that must eventually
-run (the sequential probe runner); `acquire` is what a caller that must
-report instead of waiting uses (`/deflake`, and the parallel scheduler's
-dispatch attempt).
+`wait_acquire` is for a caller that must eventually run (the sequential
+probe runner). It publishes one immutable, flock-backed queue entry for
+its complete interest set. Conflicting waiters are admitted in queue order;
+non-conflicting waiters may proceed together. While an older exclusive
+request is queued, a later shared `acquire` is refused instead of repeatedly
+barging ahead of the writer. A descendant covered by an existing ancestor
+hold inherits that hold through `probe_runner_resources` rather than making
+a new request. Existing holders drain naturally, so a Cabal
+preflight cannot be starved by a continuous succession of `/deflake`
+readers.
+
+The queue mutex covers only admission decisions and the atomic attempt to
+take the real resources. Nobody waits for a real resource while holding the
+mutex. A killed waiter releases the flock on its queue entry; the next
+admission pass reaps that entry, so the queue has the same crash recovery as
+the resource locks and no stale timeout.
+
+`acquire` remains the non-waiting operation for callers that must report
+instead of queue (`/deflake`, and the parallel scheduler's dispatch
+attempt). It checks queued requests before taking a resource, which is the
+writer-priority boundary the old polling loop lacked.
 
 Release is ownership-safe by construction
 -----------------------------------------
@@ -169,6 +186,11 @@ NOTE_REAP_GRACE_SECONDS = 30.0
 DEFAULT_POLL_SECONDS = 1.0
 DEFAULT_ANNOUNCE_SECONDS = 30.0
 
+# Queue entries are immutable, live while their own flock is held, and
+# ordered by a sequence allocated under the namespace's queue mutex.
+QUEUE_ENTRY = "waiter"
+QUEUE_MUTEX = "queue"
+
 # A resource name is a table key in `probe_runner_resources`, but it becomes
 # part of
 # a filename in a world-writable directory, so it is validated rather
@@ -203,7 +225,8 @@ class ResourceBusy(Exception):
     def describe(self) -> str:
         who = ", ".join(
             f"{holder.get('owner') or 'an unidentified process'}"
-            f" ({holder.get('interest', '?')})"
+            f" ({holder.get('interest', '?')}"
+            f"{', queued' if holder.get('state') == 'queued' else ''})"
             for holder in self.holders)
         detail = f"; held by {who}" if who else ""
         return (f"the {self.interest} interest in resource "
@@ -382,6 +405,18 @@ def lock_path(resource: str, *, namespace: str, root: Path | None = None) -> Pat
                    f"-res-{require_name(resource, 'a resource name')}")
 
 
+def queue_mutex_path(*, namespace: str, root: Path | None = None) -> Path:
+    """The admission mutex shared by every resource in `namespace`."""
+    base = Path(root) if root is not None else LOCK_ROOT
+    return base / (f"{SHARED_PREFIX}-{require_name(namespace, 'a namespace')}"
+                   f"-{QUEUE_MUTEX}")
+
+
+def _queue_entry_glob(namespace: str) -> str:
+    return (f"{SHARED_PREFIX}-{require_name(namespace, 'a namespace')}"
+            f"-{QUEUE_ENTRY}-*.json")
+
+
 def _note_glob(namespace: str) -> str:
     return f"{SHARED_PREFIX}-{namespace}-holder-*.json"
 
@@ -540,6 +575,245 @@ class _Note:
 
 
 # --------------------------------------------------------------------------
+# Conflict-aware admission queue
+# --------------------------------------------------------------------------
+def _try_queue_mutex(namespace: str, base: Path) -> int | None:
+    """Take the namespace admission mutex without waiting.
+
+    `None` means another admission pass owns it. An unsafe mutex path is a
+    hard refusal: proceeding without the queue would restore reader barging
+    exactly when an exclusive waiter depends on it.
+    """
+    path = queue_mutex_path(namespace=namespace, root=base)
+    fd = _open_shared_lock_file(path, os.O_CREAT | os.O_RDWR)
+    if fd is None:
+        raise ResourceLockError(
+            f"the resource-queue mutex {path} is not a plain file this "
+            f"process may safely lock; no resource was acquired")
+    _share_file(fd)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        if error.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+            return None
+        raise ResourceLockError(
+            f"could not lock the resource-queue mutex {path} ({error})") \
+            from None
+    return fd
+
+
+def _release_queue_mutex(fd: int | None) -> None:
+    if fd is None:
+        return
+    with contextlib.suppress(OSError):
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    with contextlib.suppress(OSError):
+        os.close(fd)
+
+
+def _queue_document(path: Path, fd: int) -> dict:
+    """Read and validate one live immutable queue entry."""
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = b""
+        while len(raw) <= 65536:
+            chunk = os.read(fd, 65537 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+        if len(raw) > 65536:
+            raise ValueError("entry is larger than 64 KiB")
+        document = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise ResourceLockError(
+            f"the live resource-queue entry {path} is unreadable ({error}); "
+            f"no resource was acquired") from None
+    if not isinstance(document, dict):
+        raise ResourceLockError(
+            f"the live resource-queue entry {path} is not an object; "
+            f"no resource was acquired")
+    sequence = document.get("sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) \
+            or sequence < 1:
+        raise ResourceLockError(
+            f"the live resource-queue entry {path} has an invalid sequence; "
+            f"no resource was acquired")
+    try:
+        exclusive, shared = _normalize(document.get("exclusive"),
+                                       document.get("shared"))
+    except ResourceLockError as error:
+        raise ResourceLockError(
+            f"the live resource-queue entry {path} is invalid ({error}); "
+            f"no resource was acquired") from None
+    if not exclusive and not shared:
+        raise ResourceLockError(
+            f"the live resource-queue entry {path} requests no resources; "
+            f"no resource was acquired")
+    document["exclusive"] = sorted(exclusive)
+    document["shared"] = sorted(shared)
+    return document
+
+
+def _live_queue_entries(namespace: str, base: Path) -> list[dict]:
+    """Return live queue entries in admission order, reaping dead names."""
+    entries = []
+    try:
+        paths = sorted(base.glob(_queue_entry_glob(namespace)))
+    except OSError as error:
+        raise ResourceLockError(
+            f"could not inspect the resource queue in {base} ({error})") \
+            from None
+    for path in paths:
+        fd = _open_shared_lock_file(path, os.O_RDONLY)
+        if fd is None:
+            if not path.exists():
+                continue
+            raise ResourceLockError(
+                f"the resource-queue entry {path} is not a plain file this "
+                f"process may safely inspect; no resource was acquired")
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno not in (errno.EWOULDBLOCK, errno.EAGAIN,
+                                       errno.EACCES):
+                    raise ResourceLockError(
+                        f"could not inspect the resource-queue entry {path} "
+                        f"({error})") from None
+                entries.append(_queue_document(path, fd))
+                continue
+
+            # The publisher is gone. The entry cannot become live again:
+            # its owner locked it before the atomic rename and never unlocks
+            # while queued. Unlinking may fail across local users in sticky
+            # `/tmp`; treating the unlocked name as dead is sufficient.
+            with contextlib.suppress(OSError):
+                path.unlink()
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+    return sorted(entries, key=lambda entry: entry["sequence"])
+
+
+class _QueueEntry:
+    """One waiter's immutable, flock-backed place in the admission queue."""
+
+    def __init__(self, path: Path, fd: int, document: dict):
+        self.path = path
+        self._fd: int | None = fd
+        self.document = document
+
+    @property
+    def sequence(self) -> int:
+        return self.document["sequence"]
+
+    @classmethod
+    def publish(cls, namespace: str, base: Path, *, exclusive: frozenset,
+                shared: frozenset, purpose: str,
+                live_entries: list[dict]) -> "_QueueEntry":
+        """Publish after the caller takes the queue mutex."""
+        sequence = max((entry["sequence"] for entry in live_entries),
+                       default=0) + 1
+        token = uuid.uuid4().hex[:8]
+        path = base / (f"{SHARED_PREFIX}-{namespace}-{QUEUE_ENTRY}-"
+                       f"{sequence:020d}-{os.getpid()}-{token}.json")
+        staging = path.with_suffix(".staging")
+        document = {
+            "sequence": sequence,
+            "owner": _owner_description(),
+            "pid": os.getpid(),
+            "purpose": purpose or "",
+            "exclusive": sorted(exclusive),
+            "shared": sorted(shared),
+            "queued_at": time.time(),
+        }
+        payload = json.dumps(document, sort_keys=True).encode("utf-8")
+        try:
+            fd = os.open(staging,
+                         os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW,
+                         SHARED_FILE_MODE)
+        except OSError as error:
+            raise ResourceLockError(
+                f"could not create the resource-queue entry {staging} "
+                f"({error}); nothing was queued") from None
+        _share_file(fd)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            offset = 0
+            while offset < len(payload):
+                written = os.write(fd, payload[offset:])
+                if written <= 0:
+                    raise OSError("queue entry write made no progress")
+                offset += written
+            os.replace(staging, path)
+        except OSError as error:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                staging.unlink()
+            raise ResourceLockError(
+                f"could not publish the resource-queue entry {path} "
+                f"({error}); nothing was queued") from None
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            with contextlib.suppress(OSError):
+                staging.unlink()
+            raise
+        return cls(path, fd, document)
+
+    def withdraw(self) -> None:
+        """Remove this waiter's place. Idempotent and ownership-safe."""
+        if self._fd is None:
+            return
+        with contextlib.suppress(OSError):
+            self.path.unlink()
+        with contextlib.suppress(OSError):
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+        with contextlib.suppress(OSError):
+            os.close(self._fd)
+        self._fd = None
+
+
+def _conflicting_resource(exclusive: frozenset, shared: frozenset,
+                          queued: dict) -> tuple[str, str] | None:
+    """The first requested resource conflicting with `queued`, if any."""
+    queued_exclusive = frozenset(queued["exclusive"])
+    queued_shared = frozenset(queued["shared"])
+    for resource in sorted(exclusive | shared):
+        if resource in exclusive:
+            if resource in queued_exclusive or resource in queued_shared:
+                return resource, EXCLUSIVE
+        elif resource in queued_exclusive:
+            return resource, SHARED
+    return None
+
+
+def _queued_busy(exclusive: frozenset, shared: frozenset, queued: dict,
+                 namespace: str) -> ResourceBusy | None:
+    conflict = _conflicting_resource(exclusive, shared, queued)
+    if conflict is None:
+        return None
+    resource, interest = conflict
+    queued_interest = (EXCLUSIVE if resource in queued["exclusive"]
+                       else SHARED)
+    return ResourceBusy(
+        resource, interest, namespace=namespace,
+        holders=[{
+            "owner": queued.get("owner"),
+            "pid": queued.get("pid"),
+            "purpose": queued.get("purpose"),
+            "interest": queued_interest,
+            "acquired": queued.get("queued_at"),
+            "state": "queued",
+        }])
+
+
+# --------------------------------------------------------------------------
 # The hold
 # --------------------------------------------------------------------------
 class ResourceHold:
@@ -618,23 +892,10 @@ def _normalize(exclusive, shared) -> tuple[frozenset, frozenset]:
     return exclusive, shared - exclusive
 
 
-def acquire(*, exclusive=(), shared=(), namespace: str,
-            root: Path | None = None, purpose: str = "") -> ResourceHold:
-    """Take the whole interest set, or none of it. Never waits.
-
-    Names are taken in sorted order and every attempt is non-blocking,
-    so this can neither deadlock against another caller (nobody ever
-    waits while holding) nor be starved into a partial acquisition: the
-    first refusal rolls back everything already taken and raises
-    `ResourceBusy`.
-
-    An empty interest set is a legitimate hold that owns nothing, so a
-    caller never has to branch on whether its probe declared anything.
-    """
-    require_name(namespace, "a namespace")
-    want_exclusive, want_shared = _normalize(exclusive, shared)
-    base = _check_shared_dir(Path(root) if root is not None else LOCK_ROOT)
-
+def _acquire_resources(*, want_exclusive: frozenset,
+                       want_shared: frozenset, namespace: str, base: Path,
+                       purpose: str) -> ResourceHold:
+    """Take normalized real-resource interests; queue admission is done."""
     plan = sorted([(name, EXCLUSIVE) for name in want_exclusive] +
                   [(name, SHARED) for name in want_shared])
     fds: dict = {}
@@ -702,21 +963,69 @@ def acquire(*, exclusive=(), shared=(), namespace: str,
     return ResourceHold(namespace, want_exclusive, want_shared, fds, note)
 
 
+def _first_interest(exclusive: frozenset,
+                    shared: frozenset) -> tuple[str, str]:
+    plan = sorted([(name, EXCLUSIVE) for name in exclusive] +
+                  [(name, SHARED) for name in shared])
+    return plan[0]
+
+
+def acquire(*, exclusive=(), shared=(), namespace: str,
+            root: Path | None = None, purpose: str = "") -> ResourceHold:
+    """Take the whole interest set immediately, or none of it.
+
+    The namespace queue mutex is also attempted non-blockingly. Under it,
+    every live queued request gets priority over this unqueued caller when
+    their interests conflict. If another admission pass briefly owns that
+    mutex, this call raises ResourceBusy with no named holders even when its
+    resources do not conflict. Non-conflicting work remains independent
+    once the mutex is available.
+
+    An empty interest set is a legitimate hold that owns nothing, so a
+    caller never has to branch on whether its probe declared anything.
+    """
+    require_name(namespace, "a namespace")
+    want_exclusive, want_shared = _normalize(exclusive, shared)
+    base = _check_shared_dir(Path(root) if root is not None else LOCK_ROOT)
+    if not want_exclusive and not want_shared:
+        return _acquire_resources(
+            want_exclusive=want_exclusive, want_shared=want_shared,
+            namespace=namespace, base=base, purpose=purpose)
+
+    queue_fd = _try_queue_mutex(namespace, base)
+    if queue_fd is None:
+        resource, interest = _first_interest(want_exclusive, want_shared)
+        raise ResourceBusy(resource, interest, namespace=namespace)
+    try:
+        for queued in _live_queue_entries(namespace, base):
+            busy = _queued_busy(want_exclusive, want_shared, queued,
+                                namespace)
+            if busy is not None:
+                raise busy
+        return _acquire_resources(
+            want_exclusive=want_exclusive, want_shared=want_shared,
+            namespace=namespace, base=base, purpose=purpose)
+    finally:
+        _release_queue_mutex(queue_fd)
+
+
 def wait_acquire(*, exclusive=(), shared=(), namespace: str,
                  root: Path | None = None, purpose: str = "",
                  poll: float = DEFAULT_POLL_SECONDS,
                  announce=None,
                  announce_interval: float = DEFAULT_ANNOUNCE_SECONDS,
-                 sleep=time.sleep) -> ResourceHold:
-    """`acquire`, retried until it succeeds.
+                 sleep=time.sleep,
+                 deadline: float | None = None) -> ResourceHold:
+    """Queue one complete interest set until it can be acquired.
 
     For a caller that must eventually run the probe rather than report
-    that it could not — the sequential probe runner. It is deliberately
-    unbounded, and that is safe rather than optimistic: an flock dies
-    with the open file description that holds it, so a crashed or killed
-    holder releases everything instantly and there is no stale state to
-    time out against. Only a live process still doing the work it
-    declared can keep us here, which is the same wait
+    that it could not — the sequential probe runner. Conflicting requests
+    are admitted in queue order; non-conflicting requests may proceed.
+    It is unbounded unless the caller supplies an absolute monotonic
+    `deadline`. Both resource holds and queue entries die with their flock,
+    so a crashed or killed process leaves no live state to time out against.
+    Only a live process still doing the work it declared can keep us here,
+    which is the same wait
     `probe_runner_resources.ResourceLedger` already imposes within one
     sweep.
 
@@ -725,15 +1034,89 @@ def wait_acquire(*, exclusive=(), shared=(), namespace: str,
     launched, so a probe's own elapsed time and timeout cover execution
     alone.
     """
+    require_name(namespace, "a namespace")
+    want_exclusive, want_shared = _normalize(exclusive, shared)
+    base = _check_shared_dir(Path(root) if root is not None else LOCK_ROOT)
+    if not want_exclusive and not want_shared:
+        return _acquire_resources(
+            want_exclusive=want_exclusive, want_shared=want_shared,
+            namespace=namespace, base=base, purpose=purpose)
+
     announced = None
-    while True:
-        try:
-            return acquire(exclusive=exclusive, shared=shared,
-                           namespace=namespace, root=root, purpose=purpose)
-        except ResourceBusy as busy:
-            now = time.monotonic()
-            if announce is not None and (announced is None or
-                                         now - announced >= announce_interval):
-                announce(busy)
-                announced = now
+
+    def announce_busy(busy: ResourceBusy) -> None:
+        nonlocal announced
+        now = time.monotonic()
+        if announce is not None and (announced is None or
+                                     now - announced >= announce_interval):
+            announce(busy)
+            announced = now
+
+    def wait_after(busy: ResourceBusy) -> None:
+        announce_busy(busy)
+        if deadline is None:
             sleep(poll)
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise busy
+        sleep(max(0.0, min(poll, remaining)))
+
+    entry = None
+    try:
+        while entry is None:
+            queue_fd = _try_queue_mutex(namespace, base)
+            if queue_fd is None:
+                resource, interest = _first_interest(want_exclusive,
+                                                     want_shared)
+                wait_after(ResourceBusy(resource, interest,
+                                        namespace=namespace))
+                continue
+            try:
+                live = _live_queue_entries(namespace, base)
+                entry = _QueueEntry.publish(
+                    namespace, base, exclusive=want_exclusive,
+                    shared=want_shared, purpose=purpose,
+                    live_entries=live)
+            finally:
+                _release_queue_mutex(queue_fd)
+
+        while True:
+            busy = None
+            queue_fd = _try_queue_mutex(namespace, base)
+            if queue_fd is None:
+                resource, interest = _first_interest(want_exclusive,
+                                                     want_shared)
+                busy = ResourceBusy(resource, interest,
+                                    namespace=namespace)
+            else:
+                try:
+                    live = _live_queue_entries(namespace, base)
+                    for queued in live:
+                        if queued["sequence"] >= entry.sequence:
+                            break
+                        busy = _queued_busy(want_exclusive, want_shared,
+                                            queued, namespace)
+                        if busy is not None:
+                            break
+                    if busy is None:
+                        try:
+                            hold = _acquire_resources(
+                                want_exclusive=want_exclusive,
+                                want_shared=want_shared,
+                                namespace=namespace, base=base,
+                                purpose=purpose)
+                        except ResourceBusy as conflict:
+                            busy = conflict
+                        else:
+                            entry.withdraw()
+                            entry = None
+                            return hold
+                finally:
+                    _release_queue_mutex(queue_fd)
+
+            assert busy is not None
+            wait_after(busy)
+    finally:
+        if entry is not None:
+            entry.withdraw()
