@@ -360,6 +360,10 @@ function randbox.new(params)
     end
 
     randboxes[id] = rb
+    -- #2655: the text element was created with the complete value.
+    -- Clip it before the caller can show the widget; updateDisplay is
+    -- otherwise only reached from a later edit.
+    randbox.updateDisplay(id)
 
     engine.logDebug("RandBox created: " .. rb.name
         .. " type=" .. rb.randType
@@ -506,6 +510,56 @@ end
 -- Display Update
 -----------------------------------------------------------
 
+-- Code-point window that contains `cursorPos` and fits in `available`
+-- pixels. A code point wider than the field is dropped whole; the
+-- stored value is never sliced on a byte boundary.
+local function visibleWindow(rb, text, cursorPos, available)
+    local length = utf8Safe.codepointLength(text)
+    if cursorPos < 0 then cursorPos = 0 end
+    if cursorPos > length then cursorPos = length end
+
+    local function widthOf(sample)
+        return engine.getTextWidth(rb.font, sample, rb.fontSize)
+    end
+
+    if available <= 0 then
+        return "", cursorPos, 0
+    end
+
+    local fullWidth = widthOf(text)
+    if fullWidth <= available then
+        return text, 0, fullWidth
+    end
+
+    -- Most code points immediately before the cursor that still fit,
+    -- then whatever follows still fits. Home and a left arrow therefore
+    -- reveal the insertion point. textbox.lua instead keeps a suffix
+    -- and only clamps the caret, which hides the cursor once it enters
+    -- the clipped head.
+    local startPos = cursorPos
+    for i = 0, cursorPos do
+        local candidate = utf8Safe.slice(text, i, cursorPos)
+        if widthOf(candidate) <= available then
+            startPos = i
+            break
+        end
+    end
+
+    local visible = utf8Safe.slice(text, startPos, cursorPos)
+    local width = widthOf(visible)
+    for i = cursorPos + 1, length do
+        local candidate = utf8Safe.slice(text, startPos, i)
+        local w = widthOf(candidate)
+        if w <= available then
+            visible = candidate
+            width = w
+        else
+            break
+        end
+    end
+    return visible, startPos, width
+end
+
 function randbox.updateDisplay(id)
     local rb = randboxes[id]
     if not rb then return end
@@ -513,19 +567,45 @@ function randbox.updateDisplay(id)
 
     local text = UI.getTextInput(rb.boxId) or ""
     local cursorPos = UI.getCursor(rb.boxId) or 0
-
-    local textWidth = engine.getTextWidth(rb.font, text, rb.fontSize)
-    local textX = rb.textPadding
     local textY = (rb.height / 2) + (rb.fontSize / 3)
 
-    UI.setText(rb.textId, text)
+    -- Text ink stays inside the padding. While focused, the caret is a
+    -- "|" centered on the insertion point and its whole glyph has to
+    -- stay inside the input box: the dice button begins at inputWidth,
+    -- so half the glyph is reserved on whichever edge the cursor is on.
+    local textX = rb.textPadding
+    local maxRight = rb.inputWidth - rb.textPadding
+    local caretW = 0
+    if rb.focused and rb.cursorId then
+        caretW = engine.getTextWidth(rb.font, "|", rb.fontSize)
+        local half = caretW / 2
+        if textX < half then textX = half end
+        local caretLimit = rb.inputWidth - half
+        if caretLimit < maxRight then maxRight = caretLimit end
+    end
+    local available = maxRight - textX
+    if available < 0 then available = 0 end
+
+    local visible, startPos, _ = visibleWindow(rb, text, cursorPos, available)
+    UI.setText(rb.textId, visible)
     UI.setPosition(rb.textId, textX, textY)
 
     if rb.cursorId and rb.focused then
-        local textBeforeCursor = utf8Safe.prefix(text, cursorPos)
-        local cursorTextWidth = engine.getTextWidth(rb.font, textBeforeCursor, rb.fontSize)
-        local cursorX = textX + cursorTextWidth
-                      - (engine.getTextWidth(rb.font, "|", rb.fontSize) / 2)
+        local length = utf8Safe.codepointLength(text)
+        if cursorPos < 0 then cursorPos = 0 end
+        if cursorPos > length then cursorPos = length end
+        local localCursor = cursorPos - startPos
+        local visLen = utf8Safe.codepointLength(visible)
+        if localCursor < 0 then localCursor = 0 end
+        if localCursor > visLen then localCursor = visLen end
+        local beforeW = engine.getTextWidth(
+            rb.font, utf8Safe.prefix(visible, localCursor), rb.fontSize)
+        local half = caretW / 2
+        local cursorX = textX + beforeW - half
+        if cursorX < 0 then cursorX = 0 end
+        local maxCursor = rb.inputWidth - caretW
+        if maxCursor < 0 then maxCursor = 0 end
+        if cursorX > maxCursor then cursorX = maxCursor end
         UI.setPosition(rb.cursorId, cursorX, textY)
     end
 end
