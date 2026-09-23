@@ -17,7 +17,7 @@ Twenty-three groups over `probe_runner_resources`:
   not deadlock against its ancestor;
   the preflight build excludes a foreign runner and waits for one;
   the hold environment names what a probe holds, and a probe is handed
-  its runner's exclusive holds;
+  its runner's exclusive and shared holds;
   no registered probe launches the engine through Cabal;
   the resource ledger is a reader/writer lock, and the cross-process half
   of it behaves against a FOREIGN holder in all four combinations.
@@ -39,6 +39,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from .support import (
     PreflightRecorder,
@@ -402,6 +403,23 @@ def test_an_ancestors_exclusive_hold_is_not_waited_on() -> None:
     expect("repo-config" in lock_shared,
            f"while everything else is still requested "
            f"(got {sorted(lock_shared)})")
+    shared_env = {probe_runner_resources.ENV_HELD_NAMESPACE: namespace,
+                  probe_runner_resources.ENV_HELD_SHARED: "repo-config"}
+    _, child_shared = (
+        probe_runner_resources.cross_process_interests(
+            "chop", namespace, shared_env))
+    expect("repo-config" not in child_shared,
+           "a shared descendant uses its ancestor's shared hold")
+    config_exclusive, _ = probe_runner_resources.cross_process_interests(
+        "config_state", namespace, shared_env)
+    expect("repo-config" in config_exclusive,
+           "an inherited shared hold never covers an exclusive request")
+    foreign_shared_env = dict(shared_env, **{
+        probe_runner_resources.ENV_HELD_NAMESPACE: "somewhere-else"})
+    _, foreign_child_shared = probe_runner_resources.cross_process_interests(
+        "chop", namespace, foreign_shared_env)
+    expect("repo-config" in foreign_child_shared,
+           "a shared hold from another namespace is ignored")
     nested_exclusive, _ = probe_runner_resources.cross_process_interests(
         "save_compat_migration", namespace, env)
     expect(not nested_exclusive,
@@ -593,15 +611,26 @@ def test_a_nested_preflight_does_not_wait_on_its_ancestor() -> None:
 
 
 def test_the_hold_environment_names_what_a_probe_holds() -> None:
-    print("\n-- a probe is told what its runner holds exclusively for it")
+    print("\n-- a probe is told what its runner holds for it")
     namespace = "selftest-hold-env"
     env = probe_runner_resources.descendant_hold_env("save_compat_migration", namespace)
     expect(env.get(probe_runner_resources.ENV_HELD_EXCLUSIVE) == "cabal-build",
            f"an exclusive holder exports its resource (got {env!r})")
+    expect(env.get(probe_runner_resources.ENV_HELD_SHARED) == "repo-config",
+           f"and exports its shared resource (got {env!r})")
     expect(env.get(probe_runner_resources.ENV_HELD_NAMESPACE) == namespace,
            f"qualified by the namespace it was taken in (got {env!r})")
-    expect(probe_runner_resources.descendant_hold_env("chop", namespace) == {},
-           "a probe holding nothing exclusively exports nothing")
+    shared_env = probe_runner_resources.descendant_hold_env("chop", namespace)
+    expect(shared_env.get(probe_runner_resources.ENV_HELD_SHARED)
+           == "cabal-build,repo-config",
+           f"an ordinary probe exports both shared holds (got {shared_env!r})")
+    with patch.dict(os.environ, env):
+        nested_env = probe_runner_resources.descendant_hold_env("chop", namespace)
+    expect(nested_env.get(probe_runner_resources.ENV_HELD_EXCLUSIVE)
+           == "cabal-build"
+           and nested_env.get(probe_runner_resources.ENV_HELD_SHARED)
+           == "repo-config",
+           f"a second nesting level keeps both holds (got {nested_env!r})")
     expect(probe_runner_resources.descendant_hold_env("save_compat_migration", None) == {},
            "and without a namespace there is nothing to export")
 
@@ -620,9 +649,11 @@ def test_a_probe_is_handed_its_runners_exclusive_holds() -> None:
         lines = tree.env_lines("config_state")
         expect(len(lines) == 1, f"it ran once (got {lines})")
         if lines:
-            _exe, _codec, held, held_ns = lines[0]
+            _exe, _codec, held, held_shared, held_ns = lines[0]
             expect(held == "repo-config",
                    f"and was told what its runner holds for it (got {held!r})")
+            expect(held_shared == "cabal-build",
+                   f"and was told its shared hold (got {held_shared!r})")
             expect(held_ns == fixture.namespace,
                    f"in the runner's own namespace (got {held_ns!r})")
     finally:

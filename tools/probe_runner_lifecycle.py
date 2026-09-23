@@ -311,8 +311,8 @@ def run_one(script: str, port: int | None, timeout: float,
     The four `probe-result/v1` keyword parameters are that protocol's
     wiring (#1425), handed to the child through the environment so a
     migrated probe needs no new command-line flags. `hold_env` is the
-    same idea for the resources an ancestor holds exclusively on the
-    child's behalf (#1570), which only matters to a probe that nests
+    same idea for the resources an ancestor holds on the child's
+    behalf (#1570), which only matters to a probe that nests
     another runner. Every one defaults to None, which passes no
     environment override at all — so every pre-existing positional
     caller behaves exactly as it did.
