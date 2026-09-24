@@ -255,6 +255,10 @@ data MapArtifactRefusal
       --   decode.
     | MapArtifactPngDimensions !Text !(Int, Int) !(Int, Int)
       -- ^ What, expected, declared.
+    | MapArtifactInflatedSize !Text !Integer !Integer
+      -- ^ What, the exact inflated image-data length a page has, and the
+      --   length observed when inflation stopped — at the first output
+      --   past the bound, never after inflating the whole stream.
     | MapArtifactDecodeFailure !Text !Text
       -- ^ The native decoder refused (or threw) after every declared
       --   bound had passed.
@@ -316,6 +320,10 @@ mapArtifactRefusalText r = "Refusing map artifact: " <> case r of
     MapArtifactPngDimensions what (ew, eh) (w, h) →
         what <> " declares " <> tshow w <> "×" <> tshow h <> ", not "
         <> tshow ew <> "×" <> tshow eh <> "."
+    MapArtifactInflatedSize what expected observed →
+        what <> " inflates to " <> (if observed > expected then "more than " else "")
+        <> tshow observed <> " image-data bytes, not exactly "
+        <> tshow expected <> "."
     MapArtifactDecodeFailure what why → what <> " does not decode: " <> why <> "."
     MapArtifactSubstituted what why → what <> " disagrees with the library record: " <> why <> "."
     MapArtifactEntryIncomplete why → "the library entry is not complete: " <> why

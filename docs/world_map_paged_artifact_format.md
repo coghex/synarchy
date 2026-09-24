@@ -109,7 +109,9 @@ produce identical bytes.
 The file name is derived from the key by `mapPageFileName`. It is zero-padded
 so that names sort like keys, and it is never taken from input. The PNG is
 JuicyPixels' `encodePng` of the exact RGBA8 bytes. JuicyPixels is already a
-library dependency, and no codec package was added. Encoding is deterministic
+library dependency, and no codec package was added. The inflate bound below
+uses `zlib`, which was already in the build plan as JuicyPixels' own
+inflater; listing it in `build-depends` adds no package. Encoding is deterministic
 under the pinned package set; the golden example pins it.
 
 Each page file carries its world, compatibility, and key. Fine pages need
@@ -197,6 +199,17 @@ Integrity-byte accounting:
   the inventory prices. The header must also declare bit depth 8, colour
   type 6 (RGBA), deflate, adaptive filtering, and no interlace. Other pixel
   types are refused, never converted.
+- **Inflated image data:** the IHDR bounds the image, not the deflate
+  stream. JuicyPixels inflates every IDAT byte into one buffer before
+  cutting the image out of it, so a valid PNG of a few kilobytes could make
+  it allocate many megabytes. `checkPageImageData` walks the chunk list to
+  `IEND`, concatenates the IDAT payloads, which are bounded by the encoded
+  size, and stream-inflates them. It stops at the first output chunk past the
+  exact non-interlaced RGBA8 length, 514 × (1 + 4 × 514) = 1,057,298 bytes,
+  so at most one inflate buffer beyond the bound is ever produced. The data
+  must then be exactly that long, with nothing after the deflate stream.
+  Otherwise the page is refused as `MapArtifactInflatedSize`. Only then does
+  the native decoder run.
 - **Native decode:** JuicyPixels runs inside an exception boundary with its
   output fully forced, because its zlib inflate can throw on a corrupt
   stream. Any exception becomes `MapArtifactDecodeFailure`. The decoded
@@ -245,7 +258,7 @@ pattern instead of by message text:
 | unknown format | `MapArtifactUnknownVersion`, `MapArtifactNotRecognised` |
 | wrong identity | `MapArtifactWrongWorld`, `MapArtifactIncompatible <field>` |
 | damage | `MapArtifactTruncated`, `MapArtifactLengthMismatch`, `MapArtifactChecksumMismatch`, `MapArtifactDecodeFailure` |
-| declarations | `MapArtifactOversized`, `MapArtifactPngHeader`, `MapArtifactPngDimensions`, `MapArtifactGeometry`, `MapArtifactGeometryMismatch`, `MapArtifactMalformed` |
+| declarations | `MapArtifactOversized`, `MapArtifactPngHeader`, `MapArtifactPngDimensions`, `MapArtifactInflatedSize`, `MapArtifactGeometry`, `MapArtifactGeometryMismatch`, `MapArtifactMalformed` |
 | keys | `MapArtifactInvalidKey`, `MapArtifactDuplicateKey`, `MapArtifactUnorderedKeys`, `MapArtifactConflictingName`, `MapArtifactUnexpectedPage`, `MapArtifactPageBinding`, `MapArtifactNotFineLevel` |
 | library agreement | `MapArtifactSubstituted`, `MapArtifactEntryIncomplete`, `MapArtifactLibrary` |
 | environment | `MapArtifactIO`, `MapArtifactImage` |

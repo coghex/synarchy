@@ -1167,6 +1167,11 @@ library
                  , GLFW-b
                  , hslua
                  , JuicyPixels
+                 -- #2693: the paged map artifact bounds a page PNG's inflated
+                 -- IDAT stream before JuicyPixels decodes it. zlib is already
+                 -- in the build plan as JuicyPixels' own inflater; listing it
+                 -- adds no package.
+                 , zlib
                  , linear
                  , monad-logger
                  , mtl
@@ -1904,6 +1909,8 @@ test-suite synarchy-test-headless
                 , hslua
                 , hspec
                 , JuicyPixels
+                -- #2693's oversized-inflate fixture builds a real zlib stream.
+                , zlib
                 , cryptohash-sha256
                 , synarchy
                 , text

@@ -18,6 +18,7 @@ import UPrelude
 import Test.Hspec
 import Control.Exception (Exception, throwIO, try)
 import qualified Codec.Picture as JP
+import qualified Codec.Compression.Zlib as Zlib
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -162,6 +163,36 @@ corruptIdat png =
         at = BS.length before + 4
     in if BS.null rest then error "no IDAT" else replaceAt at (BS.pack [0xFF, 0xFF, 0xFF, 0xFF]) png
 
+-- | A hand-built, fully valid PNG — real zlib stream, correct CRCs — of
+--   a 514-square RGBA8 page whose IDAT inflates to exactly @scanlines@.
+--   Lets a fixture carry image data of any inflated length.
+handBuiltPng ∷ BS.ByteString → BS.ByteString
+handBuiltPng scanlines =
+    BS.pack [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    <> chunk "IHDR" (word32 514 <> word32 514 <> BS.pack [8, 6, 0, 0, 0])
+    <> chunk "IDAT" (BL.toStrict (Zlib.compress (BL.fromStrict scanlines)))
+    <> chunk "IEND" ""
+  where
+    chunk kind body = word32 (fromIntegral (BS.length body)) <> kind <> body
+                      <> word32 (crc32 (kind <> body))
+
+-- | The PNG CRC-32 (ISO 3309), bitwise.
+crc32 ∷ BS.ByteString → Word32
+crc32 = complement ∘ BS.foldl' byte 0xFFFFFFFF
+  where
+    byte c b = foldl' (\c' _ → if testBit c' 0 then (c' `shiftR` 1) `xor` 0xEDB88320
+                                                 else c' `shiftR` 1)
+                      (c `xor` fromIntegral b) [1 ∷ Int .. 8]
+
+-- | A page's exact filtered scanlines: filter byte 0, then the row.
+pageScanlines ∷ BS.ByteString → BS.ByteString
+pageScanlines rgba = BS.concat
+    [ BS.cons 0 (BS.take (mapPageEdge * 4) (BS.drop (y * mapPageEdge * 4) rgba))
+    | y ← [0 .. mapPageEdge - 1] ]
+
+scanlineBytes ∷ Int
+scanlineBytes = mapPageEdge * (1 + 4 * mapPageEdge)
+
 -- ---------------------------------------------------------------------
 -- Library scratch
 -- ---------------------------------------------------------------------
@@ -205,6 +236,7 @@ spec = do
     coverageSpec
     formatSpec
     refusalSpec
+    inflateSpec
     librarySpec
     fineSpec
 
@@ -417,11 +449,55 @@ refusalSpec = describe "refusals" $ do
         png ← ok (encodePagePng "p" (fixturePage 1 (MapPageKey 0 0 0)))
         r ← decodePagePng "idat" (corruptIdat png)
         r `shouldSatisfy` isLeftWith (\case MapArtifactDecodeFailure {} → True; _ → False)
+        -- A hand-built PNG with exactly a page's image data decodes, so
+        -- the fixtures below differ from a valid page only where stated.
+        let rgba = fixturePage 1 (MapPageKey 0 0 0)
+        decodePagePng "hand" (handBuiltPng (pageScanlines rgba)) `shouldReturn` Right rgba
         -- The public decoder bounds the encoded size itself.
         let padded = png <> BS.replicate (mapPagePngMaxBytes + 1 - BS.length png) 0
         decodePagePng "padded" padded `shouldReturn`
             Left (MapArtifactOversized "padded" (toInteger mapPagePngMaxBytes)
                                                 (toInteger mapPagePngMaxBytes + 1))
+
+inflateSpec ∷ Spec
+inflateSpec = describe "inflated image data" $ do
+    -- A constant page, so the deflated stream is tiny.
+    let rgba = BS.replicate pageBytes 7
+        -- 16 MiB of zeros after a page's real scanlines: a tiny, valid,
+        -- correctly checksummed PNG the native decoder would accept.
+        bomb = handBuiltPng (pageScanlines rgba <> BS.replicate (16 * 1024 * 1024) 0)
+        short = handBuiltPng (BS.take (scanlineBytes - 2057) (pageScanlines rgba))
+        overBound = \case
+            MapArtifactInflatedSize _ expected observed →
+                expected ≡ toInteger scanlineBytes
+                ∧ observed > expected
+                -- Stopped at the first chunk past the bound, not after
+                -- inflating the whole stream.
+                ∧ observed ≤ expected + 65536
+            _ → False
+
+    it "an oversized inflate is refused before the native decoder allocates it" $ do
+        BS.length bomb `shouldSatisfy` (< 64 * 1024)
+        -- The PNG is otherwise valid: JuicyPixels itself accepts it.
+        either (const False) (const True) (JP.decodePng bomb) `shouldBe` True
+        checkPagePngHeader "bomb" bomb `shouldBe` Right ()
+        decodePagePng "bomb" bomb ≫= (`shouldSatisfy` isLeftWith overBound)
+
+    it "image data shorter than a page is refused as its inflated size" $
+        decodePagePng "short" short ≫= (`shouldSatisfy` isLeftWith (\case
+            MapArtifactInflatedSize _ expected observed →
+                expected ≡ toInteger scanlineBytes ∧ observed ≡ expected - 2057
+            _ → False))
+
+    it "an oversized inflate behind a valid page file is a fine-page miss" $
+        withExclusiveTempDirectory "synarchy-paged-map-inflate" $ \dir → do
+            let key = MapPageKey 0 1 1
+                file = encodeMapPageFile (MapPageBinding gidA compat key) bomb
+            decodeMapPageFile (MapPageBinding gidA compat key) file `shouldBe` Right bomb
+            BS.writeFile (dir </> T.unpack (mapPageFileName key)) file
+            readFinePage dir gidA compat 136 key ≫= (`shouldSatisfy` \case
+                Right (FinePageMiss (FinePageInvalid r)) → overBound r
+                _ → False)
 
 librarySpec ∷ Spec
 librarySpec = describe "library publication" $ do
