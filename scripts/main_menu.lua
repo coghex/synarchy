@@ -17,6 +17,8 @@ mainMenu.uiCreated = false
 
 mainMenu.titleLabelId = nil
 
+local TITLE_TEXT = "Ecce Homo"
+
 -- Owned element IDs for scoped cleanup
 mainMenu.ownedLabels  = {}
 mainMenu.ownedBoxes   = {}   -- raw UI element handles (not button IDs)
@@ -158,9 +160,12 @@ function mainMenu.createUI()
     -- before any label text is even measured). Shrinks this menu's OWN
     -- effective scale (never the stored/configured UI scale) against
     -- BOTH budgets and takes whichever constraint is tighter, so the
-    -- panel + title always stay in-frame in both dimensions. The
-    -- height budget includes titleOffset as headroom for the title,
-    -- which floats above the panel at `menuY - s.titleOffset`.
+    -- panel + title always stay in-frame in both dimensions. The title
+    -- floats above the panel with its BASELINE at `menuY - s.titleOffset`
+    -- and its glyphs rising about `titleFontSize` above that (#2656), so
+    -- the height budget reserves titleOffset + titleFontSize of headroom,
+    -- and the width budget covers the title's own width as well as the
+    -- panel's.
     local function measureMaxLabelWidth(fontSize)
         local maxW = 0
         for _, item in ipairs(menuItems) do
@@ -176,10 +181,13 @@ function mainMenu.createUI()
                             + s.buttonPaddingX + s.menuPaddingX
     local maxMenuHeight = math.floor(mainMenu.fbH * 0.9)
     local maxMenuWidth = math.floor(mainMenu.fbW * 0.9)
+    local naturalTitleWidth = engine.getTextWidth(
+        mainMenu.titleFont, TITLE_TEXT, s.titleFontSize)
     local scaleForHeight = responsive.fitScale(
-        naturalMenuHeight + s.titleOffset, maxMenuHeight, uiscale)
+        naturalMenuHeight + s.titleOffset + s.titleFontSize,
+        maxMenuHeight, uiscale)
     local scaleForWidth = responsive.fitScale(
-        naturalMenuWidth, maxMenuWidth, uiscale)
+        math.max(naturalMenuWidth, naturalTitleWidth), maxMenuWidth, uiscale)
     uiscale = math.min(scaleForHeight, scaleForWidth)
     s = scale.applyAllWith(mainMenu.baseSizes, uiscale)
 
@@ -198,15 +206,30 @@ function mainMenu.createUI()
                      + s.buttonSpacing + s.menuPaddingY
     local menuWidth  = itemWidth + s.menuPaddingX
 
+    -- Title. Created before the panel is positioned so the clamp below
+    -- can use the label's own final (floored) effective font size.
+    mainMenu.titleLabelId = label.new({
+        name     = "title",
+        text     = TITLE_TEXT,
+        font     = mainMenu.titleFont,
+        fontSize = mainMenu.baseSizes.titleFontSize,
+        color    = {1.0, 1.0, 1.0, 1.0},
+        page     = mainMenu.page,
+        uiscale  = uiscale,
+    })
+    table.insert(mainMenu.ownedLabels, mainMenu.titleLabelId)
+    local titleFontSize = label.getFontSize(mainMenu.titleLabelId)
+
     local menuX = (mainMenu.fbW - menuWidth) / 2
     local menuY = (mainMenu.fbH - menuHeight) / 2
-    -- Clamp so the panel's left edge, and the title (floats above the
-    -- panel at `menuY - s.titleOffset`), never go off-frame even if the
-    -- compact fallback above still leaves things a little tight (e.g.
-    -- real glyph metrics measuring wider than the estimate it shrank
-    -- against).
+    -- Clamp so the panel's left edge, and the title's glyph top (its
+    -- baseline sits at `menuY - s.titleOffset`, its glyphs about
+    -- `titleFontSize` above that -- #2656), never go off-frame even if
+    -- the compact fallback above still leaves things a little tight
+    -- (e.g. real glyph metrics measuring wider than the estimate it
+    -- shrank against).
     menuX = math.max(menuX, 0)
-    menuY = math.max(menuY, s.titleOffset + 4)
+    menuY = math.max(menuY, s.titleOffset + titleFontSize + 4)
 
     -- Background panel
     mainMenu.panelId = panel.new({
@@ -231,18 +254,6 @@ function mainMenu.createUI()
     table.insert(mainMenu.ownedPanels, mainMenu.panelId)
 
     local baseZ = panel.getZIndex(mainMenu.panelId)
-
-    -- Title
-    mainMenu.titleLabelId = label.new({
-        name     = "title",
-        text     = "Ecce Homo",
-        font     = mainMenu.titleFont,
-        fontSize = mainMenu.baseSizes.titleFontSize,
-        color    = {1.0, 1.0, 1.0, 1.0},
-        page     = mainMenu.page,
-        uiscale  = uiscale,
-    })
-    table.insert(mainMenu.ownedLabels, mainMenu.titleLabelId)
 
     local titleW, _ = label.getSize(mainMenu.titleLabelId)
     local titleX = (mainMenu.fbW - titleW) / 2
