@@ -486,6 +486,17 @@ librarySpec = describe "library publication" $ do
                 Right (FinePageMiss (FinePageInvalid (MapArtifactIO path _))) → path ≡ dir
                 _ → False)
 
+    it "a page read after opening re-checks the entry directory rather than following a new symlink" $
+        withLibrary $ \root lib → do
+            _ ← publishFixture lib gidA 1 8
+            opened ← openMapArtifact lib gidA compat ≫= ok
+            let dir = entryDirectory lib gidA
+                elsewhere = root </> "elsewhere"
+            renameDirectory dir elsewhere
+            createDirectoryLink elsewhere dir
+            readMandatoryPage opened (MapPageKey 0 0 0) ≫= (`shouldSatisfy` isLeftWith
+                (\case MapArtifactIO path _ → path ≡ dir; _ → False))
+
     it "a corrupt deflate stream behind a recomputed checksum is refused by the native decoder" $
         withLibrary $ \_ lib → do
             _ ← publishFixture lib gidA 1 72

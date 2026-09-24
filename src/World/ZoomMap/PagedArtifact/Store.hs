@@ -208,9 +208,12 @@ readMandatoryPage opened key =
   where
     m = omaManifest opened
 
--- | One page file, checked in the order the format fixes: present,
---   exactly the recorded length, the recorded digest, then its own
---   framing and binding, then its PNG header, then the native decode.
+-- | One page file, checked in the order the format fixes: its directory
+--   and that directory's parent are not symlinks (re-checked on EVERY
+--   read, since the directory can be replaced after 'openMapArtifact'),
+--   the file is present, exactly the recorded length, the recorded
+--   digest, then its own framing and binding, then its PNG header, then
+--   the native decode.
 verifyPage
     ∷ FilePath → GeneratedWorldId → MapCompatibility → MapManifestPage
     → IO (Either MapArtifactRefusal BS.ByteString)
@@ -218,10 +221,12 @@ verifyPage dir gid compat p = do
     let key = mmpKey p
         what = "page file " <> mmpName p
         declared = toInteger (mmpFileBytes p)
+    safe ← rejectSymlinkedManagedPath dir
     -- The file's size is compared with the manifest's declaration before
     -- it is read, and the read is capped at that declaration.
-    read' ← readChecked what (dir </> T.unpack (mmpName p)) (fromIntegral (mmpFileBytes p))
-                        (checkSize what declared)
+    read' ← either (pure . Left . MapArtifactIO dir) (const $
+                readChecked what (dir </> T.unpack (mmpName p)) (fromIntegral (mmpFileBytes p))
+                            (checkSize what declared)) safe
     case read' of
         Left r → pure (Left r)
         Right Nothing → pure (Left (MapArtifactMissingRequired (RequiredPage key)))

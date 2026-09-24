@@ -184,8 +184,9 @@ Integrity-byte accounting:
   Other reads are capped at their format bound. Each read asks for at most
   one byte more than its cap, so a file that grows in between still cannot
   force a larger allocation. Symlinks are refused and never followed: the
-  entry directory and its parent are checked before the manifest or any
-  page is opened. A fine-page directory that is, or whose parent is, a
+  entry directory and its parent are checked before the manifest and before
+  every mandatory page read, including `readMandatoryPage` after
+  `openMapArtifact`. A fine-page directory that is, or whose parent is, a
   symlink is refused by `writeFinePage`; for `readFinePage` it is a
   `FinePageMiss`.
 - **Encoded PNG size:** `checkPagePngHeader`, and therefore `decodePagePng`,
