@@ -63,7 +63,7 @@ import System.IO (IOMode(..), hClose, hFlush, openBinaryTempFile, withBinaryFile
 import World.GeneratedLibrary
 import World.Map.ImagePlan (MapImagePlan(..), checkUploadPayload)
 import World.Page.GeneratedId (GeneratedWorldId)
-import World.Save.Storage.Durable (rejectSymlinkedPath)
+import World.Save.Storage.Durable (rejectSymlinkedManagedPath, rejectSymlinkedPath)
 import World.ZoomMap.Pyramid.Address
 import World.ZoomMap.Pyramid.Inventory
 import World.ZoomMap.PagedArtifact.Format
@@ -170,8 +170,14 @@ openMapArtifact lib gid compat = do
         Right Nothing → pure (Left (MapArtifactAbsent gid))
         Right (Just entry) → do
             let dir = entryDirectory lib gid
-            read' ← readBounded "manifest" (dir </> T.unpack mapManifestFileName)
-                                mapManifestMaxBytes
+            -- The entry directory and its parent are checked BEFORE any
+            -- payload is opened: a symlinked entry is also an unreadable
+            -- one to the library, but reading through it first would
+            -- follow the link outside the library root.
+            safe ← rejectSymlinkedManagedPath dir
+            read' ← either (pure . Left . MapArtifactIO dir) (const $
+                        readBounded "manifest" (dir </> T.unpack mapManifestFileName)
+                                    mapManifestMaxBytes) safe
             case read' of
                 Left r → pure (Left r)
                 Right Nothing → pure (Left (MapArtifactMissingRequired RequiredManifest))
@@ -212,7 +218,10 @@ verifyPage dir gid compat p = do
     let key = mmpKey p
         what = "page file " <> mmpName p
         declared = toInteger (mmpFileBytes p)
-    read' ← readBounded what (dir </> T.unpack (mmpName p)) mapPageFileMaxBytes
+    -- The file's size is compared with the manifest's declaration before
+    -- it is read, and the read is capped at that declaration.
+    read' ← readChecked what (dir </> T.unpack (mmpName p)) (fromIntegral (mmpFileBytes p))
+                        (checkSize what declared)
     case read' of
         Left r → pure (Left r)
         Right Nothing → pure (Left (MapArtifactMissingRequired (RequiredPage key)))
@@ -348,15 +357,17 @@ writeFinePage dir gid compat worldSize key rgba =
                             Right () → Right final
 
 -- | Read one fine page from @dir@. 'Left' only for a malformed request
---   ('checkFineKey'); everything about the file itself is a hit or a
---   miss.
+--   ('checkFineKey') or a symlinked @dir@, which is refused rather than
+--   followed; everything about the file itself is a hit or a miss.
 readFinePage
     ∷ FilePath → GeneratedWorldId → MapCompatibility → Int → MapPageKey
     → IO (Either MapArtifactRefusal FinePageRead)
 readFinePage dir gid compat worldSize key =
     case checkFineKey worldSize key of
         Left r → pure (Left r)
-        Right () → do
+        Right () → rejectSymlinkedPath dir ≫= \case
+          Left why → pure (Left (MapArtifactIO dir why))
+          Right () → do
             let what = "fine page " <> mapPageFileName key
             read' ← readBounded what (dir </> T.unpack (mapPageFileName key))
                                 mapPageFileMaxBytes
@@ -378,7 +389,14 @@ readFinePage dir gid compat worldSize key =
 --   between the check and the read still cannot make this allocate past
 --   it. A symlink is refused, never followed.
 readBounded ∷ Text → FilePath → Int → IO (Either MapArtifactRefusal (Maybe BS.ByteString))
-readBounded what path bound = do
+readBounded what path bound = readChecked what path bound (const (Right ()))
+
+-- | 'readBounded' with an extra check of the file's size, run before the
+--   format bound and before any byte is read.
+readChecked
+    ∷ Text → FilePath → Int → (Integer → Either MapArtifactRefusal ())
+    → IO (Either MapArtifactRefusal (Maybe BS.ByteString))
+readChecked what path bound sizeCheck = do
     safe ← rejectSymlinkedPath path
     case safe of
         Left why → pure (Left (MapArtifactIO path why))
@@ -387,14 +405,23 @@ readBounded what path bound = do
                 exists ← doesFileExist path
                 if not exists then pure (Right Nothing) else do
                     size ← getFileSize path
-                    if size > toInteger bound
-                        then pure (Left (MapArtifactOversized what (toInteger bound) size))
-                        else do
-                            bytes ← withBinaryFile path ReadMode (\h → BS.hGet h (bound + 1))
-                            pure $ if BS.length bytes > bound
-                                then Left (MapArtifactOversized what (toInteger bound)
-                                                               (toInteger (BS.length bytes)))
-                                else Right (Just bytes)
+                    either (pure . Left) (const (readUpTo size)) (sizeCheck size)
             pure $ case result of
                 Left (e ∷ IOException) → Left (MapArtifactIO path (tshow e))
                 Right r → r
+  where
+    readUpTo size = if size > toInteger bound
+        then pure (Left (MapArtifactOversized what (toInteger bound) size))
+        else do
+            bytes ← withBinaryFile path ReadMode (\h → BS.hGet h (bound + 1))
+            pure $ if BS.length bytes > bound
+                then Left (MapArtifactOversized what (toInteger bound)
+                                               (toInteger (BS.length bytes)))
+                else Right (Just bytes)
+
+-- | A mandatory page file must be exactly its manifest-declared length.
+checkSize ∷ Text → Integer → Integer → Either MapArtifactRefusal ()
+checkSize what declared size
+    | size < declared = Left (MapArtifactTruncated what declared size)
+    | size > declared = Left (MapArtifactLengthMismatch what declared size)
+    | otherwise = Right ()

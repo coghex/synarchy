@@ -178,9 +178,17 @@ Integrity-byte accounting:
   refused above `mapPagePngMaxBytes` (2 MiB) using only the 73-byte header.
   An incompressible page's PNG is about 1.06 MB, so 2 MiB leaves a wide
   margin.
-- **File reads:** the size is checked first. The read then asks for at most
-  one byte more than the bound, so a file that grows in between still cannot
-  force a larger allocation. Symlinks are refused and never followed.
+- **File reads:** the size is checked first. A mandatory page file must be
+  exactly its manifest-declared length (`MapArtifactTruncated` or
+  `MapArtifactLengthMismatch`), and the read is capped at that declaration.
+  Other reads are capped at their format bound. Each read asks for at most
+  one byte more than its cap, so a file that grows in between still cannot
+  force a larger allocation. Symlinks are refused and never followed: the
+  entry directory and its parent are checked before the manifest or any
+  page is opened, and a symlinked fine-page directory is refused by both
+  `writeFinePage` and `readFinePage`.
+- **Encoded PNG size:** `checkPagePngHeader`, and therefore `decodePagePng`,
+  refuses a PNG longer than `mapPagePngMaxBytes` before reading its header.
 - **PNG gate:** before the native decoder sees a byte, the signature and IHDR
   must declare exactly the page plan's width and height. That plan comes from
   `planMapImage MapImageRGBA8 (TiledImageSource 1 mapPageEdge)`, the same plan

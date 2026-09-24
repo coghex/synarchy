@@ -25,7 +25,7 @@ import qualified Data.List as L
 import qualified Data.Serialize.Put as P
 import qualified Data.Text as T
 import Numeric (showHex)
-import System.Directory (createDirectoryIfMissing, removeFile)
+import System.Directory (createDirectoryIfMissing, createDirectoryLink, removeFile, renameDirectory)
 import System.FilePath ((</>))
 
 import World.GeneratedLibrary
@@ -417,6 +417,11 @@ refusalSpec = describe "refusals" $ do
         png ← ok (encodePagePng "p" (fixturePage 1 (MapPageKey 0 0 0)))
         r ← decodePagePng "idat" (corruptIdat png)
         r `shouldSatisfy` isLeftWith (\case MapArtifactDecodeFailure {} → True; _ → False)
+        -- The public decoder bounds the encoded size itself.
+        let padded = png <> BS.replicate (mapPagePngMaxBytes + 1 - BS.length png) 0
+        decodePagePng "padded" padded `shouldReturn`
+            Left (MapArtifactOversized "padded" (toInteger mapPagePngMaxBytes)
+                                                (toInteger mapPagePngMaxBytes + 1))
 
 librarySpec ∷ Spec
 librarySpec = describe "library publication" $ do
@@ -452,6 +457,9 @@ librarySpec = describe "library publication" $ do
             BS.writeFile (dir </> page) (BS.take 1000 original)
             openMapArtifact lib gidA compat ≫= (`shouldSatisfy` isLeftWith
                 (\case MapArtifactTruncated {} → True; _ → False))
+            BS.writeFile (dir </> page) (original <> "grown")
+            openMapArtifact lib gidA compat ≫= (`shouldSatisfy` isLeftWith
+                (\case MapArtifactLengthMismatch {} → True; _ → False))
             BS.writeFile (dir </> page) (replaceAt 900 "!" original)
             openMapArtifact lib gidA compat ≫= (`shouldSatisfy` isLeftWith
                 (\case MapArtifactChecksumMismatch _ → True; _ → False))
@@ -461,6 +469,20 @@ librarySpec = describe "library publication" $ do
             removeFile (dir </> T.unpack mapManifestFileName)
             openMapArtifact lib gidA compat `shouldReturn`
                 Left (MapArtifactMissingRequired RequiredManifest)
+
+    it "a symlinked entry directory is refused before any payload is read through it" $
+        withLibrary $ \root lib → do
+            _ ← publishFixture lib gidA 1 8
+            let dir = entryDirectory lib gidA
+                elsewhere = root </> "elsewhere"
+            renameDirectory dir elsewhere
+            createDirectoryLink elsewhere dir
+            -- Without the directory check this read the intact payload
+            -- through the link and failed only at the record check.
+            openMapArtifact lib gidA compat ≫= (`shouldSatisfy` isLeftWith
+                (\case MapArtifactIO path _ → path ≡ dir; _ → False))
+            readFinePage dir gidA compat 136 (MapPageKey 0 0 0) ≫= (`shouldSatisfy` isLeftWith
+                (\case MapArtifactIO path _ → path ≡ dir; _ → False))
 
     it "a corrupt deflate stream behind a recomputed checksum is refused by the native decoder" $
         withLibrary $ \_ lib → do

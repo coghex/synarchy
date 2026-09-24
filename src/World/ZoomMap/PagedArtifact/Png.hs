@@ -48,11 +48,15 @@ encodePagePng what rgba = do
                                          (toInteger (BS.length png))
     pure png
 
--- | Refuse a PNG whose signature or IHDR is not exactly a page's, before
---   any pixel is decoded or allocated.
+-- | Refuse a PNG longer than 'mapPagePngMaxBytes', or whose signature
+--   or IHDR is not exactly a page's, before any pixel is decoded or
+--   allocated.
 checkPagePngHeader ∷ Text → BS.ByteString → Either MapArtifactRefusal ()
 checkPagePngHeader what png = do
     plan ← either (Left . MapArtifactImage) Right mapPagePlan
+    when (BS.length png > mapPagePngMaxBytes) $
+        Left $ MapArtifactOversized what (toInteger mapPagePngMaxBytes)
+                                         (toInteger (BS.length png))
     when (BS.length png < 33) $
         Left $ MapArtifactPngHeader what "shorter than a PNG signature and IHDR"
     unless (BS.take 8 png ≡ pngSignature) $
