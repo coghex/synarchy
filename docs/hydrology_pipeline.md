@@ -231,8 +231,9 @@ top level — and only this stage creates a remainder. Activation, the per-tick
 writeback and equilibrium deactivation all go through
 `Sim.Fluid.Types.derivePassiveFluid` and round nothing, so a partial cell
 survives back into the map and into the save. Integer consumers (the surface
-map, flora, ice, soil gates, the renderer) read the documented ceiling view,
-`fluidSurfaceCeilZ`. See engine contracts §The exact fluid plane.
+map, flora, ice, soil gates, and render slice ownership) read the documented ceiling view,
+`fluidSurfaceCeilZ`. Fluid vertices use the exact plane at the rendering
+boundary. See engine contracts §The exact fluid plane.
 
 ## 8. The two carving mechanisms
 

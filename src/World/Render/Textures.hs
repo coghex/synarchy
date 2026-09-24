@@ -2,6 +2,7 @@
 module World.Render.Textures
     ( getTileTexture
     , getTileFaceMapTexture
+    , getFluidFaceMapTexture
     , getVegFaceMapTexture
     ) where
 
@@ -9,6 +10,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import World.Types
 import World.Slope (slopeToFaceMapIndex)
+import World.Fluid.Exact (exactTopLevel)
 import Engine.Asset.Handle (TextureHandle(..))
 
 getTileTexture ∷ WorldTextures → Word8 → TextureHandle
@@ -59,3 +61,15 @@ getVegFaceMapTexture textures slopeId =
         14 → wtVegSlopeFaceMapESW textures
         15 → wtVegSlopeFaceMapNESW textures
         _  → wtVegFaceMap textures
+
+-- | Select by the signed exact plane, including full levels at multiples.
+getFluidFaceMapTexture ∷ WorldTextures → Int → TextureHandle
+getFluidFaceMapTexture textures exactSurface = case exactTopLevel exactSurface of
+    1 → wtFluidLevelFaceMap1 textures
+    2 → wtFluidLevelFaceMap2 textures
+    3 → wtFluidLevelFaceMap3 textures
+    4 → wtFluidLevelFaceMap4 textures
+    5 → wtFluidLevelFaceMap5 textures
+    6 → wtFluidLevelFaceMap6 textures
+    7 → wtFluidLevelFaceMap7 textures
+    _ → wtFluidLevelFaceMap8 textures

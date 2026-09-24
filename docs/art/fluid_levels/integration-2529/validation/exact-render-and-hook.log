@@ -1,0 +1,57 @@
+Build profile: -w ghc-9.12.2 -O1
+In order, the following will be built (use -v for more details):
+ - synarchy-0.1.0.0 (configuration changed)
+Configuring synarchy-0.1.0.0...
+Preprocessing library for synarchy-0.1.0.0...
+Building library for synarchy-0.1.0.0...
+[506 of 912] Compiling World.Render.TileQuads ( src/World/Render/TileQuads.hs, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/World/Render/TileQuads.o, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/World/Render/TileQuads.dyn_o ) [Source file changed]
+[585 of 912] Compiling World.Render.FluidTopQuads ( src/World/Render/FluidTopQuads.hs, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/World/Render/FluidTopQuads.o, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/World/Render/FluidTopQuads.dyn_o ) [Source file changed]
+[843 of 912] Compiling World.Thread.Command.Edit.Fluid ( src/World/Thread/Command/Edit/Fluid.hs, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/World/Thread/Command/Edit/Fluid.o, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/World/Thread/Command/Edit/Fluid.dyn_o ) [Source file changed]
+Preprocessing executable 'synarchy' for synarchy-0.1.0.0...
+Building executable 'synarchy' for synarchy-0.1.0.0...
+[13 of 13] Linking dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy/synarchy [Library changed]
+Preprocessing executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Building executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+[2 of 2] Linking dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-save-codec/synarchy-save-codec [Library changed]
+Preprocessing test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+[7 of 7] Linking dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-test-graphical/synarchy-test-graphical [Library changed]
+Preprocessing test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+[445 of 510] Compiling Test.Headless.World.Render.FluidLevels ( test-headless/Test/Headless/World/Render/FluidLevels.hs, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-test-headless/synarchy-test-headless-tmp/Test/Headless/World/Render/FluidLevels.o, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-test-headless/synarchy-test-headless-tmp/Test/Headless/World/Render/FluidLevels.dyn_o ) [Source file changed]
+[510 of 510] Compiling Main             ( test-headless/Spec.hs, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-test-headless/synarchy-test-headless-tmp/Main.o, dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-test-headless/synarchy-test-headless-tmp/Main.dyn_o ) [Test.Headless.World.Render.FluidLevels changed]
+[511 of 511] Linking dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy-test-headless/synarchy-test-headless [Objects changed]
+Running 1 test suites...
+Test suite synarchy-test-headless: RUNNING...
+
+World.Render.FluidLevels
+  initial and late structural binding
+    binds all eight distinct handles and invalidates every render cache [✔]
+  unchanged ice base and independent elevation
+    keeps dry drape one z above terrain and dry basin fill/cap [✔]
+    uses the fluid ceiling only for the base, including partial and full planes [✔]
+  exact capture edit hook
+    validates arguments, canonicalizes aliases, records exact edits and fences stale sim output [✔]
+  exact tops through the production pass
+    selects every level for every fluid, including negative planes and full multiples [✔]
+    places vertices at fractional heights in every facing [✔]
+    culls using fractional placement rather than the owning ceiling [✔]
+    uses the ceiling for the actual slice/depth decision, including zero as wet [✔]
+    sorts exact tops above their own sides [✔]
+    keeps covered partial Lake/Ocean suppressed and River/Lava visible [✔]
+  mask and separate-side coverage
+    starts below the mask slab and terminates at an exact partial neighbour [✔]
+    does not duplicate the mask slab for same-z mixed levels or full one-z drops [✔]
+    clips actual side intervals at both depth boundaries [✔]
+    covers without gaps, duplicates, or above-neighbour overshoot across the signed range [✔]
+    gives left and right sides independent fractional endpoints and Ocean parity [✔]
+    emits nothing for equal/higher neighbours and an enclosed equal-height cell [✔]
+  production neighbour lookup
+    matches loaded ordinary and U seams in all four facings and omits unloaded edges [✔]
+
+Finished in 0.0364 seconds
+17 examples, 0 failures
+Test suite synarchy-test-headless: PASS
+Test suite logged to:
+/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2529-fluid-levels/./dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/test/synarchy-0.1.0.0-synarchy-test-headless.log
+1 of 1 test suites (1 of 1 test cases) passed.

@@ -33,6 +33,15 @@ parseTextureType "iso_slope_facemap_nsw"    = SlopeFaceMapNSW
 parseTextureType "iso_slope_facemap_esw"    = SlopeFaceMapESW
 parseTextureType "iso_slope_facemap_nesw"   = SlopeFaceMapNESW
 parseTextureType "nofacemap"                = NoFaceMap
+-- Exact fluid masks
+parseTextureType "fluid_level_facemap_1" = FluidLevelFaceMap1
+parseTextureType "fluid_level_facemap_2" = FluidLevelFaceMap2
+parseTextureType "fluid_level_facemap_3" = FluidLevelFaceMap3
+parseTextureType "fluid_level_facemap_4" = FluidLevelFaceMap4
+parseTextureType "fluid_level_facemap_5" = FluidLevelFaceMap5
+parseTextureType "fluid_level_facemap_6" = FluidLevelFaceMap6
+parseTextureType "fluid_level_facemap_7" = FluidLevelFaceMap7
+parseTextureType "fluid_level_facemap_8" = FluidLevelFaceMap8
 -- Side face maps (left/right only)
 parseTextureType "side_facemap_left"        = SideFaceMapLeft
 parseTextureType "side_facemap_right"       = SideFaceMapRight

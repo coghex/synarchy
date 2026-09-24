@@ -83,6 +83,7 @@ import World.Thread.Command.UI (handleWorldShowCommand, handleWorldHideCommand
                                , handleWorldSetToolModeCommand)
 import World.Thread.Command.Edit (handleWorldDeleteTileCommand
                                  , handleWorldSetFluidTileCommand
+                                 , handleWorldDebugSetFluidSurfaceCommand
                                  , handleWorldSetSlopeCommand
                                  , handleWorldSetVegCommand
                                  , handleWorldSetCellCommand
@@ -235,6 +236,8 @@ handleWorldCommand env logger (WorldLoadPublish requestId)
   = handleWorldLoadPublishCommand env logger requestId
 handleWorldCommand env logger (WorldDeleteTile pageId gx gy)
   = handleWorldDeleteTileCommand env logger pageId gx gy
+handleWorldCommand env logger (WorldDebugSetFluidSurface pageId gx gy fluidType surface)
+  = handleWorldDebugSetFluidSurfaceCommand env logger pageId gx gy fluidType surface
 handleWorldCommand env logger (WorldSetFluidTile pageId gx gy fluidType)
   = handleWorldSetFluidTileCommand env logger pageId gx gy fluidType
 handleWorldCommand env logger (WorldSetSlope pageId gx gy z bits)

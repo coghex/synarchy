@@ -68,6 +68,9 @@ end
 -----------------------------------------------------------
 
 function testArena.sendTextures(worldId)
+    -- Include the same eight fluid masks and side maps as ordinary worlds.
+    worldView.ensureStructuralTextures()
+    worldView.rebindStructural(worldId)
     local st = worldView.structuralTextures
 
     local function validHandle(h)

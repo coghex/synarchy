@@ -464,6 +464,9 @@ data WorldCommand
         -- ^ worldId, gx, gy, fluid kind. Sets one tile of fluid at
         --   surfaceZ + 1 on the given column. Idempotent; replaces any
         --   existing fluid cell. Currently a debug-tool affordance.
+    | WorldDebugSetFluidSurface WorldPageId Int Int FluidType Int
+        -- ^ worldId, gx, gy, fluid kind, exact signed surface in eighth-z units.
+        --   Debug authoring through the normal edit-log and sim-reseed path.
     | WorldSetSlope WorldPageId Int Int Int Word8
         -- ^ worldId, gx, gy, z, slope bitmask (0=N 1=E 2=S 3=W). Sets the
         --   walkable-ramp slope bits of an existing tile via the WeSetSlope

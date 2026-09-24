@@ -4,6 +4,8 @@ module Engine.Scripting.Lua.API.Register.Debug
 
 import UPrelude
 import Engine.Core.State (EngineEnv)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
+import Engine.Scripting.Lua.API.Debug (setFluidSurfaceFn)
 import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import Engine.Scripting.Lua.API.CallStats (getLuaCallStatsFn, resetLuaCallStatsFn)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
@@ -31,6 +33,7 @@ registerDebugAPI callStats env = do
     Lua.pop 1
     Lua.newtable
 
+  registerLuaFunction callStats "debug" "setFluidSurface" (setFluidSurfaceFn (toWorldSimCapability env))
   registerLuaFunction callStats "debug" "captureScreenshot" (captureScreenshotFn env)
   registerLuaFunction callStats "debug" "getWindowPos" (getWindowPosFn env)
   registerLuaFunction callStats "debug" "recordOutcome" (debugRecordOutcomeFn env)

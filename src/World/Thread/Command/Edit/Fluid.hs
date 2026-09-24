@@ -4,6 +4,7 @@
 --   (issue #563).
 module World.Thread.Command.Edit.Fluid
     ( handleWorldSetFluidTileCommand
+    , handleWorldDebugSetFluidSurfaceCommand
     ) where
 
 import UPrelude
@@ -13,7 +14,8 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrameWith)
+import World.Chunk.Residency (canonicalChunkCoord)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
@@ -27,7 +29,19 @@ import World.Flora.Designation (replaceChunkForgettingFlora)
 --   `applyEdit` helper.
 handleWorldSetFluidTileCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Int → Int → FluidType → IO ()
-handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
+handleWorldSetFluidTileCommand env logger pageId gx gy fluidType =
+    handleFluidEdit env logger pageId gx gy fluidType Nothing
+
+-- | Debug capture fixture only: preserve the exact plane through the SAME
+--   edit-log, cache invalidation and stale-simulation-writeback boundary.
+handleWorldDebugSetFluidSurfaceCommand ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → FluidType → Int → IO ()
+handleWorldDebugSetFluidSurfaceCommand env logger pageId gx gy fluidType surface =
+    handleFluidEdit env logger pageId gx gy fluidType (Just surface)
+
+handleFluidEdit ∷ EngineEnv → LoggerState → WorldPageId
+    → Int → Int → FluidType → Maybe Int → IO ()
+handleFluidEdit env logger pageId rawGX rawGY fluidType exactSurface = do
     let wsc = toWorldSimCapability env
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
@@ -35,8 +49,14 @@ handleWorldSetFluidTileCommand env logger pageId gx gy fluidType = do
             logWarn logger CatWorld $
                 "World not found for set fluid: " <> unWorldPageId pageId
         Just ws → do
-            let (coord, _) = globalToChunk gx gy
-                edit = WeSetFluidTile gx gy fluidType
+            params ← readIORef (wsGenParamsRef ws)
+            let canonicalize = maybe id canonicalChunkCoord params
+                (coord, _, (dx, dy)) = canonicalTileFrameWith canonicalize rawGX rawGY
+                gx = rawGX + dx
+                gy = rawGY + dy
+                edit = case exactSurface of
+                    Nothing → WeSetFluidTile gx gy fluidType
+                    Just surface → WeSetFluidSnapshot gx gy fluidType surface
             td ← readIORef (wsTilesRef ws)
             case lookupChunk coord td of
                 Nothing →

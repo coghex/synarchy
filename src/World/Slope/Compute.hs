@@ -99,7 +99,7 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
         -- Its ORIGINAL justification no longer holds: the rule existed to
         -- keep a descending river's bed under a fluid top that ramped
         -- between z-levels, so the upstream block's corner could not poke
-        -- through. Fluid tops are now flat whole-z steps and every drop
+        -- through. Fluid tops are now flat exact eighth-z steps and every drop
         -- is a vertical fluid edge ('World.Render.SideDecoQuads'), so
         -- there is no ramped surface for the bed to match. The rule is
         -- kept because it still shapes the visible bed and banks, and
@@ -173,7 +173,7 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
 --   toward the cardinal neighbour whose surface z is @neighborZ@?
 --
 --   Terrain throughout, for a wet tile as much as a dry one: this feeds
---   @ctSlopes@, the bed and bank geometry. A fluid TOP is a flat whole-z
+--   @ctSlopes@, the bed and bank geometry. A fluid TOP is a flat exact-height
 --   step and never consults this (#2517).
 --
 --   @neighborHasFluid@ is the caller's already-resolved answer to whether

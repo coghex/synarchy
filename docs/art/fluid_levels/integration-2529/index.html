@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synarchy #2529 — fluid rendering review</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#15191e;color:#e5e8ed}body{margin:20px}h1{font-size:22px}p{max-width:1000px;line-height:1.5}nav{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:22px 0}label{display:flex;gap:8px;align-items:center}select,button{font:inherit;padding:8px;border:1px solid #637080;border-radius:5px;background:#252d37;color:inherit}a{color:#91c8ff}.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}figure{margin:0;min-width:0}figcaption{padding:10px 0;font-weight:600}img{width:100%;image-rendering:pixelated;display:block;background:black}.single{grid-template-columns:1fr}.single figure{max-width:1280px}.meta{color:#aeb9c5;font-size:13px}#note{min-height:48px}#links{display:flex;gap:24px;margin:15px 0}@media(max-width:900px){.pair{grid-template-columns:1fr}}
+</style>
+<h1>Fluid levels — before and after</h1>
+<p>Start with Lake levels, then Tall stacks. The separate row increases from level 1 to 8; the joined row is the same progression with adjacent cells. Look for distinct thin layers, flat tops, continuous tall sides, and clean joins. Rotate through the four facings. Colors and lighting are unchanged.</p>
+<nav>
+<label>Scene <select id="scene"></select></label>
+<label>Facing <select id="facing"><option value="0">South</option><option value="1">West</option><option value="2">North</option><option value="3">East</option></select></label>
+<label>Lighting <select id="light"><option value="day">Day</option><option value="night">Night</option></select></label>
+<label>Layout <select id="layout"><option value="pair">Side by side</option><option value="single">Full width, stacked</option></select></label>
+</nav>
+<p id="note"></p>
+<div class="pair" id="images"><figure><figcaption>Before — prerequisite-complete base</figcaption><img id="before" alt="Base rendering"></figure><figure><figcaption>After — exact eighth-level rendering</figcaption><img id="after" alt="Implementation rendering"></figure></div>
+<div id="links"><a id="beforeLink" target="_blank">Open original before PNG</a><a id="afterLink" target="_blank">Open original after PNG</a></div>
+<p class="meta">72 matched views: 9 scenes × 4 facings × day/night. Same saved fixture. Base: d2a782088b44. Rendering implementation: 7321a5a627a6. Owner visual verdict: approved 2026-09-24. <a href="README.md">Evidence and reproduction notes</a>.</p>
+<script>
+const scenes=[['lake-levels','Lake levels'],['river-levels','River levels'],['lava-levels','Lava levels'],['ocean-levels','Partial ocean levels'],['stacks-and-enclosures','Tall stacks and enclosed cells'],['dry-drape-ice','Dry drape ice'],['dry-basin-ice','Dry basin ice'],['covered-partial-lake','Partial lake beneath ice'],['covered-partial-ocean','Partial ocean beneath ice']];
+const scene=document.getElementById('scene');for(const [v,t] of scenes){scene.add(new Option(t,v))}
+function render(){const name=scene.value;const ice=name.includes('ice')||name.startsWith('covered-');const file=name+'-'+document.getElementById('facing').value+'-'+document.getElementById('light').value+'.png';for(const side of ['before','after']){const path=(side==='after'?'after':ice?'before-ice':'before-arena')+'/'+file;document.getElementById(side).src=path;document.getElementById(side+'Link').href=path}document.getElementById('images').className=document.getElementById('layout').value;document.getElementById('note').textContent=ice?'Ice regression: the sampled ice stays at z=31 in both builds. Covered Lake/Ocean cells are at 30⅜ and remain hidden under it. Basin interiors are deliberately uniform; use Dry drape ice to inspect the visible boundary.':name==='stacks-and-enclosures'?'Small columns have unequal left/right neighbours and a partial cap over full-height strips. The 3×3 pools include an enclosed equal-height center. All four materials use the same geometry.':'The separate row rises from ⅛ to 8/8 above the dry floor. The joined row crosses the ordinary loaded chunk boundary at x=16. The base rounds every top up to the same whole-z plane.'}
+for(const id of ['scene','facing','light','layout'])document.getElementById(id).addEventListener('change',render);render();
+</script></html>
