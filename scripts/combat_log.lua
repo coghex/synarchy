@@ -80,11 +80,21 @@ local BATTLE_REJOIN_MAX_SEC = 120
 -- so a long session grew without limit: every ingest scanned, and every
 -- render measured a tab for, every battle ever seen. These two caps are the
 -- same numbers in injury_log_panel.lua.
+--
+-- #2688: a battle's participants are bounded by the same event cap. They
+-- are exactly the non-nil attacker/target ids its RETAINED events name, so
+-- trimming an event also forgets any id no other retained event names, and a
+-- battle never holds more than 2 x MAX_GROUP_EVENTS participants.
 local MAX_GROUPS       = 64
 local MAX_GROUP_EVENTS = 200
 combatLog.allEvents = combatLog.allEvents or {}   -- {ev, ev, ...}
 -- Each battle: { id, name, active, participants={[uid]=true,...},
---                events={ev,...}, lastEventAt }
+--                participantRefs={[uid]=n,...}, events={ev,...},
+--                lastEventAt }
+-- participants is the set findBattle matches against: the ids named by the
+-- battle's retained events, nothing more. participantRefs counts how many of
+-- those endpoints name each id (an attacker that is its own target counts
+-- twice), so trimming an event updates the set in O(1) instead of rescanning.
 combatLog.battles      = combatLog.battles      or {}
 combatLog.nextBattleId = combatLog.nextBattleId or 1
 combatLog.activeTabId  = combatLog.activeTabId or "all"
@@ -409,6 +419,9 @@ end
 -- the battle table, or nil. Battles silent longer than
 -- BATTLE_REJOIN_MAX_SEC are skipped: they're considered closed, so a
 -- reused unit id can't get its events merged into a dead unit's battle.
+-- Participants are only the ids the battle's retained events name (#2688),
+-- so an id whose every event has been trimmed no longer matches; the other
+-- endpoint can still match, and the first matching battle wins.
 local function findBattle(atk, tgt)
     local now = engine.gameTime()
     for _, b in ipairs(combatLog.battles) do
@@ -536,13 +549,31 @@ local function newBattle(atk, tgt, gameTime)
         name        = name,
         active      = true,
         participants = {},
+        participantRefs = {},
         events      = {},
         lastEventAt = gameTime,
     }
-    if atk then b.participants[atk] = true end
-    if tgt then b.participants[tgt] = true end
+    -- The participants arrive with the event itself, in processEvent.
     table.insert(combatLog.battles, b)
     return b
+end
+
+-- #2688: one retained-event endpoint naming `uid` joins / leaves `b`.
+local function addParticipant(b, uid)
+    if uid == nil then return end
+    b.participantRefs[uid] = (b.participantRefs[uid] or 0) + 1
+    b.participants[uid] = true
+end
+
+local function dropParticipant(b, uid)
+    if uid == nil then return end
+    local n = (b.participantRefs[uid] or 0) - 1
+    if n > 0 then
+        b.participantRefs[uid] = n
+    else
+        b.participantRefs[uid] = nil
+        b.participants[uid] = nil
+    end
 end
 
 -- Push an event into the All-tab ring (capped) and the appropriate
@@ -560,15 +591,19 @@ local function processEvent(ev)
     if b then
         -- Re-activate if quiescence had closed it.
         b.active = true
-        if atk then b.participants[atk] = true end
-        if tgt then b.participants[tgt] = true end
     else
         b = newBattle(atk, tgt, ev.ts or 0)
     end
     table.insert(b.events, 1, ev)
+    addParticipant(b, atk)
+    addParticipant(b, tgt)
     -- #2189: newest-first, so trimming the tail drops the oldest event.
+    -- #2688: its endpoints go with it, so participants never outlive the
+    -- retained events that name them.
     while #b.events > MAX_GROUP_EVENTS do
-        table.remove(b.events)
+        local old = table.remove(b.events)
+        dropParticipant(b, old.attacker)
+        dropParticipant(b, old.target)
     end
     b.lastEventAt = ev.ts or 0
 
