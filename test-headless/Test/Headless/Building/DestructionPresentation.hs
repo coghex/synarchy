@@ -37,8 +37,8 @@ import Building.Knowledge
     ( ContainerKnowledge(..), knownContainerIds, observeContainer )
 import Building.Placement (PlacementResult(..), canPlaceAt)
 import Building.Render
-    ( buildingToQuad, destructionToQuad, placedBuildingSortKey
-    , renderBuildingQuadsScanned )
+    ( buildingToQuad, destructionToQuad, placedBuildingPass
+    , placedBuildingSortKey, renderBuildingQuadsScanned )
 import Building.Schema
 import Building.Thread.Command (processAllBuildingCommands)
 import Building.Types
@@ -66,7 +66,8 @@ import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
-import World.Grid (tileSideHeight)
+import World.Grid (gridToWorld, tileSideHeight)
+import World.Render.ChunkCulling (chunkWrapOffset)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Types
     (BuildingSnapshot(..), fromBuildingSnapshot, toBuildingSnapshot)
@@ -297,8 +298,8 @@ builtEffect = captured (builtInstance demolishDef) demolishDef
 
 effectQuad ∷ CameraFacing → Double → DestructionEffect → Maybe SortableQuad
 effectQuad facing now eff =
-    destructionToQuad (fromIntegral ∘ (\(TextureHandle h) → h)) 0 facing zSlice
-                      effDepth tileAlpha eff now texSizes
+    destructionToQuad (fromIntegral ∘ (\(TextureHandle h) → h)) 0 facing
+                      originSeam zSlice effDepth tileAlpha eff now texSizes
 
 effectQuadOrFail ∷ CameraFacing → Double → DestructionEffect → IO SortableQuad
 effectQuadOrFail facing now eff = case effectQuad facing now eff of
@@ -310,8 +311,15 @@ effectQuadOrFail facing now eff = case effectQuad facing now eff of
 placedQuad ∷ CameraFacing → Bool → Double → BuildingInstance → BuildingDef
            → Maybe SortableQuad
 placedQuad facing sel now inst def =
-    buildingToQuad (fromIntegral ∘ (\(TextureHandle h) → h)) 0 facing zSlice
-                   effDepth tileAlpha sel inst (Just def) now texSizes
+    buildingToQuad (fromIntegral ∘ (\(TextureHandle h) → h)) 0 facing
+                   originSeam zSlice effDepth tileAlpha sel inst (Just def) now
+                   texSizes
+
+-- | A camera at the origin: the fixture anchor's chunk is nearest
+--   through its canonical alias, so the seam translation (#2691) is the
+--   identity for every example that is not about the seam.
+originSeam ∷ BuildingSeamView
+originSeam = BuildingSeamView 0 0 worldSizeChunks
 
 placedQuadOrFail ∷ CameraFacing → Bool → Double → BuildingInstance → BuildingDef
                  → IO SortableQuad
@@ -600,6 +608,89 @@ quadSpec = describe "the effect quad through the shared geometry boundary" $ do
             effectQuad f (startClock + collapseDuration) eff `shouldSatisfy` isNothing
             effectQuad f (startClock + 1.49) eff `shouldSatisfy` isJust
 
+    it "draws at the demolished instance's u-alias across the seam, at every facing (#2691)" $ do
+        -- Through the production placed pass, not a translated
+        -- expectation: the instance and its effect each go through the
+        -- pass once with a camera parked on the anchor's alias one world
+        -- away, and once with the camera at the origin where the
+        -- canonical alias is the nearest.
+        eff ← builtEffect
+        let inst = builtInstance demolishDef
+            defs = HM.fromList [ (bdName d, d) | d ← allDefs ]
+            withEffect = emptyBuildingManager
+                { bmDefs = defs, bmDestructions = HM.singleton theId eff }
+            withInstance = emptyBuildingManager
+                { bmDefs = defs, bmInstances = HM.singleton theId inst }
+        forM_ canonicalFacings $ \f → do
+            let seamCam = seamCamAt f
+                offset = uncurry (chunkWrapOffset f seamWorld) seamCam
+                             (ChunkCoord 0 0)
+            -- PRECONDITIONS: the anchor's chunk really is reached through
+            -- a non-identity alias from the seam camera, and through the
+            -- canonical one from the origin.
+            offset `shouldSatisfy` (≢ (0, 0))
+            chunkWrapOffset f seamWorld 0 0 (ChunkCoord 0 0) `shouldBe` (0, 0)
+            e0 ← onlyQuad (passAt f (0, 0) withEffect)
+            e1 ← onlyQuad (passAt f seamCam withEffect)
+            i0 ← onlyQuad (passAt f (0, 0) withInstance)
+            i1 ← onlyQuad (passAt f seamCam withInstance)
+            -- The effect moves by exactly the alias shift its instance
+            -- moves by…
+            quadBounds e1 `shouldSatisfy` boundsClose (shiftBounds offset (quadBounds e0))
+            quadBounds i1 `shouldSatisfy` boundsClose (shiftBounds offset (quadBounds i0))
+            -- …so it keeps the instance's ground contact over there too…
+            bottomOf e1 `shouldSatisfy` nearly (bottomOf i1)
+            centreXOf e1 `shouldSatisfy` nearly (centreXOf i1)
+            -- …and only its position moved: frame, sort and lighting are
+            -- the canonical effect's.
+            sqTexture e1 `shouldBe` sqTexture e0
+            sqSortKey e1 `shouldBe` sqSortKey e0
+            quadWorldUV e1 `shouldBe` quadWorldUV e0
+            quadTint e1 `shouldBe` quadTint e0
+
+-- | A world small enough that a camera one world-width east of the
+--   anchor reaches its chunk only through a non-identity u-alias.
+seamWorld ∷ Int
+seamWorld = 8
+
+-- | That camera: parked on the anchor's u-alias one whole world away,
+--   at @f@'s own projection. The world wraps in @u = gx - gy@ with
+--   @v = gx + gy@ fixed, so the alias moves half a world along each grid
+--   axis in opposite directions.
+seamCamAt ∷ CameraFacing → (Float, Float)
+seamCamAt f =
+    let half = seamWorld * chunkSize `div` 2
+    in gridToWorld f (fst anchor + half) (snd anchor - half)
+
+-- | The production placed pass ('Building.Render.placedBuildingPass')
+--   over one snapshot, with the camera at @cam@ on a 'seamWorld' page.
+passAt ∷ CameraFacing → (Float, Float) → BuildingManager
+       → V.Vector SortableQuad
+passAt f (camX, camY) =
+    placedBuildingPass (fromIntegral ∘ (\(TextureHandle h) → h)) (const 0)
+                       (const (BuildingSeamView camX camY seamWorld))
+                       f zSlice effDepth tileAlpha startClock texSizes
+                       (HS.singleton fixturePage)
+
+-- | The pass's one quad: an entity is never drawn twice, at the seam or
+--   away from it.
+onlyQuad ∷ V.Vector SortableQuad → IO SortableQuad
+onlyQuad qs = do
+    V.length qs `shouldBe` 1
+    pure (V.head qs)
+
+shiftBounds ∷ (Float, Float) → Bounds → Bounds
+shiftBounds (ox, oy) (x0, y0, x1, y1) = (x0 + ox, y0 + oy, x1 + ox, y1 + oy)
+
+boundsClose ∷ Bounds → Bounds → Bool
+boundsClose (a0, b0, c0, d0) (a1, b1, c1, d1) =
+    all (uncurry nearly) [(a0, a1), (b0, b1), (c0, c1), (d0, d1)]
+
+-- | 'closeTo' loosened for positions a whole world-width from the
+--   origin, where one float ulp alone approaches its tolerance.
+nearly ∷ Float → Float → Bool
+nearly a b = abs (a - b) < 1.0e-4
+
 -- * Pruning
 
 pruneSpec ∷ Spec
@@ -737,7 +828,8 @@ scannedBuildings env = do
     -- what one frame does at its own start.
     bm ← readIORef (buildingManagerRef env)
     (scanned, quads) ← renderBuildingQuadsScanned env bm (const 0) FaceSouth
-                                                  zSlice effDepth tileAlpha
+                                                  (0, 0) zSlice effDepth
+                                                  tileAlpha
     pure (scanned, V.length quads)
 
 drainSpec ∷ Spec

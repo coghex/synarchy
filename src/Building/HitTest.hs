@@ -9,6 +9,10 @@
 -- ghost), sized from that texture, with the sprite-anchor drop applied
 -- — so the click target IS the visible quad at every camera facing. A
 -- pixel that lies only inside some other view's bounds does not hit.
+-- It is also moved onto the anchor's nearest u-alias by the same
+-- 'Building.Visual.placedBuildingQuadSeen' the renderer uses (#2691), so
+-- a building drawn across the cylindrical seam is clicked where it is
+-- drawn rather than one world-width away.
 --
 -- What stays this module's own is the POLICY around the quad: only the
 -- active world is clickable, the z-slice / view-depth band, the
@@ -32,7 +36,9 @@ import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Viewport (windowDegenerate)
 import World.Generate (viewDepth)
 import Building.Types
-import Building.Visual (BuildingQuadRect(..), placedBuildingQuad)
+import World.State.Types (WorldState(..))
+import Building.Visual
+    (BuildingQuadRect(..), buildingSeamView, placedBuildingQuadSeen)
 
 -- | Hit test at framebuffer-pixel coordinates. Returns the topmost
 --   (highest-Z) building whose sprite quad contains the click.
@@ -50,9 +56,15 @@ hitTestBuildingAt env pixX pixY = do
 
     -- Only the active world's buildings are clickable (#76) — matches the
     -- render scoping; a hidden world's building must not win the hit-test.
-    let instances = case resolveActiveWorld mgr of
+    let activeWorld = resolveActiveWorld mgr
+        instances = case activeWorld of
             Just (pid, _) → buildingsOnPage pid (bmInstances bm)
             Nothing       → HM.empty
+    -- The active page's circumference, under the same convention its
+    -- terrain and the render pass use (#2691).
+    params ← case activeWorld of
+        Just (_, ws) → readIORef (wsGenParamsRef ws)
+        Nothing      → return Nothing
     -- Zero-size window (minimize): the pixel→world divisions below would
     -- yield a non-finite click coord. Report "no building".
     if windowDegenerate winW winH ∨ HM.null instances
@@ -66,6 +78,7 @@ hitTestBuildingAt env pixX pixY = do
                 effDepth = min viewDepth
                                (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
                 (camX, camY) = camPosition camera
+                seam = buildingSeamView (camX, camY) params
 
                 -- Screen pixel → world coord (same projection as
                 -- Unit.HitTest and the world cursor hit test).
@@ -88,8 +101,8 @@ hitTestBuildingAt env pixX pixY = do
                           (_, BuildingQuadRect
                                 { bqX = drawX, bqY = drawY
                                 , bqW = quadW, bqH = quadH }) =
-                              placedBuildingQuad facing now zSlice texSizes
-                                                 inst mDef
+                              placedBuildingQuadSeen facing seam now zSlice
+                                                     texSizes inst mDef
                           cx    = drawX + quadW * 0.5
                           cy    = drawY + quadH * 0.5
                           dx    = worldX - cx

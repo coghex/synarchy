@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.Render.ChunkCulling
     ( isChunkVisibleWrapped
+    , chunkWrapOffset
     , isChunkRelevantForSlice
     ) where
 
@@ -57,22 +58,8 @@ bestWrapOffset facing worldSize camX camY chunkScreenX chunkScreenY =
 isChunkVisibleWrapped ∷ CameraFacing → Int → ViewBounds → Float → Float
   → ChunkCoord → Maybe (Float, Float)
 isChunkVisibleWrapped facing worldSize vb camX camY coord =
-    let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
-        corners = [ gridToScreen facing gx gy
-                  | gx ← [minGX, maxGX]
-                  , gy ← [minGY, maxGY]
-                  ]
-        sxs = map fst corners
-        sys = map snd corners
-        sxMin = minimum sxs
-        sxMax = maximum sxs
-        syMin = minimum sys
-        syMax = maximum sys
-
-        chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
-        chunkCenterY = (syMin + syMax + tileHeight) / 2.0
-        (offX, offY) = bestWrapOffset facing worldSize camX camY
-                                      chunkCenterX chunkCenterY
+    let (sxMin, syMin, sxMax, syMax) = chunkScreenExtent facing coord
+        (offX, offY) = chunkWrapOffset facing worldSize camX camY coord
 
         chunkLeft   = sxMin + offX
         chunkRight  = sxMax + tileWidth + offX
@@ -84,6 +71,38 @@ isChunkVisibleWrapped facing worldSize vb camX camY coord =
                     ∨ chunkBottom < vbTop vb
                     ∨ chunkTop    > vbBottom vb)
     in if visible then Just (offX, offY) else Nothing
+
+-- | The screen-space shift of a chunk's nearest u-alias, decided
+--   exactly as 'isChunkVisibleWrapped' decides it but WITHOUT the
+--   bounds test: wherever that function answers @Just off@, this
+--   answers @off@.
+--
+--   For content anchored in a chunk that must be placed by its
+--   terrain's alias whether or not the chunk's own ground rectangle
+--   meets the view — a building sprite can reach the screen while its
+--   anchor tile does not (#2691). Identity (0, 0) whenever the
+--   canonical position is already the nearest one.
+chunkWrapOffset ∷ CameraFacing → Int → Float → Float → ChunkCoord
+  → (Float, Float)
+chunkWrapOffset facing worldSize camX camY coord =
+    let (sxMin, syMin, sxMax, syMax) = chunkScreenExtent facing coord
+        chunkCenterX = (sxMin + sxMax + tileWidth) / 2.0
+        chunkCenterY = (syMin + syMax + tileHeight) / 2.0
+    in bestWrapOffset facing worldSize camX camY chunkCenterX chunkCenterY
+
+-- | The min/max screen position of a chunk's four corner tiles at
+--   @facing@, as @(xMin, yMin, xMax, yMax)@ — tile origins, so a caller
+--   adds one tile's extent for the far edges.
+chunkScreenExtent ∷ CameraFacing → ChunkCoord → (Float, Float, Float, Float)
+chunkScreenExtent facing coord =
+    let ((minGX, minGY), (maxGX, maxGY)) = chunkWorldBounds coord
+        corners = [ gridToScreen facing gx gy
+                  | gx ← [minGX, maxGX]
+                  , gy ← [minGY, maxGY]
+                  ]
+        sxs = map fst corners
+        sys = map snd corners
+    in (minimum sxs, minimum sys, maximum sxs, maximum sys)
 
 isChunkRelevantForSlice ∷ Int → LoadedChunk → Bool
 isChunkRelevantForSlice _zSlice lc =

@@ -235,8 +235,15 @@ tileAlpha = 0.8
 renderQuad ∷ CameraFacing → Bool → Double → BuildingInstance → Maybe BuildingDef
            → Maybe SortableQuad
 renderQuad facing sel now inst mDef =
-    buildingToQuad (fromIntegral ∘ (\(TextureHandle h) → h)) 0 facing zSlice
-                   effDepth tileAlpha sel inst mDef now texSizes
+    buildingToQuad (fromIntegral ∘ (\(TextureHandle h) → h)) 0 facing
+                   originSeam zSlice effDepth tileAlpha sel inst mDef now
+                   texSizes
+
+-- | A camera at the origin of a default-sized world: every fixture
+--   anchor here is near it, so the nearest u-alias is the canonical one
+--   and the seam translation (#2691) is the identity.
+originSeam ∷ BuildingSeamView
+originSeam = buildingSeamView (0, 0) Nothing
 
 renderedOrFail ∷ CameraFacing → Bool → Double → BuildingInstance
                → Maybe BuildingDef → IO SortableQuad
