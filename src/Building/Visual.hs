@@ -35,6 +35,12 @@ module Building.Visual
     , buildingQuadRect
     , spriteAnchorOffset
     , placedBuildingQuad
+      -- * Which u-alias it is drawn through (#2691)
+    , BuildingSeamView(..)
+    , buildingSeamView
+    , buildingSeamOffset
+    , throughNearestAlias
+    , placedBuildingQuadSeen
       -- * How a ghost of it is presented
     , ghostTint
     , previewGhostAlpha
@@ -51,6 +57,9 @@ import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Camera (CameraFacing)
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
 import World.Page.Types (WorldPageId)
+import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Types (WorldGenParams(..))
+import World.Render.ChunkCulling (chunkWrapOffset)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , applyFacingF, baseTileW, baseTileH)
@@ -253,8 +262,10 @@ buildingQuadRect facing zSlice texSizes anchorOffset gx gy gz tex =
         , bqIsoDepth = faF + fbF }
 
 -- | The visual sample AND the quad of a placed instance, from one
---   call: what 'Building.Render.buildingToQuad' draws and what
---   'Building.HitTest.hitTestBuildingAt' tests the click against.
+--   call, at the CANONICAL anchor. What 'Building.Render.buildingToQuad'
+--   draws and what 'Building.HitTest.hitTestBuildingAt' tests the click
+--   against is this moved onto the anchor's nearest u-alias —
+--   'placedBuildingQuadSeen' (#2691).
 placedBuildingQuad
     ∷ CameraFacing → Double → Int → HM.HashMap TextureHandle (Int, Int)
     → BuildingInstance → Maybe BuildingDef
@@ -266,6 +277,77 @@ placedBuildingQuad facing now zSlice texSizes inst mDef =
                      (biAnchorX inst) (biAnchorY inst) (biGridZ inst)
                      (bvTexture visual)
     in (visual, rect)
+
+-- * The seam (#2691)
+--
+--   Chunks are stored u-wrapped, and the terrain draws each one through
+--   the u-alias nearest the camera. A building's stored anchor is
+--   CANONICAL, so the rectangle 'placedBuildingQuad' builds from it is
+--   the canonical alias's — one whole world-width away from the terrain
+--   it stands on whenever the camera looks at that terrain across the
+--   seam. The vertex shader applies no entity wrap of its own, so the
+--   alias has to be chosen here, by the SAME decision the terrain and
+--   the committed designation make ("World.Render.ChunkCulling").
+
+-- | The per-frame, per-PAGE input the nearest-alias decision needs:
+--   the camera's screen position and that page's circumference.
+--   Several pages with different world sizes can be visible at once, so
+--   the size is the building's (or destruction effect's) own page's,
+--   never the active page's.
+data BuildingSeamView = BuildingSeamView
+    { bsvCamX      ∷ !Float
+    , bsvCamY      ∷ !Float
+    , bsvWorldSize ∷ !Int   -- ^ the page's world size, in chunks
+    } deriving (Show, Eq)
+
+-- | A page's seam view from the camera position and the page's
+--   generation parameters, with the terrain passes' own convention for
+--   a page that has none yet (128 chunks), so a building can never
+--   choose its alias against a different circumference than the ground
+--   under it.
+buildingSeamView ∷ (Float, Float) → Maybe WorldGenParams → BuildingSeamView
+buildingSeamView (camX, camY) paramsM = BuildingSeamView
+    { bsvCamX      = camX
+    , bsvCamY      = camY
+    , bsvWorldSize = maybe 128 wgpWorldSize paramsM
+    }
+
+-- | The screen shift of the nearest u-alias of the chunk holding the
+--   canonical tile @(gx, gy)@: the terrain's own choice for that chunk
+--   ('chunkWrapOffset'), so a building draws over exactly the ground
+--   copy the player sees. @(0, 0)@ away from the seam.
+buildingSeamOffset ∷ CameraFacing → BuildingSeamView → Int → Int
+                   → (Float, Float)
+buildingSeamOffset facing sv gx gy =
+    chunkWrapOffset facing (bsvWorldSize sv) (bsvCamX sv) (bsvCamY sv)
+                    (fst (globalToChunk gx gy))
+
+-- | Move a rectangle anchored at the canonical tile @(gx, gy)@ onto that
+--   tile's nearest alias. POSITION ONLY: size and 'bqIsoDepth' — and so
+--   the sort key built from it — are untouched, exactly as
+--   'Structure.Render.translateQuad' leaves a structure piece's.
+throughNearestAlias ∷ CameraFacing → BuildingSeamView → Int → Int
+                    → BuildingQuadRect → BuildingQuadRect
+throughNearestAlias facing sv gx gy rect =
+    let (offX, offY) = buildingSeamOffset facing sv gx gy
+    in if offX ≡ 0 ∧ offY ≡ 0
+       then rect
+       else rect { bqX = bqX rect + offX, bqY = bqY rect + offY }
+
+-- | 'placedBuildingQuad' where it is actually DRAWN: through the
+--   anchor's nearest alias. The one geometry decision both
+--   'Building.Render.buildingToQuad' and
+--   'Building.HitTest.hitTestBuildingAt' read, so a building is
+--   clickable exactly where it appears, at the seam and away from it.
+placedBuildingQuadSeen
+    ∷ CameraFacing → BuildingSeamView → Double → Int
+    → HM.HashMap TextureHandle (Int, Int)
+    → BuildingInstance → Maybe BuildingDef
+    → (BuildingVisual, BuildingQuadRect)
+placedBuildingQuadSeen facing sv now zSlice texSizes inst mDef =
+    let (visual, rect) = placedBuildingQuad facing now zSlice texSizes inst mDef
+    in ( visual
+       , throughNearestAlias facing sv (biAnchorX inst) (biAnchorY inst) rect )
 
 -- * Ghost presentation (#1845)
 --

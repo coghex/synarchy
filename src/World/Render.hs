@@ -210,8 +210,12 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
+            -- The frame camera's position, the one the terrain chose
+            -- its chunk aliases from: a building draws through the
+            -- same alias as the ground under it (#2691).
             renderBuildingQuadsScanned env frameBuildings solarSlotOf facing
-                                       zSlice effDepth tileAlpha
+                                       (camPosition camera) zSlice effDepth
+                                       tileAlpha
 
     -- Structures (walls / floors / ceilings) — same iso-sorted quad path
     -- as buildings, with each piece's own facemap slot.

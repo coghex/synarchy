@@ -29,7 +29,10 @@
 --   headlessly; 'Building.Render.renderBuildingQuadsScanned' returns
 --   nothing without a texture system, which is the normal GPU-free
 --   state. So the staked instance's own quad is asserted through the
---   pure 'buildingToQuad' here, and the pixels are
+--   pure 'buildingToQuad' here — or, where the seam is concerned
+--   (#2691), through the pure 'Building.Render.placedBuildingPass' that
+--   scanned entry point runs once it has a texture system, over the
+--   engine's own seam views — and the pixels are
 --   'tools/construction_blueprint_footprint_probe.py'\'s job.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
@@ -51,13 +54,17 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import System.Directory (doesFileExist)
 
-import Building.Render (buildingGhostQuad, buildingToQuad, ghostToQuad)
+import Building.HitTest (hitTestBuildingAt)
+import Building.Render
+    ( buildingGhostQuad, buildingToQuad, ghostToQuad, pageSeamViews
+    , placedBuildingPass )
 import Building.Schema
 import Building.Types
     ( BuildingAnimation(..), BuildingDef(..), BuildingGhost(..), BuildingId(..)
     , BuildingInstance(..), BuildingManager(..), emptyBuildingManager )
 import Building.Visual
-    ( BuildingQuadRect(..), BuildingVisual(..), buildingQuadRect
+    ( BuildingQuadRect(..), BuildingSeamView(..), BuildingVisual(..)
+    , buildingQuadRect, placedBuildingQuad
     , buildingStakedAt, designatedGhostAlpha
     , ghostPieceTint, placedBuildingVisual, previewGhostAlpha
     , previewBuildingTexture, spriteAnchorOffset )
@@ -85,7 +92,7 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Generate (viewDepth)
 import World.Grid (gridToWorld)
-import World.Render.ChunkCulling (isChunkVisibleWrapped)
+import World.Render.ChunkCulling (chunkWrapOffset, isChunkVisibleWrapped)
 import World.Render.CursorQuads (renderWorldCursorQuadsScanned)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Chunk.Types (ChunkCoord(..))
@@ -260,10 +267,16 @@ stakedGhost def = stakedGhostAt def anchorZ
 
 stakedGhostAt ∷ BuildingDef → Int → Maybe SortableQuad
 stakedGhostAt def z =
-    buildingToQuad (const 0) noFaceMapVertexId facing zSlice effDepth
-                   tileAlpha False
+    buildingToQuad (const 0) noFaceMapVertexId facing originSeam zSlice
+                   effDepth tileAlpha False
                    (instanceOf def (fst anchorTile) (snd anchorTile) z 0)
                    (Just def) 0 texSizes
+
+-- | The engine scene's own camera — at the origin of a 'worldSizeChunks'
+--   page — through which the anchor's canonical alias is the nearest, so
+--   the seam translation (#2691) is the identity.
+originSeam ∷ BuildingSeamView
+originSeam = BuildingSeamView 0 0 worldSizeChunks
 
 -- * Quad readers
 
@@ -620,6 +633,118 @@ renderSpec = describe "the committed designation render pass" $ do
         sqSortKey drawn `shouldBe` sqSortKey raw
         quadWorldUV drawn `shouldBe` quadWorldUV raw
         sqTexture drawn `shouldBe` sqTexture raw
+
+    it "hands a seam-side designation off to an instance drawn at the same\
+       \ alias, at every facing (#2691)" $ \env →
+        forM_ canonicalFacings $ \f → forM_ [True, False] $ \atSeam → do
+            -- The designation draws through the nearest alias
+            -- (above), and the placed instance used to draw at its
+            -- canonical anchor — one world-width away — so staking
+            -- made the site jump offscreen. The instance side is the
+            -- PRODUCTION placed pass over the engine's own seam views.
+            (ws, offset) ← seamScene env f atSeam
+            plan ws workDef
+            (_, before) ← cursorPass env ws
+            V.length before `shouldBe` 1
+            let designation = V.head before
+            stake env workDef
+            (_, after) ← cursorPass env ws
+            -- The designation yields to the stake (#1845) …
+            V.length after `shouldBe` 0
+            placed ← placedPass env
+            -- … and exactly one instance quad replaces it, over the same
+            -- ground: the hand-off moves nothing, at the seam or away.
+            V.length placed `shouldBe` 1
+            let inst = V.head placed
+            quadBounds inst
+                `shouldSatisfy` boundsAgree (quadBounds designation)
+            sqTexture inst `shouldBe` sqTexture designation
+            quadTint inst `shouldBe` quadTint designation
+            -- Position ONLY: sorting and lighting stay the anchor's.
+            sqSortKey inst `shouldBe` sqSortKey designation
+            quadWorldUV inst `shouldBe` quadWorldUV designation
+            -- At the seam the instance is demonstrably off its canonical
+            -- position, and by exactly the designation's alias shift.
+            when atSeam $ do
+                let raw = canonicalRectBounds f
+                quadBounds inst `shouldNotSatisfy` boundsAgree raw
+                quadBounds inst
+                    `shouldSatisfy` boundsAgree (shiftBounds offset raw)
+
+    it "selects a seam-side building where it is drawn, at every facing\
+       \ (#2691)" $ \env →
+        forM_ canonicalFacings $ \f → forM_ [True, False] $ \atSeam → do
+            -- The click target is taken from the DESIGNATION's drawn
+            -- bounds — the cursor pass's own, independent alias path —
+            -- not from the function the hit test calls.
+            (ws, _) ← seamScene env f atSeam
+            plan ws workDef
+            (_, before) ← cursorPass env ws
+            V.length before `shouldBe` 1
+            stake env workDef
+            clickWorld env (boundsCentre (quadBounds (V.head before)))
+                `shouldReturn` Just (BuildingId 1)
+            -- Nothing is left at the canonical position across the
+            -- seam. Away from it that position IS the drawn one, and the
+            -- click above is the unchanged control.
+            when atSeam $
+                clickWorld env (boundsCentre (canonicalRectBounds f))
+                    `shouldReturn` Nothing
+
+    it "resolves each page's alias against that page's own world size\
+       \ (#2691)" $ \_env → do
+        -- Two visible pages with different circumferences, the LARGER
+        -- listed first so it is the active one: an alias chosen against
+        -- the active page's size would leave the small page's
+        -- building at its canonical position.
+        small ← emptyWorldState
+        large ← emptyWorldState
+        writeIORef (wsGenParamsRef small)
+            (Just defaultWorldGenParams { wgpWorldSize = seamWorldChunks })
+        writeIORef (wsGenParamsRef large)
+            (Just defaultWorldGenParams { wgpWorldSize = worldSizeChunks })
+        let largePage = WorldPageId "building_ghost_large_page"
+            mgr = emptyWorldManager
+                { wmWorlds  = [(largePage, large), (fixturePage, small)]
+                , wmVisible = [largePage, fixturePage] }
+            (ax, ay) = anchorTile
+            -- workDef's instance is the pre-delivery ghost and
+            -- plannedDef's is not, so the two quads are told apart by
+            -- their opacity.
+            onSmall = instanceOf workDef ax ay anchorZ 0
+            onLarge = (instanceOf plannedDef ax ay anchorZ 0)
+                { biPage = largePage }
+            bm = emptyBuildingManager
+                { bmDefs = HM.fromList
+                    [ (bdName d, d) | d ← [plannedDef, workDef] ]
+                , bmInstances = HM.fromList
+                    [ (BuildingId 1, onSmall), (BuildingId 2, onLarge) ] }
+            (cx, cy) = seamCamPosAt FaceSouth
+            smallOffset = chunkWrapOffset FaceSouth seamWorldChunks cx cy
+                                          (ChunkCoord 0 0)
+        -- PRECONDITIONS: the same camera needs a non-identity alias on
+        -- the small page and the canonical one on the large page.
+        smallOffset `shouldSatisfy` (≢ (0, 0))
+        chunkWrapOffset FaceSouth worldSizeChunks cx cy (ChunkCoord 0 0)
+            `shouldBe` (0, 0)
+        seamOf ← pageSeamViews mgr (cx, cy)
+        let quads = V.toList $
+                placedBuildingPass (const 0) (const 0) seamOf FaceSouth
+                    zSlice effDepth tileAlpha 0 texSizes
+                    (HS.fromList (wmVisible mgr)) bm
+            ghostly q = closeTo (tileAlpha * designatedGhostAlpha)
+                                (quadAlpha q)
+            rawOf inst def = rectBounds . snd $
+                placedBuildingQuad FaceSouth 0 zSlice texSizes inst (Just def)
+        length quads `shouldBe` 2
+        case (filter ghostly quads, filter (not . ghostly) quads) of
+            ([qSmall], [qLarge]) → do
+                quadBounds qSmall `shouldSatisfy` boundsAgree
+                    (shiftBounds smallOffset (rawOf onSmall workDef))
+                quadBounds qLarge `shouldSatisfy` boundsAgree
+                    (rawOf onLarge plannedDef)
+            _ → expectationFailure
+                    "expected one quad per page, told apart by opacity"
 
     it "makes the yield frame-atomic against a mid-frame stake" $ \env → do
         -- 'World.Render.updateWorldTiles' assembles the cursor quads and
@@ -1108,8 +1233,8 @@ raiseTerrain ws z = do
 stakedGhostFrom ∷ BuildingManager → Maybe SortableQuad
 stakedGhostFrom bm = case HM.elems (bmInstances bm) of
     []         → Nothing
-    (inst : _) → buildingToQuad (const 0) noFaceMapVertexId facing zSlice
-                     effDepth tileAlpha False inst
+    (inst : _) → buildingToQuad (const 0) noFaceMapVertexId facing originSeam
+                     zSlice effDepth tileAlpha False inst
                      (HM.lookup (biDefName inst) (bmDefs bm)) 0 texSizes
 
 plan ∷ WorldState → BuildingDef → IO ()
@@ -1140,6 +1265,92 @@ cursorPassWith ∷ EngineEnv → BuildingManager → WorldState
                → IO (Int, V.Vector SortableQuad)
 cursorPassWith env bm ws =
     renderWorldCursorQuadsScanned env bm fixturePage ws tileAlpha
+
+-- * The seam hand-off (#2691)
+
+-- | The engine scene on a 'seamWorldChunks' page at @f@, with the camera
+--   either parked on the anchor's u-alias one world away ('True') or at
+--   the origin ('False'), and the designation's alias shift from there
+--   — pinned rather than assumed, so a fixture change cannot quietly
+--   turn the seam half into an identity comparison.
+seamScene ∷ EngineEnv → CameraFacing → Bool
+          → IO (WorldState, (Float, Float))
+seamScene env f atSeam = do
+    ws ← scene env
+    writeIORef (wsGenParamsRef ws)
+        (Just defaultWorldGenParams { wgpWorldSize = seamWorldChunks })
+    let rv = toRenderViewCapability env
+    cam ← readIORef (rvCameraRef rv)
+    let camPos = if atSeam then seamCamPosAt f else (0, 0)
+        cam' = cam { camPosition = camPos, camFacing = f }
+    writeIORef (rvCameraRef rv) cam'
+    (fbW, fbH) ← readIORef (rvFramebufferSizeRef rv)
+    let vb = computeViewBounds cam' fbW fbH (sceneDepth cam')
+        offset = isChunkVisibleWrapped f seamWorldChunks vb
+                     (fst camPos) (snd camPos) (ChunkCoord 0 0)
+    offset `shouldSatisfy` maybe False
+        (if atSeam then (≢ (0, 0)) else (≡ (0, 0)))
+    pure (ws, fromMaybe (0, 0) offset)
+
+-- | The anchor's u-ALIAS one whole world away, projected at @f@. The
+--   world wraps in @u = gx - gy@ with @v = gx + gy@ fixed, so the alias
+--   is the anchor moved half a world-width along each grid axis in
+--   opposite directions; at every facing that is a displacement along
+--   'World.Grid.worldWrapPeriod''s axis alone, which a camera parked
+--   there can only reach through a non-identity alias.
+seamCamPosAt ∷ CameraFacing → (Float, Float)
+seamCamPosAt f =
+    let half = seamWorldChunks * chunkSize `div` 2
+    in gridToWorld f (fst anchorTile + half) (snd anchorTile - half)
+
+-- | The terrain view depth the render passes derive from the camera.
+sceneDepth ∷ Camera2D → Int
+sceneDepth cam = min viewDepth (max 8 (round (camZoom cam * 80.0 + 8.0 ∷ Float)))
+
+-- | What 'Building.Render.renderBuildingQuadsScanned' draws from the
+--   live engine once it has a texture system: the pure placed pass over
+--   the live manager, with the engine's own per-page seam views.
+placedPass ∷ EngineEnv → IO (V.Vector SortableQuad)
+placedPass env = do
+    bm  ← readIORef (buildingManagerRef env)
+    mgr ← readIORef (worldManagerRef env)
+    cam ← readIORef (rvCameraRef (toRenderViewCapability env))
+    seamOf ← pageSeamViews mgr (camPosition cam)
+    pure $ placedBuildingPass (const 0) (const 0) seamOf (camFacing cam)
+               (camZSlice cam) (sceneDepth cam) tileAlpha 0 texSizes
+               (HS.fromList (wmVisible mgr)) bm
+
+-- | The staked 'workDef' instance's rect at its CANONICAL anchor.
+canonicalRectBounds ∷ CameraFacing → (Float, Float, Float, Float)
+canonicalRectBounds f = rectBounds . snd $
+    placedBuildingQuad f 0 zSlice texSizes
+        (instanceOf workDef (fst anchorTile) (snd anchorTile) anchorZ 0)
+        (Just workDef)
+
+rectBounds ∷ BuildingQuadRect → (Float, Float, Float, Float)
+rectBounds r = (bqX r, bqY r, bqX r + bqW r, bqY r + bqH r)
+
+shiftBounds ∷ (Float, Float) → (Float, Float, Float, Float)
+            → (Float, Float, Float, Float)
+shiftBounds (ox, oy) (x0, y0, x1, y1) = (x0 + ox, y0 + oy, x1 + ox, y1 + oy)
+
+boundsCentre ∷ (Float, Float, Float, Float) → (Float, Float)
+boundsCentre (x0, y0, x1, y1) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5)
+
+-- | Click the framebuffer pixel that projects onto world point @p@ under
+--   the live camera, without moving the camera — moving it would move
+--   the alias decision under test.
+clickWorld ∷ EngineEnv → (Float, Float) → IO (Maybe BuildingId)
+clickWorld env (wx, wy) = do
+    let rv = toRenderViewCapability env
+    cam ← readIORef (rvCameraRef rv)
+    (winW, winH) ← readIORef (rvWindowSizeRef rv)
+    let zoom = camZoom cam
+        (camX, camY) = camPosition cam
+        vw = zoom * (fromIntegral winW / fromIntegral winH)
+        pixX = ((wx - camX) / vw + 1) * 0.5 * fromIntegral winW ∷ Float
+        pixY = ((wy - camY) / zoom + 1) * 0.5 * fromIntegral winH ∷ Float
+    hitTestBuildingAt env (realToFrac pixX) (realToFrac pixY)
 
 spec ∷ Spec
 spec = describe "building ghost" $ do

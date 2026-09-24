@@ -22,6 +22,8 @@
 module Building.Render
     ( renderBuildingQuads
     , renderBuildingQuadsScanned
+    , placedBuildingPass
+    , pageSeamViews
     , buildingToQuad
     , destructionToQuad
     , placedBuildingSortKey
@@ -51,7 +53,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , renderFlagSelected, tileWorldUV
                                           , noFaceMapVertexId)
 import World.Grid (worldLayer)
-import World.State.Types (wmVisible)
+import World.State.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
 import Building.Types
 import Building.Visual
@@ -61,10 +63,10 @@ import Building.Destruction (destructionFrame, destructionsOnPages)
 --   page's buildings, so each instance's quad takes ITS OWN page's
 --   solar slot (#1869).
 renderBuildingQuads ∷ EngineEnv → BuildingManager → (WorldPageId → Word32)
-                    → CameraFacing → Int → Int → Float
+                    → CameraFacing → (Float, Float) → Int → Int → Float
                     → IO (V.Vector SortableQuad)
-renderBuildingQuads env bm solarSlotOf facing zSlice effDepth tileAlpha =
-    snd ⊚ renderBuildingQuadsScanned env bm solarSlotOf facing zSlice
+renderBuildingQuads env bm solarSlotOf facing camPos zSlice effDepth tileAlpha =
+    snd ⊚ renderBuildingQuadsScanned env bm solarSlotOf facing camPos zSlice
                                      effDepth tileAlpha
 
 -- | 'renderBuildingQuads' with the scene-assembly telemetry (#1921)
@@ -80,10 +82,14 @@ renderBuildingQuads env bm solarSlotOf facing zSlice effDepth tileAlpha =
 --   holding only effects — the moments after the last building on a
 --   page is demolished — is still measured rather than reported as an
 --   empty pass.
+--
+--   @camPos@ is the frame camera's screen position, the one the terrain
+--   chose its chunk aliases from (#2691).
 renderBuildingQuadsScanned
     ∷ EngineEnv → BuildingManager → (WorldPageId → Word32) → CameraFacing
-    → Int → Int → Float → IO (Int, V.Vector SortableQuad)
-renderBuildingQuadsScanned env bm solarSlotOf facing zSlice effDepth tileAlpha = do
+    → (Float, Float) → Int → Int → Float → IO (Int, V.Vector SortableQuad)
+renderBuildingQuadsScanned env bm solarSlotOf facing camPos zSlice effDepth
+                           tileAlpha = do
     -- Render only the visible worlds' buildings — buildings are
     -- world-scoped so a hidden world's must not draw here (#76). The
     -- same scoping holds for a destruction effect: a hidden page's
@@ -91,51 +97,90 @@ renderBuildingQuadsScanned env bm solarSlotOf facing zSlice effDepth tileAlpha =
     -- clip runs out it resumes at the phase the clock dictates.
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let visiblePages = HS.fromList (wmVisible mgr)
-        instances = buildingsOnPages visiblePages (bmInstances bm)
+        scanned = HM.size (bmInstances bm) + HM.size (bmDestructions bm)
+    -- Game-clock matches biSpawnedAt's clock, so the Appearing→Built
+    -- transition a zero-work def derives from elapsed time doesn't run
+    -- while paused. A destruction effect's start is the same clock, so
+    -- pause freezes its phase too.
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+    texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
+    mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
+    case mBts of
+        Nothing → return (scanned, V.empty)
+        Just _bts → do
+            seamOf ← pageSeamViews mgr camPos
+            -- Stable handle id resolved in the shader (#286); buildings
+            -- carry no directional face map (#1696).
+            let lookupSlot h = fromIntegral (toInt h) ∷ Word32
+            return ( scanned
+                   , placedBuildingPass lookupSlot solarSlotOf seamOf facing
+                         zSlice effDepth tileAlpha now texSizes visiblePages
+                         bm )
+
+-- | Each visible page's 'BuildingSeamView' for this frame (#2691): the
+--   camera position and THAT page's world size, read from its own
+--   generation parameters under the terrain's convention. Several
+--   visible pages may have different circumferences, and the building
+--   scan is global, so an instance or effect must resolve its alias
+--   against the page it belongs to rather than the active one. A page
+--   not in the manager gets the parameterless default, which is what
+--   its terrain would draw with.
+pageSeamViews ∷ WorldManager → (Float, Float)
+              → IO (WorldPageId → BuildingSeamView)
+pageSeamViews mgr camPos = do
+    views ← forM (wmVisible mgr) $ \pid →
+        case lookup pid (wmWorlds mgr) of
+            Just ws → (\params → (pid, buildingSeamView camPos params))
+                          ⊚ readIORef (wsGenParamsRef ws)
+            Nothing → return (pid, fallback)
+    let table = HM.fromList views
+    return $ \pid → HM.lookupDefault fallback pid table
+  where
+    fallback = buildingSeamView camPos Nothing
+
+-- | The placed-building pass itself, once the frame's inputs are read:
+--   every visible page's destruction effects and instances, each drawn
+--   through its own page's nearest alias and stamped with its own
+--   page's solar slot. Pure — exported so the seam contract is
+--   assertable at the production boundary without a texture system
+--   (#2691), which 'renderBuildingQuadsScanned' needs before it emits.
+placedBuildingPass
+    ∷ (TextureHandle → Word32)
+    → (WorldPageId → Word32)                -- ^ solar slot of a page
+    → (WorldPageId → BuildingSeamView)      -- ^ seam view of a page
+    → CameraFacing
+    → Int → Int → Float                     -- ^ zSlice, effDepth, tileAlpha
+    → Double                                -- ^ game time now
+    → HM.HashMap TextureHandle (Int, Int)
+    → HS.HashSet WorldPageId                -- ^ visible pages
+    → BuildingManager
+    → V.Vector SortableQuad
+placedBuildingPass lookupSlot solarSlotOf seamOf facing zSlice effDepth
+                   tileAlpha now texSizes visiblePages bm =
+    let instances = buildingsOnPages visiblePages (bmInstances bm)
         effects   = destructionsOnPages visiblePages (bmDestructions bm)
         defs      = bmDefs bm
         selected  = bmSelected bm
-        scanned   = HM.size (bmInstances bm) + HM.size (bmDestructions bm)
-    if HM.null instances ∧ HM.null effects
-        then return (scanned, V.empty)
-        else do
-            -- Game-clock matches biSpawnedAt's clock, so the
-            -- Appearing→Built transition a zero-work def derives
-            -- from elapsed time
-            -- doesn't run while paused. A destruction effect's
-            -- start is the same clock, so pause freezes its phase too.
-            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-            texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
-            mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
-            case mBts of
-                Nothing → return (scanned, V.empty)
-                Just _bts → do
-                    -- Stable handle id resolved in the shader (#286);
-                    -- buildings carry no directional face map (#1696).
-                    let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                        defFmSlot = noFaceMapVertexId
-                        withEffects = HM.foldl' (\acc eff →
-                                case destructionToQuad lookupSlot defFmSlot facing
-                                            zSlice effDepth tileAlpha eff now
-                                            texSizes of
-                                    Just sq →
-                                        setQuadSolarPage
-                                            (solarSlotOf (dePage eff)) sq : acc
-                                    Nothing → acc
-                              ) [] effects
-                        quads = V.fromList
-                            $ HM.foldlWithKey' (\acc bid inst →
-                                let mDef  = HM.lookup (biDefName inst) defs
-                                    isSel = selected ≡ Just bid
-                                in case buildingToQuad lookupSlot defFmSlot facing
-                                                zSlice effDepth tileAlpha isSel inst mDef
-                                                now texSizes of
-                                    Just sq →
-                                        setQuadSolarPage
-                                            (solarSlotOf (biPage inst)) sq : acc
-                                    Nothing → acc
-                              ) withEffects instances
-                    return (scanned, quads)
+        defFmSlot = noFaceMapVertexId
+        withEffects = HM.foldl' (\acc eff →
+                case destructionToQuad lookupSlot defFmSlot facing
+                            (seamOf (dePage eff)) zSlice effDepth tileAlpha
+                            eff now texSizes of
+                    Just sq →
+                        setQuadSolarPage (solarSlotOf (dePage eff)) sq : acc
+                    Nothing → acc
+              ) [] effects
+    in V.fromList
+        $ HM.foldlWithKey' (\acc bid inst →
+            let mDef  = HM.lookup (biDefName inst) defs
+                isSel = selected ≡ Just bid
+            in case buildingToQuad lookupSlot defFmSlot facing
+                        (seamOf (biPage inst)) zSlice effDepth tileAlpha
+                        isSel inst mDef now texSizes of
+                Just sq →
+                    setQuadSolarPage (solarSlotOf (biPage inst)) sq : acc
+                Nothing → acc
+          ) withEffects instances
 
 -- | One placed instance's quad, or 'Nothing' when the camera band
 --   culls it. Pure — exported so the render/hit-test agreement is
@@ -145,6 +190,7 @@ buildingToQuad
     ∷ (TextureHandle → Word32)
     → Float
     → CameraFacing
+    → BuildingSeamView                      -- ^ the instance's page (#2691)
     → Int
     → Int                                   -- ^ effDepth (terrain view depth)
     → Float
@@ -154,7 +200,7 @@ buildingToQuad
     → Double
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef now texSizes =
+buildingToQuad lookupSlot defFmSlot facing seam zSlice effDepth tileAlpha isSel inst mDef now texSizes =
     let gridZ = biGridZ inst
         relativeZ = gridZ - zSlice
         -- Match the terrain band (see Unit.Render): cull only above the
@@ -166,10 +212,10 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             -- handle this facing shows (the lifecycle frame, or the
             -- static view at ghost opacity while materials are
             -- outstanding, or the stamped handle when the def is
-            -- gone), sized from that handle and anchored on the
-            -- footprint.
-            (visual, rect) = placedBuildingQuad facing now zSlice texSizes
-                                                inst mDef
+            -- gone), sized from that handle, anchored on the footprint
+            -- and moved onto the anchor's nearest u-alias (#2691).
+            (visual, rect) = placedBuildingQuadSeen facing seam now zSlice
+                                                    texSizes inst mDef
             texHandle = bvTexture visual
             isGhost   = bvGhost visual
             BuildingQuadRect
@@ -246,7 +292,8 @@ placedBuildingSortKey isoDepth relativeZ =
 --   Geometry is the placed building's: 'buildingQuadRect' from the
 --   captured anchor, grid z and sprite-anchor drop, sized from the
 --   selected frame's own canvas, the same ground contact, world UV,
---   layer and 'placedBuildingSortKey'. What is deliberately NOT the
+--   layer and 'placedBuildingSortKey', drawn through the same nearest
+--   u-alias as the instance it replaces (#2691). What is deliberately NOT the
 --   placed building's: no selection outline (the effect is never
 --   selected and never hit-tested) and no pre-delivery ghost opacity —
 --   the tint is exactly the scene's @tileAlpha@ whatever the building
@@ -255,6 +302,7 @@ destructionToQuad
     ∷ (TextureHandle → Word32)
     → Float
     → CameraFacing
+    → BuildingSeamView                      -- ^ the effect's page (#2691)
     → Int
     → Int                                   -- ^ effDepth (terrain view depth)
     → Float                                 -- ^ scene tileAlpha
@@ -262,7 +310,7 @@ destructionToQuad
     → Double                                -- ^ game time now
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-destructionToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha eff now texSizes =
+destructionToQuad lookupSlot defFmSlot facing seam zSlice effDepth tileAlpha eff now texSizes =
     let gridZ = deGridZ eff
         relativeZ = gridZ - zSlice
     in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
@@ -273,7 +321,12 @@ destructionToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha eff now 
             let BuildingQuadRect
                     { bqX = drawX, bqY = drawY, bqW = quadW, bqH = quadH
                     , bqIsoDepth = isoDepth } =
-                    buildingQuadRect facing zSlice texSizes
+                    -- Through the anchor's nearest alias, like the
+                    -- instance it replaces: same anchor, same page, so
+                    -- the same alias (#2691).
+                    throughNearestAlias facing seam (deAnchorX eff)
+                                        (deAnchorY eff)
+                  $ buildingQuadRect facing zSlice texSizes
                                      (deAnchorOffset eff)
                                      (deAnchorX eff) (deAnchorY eff) gridZ
                                      texHandle
