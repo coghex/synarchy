@@ -22,8 +22,11 @@
 --     console-required mode, an engine shutdown;
 --   * a 'DebugListener' handle whose 'stopDebugConsole' is idempotent,
 --     closes the listening socket, joins the accept thread, and closes,
---     kills and joins every admitted client — so no console thread
---     outlives the Lua worker that started it;
+--     kills and joins every admitted client, all within one total bound
+--     ('listenerJoinMicros'). A thread that exits promptly never
+--     outlives the Lua worker that started it; one still running when
+--     the bound expires is logged and left behind (#2689), which is
+--     safe because no console thread touches the Lua state;
 --   * the connection cap, counted from admission through handler
 --     cleanup.
 --
@@ -35,6 +38,7 @@ module Engine.Scripting.Lua.DebugServer.Listener
     , stopDebugConsole
     , pollDebugCommand
     , inertDebugConsole
+    , listenerJoinMicros
     ) where
 
 import UPrelude
@@ -42,14 +46,14 @@ import Engine.Scripting.Lua.DebugServer.Types
 import Engine.Scripting.Lua.DebugServer.Client (serveClient, refuseClient)
 import qualified Data.Map.Strict as Map
 import Control.Concurrent (forkIO, killThread, myThreadId, threadDelay)
-import Control.Concurrent.MVar
-    (newEmptyMVar, readMVar, tryPutMVar, tryReadMVar)
-import Control.Concurrent.STM (STM, atomically, readTVar, writeTVar, modifyTVar')
+import Control.Concurrent.MVar (newEmptyMVar, readMVar, tryPutMVar)
+import Control.Concurrent.STM
+    ( STM, TMVar, atomically, check, newEmptyTMVarIO, orElse, readTMVar
+    , readTVar, registerDelay, tryPutTMVar, writeTVar, modifyTVar' )
 import Control.Concurrent.STM.TQueue (TQueue, newTQueue, tryReadTQueue)
 import Control.Concurrent.STM.TVar (TVar, newTVarIO, readTVarIO)
 import Control.Exception (SomeException, try, onException, finally)
 import System.IO (hPutStrLn, hFlush, stdout, stderr)
-import System.Timeout (timeout)
 import Network.Socket
 
 -- | Start the debug TCP server described by the config.
@@ -97,7 +101,7 @@ startDebugServer cfg
       case r of
           Left (e ∷ SomeException) → return (Left (tshow e))
           Right sock → do
-              listener ← newListener sock
+              listener ← newListener sock (dscOnStopIncomplete cfg)
               -- Ready signal on stdout — agents can wait for this line
               -- to know the debug console is accepting connections.
               -- (Port 0 is handled above and never reaches here.)
@@ -105,7 +109,7 @@ startDebugServer cfg
               hFlush stdout
               tid ← forkIO $
                   acceptLoop cfg listener cmdQueue 0
-                    `finally` (close sock >> void (tryPutMVar (dlAcceptDone listener) ()))
+                    `finally` (close sock >> signalDone (dlAcceptDone listener))
               atomically $ writeTVar (dlAcceptThread listener) (Just tid)
               return $ Right DebugConsole
                   { consoleQueue    = cmdQueue
@@ -125,14 +129,15 @@ inertDebugConsole = do
 pollDebugCommand ∷ TQueue DebugCommand → IO (Maybe DebugCommand)
 pollDebugCommand = atomically ∘ tryReadTQueue
 
-newListener ∷ Socket → IO DebugListener
-newListener sock = DebugListener sock
+newListener ∷ Socket → (ConsoleThreadKind → IO ()) → IO DebugListener
+newListener sock onIncomplete = DebugListener sock
     ⊚ newTVarIO False
     ⊛ newTVarIO False
     ⊛ newTVarIO Map.empty
     ⊛ newTVarIO 1
     ⊛ newTVarIO Nothing
-    ⊛ newEmptyMVar
+    ⊛ newEmptyTMVarIO
+    ⊛ pure onIncomplete
 
 -- | Stop the console: idempotent, and a no-op for an inert one.
 --
@@ -142,11 +147,34 @@ newListener sock = DebugListener sock
 --   then the accept thread is joined, and only then is every admitted
 --   client closed, killed and joined — closing a client's socket
 --   releases it from @recv@, and the kill releases one parked in the
---   30-second response wait, which a close alone would not.
+--   30-second response wait, which a close alone would not. Every
+--   client is closed and killed before any is waited for, so one that
+--   will not die cannot stop the rest from being told to (#2689).
 --
---   The whole teardown is bounded: a client that somehow refuses to die
---   must not hold up engine shutdown, so each join is time-boxed and
---   the process's own exit reclaims whatever is left.
+--   The WHOLE stop is bounded by 'listenerJoinMicros', one deadline
+--   shared by every step rather than restarted per thread (#2689).
+--   Both production callers are the Lua worker's cleanups (cooperative
+--   stop, forced termination and crash cleanup alike), which run under
+--   the worker's UNINTERRUPTIBLE mask, where an asynchronous exception
+--   cannot land — so 'System.Timeout.timeout' would never fire there,
+--   and a synchronous 'killThread' would block its caller until the
+--   target accepted. Neither is used: every join is one STM
+--   transaction that returns when the thread's done-cell fills OR the
+--   deadline's 'registerDelay' flag flips, which needs no exception at
+--   all, and every socket close and every kill runs on a helper thread
+--   of its own, so a target that is slow to take either costs this
+--   thread nothing. The bound is therefore the same masked or not, and
+--   with every admitted client stalled.
+--
+--   The accept thread gets half the bound to exit on the close alone;
+--   past that it is killed, and the clients are stopped without
+--   waiting any longer for it. A thread still running when the bound
+--   expires is reported once, by kind, through 'dlOnStopIncomplete' —
+--   itself on a helper thread, so a sink that throws or blocks cannot
+--   stretch the stop — and then left behind: the caller's remaining
+--   cleanup (the queue drain and @Lua.close@) goes ahead. That is safe
+--   because no console thread touches the Lua state; see
+--   'dscOnStopIncomplete'. A prompt stop reports nothing.
 --
 --   The loss latch is claimed in the SAME transaction as the stopping
 --   flag, which closes the one window the flag alone leaves open: an
@@ -164,34 +192,66 @@ stopDebugConsole console = case consoleListener console of
             writeTVar (dlLossReported listener) True
             return wasStopping
         unless alreadyStopping $ do
-            void ∘ tryAny ∘ close $ dlSocket listener
-            joinAcceptThread listener
+            deadline ← registerDelay listenerJoinMicros
+            acceptGrace ← registerDelay (listenerJoinMicros `div` 2)
+            inBackground ∘ close $ dlSocket listener
+            acceptExited ← awaitDone acceptGrace (dlAcceptDone listener)
+            unless acceptExited $
+                readTVarIO (dlAcceptThread listener)
+                    ⌦ mapM_ (inBackground ∘ killThread)
             clients ← atomically $ do
                 current ← readTVar (dlClients listener)
                 writeTVar (dlClients listener) Map.empty
                 return (Map.elems current)
             mapM_ stopClient clients
+            acceptJoined ← awaitDone deadline (dlAcceptDone listener)
+            clientsJoined ← mapM (awaitDone deadline ∘ chDone) clients
+            let stragglers =
+                    [ ConsoleAcceptThread | not acceptJoined ]
+                    <> [ ConsoleClientThread | joined ← clientsJoined
+                                             , not joined ]
+            forM_ stragglers $ inBackground ∘ dlOnStopIncomplete listener
 
--- | Wait for the accept loop to exit, killing it if the close alone did
---   not wake it.
-joinAcceptThread ∷ DebugListener → IO ()
-joinAcceptThread listener = do
-    joined ← timeout listenerJoinMicros (readMVar (dlAcceptDone listener))
-    when (isNothing joined) $ do
-        mTid ← readTVarIO (dlAcceptThread listener)
-        forM_ mTid $ \tid → void ∘ tryAny $ killThread tid
-        void ∘ timeout listenerJoinMicros ∘ readMVar $ dlAcceptDone listener
-
+-- | Close a client's socket, then kill its handler — in that order, on
+--   a helper thread, so neither can hold up the stop. The kill waits
+--   for the handler's id rather than skipping it, because an accept
+--   thread that was stopped mid-admission may fork it after the stop
+--   took its snapshot.
 stopClient ∷ ClientHandle → IO ()
-stopClient handle = do
-    void ∘ tryAny ∘ close $ chSocket handle
-    mTid ← tryReadMVar (chThread handle)
-    forM_ mTid $ \tid → void ∘ tryAny $ killThread tid
-    void ∘ timeout listenerJoinMicros ∘ readMVar $ chDone handle
+stopClient handle = inBackground $ do
+    void ∘ tryAny $ chClose handle
+    readMVar (chThread handle) ⌦ killThread
 
--- | How long a shutdown waits on any one console thread. Generous
---   relative to what these threads do after a close-and-kill, and
---   finite so a wedged one cannot hold the engine open.
+-- | Wait for a done-cell to fill or the deadline flag to flip, whichever
+--   comes first; 'True' if the thread exited. One STM transaction, so it
+--   is bounded under any mask — it never needs an exception to return.
+awaitDone ∷ TVar Bool → TMVar () → IO Bool
+awaitDone deadline done = atomically $
+    (True <$ readTMVar done) `orElse` (False <$ (readTVar deadline ⌦ check))
+
+signalDone ∷ TMVar () → IO ()
+signalDone done = void ∘ atomically $ tryPutTMVar done ()
+
+-- | Run a teardown step on a thread of its own and move on. Whatever it
+--   throws is dropped, and however long it blocks costs the caller
+--   nothing: a kill waits for its target to accept, a close or a
+--   diagnostic sink may stall, and the stop's bound must hold anyway.
+inBackground ∷ IO () → IO ()
+inBackground act = void ∘ forkIO ∘ void $ tryAny act
+
+-- | The total bound on one 'stopDebugConsole': every close, kill and
+--   join it makes, together, measured from the stop's start. Not a
+--   per-thread allowance, and it never restarts.
+--
+--   The stop runs inside the Lua worker's cleanup, under that worker's
+--   uninterruptible mask (see 'stopDebugConsole' for why the bound
+--   holds there), and the cleanup must finish inside BOTH of
+--   'Engine.Core.Thread.productionShutdownTimeouts'' budgets: the 10 s
+--   graceful wait, and — when the worker was force-killed — the 5 s
+--   unwind, which also has to cover the queue drain and @Lua.close@
+--   after this. Two seconds leaves three of those five for them. A
+--   console thread still running at the bound is reported and left
+--   behind rather than waited for.
 listenerJoinMicros ∷ Int
 listenerJoinMicros = 2000000
 
@@ -255,8 +315,8 @@ admit ∷ DebugServerConfig → DebugListener → TQueue DebugCommand → Socket
       → IO ()
 admit cfg listener cmdQueue conn = do
     threadVar ← newEmptyMVar
-    doneVar ← newEmptyMVar
-    let handle = ClientHandle conn threadVar doneVar
+    doneVar ← newEmptyTMVarIO
+    let handle = ClientHandle (dscCloseClient cfg conn) threadVar doneVar
     mSlot ← atomically $ do
         clients ← readTVar (dlClients listener)
         stopping ← readTVar (dlStopping listener)
@@ -279,14 +339,23 @@ admit cfg listener cmdQueue conn = do
                 `finally` releaseSlot listener slot handle
             void $ tryPutMVar threadVar tid
 
--- | Give the slot back and signal the handler's exit. Runs in the
---   handler's own @finally@, so it covers a clean disconnect, a
---   refused-line disconnect, an idle close, and an async kill alike.
+-- | Close the socket, then give the slot back and signal the handler's
+--   exit. Runs in the handler's own @finally@, so it covers a clean
+--   disconnect, a refused-line disconnect, an idle close, and an async
+--   kill alike.
+--
+--   The slot is released LAST, in one transaction with the done signal
+--   (#2689). Removing it first left a window in which a handler stalled
+--   in its own close was gone from 'dlClients' but not finished, so a
+--   concurrent 'stopDebugConsole' neither waited for it nor reported
+--   it. The close is guarded at 'SomeException', a kill landing in it
+--   included, so the release and the signal always run.
 releaseSlot ∷ DebugListener → Int → ClientHandle → IO ()
 releaseSlot listener slot handle = do
-    atomically $ modifyTVar' (dlClients listener) (Map.delete slot)
-    void ∘ tryAny ∘ close $ chSocket handle
-    void $ tryPutMVar (chDone handle) ()
+    void ∘ tryAny $ chClose handle
+    atomically $ do
+        modifyTVar' (dlClients listener) (Map.delete slot)
+        void $ tryPutTMVar (chDone handle) ()
 
 swapTVarBool ∷ TVar Bool → Bool → STM Bool
 swapTVarBool var new = do

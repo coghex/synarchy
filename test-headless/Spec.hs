@@ -345,6 +345,7 @@ import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
 import qualified Test.Headless.Core.DebugSocket as DebugSocket
+import qualified Test.Headless.Core.DebugConsoleStop as DebugConsoleStop
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.DumpSettleWait as DumpSettleWait
@@ -1245,6 +1246,7 @@ main = hspec $ do
     AudioSettings.spec
     DebugListener.spec
     DebugSocket.spec
+    DebugConsoleStop.spec
     AppCli.spec
     AppChunkRegion.spec
     DumpSettleWait.spec
