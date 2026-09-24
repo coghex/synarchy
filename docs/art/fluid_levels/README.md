@@ -72,3 +72,7 @@ The driver is manual-only and uses an isolated resource root and paused save
 fixture, so the prerequisite-complete base and implementation see identical
 fluid quantities. Owner signoff for that integration is separate from the
 mask-art approval above.
+
+The [integrated comparison gallery](integration-2529/index.html) and
+[reproduction record](integration-2529/README.md) retain all 72 paired views.
+Integration owner verdict: **approved, 2026-09-24**; see the reproduction record above.
