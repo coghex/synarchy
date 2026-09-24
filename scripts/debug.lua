@@ -1,7 +1,7 @@
 -- Debug overlay module
 --
 -- Toggled with F8. Shows green diagnostic text in the top-left: an FPS
--- line, then one button per category (spawn/fluid/item/terrain/
+-- line and Grab toggle, then one button per category (spawn/fluid/item/terrain/
 -- location/structure). Clicking a category's button opens a vertical
 -- list of its entries; clicking an entry arms that category (a "> "
 -- prefix + yellow highlight) and left-clicks on the map perform that
@@ -15,7 +15,7 @@
 -- visibility gating, the parallel click hit-test, and mutual-exclusion
 -- wiring between categories. Each category's list-building, armed-state
 -- handling, and layout math live in scripts/debug/ (mode.lua = one
--- category's behavior, modes.lua = the six concrete categories,
+-- category's behavior, modes.lua = the category specs and Grab toggle,
 -- layout.lua = the vertical-stacking math shared by all of them).
 --
 -- Click handling is intentionally parallel to the UI manager — debug
@@ -31,6 +31,7 @@ local label = require("scripts.ui.label")
 local Mode = require("scripts.debug.mode")
 local layout = require("scripts.debug.layout")
 local modeSpecs = require("scripts.debug.modes")
+local grab = require("scripts.debug.grab")
 
 -- This module is loaded twice if we're not careful: once by
 -- `engine.loadScript` (which uses dofile and does NOT touch
@@ -76,6 +77,11 @@ end
 local MOUSE_LEFT = 1
 
 function debugOverlay.init(scriptId)
+    local saveModules = require("scripts.lib.save_modules")
+    if not saveModules.resetHooks.debug_grab then
+        saveModules.registerResetHook("debug_grab", debugOverlay.clearArmedGrab)
+    end
+    require("scripts.lib.session_teardown").register("debug_grab", debugOverlay.clearArmedGrab)
     engine.logDebug("Debug overlay initializing...")
     debugOverlay.debugFont = engine.loadFont(
         "assets/fonts/shell.ttf", debugOverlay.baseSizes.fontSize)
@@ -100,6 +106,7 @@ local function refreshAllEntries()
 end
 
 function setArmedMode(mode, value)
+    grab.cancel()
     debugOverlay[mode.armedField] = value
     for _, otherField in ipairs(mode.exclusiveWith) do
         debugOverlay[otherField] = nil
@@ -108,6 +115,7 @@ function setArmedMode(mode, value)
 end
 
 function clearArmedMode(mode)
+    if mode.key == "grab" then grab.cancel() end
     if debugOverlay[mode.armedField] == nil then return end
     debugOverlay[mode.armedField] = nil
     refreshAllEntries()
@@ -122,7 +130,10 @@ repositionBelowSpawn = function()
     for i = 2, #debugOverlay.modeOrder do
         local mode = debugOverlay.modeOrder[i]
         local y = ys[mode.key]
-        if mode.buttonId then label.setPosition(mode.buttonId, s.margin, y) end
+        if mode.buttonId then
+            local x = mode.header and s.margin + s.fontSize * 6 or s.margin
+            label.setPosition(mode.buttonId, x, y)
+        end
         if mode.listVisible then
             local baseY = y + s.fontSize
             for j, entry in ipairs(mode.entries) do
@@ -136,6 +147,7 @@ repositionBelowSpawn = function()
 end
 
 openMode = function(mode)
+    if mode.toggle then setArmedMode(mode, true); return end
     if mode.listVisible then return end
     mode.listVisible = true
     local s = scale.applyAll(debugOverlay.baseSizes)
@@ -165,6 +177,7 @@ rebuildClickableRects = function()
     for _, mode in ipairs(debugOverlay.modeOrder) do
         local y = ys[mode.key]
         local rect = layout.rowRect(debugOverlay.debugFont, s, y, mode.label)
+        if mode.header then rect.x = s.margin + s.fontSize * 6 end
         rect.action = function()
             if mode.listVisible or debugOverlay[mode.armedField] then
                 clearArmedMode(mode)
@@ -206,6 +219,8 @@ local WRAPPER_NAMES = {
                   setArmed = "setArmedTerrain",    clearArmed = "clearArmedTerrain" },
     location  = { open = "openLocationList",  close = "closeLocationList",
                   setArmed = "setArmedLocation",   clearArmed = "clearArmedLocation" },
+    grab      = { open = "armGrab", close = "closeGrab",
+                  setArmed = "setArmedGrab", clearArmed = "clearArmedGrab" },
     structure = { open = "openStructureList", close = "closeStructureList",
                   setArmed = "setArmedStructure",  clearArmed = "clearArmedStructure" },
 }
@@ -222,6 +237,7 @@ end
 -- UI creation
 -----------------------------------------------------------
 function debugOverlay.createUI()
+    grab.cancel()
     if debugOverlay.uiCreated and debugOverlay.page then
         UI.deletePage(debugOverlay.page)
         if debugOverlay.fpsLabelId then
@@ -275,6 +291,7 @@ function debugOverlay.createUI()
 end
 
 function debugOverlay.update(dt)
+    grab.update(debugOverlay)
     local fps = engine.getFPS()
     if debugOverlay.fpsLabelId then
         label.setText(debugOverlay.fpsLabelId, "FPS: " .. tostring(math.floor(fps)))
@@ -404,7 +421,12 @@ end
 -- exact same pixel (common: toggling the spawn list without moving
 -- the mouse) matched the stale claim — swallowed but never fired.
 -- onMouseUp is an engine broadcast and fires on every release.
+function debugOverlay.tryClaimGrab(button, x, y)
+    return grab.claim(debugOverlay, button, x, y)
+end
+
 function debugOverlay.onMouseUp(button, x, y, downRoute)
+    grab.release(debugOverlay, button, x, y, downRoute)
     debugOverlay.lastClaim = nil
 end
 
@@ -422,6 +444,7 @@ function debugOverlay.onKeyDown(key)
 end
 
 function debugOverlay.onFramebufferResize(width, height)
+    grab.cancel()
     -- #750: a 0x0 minimize must not rebuild the overlay against a
     -- degenerate framebuffer; createUI() reads engine.getFramebufferSize
     -- itself (not these params), so just skip the rebuild entirely and
@@ -437,6 +460,7 @@ end
 -- Shutdown
 -----------------------------------------------------------
 function debugOverlay.shutdown()
+    grab.cancel()
     for _, mode in ipairs(debugOverlay.modeOrder) do
         mode:destroyList()
     end

@@ -1,0 +1,19 @@
+{
+  "scripts/debug.lua": "9bbe5b5c2552847623c04327f6a669189d8954500f771be885c91fa64362f4b4",
+  "scripts/debug/grab.lua": "759bbebc82a8e6912ca5288b43227082a74eb153a2ff4af73317943584a0dde9",
+  "scripts/debug/layout.lua": "9350b538350a049593f2e4aa17dacb794960782f11bae0503ed0c744b3d9ca4f",
+  "scripts/debug/mode.lua": "947d17614e30858036140e948c5a675919ede51ca1990bf5e57b91ca0f95c92f",
+  "scripts/debug/modes.lua": "4623695c376c68621e8895daa0b2ed75c619573dfd1fc896b32102976fb88d67",
+  "scripts/init_mouse.lua": "6394c277e92de7b64e2d68ec8bf83c77b344437e572d143e808c176c77b59a08",
+  "scripts/ui/view_teardown.lua": "eaf752abd08c2495d5c9f889ee2ab09b870de7c3aae2890279512ce8f483b7bc",
+  "scripts/ui_manager_widgets.lua": "4e58414bd8c9dee147d524368f47b42d2a00ff948d16c1cc4148b123f0c50474",
+  "scripts/unit_drag_select.lua": "2e955306e139a4355fb2d9a756dda5fe16c749d19558f6f9464207ccf7ba2956",
+  "src/Engine/Scripting/Lua/API/Register/UI.hs": "666f5873d7eb3b6221431265b1b8c07951880513fcd650966c804df72768916d",
+  "src/Engine/Scripting/Lua/API/UI/Property.hs": "e43b1b354ad7431349d4f4c1850f0ab0e2d34b778f6df8ac3c1476c3899d70d9",
+  "src/Engine/Scripting/Lua/API/WorldQuery/Pick.hs": "7d609c167d53d39e6c4849f8da287767306d90fc0461cd58ea92a53b888caeb0",
+  "synarchy.cabal": "330359bd73c20418c190856ccb0db4e543ad6b8d4ebe461cfeb33fb9365fcd22",
+  "test-headless/Spec.hs": "d44a4f8ea9c2fab797de31ddc2fc9ee6d0cb717a9bb386e06824108a544c361d",
+  "test-headless/Test/Headless/Lua/DebugGrab.hs": "97fd33cfa62f308c5312833b62f37851e183cd51c42e4a111f6b90f754a36a92",
+  "test-headless/Test/Headless/Lua/UiDescriptors.hs": "eceeec087a7427be671b23a0c1f162fa0e3542ad1ddc0d2b785a6d9c956b7ed7",
+  "tools/debug_grab_capture.py": "2ffadc049a1e1771dbe61afea27bd033ba8000816ab25aa8395dc9c0d4f843ea"
+}

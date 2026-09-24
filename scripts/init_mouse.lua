@@ -86,6 +86,11 @@ function M.onMouseDown(button, x, y)
         return
     end
 
+    if debugOverlay.tryClaimGrab(button, x, y) then
+        recordClick("debug_grab", nil, x, y)
+        return
+    end
+
     -- Debug anim panel (per-selection). Sits to the LEFT of the
     -- info-v2 pane and lists clickable animation names. Same
     -- parallel hit-test pattern as debug.lua so clicks on anim rows

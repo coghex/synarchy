@@ -1,0 +1,56 @@
+resource root: /tmp/grab-acceptance-8/run-root (from --resource-root)
+dump: seed=42 worldSize=256 plates=19 region=(-8,-8,8,8)
+2026-09-24 12:21:02 [INFO] [Init] [Θ:19] [Init:244] Legacy config config/keybinds.yaml carries no player state (it resolves to the same values as the versioned default); leaving config/keybinds.local.yaml absent so later default changes still apply
+2026-09-24 12:21:02 [INFO] [Init] [Θ:19] [Init:244] Legacy config config/video.yaml carries no player state (it resolves to the same values as the versioned default); leaving config/video.local.yaml absent so later default changes still apply
+2026-09-24 12:21:02 [INFO] [Lua] [Θ:19] [Thread:317] Starting Lua scripting thread...
+2026-09-24 12:21:02 [INFO] [Lua] [autosave.lua:361] Autosave: disabled, every 10 min, keeping 3 generation(s)
+READY port=0
+2026-09-24 12:21:02 [INFO] [Lua] [Θ:19] [Thread:238] Debug server listening on port 0
+2026-09-24 12:21:02 [INFO] [World] [Θ:19] [Thread:317] Starting world thread...
+2026-09-24 12:21:02 [INFO] [Thread] [Θ:19] [Thread:317] Starting unit thread...
+2026-09-24 12:21:02 [INFO] [World] [Θ:19] [Thread:317] Starting simulation thread...
+2026-09-24 12:21:02 [INFO] [Thread] [Θ:19] [Thread:317] Starting combat thread...
+dump: generating world...
+2026-09-24 12:21:02 [INFO] [Asset] [Θ:300] [YamlMaterials:187] Loading materials from data/materials (13 files)
+2026-09-24 12:21:02 [INFO] [Asset] [Θ:300] [YamlMaterials:191] Total materials loaded: 73
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'floor' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'ceiling' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'post' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall ne' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall nw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall se' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:520] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall sw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [WARN] [Lua] [Θ:520] [StructureArt:179] structure art: pack 'dungeon_1' sprite 'assets/textures/buildings/dungeon_1/ceiling.png' is the static art of more than one appearance, so a piece placed with it identifies none -- neither claimant's lifecycle frames will play. Give the variant its own sprite for that appearance.
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection isolated' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_n' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_e' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_s' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_w' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection straight_ns' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection straight_ew' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_ne' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_nw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_se' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_sw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_n' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_e' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_s' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_w' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:03 [INFO] [Lua] [Θ:540] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection cross' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-24 12:21:50 [INFO] [World] [Θ:300] [Init:280] Flora catalog snapshot: 0 species, 0 worldgen entries
+2026-09-24 12:21:50 [INFO] [World] [Θ:300] [ColorPalette:88] Building zoom color palette from textures...
+2026-09-24 12:21:50 [INFO] [Asset] [Θ:300] [YamlMaterials:187] Loading materials from data/materials (13 files)
+2026-09-24 12:21:50 [INFO] [Asset] [Θ:300] [YamlMaterials:191] Total materials loaded: 73
+2026-09-24 12:21:50 [INFO] [World] [Θ:300] [ColorPalette:103] Palette built: 73 materials, 77 vegetation
+2026-09-24 12:21:54 [WARN] [World] [Θ:300] [Init:438] Zoom artifact cache: publish skipped (zoom artifact exceeds the 64 MiB limit)
+2026-09-24 12:21:54 [INFO] [World] [Θ:300] [Init:498] Zoom atlas: 5824×5792 (32768 chunks)
+2026-09-24 12:21:54 [INFO] [World] [Θ:300] [Init:620] World initialized: 25 chunks, surface at z=60: dump
+dump: init complete
+dump: queued 264 chunks
+dump: all chunks loaded
+dump: fast-settling sim...
+dump: sim settled
+dump: WorldLakes lakes=11565 chunks_touched=8885 total_wet_tiles=593012
+dump: WorldRivers rivers=1310 chunks_touched=4332 peak_flow=156082
+dump: OreDeposits chunks_touched=1354 total_volume=2595840 max_chunk=21632 p90_chunk=3840 median_chunk=1280
+dump: done

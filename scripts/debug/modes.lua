@@ -73,6 +73,16 @@ local structureMode = Mode.new({
     entryText  = function(kind) return kind end,
 })
 
-return {
+local modes = {
     spawnMode, fluidMode, itemMode, terrainMode, locationMode, structureMode,
 }
+local otherFields = {}
+for _, mode in ipairs(modes) do
+    table.insert(mode.exclusiveWith, "armedGrab")
+    table.insert(otherFields, mode.armedField)
+end
+modes[#modes + 1] = Mode.new({
+    key = "grab", label = "Grab", armedField = "armedGrab", toggle = true, header = true,
+    exclusiveWith = otherFields,
+})
+return modes

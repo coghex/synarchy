@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.UI.Property
   , uiIsPageVisibleFn
   , uiIsPageInputExclusiveFn
   , uiIsInputBlockedFn
+  , uiIsPointerBlockedAtFn
   , uiIsPageInScopeFn
   , uiGetElementInfoFn
   , uiGetVisibleElementsFn
@@ -48,7 +49,7 @@ import Engine.Core.Capability.Ui (UiCapability(..), toUiCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import UI.Types
 import UI.Manager
-import UI.InputOwnership (isGameplayBlocked, isPageInScope)
+import UI.InputOwnership (isGameplayBlocked, isPageInScope, isPointerSurfaceBlocked)
 import UI.Clipping (effectiveClip)
 import UI.InteractiveBounds (effectiveInteractiveBounds)
 
@@ -127,6 +128,24 @@ uiIsInputBlockedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiIsInputBlockedFn env = do
     mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
     Lua.pushboolean (isGameplayBlocked mgr)
+    return 1
+
+-- | UI.isPointerBlockedAt(fbX, fbY) → bool. Uses the engine pointer
+--   surface predicate, including clipping and modal boundaries. Invalid
+--   coordinates fail closed; callers convert window pixels explicitly.
+uiIsPointerBlockedAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+uiIsPointerBlockedAtFn env = do
+    mx ← Lua.tonumber 1
+    my ← Lua.tonumber 2
+    mgr ← Lua.liftIO $ readIORef (uicUiManagerRef (toUiCapability env))
+    let blocked = case (mx, my) of
+            (Just x, Just y) →
+                let fx = realToFrac x ∷ Float
+                    fy = realToFrac y ∷ Float
+                in isNaN fx ∨ isInfinite fx ∨ isNaN fy ∨ isInfinite fy
+                   ∨ isPointerSurfaceBlocked (fx, fy) mgr
+            _ → True
+    Lua.pushboolean blocked
     return 1
 
 -- | UI.isPageInScope(pageHandle) -> boolean (#742) —

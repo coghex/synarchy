@@ -256,6 +256,30 @@ spec = around withDescriptorEngine $ do
                 , "and (UI.hasFocus(999999) == false)" ])
             validated `shouldBe` "true"
 
+        it "queries pointer blocking through the real clipped UI surface" $ \env → do
+            (ls, ds) ← newFixture env
+            checkShape ls ds "isPointerBlockedAt" "UI.isPointerBlockedAt(700, 500)"
+            result ← evalDebug ls (T.unlines
+                [ "assert(UI.isPointerBlockedAt() == true)"
+                , "assert(UI.isPointerBlockedAt(0/0, 0) == true)"
+                , "assert(UI.isPointerBlockedAt(700, 500) == false)"
+                , "local p = UI.newPage('grab_gate', 'overlay')"
+                , "UI.showPage(p)"
+                , "local e = UI.newElement('blocker', 50, 50, p)"
+                , "UI.addToPage(p, e, 600, 400)"
+                , "UI.setPointerBlocking(e, true)"
+                , "assert(UI.isPointerBlockedAt(620, 420))"
+                , "local decoration = UI.newElement('decoration', 50, 50, p)"
+                , "UI.addToPage(p, decoration, 600, 400)"
+                , "UI.setZIndex(decoration, 20)"
+                , "assert(UI.isPointerBlockedAt(620, 420))"
+                , "UI.setVisible(e, false)"
+                , "assert(not UI.isPointerBlockedAt(620, 420))"
+                , "UI.setPageInputExclusive(p, true)"
+                , "assert(UI.isPointerBlockedAt(700, 500))"
+                , "return true" ])
+            result `shouldBe` "true"
+
         it "pushes nothing from the setters that describe no results" $ \env → do
             (ls, ds) ← newFixture env
             checkShape ls ds "setVisible" "UI.setVisible(_G.__box, true)"

@@ -1868,6 +1868,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UiDescriptors
                    Test.Headless.Lua.SchedulerFairness
                    Test.Headless.Lua.DragSelectDeferred
+                   Test.Headless.Lua.DebugGrab
                    Test.Headless.Lua.TextWrapping
                    Test.Headless.Lua.GroupedLogRetention
                    Test.Headless.Lua.TextTruncation

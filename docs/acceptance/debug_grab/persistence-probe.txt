@@ -1,0 +1,69 @@
+=== engine A: build scenario + save 'gen1' ===
+  [PASS] world.init accepted (got 'ok')
+  [PASS] building.spawn('acolyte_portal') succeeded (got 1)
+  [PASS] acolyte_portal roster seeded to 6 (got 6)
+  [PASS] acolyte_portal's roster sequencer spawned at least one unit (remaining 6 -> 5)
+  [PASS] attacker unit.spawn succeeded (got 2)
+  [PASS] target unit.spawn succeeded (got 3)
+  [PASS] commandAttack set a real, live attackTargetUid (3 vs expected 3)
+  [PASS] unit.select(2) succeeded before saving (got 'true')
+  [PASS] unit 2 is genuinely selected before saving (got '[2]')
+  [PASS] building 1 is genuinely selected before saving (got 1)
+  [PASS] a tile is genuinely selected before saving (got '{"gx":3,"gy":4,"z":2}')
+  [PASS] tool mode is genuinely non-default before saving (got 'mine')
+  [PASS] engine.saveWorld('gen1') accepted (got 'true')
+  [PASS] engine.getSaveStatus() reports a request id right after saveWorld('gen1')
+  [PASS] save 'gen1' (request 1) reached SaveCaptureComplete (got {'outcome': 'SaveSucceeded', 'phase': 'SaveCaptureComplete', 'acknowledgedOwners': 6, 'ownerCount': 6, 'id': 1})
+  [PASS] save file appeared at /var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/persistence_contract_probe_5eysc0_m/root/saves/gen1/world.synworld
+  [PASS] engine.listSaves() reports a well-formed timestamp for 'gen1' (got {'name': 'gen1', 'timestamp': '2026-09-24T12:18:55.812880Z', 'worldSize': 8, 'seed': 424242, 'worldGloss': 'the persistence contract test world', 'worldName': 'Contract Test World', 'autosave': False})
+  [PASS] world.setMapMode('contract_page', 'map_pressure') actually took effect (decoded pgsMapMode = 'ZMPressure', expected 'ZMPressure')
+=== engine B: fresh process, load 'gen1', save 'gen2' ===
+  [PASS] setup: pre-load-only page 'contract_preload_ghost' is live before the load
+  [PASS] engine.loadSave('gen1') accepted (got 'true')
+  [PASS] engine.getLoadStatus() reports a request id right after loadSave('gen1')
+  [PASS] load transaction 1 published (status={'outcome': 'LoadSucceeded', 'saveName': 'gen1', 'id': 1, 'phase': 'LoadPublished'})
+  [PASS] pre-load-only page 'contract_preload_ghost' (never part of 'gen1') did NOT survive the load -- a load replaces the whole session, it does not merge
+  [PASS] after loading gen1: session begins paused
+  [PASS] after loading gen1: tool resets to the default tool (#103), got 'default'
+  [PASS] after loading gen1: unit selection is empty (got '{}')
+  [PASS] after loading gen1: building selection is empty (got 'null')
+  [PASS] after loading gen1: tile selection is empty (got 'null')
+  [PASS] lua.unit_ai's attackTargetUid survived the fresh-process load of 'gen1' (3 vs expected 3)
+  [PASS] requirement 7: repeating the canonical live inspection during a 2s paused dwell produces the SAME persistent state ({'date': '{"month":1,"day":1,"absoluteDay":0,"dayOfYear":0,"year":1}', 'activePage': 'contract_page', 'paused': 'true', 'toolMode': 'default', 'spawnRemaining': '3', 'attackTargetUid': 3} -> {'date': '{"month":1,"day":1,"absoluteDay":0,"dayOfYear":0,"year":1}', 'activePage': 'contract_page', 'paused': 'true', 'toolMode': 'default', 'spawnRemaining': '3', 'attackTargetUid': 3})
+  [PASS] engine.saveWorld('gen2') accepted (got 'true')
+  [PASS] engine.getSaveStatus() reports a request id right after saveWorld('gen2')
+  [PASS] save 'gen2' (request 2) reached SaveCaptureComplete (got {'id': 2, 'ownerCount': 6, 'outcome': 'SaveSucceeded', 'phase': 'SaveCaptureComplete', 'acknowledgedOwners': 6})
+  [PASS] save file appeared at /var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/persistence_contract_probe_5eysc0_m/root/saves/gen2/world.synworld
+=== engine C: fresh process, load 'gen2', save 'gen3' ===
+  [PASS] engine.loadSave('gen2') accepted (got 'true')
+  [PASS] engine.getLoadStatus() reports a request id right after loadSave('gen2')
+  [PASS] load transaction 1 published (status={'phase': 'LoadPublished', 'saveName': 'gen2', 'id': 1, 'outcome': 'LoadSucceeded'})
+  [PASS] after loading gen2: session begins paused
+  [PASS] after loading gen2: tool resets to the default tool (#103), got 'default'
+  [PASS] after loading gen2: unit selection is empty (got '{}')
+  [PASS] after loading gen2: building selection is empty (got 'null')
+  [PASS] after loading gen2: tile selection is empty (got 'null')
+  [PASS] lua.unit_ai's attackTargetUid survived the fresh-process load of 'gen2' (3 vs expected 3)
+  [PASS] engine.saveWorld('gen3') accepted (got 'true')
+  [PASS] engine.getSaveStatus() reports a request id right after saveWorld('gen3')
+  [PASS] save 'gen3' (request 2) reached SaveCaptureComplete (got {'phase': 'SaveCaptureComplete', 'id': 2, 'outcome': 'SaveSucceeded', 'ownerCount': 6, 'acknowledgedOwners': 6})
+  [PASS] save file appeared at /var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/persistence_contract_probe_5eysc0_m/root/saves/gen3/world.synworld
+=== engine D: fresh process, load 'gen3', save 'gen4' ===
+  [PASS] engine.loadSave('gen3') accepted (got 'true')
+  [PASS] engine.getLoadStatus() reports a request id right after loadSave('gen3')
+  [PASS] load transaction 1 published (status={'id': 1, 'saveName': 'gen3', 'outcome': 'LoadSucceeded', 'phase': 'LoadPublished'})
+  [PASS] after loading gen3: session begins paused
+  [PASS] after loading gen3: tool resets to the default tool (#103), got 'default'
+  [PASS] after loading gen3: unit selection is empty (got '{}')
+  [PASS] after loading gen3: building selection is empty (got 'null')
+  [PASS] after loading gen3: tile selection is empty (got 'null')
+  [PASS] lua.unit_ai's attackTargetUid survived the fresh-process load of 'gen3' (3 vs expected 3)
+  [PASS] engine.saveWorld('gen4') accepted (got 'true')
+  [PASS] engine.getSaveStatus() reports a request id right after saveWorld('gen4')
+  [PASS] save 'gen4' (request 2) reached SaveCaptureComplete (got {'acknowledgedOwners': 6, 'outcome': 'SaveSucceeded', 'id': 2, 'phase': 'SaveCaptureComplete', 'ownerCount': 6})
+  [PASS] save file appeared at /var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/persistence_contract_probe_5eysc0_m/root/saves/gen4/world.synworld
+  [PASS] unpausing resumes at the default simulation speed (got 1.0)
+=== comparing 4 generations through the real production codec ===
+  [PASS] all 4 generations are structurally IDENTICAL (SessionSnapshot Eq + lua.* payload byte-equality) across three real fresh-process save->load->save cycles
+
+PASS: 0 check(s) failed
