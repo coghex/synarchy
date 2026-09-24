@@ -272,7 +272,8 @@ local registry = {
           end
       end,
       hudHide  = function() require("scripts.debug").hide() end,
-      menu     = function() require("scripts.debug").hide() end },
+      menu     = function() require("scripts.debug").hide() end,
+      saveLoaded = function() require("scripts.debug").clearArmedGrab() end },
 
     -- HUD-owned log panels (#84) and notification popups (#85): each
     -- owns its own modal page / visible flag, so hiding the HUD pages

@@ -1,0 +1,125 @@
+
+Ground item move
+  a move that takes
+    repositions the row in place, preserving its gid, its whole instance, the allocator, every other row and the selection [✔]
+    answers exactly one value [✔]
+  page resolution
+    moves on an explicitly named HIDDEN page, leaving the active page alone [✔]
+    refuses an unknown page, touching neither live page [✔]
+    refuses everything when no page is active [✔]
+    re-resolves the active page on EVERY call, so a switch between two moves lands on the page that is active now [✔]
+    never selects across pages when the gid collides: the instance decides which page's row was meant [✔]
+  argument refusals
+    refuses a gid or an instanceId that is a numeric STRING [✔]
+    refuses a missing or unconvertible required argument [✔]
+    refuses a gid the page has no row for, and a live gid whose instance does not match [✔]
+  coordinate refusals
+    refuses a non-finite coordinate on EITHER axis [✔]
+    refuses a finite Lua number whose narrowing to Float is not [✔]
+    refuses a coordinate past the frame bound, rather than wrapping into a chunk that happens to be loaded [✔]
+    refuses a destination whose chunk is not loaded, without loading one [✔]
+    refuses a column whose material sits only at the elevation a REAL pointer hit reports, with that hit established and three elevations in play [✔]
+    refuses a column whose material sits only at the camera's z-slice [✔]
+    takes when material sits at the destination's own terrain surface, with the same pointer hit and camera slice standing [✔]
+    refuses a column whose terrain surface is outside its stored z-range, without raising [✔]
+    refuses a far ARENA destination rather than wrapping it by the arena's sentinel world size onto a loaded chunk [✔]
+  canonical destinations
+    stores a seam alias in the canonical frame, keeping its sub-tile fraction [✔]
+    stores a negative destination as given, keeping its fraction [✔]
+  the page's ground-item lock
+    makes a move wait for the lock, then commits against the map as it is at commit time [✔]
+    refuses the second of two moves when the row is removed between them, without recreating it [✔]
+
+Finished in 3.9624 seconds
+23 examples, 0 failures
+
+Item.Condition
+  non-finite spawn geometry
+    item.spawnGround coordinates
+      refuses a x that is missing, answering nil and mutating nothing [✔]
+      refuses a x that is unconvertible, answering nil and mutating nothing [✔]
+      refuses a x that is NaN, answering nil and mutating nothing [✔]
+      refuses a x that is +Infinity, answering nil and mutating nothing [✔]
+      refuses a x that is -Infinity, answering nil and mutating nothing [✔]
+      refuses a x that is finite but overflowing a Float, answering nil and mutating nothing [✔]
+      refuses a x that is finite but overflowing a Float, negative, answering nil and mutating nothing [✔]
+      refuses a y that is missing, answering nil and mutating nothing [✔]
+      refuses a y that is unconvertible, answering nil and mutating nothing [✔]
+      refuses a y that is NaN, answering nil and mutating nothing [✔]
+      refuses a y that is +Infinity, answering nil and mutating nothing [✔]
+      refuses a y that is -Infinity, answering nil and mutating nothing [✔]
+      refuses a y that is finite but overflowing a Float, answering nil and mutating nothing [✔]
+      refuses a y that is finite but overflowing a Float, negative, answering nil and mutating nothing [✔]
+      still accepts a numeric STRING and every magnitude a Float can actually hold, so the refusals above are not vacuous [✔]
+    world.spawnLocationSignificantItem coordinates
+      refuses a x that is missing, answering false and binding nothing [✔]
+      refuses a x that is unconvertible, answering false and binding nothing [✔]
+      refuses a x that is NaN, answering false and binding nothing [✔]
+      refuses a x that is +Infinity, answering false and binding nothing [✔]
+      refuses a x that is -Infinity, answering false and binding nothing [✔]
+      refuses a x that is finite but overflowing a Float, answering false and binding nothing [✔]
+      refuses a x that is finite but overflowing a Float, negative, answering false and binding nothing [✔]
+      refuses a y that is missing, answering false and binding nothing [✔]
+      refuses a y that is unconvertible, answering false and binding nothing [✔]
+      refuses a y that is NaN, answering false and binding nothing [✔]
+      refuses a y that is +Infinity, answering false and binding nothing [✔]
+      refuses a y that is -Infinity, answering false and binding nothing [✔]
+      refuses a y that is finite but overflowing a Float, answering false and binding nothing [✔]
+      refuses a y that is finite but overflowing a Float, negative, answering false and binding nothing [✔]
+      an ACCEPTED spawn fills the slot and moves those same observables [✔]
+    blood.spawn geometry
+      refuses a x that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a x that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a x that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a x that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a y that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a y that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a y that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a y that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetX that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetX that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetX that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetX that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetY that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetY that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetY that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a offsetY that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a rotation that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a rotation that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a rotation that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a rotation that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a scale that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a scale that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a scale that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a scale that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a opacity that is NaN, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a opacity that is +Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a opacity that is -Infinity, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a opacity that is finite but overflowing a Float, names it in the reason, and leaves the whole store untouched [✔]
+      refuses a scale zero, leaving the whole store untouched [✔]
+      refuses a scale negative, leaving the whole store untouched [✔]
+      refuses a opacity below 0, leaving the whole store untouched [✔]
+      refuses a opacity above 1, leaving the whole store untouched [✔]
+      accepts a positive finite scale and BOTH opacity endpoints, storing each unchanged [✔]
+      leaves an absent or unconvertible control on its documented default, exactly as before [✔]
+    a staged load
+      the filter rejects on EITHER axis, for NaN and both infinities, and keeps every finite position a Float holds [✔]
+      sanitizeGroundItems drops exactly those entries, leaves every surviving id where it was, never rewinds the allocator, and reports in ascending id order [✔]
+      drops the entry stored at a non-finite position, keeps every other, preserves gisNextId and the global item cursor, and warns exactly once naming the page and the page-local id [✔]
+      resolves the durable-order diagnostic against the SANITIZED map — the dropped item's reference dangles, the surviving one does not — and keeps the order verbatim [✔]
+      hands Lua a reconciliation context describing the RESTORED session, not the save as decoded: the dropped entry's ground id and item-instance id are both absent from it [✔]
+      reports a durable Lua ground_item or item_instance reference to the dropped entry as no longer resolving — tolerated and cleared, never a load failure — while a reference to a surviving entry still resolves [✔]
+      leaves a significant obligation bound to the dropped item exactly as the save recorded it: dangling, never rebound, never latched taken [✔]
+
+Finished in 0.1130 seconds
+71 examples, 0 failures
+
+Chop gesture
+  input claiming
+    claims both buttons while the tool is active [✔]
+    claims neither when another tool mode is selected [✔]
+    claims neither outside the zoomed-in view [✔]
+    never arms a unit box-selection [✔]
+
+Finished in 0.0024 seconds
+4 examples, 0 failures

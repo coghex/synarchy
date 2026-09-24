@@ -1,0 +1,1093 @@
+[
+  {
+    "grabButton": {
+      "pointerBlocking": false,
+      "bounds": {
+        "h": 40,
+        "w": 64.0,
+        "x": 202.0,
+        "y": 10.0
+      },
+      "id": "label:37",
+      "type": "label",
+      "visible": true,
+      "label": "Grab",
+      "name": "grab_button",
+      "leftClickAffordance": false,
+      "enabled": false,
+      "paintKey": 201000,
+      "leftClickTarget": false,
+      "controlFocused": false,
+      "screen": "debug_overlay",
+      "interactiveBounds": false,
+      "inScope": true,
+      "focused": false,
+      "paintOrder": 16,
+      "handle": 99,
+      "control": false,
+      "hovered": false
+    }
+  },
+  {
+    "mouse": [
+      234.0,
+      30.0
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.3875002861023,
+          "y1": 1.7281250953674,
+          "sortKey": 45.000598907471,
+          "fmSlot": -1.0,
+          "x0": 3.3625001907349,
+          "y0": 1.7031251192093
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.2375001907349,
+          "y1": 1.7281250953674,
+          "sortKey": 45.000598907471,
+          "fmSlot": -1.0,
+          "x0": 3.2125000953674,
+          "y0": 1.7031251192093
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.30000001192093,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-lantern-before",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": 0.5,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": 45.5,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 1,
+      "condition": 62.992225646973,
+      "sharpness": 100.0,
+      "id": 0,
+      "weight": 0.60000002384186,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "mouse": [
+      730.00028610231,
+      433.74998435376
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.462500333786,
+          "y1": 1.7614583969116,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.4375002384186,
+          "y0": 1.7364584207535
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.2375001907349,
+          "y1": 1.7281250953674,
+          "sortKey": 45.000598907471,
+          "fmSlot": -1.0,
+          "x0": 3.2125000953674,
+          "y0": 1.7031251192093
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.30000001192093,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-lantern-mid",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": 0.44444465637207,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": 46.444446563721,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 1,
+      "condition": 62.992225646973,
+      "sharpness": 100.0,
+      "id": 0,
+      "weight": 0.60000002384186,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "mouse": [
+      1000000.0,
+      1000000.0
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.462500333786,
+          "y1": 1.7614583969116,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.4375002384186,
+          "y0": 1.7364584207535
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.2375001907349,
+          "y1": 1.7281250953674,
+          "sortKey": 45.000598907471,
+          "fmSlot": -1.0,
+          "x0": 3.2125000953674,
+          "y0": 1.7031251192093
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.30000001192093,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-lantern-invalid",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": 0.44444465637207,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": 46.444446563721,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 1,
+      "condition": 62.992225646973,
+      "sharpness": 100.0,
+      "id": 0,
+      "weight": 0.60000002384186,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "mouse": [
+      755.00028610231,
+      443.74998435376
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.4833331108093,
+          "y1": 1.7697916030884,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.4583330154419,
+          "y0": 1.7447916269302
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.2375001907349,
+          "y1": 1.7281250953674,
+          "sortKey": 45.000598907471,
+          "fmSlot": -1.0,
+          "x0": 3.2125000953674,
+          "y0": 1.7031251192093
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.30000001192093,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-lantern-after",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": 0.41666793823242,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": 46.694442749023,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 1,
+      "condition": 62.992225646973,
+      "sharpness": 100.0,
+      "id": 0,
+      "weight": 0.60000002384186,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "grabButton": {
+      "pointerBlocking": false,
+      "bounds": {
+        "h": 40,
+        "w": 96.0,
+        "x": 202.0,
+        "y": 10.0
+      },
+      "id": "label:37",
+      "type": "label",
+      "visible": true,
+      "label": "> Grab",
+      "name": "grab_button",
+      "leftClickAffordance": false,
+      "enabled": false,
+      "paintKey": 201000,
+      "leftClickTarget": false,
+      "controlFocused": false,
+      "screen": "debug_overlay",
+      "interactiveBounds": false,
+      "inScope": true,
+      "focused": false,
+      "paintOrder": 16,
+      "handle": 99,
+      "control": false,
+      "hovered": false
+    }
+  },
+  {
+    "mouse": [
+      755.00028610231,
+      443.74998435376
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.4833331108093,
+          "y1": 1.7697916030884,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.4583330154419,
+          "y0": 1.7447916269302
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.2375001907349,
+          "y1": 1.7281250953674,
+          "sortKey": 45.000598907471,
+          "fmSlot": -1.0,
+          "x0": 3.2125000953674,
+          "y0": 1.7031251192093
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.40000000596046,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-axe-before",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Steel Axe",
+      "y": 1.5,
+      "fill": 0.0,
+      "defName": "axe_steel",
+      "x": 44.5,
+      "hasStorage": false,
+      "kind": "weapon",
+      "qualityTier": "average",
+      "instanceId": 2,
+      "condition": 58.011276245117,
+      "sharpness": 100.0,
+      "id": 1,
+      "weight": 1.0,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "mouse": [
+      595.00013075769,
+      425.31248889396
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.4833331108093,
+          "y1": 1.7697916030884,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.4583330154419,
+          "y0": 1.7447916269302
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.3375005722046,
+          "y1": 1.7725695371628,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.3125004768372,
+          "y0": 1.7475695610046
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.40000000596046,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-axe-mid",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Steel Axe",
+      "y": 1.4259243011475,
+      "fill": 0.0,
+      "defName": "axe_steel",
+      "x": 45.759262084961,
+      "hasStorage": false,
+      "kind": "weapon",
+      "qualityTier": "average",
+      "instanceId": 2,
+      "condition": 58.011276245117,
+      "sharpness": 100.0,
+      "id": 1,
+      "weight": 1.0,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "mouse": [
+      620.00013075769,
+      435.31248889396
+    ],
+    "scale": 1.0,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": 3.4833331108093,
+          "y1": 1.7697916030884,
+          "sortKey": 46.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.4583330154419,
+          "y0": 1.7447916269302
+        },
+        {
+          "texSlot": 633.0,
+          "x1": 3.3652782440186,
+          "y1": 1.7836806774139,
+          "sortKey": 47.000595092773,
+          "fmSlot": -1.0,
+          "x0": 3.3402781486511,
+          "y0": 1.7586807012558
+        }
+      ],
+      "groundItems": 2,
+      "quads": 2,
+      "camX": 3.375,
+      "zoom": 0.40000000596046,
+      "camY": 1.6875001192093,
+      "zSlice": 0
+    },
+    "page": "test_arena",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "arena-axe-after",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Steel Axe",
+      "y": 1.3888893127441,
+      "fill": 0.0,
+      "defName": "axe_steel",
+      "x": 46.092594146729,
+      "hasStorage": false,
+      "kind": "weapon",
+      "qualityTier": "average",
+      "instanceId": 2,
+      "condition": 58.011276245117,
+      "sharpness": 100.0,
+      "id": 1,
+      "weight": 1.0,
+      "temperature": 0.0
+    },
+    "surface": 0
+  },
+  {
+    "grabButton": {
+      "pointerBlocking": false,
+      "bounds": {
+        "h": 30,
+        "w": 48.0,
+        "x": 151.0,
+        "y": 7.0
+      },
+      "id": "label:46",
+      "type": "label",
+      "visible": true,
+      "label": "Grab",
+      "name": "grab_button",
+      "leftClickAffordance": false,
+      "enabled": false,
+      "paintKey": 201000,
+      "leftClickTarget": false,
+      "controlFocused": false,
+      "screen": "debug_overlay",
+      "interactiveBounds": false,
+      "inScope": true,
+      "focused": false,
+      "paintOrder": 16,
+      "handle": 117,
+      "control": false,
+      "hovered": false
+    }
+  },
+  {
+    "mouse": [
+      175.0,
+      22.0
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.88750004768372,
+          "y1": -1.2843750715256,
+          "sortKey": -38.003402709961,
+          "fmSlot": -1.0,
+          "x0": -0.91250002384186,
+          "y0": -1.3093750476837
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.66250002384186,
+          "y1": -1.1968749761581,
+          "sortKey": -35.00239944458,
+          "fmSlot": -1.0,
+          "x0": -0.6875,
+          "y0": -1.2218749523163
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.34999999403954,
+      "camY": -1.2000000476837,
+      "zSlice": 5
+    },
+    "page": "grab_world",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-lantern-before",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": -12.5,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": -24.5,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 6,
+      "condition": 57.503276824951,
+      "sharpness": 100.0,
+      "id": 3,
+      "weight": 0.60000002384186,
+      "temperature": 123.0
+    },
+    "surface": 1
+  },
+  {
+    "mouse": [
+      650.0,
+      340.0
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.80291676521301,
+          "y1": -1.206597328186,
+          "sortKey": -35.002410888672,
+          "fmSlot": -1.0,
+          "x0": -0.82791674137115,
+          "y0": -1.2315973043442
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.66250002384186,
+          "y1": -1.1968749761581,
+          "sortKey": -35.00239944458,
+          "fmSlot": -1.0,
+          "x0": -0.6875,
+          "y0": -1.2218749523163
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.34999999403954,
+      "camY": -1.2000000476837,
+      "zSlice": 5
+    },
+    "page": "grab_world",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-lantern-mid-higher",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": -11.693519592285,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": -22.565742492676,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 6,
+      "condition": 57.503276824951,
+      "sharpness": 100.0,
+      "id": 3,
+      "weight": 0.60000002384186,
+      "temperature": 123.0
+    },
+    "surface": 2
+  },
+  {
+    "mouse": [
+      490.0,
+      460.0
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.95847225189209,
+          "y1": -1.0899305343628,
+          "sortKey": -33.003398895264,
+          "fmSlot": -1.0,
+          "x0": -0.98347222805023,
+          "y0": -1.1149305105209
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.66250002384186,
+          "y1": -1.1968749761581,
+          "sortKey": -35.00239944458,
+          "fmSlot": -1.0,
+          "x0": -0.6875,
+          "y0": -1.2218749523163
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.34999999403954,
+      "camY": -1.2000000476837,
+      "zSlice": 5
+    },
+    "page": "grab_world",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-lantern-after-lower",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": -9.4342594146729,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": -22.380554199219,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 6,
+      "condition": 57.503276824951,
+      "sharpness": 100.0,
+      "id": 3,
+      "weight": 0.60000002384186,
+      "temperature": 123.0
+    },
+    "surface": 1
+  },
+  {
+    "grabButton": {
+      "pointerBlocking": false,
+      "bounds": {
+        "h": 30,
+        "w": 72.0,
+        "x": 151.0,
+        "y": 7.0
+      },
+      "id": "label:46",
+      "type": "label",
+      "visible": true,
+      "label": "> Grab",
+      "name": "grab_button",
+      "leftClickAffordance": false,
+      "enabled": false,
+      "paintKey": 201000,
+      "leftClickTarget": false,
+      "controlFocused": false,
+      "screen": "debug_overlay",
+      "interactiveBounds": false,
+      "inScope": true,
+      "focused": false,
+      "paintOrder": 16,
+      "handle": 117,
+      "control": false,
+      "hovered": false
+    }
+  },
+  {
+    "mouse": [
+      490.0,
+      460.0
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.95847225189209,
+          "y1": -1.0899305343628,
+          "sortKey": -33.003398895264,
+          "fmSlot": -1.0,
+          "x0": -0.98347222805023,
+          "y0": -1.1149305105209
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.66250002384186,
+          "y1": -1.1968749761581,
+          "sortKey": -35.00239944458,
+          "fmSlot": -1.0,
+          "x0": -0.6875,
+          "y0": -1.2218749523163
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.40000000596046,
+      "camY": -1.2000000476837,
+      "zSlice": 5
+    },
+    "page": "grab_world",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-axe-before",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Steel Axe",
+      "y": -12.5,
+      "fill": 0.0,
+      "defName": "axe_steel",
+      "x": -21.5,
+      "hasStorage": false,
+      "kind": "weapon",
+      "qualityTier": "average",
+      "instanceId": 7,
+      "condition": 55.846378326416,
+      "sharpness": 100.0,
+      "id": 4,
+      "weight": 1.0,
+      "temperature": 87.0
+    },
+    "surface": 2
+  },
+  {
+    "mouse": [
+      775.00003017486,
+      451.56257522758
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.95847225189209,
+          "y1": -1.0899305343628,
+          "sortKey": -33.003398895264,
+          "fmSlot": -1.0,
+          "x0": -0.98347222805023,
+          "y0": -1.1149305105209
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.66250014305115,
+          "y1": -1.0612270832062,
+          "sortKey": -33.002376556396,
+          "fmSlot": -1.0,
+          "x0": -0.68750011920929,
+          "y0": -1.0862270593643
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.40000000596046,
+      "camY": -1.2000000476837,
+      "zSlice": 5
+    },
+    "page": "grab_world",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-axe-mid",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Steel Axe",
+      "y": -11.018518447876,
+      "fill": 0.0,
+      "defName": "axe_steel",
+      "x": -20.018520355225,
+      "hasStorage": false,
+      "kind": "weapon",
+      "qualityTier": "average",
+      "instanceId": 7,
+      "condition": 55.846378326416,
+      "sharpness": 100.0,
+      "id": 4,
+      "weight": 1.0,
+      "temperature": 87.0
+    },
+    "surface": 2
+  },
+  {
+    "mouse": [
+      800.00003017486,
+      461.56257522758
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.95847225189209,
+          "y1": -1.0899305343628,
+          "sortKey": -33.003398895264,
+          "fmSlot": -1.0,
+          "x0": -0.98347222805023,
+          "y0": -1.1149305105209
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.63472235202789,
+          "y1": -1.0506044626236,
+          "sortKey": -32.002376556396,
+          "fmSlot": -1.0,
+          "x0": -0.65972232818604,
+          "y0": -1.0756044387817
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.40000000596046,
+      "camY": -1.2000000476837,
+      "zSlice": 5
+    },
+    "page": "grab_world",
+    "armed": true,
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-axe-after",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Steel Axe",
+      "y": -11.055555343628,
+      "fill": 0.0,
+      "defName": "axe_steel",
+      "x": -19.685186386108,
+      "hasStorage": false,
+      "kind": "weapon",
+      "qualityTier": "average",
+      "instanceId": 7,
+      "condition": 55.846378326416,
+      "sharpness": 100.0,
+      "id": 4,
+      "weight": 1.0,
+      "temperature": 87.0
+    },
+    "surface": 2
+  },
+  {
+    "save": {
+      "ownerCount": 7,
+      "phase": "SaveCaptureComplete",
+      "id": 1,
+      "acknowledgedOwners": 7,
+      "outcome": "SaveSucceeded"
+    },
+    "items": {
+      "3": {
+        "quality": 73.0,
+        "displayName": "Lantern",
+        "y": -9.4342594146729,
+        "fill": 0.0,
+        "defName": "lantern",
+        "x": -22.380554199219,
+        "hasStorage": false,
+        "kind": "misc",
+        "instanceId": 6,
+        "condition": 57.503276824951,
+        "sharpness": 100.0,
+        "id": 3,
+        "weight": 0.60000002384186,
+        "temperature": 123.0
+      },
+      "4": {
+        "quality": 73.0,
+        "displayName": "Steel Axe",
+        "y": -11.055555343628,
+        "fill": 0.0,
+        "defName": "axe_steel",
+        "x": -19.685186386108,
+        "hasStorage": false,
+        "kind": "weapon",
+        "qualityTier": "average",
+        "instanceId": 7,
+        "condition": 55.846378326416,
+        "sharpness": 100.0,
+        "id": 4,
+        "weight": 1.0,
+        "temperature": 87.0
+      }
+    }
+  },
+  {
+    "load": {
+      "id": 1,
+      "saveName": "grab_acceptance",
+      "phase": "LoadPublished",
+      "outcome": "LoadSucceeded"
+    },
+    "items": [
+      {
+        "quality": 73.0,
+        "displayName": "Lantern",
+        "y": -9.4342594146729,
+        "fill": 0.0,
+        "defName": "lantern",
+        "x": -22.380554199219,
+        "hasStorage": false,
+        "kind": "misc",
+        "instanceId": 6,
+        "condition": 57.503276824951,
+        "sharpness": 100.0,
+        "id": 3,
+        "weight": 0.60000002384186,
+        "temperature": 123.0
+      },
+      {
+        "quality": 73.0,
+        "displayName": "Steel Axe",
+        "y": -11.055555343628,
+        "fill": 0.0,
+        "defName": "axe_steel",
+        "x": -19.685186386108,
+        "hasStorage": false,
+        "kind": "weapon",
+        "qualityTier": "average",
+        "instanceId": 7,
+        "condition": 55.846378326416,
+        "sharpness": 100.0,
+        "id": 4,
+        "weight": 1.0,
+        "temperature": 87.0
+      }
+    ],
+    "grabCleared": true
+  },
+  {
+    "mouse": [
+      899.9999344349,
+      533.20603544703
+    ],
+    "scale": 0.75,
+    "framebuffer": [
+      1280.0,
+      720.0
+    ],
+    "quads": {
+      "sample": [
+        {
+          "texSlot": 697.0,
+          "x1": -0.95847225189209,
+          "y1": -0.56493055820465,
+          "sortKey": -33.024398803711,
+          "fmSlot": -1.0,
+          "x0": -0.98347222805023,
+          "y0": -0.58993053436279
+        },
+        {
+          "texSlot": 633.0,
+          "x1": -0.63472235202789,
+          "y1": -0.52560448646545,
+          "sortKey": -32.023376464844,
+          "fmSlot": -1.0,
+          "x0": -0.65972232818604,
+          "y0": -0.5506044626236
+        }
+      ],
+      "groundItems": 5,
+      "quads": 2,
+      "camX": -0.82500004768372,
+      "zoom": 0.40000000596046,
+      "camY": -1.2000000476837,
+      "zSlice": 26
+    },
+    "page": "grab_world",
+    "window": [
+      1280.0,
+      720.0
+    ],
+    "name": "world-after-load",
+    "item": {
+      "quality": 73.0,
+      "displayName": "Lantern",
+      "y": -9.4342594146729,
+      "fill": 0.0,
+      "defName": "lantern",
+      "x": -22.380554199219,
+      "hasStorage": false,
+      "kind": "misc",
+      "instanceId": 6,
+      "condition": 57.503276824951,
+      "sharpness": 100.0,
+      "id": 3,
+      "weight": 0.60000002384186,
+      "temperature": 123.0
+    },
+    "surface": 1
+  }
+]

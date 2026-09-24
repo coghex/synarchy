@@ -42,6 +42,8 @@ Mode.formatEntry = formatEntry
 function Mode.new(spec)
     return setmetatable({
         key           = spec.key,
+        toggle        = spec.toggle,
+        header        = spec.header,
         label         = spec.label,
         armedField    = spec.armedField,
         exclusiveWith = spec.exclusiveWith,
@@ -64,10 +66,11 @@ function Mode:createButton(overlay, uiscale, s, y)
         color    = COLOR_DIM,
         page     = overlay.page,
         uiscale  = uiscale,
-        x        = s.margin,
-        y        = y,
+        x        = self.header and s.margin + s.fontSize * 6 or s.margin,
+        y        = self.header and s.margin + s.fontSize or y,
         zIndex   = 1000,
     })
+    self:refreshEntries(overlay)
 end
 
 function Mode:destroyButton()
@@ -137,6 +140,10 @@ end
 -- (value == nil).
 function Mode:refreshEntries(overlay)
     local armed = overlay[self.armedField]
+    if self.toggle and self.buttonId then
+        label.setText(self.buttonId, armed and formatEntry(self.label, true) or self.label)
+        label.setColor(self.buttonId, armed and COLOR_BRIGHT or COLOR_DIM)
+    end
     for _, entry in ipairs(self.entries) do
         if entry.value ~= nil then
             local isArmed = (entry.value == armed)

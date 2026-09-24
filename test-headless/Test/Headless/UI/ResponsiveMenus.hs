@@ -438,6 +438,49 @@ spec = around withMenusEngine $ do
                     selValue p `shouldBe` "beta"
                     selCount p `shouldBe` 1
 
+        -- #2629: the rebuilt list keeps its scroll offset, clamped to
+        -- min(prev, max(0, #saves - newVisible)). At UI scale 1 the list
+        -- shows 5 rows at 1280x720 and 8 at 1280x900.
+        it "save browser's scroll offset survives a resize, clamped to the rebuilt list's range, without re-firing onSelect" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.save_browser');"
+                , "local list = require('scripts.ui.list');"
+                , "_G.__selectCount = 0;"
+                , "local function run(n, w0, h0, offset, w1, h1)"
+                    <> " local saves = {};"
+                    <> " for i = 1, n do saves[i] = {name='save-'..i, timestamp='t'} end;"
+                    <> " m.init(1,2,3,w0,h0);"
+                    <> " m.show(saves, function(v) _G.__selectCount = _G.__selectCount + 1 end, function() end);"
+                    <> " list.setScrollOffset(m.listId, offset);"
+                    <> " local before = list.getScrollOffset(m.listId);"
+                    <> " m.onFramebufferResize(w1, h1);"
+                    <> " local r = {before=before, after=list.getScrollOffset(m.listId),"
+                    <> " visible=m.visibleCount};"
+                    <> " m.shutdown();"
+                    <> " return r"
+                    <> " end;"
+                , "local same = run(30, 1280, 720, 10, 1200, 720);"
+                , "local grow = run(10, 1280, 720, 5, 1280, 900);"
+                , "local shrink = run(10, 1280, 900, 2, 1280, 720);"
+                , "local all = run(6, 1280, 720, 1, 1280, 900);"
+                , "return {same=same, grow=grow, shrink=shrink, all=all,"
+                    <> " count=_G.__selectCount}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe SaveScrollProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- Same row count: the offset survives untouched.
+                    ssSame p `shouldBe` ScrollCase 10 10 5
+                    -- Viewport grows 5 → 8 rows: a near-bottom offset
+                    -- clamps to the new maximum (10 - 8).
+                    ssGrow p `shouldBe` ScrollCase 5 2 8
+                    -- Viewport shrinks 8 → 5 rows: a valid offset stays.
+                    ssShrink p `shouldBe` ScrollCase 2 2 5
+                    -- Every save now fits: offset zero, all six shown.
+                    ssAll p `shouldBe` ScrollCase 1 0 6
+                    ssCount p `shouldBe` 0
+
         it "settings menu preserves an in-progress (unsubmitted) textbox edit, its cursor, and its keyboard focus across a resize" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -743,15 +786,16 @@ spec = around withMenusEngine $ do
                     , "local pw, ph = p.getSize(m.panelId);"
                     , "local panelInFrame = px >= 0 and py >= 0"
                         <> " and (px+pw) <= 3840 and (py+ph) <= 2160;"
-                    , "local titleInfo = UI.getElementInfo("
-                        <> "require('scripts.ui.label').getElementHandle(m.titleLabelId));"
-                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y}"
+                    , "local L = require('scripts.ui.label');"
+                    , "local titleInfo = UI.getElementInfo(L.getElementHandle(m.titleLabelId));"
+                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y,"
+                        <> " titleFontSize = L.getFontSize(m.titleLabelId)}"
                     ])
                 case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CompactFallbackProbe of
                     Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                     Just p → do
                         cfPanelInFrame p `shouldBe` True
-                        cfTitleY p `shouldSatisfy` (>= 0)
+                        expectCompactTitleInFrame menuName p
 
         forM_ [ ("main", "scripts.main_menu"), ("pause", "scripts.pause_menu") ] $ \(menuName, modulePath) →
             it (menuName ⧺ " menu at 800x2160@4 (narrow width, not just short height — fixed button/menu padding alone used to overflow horizontally)") $ \env → do
@@ -770,15 +814,78 @@ spec = around withMenusEngine $ do
                     , "local pw, ph = p.getSize(m.panelId);"
                     , "local panelInFrame = px >= 0 and py >= 0"
                         <> " and (px+pw) <= 800 and (py+ph) <= 2160;"
-                    , "local titleInfo = UI.getElementInfo("
-                        <> "require('scripts.ui.label').getElementHandle(m.titleLabelId));"
-                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y}"
+                    , "local L = require('scripts.ui.label');"
+                    , "local titleInfo = UI.getElementInfo(L.getElementHandle(m.titleLabelId));"
+                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y,"
+                        <> " titleFontSize = L.getFontSize(m.titleLabelId)}"
                     ])
                 case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CompactFallbackProbe of
                     Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                     Just p → do
                         cfPanelInFrame p `shouldBe` True
-                        cfTitleY p `shouldSatisfy` (>= 0)
+                        expectCompactTitleInFrame menuName p
+
+    -- #2656: a label's y is its text BASELINE, and its glyphs rise about
+    -- its effective fontSize above that, so the title is only legible
+    -- when its glyph TOP is in-frame. The formal 800x600 minimum at 1x
+    -- used to leave only the bottom slivers of the 96 px title visible.
+    -- Covers every main-menu item count (0/1/2+ saves → 3/4/5 actions)
+    -- at the minimum framebuffer across its band's scale range, plus
+    -- each responsive band's boundaries at the maximum item count, under
+    -- nonzero text metrics so the horizontal assertions are meaningful.
+    describe "main menu compact fallback keeps the title's glyphs in-frame (#2656)" $ do
+        let saveCounts = [0, 1, 2 ∷ Int]
+            minimumCases = [ (800, 600, sc, n) | sc ← [0.5, 1.0], n ← saveCounts ]
+            boundaryCases =
+                [ (w, h, sc, n)
+                | (w, h, sc) ← [ (800, 900, 1.0), (800, 901, 0.75), (800, 901, 2.0)
+                               , (1280, 1200, 2.0), (1280, 1201, 1.0), (1280, 1600, 3.0)
+                               , (1920, 1601, 1.5), (800, 2160, 4.0), (3840, 2160, 4.0) ]
+                , n ← [0, 2] ]
+        forM_ (minimumCases ⧺ boundaryCases) $ \(w, h, uiscale, saves) →
+            it ("at " ⧺ show w ⧺ "x" ⧺ show h ⧺ "@" ⧺ show uiscale
+                ⧺ " with " ⧺ show saves ⧺ " save(s)") $ \env → do
+                ls ← newBareLuaBackend env
+                r ← evalJSON ls $ luaLines
+                    [ setScaleCall (uiscale ∷ Double) <> ";"
+                    , nonZeroMetrics 0.6
+                    , "engine.listSaves = function() local out = {};"
+                        <> " for i = 1, " <> tshow saves <> " do"
+                        <> " out[i] = {name='s' .. i, timestamp='t'} end;"
+                        <> " return out end;"
+                    , bootMain w h <> ";"
+                    , "local p = require('scripts.ui.panel');"
+                    , "local L = require('scripts.ui.label');"
+                    , "local px, py = p.getPosition(m.panelId);"
+                    , "local pw, ph = p.getSize(m.panelId);"
+                    , "local info = UI.getElementInfo(L.getElementHandle(m.titleLabelId));"
+                    , "local tw, _ = L.getSize(m.titleLabelId);"
+                    , "return {saves = #m.saves, px = px, py = py, pw = pw, ph = ph,"
+                        <> " titleX = info.x, titleY = info.y, titleW = tw,"
+                        <> " titleFontSize = L.getFontSize(m.titleLabelId)}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe MainTitleProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        let fw = fromIntegral w
+                            fh = fromIntegral h
+                        mtSaves p `shouldBe` saves
+                        -- The panel stays inside the framebuffer.
+                        mtPanelX p `shouldSatisfy` (>= 0)
+                        mtPanelY p `shouldSatisfy` (>= 0)
+                        (mtPanelX p + mtPanelW p) `shouldSatisfy` (<= fw)
+                        (mtPanelY p + mtPanelH p) `shouldSatisfy` (<= fh)
+                        -- The title's glyph extent stays inside it too.
+                        mtTitleFontSize p `shouldSatisfy` (> 0)
+                        (mtTitleY p - mtTitleFontSize p) `shouldSatisfy` (>= 0)
+                        mtTitleX p `shouldSatisfy` (>= 0)
+                        mtTitleW p `shouldSatisfy` (> 0)
+                        (mtTitleX p + mtTitleW p) `shouldSatisfy` (<= fw)
+                        -- It floats above the panel without reaching it.
+                        mtTitleY p `shouldSatisfy` (< mtPanelY p)
+                        -- Both stay horizontally centred.
+                        abs (mtTitleX p + mtTitleW p / 2 - fw / 2) `shouldSatisfy` (<= 1)
+                        abs (mtPanelX p + mtPanelW p / 2 - fw / 2) `shouldSatisfy` (<= 1)
 
     describe "save browser stays in-frame at a narrow, high-scale supported combination" $
         it "800x2160@4x (panel width is a fixed 0.6 fraction of the framebuffer that doesn't scale with uiscale, while its side padding does — bounds.width used to go to zero)" $ \env → do
@@ -2047,6 +2154,20 @@ instance FromJSON SelectProbe where
     parseJSON = withObject "SelectProbe" $ \o →
         SelectProbe <$> o .: "value" <*> o .: "count"
 
+data ScrollCase = ScrollCase
+    { scBefore ∷ Int, scAfter ∷ Int, scVisible ∷ Int } deriving (Show, Eq)
+instance FromJSON ScrollCase where
+    parseJSON = withObject "ScrollCase" $ \o →
+        ScrollCase <$> o .: "before" <*> o .: "after" <*> o .: "visible"
+
+data SaveScrollProbe = SaveScrollProbe
+    { ssSame ∷ ScrollCase, ssGrow ∷ ScrollCase, ssShrink ∷ ScrollCase
+    , ssAll ∷ ScrollCase, ssCount ∷ Int } deriving Show
+instance FromJSON SaveScrollProbe where
+    parseJSON = withObject "SaveScrollProbe" $ \o →
+        SaveScrollProbe <$> o .: "same" <*> o .: "grow" <*> o .: "shrink"
+                        <*> o .: "all" <*> o .: "count"
+
 data OutsideEnvelopeProbe = OutsideEnvelopeProbe
     { oepHasBack ∷ Bool, oepHasApply ∷ Bool, oepHasSave ∷ Bool, oepValidDims ∷ Bool
     , oepTabFrameValid ∷ Bool
@@ -2071,10 +2192,31 @@ instance FromJSON BackButtonProbe where
         BackButtonProbe <$> o .: "y" <*> o .: "bottom"
 
 data CompactFallbackProbe = CompactFallbackProbe
-    { cfPanelInFrame ∷ Bool, cfTitleY ∷ Double } deriving Show
+    { cfPanelInFrame ∷ Bool, cfTitleY ∷ Double, cfTitleFontSize ∷ Double } deriving Show
 instance FromJSON CompactFallbackProbe where
-    parseJSON = withObject "CompactFallbackProbe" $ \o →
-        CompactFallbackProbe <$> o .: "panelInFrame" <*> o .: "titleY"
+    parseJSON = withObject "CompactFallbackProbe" $ \o → CompactFallbackProbe
+        <$> o .: "panelInFrame" <*> o .: "titleY" <*> o .: "titleFontSize"
+
+-- | #2656: the main menu's title must keep its GLYPH TOP (baseline minus
+--   its effective fontSize) in-frame. The pause menu duplicates the old
+--   baseline-only placement and is out of #2656's scope, so its cases
+--   keep their original baseline assertion.
+expectCompactTitleInFrame ∷ String → CompactFallbackProbe → Expectation
+expectCompactTitleInFrame menuName p
+    | menuName ≡ "main" = (cfTitleY p - cfTitleFontSize p) `shouldSatisfy` (>= 0)
+    | otherwise         = cfTitleY p `shouldSatisfy` (>= 0)
+
+data MainTitleProbe = MainTitleProbe
+    { mtSaves ∷ Int
+    , mtPanelX, mtPanelY, mtPanelW, mtPanelH ∷ Double
+    , mtTitleX, mtTitleY, mtTitleW, mtTitleFontSize ∷ Double
+    } deriving Show
+instance FromJSON MainTitleProbe where
+    parseJSON = withObject "MainTitleProbe" $ \o → MainTitleProbe
+        <$> o .: "saves"
+        <*> o .: "px" <*> o .: "py" <*> o .: "pw" <*> o .: "ph"
+        <*> o .: "titleX" <*> o .: "titleY" <*> o .: "titleW"
+        <*> o .: "titleFontSize"
 
 data SaveBrowserExtremeProbe = SaveBrowserExtremeProbe
     { sbepPanelInFrame ∷ Bool, sbepValidWidth ∷ Bool } deriving Show

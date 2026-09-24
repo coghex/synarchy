@@ -3259,6 +3259,37 @@ mutation-tested by loosening the fixture bound one unit past the guard
 and asserting the verdict flips, and whose structural writer guard holds
 the allowlist above.
 
+## Debug ground-item Grab (#2489)
+
+The F8 `Grab` toggle owns left presses before designation tools, selection,
+placement, or HUD tile actions. Both raw press subscribers consult the same
+idempotent claim; `unit_drag_select` records exactly one deferred outcome
+without arming selection. Right-click and Escape cancel; a normal release
+applies its own final live pick and keeps Grab armed. Empty ground and sprite
+hits without a ground pick are owned no-ops.
+
+The controller captures the active page, item identity, fractional offset and
+pick selection generation. `world.pickPos` now returns `(x, y, pageId,
+selectionGen)` from the same manager snapshot, preserving its first two results.
+A different page or generation ends capture. Seam localization preserves
+fractions and uses the page's `getWrapWidth`; arenas remain unwrapped.
+
+Every held sample and final release checks the gameplay gate and
+`UI.isPointerBlockedAt(fbX, fbY)`, which exposes the engine's pointer-surface
+predicate (including clipping and modals). Missing/non-finite coordinates
+fail closed. No stale hover position participates. Valid destinations use
+their own terrain-surface elevation, including higher/lower ground; invalid
+picks or destinations preserve the last accepted position and allow resumption.
+A false move result alone never ends capture: a separate page-consistent
+identity observation distinguishes terrain refusal from item removal.
+
+Hide, mode switch, view/menu teardown, resize, page change, identity loss,
+Exit to Menu, load reset and reconciliation all terminate capture without
+rollback. Later releases cannot mutate the replacement session, even with
+reused ids. Code, owner acceptance and rendered evidence travel in the same PR.
+Gates: `Debug Grab gesture`, `drag-select deferred capture`, `session teardown`,
+`UI descriptors`, Lua budget/registration and persistence-inventory audits.
+
 ## Ground-item relocation (#2486)
 
 `item.debugMoveGround(gid, instanceId, x, y [, pageId])` repositions one
