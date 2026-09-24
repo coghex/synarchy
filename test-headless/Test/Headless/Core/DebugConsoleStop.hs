@@ -31,7 +31,7 @@ module Test.Headless.Core.DebugConsoleStop (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar
     (MVar, newEmptyMVar, putMVar, readMVar, takeMVar, tryPutMVar)
 import Control.Exception
@@ -101,7 +101,7 @@ deferredKillSpec = describe "a console thread that defers the kill" $ do
     warnings ← newIORef []
     withStalledServer stall stallAcceptUninterruptibly (record warnings) $ \console → do
         awaitEntered stall 1
-        elapsed ← timed (stopDebugConsole console)
+        elapsed ← timedStop (stopDebugConsole console)
         elapsed `shouldSatisfy` withinBound
         -- Idempotent: the second stop does nothing, so it warns about
         -- nothing either.
@@ -170,7 +170,7 @@ fullHouse mPath = do
             awaitEntered stall defaultMaxConnections
             (elapsed, steps) ← case mPath of
                 Nothing → do
-                    e ← timed (stopDebugConsole console)
+                    e ← timedStop (stopDebugConsole console)
                     pure (e, cleanupSteps)
                 Just path → do
                     outcome ← runThroughWorker path console
@@ -217,7 +217,7 @@ promptSpec = describe "a stop in which every thread exits promptly" $
           (do void (readUntilContains twoSeconds "> " sock)
               sendAll sock "park\n"
               awaitEntered parked 1
-              elapsed ← timed $
+              elapsed ← timedStop $
                   if masked then uninterruptibleMask_ (stopDebugConsole console)
                             else stopDebugConsole console
               -- Nothing was waited out: well inside the accept's half of
@@ -442,8 +442,17 @@ waitFor budget check = do
                     else threadDelay 5000 ≫ loop
     loop
 
-timed ∷ IO () → IO Int
-timed act = fst ⊚ timedWith act
+-- | Time a stop made directly by the test, on a thread of its own so an
+--   unbounded one FAILS the example — reading as 'generousJoin' — rather
+--   than hanging it: a synchronous kill of a masked thread blocks even an
+--   unmasked caller for good.
+timedStop ∷ IO () → IO Int
+timedStop stop = do
+    done ← newEmptyMVar
+    (elapsed, finished) ← timedWith $ do
+        void ∘ forkIO $ stop `finally` putMVar done ()
+        isJust ⊚ timeout generousJoin (takeMVar done)
+    pure (if finished then elapsed else max elapsed generousJoin)
 
 timedWith ∷ IO α → IO (Int, α)
 timedWith act = do
