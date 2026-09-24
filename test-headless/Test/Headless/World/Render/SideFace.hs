@@ -311,8 +311,8 @@ preservedSideSpec = describe "waterSideFaceQuads leaves non-drops alone" $ do
             `shouldBe` 0
 
     it "keeps the strips below the mask sorted a fixed step apart" $ do
-        -- Sort ordering is unchanged: one quad per z-level of the drop,
-        -- keys ascending in 0.001 steps as they always were.
+        -- For this whole-z fixture, each strip below the mask-owned slab
+        -- spans one z-level; its sort key advances by 0.001.
         let quads = runIn (fluidMapWith [((5, 8), fluidCellAtZ Lake 10)])
                           (terrMapWith 10 [((6, 8), 6)])
             keys = map sqSortKey quads
@@ -414,8 +414,8 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
         -- absolute sort keys legitimately differ by the tile offset
         -- between them. Compare the per-quad structure instead —
         -- normalised against each fixture's own base key, which is
-        -- exactly the z-stack the drop produces (one quad per z, keys
-        -- 0.001 apart). Normalising subtracts Floats of different
+        -- exactly the strips below the mask-owned slab (here one per z,
+        -- keys 0.001 apart). Normalising subtracts Floats of different
         -- magnitudes, so compare within a tolerance two orders of
         -- magnitude below that step rather than bit-exactly.
         let interiorVia m = canonicalChunkLookup seamWorld
