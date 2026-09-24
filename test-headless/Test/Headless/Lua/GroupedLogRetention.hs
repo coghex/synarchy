@@ -35,6 +35,12 @@
 --       every @onContentScroll@ invocation happens under @syncingScrollbar@
 --       and leaves the scroll state alone.
 --
+--   #2688 adds the combat panel's PARTICIPANT set to the same horizon: a
+--   retained battle's @participants@ are exactly the non-nil attacker\/target
+--   ids its retained events name, checked in both directions after every
+--   event, so an id named only by trimmed events stops matching @findBattle@.
+--   (Injury groups key on one victim and keep no participant set.)
+--
 --   The flat ring's own contract (200, newest-first, oldest dropped) and both
 --   @unitEntries@ functions are re-pinned here too, since the point of the
 --   change is that bounding the GROUPS must not touch them.
@@ -197,6 +203,8 @@ spec = aroundAll withSharedFixture $
 
     mapM_ panelSpec [combatPanel, injuryPanel]
 
+    participantSpec
+
     describe "the unitEntries consumers" $
         it "unit_log reaches both panels only through unitEntries, never \
            \through a grouped list" $ \_ → do
@@ -210,6 +218,127 @@ spec = aroundAll withSharedFixture $
             -- their own modules, which is why bounding them is invisible here.
             T.isInfixOf "battles" src  `shouldBe` False
             T.isInfixOf "unitLogs" src `shouldBe` False
+
+-- | Combat-only (#2688): participant retention follows event retention.
+--
+--   @CEV@ builds one event from explicit endpoints (either may be nil), and
+--   @PARTS_OK@ is the whole contract as one check: for every retained battle,
+--   @participants@ equals the set of non-nil ids its retained events name, in
+--   BOTH directions, and never exceeds 2 x 200. @feedC@ runs that check after
+--   every processed event and counts violations in @BAD@, so a transient
+--   divergence cannot hide behind a correct final state.
+participantSpec ∷ SpecWith (EngineEnv, LuaBackendState)
+participantSpec = describe "combat_log participants (#2688)" $ do
+
+    let run env ls src expected = do
+            resetPanel env ls combatPanel
+            _ ← eval ls participantLua
+            eval ls src ≫= (`shouldBe` expected)
+
+    it "keeps one attacker's 10,000 successive new targets to the 201 ids \
+       \its 200 retained events name" $ \(env, ls) →
+        run env ls (luaLines
+            [ "for j = 1, 10000 do feedC(1, 1 + j, j, j) end;"
+            , "local g = G()[1];"
+            , "return #G() .. '|' .. #g.events .. '|' .. count(g.participants)"
+            , "  .. '|' .. tostring(g.participants[1]) .. '|'"
+            , "  .. tostring(g.participants[10001]) .. '|'"
+            , "  .. tostring(g.participants[9802]) .. '|'"
+            , "  .. tostring(g.participants[9801]) .. '|' .. BAD"
+            ])
+            -- Retained events are seq 9801..10000, naming targets
+            -- 9802..10001 plus attacker 1; target 9801 was trimmed with
+            -- seq 9800.
+            "1|200|201|true|true|true|nil|0"
+
+    it "keeps an id that a retained event still names after its older \
+       \event is trimmed, and rejoins on it" $ \(env, ls) →
+        -- Id 500 is named by seq 1 (trimmed) AND seq 100 (retained). A
+        -- regression guard: this already held before #2688.
+        run env ls (luaLines
+            [ "feedC(1, 500, 1, 1);"
+            , "for j = 2, 201 do"
+            , "  feedC(1, j == 100 and 500 or 1000 + j, j, j) end;"
+            , "local g = G()[1];"
+            , "local trimmed = g.events[#g.events].seq;"
+            , "local kept = tostring(g.participants[500]);"
+            -- A fresh attacker whose only link to the battle is 500.
+            , "feedC(9000, 500, 202, 202);"
+            , "return trimmed .. '|' .. kept .. '|' .. #G() .. '|'"
+            , "  .. g.events[1].seq .. '|' .. tostring(g.participants[9000])"
+            , "  .. '|' .. BAD"
+            ])
+            "2|true|1|202|true|0"
+
+    it "opens a new battle for an id named only by trimmed events while the \
+       \battle is still inside the rejoin window" $ \(env, ls) →
+        run env ls (luaLines
+            [ "feedC(1, 500, 1, 1);"
+            , "for j = 2, 201 do feedC(1, 1000 + j, j, j) end;"
+            , "local g = G()[1];"
+            , "local forgotten = tostring(g.participants[500]);"
+            , "local inside = (_G.NOW + 1 - g.lastEventAt) <= 120;"
+            , "local fresh = NEXT();"
+            , "feedC(9000, 500, 202, 202);"
+            , "local opened = #G() .. '|' .. tostring(hasId(fresh)) .. '|'"
+            , "  .. #byId(fresh).events .. '|' .. #g.events .. '|'"
+            , "  .. g.events[1].seq;"
+            -- A forgotten id still rides along when its OTHER endpoint
+            -- matches: attacker 500 (forgotten by battle 1, but now in the
+            -- fresh battle 2) against target 1 (retained by battle 1) joins
+            -- the FIRST matching battle in list order, battle 1.
+            , "feedC(500, 1, 203, 203);"
+            , "return forgotten .. '|' .. tostring(inside) .. '|' .. opened"
+            , "  .. '|' .. #G() .. '|' .. g.events[1].seq .. '|'"
+            , "  .. #byId(fresh).events .. '|' .. BAD"
+            ])
+            "nil|true|2|true|1|200|201|2|203|1|0"
+
+    it "counts absent endpoints and an attacker that is its own target \
+       \correctly as their events are trimmed" $ \(env, ls) →
+        -- Seq 1 is a self-hit by 7 (7 named twice by ONE event) and seq 2
+        -- links 7 to 1; seq 3 links 8 in and seq 4 is its self-hit, and seq
+        -- 150 names 8 again. The rest are nil-target, nil-attacker, 1-on-1
+        -- self-hit or fresh-target events, so trimming meets every shape.
+        run env ls (luaLines
+            [ "feedC(7, 7, 1, 1); feedC(7, 1, 2, 2); feedC(1, 8, 3, 3);"
+            , "feedC(8, 8, 4, 4);"
+            , "for j = 5, 210 do"
+            , "  local m = j % 4;"
+            , "  if j == 150 then feedC(1, 8, j, j)"
+            , "  elseif m == 0 then feedC(1, nil, j, j)"
+            , "  elseif m == 1 then feedC(nil, 1, j, j)"
+            , "  elseif m == 2 then feedC(1, 1, j, j)"
+            , "  else feedC(1, 2000 + j, j, j) end end;"
+            , "local g = G()[1];"
+            , "return #G() .. '|' .. #g.events .. '|' .. g.events[#g.events].seq"
+            , "  .. '|' .. tostring(g.participants[7]) .. '|'"
+            , "  .. tostring(g.participants[8]) .. '|'"
+            , "  .. tostring(g.participants[1]) .. '|' .. BAD"
+            ])
+            -- Seqs 1..10 are trimmed: 7 goes with them; 8 survives on 150.
+            "1|200|11|nil|true|true|0"
+
+participantLua ∷ Text
+participantLua = luaLines
+    [ "function CEV(a, t, ts, seq) return { kind = 'miss', attacker = a,"
+    , "  target = t, ts = ts, seq = seq, payload = {} } end;"
+    , "function PARTS_OK() for _, g in ipairs(G()) do local want = {};"
+    , "  for _, ev in ipairs(g.events) do"
+    , "    if ev.attacker ~= nil then want[ev.attacker] = true end;"
+    , "    if ev.target ~= nil then want[ev.target] = true end end;"
+    , "  for id in pairs(want) do"
+    , "    if g.participants[id] ~= true then return false end end;"
+    , "  for id in pairs(g.participants) do"
+    , "    if not want[id] then return false end end;"
+    , "  if count(g.participants) > 2 * 200 then return false end end;"
+    , "  return true end;"
+    , "_G.BAD = 0;"
+    , "function feedC(a, t, ts, seq) _G.NOW = ts;"
+    , "  feed({ CEV(a, t, ts, seq) });"
+    , "  if not PARTS_OK() then _G.BAD = _G.BAD + 1 end end;"
+    , "return 'ok'"
+    ]
 
 panelSpec ∷ Panel → SpecWith (EngineEnv, LuaBackendState)
 panelSpec p = describe (pLabel p) $ do
