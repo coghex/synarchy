@@ -1,13 +1,13 @@
 {-# LANGUAGE Strict #-}
 -- | Pure tests for DFL-1's flat-step fluid geometry (#2517): flat River
 --   and Lake tops from 'World.Render.FluidTopQuads.fluidTopQuads', and
---   'World.Render.SideDecoQuads.waterSideFaceQuads' owning every positive
---   visible drop between a fluid top and a lower neighbour.
+--   'World.Render.SideDecoQuads.waterSideFaceQuads' filling exposed drops
+--   below the slab already covered by the selected level mask (#2529).
 --
 --   The two halves are one contract and are tested together, under the
 --   registered group @World.Render.SideFace@, because neither is
---   sufficient on its own: a flat top with no side face leaves a one-z
---   drop invisible, and a side face under a ramped top double-draws it.
+--   sufficient on its own: the top mask owns the first slab and separate
+--   sides must meet it without duplicating that slab.
 --
 --   The side-face half also still guards its original regressions: side
 --   faces used to be hard filtered to in-chunk neighbours, so a drop
@@ -18,7 +18,7 @@
 --   No engine needed: both passes are pure. We hand-build a 16×16 home
 --   chunk and feed neighbour chunks through the lookup callbacks. The
 --   view bounds accept every tile, so the emitted-quad COUNT is exactly
---   the number of z-levels in the drop, and the face-map handles are all
+--   the number of z-levels below the mask-owned top slab, and handles are all
 --   DISTINCT (see 'distinctTextures') so an emitted quad names which face
 --   map it selected.
 module Test.Headless.World.Render.SideFace (spec) where
@@ -89,6 +89,7 @@ run fm tm fluidLookup terrLookup =
 distinctTextures ∷ WorldTextures
 distinctTextures = defaultWorldTextures
     { wtIsoFaceMap          = TextureHandle 10
+    , wtFluidLevelFaceMap8  = TextureHandle 10
     , wtSlopeFaceMapN       = TextureHandle 11
     , wtSlopeFaceMapE       = TextureHandle 12
     , wtSlopeFaceMapNE      = TextureHandle 13
@@ -248,129 +249,28 @@ flatTopSpec = describe "fluidTopQuads selects a flat fluid top (#2517)" $ do
             (_, _, fresh) = fluidTopQuads testCtx (ChunkCoord 0 0) fm noIce offscreen
         length fresh `shouldBe` 0
 
--- * Requirement 2 — the side-face generator owns every positive drop
+-- * Combined top-mask and separate-side coverage
 
 oneZSpec ∷ Spec
-oneZSpec = describe "waterSideFaceQuads owns a one-z drop (#2517)" $ do
-    -- Home water at the interior tile (5,8), surface 10, flat terrain at
-    -- 10. Under FaceSouth the two camera-visible neighbours are (5,9)
-    -- and (6,8); only the one a case overrides ever drops.
+oneZSpec = describe "separate sides begin below the mask-owned slab (#2529)" $ do
     let waterAt ft = fluidMapWith [((5, 8), fluidCellAtZ ft 10)]
-        flatTerr  = terrMapWith 10 []
         dryDropTo z = terrMapWith 10 [((6, 8), z)]
-        wetDropTo z = fluidMapWith [ ((5, 8), fluidCellAtZ Lake 10)
-                                   , ((6, 8), fluidCellAtZ Lake z) ]
         noLookup ∷ ChunkCoord → Maybe a
         noLookup = const Nothing
-
-    it "emits exactly one quad for an in-chunk one-z DRY drop" $
-        length (run (waterAt Lake) (dryDropTo 9) noLookup noLookup)
-            `shouldBe` 1
-
-    it "emits exactly one quad for an in-chunk one-z WET drop" $
-        length (run (wetDropTo 9) flatTerr noLookup noLookup)
-            `shouldBe` 1
-
-    it "puts the one-z quad at the z the drop actually spans" $ do
-        -- The single quad covers the level between the neighbour surface
-        -- (9) and this tile's surface (10), i.e. z = 9. A producer that
-        -- drew it at z = 10 would emit the right COUNT at the wrong
-        -- height, so compare its sort key against the SAME level in a
-        -- deeper drop over the same tile rather than only counting.
-        let oneZ = run (waterAt Lake) (dryDropTo 9) noLookup noLookup
-            twoZ = run (waterAt Lake) (dryDropTo 8) noLookup noLookup
-        length oneZ `shouldBe` 1
-        length twoZ `shouldBe` 2
-        -- The stack is emitted bottom-up (z = bottomZ .. mySurf - 1), so
-        -- the two-z stack's LAST quad is its z = 9 one.
-        map sqSortKey oneZ `shouldBe` map sqSortKey (drop 1 twoZ)
-
-    it "emits N quads for a drop of N z, for N = 1..5" $
-        sequence_
-            [ length (run (waterAt Lake) (dryDropTo (10 - n)) noLookup noLookup)
-                `shouldBe` n
-            | n ← [1 .. 5 ∷ Int] ]
-
-    it "emits N quads for a WET drop of N z, for N = 1..5" $
-        sequence_
-            [ length (run (wetDropTo (10 - n)) flatTerr noLookup noLookup)
-                `shouldBe` n
-            | n ← [1 .. 5 ∷ Int] ]
-
-    it "emits one quad per camera-visible edge for all four facings" $
-        -- All four cardinal neighbours one z lower: each facing shows
-        -- exactly its own two edges, never four and never zero.
-        sequence_
-            [ let ctx = testCtx { qcFacing = f }
-                  fm = fluidMapWith
-                          ( ((5, 8), fluidCellAtZ Lake 10)
-                          : [ (p, fluidCellAtZ Lake 9)
-                            | p ← [(5, 7), (6, 8), (5, 9), (4, 8)] ] )
-              in length (waterSideFaceQuads ctx (ChunkCoord 0 0) fm flatTerr
-                            noLookup noLookup allVisible)
-                     `shouldBe` 2
-            | f ← [FaceSouth, FaceEast, FaceNorth, FaceWest] ]
-
-    it "clips the side stack to the z-slice window" $ do
-        -- A five-z drop with effective depth 2 shows only z ∈ {8, 9}.
-        let ctx = testCtx { qcEffectiveDepth = EffectiveDepth 2 }
-        length (waterSideFaceQuads ctx (ChunkCoord 0 0)
+    it "leaves a one-z drop entirely to the top mask for all fluid types" $
+        forM_ [Lake, River, Ocean, Lava] $ \ft →
+            length (run (waterAt ft) (dryDropTo 9) noLookup noLookup)
+                `shouldBe` 0
+    it "emits only the remaining N-1 strips for whole-z drops" $
+        forM_ [Lake, River, Ocean, Lava] $ \ft →
+            forM_ [1 .. 5] $ \n →
+                length (run (waterAt ft) (dryDropTo (10 - n)) noLookup noLookup)
+                    `shouldBe` (n - 1)
+    it "clips the remaining strips to the actual visible interval" $ do
+        let context = testCtx { qcEffectiveDepth = EffectiveDepth 2 }
+        length (waterSideFaceQuads context (ChunkCoord 0 0)
                     (waterAt Lake) (dryDropTo 5) noLookup noLookup allVisible)
-            `shouldBe` 2
-
-    it "leaves Lava's one-z omission and multi-z geometry unchanged" $ do
-        -- Requirement 4: DFL-1 is a freshwater change. Lava still starts
-        -- at a two-z gap and still emits one quad per z above that.
-        length (run (waterAt Lava) (dryDropTo 9) noLookup noLookup)
-            `shouldBe` 0
-        length (run (waterAt Lava) (dryDropTo 8) noLookup noLookup)
-            `shouldBe` 2
-        length (run (waterAt Lava) (dryDropTo 5) noLookup noLookup)
-            `shouldBe` 5
-
-    it "leaves Ocean excluded from fluid side faces entirely" $ do
-        length (run (waterAt Ocean) (dryDropTo 9) noLookup noLookup)
-            `shouldBe` 0
-        length (run (waterAt Ocean) (dryDropTo 5) noLookup noLookup)
-            `shouldBe` 0
-
-    it "emits one quad each side of a one-z drop across a loaded seam" $ do
-        -- Requirement 3, ordinary (non-U) chunk seam: the east edge tile
-        -- steps into chunk (1,0). Dry and wet, each exactly one quad.
-        let edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
-            fluidDry (ChunkCoord 1 0) = Just (fluidMapWith [])
-            fluidDry _                = Nothing
-            terrOne  (ChunkCoord 1 0) = Just (terrMapWith 9 [])
-            terrOne  _                = Nothing
-            fluidWet (ChunkCoord 1 0) =
-                Just (fluidMapWith [((0, 8), fluidCellAtZ Lake 9)])
-            fluidWet _                = Nothing
-            terrFlat (ChunkCoord 1 0) = Just (terrMapWith 10 [])
-            terrFlat _                = Nothing
-        length (run edgeWater flatTerr fluidDry terrOne) `shouldBe` 1
-        length (run edgeWater flatTerr fluidWet terrFlat) `shouldBe` 1
-
-    it "emits one quad for a one-z drop across the cylindrical U seam" $ do
-        -- Requirement 3 (#1135), through the real canonicalising lookup.
-        let seamHome   = ChunkCoord 16 (-15)
-            seamStored = ChunkCoord (-15) 17
-            lookupVia m = canonicalChunkLookup 64
-                              (HM.fromList [(seamStored, m)])
-            edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
-            runAt fl tl = waterSideFaceQuads testCtx seamHome edgeWater
-                              flatTerr fl tl allVisible
-        length (runAt (lookupVia (fluidMapWith [])) (lookupVia (terrMapWith 9 [])))
             `shouldBe` 1
-        length (runAt (lookupVia (fluidMapWith [((0, 8), fluidCellAtZ Lake 9)]))
-                      (lookupVia (terrMapWith 10 [])))
-            `shouldBe` 1
-
-    it "draws nothing for a one-z drop into an UNLOADED seam neighbour" $ do
-        -- The conservative default must survive the ownership transfer:
-        -- an unknown neighbour is still not a drop.
-        let edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
-        length (run edgeWater flatTerr (const Nothing) (const Nothing))
-            `shouldBe` 0
 
 -- * Requirement 3 — behaviour that must NOT change
 
@@ -410,14 +310,14 @@ preservedSideSpec = describe "waterSideFaceQuads leaves non-drops alone" $ do
                                     | x ← [4 .. 6], y ← [7 .. 9] ]) flatTerr)
             `shouldBe` 0
 
-    it "keeps one quad per z, sorted a fixed step apart" $ do
+    it "keeps the strips below the mask sorted a fixed step apart" $ do
         -- Sort ordering is unchanged: one quad per z-level of the drop,
         -- keys ascending in 0.001 steps as they always were.
         let quads = runIn (fluidMapWith [((5, 8), fluidCellAtZ Lake 10)])
                           (terrMapWith 10 [((6, 8), 6)])
             keys = map sqSortKey quads
             steps = zipWith (-) (drop 1 keys) keys
-        length quads `shouldBe` 4
+        length quads `shouldBe` 3
         steps `shouldSatisfy` all (\d → abs (d - 0.001) < 1.0e-5)
 
 inChunkSpec ∷ Spec
@@ -437,18 +337,18 @@ inChunkSpec = describe "waterSideFaceQuads across chunk seams" $ do
             fluidLookup _                = Nothing
             terrLookup  (ChunkCoord 1 0) = Just (terrMapWith 0 [])
             terrLookup  _                = Nothing
-        -- z = 0..9 → ten side-face quads.
-        length (run homeFluid homeTerr fluidLookup terrLookup) `shouldBe` 10
+        -- The top mask owns 9..10; nine strips cover 0..9.
+        length (run homeFluid homeTerr fluidLookup terrLookup) `shouldBe` 9
 
     it "renders side faces over a LOWER-WATER drop in the adjacent chunk" $ do
         -- Neighbor (0,8) holds water at surface 5, so the stack bottoms
-        -- out on that surface: faces from z=5..9 (five quads).
+        -- out on that surface: four strips cover 5..9 below the mask.
         let fluidLookup (ChunkCoord 1 0) =
                 Just (fluidMapWith [((0, 8), fluidCellAtZ Lake 5)])
             fluidLookup _                = Nothing
             terrLookup  (ChunkCoord 1 0) = Just (terrMapWith 0 [])
             terrLookup  _                = Nothing
-        length (run homeFluid homeTerr fluidLookup terrLookup) `shouldBe` 5
+        length (run homeFluid homeTerr fluidLookup terrLookup) `shouldBe` 4
 
     it "draws nothing at the seam when the neighbor chunk is not loaded" $
         -- Both lookups miss → the drop is unknown, so no side face (the
@@ -462,7 +362,7 @@ inChunkSpec = describe "waterSideFaceQuads across chunk seams" $ do
         let inFluid = fluidMapWith [((5, 8), fluidCellAtZ Lake 10)]
             inTerr  = terrMapWith 10 [((6, 8), 0)]
         length (run inFluid inTerr (const Nothing) (const Nothing))
-            `shouldBe` 10
+            `shouldBe` 9
 
 -- | #1135: 'neighborCell' builds its cross-chunk coord in the HOME
 --   chunk's raw frame, but chunks are STORED u-wrapped. Right at the
@@ -494,16 +394,16 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
                 fluidLookup terrLookup allVisible
 
     it "renders side faces over a DRY drop across the seam" $
-        -- Neighbour stored under the wrapped key is dry at z=0 → z=0..9.
+        -- Neighbour stored under the wrapped key is dry at z=0; mask owns 9..10.
         length (runAt seamHome (lookupVia (fluidMapWith []))
                                (lookupVia (terrMapWith 0 [])))
-            `shouldBe` 10
+            `shouldBe` 9
 
     it "renders side faces over a LOWER-WATER drop across the seam" $
         length (runAt seamHome
                     (lookupVia (fluidMapWith [((0, 8), fluidCellAtZ Lake 5)]))
                     (lookupVia (terrMapWith 0 [])))
-            `shouldBe` 5
+            `shouldBe` 4
 
     it "matches the equivalent interior fixture exactly" $ do
         -- Same relative geometry one chunk IN from the seam: home chunk
@@ -527,7 +427,7 @@ seamSpec = describe "waterSideFaceQuads across the U seam (#1135)" $ do
                                 (interiorVia (terrMapWith 0 []))
             normalised qs = let ks = map sqSortKey qs
                             in map (subtract (minimum ks)) ks
-        length seamQuads `shouldBe` 10
+        length seamQuads `shouldBe` 9
         length seamQuads `shouldBe` length interiorQuads
         zip (normalised seamQuads) (normalised interiorQuads)
             `shouldSatisfy` all (\(a, b) → abs (a - b) < 1.0e-5)

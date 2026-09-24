@@ -173,7 +173,7 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
 --   toward the cardinal neighbour whose surface z is @neighborZ@?
 --
 --   Terrain throughout, for a wet tile as much as a dry one: this feeds
---   @ctSlopes@, the bed and bank geometry. A fluid TOP is a flat whole-z
+--   @ctSlopes@, the bed and bank geometry. A fluid TOP is a flat exact-height
 --   step and never consults this (#2517).
 --
 --   @neighborHasFluid@ is the caller's already-resolved answer to whether

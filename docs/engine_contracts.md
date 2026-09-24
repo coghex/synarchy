@@ -83,6 +83,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Loot realization (#2502)](#loot-realization-2502)
 - [Farming (#331-#336)](#farming-331-336)
 - [The exact fluid plane (#2520)](#the-exact-fluid-plane-2520)
+- [Exact fluid rendering (#2529)](#exact-fluid-rendering-2529)
 - [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485-2490)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
@@ -5510,8 +5511,9 @@ Design record:
 §Persistence and migration; D-1, D-2, D-4, D-5, D-11, D-12). DFL-2 of
 epic #2514 makes one fixed-point surface authoritative for every fluid
 type, so a partial quantity survives activation, writeback,
-deactivation, save and load without gaining or losing fluid. It changes
-no visible geometry: rendering still places whole z.
+deactivation, save and load without gaining or losing fluid. That prerequisite changed
+no visible geometry. Since #2529, fluid rendering places the exact plane and
+selects its corresponding level mask; integer consumers retain the ceiling view.
 
 **One scale, one owner.** `World.Fluid.Exact.fluidUnitsPerZ` is eight,
 and it is the only place the number is written. Every conversion
@@ -5575,10 +5577,10 @@ both the per-chunk phases and the seam pass. A caller deriving BETWEEN
 ticks — the writeback, deactivation — already holds a map the last tick
 corrected, so it needs no such record.
 
-**Integer consumers are documented compatibility views.** Rendering,
+**Integer consumers are documented compatibility views.** Terrain shading,
 `lcSurfaceMap` and the rendered-surface rule (§Flora visual state and
 fallback names the same rule for flora), flora placement, vegetation
-depth, ice, soil gates, ground-item and tile quads, side faces and the
+depth, ice, soil gates, ground-item and terrain tile quads and the
 cursor all read `fluidSurfaceCeilZ` — the lowest whole z at or above the
 exact surface — so a partially filled top level still reads as one
 occupied z. `world.getFluidAt`, `world.getSurfaceAt` and
@@ -5641,6 +5643,43 @@ terrain a given seed regenerates it fixes the volume too; the
 volume-over-terrain identity itself is proved at a KNOWN terrain by the
 hspec round trip. The whole-z Lua and dump views cannot see a remainder
 at all, so neither can stand in for any of this.
+
+---
+
+## Exact fluid rendering (#2529)
+
+River, Lake, Lava and Ocean tops use the signed exact plane for placement,
+`exactTopLevel` for mask selection, and the integer ceiling only for the
+inclusive slice window `[slice-depth, slice]`. Screen culling uses fractional
+placement. Generated ocean remains full level 8; this renderer also supports
+runtime or edited partial ocean. Terrain slopes, bed visibility, tint policy
+and zoom-map classification retain their existing rules.
+
+The eight approved masks already contain the top slab's side pixels. Additional
+side geometry begins at `ceil(surface)-1`, ends independently at each front
+neighbour's exact fluid plane (or dry terrain), and is split/clipped in exact
+units before vertex conversion. Equal, higher and unloaded neighbours generate
+no additional side geometry. Production canonical chunk lookup governs ordinary
+and cylindrical seams. Painter order occludes hidden mask pixels; rendered
+coverage must be reviewed, not inferred from quad counts.
+
+Ice remains at `icSurface`. Its generation base is still the maximum of terrain
+and the fluid ceiling, with drape at base+1 and the existing 20-z basin cap.
+Covered Lake/Ocean tops remain suppressed; River eligibility is unchanged.
+
+`debug.setFluidSurface(page,x,y,kind,exactUnits)` is a fixture-authoring hook:
+it queues an exact snapshot through the world edit log, simulation edit-generation
+boundary and cache invalidation. Kinds are lake/river/ocean/lava; malformed
+arguments are rejected. It does not add an exact public query or alter existing
+query arities. Its edits use the already-current snapshot format; no save schema
+or generated terrain changes.
+
+Gates: `World.Render.FluidLevels`, `World.Render.SideFace`,
+`World.Render.PickSeam`, `World.Slope.slopeBit`, `World.Slope.FaceMaps`,
+`tools/fluid_level_masks.py --check-generated`, `tools/check_texture_paths.py`,
+and `tools/lua_registration_audit.py`. Manual rendered evidence comes from
+`tools/fluid_levels_render_capture.py`; owner acceptance, captures and the
+reproducible fixture belong in the implementation PR before final review.
 
 ---
 

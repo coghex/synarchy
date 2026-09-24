@@ -7,14 +7,14 @@
 --   the pass lives here, where a pure headless spec can drive the real
 --   production boundary over real neighbour topologies.
 --
---   Vertical fluid EDGES are not built here. Every positive visible drop
---   between a fluid top and a lower neighbour is a side quad from
---   'World.Render.SideDecoQuads.waterSideFaceQuads'.
+--   Each selected mask includes its top slab's side pixels. Deeper exposed
+--   intervals come from 'World.Render.SideDecoQuads.waterSideFaceQuads'.
 module World.Render.FluidTopQuads
     ( fluidTopQuads
     ) where
 
 import UPrelude
+import World.Fluid.Exact (exactSurfaceRenderZ)
 import qualified Data.Vector as V
 import Engine.Scene.Types (SortableQuad(..))
 import World.Chunk.Types (ChunkCoord, chunkSize)
@@ -34,8 +34,8 @@ import World.Render.ViewBounds (ViewBounds, isTileVisible)
 --
 --   Eligibility is unchanged by #2517 and deliberately asymmetric:
 --
---     * every fluid top is clipped to the @[zSlice - effDepth, zSlice]@
---       window and to 'ViewBounds';
+--     * the fluid ceiling owns the @[zSlice - effDepth, zSlice]@ window;
+--       screen culling uses the exact fractional placement;
 --     * an Ocean or Lake cell under ice draws no top, because the ice
 --       overlay is drawn above it instead;
 --     * a River cell under ice still draws its top, and Lava is never
@@ -73,20 +73,20 @@ fluidTopQuads ctx coord fluidMap iceMap vb =
                     ly = idx `div` chunkSize
                     (gx, gy) = chunkToGlobal coord lx ly
                     (rawX, rawY) = gridToScreen facing gx gy
-                    relativeZ = fluidSurfaceCeilZ fc - zSlice
-                    heightOffset = fromIntegral relativeZ * tileSideHeight
+                    relativeZ = exactSurfaceRenderZ (fcExactSurface fc) - fromIntegral zSlice
+                    heightOffset = relativeZ * tileSideHeight
                     drawX = rawX + wrapX
                     drawY = rawY + wrapY - heightOffset
                     -- Skip ocean/lake rendering where ice covers the surface
                     hasIce = isJust (iceMap V.! idx)
                     ocean = oceanTileToQuad lookupSlot lookupFmSlot textures
-                                facing gx gy (fluidSurfaceCeilZ fc) zSlice effDepth
+                                facing gx gy (fcExactSurface fc) zSlice effDepth
                                 zoomAlpha (wrapX, wrapY)
                     lava = lavaTileToQuad lookupSlot lookupFmSlot textures
-                               facing gx gy (fluidSurfaceCeilZ fc) zSlice effDepth
+                               facing gx gy (fcExactSurface fc) zSlice effDepth
                                zoomAlpha (wrapX, wrapY)
                     fresh ft = freshwaterTileToQuad lookupSlot lookupFmSlot
-                                   textures facing gx gy (fluidSurfaceCeilZ fc) ft
+                                   textures facing gx gy (fcExactSurface fc) ft
                                    zSlice effDepth zoomAlpha (wrapX, wrapY)
                 in if not (isTileVisible vb drawX drawY)
                    then (oAcc, lAcc, fAcc)

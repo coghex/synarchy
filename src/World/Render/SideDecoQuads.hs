@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.Render.SideDecoQuads
     ( waterSideFaceQuads
+    , fluidSideIntervals
     ) where
 
 import UPrelude
@@ -12,29 +13,24 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
                                            , tileWorldUV)
 import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize, columnIndex)
-import World.Fluid.Types (FluidCell(..), FluidType(..), fluidSurfaceCeilZ)
+import World.Fluid.Types (FluidCell(..), FluidType(..))
+import World.Fluid.Exact (exactSurfaceOfZ, exactSurfaceCeilZ
+                        , exactSurfaceFloorZ, exactSurfaceRenderZ)
 import World.Material (matOcean, matLava, unMaterialId)
 import World.Generate (chunkToGlobal)
 import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
+                  , tileHalfDiamondHeight
                   , worldLayer, applyFacing)
 import World.Render.QuadContext (QuadContext(..), WorldX(..), WorldY(..)
-                                , WorldZ(..), ZSlice(..), EffectiveDepth(..))
+                                , ZSlice(..), EffectiveDepth(..))
 import World.Render.Textures.Types (WorldTextures(..))
 import World.Render.ViewBounds (ViewBounds, isTileVisible)
 
--- | Generate quads for water side faces where water drops between
---   adjacent tiles. Draws side faces for:
---   1. Water-to-water drops (water neighbor at lower surface)
---   2. Water-to-dry drops (dry neighbor with terrain below water)
---   In case 2, terrain cliff faces cover up to terrain level;
---   water side faces cover terrain level to water surface.
---
---   __Freshwater side faces own EVERY positive drop (#2517).__ River and
---   Lake tops are flat steps at their integer surface, so nothing else
---   covers the gap to a lower neighbour: a neighbour one z below gets one
---   quad, N below gets N, on the same terms multi-z drops already used.
---   Lava is unchanged and keeps its two-or-more rule (DFL-1 is a
---   freshwater presentation change; lava is explicitly out of its scope).
+-- | Additional fluid sides below the slab already drawn by the level mask.
+--   Each visible edge ends at its own exact neighbour plane (or dry terrain).
+--   The mask owns its top fractional slab; painter order lets front neighbours
+--   occlude its hidden pixels. These strips fill only the interval BELOW it.
+--   Ocean, River, Lake and Lava share geometry, retaining their materials.
 waterSideFaceQuads ∷ QuadContext
                    → ChunkCoord
                    → V.Vector (Maybe FluidCell)  -- ^ this chunk's fluid map
@@ -52,42 +48,14 @@ waterSideFaceQuads ctx coord
     , ly ← [0 .. chunkSize - 1]
     , let idx = columnIndex lx ly
     , Just fc ← [fluidMap V.! idx]
-    , fcType fc ≢ Ocean
-    , let mySurf = fluidSurfaceCeilZ fc
-          -- Smallest drop this fluid draws a side face for, in whole z.
-          --
-          -- River and Lake: 1 — their tops are flat steps (#2517), so
-          -- this generator is the only thing that can show a one-z drop.
-          -- Lava: 2 — unchanged. Its top has always used the flat face
-          -- map too, but its one-z omission predates this issue and DFL-1
-          -- scopes itself to freshwater, so changing it here would be an
-          -- unrequested visual change to a second fluid.
-          minDrop = case fcType fc of
-              Lava → 2
-              _    → 1
-    -- Check each camera-visible cardinal neighbor. A neighbor can sit in
-    -- the adjacent chunk (a waterfall/cliff right at a seam): resolve it
-    -- through the cross-chunk lookup (World.Render.ChunkLookup), so side
-    -- faces don't vanish at chunk boundaries.
     , (nx, ny, isLeftFace) ← neighborDirs facing lx ly
     , Just (nFluid, nTerrZ) ← [neighborCell nx ny]
-    , let -- Bottom of the side-face stack depends on neighbor type:
-          --   Water neighbor: draw from neighbor water surface
-          --   Dry neighbor: draw from neighbor terrain surface
-          (bottomZ, shouldDraw) = case nFluid of
-              Just nfc | fluidSurfaceCeilZ nfc ≤ mySurf - minDrop →
-                             (fluidSurfaceCeilZ nfc, True)
-              Just _                                      → (mySurf, False)
-              Nothing | nTerrZ ≤ mySurf - minDrop         → (nTerrZ, True)
-              Nothing                                     → (mySurf, False)
-    , shouldDraw
-    -- One quad per z-level of gap
-    , z ← [bottomZ .. mySurf - 1]
-    , z ≥ zSlice - effDepth
-    , z ≤ zSlice
+    , let bottom = maybe (exactSurfaceOfZ nTerrZ) fcExactSurface nFluid
+    , (lo, hi) ← fluidSideIntervals (fcExactSurface fc) bottom
+                     zSlice effDepth
     , let (gx, gy) = chunkToGlobal coord lx ly
     , sq ← maybeToList (waterSideQuad ctx (fcType fc)
-                            (WorldX gx) (WorldY gy) (WorldZ z) isLeftFace vb)
+                            (WorldX gx) (WorldY gy) lo hi isLeftFace vb)
     ]
   where
     facing   = qcFacing ctx
@@ -136,85 +104,67 @@ neighborDirs facing lx ly = case facing of
     FaceNorth → [(lx, ly - 1, True),  (lx - 1, ly, False)]
     FaceWest  → [(lx - 1, ly, True),  (lx, ly + 1, False)]
 
--- | Create a single fluid side-face quad at a given z-level.
---
---   Takes the same 'QuadContext' its caller was handed rather than the
---   unpacked slice\/depth\/alpha\/offset values (#1138): forwarding those
---   positionally would just move the transposition hazard one level down.
-waterSideQuad ∷ QuadContext
-              → FluidType       -- ^ owning fluid (texture choice)
-              → WorldX → WorldY → WorldZ
-              → Bool            -- ^ True = left face, False = right face
-              → ViewBounds
-              → Maybe SortableQuad
-waterSideQuad ctx ftype wx wy wz isLeft vb =
-    let lookupSlot   = qcLookupSlot ctx
-        lookupFmSlot = qcLookupFmSlot ctx
-        textures     = qcTextures ctx
-        facing       = qcFacing ctx
-        gx           = unWorldX wx
-        gy           = unWorldY wy
-        z            = unWorldZ wz
-        zSlice       = unZSlice (qcZSlice ctx)
-        tileAlpha    = qcTileAlpha ctx
-        wrapOff      = qcWrapOffset ctx
+-- | Exact half-open intervals [lo, hi) below the mask's slab, split on
+--   whole-z boundaries. Clip the interval itself to the depth/slice window;
+--   a top above the slice can still have a visible side below it.
+fluidSideIntervals ∷ Int → Int → Int → Int → [(Int, Int)]
+fluidSideIntervals surface neighbour zSlice depth =
+    [ (max bottom (exactSurfaceOfZ z), min top (exactSurfaceOfZ (z + 1)))
+    | z ← [exactSurfaceFloorZ bottom .. exactSurfaceCeilZ top - 1]
+    , bottom < top
+    ]
+  where
+    slabBottom = exactSurfaceOfZ (exactSurfaceCeilZ surface - 1)
+    bottom = max neighbour (exactSurfaceOfZ (zSlice - depth))
+    top = min slabBottom (exactSurfaceOfZ zSlice)
+
+-- | Affinely compress the WHOLE side-mask canvas about its slanted top
+--   edge. Cropping the canvas to an ideal parallelogram clips off the last
+--   opaque staircase row and opens a one-pixel crack between full strips.
+--   The whole canvas preserves those authored boundary pixels. At full
+--   height this is exactly the existing rectangular mask projection.
+waterSideQuad ∷ QuadContext → FluidType → WorldX → WorldY
+              → Int → Int → Bool → ViewBounds → Maybe SortableQuad
+waterSideQuad ctx ftype wx wy lo hi isLeft vb =
+    let textures = qcTextures ctx
+        facing = qcFacing ctx
+        gx = unWorldX wx
+        gy = unWorldY wy
+        zSlice = unZSlice (qcZSlice ctx)
+        relativeZ = exactSurfaceRenderZ hi - fromIntegral zSlice
+        segmentHeight = exactSurfaceRenderZ (hi - lo) * tileSideHeight
         (rawX, rawY) = gridToScreen facing gx gy
-        (fa, fb) = applyFacing facing gx gy
-        relativeZ = z - zSlice
-        heightOffset = fromIntegral relativeZ * tileSideHeight
-
-        (wrapX, wrapY) = wrapOff
+        (wrapX, wrapY) = qcWrapOffset ctx
         drawX = rawX + wrapX
-        drawY = rawY + wrapY - heightOffset
-
-        -- Check side face map is loaded before rendering
-        fmHandle0 = if isLeft
-                    then wtSideFaceMapLeft textures
-                    else wtSideFaceMapRight textures
-        fmSlot0 = lookupFmSlot fmHandle0
-
-    in if not (isTileVisible vb drawX drawY) ∨ fmSlot0 ≡ 0.0
+        drawY = rawY + wrapY - relativeZ * tileSideHeight
+        (fa, fb) = applyFacing facing gx gy
+        fmHandle = if isLeft then wtSideFaceMapLeft textures
+                             else wtSideFaceMapRight textures
+        fmSlot = qcLookupFmSlot ctx fmHandle
+        sideMat = if ftype ≡ Lava then matLava else matOcean
+        texHandle = HM.lookupDefault (wtNoTexture textures)
+                        (unMaterialId sideMat) (wtTileTextures textures)
+        actualSlot = fromIntegral (qcLookupSlot ctx texHandle)
+        tint = Vec4 1 1 1 (qcTileAlpha ctx)
+        wuv = tileWorldUV gx gy
+        -- Compress relative to the side edge, not the canvas origin:
+        -- the edge must keep its isometric slope while thickness changes.
+        scale = segmentHeight / tileSideHeight
+        edgeAt u = if isLeft
+                   then tileHalfDiamondHeight * (1 + 2 * u)
+                   else tileHalfDiamondHeight * (3 - 2 * u)
+        vertex u v =
+            let y = scale * v * tileHeight + (1 - scale) * edgeAt u
+            in mkVertexWorld wuv (Vec2 (drawX + u * tileWidth) (drawY + y))
+                   (Vec2 u v) tint actualSlot fmSlot
+    in if fmSlot ≡ 0 ∨ not (isTileVisible vb drawX drawY)
        then Nothing
-       else let
-            sortKey = fromIntegral (fa + fb)
-                    + fromIntegral relativeZ * 0.001
-                    + 0.00005
-
-            -- Texture by fluid type: lava side faces are lava, every
-            -- water class shares the ocean texture. (Pre-2026-06-06
-            -- lava sides rendered as water — bright blue cliffs under
-            -- floating pool rims.)
-            sideMat = case ftype of
-                Lava → matLava
-                _    → matOcean
-            texHandle = case HM.lookup (unMaterialId sideMat)
-                                       (wtTileTextures textures) of
-                            Nothing → wtNoTexture textures
-                            Just h  → h
-            actualSlot = lookupSlot texHandle
-
-            -- Side face map slot (already checked non-zero above)
-            fmSlot = fmSlot0
-
-            -- No tinting — color comes from texture
-            tint = Vec4 1.0 1.0 1.0 tileAlpha
-            wuv = tileWorldUV gx gy
-
-            v0 = mkVertexWorld wuv (Vec2 drawX drawY)
-                         (Vec2 0 0) tint (fromIntegral actualSlot) fmSlot
-            v1 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) drawY)
-                         (Vec2 1 0) tint (fromIntegral actualSlot) fmSlot
-            v2 = mkVertexWorld wuv (Vec2 (drawX + tileWidth) (drawY + tileHeight))
-                         (Vec2 1 1) tint (fromIntegral actualSlot) fmSlot
-            v3 = mkVertexWorld wuv (Vec2 drawX (drawY + tileHeight))
-                         (Vec2 0 1) tint (fromIntegral actualSlot) fmSlot
-
-        in Just SortableQuad
-            { sqSortKey = sortKey
-            , sqV0      = v0
-            , sqV1      = v1
-            , sqV2      = v2
-            , sqV3      = v3
+       else Just SortableQuad
+            { sqSortKey = fromIntegral (fa + fb) + relativeZ * 0.001 + 0.00005
+            , sqV0 = vertex 0 0
+            , sqV1 = vertex 1 0
+            , sqV2 = vertex 1 1
+            , sqV3 = vertex 0 1
             , sqTexture = texHandle
-            , sqLayer   = worldLayer
+            , sqLayer = worldLayer
             }

@@ -14,6 +14,8 @@ module World.Render.TileQuads
     ) where
 
 import UPrelude
+import World.Fluid.Exact (exactSurfaceRenderZ)
+import World.Render.Textures (getFluidFaceMapTexture)
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scene.Types (SortableQuad(..))
@@ -158,19 +160,19 @@ blankTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY worldZ zSl
 
 oceanTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                 → WorldTextures → CameraFacing
-                → Int → Int → Int → Int → Int -- ^ worldX, worldY, fluidZ, zSlice, effDepth
+                → Int → Int → Int → Int → Int -- ^ worldX, worldY, exact fluid surface, zSlice, effDepth
                 → Float → (Float, Float)               -- ^ tileAlpha, wrap (x,y)
                 → SortableQuad
 oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice _effDepth tileAlpha wrapOff =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
-        relativeZ = fluidZ - zSlice
-        heightOffset = fromIntegral relativeZ * tileSideHeight
+        relativeZ = exactSurfaceRenderZ fluidZ - fromIntegral zSlice
+        heightOffset = relativeZ * tileSideHeight
         (wrapX, wrapY) = wrapOff
         drawX = rawX + wrapX
         drawY = rawY + wrapY - heightOffset
         sortKey = fromIntegral (fa + fb)
-                + fromIntegral relativeZ * 0.001
+                + relativeZ * 0.001
                 + 0.0005
 
         texHandle = case HM.lookup (unMaterialId matOcean)
@@ -178,7 +180,7 @@ oceanTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSl
                            Nothing → wtNoTexture textures
                            Just h  → h
         actualSlot = lookupSlot texHandle
-        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        fmSlot = lookupFmSlot (getFluidFaceMapTexture textures fluidZ)
 
         finalAlpha = tileAlpha
         tint = Vec4 0.7 0.8 1.0 finalAlpha
@@ -246,26 +248,26 @@ iceTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY iceZ zSlice 
 
 lavaTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                → WorldTextures → CameraFacing
-               → Int → Int → Int → Int → Int -- ^ worldX, worldY, fluidZ, zSlice, effDepth
+               → Int → Int → Int → Int → Int -- ^ worldX, worldY, exact fluid surface, zSlice, effDepth
                → Float → (Float, Float)               -- ^ tileAlpha, wrap (x,y)
                → SortableQuad
 lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSlice _effDepth tileAlpha wrapOff =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
-        relativeZ = fluidZ - zSlice
-        heightOffset = fromIntegral relativeZ * tileSideHeight
+        relativeZ = exactSurfaceRenderZ fluidZ - fromIntegral zSlice
+        heightOffset = relativeZ * tileSideHeight
         (wrapX, wrapY) = wrapOff
         drawX = rawX + wrapX
         drawY = rawY + wrapY - heightOffset
         sortKey = fromIntegral (fa + fb)
-                + fromIntegral relativeZ * 0.001
+                + relativeZ * 0.001
                 + 0.0005
         texHandle = case HM.lookup (unMaterialId matLava)
                                    (wtTileTextures textures) of
                            Nothing → wtNoTexture textures
                            Just h  → h
         actualSlot = lookupSlot texHandle
-        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        fmSlot = lookupFmSlot (getFluidFaceMapTexture textures fluidZ)
         finalAlpha = tileAlpha
         tint = Vec4 1.0 0.6 0.2 finalAlpha
         wuv = tileWorldUV worldX worldY
@@ -285,32 +287,32 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
 
 -- * Freshwater (River\/Lake) Surface Tile Quad
 
--- | One flat River or Lake top at its integer surface height.
+-- | One flat River or Lake top at its exact eighth-z surface height.
 --
 --   __The top is flat for every neighbour configuration (#2517).__ This
 --   constructor takes no slope id and consults no neighbour: it selects
---   'wtIsoFaceMap', the flat face map, exactly as the Ocean and Lava tops
+--   the exact-level face map, exactly as the Ocean and Lava tops
 --   already do. Before DFL-1 it took a ramp id derived from the four
 --   cardinal neighbours, which both interpolated a whole-z step and
 --   collapsed seven distinct neighbour topologies onto one mask (#1600).
---   Every positive visible drop is now a vertical fluid edge drawn by
+--   The selected level mask owns its slab; deeper exposed sides are drawn by
 --   'World.Render.SideDecoQuads.waterSideFaceQuads' instead.
 freshwaterTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                      → WorldTextures → CameraFacing
-                     → Int → Int → Int → FluidType → Int → Int -- ^ worldX, worldY, fluidZ, fluidType, zSlice, effDepth
+                     → Int → Int → Int → FluidType → Int → Int -- ^ worldX, worldY, exact fluid surface, fluidType, zSlice, effDepth
                      → Float → (Float, Float)                           -- ^ tileAlpha, wrap (x,y)
                      → SortableQuad
 freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                      fluidZ fluidType zSlice _effDepth tileAlpha wrapOff =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
-        relativeZ = fluidZ - zSlice
-        heightOffset = fromIntegral relativeZ * tileSideHeight
+        relativeZ = exactSurfaceRenderZ fluidZ - fromIntegral zSlice
+        heightOffset = relativeZ * tileSideHeight
         (wrapX, wrapY) = wrapOff
         drawX = rawX + wrapX
         drawY = rawY + wrapY - heightOffset
         sortKey = fromIntegral (fa + fb)
-                + fromIntegral relativeZ * 0.001
+                + relativeZ * 0.001
                 + 0.0005
 
         texHandle = case HM.lookup (unMaterialId matOcean)
@@ -318,8 +320,8 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                            Nothing → wtNoTexture textures
                            Just h  → h
         actualSlot = lookupSlot texHandle
-        -- Flat, unconditionally (#2517): a fluid top never ramps.
-        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
+        -- Flat, unconditionally: the exact level changes thickness, never slope.
+        fmSlot = lookupFmSlot (getFluidFaceMapTexture textures fluidZ)
 
         finalAlpha = tileAlpha
 

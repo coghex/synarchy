@@ -461,6 +461,7 @@ data WorldCommand
         --   authorized-command handling in "World.Thread").
     | WorldDeleteTile WorldPageId Int Int      -- ^ worldId, gx, gy
     | WorldSetFluidTile WorldPageId Int Int FluidType
+    | WorldDebugSetFluidSurface WorldPageId Int Int FluidType Int
         -- ^ worldId, gx, gy, fluid kind. Sets one tile of fluid at
         --   surfaceZ + 1 on the given column. Idempotent; replaces any
         --   existing fluid cell. Currently a debug-tool affordance.

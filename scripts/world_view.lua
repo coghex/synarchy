@@ -24,6 +24,14 @@ worldView.structuralTextures = {
     noTexture      = -1,
     blankTexture   = -1,
     isoFaceMap     = -1,
+    fluidLevelFaceMap1 = -1,
+    fluidLevelFaceMap2 = -1,
+    fluidLevelFaceMap3 = -1,
+    fluidLevelFaceMap4 = -1,
+    fluidLevelFaceMap5 = -1,
+    fluidLevelFaceMap6 = -1,
+    fluidLevelFaceMap7 = -1,
+    fluidLevelFaceMap8 = -1,
     isoSlopeFaceMapN    = -1,
     isoSlopeFaceMapE    = -1,
     isoSlopeFaceMapNE   = -1,
@@ -95,6 +103,14 @@ function worldView.ensureStructuralTextures()
     st.noTexture      = engine.loadTexture("assets/textures/utility/notexture.png")
     st.blankTexture   = engine.loadTexture("assets/textures/utility/blanktexture.png")
     st.isoFaceMap     = engine.loadTexture("assets/textures/facemap/isoface.png")
+    st.fluidLevelFaceMap1 = engine.loadTexture("assets/textures/facemap/isoface_level_1.png")
+    st.fluidLevelFaceMap2 = engine.loadTexture("assets/textures/facemap/isoface_level_2.png")
+    st.fluidLevelFaceMap3 = engine.loadTexture("assets/textures/facemap/isoface_level_3.png")
+    st.fluidLevelFaceMap4 = engine.loadTexture("assets/textures/facemap/isoface_level_4.png")
+    st.fluidLevelFaceMap5 = engine.loadTexture("assets/textures/facemap/isoface_level_5.png")
+    st.fluidLevelFaceMap6 = engine.loadTexture("assets/textures/facemap/isoface_level_6.png")
+    st.fluidLevelFaceMap7 = engine.loadTexture("assets/textures/facemap/isoface_level_7.png")
+    st.fluidLevelFaceMap8 = engine.loadTexture("assets/textures/facemap/isoface_level_8.png")
     st.isoSlopeFaceMapN    = engine.loadTexture("assets/textures/facemap/isoface_slope_n.png")
     st.isoSlopeFaceMapE    = engine.loadTexture("assets/textures/facemap/isoface_slope_e.png")
     st.isoSlopeFaceMapNE   = engine.loadTexture("assets/textures/facemap/isoface_slope_ne.png")
@@ -163,6 +179,10 @@ function worldView.rebindStructural(worldId)
     world.setTexture(worldId, "iso_slope_facemap_esw", st.isoSlopeFaceMapESW)
     world.setTexture(worldId, "iso_slope_facemap_nesw",st.isoSlopeFaceMapNESW)
     world.setTexture(worldId, "nofacemap",             st.noFaceMap)
+    for level = 1, 8 do
+        world.setTexture(worldId, "fluid_level_facemap_" .. level,
+            st["fluidLevelFaceMap" .. level])
+    end
     -- Side face maps
     world.setTexture(worldId, "side_facemap_left",   st.sideFaceMapLeft)
     world.setTexture(worldId, "side_facemap_right",  st.sideFaceMapRight)
