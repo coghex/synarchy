@@ -438,6 +438,49 @@ spec = around withMenusEngine $ do
                     selValue p `shouldBe` "beta"
                     selCount p `shouldBe` 1
 
+        -- #2629: the rebuilt list keeps its scroll offset, clamped to
+        -- min(prev, max(0, #saves - newVisible)). At UI scale 1 the list
+        -- shows 5 rows at 1280x720 and 8 at 1280x900.
+        it "save browser's scroll offset survives a resize, clamped to the rebuilt list's range, without re-firing onSelect" $ \env → do
+            ls ← newBareLuaBackend env
+            r ← evalJSON ls $ luaLines
+                [ "local m = require('scripts.save_browser');"
+                , "local list = require('scripts.ui.list');"
+                , "_G.__selectCount = 0;"
+                , "local function run(n, w0, h0, offset, w1, h1)"
+                    <> " local saves = {};"
+                    <> " for i = 1, n do saves[i] = {name='save-'..i, timestamp='t'} end;"
+                    <> " m.init(1,2,3,w0,h0);"
+                    <> " m.show(saves, function(v) _G.__selectCount = _G.__selectCount + 1 end, function() end);"
+                    <> " list.setScrollOffset(m.listId, offset);"
+                    <> " local before = list.getScrollOffset(m.listId);"
+                    <> " m.onFramebufferResize(w1, h1);"
+                    <> " local r = {before=before, after=list.getScrollOffset(m.listId),"
+                    <> " visible=m.visibleCount};"
+                    <> " m.shutdown();"
+                    <> " return r"
+                    <> " end;"
+                , "local same = run(30, 1280, 720, 10, 1200, 720);"
+                , "local grow = run(10, 1280, 720, 5, 1280, 900);"
+                , "local shrink = run(10, 1280, 900, 2, 1280, 720);"
+                , "local all = run(6, 1280, 720, 1, 1280, 900);"
+                , "return {same=same, grow=grow, shrink=shrink, all=all,"
+                    <> " count=_G.__selectCount}"
+                ]
+            case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe SaveScrollProbe of
+                Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                Just p → do
+                    -- Same row count: the offset survives untouched.
+                    ssSame p `shouldBe` ScrollCase 10 10 5
+                    -- Viewport grows 5 → 8 rows: a near-bottom offset
+                    -- clamps to the new maximum (10 - 8).
+                    ssGrow p `shouldBe` ScrollCase 5 2 8
+                    -- Viewport shrinks 8 → 5 rows: a valid offset stays.
+                    ssShrink p `shouldBe` ScrollCase 2 2 5
+                    -- Every save now fits: offset zero, all six shown.
+                    ssAll p `shouldBe` ScrollCase 1 0 6
+                    ssCount p `shouldBe` 0
+
         it "settings menu preserves an in-progress (unsubmitted) textbox edit, its cursor, and its keyboard focus across a resize" $ \env → do
             ls ← newBareLuaBackend env
             r ← evalJSON ls $ luaLines
@@ -2110,6 +2153,20 @@ data SelectProbe = SelectProbe { selValue ∷ Text, selCount ∷ Int } deriving 
 instance FromJSON SelectProbe where
     parseJSON = withObject "SelectProbe" $ \o →
         SelectProbe <$> o .: "value" <*> o .: "count"
+
+data ScrollCase = ScrollCase
+    { scBefore ∷ Int, scAfter ∷ Int, scVisible ∷ Int } deriving (Show, Eq)
+instance FromJSON ScrollCase where
+    parseJSON = withObject "ScrollCase" $ \o →
+        ScrollCase <$> o .: "before" <*> o .: "after" <*> o .: "visible"
+
+data SaveScrollProbe = SaveScrollProbe
+    { ssSame ∷ ScrollCase, ssGrow ∷ ScrollCase, ssShrink ∷ ScrollCase
+    , ssAll ∷ ScrollCase, ssCount ∷ Int } deriving Show
+instance FromJSON SaveScrollProbe where
+    parseJSON = withObject "SaveScrollProbe" $ \o →
+        SaveScrollProbe <$> o .: "same" <*> o .: "grow" <*> o .: "shrink"
+                        <*> o .: "all" <*> o .: "count"
 
 data OutsideEnvelopeProbe = OutsideEnvelopeProbe
     { oepHasBack ∷ Bool, oepHasApply ∷ Bool, oepHasSave ∷ Bool, oepValidDims ∷ Bool
