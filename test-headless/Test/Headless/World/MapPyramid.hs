@@ -930,13 +930,24 @@ ownershipSpec = describe "producer-side ownership" $ do
         filter (not ∘ null ∘ snd) offenders `shouldBe` []
 
     it "leaves the pyramid with no production caller in this slice" $ do
+        -- Transitive since #2693: the paged-artifact format (WML-7) is
+        -- built ON the pyramid's addressing, so it may import it — but
+        -- only while nothing outside its own family imports IT, which
+        -- keeps the pyramid unreachable from production code.
         sources ← (⧺) ⊚ haskellSourcesUnder "src" ⊛ haskellSourcesUnder "app"
+        let within prefixes path = any (`L.isPrefixOf` path) prefixes
+            pyramidFamily  = ["src/World/ZoomMap/Pyramid"]
+            artifactFamily = ["src/World/ZoomMap/PagedArtifact"]
         callers ← forM sources $ \path → do
             body ← readFile path
-            let pulls = [ m | m ← importedModules body
-                        , "World.ZoomMap.Pyramid" `L.isPrefixOf` m ]
-            pure (path, if "src/World/ZoomMap/Pyramid" `L.isPrefixOf` path
-                        then [] else pulls)
+            let pulls prefix = [ m | m ← importedModules body, prefix `L.isPrefixOf` m ]
+                pyramidPulls
+                    | within (pyramidFamily ⧺ artifactFamily) path = []
+                    | otherwise = pulls "World.ZoomMap.Pyramid"
+                artifactPulls
+                    | within artifactFamily path = []
+                    | otherwise = pulls "World.ZoomMap.PagedArtifact"
+            pure (path, pyramidPulls ⧺ artifactPulls)
         filter (not ∘ null ∘ snd) callers `shouldBe` []
 
 haskellSourcesUnder ∷ FilePath → IO [FilePath]

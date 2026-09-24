@@ -1140,6 +1140,11 @@ library
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.Live.Types
                      World.ZoomMap.ColorPalette
+                     World.ZoomMap.PagedArtifact
+                     World.ZoomMap.PagedArtifact.Format
+                     World.ZoomMap.PagedArtifact.Png
+                     World.ZoomMap.PagedArtifact.Store
+                     World.ZoomMap.PagedArtifact.Types
                      World.ZoomMap.Pyramid
                      World.ZoomMap.Pyramid.Address
                      World.ZoomMap.Pyramid.Cells
@@ -1555,6 +1560,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Identity
                    Test.Headless.World.MapImagePlan
                    Test.Headless.World.MapPyramid
+                   Test.Headless.World.PagedMapArtifact
                    Test.Headless.World.MapImageAdmission
                    Test.Headless.World.MaterialRegistryMerge
                    Test.Headless.World.CursorInfo

@@ -21,7 +21,7 @@ concrete precondition
 - [x] WML-4. Establish the shared generated-world library lifecycle — [#2024]
 - [x] WML-5. Generate deterministic spatial pyramid pages — [#2298]
 - [x] WML-6. Measure map-page codecs and disk-cache budgets — [#2303]
-- [ ] WML-7. Define the versioned map-artifact format — [deferred]: Q-17 owner choices are resolved; #2303 measurement delivery remains pending
+- [x] WML-7. Define the versioned map-artifact format — [#2693]
 - [ ] WML-8. Publish mandatory map artifacts during world generation
 - [ ] WML-9. Load and recover map artifacts transactionally
 - [ ] WML-10. Serve lazy fine pages through bounded caches
@@ -1459,13 +1459,13 @@ the exact commands appropriate to each one-PR slice:
 
 ### WML-7. Define the versioned map-artifact format
 
-> **Deferred (2026-09-02), updated 2026-09-10.** Q-17's owner decisions are
-> now resolved: PNG, 3 GiB optional fine-page disk quota, hard 95% main / 5%
-> small auxiliary-world partitions. #2303's
-> [reproducible measurements](world_map_page_codec_measurement.md) and owner
-> signoff are delivered together in PR #2595, pending final review/delivery.
-> Resume processing this slice after that prerequisite is delivered; do not
-> infer that the artifact schema or production cache has been implemented.
+> **Implemented by #2693.** Q-17's owner decisions (PNG, 3 GiB optional
+> fine-page quota, hard 95% main / 5% auxiliary partitions) were delivered by
+> #2303's [measurements](world_map_page_codec_measurement.md). The format,
+> compatibility rules, required/optional distinction and gates are specified
+> in [world_map_paged_artifact_format.md](world_map_paged_artifact_format.md).
+> No production caller, runtime cache or quota enforcement exists yet; those
+> remain WML-8, WML-9 and WML-10.
 
 - **Outcome:** Mandatory root/coarse pages and reproducible fine-cache pages
   have one versioned, integrity-checked, world-qualified storage contract.
