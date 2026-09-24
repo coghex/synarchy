@@ -47,6 +47,8 @@ module Engine.Scripting.Lua.DebugServer.Types
     , idleTimeoutMessage
     , listenerRetryMessage
     , listenerLostMessage
+    , ConsoleThreadKind(..)
+    , consoleStopIncompleteMessage
       -- * Configuration
     , DebugServerConfig(..)
     , defaultDebugServerConfig
@@ -61,7 +63,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Control.Concurrent (ThreadId)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, tryPutMVar)
-import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM (TMVar, atomically)
 import Control.Concurrent.STM.TQueue (TQueue)
 import Control.Concurrent.STM.TVar (TVar, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Exception (SomeException, fromException)
@@ -438,6 +440,29 @@ listenerLostMessage port cause =
     "synarchy: debug console listener on port " <> tshow port
       <> " was lost and cannot accept further connections: " <> cause
 
+-- | Which console thread a bounded stop gave up waiting for (#2689).
+data ConsoleThreadKind
+    = ConsoleAcceptThread
+      -- ^ The listener's accept loop.
+    | ConsoleClientThread
+      -- ^ One admitted client's handler.
+    deriving (Eq, Show)
+
+-- | The warning for a console thread still running when
+--   'Engine.Scripting.Lua.DebugServer.Listener.stopDebugConsole''s
+--   total bound expired. Names the port and the thread kind, and says
+--   what happens next: teardown continues without it, which the
+--   console's ownership makes safe (see 'dscOnStopIncomplete').
+consoleStopIncompleteMessage ∷ Int → ConsoleThreadKind → Text
+consoleStopIncompleteMessage port kind =
+    "debug console on port " <> tshow port <> ": " <> kindName
+      <> " thread still running when the console stop's bound expired;"
+      <> " continuing teardown without it"
+  where
+    kindName = case kind of
+        ConsoleAcceptThread → "accept"
+        ConsoleClientThread → "client"
+
 -- | Everything 'Engine.Scripting.Lua.DebugServer.Listener.startDebugServer'
 --   needs, in one record so a test can override one field and inherit
 --   the rest from 'defaultDebugServerConfig'.
@@ -473,12 +498,27 @@ data DebugServerConfig = DebugServerConfig
       --   production caller reports it on stderr and, in a
       --   'Engine.Scripting.Lua.DebugServer.ConsoleRequired' mode, asks
       --   the engine to shut down.
+    , dscOnStopIncomplete ∷ !(ConsoleThreadKind → IO ())
+      -- ^ Called once per console thread still running when
+      --   'Engine.Scripting.Lua.DebugServer.Listener.stopDebugConsole''s
+      --   total bound expired (#2689), and never for a stop in which
+      --   every thread exited. BEST EFFORT: it runs on a thread of its
+      --   own, so a sink that throws or blocks can neither stretch the
+      --   stop past its bound nor skip the cleanup after it. The
+      --   production caller logs it at warning level.
+      --
+      --   Continuing is safe because no console thread touches the Lua
+      --   state: a client answers built-ins from engine state and
+      --   reaches Lua only by queueing a 'DebugCommand', so a straggler
+      --   cannot use a Lua state closed after the stop. A command it
+      --   queues after the shutdown drain is never claimed and ends on
+      --   its own 'dslCommandResponseMicros' wait.
     }
 
 -- | The production configuration for a port and a built-in table:
 --   'defaultDebugServerLimits', the real 'Network.Socket.accept', the
---   default classification, and stderr diagnostics for both the retry
---   and the loss.
+--   default classification, and stderr diagnostics for the retry, the
+--   loss and an incomplete stop.
 --
 --   A caller that needs more than stderr on loss — the Lua thread,
 --   which must also stop a @--headless@ engine — overrides 'dscOnLoss'
@@ -495,6 +535,8 @@ defaultDebugServerConfig port builtin = DebugServerConfig
         putStderrLine (listenerRetryMessage port remaining cause)
     , dscOnLoss   = \cause →
         putStderrLine (listenerLostMessage port cause)
+    , dscOnStopIncomplete = \kind →
+        putStderrLine (consoleStopIncompleteMessage port kind)
     }
 
 -- | Write a diagnostic to stderr, BEST EFFORT.
@@ -547,10 +589,15 @@ data DebugListener = DebugListener
       --   with no window either side.
     , dlNextClientId ∷ !(TVar Int)
     , dlAcceptThread ∷ !(TVar (Maybe ThreadId))
-    , dlAcceptDone ∷ !(MVar ())
+    , dlAcceptDone ∷ !(TMVar ())
       -- ^ Filled exactly once when the accept loop exits, so a stop
       --   genuinely JOINS the thread rather than reading back the flag
-      --   it just set.
+      --   it just set. A 'TMVar' so the join can race a deadline in one
+      --   transaction: 'System.Timeout.timeout' cannot bound a wait made
+      --   under the worker's uninterruptible mask (#2689).
+    , dlOnStopIncomplete ∷ !(ConsoleThreadKind → IO ())
+      -- ^ 'dscOnStopIncomplete', kept here because the stop sees only
+      --   the listener.
     }
 
 -- | One admitted client, enough of it to close, kill and join.
@@ -561,5 +608,7 @@ data ClientHandle = ClientHandle
       --   'Control.Concurrent.MVar.tryReadMVar' at shutdown, which is
       --   why the slot is registered BEFORE the fork: the handler's own
       --   deregistration can then never race ahead of its registration.
-    , chDone ∷ !(MVar ())
+    , chDone ∷ !(TMVar ())
+      -- ^ Filled when the handler exits; a 'TMVar' for the same reason
+      --   as 'dlAcceptDone'.
     }

@@ -27,6 +27,7 @@ import Engine.Scripting.Lua.DebugServer
     ( DebugCommand, DebugConsole(..), DebugServerConfig(..)
     , cancelDebugCommand
     , defaultDebugServerConfig, startDebugServer, stopDebugConsole
+    , consoleStopIncompleteMessage
     , inertDebugConsole, pollDebugCommand
     , DebugListenerFailure(..), ListenerAction(..), listenerAction
     , reportDebugListenerFailure, handleDebugListenerLoss
@@ -83,18 +84,25 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
     , wsOnStop      = \lls → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatLua "Lua thread stopped"
-        -- #2170: stop the console FIRST, so no accept thread and no
-        -- client handler outlives this worker. Every admitted client is
-        -- closed, killed and joined here, before the Lua state below is
-        -- freed out from under a thread that might still be holding a
-        -- command against it.
+        -- #2170: stop the console FIRST. Every admitted client is
+        -- closed and killed here, and joined if it exits in time,
+        -- before the queue below is drained and the Lua state freed.
+        -- The stop is bounded (#2689): it runs under this worker's
+        -- uninterruptible cleanup mask and still returns within
+        -- 'listenerJoinMicros', and a console thread that has not
+        -- exited by then is logged and left behind rather than waited
+        -- for. That cannot reach the Lua state closed below: no
+        -- console thread ever touches it, and a command a straggler
+        -- queues after the drain is never claimed and ends on its
+        -- client's response timeout.
         stopDebugConsole (llsConsole lls)
         -- Cancel every debug command still queued at teardown. Note the
         -- ORDER, which #2170 fixed deliberately and #2282 did not
         -- change: the console is stopped FIRST, so by the time this
-        -- runs every client handler has been closed, killed and joined
-        -- and no socket client is left to read the reply. What the
-        -- drain still buys is the lifecycle transition -- the queued
+        -- runs every client handler that exited within the stop's
+        -- bound has been closed, killed and joined, and no socket
+        -- client is left to read the reply. What the drain still
+        -- buys is the lifecycle transition -- the queued
         -- commands are CANCELLED and so can never be executed by
         -- anything that outlives this teardown -- plus a filled
         -- response cell for any in-process waiter. Mirrors the crash
@@ -231,6 +239,13 @@ luaStartup env stateRef = do
         serverConfig = (defaultDebugServerConfig port (debugBuiltin env))
             { dscOnLoss = handleDebugListenerLoss mode port $
                 void (requestEngineCleanup (lifecycleRef env))
+              -- #2689: a console thread the bounded stop left behind is
+              -- a warning in the engine log, read at report time so a
+              -- logger swapped since boot is the one that gets it.
+            , dscOnStopIncomplete = \kind → do
+                current ← readIORef (loggerRef env)
+                logWarn current CatLua $
+                    consoleStopIncompleteMessage port kind
             }
         -- Shared by both branches that actually touch a socket.
         attemptBind = startDebugServer serverConfig

@@ -1765,6 +1765,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener
                    Test.Headless.Core.DebugSocket
+                   Test.Headless.Core.DebugConsoleStop
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig

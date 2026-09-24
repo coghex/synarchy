@@ -29,7 +29,16 @@
 --   The port is EPHEMERAL in the sense of \"dynamically chosen, and
 --   never zero\": port 0 is issue #46's no-listener sentinel and keeps
 --   that meaning, which is itself one of the cases below.
-module Test.Headless.Core.DebugSocket (spec) where
+module Test.Headless.Core.DebugSocket
+    ( spec
+      -- * Fixtures shared with "Test.Headless.Core.DebugConsoleStop"
+    , Diagnostics(..)
+    , newDiagnostics
+    , testConfig
+    , withServer
+    , connectTo
+    , readUntilContains
+    ) where
 
 import UPrelude
 import Test.Hspec

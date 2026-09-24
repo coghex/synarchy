@@ -73,8 +73,11 @@ module Engine.Scripting.Lua.DebugServer
     , idleTimeoutMessage
     , listenerRetryMessage
     , listenerLostMessage
+    , ConsoleThreadKind(..)
+    , consoleStopIncompleteMessage
     , startDebugServer
     , stopDebugConsole
+    , listenerJoinMicros
     , inertDebugConsole
     , pollDebugCommand
       -- * Per-boot-mode listener policy (#1190)
