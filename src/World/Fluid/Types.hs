@@ -65,8 +65,8 @@ fluidCellAtZ t z = FluidCell t (exactSurfaceOfZ z)
 
 -- | Compatibility view: the lowest whole z at or above this cell's
 --   exact surface. THE integer height every pre-#2520 consumer reads,
---   so a partially filled top level still renders and gates as one
---   occupied z.
+--   so a partially filled top level still gates as one occupied z.
+--   Fluid vertices use the exact plane; slice ownership uses this ceiling.
 fluidSurfaceCeilZ ∷ FluidCell → Int
 fluidSurfaceCeilZ = exactSurfaceCeilZ . fcExactSurface
 {-# INLINE fluidSurfaceCeilZ #-}

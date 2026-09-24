@@ -41,6 +41,14 @@ data WorldTextures = WorldTextures
     , wtSlopeFaceMapNSW  ∷ TextureHandle
     , wtSlopeFaceMapESW  ∷ TextureHandle
     , wtSlopeFaceMapNESW ∷ TextureHandle
+    , wtFluidLevelFaceMap1 ∷ TextureHandle
+    , wtFluidLevelFaceMap2 ∷ TextureHandle
+    , wtFluidLevelFaceMap3 ∷ TextureHandle
+    , wtFluidLevelFaceMap4 ∷ TextureHandle
+    , wtFluidLevelFaceMap5 ∷ TextureHandle
+    , wtFluidLevelFaceMap6 ∷ TextureHandle
+    , wtFluidLevelFaceMap7 ∷ TextureHandle
+    , wtFluidLevelFaceMap8 ∷ TextureHandle
     , wtNoFaceMap        ∷ TextureHandle
       -- Side face maps (left/right only, no top face)
     , wtSideFaceMapLeft  ∷ TextureHandle
@@ -95,6 +103,14 @@ defaultWorldTextures = WorldTextures
     , wtSlopeFaceMapNSW  = TextureHandle 0
     , wtSlopeFaceMapESW  = TextureHandle 0
     , wtSlopeFaceMapNESW = TextureHandle 0
+    , wtFluidLevelFaceMap1 = TextureHandle 0
+    , wtFluidLevelFaceMap2 = TextureHandle 0
+    , wtFluidLevelFaceMap3 = TextureHandle 0
+    , wtFluidLevelFaceMap4 = TextureHandle 0
+    , wtFluidLevelFaceMap5 = TextureHandle 0
+    , wtFluidLevelFaceMap6 = TextureHandle 0
+    , wtFluidLevelFaceMap7 = TextureHandle 0
+    , wtFluidLevelFaceMap8 = TextureHandle 0
     , wtNoFaceMap        = TextureHandle 0
     , wtSideFaceMapLeft  = TextureHandle 0
     , wtSideFaceMapRight = TextureHandle 0

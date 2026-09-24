@@ -48,6 +48,15 @@ handleWorldSetTextureCommand wsc logger pageId texType texHandle = do
                   SlopeFaceMapESW     → wt { wtSlopeFaceMapESW  = texHandle }
                   SlopeFaceMapNESW    → wt { wtSlopeFaceMapNESW = texHandle }
                   NoFaceMap           → wt { wtNoFaceMap        = texHandle }
+                  -- Exact fluid masks
+                  FluidLevelFaceMap1 → wt { wtFluidLevelFaceMap1 = texHandle }
+                  FluidLevelFaceMap2 → wt { wtFluidLevelFaceMap2 = texHandle }
+                  FluidLevelFaceMap3 → wt { wtFluidLevelFaceMap3 = texHandle }
+                  FluidLevelFaceMap4 → wt { wtFluidLevelFaceMap4 = texHandle }
+                  FluidLevelFaceMap5 → wt { wtFluidLevelFaceMap5 = texHandle }
+                  FluidLevelFaceMap6 → wt { wtFluidLevelFaceMap6 = texHandle }
+                  FluidLevelFaceMap7 → wt { wtFluidLevelFaceMap7 = texHandle }
+                  FluidLevelFaceMap8 → wt { wtFluidLevelFaceMap8 = texHandle }
                   -- Side face maps
                   SideFaceMapLeft     → wt { wtSideFaceMapLeft  = texHandle }
                   SideFaceMapRight    → wt { wtSideFaceMapRight = texHandle }

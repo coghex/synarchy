@@ -1,0 +1,1470 @@
+{
+  "source_revision": "7321a5a627a66d7eba8738a2fe7c8bf1ec07e87d",
+  "source_dirty": false,
+  "binary": "/private/tmp/foreground-2529-build/synarchy",
+  "binary_sha256": "777eaad14bd37f21354036ef5ea0c65f2c6aa834ea60e9ad3159bcc84b3e021d",
+  "argv": [
+    "tools/fluid_levels_render_capture.py",
+    "--port",
+    "9429",
+    "--size",
+    "1280x720",
+    "--engine",
+    "/tmp/foreground-2529-build/synarchy",
+    "--codec",
+    "/tmp/foreground-2529-build/synarchy-save-codec",
+    "--out",
+    "/tmp/foreground-2529-complete-draft2"
+  ],
+  "resource_root": "/private/tmp/foreground-2529-complete-draft2/resource-root",
+  "fixture_path": "fixture",
+  "fixture_authoring": "debug.setFluidSurface -> WeSetFluidSnapshot -> normal session save/load",
+  "fixture_sha256": "02c2b839392aeda79e0793c102420187b83519125afbec37fb0bc5ff20316abb",
+  "codec": "/private/tmp/foreground-2529-build/synarchy-save-codec",
+  "codec_sha256": "b966d224cb682b4beedd0d046167b48bcb06fa2ae3930e5199b7e17df375f483",
+  "source_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "driver_sha256": "89e8c7982c431a70da624c8aa6c3c4eb32ffa9762176a21fe40bb8608a98441b",
+  "size": "1280x720",
+  "frames": [
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "river-levels-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.26250001788139,
+        "x": 2.92578125
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "river-levels-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.26250001788139,
+        "x": 2.92578125
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "river-levels-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -1.4609375,
+        "x": -0.52500003576279
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "river-levels-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -1.4609375,
+        "x": -0.52500003576279
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "river-levels-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.26250001788139,
+        "x": -2.92578125
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "river-levels-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.26250001788139,
+        "x": -2.92578125
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "river-levels-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 1.4609375,
+        "x": 0.52500003576279
+      }
+    },
+    {
+      "scene": {
+        "name": "river-levels",
+        "x": 16,
+        "y": -23,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "river-levels-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 1.4609375,
+        "x": 0.52500003576279
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lake-levels-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.1875,
+        "x": 2.0234375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lake-levels-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.1875,
+        "x": 2.0234375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lake-levels-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -1.01171875,
+        "x": 0.375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lake-levels-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -1.01171875,
+        "x": 0.375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lake-levels-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.1875,
+        "x": -2.0234375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lake-levels-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.1875,
+        "x": -2.0234375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lake-levels-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 1.01171875,
+        "x": -0.375
+      }
+    },
+    {
+      "scene": {
+        "name": "lake-levels",
+        "x": 16,
+        "y": -11,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lake-levels-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 1.01171875,
+        "x": -0.375
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lava-levels-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.63750004768372,
+        "x": 1.125
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lava-levels-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.63750004768372,
+        "x": 1.125
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lava-levels-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.5625,
+        "x": 1.2750000953674
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lava-levels-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.5625,
+        "x": 1.2750000953674
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lava-levels-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.63750004768372,
+        "x": -1.125
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lava-levels-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.63750004768372,
+        "x": -1.125
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "lava-levels-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.5625,
+        "x": -1.2750000953674
+      }
+    },
+    {
+      "scene": {
+        "name": "lava-levels",
+        "x": 16,
+        "y": 1,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "lava-levels-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.5625,
+        "x": -1.2750000953674
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "ocean-levels-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 1.0875000953674,
+        "x": 0.2265625
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "ocean-levels-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 1.0875000953674,
+        "x": 0.2265625
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "ocean-levels-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.11328125,
+        "x": 2.1750001907349
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "ocean-levels-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -0.11328125,
+        "x": 2.1750001907349
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "ocean-levels-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -1.0875000953674,
+        "x": -0.2265625
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "ocean-levels-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": -1.0875000953674,
+        "x": -0.2265625
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "ocean-levels-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.11328125,
+        "x": -2.1750001907349
+      }
+    },
+    {
+      "scene": {
+        "name": "ocean-levels",
+        "x": 16,
+        "y": 13,
+        "z": -2,
+        "zoom": 0.5,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "ocean-levels-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": -2,
+        "y": 0.11328125,
+        "x": -2.1750001907349
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "stacks-and-enclosures-0-day.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": -0.48750001192093,
+        "x": -0.9765625
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "stacks-and-enclosures-0-night.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": -0.48750001192093,
+        "x": -0.9765625
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "stacks-and-enclosures-1-day.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": 0.48828125,
+        "x": -0.97500002384186
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "stacks-and-enclosures-1-night.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": 0.48828125,
+        "x": -0.97500002384186
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "stacks-and-enclosures-2-day.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": 0.48750001192093,
+        "x": 0.9765625
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "stacks-and-enclosures-2-night.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": 0.48750001192093,
+        "x": 0.9765625
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "stacks-and-enclosures-3-day.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": -0.48828125,
+        "x": 0.97500002384186
+      }
+    },
+    {
+      "scene": {
+        "name": "stacks-and-enclosures",
+        "x": -13,
+        "y": 0,
+        "z": 0,
+        "zoom": 0.85,
+        "page": "test_arena"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "stacks-and-enclosures-3-night.png",
+      "camera": {
+        "zoom": 0.85000002384186,
+        "z": 0,
+        "y": -0.48828125,
+        "x": 0.97500002384186
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-drape-ice-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 14.625000953674,
+        "x": -2.25
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-drape-ice-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 14.625000953674,
+        "x": -2.25
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-drape-ice-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 1.125,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-drape-ice-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 1.125,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-drape-ice-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -14.625000953674,
+        "x": 2.25
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-drape-ice-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -14.625000953674,
+        "x": 2.25
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-drape-ice-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -1.125,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-drape-ice",
+        "x": 180,
+        "y": 210,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-drape-ice-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -1.125,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-basin-ice-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 15.375000953674,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-basin-ice-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 15.375000953674,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-basin-ice-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-basin-ice-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-basin-ice-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -15.375000953674,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-basin-ice-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -15.375000953674,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "dry-basin-ice-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "dry-basin-ice",
+        "x": 205,
+        "y": 205,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "dry-basin-ice-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-lake-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 16.35000038147,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-lake-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 16.35000038147,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-lake-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-lake-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-lake-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -16.35000038147,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-lake-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -16.35000038147,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-lake-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-lake",
+        "x": 218,
+        "y": 218,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-lake-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-ocean-0-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 16.800001144409,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 0,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-ocean-0-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 16.800001144409,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-ocean-1-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 1,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-ocean-1-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": 18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-ocean-2-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -16.800001144409,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 2,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-ocean-2-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": -16.800001144409,
+        "x": 0.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "day",
+      "sun_angle": 0.125,
+      "path": "covered-partial-ocean-3-day.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": -18.0
+      }
+    },
+    {
+      "scene": {
+        "name": "covered-partial-ocean",
+        "x": 224,
+        "y": 224,
+        "z": 33,
+        "zoom": 0.5,
+        "page": "fluid_levels_ice"
+      },
+      "facing": 3,
+      "light": "night",
+      "sun_angle": 0.75,
+      "path": "covered-partial-ocean-3-night.png",
+      "camera": {
+        "zoom": 0.5,
+        "z": 33,
+        "y": 0.0,
+        "x": -18.0
+      }
+    }
+  ]
+}

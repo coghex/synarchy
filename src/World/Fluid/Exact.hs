@@ -25,6 +25,7 @@ module World.Fluid.Exact
     , exactSurfaceCeilZ
     , exactSurfaceFloorZ
     , exactTopLevel
+    , exactSurfaceRenderZ
     , exactVolumeOverTerrain
     ) where
 
@@ -45,7 +46,7 @@ exactSurfaceOfZ z = z * fluidUnitsPerZ
 
 -- | The integer CEILING view of an exact surface: the lowest whole z at
 --   or above it. This is the compatibility view every integer consumer
---   reads — rendering, flora, ice, soil gates, the cursor, the Lua
+--   reads — slice ownership, flora, ice, soil gates, the cursor, the Lua
 --   queries and the dump — so a partially filled top z still reads as
 --   a whole occupied level rather than disappearing.
 exactSurfaceCeilZ ∷ Int → Int
@@ -72,3 +73,8 @@ exactTopLevel e = ((e - 1) `mod` fluidUnitsPerZ) + 1
 exactVolumeOverTerrain ∷ Int → Int → Int
 exactVolumeOverTerrain terrainZ e = max 0 (e - exactSurfaceOfZ terrainZ)
 {-# INLINE exactVolumeOverTerrain #-}
+
+-- | Floating-point height at the final rendering boundary only.
+exactSurfaceRenderZ ∷ Int → Float
+exactSurfaceRenderZ e = fromIntegral e / fromIntegral fluidUnitsPerZ
+{-# INLINE exactSurfaceRenderZ #-}

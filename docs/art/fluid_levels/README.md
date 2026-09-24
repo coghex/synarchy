@@ -51,3 +51,28 @@ this delivery.
 
 Regeneration and preview instructions:
 [`docs/asset_generation.md`](../../asset_generation.md#fluid-level-masks-2525).
+
+## Runtime binding (#2529)
+
+`assets/textures/facemap/isoface_level_N.png` binds to
+`world.setTexture(page, "fluid_level_facemap_N", handle)`, for each N=1..8.
+Startup preloads all eight files. World creation, arena creation and save-load
+rebinding send all eight handles; every assignment invalidates detailed, zoom
+and background quad caches. Level 8 retains its own handle even though its
+pixels equal the flat terrain map. No approved asset bytes change.
+
+Fluid tops select with `exactTopLevel` and place at the exact signed plane.
+The selected mask already draws the top slab down to `ceil(surface)-1`.
+Separate side strips cover only the interval below that slab down to each
+neighbour's exact fluid plane or dry terrain top. Front neighbours occlude
+hidden mask pixels; the four-facing GPU captures verify that combined result.
+
+Reproducible integrated captures: `tools/fluid_levels_render_capture.py`.
+The driver is manual-only and uses an isolated resource root and paused save
+fixture, so the prerequisite-complete base and implementation see identical
+fluid quantities. Owner signoff for that integration is separate from the
+mask-art approval above.
+
+The [integrated comparison gallery](integration-2529/index.html) and
+[reproduction record](integration-2529/README.md) retain all 72 paired views.
+Integration owner verdict: **approved, 2026-09-24**; see the reproduction record above.

@@ -17,6 +17,7 @@ module World.Thread.Command.Edit
     ( handleWorldAddTileCommand
     , handleWorldDeleteTileCommand
     , handleWorldSetFluidTileCommand
+    , handleWorldDebugSetFluidSurfaceCommand
     , handleWorldSetSlopeCommand
     , handleWorldSetVegCommand
     , handleWorldSetCellCommand
@@ -43,4 +44,5 @@ import World.Thread.Command.Edit.Vegetation
     , handleWorldPlantRowCropAtCommand
     )
 import World.Thread.Command.Edit.Dig (handleWorldDigTileCommand)
-import World.Thread.Command.Edit.Fluid (handleWorldSetFluidTileCommand)
+import World.Thread.Command.Edit.Fluid
+    (handleWorldSetFluidTileCommand, handleWorldDebugSetFluidSurfaceCommand)

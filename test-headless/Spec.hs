@@ -315,6 +315,7 @@ import qualified Test.Headless.Structure.ConstructionPacks as StructureConstruct
 import qualified Test.Headless.Structure.DestructionFrames as StructureDestructionFrames
 import qualified Test.Headless.Structure.DestructionPacks as StructureDestructionPacks
 import qualified Test.Headless.World.StructureDestruction as WorldStructureDestruction
+import qualified Test.Headless.World.Render.FluidLevels as RenderFluidLevels
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -1205,6 +1206,7 @@ main = hspec $ do
     -- "against one pre-commit snapshot" is a controlled state.
     BuildingFootprintExclusivity.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
+    describe "World.Render.FluidLevels" RenderFluidLevels.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
     describe "World.Slope.FaceMaps" FluidLevelMasks.spec

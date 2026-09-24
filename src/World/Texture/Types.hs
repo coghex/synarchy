@@ -54,4 +54,13 @@ data WorldTextureType
     | MatBgTexture    !Word8
     -- Vegetation textures: vegId → tile handle
     | VegTileTexture  !Word8
+    -- Exact fluid masks (runtime handles, not serialized)
+    | FluidLevelFaceMap1
+    | FluidLevelFaceMap2
+    | FluidLevelFaceMap3
+    | FluidLevelFaceMap4
+    | FluidLevelFaceMap5
+    | FluidLevelFaceMap6
+    | FluidLevelFaceMap7
+    | FluidLevelFaceMap8
     deriving (Show, Eq)

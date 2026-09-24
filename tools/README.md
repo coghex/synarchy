@@ -36,6 +36,22 @@ measurement stays manual. See [the measurement protocol and results](../docs/wor
 for timing boundaries, terrain checks, memory baselines, quota assumptions,
 and the owner's shipping decision.
 
+## Manual eighth-level fluid captures (`fluid_levels_render_capture.py`, #2529)
+
+`python3 tools/fluid_levels_render_capture.py --port 9429 --size 1280x720
+--out /tmp/issue-2529-captures` builds a paused exact-level scene and captures
+all four facings in day/night lighting using offscreen Vulkan. It needs a GPU
+and is manual-only; it is not registered with CI or the probe runner.
+The debug-only `debug.setFluidSurface` hook records exact snapshot edits.
+A normal session save retains the fixture, and `--fixture <directory>` loads
+that identical state for comparison with `--engine <base-binary>` and
+`--source-root <base-checkout>`. Config, saves, screenshots and manifests stay
+inside the output directory. The driver stops only its own engine.
+
+See [the integration evidence](../docs/art/fluid_levels/README.md) for mask
+keys and owner review. Screenshots are evidence for a human decision, not a
+pixel-equality gate.
+
 ## Manual flat-step fluid scene (`flat_fluid_scene.py`, #2517)
 
 `python3 tools/flat_fluid_scene.py --engine "$(cabal list-bin exe:synarchy)"
