@@ -743,15 +743,16 @@ spec = around withMenusEngine $ do
                     , "local pw, ph = p.getSize(m.panelId);"
                     , "local panelInFrame = px >= 0 and py >= 0"
                         <> " and (px+pw) <= 3840 and (py+ph) <= 2160;"
-                    , "local titleInfo = UI.getElementInfo("
-                        <> "require('scripts.ui.label').getElementHandle(m.titleLabelId));"
-                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y}"
+                    , "local L = require('scripts.ui.label');"
+                    , "local titleInfo = UI.getElementInfo(L.getElementHandle(m.titleLabelId));"
+                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y,"
+                        <> " titleFontSize = L.getFontSize(m.titleLabelId)}"
                     ])
                 case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CompactFallbackProbe of
                     Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                     Just p → do
                         cfPanelInFrame p `shouldBe` True
-                        cfTitleY p `shouldSatisfy` (>= 0)
+                        expectCompactTitleInFrame menuName p
 
         forM_ [ ("main", "scripts.main_menu"), ("pause", "scripts.pause_menu") ] $ \(menuName, modulePath) →
             it (menuName ⧺ " menu at 800x2160@4 (narrow width, not just short height — fixed button/menu padding alone used to overflow horizontally)") $ \env → do
@@ -770,15 +771,78 @@ spec = around withMenusEngine $ do
                     , "local pw, ph = p.getSize(m.panelId);"
                     , "local panelInFrame = px >= 0 and py >= 0"
                         <> " and (px+pw) <= 800 and (py+ph) <= 2160;"
-                    , "local titleInfo = UI.getElementInfo("
-                        <> "require('scripts.ui.label').getElementHandle(m.titleLabelId));"
-                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y}"
+                    , "local L = require('scripts.ui.label');"
+                    , "local titleInfo = UI.getElementInfo(L.getElementHandle(m.titleLabelId));"
+                    , "return {panelInFrame = panelInFrame, titleY = titleInfo.y,"
+                        <> " titleFontSize = L.getFontSize(m.titleLabelId)}"
                     ])
                 case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe CompactFallbackProbe of
                     Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
                     Just p → do
                         cfPanelInFrame p `shouldBe` True
-                        cfTitleY p `shouldSatisfy` (>= 0)
+                        expectCompactTitleInFrame menuName p
+
+    -- #2656: a label's y is its text BASELINE, and its glyphs rise about
+    -- its effective fontSize above that, so the title is only legible
+    -- when its glyph TOP is in-frame. The formal 800x600 minimum at 1x
+    -- used to leave only the bottom slivers of the 96 px title visible.
+    -- Covers every main-menu item count (0/1/2+ saves → 3/4/5 actions)
+    -- at the minimum framebuffer across its band's scale range, plus
+    -- each responsive band's boundaries at the maximum item count, under
+    -- nonzero text metrics so the horizontal assertions are meaningful.
+    describe "main menu compact fallback keeps the title's glyphs in-frame (#2656)" $ do
+        let saveCounts = [0, 1, 2 ∷ Int]
+            minimumCases = [ (800, 600, sc, n) | sc ← [0.5, 1.0], n ← saveCounts ]
+            boundaryCases =
+                [ (w, h, sc, n)
+                | (w, h, sc) ← [ (800, 900, 1.0), (800, 901, 0.75), (800, 901, 2.0)
+                               , (1280, 1200, 2.0), (1280, 1201, 1.0), (1280, 1600, 3.0)
+                               , (1920, 1601, 1.5), (800, 2160, 4.0), (3840, 2160, 4.0) ]
+                , n ← [0, 2] ]
+        forM_ (minimumCases ⧺ boundaryCases) $ \(w, h, uiscale, saves) →
+            it ("at " ⧺ show w ⧺ "x" ⧺ show h ⧺ "@" ⧺ show uiscale
+                ⧺ " with " ⧺ show saves ⧺ " save(s)") $ \env → do
+                ls ← newBareLuaBackend env
+                r ← evalJSON ls $ luaLines
+                    [ setScaleCall (uiscale ∷ Double) <> ";"
+                    , nonZeroMetrics 0.6
+                    , "engine.listSaves = function() local out = {};"
+                        <> " for i = 1, " <> tshow saves <> " do"
+                        <> " out[i] = {name='s' .. i, timestamp='t'} end;"
+                        <> " return out end;"
+                    , bootMain w h <> ";"
+                    , "local p = require('scripts.ui.panel');"
+                    , "local L = require('scripts.ui.label');"
+                    , "local px, py = p.getPosition(m.panelId);"
+                    , "local pw, ph = p.getSize(m.panelId);"
+                    , "local info = UI.getElementInfo(L.getElementHandle(m.titleLabelId));"
+                    , "local tw, _ = L.getSize(m.titleLabelId);"
+                    , "return {saves = #m.saves, px = px, py = py, pw = pw, ph = ph,"
+                        <> " titleX = info.x, titleY = info.y, titleW = tw,"
+                        <> " titleFontSize = L.getFontSize(m.titleLabelId)}"
+                    ]
+                case decode (BL.fromStrict (TE.encodeUtf8 r)) ∷ Maybe MainTitleProbe of
+                    Nothing → expectationFailure ("failed to decode: " ⧺ T.unpack r)
+                    Just p → do
+                        let fw = fromIntegral w
+                            fh = fromIntegral h
+                        mtSaves p `shouldBe` saves
+                        -- The panel stays inside the framebuffer.
+                        mtPanelX p `shouldSatisfy` (>= 0)
+                        mtPanelY p `shouldSatisfy` (>= 0)
+                        (mtPanelX p + mtPanelW p) `shouldSatisfy` (<= fw)
+                        (mtPanelY p + mtPanelH p) `shouldSatisfy` (<= fh)
+                        -- The title's glyph extent stays inside it too.
+                        mtTitleFontSize p `shouldSatisfy` (> 0)
+                        (mtTitleY p - mtTitleFontSize p) `shouldSatisfy` (>= 0)
+                        mtTitleX p `shouldSatisfy` (>= 0)
+                        mtTitleW p `shouldSatisfy` (> 0)
+                        (mtTitleX p + mtTitleW p) `shouldSatisfy` (<= fw)
+                        -- It floats above the panel without reaching it.
+                        mtTitleY p `shouldSatisfy` (< mtPanelY p)
+                        -- Both stay horizontally centred.
+                        abs (mtTitleX p + mtTitleW p / 2 - fw / 2) `shouldSatisfy` (<= 1)
+                        abs (mtPanelX p + mtPanelW p / 2 - fw / 2) `shouldSatisfy` (<= 1)
 
     describe "save browser stays in-frame at a narrow, high-scale supported combination" $
         it "800x2160@4x (panel width is a fixed 0.6 fraction of the framebuffer that doesn't scale with uiscale, while its side padding does — bounds.width used to go to zero)" $ \env → do
@@ -2071,10 +2135,31 @@ instance FromJSON BackButtonProbe where
         BackButtonProbe <$> o .: "y" <*> o .: "bottom"
 
 data CompactFallbackProbe = CompactFallbackProbe
-    { cfPanelInFrame ∷ Bool, cfTitleY ∷ Double } deriving Show
+    { cfPanelInFrame ∷ Bool, cfTitleY ∷ Double, cfTitleFontSize ∷ Double } deriving Show
 instance FromJSON CompactFallbackProbe where
-    parseJSON = withObject "CompactFallbackProbe" $ \o →
-        CompactFallbackProbe <$> o .: "panelInFrame" <*> o .: "titleY"
+    parseJSON = withObject "CompactFallbackProbe" $ \o → CompactFallbackProbe
+        <$> o .: "panelInFrame" <*> o .: "titleY" <*> o .: "titleFontSize"
+
+-- | #2656: the main menu's title must keep its GLYPH TOP (baseline minus
+--   its effective fontSize) in-frame. The pause menu duplicates the old
+--   baseline-only placement and is out of #2656's scope, so its cases
+--   keep their original baseline assertion.
+expectCompactTitleInFrame ∷ String → CompactFallbackProbe → Expectation
+expectCompactTitleInFrame menuName p
+    | menuName ≡ "main" = (cfTitleY p - cfTitleFontSize p) `shouldSatisfy` (>= 0)
+    | otherwise         = cfTitleY p `shouldSatisfy` (>= 0)
+
+data MainTitleProbe = MainTitleProbe
+    { mtSaves ∷ Int
+    , mtPanelX, mtPanelY, mtPanelW, mtPanelH ∷ Double
+    , mtTitleX, mtTitleY, mtTitleW, mtTitleFontSize ∷ Double
+    } deriving Show
+instance FromJSON MainTitleProbe where
+    parseJSON = withObject "MainTitleProbe" $ \o → MainTitleProbe
+        <$> o .: "saves"
+        <*> o .: "px" <*> o .: "py" <*> o .: "pw" <*> o .: "ph"
+        <*> o .: "titleX" <*> o .: "titleY" <*> o .: "titleW"
+        <*> o .: "titleFontSize"
 
 data SaveBrowserExtremeProbe = SaveBrowserExtremeProbe
     { sbepPanelInFrame ∷ Bool, sbepValidWidth ∷ Bool } deriving Show
