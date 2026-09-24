@@ -49,9 +49,10 @@ import Engine.Core.ConfigWrite
   ( ConfigWriteOps(..), copyConfigFile, realConfigWriteOps, removeConfigFile
   , removeConfigFileWith, writeConfigBytes, writeConfigBytesWith )
 import Engine.Core.Init
-  (LegacyNeutralityCheck(..), migrateLegacyConfig, resolveConfigPath)
+  ( LegacyNeutralityCheck(..), migrateLegacyConfig, migrateLegacyConfigWith
+  , resolveConfigPath )
 import Engine.Core.Log
-  ( LogBackend(..), LogConfig(..), LogEntry(..), LoggerState
+  ( LogBackend(..), LogConfig(..), LogEntry(..), LogLevel(..), LoggerState
   , defaultLogConfig, initLogger )
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -96,6 +97,13 @@ saidAll drain needles = do
     said ← T.concat ∘ map leMessage ⊚ drain
     forM_ needles $ \needle →
         (needle, needle `T.isInfixOf` said) `shouldBe` (needle, True)
+
+-- | The level of every captured line about a legacy config, in order,
+--   so a migration diagnostic's SEVERITY is asserted and not only its
+--   text.
+legacyLevels ∷ [LogEntry] → [LogLevel]
+legacyLevels entries =
+    [ leLevel e | e ← entries, "Legacy config " `T.isInfixOf` leMessage e ]
 
 -- | A path whose PARENT is a regular file. @ENOTDIR@ for every user,
 --   root included, at both the directory-creation and the temporary-claim
@@ -535,10 +543,68 @@ writerSpec = describe "config writers report a failed write" $ do
             saidAll drain
                 [ "is valid, but writing it to", T.pack local
                 , "could not create the directory for" ]
+            -- #2687 requirement 1: a PRE-publication failure keeps its
+            -- fallback-and-retry wording, at warning level, with no
+            -- success line — all of which is true of this phase.
+            entries ← drain
+            legacyLevels entries `shouldBe` [LevelWarn]
+            saidAll drain
+                [ "falls back to the versioned default"
+                , "retried on the next boot" ]
+            T.concat (map leMessage entries)
+                `shouldNotContainText` "Migrated legacy config"
             -- The migration never happened, so resolution still falls
             -- back to the versioned default rather than to a
             -- half-written file.
             resolveConfigPath local legacy `shouldReturn` legacy
+
+    it "migrateLegacyConfig reports a POST-publication durability failure \
+       \as a published-but-unconfirmed local file, never as a fallback \
+       \or a retry (#2687)" $
+        inTemp $ \dir → do
+            (logger0, drain0) ← capturingLogger
+            attempts ← newIORef (0 ∷ Int)
+            let legacy = dir </> "video.yaml"
+                local  = dir </> "config" </> "video.local.yaml"
+                legacyBytes = "required: 7\n"
+                -- The shared writer's REAL publication sequence, failing
+                -- only the directory sync after the rename succeeded —
+                -- the same phase the helper example above pins — and
+                -- counting every copy attempt that reaches the write.
+                ops = realConfigWriteOps
+                    { cwoWrite = \tmp bytes → do
+                        modifyIORef' attempts (+ 1)
+                        cwoWrite realConfigWriteOps tmp bytes
+                    , cwoSyncDir = \_ → throwIO (ErrorCall "sync refused")
+                    }
+            BS.writeFile legacy legacyBytes
+            migrateLegacyConfigWith ops probeCfg logger0 Nothing legacy local
+            readIORef attempts `shouldReturn` 1
+            -- The complete, source-identical file is published, and the
+            -- legacy source is untouched.
+            BS.readFile local `shouldReturn` legacyBytes
+            BS.readFile legacy `shouldReturn` legacyBytes
+            entriesOf (takeDirectory local) `shouldReturn` ["video.local.yaml"]
+            entries ← drain0
+            let said = T.concat (map leMessage entries)
+            legacyLevels entries `shouldBe` [LevelWarn]
+            saidAll drain0
+                [ T.pack local, "was published", "durability is unconfirmed"
+                , "could not confirm durable", "sync refused" ]
+            forM_ [ "falls back to the versioned default"
+                  , "retried on the next boot"
+                  , "Migrated legacy config" ] $ \claim →
+                said `shouldNotContainText` claim
+            -- The published file is what the boot now resolves.
+            resolveConfigPath local legacy `shouldReturn` local
+            -- The existence gate is closed: a second boot makes no new
+            -- copy attempt and says nothing about the legacy file.
+            (logger1, drain1) ← capturingLogger
+            migrateLegacyConfigWith ops probeCfg logger1 Nothing legacy local
+            readIORef attempts `shouldReturn` 1
+            later ← drain1
+            legacyLevels later `shouldBe` []
+            BS.readFile local `shouldReturn` legacyBytes
 
     it "migrateLegacyConfig reports a failed neutrality record and still \
        \leaves the local path absent" $ inTemp $ \dir → do

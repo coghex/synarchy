@@ -3975,7 +3975,9 @@ failure — a raised one used to abort `data.save()` before autosave
 settings were persisted. Higher-level boot workflows (`loadOverrides`,
 `migrateLegacyConfig`, `recordNeutralLegacy`) keep their own return
 types but consume the outcome explicitly, and never log a success line
-after a `Left`.
+after a `Left`. The migration alone consumes the phase-tagged
+copy (`copyConfigFileWith`), because a post-rename `Left` has already
+published the local file its existence gate reads (#2687).
 
 **A failed write must not move a baseline either.** `data.save()`
 refreshes Settings Back's persisted video baseline
@@ -6333,8 +6335,14 @@ default it doesn't mention). The tracked legacy
 `video.yaml`/`keybinds.yaml`/`notifications.yaml` exist ONLY as a
 one-time migration source: `Engine.Core.Init.migrateLegacyConfig`
 copies a legacy file to the local path iff the local file is absent AND
-the legacy file decodes against the real target schema; failures fall
-back to defaults and never touch a valid local file.
+the legacy file decodes against the real target schema, and never
+touches a valid local file. A failure before the copy's publishing
+rename leaves no local file, so the boot falls back to defaults and the
+next boot retries. A directory-sync failure AFTER that rename has
+already published the complete local file (#2687): the boot uses it,
+the existence gate suppresses any retry, and the warning says the
+migrated file was published with its durability unconfirmed rather
+than promising a fallback.
 
 **A neutral placeholder is NOT promoted (#1937).** Those tracked legacy
 files hold the versioned default's own content, and copying that was
