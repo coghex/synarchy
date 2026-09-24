@@ -185,8 +185,9 @@ Integrity-byte accounting:
   one byte more than its cap, so a file that grows in between still cannot
   force a larger allocation. Symlinks are refused and never followed: the
   entry directory and its parent are checked before the manifest or any
-  page is opened, and a symlinked fine-page directory is refused by both
-  `writeFinePage` and `readFinePage`.
+  page is opened. A fine-page directory that is, or whose parent is, a
+  symlink is refused by `writeFinePage`; for `readFinePage` it is a
+  `FinePageMiss`.
 - **Encoded PNG size:** `checkPagePngHeader`, and therefore `decodePagePng`,
   refuses a PNG longer than `mapPagePngMaxBytes` before reading its header.
 - **PNG gate:** before the native decoder sees a byte, the signature and IHDR
@@ -220,7 +221,7 @@ and the result says why. Regeneration and load-session recovery are WML-9's.
 **Fine pages** are written by `writeFinePage` and read by `readFinePage`, in a
 directory the caller passes. Only a valid key below the cutoff is accepted.
 Anything else is a caller error (`MapArtifactNotFineLevel`,
-`MapArtifactInvalidKey`). A fine page is never listed in the library's entry
+`MapArtifactInvalidKey`), the only `Left` a fine-page read returns. A fine page is never listed in the library's entry
 record, so it can never make an entry incomplete. The library ignores
 unlisted files in an entry directory: it neither trusts nor removes them.
 Every problem reading a fine page is a `FinePageMiss`, either

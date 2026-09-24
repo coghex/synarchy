@@ -25,7 +25,7 @@ import qualified Data.List as L
 import qualified Data.Serialize.Put as P
 import qualified Data.Text as T
 import Numeric (showHex)
-import System.Directory (createDirectoryIfMissing, createDirectoryLink, removeFile, renameDirectory)
+import System.Directory (createDirectoryIfMissing, createDirectoryLink, listDirectory, removeFile, renameDirectory)
 import System.FilePath ((</>))
 
 import World.GeneratedLibrary
@@ -481,8 +481,10 @@ librarySpec = describe "library publication" $ do
             -- through the link and failed only at the record check.
             openMapArtifact lib gidA compat ≫= (`shouldSatisfy` isLeftWith
                 (\case MapArtifactIO path _ → path ≡ dir; _ → False))
-            readFinePage dir gidA compat 136 (MapPageKey 0 0 0) ≫= (`shouldSatisfy` isLeftWith
-                (\case MapArtifactIO path _ → path ≡ dir; _ → False))
+            -- For a fine-page read the same refusal is a cache miss.
+            readFinePage dir gidA compat 136 (MapPageKey 0 0 0) ≫= (`shouldSatisfy` \case
+                Right (FinePageMiss (FinePageInvalid (MapArtifactIO path _))) → path ≡ dir
+                _ → False)
 
     it "a corrupt deflate stream behind a recomputed checksum is refused by the native decoder" $
         withLibrary $ \_ lib → do
@@ -604,6 +606,24 @@ fineSpec = describe "fine pages" $ do
             readFinePage scratch gidB compat { mcGenerator = 2 } 136 key ≫= (`shouldSatisfy` \case
                 Right (FinePageMiss (FinePageInvalid (MapArtifactIncompatible CompatGenerator 2 1))) → True
                 _ → False)
+
+    it "a fine-page directory behind a symlink, at itself or its parent, is never followed" $
+        withExclusiveTempDirectory "synarchy-paged-map-fine-link" $ \root → do
+            let real = root </> "real"
+                linkedParent = root </> "linked"
+                key = MapPageKey 0 0 0
+                rgba = fixturePage 1 key
+            createDirectoryIfMissing True (real </> "fine")
+            createDirectoryLink real linkedParent
+            createDirectoryLink (real </> "fine") (root </> "fine-link")
+            forM_ [linkedParent </> "fine", root </> "fine-link"] $ \dir → do
+                writeFinePage dir gidA compat 136 key rgba ≫= (`shouldSatisfy` isLeftWith
+                    (\case MapArtifactIO path _ → path ≡ dir; _ → False))
+                readFinePage dir gidA compat 136 key ≫= (`shouldSatisfy` \case
+                    Right (FinePageMiss (FinePageInvalid (MapArtifactIO path _))) → path ≡ dir
+                    _ → False)
+            -- Nothing was written through either link.
+            listDirectory (real </> "fine") `shouldReturn` []
 
     it "a fine-page request for a mandatory level or an invalid key is the caller's error" $
         withExclusiveTempDirectory "synarchy-paged-map-fine" $ \dir → do

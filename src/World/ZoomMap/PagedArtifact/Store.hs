@@ -330,6 +330,7 @@ checkFineKey worldSize key = do
 
 -- | Write one fine page into @dir@ under its canonical name, replacing
 --   any previous copy by a single rename. Returns the path written.
+--   Refuses a @dir@ that is, or whose parent is, a symlink.
 writeFinePage
     ∷ FilePath → GeneratedWorldId → MapCompatibility → Int → MapPageKey
     → BS.ByteString → IO (Either MapArtifactRefusal FilePath)
@@ -339,7 +340,7 @@ writeFinePage dir gid compat worldSize key rgba =
         Right png → do
             let file = encodeMapPageFile (MapPageBinding gid compat key) png
                 final = dir </> T.unpack (mapPageFileName key)
-            safe ← rejectSymlinkedPath dir
+            safe ← rejectSymlinkedManagedPath dir
             isDir ← doesDirectoryExist dir
             case safe of
                 Left why → pure (Left (MapArtifactIO dir why))
@@ -357,16 +358,17 @@ writeFinePage dir gid compat worldSize key rgba =
                             Right () → Right final
 
 -- | Read one fine page from @dir@. 'Left' only for a malformed request
---   ('checkFineKey') or a symlinked @dir@, which is refused rather than
---   followed; everything about the file itself is a hit or a miss.
+--   ('checkFineKey'); everything else is a hit or a miss. A @dir@ that
+--   is, or whose parent is, a symlink is never read through: that too
+--   is a miss ('FinePageInvalid').
 readFinePage
     ∷ FilePath → GeneratedWorldId → MapCompatibility → Int → MapPageKey
     → IO (Either MapArtifactRefusal FinePageRead)
 readFinePage dir gid compat worldSize key =
     case checkFineKey worldSize key of
         Left r → pure (Left r)
-        Right () → rejectSymlinkedPath dir ≫= \case
-          Left why → pure (Left (MapArtifactIO dir why))
+        Right () → rejectSymlinkedManagedPath dir ≫= \case
+          Left why → pure (Right (FinePageMiss (FinePageInvalid (MapArtifactIO dir why))))
           Right () → do
             let what = "fine page " <> mapPageFileName key
             read' ← readBounded what (dir </> T.unpack (mapPageFileName key))
