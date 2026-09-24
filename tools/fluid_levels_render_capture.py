@@ -176,7 +176,8 @@ def capture(port: int, out: Path, spec: dict) -> list:
     for scene in spec["scenes"]:
         page = scene["page"]
         assert lua(port, f"world.hide('{PAGE}'); world.hide('{ICE_PAGE}'); "
-                   f"world.show('{page}'); world.setTimeScale('{page}',0); return true") is True
+                   f"world.show('{page}'); world.setTimeScale('{page}',0); "
+                   f"package.loaded['scripts.world_view'].sendTexturesToWorld('{page}'); return true") is True
         for turn in range(4):
             if turn:
                 lua(port, "camera.rotateCW(); return true")
@@ -229,6 +230,7 @@ def main() -> int:
     ap.add_argument("--codec", type=Path)
     ap.add_argument("--source-root", type=Path, default=REPO)
     ap.add_argument("--fixture", type=Path)
+    ap.add_argument("--scenes", nargs="+", help="capture selected recipe scene names")
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -268,7 +270,13 @@ def main() -> int:
             str(out / "fixture" / "world.synworld"), "--output", str(out / "fixture-summary.json")], check=True)
         summary = json.loads((out / "fixture-summary.json").read_text())
         verify_exact_fixture(summary, spec)
-        frames = capture(args.port, out, spec)
+        capture_spec = dict(spec)
+        if args.scenes:
+            known = {scene["name"] for scene in spec["scenes"]}
+            if set(args.scenes) - known:
+                raise ValueError(f"unknown scenes: {set(args.scenes) - known}")
+            capture_spec["scenes"] = [scene for scene in spec["scenes"] if scene["name"] in args.scenes]
+        frames = capture(args.port, out, capture_spec)
         binary = Path(os.environ["SYNARCHY_PROBE_ENGINE_EXE"])
         manifest = dict(source_revision=subprocess.check_output(
             ["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
