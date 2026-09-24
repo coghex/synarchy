@@ -1,0 +1,1 @@
+lua registration audit: 675 registrations across 28 namespaces from 14 registrar modules; 4245 namespaced references across 238 scripts; 0 finding(s)

@@ -295,7 +295,7 @@ worldGetWrapWidthFn env = do
     Lua.pushinteger (fromIntegral (worldWidthTiles worldSize))
     return 1
 
--- | world.pickPos(pixX, pixY) → hx, hy or nil
+-- | world.pickPos(pixX, pixY) → hx, hy, pageId, selectionGen or nil
 --   Synchronous fractional-position analog of pickTile: the live
 --   screen-pixel → sub-tile hit-test from the given click coordinates
 --   (item/unit convention, tile k spans [k, k+1)). Like pickTile it
@@ -306,6 +306,8 @@ worldGetWrapWidthFn env = do
 --   corner structure placement) where the async hover cache can lag a
 --   fast cursor move and place at a stale fractional position. Returns
 --   nil when the pixel is off-world / over no solid tile.
+--   Page and selection generation come from the same manager snapshot
+--   as the pick, so a held gesture can reject page changes (#2489).
 worldPickPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldPickPosFn env = do
     mPx ← Lua.tonumber 1
@@ -315,8 +317,8 @@ worldPickPosFn env = do
             let px = round px'
                 py = round py'
             manager ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
-            case visiblePageState manager of
-                Just ws → do
+            case visiblePage manager of
+                Just (pageId, ws) → do
                     let rv = toRenderViewCapability env
                     camera   ← Lua.liftIO $ readIORef (rvCameraRef rv)
                     tileData ← Lua.liftIO $ readIORef (wsTilesRef ws)
@@ -338,7 +340,9 @@ worldPickPosFn env = do
                         Just (_, _, _, _, (hx, hy)) → do
                             Lua.pushnumber (Lua.Number (realToFrac hx))
                             Lua.pushnumber (Lua.Number (realToFrac hy))
-                            return 2
+                            Lua.pushstring (TE.encodeUtf8 (unWorldPageId pageId))
+                            Lua.pushinteger (fromIntegral (wmSelectionGen manager))
+                            return 4
                         Nothing → do
                             Lua.pushnil
                             return 1

@@ -701,7 +701,8 @@ end
 -- toward (a deferred click if still "pressed", a cancelled-drag "noop"
 -- if already "dragging") rather than silently dropping it, since
 -- dragSelect.onMouseUp will never get a chance to.
-function dragSelect.cancel()
+-- Optional button limits teardown to that gesture (Grab right-click cancellation).
+function dragSelect.cancel(button)
     -- #1856: disarm BOTH tool boxes FIRST. The branches below resolve
     -- each button's pending click and then clear it, so disarming
     -- afterwards would arrive to find nothing left to restamp and the
@@ -709,9 +710,9 @@ function dragSelect.cancel()
     -- below-threshold Chop press recorded as an accepted click that
     -- designated nothing. Disarming here restamps it as the noop it is
     -- BEFORE the branch reads it, and takes the rect down with it.
-    dragSelect.disarmToolBox(1)
-    dragSelect.disarmToolBox(2)
-    if dragSelect.state ~= "idle" then
+    if button ~= 2 then dragSelect.disarmToolBox(1) end
+    if button ~= 1 then dragSelect.disarmToolBox(2) end
+    if button ~= 2 and dragSelect.state ~= "idle" then
         if dragSelect.state == "dragging" then
             recordDragOutcomeFb("noop", dragSelect.startFbX, dragSelect.startFbY,
                 0, 0, dragReason("cancelled (view transition)",
@@ -726,7 +727,7 @@ function dragSelect.cancel()
     end
     -- Right-button (#730 review round 4): same resolve-don't-lose
     -- contract as the left-button case above.
-    if dragSelect.rightState ~= "idle" then
+    if button ~= 1 and dragSelect.rightState ~= "idle" then
         if dragSelect.rightState == "dragging" then
             recordDragOutcomeFb("noop", dragSelect.rightStartFbX,
                 dragSelect.rightStartFbY, 0, 0,

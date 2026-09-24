@@ -12,6 +12,7 @@ end
 -- Y position immediately after `mode`'s button (and its list rows, if
 -- open) — i.e. where the NEXT mode's button belongs.
 function layout.advance(y, s, mode)
+    if mode.header then return y end
     y = y + (s.fontSize + s.rowSpacing)
     if mode.listVisible then
         local rows = math.max(1, #mode.entries)
@@ -27,7 +28,7 @@ function layout.computeYs(modeOrder, s)
     local y = layout.anchorY(s)
     local ys = {}
     for _, mode in ipairs(modeOrder) do
-        ys[mode.key] = y
+        ys[mode.key] = mode.header and s.margin + s.fontSize or y
         y = layout.advance(y, s, mode)
     end
     return ys

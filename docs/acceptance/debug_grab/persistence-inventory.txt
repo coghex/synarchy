@@ -1,0 +1,1 @@
+persistence-inventory audit: 231 root-owner fields + 3 Lua save module(s) + 10 typed reference field(s) + 10 Lua reference kind(s) all classified

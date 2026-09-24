@@ -1,0 +1,28 @@
+{
+  "command": "cabal run exe:synarchy -- --dump --resource-root /tmp/grab-acceptance-8/run-root",
+  "exit_code": 0,
+  "bytes": 20125735,
+  "sha256": "fb0171296164d32f75ef6cb135d72ae9a6a1b779896e122f5366c2291535cb5a",
+  "top_level_type": "array",
+  "record_count": 73984,
+  "record_keys": [
+    "beyondGlacier",
+    "fluidSurf",
+    "fluidType",
+    "glacierZone",
+    "iceMode",
+    "iceSurf",
+    "matId",
+    "oreCount",
+    "oreId",
+    "oreTopZ",
+    "surfaceZ",
+    "terrainZ",
+    "v",
+    "waterTableSummer",
+    "waterTableWinter",
+    "waterTableZ",
+    "x",
+    "y"
+  ]
+}

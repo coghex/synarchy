@@ -1,0 +1,56 @@
+Build profile: -w ghc-9.12.2 -O1
+In order, the following will be built (use -v for more details):
+ - synarchy-0.1.0.0 (ephemeral targets)
+Preprocessing library for synarchy-0.1.0.0...
+Building library for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy' for synarchy-0.1.0.0...
+Building executable 'synarchy' for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Building executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Running 1 test suites...
+Test suite synarchy-test-headless: RUNNING...
+
+Debug Grab gesture (#2489)
+  claims exactly once with ui-first [✔]
+  claims exactly once with game-first [✔]
+  toggles the real button and uses the armed label treatment [✔]
+  excludes every placement category in both directions [✔]
+  owns empty ground and sprite hits without usable ground [✔]
+  resumes after nil picks and destination refusals [✔]
+  applies the final pick even without an update [✔]
+  ends an invalid release without another move [✔]
+  ignores unmatched and non-left releases [✔]
+  cancels a matching swallowed release [✔]
+  cancels a matching ui release [✔]
+  leaves later updates inert after D.onKeyDown('Escape') [✔]
+  leaves later updates inert after D.hide() [✔]
+  leaves later updates inert after D.setArmedItem('lantern') [✔]
+  leaves later updates inert after D.onFramebufferResize(1280,720) [✔]
+  leaves later updates inert after D.onFramebufferResize(0,0) [✔]
+  leaves later updates inert after require('scripts.lib.session_teardown').runAll() [✔]
+  leaves later updates inert after D.createUI() [✔]
+  right-click cancels before designation handlers in either subscriber order [✔]
+  clears through real load apply and reconciliation even with reused ids [✔]
+  clears through the actual zoomBand debug-overlay hook [✔]
+  clears through the actual hudHide debug-overlay hook [✔]
+  clears through the actual menu debug-overlay hook [✔]
+  blocks capture and held/final movement under pointer-blocking UI [✔]
+  freezes under a modal but keeps debug controls usable above it [✔]
+  ends capture when the item disappears or its identity changes [✔]
+  never mixes active item and visible pick pages [✔]
+  rejects a different pick page and selection generation during a hold [✔]
+  preserves fractional offsets through seam direction -1 [✔]
+  preserves fractional offsets through seam direction 1 [✔]
+  preserves offset when the stored item already uses a seam alias [✔]
+  does not wrap arena positions [✔]
+
+Finished in 0.1000 seconds
+32 examples, 0 failures
+Test suite synarchy-test-headless: PASS
+Test suite logged to:
+/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2489-debug-grab/./dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/test/synarchy-0.1.0.0-synarchy-test-headless.log
+1 of 1 test suites (1 of 1 test cases) passed.

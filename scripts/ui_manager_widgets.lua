@@ -71,6 +71,10 @@ function uiManager.onMouseDown(button_num, x, y)
         return
     end
 
+    if debugOverlay.tryClaimGrab(button_num, x, y) then
+        return
+    end
+
     local ww, wh = engine.getWindowSize()
     local sx, sy = x, y
     if ww and wh and ww > 0 and wh > 0 then

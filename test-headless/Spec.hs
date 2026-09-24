@@ -261,6 +261,7 @@ import qualified Test.Headless.UI.SettingsRevert
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
+import qualified Test.Headless.Lua.DebugGrab as LuaDebugGrab
 import qualified Test.Headless.Lua.ChopGesture as LuaChopGesture
 import qualified Test.Headless.Lua.ChopDesignationClaim as LuaChopDesignationClaim
 import qualified Test.Headless.Lua.MineDesignationEligibility as LuaMineDesignationEligibility
@@ -1116,6 +1117,7 @@ main = hspec $ do
     describe "Tutorial HUD" UITutorialHud.spec
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     LuaDragSelectDeferred.spec
+    LuaDebugGrab.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec
     describe "Lua.GroupedLogRetention" LuaGroupedLogRetention.spec
     describe "Lua.TextTruncation" LuaTextTruncation.spec

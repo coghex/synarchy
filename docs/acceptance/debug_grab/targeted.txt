@@ -1,0 +1,127 @@
+
+drag-select deferred capture (#1676)
+  a deferred click
+    reports the press's press-time framebuffer point after the ratio changes mid-gesture [✔]
+    does the same for the right button's independent pending click [✔]
+    is flushed by a view-transition cancel at the same press-time point [✔]
+  a view-transition cancel of a real drag
+    reports where the LEFT drag began, not where the ratio later put it [✔]
+    reports where the RIGHT drag began, from its own start coordinates [✔]
+  the degenerate-viewport fallback
+    keeps a press captured under a zero framebuffer raw, however the ratio later recovers [✔]
+    keeps a drag origin captured under a zero WINDOW size raw too [✔]
+  a resolution at its own event still converts live
+    records a committed drag's RELEASE point under release-time geometry [✔]
+
+Finished in 0.0045 seconds
+8 examples, 0 failures
+
+Lua.CallStats
+  wires the full production API to one window, including the UI descriptor registrar [✔]
+UI descriptor registration boundary (#2479)
+  installs exactly the descriptors' names, every one a function [✔]
+  names every verb exactly once, and names at least one [✔]
+  carries a structurally well-formed descriptor for every verb [✔]
+UI descriptors against live results (#2479)
+  distinguishes zero results from one nil result [✔]
+  pushes placePopup's three bare values in descriptor order [✔]
+  pushes findHoverTarget's two nullable values, together [✔]
+  pushes getElementInfo's nullable record with every documented field [✔]
+  pushes getVisibleElements as an array of those same records [✔]
+  pushes getEffectiveClip's nullable rect both ways [✔]
+  pushes the nullable scalars and plain values it describes [✔]
+  documents Lua.toboolean's coercion the way it really behaves [✔]
+  describes scroll capture as the raw opt-in it really is [✔]
+  describes page scope as requiring visibility [✔]
+  describes control focus as the unvalidated handle it really is [✔]
+  queries pointer blocking through the real clipped UI surface [✔]
+  pushes nothing from the setters that describe no results [✔]
+
+Finished in 0.1881 seconds
+17 examples, 0 failures
+
+session teardown clears Lua entity state (#1610)
+  clears all five registrants on the real Exit to Menu path, in place and while the session is still live [✔]
+  keeps both tables empty through the manager-clear drain window, while the entity queries still report the destroyed session [✔]
+  lets the next session activation create fresh rows again [✔]
+  releases the latch from the real gameplay-view transition and from a published load, and from no other menu [✔]
+  runs every remaining clear and still destroys the world when one callback fails [✔]
+  fires no session-teardown callback on a save load [✔]
+
+Finished in 0.1142 seconds
+6 examples, 0 failures
+
+Ground item move
+  a move that takes
+    repositions the row in place, preserving its gid, its whole instance, the allocator, every other row and the selection [✔]
+    answers exactly one value [✔]
+
+Finished in 0.0216 seconds
+2 examples, 0 failures
+
+Ground item move
+  page resolution
+    moves on an explicitly named HIDDEN page, leaving the active page alone [✔]
+    refuses an unknown page, touching neither live page [✔]
+    refuses everything when no page is active [✔]
+    re-resolves the active page on EVERY call, so a switch between two moves lands on the page that is active now [✔]
+    never selects across pages when the gid collides: the instance decides which page's row was meant [✔]
+
+Finished in 0.0552 seconds
+5 examples, 0 failures
+
+Ground item move
+  argument refusals
+    refuses a gid or an instanceId that is a numeric STRING [✔]
+    refuses a missing or unconvertible required argument [✔]
+    refuses a gid the page has no row for, and a live gid whose instance does not match [✔]
+
+Finished in 0.0371 seconds
+3 examples, 0 failures
+
+Ground item move
+  coordinate refusals
+    refuses a non-finite coordinate on EITHER axis [✔]
+    refuses a finite Lua number whose narrowing to Float is not [✔]
+    refuses a coordinate past the frame bound, rather than wrapping into a chunk that happens to be loaded [✔]
+    refuses a destination whose chunk is not loaded, without loading one [✔]
+    refuses a column whose material sits only at the elevation a REAL pointer hit reports, with that hit established and three elevations in play [✔]
+    refuses a column whose material sits only at the camera's z-slice [✔]
+    takes when material sits at the destination's own terrain surface, with the same pointer hit and camera slice standing [✔]
+    refuses a column whose terrain surface is outside its stored z-range, without raising [✔]
+    refuses a far ARENA destination rather than wrapping it by the arena's sentinel world size onto a loaded chunk [✔]
+
+Finished in 4.8673 seconds
+9 examples, 0 failures
+
+Ground item move
+  canonical destinations
+    stores a seam alias in the canonical frame, keeping its sub-tile fraction [✔]
+    stores a negative destination as given, keeping its fraction [✔]
+
+Finished in 0.0221 seconds
+2 examples, 0 failures
+
+ground item page ownership
+  item.pickupGround
+    picks from the unit's OWN page when both pages share the gid [✔]
+    fails with no mutation when only the ACTIVE page has the gid [✔]
+    fails with no mutation when the unit's page has no live world [✔]
+    fails with no mutation when the unit does not exist [✔]
+    deselects in the OWNING page's cursor only [✔]
+    leaves the cursor untouched when nothing was removed [✔]
+    restores a vanished unit's item to the page it came from [✔]
+  the three drop verbs
+    unit.dropEquipmentToGround lands on the unit's own page only [✔]
+    unit.dropItemToGround lands on the unit's own page only [✔]
+    unit.dropItemById lands on the unit's own page only [✔]
+    unit.dropEquipmentToGround fails with no mutation off a live page [✔]
+    unit.dropItemToGround fails with no mutation off a live page [✔]
+    unit.dropItemById fails with no mutation off a live page [✔]
+  same-page behavior is unchanged
+    round-trips the exact instance on a non-active page [✔]
+    round-trips on the ACTIVE page for a unit standing on it [✔]
+    still refuses a gid that exists on no live page [✔]
+
+Finished in 0.0252 seconds
+16 examples, 0 failures

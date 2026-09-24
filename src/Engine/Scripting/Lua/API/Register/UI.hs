@@ -43,7 +43,7 @@ registerUIAPI callStats = void ∘ installUIAPI callStats
 -- * Shared argument and result shapes
 --
 --   These recur verbatim across the namespace; naming them once keeps
---   the 82 descriptors below readable and keeps one wording for one
+--   the descriptors below readable and keeps one wording for one
 --   fact.
 
 -- | The element handle almost every verb takes first.
@@ -163,6 +163,13 @@ installUIAPI callStats env = do
             "True while any visible page establishes an input-exclusive modal boundary."])
         "Whether gameplay input is currently blocked by a modal UI boundary (#742).")
         (uiIsInputBlockedFn env)
+    , registerLuaVerb callStats "UI" (luaVerb "isPointerBlockedAt"
+        [ argReq "fbX" TNumber "Framebuffer x, read with Lua.tonumber."
+        , argReq "fbY" TNumber "Framebuffer y, read with Lua.tonumber." ]
+        (retVals [resVal "blocked" TBoolean
+            "True for a modal boundary, a pointer-blocking element at the point, or missing/non-finite coordinates after Float conversion."])
+        "Query the engine pointer-surface predicate without changing input state.")
+        (uiIsPointerBlockedAtFn env)
     , registerLuaVerb callStats "UI" (luaVerb "isPageInScope"
         [pageArg]
         (retVals [resVal "inScope" TBoolean
