@@ -219,7 +219,7 @@ stopDebugConsole console = case consoleListener console of
 --   took its snapshot.
 stopClient ∷ ClientHandle → IO ()
 stopClient handle = inBackground $ do
-    void ∘ tryAny ∘ close $ chSocket handle
+    void ∘ tryAny $ chClose handle
     readMVar (chThread handle) ⌦ killThread
 
 -- | Wait for a done-cell to fill or the deadline flag to flip, whichever
@@ -316,7 +316,7 @@ admit ∷ DebugServerConfig → DebugListener → TQueue DebugCommand → Socket
 admit cfg listener cmdQueue conn = do
     threadVar ← newEmptyMVar
     doneVar ← newEmptyTMVarIO
-    let handle = ClientHandle conn threadVar doneVar
+    let handle = ClientHandle (dscCloseClient cfg conn) threadVar doneVar
     mSlot ← atomically $ do
         clients ← readTVar (dlClients listener)
         stopping ← readTVar (dlStopping listener)
@@ -339,14 +339,23 @@ admit cfg listener cmdQueue conn = do
                 `finally` releaseSlot listener slot handle
             void $ tryPutMVar threadVar tid
 
--- | Give the slot back and signal the handler's exit. Runs in the
---   handler's own @finally@, so it covers a clean disconnect, a
---   refused-line disconnect, an idle close, and an async kill alike.
+-- | Close the socket, then give the slot back and signal the handler's
+--   exit. Runs in the handler's own @finally@, so it covers a clean
+--   disconnect, a refused-line disconnect, an idle close, and an async
+--   kill alike.
+--
+--   The slot is released LAST, in one transaction with the done signal
+--   (#2689). Removing it first left a window in which a handler stalled
+--   in its own close was gone from 'dlClients' but not finished, so a
+--   concurrent 'stopDebugConsole' neither waited for it nor reported
+--   it. The close is guarded at 'SomeException', a kill landing in it
+--   included, so the release and the signal always run.
 releaseSlot ∷ DebugListener → Int → ClientHandle → IO ()
 releaseSlot listener slot handle = do
-    atomically $ modifyTVar' (dlClients listener) (Map.delete slot)
-    void ∘ tryAny ∘ close $ chSocket handle
-    signalDone (chDone handle)
+    void ∘ tryAny $ chClose handle
+    atomically $ do
+        modifyTVar' (dlClients listener) (Map.delete slot)
+        void $ tryPutTMVar (chDone handle) ()
 
 swapTVarBool ∷ TVar Bool → Bool → STM Bool
 swapTVarBool var new = do

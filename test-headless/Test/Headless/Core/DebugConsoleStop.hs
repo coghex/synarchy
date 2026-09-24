@@ -130,6 +130,38 @@ deferredKillSpec = describe "a console thread that defers the kill" $ do
           awaitWarnings calls 1 `shouldReturn` [ConsoleAcceptThread])
         `finally` void (tryPutMVar sinkGate ())
 
+  it "still finds, bounds and reports a client stalled inside its own \
+     \cleanup" $ do
+    -- The handler's @finally@ closes its socket before it gives its
+    -- slot back. Were the slot given back FIRST, a handler stuck in
+    -- that close would already be missing from the stop's snapshot:
+    -- not waited for, and not reported.
+    stall ← newStall
+    warnings ← newIORef []
+    let stallingClose sock = do
+            uninterruptibleMask_ $ do
+                enter stall
+                readMVar (stallGate stall)
+                leave stall
+            close sock
+        tweak cfg = cfg { dscCloseClient = stallingClose
+                        , dscOnStopIncomplete = record warnings }
+    withReleasedStall stall $ withQuietServer tweak $ \port console → do
+        sock ← connectTo port
+        void (readUntilContains twoSeconds "> " sock)
+        -- Hanging up ends the handler, whose cleanup then stalls.
+        close sock
+        awaitEntered stall 1
+        elapsed ← timedStop (stopDebugConsole console)
+        elapsed `shouldSatisfy` withinBound
+        awaitWarnings warnings 1 `shouldReturn` [ConsoleClientThread]
+        settle
+        readIORef warnings `shouldReturn` [ConsoleClientThread]
+    -- Released: every close that entered the stall (the handler's, and
+    -- the stop's own on its helper) comes back out.
+    entered ← readIORef (stallEntered stall)
+    awaitLeft stall entered `shouldReturn` True
+
 -- ---------------------------------------------------------------- --
 -- Every admitted client stalled at once
 -- ---------------------------------------------------------------- --

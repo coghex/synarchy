@@ -68,7 +68,7 @@ import Control.Concurrent.STM.TQueue (TQueue)
 import Control.Concurrent.STM.TVar (TVar, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Exception (SomeException, fromException)
 import GHC.IO.Exception (IOErrorType(..))
-import Network.Socket (Socket, SockAddr, accept)
+import Network.Socket (Socket, SockAddr, accept, close)
 import System.IO (hPutStrLn, hFlush, stderr)
 import System.IO.Error (ioeGetErrorType, tryIOError)
 
@@ -484,6 +484,12 @@ data DebugServerConfig = DebugServerConfig
       --   which is the only way to prove the supervision loop survives a
       --   transient error without waiting for the operating system to
       --   produce one.
+    , dscCloseClient ∷ !(Socket → IO ())
+      -- ^ The client-socket close seam, 'Network.Socket.close' in
+      --   production: both the handler's own cleanup and the stop's
+      --   close go through it. A test substitutes a close that stalls,
+      --   which is the only way to hold a handler inside its own
+      --   cleanup and prove the stop still sees it (#2689).
     , dscClassify ∷ !(SomeException → AcceptDisposition)
       -- ^ The classification seam, 'classifyAcceptFailure' in
       --   production.
@@ -530,6 +536,7 @@ defaultDebugServerConfig port builtin = DebugServerConfig
     , dscBuiltin  = builtin
     , dscLimits   = defaultDebugServerLimits
     , dscAccept   = accept
+    , dscCloseClient = close
     , dscClassify = classifyAcceptFailure
     , dscOnRetry  = \remaining cause →
         putStderrLine (listenerRetryMessage port remaining cause)
@@ -602,13 +609,18 @@ data DebugListener = DebugListener
 
 -- | One admitted client, enough of it to close, kill and join.
 data ClientHandle = ClientHandle
-    { chSocket ∷ !Socket
+    { chClose ∷ !(IO ())
+      -- ^ Closes the client's socket, through 'dscCloseClient'.
     , chThread ∷ !(MVar ThreadId)
-      -- ^ Filled immediately after the fork. Read with
-      --   'Control.Concurrent.MVar.tryReadMVar' at shutdown, which is
-      --   why the slot is registered BEFORE the fork: the handler's own
-      --   deregistration can then never race ahead of its registration.
+      -- ^ Filled immediately after the fork. The slot is registered
+      --   BEFORE the fork, so the handler's own deregistration can
+      --   never race ahead of its registration, and a stop that finds
+      --   the slot before this is filled waits for it rather than
+      --   skipping the kill.
     , chDone ∷ !(TMVar ())
-      -- ^ Filled when the handler exits; a 'TMVar' for the same reason
-      --   as 'dlAcceptDone'.
+      -- ^ Filled when the handler's cleanup is complete, in the SAME
+      --   transaction that removes it from 'dlClients' — so a handler
+      --   still inside its cleanup is still in the map for a stop to
+      --   find, and one gone from the map has finished (#2689). A
+      --   'TMVar' for the same reason as 'dlAcceptDone'.
     }
