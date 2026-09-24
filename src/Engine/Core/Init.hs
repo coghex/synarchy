@@ -6,6 +6,7 @@ module Engine.Core.Init
   , EngineInitResult(..)
   , resolveConfigPath
   , migrateLegacyConfig
+  , migrateLegacyConfigWith
   , LegacyNeutralityCheck(..)
   ) where
 
@@ -33,7 +34,9 @@ import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg, OverridesFile)
 import Engine.PlayerEvent (emptyEventStore)
 import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
-import Engine.Core.ConfigWrite (copyConfigFile, writeConfigBytes)
+import Engine.Core.ConfigWrite
+  ( ConfigWriteOps, ConfigWritePhase(..), copyConfigFileWith
+  , realConfigWriteOps, writeConfigBytes )
 import Engine.Core.Defaults
 import Engine.Core.SessionEpoch (freshSessionGameTime)
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
@@ -184,17 +187,37 @@ data LegacyNeutralityCheck = LegacyNeutralityCheck
 --   file, and gets its own warning naming the local path instead of
 --   accusing a file that is fine.
 --
---   Both classes reach the same outcome: the legacy file is untouched
---   ('copyConfigFile' never writes its source), no local file appears
---   (that copy publishes by atomic rename or not at all, #2202, so a
---   failed one leaves nothing behind to poison the existence gate
---   above), the boot falls back to the versioned default/registry
---   exactly like a missing legacy file, and the migration is
---   re-attempted on the next boot.
+--   In every case the legacy file is untouched ('copyConfigFileWith' never
+--   writes its source). What else a failure leaves depends on which
+--   side of the copy's atomic rename (#2202) it happened (#2687):
+--
+--     * A source-side failure, or a destination failure BEFORE
+--       publication (the read, the directory, the temporary, the write,
+--       the flush, or the rename itself): no local file appears, so
+--       nothing poisons the existence gate above. The boot falls back to
+--       the versioned default/registry exactly like a missing legacy
+--       file, and the migration is re-attempted on the next boot.
+--     * A destination failure AFTER publication: the rename succeeded
+--       and only the directory sync failed. The complete migrated local
+--       file IS present, so resolution selects it and the existence gate
+--       suppresses every later attempt — there is no fallback and no
+--       retry. The warning says the file was published with its
+--       durability unconfirmed, and nothing rolls the file back.
+--
+--   Neither logs the @Migrated legacy config@ success line.
 migrateLegacyConfig ∷ ∀ a. (FromJSON a, Eq a)
                     ⇒ Proxy a → LoggerState → Maybe LegacyNeutralityCheck
                     → FilePath → FilePath → IO ()
-migrateLegacyConfig _ logger mCheck legacyPath localPath = do
+migrateLegacyConfig = migrateLegacyConfigWith realConfigWriteOps
+
+-- | 'migrateLegacyConfig' with the copy's filesystem operations
+--   injected, so the gate can fail one publish phase and still run the
+--   production decision logic. Production calls 'migrateLegacyConfig'.
+migrateLegacyConfigWith ∷ ∀ a. (FromJSON a, Eq a)
+                        ⇒ ConfigWriteOps → Proxy a → LoggerState
+                        → Maybe LegacyNeutralityCheck
+                        → FilePath → FilePath → IO ()
+migrateLegacyConfigWith ops _ logger mCheck legacyPath localPath = do
   hasLocal ← doesFileExist localPath
   unless hasLocal $ do
     hasLegacy ← doesFileExist legacyPath
@@ -221,19 +244,29 @@ migrateLegacyConfig _ logger mCheck legacyPath localPath = do
       case (outcome ∷ Either SomeException Bool) of
         -- #2202: the copy is DURABLE — a temporary in the destination's
         -- own directory, fsync, atomic rename, fsync the directory — so
-        -- an interrupted copy can never leave a partial local file. That
+        -- an interrupted copy can never leave a PARTIAL local file. That
         -- matters most HERE: migration is gated on the local file's mere
         -- EXISTENCE, so one partial copy used to suppress every later
-        -- migration attempt permanently. 'copyConfigFile' reports rather
-        -- than throws, which is exactly the shape #2210's
-        -- destination-blaming arm already wanted.
+        -- migration attempt permanently. The copy reports rather than
+        -- throws, which is exactly the shape #2210's destination-blaming
+        -- arm already wanted. It also reports WHICH side of the rename a
+        -- failure fell on (#2687): only a pre-publication failure leaves
+        -- the local path absent; a failed directory sync after the rename
+        -- has already published the complete file.
         Right True → do
-          copied ← copyConfigFile legacyPath localPath
+          copied ← copyConfigFileWith ops legacyPath localPath
           case copied of
             Right () → logInfo logger CatInit $
               "Migrated legacy config " <> T.pack legacyPath
                 <> " -> " <> T.pack localPath
-            Left err → logWarn logger CatInit $
+            Left (AfterPublication, err) → logWarn logger CatInit $
+              "Legacy config " <> T.pack legacyPath
+                <> " was copied and the migrated local file "
+                <> T.pack localPath
+                <> " was published, but its durability is unconfirmed. "
+                <> "The boot uses the published local file and the "
+                <> "legacy file is untouched: " <> err
+            Left (BeforePublication, err) → logWarn logger CatInit $
               "Legacy config " <> T.pack legacyPath
                 <> " is valid, but writing it to " <> T.pack localPath
                 <> " failed; the destination could not be written. The "
