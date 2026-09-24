@@ -56,6 +56,13 @@
 --
 --   In every returned outcome this operation's own temporary is gone.
 --
+--   'writeConfigBytes' reports every phase as the same @Left Text@,
+--   which is all a family that simply saves again needs. A caller whose
+--   own NEXT decision depends on whether the target now exists — the
+--   legacy migration, gated on the local file's existence (#2687) — uses
+--   the phased variants instead, which tag the same cause with the
+--   'ConfigWritePhase' it stopped in.
+--
 --   === Synchronous versus asynchronous
 --
 --   A synchronous filesystem failure becomes a descriptive 'Left' naming
@@ -71,6 +78,9 @@ module Engine.Core.ConfigWrite
     writeConfigBytes
   , writeConfigYaml
   , copyConfigFile
+    -- * Phased outcomes
+  , ConfigWritePhase(..)
+  , copyConfigFileWith
     -- * Removing
   , removeConfigFile
   , removeConfigFileWith
@@ -78,6 +88,7 @@ module Engine.Core.ConfigWrite
   , ConfigWriteOps(..)
   , realConfigWriteOps
   , writeConfigBytesWith
+  , writeConfigBytesPhasedWith
   ) where
 
 import UPrelude
@@ -131,6 +142,19 @@ realConfigWriteOps = ConfigWriteOps
     , cwoRemoveTarget = removeFile
     }
 
+-- | Which side of the publishing rename a failed write stopped on
+--   (#2687). The module header states what each leaves on disk.
+data ConfigWritePhase
+    = BeforePublication
+      -- ^ The directory, the temporary's name, the write, the flush or
+      --   the rename failed — or, for a copy, reading its source did.
+      --   The target is exactly what it was before the call.
+    | AfterPublication
+      -- ^ The rename succeeded and only the directory sync failed: the
+      --   target IS the complete new file, but its durability is
+      --   unconfirmed.
+    deriving (Show, Eq)
+
 -- | Durably replace @path@ with @bytes@. The one write primitive every
 --   @config/@ family goes through; see the module header for the
 --   sequence, the per-phase failure guarantees, and the async policy.
@@ -150,18 +174,36 @@ writeConfigYaml path = writeConfigBytes path ∘ Yaml.encode
 --   EXISTENCE, so one interrupted partial copy suppressed every later
 --   migration attempt for good.
 copyConfigFile ∷ FilePath → FilePath → IO (Either Text ())
-copyConfigFile src dst = do
+copyConfigFile src dst =
+    dropPhase ⊚ copyConfigFileWith realConfigWriteOps src dst
+
+-- | 'copyConfigFile' against injected operations, keeping the phase a
+--   failure stopped in. The migration consumes this directly, because a
+--   post-publication failure has already created the local file its
+--   existence gate reads (#2687).
+copyConfigFileWith ∷ ConfigWriteOps → FilePath → FilePath
+                   → IO (Either (ConfigWritePhase, Text) ())
+copyConfigFileWith ops src dst = do
     loaded ← trySynchronous (BS.readFile src)
     case loaded of
-        Left e → pure $ Left $ "could not read " <> T.pack src <> ": "
-                                 <> tshow e
-        Right bytes → writeConfigBytes dst bytes
+        Left e → pure $ Left ( BeforePublication
+                             , "could not read " <> T.pack src <> ": "
+                                 <> tshow e )
+        Right bytes → writeConfigBytesPhasedWith ops dst bytes
 
 -- | 'writeConfigBytes' against injected operations. Exported for the
 --   gate; production calls 'writeConfigBytes'.
 writeConfigBytesWith ∷ ConfigWriteOps → FilePath → BS.ByteString
                      → IO (Either Text ())
-writeConfigBytesWith ops path bytes = do
+writeConfigBytesWith ops path bytes =
+    dropPhase ⊚ writeConfigBytesPhasedWith ops path bytes
+
+-- | 'writeConfigBytesWith', tagging a failure with the
+--   'ConfigWritePhase' it stopped in. The cause text is the same one the
+--   untagged variant returns.
+writeConfigBytesPhasedWith ∷ ConfigWriteOps → FilePath → BS.ByteString
+                           → IO (Either (ConfigWritePhase, Text) ())
+writeConfigBytesPhasedWith ops path bytes = do
     prepared ← trySynchronous (createDirectoryIfMissing True dir)
     case prepared of
         Left e   → pure (failed "could not create the directory for" e)
@@ -189,21 +231,26 @@ writeConfigBytesWith ops path bytes = do
     template = "tmp-" ⧺ map (\c → if c ≡ '.' then '-' else c)
                              (takeFileName path)
 
-    failed ∷ Text → SomeException → Either Text ()
-    failed what e = Left $ what <> " " <> T.pack path <> ": "
-                             <> tshow e
+    failed ∷ Text → SomeException → Either (ConfigWritePhase, Text) ()
+    failed = failedIn BeforePublication
+
+    failedIn ∷ ConfigWritePhase → Text → SomeException
+             → Either (ConfigWritePhase, Text) ()
+    failedIn phase what e =
+        Left (phase, what <> " " <> T.pack path <> ": " <> tshow e)
 
     -- A pre-rename failure, with its temporary removed FIRST so the
     -- returned message can also name a leftover the removal could not
     -- clear (#2202 review round 1: a swallowed cleanup failure let this
     -- return 'Left' while its own temporary stayed in config/).
     failedAfterDiscard ∷ FilePath → Text → SomeException
-                       → IO (Either Text ())
+                       → IO (Either (ConfigWritePhase, Text) ())
     failedAfterDiscard tmp what e = do
         leftovers ← cwoDiscardTemp ops tmp
         pure $ case failed what e of
-            Left message → Left (message <> renderLeftovers leftovers)
-            Right ()     → Right ()
+            Left (phase, message) →
+                Left (phase, message <> renderLeftovers leftovers)
+            Right () → Right ()
 
     bestEffortDiscard tmp = void (cwoDiscardTemp ops tmp)
 
@@ -227,13 +274,19 @@ writeConfigBytesWith ops path bytes = do
                     Right () → do
                         synced ← trySynchronous (cwoSyncDir ops dir)
                         pure $ case synced of
-                            Left e   → failed "could not confirm durable" e
+                            Left e   → failedIn AfterPublication
+                                            "could not confirm durable" e
                             Right () → Right ()
 
     describeStep ∷ WriteStep → Text
     describeStep StepOpen  = "could not open a temporary for"
     describeStep StepWrite = "could not write"
     describeStep StepFlush = "could not flush"
+
+-- | Forget which phase a failure stopped in, for the callers whose
+--   contract is the plain @Either Text ()@.
+dropPhase ∷ Either (ConfigWritePhase, Text) () → Either Text ()
+dropPhase = either (Left ∘ snd) Right
 
 -- | Append a cleanup failure to the message that is already being
 --   returned. Empty when the temporary went away, which is the case

@@ -177,9 +177,12 @@ shouldBeWriteFailureWarning entries local expected =
         other → expectationFailure $
             "expected exactly one legacy-config warning, got: " <> show other
 
--- | #2210 requirement 3: a failed migration leaves the world exactly as
---   a missing legacy file would — the source byte-for-byte untouched, no
---   local file, and the boot still resolving the versioned default.
+-- | #2210 requirement 3: a migration that failed BEFORE the copy's
+--   publishing rename leaves the world exactly as a missing legacy file
+--   would — the source byte-for-byte untouched, no local file, and the
+--   boot still resolving the versioned default. A post-rename failure
+--   has already published the local file, so it is not this outcome
+--   (#2687; pinned in "Test.Headless.Core.ConfigWrite").
 shouldHaveLeftNoTrace ∷ FilePath → BS.ByteString → FilePath → FilePath
                       → Expectation
 shouldHaveLeftNoTrace legacy legacyBytes local deflt = do
