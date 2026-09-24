@@ -11,6 +11,9 @@ local saveBrowser = {}
 saveBrowser.page = nil
 saveBrowser.panelId = nil
 saveBrowser.listId = nil
+-- Rows the current list shows at once (#2629): the upper bound a
+-- resize-restored scroll offset is clamped against.
+saveBrowser.visibleCount = 0
 saveBrowser.saves = {}
 saveBrowser.onSelectCallback = nil
 saveBrowser.onBackCallback = nil
@@ -258,6 +261,7 @@ function saveBrowser.createUI()
     local visibleCount = math.min(#listItems, saveBrowser.baseSizes.maxVisible,
         heightVisibleCount)
     if visibleCount < 1 then visibleCount = 1 end
+    saveBrowser.visibleCount = visibleCount
     local listHeight = visibleCount * s.itemHeight
 
     local panelWidth  = math.floor(saveBrowser.fbW * 0.6)
@@ -441,6 +445,9 @@ function saveBrowser.onFramebufferResize(width, height)
         -- player had picked.
         local prevValue = saveBrowser.listId
             and list.getSelectedValue(saveBrowser.listId)
+        -- #2629: the scroll offset too — list.new() starts at row zero.
+        local prevScroll = saveBrowser.listId
+            and list.getScrollOffset(saveBrowser.listId) or 0
 
         -- #748 round 5: preserve keyboard CONTROL focus (#745) too,
         -- mirroring settings_menu/create_world_menu/main_menu/pause_menu.
@@ -455,6 +462,19 @@ function saveBrowser.onFramebufferResize(width, height)
         if wasVisible and saveBrowser.page then
             UI.showPage(saveBrowser.page)
             responsive.restoreControlFocusName(controlFocusName)
+        end
+
+        -- Clamp to the rebuilt list's valid range here rather than
+        -- relying on list.setScrollOffset: with every save visible there
+        -- is no scrollbar, and that branch only enforces a nonnegative
+        -- offset. Scrolling fires no onSelect, so no save loads.
+        if saveBrowser.listId then
+            local maxScroll = math.max(0,
+                #saveBrowser.saves - saveBrowser.visibleCount)
+            local restored = math.min(prevScroll, maxScroll)
+            if restored > 0 then
+                list.setScrollOffset(saveBrowser.listId, restored)
+            end
         end
 
         if prevValue and saveBrowser.listId then
