@@ -30,12 +30,12 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Fingerprint every accepted zoom-palette texture dependency
-- [ ] PRR-2. Narrow the scene comparator's render-equivalence guarantee
+- [x] PRR-1. Fingerprint every accepted zoom-palette texture dependency — [#2692]
+- [x] PRR-2. Narrow the scene comparator's render-equivalence guarantee — [#2694]
 
 ## 1. Zoom artifact invalidation
 
-### PRR-1. Fingerprint every accepted zoom-palette texture dependency
+### [#2692] PRR-1. Fingerprint every accepted zoom-palette texture dependency
 
 > **Captured note:** PR #2191 fingerprints four directory trees, but the
 > palette loader accepts texture references outside them. Changing such a
@@ -79,7 +79,7 @@ stale-map or full save/load reproduction.
 
 ## 2. Scene ordering contract
 
-### PRR-2. Narrow the scene comparator's render-equivalence guarantee
+### [#2694] PRR-2. Narrow the scene comparator's render-equivalence guarantee
 
 > **Captured note:** PR #2121 documents `quadPainterOrder` as total on
 > everything that can affect rendering, claiming residual ties render

@@ -28,12 +28,12 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Escape rebased screenshot destinations as Markdown links
-- [ ] PRR-2. Preserve the wrapped building position through the staking handoff
+- [x] PRR-1. Escape rebased screenshot destinations as Markdown links — [#2690]
+- [x] PRR-2. Preserve the wrapped building position through the staking handoff — [#2691]
 
 ## 1. Playtest evidence links
 
-### PRR-1. Escape rebased screenshot destinations as Markdown links
+### [#2690] PRR-1. Escape rebased screenshot destinations as Markdown links
 
 > **Captured note:** PR #2289 rebases screenshot paths for reports written
 > outside their trace directory, but emits raw filesystem paths as bare
@@ -68,7 +68,7 @@ rendering run.
 
 ## 2. Building ghost continuity at the world seam
 
-### PRR-2. Preserve the wrapped building position through the staking handoff
+### [#2691] PRR-2. Preserve the wrapped building position through the staking handoff
 
 > **Captured note:** PR #2254 promises identical designation and staked
 > building geometry, but only the designation applies the nearest world-wrap

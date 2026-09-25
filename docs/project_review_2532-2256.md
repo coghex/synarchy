@@ -25,12 +25,12 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Make migration diagnostics distinguish publication from durability
-- [ ] PRR-2. Bound combat-group participant retention as well as event retention
+- [x] PRR-1. Make migration diagnostics distinguish publication from durability — [#2687]
+- [x] PRR-2. Bound combat-group participant retention as well as event retention — [#2688]
 
 ## 1. Config migration diagnostics
 
-### PRR-1. Make migration diagnostics distinguish publication from durability
+### [#2687] PRR-1. Make migration diagnostics distinguish publication from durability
 
 > **Captured note:** PR #2266's destination-failure warning and failure
 > contract promise default fallback and a retry on the next boot. After
@@ -64,7 +64,7 @@ was inspected statically, not produced by injecting a real boot failure.
 
 ## 2. Grouped combat history
 
-### PRR-2. Bound combat-group participant retention as well as event retention
+### [#2688] PRR-2. Bound combat-group participant retention as well as event retention
 
 > **Captured note:** PR #2257 bounds group count and each group's events,
 > but a continuously active combat group's `participants` set still grows

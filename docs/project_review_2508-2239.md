@@ -30,11 +30,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Make console teardown bounds effective inside worker cleanup
+- [x] PRR-1. Make console teardown bounds effective inside worker cleanup — [#2689]
 
 ## 1. Console and worker teardown
 
-### PRR-1. Make console teardown bounds effective inside worker cleanup
+### [#2689] PRR-1. Make console teardown bounds effective inside worker cleanup
 
 > **Captured note:** PR #2246 installs timeout-bounded console joins inside
 > worker cleanup that PR #2239 runs under an uninterruptible mask. The

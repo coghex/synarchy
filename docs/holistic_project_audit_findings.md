@@ -73,7 +73,7 @@ pass broadened HPA-4, HPA-7, and HPA-35 with independently verified evidence.
 
 - [x] HPA-1. Lateral fluid equalization can underflow its source volume — [#2042]
 - [x] HPA-2. Runtime fluid ignores the cylindrical world seam — [#2044]
-- [ ] HPA-3. Transfers between unlike fluids silently change fluid identity — [deferred]: reaction epic pending via /design-epic
+- [x] HPA-3. Transfers between unlike fluids silently change fluid identity — [#2480]
 - [x] HPA-4. Session replacement retains independent history and transient UI — [#2156]
 - [x] HPA-5. Legacy save read exceptions leave the load transaction active — [#2162]
 - [x] HPA-6. Forced worker shutdown returns before the worker has exited — [#2165]
@@ -96,7 +96,7 @@ pass broadened HPA-4, HPA-7, and HPA-35 with independently verified evidence.
 - [x] HPA-23. Unknown-component preservation fails open when a generation cannot be read — [#2227]
 - [x] HPA-24. Slot creation and autosave rotation omit parent-directory durability — [#2229]
 - [x] HPA-25. A fresh world's center chunk is never admitted to fluid simulation — [#2232]
-- [ ] HPA-26. Reusing a world-page name can adopt the previous incarnation's state — [deferred]: page incarnation epic pending via /process-design-doc
+- [x] HPA-26. Reusing a world-page name can adopt the previous incarnation's state — [#2474]
 - [x] HPA-27. Normal world initialization discards runtime material registrations — [#2278]
 - [x] HPA-28. A non-finite time scale crashes the world worker — [#2280]
 - [x] HPA-29. A timed-out debug command can still execute later — [#2282]
@@ -183,9 +183,7 @@ For a 64-chunk cylindrical world, a raw neighbor across the U boundary canonical
 - **Scope and constraints:** The simulation needs enough per-world topology context to canonicalize activation and reconciliation while processing each shared edge exactly once. Arena and zero-size worlds must retain identity behavior.
 - **Remaining uncertainty:** The coordinate mismatch is direct, but an end-to-end active-fluid fixture at the physical wrap boundary was not run.
 
-### [deferred] HPA-3. Transfers between unlike fluids silently change fluid identity
-
-> **Deferred:** Owner chose a lava+water→stone reaction feature, which is epic-sized — precondition: the unlike-fluid reaction design document is processed through `/process-design-doc` and its epic number exists to link here.
+### [#2480] HPA-3. Transfers between unlike fluids silently change fluid identity
 
 **Severity:** Medium
 
@@ -943,9 +941,7 @@ center as already resident, no later path sends its missing
 - **Remaining uncertainty:** No live center-fluid world was observed; the sole
   producer inventory confirms the missing message.
 
-### [deferred] HPA-26. Reusing a world-page name can adopt the previous incarnation's state
-
-> **Deferred:** Owner chose the epic path (queue-ordered per-page unit and building teardown on single-page destroy and same-id re-init, and fencing in-flight fluid writebacks with the page's existing `ChunkGeneration` epoch; design authority `docs/page_incarnation_design.md`) — precondition: that design document's EPIC entry is processed through `/process-design-doc` and its epic number exists to link here.
+### [#2474] HPA-26. Reusing a world-page name can adopt the previous incarnation's state
 
 **Severity:** High
 
