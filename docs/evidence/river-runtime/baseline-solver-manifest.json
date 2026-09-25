@@ -1,0 +1,9 @@
+{
+  "source_commit": "8caf3c99b6acc947468be63fcca68f40e1aa583a",
+  "production_code_modified": false,
+  "source": "tools/river_runtime/Characterize.hs",
+  "source_sha256": "daaa59be90f395bfa7c6293b9d3e010eba5bdd39ba8f9d14da9d4e83f493e49f",
+  "executable_sha256": "ec64f1712d3c90b236b3401b33545f1ef35f87f31571dbf21e9c373893f1b5a2",
+  "ticks": 10,
+  "classification": "characterization, not behavior approval"
+}

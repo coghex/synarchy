@@ -1,0 +1,13 @@
+{
+  "source_commit": "8caf3c99b6acc947468be63fcca68f40e1aa583a",
+  "engine": "/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2533-river-eighth-progression/dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy/synarchy",
+  "engine_sha256": "3979c17e81c87a16c1218607f92eff7af29a1634b4fdd56401a1fba1d605031b",
+  "driver_sha256": "0aaa93c97884029e2488cc2360e180b17ca871860bedbfd64129e062b0e3cc8d",
+  "limitations": [
+    "finite initial water, no continuous supply",
+    "all 25 arena chunks are resident",
+    "socket surface observations are rounded ceilings",
+    "wall-clock observation; no exact tick-count claim"
+  ],
+  "completed": true
+}
