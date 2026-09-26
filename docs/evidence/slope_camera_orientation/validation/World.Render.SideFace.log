@@ -1,0 +1,53 @@
+Build profile: -w ghc-9.12.2 -O1
+In order, the following will be built (use -v for more details):
+ - synarchy-0.1.0.0 (ephemeral targets)
+Preprocessing library for synarchy-0.1.0.0...
+Building library for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy' for synarchy-0.1.0.0...
+Building executable 'synarchy' for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Building executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Running 1 test suites...
+Test suite synarchy-test-headless: RUNNING...
+
+World.Render.SideFace
+  fluidTopQuads selects a flat fluid top (#2517)
+    is flat for River under every lower-neighbour topology [✔]
+    is flat for Lake under every lower-neighbour topology [✔]
+    never selects any of the sixteen slope face maps [✔]
+    is flat for a single lower neighbour, which used to ramp [✔]
+    keeps Ocean and Lava tops flat and unchanged [✔]
+    suppresses Ocean and Lake tops under ice but keeps River tops [✔]
+    clips fluid tops to the z-slice window [✔]
+    emits no top for a tile the view bounds reject [✔]
+  separate sides begin below the mask-owned slab (#2529)
+    leaves a one-z drop entirely to the top mask for all fluid types [✔]
+    emits only the remaining N-1 strips for whole-z drops [✔]
+    clips the remaining strips to the actual visible interval [✔]
+  waterSideFaceQuads leaves non-drops alone
+    draws nothing for an equal-height wet neighbour [✔]
+    draws nothing for a HIGHER wet neighbour [✔]
+    draws nothing for equal or higher dry terrain [✔]
+    draws nothing for enclosed equal-height water [✔]
+    keeps the strips below the mask sorted a fixed step apart [✔]
+  waterSideFaceQuads across chunk seams
+    renders side faces over a DRY drop in the adjacent chunk (the bug) [✔]
+    renders side faces over a LOWER-WATER drop in the adjacent chunk [✔]
+    draws nothing at the seam when the neighbor chunk is not loaded [✔]
+    still renders a waterfall face WITHIN a chunk (regression guard) [✔]
+  waterSideFaceQuads across the U seam (#1135)
+    renders side faces over a DRY drop across the seam [✔]
+    renders side faces over a LOWER-WATER drop across the seam [✔]
+    matches the equivalent interior fixture exactly [✔]
+    draws nothing when the seam neighbour is genuinely unloaded [✔]
+
+Finished in 0.0017 seconds
+24 examples, 0 failures
+Test suite synarchy-test-headless: PASS
+Test suite logged to:
+/Users/vincentcoghlan/worktrees/coghex/synarchy/fix-slope-camera-orientation/./dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/test/synarchy-0.1.0.0-synarchy-test-headless.log
+1 of 1 test suites (1 of 1 test cases) passed.

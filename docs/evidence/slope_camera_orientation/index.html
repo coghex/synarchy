@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Slope orientation fix</title>
+<style>
+:root{color-scheme:light dark;font:17px/1.5 system-ui;background:Canvas;color:CanvasText}
+body{max-width:1280px;margin:0 auto;padding:20px}
+p{max-width:950px}nav{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+button,select{font:inherit;padding:8px;cursor:pointer}button[aria-pressed=true]{outline:2px solid Highlight;outline-offset:2px}
+img{display:block;width:100%;height:auto}figure{margin:0}figcaption{margin:10px 0}
+</style>
+<h1>Slopes keep their world orientation</h1>
+<p>The tall pillar carries one slope. The shorter flat pillar is a marker fixed three tiles east.
+Switch camera views: the marker moves around the slope. Compare A and B at the same view.</p>
+<nav aria-label="Scene"><select id="scene" aria-label="Scene"><option value="isolated">Isolated slope</option><option value="hill">Descending hill</option><option value="masks">All 16 terrain masks</option><option value="vegetation">All 16 vegetation masks</option></select></nav>
+<nav id="views" aria-label="Camera view"></nav>
+<nav id="variants" aria-label="Mask selection"></nav>
+<figure><figcaption id="caption" aria-live="polite"></figcaption><img id="frame" width="1280" height="900" alt=""></figure>
+<p>B uses the corrected production renderer. Both runs author slope flags once and verify they remain unchanged after every camera turn. Terrain and vegetation use the existing art. The two mask galleries contain IDs 0–15 in world-row order; their positions rotate with the camera.</p>
+<script>
+const scene=document.getElementById('scene'),frame=document.getElementById('frame');
+let facing=1,variant='rotated';
+const variants={current:['A: before fix','before'],rotated:['B: corrected renderer','after']};
+function show(){
+ const title=scene.options[scene.selectedIndex].text;
+ frame.src=variants[variant][1]+'/'+scene.value+'-'+facing+'.png';
+ frame.alt=title+', view '+facing+', '+variants[variant][0];
+ document.getElementById('caption').textContent=frame.alt;
+ for(const b of document.querySelectorAll('[data-view]'))b.setAttribute('aria-pressed',String(Number(b.dataset.view)===facing));
+ for(const b of document.querySelectorAll('[data-variant]'))b.setAttribute('aria-pressed',String(b.dataset.variant===variant));
+}
+for(let i=0;i<4;i++){const b=document.createElement('button');b.type='button';b.textContent='View '+i;b.dataset.view=i;b.onclick=()=>{facing=i;show()};document.getElementById('views').append(b);}
+for(const [key,value] of Object.entries(variants)){const b=document.createElement('button');b.type='button';b.textContent=value[0];b.dataset.variant=key;b.onclick=()=>{variant=key;show()};document.getElementById('variants').append(b);}
+scene.onchange=show;show();
+</script>
+</html>

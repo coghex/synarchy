@@ -1,0 +1,44 @@
+{
+  "groups": [
+    {
+      "group": "World.Render.SlopeFacing",
+      "examples": 6,
+      "failures": 0
+    },
+    {
+      "group": "World.Render.FluidLevels",
+      "examples": 17,
+      "failures": 0
+    },
+    {
+      "group": "World.Render.PickSeam",
+      "examples": 19,
+      "failures": 0
+    },
+    {
+      "group": "World.Slope.FaceMaps",
+      "examples": 15,
+      "failures": 0
+    },
+    {
+      "group": "World.Spoil",
+      "examples": 6,
+      "failures": 0
+    },
+    {
+      "group": "World.Render.SideFace",
+      "examples": 24,
+      "failures": 0
+    }
+  ],
+  "total_examples": 87,
+  "captures": 32,
+  "unchanged_fixture_readbacks": true,
+  "reference_view_pixel_identical": true,
+  "viewer_controls_checked": true,
+  "owner_visual_review": {
+    "status": "accepted",
+    "date": "2026-09-26",
+    "quote": "that looks right, make this a pr"
+  }
+}

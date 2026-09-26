@@ -1,0 +1,49 @@
+Build profile: -w ghc-9.12.2 -O1
+In order, the following will be built (use -v for more details):
+ - synarchy-0.1.0.0 (ephemeral targets)
+Preprocessing library for synarchy-0.1.0.0...
+Building library for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy' for synarchy-0.1.0.0...
+Building executable 'synarchy' for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Building executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Running 1 test suites...
+Test suite synarchy-test-headless: RUNNING...
+
+World.Render.PickSeam
+  the fixture really exercises the alias path
+    stores the seam chunk only under its canonical key [✔]
+    puts the two names for that tile a whole world apart [✔]
+  at FaceSouth
+    resolves a seam-alias pick to the CANONICAL tile [✔]
+    shifts the fractional hover position by the SAME whole tile [✔]
+    is the identity away from the seam [✔]
+    still reports no tile when the chunk genuinely is not loaded [✔]
+  at FaceNorth
+    resolves a seam-alias pick to the CANONICAL tile [✔]
+    shifts the fractional hover position by the SAME whole tile [✔]
+    is the identity away from the seam [✔]
+    still reports no tile when the chunk genuinely is not loaded [✔]
+  at FaceWest
+    resolves a seam-alias pick to the CANONICAL tile [✔]
+    shifts the fractional hover position by the SAME whole tile [✔]
+    is the identity away from the seam [✔]
+    still reports no tile when the chunk genuinely is not loaded [✔]
+  at FaceEast
+    resolves a seam-alias pick to the CANONICAL tile [✔]
+    shifts the fractional hover position by the SAME whole tile [✔]
+    is the identity away from the seam [✔]
+    still reports no tile when the chunk genuinely is not loaded [✔]
+  a degenerate viewport is still rejected
+    reports no tile when the window has collapsed [✔]
+
+Finished in 0.0014 seconds
+19 examples, 0 failures
+Test suite synarchy-test-headless: PASS
+Test suite logged to:
+/Users/vincentcoghlan/worktrees/coghex/synarchy/fix-slope-camera-orientation/./dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/test/synarchy-0.1.0.0-synarchy-test-headless.log
+1 of 1 test suites (1 of 1 test cases) passed.
