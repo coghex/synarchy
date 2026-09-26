@@ -5560,8 +5560,9 @@ ad-hoc arithmetic at the call site. Flow rates and thresholds in
 a SIGNED fixed-point ABSOLUTE surface in eighths of a z. There is no
 integer surface beside it, no surface-plus-sublevel pair and no
 ocean-only branch. A whole-z plane is `z * 8` (`fluidCellAtZ`), which is
-what generation, the ocean fill and whole-level player edits produce;
-only the simulation and the saves it writes carry a remainder.
+what lake/ocean generation and whole-level player edits produce. Since
+#2533, generated river surfaces also carry remainders, directly in their
+per-tile table; runtime simulation preserves and evolves that exact plane.
 
 **Volume and the plane share one unit.** `afcVolume` stays a `Word16`
 count of the units standing over the cell's OWN terrain top, so an

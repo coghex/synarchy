@@ -38,8 +38,10 @@
 --        carve pass deepens the channel into a stepped gorge instead
 --        of rendering a vertical water wall. Surface z is
 --        monotonically non-increasing downstream.
---     8. Per-chunk bitmasks + per-tile surface z, indexed by
---        chunk coord for chunk-gen lookup.
+--     8. Refine the retained footprint to exact eighth-z surfaces,
+--        reconciling width overlaps, downstream flow and lateral bounds
+--        together. Deepen only beds that would otherwise protrude through
+--        those planes; index the exact surfaces and carve by chunk.
 --
 --   Steps 1–5 (climate → flow field) live in
 --   'World.Fluid.River.Identify.Flow'; step 7's component tracing
@@ -71,12 +73,13 @@ import World.Fluid.Lake.Identify (computeWorldEdgeOcean)
 import World.Fluid.Lake.Types (WorldLakes)
 import World.Fluid.River.Identify.BedDepth
     (computeBedDepth, maxBedDepth, computeCarveDelta)
-import World.Fluid.River.Identify.Breakthrough (addBreakthroughs)
+import World.Fluid.River.Identify.Breakthrough (addBreakthroughsWithPaths)
+import World.Fluid.River.Identify.Surface (exactRiverSurfaces)
 import World.Fluid.River.Identify.ChunkIndex
     (buildRiverCarveDeltaIndex, buildRiverChunkIndex)
 import World.Fluid.River.Identify.Components
     ( extendRiverChains, clampCentreSurfaces, clampLateralSurfaces
-    , expandWidth, depthFromRadius, cullByLength, labelRiverComponents
+    , expandWidthWithSections, depthFromRadius, cullByLength, labelRiverComponents
     , buildRivers )
 import World.Fluid.River.Identify.Common (SpillwayOwners)
 import World.Fluid.River.Identify.Flow
@@ -152,7 +155,7 @@ identifyWorldRivers seed worldSize lakes terrain climate waterfallQuantum0
 -- * River trace
 
 -- | From per-tile flow, find river tiles (flow ≥ threshold), group
---   them into connected components, compute quantised surface z, and
+--   them into connected components, compute exact surface planes, and
 --   build per-chunk bitmasks.
 traceRivers
     ∷ Word64               -- ^ world seed (pool/riffle bed noise)
@@ -201,8 +204,8 @@ traceRivers seed worldSize terrain lakeIdAt owners spillwayOf dir flow
         -- surface from 'clampCentreSurfaces'; widened tiles inherit the
         -- lowest centre's surface so the water plane stays flat across
         -- the river's cross-section).
-        (isRiverTile, widthRadius, surfZ, perpDist) =
-            expandWidth worldTiles terrain dir flow isRiverCentre centreSurf
+        (isRiverTile, widthRadius, surfZ, perpDist, sections) =
+            expandWidthWithSections worldTiles terrain dir flow isRiverCentre centreSurf
 
         -- Step 2: label connected components — plain 4-adjacency over
         -- the widened river mask (wings included), so width wings stay
@@ -223,8 +226,8 @@ traceRivers seed worldSize terrain lakeIdAt owners spillwayOf dir flow
         -- added to the bitmask with width 0; surface descends to
         -- @seaLevel + 1@ at the path's end.
         worldOcean = computeWorldEdgeOcean terrain worldTiles
-        (isRiverTileB, compIdB, widthRadiusB, surfZB, perpDistB) =
-            addBreakthroughs worldTiles isRiverTileF compIdF dir terrain
+        (isRiverTileB, compIdB, widthRadiusB, surfZB, perpDistB, paths) =
+            addBreakthroughsWithPaths worldTiles isRiverTileF compIdF dir terrain
                              worldOcean widthRadius surfZ perpDist
 
         -- Step 3.5: lateral waterfall clamp. The chain clamp (1c-pre)
@@ -236,6 +239,17 @@ traceRivers seed worldSize terrain lakeIdAt owners spillwayOf dir flow
         -- included). The carve pass below absorbs any lowering.
         surfZL = clampLateralSurfaces worldTiles isRiverTileB surfZB waterfallQuantum
 
+        -- Footprint/width/culling above retain their historical inputs.
+        -- Only the final water plane is refined. Compatible width claims,
+        -- resolved downhill junctions and lateral bounds are solved together;
+        -- conflicting overlap planes no longer flatten an entire bend.
+        -- Ocean composition has priority over the latent river table. Its
+        -- zero-depth beds are repaired locally during chunk generation;
+        -- forcing every overridden table entry to sea level would instead
+        -- drag inland reaches and lake outlets down through lateral bounds.
+        exactSurf = exactRiverSurfaces worldTiles dir isRiverCentre
+                        isRiverTileB surfZL sections paths waterfallQuantum
+
         -- Step 4: build per-component bookkeeping (bbox, sources,
         -- sinks, peak flow). Uses post-breakthrough data so bboxes
         -- include the carved canyons.
@@ -244,7 +258,7 @@ traceRivers seed worldSize terrain lakeIdAt owners spillwayOf dir flow
 
         -- Step 5: per-chunk bitmasks + surface z + width slices.
         byChunk = buildRiverChunkIndex worldSize half isRiverTileB compIdB
-                                       surfZL widthRadiusB
+                                       exactSurf widthRadiusB
 
         -- Step 5.5 (#223): per-tile bed depth. Ordinary reaches keep
         -- the flat 'depthFromRadius' fit; confined (canyon-walled)
@@ -256,10 +270,13 @@ traceRivers seed worldSize terrain lakeIdAt owners spillwayOf dir flow
         -- Step 6: per-tile carve delta. Includes breakthrough path
         -- tiles, which can have large delta where they cut through
         -- coastal mountains.
-        carveDelta = computeCarveDelta worldTiles terrain
-                                       isRiverTileB bedDepth surfZL
+        legacyCarve = computeCarveDelta worldTiles terrain
+                                        isRiverTileB bedDepth surfZL
+        -- Preserve the historical input to chunk terrain smoothing. New
+        -- worlds fit any remaining protruding river beds after that pass,
+        -- so this minimal repair cannot drag down unrelated lake banks.
         carveByChunk = buildRiverCarveDeltaIndex worldSize half isRiverTileB
-                                                 carveDelta
+                                                 legacyCarve
 
     in if nComps ≡ 0
        then emptyWorldRivers

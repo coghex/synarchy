@@ -1,0 +1,34 @@
+River mouth gap analysis
+========================
+Total tiles: 786432
+Rivers: 9160  Mask: 0  Ocean: 0  Lake: 55009
+
+FILLABLE gaps (terrain < river surface — water should exist): 77
+  In river mask: 0
+  Body at distance 1: 33  distance 2: 44
+  Depth distribution (river_surf - terrain):
+    depth=1: 25
+    depth=2: 15
+    depth=3: 11
+    depth=4: 11
+    depth=5: 5
+    depth=6: 4
+    depth=7: 1
+    depth=8: 4
+    depth=9: 1
+  Examples:
+    (-322,-64) terr=55 river_s=56 lake_s=51 d=2 mask=False
+    (-313,-83) terr=53 river_s=54 lake_s=51 d=2 mask=False
+    (-313,-82) terr=51 river_s=52 lake_s=51 d=1 mask=False
+    (-197,290) terr=39 river_s=44 lake_s=36 d=2 mask=False
+    (-143,52) terr=57 river_s=58 lake_s=54 d=2 mask=False
+
+BLOCKED gaps (terrain >= river surface — needs carving): 164
+  In river mask: 0
+  Body at distance 1: 71  distance 2: 93
+  Examples:
+    (-323,-65) terr=53 river_s=52 lake_s=51 d=1 mask=False
+    (-278,-70) terr=166 river_s=166 lake_s=166 d=2 mask=False
+    (-279,-69) terr=168 river_s=166 lake_s=166 d=2 mask=False
+    (-277,-68) terr=170 river_s=165 lake_s=166 d=1 mask=False
+    (-282,-66) terr=163 river_s=157 lake_s=157 d=2 mask=False

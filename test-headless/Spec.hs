@@ -35,6 +35,8 @@ import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
+import qualified Test.Headless.WorldGen.ExactRiver as ExactRiver
+import qualified Test.Headless.WorldGen.ExactRiverWorld as ExactRiverWorld
 import qualified Test.Headless.WorldGen.SharedSpillway as SharedSpillway
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
@@ -522,6 +524,7 @@ main = hspec $ do
         -- GraphicsState record, so the whole contract is provable with
         -- no GPU.
         describe "swapchain resize request" GraphicsSwapchainResize.spec
+        ExactRiverWorld.spec
         describe "River.InlandSources" RiverInlandSources.spec
         -- Capability-projection aliasing (#891): pure handle-equality
         -- checks against the already-booted env — no worldgen, no
@@ -851,6 +854,7 @@ main = hspec $ do
     describe "Wrap Seam" WrapSeam.spec
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
     describe "WorldGen.CoastBreach" CoastBreach.spec
+    ExactRiver.spec
     describe "WorldGen.Breakthrough" Breakthrough.spec
     describe "shared lake spillways" SharedSpillway.spec
     describe "WorldGen.BedDepth" BedDepth.spec
