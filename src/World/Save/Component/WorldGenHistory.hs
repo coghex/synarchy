@@ -42,7 +42,10 @@
 --   The frozen-DTO boundary rule is stated ONCE, in
 --   "World.Save.Component.Types".
 module World.Save.Component.WorldGenHistory
-    ( WorldGenParamsDTOv8(..)
+    ( WorldGenParamsDTOv9(..)
+    , toWorldGenParamsDTOv9
+    , fromWorldGenParamsDTOv9
+    , WorldGenParamsDTOv8(..)
     , toWorldGenParamsDTOv8
     , fromWorldGenParamsDTOv8
     , WorldGenParamsDTOv7(..)
@@ -84,6 +87,96 @@ import Location.Instance
 import World.Chunk.Types (ChunkCoord)
 import World.Save.Component.WorldGenClimate
 import World.Save.Component.WorldGenNaming
+
+-- Frozen pre-#2533 worldgen params (@world-pages@ v12) ------------
+
+data WorldGenParamsDTOv9 = WorldGenParamsDTOv9
+    { gp9Seed                    ∷ !Word64
+    , gp9WorldSize               ∷ !Int
+    , gp9PlateCount              ∷ !Int
+    , gp9Plates                  ∷ ![TectonicPlateDTO]
+    , gp9Calender                ∷ !CalendarConfigDTO
+    , gp9SunConfig               ∷ !SunConfigDTO
+    , gp9MoonConfig              ∷ !MoonConfigDTO
+    , gp9GeoTimeline             ∷ !GeoTimeline
+    , gp9OceanMap                ∷ !OceanMap
+    , gp9OceanDist               ∷ !OceanDistMap
+    , gp9ClimateParams           ∷ !ClimateParamsDTO
+    , gp9ClimateState            ∷ !ClimateStateDTO
+    , gp9ErosionIntensity        ∷ !Float
+    , gp9VolcanicActivity        ∷ !Float
+    , gp9LavaPoolDepth           ∷ !Int
+    , gp9LavaPoolRadius          ∷ !Int
+    , gp9WaterfallQuantum        ∷ !Int
+    , gp9OreLevers               ∷ !OreLeversDTO
+    , gp9TimelineParams          ∷ !TimelineParamsDTO
+    , gp9LocationOverlay         ∷ !LocationOverlay
+    , gp9LocationInstances       ∷ !LocationInstancesDTO
+    , gp9LocationStamped         ∷ !(HS.HashSet ChunkCoord)
+    , gp9RiverNames              ∷ !RiverNamesDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+toWorldGenParamsDTOv9 ∷ WorldGenParams → WorldGenParamsDTOv9
+toWorldGenParamsDTOv9 p = WorldGenParamsDTOv9
+    { gp9Seed                    = wgpSeed p
+    , gp9WorldSize               = wgpWorldSize p
+    , gp9PlateCount              = wgpPlateCount p
+    , gp9Plates                  = map toTectonicPlateDTO (wgpPlates p)
+    , gp9Calender                = toCalendarConfigDTO (wgpCalender p)
+    , gp9SunConfig               = toSunConfigDTO (wgpSunConfig p)
+    , gp9MoonConfig              = toMoonConfigDTO (wgpMoonConfig p)
+    , gp9GeoTimeline             = wgpGeoTimeline p
+    , gp9OceanMap                = wgpOceanMap p
+    , gp9OceanDist               = wgpOceanDist p
+    , gp9ClimateParams           = toClimateParamsDTO (wgpClimateParams p)
+    , gp9ClimateState            = toClimateStateDTO (wgpClimateState p)
+    , gp9ErosionIntensity        = wgpErosionIntensity p
+    , gp9VolcanicActivity        = wgpVolcanicActivity p
+    , gp9LavaPoolDepth           = wgpLavaPoolDepth p
+    , gp9LavaPoolRadius          = wgpLavaPoolRadius p
+    , gp9WaterfallQuantum        = wgpWaterfallQuantum p
+    , gp9OreLevers               = toOreLeversDTO (wgpOreLevers p)
+    , gp9TimelineParams          = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp9LocationOverlay         = wgpLocationOverlay p
+    , gp9LocationInstances       = toLocationInstancesDTO (wgpLocationInstances p)
+    , gp9LocationStamped         = wgpLocationStamped p
+    , gp9RiverNames              = toRiverNamesDTO (wgpRiverNames p)
+    }
+
+-- | Rebuild the live record from the DTO, restoring the transient
+--   @wgpVolcanoCtx@ via 'withVolcanoCtx' exactly the way the manual
+--   'Serialize' instance's @get@ does (from seed / world-size / plates /
+--   timeline). Adding a field to 'WorldGenParams' (or any nested frozen
+--   record) breaks THIS construction — the conscious reconciliation the
+--   boundary rule asks for.
+fromWorldGenParamsDTOv9 ∷ WorldGenParamsDTOv9 → WorldGenParams
+fromWorldGenParamsDTOv9 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                    = gp9Seed d
+    , wgpWorldSize               = gp9WorldSize d
+    , wgpPlateCount              = gp9PlateCount d
+    , wgpPlates                  = map fromTectonicPlateDTO (gp9Plates d)
+    , wgpCalender                = fromCalendarConfigDTO (gp9Calender d)
+    , wgpSunConfig               = fromSunConfigDTO (gp9SunConfig d)
+    , wgpMoonConfig              = fromMoonConfigDTO (gp9MoonConfig d)
+    , wgpGeoTimeline             = gp9GeoTimeline d
+    , wgpOceanMap                = gp9OceanMap d
+    , wgpOceanDist               = gp9OceanDist d
+    , wgpClimateParams           = fromClimateParamsDTO (gp9ClimateParams d)
+    , wgpClimateState            = fromClimateStateDTO (gp9ClimateState d)
+    , wgpErosionIntensity        = gp9ErosionIntensity d
+    , wgpVolcanicActivity        = gp9VolcanicActivity d
+    , wgpLavaPoolDepth           = gp9LavaPoolDepth d
+    , wgpLavaPoolRadius          = gp9LavaPoolRadius d
+    , wgpWaterfallQuantum        = gp9WaterfallQuantum d
+    , wgpOreLevers               = fromOreLeversDTO (gp9OreLevers d)
+    , wgpTimelineParams          = fromTimelineParamsDTO (gp9TimelineParams d)
+    , wgpLocationOverlay         = gp9LocationOverlay d
+    , wgpLocationInstances       = fromLocationInstancesDTO (gp9LocationInstances d)
+    , wgpLocationStamped         = gp9LocationStamped d
+    , wgpRiverNames              = fromRiverNamesDTO (gp9RiverNames d)
+    , wgpExactRiverBeds          = False
+    , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
 
 -- Frozen pre-#916 worldgen params (@world-pages@ v7) ----------------
 
@@ -170,6 +263,7 @@ fromWorldGenParamsDTOv6 d = withVolcanoCtx WorldGenParams
                                       (gp6LocationInstances d)
     , wgpLocationStamped         = gp6LocationStamped d
     , wgpRiverNames              = fromRiverNamesDTO (gp6RiverNames d)
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -263,6 +357,7 @@ fromWorldGenParamsDTOv8 d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances        = fromLocationInstancesDTOv6 (gp8LocationInstances d)
     , wgpLocationStamped          = gp8LocationStamped d
     , wgpRiverNames               = fromRiverNamesDTO (gp8RiverNames d)
+    , wgpExactRiverBeds           = False
     , wgpVolcanoCtx               = emptyVolcanoCtx
     }
 
@@ -353,6 +448,7 @@ fromWorldGenParamsDTOv7 d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances        = fromLocationInstancesDTOv5 (gp7LocationInstances d)
     , wgpLocationStamped          = gp7LocationStamped d
     , wgpRiverNames               = fromRiverNamesDTO (gp7RiverNames d)
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -457,6 +553,7 @@ fromWorldGenParamsDTOv5 d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances       = fromLocationInstancesDTOv3 (gp5LocationInstances d)
     , wgpLocationStamped         = gp5LocationStamped d
     , wgpRiverNames              = fromRiverNamesDTO (gp5RiverNames d)
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -558,6 +655,7 @@ fromWorldGenParamsDTOv4 d = withVolcanoCtx WorldGenParams
                                       (gp4LocationInstances d)
     , wgpLocationStamped         = gp4LocationStamped d
     , wgpRiverNames              = fromRiverNamesDTOv1 (gp4RiverNames d)
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -657,6 +755,7 @@ fromWorldGenParamsDTOv3 d = withVolcanoCtx WorldGenParams
                                       (gp3LocationInstances d)
     , wgpLocationStamped         = gp3LocationStamped d
     , wgpRiverNames              = emptyRiverNames
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -754,6 +853,7 @@ fromWorldGenParamsDTOv2 d = withVolcanoCtx WorldGenParams
                                       (gp2LocationInstances d)
     , wgpLocationStamped         = gp2LocationStamped d
     , wgpRiverNames              = emptyRiverNames
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 
@@ -827,6 +927,7 @@ fromWorldGenParamsDTOv1 d = withVolcanoCtx WorldGenParams
         pendingLegacyFlags (gp1LocationDiscovered d) (gp1LocationContentsSpawned d)
     , wgpLocationStamped         = gp1LocationStamped d
     , wgpRiverNames              = emptyRiverNames
+    , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }
 

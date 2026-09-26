@@ -1,10 +1,10 @@
 {-# LANGUAGE Strict #-}
 
 -- | Per-chunk indexing for the river-identification pipeline: buckets
---   the finalized per-tile river data (bitmask, surface z, width,
+--   the finalized per-tile river data (bitmask, exact surface (eighth-z units), width,
 --   carve delta) into per-'ChunkCoord' vectors so chunk generation can
 --   look up its slice in O(1) ('buildRiverChunkIndex' for the bitmask,
---   surface z and width; 'buildRiverCarveDeltaIndex' for the carve
+--   exact surface (eighth-z units) and width; 'buildRiverCarveDeltaIndex' for the carve
 --   delta). Called once from
 --   'World.Fluid.River.Identify.traceRivers'. See that module's header
 --   comment for the full pipeline overview.
@@ -62,7 +62,7 @@ buildRiverCarveDeltaIndex worldSize half isRiverTile carveDelta =
     in HM.map freezeChunk accum
 
 -- | Build the per-chunk index: one 'RiverChunkEntry' per (chunk, river)
---   pair that overlaps. Both the bitmask and the per-tile surface z are
+--   pair that overlaps. Both the bitmask and the per-tile exact surface (eighth-z units) are
 --   chunkArea-long.
 buildRiverChunkIndex
     ∷ Int                  -- ^ worldSize

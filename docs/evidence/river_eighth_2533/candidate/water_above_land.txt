@@ -1,0 +1,41 @@
+Water: 64169, Dry: 720679
+
+ISSUE 1: Water tiles floating above adjacent dry land (diff > 1)
+  Total (tile,dir) pairs: 775
+    river: 769
+    lake: 6
+  Difference distribution:
+    diff=2: 292
+    diff=3: 157
+    diff=4: 107
+    diff=5: 74
+    diff=6: 59
+    diff=7: 27
+    diff=8: 22
+    diff=9: 18
+    diff=10: 9
+    diff=12: 2
+    diff=13: 2
+    diff=14: 1
+    diff=16: 1
+    diff=22: 1
+    diff=39: 1
+  Unique water tiles with floating issue: 771
+
+ISSUE 2: Lake tiles with dry bank BELOW lake surface
+  Total: 3
+  lake(-138,-6) surf=187 | dry(-137,-6) terr=174
+  lake(-23,272) surf=264 | dry(-24,272) terr=248
+  lake(-22,272) surf=264 | dry(-21,272) terr=225
+
+Worst water-above-land examples:
+  lake(-22,272) surf=264 | dry(-22,273) terr=220 diff=44
+  lake(-23,272) surf=264 | dry(-23,273) terr=222 diff=42
+  lake(-22,272) surf=264 | dry(-21,272) terr=225 diff=39
+  river(-118,36) surf=95 | dry(-117,36) terr=73 diff=22
+  lake(-23,272) surf=264 | dry(-24,272) terr=248 diff=16
+  river(-76,380) surf=75 | dry(-76,379) terr=61 diff=14
+  lake(-138,-6) surf=187 | dry(-137,-6) terr=174 diff=13
+  lake(-138,-6) surf=187 | dry(-138,-5) terr=174 diff=13
+  river(-111,39) surf=49 | dry(-110,39) terr=37 diff=12
+  river(-62,-229) surf=51 | dry(-62,-230) terr=39 diff=12

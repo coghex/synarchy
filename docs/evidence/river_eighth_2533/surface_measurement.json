@@ -1,0 +1,192 @@
+[
+  {
+    "seed": 42,
+    "world_size": 64,
+    "river_tiles": 16654,
+    "fractional_tiles": 14535,
+    "largest_reduction_eighth_units": 10,
+    "tiles_reduced_over_one_z": 376,
+    "largest_locations": [
+      {
+        "index": 77799,
+        "x": 487,
+        "y": -437,
+        "old_whole_z": 2,
+        "new_eighth_z": 6
+      },
+      {
+        "index": 78819,
+        "x": 483,
+        "y": -436,
+        "old_whole_z": 7,
+        "new_eighth_z": 46
+      },
+      {
+        "index": 78820,
+        "x": 484,
+        "y": -436,
+        "old_whole_z": 6,
+        "new_eighth_z": 38
+      },
+      {
+        "index": 78821,
+        "x": 485,
+        "y": -436,
+        "old_whole_z": 5,
+        "new_eighth_z": 30
+      },
+      {
+        "index": 78822,
+        "x": 486,
+        "y": -436,
+        "old_whole_z": 4,
+        "new_eighth_z": 22
+      },
+      {
+        "index": 78823,
+        "x": 487,
+        "y": -436,
+        "old_whole_z": 3,
+        "new_eighth_z": 14
+      },
+      {
+        "index": 78824,
+        "x": 488,
+        "y": -436,
+        "old_whole_z": 2,
+        "new_eighth_z": 6
+      },
+      {
+        "index": 79830,
+        "x": 470,
+        "y": -435,
+        "old_whole_z": 27,
+        "new_eighth_z": 206
+      },
+      {
+        "index": 79831,
+        "x": 471,
+        "y": -435,
+        "old_whole_z": 26,
+        "new_eighth_z": 198
+      },
+      {
+        "index": 79832,
+        "x": 472,
+        "y": -435,
+        "old_whole_z": 24,
+        "new_eighth_z": 182
+      },
+      {
+        "index": 79833,
+        "x": 473,
+        "y": -435,
+        "old_whole_z": 22,
+        "new_eighth_z": 166
+      },
+      {
+        "index": 79834,
+        "x": 474,
+        "y": -435,
+        "old_whole_z": 21,
+        "new_eighth_z": 158
+      }
+    ],
+    "raw_centre_edges_superseded_by_junctions": 16
+  },
+  {
+    "seed": 4567,
+    "world_size": 32,
+    "river_tiles": 19518,
+    "fractional_tiles": 15336,
+    "largest_reduction_eighth_units": 15,
+    "tiles_reduced_over_one_z": 6252,
+    "largest_locations": [
+      {
+        "index": 30719,
+        "x": 255,
+        "y": -197,
+        "old_whole_z": 104,
+        "new_eighth_z": 817
+      },
+      {
+        "index": 31231,
+        "x": 255,
+        "y": -196,
+        "old_whole_z": 100,
+        "new_eighth_z": 785
+      },
+      {
+        "index": 31743,
+        "x": 255,
+        "y": -195,
+        "old_whole_z": 95,
+        "new_eighth_z": 745
+      },
+      {
+        "index": 32255,
+        "x": 255,
+        "y": -194,
+        "old_whole_z": 92,
+        "new_eighth_z": 721
+      },
+      {
+        "index": 32767,
+        "x": 255,
+        "y": -193,
+        "old_whole_z": 90,
+        "new_eighth_z": 705
+      },
+      {
+        "index": 33279,
+        "x": 255,
+        "y": -192,
+        "old_whole_z": 86,
+        "new_eighth_z": 673
+      },
+      {
+        "index": 33791,
+        "x": 255,
+        "y": -191,
+        "old_whole_z": 84,
+        "new_eighth_z": 657
+      },
+      {
+        "index": 34303,
+        "x": 255,
+        "y": -190,
+        "old_whole_z": 81,
+        "new_eighth_z": 633
+      },
+      {
+        "index": 34815,
+        "x": 255,
+        "y": -189,
+        "old_whole_z": 76,
+        "new_eighth_z": 593
+      },
+      {
+        "index": 35327,
+        "x": 255,
+        "y": -188,
+        "old_whole_z": 70,
+        "new_eighth_z": 545
+      },
+      {
+        "index": 35839,
+        "x": 255,
+        "y": -187,
+        "old_whole_z": 59,
+        "new_eighth_z": 457
+      },
+      {
+        "index": 36351,
+        "x": 255,
+        "y": -186,
+        "old_whole_z": 47,
+        "new_eighth_z": 361
+      }
+    ],
+    "raw_centre_edges_superseded_by_junctions": 60
+  }
+]

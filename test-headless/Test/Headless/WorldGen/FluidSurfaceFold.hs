@@ -22,13 +22,14 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Constants (seaLevel)
+import World.Fluid.Exact (exactSurfaceOfZ, exactSurfaceCeilZ)
 import World.Fluid.Lake.Types
     ( Lake(..), LakeChunkEntry(..), WorldLakes(..) )
 import World.Fluid.River.Types
     ( RiverChunkEntry(..), WorldRivers(..) )
 -- 'Lake' is a constructor of both 'FluidType' and the lake table's
 -- own record type, so take only the classifier this suite asserts on.
-import World.Fluid.Types (fluidCellAtZ, FluidType(River))
+import World.Fluid.Types (FluidCell(..), fluidCellAtZ, FluidType(River))
 import World.Generate.Chunk.Fluid
     ( chunkWaterSurfMap, composeFluidMap, lakeSurfaceMap
     , riverSurfaceMap )
@@ -100,7 +101,7 @@ mkRivers bodies = WorldRivers
         [ RiverChunkEntry
             { rceRiverId      = rid
             , rceBitmask      = bitmaskAt (map fst claims)
-            , rcePerTileSurfZ = surfsAt claims
+            , rcePerTileSurfZ = surfsAt [(i, exactSurfaceOfZ z) | (i,z) ← claims]
             , rceWidthRadius  = VU.replicate chunkAreaT 0
             }
         | (rid, claims) ← zip [0 ..] bodies
@@ -154,14 +155,14 @@ spec = do
 
         it "reads each claimed tile's own surface" $ do
             let v = riverSurfaceMap (mkRivers [[(3, 7), (4, 11)]]) coordT
-            (v VU.! 3, v VU.! 4) `shouldBe` (7, 11)
+            (v VU.! 3, v VU.! 4) `shouldBe` (exactSurfaceOfZ 7, exactSurfaceOfZ 11)
 
         it "keeps the lower surface where two rivers overlap, in either \
            \declaration order" $ do
             let lowFirst  = mkRivers [[(5, 2)], [(5, 9)]]
                 highFirst = mkRivers [[(5, 9)], [(5, 2)]]
-            riverSurfaceMap lowFirst  coordT VU.! 5 `shouldBe` 2
-            riverSurfaceMap highFirst coordT VU.! 5 `shouldBe` 2
+            riverSurfaceMap lowFirst  coordT VU.! 5 `shouldBe` exactSurfaceOfZ 2
+            riverSurfaceMap highFirst coordT VU.! 5 `shouldBe` exactSurfaceOfZ 2
 
     describe "chunkWaterSurfMap merges the two sources by the sentinel \
              \rule" $ do
@@ -198,8 +199,21 @@ spec = do
                 params = paramsWith lakes rivers
                 expected = VU.zipWith mergeSurfaces
                     (lakeSurfaceMap lakes coordT)
-                    (riverSurfaceMap rivers coordT)
+                    (VU.map (\x → if x ≡ absent then x else exactSurfaceCeilZ x)
+                        (riverSurfaceMap rivers coordT))
             chunkWaterSurfMap params coordT `shouldBe` expected
+
+    it "compares fractional rivers with whole-z lakes before the ceiling view" $ do
+        let lakes = mkLakes [(4, [0,1,2])]
+            whole = mkRivers [[(0,1),(1,1),(2,1)]]
+            exact = whole { wrByChunk = HM.map (V.map (\e → e
+                { rcePerTileSurfZ = surfsAt [(0,31),(1,33),(2,7)] }))
+                (wrByChunk whole) }
+            params = paramsWith lakes exact
+            cells = composeFluidMap params coordT (VU.replicate chunkAreaT 0)
+        map (chunkWaterSurfMap params coordT VU.!) [0,1,2] `shouldBe` [4,4,1]
+        map (cells V.!) [0,1,2] `shouldBe`
+            map (Just . FluidCell River) [31,33,7]
 
     describe "sharing the fold does not merge the two downstream \
              \policies" $

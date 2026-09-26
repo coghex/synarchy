@@ -13,6 +13,7 @@ module World.Fluid.River.Identify.Components
     , clampCentreSurfaces
     , clampLateralSurfaces
     , expandWidth
+    , expandWidthWithSections
     , depthFromRadius
     , cullByLength
     , labelRiverComponents
@@ -204,6 +205,18 @@ expandWidth
     → VU.Vector Int        -- ^ waterfall-clamped per-centre surface z
     → (VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int)
 expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
+    let (mask, width, surf, perp, _) =
+            expandWidthWithSections worldTiles terrain dir flow isRiverCentre centreSurf
+    in (mask, width, surf, perp)
+
+-- | Preserve the historical footprint walk, including overlapping claims,
+-- while recording every centre/wing equality for the exact surface solve.
+-- These are generation scratch, not persisted river state.
+expandWidthWithSections
+    ∷ Int → VU.Vector Int → VU.Vector Word8 → VU.Vector Int
+    → VU.Vector Bool → VU.Vector Int
+    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int, [(Int, Int)])
+expandWidthWithSections worldTiles terrain dir flow isRiverCentre centreSurf =
     let nTiles = worldTiles * worldTiles
         -- Don't widen into terrain that rises too far above the river's
         -- water surface. Caps the carve depth a wing tile can demand;
@@ -222,6 +235,7 @@ expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
         -- cross-section in 'World.Fluid.River.Identify.BedDepth.computeBedDepth',
         -- min wins when a tile is claimed by several centres.
         perp   ← VUM.replicate nTiles (maxBound ∷ Int)
+        sections ← newSTRef []
         let updateTile tIdx r s p = do
                 VUM.write isR tIdx True
                 curR ← VUM.read width tIdx
@@ -251,6 +265,7 @@ expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
                                           ∧ nT ≤ maxBank
                                           ∧ nT ≥ minBank) $ do
                                         updateTile nxt r centreS k
+                                        modifySTRef' sections ((centreIdx, nxt):)
                                         loop (k + 1) nxt
                 loop 1 centreIdx
         forM_ [0 .. nTiles - 1] $ \i → when (isRiverCentre VU.! i) $ do
@@ -263,7 +278,8 @@ expandWidth worldTiles terrain dir flow isRiverCentre centreSurf =
         widthF ← VU.unsafeFreeze width
         surfZf ← VU.unsafeFreeze surfZ
         perpF  ← VU.unsafeFreeze perp
-        pure (isRf, widthF, surfZf, perpF)
+        sectionEdges ← readSTRef sections
+        pure (isRf, widthF, surfZf, perpF, sectionEdges)
 
 -- | Carve depth in z for a given width radius. v2 user-approved:
 --   narrow rivers (radius 0/1) carve 1 z; wider rivers carve deeper

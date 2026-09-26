@@ -4,17 +4,16 @@
 --   at world init (see "World.Fluid.River.Identify").
 --
 --   Every river tile has ONE 'rcePerTileSurfZ' computed once globally
---   (quantised carve-z with noise-perturbed boundaries for natural-
+--   (an exact eighth-z plane with noise-perturbed boundaries for natural-
 --   looking waterfalls). Chunk gen reads this chunk's bitmasks for
 --   each overlapping river — a tile renders as 'River' at the stored
 --   surface iff the bitmask bit is set AND the chunk's real terrain
 --   is at or below that surface. Cross-chunk consistency is automatic
 --   because every chunk reads the same global table.
 --
---   v1 is 1-tile-wide everywhere. The 'rivFlowRate' field is computed
---   and stored so variable width can be added later without redoing
---   the trace: a future per-tile width field can hang off the same
---   'RiverChunkEntry'.
+--   'rivFlowRate' retains the original hydrological peak flow; per-tile
+--   width radii and bitmasks retain the selected geometry independently
+--   of the final exact surface and its resolved overlap junctions.
 module World.Fluid.River.Types
     ( RiverId
     , River(..)
@@ -70,8 +69,8 @@ data River = River
 -- | The river's overlap with one chunk. 'rceBitmask' is length
 --   @chunkSize * chunkSize@ (256), indexed @ly * chunkSize + lx@;
 --   True iff that tile is part of this river. 'rcePerTileSurfZ' is
---   the same length; for in-bitmask tiles it carries the quantised
---   water surface elevation, for out-of-bitmask tiles its slot is
+--   the same length; for in-bitmask tiles it carries the signed exact
+--   water surface in eighth-z units (#2533, world-pages v13), for out-of-bitmask tiles its slot is
 --   'minBound'.
 data RiverChunkEntry = RiverChunkEntry
     { rceRiverId      ∷ !RiverId
@@ -86,7 +85,7 @@ data RiverChunkEntry = RiverChunkEntry
 
 -- | Bit-packed bitmask form (32 bytes for the 256-tile bitmask, same
 --   scheme as 'World.Fluid.Lake.Types.LakeChunkEntry'), plus a raw
---   list of the per-tile surface z values. The pack helpers below
+--   list of the per-tile exact surface values. The pack helpers below
 --   mirror 'World.Fluid.Lake.Types' — they're inlined here to keep
 --   the River module from depending on Lake internals.
 instance Serialize RiverChunkEntry where
@@ -136,7 +135,7 @@ data WorldRivers = WorldRivers
       -- ^ All rivers, indexed by 'RiverId'.
     , wrByChunk    ∷ !(HM.HashMap ChunkCoord (V.Vector RiverChunkEntry))
       -- ^ Per-chunk: rivers overlapping the chunk + their bitmasks
-      --   and per-tile surface z. Chunks with no rivers are absent.
+      --   and per-tile exact surface. Chunks with no rivers are absent.
     , wrCarveDelta ∷ !(HM.HashMap ChunkCoord (VU.Vector Int))
       -- ^ Per-chunk per-tile carve depth (chunk-local indexing, length
       --   @chunkSize * chunkSize@). Non-zero on river-bitmask tiles —

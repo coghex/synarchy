@@ -965,7 +965,7 @@ haskellSourcesUnder root = do
 
 -- * The golden spec
 
--- | Digests captured from the tree BEFORE this slice: SHA-256 over the
+-- | SHA-256 goldens, recaptured for #2533's generated river surfaces, over the
 --   concatenated 'generateChunkPixels' blocks for the chunks a page
 --   covers, in canonical cell order.
 pageGoldens ∷ [(Int, Int, Int, String)]
@@ -992,9 +992,9 @@ cellGoldens =
 
 worldSpec ∷ SpecWith EngineEnv
 worldSpec = describe "map pyramid finest-page goldens (#2298)" $ do
-    it "matches the pre-change chunk bytes at worldSize 64" $ \env →
+    it "matches the pinned chunk bytes at worldSize 64" $ \env →
         goldenPages env 64
-    it "matches the pre-change chunk bytes at worldSize 128" $ \env →
+    it "matches the pinned chunk bytes at worldSize 128" $ \env →
         goldenPages env 128
     it "carries the halo-aware bytes, and the halo can change them" $ \env →
         haloDependence env 64
@@ -1037,14 +1037,14 @@ goldenPages ∷ EngineEnv → Int → IO ()
 goldenPages env size = do
     PyramidFixture { pfInventory = inv, pfGeometry = geom, pfSource = src }
         ← pyramidFor env size
-    forM_ [ (pu, pv, digest) | (s, pu, pv, digest) ← pageGoldens, s ≡ size ] $
-      \(pu, pv, expected) → do
+    let expectedPages = [ (pu, pv, digest) | (s, pu, pv, digest) ← pageGoldens, s ≡ size ]
+    actualPages ← forM expectedPages $ \(pu, pv, _) → do
         let key = MapPageKey 0 pu pv
         bytes ← accept (mapPageImage inv src key)
         covered ← acceptAddress (mapPageFinestCells geom key)
         let blocks = [ pageCellBlock bytes col row | (col, row, _) ← covered ]
-        (size, pu, pv, hex (SHA256.hash (BS.concat blocks)))
-            `shouldBe` (size, pu, pv, expected)
+        pure (pu, pv, hex (SHA256.hash (BS.concat blocks)))
+    actualPages `shouldBe` expectedPages
 
     -- The individual cells pin BOTH the bytes and the chunk the cell
     -- must hold, so a permutation that preserves the aggregate digest

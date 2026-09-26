@@ -30,6 +30,7 @@ import World.Generate.InitTerrain (BorderedTerrainCache)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
 import World.Geology.Coastal (applyCoastalTable)
 import World.Fluid.Seabed (applySeabedTable)
+import World.Generate.Chunk.RiverBed (fitExactRiverBeds)
 import World.Generate.Chunk.Fluid
     ( chunkWaterSurfMap, chunkOrNeighborOceanic, poolRimCaps, mergeRimCaps
     , applyBasaltCaps, composeFluidMap, lavaShellMask, applyLavaShell
@@ -158,9 +159,11 @@ generateZoomTerrain registry params mBorderedCache coord =
         -- Second despike post-carve — mirrors 'generateChunk' (see
         -- the comment there); required here too so the zoom map and
         -- the detail chunks agree (chunk/fast parity).
-        (finalElevVec, _) =
+        (legacyFinalElev, _) =
             removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
                                   (carvedElevVec, finalMatVec)
+
+        finalElevVec = fitExactRiverBeds params coord chunkBorder legacyFinalElev
 
         -- Extract interior 16×16 from bordered region; carve already baked.
         chunkArea = chunkSize * chunkSize

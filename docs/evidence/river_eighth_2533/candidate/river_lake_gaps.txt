@@ -1,0 +1,26 @@
+Rivers: 9160, Lakes: 55009, Ocean: 0
+
+ISSUE 1: River-lake cliffs (river surf > lake surf + 1)
+  Total: 85
+  diff=2: 38 tiles
+  diff=3: 15 tiles
+  diff=4: 10 tiles
+  diff=5: 5 tiles
+  diff=6: 4 tiles
+  diff=7: 3 tiles
+  diff=8: 3 tiles
+  diff=9: 2 tiles
+  diff=10: 1 tiles
+  diff=11: 2 tiles
+  diff=16: 1 tiles
+  diff=19: 1 tiles
+
+ISSUE 2: River chains running parallel to lakes (5+ tiles, 3+ cliffs)
+  Total: 0
+
+Worst cliffs:
+  river(-79,-260) surf=54 | lake(-79,-259) surf=35 diff=19
+  river(-75,-257) surf=37 | lake(-75,-256) surf=21 diff=16
+  river(-96,378) surf=41 | lake(-96,377) surf=30 diff=11
+  river(-78,-259) surf=46 | lake(-79,-259) surf=35 diff=11
+  river(-99,379) surf=40 | lake(-99,378) surf=30 diff=10

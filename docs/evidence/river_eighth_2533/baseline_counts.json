@@ -1,0 +1,338 @@
+[
+  {
+    "file": "tools/baselines/seed13579_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 13579,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "DESERT_SOIL_ON_SLOPE": [
+        1,
+        0
+      ],
+      "FLOATING_WATER": [
+        117,
+        115
+      ],
+      "WATER_ABOVE_LAND": [
+        203,
+        201
+      ],
+      "WATER_CLIFF": [
+        203,
+        201
+      ],
+      "WATER_WATER_CLIFF": [
+        2154,
+        2152
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed137_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 137,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "FLOATING_WATER": [
+        57,
+        56
+      ],
+      "WATER_ABOVE_LAND": [
+        74,
+        73
+      ],
+      "WATER_CLIFF": [
+        74,
+        73
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed314_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 314,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "DESERT_SOIL_ON_SLOPE": [
+        90,
+        86
+      ],
+      "FLOATING_WATER": [
+        93,
+        88
+      ],
+      "MID_RIVER_CLIFF": [
+        47,
+        32
+      ],
+      "WATER_ABOVE_LAND": [
+        158,
+        141
+      ],
+      "WATER_CLIFF": [
+        158,
+        141
+      ],
+      "WATER_WATER_CLIFF": [
+        1012,
+        988
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed42_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 42,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "DESERT_SOIL_ON_SLOPE": [
+        44,
+        40
+      ],
+      "FLOATING_WATER": [
+        141,
+        113
+      ],
+      "ISLAND_1TILE": [
+        1,
+        2
+      ],
+      "MID_RIVER_CLIFF": [
+        30,
+        12
+      ],
+      "RIVER_CHUNK_GAP": [
+        15,
+        14
+      ],
+      "RIVER_MOUTH_DROP": [
+        12,
+        10
+      ],
+      "WATER_ABOVE_LAND": [
+        169,
+        137
+      ],
+      "WATER_CLIFF": [
+        169,
+        137
+      ],
+      "WATER_WATER_CLIFF": [
+        2413,
+        2365
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed42_size64_region_-2_-2_2_2.json",
+    "metadata": {
+      "seed": 42,
+      "worldSize": 64,
+      "region": [
+        -2,
+        -2,
+        2,
+        2
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "FLOATING_WATER": [
+        19,
+        17
+      ],
+      "RIVER_CHUNK_GAP": [
+        6,
+        5
+      ],
+      "WATER_ABOVE_LAND": [
+        19,
+        17
+      ],
+      "WATER_CLIFF": [
+        19,
+        17
+      ],
+      "WATER_WATER_CLIFF": [
+        686,
+        678
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed4567_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 4567,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "DESERT_SOIL_ON_SLOPE": [
+        33,
+        34
+      ],
+      "FLOATING_WATER": [
+        196,
+        178
+      ],
+      "MID_RIVER_CLIFF": [
+        76,
+        69
+      ],
+      "RIVER_CHUNK_GAP": [
+        21,
+        19
+      ],
+      "WATER_ABOVE_LAND": [
+        323,
+        291
+      ],
+      "WATER_CLIFF": [
+        323,
+        291
+      ],
+      "WATER_WATER_CLIFF": [
+        2825,
+        2786
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed5050_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 5050,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "WATER_ABOVE_LAND": [
+        256,
+        252
+      ],
+      "WATER_CLIFF": [
+        256,
+        252
+      ],
+      "WATER_WATER_CLIFF": [
+        2532,
+        2530
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed7_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 7,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "FLOATING_WATER": [
+        69,
+        67
+      ],
+      "MID_RIVER_CLIFF": [
+        94,
+        75
+      ],
+      "WATER_ABOVE_LAND": [
+        206,
+        195
+      ],
+      "WATER_CLIFF": [
+        206,
+        195
+      ],
+      "WATER_WATER_CLIFF": [
+        3175,
+        3165
+      ]
+    }
+  },
+  {
+    "file": "tools/baselines/seed8080_size32_region_-4_-4_4_4.json",
+    "metadata": {
+      "seed": 8080,
+      "worldSize": 32,
+      "region": [
+        -4,
+        -4,
+        4,
+        4
+      ],
+      "captureRuns": 3
+    },
+    "changes": {
+      "FLOATING_WATER": [
+        106,
+        105
+      ],
+      "MID_RIVER_CLIFF": [
+        43,
+        40
+      ],
+      "WATER_ABOVE_LAND": [
+        203,
+        193
+      ],
+      "WATER_CLIFF": [
+        203,
+        193
+      ],
+      "WATER_WATER_CLIFF": [
+        1984,
+        1975
+      ]
+    }
+  }
+]

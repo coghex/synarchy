@@ -2790,6 +2790,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z4-medic-claim-order.expected.json"
         }
       ]
+    },
+    {
+      "id": "z5-exact-generated-rivers",
+      "description": "Generated river table uses exact eighth-z surfaces; historical whole-z tables migrate once without regenerating their beds.",
+      "declaredAt": "2026-09-26",
+      "declaredByIssue": 2533,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.PageCore.worldPagesCodec / migrateWorldPagesV12",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 13,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z5-exact-generated-rivers",
+          "path": "test-headless/data/save-compat/z5-exact-generated-rivers.bin",
+          "kind": "complete-session",
+          "sha256": "b38e766ceb98fbb69b237aad7167b517cce61a711a583c7f8c754efd4b8c31f8",
+          "sizeBytes": 2509316,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('exact_rivers', 42, 32, 3), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z5-exact-generated-rivers.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",
