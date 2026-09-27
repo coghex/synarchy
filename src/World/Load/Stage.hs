@@ -865,7 +865,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           (zoomCache, chunkPixels) ← if not isActive
             then pure $ buildZoomCacheWithPixels params registry palette Nothing
             else do
-              keyResult ← buildZoomArtifactKey params registry
+              keyResult ← buildZoomArtifactKey params registry palette
               case keyResult of
                 Left reason → do
                   logWarn logger CatWorld $

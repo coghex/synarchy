@@ -46,6 +46,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Material
     ( MaterialId(..), MaterialProps(..), MaterialRegistry
     , getMaterialProps, isKnownMaterial )
+import World.ZoomMap.ColorPalette (PaletteSource(..), ZoomColorPalette(..))
 import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
 
 data ZoomArtifactKey = ZoomArtifactKey
@@ -116,6 +117,13 @@ artifactProducerDigest = BS.pack $(do
     lift $ BS.unpack $ SHA256.finalize $
         SHA256.updates SHA256.init (concat fields))
 
+-- | Directories fingerprinted whole, path and bytes, into
+--   'zakResourcesDigest'.  They cover the material and vegetation YAML
+--   the palette and registry are built from and the stock palette
+--   texture directories.  They are NOT the palette's dependency set: an
+--   authored @zoom@ or vegetation variant path may name a texture
+--   anywhere, so 'buildZoomArtifactKey' additionally fingerprints every
+--   texture the palette actually sampled, wherever it lives (#2692).
 resourceRoots ∷ [FilePath]
 resourceRoots =
     [ "data/materials"
@@ -127,20 +135,39 @@ resourceRoots =
 -- | The full structural encoding is intentionally conservative: a field
 -- that cannot affect zoom output may cause a miss, but can never permit a
 -- stale hit.  Resource paths and bytes are both included in stable order.
+--
+-- Palette textures are fingerprinted, not rejected (#2692): every
+-- material @zoom@ path and vegetation variant path the given palette
+-- sampled contributes its owning definition, authored path and the
+-- SHA-256 of the exact bytes
+-- 'World.ZoomMap.ColorPalette.buildColorPalette' decoded, whether or not
+-- it lies under 'resourceRoots'.  Taking the digests from the
+-- palette rather than re-reading the files keys an artifact on the
+-- bytes that produced its colours, so an edit landing between palette
+-- build and key construction cannot publish old pixels under a new key.
+-- Any texture the palette could not sample (missing, unreadable,
+-- undecodable) makes the key 'Left', so that load neither reads nor
+-- publishes the cache and rebuilds instead.
 buildZoomArtifactKey
-    ∷ WorldGenParams → MaterialRegistry → IO (Either Text ZoomArtifactKey)
-buildZoomArtifactKey params registry =
+    ∷ WorldGenParams → MaterialRegistry → ZoomColorPalette
+    → IO (Either Text ZoomArtifactKey)
+buildZoomArtifactKey params registry palette =
   case artifactEntryCount params ≫= validateArtifactSize of
     Left reason → pure (Left reason)
-    Right (_, count) → do
+    Right (_, count) → case paletteTextureFields palette of
+     Left reason → pure (Left reason)
+     Right textureFields → do
       result ← try $ do
         paths ← L.sort . concat ⊚ mapM listFilesRecursive resourceRoots
         fields ← forM paths $ \path → do
             content ← BS.readFile path
             let relative = TE.encodeUtf8 (T.pack (makeRelative "." path))
             pure [lengthField relative, relative, lengthField content, content]
-        let resources = SHA256.finalize $
-                SHA256.updates SHA256.init (concat fields)
+        -- Counts delimit the two sections, so no root listing can
+        -- masquerade as a palette-texture listing or vice versa.
+        let resources = SHA256.finalize $ SHA256.updates SHA256.init $
+                [countField (length fields)] <> concat fields
+                <> [countField (length textureFields)] <> concat textureFields
         pure $ Right ZoomArtifactKey
             { zakProducerDigest = artifactProducerDigest
             , zakParamsDigest = SHA256.hash (encode params)
@@ -151,6 +178,26 @@ buildZoomArtifactKey params registry =
       pure $ case (result ∷ Either IOException (Either Text ZoomArtifactKey)) of
         Left e → Left ("cannot fingerprint zoom inputs: " <> tshow e)
         Right value → value
+  where
+    countField n = runPut $ putWord64be (fromIntegral n)
+
+-- | Every palette-sampled texture as length-prefixed (path, digest)
+--   fields, each with the definition that sampled it, in a stable order;
+--   or the first texture that could not be sampled, naming its
+--   definition and path.
+paletteTextureFields ∷ ZoomColorPalette → Either Text [[BS.ByteString]]
+paletteTextureFields palette = do
+    pairs ← forM (zcpSources palette) $ \source → case psDigest source of
+        Left reason → Left $ "cannot fingerprint zoom palette texture for "
+            <> psOwner source <> ": " <> T.pack (psPath source)
+            <> " (" <> reason <> ")"
+        Right digest → Right
+            ( TE.encodeUtf8 (psOwner source)
+            , TE.encodeUtf8 (T.pack (psPath source)), digest )
+    pure
+        [ [ lengthField owner, owner, lengthField path, path
+          , lengthField digest, digest ]
+        | (owner, path, digest) ← L.nub (L.sort pairs) ]
 
 loadZoomArtifact ∷ ZoomArtifactKey → IO (Either Text ZoomArtifact)
 loadZoomArtifact = loadZoomArtifactAt zoomArtifactPath
