@@ -1,0 +1,7 @@
+{
+  "src/World/Render/Textures.hs": "a15d8a7a7c5a47b52803e62f82b4ec618c6a6ee7c555b58761a34118722a5821",
+  "src/World/Render/TileQuads.hs": "20ceb8fe85336c6f91c97e62f5c1a22b746dbeab05638f4b94056370f1447734",
+  "src/World/Render/SpoilQuads.hs": "f8c258a137f36e5481c8e6b1601c88db4019c4110deb903134f7d78a0bc10f36",
+  "test-headless/Test/Headless/World/Render/SlopeFacing.hs": "1a8ebbc4d3968c764210db777058ff47711c6a4ea68ee558cacedfd3f6862a62",
+  "tools/slope_orientation_capture.py": "c80391f039a656a69d0076e4ddc8ac758733eb6210589b20d64f012547ae45d5"
+}

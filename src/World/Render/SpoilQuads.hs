@@ -172,7 +172,7 @@ renderSpoilQuadsScanned env worldState tileAlpha = do
                                 + 0.0003
                         tex    = getTileTexture textures
                                      (unMaterialId mat)
-                        fmTex  = getTileFaceMapTexture textures
+                        fmTex  = getTileFaceMapTexture textures facing
                                      (unMaterialId mat)
                                      (loweredMask corners)
                         slotF  = lookupSlot tex

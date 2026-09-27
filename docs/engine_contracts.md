@@ -5679,6 +5679,29 @@ at all, so neither can stand in for any of this.
 
 ---
 
+## Terrain slope orientation
+
+Terrain slope flags describe world directions. Terrain, vegetation/crop tile
+overlays and spoil overlays choose the existing face map relative to camera
+facing; rotating the camera never rewrites stored slope or corner state. The
+reference FaceSouth view is unchanged. At successive clockwise facings
+South/West/North/East, a world E mask selects E/N/W/S; combinations rotate as
+one four-bit mask. Flat masks remain flat and invalid IDs retain the flat
+fallback. Texture UVs and shader lighting keep their existing conventions.
+
+This is visual mask selection, not a new physical terrain surface. The existing
+tile-column picker remains unchanged; exact slope-silhouette picking is not
+established by this contract. Fluid levels and worldgen output are unchanged.
+
+Gates: hspec `World.Render.SlopeFacing`, `World.Render.FluidLevels`,
+`World.Render.PickSeam`, `World.Slope.FaceMaps`, and `World.Spoil`.
+`python3 tools/slope_orientation_capture.py --out /absolute/new/directory`
+captures an isolated slope, descending hill, all terrain masks and vegetation
+masks at four facings, checking that world flags remain unchanged throughout.
+Rendered evidence and owner review belong with the implementation.
+
+---
+
 ## Exact fluid rendering (#2529)
 
 River, Lake, Lava and Ocean tops use the signed exact plane for placement,

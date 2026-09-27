@@ -1,0 +1,142 @@
+[
+  {
+    "path": "isolated-0.png",
+    "identical": true,
+    "changed_bounds": null
+  },
+  {
+    "path": "isolated-1.png",
+    "identical": false,
+    "changed_bounds": [
+      544,
+      451,
+      736,
+      545
+    ]
+  },
+  {
+    "path": "isolated-2.png",
+    "identical": false,
+    "changed_bounds": [
+      546,
+      450,
+      738,
+      546
+    ]
+  },
+  {
+    "path": "isolated-3.png",
+    "identical": false,
+    "changed_bounds": [
+      544,
+      449,
+      736,
+      578
+    ]
+  },
+  {
+    "path": "hill-0.png",
+    "identical": true,
+    "changed_bounds": null
+  },
+  {
+    "path": "hill-1.png",
+    "identical": false,
+    "changed_bounds": [
+      277,
+      415,
+      894,
+      692
+    ]
+  },
+  {
+    "path": "hill-2.png",
+    "identical": false,
+    "changed_bounds": [
+      380,
+      415,
+      1003,
+      691
+    ]
+  },
+  {
+    "path": "hill-3.png",
+    "identical": false,
+    "changed_bounds": [
+      380,
+      329,
+      1003,
+      692
+    ]
+  },
+  {
+    "path": "masks-0.png",
+    "identical": true,
+    "changed_bounds": null
+  },
+  {
+    "path": "masks-1.png",
+    "identical": false,
+    "changed_bounds": [
+      325,
+      315,
+      955,
+      765
+    ]
+  },
+  {
+    "path": "masks-2.png",
+    "identical": false,
+    "changed_bounds": [
+      235,
+      345,
+      1135,
+      675
+    ]
+  },
+  {
+    "path": "masks-3.png",
+    "identical": false,
+    "changed_bounds": [
+      325,
+      255,
+      955,
+      720
+    ]
+  },
+  {
+    "path": "vegetation-0.png",
+    "identical": true,
+    "changed_bounds": null
+  },
+  {
+    "path": "vegetation-1.png",
+    "identical": false,
+    "changed_bounds": [
+      325,
+      315,
+      955,
+      765
+    ]
+  },
+  {
+    "path": "vegetation-2.png",
+    "identical": false,
+    "changed_bounds": [
+      234,
+      345,
+      1134,
+      675
+    ]
+  },
+  {
+    "path": "vegetation-3.png",
+    "identical": false,
+    "changed_bounds": [
+      325,
+      255,
+      955,
+      720
+    ]
+  }
+]

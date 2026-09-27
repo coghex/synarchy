@@ -12,6 +12,7 @@ import World.Types
 import World.Slope (slopeToFaceMapIndex)
 import World.Fluid.Exact (exactTopLevel)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Graphics.Camera (CameraFacing(..))
 
 getTileTexture ∷ WorldTextures → Word8 → TextureHandle
 getTileTexture _        0 = TextureHandle 0
@@ -20,9 +21,23 @@ getTileTexture textures matId =
         Just h  → h
         Nothing → wtNoTexture textures
 
-getTileFaceMapTexture ∷ WorldTextures → Word8 → Word8 → TextureHandle
-getTileFaceMapTexture textures _mat slopeId =
-    case slopeToFaceMapIndex slopeId of
+-- | Stored slope bits describe the world. Only mask selection changes with
+-- the view: an E mask becomes N/W/S at West/North/East camera facings.
+-- Keep invalid IDs invalid so the selectors retain their flat fallback.
+viewSlopeId ∷ CameraFacing → Word8 → Word8
+viewSlopeId facing bits
+    | bits > 15 = bits
+    | otherwise = ((bits `shiftR` turns) ⌄ (bits `shiftL` (4 - turns))) ⌃ 15
+  where
+    turns = case facing of
+        FaceSouth → 0
+        FaceWest → 1
+        FaceNorth → 2
+        FaceEast → 3
+
+getTileFaceMapTexture ∷ WorldTextures → CameraFacing → Word8 → Word8 → TextureHandle
+getTileFaceMapTexture textures facing _mat slopeId =
+    case slopeToFaceMapIndex (viewSlopeId facing slopeId) of
         0  → wtIsoFaceMap textures
         1  → wtSlopeFaceMapN textures
         2  → wtSlopeFaceMapE textures
@@ -41,9 +56,9 @@ getTileFaceMapTexture textures _mat slopeId =
         15 → wtSlopeFaceMapNESW textures
         _  → wtIsoFaceMap textures
 
-getVegFaceMapTexture ∷ WorldTextures → Word8 → TextureHandle
-getVegFaceMapTexture textures slopeId =
-    case slopeToFaceMapIndex slopeId of
+getVegFaceMapTexture ∷ WorldTextures → CameraFacing → Word8 → TextureHandle
+getVegFaceMapTexture textures facing slopeId =
+    case slopeToFaceMapIndex (viewSlopeId facing slopeId) of
         0  → wtVegFaceMap textures
         1  → wtVegSlopeFaceMapN textures
         2  → wtVegSlopeFaceMapE textures
