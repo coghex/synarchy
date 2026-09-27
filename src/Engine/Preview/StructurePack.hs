@@ -64,6 +64,7 @@ import Data.Conduit (runConduit, (.|))
 import qualified Data.Conduit.List as CL
 import Control.Monad.Trans.Resource (runResourceT)
 import Control.Exception (IOException, SomeException, try)
+import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files
     ( FileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile
     , isSymbolicLink )
@@ -306,9 +307,19 @@ lifecycles ctx o = (,) ⊚ construction ⊛ destruction
             fps ← case field d "fps" of
                 Just n@(Aeson.Number _)
                   | Aeson.Success (f ∷ Double) ← Aeson.fromJSON n →
-                    if isNaN f ∨ isInfinite f ∨ f ≤ 0
+                    -- The viewer model carries the rate as a 'Float'
+                    -- ('pslFps'), so a rate that is finite and positive
+                    -- as a 'Double' but overflows or underflows the
+                    -- narrowing is refused here too, rather than
+                    -- reaching playback as Infinity or 0.
+                    let narrowed = realToFrac f ∷ Float
+                    in if isNaN f ∨ isInfinite f ∨ f ≤ 0
                         then Left (dctx <> ".fps: must be a finite positive \
                                           \number, got " <> tshow f)
+                        else if isInfinite narrowed ∨ narrowed ≤ 0
+                        then Left (dctx <> ".fps: " <> tshow f
+                                   <> " is outside the representable \
+                                      \playback-rate range")
                         else pure f
                 Just _  → Left (dctx <> ".fps: must be a number")
                 Nothing → Left (dctx <> ": missing required `fps`")
@@ -573,7 +584,14 @@ loadStructurePackFrom packsRoot texRoot item
         mst ← (try (getSymbolicLinkStatus manifest)
                   ∷ IO (Either IOException FileStatus))
         case mst of
-            Left _ → pure (Right Nothing)
+            -- ABSENT, and only absent, is the folder browser's case. A
+            -- manifest that cannot even be inspected (a permission
+            -- failure on its directory, say) is not known to be absent,
+            -- so it is a diagnostic rather than a silent fallback.
+            Left e
+                | isDoesNotExistError e → pure (Right Nothing)
+                | otherwise → pure (Left (PackManifestUnreadable manifest
+                                              (tshow e)))
             Right st
                 | isSymbolicLink st → pure (Left (PackManifestSymlink manifest))
                 | isDirectory st ∨ not (isRegularFile st) →

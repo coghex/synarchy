@@ -22,6 +22,8 @@ import Data.List (find, nub)
 import System.Directory (createDirectoryIfMissing, createDirectoryLink
                         , createFileLink)
 import System.FilePath ((</>))
+import System.Posix.Files (setFileMode, nullFileMode, ownerModes)
+import Control.Exception (finally)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Types
     ( EngineConfig(..), PreviewBrowse(..), PreviewStructPath(..)
@@ -399,6 +401,25 @@ spec = do
             load fx "link" ⌦ (`shouldBe` Left (PackManifestSymlink (fxPacks fx </> "link.yaml")))
             load fx "dangling" ⌦ (`shouldBe` Left (PackManifestSymlink (fxPacks fx </> "dangling.yaml")))
             load fx "dir" ⌦ (`shouldBe` Left (PackManifestNotAFile (fxPacks fx </> "dir.yaml")))
+
+        it "a manifest that cannot be inspected is a diagnostic, not a fallback" $ withFixture $ \fx → do
+            writePack fx "locked" "name: locked"
+            let restore = setFileMode (fxPacks fx) ownerModes
+            -- No permission to search the pack directory: lstat of the
+            -- manifest fails with EACCES, which is NOT absence.
+            (setFileMode (fxPacks fx) nullFileMode >> load fx "locked")
+                `finally` restore ⌦ \case
+                Left (PackManifestUnreadable path why) → do
+                    path `shouldBe` (fxPacks fx </> "locked.yaml")
+                    T.null why `shouldBe` False
+                other → expectationFailure ("expected an unreadable-manifest \
+                                            \refusal, got " ⧺ show other)
+
+        it "a destruction fps that overflows the playback rate is refused pre-boot" $ do
+            rejects "pieces: { floor: { texture: T/a.png, facemap: T/f.png, destruction: { fps: 1.0e100, frames: [T/a.png] } } }\n"
+                    "outside the representable playback-rate range"
+            rejects "pieces: { floor: { texture: T/a.png, facemap: T/f.png, destruction: { fps: 1.0e-100, frames: [T/a.png] } } }\n"
+                    "outside the representable playback-rate range"
 
         it "a malformed pack is a pre-boot refusal naming the file and the fault" $ do
             rejects "- just\n- a list\n" "not a mapping"
