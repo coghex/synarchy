@@ -576,6 +576,40 @@ spec = do
                 , "selectRow('post@default'); assert(d().selectedCap == nil and #d().capRow == 0)"
                 ]
 
+        it "a failed frame describes only itself: a lifecycle or frame change recovers, and a late failure of an earlier frame changes nothing" $ withFx $ \_ p →
+            runsWithPack p $ lns
+                [ bootFromEngine
+                , "NOW = 50"
+                , "assert(pm.onPreviewLifecycleClick(lifecycleCell('construction').hitHandle))"
+                , "pm.update(0.016)"
+                , "local s = d()"
+                , "local failed, failedPath = s.handle, s.path"
+                , "assert(failed and s.frameIndex == 0 and s.state == 'ready')"
+                , "pm.onAssetFailed('texture', failed, failedPath, 'boom', true)"
+                , "pm.update(0.016)"
+                , "assert(d().state == 'empty', 'the displayed frame failed')"
+                , "-- The clip advancing to its next frame is a new frame."
+                , "NOW = 50.13; pm.update(0.016)"
+                , "s = d()"
+                , "assert(s.frameIndex == 1 and s.state == 'ready', 'state ' .. s.state)"
+                , "local second = s.handle"
+                , "-- A lifecycle change recovers too, including to an undeclared one."
+                , "pm.onAssetFailed('texture', second, s.path, 'boom', true)"
+                , "pm.update(0.016); assert(d().state == 'empty')"
+                , "assert(pm.onPreviewLifecycleClick(lifecycleCell('destruction').hitHandle))"
+                , "pm.update(0.016)"
+                , "assert(d().undeclared and d().state == 'ready', 'state ' .. d().state)"
+                , "assert(pm.onPreviewLifecycleClick(lifecycleCell('static').hitHandle))"
+                , "pm.update(0.016)"
+                , "s = d()"
+                , "assert(s.state == 'ready' and s.handle)"
+                , "-- A DELAYED failure of a frame no longer on screen leaves the"
+                , "-- current selection alone."
+                , "pm.onAssetFailed('texture', failed, failedPath, 'late', true)"
+                , "pm.update(0.016)"
+                , "assert(d().state == 'ready', 'a stale failure blanked the view')"
+                ]
+
         it "a framebuffer resize preserves appearance, lifecycle, cap, scroll, phase and zoom" $ withFx $ \_ p →
             runsWithPack p $ lns
                 [ bootFromEngine

@@ -908,6 +908,14 @@ local function buildStructureUI(pack, fbW, fbH, restoreAppearance, restoreScroll
             font = labelFont,
             panel = panelBounds,
             requestTexture = requestViewTexture,
+            -- One displayed frame at a time: when it changes, the view's
+            -- handle set is ONLY the new frame's (#1690), so a failure the
+            -- previous frame suffered -- or suffers late -- can neither
+            -- keep the new one "empty" nor blank it.
+            onDisplayChange = function()
+                viewHandles = {}
+                readyState = "loading"
+            end,
             chromeTexture = list.getChromeTexture(),
             -- The pack is ONE preview object (#1907).
             zoom = zoomMultiplier,
@@ -1481,6 +1489,7 @@ structureDump = function(out)
     out.selected = selected and { label = selected.label,
                                   path = selected.identity } or nil
     out.path = view and view.path or nil
+    out.handle = view and view.handle or nil
     out.frameIndex = view and view.frameIndex or nil
     out.frameCount = view and view.frameCount or nil
     out.missing = view and view.missing or false

@@ -150,7 +150,12 @@ end
 -- params: page, font, panel, requestTexture(path) -> handle (the owner's
 -- cache + trimmed-loading bookkeeping; NEVER called for a missing frame),
 -- chromeTexture (the list's highlight.png, reused for markers and hit
--- boxes so no control adds a texture load), zoom, uiscale, zIndex.
+-- boxes so no control adds a texture load), zoom, uiscale, zIndex, and
+-- onDisplayChange() -- called whenever the DISPLAYED frame changes
+-- (appearance, lifecycle or playback index), before anything for the
+-- new frame is requested, so the owner can drop the previous frame's
+-- handles and readiness: a failure the old frame suffered, or suffers
+-- late, must not describe the new one.
 function structurePackView.new(params)
     local id = nextId
     nextId = nextId + 1
@@ -160,6 +165,8 @@ function structurePackView.new(params)
         font = params.font,
         panel = params.panel,
         requestTexture = params.requestTexture,
+        onDisplayChange = params.onDisplayChange,
+        shownKey = nil,
         chromeTexture = params.chromeTexture,
         zoom = previewZoom.clamp(params.zoom),
         uiscale = params.uiscale or scale.get(),
@@ -450,6 +457,14 @@ function structurePackView.reflow(id)
     end
 
     local frame, l = displayedFrame(v)
+    -- Which frame is on screen, by identity. A cap change, a resize or a
+    -- zoom step keeps it; anything else is a new frame for the owner.
+    local shown = tostring(v.appearance.identity) .. "|" .. v.lifecycle
+        .. "|" .. tostring(v.frameIndex)
+    if shown ~= v.shownKey then
+        v.shownKey = shown
+        if v.onDisplayChange then v.onDisplayChange() end
+    end
     for i, text in ipairs(infoLines(v, frame, l)) do
         UI.setText(v.infoIds[i], text)
         UI.setPosition(v.infoIds[i], v.panel.x, g.infoY + i * g.lineH)
