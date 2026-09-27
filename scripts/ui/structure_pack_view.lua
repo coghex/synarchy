@@ -55,6 +55,7 @@ local CAP_CALLBACK = "onPreviewCapClick"
 
 local MISSING_MARK = "X"
 local UNDECLARED_MARK = "undeclared"
+local FAILED_MARK = "failed"
 
 -- Must stay identical to Engine.Preview.BuildingMatrix.previewFrameIndexAt
 -- (which Engine.Preview.StructurePack.lifecycleFrameIndexAt applies) and
@@ -167,6 +168,7 @@ function structurePackView.new(params)
         requestTexture = params.requestTexture,
         onDisplayChange = params.onDisplayChange,
         shownKey = nil,
+        failedKey = nil,   -- the displayed frame whose upload failed
         chromeTexture = params.chromeTexture,
         zoom = previewZoom.clamp(params.zoom),
         uiscale = params.uiscale or scale.get(),
@@ -463,6 +465,9 @@ function structurePackView.reflow(id)
         .. "|" .. tostring(v.frameIndex)
     if shown ~= v.shownKey then
         v.shownKey = shown
+        -- A failure describes the frame as it was displayed THEN; coming
+        -- back to the same frame later is a fresh attempt.
+        v.failedKey = nil
         if v.onDisplayChange then v.onDisplayChange() end
     end
     for i, text in ipairs(infoLines(v, frame, l)) do
@@ -472,12 +477,20 @@ function structurePackView.reflow(id)
 
     local centreX = g.enlarged.x + math.floor(g.enlarged.width / 2)
     local centreY = g.enlarged.y + math.floor(g.enlarged.height / 2)
-    if not frame or frame.missing then
+    -- A frame whose upload FAILED is terminal for as long as it stays the
+    -- displayed frame: never retried behind the owner's back (the owner
+    -- has already settled on "empty", which a silent retry could never
+    -- correct), and retried only through a genuine display change --
+    -- another frame, lifecycle or appearance -- which also resets the
+    -- owner's readiness.
+    local failed = v.failedKey ~= nil and v.failedKey == v.shownKey
+    if failed or not frame or frame.missing then
         -- Terminal: hide the sprite so nothing earlier lingers, and never
         -- request the path.
         v.handle = nil
         UI.setVisible(v.spriteId, false)
-        UI.setText(v.missingId, frame and MISSING_MARK or UNDECLARED_MARK)
+        UI.setText(v.missingId, failed and FAILED_MARK
+            or (frame and MISSING_MARK or UNDECLARED_MARK))
         UI.setVisible(v.missingId, true)
         UI.setPosition(v.missingId, centreX, centreY)
         v.ready = true
@@ -528,6 +541,19 @@ end
 -----------------------------------------------------------
 -- Input
 -----------------------------------------------------------
+
+-- The owner's report that a texture upload terminally failed (#1690).
+-- Only the handle the view is DISPLAYING matters; anything else belongs
+-- to a frame no longer on screen. Returns true when it was the current
+-- frame's.
+function structurePackView.noteFailed(id, handle)
+    local v = views[id]
+    if not v or handle == nil or handle ~= v.handle then return false end
+    v.failedKey = v.shownKey
+    v.fitKey = nil
+    structurePackView.reflow(id)
+    return true
+end
 
 function structurePackView.isLifecycleCallback(name)
     return name == LIFECYCLE_CALLBACK
@@ -601,6 +627,7 @@ function structurePackView.dump(id)
         fpsSource = l and l.fpsSource or nil,
         path = frame and frame.path or nil,
         missing = frame ~= nil and frame.missing == true,
+        failed = v.failedKey ~= nil and v.failedKey == v.shownKey,
         missingReason = frame and frame.reason or nil,
         handle = v.handle,
         facemap = f and f.path or nil,

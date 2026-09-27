@@ -610,6 +610,30 @@ spec = do
                 , "assert(d().state == 'ready', 'a stale failure blanked the view')"
                 ]
 
+        it "a failed displayed frame is terminal, never silently retried, and recovers through a display change" $ withFx $ \fx p →
+            runsWithPack p $ lns
+                [ bootFromEngine
+                , "local s = d()"
+                , "assert(s.state == 'ready' and s.handle)"
+                , "pm.onAssetFailed('texture', s.handle, s.path, 'boom', true)"
+                , "local loads = LOAD_COUNT"
+                , "for _ = 1, 5 do pm.update(0.016) end"
+                , "s = d()"
+                , "assert(LOAD_COUNT == loads, 'the failed frame was re-requested')"
+                , "assert(s.state == 'empty' and s.failed == true and s.handle == nil)"
+                , "assert(UI.getElementInfo(s.spriteElement).visible == false)"
+                , "assert(UI.getElementInfo(s.missingElement).text == 'failed')"
+                , "-- The same frame again, through a genuine display change."
+                , "assert(pm.onPreviewLifecycleClick(lifecycleCell('construction').hitHandle))"
+                , "assert(pm.onPreviewLifecycleClick(lifecycleCell('static').hitHandle))"
+                , "pm.update(0.016)"
+                , "s = d()"
+                , "assert(s.path == '" <> tpath fx "post.png" <> "' and s.failed == false)"
+                , "assert(LOAD_COUNT > loads, 'the frame is requested afresh')"
+                , "assert(s.state == 'ready' and UI.getElementInfo(s.spriteElement).visible,"
+                , "    'and a successful retry reports ready')"
+                ]
+
         it "a framebuffer resize preserves appearance, lifecycle, cap, scroll, phase and zoom" $ withFx $ \_ p →
             runsWithPack p $ lns
                 [ bootFromEngine

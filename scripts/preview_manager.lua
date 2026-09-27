@@ -1061,6 +1061,12 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     -- ...but only a CURRENT waiter settles the view.
     if isPending or isInView then
         readyState = "empty"
+        -- #2495: the structure view must also stop requesting the frame
+        -- that failed, or it would retry it silently under a state that
+        -- already says "empty".
+        if structureViewId then
+            structurePackView.noteFailed(structureViewId, handle)
+        end
     end
 end
 
@@ -1493,6 +1499,7 @@ structureDump = function(out)
     out.frameIndex = view and view.frameIndex or nil
     out.frameCount = view and view.frameCount or nil
     out.missing = view and view.missing or false
+    out.failed = view and view.failed or false
     out.missingReason = view and view.missingReason or nil
     out.undeclared = view and view.undeclared or false
     out.facemap = view and view.facemap or nil
