@@ -132,6 +132,11 @@ data DeclAppearance = DeclAppearance
   , daEdge         ∷ !(Maybe Text)
   , daConnection   ∷ !(Maybe Text)
   , daVariant      ∷ !Text
+  , daOverride     ∷ !Bool
+    -- ^ A @variants.\<name\>@ override rather than the pack's own
+    --   default appearance. Distinct from the variant NAME, which a pack
+    --   may legitimately spell @default@ (gameplay tells the base, a nil
+    --   variant, from a variant named @"default"@).
   , daTexture      ∷ !Text
   , daTextureInherited ∷ !Bool
   , daFacemaps     ∷ ![DeclFacemap]
@@ -346,7 +351,7 @@ basePiece kind v = do
     (c, d) ← lifecycles ctx o
     pure DeclAppearance
         { daKind = kind, daEdge = Nothing, daConnection = Nothing
-        , daVariant = defaultVariant, daTexture = tex
+        , daVariant = defaultVariant, daOverride = False, daTexture = tex
         , daTextureInherited = False
         , daFacemaps = [DeclFacemap Nothing (Just face) False]
         , daConstruction = c, daDestruction = d }
@@ -365,7 +370,7 @@ baseWall edge v = do
     (c, d) ← lifecycles ctx o
     pure DeclAppearance
         { daKind = "wall", daEdge = Just edge, daConnection = Nothing
-        , daVariant = defaultVariant, daTexture = tex
+        , daVariant = defaultVariant, daOverride = False, daTexture = tex
         , daTextureInherited = False
         , daFacemaps = [ DeclFacemap (Just cap) (lookup cap caps) False
                        | cap ← wallCaps ]
@@ -413,7 +418,7 @@ variantDecl orders basePieces baseWalls name v = do
             (c, d) ← lifecycles pctx po
             let inherited = listToMaybe (daFacemaps base)
             pure (k, base
-                { daVariant = name
+                { daVariant = name, daOverride = True
                 , daTexture = fromMaybe (daTexture base) tex
                 , daTextureInherited = isNothing tex
                 , daFacemaps = case face of
@@ -432,7 +437,7 @@ variantDecl orders basePieces baseWalls name v = do
             caps ← fromMaybe [] ⊚ capMap wctx wo
             (c, d) ← lifecycles wctx wo
             pure (e, base
-                { daVariant = name
+                { daVariant = name, daOverride = True
                 , daTexture = fromMaybe (daTexture base) tex
                 , daTextureInherited = isNothing tex
                 , daFacemaps =
@@ -463,7 +468,7 @@ wireAppearances orders top conns = do
                                  \with a `texture` path")
             pure DeclAppearance
                 { daKind = "wire", daEdge = Nothing, daConnection = Just name
-                , daVariant = defaultVariant, daTexture = tex
+                , daVariant = defaultVariant, daOverride = False, daTexture = tex
                 , daTextureInherited = False
                 , daFacemaps = [DeclFacemap Nothing (Just face) False]
                 , daConstruction = c, daDestruction = d }
@@ -530,6 +535,7 @@ resolveStructurePack texRoot name manifest decls = do
             , psaEdge       = daEdge da
             , psaConnection = daConnection da
             , psaVariant    = daVariant da
+            , psaOverride   = daOverride da
             , psaTextureInherited = daTextureInherited da
             , psaFacemaps   = faces
             , psaLifecycles = [staticL, cons, dest]
@@ -552,14 +558,20 @@ resolveStructurePack texRoot name manifest decls = do
         (Just e, _) → "wall " <> e
         (_, Just _) → "wire"
         _           → daKind da
+    -- The base appearance carries NO variant suffix and an override
+    -- always does, so no variant name — @default@ included — can alias
+    -- the base's identity.
     identityOf da =
         daKind da
           <> maybe "" (":" <>) (daEdge da)
           <> maybe "" (":" <>) (daConnection da)
-          <> "@" <> daVariant da
+          <> (if daOverride da then "@" <> daVariant da else "")
     labelOf da = case daConnection da of
         Just c  → "wire / " <> c
-        Nothing → groupOf da <> " / " <> daVariant da
+        Nothing
+          | daOverride da ∧ daVariant da ≡ defaultVariant →
+              groupOf da <> " / variants.default"
+          | otherwise → groupOf da <> " / " <> daVariant da
 
 -- | The whole pre-boot pipeline for @--preview structures/\<name\>@,
 --   against the shipped roots.

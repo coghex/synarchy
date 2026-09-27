@@ -88,7 +88,7 @@ def expected_pack(name: str) -> tuple[list[dict], set[str]]:
 
     for kind, base in pieces.items():
         named.update([base["texture"], base["facemap"], *lifecycle_paths(base)])
-        apps.append({"identity": f"{kind}@default", "texture": base["texture"],
+        apps.append({"identity": kind, "texture": base["texture"],
                      "facemaps": {None: base["facemap"]}})
         for vname, v in variants.items():
             over = (v.get("pieces") or {}).get(kind)
@@ -102,7 +102,7 @@ def expected_pack(name: str) -> tuple[list[dict], set[str]]:
     for edge, base in walls.items():
         faces = base.get("facemaps") or {}
         named.update([base["texture"], *faces.values(), *lifecycle_paths(base)])
-        apps.append({"identity": f"wall:{edge}@default",
+        apps.append({"identity": f"wall:{edge}",
                      "texture": base["texture"],
                      "facemaps": {c: faces.get(c) for c in WALL_CAPS}})
         for vname, v in variants.items():
@@ -121,7 +121,7 @@ def expected_pack(name: str) -> tuple[list[dict], set[str]]:
         named.update([tex, doc["facemap"]])
         if isinstance(entry, dict):
             named.update(lifecycle_paths(entry))
-        apps.append({"identity": f"wire:{cname}@default", "texture": tex,
+        apps.append({"identity": f"wire:{cname}", "texture": tex,
                      "facemaps": {None: doc["facemap"]}})
     return apps, named
 

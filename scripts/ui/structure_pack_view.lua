@@ -468,6 +468,9 @@ function structurePackView.reflow(id)
         -- A failure describes the frame as it was displayed THEN; coming
         -- back to the same frame later is a fresh attempt.
         v.failedKey = nil
+        -- Not ready until THIS frame is on screen: the previous frame's
+        -- readiness says nothing about an upload still in flight.
+        v.ready = false
         if v.onDisplayChange then v.onDisplayChange() end
     end
     for i, text in ipairs(infoLines(v, frame, l)) do
@@ -516,6 +519,9 @@ function structurePackView.reflow(id)
             .. "|" .. tostring(v.cap) .. "|" .. tostring(v.panel.width)
             .. "x" .. tostring(v.panel.height) .. "@" .. tostring(v.zoom)
     else
+        -- Still uploading: the sprite holds a handle with no size yet,
+        -- which is not a frame on screen.
+        v.ready = false
         v.fitKey = nil
     end
 end

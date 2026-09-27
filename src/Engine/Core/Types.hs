@@ -377,7 +377,9 @@ data PreviewStructLifecycle = PreviewStructLifecycle
 --   connection.
 data PreviewStructAppearance = PreviewStructAppearance
   { psaIdentity   ∷ !Text
-    -- ^ Stable selection identity, @\<kind\>[:\<edge|connection\>]\@\<variant\>@.
+    -- ^ Stable selection identity: @\<kind\>[:\<edge|connection\>]@ for
+    --   the pack's default appearance, plus @\@\<variant\>@ for a
+    --   @variants.\<name\>@ override — even one named @default@.
   , psaLabel      ∷ !Text
   , psaGroup      ∷ !Text
     -- ^ The owning appearance the list groups by: the piece kind,
@@ -387,6 +389,10 @@ data PreviewStructAppearance = PreviewStructAppearance
   , psaConnection ∷ !(Maybe Text)
   , psaVariant    ∷ !Text
     -- ^ @"default"@ or the @variants.\<name\>@ key.
+  , psaOverride   ∷ !Bool
+    -- ^ A @variants.\<name\>@ override rather than the default
+    --   appearance; the only unambiguous discriminator, since a variant
+    --   may itself be named @default@.
   , psaTextureInherited ∷ !Bool
   , psaFacemaps   ∷ ![PreviewStructFacemap]
   , psaLifecycles ∷ ![PreviewStructLifecycle]

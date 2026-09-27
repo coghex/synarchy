@@ -1202,7 +1202,10 @@ libyaml event stream, since a decoded YAML map is key-ordered): each
 `walls.<edge>` likewise (one appearance per edge; its four cap facemaps
 `00`/`10`/`01`/`11` are LIGHTING variants, not appearances), then each
 Wire `connections.<name>` under one `wire` group. Identities are
-`<kind>[:<edge|connection>]@<variant>`. A variant resolves exactly as
+`<kind>[:<edge|connection>]` for the pack's default appearance and
+`…@<variant>` for a `variants.<v>` override — a variant may itself be
+named `default`, so the dump's `override` flag, not the `variant` name,
+tells the two apart. A variant resolves exactly as
 `scripts/structures.lua` does: texture and facemaps (per cap) fall back
 to the default's — inheritance, not substitution — while `construction`
 and `destruction` are the variant's OWN or undeclared, never inherited.
@@ -1420,13 +1423,13 @@ ONLY — `playback` (`entry`, `frameIndex`, `frameCount`, effective
 **Structure mode** (#2495) adds `pack`, `manifest`, `defaultAppearance`,
 the ordered `appearances` (each with `identity`, `label`, `group`,
 `kind`, `edge`, `variant`, `connection`, `texture`, `textureInherited`,
-`facemaps` — per cap `path`/`declared`/`missing`/`reason`/`inherited` —
+`override`, `facemaps` — per cap `path`/`declared`/`missing`/`reason`/`inherited` —
 and `lifecycles.{static,construction,destruction}` with `frameCount`,
 `paths`, `missing` (a count) plus `missingFrames` (`index`/`path`/
 `reason`), `undeclared`, `fps`, `fpsSource`, `alphaPolicy`),
 `selectedAppearance`, `selectedVariant`, `selectedCap` (walls only),
 `selectedLifecycle`, and for the displayed frame `path`, `frameIndex`,
-`frameCount`, `missing`/`missingReason`, `undeclared`, `facemap` (+
+`frameCount`, `handle`, `missing`/`missingReason`, `failed`, `undeclared`, `facemap` (+
 `facemapMissing`/`facemapReason`) and `alphaPolicy`; `lifecycleRow` and
 `capRow` cells with `hitHandle`, caption and `UI.getElementInfo` bounds;
 per-visible-row `rows` carrying each appearance's `identity`; the

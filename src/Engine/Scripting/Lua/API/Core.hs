@@ -404,6 +404,8 @@ getPreviewBrowseFn env = do
       forM_ (psaConnection a) (pushTextField "connection")
       Lua.pushboolean (psaTextureInherited a)
       Lua.setfield (-2) "textureInherited"
+      Lua.pushboolean (psaOverride a)
+      Lua.setfield (-2) "override"
       pushArray pushStructFacemap (psaFacemaps a)
       Lua.setfield (-2) "facemaps"
       pushArray pushStructLifecycle (psaLifecycles a)

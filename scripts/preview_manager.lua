@@ -1472,6 +1472,7 @@ structureDump = function(out)
             kind = a.kind,
             edge = a.edge,
             variant = a.variant,
+            override = a.override == true,
             connection = a.connection,
             texture = (static.paths or {})[1],
             textureInherited = a.textureInherited == true,

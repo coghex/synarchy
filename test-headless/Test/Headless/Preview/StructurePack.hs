@@ -216,16 +216,16 @@ spec = do
             loadStructurePack "dungeon_1" ⌦ \case
                 Right (Just p) → do
                     map psaIdentity (pspkAppearances p) `shouldBe`
-                        [ "floor@default", "floor@damaged", "ceiling@default"
-                        , "post@default", "post@damaged"
-                        , "wall:ne@default", "wall:ne@damaged"
-                        , "wall:nw@default", "wall:nw@damaged"
-                        , "wall:se@default", "wall:se@damaged"
-                        , "wall:sw@default", "wall:sw@damaged" ]
+                        [ "floor", "floor@damaged", "ceiling"
+                        , "post", "post@damaged"
+                        , "wall:ne", "wall:ne@damaged"
+                        , "wall:nw", "wall:nw@damaged"
+                        , "wall:se", "wall:se@damaged"
+                        , "wall:sw", "wall:sw@damaged" ]
                     let apps = pspkAppearances p
                     length (filter ((≡ "default") ∘ psaVariant) apps) `shouldBe` 7
                     length (filter ((≡ "damaged") ∘ psaVariant) apps) `shouldBe` 6
-                    pspkDefault p `shouldBe` "floor@default"
+                    pspkDefault p `shouldBe` "floor"
                     forM_ (filter (isJust ∘ psaEdge) apps) $ \a → do
                         map psfCap (psaFacemaps a) `shouldBe` map Just wallCaps
                         all (isJust ∘ psfFile) (psaFacemaps a) `shouldBe` True
@@ -250,7 +250,7 @@ spec = do
                     nub (map psaGroup apps) `shouldBe` ["wire"]
                     nub [ fmap pstPath (psfFile f) | a ← apps, f ← psaFacemaps a ]
                         `shouldBe` [Just "assets/textures/facemap/floorface.png"]
-                    pspkDefault p `shouldBe` "wire:isolated@default"
+                    pspkDefault p `shouldBe` "wire:isolated"
                 other → expectationFailure (show other)
 
         it "every shipped appearance's static path and facemap is a regular, loadable file" $
@@ -276,17 +276,17 @@ spec = do
     describe "a synthetic pack" $ do
         it "keeps the document's declaration order and groups each owner's variants under it" $ withFx $ \_ p → do
             map psaIdentity (pspkAppearances p) `shouldBe`
-                [ "post@default", "post@worn", "floor@default", "floor@worn"
-                , "wall:sw@default", "wall:sw@worn" ]
-            pspkDefault p `shouldBe` "post@default"
+                [ "post", "post@worn", "floor", "floor@worn"
+                , "wall:sw", "wall:sw@worn" ]
+            pspkDefault p `shouldBe` "post"
 
         it "reads construction and destruction in declared order, with their timing and alpha policy" $ withFx $ \fx p → do
-            let post = appearance p "post@default"
+            let post = appearance p "post"
                 c = lifecycle post "construction"
             map pstPath (pslFrames c) `shouldBe`
                 map (tpath fx) ["post_c0.png", "post_c1.png", "post_c2.png"]
             (pslFps c, pslFpsSource c) `shouldBe` (structurePreviewDefaultFps, "preview-default")
-            let d = lifecycle (appearance p "floor@default") "destruction"
+            let d = lifecycle (appearance p "floor") "destruction"
             (pslFps d, pslFpsSource d) `shouldBe` (12, "authored")
             forM_ (pspkAppearances p) $ \a → do
                 pslAlphaPolicy (lifecycle a "static") `shouldBe` "facemap-alpha"
@@ -294,14 +294,14 @@ spec = do
                 pslAlphaPolicy (lifecycle a "destruction") `shouldBe` "frame-alpha"
 
         it "reports a missing destruction frame IN ITS POSITION, without substitution" $ withFx $ \fx p → do
-            let d = lifecycle (appearance p "floor@default") "destruction"
+            let d = lifecycle (appearance p "floor") "destruction"
             map pstPath (pslFrames d) `shouldBe`
                 map (tpath fx) ["floor_d0.png", "floor_d1_absent.png"]
             map pstMissing (pslFrames d) `shouldBe` [False, True]
             pstReason (pslFrames d !! 1) `shouldBe` Just "absent"
 
         it "an appearance with no construction list is undeclared, distinct from missing" $ withFx $ \_ p → do
-            let c = lifecycle (appearance p "floor@default") "construction"
+            let c = lifecycle (appearance p "floor") "construction"
             (pslDeclared c, pslFrames c) `shouldBe` (False, [])
 
         it "a variant inherits texture and facemaps but NEVER a lifecycle" $ withFx $ \fx p → do
@@ -331,21 +331,51 @@ spec = do
             psaTextureInherited w `shouldBe` True
             pslDeclared (lifecycle w "construction") `shouldBe` False
 
+        it "a variant NAMED default is its own appearance, distinct from the base" $ withFixture $ \fx → do
+            touch fx ["a.png", "b.png", "f.png"]
+            writePack fx "named" $ T.unlines
+                [ "pieces:"
+                , "  floor: { texture: T/a.png, facemap: T/f.png }"
+                , "variants:"
+                , "  default:"
+                , "    pieces:"
+                , "      floor: { texture: T/b.png, construction: [T/b.png] }" ]
+            p ← loadOk fx "named"
+            map (\a → (psaIdentity a, psaVariant a, psaOverride a, staticPath a))
+                (pspkAppearances p) `shouldBe`
+                [ ("floor", "default", False, tpath fx "a.png")
+                , ("floor@default", "default", True, tpath fx "b.png") ]
+            nub (map psaLabel (pspkAppearances p)) `shouldBe`
+                ["floor / default", "floor / variants.default"]
+            pslDeclared (lifecycle (appearance p "floor@default") "construction")
+                `shouldBe` True
+            pslDeclared (lifecycle (appearance p "floor") "construction")
+                `shouldBe` False
+            runsWithPack p $ lns
+                [ bootFromEngine
+                , "assert(d().selectedAppearance == 'floor' and d().path == '" <> tpath fx "a.png" <> "')"
+                , "selectRow('floor@default')"
+                , "local s = d()"
+                , "assert(s.selectedAppearance == 'floor@default', tostring(s.selectedAppearance))"
+                , "assert(s.path == '" <> tpath fx "b.png" <> "' and s.appearances[2].override == true)"
+                , "assert(s.appearances[1].override == false)"
+                ]
+
         it "falls back to the first wall edge, then the first connection, for the default" $ withFixture $ \fx → do
             touch fx ["a.png", "f.png"]
             writePack fx "walls" $ T.unlines
                 [ "walls:"
                 , "  se: { texture: T/a.png, facemaps: { \"00\": T/f.png } }"
                 , "  ne: { texture: T/a.png, facemaps: { \"00\": T/f.png } }" ]
-            pspkDefault ⊚ loadOk fx "walls" ⌦ (`shouldBe` "wall:se@default")
+            pspkDefault ⊚ loadOk fx "walls" ⌦ (`shouldBe` "wall:se")
             writePack fx "wires" $ T.unlines
                 [ "facemap: T/f.png"
                 , "connections:"
                 , "  tee_w: T/a.png"
                 , "  cross: { texture: T/a.png, construction: [T/a.png] }" ]
             p ← loadOk fx "wires"
-            pspkDefault p `shouldBe` "wire:tee_w@default"
-            pslDeclared (lifecycle (appearance p "wire:cross@default") "construction")
+            pspkDefault p `shouldBe` "wire:tee_w"
+            pslDeclared (lifecycle (appearance p "wire:cross") "construction")
                 `shouldBe` True
 
     describe "declared paths are judged under assets/textures" $ do
@@ -366,7 +396,7 @@ spec = do
                 , "      - T/a.jpg"
                 , "      - T/real/a.png" ]
             p ← loadOk fx "paths"
-            let c = lifecycle (appearance p "floor@default") "construction"
+            let c = lifecycle (appearance p "floor") "construction"
             map pstReason (pslFrames c) `shouldBe`
                 [ Just "outside_root", Just "symlink", Just "directory"
                 , Just "unsupported_extension", Nothing ]
@@ -377,7 +407,7 @@ spec = do
             touch fx ["a.png"]
             writePack fx "face" $ T.unlines
                 [ "pieces:", "  floor: { texture: T/a.png, facemap: T/nope.png }" ]
-            a ← (`appearance` "floor@default") ⊚ loadOk fx "face"
+            a ← (`appearance` "floor") ⊚ loadOk fx "face"
             map pstMissing (pslFrames (lifecycle a "static")) `shouldBe` [False]
             map (fmap pstReason ∘ psfFile) (psaFacemaps a) `shouldBe` [Just (Just "absent")]
 
@@ -445,8 +475,8 @@ spec = do
 
     describe "playback timing" $ do
         it "a lifecycle's frame index at a clock phase follows its fps, replaying past a complete cycle" $ withFx $ \_ p → do
-            let d = lifecycle (appearance p "floor@default") "destruction"   -- 12 fps, 2 frames
-                c = lifecycle (appearance p "post@default") "construction"    -- 8 fps default, 3 frames
+            let d = lifecycle (appearance p "floor") "destruction"   -- 12 fps, 2 frames
+                c = lifecycle (appearance p "post") "construction"    -- 8 fps default, 3 frames
                 eps = 1e-6
             map (lifecycleFrameIndexAt d) [0, 1/12 + eps, 2/12 + eps, 3/12 + eps]
                 `shouldBe` [0, 1, 0, 1]
@@ -457,7 +487,7 @@ spec = do
             length (pslFrames d) `shouldBe` 2
 
         it "static and undeclared lifecycles never advance" $ withFx $ \_ p → do
-            let a = appearance p "floor@default"
+            let a = appearance p "floor"
             lifecycleFrameIndexAt (lifecycle a "static") 5 `shouldBe` 0
             lifecycleFrameIndexAt (lifecycle a "construction") 5 `shouldBe` 0
 
@@ -468,7 +498,7 @@ spec = do
                 , "local s = d()"
                 , "assert(s.mode == 'structure' and s.state == 'ready', tostring(s.state))"
                 , "assert(s.pack == 'fx' and s.appearanceCount == 6)"
-                , "assert(s.selectedAppearance == 'post@default' and s.selectedVariant == 'default')"
+                , "assert(s.selectedAppearance == 'post' and s.selectedVariant == 'default')"
                 , "assert(s.selectedLifecycle == 'static' and s.selectedCap == nil)"
                 , "assert(s.path == '" <> tpath fx "post.png" <> "', tostring(s.path))"
                 , "assert(s.facemap == '" <> tpath fx "postface.png" <> "')"
@@ -494,7 +524,7 @@ spec = do
         it "plays a lifecycle on one clock, replays it, and never requests or retains a missing frame" $ withFx $ \fx p →
             runsWithPack p $ lns
                 [ bootFromEngine
-                , "selectRow('floor@default')"
+                , "selectRow('floor')"
                 , "local staticPath = d().path"
                 , "NOW = 20"
                 , "assert(pm.onPreviewLifecycleClick(lifecycleCell('destruction').hitHandle))"
@@ -543,7 +573,7 @@ spec = do
         it "a wall cap changes only the reported facemap, mid-playback" $ withFx $ \fx p →
             runsWithPack p $ lns
                 [ bootFromEngine
-                , "selectRow('wall:sw@default')"
+                , "selectRow('wall:sw')"
                 , "local s = d()"
                 , "assert(s.selectedCap == '00' and #s.capRow == 4)"
                 , "assert(s.facemap == '" <> tpath fx "w00.png" <> "')"
@@ -573,7 +603,7 @@ spec = do
                 , "assert(s.selectedCap == '10' and s.facemap == '" <> tpath fx "worn_w10.png" <> "')"
                 , "assert(s.appearances[6].facemaps[1].inherited == true)"
                 , "assert(s.appearances[6].facemaps[2].inherited == false)"
-                , "selectRow('post@default'); assert(d().selectedCap == nil and #d().capRow == 0)"
+                , "selectRow('post'); assert(d().selectedCap == nil and #d().capRow == 0)"
                 ]
 
         it "a failed frame describes only itself: a lifecycle or frame change recovers, and a late failure of an earlier frame changes nothing" $ withFx $ \_ p →
@@ -634,10 +664,37 @@ spec = do
                 , "    'and a successful retry reports ready')"
                 ]
 
+        it "a frame still uploading is not ready, even right after a ready one" $ withFx $ \_ p →
+            runsWithPack p $ lns
+                [ bootFromEngine
+                , "-- Hold every NEW upload in flight until released."
+                , "local pending = {}"
+                , "local realLoad, realSize = engine.loadTexture, engine.getTextureSize"
+                , "engine.loadTexture = function(path)"
+                , "  local h = realLoad(path); if HOLD then pending[h] = true end; return h"
+                , "end"
+                , "engine.getTextureSize = function(h)"
+                , "  if pending[h] then return nil end; return realSize(h)"
+                , "end"
+                , "NOW = 70"
+                , "assert(pm.onPreviewLifecycleClick(lifecycleCell('construction').hitHandle))"
+                , "pm.update(0.016)"
+                , "assert(d().frameIndex == 0 and d().state == 'ready')"
+                , "HOLD = true"
+                , "NOW = 70.13; pm.update(0.016)"
+                , "local s = d()"
+                , "assert(s.frameIndex == 1 and s.state == 'loading',"
+                , "  'frame 1 is still uploading, got ' .. s.state)"
+                , "pm.update(0.016); assert(d().state == 'loading')"
+                , "pending = {}"
+                , "pm.update(0.016)"
+                , "assert(d().state == 'ready', 'the upload landed')"
+                ]
+
         it "a framebuffer resize preserves appearance, lifecycle, cap, scroll, phase and zoom" $ withFx $ \_ p →
             runsWithPack p $ lns
                 [ bootFromEngine
-                , "selectRow('wall:sw@default')"
+                , "selectRow('wall:sw')"
                 , "assert(pm.onPreviewCapClick(capCell('11').hitHandle))"
                 , "NOW = 40"
                 , "assert(pm.onPreviewLifecycleClick(lifecycleCell('construction').hitHandle))"
@@ -649,7 +706,7 @@ spec = do
                 , "pm.onFramebufferResize(700, 500)"
                 , "pm.update(0.016)"
                 , "local after = d()"
-                , "assert(after.selectedAppearance == 'wall:sw@default')"
+                , "assert(after.selectedAppearance == 'wall:sw')"
                 , "assert(after.selectedVariant == 'default' and after.selectedCap == '11')"
                 , "assert(after.selectedLifecycle == 'construction' and after.frameIndex == 1)"
                 , "assert(after.scrollOffset == 2, 'scroll ' .. tostring(after.scrollOffset))"
@@ -664,7 +721,7 @@ spec = do
                 Right (Just p) → runsWithPack p $ lns
                     [ bootFromEngine
                     , "local s = d()"
-                    , "assert(s.appearanceCount == 13 and s.selectedAppearance == 'floor@default')"
+                    , "assert(s.appearanceCount == 13 and s.selectedAppearance == 'floor')"
                     , "assert(s.path == 'assets/textures/buildings/dungeon_1/floor.png')"
                     , "assert(s.totals.missing == 0 and s.totals.missingFacemaps == 0)"
                     , "assert(s.totals.undeclared == 26)"
