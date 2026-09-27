@@ -26,11 +26,13 @@ Consumes the production owners (`critic_click`, `critic_signals`,
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
 import sys
 import tempfile
+import urllib.parse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -44,6 +46,86 @@ from critic_pipeline import run_critic  # noqa: E402
 from critic_signals import (build_digest, build_signals,  # noqa: E402
                             friction_candidates, plan_batches)
 from trace import load_meta, load_turns  # noqa: E402
+
+
+
+# #2690: the report's screenshot links, read the way CommonMark reads an
+# inline image (https://spec.commonmark.org/0.31.2/#links) rather than
+# by a regex that accepts anything up to the first `)`.
+_IMG_OPEN = "![turn screenshot]("   # render_report's own spelling
+_ASCII_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+_DEST_DECODE = re.compile(
+    r"\\([!-/:-@\[-`{-~])"
+    r"|(&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});)")
+
+
+def _link_destination(text: str, i: int) -> tuple[str, int] | None:
+    """The raw link destination starting at `text[i]` and the index just
+    past it, or None when CommonMark would not accept one there."""
+    def escaped(j):
+        return text[j] == "\\" and text[j + 1:j + 2] in _ASCII_PUNCT \
+            and j + 1 < len(text)
+
+    if text.startswith("<", i):
+        # `<...>`: no line ending and no unescaped `<` or `>` inside
+        j = i + 1
+        while j < len(text) and text[j] != ">":
+            if text[j] in "<\n":
+                return None
+            j += 2 if escaped(j) else 1
+        return (text[i + 1:j], j + 1) if j < len(text) else None
+    # bare: no space or control character, parentheses balanced
+    depth, j = 0, i
+    while j < len(text):
+        c = text[j]
+        if escaped(j):
+            j += 2
+            continue
+        if c == " " or ord(c) < 0x20 or ord(c) == 0x7F:
+            break
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        j += 1
+    return (text[i:j], j) if j > i and depth == 0 else None
+
+
+def _decode_destination(raw: str) -> str:
+    """CommonMark's decoding of a destination: backslash escapes and
+    entity references, in one left-to-right pass. Percent escapes stay
+    as they are — they are the URI's, not Markdown's."""
+    return _DEST_DECODE.sub(
+        lambda m: m.group(1) if m.group(1) is not None
+        else html.unescape(m.group(2)), raw)
+
+
+def report_image_links(report: str) -> list[tuple[str, str | None]]:
+    """One entry per image `render_report` opened, in report order:
+    `(raw text, relative filesystem path)`. The path is None when the
+    text is not a complete CommonMark image (no title is ever emitted,
+    so the destination must be followed by the closing `)`), or when
+    its URI is not a plain relative path — a scheme, authority, query
+    or fragment means some of the path was read as something else.
+    Otherwise it is the percent-decoded URI path."""
+    out, i = [], report.find(_IMG_OPEN)
+    while i >= 0:
+        start = i + len(_IMG_OPEN)
+        end = report.find("\n", start)
+        raw = report[start:end if end >= 0 else len(report)]
+        path = None
+        parsed = _link_destination(report, start)
+        if parsed and report.startswith(")", parsed[1]):
+            dest = _decode_destination(parsed[0])
+            parts = urllib.parse.urlsplit(dest)
+            if dest and not (parts.scheme or parts.netloc
+                             or "?" in dest or "#" in dest):
+                path = urllib.parse.unquote(parts.path)
+        out.append((raw, path))
+        i = report.find(_IMG_OPEN, start)
+    return out
 
 
 class FakeCritic:
@@ -696,57 +778,81 @@ def selftest() -> int:
                   for f_ in data["findings"]
                   for ref in f_.get("screenshots", [])))
 
-        # #2220: a report's evidence images must resolve from wherever
-        # the report was written. `_ref_key` doubles as the "spelled
-        # exactly as the trace records it" oracle: it matches a ref
-        # against the trace's own `screenshot` / `post_screenshot`
-        # strings and returns None for anything rebased or invented.
-        IMG_REF = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
-        default_refs = IMG_REF.findall(report)
+        # #2220/#2690: a report's evidence images must be real CommonMark
+        # images that resolve from wherever the report was written.
+        # `_ref_key` doubles as the "spelled exactly as the trace records
+        # it" oracle: it matches a ref against the trace's own
+        # `screenshot` / `post_screenshot` strings and returns None for
+        # anything rebased or invented.
+        def _expected_refs(findings_path_):
+            # the screenshots render_report emits, in its order (defects
+            # first), one per attachment — multiplicity preserved
+            with open(findings_path_) as fh:
+                fs = json.load(fh)["findings"]
+            return [ref for f_ in (
+                        [f_ for f_ in fs if f_["verdict"] == "defect"]
+                        + [f_ for f_ in fs if f_["verdict"] != "defect"])
+                    for ref in f_.get("screenshots", [])]
+
+        def _check_links(where, report_path_, findings_path_, trace_dir_,
+                         spelling=None):
+            """Every expected screenshot occurrence is a complete image
+            link whose decoded destination lands, from the report's own
+            directory, on ITS trace frame. `spelling(ref)`, when given,
+            is the exact destination text each link must carry."""
+            base = os.path.dirname(report_path_)
+            expected = _expected_refs(findings_path_)
+            links = report_image_links(open(report_path_).read())
+            check(f"a report written to {where} references screenshots, "
+                  "one image per attached screenshot",
+                  bool(expected) and len(links) == len(expected),
+                  f"{len(links)} images for {len(expected)} screenshots")
+            broken = [raw for raw, path in links if path is None]
+            check("...every one a complete CommonMark image with a plain "
+                  f"relative destination ({where})",
+                  not broken, str(broken[:3]))
+            wrong = [(raw, ref) for (raw, path), ref in zip(links, expected)
+                     if path is None
+                     or os.path.isabs(path)
+                     or not os.path.exists(os.path.join(base, path))
+                     or os.path.realpath(os.path.join(base, path))
+                     != os.path.realpath(os.path.join(trace_dir_, ref))]
+            check("...each decoding to its own trace frame, relative and "
+                  f"existing from the report's directory ({where})",
+                  not wrong, str(wrong[:3]))
+            if spelling is not None:
+                respelled = [(raw, ref) for (raw, _), ref
+                             in zip(links, expected)
+                             if raw != spelling(ref) + ")"]
+                check(f"...spelled exactly as expected ({where})",
+                      not respelled, str(respelled[:3]))
+
+        _check_links("the trace root (the default)", report_path,
+                     findings_path, tdir, spelling=lambda ref: ref)
+        default_refs = [path for _, path in report_image_links(report)]
         check("the default-location report still spells every image link "
               "exactly as the trace records it (#2220 changes nothing here)",
               bool(default_refs)
               and all(_ref_key(r) is not None for r in default_refs),
               str([r for r in default_refs if _ref_key(r) is None][:3]))
 
-        def _trace_files():
+        def _trace_files(trace_dir_):
             # content-addressed, so "unmodified" means the bytes are
             # unchanged rather than merely the timestamps
             snap = {}
-            for root, _dirs, names in os.walk(tdir):
+            for root, _dirs, names in os.walk(trace_dir_):
                 for name in names:
                     path = os.path.join(root, name)
                     with open(path, "rb") as fh:
-                        snap[os.path.relpath(path, tdir)] = hashlib.sha256(
-                            fh.read()).hexdigest()
+                        snap[os.path.relpath(path, trace_dir_)] = \
+                            hashlib.sha256(fh.read()).hexdigest()
             return snap
 
-        # the two path relationships `--out` can name that the default
-        # run above does not cover: a directory beside the trace, and
-        # one nested inside it.
-        before_out = _trace_files()
-        for where, out_dir, outside in (
-                ("a sibling dir", os.path.join(tmp, "elsewhere"), True),
-                ("a dir inside the trace",
-                 os.path.join(tdir, "nested-report"), False)):
-            rp_o, fp_o = run_critic(tdir, FakeCritic(), out_dir=out_dir)
-            base = os.path.dirname(rp_o)
-            refs = IMG_REF.findall(open(rp_o).read())
-            check(f"a report written to {where} still references screenshots",
-                  bool(refs))
-            check("...every image target is relative, never a "
-                  f"machine-specific absolute path ({where})",
-                  all(not os.path.isabs(r) for r in refs), str(refs[:3]))
-            unresolved = [r for r in refs
-                          if not os.path.exists(os.path.join(base, r))]
-            check("...and resolves to an existing file from the report's "
-                  f"own directory ({where})",
-                  not unresolved, str(unresolved[:3]))
-            inside = os.path.abspath(tdir) + os.sep
-            check("...each landing on a trace-owned frame, nothing copied "
-                  f"out ({where})",
-                  all(os.path.abspath(os.path.join(base, r)).startswith(inside)
-                      for r in refs))
+        def _check_out_run(where, trace_dir_, out_dir, outside,
+                           spelling=None):
+            before = _trace_files(trace_dir_)
+            rp_o, fp_o = run_critic(trace_dir_, FakeCritic(), out_dir=out_dir)
+            _check_links(where, rp_o, fp_o, trace_dir_, spelling)
             with open(fp_o) as f:
                 data_o = json.load(f)
             attached = [ref for f_ in data_o["findings"]
@@ -766,12 +872,53 @@ def selftest() -> int:
                       for n in a["frames"]))
             if outside:
                 # the trace stays the sole owner of its frames: an
-                # --out run beside it neither rewrites nor removes a
+                # --out run outside it neither rewrites nor removes a
                 # single file under it (a nested --out legitimately
                 # adds its own two artifacts, so it is exempt).
                 check("...leaving every file under the trace untouched "
                       f"({where})",
-                      _trace_files() == before_out)
+                      _trace_files(trace_dir_) == before)
+
+        def _plain_rebase(trace_dir_, out_dir):
+            # #2690 req 3: a rebased path needing no escaping keeps the
+            # plain relpath spelling #2220 gave it
+            return lambda ref: os.path.relpath(
+                os.path.join(trace_dir_, ref), out_dir)
+
+        # the two path relationships `--out` can name that the default
+        # run above does not cover — a directory beside the trace, and
+        # one nested inside it — on ordinary names: the plain-spelling
+        # controls.
+        for where, out_dir, outside in (
+                ("a sibling dir", os.path.join(tmp, "elsewhere"), True),
+                ("a dir inside the trace",
+                 os.path.join(tdir, "nested-report"), False)):
+            _check_out_run(where, tdir, out_dir, outside,
+                           _plain_rebase(tdir, out_dir))
+
+        # #2690: directory names a bare Markdown destination or a URI
+        # would misread. Each trace is a fresh canned trace under such a
+        # name, reported beside it, inside it, and — for the colon, which
+        # only a FIRST path segment turns into a scheme — from its parent.
+        for name in ("trace with spaces", "trace (balanced)",
+                     "trace (unmatched", "trace unmatched)",
+                     "trace <angle> brackets", "trace #literal hash",
+                     "trace %20 percent", "trace \\( &amp; &#35; escapes",
+                     "trace:colon"):
+            sdir = build_canned_trace(os.path.join(tmp, "special", name))
+            _check_out_run(f"a sibling of {name!r}", sdir,
+                           os.path.join(tmp, "special", "out"), True)
+            _check_out_run(f"a dir (#1 %41 <x>) inside {name!r}", sdir,
+                           os.path.join(sdir, "out (#1 %41 <x>)"), False)
+        _check_out_run("the parent of 'trace:colon'",
+                       os.path.join(tmp, "special", "trace:colon"),
+                       os.path.join(tmp, "special"), False)
+        # and an output directory full of the same characters, beside an
+        # ordinary trace
+        _check_out_run("an out dir named 'out (x #1 %41 <y> \\&amp;'", tdir,
+                       os.path.join(tmp, "out (x #1 %41 <y> \\&amp;"), True,
+                       _plain_rebase(tdir, os.path.join(
+                           tmp, "out (x #1 %41 <y> \\&amp;")))
 
         # batched end-to-end: max_frames=2 still covers everything
         rp4, fp4 = run_critic(tdir, FakeCritic(),
