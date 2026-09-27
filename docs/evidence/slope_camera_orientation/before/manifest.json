@@ -1,0 +1,633 @@
+{
+  "complete": true,
+  "engine_sha256": "21d5464f6a1e497d37708a1fee8663c4486db4f10fd4a6efa9ba13a034c99119",
+  "frames": [
+    {
+      "scene": "isolated",
+      "facing": 0,
+      "path": "isolated-0.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "isolated",
+      "facing": 1,
+      "path": "isolated-1.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "isolated",
+      "facing": 2,
+      "path": "isolated-2.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "isolated",
+      "facing": 3,
+      "path": "isolated-3.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "hill",
+      "facing": 0,
+      "path": "hill-0.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "hill",
+      "facing": 1,
+      "path": "hill-1.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "hill",
+      "facing": 2,
+      "path": "hill-2.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "hill",
+      "facing": 3,
+      "path": "hill-3.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "masks",
+      "facing": 0,
+      "path": "masks-0.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "masks",
+      "facing": 1,
+      "path": "masks-1.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "masks",
+      "facing": 2,
+      "path": "masks-2.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "masks",
+      "facing": 3,
+      "path": "masks-3.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "vegetation",
+      "facing": 0,
+      "path": "vegetation-0.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "vegetation",
+      "facing": 1,
+      "path": "vegetation-1.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "vegetation",
+      "facing": 2,
+      "path": "vegetation-2.png",
+      "state_unchanged": true
+    },
+    {
+      "scene": "vegetation",
+      "facing": 3,
+      "path": "vegetation-3.png",
+      "state_unchanged": true
+    }
+  ],
+  "observations": [
+    {
+      "x": -24,
+      "y": 8,
+      "z": -2,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -21,
+      "y": 8,
+      "z": -3,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -28,
+      "y": -27,
+      "z": -2,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -28,
+      "y": -26,
+      "z": -2,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -28,
+      "y": -22,
+      "z": -2,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -28,
+      "y": -21,
+      "z": -2,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -27,
+      "y": -27,
+      "z": -2,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -27,
+      "y": -26,
+      "z": -2,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -27,
+      "y": -22,
+      "z": -2,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -27,
+      "y": -21,
+      "z": -2,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -26,
+      "y": -27,
+      "z": -3,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -26,
+      "y": -26,
+      "z": -3,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -26,
+      "y": -22,
+      "z": -3,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -26,
+      "y": -21,
+      "z": -3,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -25,
+      "y": -27,
+      "z": -3,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -25,
+      "y": -26,
+      "z": -3,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -25,
+      "y": -22,
+      "z": -3,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -25,
+      "y": -21,
+      "z": -3,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -24,
+      "y": -27,
+      "z": -4,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -24,
+      "y": -26,
+      "z": -4,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -24,
+      "y": -22,
+      "z": -4,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -24,
+      "y": -21,
+      "z": -4,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -23,
+      "y": -27,
+      "z": -4,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -23,
+      "y": -26,
+      "z": -4,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -23,
+      "y": -22,
+      "z": -4,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -23,
+      "y": -21,
+      "z": -4,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -22,
+      "y": -27,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -22,
+      "y": -26,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -22,
+      "y": -22,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -22,
+      "y": -21,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -21,
+      "y": -27,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -21,
+      "y": -26,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -21,
+      "y": -22,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": -21,
+      "y": -21,
+      "z": -5,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": 4,
+      "z": -2,
+      "bits": 0,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": 4,
+      "z": -2,
+      "bits": 1,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": 4,
+      "z": -2,
+      "bits": 2,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": 4,
+      "z": -2,
+      "bits": 3,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": 7,
+      "z": -2,
+      "bits": 4,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": 7,
+      "z": -2,
+      "bits": 5,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": 7,
+      "z": -2,
+      "bits": 6,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": 7,
+      "z": -2,
+      "bits": 7,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": 10,
+      "z": -2,
+      "bits": 8,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": 10,
+      "z": -2,
+      "bits": 9,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": 10,
+      "z": -2,
+      "bits": 10,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": 10,
+      "z": -2,
+      "bits": 11,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": 13,
+      "z": -2,
+      "bits": 12,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": 13,
+      "z": -2,
+      "bits": 13,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": 13,
+      "z": -2,
+      "bits": 14,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": 13,
+      "z": -2,
+      "bits": 15,
+      "veg": 0,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": -28,
+      "z": -2,
+      "bits": 0,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": -28,
+      "z": -2,
+      "bits": 1,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": -28,
+      "z": -2,
+      "bits": 2,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": -28,
+      "z": -2,
+      "bits": 3,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": -25,
+      "z": -2,
+      "bits": 4,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": -25,
+      "z": -2,
+      "bits": 5,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": -25,
+      "z": -2,
+      "bits": 6,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": -25,
+      "z": -2,
+      "bits": 7,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": -22,
+      "z": -2,
+      "bits": 8,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": -22,
+      "z": -2,
+      "bits": 9,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": -22,
+      "z": -2,
+      "bits": 10,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": -22,
+      "z": -2,
+      "bits": 11,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 3,
+      "y": -19,
+      "z": -2,
+      "bits": 12,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 6,
+      "y": -19,
+      "z": -2,
+      "bits": 13,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 9,
+      "y": -19,
+      "z": -2,
+      "bits": 14,
+      "veg": 1,
+      "wet": false
+    },
+    {
+      "x": 12,
+      "y": -19,
+      "z": -2,
+      "bits": 15,
+      "veg": 1,
+      "wet": false
+    }
+  ],
+  "flags_authored_once": true
+}

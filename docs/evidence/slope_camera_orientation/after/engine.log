@@ -1,0 +1,72 @@
+resource root: /Users/vincentcoghlan/worktrees/coghex/synarchy/fix-slope-camera-orientation/docs/evidence/slope_camera_orientation/after/resource-root (from --resource-root)
+2026-09-26 21:15:15 [INFO] [Init] [Θ:19] [Init:277] Legacy config config/keybinds.yaml carries no player state (it resolves to the same values as the versioned default); leaving config/keybinds.local.yaml absent so later default changes still apply
+2026-09-26 21:15:15 [INFO] [Init] [Θ:19] [Init:277] Legacy config config/video.yaml carries no player state (it resolves to the same values as the versioned default); leaving config/video.local.yaml absent so later default changes still apply
+2026-09-26 21:15:15 [INFO] [Init] [Θ:19] [Init:259] Migrated legacy config config/notifications.yaml -> config/notifications.local.yaml
+2026-09-26 21:15:15 [INFO] [Audio] Starting audio worker: AudioRunningNull
+2026-09-26 21:15:15 [INFO] [Input] [Θ:19] [Thread:317] Starting input thread...
+2026-09-26 21:15:15 [INFO] [Lua] [Θ:19] [Thread:317] Starting Lua scripting thread...
+2026-09-26 21:15:15 [INFO] [Lua] [autosave.lua:361] Autosave: disabled, every 10 min, keeping 3 generation(s)
+READY port=9550
+2026-09-26 21:15:15 [INFO] [Lua] [Θ:19] [Thread:253] Debug server listening on port 9550
+2026-09-26 21:15:15 [INFO] [World] [Θ:19] [Thread:317] Starting world thread...
+2026-09-26 21:15:15 [INFO] [Thread] [Θ:19] [Thread:317] Starting unit thread...
+2026-09-26 21:15:15 [INFO] [World] [Θ:19] [Thread:317] Starting simulation thread...
+2026-09-26 21:15:15 [INFO] [Thread] [Θ:19] [Thread:317] Starting combat thread...
+2026-09-26 21:15:15 [INFO] [System] [Θ:19] [Offscreen:88] Starting engine (offscreen)...
+2026-09-26 21:15:15 [INFO] [Vulkan] [Θ:19] [Device:165] Selected physical device {device="Apple M3 Max", score=10100}
+2026-09-26 21:15:15 [INFO] [Vulkan] [Θ:19] [Init:182] Device maxImageDimension2D: 16384
+2026-09-26 21:15:15 [INFO] [Font] [Θ:19] [SDF:145] Font atlas coverage: path=assets/fonts/shell.ttf requested=330 supplied=291 missing=39 [U+010A U+010B U+0114 U+0115 U+0116 U+0117 U+0120 U+0121 U+0122 U+0123 U+0126 U+0127 U+0128 U+0129 U+012C U+012D U+012E U+012F U+0136 U+0137 U+0138 U+013B U+013C U+0145 U+0146 U+0149 U+014A U+014B U+014E U+014F U+0156 U+0157 U+0166 U+0167 U+0168 U+0169 U+0172 U+0173 U+017F]
+2026-09-26 21:15:15 [INFO] [Font] [Θ:19] [SDF:145] Font atlas coverage: path=assets/fonts/arcade.ttf requested=330 supplied=327 missing=3 [U+2010 U+2032 U+2033]
+2026-09-26 21:15:15 [INFO] [Font] [Θ:19] [SDF:145] Font atlas coverage: path=assets/fonts/gothic.ttf requested=99 supplied=84 missing=15 [U+002F U+003A U+003B U+003C U+003D U+003E U+005B U+005C U+005D U+005E U+0060 U+007B U+007C U+007D U+007E]
+2026-09-26 21:15:15 [INFO] [Lua] [startup_loader.lua:519] Startup loader queued 258 items for profile normal
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: material loaded 219 from 13 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: vegetation loaded 77 from 5 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: flora loaded 202 from 8 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: substance loaded 16 from 4 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: infection loaded 8 from 1 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: recipe loaded 19 from 6 file(s)
+2026-09-26 21:15:16 [WARN] [Audio] output underruns
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'floor' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'ceiling' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'post' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall ne' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall nw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall se' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:741] [StructureArt:172] structure art: pack 'dungeon_1' appearance 'wall sw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [WARN] [Lua] [Θ:741] [StructureArt:179] structure art: pack 'dungeon_1' sprite 'assets/textures/buildings/dungeon_1/ceiling.png' is the static art of more than one appearance, so a piece placed with it identifies none -- neither claimant's lifecycle frames will play. Give the variant its own sprite for that appearance.
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection isolated' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_n' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_e' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_s' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection end_w' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection straight_ns' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection straight_ew' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_ne' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_nw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_se' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection corner_sw' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_n' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_e' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_s' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection tee_w' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [Θ:761] [StructureArt:172] structure art: pack 'wire' appearance 'wire connection cross' declares no construction frames -- a paid site of it draws nothing until the piece appears
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: item loaded 67 from 39 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: equipment loaded 1 from 1 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: building loaded 8 from 8 file(s)
+2026-09-26 21:15:16 [INFO] [Lua] [startup_loader.lua:150] Startup assets: faction loaded 8 from 1 file(s)
+2026-09-26 21:15:18 [INFO] [Lua] [test_arena.lua:191] Creating test arena world...
+2026-09-26 21:15:18 [INFO] [World] [Θ:303] [Init:664] Initializing test arena: test_arena
+2026-09-26 21:15:18 [INFO] [World] [Θ:303] [Init:749] Test arena initialized: 25 flat loam chunks at z=0
+2026-09-26 21:15:18 [INFO] [Lua] [test_arena.lua:209] Test arena world created
+2026-09-26 21:15:18 [INFO] [World] [Θ:303] [Init:755] Arena textures ready, showing: test_arena
+2026-09-26 21:15:18 [INFO] [Lua] [ui_manager_menu.lua:258] Arena ready, switching to test arena view
+2026-09-26 21:15:26 [WARN] [Audio] output underruns (6349 suppressed)
+2026-09-26 21:15:36 [WARN] [Audio] output underruns (6497 suppressed)
+2026-09-26 21:15:46 [WARN] [Audio] output underruns (6082 suppressed)
+2026-09-26 21:15:56 [WARN] [Audio] output underruns (5867 suppressed)
+2026-09-26 21:16:06 [WARN] [Audio] output underruns (6385 suppressed)
+2026-09-26 21:16:16 [WARN] [Audio] output underruns (7200 suppressed)
+2026-09-26 21:16:26 [WARN] [Audio] output underruns (8259 suppressed)
+2026-09-26 21:16:31 [INFO] [System] [Θ:19] [Shutdown:72] Starting engine shutdown...
+2026-09-26 21:16:31 [INFO] [Asset] [Θ:19] [Manager:259] Asset cleanup phase started
+2026-09-26 21:16:31 [INFO] [Asset] [Θ:19] [Manager:284] Asset cleanup completed successfully

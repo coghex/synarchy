@@ -1,0 +1,47 @@
+Build profile: -w ghc-9.12.2 -O1
+In order, the following will be built (use -v for more details):
+ - synarchy-0.1.0.0 (ephemeral targets)
+Preprocessing library for synarchy-0.1.0.0...
+Building library for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy' for synarchy-0.1.0.0...
+Building executable 'synarchy' for synarchy-0.1.0.0...
+Preprocessing executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Building executable 'synarchy-save-codec' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-graphical' for synarchy-0.1.0.0...
+Preprocessing test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Building test suite 'synarchy-test-headless' for synarchy-0.1.0.0...
+Running 1 test suites...
+Test suite synarchy-test-headless: RUNNING...
+
+World.Render.FluidLevels
+  initial and late structural binding
+    binds all eight distinct handles and invalidates every render cache [✔]
+  unchanged ice base and independent elevation
+    keeps dry drape one z above terrain and dry basin fill/cap [✔]
+    uses the fluid ceiling only for the base, including partial and full planes [✔]
+  exact capture edit hook
+    validates arguments, canonicalizes aliases, records exact edits and fences stale sim output [✔]
+  exact tops through the production pass
+    selects every level for every fluid, including negative planes and full multiples [✔]
+    places vertices at fractional heights in every facing [✔]
+    culls using fractional placement rather than the owning ceiling [✔]
+    uses the ceiling for the actual slice/depth decision, including zero as wet [✔]
+    sorts exact tops above their own sides [✔]
+    keeps covered partial Lake/Ocean suppressed and River/Lava visible [✔]
+  mask and separate-side coverage
+    starts below the mask slab and terminates at an exact partial neighbour [✔]
+    does not duplicate the mask slab for same-z mixed levels or full one-z drops [✔]
+    clips actual side intervals at both depth boundaries [✔]
+    covers without gaps, duplicates, or above-neighbour overshoot across the signed range [✔]
+    gives left and right sides independent fractional endpoints and Ocean parity [✔]
+    emits nothing for equal/higher neighbours and an enclosed equal-height cell [✔]
+  production neighbour lookup
+    matches loaded ordinary and U seams in all four facings and omits unloaded edges [✔]
+
+Finished in 0.0343 seconds
+17 examples, 0 failures
+Test suite synarchy-test-headless: PASS
+Test suite logged to:
+/Users/vincentcoghlan/worktrees/coghex/synarchy/fix-slope-camera-orientation/./dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/test/synarchy-0.1.0.0-synarchy-test-headless.log
+1 of 1 test suites (1 of 1 test cases) passed.

@@ -62,7 +62,7 @@ tileToQuad ctx wx wy wz tile mFluid chunkHasFluid =
                 + fromIntegral relativeZ * 0.001
         texHandle = getTileTexture textures (tileType tile)
         actualSlot = lookupSlot texHandle
-        fmHandle = getTileFaceMapTexture textures (tileType tile) (tileSlopeId tile)
+        fmHandle = getTileFaceMapTexture textures facing (tileType tile) (tileSlopeId tile)
         fmSlot = lookupFmSlot fmHandle
 
         depth = zSlice - worldZ
@@ -478,7 +478,7 @@ worldCursorBgToQuad lookupSlot lookupFmSlot textures facing
         }
 
 -- | Vegetation overlay quad.
---   Draws on top of terrain, under fluid, using the flat facemap.
+--   Draws on top of terrain, under fluid, using its view-relative slope mask.
 --   Returns Nothing for vegId 0 (no vegetation).
 vegToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
           → WorldTextures → CameraFacing
@@ -526,7 +526,7 @@ vegQuadWithTexture lookupSlot lookupFmSlot textures facing
 
         actualSlot = lookupSlot texHandle
 
-        fmHandle = getVegFaceMapTexture textures slopeId
+        fmHandle = getVegFaceMapTexture textures facing slopeId
         fmSlot = lookupFmSlot fmHandle
 
         depth = zSlice - worldZ

@@ -36,6 +36,17 @@ measurement stays manual. See [the measurement protocol and results](../docs/wor
 for timing boundaries, terrain checks, memory baselines, quota assumptions,
 and the owner's shipping decision.
 
+## Manual slope orientation captures (`slope_orientation_capture.py`)
+
+`python3 tools/slope_orientation_capture.py --out /tmp/slope-orientation`
+captures an isolated slope, descending hill, all 16 terrain masks and vegetation
+masks at four camera facings. It authors the paused arena once and verifies
+terrain, slope and vegetation state after each rotation without rewriting flags.
+Use `--engine /absolute/binary` for before/after captures; otherwise the normal
+build-lock helper prepares the engine. This manual GPU capture is not a CI probe.
+Runtime files stay in the selected output directory; only its own engine is
+stopped. See [the retained comparison](../docs/evidence/slope_camera_orientation/README.md).
+
 ## Manual eighth-level fluid captures (`fluid_levels_render_capture.py`, #2529)
 
 `python3 tools/fluid_levels_render_capture.py --port 9429 --size 1280x720
