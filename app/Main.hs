@@ -17,6 +17,8 @@ import Engine.Preview.Discovery (discoverEntries, resolveFocusedEntry
 import Engine.Preview.Unit (buildPreviewUnit, unitFocusErrorMessage
                            , unitsCategoryRoot)
 import Engine.Preview.Building (buildPreviewBuilding)
+import Engine.Preview.StructurePack (loadStructurePack
+                                    , structurePackErrorMessage)
 import Engine.Audio.Preview.Discovery (isAudioFile, resolvePreviewFile)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, defaultLayers, parseArg, parseRegion
@@ -210,7 +212,7 @@ runPreviewTarget callerDirectory raw cat mItem port
 --   structure, a symlinked directory, and a file where a directory was
 --   expected all reject here.
 --
---   @flora@ and @structures@ item folders are flat sets of static PNGs
+--   @flora@ and pack-less @structures@ item folders are flat sets of static PNGs
 --   — the exact shape #886's simple-category browser already handles —
 --   so they are deliberately ROUTED into it (rooted at the item's own
 --   folder) rather than given viewers of their own (#888 Requirement
@@ -228,13 +230,25 @@ runGroupedPreview cat item port
             Left err → rejectItem (itemDirErrorMessage err)
             Right building →
                 runPreview target (PreviewBuildingAssets building) port
-    | otherwise =
+    -- #2495: a structure name with a pack manifest browses the PACK —
+    -- the YAML is the appearance authority, and its art may live under
+    -- any category (dungeon_1's is under buildings/). Only an ABSENT
+    -- manifest falls through to the folder browser below, so every
+    -- existing structures rejection still rejects identically.
+    | cat ≡ "structures" =
+        loadStructurePack item ⌦ \case
+            Left err → rejectItem (structurePackErrorMessage err)
+            Right (Just pack) →
+                runPreview target (PreviewStructureAssets pack) port
+            Right Nothing → browseFolder
+    | otherwise = browseFolder
+  where
+    browseFolder =
         resolveItemDir (textureCategoryRoot cat) item ⌦ \case
             Left err → rejectItem (itemDirErrorMessage err)
             Right dir → do
                 entries ← discoverEntries dir
                 runPreview target (PreviewList entries) port
-  where
     target = (T.pack cat, Just (T.pack item))
     rejectItem msg = do
         hPutStrLn stderr $ "--preview " ⧺ cat ⧺ "/" ⧺ item ⧺ ": "

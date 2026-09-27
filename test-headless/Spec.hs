@@ -122,6 +122,7 @@ import qualified Test.Headless.Preview.BuildingMatrix as PreviewBuildingMatrix
 import qualified Test.Headless.Preview.BuildingMatrixView as PreviewBuildingMatrixView
 import qualified Test.Headless.Preview.Zoom as PreviewZoom
 import qualified Test.Headless.Preview.KeyboardNavigation as PreviewKeyboardNavigation
+import qualified Test.Headless.Preview.StructurePack as PreviewStructurePack
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
 import qualified Test.Headless.World.Save.Serialize as SaveSerialize
 import qualified Test.Headless.World.Save.Envelope as SaveEnvelope
@@ -882,6 +883,7 @@ main = hspec $ do
       PreviewBuildingMatrix.spec
       describe "the shipped Lua viewer" PreviewBuildingMatrixView.spec
     describe "Preview.Zoom" PreviewZoom.spec
+    describe "Preview.StructurePack" PreviewStructurePack.spec
     describe "building asset schema and lifecycle roles"
         BuildingAssetSchema.spec
     BuildingCameraFacing.spec

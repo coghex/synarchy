@@ -512,6 +512,7 @@ library
                      Engine.Preview.Discovery
                      Engine.Preview.Unit
                      Engine.Preview.Building
+                     Engine.Preview.StructurePack
                      Engine.Preview.BuildingMatrix
                      Engine.Core.Types
                      Engine.Core.Log
@@ -1189,6 +1190,14 @@ library
                  , primitive
                  , cereal
                  , yaml
+                 -- #2495: the structure-pack preview reads a manifest's
+                 -- mapping KEY ORDER from libyaml's event stream, which the
+                 -- decoded 'Data.Yaml' value does not keep. All three are
+                 -- already in the build plan as yaml's own dependencies;
+                 -- listing them adds no package.
+                 , libyaml
+                 , conduit
+                 , resourcet
                  , aeson
                  , cryptohash-sha256
                  , random
@@ -1526,6 +1535,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Preview.LuaHarness
                    Test.Headless.Preview.Zoom
                    Test.Headless.Preview.KeyboardNavigation
+                   Test.Headless.Preview.StructurePack
                    Test.Headless.World.Save.Sanitize
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope

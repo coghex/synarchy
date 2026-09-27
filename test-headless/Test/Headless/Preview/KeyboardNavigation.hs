@@ -188,6 +188,23 @@ managerHarness = lns
     , "  dump=function() return {ready=true,animated=false,facing='south',"
     , "      zoom={multiplier=BUILD_ZOOM,region=BUILD_PANEL}} end,"
     , "}"
+    -- #2495's structure spy: Left/Right reach the lifecycle row; an
+    -- appearance selection is recorded so a lifecycle move can be shown
+    -- NOT to reselect the appearance.
+    , "LIFECYCLE_STEPS = {}"
+    , "structureViewStub = {"
+    , "  new=function(p) STRUCT_PANEL=p.panel; STRUCT_ZOOM=p.zoom; return 1 end,"
+    , "  setAppearance=function(_,a) STRUCT_APPEARANCE=a.identity"
+    , "      STRUCT_SETS=(STRUCT_SETS or 0)+1 end,"
+    , "  selectAdjacentLifecycle=function(_,step,now)"
+    , "      table.insert(LIFECYCLE_STEPS,step); LIFECYCLE_NOW=now; return true end,"
+    , "  getZoomRegion=function() return STRUCT_PANEL end, setZoom=function(_,z) STRUCT_ZOOM=z end,"
+    , "  setPanel=function(_,p) STRUCT_PANEL=p end, update=function() end, destroy=function() end,"
+    , "  handleLifecycleClick=function() return nil end, handleCapClick=function() return nil end,"
+    , "  dump=function() return {ready=true,animated=false,lifecycle='static',"
+    , "      lifecycleRow={},capRow={},zoom={multiplier=STRUCT_ZOOM,region=STRUCT_PANEL}} end,"
+    , "}"
+    , "package.loaded['scripts.ui.structure_pack_view']=structureViewStub"
     , "package.loaded['scripts.ui.asset_browser']=assetBrowserStub"
     , "package.loaded['scripts.ui.list']={getChromeTexture=function() return 90 end}"
     , "package.loaded['scripts.ui.unit_animation_view']=unitViewStub"
@@ -351,6 +368,42 @@ spec = do
             , "assert(#FACING_STEPS==2 and FACING_STEPS[1]==-1 and FACING_STEPS[2]==1)"
             , "assert(BUILD_ENTRY_SETS==1,"
             , "    'a facing change must not reselect the row')"
+            ]
+
+        it "routes structure Up/Down to appearance selection and Left/Right to the lifecycle row" $ runsOk $ lns
+            [ managerHarness
+            , "NOW=50"
+            , "local function app(id) return {identity=id,label=id,variant='default',"
+            , "    facemaps={},lifecycles={}} end"
+            , "local pm=bootManager({mode='structure',structure={name='fx',"
+            , "    defaultAppearance='floor@default',"
+            , "    appearances={app('floor@default'),app('post@default')}}},"
+            , "    {category='structures',item='fx'})"
+            , "assert(STRUCT_SETS==1 and STRUCT_APPEARANCE=='floor@default')"
+            , "assert(pm.onKeyDown('Down') and BROWSER_STEPS[1]==1)"
+            , "assert(STRUCT_SETS==2 and STRUCT_APPEARANCE=='post@default')"
+            , "assert(pm.dump().selectedAppearance=='post@default')"
+            , "assert(pm.onKeyDown('Left') and pm.onKeyDown('Right'))"
+            , "assert(#LIFECYCLE_STEPS==2 and LIFECYCLE_STEPS[1]==-1 and LIFECYCLE_STEPS[2]==1)"
+            , "assert(LIFECYCLE_NOW==50,'a lifecycle move starts its clock at the wall clock')"
+            , "assert(STRUCT_SETS==2,'a lifecycle change must not reselect the appearance')"
+            , "assert(#DIRECTION_STEPS==0 and #FACING_STEPS==0)"
+            ]
+
+        it "applies the same held-key clock to the wrapped structure lifecycle row" $ runsOk $ lns
+            [ managerHarness
+            , "NOW=400"
+            , "local pm=bootManager({mode='structure',structure={name='fx',"
+            , "    defaultAppearance='floor@default',appearances={{identity='floor@default',"
+            , "    label='floor',variant='default',facemaps={},lifecycles={}}}}},"
+            , "    {category='structures',item='fx'})"
+            , "assert(pm.onKeyDown('Right') and #LIFECYCLE_STEPS==1)"
+            , "NOW=400.19; pm.update(0.016); assert(#LIFECYCLE_STEPS==1)"
+            , "NOW=400.21; pm.update(0.016)"
+            , "assert(#LIFECYCLE_STEPS==2 and LIFECYCLE_STEPS[2]==1)"
+            , "NOW=400.251; pm.update(0.016); assert(#LIFECYCLE_STEPS==3)"
+            , "assert(pm.onKeyUp('Right'))"
+            , "NOW=401; pm.update(0.016); assert(#LIFECYCLE_STEPS==3)"
             ]
 
         it "moves immediately, repeats after a short delay at a fast fixed cadence, and stops exactly on key-up" $ runsOk $ lns
