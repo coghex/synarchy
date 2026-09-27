@@ -433,7 +433,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- A fresh world already paid for these exact pixels.  Publishing
         -- them is best-effort and gives a later matching save load the
         -- fast path without retaining a second in-memory representation.
-        artifactKey ← buildZoomArtifactKey params registry
+        artifactKey ← buildZoomArtifactKey params registry palette
         case artifactKey of
           Left reason → logWarn logger CatWorld $
               "Zoom artifact cache: publish skipped (" <> reason <> ")"

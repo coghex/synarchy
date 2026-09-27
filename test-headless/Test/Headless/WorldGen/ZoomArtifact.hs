@@ -9,8 +9,12 @@ import Data.Either (isLeft, isRight)
 import Data.IORef (readIORef)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import System.Directory (listDirectory, removeDirectoryRecursive)
+import System.Directory
+    ( copyFile, createDirectory, listDirectory, removeDirectoryRecursive )
 import Test.Hspec
+import Engine.Core.Log (LogConfig(..), LoggerState, defaultLogConfig, initLogger)
+import Test.Headless.Harness.Log (quietLogBackend)
+import World.Material (emptyMaterialRegistry)
 import Test.Headless.Harness (sharedWorld, getWorldGenParams)
 import Engine.Core.State (EngineEnv, loggerRef, materialRegistryRef)
 import World.Types
@@ -82,6 +86,142 @@ spec = describe "exact zoom reconstruction artifact" $ do
         failed `shouldSatisfy` isLeft
         loadZoomArtifactAt path fixtureKey ≫= (`shouldSatisfy` isLeft)
 
+    paletteTextureSpec
+
+-- | #2692: the key must depend on every texture the palette samples,
+-- not only files under the four fixed resource roots.  Each fixture is
+-- an isolated temp tree whose YAML names a PNG outside those roots by
+-- absolute path; the PNGs are copies of tracked zoom textures.
+paletteTextureSpec ∷ Spec
+paletteTextureSpec = describe "palette textures outside the resource roots" $ do
+    it "rekeys when only a material zoom texture's bytes change" $
+      withPaletteFixture $ \fixture → do
+        copyFile sandstonePng (pfTexture fixture)
+        writeMaterialYaml fixture (pfTexture fixture)
+        keyA ← fixtureKeyFor fixture
+        copyFile shalePng (pfTexture fixture)
+        keyB ← fixtureKeyFor fixture
+        assertStaleArtifactRejected fixture keyA keyB
+
+    it "rekeys when only a vegetation variant texture's bytes change" $
+      withPaletteFixture $ \fixture → do
+        writeVegetationYaml fixture (pfTexture fixture)
+        copyFile sandstonePng (pfTexture fixture)
+        keyA ← fixtureKeyFor fixture
+        copyFile shalePng (pfTexture fixture)
+        keyB ← fixtureKeyFor fixture
+        assertStaleArtifactRejected fixture keyA keyB
+
+    it "keys identical content identically (two successful builds)" $
+      withPaletteFixture $ \fixture → do
+        copyFile sandstonePng (pfTexture fixture)
+        writeMaterialYaml fixture (pfTexture fixture)
+        writeVegetationYaml fixture (pfTexture fixture)
+        keyA ← fixtureKeyFor fixture
+        keyB ← fixtureKeyFor fixture
+        keyA `shouldSatisfy` isRight
+        keyB `shouldSatisfy` isRight
+        keyA `shouldBe` keyB
+
+    it "refuses a key when a sampled texture is missing" $
+      withPaletteFixture $ \fixture → do
+        writeMaterialYaml fixture (pfTexture fixture)
+        fixtureKeyFor fixture ≫= expectNamedFailure fixture "material"
+        writeVegetationYaml fixture (pfTexture fixture)
+        writeMaterialYaml fixture sandstonePng
+        fixtureKeyFor fixture ≫= expectNamedFailure fixture "vegetation"
+
+    it "refuses a key when a sampled texture is unreadable or undecodable" $
+      withPaletteFixture $ \fixture → do
+        -- A directory at the path cannot be read as a file by anyone,
+        -- including root, unlike a permission-stripped file.
+        createDirectory (pfTexture fixture)
+        writeMaterialYaml fixture (pfTexture fixture)
+        fixtureKeyFor fixture ≫= expectNamedFailure fixture "material"
+        removeDirectoryRecursive (pfTexture fixture)
+        BS.writeFile (pfTexture fixture) "not a png"
+        fixtureKeyFor fixture ≫= expectNamedFailure fixture "material"
+
+data PaletteFixture = PaletteFixture
+    { pfRoot    ∷ FilePath
+    , pfMatDir  ∷ FilePath
+    , pfVegDir  ∷ FilePath
+    , pfTexture ∷ FilePath
+    , pfLogger  ∷ LoggerState
+    }
+
+withPaletteFixture ∷ (PaletteFixture → IO a) → IO a
+withPaletteFixture action = withTempRoot $ \root → do
+    let matDir = root ⊘ "materials"
+        vegDir = root ⊘ "vegetation"
+        textureDir = root ⊘ "custom"
+    mapM_ createDirectory [matDir, vegDir, textureDir]
+    logger ← initLogger defaultLogConfig { lcBackend = quietLogBackend }
+    action PaletteFixture
+        { pfRoot = root, pfMatDir = matDir, pfVegDir = vegDir
+        , pfTexture = textureDir ⊘ "palette.png", pfLogger = logger }
+
+sandstonePng, shalePng ∷ FilePath
+sandstonePng = "assets/textures/world/zoommap/sandstone_chunk.png"
+shalePng = "assets/textures/world/zoommap/shale_chunk.png"
+
+writeMaterialYaml ∷ PaletteFixture → FilePath → IO ()
+writeMaterialYaml fixture zoomPath =
+    writeFile (pfMatDir fixture ⊘ "custom.yaml") $ unlines
+        [ "materials:"
+        , "  - id: 200"
+        , "    name: custom_rock"
+        , "    tile: " <> show sandstonePng
+        , "    zoom: " <> show zoomPath
+        , "    bg: " <> show sandstonePng
+        ]
+
+writeVegetationYaml ∷ PaletteFixture → FilePath → IO ()
+writeVegetationYaml fixture variantPath =
+    writeFile (pfVegDir fixture ⊘ "custom.yaml") $ unlines
+        [ "vegetation:"
+        , "  - id_start: 200"
+        , "    name: custom_moss"
+        , "    variants:"
+        , "      - " <> show variantPath
+        ]
+
+fixtureKeyFor ∷ PaletteFixture → IO (Either Text ZoomArtifactKey)
+fixtureKeyFor fixture = do
+    palette ← buildColorPalette (pfLogger fixture)
+        (pfMatDir fixture) (pfVegDir fixture)
+    buildZoomArtifactKey fixtureParams emptyMaterialRegistry palette
+  where
+    fixtureParams = defaultWorldGenParams { wgpWorldSize = 16 }
+
+-- | Both builds succeed, differ, and an artifact published under the
+-- original texture's key is a miss under the edited texture's key.
+assertStaleArtifactRejected
+    ∷ PaletteFixture → Either Text ZoomArtifactKey
+    → Either Text ZoomArtifactKey → IO ()
+assertStaleArtifactRejected fixture keyA keyB =
+    case (keyA, keyB) of
+      (Right before, Right after) → do
+        after `shouldNotBe` before
+        let path = pfRoot fixture ⊘ "cache" ⊘ "zoom" ⊘ "current.zarf"
+            count = zakEntryCount before
+            entries = V.replicate count (V.head fixtureEntries)
+            pixels = V.replicate count (V.head fixturePixels)
+        publishZoomArtifactAt path before entries pixels
+            ≫= (`shouldSatisfy` isRight)
+        loadZoomArtifactAt path before ≫= (`shouldSatisfy` isRight)
+        loadZoomArtifactAt path after ≫= (`shouldSatisfy` isLeft)
+      _ → expectationFailure $
+          "expected two successful keys, got " <> show (keyA, keyB)
+
+expectNamedFailure
+    ∷ PaletteFixture → Text → Either Text ZoomArtifactKey → IO ()
+expectNamedFailure fixture kind result = case result of
+    Right _ → expectationFailure "expected key construction to fail"
+    Left reason → do
+        T.unpack reason `shouldContain` T.unpack kind
+        T.unpack reason `shouldContain` pfTexture fixture
+
 -- | The optimization's load-bearing equality: fresh init supplies a bordered
 -- terrain cache while save load reconstructs from scratch.  Both paths must
 -- produce the same ordered entries and pixel blocks, and the real pair must
@@ -112,7 +252,7 @@ worldSpec = describe "fresh/cache and load/scratch zoom identity" $
         scratch' ← evaluate (force scratch)
         cached' `shouldBe` scratch'
 
-        keyResult ← buildZoomArtifactKey params registry
+        keyResult ← buildZoomArtifactKey params registry palette
         key ← case keyResult of
             Left reason → expectationFailure (T.unpack reason) >> error "unreachable"
             Right value → pure value
@@ -128,6 +268,7 @@ worldSpec = describe "fresh/cache and load/scratch zoom identity" $
                 overriddenRegistry = registerMaterial (unMaterialId matGranite)
                     (granite { mpHardness = mpHardness granite + 0.25 }) registry
             overriddenKeyResult ← buildZoomArtifactKey params overriddenRegistry
+                palette
             overriddenKey ← case overriddenKeyResult of
                 Left reason → expectationFailure (T.unpack reason)
                     >> error "unreachable"

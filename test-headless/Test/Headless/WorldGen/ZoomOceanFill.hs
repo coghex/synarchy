@@ -84,6 +84,7 @@ testPalette ∷ ZoomColorPalette
 testPalette = ZoomColorPalette
     { zcpMaterials  = Map.fromList [(testMat, (20, 200, 40, 255))]
     , zcpVegetation = Map.empty
+    , zcpSources    = []
     }
 
 testMat ∷ Word8
