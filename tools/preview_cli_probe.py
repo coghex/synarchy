@@ -40,9 +40,11 @@ Checks:
      unknown item, a name carrying path structure, absolute/".."/"."
      traversal shapes, a symlinked item directory, and a FILE where a
      browsable item directory was expected (assets/textures/flora holds
-     unknown_flora.png beside its real species folders). Valid targets
-     are deliberately NOT booted here (that would open a real GLFW
-     window — see tools/preview_probe.py).
+     unknown_flora.png beside its real species folders). Since #2495 a
+     structures name with a data/structure_packs/<name>.yaml browses that
+     PACK, so a malformed or symlinked manifest also rejects pre-boot,
+     naming the file. Valid targets are deliberately NOT booted here
+     (that would open a real GLFW window — see tools/preview_probe.py).
   9. Mode-specific flags (CH-58, #1012): a flag from app/Main.hs's
      incompatibleFlagTable given to a boot mode that doesn't honour it
      (e.g. --seed with --headless, --port with --dump, --seeds with
@@ -289,6 +291,43 @@ def check_grouped_item_targets() -> bool:
               and expect in r.stderr)
         results.append(check(f"grouped item: {label}", ok,
                              f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+
+    # #2495: a structures name WITH a pack manifest browses the pack, so
+    # the manifest itself is pre-boot input now. Only an ABSENT manifest
+    # falls back to the folder browser (the "unknown structure" row
+    # above); a malformed one, and a symlinked one, must reject naming
+    # the file rather than silently browsing a folder instead.
+    packs_dir = os.path.join("data", "structure_packs")
+    bad_pack = os.path.join(packs_dir, "_cli_probe_bad_2495.yaml")
+    link_pack = os.path.join(packs_dir, "_cli_probe_link_2495.yaml")
+    made: list[str] = []
+    try:
+        if not os.path.lexists(bad_pack):
+            with open(bad_pack, "w", encoding="utf-8") as f:
+                f.write("pieces:\n  floor:\n    texture: a.png\n"
+                        "    facemap: b.png\n    construction: []\n")
+            made.append(bad_pack)
+        r = run_cli("--preview", "structures/_cli_probe_bad_2495")
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and bad_pack in r.stderr
+              and "malformed structure pack" in r.stderr
+              and "the frame list is empty" in r.stderr)
+        results.append(check("structures: malformed pack manifest names the "
+                             "file and the fault", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+        if not os.path.lexists(link_pack):
+            os.symlink("wire.yaml", link_pack)
+            made.append(link_pack)
+        r = run_cli("--preview", "structures/_cli_probe_link_2495")
+        ok = (r.returncode == 1
+              and "READY" not in r.stdout
+              and "manifest must not be a symlink" in r.stderr)
+        results.append(check("structures: symlinked pack manifest", ok,
+                             f"rc={r.returncode} stderr={r.stderr.strip()!r}"))
+    finally:
+        for path in made:
+            os.unlink(path)
 
     # A symlinked item directory: refused unconditionally, because
     # doesDirectoryExist follows links and browsing one would load

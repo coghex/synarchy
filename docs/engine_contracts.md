@@ -846,14 +846,18 @@ directory was expected all exit 1 **before a window exists**. Trimmed
 loading: only its font, the list widget's own chrome textures, and
 textures within the requested category/item — never `data/*.yaml`
 gameplay catalogs. Visual-definition exceptions are the units
-viewer's `data/units/<name>.yaml` and the buildings viewer's
-`data/buildings/<name>.yaml`. Audio also reads the three `data/audio/*.yaml`
+viewer's `data/units/<name>.yaml`, the buildings viewer's
+`data/buildings/<name>.yaml`, and the structure pack viewer's
+`data/structure_packs/<name>.yaml` (#2495, see §Structure pack viewer).
+Audio also reads the three `data/audio/*.yaml`
 catalogs and bounded sample files; it adds no textures or gameplay definitions.
 
-`flora/<name>` and `structures/<name>` reuse the shared browser
-(`scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`, #888) rooted at
-the ITEM's folder — anything beyond routing the resolved folder into
-`discoverEntries` means the routing is wrong, not the reuse. The units
+`flora/<name>` and a `structures/<name>` with NO pack manifest reuse the
+shared browser (`scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`,
+#888) rooted at the ITEM's folder — anything beyond routing the resolved
+folder into `discoverEntries` means the routing is wrong, not the reuse.
+A `structures/<name>` whose `data/structure_packs/<name>.yaml` exists
+browses the PACK instead (#2495, §Structure pack viewer). The units
 viewer (#887/#1261) samples the compiled atlas through the SAME loader
 (`Unit.Atlas.Yaml.resolveUnitAtlases`) and frozen cell arithmetic
 (`atlasCellUV`) the game uses — a preview-only decoder would miss the
@@ -889,10 +893,11 @@ filtering, both viewers, trimmed loading verified against the engine's
 own authoritative texture record, and zoom on all six display kinds via
 real `input.moveMouse`/`input.scroll`). Pure logic: hspec
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
-`"Preview.Building"` / `"Preview.BuildingMatrix"` / `"Preview.Zoom"` /
-`"Preview.KeyboardNavigation"` — the last three are the only BLOCKING
-automated gates zoom, the buildings matrix and keyboard routing have,
-the probe being manual-only.
+`"Preview.Building"` / `"Preview.BuildingMatrix"` /
+`"Preview.StructurePack"` / `"Preview.Zoom"` /
+`"Preview.KeyboardNavigation"` — the last four are the only BLOCKING
+automated gates the structure pack viewer, zoom, the buildings matrix
+and keyboard routing have, the probe being manual-only.
 
 
 Enforced by `tools/preview_cli_probe.py` (CI-eligible, no boot) and
@@ -1172,12 +1177,100 @@ unresolved animation reference, or art that is not on disk, so the
 missing, unresolved, legacy and provenance states have nowhere else to
 be verified through real marshalling and rendering.
 
+### Structure pack viewer (#2495)
+
+`--preview structures/<name>` resolves the PACK first, pre-boot
+(`Engine.Preview.StructurePack`, dispatched from `app/Main.hs`):
+
+1. The name gets the SAME single-component validation as every grouped
+   item (`resolveItemDir`'s rule), before any path is built from it, and
+   an unsafe name reports the folder browser's own wording.
+2. `data/structure_packs/<name>.yaml` is `lstat`ed. ABSENT — and only
+   absent — falls back to the folder browser unchanged, so every
+   pre-#2495 structures rejection still rejects identically. A symlink
+   (dangling or not), a directory or other non-regular file, an
+   unreadable file, and a malformed pack are pre-boot exits naming the
+   manifest and the fault.
+3. The pack YAML is the APPEARANCE authority, not the asset tree: a
+   pack's art may live under any category (`dungeon_1`'s is under
+   `buildings/` and `facemap/`, and its palette paths are persisted), so
+   the viewer follows the YAML and never asks art to move.
+
+The decoder enumerates, in grouped DECLARATION order (read from the
+libyaml event stream, since a decoded YAML map is key-ordered): each
+`pieces.<kind>` then each `variants.<v>` override of it, each
+`walls.<edge>` likewise (one appearance per edge; its four cap facemaps
+`00`/`10`/`01`/`11` are LIGHTING variants, not appearances), then each
+Wire `connections.<name>` under one `wire` group. Identities are
+`<kind>[:<edge|connection>]` for the pack's default appearance and
+`…@<variant>` for a `variants.<v>` override — a variant may itself be
+named `default`, so the dump's `override` flag, not the `variant` name,
+tells the two apart. A variant resolves exactly as
+`scripts/structures.lua` does: texture and facemaps (per cap) fall back
+to the default's — inheritance, not substitution — while `construction`
+and `destruction` are the variant's OWN or undeclared, never inherited.
+Lifecycle declarations are read with the engine's refusals (#2488/#2491):
+an empty or sparse list, a non-path entry, and a destruction clip whose
+`fps` is absent, non-numeric, non-finite or non-positive are malformed
+packs; an absent key is UNDECLARED. A pack with no appearances, an
+unknown edge or cap, and an override of a piece or edge the default
+never declares are malformed too. The default selection is the first
+appearance: the first piece kind's default, else the first wall edge's,
+else the first connection, at `static`.
+
+Every declared path — texture, facemap, every frame — is judged
+pre-boot under `assets/textures/` with the buildings matrix's own
+`classifyDeclaredPath` (containment, extension, and an `lstat` walk that
+refuses a symlink at ANY level). A failing path is MISSING with its
+reason and keeps its declared spelling and its POSITION in the
+sequence, so `frameCount` is always the declared count and playback
+neither compresses the clip nor substitutes a neighbour. A missing
+facemap is attributed separately from a missing sprite. A lifecycle the
+appearance does not declare is UNDECLARED, never missing.
+
+`scripts/ui/structure_pack_view.lua` shows the selected appearance's
+enlarged frame, a lifecycle row (`static`, `construction`,
+`destruction`; a caption suffix `-` marks undeclared, `!` a missing
+frame), a cap row for wall edges, and three info lines. Selecting an
+appearance shows its static sprite; selecting a lifecycle starts ONE
+wall clock over its declared frames with #1833's forced replay —
+destruction at its authored `fps`, construction (progress-indexed in
+gameplay) at the documented preview default of 8 fps, reported as
+`fpsSource = "preview-default"`. A cap change alters ONLY the reported
+facemap. A missing or undeclared frame is never requested; the sprite
+is hidden and a textureless marker (`X` / `undeclared`) drawn, so
+nothing earlier lingers, and the state is terminal-ready. Frames render
+RAW: the panel and the dump report the facemap the frame reuses and its
+alpha policy (`facemap-alpha` for the static sprite, `frame-alpha` for
+lifecycle frames, D-10) instead of reimplementing the world shader.
+Up/Down walk the appearance list, Left/Right the lifecycle row
+(wrapping), both with the preview's held-key repeat. A resize preserves
+appearance, variant, lifecycle, cap, scroll offset, playback phase and
+zoom; the zoom object is the PACK.
+
+Trimmed loading: the textures a pack boot may load are exactly the paths
+its YAML names (plus list chrome) — an allowlist; only the displayed
+frame is ever requested, and reporting a facemap never loads it.
+
+Gates: hspec `--match "Preview.StructurePack"` (the decoder over both
+shipped packs and synthetic fixtures, every refusal, the path verdicts,
+the timing, and the SHIPPED Lua viewer fed through the real
+`engine.getPreviewBrowse` marshaller), `--match "Preview.KeyboardNavigation"`
+and `--match "Preview.Zoom"`; `tools/preview_cli_probe.py` check 8 (a
+malformed and a symlinked manifest); and the manual-only, `needs-gpu`
+`tools/preview_probe.py --only dispatch` phases 8/9 (both shipped packs
+against a PyYAML-derived expectation, every lifecycle and cap cell
+clicked through its dump bounds, and the pack-named texture allowlist)
+plus the `structures/wire` zoom scenario.
+
 ### Centered bounded zoom (#1907)
 
 Every main preview display — the bare simple-category list's panel,
 focused-item mode, the units viewer's ENLARGED direction, the buildings
-viewer's static entries and animations, and the flora/structures item
-folders that reuse the shared browser — has ONE zoom multiplier per
+viewer's static entries and animations, the structure pack viewer's
+enlarged frame (#2495; its region is the sub-rect above the lifecycle
+and cap rows), and the flora/pack-less structures item folders that
+reuse the shared browser — has ONE zoom multiplier per
 session. `scripts/ui/preview_zoom.lua` owns the limits and the
 arithmetic; every pane fits through its `fitRect`, so no two panes can
 drift onto different math.
@@ -1295,7 +1388,7 @@ display kinds.
 `require("scripts.preview_manager").dump()` (self-registered into
 `package.loaded` the same way `unit_ai.lua`/`debug.lua` are, despite
 being `engine.loadScript`-loaded, not `require`d) reports `mode`
-(`"list"`/`"item"`/`"unit"`/`"building"` — #632's `"placeholder"` is GONE
+(`"list"`/`"item"`/`"unit"`/`"building"`/`"structure"`/`"audio"` — #632's `"placeholder"` is GONE
 as of #888, every canonical category now dispatching to real behavior),
 `state` (`"loading"`/`"ready"`/`"empty"`), the current `selected` entry,
 and in list mode the FULL ordered `entries` list (not just its
@@ -1326,6 +1419,25 @@ each cell's own mirrored flag, source, frame index, sampled
 per-visible-row `rows` bounds/handles, and — for an animation selection
 ONLY — `playback` (`entry`, `frameIndex`, `frameCount`, effective
 `fps`/`loop`, `ready`).
+
+**Structure mode** (#2495) adds `pack`, `manifest`, `defaultAppearance`,
+the ordered `appearances` (each with `identity`, `label`, `group`,
+`kind`, `edge`, `variant`, `connection`, `texture`, `textureInherited`,
+`override`, `facemaps` — per cap `path`/`declared`/`missing`/`reason`/`inherited` —
+and `lifecycles.{static,construction,destruction}` with `frameCount`,
+`paths`, `missing` (a count) plus `missingFrames` (`index`/`path`/
+`reason`), `undeclared`, `fps`, `fpsSource`, `alphaPolicy`),
+`selectedAppearance`, `selectedVariant`, `selectedCap` (walls only),
+`selectedLifecycle`, and for the displayed frame `path`, `frameIndex`,
+`frameCount`, `handle`, `missing`/`missingReason`, `failed`, `undeclared`, `facemap` (+
+`facemapMissing`/`facemapReason`) and `alphaPolicy`; `lifecycleRow` and
+`capRow` cells with `hitHandle`, caption and `UI.getElementInfo` bounds;
+per-visible-row `rows` carrying each appearance's `identity`; the
+marker/sprite/info element handles; `totals` (`missing` frames,
+`undeclared` lifecycles, `missingFacemaps`, summed from the
+per-appearance reports); and `playback` for a playing lifecycle only.
+`selection.identity` speaks the same selection vocabulary as building
+mode.
 
 **Every mode** additionally carries `zoom` (#1907): `multiplier`, `min`,
 `max`, the `region` the wheel is captured over (unit mode's is the
@@ -1371,7 +1483,11 @@ only), and textures within the requested category/item — never
 `data/*.yaml` gameplay catalogs. The two visual-definition exceptions are a
 single file for the requested item: the units viewer's
 `data/units/<name>.yaml` and the buildings viewer's
-`data/buildings/<name>.yaml`.
+`data/buildings/<name>.yaml` — plus the structure pack viewer's
+`data/structure_packs/<name>.yaml` (#2495). A structure PACK spans
+texture categories, so its allowance is not a category prefix but
+exactly the paths that YAML names, and only the displayed frame of each
+is requested.
 
 A DECLARED building path (#2492) that does not resolve under
 `assets/textures/buildings/<name>/` — after the same containment and

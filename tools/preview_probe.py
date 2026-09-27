@@ -129,14 +129,21 @@ Checks:
      which surfaces as ordinary item-relative statics rather than one
      animation — and the default falls all the way through to the first
      entry.
-  8. Flat grouped items (--preview flora/<name>, --preview
-     structures/wire, #888): both dispatch into #886's SIMPLE-category
-     browser rooted at the item's own folder (mode == "list") rather
-     than a bespoke viewer, with the item folder's own textures listed
-     in order and the first auto-selected.
+  8. Flat grouped items (--preview flora/<name>, #888) dispatch into
+     #886's SIMPLE-category browser rooted at the item's own folder
+     (mode == "list"), with the item folder's own textures listed in
+     order and the first auto-selected. Structure PACKS
+     (--preview structures/dungeon_1 and structures/wire, #2495) browse
+     the pack instead (mode == "structure"): every appearance the pack
+     YAML declares, in grouped declaration order with its resolved
+     texture (checked against a PyYAML-derived expectation); the first
+     declared piece kind's default at `static`; every lifecycle cell
+     and every wall cap cell selected through its own dump-reported
+     bounds; Left/Right walking the lifecycle row.
   9. Canonical dispatch sweep (#888 / epic #427 acceptance): every
      canonical category — icons, items, ui, world, units, flora,
-     buildings, structures, audio — boots to its documented mode, and the
+     buildings, structures (a pack, since #2495), audio — boots to its
+     documented mode, and the
      Phase 1 (#632) "placeholder" mode is gone from every one of them.
  10. Trimmed loading (Requirement 5, a shared per-phase helper rather
      than a boot of its own): engine.getLoadedTexturePaths() —
@@ -145,12 +152,14 @@ Checks:
      engine.loadTexture's Haskell handler itself, not any Lua caller's
      self-reported bookkeeping) — contains ONLY paths under the browsed
      category's root plus the documented chrome allowlist (list mode
-     only), with no extras and nothing missing; the normal ~25-script
+     only), with no extras and nothing missing — for a structure pack,
+     whose art spans categories, EXACTLY the paths its YAML names plus
+     the chrome (#2495); the normal ~25-script
      gameplay set never loaded (the `ui` global, wired only outside the
      preview boot profile, stays nil).
  11. Centered bounded zoom (#1907), one boot per display kind (bare
      list, focused item, unit enlarged, building, flora item, structure
-     item), driving the REAL wheel pipeline with input.moveMouse +
+     pack), driving the REAL wheel pipeline with input.moveMouse +
      input.scroll over the dump-reported zoom REGION rather than any
      hardcoded coordinate: a session starts at multiplier 1, delta
      MAGNITUDE is honoured rather than reduced to a sign, both limits

@@ -77,6 +77,57 @@ buildingBrowse = lns
     , "pm.update(0.016)"
     ]
 
+-- | A structure pack payload shaped exactly as
+--   'Engine.Scripting.Lua.API.Core' marshals one (#2495): a floor with a
+--   two-frame construction sequence and a wall edge with four caps.
+structureBrowse ∷ Text
+structureBrowse = lns
+    [ "local T = 'assets/textures/buildings/fx/'"
+    , "local function frame(p) return { path = T .. p, missing = false } end"
+    , "local function lc(name, frames, fps, src, alpha)"
+    , "  return { name = name, declared = frames ~= nil, frames = frames or {},"
+    , "           fps = fps or 0, fpsSource = src, alphaPolicy = alpha }"
+    , "end"
+    , "local function face(cap, p)"
+    , "  return { cap = cap, path = T .. p, declared = true, missing = false,"
+    , "           inherited = false }"
+    , "end"
+    , "local structure = { name = 'fx', manifest = 'data/structure_packs/fx.yaml',"
+    , "  defaultAppearance = 'floor', appearances = {"
+    , "  { identity = 'floor', label = 'floor / default', group = 'floor',"
+    , "    kind = 'floor', variant = 'default', textureInherited = false,"
+    , "    facemaps = { { path = T .. 'ff.png', declared = true, missing = false,"
+    , "                   inherited = false } },"
+    , "    lifecycles = {"
+    , "      lc('static', { frame('floor.png') }, 0, 'static', 'facemap-alpha'),"
+    , "      lc('construction', { frame('c0.png'), frame('c1.png') }, 8,"
+    , "         'preview-default', 'frame-alpha'),"
+    , "      lc('destruction', nil, 0, 'undeclared', 'frame-alpha') } },"
+    , "  { identity = 'wall:ne', label = 'wall ne / default',"
+    , "    group = 'wall ne', kind = 'wall', edge = 'ne', variant = 'default',"
+    , "    textureInherited = false,"
+    , "    facemaps = { face('00', 'w00.png'), face('10', 'w10.png'),"
+    , "                 face('01', 'w01.png'), face('11', 'w11.png') },"
+    , "    lifecycles = {"
+    , "      lc('static', { frame('wall.png') }, 0, 'static', 'facemap-alpha'),"
+    , "      lc('construction', nil, 0, 'undeclared', 'frame-alpha'),"
+    , "      lc('destruction', nil, 0, 'undeclared', 'frame-alpha') } },"
+    , "} }"
+    , "local pm = bootPreview({ mode = 'structure', structure = structure },"
+    , "                       { category = 'structures', item = 'fx' })"
+    , "pm.update(0.016)"
+    , "local function lifecycleHit(name)"
+    , "  for _, c in ipairs(pm.dump().lifecycleRow) do"
+    , "    if c.lifecycle == name then return c.hitHandle end"
+    , "  end"
+    , "end"
+    , "local function capHit(cap)"
+    , "  for _, c in ipairs(pm.dump().capRow) do"
+    , "    if c.cap == cap then return c.hitHandle end"
+    , "  end"
+    , "end"
+    ]
+
 spec ∷ Spec
 spec = do
   describe "limits and the fit-to-region arithmetic" $ do
@@ -687,6 +738,66 @@ spec = do
       , "    'while the region was recomputed')"
       , "assertContained('building after resize', after.zoom.sprite,"
       , "    after.zoom.region)"
+      ]
+
+  describe "structure pack viewer (#2495)" $ do
+    it "zooms over the enlarged sub-rect above the lifecycle row, and a \
+       \lifecycle change preserves the multiplier -- the PACK is one \
+       \preview object" $ runsOk $ lns
+      [ harness
+      , structureBrowse
+      , "local d = pm.dump()"
+      , "assert(d.mode == 'structure', tostring(d.mode))"
+      , "assert(d.zoom.region.height < d.panelBounds.height,"
+      , "    'the region excludes the lifecycle row')"
+      , "for _, c in ipairs(d.lifecycleRow) do"
+      , "  assert(c.bounds.y >= d.zoom.region.y + d.zoom.region.height,"
+      , "      'the lifecycle row sits below the zoom region')"
+      , "end"
+      , "local fitted = d.zoom.sprite"
+      , "pm.onUIScroll(d.zoom.surface, 0, 2)"
+      , "pm.update(0.016)"
+      , "local held = pm.dump().zoom.multiplier"
+      , "assert(held < pz.MAX and pm.dump().zoom.sprite.w < fitted.w)"
+      , "assertContained('structure', pm.dump().zoom.sprite, pm.dump().zoom.region)"
+      , "assertCentered('structure', pm.dump().zoom.sprite, pm.dump().zoom.region)"
+      , "NOW = 3"
+      , "assert(pm.onPreviewLifecycleClick(lifecycleHit('construction')))"
+      , "NOW = 3.2; pm.update(0.016)"
+      , "local after = pm.dump()"
+      , "assert(after.selectedLifecycle == 'construction' and after.frameIndex == 1,"
+      , "    'the lifecycle really changed and played')"
+      , "assert(after.zoom.multiplier == held, 'a lifecycle change preserves zoom')"
+      , "assertContained('structure frame', after.zoom.sprite, after.zoom.region)"
+      , "assert(pm.onPreviewLifecycleClick(lifecycleHit('destruction')))"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().zoom.multiplier == held,"
+      , "    'an undeclared lifecycle preserves it too')"
+      , "assert(pm.dump().zoom.sprite == nil,"
+      , "    'and reports no sprite rect for a frame that is not on screen')"
+      ]
+
+    it "an appearance change, a cap change and a resize all preserve the \
+       \multiplier" $ runsOk $ lns
+      [ harness
+      , structureBrowse
+      , "pm.onUIScroll(pm.dump().zoom.surface, 0, 2)"
+      , "local held = pm.dump().zoom.multiplier"
+      , "assetBrowserStub.selectEntry(1, 'wall:ne')"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().selectedAppearance == 'wall:ne')"
+      , "assert(pm.dump().zoom.multiplier == held, 'appearance change preserves')"
+      , "assert(pm.onPreviewCapClick(capHit('11')))"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().selectedCap == '11' and pm.dump().zoom.multiplier == held,"
+      , "    'cap change preserves')"
+      , "local before = pm.dump().zoom"
+      , "pm.onFramebufferResize(1500, 1150)"
+      , "pm.update(0.016)"
+      , "local after = pm.dump()"
+      , "assert(after.zoom.multiplier == held, 'resize preserves')"
+      , "assert(after.zoom.region.width ~= before.region.width)"
+      , "assertContained('structure after resize', after.zoom.sprite, after.zoom.region)"
       ]
 
   describe "session lifecycle" $

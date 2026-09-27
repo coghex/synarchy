@@ -218,6 +218,25 @@ def check_trimmed_loading(port: int, category_root_prefix: str, allow_chrome: bo
                 f"loaded={loaded} unaccounted={unaccounted}")
 
 
+def check_trimmed_loading_paths(port: int, allowed: set[str],
+                                what: str) -> bool:
+    """The structure-pack form of Requirement 5 (#2495): a pack's art may
+    live under several categories (dungeon_1's is under buildings/ and
+    facemap/), so the allowance is not a category prefix but EXACTLY the
+    set of paths the pack YAML names, plus the list-mode chrome. Checked
+    against the same engine-authoritative record as
+    `check_trimmed_loading`; reporting a facemap never requires loading
+    it, so this is an allowlist, not a demand that every path load."""
+    loaded = send_json(port, "return engine.getLoadedTexturePaths()")
+    loaded = loaded if isinstance(loaded, list) else []
+    unaccounted = [p for p in loaded
+                   if p not in allowed and p not in CHROME_TEXTURE_PATHS]
+    return check(f"{what}: every engine-loaded texture is a path the pack "
+                 "YAML names or a documented chrome asset",
+                 not unaccounted,
+                 f"loaded={loaded} unaccounted={unaccounted}")
+
+
 def check_no_gameplay_scripts_loaded(port: int) -> bool:
     """The normal ~25-script gameplay/menu set (init_loader.lua's
     non-preview branch) never loads in preview mode — the `ui` global it

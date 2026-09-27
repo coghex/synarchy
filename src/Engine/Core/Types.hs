@@ -14,6 +14,11 @@ module Engine.Core.Types
   , PreviewDeclaredEntry(..)
   , PreviewFsClass(..)
   , PreviewBuilding(..)
+  , PreviewStructPath(..)
+  , PreviewStructFacemap(..)
+  , PreviewStructLifecycle(..)
+  , PreviewStructAppearance(..)
+  , PreviewStructurePack(..)
   , PreviewBrowse(..)
   ) where
 
@@ -311,19 +316,120 @@ data PreviewBuilding = PreviewBuilding
     --   @"filesystem:\<pbDefault\>"@, else empty for an empty browser.
   } deriving (Eq, Show)
 
+-- | One path a structure pack DECLARES (#2495), judged against the
+--   preview asset boundary (@assets\/textures\/@) before boot.
+--
+--   A missing path keeps its declared spelling — the diagnostic is ABOUT
+--   it — and the viewer must never request it or substitute another
+--   appearance's, variant's, or lifecycle's art in its place.
+data PreviewStructPath = PreviewStructPath
+  { pstPath    ∷ !Text
+  , pstMissing ∷ !Bool
+  , pstReason  ∷ !(Maybe Text)
+    -- ^ @"absent"@, @"directory"@, @"symlink"@, @"special"@,
+    --   @"unsupported_extension"@ or @"outside_root"@ — the same
+    --   vocabulary 'Engine.Preview.BuildingMatrix.missingReasonKey'
+    --   reports. 'Nothing' exactly when 'pstMissing' is 'False'.
+  } deriving (Eq, Show)
+
+-- | One facemap an appearance lights with (#2495). A wall edge carries
+--   four, one per cap variant (@00@, @10@, @01@, @11@); every other
+--   appearance carries exactly one with no cap.
+data PreviewStructFacemap = PreviewStructFacemap
+  { psfCap       ∷ !(Maybe Text)
+  , psfFile      ∷ !(Maybe PreviewStructPath)
+    -- ^ 'Nothing' when the pack declares no facemap for this cap at
+    --   all, which is distinct from a declared path that is missing.
+  , psfInherited ∷ !Bool
+    -- ^ A variant inherited this facemap from the default appearance,
+    --   exactly as @scripts\/structures.lua@ resolves it. Inheritance
+    --   is the gameplay contract, not substitution.
+  } deriving (Eq, Show)
+
+-- | One lifecycle of a structure appearance (#2495): @static@,
+--   @construction@ or @destruction@, always in that order.
+data PreviewStructLifecycle = PreviewStructLifecycle
+  { pslName        ∷ !Text
+  , pslDeclared    ∷ !Bool
+    -- ^ 'False' for an appearance that declares no such sequence —
+    --   reported as UNDECLARED, never as missing. The static lifecycle
+    --   is always declared.
+  , pslFrames      ∷ ![PreviewStructPath]
+    -- ^ The declared frames in declared order, a missing one kept IN
+    --   ITS POSITION so playback neither compresses the sequence nor
+    --   substitutes a neighbour. Exactly one for @static@; empty only
+    --   when undeclared.
+  , pslFps         ∷ !Float
+    -- ^ The effective inspection rate; 0 for a lifecycle that does not
+    --   play.
+  , pslFpsSource   ∷ !Text
+    -- ^ @"authored"@ (destruction's own @fps@), @"preview-default"@
+    --   (construction is progress-indexed in gameplay, so the preview
+    --   inspects it at the documented default), @"static"@ or
+    --   @"undeclared"@.
+  , pslAlphaPolicy ∷ !Text
+    -- ^ @"facemap-alpha"@ for the static sprite, @"frame-alpha"@ for
+    --   lifecycle frames (D-10).
+  } deriving (Eq, Show)
+
+-- | One resolved appearance a structure pack declares (#2495): a piece
+--   kind, a wall edge, a variant override of either, or one Wire
+--   connection.
+data PreviewStructAppearance = PreviewStructAppearance
+  { psaIdentity   ∷ !Text
+    -- ^ Stable selection identity: @\<kind\>[:\<edge|connection\>]@ for
+    --   the pack's default appearance, plus @\@\<variant\>@ for a
+    --   @variants.\<name\>@ override — even one named @default@.
+  , psaLabel      ∷ !Text
+  , psaGroup      ∷ !Text
+    -- ^ The owning appearance the list groups by: the piece kind,
+    --   @wall \<edge\>@, or @wire@.
+  , psaKind       ∷ !Text
+  , psaEdge       ∷ !(Maybe Text)
+  , psaConnection ∷ !(Maybe Text)
+  , psaVariant    ∷ !Text
+    -- ^ @"default"@ or the @variants.\<name\>@ key.
+  , psaOverride   ∷ !Bool
+    -- ^ A @variants.\<name\>@ override rather than the default
+    --   appearance; the only unambiguous discriminator, since a variant
+    --   may itself be named @default@.
+  , psaTextureInherited ∷ !Bool
+  , psaFacemaps   ∷ ![PreviewStructFacemap]
+  , psaLifecycles ∷ ![PreviewStructLifecycle]
+    -- ^ Exactly three: @static@, @construction@, @destruction@.
+  } deriving (Eq, Show)
+
+-- | A resolved @--preview structures/\<name\>@ PACK target (#2495),
+--   read from @data\/structure_packs\/\<name\>.yaml@ — the appearance
+--   authority — rather than from any folder under @assets\/textures@.
+data PreviewStructurePack = PreviewStructurePack
+  { pspkName        ∷ !Text
+  , pspkManifest    ∷ !Text
+  , pspkAppearances ∷ ![PreviewStructAppearance]
+    -- ^ Grouped: every piece kind (default, then its variant
+    --   overrides), every wall edge likewise, then Wire's connections,
+    --   each in the pack's own declaration order.
+  , pspkDefault     ∷ !Text
+    -- ^ The identity of the first appearance — the first declared piece
+    --   kind's default, else the first wall edge's, else the first Wire
+    --   connection.
+  } deriving (Eq, Show)
+
 -- | Resolved browsing state, computed once in @Main@ before boot so the
 --   discovery/containment logic ('Engine.Preview.Discovery',
 --   'Engine.Preview.Unit', 'Engine.Preview.Building') never has to run
 --   again from the Lua thread.
 --   'PreviewList' backs a bare @--preview \<simple category\>@ (#886
 --   Requirement 3) AND a @--preview flora\/\<name\>@ \/
---   @--preview structures\/\<name\>@ target, which #888 deliberately
+--   pack-less @--preview structures\/\<name\>@ target, which #888 deliberately
 --   routes into that same browser rooted at the item's own folder
 --   rather than forking a viewer per category; 'PreviewItem' backs a
 --   validated @--preview \<simple category\>/\<item\>@ (#886
 --   Requirement 4); 'PreviewUnitAnims' backs a validated
 --   @--preview units/\<name\>@ (#887); 'PreviewBuildingAssets' backs a
---   validated @--preview buildings/\<name\>@ (#888). Every canonical
+--   validated @--preview buildings/\<name\>@ (#888);
+--   'PreviewStructureAssets' backs a @--preview structures/\<name\>@
+--   whose pack YAML exists (#2495). Every canonical
 --   category now resolves to one of these — outside 'BootPreview'
 --   'ecPreviewBrowse' is simply 'Nothing'.
 data PreviewBrowse
@@ -331,6 +437,7 @@ data PreviewBrowse
   | PreviewItem !PreviewEntry
   | PreviewUnitAnims !PreviewUnit
   | PreviewBuildingAssets !PreviewBuilding
+  | PreviewStructureAssets !PreviewStructurePack
   | PreviewAudio !Text !(Maybe FilePath)
   deriving (Eq, Show)
 

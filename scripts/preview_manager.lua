@@ -12,7 +12,7 @@
 -- BEFORE this script ever runs, so engine.getPreviewBrowse() is the
 -- single source of truth here and always answers with a real mode —
 -- "list" backs a bare --preview <simple category> AND a
--- --preview flora/<name> / structures/<name> target (#888 routes those
+-- --preview flora/<name> / pack-less structures/<name> target (#888 routes those
 -- flat, static-PNG item folders into the SAME browser rather than
 -- forking a viewer per category), "item" backs a validated
 -- --preview <simple category>/<item> (focused mode: no list).
@@ -63,6 +63,16 @@
 -- strip when a declared row is selected and are ignored on a raw row,
 -- which has no facing model.
 --
+-- #2495 (BDA-17) adds the fifth, "structure": a --preview
+-- structures/<name> whose data/structure_packs/<name>.yaml exists browses
+-- the PACK rather than a texture folder. Engine.Preview.StructurePack
+-- enumerates every appearance the YAML declares (piece kinds, wall
+-- edges, variant overrides, Wire connections) with every path already
+-- judged; scripts/ui/structure_pack_view.lua owns the enlarged frame,
+-- the lifecycle row, the wall cap row and the shared clock. Up/Down move
+-- through the appearance list, Left/Right through the lifecycle row. A
+-- structure name WITHOUT a pack still browses its folder as "list".
+--
 -- #1907 adds centered bounded zoom, the one piece of state that spans
 -- every mode: ONE multiplier per session, previewZoom.MAX (the aspect
 -- fit) down to previewZoom.MIN, applied to whichever pane the mode owns
@@ -74,6 +84,7 @@ local assetBrowser = require("scripts.ui.asset_browser")
 local list = require("scripts.ui.list")
 local unitAnimationView = require("scripts.ui.unit_animation_view")
 local buildingAssetView = require("scripts.ui.building_asset_view")
+local structurePackView = require("scripts.ui.structure_pack_view")
 local previewZoom = require("scripts.ui.preview_zoom")
 local previewAudio = require("scripts.ui.preview_audio")
 
@@ -89,7 +100,8 @@ local FONT_SIZE = 24
 local labelFont = nil
 local page = nil
 
--- mode: "list" | "item" | "unit" | "building" (nil only if the engine
+-- mode: "list" | "item" | "unit" | "building" | "structure" | "audio"
+-- (nil only if the engine
 -- somehow reports no browse state at all — see onAssetLoaded)
 local mode = nil
 local readyState = "loading"  -- "loading" | "ready" | "empty"
@@ -131,6 +143,13 @@ local buildingViewId = nil
 -- path after a resize has to reselect exactly the row that was active.
 local buildingRows = nil
 local selectedEntry = nil
+
+-- #2495 structure-pack state: the resolved pack payload, its view, and
+-- the IDENTITY of the selected appearance (the list's value).
+local structureData = nil
+local structureViewId = nil
+local selectedAppearance = nil
+local structureDump   -- assigned beside the dump below
 
 -----------------------------------------------------------
 -- Centered bounded zoom (#1907). scripts/ui/preview_zoom.lua owns the
@@ -286,6 +305,8 @@ local function currentZoomRegion()
         return unitAnimationView.getZoomRegion(animViewId) or panelBounds
     elseif mode == "building" and buildingViewId then
         return buildingAssetView.getZoomRegion(buildingViewId) or panelBounds
+    elseif mode == "structure" and structureViewId then
+        return structurePackView.getZoomRegion(structureViewId) or panelBounds
     end
     return panelBounds
 end
@@ -402,6 +423,9 @@ local function setZoomMultiplier(multiplier)
     if animViewId then unitAnimationView.setZoom(animViewId, zoomMultiplier) end
     if buildingViewId then
         buildingAssetView.setZoom(buildingViewId, zoomMultiplier)
+    end
+    if structureViewId then
+        structurePackView.setZoom(structureViewId, zoomMultiplier)
     end
     layoutPanelSprite()
 end
@@ -821,6 +845,102 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll,
     syncZoomSurface()
 end
 
+-----------------------------------------------------------
+-- Structure pack viewer (#2495)
+-----------------------------------------------------------
+
+local function findAppearance(identity)
+    for _, a in ipairs(structureData and structureData.appearances or {}) do
+        if a.identity == identity then return a end
+    end
+    return nil
+end
+
+-- A genuine appearance selection: its static sprite, a fresh clock. The
+-- resize path deliberately does NOT come through here -- see
+-- buildStructureUI.
+local function onAppearanceSelected(value, _label, _index)
+    local a = findAppearance(value)
+    if not a or not structureViewId then return end
+    selectedAppearance = value
+    viewHandles = {}
+    readyState = "loading"
+    structurePackView.setAppearance(structureViewId, a, engine.realTime())
+end
+
+-- restoreAppearance/restoreScroll: nil for the initial build. Real
+-- values on the resize rebuild, where the selected appearance (and with
+-- it its variant), lifecycle, cap, scroll offset, playback phase and
+-- zoom all survive: the list is rebuilt, the view only re-panelled.
+local function buildStructureUI(pack, fbW, fbH, restoreAppearance, restoreScroll)
+    mode = "structure"
+    structureData = pack
+
+    assetBrowser.init()
+    local listItems = {}
+    for i, a in ipairs(pack.appearances or {}) do
+        listItems[i] = { label = a.label, path = a.identity }
+    end
+    browserId = assetBrowser.new({
+        page = page,
+        font = labelFont,
+        x = 40, y = 40,
+        width = math.max(200, fbW - 80),
+        height = math.max(100, fbH - 80),
+        entries = listItems,
+        onSelect = onAppearanceSelected,
+    })
+    panelBounds = assetBrowser.getPanelBounds(browserId)
+
+    if #listItems == 0 then
+        readyState = "empty"
+        return
+    end
+
+    -- The zoom surface's donor, for the same reason as the buildings
+    -- viewer: the default appearance may be fully diagnostic and request
+    -- nothing, and the list chrome is already in flight.
+    adoptZoomSurfaceTexture(list.getChromeTexture())
+
+    if not structureViewId then
+        structureViewId = structurePackView.new({
+            page = page,
+            font = labelFont,
+            panel = panelBounds,
+            requestTexture = requestViewTexture,
+            -- One displayed frame at a time: when it changes, the view's
+            -- handle set is ONLY the new frame's (#1690), so a failure the
+            -- previous frame suffered -- or suffers late -- can neither
+            -- keep the new one "empty" nor blank it.
+            onDisplayChange = function()
+                viewHandles = {}
+                readyState = "loading"
+            end,
+            chromeTexture = list.getChromeTexture(),
+            -- The pack is ONE preview object (#1907).
+            zoom = zoomMultiplier,
+        })
+    else
+        structurePackView.setPanel(structureViewId, panelBounds)
+    end
+
+    if restoreAppearance then
+        assetBrowser.selectEntrySilently(browserId, restoreAppearance)
+        selectedAppearance = restoreAppearance
+        structurePackView.setPanel(structureViewId, panelBounds)
+    else
+        -- Requirement 8: the first declared piece kind's default variant
+        -- (else the first wall edge, else the first Wire connection) at
+        -- static -- decided by Engine.Preview.StructurePack.
+        assetBrowser.selectEntry(browserId, pack.defaultAppearance)
+    end
+
+    if restoreScroll and restoreScroll > 0 then
+        assetBrowser.setScrollOffset(browserId, restoreScroll)
+    end
+    syncZoomSurface()
+end
+
 function previewManager.init(scriptId)
     -- Requirement 3: nearest-neighbour is REQUIRED for the browser, not
     -- just the default — a user's persisted config/video.local.yaml can
@@ -848,6 +968,8 @@ function previewManager.onAssetLoaded(assetType, handle, path)
             buildUnitUI(browse.unit, fbW, fbH, nil, nil, nil)
         elseif browse and browse.mode == "building" then
             buildBuildingUI(browse.building, fbW, fbH, nil, nil)
+        elseif browse and browse.mode == "structure" then
+            buildStructureUI(browse.structure, fbW, fbH, nil, nil)
         elseif browse and browse.mode == "audio" then
             mode, readyState = "audio", "ready"
         else
@@ -939,6 +1061,12 @@ function previewManager.onAssetFailed(assetType, handle, path, reason, reported)
     -- ...but only a CURRENT waiter settles the view.
     if isPending or isInView then
         readyState = "empty"
+        -- #2495: the structure view must also stop requesting the frame
+        -- that failed, or it would retry it silently under a state that
+        -- already says "empty".
+        if structureViewId then
+            structurePackView.noteFailed(structureViewId, handle)
+        end
     end
 end
 
@@ -989,6 +1117,10 @@ function previewManager.update(dt)
         now = now or engine.realTime()
         buildingAssetView.update(buildingViewId, now)
         view = buildingAssetView.dump(buildingViewId)
+    elseif structureViewId then
+        now = now or engine.realTime()
+        structurePackView.update(structureViewId, now)
+        view = structurePackView.dump(structureViewId)
     else
         return
     end
@@ -1010,6 +1142,10 @@ function previewManager.shutdown()
     if buildingViewId then
         buildingAssetView.destroy(buildingViewId)
         buildingViewId = nil
+    end
+    if structureViewId then
+        structurePackView.destroy(structureViewId)
+        structureViewId = nil
     end
     if spriteId then
         UI.deleteElement(spriteId)
@@ -1033,6 +1169,8 @@ function previewManager.shutdown()
     buildingData = nil
     buildingRows = nil
     selectedEntry = nil
+    structureData = nil
+    selectedAppearance = nil
     textureCache = {}
     viewHandles = {}
     loadedPaths = {}
@@ -1092,6 +1230,12 @@ local function adjacentFacing(step)
         return unitAnimationView.selectAdjacentDirection(animViewId, step)
     elseif mode == "building" and buildingViewId then
         return buildingAssetView.selectAdjacentFacing(buildingViewId, step)
+    elseif mode == "structure" and structureViewId then
+        -- #2495: Left/Right walk the lifecycle row, wrapping like unit
+        -- directions and building facings; a lifecycle change restarts
+        -- its clock exactly as a click does.
+        return structurePackView.selectAdjacentLifecycle(structureViewId,
+            step, engine.realTime())
     end
     return false
 end
@@ -1178,6 +1322,19 @@ function previewManager.onPreviewFacingClick(elemHandle)
     return buildingAssetView.handleCellClick(buildingViewId, elemHandle) ~= nil
 end
 
+-- #2495: the structure viewer's lifecycle and wall-cap controls. Their
+-- own callback names, for the same disjoint-handle reason as above.
+function previewManager.onPreviewLifecycleClick(elemHandle)
+    if not structureViewId then return false end
+    return structurePackView.handleLifecycleClick(structureViewId, elemHandle,
+        engine.realTime()) ~= nil
+end
+
+function previewManager.onPreviewCapClick(elemHandle)
+    if not structureViewId then return false end
+    return structurePackView.handleCapClick(structureViewId, elemHandle) ~= nil
+end
+
 -- Preview windows are resizable (App.Preview reuses the normal window
 -- config), so a bare-category list or a focused item must reflow on
 -- resize instead of leaving stale bounds/sprite dimensions behind
@@ -1223,6 +1380,18 @@ function previewManager.onFramebufferResize(width, height)
         end
         buildBuildingUI(buildingData, width, height, selectedEntry, prevScroll,
                         prevDump and prevDump.facing or nil)
+    elseif mode == "structure" then
+        -- #2495 requirement 6: appearance, variant, lifecycle, cap,
+        -- scroll offset, playback phase and zoom all survive. The view
+        -- holds the lifecycle, cap and clock itself and is only
+        -- re-panelled.
+        local prevScroll = browserId and assetBrowser.getScrollOffset(browserId) or 0
+        if browserId then
+            assetBrowser.destroy(browserId)
+            browserId = nil
+        end
+        buildStructureUI(structureData, width, height, selectedAppearance,
+                         prevScroll)
     end
     -- #1907: the multiplier is untouched by a resize (nothing above
     -- writes it, and every mode's restore path is the SILENT one that
@@ -1248,6 +1417,117 @@ end
 -- engine-is-the-authority rule scripts/ui/list.lua's dump already
 -- follows, so a probe can prove containment and centering against what
 -- is really on screen.
+-- #2495 requirement 7: the structure viewer's dump. Every appearance in
+-- list order with its declared texture, facemaps and per-lifecycle
+-- frames; the selection; the displayed frame's path, facemap and alpha
+-- policy; per-visible-row bounds and handles; and aggregate diagnostics.
+local function lifecycleDump(l)
+    local paths, missingFrames = {}, {}
+    for i, f in ipairs(l.frames or {}) do
+        paths[i] = f.path
+        if f.missing then
+            table.insert(missingFrames, { index = i - 1, path = f.path,
+                                          reason = f.reason })
+        end
+    end
+    return {
+        frameCount = #paths,
+        paths = paths,
+        missing = #missingFrames,
+        missingFrames = missingFrames,
+        undeclared = l.declared ~= true,
+        fps = l.fps,
+        fpsSource = l.fpsSource,
+        alphaPolicy = l.alphaPolicy,
+    }
+end
+
+structureDump = function(out)
+    out.pack = structureData and structureData.name or nil
+    out.manifest = structureData and structureData.manifest or nil
+    out.defaultAppearance = structureData
+        and structureData.defaultAppearance or nil
+    out.appearances = {}
+    local totals = { missing = 0, undeclared = 0, missingFacemaps = 0 }
+    for i, a in ipairs(structureData and structureData.appearances or {}) do
+        local lifecycles = {}
+        for _, l in ipairs(a.lifecycles or {}) do
+            local d = lifecycleDump(l)
+            lifecycles[l.name] = d
+            totals.missing = totals.missing + d.missing
+            if d.undeclared then totals.undeclared = totals.undeclared + 1 end
+        end
+        local facemaps = {}
+        for j, f in ipairs(a.facemaps or {}) do
+            facemaps[j] = { cap = f.cap, path = f.path, declared = f.declared,
+                            missing = f.missing == true, reason = f.reason,
+                            inherited = f.inherited == true }
+            if f.missing then totals.missingFacemaps = totals.missingFacemaps + 1 end
+        end
+        local static = lifecycles.static or {}
+        out.appearances[i] = {
+            identity = a.identity,
+            label = a.label,
+            group = a.group,
+            kind = a.kind,
+            edge = a.edge,
+            variant = a.variant,
+            override = a.override == true,
+            connection = a.connection,
+            texture = (static.paths or {})[1],
+            textureInherited = a.textureInherited == true,
+            facemaps = facemaps,
+            lifecycles = lifecycles,
+        }
+    end
+    out.appearanceCount = #out.appearances
+    out.totals = totals
+
+    local view = structureViewId and structurePackView.dump(structureViewId)
+    local selected = findAppearance(selectedAppearance)
+    out.selectedAppearance = selectedAppearance
+    out.selectedVariant = selected and selected.variant or nil
+    out.selectedCap = view and view.cap or nil
+    out.selectedLifecycle = view and view.lifecycle or nil
+    -- The zoom probe's shared selection vocabulary (tools/preview/zoom.py
+    -- _selection_key), and the same shape the buildings viewer reports.
+    out.selection = selected and { identity = selected.identity,
+                                   label = selected.label } or nil
+    out.selected = selected and { label = selected.label,
+                                  path = selected.identity } or nil
+    out.path = view and view.path or nil
+    out.handle = view and view.handle or nil
+    out.frameIndex = view and view.frameIndex or nil
+    out.frameCount = view and view.frameCount or nil
+    out.missing = view and view.missing or false
+    out.failed = view and view.failed or false
+    out.missingReason = view and view.missingReason or nil
+    out.undeclared = view and view.undeclared or false
+    out.facemap = view and view.facemap or nil
+    out.facemapMissing = view and view.facemapMissing or nil
+    out.facemapReason = view and view.facemapReason or nil
+    out.alphaPolicy = view and view.alphaPolicy or nil
+    out.lifecycleRow = view and view.lifecycleRow or nil
+    out.capRow = view and view.capRow or nil
+    out.spriteElement = view and view.spriteElement or nil
+    out.missingElement = view and view.missingElement or nil
+    out.infoElements = view and view.infoElements or nil
+    out.scrollOffset = assetBrowser.getScrollOffset(browserId)
+    out.rows = assetBrowser.dump(browserId)
+    local byIdentity = {}
+    for _, a in ipairs(out.appearances) do byIdentity[a.identity] = a end
+    for _, dumped in ipairs(out.rows) do
+        local a = byIdentity[dumped.key]
+        if a then
+            dumped.identity = a.identity
+            dumped.variant = a.variant
+            dumped.group = a.group
+        end
+    end
+    out.panelBounds = panelBounds
+    if view and view.animated then out.playback = view end
+end
+
 local function zoomDump()
     local sprite = nil
     if mode == "unit" and animViewId then
@@ -1255,6 +1535,9 @@ local function zoomDump()
         sprite = view and view.zoom and view.zoom.sprite or nil
     elseif mode == "building" and buildingViewId then
         local view = buildingAssetView.dump(buildingViewId)
+        sprite = view and view.zoom and view.zoom.sprite or nil
+    elseif mode == "structure" and structureViewId then
+        local view = structurePackView.dump(structureViewId)
         sprite = view and view.zoom and view.zoom.sprite or nil
     elseif spriteId then
         local info = UI.getElementInfo(spriteId)
@@ -1545,6 +1828,8 @@ function previewManager.dump()
         if view and view.animated then
             out.playback = view
         end
+    elseif mode == "structure" then
+        structureDump(out)
     end
     return out
 end

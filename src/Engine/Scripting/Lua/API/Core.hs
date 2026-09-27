@@ -37,6 +37,9 @@ import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
     , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..)
     , PreviewBuilding(..), PreviewBuildingEntry(..)
+    , PreviewStructurePack(..), PreviewStructAppearance(..)
+    , PreviewStructLifecycle(..), PreviewStructFacemap(..)
+    , PreviewStructPath(..)
     , PreviewDeclaredEntry(..), PreviewFacingCell(..), PreviewFsClass(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
@@ -169,15 +172,19 @@ getPreviewTargetFn env = do
 --   | {mode="item", entry={label=,path=}}
 --   | {mode="unit", unit={name=,defaultAnim=,animations={...}}}
 --   | {mode="building", building={name=,defaultEntry=,entries={...}}}
+--   | {mode="structure", structure={name=,manifest=,defaultAppearance=,
+--                                    appearances={...}}}
 --   The browsing state @app/Main.hs@ resolved before boot:
 --   'PreviewList' for a bare @--preview \<simple category\>@ (#886) and
---   for a @--preview flora\/\<name\>@ \/ @structures\/\<name\>@ target
+--   for a @--preview flora\/\<name\>@ \/ pack-less @structures\/\<name\>@ target
 --   (#888 routes both into that same browser, rooted at the item's own
 --   folder), 'PreviewItem' for a validated
 --   @--preview \<simple category\>/\<item\>@ (#886), 'PreviewUnitAnims'
 --   for a validated @--preview units/\<name\>@ (#887), and
 --   'PreviewBuildingAssets' for a validated
---   @--preview buildings/\<name\>@ (#888). 'nil' only outside
+--   @--preview buildings/\<name\>@ (#888), and
+--   'PreviewStructureAssets' for a @--preview structures/\<name\>@
+--   whose pack manifest exists (#2495). 'nil' only outside
 --   'BootPreview' — every canonical preview target now resolves to a
 --   real browsing mode.
 --
@@ -230,6 +237,12 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "mode"
       pushPreviewBuilding building
       Lua.setfield (-2) "building"
+    Just (PreviewStructureAssets pack) → do
+      Lua.newtable
+      Lua.pushstring "structure"
+      Lua.setfield (-2) "mode"
+      pushStructurePack pack
+      Lua.setfield (-2) "structure"
     Just (PreviewAudio category file) → do
       Lua.newtable
       Lua.pushstring "audio"
@@ -367,6 +380,72 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "declared"
       Lua.pushboolean (pfcsUndeclared f)
       Lua.setfield (-2) "undeclared"
+
+    -- #2495. Every appearance, lifecycle, frame and facemap is pushed
+    -- with its engine-side verdict already attached: the Lua viewer never
+    -- decides whether a path exists, and never requests one marked
+    -- missing.
+    pushStructurePack pack = do
+      Lua.newtable
+      pushTextField "name"              (pspkName pack)
+      pushTextField "manifest"          (pspkManifest pack)
+      pushTextField "defaultAppearance" (pspkDefault pack)
+      pushArray pushStructAppearance (pspkAppearances pack)
+      Lua.setfield (-2) "appearances"
+
+    pushStructAppearance a = do
+      Lua.newtable
+      pushTextField "identity" (psaIdentity a)
+      pushTextField "label"    (psaLabel a)
+      pushTextField "group"    (psaGroup a)
+      pushTextField "kind"     (psaKind a)
+      pushTextField "variant"  (psaVariant a)
+      forM_ (psaEdge a)       (pushTextField "edge")
+      forM_ (psaConnection a) (pushTextField "connection")
+      Lua.pushboolean (psaTextureInherited a)
+      Lua.setfield (-2) "textureInherited"
+      Lua.pushboolean (psaOverride a)
+      Lua.setfield (-2) "override"
+      pushArray pushStructFacemap (psaFacemaps a)
+      Lua.setfield (-2) "facemaps"
+      pushArray pushStructLifecycle (psaLifecycles a)
+      Lua.setfield (-2) "lifecycles"
+
+    pushStructFacemap f = do
+      Lua.newtable
+      forM_ (psfCap f) (pushTextField "cap")
+      Lua.pushboolean (isJust (psfFile f))
+      Lua.setfield (-2) "declared"
+      Lua.pushboolean (psfInherited f)
+      Lua.setfield (-2) "inherited"
+      forM_ (psfFile f) $ \p → do
+        pushTextField "path" (pstPath p)
+        forM_ (pstReason p) (pushTextField "reason")
+      -- An undeclared cap has no file to be missing; it is still not a
+      -- facemap the frame can be lit with, so it reports missing too and
+      -- names why.
+      Lua.pushboolean (maybe True pstMissing (psfFile f))
+      Lua.setfield (-2) "missing"
+      when (isNothing (psfFile f)) $ pushTextField "reason" "undeclared"
+
+    pushStructLifecycle l = do
+      Lua.newtable
+      pushTextField "name"        (pslName l)
+      pushTextField "fpsSource"   (pslFpsSource l)
+      pushTextField "alphaPolicy" (pslAlphaPolicy l)
+      Lua.pushboolean (pslDeclared l)
+      Lua.setfield (-2) "declared"
+      Lua.pushnumber (realToFrac (pslFps l))
+      Lua.setfield (-2) "fps"
+      pushArray pushStructPath (pslFrames l)
+      Lua.setfield (-2) "frames"
+
+    pushStructPath p = do
+      Lua.newtable
+      pushTextField "path" (pstPath p)
+      Lua.pushboolean (pstMissing p)
+      Lua.setfield (-2) "missing"
+      forM_ (pstReason p) (pushTextField "reason")
 
     pushBuildingEntry e = do
       Lua.newtable

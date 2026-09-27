@@ -5,7 +5,8 @@
 --   Haskell restatement of its arithmetic:
 --   @scripts/ui/preview_zoom.lua@,
 --   @scripts/ui/unit_animation_view.lua@,
---   @scripts/ui/building_asset_view.lua@ and
+--   @scripts/ui/building_asset_view.lua@,
+--   @scripts/ui/structure_pack_view.lua@ and
 --   @scripts/preview_manager.lua@ all run in a stdlib-only @HsLua@
 --   interpreter — no engine, no GPU, no UI backend — with @engine@/@UI@
 --   and the two modules that are NOT under test (@scripts.ui.list@,
@@ -24,7 +25,7 @@
 --   that timing IS the object-identity reset rule: a resize restores
 --   silently and therefore preserves the multiplier for free.
 --
---   Lives in its own module because two specs need it verbatim: a
+--   Lives in its own module because several specs need it verbatim: a
 --   second copy would be free to drift, and a harness that differs
 --   between two groups makes their results incomparable.
 module Test.Headless.Preview.LuaHarness
@@ -257,6 +258,8 @@ harness = lns
     , "    dofile('scripts/ui/unit_animation_view.lua')"
     , "package.loaded['scripts.ui.building_asset_view'] ="
     , "    dofile('scripts/ui/building_asset_view.lua')"
+    , "package.loaded['scripts.ui.structure_pack_view'] ="
+    , "    dofile('scripts/ui/structure_pack_view.lua')"
     , "pz = package.loaded['scripts.ui.preview_zoom']"
     , "function bootPreview(browse, target, fbw, fbh)"
     , "    BROWSE, TARGET = browse, target"

@@ -371,7 +371,9 @@ def check_zoom(port: int) -> bool:
         ("units/acolyte", "unit enlarged", True, False, True),
         ("buildings/acolyte_portal", "building", True, False, True),
         (f"flora/{first_item('flora')}", "flora item", True, False, False),
-        ("structures/wire", "structure item", True, False, False),
+        # #2495: a structure name with a pack manifest browses the PACK;
+        # its appearance rows are other views of the same preview object.
+        ("structures/wire", "structure pack", True, False, True),
     ]
 
     for target, label, list_backed, resets, ticks in targets:
