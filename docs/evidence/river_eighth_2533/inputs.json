@@ -1,0 +1,58 @@
+{
+  "base": {
+    "path": "/tmp/synarchy-2533-base-full-42.json",
+    "sha256": "b3a5f30fd7c62a2a422be48925b116d1f5bc610b7766777ee2cdb3f13a890970",
+    "size_bytes": 165674748,
+    "seed": 42,
+    "world_size": 64,
+    "plates": 3,
+    "region": [
+      -32,
+      -32,
+      31,
+      31
+    ]
+  },
+  "candidate": {
+    "path": "/tmp/synarchy-2533-final-full-42.json",
+    "sha256": "b3a5f30fd7c62a2a422be48925b116d1f5bc610b7766777ee2cdb3f13a890970",
+    "size_bytes": 165674748,
+    "seed": 42,
+    "world_size": 64,
+    "plates": 3,
+    "region": [
+      -32,
+      -32,
+      31,
+      31
+    ]
+  },
+  "coastal_base": {
+    "path": "/tmp/synarchy-2533-base-coast42.json",
+    "sha256": "df21cc9e85f89121d1219cbe3d9d650feda558022e4da412184a0f86e4f85e04",
+    "size_bytes": 5562039,
+    "seed": 42,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ]
+  },
+  "coastal_candidate": {
+    "path": "/tmp/synarchy-2533-final-42.json",
+    "sha256": "ff97b14a9639f931304bfd4c4927fd446ce024020192ee5e8c3b094a8d8bc55e",
+    "size_bytes": 5562866,
+    "seed": 42,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ]
+  }
+}

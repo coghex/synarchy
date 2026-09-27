@@ -139,6 +139,10 @@ data WorldGenParams = WorldGenParams
       --   world init and read thereafter (#708 principle 5).
       --
       --   Serialized.
+    , wgpExactRiverBeds ∷ !Bool
+      -- ^ Persisted generation policy (#2533): repair only river beds after
+      -- historical terrain smoothing. False for migrated worlds, whose
+      -- stored beds must remain untouched.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
@@ -180,6 +184,7 @@ instance Serialize WorldGenParams where
         put (lisById (wgpLocationInstances p))
         put (wgpLocationStamped p)
         put (wgpRiverNames p)
+        put (wgpExactRiverBeds p)
     get = do
         seed       ← get
         ws         ← get
@@ -205,6 +210,7 @@ instance Serialize WorldGenParams where
         locById    ← get
         locStamped ← get
         riverNames ← get
+        exactRiverBeds ← get
         let vc = buildVolcanoCtx seed ws plates (gtFeatures timeline)
         pure WorldGenParams
             { wgpSeed             = seed
@@ -234,6 +240,7 @@ instance Serialize WorldGenParams where
                 }
             , wgpLocationStamped  = locStamped
             , wgpRiverNames       = riverNames
+            , wgpExactRiverBeds   = exactRiverBeds
             , wgpVolcanoCtx       = vc
             }
 
@@ -267,6 +274,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpLocationInstances = emptyLocationInstances
     , wgpLocationStamped = HS.empty
     , wgpRiverNames = emptyRiverNames
+    , wgpExactRiverBeds = True
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

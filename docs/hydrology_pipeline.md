@@ -134,6 +134,59 @@ identification splits the same way: `World.Fluid.River.Identify` plus
 Rivers and lakes each emit a per-chunk **carve delta** here
 (`wrCarveDelta`, `wlCarveDelta`). That is carving mechanism **B** — see §8.
 
+### Exact river surface finalization (#2533)
+
+River selection still uses the historical whole-z bank tests, width walk,
+component cull and breakthrough search. These decide the footprint before
+fractional heights are introduced; changing a water plane cannot select or
+discard a river component or change a width. The width walk also records
+every centre/wing claim, and the breakthrough pass retains its routed paths.
+Both are local generation scratch, not saved state.
+
+`River.Identify.Surface` then works in signed eighth-z units. A downstream
+lookahead average spreads height steps upstream, with its initial adjustment
+capped below one z. First a baseline fits explicit breakthrough sink anchors
+and lateral bounds, before classifying compatible sections or resolving junctions.
+Smoothing and junction reconciliation then lower that baseline by at most
+seven eighth-units. Breakthrough endpoints meet the exact ocean plane. One
+coupled relaxation enforces compatible centre/wing equality, non-increasing
+flow on the resolved surface connections, and the waterfall bound on every
+adjacent pair. The configured `waterfall_quantum` remains whole-z; the solver
+converts that bound with `exactSurfaceOfZ`. Each adjacent bound also preserves
+the old pair's maximum slope (allowing an eighth step for an old flat pair).
+Ocean composition still takes priority over the river table. Only routed
+breakthrough endpoints are sea-level anchors in the surface graph: a latent
+river entry covered by Ocean is not another hydrological sink. Forcing all
+such entries to zero was measured to drag inland reaches and lake outlets
+down through lateral constraints. Chunk generation instead fits an overridden
+cell's bed below the actual ocean plane locally (§8), without propagating that
+bed repair into the surface graph. Sea level and composition priority are
+unchanged.
+
+**Overlap policy, revised with owner approval:** claims whose finalized,
+sink-normalized historical planes agree remain exactly flat. Claims at
+different planes meet as a junction; they do not force the whole overlapping
+width group to the lowest plane. Strict equality of every historical claim
+was measured to require cuts up to 100 z and was rejected.
+
+`River.Identify.SurfaceFlow` retains ordinary centre and breakthrough edges.
+When widening has overwritten a centre with a lower intersecting reach, its
+old uphill connection is obsolete. The affected connected level patch is
+routed by a deterministic multi-source breadth-first search toward its lower
+wet neighbours. Every parent step decreases distance to an outlet, and every
+outlet lowers the plane. A patch with no lower wet outlet remains a terminal
+pool; this pass neither invents a drain nor digs a new route. Breakthrough
+endpoints still meet the ocean plane, while an intercepted approach may join
+an existing lower reach before the original endpoint. Connections are generation
+scratch used for surface smoothing, not persisted runtime flow or a rewrite
+of rainfall, accumulation, river identity, footprint or width metadata.
+
+This replaces the original requirement to flatten *all* overlapping claims
+and enforce obsolete uphill centre edges. Ordinary compatible sections remain
+flat; resolved connections remain downhill. Keeping the historical terrain
+smoothing inputs and applying the final river-only bed repair afterwards (§8)
+protects adjacent dry banks and lake beds from new smoothing-induced cuts.
+
 ### 5.1 Spillway ownership is one-to-many
 
 `World.Fluid.River.Identify.Flow.computeSpillways` gives each lake ONE
@@ -206,7 +259,10 @@ bindings appear in:
    It reads the global tables (`gtWorldLakes`, `gtWorldRivers`, `gtWorldOcean`,
    `gtWorldLavaPools`), not the water table: ocean from the coarse chunk flood
    OR'd with the tile-resolution mask, lakes from each lake's surface, rivers
-   from each river chunk entry's per-tile `rcePerTileSurfZ`, lava on top.
+   from each river chunk entry's exact per-tile `rcePerTileSurfZ`, lava on top.
+   River/terrain comparisons use exact units; lake and ocean table heights
+   remain whole-z. `chunkWaterSurfMap` merges lake and river claims in exact
+   units before returning its integer ceiling view to magma-cap placement.
 3. **`World.Fluid.Ice.computeChunkIce`** — the per-chunk ice overlay.
 4. **`World.Hydrology.WaterTable.computeWaterTable`** — the subsurface
    baseline, then `World.Generate.Chunk.SoilGates.applyFluidWt` lifts it now
@@ -226,8 +282,9 @@ beyond supplying the initial `FluidCell` map that stage 4 composed.
 Since #2520 that map's height is EXACT: `FluidCell.fcExactSurface` is a signed
 fixed-point absolute surface in eighths of a z (`World.Fluid.Exact`,
 `fluidUnitsPerZ`), for every `FluidType` including Ocean. Every plane stages 1
-to 4 produce is still a whole z — `fluidCellAtZ` writes it as `z * 8`, a full
-top level — and only this stage creates a remainder. Activation, the per-tick
+to 4 produce is a whole z except the generated river table (#2533): lakes
+and oceans still use `fluidCellAtZ`, while rivers compose their exact planes
+directly and may start with a partial top level. Activation, the per-tick
 writeback and equilibrium deactivation all go through
 `Sim.Fluid.Types.derivePassiveFluid` and round nothing, so a partial cell
 survives back into the map and into the save. Integer consumers (the surface
@@ -252,6 +309,16 @@ identifiers run on already-settled terrain and emit a bounded per-tile
 needs the finalized path, width and surface that only exist after stage 2, so
 it cannot be folded into A; it is a top-up to channel depth on terrain A
 already shaped.
+
+For eighth-level rivers, the historical depth model, stored carve table and
+post-carve smoothing remain the baseline. New worlds then apply
+`Chunk.RiverBed.fitExactRiverBeds` to the bordered terrain: only a river tile
+whose bed protrudes through the exact plane is lowered to
+`exactSurfaceCeilZ surface - 1` (using sea level when Ocean takes priority).
+This repair runs **after** smoothing so deep river cuts do not cause the
+smoother to lower unrelated lake beds and banks. Detail and zoom call the same
+helper. The saved `wgpExactRiverBeds` policy is false for migrated worlds;
+their stored beds are not repaired during regeneration.
 
 ## 9. Ocean and lake ownership
 
@@ -297,6 +364,11 @@ The rendered water surface does **not** come from segment geometry and does
 table: `World.Fluid.River.Identify` computes it, `.Identify.ChunkIndex` stores
 it as `rcePerTileSurfZ` on each `RiverChunkEntry`, and
 `World.Generate.Chunk.Fluid.composeFluidMap` reads it directly (§6.2).
+Despite its retained field name, `rcePerTileSurfZ` holds exact eighth-z units;
+off-mask slots retain `minBound`. `world-pages` v13 records this precision.
+Every supported pre-v13 input scales real stored heights once, preserving
+absent slots, footprints, widths, identities and carve deltas. Loading does
+not regenerate the river network, and current saves do not scale again.
 
 Segment geometry still has to be self-consistent, which is what
 `World.Fluid.River.fixupSegmentContinuity` enforces — adjacent segments share

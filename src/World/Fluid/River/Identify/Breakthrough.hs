@@ -7,6 +7,7 @@
 --   that module's header comment for the full pipeline overview.
 module World.Fluid.River.Identify.Breakthrough
     ( addBreakthroughs
+    , addBreakthroughsWithPaths
     , dijkstraBreakthrough
     ) where
 
@@ -200,6 +201,21 @@ addBreakthroughs
       , VU.Vector Int )
 addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
                  widthRadius surfZ perpDist =
+    let (mask, comps, widths, surfaces, distances, _) =
+            addBreakthroughsWithPaths worldTiles isRiverTile compId dir terrain
+                worldOcean widthRadius surfZ perpDist
+    in (mask, comps, widths, surfaces, distances)
+
+-- | Also retain the actual routed paths. A breakthrough can run across
+-- uphill terrain, so its flow edges cannot be recovered from D4 descent.
+addBreakthroughsWithPaths
+    ∷ Int → VU.Vector Bool → VU.Vector Int → VU.Vector Word8
+    → VU.Vector Int → VU.Vector Bool → VU.Vector Int → VU.Vector Int
+    → VU.Vector Int
+    → (VU.Vector Bool, VU.Vector Int, VU.Vector Int, VU.Vector Int,
+       VU.Vector Int, [[Int]])
+addBreakthroughsWithPaths worldTiles isRiverTile compId dir terrain worldOcean
+                          widthRadius surfZ perpDist =
     let nTiles = worldTiles * worldTiles
         mouths = findStrandedMouths nTiles isRiverTile dir terrain
     in runST $ do
@@ -208,6 +224,7 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
         widthM ← VU.thaw widthRadius
         surfM  ← VU.thaw surfZ
         perpM  ← VU.thaw perpDist
+        pathsM ← newSTRef []
         forM_ mouths $ \m → do
             let mSurf = surfZ VU.! m
                 mCid  = compId VU.! m
@@ -215,6 +232,8 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
                 case dijkstraBreakthrough worldTiles m terrain worldOcean of
                     Nothing       → pure ()
                     Just (path, _) → do
+                        paths ← readSTRef pathsM
+                        writeSTRef pathsM (path : paths)
                         -- Walk the path past the start (path[0] is the
                         -- mouth, already a river tile). Surface tracks
                         -- the natural terrain so a descending stretch
@@ -244,4 +263,5 @@ addBreakthroughs worldTiles isRiverTile compId dir terrain worldOcean
         widthF ← VU.unsafeFreeze widthM
         surfF  ← VU.unsafeFreeze surfM
         perpF  ← VU.unsafeFreeze perpM
-        pure (isRf, compF, widthF, surfF, perpF)
+        paths ← readSTRef pathsM
+        pure (isRf, compF, widthF, surfF, perpF, reverse paths)

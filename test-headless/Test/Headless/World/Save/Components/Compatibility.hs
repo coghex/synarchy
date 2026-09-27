@@ -367,7 +367,7 @@ spec = do
                     -- against REAL historical bytes.
                     resolveFixturePages snap
                         `shouldBe` withoutPageGeneratedIds
-                                       (withoutLanguageProvenance richSnapshot)
+                                       (withoutLanguageProvenance (withoutExactRiverBedRepair richSnapshot))
                     languageProvenanceOf snap page1 `shouldBe` Nothing
                     isMigrated `shouldBe` False
 
@@ -668,6 +668,14 @@ resolveFixturePages snap = snap
         { pgsGenParams = expectGeometry
             (resolveLegacyLocationParams emptyLocationRegistry
                                          (pgsGenParams p)) }
+
+-- | Pre-v13 worlds retain their historical terrain policy; enabling the
+-- new positive-depth repair here would change regenerated old river beds.
+withoutExactRiverBedRepair ∷ SessionSnapshot → SessionSnapshot
+withoutExactRiverBedRepair snap = snap
+    { snapPages = HM.map (\p → p
+        { pgsGenParams = (pgsGenParams p) { wgpExactRiverBeds = False } })
+        (snapPages snap) }
 
 -- | The expectation for a fixture whose bytes predate #1092: identical
 --   to the live snapshot except that no identity carries language

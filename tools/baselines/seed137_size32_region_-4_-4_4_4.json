@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "35b187065ef8de31044bd8e7fab18724dfed3af5e2a10289479d79beb81ea3ea",
-      "35b187065ef8de31044bd8e7fab18724dfed3af5e2a10289479d79beb81ea3ea",
-      "35b187065ef8de31044bd8e7fab18724dfed3af5e2a10289479d79beb81ea3ea"
+      "a231d6d72a1cb01968d7a3774cb8e49ee2d9072785ed933e7200d22afc7cccaf",
+      "a231d6d72a1cb01968d7a3774cb8e49ee2d9072785ed933e7200d22afc7cccaf",
+      "a231d6d72a1cb01968d7a3774cb8e49ee2d9072785ed933e7200d22afc7cccaf"
     ]
   },
   "tileCount": 20736,
@@ -107,13 +107,13 @@
       ]
     },
     "FLOATING_WATER": {
-      "min": 57,
-      "max": 57,
-      "median": 57,
+      "min": 56,
+      "max": 56,
+      "median": 56,
       "all": [
-        57,
-        57,
-        57
+        56,
+        56,
+        56
       ]
     },
     "ISOLATED_FLUID": {
@@ -177,23 +177,23 @@
       ]
     },
     "WATER_ABOVE_LAND": {
-      "min": 74,
-      "max": 74,
-      "median": 74,
+      "min": 73,
+      "max": 73,
+      "median": 73,
       "all": [
-        74,
-        74,
-        74
+        73,
+        73,
+        73
       ]
     },
     "WATER_CLIFF": {
-      "min": 74,
-      "max": 74,
-      "median": 74,
+      "min": 73,
+      "max": 73,
+      "median": 73,
       "all": [
-        74,
-        74,
-        74
+        73,
+        73,
+        73
       ]
     },
     "WATER_WATER_CLIFF": {
@@ -211,15 +211,15 @@
     "summary": {
       "FLAT_ISOLATED_WATER": 8,
       "FLOATING_LAKE": 5849,
-      "FLOATING_WATER": 57,
+      "FLOATING_WATER": 56,
       "ISOLATED_FLUID": 3,
       "LAVA_RIM_INCOMPLETE": 3,
       "MID_RIVER_CLIFF": 12,
       "MULTI_ISLAND": 7,
       "RIVER_CHUNK_GAP": 10,
       "RIVER_MOUTH_DROP": 1,
-      "WATER_ABOVE_LAND": 74,
-      "WATER_CLIFF": 74,
+      "WATER_ABOVE_LAND": 73,
+      "WATER_CLIFF": 73,
       "WATER_WATER_CLIFF": 906
     },
     "issues": {
@@ -29514,11 +29514,6 @@
       ],
       "FLOATING_WATER": [
         {
-          "x": -64,
-          "y": -17,
-          "details": "river terr=94 -> dry(-64,-16) terr=93 gap=1"
-        },
-        {
           "x": -63,
           "y": -7,
           "details": "river terr=29 -> dry(-64,-7) terr=23 gap=6"
@@ -29936,7 +29931,7 @@
         {
           "x": -64,
           "y": -17,
-          "details": "river surf=95 -> dry(-64,-16) terr=93"
+          "details": "river surf=94 -> dry(-64,-16) terr=93"
         },
         {
           "x": -39,
@@ -29992,11 +29987,6 @@
         }
       ],
       "WATER_ABOVE_LAND": [
-        {
-          "x": -64,
-          "y": -17,
-          "details": "river surf=95 terr=94 -> land(-64,-16) terr=93 cliff=2"
-        },
         {
           "x": -63,
           "y": -7,
@@ -30364,11 +30354,6 @@
         }
       ],
       "WATER_CLIFF": [
-        {
-          "x": -64,
-          "y": -17,
-          "details": "river surf=95 -> dry(-64,-16) terr=93 cliff=2"
-        },
         {
           "x": -63,
           "y": -7,

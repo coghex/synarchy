@@ -47,19 +47,9 @@ import World.Save.Component.WorldGenNaming
 --   record is a frozen DTO (see this module's haddock); 'GeoTimeline'
 --   and the content-collection aliases are reused as leaves.
 --
---   This is the CURRENT shape, carried by @world-pages@ v7: #1102's
---   per-page river-name table beside the location instances, both
---   carrying #1104's optional etymology source, over the #1230 instance
---   shape that no longer stores a discovery margin.
---   'WorldGenParamsDTOv5' below is the frozen shape @world-pages@ v6
---   carries (the same tables, instances still carrying that margin),
---   'WorldGenParamsDTOv4' the frozen shape v5
---   carries (river names and instances, no etymology),
---   'WorldGenParamsDTOv3' the frozen shape v4 carries (#1101's
---   per-instance gloss, no river names), 'WorldGenParamsDTOv2' the
---   frozen shape v2 and v3 carry (the #911 instance table, no gloss),
---   and 'WorldGenParamsDTOv1' the frozen pre-#911 shape (three
---   chunk-keyed location sets); all five are decode-only.
+--   Current world-pages v13 appends the exact-river bed-repair policy.
+--   Historical v12 parameters are frozen as WorldGenParamsDTOv9 in
+--   WorldGenHistory; they disable that repair to preserve stored terrain.
 data WorldGenParamsDTO = WorldGenParamsDTO
     { gpSeed                    ∷ !Word64
     , gpWorldSize               ∷ !Int
@@ -84,6 +74,7 @@ data WorldGenParamsDTO = WorldGenParamsDTO
     , gpLocationInstances       ∷ !LocationInstancesDTO
     , gpLocationStamped         ∷ !(HS.HashSet ChunkCoord)
     , gpRiverNames              ∷ !RiverNamesDTO
+    , gpExactRiverBeds          ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize)
 
 toWorldGenParamsDTO ∷ WorldGenParams → WorldGenParamsDTO
@@ -111,6 +102,7 @@ toWorldGenParamsDTO p = WorldGenParamsDTO
     , gpLocationInstances       = toLocationInstancesDTO (wgpLocationInstances p)
     , gpLocationStamped         = wgpLocationStamped p
     , gpRiverNames              = toRiverNamesDTO (wgpRiverNames p)
+    , gpExactRiverBeds          = wgpExactRiverBeds p
     }
 
 -- | Rebuild the live record from the DTO, restoring the transient
@@ -144,5 +136,6 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpLocationInstances       = fromLocationInstancesDTO (gpLocationInstances d)
     , wgpLocationStamped         = gpLocationStamped d
     , wgpRiverNames              = fromRiverNamesDTO (gpRiverNames d)
+    , wgpExactRiverBeds          = gpExactRiverBeds d
     , wgpVolcanoCtx              = emptyVolcanoCtx
     }

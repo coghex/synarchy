@@ -78,6 +78,8 @@ module World.Save.Component.PageCore
     , WorldPagesDTOv10(..)
     , PageCoreDTOv11(..)
     , WorldPagesDTOv11(..)
+    , PageCoreDTOv12(..)
+    , WorldPagesDTOv12(..)
       -- * The component
     , worldPagesVersion
     , WorldPages(..)
@@ -96,11 +98,17 @@ module World.Save.Component.PageCore
     , migrateWorldPagesV9
     , migrateWorldPagesV10
     , migrateWorldPagesV11
+    , migrateWorldPagesV12
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
+import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
+import World.Geology.Timeline.Types (GeoTimeline(..))
+import World.Fluid.River.Types (WorldRivers(..), RiverChunkEntry(..))
+import World.Fluid.Exact (exactSurfaceOfZ)
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
@@ -117,6 +125,7 @@ import World.Save.Component.WorldGen
     , WorldGenParamsDTOv6(..), fromWorldGenParamsDTOv6
     , WorldGenParamsDTOv7(..), fromWorldGenParamsDTOv7
     , WorldGenParamsDTOv8(..), fromWorldGenParamsDTOv8
+    , WorldGenParamsDTOv9(..), fromWorldGenParamsDTOv9
     , EtymologySourceDTO(..)
     , toEtymologySourceDTO, fromEtymologySourceDTO )
 import Location.Instance
@@ -251,7 +260,7 @@ fromWorldIdentityDTOv1 d =
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v12) wire shape — see 'PageCoreDTOv11' for the
+--   This is the CURRENT (v13) wire shape — see 'PageCoreDTOv11' for the
 --   frozen pre-#2505 one, 'PageCoreDTOv10' for the
 --   frozen pre-#2471 one, 'PageCoreDTOv9' for the
 --   frozen pre-#917 one, 'PageCoreDTOv8' for the
@@ -543,7 +552,8 @@ data WorldPages = WorldPages
       --   without guessing which version it is looking at.
     } deriving (Show)
 
--- | Encoding always writes the current v12 shape; v11 payloads decode
+-- | Encoding writes v13 exact river surfaces; v12 payloads decode through
+--   'migrateWorldPagesV12' (#2533), and v11 payloads decode
 --   through their own frozen DTO via 'migrateWorldPagesV11' (#2505), v10
 --   via 'migrateWorldPagesV10' (#2471), v9
 --   via 'migrateWorldPagesV9' (#917), v8
@@ -574,7 +584,7 @@ data WorldPages = WorldPages
 --   "world-pages stamps its errors with the version it WRITES", which
 --   asserts @ccVersion worldPagesCodec ≡ worldPagesVersion@.
 worldPagesVersion ∷ Word32
-worldPagesVersion = 12
+worldPagesVersion = 13
 
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
@@ -582,13 +592,14 @@ worldPagesCodec = componentCodec ComponentSpec
       -- A literal, not 'worldPagesVersion': the save-compat audit parses
       -- this field statically. The example named on that constant is
       -- what keeps the two from drifting.
-    , csVersion       = 12
+    , csVersion       = 13
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 11 migrateWorldPagesV11
+    , csOlderVersions = [ atVersion 12 migrateWorldPagesV12
+                        , atVersion 11 migrateWorldPagesV11
                         , atVersion 10 migrateWorldPagesV10
                         , atVersion 9 migrateWorldPagesV9
                         , atVersion 8 migrateWorldPagesV8
@@ -685,7 +696,7 @@ validatePages wp
     -- deterministic rather than a hash-map traversal order.
     duplicates xs = [ y | (y : _ : _) ← L.group (L.sort xs) ]
 
--- | Turn the decoded current v12 page cores into the base 'PageSnapshot'
+-- | Turn the decoded current page cores into the base 'PageSnapshot'
 --   map every other page-scoped component then writes onto (assembly).
 --   All entity/activity/edit fields start empty and are overwritten by
 --   their own REQUIRED components; a valid save leaves none of these
@@ -712,6 +723,65 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         , pgsGeneratedId = pcGeneratedId p
         }
 
+-- | Frozen pre-eighth-river v12 shape, including the outgoing worldgen
+-- parameters before the bed-repair policy. GeoTimeline keeps its wire shape.
+data PageCoreDTOv12 = PageCoreDTOv12
+    { pc12PageId ∷ !WorldPageId
+    , pc12GenParams ∷ !WorldGenParamsDTOv9
+    , pc12CameraX ∷ !Float
+    , pc12CameraY ∷ !Float
+    , pc12TimeHour ∷ !Int
+    , pc12TimeMinute ∷ !Int
+    , pc12TimeRemainder ∷ !Double
+    , pc12DateYear ∷ !Int
+    , pc12DateMonth ∷ !Int
+    , pc12DateDay ∷ !Int
+    , pc12MapMode ∷ !ZoomMapMode
+    , pc12Identity ∷ !(Maybe WorldIdentityDTO)
+    , pc12GeneratedId ∷ !(Maybe GeneratedWorldId)
+    } deriving (Show, Generic, Serialize)
+newtype WorldPagesDTOv12 = WorldPagesDTOv12 { wpd12Pages ∷ [PageCoreDTOv12] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+migrateWorldPagesV12 ∷ WorldPagesDTOv12 → WorldPages
+migrateWorldPagesV12 (WorldPagesDTOv12 ps) = migrateWholeRiverSurfaces $
+    basePageSnapshots $ WorldPagesDTO $ map current ps
+  where
+    current p = PageCoreDTO
+        { pcPageId = pc12PageId p
+        , pcGenParams = toWorldGenParamsDTO (fromWorldGenParamsDTOv9 (pc12GenParams p))
+        , pcCameraX = pc12CameraX p
+        , pcCameraY = pc12CameraY p
+        , pcTimeHour = pc12TimeHour p
+        , pcTimeMinute = pc12TimeMinute p
+        , pcTimeRemainder = pc12TimeRemainder p
+        , pcDateYear = pc12DateYear p
+        , pcDateMonth = pc12DateMonth p
+        , pcDateDay = pc12DateDay p
+        , pcMapMode = pc12MapMode p
+        , pcIdentity = pc12Identity p
+        , pcGeneratedId = pc12GeneratedId p
+        }
+
+-- | Each historical dispatch calls this ONCE, including the V1 entry used
+-- by the old complete-session decoder. Current payloads bypass it. An
+-- absent slot is a sentinel, never a height to multiply; all other timeline
+-- fields, masks, widths, lake identities and stored carve deltas survive.
+migrateWholeRiverSurfaces ∷ WorldPages → WorldPages
+migrateWholeRiverSurfaces pages = pages { wpBase = HM.map migratePage (wpBase pages) }
+  where
+    migratePage page =
+        let params = pgsGenParams page
+            timeline = wgpGeoTimeline params
+            rivers = gtWorldRivers timeline
+            migrateEntry entry = entry { rcePerTileSurfZ = VU.map
+                (\s → if s ≡ minBound then s else exactSurfaceOfZ s)
+                (rcePerTileSurfZ entry) }
+            exactRivers = rivers { wrByChunk = HM.map (V.map migrateEntry) (wrByChunk rivers) }
+        in page { pgsGenParams = params
+                    { wgpGeoTimeline = timeline { gtWorldRivers = exactRivers } } }
+
 -- | The v8→v9 migration (#2021): every field a v8 page carries rides
 --   across untouched, and its generated-world id is left ABSENT.
 --
@@ -731,7 +801,7 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
 --   is accepted behaviour (design decision D-21): the earlier one
 --   simply belongs to a session nobody saved.
 migrateWorldPagesV8 ∷ WorldPagesDTOv8 → WorldPages
-migrateWorldPagesV8 (WorldPagesDTOv8 ps) = WorldPages
+migrateWorldPagesV8 (WorldPagesDTOv8 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc8PageId ps
     , wpBase    = HM.fromList [ (pc8PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -800,7 +870,7 @@ newtype WorldPagesDTOv9 = WorldPagesDTOv9 { wpd9Pages ∷ [PageCoreDTOv9] }
 --   same reason 'migrateWorldPagesV7' refuses to roll an encounter, and
 --   the same reason the v1 reconstruction discards both.
 migrateWorldPagesV9 ∷ WorldPagesDTOv9 → WorldPages
-migrateWorldPagesV9 (WorldPagesDTOv9 ps) = WorldPages
+migrateWorldPagesV9 (WorldPagesDTOv9 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc9PageId ps
     , wpBase    = HM.fromList [ (pc9PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
@@ -870,7 +940,7 @@ newtype WorldPagesDTOv10 = WorldPagesDTOv10 { wpd10Pages ∷ [PageCoreDTOv10] }
 --   an absent id in one is corruption exactly as it is in a v11 payload
 --   and @validatePages@ must keep saying so.
 migrateWorldPagesV10 ∷ WorldPagesDTOv10 → WorldPages
-migrateWorldPagesV10 (WorldPagesDTOv10 ps) = WorldPages
+migrateWorldPagesV10 (WorldPagesDTOv10 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc10PageId ps
     , wpBase    = HM.fromList [ (pc10PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
@@ -942,7 +1012,7 @@ newtype WorldPagesDTOv11 = WorldPagesDTOv11 { wpd11Pages ∷ [PageCoreDTOv11] }
 --   an absent id in one is corruption exactly as it is in a v12 payload
 --   and @validatePages@ must keep saying so.
 migrateWorldPagesV11 ∷ WorldPagesDTOv11 → WorldPages
-migrateWorldPagesV11 (WorldPagesDTOv11 ps) = WorldPages
+migrateWorldPagesV11 (WorldPagesDTOv11 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc11PageId ps
     , wpBase    = HM.fromList [ (pc11PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
@@ -968,7 +1038,7 @@ migrateWorldPagesV11 (WorldPagesDTOv11 ps) = WorldPages
 --   and gains no encounter. Rolling an encounter while loading would let the
 --   current content build reinterpret a previously materialized world.
 migrateWorldPagesV7 ∷ WorldPagesDTOv7 → WorldPages
-migrateWorldPagesV7 (WorldPagesDTOv7 ps) = WorldPages
+migrateWorldPagesV7 (WorldPagesDTOv7 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc7PageId ps
     , wpBase    = HM.fromList [ (pc7PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -1000,7 +1070,7 @@ migrateWorldPagesV7 (WorldPagesDTOv7 ps) = WorldPages
 --   discovered therefore stays discovered, and one it had not is
 --   rediscovered by sight rather than by walking into a halo.
 migrateWorldPagesV6 ∷ WorldPagesDTOv6 → WorldPages
-migrateWorldPagesV6 (WorldPagesDTOv6 ps) = WorldPages
+migrateWorldPagesV6 (WorldPagesDTOv6 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc6PageId ps
     , wpBase    = HM.fromList [ (pc6PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -1032,7 +1102,7 @@ migrateWorldPagesV6 (WorldPagesDTOv6 ps) = WorldPages
 --   map mode all ride across untouched — so a pre-#1104 save keeps
 --   every name it had and simply reports its etymology as unavailable.
 migrateWorldPagesV5 ∷ WorldPagesDTOv5 → WorldPages
-migrateWorldPagesV5 (WorldPagesDTOv5 ps) = WorldPages
+migrateWorldPagesV5 (WorldPagesDTOv5 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc5PageId ps
     , wpBase    = HM.fromList [ (pc5PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -1064,7 +1134,7 @@ migrateWorldPagesV5 (WorldPagesDTOv5 ps) = WorldPages
 --   instances with their stored names and glosses, clocks, camera, map
 --   mode — rides across untouched.
 migrateWorldPagesV4 ∷ WorldPagesDTOv4 → WorldPages
-migrateWorldPagesV4 (WorldPagesDTOv4 ps) = WorldPages
+migrateWorldPagesV4 (WorldPagesDTOv4 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc4PageId ps
     , wpBase    = HM.fromList [ (pc4PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -1093,7 +1163,7 @@ migrateWorldPagesV4 (WorldPagesDTOv4 ps) = WorldPages
 --   page's own identity, provenance included, rides across untouched:
 --   #1101 changed no world-identity field.
 migrateWorldPagesV3 ∷ WorldPagesDTOv3 → WorldPages
-migrateWorldPagesV3 (WorldPagesDTOv3 ps) = WorldPages
+migrateWorldPagesV3 (WorldPagesDTOv3 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc3PageId ps
     , wpBase    = HM.fromList [ (pc3PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -1121,7 +1191,7 @@ migrateWorldPagesV3 (WorldPagesDTOv3 ps) = WorldPages
 --   its location instances likewise keep their stored names and gain
 --   no gloss. Clocks, camera, and map mode ride across untouched.
 migrateWorldPagesV2 ∷ WorldPagesDTOv2 → WorldPages
-migrateWorldPagesV2 (WorldPagesDTOv2 ps) = WorldPages
+migrateWorldPagesV2 (WorldPagesDTOv2 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc2PageId ps
     , wpBase    = HM.fromList [ (pc2PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
@@ -1155,7 +1225,7 @@ migrateWorldPagesV2 (WorldPagesDTOv2 ps) = WorldPages
 --   provenance absent as well: a pre-#911 save predates provenance
 --   entirely.
 migrateWorldPagesV1 ∷ WorldPagesDTOv1 → WorldPages
-migrateWorldPagesV1 (WorldPagesDTOv1 ps) = WorldPages
+migrateWorldPagesV1 (WorldPagesDTOv1 ps) = migrateWholeRiverSurfaces $ WorldPages
     { wpPageIds = map pc1PageId ps
     , wpBase    = HM.fromList [ (pc1PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False

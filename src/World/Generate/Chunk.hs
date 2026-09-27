@@ -37,6 +37,7 @@ import World.Generate.Coordinates (chunkToGlobal)
 import World.Generate.Timeline (applyTimelineChunk, removeElevationSpikes)
 import World.Geology.Coastal (applyCoastalTable)
 import World.Fluid.Seabed (applySeabedTable)
+import World.Generate.Chunk.RiverBed (fitExactRiverBeds)
 import World.Generate.Chunk.Fluid
     ( composeFluidMap, chunkWaterSurfMap, applyBasaltCaps, lavaShellMask
     , applyLavaShell, smoothIslandColumns, mkSurfaceMap, chunkOrNeighborOceanic
@@ -241,9 +242,11 @@ generateChunk registry catalog pageId params coord =
         -- it only fires on 1-tile pillars >12 above ALL cardinal
         -- neighbours, so untouched natural terrain is unaffected.
         -- Mirrored in 'generateZoomTerrain' (chunk/fast parity).
-        (finalElevVec, _) =
+        (legacyFinalElev, _) =
             removeElevationSpikes 12 4 (chunkSize + 2 * chunkBorder)
                                   (carvedElevVec, seabedMatVec)
+
+        finalElevVec = fitExactRiverBeds params coord chunkBorder legacyFinalElev
 
         lookupFinal lx ly =
             if inBorder lx ly

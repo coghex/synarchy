@@ -1,0 +1,153 @@
+{
+  "engine": "/private/tmp/synarchy-2533-base",
+  "engine_sha256": "34c951c90f368ceb34324ab58b960823a9a98aef64827a3a76feca31ba2fecf4",
+  "seed": 42,
+  "world_size": 64,
+  "plates": 3,
+  "frames": [
+    {
+      "image": "steep-bend-0.png",
+      "x": -104,
+      "y": -210,
+      "z": 25,
+      "samples": {
+        "surface": 22,
+        "terrain": 19,
+        "fluid": "river"
+      },
+      "facing": 0
+    },
+    {
+      "image": "steep-bend-1.png",
+      "x": -104,
+      "y": -210,
+      "z": 25,
+      "samples": {
+        "surface": 22,
+        "terrain": 19,
+        "fluid": "river"
+      },
+      "facing": 1
+    },
+    {
+      "image": "steep-bend-2.png",
+      "x": -104,
+      "y": -210,
+      "z": 25,
+      "samples": {
+        "surface": 22,
+        "terrain": 19,
+        "fluid": "river"
+      },
+      "facing": 2
+    },
+    {
+      "image": "steep-bend-3.png",
+      "x": -104,
+      "y": -210,
+      "z": 25,
+      "samples": {
+        "surface": 22,
+        "terrain": 19,
+        "fluid": "river"
+      },
+      "facing": 3
+    },
+    {
+      "image": "bank-reach-0.png",
+      "x": -118,
+      "y": 36,
+      "z": 98,
+      "samples": {
+        "surface": 95,
+        "terrain": 89,
+        "fluid": "river"
+      },
+      "facing": 0
+    },
+    {
+      "image": "bank-reach-1.png",
+      "x": -118,
+      "y": 36,
+      "z": 98,
+      "samples": {
+        "surface": 95,
+        "terrain": 89,
+        "fluid": "river"
+      },
+      "facing": 1
+    },
+    {
+      "image": "bank-reach-2.png",
+      "x": -118,
+      "y": 36,
+      "z": 98,
+      "samples": {
+        "surface": 95,
+        "terrain": 89,
+        "fluid": "river"
+      },
+      "facing": 2
+    },
+    {
+      "image": "bank-reach-3.png",
+      "x": -118,
+      "y": 36,
+      "z": 98,
+      "samples": {
+        "surface": 95,
+        "terrain": 89,
+        "fluid": "river"
+      },
+      "facing": 3
+    },
+    {
+      "image": "gentle-reach-0.png",
+      "x": -158,
+      "y": -111,
+      "z": 21,
+      "samples": {
+        "surface": 1,
+        "terrain": 0,
+        "fluid": "river"
+      },
+      "facing": 0
+    },
+    {
+      "image": "gentle-reach-1.png",
+      "x": -158,
+      "y": -111,
+      "z": 21,
+      "samples": {
+        "surface": 1,
+        "terrain": 0,
+        "fluid": "river"
+      },
+      "facing": 1
+    },
+    {
+      "image": "gentle-reach-2.png",
+      "x": -158,
+      "y": -111,
+      "z": 21,
+      "samples": {
+        "surface": 1,
+        "terrain": 0,
+        "fluid": "river"
+      },
+      "facing": 2
+    },
+    {
+      "image": "gentle-reach-3.png",
+      "x": -158,
+      "y": -111,
+      "z": 21,
+      "samples": {
+        "surface": 1,
+        "terrain": 0,
+        "fluid": "river"
+      },
+      "facing": 3
+    }
+  ]
+}

@@ -1,0 +1,224 @@
+{
+  "historical_sweep": {
+    "command": "tools/save_compat_migration_probe.py --port 9536",
+    "exit_code": 1,
+    "cases": [
+      {
+        "case": "b1-initial-session / b1-initial-session-minimal (expected active page: main_world)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "b2-split-haskell-lua-state / b2-split-haskell-lua-state-minimal (expected active page: page1)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "c3-raw-reference-v1 / c3-typed-reference-v1-minimal (expected active page: page1)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "c3-raw-reference-v1 / c3-typed-reference-v1-multipage (expected active page: page1)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "c3-raw-reference-v1 / c3-typed-reference-v1-with-items (expected active page: page1)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "b3-lua-versioned / b3-lua-versioned-session-v1 (expected active page: page1)",
+        "passes": 28,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "d1-location-instance-identity / d1-location-instance-identity-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "e1-unit-location-knowledge / e1-unit-location-knowledge-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "f1-autosave-classification / f1-autosave-classification-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "g1-language-provenance / g1-language-provenance-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "h1-container-knowledge / h1-container-knowledge-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "i1-location-language-names / i1-location-language-names-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "j1-river-language-names / j1-river-language-names-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "k1-name-etymology / k1-name-etymology-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "k1-canonical-designation-frame / k1-canonical-designation-frame-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "l1-order-stall-budget / l1-order-stall-budget-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "m1-item-bulk-storage / m1-item-bulk-storage-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "n1-location-sight-reveal / n1-location-sight-reveal (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "o1-wander-hazard-policy / o1-wander-hazard-policy (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "p1-position-hold / p1-position-hold-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "q1-repair-ground-target / q1-repair-ground-target-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "r1-ruin-nomad-encounter / r1-ruin-nomad-encounter-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "s1-flora-instance-identity / s1-flora-instance-identity-session (expected active page: flora_identity_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "t1-construct-attempt-receipt / t1-construct-attempt-receipt-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "u1-generated-world-identity / u1-generated-world-identity-session (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "v1-location-significant-contents / v1-location-significant-contents (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "w1-construct-stake-reference / w1-construct-stake-reference (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "x1-flora-species-names / x1-flora-species-names (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "y1-subminute-clock-remainder / y1-subminute-clock-remainder (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "z1-portable-container-knowledge / z1-portable-container-knowledge (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "z2-pending-container-shells / z2-pending-container-shells (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "z3-exact-fluid-units / z3-exact-fluid-units (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "z4-medic-claim-order / z4-medic-claim-order (expected active page: generated_page)",
+        "passes": 18,
+        "failures": [],
+        "skips": 0
+      },
+      {
+        "case": "z5-exact-generated-rivers / z5-exact-generated-rivers (expected active page: exact_rivers)",
+        "passes": 16,
+        "failures": [
+          "[FAIL] after the initial migration-load: real dumped Haskell state matches the fixture's declared canonical summary -- MISMATCH at .gameTime: real dump has 2.2158049999998184, expected 2.232239999997546",
+          "[FAIL] after the resave/restart/reload round trip: real dumped Haskell state matches the fixture's declared canonical summary -- MISMATCH at .gameTime: real dump has 2.2158049999998184, expected 2.232239999997546"
+        ],
+        "skips": 0
+      }
+    ]
+  },
+  "current_fixture_fresh_run": {
+    "fixture": "z5-exact-generated-rivers.bin",
+    "sha256": "b38e766ceb98fbb69b237aad7167b517cce61a711a583c7f8c754efd4b8c31f8",
+    "passes": 18,
+    "failures": 0,
+    "skips": 0,
+    "exit_code": 0
+  },
+  "explanation": "The sweep cached expected summaries before z5 was regenerated. All 33 historical fixtures passed. Both stale z5 comparisons differ at gameTime; the actual value equals the final tracked expectation. A fresh invocation of the same canonical run_one_fixture function passed every check against the final fixture and freshly read expectations."
+}

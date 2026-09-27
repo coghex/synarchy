@@ -132,7 +132,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 12
+            ccVersion worldPagesCodec `shouldBe` 13
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -324,8 +324,12 @@ spec = do
             degenerate = AbsBounds 6 6 6 6
 
             bytesAt ∷ Word32 → AbsBounds → BS.ByteString
-            bytesAt 12 b = S.encode (WorldPagesDTO
+            bytesAt 13 b = S.encode (WorldPagesDTO
                 [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            bytesAt 12 b = S.encode (WorldPagesDTOv12
+                [ PageCoreDTOv12 page1 (toWorldGenParamsDTOv9 (gpWith b))
+                    0 0 0 0 0 1 1 1 ZMDefault Nothing
+                    (Just (fixtureGeneratedWorldIdForPage page1)) ])
             -- #2505: v11 is the same page core over gen params whose
             -- location instances carry no container slots, so it must be
             -- encoded through its own frozen DTO -- the current type's
@@ -409,7 +413,8 @@ spec = do
                     Right wp → Right (ccValidate worldPagesCodec wp)
 
             carriers ∷ [(String, Word32)]
-            carriers = [ ("v12 / LocationInstanceDTO",  12)
+            carriers = [ ("v13 / LocationInstanceDTO",  13)
+                       , ("v12 / LocationInstanceDTO",  12)
                        , ("v11 / LocationInstanceDTOv6", 11)
                        , ("v10 / LocationInstanceDTOv6", 10)
                        , ("v9 / LocationInstanceDTOv5",  9)
@@ -603,13 +608,13 @@ spec = do
                     "unsupported schema version (reader supports v1, v2, v3)")
 
         it "reports an unsupported version identically for a \
-           \TWELVE-version reader" $
-            decodeErrorOf worldPagesCodec 13 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 13
+           \THIRTEEN-version reader" $
+            decodeErrorOf worldPagesCodec 14 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 14
                     DecodePhase
                     "unsupported schema version \
                     \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
-                    \v10, v11, v12)")
+                    \v10, v11, v12, v13)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -893,7 +898,9 @@ goldenRichPayloads =
       -- hangs off the PAGE CORE, so these fixtures do witness it and the
       -- row genuinely had to move. Only this component's rows moved; no
       -- other component carries the remainder.
-    , ("world-pages",         (1356, "a2ab9bfa1262eb70"))
+      -- #2533: v13 appends the bed-repair policy byte to each page's
+      -- worldgen parameters (two pages in this fixture).
+    , ("world-pages",         (1358, "5c808bb8ebae75ec"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
       -- FloraInstanceId to every WePlaceFlora entry, of which this
@@ -929,7 +936,8 @@ goldenFullPayloads =
       -- same reason too — this page's location table is empty. #2471
       -- re-pinned it as goldenRichPayloads is, for 8 bytes rather than
       -- 16: the remainder is per PAGE and this fixture has one.
-    , ("world-pages",         (708, "f8e458cdd6312bd9"))
+      -- #2533: one persisted bed-repair policy byte for this one page.
+    , ("world-pages",         (709, "70647e58f186c6da"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",         (78,  "d70f14ce21048a09"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and

@@ -881,6 +881,7 @@ library
                      World.Generate.Constants
                      World.Generate.Coordinates
                      World.Generate.Chunk
+                     World.Generate.Chunk.RiverBed
                      World.Generate.Chunk.Fluid
                      World.Generate.Chunk.SoilGates
                      World.Generate.Chunk.Columns
@@ -1100,6 +1101,8 @@ library
                      World.Fluid.River.Identify.Common
                      World.Fluid.River.Identify.Flow
                      World.Fluid.River.Identify.Components
+                     World.Fluid.River.Identify.Surface
+                     World.Fluid.River.Identify.SurfaceFlow
                      World.Fluid.River.Identify.Breakthrough
                      World.Fluid.River.Identify.BedDepth
                      World.Fluid.River.Identify.ChunkIndex
@@ -1427,6 +1430,8 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
+                   Test.Headless.WorldGen.ExactRiver
+                   Test.Headless.WorldGen.ExactRiverWorld
                    Test.Headless.WorldGen.Breakthrough
                    Test.Headless.WorldGen.SharedSpillway
                    Test.Headless.WorldGen.BedDepth

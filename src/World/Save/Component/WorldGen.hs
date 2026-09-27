@@ -112,6 +112,9 @@ module World.Save.Component.WorldGen
     , WorldGenParamsDTOv4(..)
     , WorldGenParamsDTOv5(..)
     , WorldGenParamsDTOv6(..)
+    , WorldGenParamsDTOv9(..)
+    , toWorldGenParamsDTOv9
+    , fromWorldGenParamsDTOv9
     , WorldGenParamsDTOv8(..)
     , WorldGenParamsDTOv7(..)
     , NameExprDTO(..)

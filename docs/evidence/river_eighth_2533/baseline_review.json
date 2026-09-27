@@ -1,0 +1,1505 @@
+[
+  {
+    "seed": 42,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-base-coast42.json",
+    "candidate": "/tmp/synarchy-2533-final-42.json",
+    "base_sha256": "df21cc9e85f89121d1219cbe3d9d650feda558022e4da412184a0f86e4f85e04",
+    "candidate_sha256": "ff97b14a9639f931304bfd4c4927fd446ce024020192ee5e8c3b094a8d8bc55e",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 44,
+      "FLAT_ISOLATED_WATER": 15,
+      "FLOATING_LAKE": 2,
+      "FLOATING_WATER": 141,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 3,
+      "MID_RIVER_CLIFF": 30,
+      "MULTI_ISLAND": 15,
+      "RIVER_CHUNK_GAP": 15,
+      "RIVER_MOUTH_DROP": 12,
+      "WATER_ABOVE_LAND": 169,
+      "WATER_CLIFF": 169,
+      "WATER_WATER_CLIFF": 2413
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 40,
+      "FLAT_ISOLATED_WATER": 15,
+      "FLOATING_LAKE": 2,
+      "FLOATING_WATER": 113,
+      "ISLAND_1TILE": 2,
+      "ISOLATED_FLUID": 3,
+      "MID_RIVER_CLIFF": 12,
+      "MULTI_ISLAND": 15,
+      "RIVER_CHUNK_GAP": 14,
+      "RIVER_MOUTH_DROP": 10,
+      "WATER_ABOVE_LAND": 137,
+      "WATER_CLIFF": 137,
+      "WATER_WATER_CLIFF": 2365
+    },
+    "added_categories": {
+      "ISLAND_1TILE": 1
+    },
+    "removed_categories": {
+      "DESERT_SOIL_ON_SLOPE": 4,
+      "FLOATING_WATER": 28,
+      "MID_RIVER_CLIFF": 17,
+      "RIVER_CHUNK_GAP": 1,
+      "RIVER_MOUTH_DROP": 2,
+      "WATER_ABOVE_LAND": 32,
+      "WATER_CLIFF": 32,
+      "WATER_WATER_CLIFF": 43
+    },
+    "added_examples": [
+      {
+        "category": "ISLAND_1TILE",
+        "x": -55,
+        "y": 75,
+        "details": "terrainZ=1 (surrounded by ocean)",
+        "neighbour_evidence": [
+          {
+            "x": -55,
+            "y": 75,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": null,
+              "fluidSurf": null
+            },
+            "candidate": {
+              "terrainZ": 1,
+              "fluidType": null,
+              "fluidSurf": null
+            }
+          },
+          {
+            "x": -56,
+            "y": 75,
+            "base": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            },
+            "candidate": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            }
+          },
+          {
+            "x": -54,
+            "y": 75,
+            "base": {
+              "terrainZ": 0,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            },
+            "candidate": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            }
+          },
+          {
+            "x": -55,
+            "y": 74,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 2
+            },
+            "candidate": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            }
+          },
+          {
+            "x": -55,
+            "y": 76,
+            "base": {
+              "terrainZ": 0,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            },
+            "candidate": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            }
+          }
+        ]
+      }
+    ],
+    "banks": {
+      "base": 170,
+      "candidate": 138,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 2097,
+      "max_lowering": 2,
+      "old_types": {
+        "river": 1165,
+        "ocean": 932
+      },
+      "largest": [
+        [
+          2,
+          [
+            41,
+            -27
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            40,
+            -27
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            39,
+            -27
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            38,
+            -27
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            36,
+            -27
+          ],
+          "river",
+          "ocean"
+        ]
+      ]
+    }
+  },
+  {
+    "seed": 7,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-7.json",
+    "candidate": "/tmp/synarchy-2533-final-7.json",
+    "base_sha256": "3de876d3830df9a1056a1aa075e1d0eac45270275f1373570cd91c551d96295d",
+    "candidate_sha256": "ce0e4f522ec5410bb2b3a09cae5cec820a275ebbff19518e6432af4b13e1fc9c",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 21,
+      "FLAT_ISOLATED_WATER": 3,
+      "FLOATING_LAKE": 80,
+      "FLOATING_WATER": 69,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 9,
+      "LAVA_RIM_INCOMPLETE": 10,
+      "MID_RIVER_CLIFF": 94,
+      "MULTI_ISLAND": 9,
+      "RIVER_CHUNK_GAP": 7,
+      "WATER_ABOVE_LAND": 206,
+      "WATER_CLIFF": 206,
+      "WATER_WATER_CLIFF": 3175
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 21,
+      "FLAT_ISOLATED_WATER": 3,
+      "FLOATING_LAKE": 80,
+      "FLOATING_WATER": 67,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 9,
+      "LAVA_RIM_INCOMPLETE": 10,
+      "MID_RIVER_CLIFF": 75,
+      "MULTI_ISLAND": 9,
+      "RIVER_CHUNK_GAP": 7,
+      "WATER_ABOVE_LAND": 195,
+      "WATER_CLIFF": 195,
+      "WATER_WATER_CLIFF": 3165
+    },
+    "added_categories": {},
+    "removed_categories": {
+      "FLOATING_WATER": 2,
+      "MID_RIVER_CLIFF": 19,
+      "WATER_ABOVE_LAND": 11,
+      "WATER_CLIFF": 11,
+      "WATER_WATER_CLIFF": 9
+    },
+    "added_examples": [],
+    "banks": {
+      "base": 213,
+      "candidate": 202,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 519,
+      "max_lowering": 2,
+      "old_types": {
+        "river": 161,
+        "ocean": 358
+      },
+      "largest": [
+        [
+          2,
+          [
+            63,
+            66
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            62,
+            66
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            61,
+            66
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            60,
+            66
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            59,
+            66
+          ],
+          "river",
+          "ocean"
+        ]
+      ]
+    }
+  },
+  {
+    "seed": 314,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-314.json",
+    "candidate": "/tmp/synarchy-2533-final-314.json",
+    "base_sha256": "5813493a547276733144f139a6e21620b99b22debac9b9ec937b70815307ad99",
+    "candidate_sha256": "91e42fa32ac5373137256e2d5b86e8af1017097f0cd240cec35480d78874e70a",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 90,
+      "FLAT_ISOLATED_WATER": 4,
+      "FLOATING_WATER": 93,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 7,
+      "MID_RIVER_CLIFF": 47,
+      "MULTI_ISLAND": 5,
+      "RIVER_CHUNK_GAP": 5,
+      "RIVER_MOUTH_DROP": 1,
+      "WATER_ABOVE_LAND": 158,
+      "WATER_CLIFF": 158,
+      "WATER_WATER_CLIFF": 1012
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 86,
+      "FLAT_ISOLATED_WATER": 4,
+      "FLOATING_WATER": 88,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 7,
+      "MID_RIVER_CLIFF": 32,
+      "MULTI_ISLAND": 5,
+      "RIVER_CHUNK_GAP": 5,
+      "RIVER_MOUTH_DROP": 1,
+      "WATER_ABOVE_LAND": 141,
+      "WATER_CLIFF": 141,
+      "WATER_WATER_CLIFF": 988
+    },
+    "added_categories": {
+      "MID_RIVER_CLIFF": 5
+    },
+    "removed_categories": {
+      "DESERT_SOIL_ON_SLOPE": 4,
+      "FLOATING_WATER": 5,
+      "MID_RIVER_CLIFF": 18,
+      "WATER_ABOVE_LAND": 17,
+      "WATER_CLIFF": 17,
+      "WATER_WATER_CLIFF": 23
+    },
+    "added_examples": [
+      {
+        "category": "MID_RIVER_CLIFF",
+        "x": -59,
+        "y": 33,
+        "details": "river surf=4 (terr=1) -> water nbr surf=2 (terr=1) surf_diff=2 terr_diff=0",
+        "neighbour_evidence": [
+          {
+            "x": -59,
+            "y": 33,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 5
+            },
+            "candidate": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 4
+            }
+          },
+          {
+            "x": -60,
+            "y": 33,
+            "base": {
+              "terrainZ": 4,
+              "fluidType": "river",
+              "fluidSurf": 9
+            },
+            "candidate": {
+              "terrainZ": 4,
+              "fluidType": "river",
+              "fluidSurf": 8
+            }
+          },
+          {
+            "x": -58,
+            "y": 33,
+            "base": {
+              "terrainZ": 2,
+              "fluidType": "river",
+              "fluidSurf": 3
+            },
+            "candidate": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 2
+            }
+          },
+          {
+            "x": -59,
+            "y": 32,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 5
+            },
+            "candidate": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 4
+            }
+          },
+          {
+            "x": -59,
+            "y": 34,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 4
+            },
+            "candidate": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 3
+            }
+          }
+        ]
+      },
+      {
+        "category": "MID_RIVER_CLIFF",
+        "x": 57,
+        "y": 24,
+        "details": "river surf=13 (terr=10) -> water nbr surf=11 (terr=10) surf_diff=2 terr_diff=0",
+        "neighbour_evidence": [
+          {
+            "x": 57,
+            "y": 24,
+            "base": {
+              "terrainZ": 10,
+              "fluidType": "river",
+              "fluidSurf": 14
+            },
+            "candidate": {
+              "terrainZ": 10,
+              "fluidType": "river",
+              "fluidSurf": 13
+            }
+          },
+          {
+            "x": 56,
+            "y": 24,
+            "base": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 17
+            },
+            "candidate": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 16
+            }
+          },
+          {
+            "x": 58,
+            "y": 24,
+            "base": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 16
+            },
+            "candidate": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 15
+            }
+          },
+          {
+            "x": 57,
+            "y": 23,
+            "base": {
+              "terrainZ": 11,
+              "fluidType": "river",
+              "fluidSurf": 12
+            },
+            "candidate": {
+              "terrainZ": 10,
+              "fluidType": "river",
+              "fluidSurf": 11
+            }
+          },
+          {
+            "x": 57,
+            "y": 25,
+            "base": {
+              "terrainZ": 19,
+              "fluidType": "river",
+              "fluidSurf": 24
+            },
+            "candidate": {
+              "terrainZ": 19,
+              "fluidType": "river",
+              "fluidSurf": 23
+            }
+          }
+        ]
+      },
+      {
+        "category": "MID_RIVER_CLIFF",
+        "x": 58,
+        "y": 24,
+        "details": "river surf=15 (terr=12) -> water nbr surf=13 (terr=12) surf_diff=2 terr_diff=0",
+        "neighbour_evidence": [
+          {
+            "x": 58,
+            "y": 24,
+            "base": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 16
+            },
+            "candidate": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 15
+            }
+          },
+          {
+            "x": 57,
+            "y": 24,
+            "base": {
+              "terrainZ": 10,
+              "fluidType": "river",
+              "fluidSurf": 14
+            },
+            "candidate": {
+              "terrainZ": 10,
+              "fluidType": "river",
+              "fluidSurf": 13
+            }
+          },
+          {
+            "x": 59,
+            "y": 24,
+            "base": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 18
+            },
+            "candidate": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 17
+            }
+          },
+          {
+            "x": 58,
+            "y": 23,
+            "base": {
+              "terrainZ": 13,
+              "fluidType": "river",
+              "fluidSurf": 14
+            },
+            "candidate": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 13
+            }
+          },
+          {
+            "x": 58,
+            "y": 25,
+            "base": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 19
+            },
+            "candidate": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 18
+            }
+          }
+        ]
+      },
+      {
+        "category": "MID_RIVER_CLIFF",
+        "x": 59,
+        "y": 24,
+        "details": "river surf=17 (terr=14) -> water nbr surf=15 (terr=14) surf_diff=2 terr_diff=0",
+        "neighbour_evidence": [
+          {
+            "x": 59,
+            "y": 24,
+            "base": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 18
+            },
+            "candidate": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 17
+            }
+          },
+          {
+            "x": 58,
+            "y": 24,
+            "base": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 16
+            },
+            "candidate": {
+              "terrainZ": 12,
+              "fluidType": "river",
+              "fluidSurf": 15
+            }
+          },
+          {
+            "x": 60,
+            "y": 24,
+            "base": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 19
+            },
+            "candidate": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 18
+            }
+          },
+          {
+            "x": 59,
+            "y": 23,
+            "base": {
+              "terrainZ": 15,
+              "fluidType": "river",
+              "fluidSurf": 16
+            },
+            "candidate": {
+              "terrainZ": 14,
+              "fluidType": "river",
+              "fluidSurf": 15
+            }
+          },
+          {
+            "x": 59,
+            "y": 25,
+            "base": {
+              "terrainZ": 15,
+              "fluidType": "river",
+              "fluidSurf": 21
+            },
+            "candidate": {
+              "terrainZ": 15,
+              "fluidType": "river",
+              "fluidSurf": 20
+            }
+          }
+        ]
+      },
+      {
+        "category": "MID_RIVER_CLIFF",
+        "x": 62,
+        "y": 24,
+        "details": "river surf=23 (terr=20) -> water nbr surf=21 (terr=20) surf_diff=2 terr_diff=0",
+        "neighbour_evidence": [
+          {
+            "x": 62,
+            "y": 24,
+            "base": {
+              "terrainZ": 20,
+              "fluidType": "river",
+              "fluidSurf": 24
+            },
+            "candidate": {
+              "terrainZ": 20,
+              "fluidType": "river",
+              "fluidSurf": 23
+            }
+          },
+          {
+            "x": 61,
+            "y": 24,
+            "base": {
+              "terrainZ": 17,
+              "fluidType": "river",
+              "fluidSurf": 22
+            },
+            "candidate": {
+              "terrainZ": 17,
+              "fluidType": "river",
+              "fluidSurf": 21
+            }
+          },
+          {
+            "x": 63,
+            "y": 24,
+            "base": {
+              "terrainZ": 21,
+              "fluidType": "river",
+              "fluidSurf": 26
+            },
+            "candidate": {
+              "terrainZ": 21,
+              "fluidType": "river",
+              "fluidSurf": 25
+            }
+          },
+          {
+            "x": 62,
+            "y": 23,
+            "base": {
+              "terrainZ": 21,
+              "fluidType": "river",
+              "fluidSurf": 22
+            },
+            "candidate": {
+              "terrainZ": 20,
+              "fluidType": "river",
+              "fluidSurf": 21
+            }
+          },
+          {
+            "x": 62,
+            "y": 25,
+            "base": {
+              "terrainZ": 21,
+              "fluidType": "river",
+              "fluidSurf": 27
+            },
+            "candidate": {
+              "terrainZ": 21,
+              "fluidType": "river",
+              "fluidSurf": 26
+            }
+          }
+        ]
+      }
+    ],
+    "banks": {
+      "base": 158,
+      "candidate": 141,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 414,
+      "max_lowering": 2,
+      "old_types": {
+        "ocean": 146,
+        "river": 268
+      },
+      "largest": [
+        [
+          2,
+          [
+            72,
+            -64
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -51,
+            21
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -51,
+            20
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -51,
+            19
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -52,
+            23
+          ],
+          "river",
+          "ocean"
+        ]
+      ]
+    }
+  },
+  {
+    "seed": 2718,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-2718.json",
+    "candidate": "/tmp/synarchy-2533-final-2718.json",
+    "base_sha256": "574dac4f2eed61c0d1354389bd8e01dc6e156198bc5eae2614a2c578fb18772b",
+    "candidate_sha256": "574dac4f2eed61c0d1354389bd8e01dc6e156198bc5eae2614a2c578fb18772b",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 46,
+      "FLAT_ISOLATED_WATER": 19,
+      "FLOATING_LAKE": 220,
+      "FLOATING_WATER": 95,
+      "ISOLATED_FLUID": 11,
+      "MID_RIVER_CLIFF": 37,
+      "MULTI_ISLAND": 7,
+      "RIVER_CHUNK_GAP": 15,
+      "WATER_ABOVE_LAND": 184,
+      "WATER_CLIFF": 184,
+      "WATER_WATER_CLIFF": 1366
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 46,
+      "FLAT_ISOLATED_WATER": 19,
+      "FLOATING_LAKE": 220,
+      "FLOATING_WATER": 95,
+      "ISOLATED_FLUID": 11,
+      "MID_RIVER_CLIFF": 37,
+      "MULTI_ISLAND": 7,
+      "RIVER_CHUNK_GAP": 15,
+      "WATER_ABOVE_LAND": 184,
+      "WATER_CLIFF": 184,
+      "WATER_WATER_CLIFF": 1366
+    },
+    "added_categories": {},
+    "removed_categories": {},
+    "added_examples": [],
+    "banks": {
+      "base": 192,
+      "candidate": 192,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 0,
+      "max_lowering": 0,
+      "old_types": {},
+      "largest": []
+    }
+  },
+  {
+    "seed": 4096,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-4096.json",
+    "candidate": "/tmp/synarchy-2533-final-4096.json",
+    "base_sha256": "17a516aa6cd5c3bf9966131e5b8e1de20b431ac1a9316597e58d08695ae44d82",
+    "candidate_sha256": "17a516aa6cd5c3bf9966131e5b8e1de20b431ac1a9316597e58d08695ae44d82",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 4,
+      "FLAT_ISOLATED_WATER": 12,
+      "FLOATING_LAKE": 1549,
+      "FLOATING_WATER": 87,
+      "ISLAND_1TILE": 5,
+      "ISOLATED_FLUID": 29,
+      "LAVA_RIM_INCOMPLETE": 1,
+      "MID_RIVER_CLIFF": 27,
+      "MULTI_ISLAND": 1,
+      "RIVER_CHUNK_GAP": 11,
+      "WATER_ABOVE_LAND": 138,
+      "WATER_CLIFF": 138,
+      "WATER_WATER_CLIFF": 1959
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 4,
+      "FLAT_ISOLATED_WATER": 12,
+      "FLOATING_LAKE": 1549,
+      "FLOATING_WATER": 87,
+      "ISLAND_1TILE": 5,
+      "ISOLATED_FLUID": 29,
+      "LAVA_RIM_INCOMPLETE": 1,
+      "MID_RIVER_CLIFF": 27,
+      "MULTI_ISLAND": 1,
+      "RIVER_CHUNK_GAP": 11,
+      "WATER_ABOVE_LAND": 138,
+      "WATER_CLIFF": 138,
+      "WATER_WATER_CLIFF": 1959
+    },
+    "added_categories": {},
+    "removed_categories": {},
+    "added_examples": [],
+    "banks": {
+      "base": 146,
+      "candidate": 146,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 0,
+      "max_lowering": 0,
+      "old_types": {},
+      "largest": []
+    }
+  },
+  {
+    "seed": 4567,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-4567.json",
+    "candidate": "/tmp/synarchy-2533-final-4567.json",
+    "base_sha256": "9f5e28cdb5ff3a961fcc81880541ee37371e7e9c6e09d2ef5187cb6ea7a62f90",
+    "candidate_sha256": "f1e27f98acce4feef6dd74bd96c41f99f8776e4df4cb222baa61a11ce29af043",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 33,
+      "FLAT_ISOLATED_WATER": 16,
+      "FLOATING_LAKE": 138,
+      "FLOATING_RIVER": 11,
+      "FLOATING_WATER": 196,
+      "ISLAND_1TILE": 6,
+      "ISOLATED_FLUID": 38,
+      "MID_RIVER_CLIFF": 76,
+      "MULTI_ISLAND": 14,
+      "RIVER_CHUNK_GAP": 21,
+      "RIVER_MOUTH_DROP": 8,
+      "WATER_ABOVE_LAND": 323,
+      "WATER_CLIFF": 323,
+      "WATER_WATER_CLIFF": 2825
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 34,
+      "FLAT_ISOLATED_WATER": 16,
+      "FLOATING_LAKE": 138,
+      "FLOATING_RIVER": 11,
+      "FLOATING_WATER": 178,
+      "ISLAND_1TILE": 6,
+      "ISOLATED_FLUID": 38,
+      "MID_RIVER_CLIFF": 69,
+      "MULTI_ISLAND": 14,
+      "RIVER_CHUNK_GAP": 19,
+      "RIVER_MOUTH_DROP": 8,
+      "WATER_ABOVE_LAND": 291,
+      "WATER_CLIFF": 291,
+      "WATER_WATER_CLIFF": 2786
+    },
+    "added_categories": {
+      "DESERT_SOIL_ON_SLOPE": 1,
+      "MID_RIVER_CLIFF": 1
+    },
+    "removed_categories": {
+      "FLOATING_WATER": 18,
+      "MID_RIVER_CLIFF": 7,
+      "RIVER_CHUNK_GAP": 2,
+      "WATER_ABOVE_LAND": 32,
+      "WATER_CLIFF": 32,
+      "WATER_WATER_CLIFF": 23
+    },
+    "added_examples": [
+      {
+        "category": "DESERT_SOIL_ON_SLOPE",
+        "x": 8,
+        "y": -29,
+        "details": "sand maxNbrDelta=3",
+        "neighbour_evidence": [
+          {
+            "x": 8,
+            "y": -29,
+            "base": {
+              "terrainZ": 2,
+              "fluidType": "river",
+              "fluidSurf": 3
+            },
+            "candidate": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 2
+            }
+          },
+          {
+            "x": 7,
+            "y": -29,
+            "base": {
+              "terrainZ": 4,
+              "fluidType": null,
+              "fluidSurf": null
+            },
+            "candidate": {
+              "terrainZ": 4,
+              "fluidType": null,
+              "fluidSurf": null
+            }
+          },
+          {
+            "x": 9,
+            "y": -29,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 2
+            },
+            "candidate": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            }
+          },
+          {
+            "x": 8,
+            "y": -30,
+            "base": {
+              "terrainZ": 1,
+              "fluidType": "river",
+              "fluidSurf": 2
+            },
+            "candidate": {
+              "terrainZ": -1,
+              "fluidType": "ocean",
+              "fluidSurf": 0
+            }
+          },
+          {
+            "x": 8,
+            "y": -28,
+            "base": {
+              "terrainZ": 3,
+              "fluidType": "river",
+              "fluidSurf": 4
+            },
+            "candidate": {
+              "terrainZ": 2,
+              "fluidType": "river",
+              "fluidSurf": 3
+            }
+          }
+        ]
+      },
+      {
+        "category": "MID_RIVER_CLIFF",
+        "x": 1,
+        "y": -2,
+        "details": "river surf=7 (terr=4) -> water nbr surf=5 (terr=4) surf_diff=2 terr_diff=0",
+        "neighbour_evidence": [
+          {
+            "x": 1,
+            "y": -2,
+            "base": {
+              "terrainZ": 4,
+              "fluidType": "river",
+              "fluidSurf": 8
+            },
+            "candidate": {
+              "terrainZ": 4,
+              "fluidType": "river",
+              "fluidSurf": 7
+            }
+          },
+          {
+            "x": 0,
+            "y": -2,
+            "base": {
+              "terrainZ": 5,
+              "fluidType": "river",
+              "fluidSurf": 10
+            },
+            "candidate": {
+              "terrainZ": 5,
+              "fluidType": "river",
+              "fluidSurf": 9
+            }
+          },
+          {
+            "x": 2,
+            "y": -2,
+            "base": {
+              "terrainZ": 5,
+              "fluidType": "river",
+              "fluidSurf": 6
+            },
+            "candidate": {
+              "terrainZ": 4,
+              "fluidType": "river",
+              "fluidSurf": 5
+            }
+          },
+          {
+            "x": 1,
+            "y": -3,
+            "base": {
+              "terrainZ": 7,
+              "fluidType": "river",
+              "fluidSurf": 11
+            },
+            "candidate": {
+              "terrainZ": 7,
+              "fluidType": "river",
+              "fluidSurf": 10
+            }
+          },
+          {
+            "x": 1,
+            "y": -1,
+            "base": {
+              "terrainZ": 6,
+              "fluidType": null,
+              "fluidSurf": null
+            },
+            "candidate": {
+              "terrainZ": 6,
+              "fluidType": null,
+              "fluidSurf": null
+            }
+          }
+        ]
+      }
+    ],
+    "banks": {
+      "base": 340,
+      "candidate": 308,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 983,
+      "max_lowering": 2,
+      "old_types": {
+        "river": 358,
+        "ocean": 625
+      },
+      "largest": [
+        [
+          2,
+          [
+            79,
+            -34
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            75,
+            -36
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            71,
+            -36
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            57,
+            -24
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            14,
+            -16
+          ],
+          "river",
+          "ocean"
+        ]
+      ]
+    }
+  },
+  {
+    "seed": 5050,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-5050.json",
+    "candidate": "/tmp/synarchy-2533-final-5050.json",
+    "base_sha256": "403a721f2b62666a58c27f477869af1c385c496569dcbf23082a60439ee15f7d",
+    "candidate_sha256": "e234c3020bc8410aa10e602b868fb250fb662411087d6a4ef4da4342c6e9a2dd",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 22,
+      "FLAT_ISOLATED_WATER": 42,
+      "FLOATING_LAKE": 337,
+      "FLOATING_WATER": 155,
+      "ISOLATED_FLUID": 30,
+      "LAVA_RIM_INCOMPLETE": 13,
+      "MID_RIVER_CLIFF": 52,
+      "MULTI_ISLAND": 9,
+      "RIVER_CHUNK_GAP": 10,
+      "WATER_ABOVE_LAND": 256,
+      "WATER_CLIFF": 256,
+      "WATER_WATER_CLIFF": 2532
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 22,
+      "FLAT_ISOLATED_WATER": 42,
+      "FLOATING_LAKE": 337,
+      "FLOATING_WATER": 155,
+      "ISOLATED_FLUID": 30,
+      "LAVA_RIM_INCOMPLETE": 13,
+      "MID_RIVER_CLIFF": 52,
+      "MULTI_ISLAND": 9,
+      "RIVER_CHUNK_GAP": 10,
+      "WATER_ABOVE_LAND": 252,
+      "WATER_CLIFF": 252,
+      "WATER_WATER_CLIFF": 2530
+    },
+    "added_categories": {},
+    "removed_categories": {
+      "WATER_ABOVE_LAND": 4,
+      "WATER_CLIFF": 4,
+      "WATER_WATER_CLIFF": 2
+    },
+    "added_examples": [],
+    "banks": {
+      "base": 269,
+      "candidate": 265,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 0,
+      "max_lowering": 0,
+      "old_types": {},
+      "largest": []
+    }
+  },
+  {
+    "seed": 8080,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-8080.json",
+    "candidate": "/tmp/synarchy-2533-final-8080.json",
+    "base_sha256": "5fe86356243cff7bed51d639b7bf80d0136b808a05183046dca52bb9d24d6c58",
+    "candidate_sha256": "700d9dce0bb18cdc32c3a466e7ac190437321b0fc1573c6c594198e24820828b",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 2,
+      "FLAT_ISOLATED_WATER": 19,
+      "FLOATING_LAKE": 2,
+      "FLOATING_WATER": 106,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 28,
+      "MID_RIVER_CLIFF": 43,
+      "MULTI_ISLAND": 10,
+      "RIVER_CHUNK_GAP": 11,
+      "WATER_ABOVE_LAND": 203,
+      "WATER_CLIFF": 203,
+      "WATER_WATER_CLIFF": 1984
+    },
+    "candidate_summary": {
+      "DESERT_SOIL_ON_SLOPE": 2,
+      "FLAT_ISOLATED_WATER": 19,
+      "FLOATING_LAKE": 2,
+      "FLOATING_WATER": 105,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 28,
+      "MID_RIVER_CLIFF": 40,
+      "MULTI_ISLAND": 10,
+      "RIVER_CHUNK_GAP": 11,
+      "WATER_ABOVE_LAND": 193,
+      "WATER_CLIFF": 193,
+      "WATER_WATER_CLIFF": 1975
+    },
+    "added_categories": {},
+    "removed_categories": {
+      "FLOATING_WATER": 1,
+      "MID_RIVER_CLIFF": 3,
+      "WATER_ABOVE_LAND": 10,
+      "WATER_CLIFF": 10,
+      "WATER_WATER_CLIFF": 8
+    },
+    "added_examples": [],
+    "banks": {
+      "base": 206,
+      "candidate": 196,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 309,
+      "max_lowering": 2,
+      "old_types": {
+        "ocean": 156,
+        "river": 153
+      },
+      "largest": [
+        [
+          2,
+          [
+            -1,
+            46
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -2,
+            46
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -3,
+            46
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -4,
+            46
+          ],
+          "river",
+          "ocean"
+        ],
+        [
+          2,
+          [
+            -5,
+            46
+          ],
+          "river",
+          "ocean"
+        ]
+      ]
+    }
+  },
+  {
+    "seed": 13579,
+    "world_size": 32,
+    "plates": 4,
+    "region": [
+      -4,
+      -4,
+      4,
+      4
+    ],
+    "base": "/tmp/synarchy-2533-audit-base-13579.json",
+    "candidate": "/tmp/synarchy-2533-final-13579.json",
+    "base_sha256": "95d184fa84af52c66ea7a0be71116ed3f3d83828f2b886c5a43a5128b48cbda3",
+    "candidate_sha256": "bf5343c96c636f70c1b5cb681f25099191955099866013ba012152f574c9f796",
+    "base_summary": {
+      "DESERT_SOIL_ON_SLOPE": 1,
+      "FLAT_ISOLATED_WATER": 42,
+      "FLOATING_LAKE": 144,
+      "FLOATING_WATER": 117,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 43,
+      "LAVA_RIM_INCOMPLETE": 3,
+      "MID_RIVER_CLIFF": 83,
+      "MULTI_ISLAND": 16,
+      "RIVER_CHUNK_GAP": 11,
+      "WATER_ABOVE_LAND": 203,
+      "WATER_CLIFF": 203,
+      "WATER_WATER_CLIFF": 2154
+    },
+    "candidate_summary": {
+      "FLAT_ISOLATED_WATER": 42,
+      "FLOATING_LAKE": 144,
+      "FLOATING_WATER": 115,
+      "ISLAND_1TILE": 1,
+      "ISOLATED_FLUID": 43,
+      "LAVA_RIM_INCOMPLETE": 3,
+      "MID_RIVER_CLIFF": 83,
+      "MULTI_ISLAND": 16,
+      "RIVER_CHUNK_GAP": 11,
+      "WATER_ABOVE_LAND": 201,
+      "WATER_CLIFF": 201,
+      "WATER_WATER_CLIFF": 2152
+    },
+    "added_categories": {},
+    "removed_categories": {
+      "DESERT_SOIL_ON_SLOPE": 1,
+      "FLOATING_WATER": 2,
+      "WATER_ABOVE_LAND": 2,
+      "WATER_CLIFF": 2
+    },
+    "added_examples": [],
+    "banks": {
+      "base": 212,
+      "candidate": 210,
+      "new": 0,
+      "worsened": 0
+    },
+    "terrain": {
+      "changed": 105,
+      "max_lowering": 1,
+      "old_types": {
+        "ocean": 30,
+        "river": 75
+      },
+      "largest": [
+        [
+          1,
+          [
+            33,
+            48
+          ],
+          "ocean",
+          "ocean"
+        ],
+        [
+          1,
+          [
+            33,
+            47
+          ],
+          "ocean",
+          "ocean"
+        ],
+        [
+          1,
+          [
+            33,
+            46
+          ],
+          "ocean",
+          "ocean"
+        ],
+        [
+          1,
+          [
+            33,
+            45
+          ],
+          "ocean",
+          "ocean"
+        ],
+        [
+          1,
+          [
+            33,
+            44
+          ],
+          "ocean",
+          "ocean"
+        ]
+      ]
+    }
+  }
+]

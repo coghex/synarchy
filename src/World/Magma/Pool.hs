@@ -139,7 +139,7 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
         in tz ≡ minBound
            ∨ tz ≤ seaLevel
            ∨ lakeAt gx gy tz
-           ∨ riverAt gx gy tz
+           ∨ riverAt gx gy
 
     -- RAW chunk coords (no u-wrap) — the lake/river/carve tables and
     -- composeFluidMap's per-chunk lookups all key by the chunk's raw
@@ -157,10 +157,14 @@ identifyLavaPools worldSize poolDepth poolRadius ctx lakes rivers terrain
                                     V.! lceLakeId lce) ≥ tz)
                  (lakesInChunk lakes cc)
 
-    riverAt gx gy tz =
+    -- Every selected river tile gets a bed below its exact surface, even
+    -- where the PRE-CARVE terrain supplied here is higher. Comparing that
+    -- raw terrain with the water plane would admit a lava pool into a river
+    -- and its containment rim would undo the positive-depth repair.
+    riverAt gx gy =
         let (cc, i) = chunkOf gx gy
         in V.any (\rce → rceBitmask rce VU.! i
-                       ∧ rcePerTileSurfZ rce VU.! i ≥ tz)
+                       ∧ rcePerTileSurfZ rce VU.! i ≢ minBound)
                  (riversInChunk rivers cc)
 
     -- All pools spawned by one source: breach scan over its bbox,

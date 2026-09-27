@@ -38,6 +38,7 @@ import qualified World.Fluid.Lake.Types as WL
 import World.Fluid.River.Types
     ( WorldRivers(..), RiverChunkEntry(..), riversInChunk )
 import World.Fluid.OceanMask (oceanBitInChunk)
+import World.Fluid.Exact (exactSurfaceOfZ, exactSurfaceCeilZ)
 
 -- * The per-tile fluid-surface fold
 --
@@ -61,9 +62,9 @@ import World.Fluid.OceanMask (oceanBitInChunk)
 -- Two shapes exist because the two tables carry their surfaces
 -- differently: a lake-keyed entry has ONE surface for the whole body
 -- ('WL.lkSurface'), a river-keyed entry a per-tile surface vector
--- ('rcePerTileSurfZ'). Both fold into the same accumulator, which is
--- what lets 'chunkWaterSurfMap' merge lakes and rivers without a
--- second copy of the rule.
+-- ('rcePerTileSurfZ'). Lakes use whole z and rivers exact eighths.
+-- 'chunkWaterSurfMap' scales the lake accumulator before folding rivers,
+-- then exposes the ceiling view, sharing the same lowest-wins rule.
 
 -- | Tiles in one chunk — the length of every surface map here.
 chunkArea ∷ Int
@@ -109,7 +110,7 @@ lakeSurfaceMap table coord = VU.create $ do
     foldLakeSurfaces table coord v
     pure v
 
--- | The river-keyed fold on its own.
+-- | The river-keyed fold on its own, in exact eighth-z units.
 riverSurfaceMap ∷ WorldRivers → ChunkCoord → VU.Vector Int
 riverSurfaceMap table coord = VU.create $ do
     v ← newSurfaceAccum
@@ -129,7 +130,7 @@ riverSurfaceMap table coord = VU.create $ do
 --              flags the tile; surface = seaLevel.
 --   * River  — tile flagged by a 'RiverChunkEntry' bitmask in the
 --              global 'WorldRivers' table; surface = the entry's
---              per-tile quantised surface z.
+--              per-tile exact surface in eighth-z units.
 --   * Lake   — any lake's per-chunk bitmask flags this tile AND the
 --              chunk's real terrain is at or below the lake's
 --              uniform 'lkSurface'. Surface = lake's spillway.
@@ -165,7 +166,7 @@ composeFluidMap params coord terrainMap =
         lakeSurfMap = lakeSurfaceMap worldLakes coord
 
         -- Per-tile river surface lookup: the same fold over the river
-        -- table, which carries a per-tile quantised surface z instead
+        -- table, which carries a per-tile exact surface in eighth-z units instead
         -- of one lake-wide value.
         riverSurfMap ∷ VU.Vector Int
         riverSurfMap = riverSurfaceMap worldRivers coord
@@ -211,8 +212,8 @@ composeFluidMap params coord terrainMap =
                       -- River > Lake. By construction river tiles
                       -- aren't inside any lake, but defensive priority
                       -- keeps the picture consistent at edges.
-                      if rvSurf ≢ minBound ∧ rvSurf ≥ terrZ
-                      then Just (fluidCellAtZ River rvSurf)
+                      if rvSurf ≢ minBound ∧ rvSurf ≥ exactSurfaceOfZ terrZ
+                      then Just (FluidCell River rvSurf)
                       else if lkSurf ≢ minBound ∧ lkSurf ≥ terrZ
                            then Just (fluidCellAtZ Lake lkSurf)
                            else Nothing
@@ -240,7 +241,16 @@ chunkWaterSurfMap params coord = VU.create $ do
     let timeline = wgpGeoTimeline params
     v ← newSurfaceAccum
     foldLakeSurfaces (gtWorldLakes timeline) coord v
+    -- Lake and magma callers keep their whole-z compatibility view.
+    -- Merge in exact units first; ceiling before merging would lose the
+    -- ordering of a fractional river against a whole-z lake.
+    forM_ [0 .. chunkArea - 1] $ \i → do
+        s ← VUM.read v i
+        when (s ≢ minBound) $ VUM.write v i (exactSurfaceOfZ s)
     foldRiverSurfaces (gtWorldRivers timeline) coord v
+    forM_ [0 .. chunkArea - 1] $ \i → do
+        s ← VUM.read v i
+        when (s ≢ minBound) $ VUM.write v i (exactSurfaceCeilZ s)
     pure v
 
 -- | Raise the per-tile terrain surface where 'discoverChunkLava'
@@ -409,16 +419,7 @@ poolRimCaps params coord terrAt = HM.fromList
 --   relaxing the chunk-level test never adds ocean above sea level.
 chunkOrNeighborOceanic ∷ WorldGenParams → ChunkCoord → Bool
 chunkOrNeighborOceanic params coord =
-    let worldSize = wgpWorldSize params
-        oceanDist = wgpOceanDist params
-        check cc =
-            oceanDistAt oceanDist (wrapChunkCoordU worldSize cc) ≡ 0
-        ChunkCoord cx cy = coord
-    in check coord
-       ∨ check (ChunkCoord (cx + 1) cy)
-       ∨ check (ChunkCoord (cx - 1) cy)
-       ∨ check (ChunkCoord cx (cy + 1))
-       ∨ check (ChunkCoord cx (cy - 1))
+    chunkOrNeighborOceanicAt (wgpWorldSize params) (wgpOceanDist params) coord
 
 -- | Apply the shell mask: drop the lava cell at every shell tile so
 --   the renderer paints bare basalt terrain there. Interior lava
@@ -461,7 +462,7 @@ maxColumnPeek = 5
 --     * It currently renders dry ('fluidMap[idx] = Nothing'), and
 --     * Three or four of its cardinal in-chunk neighbors render as
 --       Lake at the same whole-z surface ('fluidSurfaceCeilZ' — every
---       generated plane is a whole z, stored as @z * 8@ on the exact
+--       generated LAKE plane is a whole z, stored as @z * 8@ on the exact
 --       plane since #2520), and
 --     * The tile's terrain is between @surface + 1@ and @surface +
 --       maxColumnPeek@ inclusive.
