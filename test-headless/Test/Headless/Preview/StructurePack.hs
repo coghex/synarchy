@@ -23,6 +23,7 @@ import System.Directory (createDirectoryIfMissing, createDirectoryLink
                         , createFileLink)
 import System.FilePath ((</>))
 import System.Posix.Files (setFileMode, nullFileMode, ownerModes)
+import System.Posix.User (getEffectiveUserID)
 import Control.Exception (finally)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Types
@@ -433,17 +434,28 @@ spec = do
             load fx "dir" ⌦ (`shouldBe` Left (PackManifestNotAFile (fxPacks fx </> "dir.yaml")))
 
         it "a manifest that cannot be inspected is a diagnostic, not a fallback" $ withFixture $ \fx → do
-            writePack fx "locked" "name: locked"
-            let restore = setFileMode (fxPacks fx) ownerModes
-            -- No permission to search the pack directory: lstat of the
-            -- manifest fails with EACCES, which is NOT absence.
-            (setFileMode (fxPacks fx) nullFileMode >> load fx "locked")
-                `finally` restore ⌦ \case
-                Left (PackManifestUnreadable path why) → do
-                    path `shouldBe` (fxPacks fx </> "locked.yaml")
-                    T.null why `shouldBe` False
-                other → expectationFailure ("expected an unreadable-manifest \
-                                            \refusal, got " ⧺ show other)
+            let unreadable name r = case r of
+                    Left (PackManifestUnreadable path why) → do
+                        path `shouldBe` (fxPacks fx </> (name ⧺ ".yaml"))
+                        T.null why `shouldBe` False
+                    other → expectationFailure ("expected an unreadable-manifest \
+                                                \refusal for " ⧺ name ⧺ ", got "
+                                                ⧺ show other)
+            -- A name the filesystem cannot even look up (ENAMETOOLONG) is
+            -- not known to be ABSENT. Independent of the user the suite
+            -- runs as, unlike the permission case below.
+            let longName = replicate 300 'x'
+            load fx longName ⌦ unreadable longName
+            -- No permission to search the pack directory (EACCES). Root
+            -- bypasses the mode bits -- CI's container runs as root -- so
+            -- the case is only meaningful, and only asserted, as another
+            -- user.
+            uid ← getEffectiveUserID
+            when (uid ≢ 0) $ do
+                writePack fx "locked" "name: locked"
+                r ← (setFileMode (fxPacks fx) nullFileMode >> load fx "locked")
+                        `finally` setFileMode (fxPacks fx) ownerModes
+                unreadable "locked" r
 
         it "a destruction fps that overflows the playback rate is refused pre-boot" $ do
             rejects "pieces: { floor: { texture: T/a.png, facemap: T/f.png, destruction: { fps: 1.0e100, frames: [T/a.png] } } }\n"
