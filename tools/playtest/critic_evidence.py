@@ -22,7 +22,8 @@ in agreement:
   * `assign_ids` — stable finding ids by verdict, severity, first turn;
   * `screenshot_target` — one trace-relative screenshot reference,
     spelled so it resolves from the directory the report is written
-    into (#2220);
+    into (#2220) and percent-encoded into a valid Markdown image
+    destination whatever that path contains (#2690);
   * `render_report` — the Markdown report with its defect and intended
     sections, screenshot references and critic warnings.
 
@@ -34,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.parse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -360,12 +362,29 @@ def screenshot_target(ref: str, trace_dir: str | None,
     the sole owner of its frames — nothing is copied out. When the
     report lands in the trace root itself (the default) the reference
     is emitted verbatim, byte-for-byte as before.
+
+    A rebased path carries the trace's and the report's directory
+    names, which can hold anything, so it is emitted as a URI path
+    reference (#2690): every byte outside `_DEST_SAFE` is
+    percent-encoded. That keeps the bare destination valid CommonMark
+    (no spaces, controls, parentheses, `<`/`>`, backslash escapes or
+    `&` entity references) and keeps its URI meaning literal (no `#`
+    fragment, `?` query, stray `%` escape, or `:` read as a scheme), so
+    percent-decoding the destination gives back the relative filesystem
+    path. A path made only of safe characters keeps its plain spelling.
     """
     if not trace_dir or not report_dir:
         return ref
     if os.path.abspath(trace_dir) == os.path.abspath(report_dir):
         return ref
-    return os.path.relpath(os.path.join(trace_dir, ref), report_dir)
+    rel = os.path.relpath(os.path.join(trace_dir, ref), report_dir)
+    return urllib.parse.quote(rel.replace(os.sep, "/"), safe=_DEST_SAFE)
+
+
+# Beyond the always-safe unreserved set (letters, digits, `-._~`): the
+# path separator and the sub-delimiters that mean nothing special in
+# either a CommonMark link destination or a URI path segment.
+_DEST_SAFE = "/!$'*+,;=@"
 
 
 def render_report(meta: dict, data: dict, warnings: list[str],

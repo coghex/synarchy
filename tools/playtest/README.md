@@ -517,6 +517,12 @@ own directory (#2220): a report beside the trace links
 and the default in-trace report keeps the plain `frames/...` spelling
 byte-for-byte. Every rebase is relative, so the report directory can be
 moved or shared as long as it keeps its position relative to the trace.
+A rebased link is also percent-encoded into a valid Markdown image
+destination (#2690): a trace named `trace with spaces` is linked as
+`../trace%20with%20spaces/frames/...`, and parentheses, `<`/`>`, `#`,
+`%`, `\`, `&` and `:` are encoded the same way, so percent-decoding the
+destination gives back the real path. A rebased path made only of
+letters, digits and `-._~/!$'*+,;=@` keeps its plain spelling.
 
 Mechanism: a deterministic pre-analysis derives per-turn signals and
 the canonical cross-source joins (action-outcome `rejected`/`noop`/
