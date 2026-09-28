@@ -3,7 +3,8 @@
 Design state: `ready for issue processing`
 
 Owner approved the 29-slice plan and internal-test-backend-first rollout on
-2026-09-24. Readiness retains each slice's explicit parameter, art, numerical,
+2026-09-24. On 2026-09-28 the owner moved player-orderable dams out of this arc
+(D-29 revised): RVR-19 and RVR-20 leave the plan, leaving 27 active slices. Readiness retains each slice's explicit parameter, art, numerical,
 migration and external-integration gates; it does not approve implementation
 or create tracker artifacts.
 
@@ -17,26 +18,26 @@ not tracked separately · `[deferred]` blocked on a concrete precondition.
 
 ## Processing status
 
-- [ ] EPIC. Make river behavior independent of detailed chunk residency
-- [ ] RVR-01. Build the controlled hydraulic experiment harness
-- [ ] RVR-02. Select and verify the detailed flow law
-- [ ] RVR-03. Define the durable hydraulic component and transaction model
-- [ ] RVR-04. Implement and measure eager legacy fluid import
-- [ ] RVR-05. Implement finite aquifer accounting and excavation transfers
-- [ ] RVR-06. Make wet terrain edits conservative and acknowledged
-- [ ] RVR-07. Implement the selected all-fluid kernel
-- [ ] RVR-08. Add the accounted fixed-sea-level boundary
-- [ ] RVR-09. Wire coherent hydraulic checkpoints into save and reconstruction
-- [ ] RVR-10. Integrate hydraulic advancement with GT grants
-- [ ] RVR-11. Implement compact finite storage and routed flow
-- [ ] RVR-12. Implement basin merge trees and additive storage curves
-- [ ] RVR-13. Apply terrain changes to compact topology
-- [ ] RVR-14. Implement shared compact/detail interfaces
-- [ ] RVR-15. Reconstruct and promote current compact water
-- [ ] RVR-16. Demote steady and moving water safely
-- [ ] RVR-17. Publish compact surfaces and promote affected edits
-- [ ] RVR-18. Prove the end-to-end arena river milestone
-- [ ] RVR-19. Implement the solid-fill job and material transaction
+- [x] EPIC. Make river behavior independent of detailed chunk residency — [#2718]
+- [x] RVR-01. Build the controlled hydraulic experiment harness — [#2719]
+- [x] RVR-02. Select and verify the detailed flow law — [#2720]
+- [x] RVR-03. Define the durable hydraulic component and transaction model — [#2721]
+- [x] RVR-04. Implement and measure eager legacy fluid import — [#2722]
+- [x] RVR-05. Implement finite aquifer accounting and excavation transfers — [#2723]
+- [x] RVR-06. Make wet terrain edits conservative and acknowledged — [#2724]
+- [x] RVR-07. Implement the selected all-fluid kernel — [#2725]
+- [x] RVR-08. Add the accounted fixed-sea-level boundary — [#2726]
+- [x] RVR-09. Wire coherent hydraulic checkpoints into save and reconstruction — [#2727]
+- [ ] RVR-10. Integrate hydraulic advancement with GT grants — [deferred]: GT-13 and GT-14 must be filed under #2478 with their fluid-cadence and clock-persistence interfaces specified
+- [x] RVR-11. Implement compact finite storage and routed flow — [#2728]
+- [x] RVR-12. Implement basin merge trees and additive storage curves — [#2729]
+- [x] RVR-13. Apply terrain changes to compact topology — [#2730]
+- [x] RVR-14. Implement shared compact/detail interfaces — [#2731]
+- [x] RVR-15. Reconstruct and promote current compact water — [#2732]
+- [x] RVR-16. Demote steady and moving water safely — [#2733]
+- [x] RVR-17. Publish compact surfaces and promote affected edits — [#2734]
+- [x] RVR-18. Prove the end-to-end arena river milestone — [#2735]
+- [x] RVR-19. Implement the solid-fill job and material transaction — [no-issue]: moved out of this arc (D-29 revised 2026-09-28); player-orderable dams are a separate future feature
 - [ ] RVR-20. Expose and visually validate the fill build order
 - [ ] RVR-21. Define climate units and persist contributing-area summaries
 - [ ] RVR-22. Apply climate budgets to the current water owner
@@ -245,11 +246,11 @@ once within this arc. CRS-5/CRS-12 must reuse that authority and migration;
 their bundle work remains deferred. Align the streaming design before delivery,
 without creating a second fluid balance or waiting for the Arc B bundle gate.
 
-### D-26. Build initial playable dams with ordinary solid fill
+### D-26. Build dams with ordinary solid fill
 
 Allow ordinary fill in water, preserving its quantity, raising the local surface
-as the bed rises, and letting the solver redistribute it outward. Supply a
-gameplay placement path; debug terrain commands alone do not fulfill this.
+as the bed rises, and letting the solver redistribute it outward. In this arc the
+placement path is the existing debug terrain tool (D-29, revised 2026-09-28).
 This approves the displacement behavior, not a dedicated floodgate feature or
 the still-proposed wet-edit job acknowledgment protocol.
 
@@ -271,12 +272,18 @@ preserve remaining storage. D-23's climate-derived water table still supplies
 the eligibility reference; this adds finite accounting, not groundwater flow
 or dynamic seepage. Initial budgets and legacy initialization remain design gates.
 
-### D-29. Provide a dedicated solid-fill build order
+### D-29. Use the existing debug terrain tool for dams; player dams are separate
 
-The owner selected a dedicated player build order with material costs and
-wet-tile support for D-26's solid-fill dams. Keep existing spoil-disposal rules.
-The feature must integrate placement legality, jobs, material accounting, and
-the hydraulic commit protocol; debug fill does not satisfy this decision.
+Revised by the owner on 2026-09-28, superseding the earlier choice of a dedicated
+player build order. This arc is about fluids. Dams, diversions, and other
+experimental fill use the terrain placement the game already has: the debug
+overlay's armed-terrain click and `world.addTile`, which emit `WeAddTile`, plus
+`world.deleteTile` for removal. Under the river backend these edits go through
+the conservative edit protocol (#2724), so their displacement is exact.
+
+Player-orderable dams (a build order with materials, workers, and UI) are a
+separate future feature with its own design and issues, not part of this arc.
+Existing spoil-disposal rules are unchanged.
 
 ### D-30. Digging wet or dry columns can draw finite groundwater
 
@@ -290,7 +297,10 @@ river. No continuous top-up or recharge follows between dig commits. In exact
 volume units, requested top-up is `max(0, volumeToWaterTable(newBed) - existingV)`;
 the committed amount is limited by the remaining budget and admitted capacity.
 
-### D-31. Initial fill recipe and height rules
+### D-31. Initial fill recipe and height rules (moved out of this arc)
+
+Retained for the future player-dam feature (D-29, revised 2026-09-28); this arc
+does not implement it.
 
 Each added tile-column z-level costs four `granite_chunk` items and becomes
 granite terrain. Support wet and dry ground, one committed layer at a time,
@@ -477,7 +487,8 @@ enter the affected occupancy footprint across commit without revalidation.
 Keep unrelated movement and jobs running. Cancellation releases reservations
 only after the transaction is definitively canceled or acknowledged committed.
 CRS-6 specifies related work but is not implemented; reuse one reservation and
-acknowledgment contract, supplying the needed subset before playable wet fill.
+acknowledgment contract. The real CRS-6 subset is required before RVR-29
+activation, and before any future player-orderable wet edit.
 
 Ordinary compact evolution must also emit surface updates for loaded terrain.
 The world thread applies revisioned publications to `wsTilesRef` and invalidates
@@ -862,7 +873,10 @@ approved as an approximation. Do not double-credit snow as rainfall and melt.
 Investigate existing glacier geometry/temperature before enlarging the first
 slice into a glacier simulation.
 
-### P-9. Dedicated solid-fill build order
+### P-9. Dedicated solid-fill build order (moved out of this arc)
+
+Retained as input for the future player-dam feature; D-29 (revised 2026-09-28)
+removes it from this arc. Nothing below is scheduled here.
 
 D-29/D-31 define a four-`granite_chunk` recipe per tile-column z-level on wet
 or dry ground. Build contiguous layers upward from solid terrain toward a fixed
@@ -1173,11 +1187,10 @@ production persistence/kernel delivery, not pure probes.
 
 ### Q-20. How are dams built and wet terrain edits committed?
 
-Dam mechanic resolved by D-26: ordinary fill with conserved displacement. The
-spoil wet-tile restriction is not a universal construction prohibition, and
-debug fill is not a playable dam mechanic.
-The player action is resolved by D-29: a dedicated solid-fill build order with
-material costs and wet-tile support. Existing spoil-disposal rules stay unchanged.
+Dam mechanic resolved by D-26: ordinary fill with conserved displacement.
+The placement path is resolved by D-29 (revised 2026-09-28): this arc uses the
+existing debug terrain tool. Player-orderable dams are a separate future feature.
+Existing spoil-disposal rules stay unchanged.
 
 Ordinary fill preserves the latest water quantity, initially raising its surface
 with the bed, then redistributing via the solver. No implicit deletion at
@@ -1186,8 +1199,8 @@ accounted projection/admission handling, not clipping. D-30 resolves excavation:
 preserve existing quantity, then account any finite aquifer top-up toward the
 water table, including wet beds. Dedicated controllable barriers
 remain later work with height/overtopping/open-state semantics to define.
-Specify the chosen gameplay path and the narrowly scoped job acknowledgment
-protocol in P-2 before rollout. Groundwater supply is finite under D-28/Q-22;
+The narrowly scoped job acknowledgment protocol in P-2 applies to the unit jobs
+that already edit wet terrain (digging). Groundwater supply is finite under D-28/Q-22;
 a source named once per dig is not an acceptable substitute.
 Future fluid-placement amount/replacement behavior also needs approval; D-23
 does not by itself settle it.
@@ -1239,7 +1252,9 @@ migrations. The earlier river-owned clock proposal is superseded.
 
 ## Delivery plan
 
-The approved plan contains **29 delivery slices**, grouped into five milestones.
+The approved plan contains **27 active delivery slices** in four active
+milestones. Milestone C (RVR-19, RVR-20) moved out of this arc under D-29
+(revised 2026-09-28); their IDs stay reserved and are dispositioned in the ledger.
 The detailed scopes, dependencies, acceptance signals and stop/ask gates are in
 [Appendix C](#appendix-c-delivery-slices).
 
@@ -1247,7 +1262,7 @@ The detailed scopes, dependencies, acceptance signals and stop/ask gates are in
 |---|---|---|
 | A. Trustworthy local water | RVR-01–RVR-10 | Measured solver, durable state/import, conservative edits, and a GT integration adapter. |
 | B. First complete river experiment | RVR-11–RVR-18 | Close/divert/reopen an authored river, unload/reload mid-drain, and save/restart without creating or deleting water. |
-| C. Player-built dams | RVR-19–RVR-20 | Build wet/dry solid fill with paid materials and reviewed visuals. |
+| C. ~~Player-built dams~~ | RVR-19–RVR-20 | Moved out of this arc (D-29 revised). Dams use the existing debug terrain tool. |
 | D. Generated-world hydrology | RVR-21–RVR-26 | Catchments, finite climate budgets, basin routing, lava admission, and coherent generated/legacy initialization. |
 | E. Integrated production | RVR-27–RVR-29 | Measured workload/error envelope, coherent all-page progression, and one activated backend. |
 
@@ -1319,7 +1334,7 @@ The third-review save/edit/construction and CRS audit also checked local
 | Persistence/residency | `docs/chunk_residency_streaming_design.md` specifies future work: CRS-5 is unprocessed; CRS-12 is deferred behind Arc B's memory gate and depends on CRS-5/CRS-11. Neither is an implemented checkpoint service. Migration ownership/sequencing is Q-19. |
 | Fluid durability today | `World.Thread.Command.Save.WriteWorld.appendFluidSnapshot` replaces resident chunks' prior snapshots with exact set/clear entries, retaining absent chunks' snapshots. `World.Edit.Apply` replays these and `WeSetFluidTile` with terrain edits. They must seed migration once, never override subsequent hydraulic state. |
 | Live edit accounting | `WeAddTile` retains a surviving surface or deletes its fluid; either can lose quantity. `WeDeleteTile` retains an existing surface as the bed falls (adding volume) or reveals climate-derived groundwater. `Edit.Sync.syncEditToSim`/`Sim.Chunk.applyChunkEdit` reseed from published tiles, potentially discarding newer sim transfers. Fences prevent stale writes, not that rollback. |
-| Dam construction | `World.Spoil.Logic.spoilTileOk` forbids wet spoil destinations. Debug `handleWorldAddTileCommand` has no wet-column prohibition. Ordinary `World.Construct.Plan` places structure overlays using the rendered surface; this does not establish solid fill or hydraulic barriers. Playable dams need the explicit mechanic in Q-20. |
+| Dam construction | `World.Spoil.Logic.spoilTileOk` forbids wet spoil destinations. Debug `handleWorldAddTileCommand` has no wet-column prohibition, so the existing debug terrain tool can fill water; this arc uses it for dams (D-29, revised). Ordinary `World.Construct.Plan` places structure overlays, not solid fill; player dams are a separate future feature. |
 
 Completed experiments remain under `docs/evidence/river-runtime/`. The real-library
 harness `tools/river_runtime/Characterize.hs` used ten fixed ticks; every observed
@@ -1463,6 +1478,12 @@ invariants apply throughout; unresolved limits remain explicit stop gates.
 
 ### RVR-10. Integrate hydraulic advancement with GT grants
 
+> **Deferred (2026-09-24):** GT-13 in #2478 schedules the legacy solver only, so it is not
+> this adapter. This slice is filed once GT-13 and GT-14 exist as issues with specified
+> fluid-cadence and clock-persistence interfaces. It can then say "blocked by" them (plus
+> GT-4, GT-6, and GT-12). RVR-11 to RVR-18 proceed without it, using #2727's explicit
+> stepping.
+
 - **Outcome and scope:** Connect the river backend to GT's existing grant, page-time conversion, fluid completion and persistent cadence interfaces. Implement only river-specific adaptation; reconcile the P-2 edit commit with GT's forward phase ordering.
 - **Phase / ordering:** A; parallel integration branch; not a prerequisite for isolated RVR-18 experiments.
 - **Depends on:** RVR-09. External capability gates are stated below; they mean landed behavior, not tracker status.
@@ -1518,7 +1539,7 @@ invariants apply throughout; unresolved limits remain explicit stop gates.
 - **Depends on:** RVR-14. External capability gates are stated below; they mean landed behavior, not tracker status.
 - **Relevant decisions:** D-9, D-10, D-11, D-32.
 - **Acceptance signals:** Loading during drainage shows current partial water; steady loads meet the accepted pulse/profile gates; edits during preparation cannot resurrect old water.
-- **Out of scope:** Forced demotion and player build orders.
+- **Out of scope:** Forced demotion and player-orderable dams.
 - **Open questions / stop gate:** Q-8: retain/refine insufficient profiles; do not force equilibrium to pass a load test.
 
 ### RVR-16. Demote steady and moving water safely
@@ -1553,6 +1574,10 @@ invariants apply throughout; unresolved limits remain explicit stop gates.
 
 ### RVR-19. Implement the solid-fill job and material transaction
 
+> **Moved out of this arc (2026-09-28):** D-29 (revised) uses the existing debug
+> terrain tool for dams. This slice belongs to the future player-dam feature;
+> its text is kept as input for that design.
+
 - **Outcome and scope:** Add the durable fixed-height order, granite recipe, per-layer work/commit, stance/access validation, payment reservation, cancellation/refund and acknowledgment. Expose initially through test APIs.
 - **Phase / ordering:** C; dependency-driven within milestone C.
 - **Depends on:** RVR-06, RVR-17, RVR-18. External capability gates are stated below; they mean landed behavior, not tracker status.
@@ -1562,6 +1587,9 @@ invariants apply throughout; unresolved limits remain explicit stop gates.
 - **Open questions / stop gate:** Q-20/P-9: work cost, stance/reach, interrupted-job semantics and existing construction interfaces must be specified before issue approval; reuse GT work-credit contracts.
 
 ### RVR-20. Expose and visually validate the fill build order
+
+> **Moved out of this arc (2026-09-28):** see RVR-19. Kept as input for the
+> future player-dam feature.
 
 - **Outcome and scope:** Integrate picker, fixed-height selection, cost/validity feedback, target preview and paid-work presentation using P-9's approved art inventory. Include existing cancellation/order UI behavior.
 - **Phase / ordering:** C; dependency-driven within milestone C.
@@ -1635,7 +1663,7 @@ invariants apply throughout; unresolved limits remain explicit stop gates.
 
 - **Outcome and scope:** Run rated generated-flow, camera/edit/save and 1/4/16-page benchmark matrices; include allocation, residual growth, publication and ledger costs. Compare single-rate and proposed multirate only as evidence demands.
 - **Phase / ordering:** E; dependency-driven within milestone E.
-- **Depends on:** RVR-18, RVR-20, RVR-26. External capability gates are stated below; they mean landed behavior, not tracker status.
+- **Depends on:** RVR-18, RVR-26. External capability gates are stated below; they mean landed behavior, not tracker status.
 - **Relevant decisions:** D-15, D-22, D-32.
 - **Acceptance signals:** Accepted steady/timing/budget gates pass at speed 1.0 on the M3 Max; report stress limits, transient evidence and whole-session memory. Owner accepts final transient limits and supported workload.
 - **Out of scope:** Quietly loosening gates, guaranteeing 1.6M links, or claiming the repository minimum machine from M3 measurements.
@@ -1655,8 +1683,8 @@ invariants apply throughout; unresolved limits remain explicit stop gates.
 
 - **Outcome and scope:** Enable the approved backend in ordinary sessions, select the durable migration path, and remove conflicting legacy reseeding/snapshot/stepping paths. Refresh engine/persistence/hydrology contracts and rollout evidence together.
 - **Phase / ordering:** E; dependency-driven within milestone E.
-- **Depends on:** RVR-09, RVR-10, RVR-20, RVR-26, RVR-27, RVR-28. External capability gates are stated below; they mean landed behavior, not tracker status.
+- **Depends on:** RVR-09, RVR-10, RVR-26, RVR-27, RVR-28. External capability gates are stated below; they mean landed behavior, not tracker status.
 - **Relevant decisions:** D-2, D-5, D-25, D-33.
 - **Acceptance signals:** Normal boot, edit, fluid reactions, save/restart, generated worlds and all-page gates use one owner/clock. Targeted production-path checks and owner evidence pass before review.
 - **Out of scope:** New algorithm development, unresolved assets or leaving required rollout docs for later publication.
-- **Open questions / stop gate:** External GT-16 and real CRS reservation/retirement capabilities must be active. Every relevant open gate above must be closed or explicitly scoped to a separately approved future feature.
+- **Open questions / stop gate:** External GT-16 and real CRS reservation/retirement capabilities (CRS-3, CRS-5, CRS-6) must be active. Every relevant open gate above must be closed or explicitly scoped to a separately approved future feature.

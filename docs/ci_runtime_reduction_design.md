@@ -1,13 +1,23 @@
 # CI runtime reduction design
 
 This design reduces pull-request feedback time without quietly dropping
-regression coverage. It is motivated by the 2026-08-15 run for PR #1328, whose
-headless Hspec step remained active for more than an hour even though recent
-successful runs normally completed the same step in about four minutes. A hang
-is something to restart, reproduce, and measure—not justification for adding a
-timer to the test suite.
+regression coverage. It was first motivated by the 2026-08-15 run for PR #1328,
+whose headless Hspec step remained active for more than an hour even though
+recent successful runs normally completed the same step in about four minutes.
+A hang is something to restart, reproduce, and measure—not justification for
+adding a timer to the test suite.
 
-Design state: `exploring`
+The problem has since changed shape. By 2026-09-28 the save-compat REPL, the
+engine-free audits, the probe build race and cache staleness had all been
+addressed (CIR-1, CIR-2, CIR-4, CIR-7), yet a successful pull-request run
+takes a median of 31 minutes. The headless Hspec run alone is a median of 17
+minutes, strictly sequential, and grows with the suite (about 5,000 examples on
+2026-09-05, 10,500 on 2026-09-28). The Haskell build in front of it is a median
+of 10 minutes. The maintainer's stated goal is pull-request CI under twenty
+minutes without losing significant coverage. The remaining slices are
+re-planned around those two costs.
+
+Design state: `ready for issue processing`
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -15,15 +25,20 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Restore fast, bounded CI feedback without weakening regression coverage
-- [ ] CIR-1. Publish durable CI timing and selection diagnostics
-- [ ] CIR-2. Decode save-compat fixture descriptors once per self-test run
-- [ ] CIR-3. Reproduce and localize headless-suite hangs without timers
-- [ ] CIR-7. Isolate parallel probes behind one prebuilt executable
-- [ ] CIR-4. Rotate the project cache every eight build-relevant master changes
-- [ ] CIR-8. Prove and adopt only safe Hspec parallel regions
-- [ ] CIR-5. Run post-build gate families on independent critical paths
-- [ ] CIR-6. Reassess full-suite and behavior-probe selection from measured coverage
+- [x] EPIC. Bring pull-request CI under twenty minutes without weakening regression coverage — [#2742]
+- [x] CIR-1. Publish durable CI timing and selection diagnostics — [#2277]
+- [x] CIR-2. Decode save-compat fixture descriptors once per self-test run — [#2273]
+- [x] CIR-7. Isolate parallel probes behind one prebuilt executable — [#1570]
+- [x] CIR-4. Rotate the project cache every eight build-relevant master changes — [no-issue]: delivered directly as 7b3757ded without a tracker issue
+- [x] CIR-14. Measure headless Hspec time per top-level group on CI — [#2743]
+- [x] CIR-15. Partition the headless suite into lanes that run every example exactly once — [#2744]
+- [x] CIR-16. Run the headless lanes as parallel CI jobs — [#2745]
+- [x] CIR-17. Attribute pull-request build time to epoch drift versus the change under test — [#2746]
+- [x] CIR-3. Reproduce and localize headless-suite hangs without timers — [#2747]
+- [x] CIR-18. Report headless lane durations against an advisory budget — [#2748]
+- [ ] CIR-8. Prove and adopt only safe in-process Hspec parallel regions — [deferred]: until #2745 has merged and, over at least five master runs, tools/ci_timing_report.py shows the longest lane's median is a lane that does not hold the shared-world block
+- [ ] CIR-5. Hand prebuilt executables to the remaining post-build gates — [deferred]: until #2745 has merged; then check whether save compatibility or world_check still runs after a headless lane in the same job
+- [ ] CIR-6. Reassess full-suite and behavior-probe selection from measured coverage — [deferred]: until #2745 has merged and #2746's build-side recommendation has been landed or declined; then measure the median successful PR run over at least ten runs with tools/ci_timing_report.py
 - [ ] CIR-9. Make required CI checks merge-group aware
 - [ ] CIR-10. Make repository identity transfer-ready
 - [ ] CIR-11. Transfer the repository and rebind existing automation
@@ -32,19 +47,22 @@ concrete precondition
 
 ## Epic contract
 
-- **Goal:** Make ordinary pull-request CI give fast, predictable feedback and
-  make abnormal runs easier to reproduce and diagnose.
-- **Done when:** CI publishes enough timing and selection data to explain its
-  critical path; repeated work identified in the save-compat audit is removed;
-  a rerun of a hung headless suite provides enough evidence to compare and
-  localize the behavior; build-cache age is bounded without unbounded churn;
-  parallel probes never mutate one shared Cabal build tree; independent gate
-  families no longer serialize behind one another unnecessarily after the
-  build; and safe Hspec regions use available concurrency without corrupting
-  shared fixtures; and several approved PRs can advance through hosted merge
-  groups without serial contributor-managed branch updates. Any reduction in
-  which tests run on a PR is
-  backed by an explicit path-to-coverage contract and retains a full post-merge
+- **Goal:** Make ordinary pull-request CI give fast, predictable feedback —
+  under twenty minutes, per the maintainer's 2026-09-28 target — and make
+  abnormal runs easier to reproduce and diagnose.
+- **Done when:** the median run wall time of successful pull-request runs is
+  under twenty minutes (D-15), measured with `tools/ci_timing_report.py` over a
+  stated sample of runs; the headless Hspec
+  suite runs as parallel lanes that together execute every example exactly
+  once, without generating any shared world twice; the build in front of those
+  lanes has a measured, explained cost and any build-side change it justifies
+  has landed; a rerun of a hung headless suite provides enough evidence to
+  compare and localize the behavior; and several approved PRs can advance
+  through hosted merge groups without serial contributor-managed branch
+  updates. Already delivered: timing and cache diagnostics (CIR-1), the
+  save-compat REPL removal (CIR-2), bounded cache age (CIR-4), and prebuilt
+  probe executables (CIR-7). Any reduction in which tests run on a PR is backed
+  by an explicit path-to-coverage contract and retains a full post-merge
   backstop.
 - **Users and operators:** Contributors waiting for PR checks, reviewers deciding
   whether a result is trustworthy, and maintainers diagnosing flakes and hangs.
@@ -52,7 +70,95 @@ concrete precondition
 
 ## Current state and evidence
 
+### Re-measurement, 2026-09-28
+
+Taken with `tools/ci_timing_report.py --last 30 --event pull_request` and
+`--last 20 --event push --branch master` (the CIR-1 tool), plus the raw job
+logs of runs 36424074239, 36343120829, 36320504148 and 36051757184.
+
+- **Critical path.** Seventeen successful PR runs: median wall time 31m00s,
+  95th percentile 36m32s. Nineteen successful master pushes: median 31m03s,
+  p95 36m58s. `test-and-audits` is the slowest job in every one of them.
+  `static-audits` (about 5–6 min) and `behavior-probes` (about 9–12 min) finish
+  well before it and are not on the critical path.
+- **Where `test-and-audits` spends it (PR medians).** Container start 49 s,
+  dependency plan 21 s, `Build (library + executable)` 182 s (p95 245 s), audio
+  build boundary 31 s, `Build test suites` 425 s (p95 524 s), `Headless test
+  suite` **1035 s (17m15s, p95 19m34s)**, save compatibility 30 s, and
+  `world_check --quick` 94 s when the worldgen gate fires. The two build steps
+  together are a median of about ten minutes; the Hspec run is about seventeen.
+- **Hspec is sequential and growing.** No spec is marked `parallel`, so the
+  4-vCPU runner executes 10,521 examples one at a time (`Finished in 1123.37
+  seconds` on run 36424074239). The same step took 854 s on 2026-09-24 with
+  10,440 examples; 37 more examples cost 265 s more. About 111 s of that is the
+  new `Test.Headless.WorldGen.ExactRiverWorld` (landed 2026-09-26 in
+  04f5b75a7), which rebuilds the full geology timeline for four worlds, three
+  of them (`(42,32,4)`, `(4567,32,4)`, `(13579,32,4)`) used by no other spec.
+  The rest is general worldgen slowdown: the map-pyramid w64 golden went from
+  41.9 s to 52.9 s, basic generation from 30.5 s to 38.5 s.
+- **The twenty slowest examples are about 530 s of the 1123 s,** and about
+  450 s of that is inside the shared-world `aroundAll withHeadlessEngine` block
+  (`test-headless/Spec.hs` lines 460–575): map-pyramid goldens and
+  composition (≈137 s), zoom artifact (53 s), `ExactRiverWorld` (111 s), zoom
+  parity (40 s), basic and determinism generation (51 s), flatness (20 s),
+  chunk/fast parity (19 s), and the full-tier-only w128 volcano exposure case
+  (59 s). The rest of the suite (≈600 s) is spread across ten thousand cheaper
+  examples. The per-group split is not yet measured; the CI log carries only the
+  top twenty (`--print-slow-items=20`).
+- **Shared worlds by key.** `sharedWorld env 42 64 3` has at least ten
+  consumers (WorldGen, Geology, ZoomArtifact, Exposure, InlandSources,
+  ActionOutcome, Climate, SelectTileZ, Realization, ExactRiverWorld,
+  MapPyramid). `(42,128,3)` is generated on every run by the map-pyramid
+  worldSize-128 golden and reused by the full-tier Exposure case.
+  Single-consumer keys include `(1840733254,64,10)` (ZoomParity), `(7,64,3)`
+  (BorderProbe), `(42,32,3)` (InlandSources) and the three private
+  `ExactRiverWorld` keys. About twenty test modules also send their own
+  `WorldInit` for private worlds, both inside the block (Exposure's w8 rim
+  world, for example) and outside it.
+- **Two costs were ruled out.** Log volume: since #1916 both CI invocations pass
+  `--format=failed-examples`, so a passing run prints a constant handful of
+  lines. Per-example engine boots: the 361 examples under `around
+  withHeadlessEngine` are cheap — `UI.InteractiveBounds` and
+  `UI.FocusNavigation` (111 examples) finish in 0.7 s locally.
+- **Build time is driven by drift and cascade, not by cache misses.** Exact
+  project-cache hits still cost 10–12.6 min of build on runs 36320504148,
+  36317483841 and 36288123692 (epoch 52, position 3/8), while other exact hits
+  cost 1.5–5 min. The epoch snapshot is written once, by the epoch's first
+  successful master push; every later PR and master run in that epoch replays
+  every build-relevant change since, plus its own diff, and the `-O2`
+  interface cascade decides how much of the 900-module library and
+  480-module test suite that recompiles. #2276
+  (`docs/test_suite_compile_cost_2276.md`) measured the test suite at 904.5
+  CPU-s under `-O2`, 484.7 under `-O0` (−46 %) and −16.6 % under `-O1`; `-O0`
+  was kept out of that issue's scope by owner specification.
+- **Hangs recur.** Master run 36054401429 (merge of #2704, 2026-09-24) sat in
+  `Headless test suite` for 82 minutes until the 90-minute job timeout cancelled
+  it. Its last output was a run of `READY port=…` lines from the debug-socket
+  and debug-console specs at 20:47:42, sixteen minutes into the step, then
+  nothing until cancellation at 21:52:57. With `--format=failed-examples`
+  nothing else identifies the active example. It is not isolated: every
+  failed or cancelled CI run from 2026-08-16 to 2026-09-28 (852 runs) was
+  scanned, and ten headless steps ran 78–87 minutes into the 90-minute job
+  timeout — master pushes 32401924621 (08-20), 32432146709 (08-21),
+  33079354477 (08-27), 33274229355 (08-29), 33319248031 (08-30), 33426496347
+  (08-31), 33559257760 (09-01), 33690302067 (09-02) and 36054401429 (09-24),
+  and PR run 32627523057 (08-23). A further run, 32510304445 (08-21), was
+  cancelled forty minutes into the step. Nine of the ten are master pushes,
+  which always run the full tier, but the PR hang ran without it, so the full
+  tier is not required. Each costs ninety minutes of a runner and a missing
+  master verdict.
+- **Runner economics.** GitHub documents standard GitHub-hosted runner usage as
+  free for public repositories, a limit of 20 concurrent jobs on the Free
+  plan, and 4 CPUs, 16 GB of RAM and 14 GB of SSD for a public repository's
+  `ubuntu-latest` runner. A PR run today holds three long-running jobs at once
+  (`test-and-audits`, `static-audits`, `behavior-probes`); peak concurrency
+  across overlapping PR and master runs has not been measured.
+
 ### Verified current state
+
+The bullets below are the pre-2026-09 evidence that shaped CIR-1 through CIR-7.
+They stay as the record; where they conflict with the re-measurement above,
+the re-measurement is current.
 
 - `.github/workflows/ci.yml` now runs `test-and-audits`, `static-audits` and
   the PR-only `behavior-probes` worker in parallel after image resolution,
@@ -248,7 +354,9 @@ concrete precondition
 ## Desired experience
 
 1. An ordinary PR should surface its first meaningful failure quickly rather
-   than making every gate wait behind unrelated work.
+   than making every gate wait behind unrelated work, and a green PR run should
+   complete in under twenty minutes. The headless suite keeps running in full on
+   every PR; it just stops running one example at a time on one runner.
 2. A run should state which expensive gates and probes were selected and show
    their elapsed times in a durable summary that remains available after
    cancellation or failure where GitHub permits.
@@ -281,6 +389,10 @@ concrete precondition
 - Git-history-derived project-cache epochs and manual bounded retention.
 - Cabal build-product cache freshness and bounded retention strategy.
 - Headless Hspec diagnostics, grouping, reruns, and local reproduction.
+- Partitioning the headless suite into lanes that run as parallel CI jobs,
+  and the build strategy that supplies each lane with the test executable.
+- Measuring and reducing the per-PR Haskell build (cache-epoch drift and the
+  test suite's compile cost).
 - Static-audit startup cost, beginning with save compatibility.
 - Existing path selectors for expensive gates and behavior probes.
 - Measurement of PR wall-clock latency, runner minutes, cache age/hit state,
@@ -341,6 +453,18 @@ engine-backed specs, but partitioning must preserve the single-generation cache
 for each shared `(seed, size, plateCount)` world and prove that concurrent test
 processes do not contend for ports, config state, or repo-relative runtime
 files.
+
+The 2026-09-24 master hang (run 36054401429) shows the diagnostic gap is now
+wider than when this section was written. #1916 moved both CI invocations to
+`--format=failed-examples` so a passing run's log is a handful of lines; the
+cost is that a hung run's log names no active example at all, and that hang
+could be placed only because the debug-console specs happen to print `READY
+port=` lines. Whatever CIR-3 adds must keep #1916's quiet passing log — for
+example, context markers at lane or top-level-group granularity, or a
+formatter that records the entered example somewhere other than the log —
+rather than restoring one line per passing example. Lanes (CIR-15, CIR-16)
+also narrow a hang to one lane's groups and let every other lane report, but
+they do not replace this diagnosis.
 
 ### Isolate parallel probes after one build
 
@@ -406,7 +530,73 @@ refused until a v3 master cache exists; deletion requires another explicit
 The CI image remains independently content-addressed and refreshes only when
 its recipe changes.
 
+### Headless Hspec lanes (proposal)
+
+The headless suite is the largest single cost and it runs its examples one at
+a time. Rather than make examples concurrent inside one process, split
+the suite into a small number of **lanes**, each a separate process on its own
+runner, that together execute every example exactly once.
+
+- **The shared-world block stays whole in one lane** (D-3). Its examples share
+  one `EngineEnv` and memoized worlds; putting a `(seed, size, plates)` key's
+  consumers in two lanes would generate that world twice. If CIR-14 shows the
+  block alone is too long for the target, it may be split only along world-key
+  affinity: every consumer of a given key stays in the same lane, so no world is
+  generated twice. `(42,64,3)` alone has at least ten consumer modules, so that
+  key's lane is the floor on how short the suite can get this way.
+- **Everything else is balanced across the remaining lanes** by measured
+  duration from CIR-14, not by example count.
+- **Coverage is partitioned by construction.** The lane a new top-level group
+  lands in must be determined without anyone remembering to list it — for
+  example, lane A selects a named wrapper `describe` and lane B `--skip`s the
+  same name, so a new group outside the wrapper can only land in B. A check
+  compares the per-lane example lists against the unpartitioned suite (Hspec
+  `--dry-run`) and fails on any example that is missing or runs twice.
+- **Running without a lane selector is unchanged.** A developer's `cabal test`
+  and `make ci` still run the whole suite in one process; lanes are a CI
+  scheduling concern and `tools/ci_parity_audit.py` keeps treating the lanes'
+  union as the one headless gate.
+- **Each lane is its own job under the stable `build-test` aggregate,** so
+  branch protection keeps one required check (as CIR-5 already proposed for
+  gate families).
+
+D-14 settles how each lane job obtains the test executable: it builds it
+from the shared cache. The comparison that decided it: artifact handoff (one
+build, then consumers) costs a job boundary on the critical path: a job with
+`needs:` starts only after its producer finishes, then pays container start
+(≈49 s median), checkout and an artifact download of the test executable
+(330 MB on a local macOS build; the Linux size is unmeasured) before its first
+example. Building in every lane from the same
+restored project cache — what the `behavior-probes` job already does for
+`exe:synarchy` — starts every lane at time zero, at the price of duplicated
+compile time on free runners and more concurrent jobs.
+
+Rough arithmetic at today's medians, before CIR-14 replaces the estimates: a
+shared-world lane of about 9–10 minutes (its top-twenty items alone are about
+6.5 minutes, 7.5 with the full-tier volcano case), a build of about 10 minutes, and 1.5 minutes of job
+start. Per-lane build: about 21 minutes. Handoff: about 23–24 minutes. So lanes
+alone do not reach the twenty-minute target at today's median build; the
+build side (CIR-17 and the choices it informs) has to move as well.
+
+### Build cost inside a cache epoch (proposal)
+
+CIR-4's epoch bounds how stale the project cache can get, but not how much a
+PR recompiles: runs with exact project-cache hits range from 1.5 to 12.6
+minutes of build, and three exact hits at the same epoch position (52, 3/8)
+each took over ten. Before choosing a remedy, attribute that time:
+how much is replaying the epoch's earlier master changes (fixable by writing a
+snapshot more often, a D-6 change) and how much is the change under test
+itself (fixable only by making recompilation cheaper, such as a lower
+optimisation level for the test suite, which #2276 measured and owner scope
+excluded). CIR-17 produces that attribution; the remedy it points to is a
+decision (Q-14), not something CIR-17 adopts on its own.
+
 ### Prove safe Hspec parallel regions
+
+This is now the follow-up to lanes rather than the first move. In-process
+`parallel` cannot touch the shared-world block, and on a 4-vCPU runner world
+generation already uses every capability (`-with-rtsopts=-N`), so its
+remaining value is inside the non-worldgen lanes once they exist.
 
 Hspec can do this directly: version 2.11.17 provides the `parallel` spec
 modifier and the test binary already exposes `--jobs=N`; the suite is linked
@@ -436,6 +626,16 @@ executable from separate worktrees and must not regenerate the same shared
 worlds in multiple lanes.
 
 ### Shorten the critical path after one build
+
+Since this section was written, #2272 moved the static audits into their own
+job and the probe lane already runs beside the main worker, so the gate
+families it lists are mostly independent already; the one serial giant left is
+the headless suite, which the lanes above address. What remains for this
+section is the post-build tail of `test-and-audits` — save compatibility
+(≈30 s) and `world_check --quick` (≈94 s when selected). D-14 chose per-lane
+builds, so most of the handoff machinery below is unnecessary for the lanes and
+CIR-5 shrinks to running that tail beside them. The text below is retained as
+the plan should a later decision reintroduce handoff.
 
 The target workflow shape is one compilation producer followed by independent
 consumers for:
@@ -668,6 +868,9 @@ runner-specific problem.
 
 ### D-5. Build once, then isolate execution trees rather than Cabal trees
 
+Amended by D-14 for the headless lanes, which each build from the shared
+immutable cache instead of consuming one handed-off executable.
+
 Parallel probes and post-build consumers receive immutable executables from one
 verified build. Each concurrently active consumer runs in its own checkout or
 ephemeral Git worktree/resource root. No consumer receives a cloned,
@@ -733,11 +936,52 @@ package is `ghcr.io/synarchy-game/synarchy-ci`. If GitHub refuses the slug when
 creation is attempted, stop and ask for a replacement rather than modifying or
 suffixing it without approval.
 
+### D-13. Lanes first, with the 2026-09-28 slice plan
+
+Approved 2026-09-28. The headless suite is split into CI lanes before any
+in-process parallelism: CIR-14 measures, CIR-15 partitions, CIR-16 runs the
+lanes as jobs; CIR-17 investigates the build; CIR-18 adds an advisory lane
+budget; CIR-8 and CIR-5 follow the lanes in their re-scoped forms. The lane
+slices do not wait for CIR-3: hang diagnosis proceeds independently, and lanes
+confine a hang to one lane without changing how it behaves. Resolves Q-15.
+
+### D-14. Each headless lane builds its own test executable
+
+Approved 2026-09-28. Every lane job restores the same dependency and project
+caches and builds `synarchy-test-headless` itself, so all lanes start at time
+zero; there is no artifact handoff for the lanes. This amends D-5 for the
+headless lanes only: each lane's build tree is its own, restored from an
+immutable cache, and is never shared with or copied to another concurrent
+consumer. The successful master push remains the only project-cache writer.
+The duplicated compile time is accepted under D-7 (free runner minutes for this
+public repository); the concurrent-job count is reported by CIR-16. Resolves
+Q-13.
+
+### D-15. The twenty-minute target is the median PR run
+
+Approved 2026-09-28. The arc's latency target is a median run wall time under
+twenty minutes for successful pull-request runs, as reported by
+`tools/ci_timing_report.py` over a stated sample. Slow-build outliers above
+twenty minutes do not by themselves fail the target. It is an optimization
+target, not a test timer or a failing gate. Resolves Q-1.
+
 ## Open questions
 
 ### Q-1. What latency and runner-minute budgets define success?
 
-Proposed starting service levels are PR median at or below 10 minutes, PR 95th
+Resolved by D-15: median run wall time of successful PR runs under twenty
+minutes. The history below is kept.
+
+Partially answered 2026-09-28: the maintainer wants pull-request CI under
+twenty minutes without losing significant coverage (today: median 31m00s, p95
+36m32s over seventeen successful PR runs). Still open: which statistic the
+twenty minutes applies to — median, 95th percentile, or every non-hung run —
+and whether it is measured as `test-and-audits` job time or run wall time. The
+difference matters: the build alone ranges from 1.5 to 12.6 minutes today, so a
+median target is reachable with lanes plus modest build work, while a p95
+target needs the build tail fixed too.
+
+The earlier proposal was PR median at or below 10 minutes, PR 95th
 percentile at or below 15 minutes when no selected scenario inherently exceeds
 that budget, and master at or below 15 minutes. These are optimization targets,
 not test timers. The user may prefer a different balance between wall-clock
@@ -774,15 +1018,21 @@ master-writer or immutable-epoch design.
 Candidates are a small custom formatter/runner hook that flushes example starts,
 a wrapper that preserves line-buffered progress, or partition-level markers.
 The choice must help compare a manually restarted run and must not serialize
-tests that are intentionally parallelizable later. CIR-3 may choose the
+tests that are intentionally parallelizable later. Since #1916 it must also
+keep a passing run's log to a handful of lines: restoring one line per passing
+example is ruled out by that issue, which is why the 2026-09-24 hang left no
+record of its active example. CIR-3 may choose the
 smallest reliable diagnostic that preserves the existing output and scheduling
 contracts; it must stop for a maintainer decision if useful diagnostics require
 changing either contract.
 
 ### Q-6. Which Hspec groups are both safe and worth parallelizing?
 
-The framework capability is verified, but the repository boundary is not. CIR-8
-must inventory fixture and process ownership, measure candidate groups at
+Re-scoped 2026-09-28: CIR-8 now follows the lanes (CIR-16) and asks the
+question only inside the non-shared-world lanes, where it can still shorten a
+lane that turns out to be the longest. The framework capability is verified,
+but the repository boundary is not. CIR-8 must inventory fixture and process
+ownership, measure candidate groups at
 `--jobs=1/2/...`, and leave any uncertain group sequential. If no safe group
 materially shortens the critical path without duplicating shared worldgen,
 CIR-8 records that result rather than forcing a parallel implementation.
@@ -792,7 +1042,11 @@ CIR-8 records that result rather than forcing a parallel implementation.
 The producer and consumers use the same immutable container image, which makes
 handoff plausible, but the Linux binary's dynamic-library requirements and the
 direct Hspec runner's runtime environment have not yet been exercised as a
-downloaded artifact. CIR-5 stops after the spike and reports the blocker if the
+downloaded artifact. D-14 chose per-lane builds for the lanes, so this
+question only needs answering if a later decision reintroduces handoff for
+the lanes or for CIR-5's post-build tail. `tools/world_audit.py` (behind `world_check.py`) launches the
+engine as `cabal run exe:synarchy`, so a clean-checkout consumer of it also
+needs an explicit executable override like the probes' `SYNARCHY_PROBE_ENGINE_EXE`. CIR-5 stops after the spike and reports the blocker if the
 minimal binary bundle cannot run without copying Cabal's build database.
 
 ### Q-8. What event counts as a completed contribution under a lieutenant model?
@@ -825,6 +1079,51 @@ Resolved by D-11 and D-12: ownership will be the new dedicated GitHub Free
 organization `synarchy-game`. Availability is rechecked at creation; refusal
 stops for a new decision.
 
+### Q-13. How does each headless lane get the test executable?
+
+Resolved by D-14: per-lane builds. The comparison below is kept.
+
+Two options, both keeping one cache writer (the successful master push):
+
+- **Per-lane build.** Every lane job restores the same dependency and project
+  caches and runs `cabal build synarchy-test-headless` itself. All lanes start
+  at time zero; no artifact, no Q-7 spike, and the pattern already exists in
+  `behavior-probes`. The costs are duplicated compile time (free runner minutes
+  for this public repository) and more concurrent jobs against the Free plan's
+  twenty. It departs from D-5's "build once" wording, so choosing it amends D-5
+  for lanes: each lane's build tree is its own, restored from an immutable
+  cache, never shared or copied between concurrent consumers.
+- **Artifact handoff.** One producer builds and uploads the executable; lane
+  jobs `needs:` it. It matches D-5 as written and spends the least compute, but
+  adds a job boundary — roughly two to three minutes of upload, container start
+  and download — to the critical path, and needs Q-7 answered first.
+
+The earlier arithmetic favours per-lane builds by those two to three minutes.
+CIR-16 stops for this decision before changing the workflow.
+
+### Q-14. Which build-side lever, if any, should follow CIR-17?
+
+Known candidates: (a) write the project-cache snapshot more often than every
+eight build-relevant master changes, which revises D-6 and trades cache storage
+(ten gigabytes per repository) and eviction churn for less replayed drift;
+(b) compile the test suite (not the library) at `-O0` or `-O1` in CI, which
+#2276 measured at −46 % or −16.6 % test-suite compile CPU but which that issue's
+owner specification excluded, and whose effect on Hspec run time is unmeasured
+(the heavy worldgen code lives in the `-O2` library); (c) neither, if CIR-17
+shows the PR's own diff dominates and lanes plus the other slices already meet
+D-15's target. No build-side change is designed until CIR-17 reports.
+
+### Q-15. Do the lane slices wait for CIR-3?
+
+Resolved by D-13: they do not. The reasoning below is kept.
+
+The old CIR-5 and CIR-8 depended on CIR-3. This revision proposes that lanes
+(CIR-14 through CIR-16) do not: lanes do not change how a hang behaves, they
+confine it to one lane and let the others report, and holding the largest
+latency win behind an unscheduled diagnosis would stall the arc. CIR-3 keeps
+its own place in the plan and gains the 2026-09-24 evidence. If the maintainer
+prefers the original ordering, CIR-15 gains a dependency on CIR-3.
+
 ## Verification strategy
 
 - Capture baseline and post-change timings from both PR and master workflows,
@@ -847,6 +1146,14 @@ stops for a new decision.
 - For artifact handoff, execute downloaded binaries in the same container and
   prove Hspec, one representative behavior probe, and world check can locate
   all repo-relative resources.
+- For lanes, prove on every run that the lanes' example lists are disjoint and
+  that their union equals the unpartitioned suite's `--dry-run` list, that the
+  summed example count matches, and that no shared-world key is initialised in
+  more than one lane. Compare the lanes' slowest wall time with the old
+  single-process step over repeated PR and master runs, and report lane skew so
+  a lane that outgrows the others is visible.
+- For the build, record per run the epoch position, cache outcome and build
+  seconds, so CIR-17's attribution can be recomputed rather than trusted.
 - For Hspec, establish a `--jobs=1` baseline, mark only audited candidate
   groups, then compare `--jobs=2` and the runner-appropriate cap across repeated
   runs. Example counts and coverage stay identical; the shared-world generation
@@ -866,6 +1173,12 @@ stops for a new decision.
 
 ### CIR-1. Publish durable CI timing and selection diagnostics
 
+> Delivered: the cache half as #1358 (`tools/ci_cache_report.py`), the timing
+> half as #2277 (`tools/ci_timing_report.py`, run on demand rather than as a
+> per-run workflow summary, plus `--print-slow-items=20` in both CI Hspec
+> invocations). A per-run summary was not built; the lane slices report their
+> own durations instead.
+
 - **Outcome:** Every CI run explains cache state, selected gates/probes, stage
   durations, retries, and critical-path duration in its summary.
 - **Scope:** Workflow summary plumbing and a bounded historical baseline of PR
@@ -881,6 +1194,9 @@ stops for a new decision.
 
 ### CIR-2. Decode save-compat fixture descriptors once per self-test run
 
+> Delivered as #2273 in its stronger form: the compiled
+> `exe:synarchy-save-codec` replaced every `cabal repl` in that family.
+
 - **Outcome:** Save-compat self-tests no longer launch a Cabal REPL for each of
   24 audit calls, while the production audit still decodes real fixtures once.
 - **Scope:** Dependency injection/caching at the descriptor verification seam
@@ -895,24 +1211,14 @@ stops for a new decision.
 - **Out of scope:** Reimplementing the Haskell envelope decoder in Python.
 - **Open questions:** `None`
 
-### CIR-3. Reproduce and localize headless-suite hangs without timers
-
-- **Outcome:** Repeated hangs can be compared and localized to the last active
-  test context without imposing a suite-level or per-example timer.
-- **Scope:** Same-commit rerun comparison, flushed progress/context, and a
-  narrowing procedure for local Hspec reproduction.
-- **Phase:** 1 — diagnose pathological runs
-- **Depends on:** `CIR-1`
-- **Ordering:** `critical path`
-- **Relevant decisions:** D-4
-- **Acceptance signals:** The restarted run is compared with the cancelled
-  attempt; a repeated hang can be narrowed to a describe/example or lifecycle
-  boundary; ordinary Hspec runtime and verdict are unchanged.
-- **Out of scope:** Fixing the product/test deadlock that triggered any one
-  specific hung PR run.
-- **Open questions:** Q-5
-
 ### CIR-7. Isolate parallel probes behind one prebuilt executable
+
+> Delivered as #1570 (commit 0ffc10df8: `tools/probe_engine.py`, the
+> runner-resolved `SYNARCHY_PROBE_ENGINE_EXE`), with follow-ups #2274
+> (persistence_contract through the prebuilt codec, no exclusive hold, no test
+> suite in the probe job) and #2275 (longest-first dispatch). The per-worker
+> ephemeral resource worktrees in this slice's scope were not built;
+> `tools/run_probes.py` creates none.
 
 - **Outcome:** The full CI-eligible probe selection can use multiple workers
   without any worker mutating a shared Cabal build tree or paying retry tax for
@@ -941,6 +1247,10 @@ stops for a new decision.
 
 ### CIR-4. Rotate the project cache every eight build-relevant master changes
 
+> No separate issue: delivered directly as commit 7b3757ded (2026-08-22,
+> `tools/ci_cache_epoch.py`, `tools/ci_cache_cleanup.py`). CI logs report it as
+> `CI_CACHE_EPOCH epoch=… position=…/8`.
+
 - **Outcome:** Successful master CI automatically seeds a fresh immutable
   project-cache epoch after each group of eight compiled-input changes, while
   pull requests consume master caches without publishing their own.
@@ -961,46 +1271,227 @@ stops for a new decision.
   and self-hosted persistent build directories.
 - **Open questions:** `None`
 
-### CIR-8. Prove and adopt only safe Hspec parallel regions
+### CIR-14. Measure headless Hspec time per top-level group on CI
 
-- **Outcome:** Audited independent Hspec groups run concurrently when that
-  materially reduces the critical path, or the repository records a measured
-  no-win result instead of forcing unsafe parallelism.
-- **Scope:** Fixture/process ownership inventory, candidate `parallel`
-  annotations, repeated `--jobs=1`, `2`, and runner-cap measurements, and a
-  bounded spike of isolated process lanes if in-process concurrency cannot
-  reach the worldgen-dominated path.
-- **Phase:** 2 — shorten test execution
-- **Depends on:** `CIR-1`, `CIR-3`
-- **Ordering:** `can proceed independently of cache work`
+- **Outcome:** A recorded, reproducible table of how the headless suite's CI
+  run time divides across its top-level groups, the shared-world block's
+  members, and each shared-world key's first generation, together with a
+  proposed lane count and partition and the predicted longest lane.
+- **Scope:** A measurement taken on the real CI runner (for example a
+  measurement-only run with `--print-slow-items` set high enough to list every
+  item, or an equivalent per-group timing hook), repeated on at least three
+  runs to expose variance, aggregated by top-level group and by shared-world
+  key, and written up under `docs/` in the manner of #2276's report. The
+  proposed partition keeps every consumer of a shared-world key in one lane.
+- **Phase:** 2 — measure the headless suite
+- **Depends on:** `none`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-3, D-13, D-15
+- **Acceptance signals:** The per-group totals account for the run's `Finished
+  in` time to within a few percent; each shared-world key's generation cost is
+  identified; the proposed partition states its predicted longest lane and the
+  evidence behind it; the aggregation is repeatable by the next agent from the
+  recorded commands.
+- **Out of scope:** Permanently raising CI log volume (see #1916), changing
+  `Spec.hs`, workflow jobs, or which tests run.
+- **Open questions:** `None` (the partition is sized against D-15's target).
+
+### CIR-15. Partition the headless suite into lanes that run every example exactly once
+
+- **Outcome:** The headless test executable can run one named lane at a time.
+  The lanes are pairwise disjoint and their union is the whole suite, each
+  shared-world key's consumers sit in exactly one lane, and running with no
+  lane selected is unchanged for developers and `make ci`.
+- **Scope:** Lane selection in `test-headless/Spec.hs` following CIR-14's
+  partition; a partition-by-construction rule so that a new top-level group
+  cannot be silently omitted from every lane; a self-test comparing per-lane
+  `--dry-run` example lists against the unpartitioned list; testing-document
+  updates in the same PR.
+- **Phase:** 2 — prepare lanes
+- **Depends on:** `CIR-14`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-3, D-8, D-13
+- **Acceptance signals:** The per-lane lists are disjoint and their union
+  equals the unpartitioned list; per-lane example counts sum to the whole; each
+  lane passes when run alone; no shared-world key is initialised in more than
+  one lane; `cabal test synarchy-test-headless` with no selector reports the
+  same example count as before the change.
+- **Out of scope:** Workflow changes (CIR-16), in-process `parallel` (CIR-8),
+  and changing, removing or demoting any example.
+- **Open questions:** `None`
+
+### CIR-16. Run the headless lanes as parallel CI jobs
+
+- **Outcome:** Pull-request and master CI run each headless lane as its own job
+  under the stable `build-test` aggregate, and the critical path shrinks by the
+  measured difference between the old single-process step and the longest lane.
+- **Scope:** One workflow job per lane, each restoring the shared caches and
+  building the test executable itself (D-14);
+  the worldgen full-tier variable reaching whichever lane holds full-tier
+  examples; one project-cache writer; `build-test` requiring every lane;
+  CIR-15's coverage check running in CI; `tools/ci_parity_audit.py` and
+  `tools/ci-local.sh` treating the lanes' union as the one headless gate (local
+  `make ci` may still run the suite in one process); `tools/ci_timing_report.py`
+  recognising lane jobs; and a before/after measurement.
+- **Phase:** 3 — structural parallelism
+- **Depends on:** `CIR-15`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-2, D-3, D-5, D-7, D-13, D-14, D-15
+- **Acceptance signals:** Every run proves lane coverage parity and a summed
+  example count equal to the unpartitioned suite on the same commit; no shared
+  world is generated twice; over at least ten PR runs, the longest lane's
+  median is reported against the pre-change `Headless test suite` median of
+  1035 s; runner-minute growth and peak concurrent jobs are reported; branch
+  protection still requires only `build-test`.
+- **Out of scope:** Changing which examples run on a PR, in-process `parallel`,
+  and moving save compatibility or `world_check` (CIR-5).
+- **Open questions:** `None` (Q-13 resolved by D-14; Q-7 does not apply to
+  per-lane builds).
+
+### CIR-17. Attribute pull-request build time to epoch drift versus the change under test
+
+- **Outcome:** A measured account of why builds with exact project-cache hits
+  range from 1.5 to 12.6 minutes: for a sample of recent PR and master runs,
+  how many library and test-suite modules each recompiled, how much of that
+  replays the epoch's earlier master changes versus the run's own diff, and the
+  projected build time under a per-master-push snapshot and under a lower
+  test-suite optimisation level.
+- **Scope:** An investigation in the manner of #2276. CI builds run with
+  `-v0`, so module counts come from reproducing sampled builds in the CI image
+  from the epoch snapshot's commit forward. The report recommends one Q-14
+  option (or none) with its projected effect on median and 95th-percentile
+  build time.
+- **Phase:** 2 — measure the build
+- **Depends on:** `none`
+- **Ordering:** `independent`
+- **Relevant decisions:** D-1, D-6, D-13, D-15
+- **Acceptance signals:** Each sampled run's recompiled-module count and build
+  seconds are split between drift and diff; the recommendation's projection
+  is stated; the reproduction commands are recorded.
+- **Out of scope:** Changing the epoch length, optimisation flags, or the
+  workflow; those follow a Q-14 decision as their own slice.
+- **Open questions:** Q-14
+
+### CIR-3. Reproduce and localize headless-suite hangs without timers
+
+> Still open, with new evidence: the headless step hung on ten runs between
+> 2026-08-20 and 2026-09-24 (nine master pushes, one PR; listed under the
+> re-measurement), each cancelled by the 90-minute job timeout. The
+> 2026-09-24 hang left only incidental `READY port=` lines to place it (see
+> Q-5).
+
+- **Outcome:** Repeated hangs can be compared and localized to the last active
+  test context without imposing a suite-level or per-example timer.
+- **Scope:** Same-commit rerun comparison, flushed progress/context that keeps
+  #1916's quiet passing log, and a narrowing procedure for local Hspec
+  reproduction. Once lanes exist, per-lane context is enough to start.
+- **Phase:** 2 — diagnose pathological runs
+- **Depends on:** `CIR-1`
+- **Ordering:** `independent`
+- **Relevant decisions:** D-4
+- **Acceptance signals:** A repeated hang can be narrowed to a describe/example
+  or lifecycle boundary from the CI log alone; a passing run's log stays a
+  constant handful of lines per lane; ordinary Hspec runtime and verdict are
+  unchanged.
+- **Out of scope:** Fixing the product/test deadlock that triggered any one
+  specific hung run.
+- **Open questions:** Q-5 (Q-15 resolved by D-13: the lane slices do not wait
+  for this one).
+
+### CIR-18. Report headless lane durations against an advisory budget
+
+- **Outcome:** Every CI run's summary shows each lane's duration, example count
+  and slowest items against an advisory per-lane budget, and flags a lane that
+  exceeds it, without failing the run. Growth like the 265 s added between
+  2026-09-24 and 2026-09-27 becomes visible on the PR that causes it.
+- **Scope:** `$GITHUB_STEP_SUMMARY` output from the lane jobs or the
+  aggregate, budget values in one checked-in place, and a documented response
+  to an over-budget lane (rebalance, add a lane, or make the expensive example
+  cheaper).
+- **Phase:** 3 — keep it fast
+- **Depends on:** `CIR-16`
+- **Ordering:** `not on the critical path`
+- **Relevant decisions:** D-1
+- **Acceptance signals:** A run with a lane forced over budget shows the flag
+  and still passes; lane durations and top items are readable without opening
+  raw logs.
+- **Out of scope:** Failing CI on duration (D-15 makes the target an
+  optimization target, not a gate; changing that needs a new decision) and
+  automatic rebalancing.
+- **Open questions:** `None`
+
+### CIR-8. Prove and adopt only safe in-process Hspec parallel regions
+
+> Deferred 2026-09-28: CIR-8 only shortens the critical path when a lane
+> without the shared-world block is the longest. Before lanes exist the
+> shared-world block alone is at least 6.5 minutes while the rest of the suite
+> (about 10 minutes over ~10,000 cheap examples) can be balanced across lanes
+> by #2744, so the likely result today is a recorded no-win. Revisit once
+> #2745's lane timings show a non-shared-world lane is the longest; if they
+> show the shared-world lane stays longest, this slice becomes `[no-issue]`.
+
+- **Outcome:** Inside the lanes that do not hold the shared-world block,
+  audited independent Hspec groups run concurrently when that materially
+  shortens the longest lane, or the repository records a measured no-win
+  result instead of forcing unsafe parallelism.
+- **Scope:** Fixture/process ownership inventory for the candidate lanes,
+  candidate `parallel` annotations, and repeated `--jobs=1`, `2`, and
+  runner-cap measurements.
+- **Phase:** 4 — tune lanes
+- **Depends on:** `CIR-16`
+- **Ordering:** `not on the critical path`
 - **Relevant decisions:** D-1, D-3, D-8
 - **Acceptance signals:** Example counts and verdicts remain identical across
   repeated runs; shared-world generation count does not increase; no mutable
   fixture/state races appear; retained parallel boundaries show a material
-  wall-time improvement.
-- **Out of scope:** A root-level `parallel`, duplicating canonical world
-  generation across shards, or making Hspec path-selective.
+  wall-time improvement on the longest lane.
+- **Out of scope:** A root-level `parallel`, `parallel` inside the shared-world
+  block, duplicating canonical world generation, or making Hspec
+  path-selective.
 - **Open questions:** Q-6
 
-### CIR-5. Run post-build gate families on independent critical paths
+### CIR-5. Hand prebuilt executables to the remaining post-build gates
 
-- **Outcome:** Hspec, static audits, behavior probes, and selected expensive
-  gates do not add their full serial durations after compilation.
-- **Scope:** A compilation-producer artifact, clean-checkout consumer jobs,
-  explicit binary-path support where needed, workflow job graph, one stable
-  aggregate required check, and measured runner-minute tradeoff.
-- **Phase:** 3 — structural parallelism
-- **Depends on:** `CIR-1`, `CIR-2`, `CIR-3`, `CIR-7`
-- **Ordering:** `critical path`
-- **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-7
-- **Acceptance signals:** Identical gate coverage and verdicts, no duplicate
-  shared world generation, lower PR critical path, bounded artifact overhead,
-  bounded runner-minute growth, and no material retry/flakiness regression.
+> Re-scoped 2026-09-28. #2272 already split the static audits off, the probe
+> job already runs beside the main worker, and CIR-16 handles the headless
+> suite. What is left is the serial tail after the build.
+
+> Deferred 2026-09-28: #2745 runs every lane in its own job and removes the
+> single-process headless step, so save compatibility and `world_check
+> --quick` should end up running beside the lanes rather than after one.
+> Revisit when #2745 merges: if either still follows a headless lane in the
+> same job on the critical path, file this slice; otherwise it becomes
+> `[no-issue]` (delivered by #2745).
+
+- **Outcome:** Save compatibility and `world_check --quick` no longer run
+  serially after the build in the job that also carries a headless lane, so
+  neither extends the critical path once lanes exist.
+- **Scope:** Running that tail beside the lanes — as its own job or inside the
+  lane with the most slack — building as the lanes do (D-14);
+  an explicit executable override for `tools/world_audit.py`'s `cabal run
+  exe:synarchy` launch and for the save-codec lookup where a consumer has no
+  build tree; the `build-test` aggregate; and a measured critical-path and
+  runner-minute comparison.
+- **Phase:** 4 — tune lanes
+- **Depends on:** `CIR-16`
+- **Ordering:** `not on the critical path`
+- **Relevant decisions:** D-1, D-2, D-5, D-7
+- **Acceptance signals:** Identical gate coverage and verdicts; the tail no
+  longer appears after the build on the critical path; bounded artifact or
+  duplicate-build overhead; no material retry/flakiness regression.
 - **Out of scope:** Parallel execution of tests that share mutable engine state
-  without isolation, or uploading the complete `dist-newstyle` tree.
-- **Open questions:** Q-7
+  without isolation, uploading the complete `dist-newstyle` tree, or changing
+  what `world_check` or save compatibility verify.
+- **Open questions:** Q-7 only if a later decision reintroduces handoff
 
 ### CIR-6. Reassess full-suite and behavior-probe selection from measured coverage
+
+> Deferred 2026-09-28: this slice decides whether structural wins are enough
+> before anything about PR test selection changes (Q-2). That evidence exists
+> only after the lanes (#2745) and the build-side change #2746 recommends. If
+> the measured median successful PR run is then under twenty minutes (D-15),
+> the unconditional suite stays and this slice becomes `[no-issue]`; otherwise
+> draft it with that measurement.
 
 - **Outcome:** Either retain the unconditional PR Hspec policy with evidence
   that structural wins are sufficient, or adopt a fail-closed, self-tested
@@ -1008,7 +1499,7 @@ stops for a new decision.
 - **Scope:** Coverage/ownership map, test grouping, selector self-tests, and
   documented stop/ask behavior for unclassified paths.
 - **Phase:** 4 — policy optimization
-- **Depends on:** `CIR-1`, `CIR-5`, `CIR-8`
+- **Depends on:** `CIR-1`, `CIR-16`, `CIR-17`
 - **Ordering:** `not on the critical path`
 - **Relevant decisions:** D-1, D-2, D-3, D-8
 - **Acceptance signals:** A measured decision; if selection changes, every path
