@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from probelib import boot, send
 
 from .constants import MAX_STEP_TILES, REPO, STAGES
+from .notices import install_latch_recorder
 from .readers import dist
 
 
@@ -37,7 +38,7 @@ from .readers import dist
 # Stage-aware check recorder
 # --------------------------------------------------------------------------
 class Checks:
-    """Every check is attributed to one of the eight STAGES, so a failure
+    """Every check is attributed to one of the ten STAGES, so a failure
     says WHICH part of the loop broke instead of only that it did."""
 
     def __init__(self) -> None:
@@ -111,8 +112,8 @@ class Checks:
                   flush=True)
         else:
             print("\n--- PASS: the first expedition runs end to end "
-                  "(prepare, travel, discover, extract, return, invest) ---",
-                  flush=True)
+                  "(prepare, travel, discover, confront, extract, return, "
+                  "invest) ---", flush=True)
 
 
 # --------------------------------------------------------------------------
@@ -242,6 +243,39 @@ class ExpeditionState:
     #: its own obligation row reports.
     sig_phys: int = -1
 
+    # ---- [setup]: the occupied ruin (#2640) -------------------------
+    #: The second ruin's placement row, stable id, anchor, and the region
+    #: that counts as "at" it.
+    occ: dict = field(default_factory=dict)
+    occ_id: int = -1
+    occ_xy: tuple = (0.0, 0.0)
+    occ_box: tuple = ()
+    #: Its persisted encounter roll, read once its contents spawned.
+    occ_rolled: int = -1
+
+    # ---- [encounter] / [reward] -------------------------------------
+    #: The retained event-log evidence (`notices.EventLedger`), baselined
+    #: as the confrontation leg begins and polled until the ruin clears.
+    ledger: object = None
+    #: The party that walked on from the first ruin.
+    fighters: list = field(default_factory=list)
+    #: The encounter's persisted membership, by uid.
+    occ_members: list = field(default_factory=list)
+    #: The occupied ruin's guaranteed item: physical id, ground id at the
+    #: moment the fight ended, and who the player's gesture gave it to.
+    occ_sig_phys: int = -1
+    occ_sig_gid: int = -1
+    occ_carrier: int = -1
+    occ_sig_def: str = ""
+    #: Lifecycles observed on the occupied ruin, in order.
+    occ_lifecycles: list = field(default_factory=list)
+    #: Whether the control traveller was ever seen at the occupied ruin.
+    control_near_occ: bool = False
+    #: Aggression episodes the occupants opened. Reported, not
+    #: fingerprinted: how often a nomad breaks off and re-engages is a
+    #: combat outcome, not an identity.
+    occ_episodes: int = 0
+
 
 # --------------------------------------------------------------------------
 # Isolation, boot and bootstrap
@@ -286,6 +320,9 @@ def make_isolated_root(base: str) -> str:
 
 
 def bootstrap(port: int) -> None:
+    """Load the content and the session scripts both engines share, then
+    install the tutorial latch recorder (`notices`) before anything in
+    this world can latch."""
     for pattern, fn in YAML_LOADERS:
         for path in sorted(glob.glob(os.path.join(REPO, pattern))):
             send(port, f"{fn}('{os.path.relpath(path, REPO)}'); return 'ok'",
@@ -302,6 +339,10 @@ def bootstrap(port: int) -> None:
                       "return t and t.id or 'nil'", timeout=15.0)
     if tree != "first_session":
         raise SetupError(f"expected the first_session tutorial tree, got {tree!r}")
+    # AFTER the loadScript calls above: re-running tutorial_progress.lua
+    # redefines its functions on the singleton, which would drop a
+    # wrapper installed earlier.
+    install_latch_recorder(port)
     # Scenario condition, applied to the whole session and therefore to
     # BOTH travellers symmetrically (see the facade's module
     # docstring): retire

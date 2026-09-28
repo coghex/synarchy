@@ -3709,7 +3709,7 @@ an unreachable anchor expires instead of re-pathing forever.
 ## The expedition loop: the unprepared control
 
 Enforced by `tools/expedition_loop_probe.py` (manual-only, fixed-seed,
-~15 min, two engine boots). `docs/expedition_gameplay_loop.md` is the
+~30 min, two engine boots). `docs/expedition_gameplay_loop.md` is the
 design authority for the arc; CLAUDE.md states that the control exists and
 must end measurably worse off. This enumerates the six conditions that
 keep the comparison honest — weakening any one turns the control into
@@ -3772,6 +3772,62 @@ at all**: `uiFrozen` only makes
 walking while `unit.getInfo` reports where it was when the flag went up.
 Use `engine.setPaused` when you need a unit to actually stay put, and
 re-read positions after pausing.
+
+**The confrontation leg (#2640, EXP-3).** After the control leg the same
+session goes on to a SECOND `ruin_small` whose persisted encounter roll is
+at least one; the six conditions above cover only the first leg and are
+not moved by it, and the control traveller takes no part. Setup chooses
+that ruin by a total order (distance from the colony, then instance id)
+and refuses with exit 2, naming it, when no occupied ruin within 160 tiles
+has straight colony and first-ruin corridors that step at most 4 levels
+and cross at most 2 wet tiles — the pathfinder will route a party up a
+cliff it does not survive, which is why the default seed moved from 42 to
+14. The first ruin's guaranteed item is followed rather than its expected
+carrier on the way home: a colonist can pick it up unordered and then walk
+on with the party. The leg proves the natural clearing order only: unknown
+when the leg begins, discovered by sight once, `active` and uncleared
+while every assigned occupant lives, still uncleared once they are all
+dead with the guaranteed item on the ground, and `cleared` exactly once
+when the player's pickup gesture takes that item. The taken-while-hostile
+ordering stays with #917's hspec coverage. Three instrument rules:
+
+- **Count notices from a retained ledger, never a final snapshot.**
+  `engine.getEventLogProgress()` is polled from the moment the leg begins and
+  every row is kept by `sequence`; an interval the ledger never saw is
+  explained only while the ring is below `eventStoreCap` (coalescing), and
+  one seen at capacity fails the exactly-once checks as unprovable. Both
+  ruins share the def label in a language-less world, so notices are
+  attributed by page and anchor coordinates, and aggression by occupant uid.
+  Aggression is exactly once PER EPISODE (owner directive on #2640), not
+  once per leg: a lone nomad wounded by a stronger acolyte retreats, the
+  ruin guard walks it home — closing the episode with a disengage notice —
+  and it re-acquires the party in a new episode with its own notice. The
+  occupant's notices must therefore alternate aggression / disengage,
+  starting with aggression, each emitted once.
+
+**Known hazard: the occupants do not outlive a slow run.** Observed while
+building the leg (2026-09-28, seed 14): an unvisited `nomad_primitive`
+occupant has no way to eat or drink and "died of electrolyte imbalance"
+about 1100 game-seconds after its contents spawned (the occupied ruin's
+chunk is loaded at setup). A normal run fights at roughly half that, but a
+run delayed long enough finds the roster already dead, the encounter
+cleared by physiology and the ruin still `unknown`, and fails `encounter`
+with the death in its notice trail. That is shipped occupant behaviour,
+not a probe defect; it is to be filed separately rather than papered over
+here.
+- **Tutorial latch order is read at the write boundary.** The four trip
+  objectives may latch during the zero-occupant leg and several in one
+  evaluation pass, so the probe wraps `tutorial_progress.completeObjectives`
+  to record the pass that latched each id (observation only) and requires
+  the pass numbers never decrease in authored order.
+- **Restored, not recomputed.** The same recorder runs in the fresh
+  process: the save component's `apply()` writes the completed set
+  directly and never passes through `completeObjectives`, so a required
+  latch present after the load publishes and absent from that engine's
+  record came off the disk. Holding the evaluator back does not work — a
+  headless boot already loads it ticking through `scripts/init_loader.lua`
+  — and `Secure` is false in the reloaded world (both guaranteed items are
+  in storage), so a plain post-load read cannot tell restored from lost.
 
 ---
 

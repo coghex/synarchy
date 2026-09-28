@@ -24,12 +24,13 @@ import time
 
 from probelib import poll_until, send, send_json
 
-from .constants import PAGE
+from .constants import ACOLYTE_DEF, PAGE, RETURN_SECONDS
 from .harness import Checks, ExpeditionState, StageAbort, assert_real_travel
 from .readers import (clearance_events, current_action, event_log,
                       find_instance, find_instance_by_def, fmt_vitals,
                       ground_items, instance_by_id, inventory, is_adjacent,
-                      pose, properties, significant_rows, unit_pos, vitals)
+                      pose, properties, roster, significant_rows, unit_pos,
+                      vitals)
 
 
 # --------------------------------------------------------------------------
@@ -48,6 +49,64 @@ def walk_until_adjacent(port: int, uid: int, foot, seconds: float,
                 return True
         time.sleep(1.0)
     return False
+
+
+def holder_of(port: int, phys: int):
+    """The live player acolyte carrying physical instance `phys`, or
+    None."""
+    for uid in roster(port).get(ACOLYTE_DEF, []):
+        if find_instance(inventory(port, uid), phys) is not None:
+            return uid
+    return None
+
+
+def locate(port: int, phys: int) -> str:
+    """Where physical instance `phys` is right now, for a failure
+    message: a carrier, the ground, or nowhere this probe can see."""
+    uid = holder_of(port, phys)
+    if uid is not None:
+        return f"carried by {uid} at {unit_pos(port, uid)}"
+    g = next((g for g in ground_items(port) if g.get("instanceId") == phys),
+             None)
+    if g is not None:
+        return f"on the ground at ({g.get('x')},{g.get('y')})"
+    for uid in roster(port).get("technomule", []):
+        if find_instance(inventory(port, uid), phys) is not None:
+            return f"carried by the technomule {uid}"
+    return "not carried by a live acolyte, not on the ground"
+
+
+def bank_home(port: int, st: ExpeditionState, phys: int,
+              seconds: float = RETURN_SECONDS):
+    """Bring physical instance `phys` home and into colony storage,
+    whoever carries it, and return its storage row (or None).
+
+    A guaranteed item is a Materials def, so it can change hands without
+    a player order — a colonist in the ruin may pick it up of its own
+    accord, and `store_materials` may bank it once its carrier is in
+    reach of the cargo. So this follows the ITEM, not a named carrier:
+    whoever holds it is walked home, and deposits it by the same lax
+    `unit.depositToCargo` verb the measured item uses, only from a tile
+    adjacent to the storage footprint."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        stored = send_json(port, f"return building.getStorage({st.storage_bid})")
+        row = find_instance(stored if isinstance(stored, list) else [], phys)
+        if row is not None:
+            return row
+        uid = holder_of(port, phys)
+        if uid is not None:
+            p = unit_pos(port, uid)
+            if p and is_adjacent(p, st.foot):
+                item = find_instance(inventory(port, uid), phys) or {}
+                send(port, f"return unit.depositToCargo({uid},{st.storage_bid},"
+                           f"'{item.get('defName', '')}',{phys})")
+            elif current_action(port, uid) != "follow_command":
+                send(port, f"require('scripts.unit_ai').commandMove({uid},"
+                           f"{st.deposit_spot[0]},{st.deposit_spot[1]}); "
+                           f"return 'ok'")
+        time.sleep(1.0)
+    return None
 
 
 def run(chk: Checks, st: ExpeditionState) -> None:
@@ -201,7 +260,8 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
     send(port, f"require('scripts.unit_ai').commandMove({prepared},"
                f"{deposit_spot[0]},{deposit_spot[1]}); return 'ok'")
     r_samples: list = []
-    arrived = walk_until_adjacent(port, prepared, foot, 420.0, r_samples)
+    arrived = walk_until_adjacent(port, prepared, foot, RETURN_SECONDS,
+                                  r_samples)
     chk.ok(bool(arrived),
            f"the carrier walks the whole way home and arrives adjacent to "
            f"colony storage (at {unit_pos(port, prepared)}, footprint "
@@ -235,25 +295,16 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
     # ended up carrying it. It may already have been banked
     # autonomously — `processing_unit` is a Materials def, and
     # `store_materials` fires on any Materials in inventory with
-    # the colony's cargo in reach — so the deposit is issued
-    # only if this carrier still holds it, and the assertion is
-    # on the OUTCOME either way: that exact physical instance
-    # ends up in colony storage.
-    held_sig = find_instance(inventory(port, prepared), sig_phys)
-    if held_sig is not None:
-        send(port, f"return unit.depositToCargo({prepared},"
-                   f"{storage_bid},'{held_sig['defName']}',{sig_phys})")
-    banked = poll_until(
-        60.0,
-        lambda: find_instance(
-            (lambda v: v if isinstance(v, list) else [])(
-                send_json(port,
-                          f"return building.getStorage({storage_bid})")),
-            sig_phys),
-        interval=1.0)
+    # the colony's cargo in reach — and since #2640 its carrier may
+    # be a colonist who went on to the occupied ruin, so `bank_home`
+    # follows the item rather than this carrier, and the assertion is
+    # on the OUTCOME: that exact physical instance ends up in colony
+    # storage.
+    banked = bank_home(port, st, sig_phys)
     chk.ok(banked is not None,
            f"the guaranteed item is banked in colony storage as that "
-           f"exact physical instance ({sig_phys})")
+           f"exact physical instance ({sig_phys}"
+           f"{'' if banked else '; now ' + locate(port, sig_phys)})")
     # Taking it out of the ruin and moving it around cannot undo
     # the latch: the ruin was looted, and that does not become
     # untrue.

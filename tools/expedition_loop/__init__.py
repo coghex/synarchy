@@ -5,9 +5,9 @@ expedition carried through preparation, travel, discovery, extraction,
 return, control comparison, save and a fresh-process load, sharing one
 world, one experimental control, one save handoff and one fingerprint.
 What moved here is WHO owns each part of it, so adding the next stage
-(#917's checks landed inside these owners; epic #1229's confrontation is
-a NEW stage between travel and extraction) is a local change rather than
-another 900 lines of `main`.
+is a local change rather than another 900 lines of `main` — #917's
+checks landed inside these owners, and #2640's confrontation leg landed
+as one new owner (`encounter`) plus its evidence library (`notices`).
 
   * `constants` — every stable value the scenario is defined by: the
     page and slot, the def names, the site bounds, the departure
@@ -26,8 +26,14 @@ another 900 lines of `main`.
     `travel`).
   * `travel` — the shared leg, sight-based discovery, the paired
     sampling, and the survival control scored from it.
+  * `notices` — session-long evidence: the event-log ledger retained
+    by sequence with its missing intervals, and the tutorial latch-order
+    recorder at the evaluator's write boundary.
   * `extract` — the retrieval orders, the walk home, and the deposit
     into colony storage.
+  * `encounter` — the occupied ruin: the party's leg, discovery,
+    activation, the fight, the untaken-item middle state, the player's
+    recovery, the clearance, and that item's deposit home.
   * `persistence` — the save capture, and the fresh-process reload.
 
 THESE ARE LIBRARIES, NOT PROBES. Nothing here is registered in

@@ -15,6 +15,17 @@ item can be what clears the place. What this gate proves is the
 
 with survival as the risk and supplies as the payoff.
 
+Since #2640 (EXP-3) the same session carries on to the arc's other
+half, the **man-versus-man** loop, at a SECOND `ruin_small` in the same
+world whose persisted encounter roll is at least one:
+
+    ... extract -> confront -> recover -> clear -> return -> invest
+
+The zero-occupant leg above is untouched and still measured first, so
+combat can never confound the food control; the confrontation leg starts
+only after it, from the first ruin, and the control traveller takes no
+part in it.
+
 Every component of that chain already had its own gate. What had never
 been run is the chain AS ONE SESSION, from an empty world to a reloaded
 save: `tools/location_embark_probe.py` stops at discovery,
@@ -25,11 +36,14 @@ verdict at all.
 STAGES
 ------
 Failure output names the stage, because "the expedition failed" is not
-diagnosable. The eight stages are independent and each can break on its
+diagnosable. The ten stages are independent and each can break on its
 own:
 
-  setup     a real world, a real placed ruin, a portal-eligible colony
-            site, the portal, its own spawned roster, colony storage
+  setup     a real world, a real placed zero-occupant ruin, a
+            portal-eligible colony site, the portal, its own spawned
+            roster, colony storage — and the OCCUPIED ruin the second
+            leg goes to, still unknown, its roster and guaranteed item
+            spawned in place
   prepare   water secured by a real acolyte's own FOV scan; the
             traveller provisioned off the technomule through the normal
             inventory-transfer surface; the shipped first_session
@@ -41,12 +55,32 @@ own:
   extract   the retrieval order is issued at the ruin and the ruin's own
             seed-stable loot-table output is picked up through the real
             pickup_ground action
-  return    the carrier walks home and deposits into colony storage from
-            an adjacent tile
+  encounter the party walks on to the occupied ruin, which was unknown
+            when the leg began and is discovered by sight exactly once;
+            its occupants acquire the party through their own
+            sight/aggression path (activated; exactly one aggression
+            notice per episode — a wounded nomad that breaks off and
+            re-engages opens a new one, shipped #916 behaviour);
+            while they are all alive it is `active` and uncleared; the
+            party kills every one under ordinary attack orders, and the
+            ruin is STILL uncleared with its guaranteed item on the
+            ground
+  reward    the player's pickup gesture takes that exact item into a
+            living acolyte's pack; its taken latch is set and the ruin
+            clears exactly once with exactly one notice; the four trip
+            objectives have latched through the real evaluator in
+            authored order
+  return    the carriers walk home and deposit into colony storage from
+            an adjacent tile — the first ruin's items and the occupied
+            ruin's guaranteed item alike
   save      the session is captured through the real save barrier
   load      a FRESH PROCESS loads it and every durable identity is
-            re-checked: location instance, per-unit knowledge, objective
-            latches, and the recovered item down to its instance id
+            re-checked: both location instances, the occupied ruin's
+            roll, membership, dead occupants and taken item, per-unit
+            knowledge, objective latches — present straight after the
+            publish and written by no evaluation pass in the fresh
+            process, so RESTORED rather than recomputed — and
+            the recovered items down to their instance ids
   control   the unprepared control party, run identically, is measurably
             worse off at the same point in the journey
 
@@ -171,7 +205,7 @@ other merely to walk would bury a 15% speed difference inside a
 comparison that is supposed to isolate supplies. And the control is
 given NO retrieval target of its own: handing it the ruin's second loot
 roll would make the loot TABLE part of the experiment, because a ruin
-can roll food (instance 3 on the default seed rolls `rations`) and a
+can roll food (instance 3 on seed 42 rolls `rations`) and a
 control that eats what it finds destroys the very measurement it exists
 to provide. The control is a control for the JOURNEY; extraction is
 #920's probe's job.
@@ -201,18 +235,20 @@ litres or kcal.
 
 WHAT IS DELIBERATELY NOT DONE
 -----------------------------
-  * No lifecycle is manufactured. `world.setLocationLifecycle` is never
-    called. The selected ruin's persisted zero-occupant encounter starts
+  * No lifecycle is manufactured, no encounter, occupant or health state
+    is written, and no tutorial latch is set. `world.setLocationLifecycle`
+    is never called. The selected ruin's persisted zero-occupant encounter starts
     clear internally but stays `unknown` until sight, then becomes
     `discovered` — and only reaches `cleared` once its #917 guaranteed
     significant item has actually been carried out, which this run does
-    through the real pickup boundary. WHO carries it is not asserted:
+    through the real pickup boundary. The OCCUPIED ruin does become
+    `discovered`, then `active` on autonomous aggression, and remains
+    uncleared until every assigned nomad is dead AND that item is taken
+    — and there the pickup is asserted to be the player's own gesture,
+    made after the fight, because that ordering is what the leg proves. WHO carries it is not asserted:
     `processing_unit` is a Materials def, so a colonist standing in the
     ruin may recover it of its own accord before the player's gesture,
-    which clears the location just as legitimately. An occupied ruin
-    would first become `discovered`,
-    then `active` on autonomous aggression, and remain so until every
-    assigned nomad is dead AND that item is taken.
+    which clears the location just as legitimately.
   * No item is staged in the ruin. The measured extraction target is
     whichever def the ruin's own two `ruin_common` rolls produced (#921
     removed the fixed entries; #948 made the draw seed-stable per
@@ -238,11 +274,13 @@ DETERMINISM AND REPEATABILITY
 -----------------------------
 Fixed seed, fixed size, fixed plate count; the ruin and colony site are
 chosen by a total order over the world's own deterministic placement
-list. The run prints a single `FINGERPRINT` line carrying the selected
-ruin instance, its anchor, its rolled loot, the extraction target, the
-guaranteed significant item's def and physical instance id, the
-colony and water tiles, the completed objective set, and the per-stage
-outcomes — so two consecutive invocations can be diffed as one line for
+list, and the occupied ruin by a total order (distance from the colony,
+then instance id) over the same list. The run prints a single
+`FINGERPRINT` line carrying both ruins' instance ids and anchors, the
+first ruin's rolled loot, the extraction target, both guaranteed
+significant items' defs and physical instance ids, the occupied ruin's
+rolled count and occupant uids, the colony and water tiles, the
+completed objective set, and the per-stage outcomes — so two consecutive invocations can be diffed as one line for
 identity AND result, not merely compared on exit status. Sampled
 measurements (the control's stomach delta) are printed separately and
 deliberately kept OUT of the fingerprint: two honest runs of the same
@@ -263,11 +301,13 @@ lifecycle, stage dispatch, the fingerprint line and the aggregate exit
 are here, and nothing else is. `tools/expedition_loop/__init__.py` is
 the ownership map; the short version is `harness` (checks, isolation,
 bootstrap, the shared state record and the one fingerprint accumulator),
-`readers` (the shared engine queries and geometry), `constants`, and one
-module per stage group — `setup`, `prepare`, `travel` (which owns the
-`control` measurement scored from its own paired samples), `extract`
-(which owns the `return` leg the same recovered instance makes), and
-`persistence` (`save` and `load`).
+`readers` (the shared engine queries and geometry), `constants`, `notices` (the retained event-log and tutorial-latch
+evidence), and one module per stage group — `setup`, `prepare`,
+`travel` (which owns the `control` measurement scored from its own
+paired samples), `extract` (which owns the `return` leg the same
+recovered instance makes), `encounter` (`encounter` and `reward`, plus
+the occupied ruin's item's share of `return`), and `persistence`
+(`save` and `load`).
 
 Those are LIBRARIES, not probes: there is still exactly one
 `expedition_loop` registration in `tools/probe_runner_registry.py`, one
@@ -276,7 +316,7 @@ and one executable — this one.
 
 Usage:
   python3 tools/expedition_loop_probe.py
-  python3 tools/expedition_loop_probe.py --seed 42 --size 64 --port 9923
+  python3 tools/expedition_loop_probe.py --seed 14 --size 64 --port 9923
 
 Exit code 0 = all checks passed; 1 = a check failed; 2 = a stage refused
 to go on, so the run could not reach the state it tests.
@@ -294,7 +334,8 @@ from probelib import quit_engine
 # GPU-free acceptance gate for this probe is
 # `python3 -c 'import expedition_loop_probe'`, and it can only catch a
 # syntax or import error in an owner that the facade actually imports.
-from expedition_loop import extract, persistence, prepare, setup, travel
+from expedition_loop import (encounter, extract, persistence, prepare, setup,
+                             travel)
 from expedition_loop.constants import LOG_A, LOG_B
 from expedition_loop.harness import (Checks, ExpeditionState, Fingerprint,
                                      SetupError, StageAbort, boot_probe,
@@ -304,7 +345,10 @@ from expedition_loop.harness import (Checks, ExpeditionState, Fingerprint,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--seed", type=int, default=42)
+    # 14, not the 42 the gate shipped with (#2640): seed 42's only
+    # occupied ruin within reach sits behind a 12-to-30-level gorge that
+    # killed the party sent to it, and setup now refuses such a world.
+    ap.add_argument("--seed", type=int, default=14)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
     ap.add_argument("--port", type=int, default=9923)
@@ -336,7 +380,10 @@ def main() -> int:
             prepare.run(chk, st)
             travel.run(chk, st)
             extract.run(chk, st)
+            encounter.run(chk, st)
+            encounter.reward(chk, st)
             extract.deliver(chk, st)
+            encounter.deliver_home(chk, st)
             persistence.save(chk, st)
             # Measured HERE, in engine A, from the observations `travel`
             # retained — before the fresh process, though it is reported

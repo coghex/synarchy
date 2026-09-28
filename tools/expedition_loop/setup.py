@@ -25,34 +25,46 @@ from __future__ import annotations
 from probelib import poll_until, send, send_json
 
 from .constants import (ACOLYTE_DEF, HOME_MAX_DIST, HOME_MIN_DIST,
-                        MAX_CORRIDOR_STEP, MULE_DEF, PAGE, PORTAL_DEF,
-                        STORAGE_DEF, WATER_MAX_DIST)
+                        MAX_CORRIDOR_STEP, MULE_DEF, OCCUPIED_MAX_DIST,
+                        OCCUPIED_MAX_STEP, OCCUPIED_MAX_WET_TILES, PAGE,
+                        PORTAL_DEF, STORAGE_DEF, WATER_MAX_DIST)
 from .harness import Checks, ExpeditionState, StageAbort
-from .readers import (_as_float, dist, ground_items, instance_by_id,
-                      load_region, placed, roster, significant_rows,
-                      surface_z)
+from .readers import (_as_float, arrival_box, dist, ground_items,
+                      instance_by_id, load_region, placed, roster,
+                      significant_rows, surface_z)
 
 
 # --------------------------------------------------------------------------
 # Site selection
 # --------------------------------------------------------------------------
-def corridor_roughness(port: int, x0: int, y0: int, x1: int, y1: int,
-                       samples: int = 24):
-    """Largest surface-Z step between consecutive samples along the
-    straight line between two tiles, or None if any sample is unresolved
-    or wet."""
-    lua = (f"local worst=0; local prev=nil; "
+def corridor_profile(port: int, x0: int, y0: int, x1: int, y1: int):
+    """(largest surface-Z step between consecutive DRY tiles, wet tiles)
+    along the straight line between two tiles, sampled at every tile — or
+    None if any tile is unresolved.
+
+    A wet tile is skipped rather than refused: a stream a party wades is
+    not a wall, and the step is measured across it from the last dry
+    tile, so a gorge with a river in it still reads as the gorge."""
+    samples = int(max(abs(x1 - x0), abs(y1 - y0), 1))
+    # Every coordinate is parenthesised: a negative one spliced after a
+    # minus sign would otherwise read `x - -8` as `x --8`, a Lua comment
+    # that swallows the rest of the line.
+    lua = (f"local x0,y0,x1,y1=({x0}),({y0}),({x1}),({y1}); "
+           f"local worst=0; local prev=nil; local wet=0; "
            f"for i=0,{samples} do local t=i/{samples}; "
-           f"local x=math.floor({x0}+({x1}-{x0})*t); "
-           f"local y=math.floor({y0}+({y1}-{y0})*t); "
+           f"local x=math.floor(x0+(x1-x0)*t+0.5); "
+           f"local y=math.floor(y0+(y1-y0)*t+0.5); "
            f"local sz=(world.getSurfaceAt(x,y)); local f=world.getFluidAt(x,y); "
-           f"if not sz or f then return -1 end; "
+           f"if not sz then return 'unresolved' end; "
+           f"if f then wet=wet+1 else "
            f"if prev then local d=math.abs(sz-prev); if d>worst then worst=d end end; "
-           f"prev=sz end; return worst")
-    v = _as_float(send(port, lua, timeout=30.0))
-    if v is None:
+           f"prev=sz end end; return worst..','..wet")
+    raw = send(port, lua, timeout=60.0)
+    step, _, wet = raw.partition(",")
+    step_v, wet_v = _as_float(step), _as_float(wet)
+    if step_v is None or wet_v is None:
         return None
-    return None if v < 0 else v
+    return step_v, int(wet_v)
 
 
 def site_candidates(port: int, gx: int, gy: int, rz: float) -> list:
@@ -183,6 +195,60 @@ def pick_site(chk: Checks, port: int):
     chk.fail_setup(f"a ruin with a portal-eligible colony site "
                    f"{HOME_MIN_DIST}..{HOME_MAX_DIST} tiles away across walkable "
                    f"ground, with water within {WATER_MAX_DIST} tiles, exists")
+    return None
+
+
+def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict):
+    """Choose the second, OCCUPIED ruin the confrontation leg goes to.
+
+    Candidates are the placed `ruin_small` instances whose persisted
+    encounter roll is at least one, in a total order — distance from the
+    colony, then instance id — so the choice is a function of the seed
+    alone. The first one within OCCUPIED_MAX_DIST whose straight
+    corridors from the colony AND from the zero-occupant ruin are
+    resolvable, cross no more than OCCUPIED_MAX_WET_TILES of water and
+    step no higher than OCCUPIED_MAX_STEP between dry tiles wins,
+    sampled at every tile. Placement legality says nothing about whether
+    a party can walk there, and the pathfinder will happily route a
+    party up a cliff it does not survive (observed on seed 42's nearest
+    occupied ruin, behind a 12-to-30-level gorge: both acolytes sent to
+    it died on the way).
+
+    Returns the placement row, or None."""
+    home = (int(site["x"]), int(site["y"]))
+    rx, ry = int(ruin["gx"]), int(ruin["gy"])
+    cands = sorted(
+        (e for e in placed(port, PAGE)
+         if isinstance(e, dict) and e.get("id") == "ruin_small"
+         and int((e.get("encounter") or {}).get("rolled_count", 0)) >= 1),
+        key=lambda e: (dist(home, (int(e["gx"]), int(e["gy"]))),
+                       int(e["instance_id"])))
+    for occ in cands:
+        gx, gy = int(occ["gx"]), int(occ["gy"])
+        far = dist(home, (gx, gy))
+        if far > OCCUPIED_MAX_DIST:
+            break
+        # Page in every chunk along both corridors before reading them.
+        for (x0, y0) in (home, (rx, ry)):
+            for k in range(0, 11):
+                t = k / 10
+                load_region(port, int(x0 + (gx - x0) * t) // 16,
+                            int(y0 + (gy - y0) * t) // 16, pad=1)
+        profiles = [corridor_profile(port, x0, y0, gx, gy)
+                    for (x0, y0) in (home, (rx, ry))]
+        ok = all(p is not None and p[0] <= OCCUPIED_MAX_STEP
+                 and p[1] <= OCCUPIED_MAX_WET_TILES for p in profiles)
+        print(f"  occupied ruin {occ['instance_id']} at ({gx},{gy}), rolled "
+              f"{occ['encounter']['rolled_count']}: {far:.0f} tiles from the "
+              f"colony; (largest step, wet tiles) from colony / first ruin "
+              f"{profiles} -> {'usable' if ok else 'not walkable'}", flush=True)
+        if ok:
+            return occ
+    chk.fail_setup(f"an OCCUPIED ruin_small (encounter roll >= 1) lies within "
+                   f"{OCCUPIED_MAX_DIST} tiles of the colony across walkable "
+                   f"ground from both the colony and the zero-occupant ruin "
+                   f"(steps <= {OCCUPIED_MAX_STEP}, <= "
+                   f"{OCCUPIED_MAX_WET_TILES} wet tiles)")
     return None
 
 
@@ -397,6 +463,42 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                  ruin_anchor=[int(ruin["gx"]), int(ruin["gy"])],
                  colony=list(home),
                  water=[site["wx"], site["wy"]])
+
+    # The confrontation leg's ruin (#2640), chosen before anything moves
+    # so a world that cannot host it refuses here, naming which ruin it
+    # lacks, rather than half an hour later.
+    occ = pick_occupied(chk, port, ruin, site)
+    if occ is None:
+        raise StageAbort("no reachable occupied ruin")
+    st.occ = occ
+    st.occ_id = occ_id = int(occ["instance_id"])
+    st.occ_xy = (float(occ["gx"]), float(occ["gy"]))
+    st.occ_box = arrival_box(occ)
+    load_region(port, int(occ["cx"]), int(occ["cy"]))
+    occ_inst = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
+                                         and i.get("contents_spawned") else None)(
+        instance_by_id(port, PAGE, occ_id)), interval=1.0) or {}
+    occ_enc = occ_inst.get("encounter") or {}
+    occupants = sorted(int(o["uid"]) for o in occ_enc.get("occupants") or [])
+    occ_sig = significant_rows(port, occ_id)
+    chk.ok(occ_inst.get("lifecycle") == "unknown"
+           and int(occ_enc.get("rolled_count", 0)) >= 1
+           and len(occupants) == int(occ_enc.get("rolled_count", -1))
+           and occ_enc.get("cleared") is False
+           and occ_inst.get("clearance_satisfied") is False
+           and len(occ_sig) == 1
+           and occ_sig[0].get("item_instance_id") is not None
+           and occ_sig[0].get("taken") is False,
+           f"the occupied ruin {occ_id} starts undiscovered with its whole "
+           f"persisted roster spawned ({len(occupants)} occupant(s) {occupants} "
+           f"for a roll of {occ_enc.get('rolled_count')!r}) and its guaranteed "
+           f"item in place ({occ_sig}); lifecycle "
+           f"{occ_inst.get('lifecycle')!r}")
+    st.occ_rolled = int(occ_enc.get("rolled_count", -1))
+    st.fp.update(occupied_instance=occ_id,
+                 occupied_anchor=[int(occ["gx"]), int(occ["gy"])],
+                 occupied_rolled=int(occ_enc.get("rolled_count", -1)),
+                 occupant_uids=occupants)
 
     inst = instance_by_id(port, PAGE, ruin_id)
     chk.ok(isinstance(inst, dict) and inst.get("lifecycle") == "unknown",

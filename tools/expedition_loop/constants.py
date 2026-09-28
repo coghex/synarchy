@@ -111,11 +111,53 @@ OBJ_EXPEDITION = "first_session_prepare_expedition"
 SUB_WATER = "first_session_prepare_water"
 SUB_FOOD = "first_session_prepare_food"
 
-#: Preparation latches required by this survival-control scenario. Later
-#: expedition objectives may also complete during the trip (#2301); EXP-3
-#: owns extending the integrated gate to require them. These three latches
-#: must survive reload; the two supply subobjectives remain live checks.
+#: Preparation latches required by this survival-control scenario. These
+#: three latches must survive reload; the two supply subobjectives remain
+#: live checks.
 REQUIRED_PREPARATION_COMPLETED = {OBJ_PORTAL, OBJ_WATER, OBJ_EXPEDITION}
 
-STAGES = ["setup", "prepare", "travel", "extract", "return",
-          "save", "load", "control"]
+#: The four durable trip objectives #2301 added, in AUTHORED presentation
+#: order (each is the next one's parent in data/tutorials/first_session.yaml).
+#: They may latch as early as the zero-occupant leg — `tutorial_eval`
+#: accepts a discovered zero-roll ruin for Confront and aggregates facts
+#: across every known location — and several may latch in one evaluation
+#: pass; the gate requires only that none latches before its predecessor.
+TRIP_OBJECTIVES = ["first_session_confront", "first_session_recover",
+                   "first_session_secure", "first_session_clear"]
+
+#: Every latch the fresh process must restore from the save.
+REQUIRED_RELOAD_COMPLETED = REQUIRED_PREPARATION_COMPLETED | set(TRIP_OBJECTIVES)
+
+# ---- the occupied ruin (#2640) -------------------------------------------
+#: The furthest the occupied ruin may sit from the colony. `ruin_small`
+#: declares `min_spacing: 5` chunks, so a second ruin is never closer than
+#: ~80 tiles to the first; this bounds the confrontation leg to a trip the
+#: party can walk and return from inside the stage budgets below.
+OCCUPIED_MAX_DIST = 160
+
+#: The occupied ruin's walkability bar, applied to the straight lines
+#: from the colony and from the zero-occupant ruin, sampled at every tile.
+#: Looser than MAX_CORRIDOR_STEP because these lines are three or four
+#: times as long and the pathfinder detours around a small rise, but far
+#: below the gorges that killed a party on seed 42 (12-30 levels): a
+#: step no higher than a unit climbs without injury, and a stream, not a
+#: lake.
+OCCUPIED_MAX_STEP = 4.0
+OCCUPIED_MAX_WET_TILES = 2
+
+#: How far short of the occupied anchor the party musters before the
+#: approach: beyond MAX_SIGHT_TILES of its bounds, so the muster itself
+#: reveals nothing and the approach is what does.
+STAGING_BACKOFF_TILES = MAX_SIGHT_TILES + 8
+
+#: Budgets for the walk to the muster / the approach, and for the fight.
+ENCOUNTER_SECONDS = 420.0
+FIGHT_SECONDS = 300.0
+
+#: The walk home. Since #2640 the carrier comes back from the occupied
+#: ruin (~75 tiles on seed 14, against the first ruin's ~30) with an
+#: empty stomach, and an observed run needed more than 420 s.
+RETURN_SECONDS = 900.0
+
+STAGES = ["setup", "prepare", "travel", "extract", "encounter", "reward",
+          "return", "save", "load", "control"]
