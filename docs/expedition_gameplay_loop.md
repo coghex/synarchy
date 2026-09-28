@@ -1227,7 +1227,7 @@ type icon its reveal resolves to.
 
 > Filed as #2640 (2026-09-17). Owner decisions folded into the issue: two ruins in one session (the calibrated zero-occupant survival control is unchanged; a second occupied `ruin_small` hosts confront → recover → clear), map state observed through lifecycle with the pure `Location map icons` spec as icon evidence, and the natural clearing order only.
 >
-> Delivered by #2640's pull request: `tools/expedition_loop_probe.py` gains the `encounter` and `reward` stages (owner module `tools/expedition_loop/encounter.py`, evidence library `notices.py`), its default seed moves from 42 to 14 because seed 42's only reachable-looking occupied ruin sits behind a gorge that killed the party, and one further owner decision was taken while implementing it: the occupants' aggression notice is exactly once **per episode**, since a wounded nomad that breaks off and re-engages opens a new episode under shipped #916 behaviour. See "9. Gate the full slice" and `docs/engine_contracts.md` §The expedition loop.
+> Delivered by #2640's pull request: `tools/expedition_loop_probe.py` gains the `encounter` and `reward` stages (owner module `tools/expedition_loop/encounter.py`, evidence library `notices.py`), its default seed moves from 42 to 14 because seed 42's only reachable-looking occupied ruin sits behind a gorge that killed the party, and two further owner decisions were taken while implementing it: the occupants' aggression notice is exactly once **per episode**, since a wounded nomad that breaks off and re-engages opens a new episode under shipped #916 behaviour; and the confrontation party is the colony's other acolytes gathered at the first ruin, the prepared traveller having carried its loot home first. See "9. Gate the full slice" and `docs/engine_contracts.md` §The expedition loop.
 
 - **Outcome:** The existing end-to-end scenario proves the completed prepare →
   travel → discover → confront → extract → return → invest loop across two
@@ -1401,11 +1401,12 @@ spawn colony from a real portal roster
   is real, but this control path deliberately excludes combat)
 → extract the ruin's own loot-table output and recover its guaranteed
   significant item (#917), which is what clears it
-→ CONFRONT a second, occupied ruin in the same world (#2640): unknown until
-  the party sees it, its nomads acquire the party themselves, the party kills
-  them under ordinary attack orders, and the ruin stays uncleared until the
-  player's pickup takes its guaranteed item
-→ return and deposit both ruins' items into colony storage
+→ return and deposit into colony storage
+→ CONFRONT a second, occupied ruin in the same world (#2640): a party gathers
+  at the first ruin and walks on; the ruin is unknown until the party sees it,
+  its nomads acquire the party themselves, the party kills them under ordinary
+  attack orders, and the ruin stays uncleared until the player's pickup takes
+  its guaranteed item, which is then carried home and banked too
 → save / reload in a fresh process
 → location, encounter, per-unit knowledge, objective and inventory state
   remain correct
@@ -1426,7 +1427,7 @@ physiological metrics — otherwise the gate would be proving that walking works
 not that preparation matters.
 
 The probe reports ten independent stages (`setup`, `prepare`, `travel`,
-`extract`, `encounter`, `reward`, `return`, `save`, `load`, `control`) so a
+`extract`, `return`, `encounter`, `reward`, `save`, `load`, `control`) so a
 failure names which part of the loop broke, and prints a fingerprint of both
 selected ruins, the occupied one's roll and occupants, both guaranteed items,
 the loot and the sites so two consecutive runs can be compared for identity.
@@ -1437,7 +1438,11 @@ slow for a blocking per-PR gate, and it leans on AI arbitration timing.
 **EXP-3 (#2640) extended it through confrontation and advancement.** The
 hostile branch of #916 runs on a SECOND `ruin_small` whose persisted roll is
 at least one, reached from the first ruin after the survival control has been
-measured, so combat still cannot confound the food comparison. The leg
+measured, so combat still cannot confound the food comparison. The prepared
+traveller carries its loot home first, unchanged; the confrontation party is
+the colony's other acolytes, gathered at the first ruin (owner directive: the
+prepared traveller, after its seeded hunger and the first leg, was observed
+crawling and falling asleep on the longer journey). The leg
 observes map state through lifecycle — `unknown` → `discovered`/`active` →
 `cleared` — with the pure `Location map icons` spec as the evidence that those
 lifecycles draw the shared unknown marker, the type icon and the dark-tinted

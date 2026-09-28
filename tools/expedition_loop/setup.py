@@ -22,6 +22,8 @@ stage's module for a decision setup makes.
 """
 from __future__ import annotations
 
+import math
+
 from probelib import poll_until, send, send_json
 
 from .constants import (ACOLYTE_DEF, HOME_MAX_DIST, HOME_MIN_DIST,
@@ -37,6 +39,26 @@ from .readers import (_as_float, arrival_box, dist, ground_items,
 # --------------------------------------------------------------------------
 # Site selection
 # --------------------------------------------------------------------------
+#: Tiles per chunk side, for the chunk arithmetic `pick_occupied` does
+#: without asking the engine.
+CHUNK_TILES = 16
+
+
+def line_tiles(x0: int, y0: int, x1: int, y1: int) -> list:
+    """The tiles `corridor_profile` samples between two tiles, in order —
+    the same rounding, so a truncation computed here lands on a tile the
+    engine-side walk also visits."""
+    n = int(max(abs(x1 - x0), abs(y1 - y0), 1))
+    return [(int(math.floor(x0 + (x1 - x0) * i / n + 0.5)),
+             int(math.floor(y0 + (y1 - y0) * i / n + 0.5)))
+            for i in range(n + 1)]
+
+
+def chunk_gap(a, b) -> int:
+    """Chebyshev distance between two chunk coordinates."""
+    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+
 def corridor_profile(port: int, x0: int, y0: int, x1: int, y1: int):
     """(largest surface-Z step between consecutive DRY tiles, wet tiles)
     along the straight line between two tiles, sampled at every tile — or
@@ -214,6 +236,16 @@ def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict):
     occupied ruin, behind a 12-to-30-level gorge: both acolytes sent to
     it died on the way).
 
+    Each corridor is read only up to the edge of the occupied ruin's own
+    CHUNK, and nothing here pages that chunk in. A location's contents
+    spawn the first time its chunk loads, and a neglected
+    `nomad_primitive` turns delirious and dies of its own physiology
+    within about twenty game-minutes (see docs/engine_contracts.md §The
+    expedition loop), so its contents are left to spawn as the
+    confrontation party sets out (`encounter.run` pages the ruin in).
+    The unread tail is the ruin's own chunk, which its `anchor: [flat]`
+    placement constraint already holds flat.
+
     Returns the placement row, or None."""
     home = (int(site["x"]), int(site["y"]))
     rx, ry = int(ruin["gx"]), int(ruin["gy"])
@@ -228,14 +260,25 @@ def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict):
         far = dist(home, (gx, gy))
         if far > OCCUPIED_MAX_DIST:
             break
-        # Page in every chunk along both corridors before reading them.
+        ruin_chunk = (gx // CHUNK_TILES, gy // CHUNK_TILES)
+        profiles = []
         for (x0, y0) in (home, (rx, ry)):
-            for k in range(0, 11):
-                t = k / 10
-                load_region(port, int(x0 + (gx - x0) * t) // 16,
-                            int(y0 + (gy - y0) * t) // 16, pad=1)
-        profiles = [corridor_profile(port, x0, y0, gx, gy)
-                    for (x0, y0) in (home, (rx, ry))]
+            tiles = line_tiles(x0, y0, gx, gy)
+            outside = []
+            for x, y in tiles:
+                if chunk_gap((x // CHUNK_TILES, y // CHUNK_TILES),
+                             ruin_chunk) == 0:
+                    break
+                outside.append((x, y))
+            # Page in the chunks this stretch crosses, each with its
+            # neighbours — but only from chunks two or more away from the
+            # ruin's, so no neighbourhood reaches it.
+            for c in dict.fromkeys((x // CHUNK_TILES, y // CHUNK_TILES)
+                                   for x, y in outside):
+                if chunk_gap(c, ruin_chunk) >= 2:
+                    load_region(port, c[0], c[1], pad=1)
+            end = outside[-1] if outside else (x0, y0)
+            profiles.append(corridor_profile(port, x0, y0, end[0], end[1]))
         ok = all(p is not None and p[0] <= OCCUPIED_MAX_STEP
                  and p[1] <= OCCUPIED_MAX_WET_TILES for p in profiles)
         print(f"  occupied ruin {occ['instance_id']} at ({gx},{gy}), rolled "
@@ -324,16 +367,26 @@ def build_storage(chk: Checks, port: int, hx: int, hy: int) -> int:
     if spot is None:
         chk.fail_setup(f"a tile beside the portal accepts {STORAGE_DEF}")
         return -1
+    # Spawned AND finished inside one PAUSED window. The AI tick is
+    # pause-gated, so no colonist ever sees the building's brief
+    # `constructing` ghost: a deliver job planned against it in that
+    # instant goes on fetching the hold's materials — on seed 14 that
+    # includes the first ruin's guaranteed `processing_unit` off the
+    # ground, which the hold's material list then consumes (observed,
+    # #2640). Same fixture, the race closed.
+    send(port, "engine.setPaused(true); return 'ok'")
     raw = send(port, f"return building.spawn('{STORAGE_DEF}',{spot[0]},{spot[1]})")
     try:
         bid = int(float(raw))
     except (TypeError, ValueError):
+        send(port, "engine.setPaused(false); return 'ok'")
         chk.fail_setup(f"{STORAGE_DEF} spawned beside the portal (got {raw!r})")
         return -1
     required = _as_float(send(port, f"return building.getBuildRequired({bid})")) or 240.0
     send(port, f"building.addBuildProgress({bid}, {required + 1.0}); return 'ok'")
     built = poll_until(30.0, lambda: send(
         port, f"return building.getActivity({bid})") == "built")
+    send(port, "engine.setPaused(false); return 'ok'")
     cap = _as_float(send(port, f"return building.getStorageCapacity({bid})"))
     if not chk.ok(bool(built) and (cap or 0) > 0,
                   f"the colony has finished storage at {spot} "
@@ -466,7 +519,9 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 
     # The confrontation leg's ruin (#2640), chosen before anything moves
     # so a world that cannot host it refuses here, naming which ruin it
-    # lacks, rather than half an hour later.
+    # lacks, rather than half an hour later. Its chunk is deliberately
+    # NOT paged in yet (see `pick_occupied`); its roster is spawned and
+    # checked by `encounter.run`.
     occ = pick_occupied(chk, port, ruin, site)
     if occ is None:
         raise StageAbort("no reachable occupied ruin")
@@ -474,31 +529,17 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     st.occ_id = occ_id = int(occ["instance_id"])
     st.occ_xy = (float(occ["gx"]), float(occ["gy"]))
     st.occ_box = arrival_box(occ)
-    load_region(port, int(occ["cx"]), int(occ["cy"]))
-    occ_inst = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
-                                         and i.get("contents_spawned") else None)(
-        instance_by_id(port, PAGE, occ_id)), interval=1.0) or {}
-    occ_enc = occ_inst.get("encounter") or {}
-    occupants = sorted(int(o["uid"]) for o in occ_enc.get("occupants") or [])
-    occ_sig = significant_rows(port, occ_id)
-    chk.ok(occ_inst.get("lifecycle") == "unknown"
-           and int(occ_enc.get("rolled_count", 0)) >= 1
-           and len(occupants) == int(occ_enc.get("rolled_count", -1))
-           and occ_enc.get("cleared") is False
-           and occ_inst.get("clearance_satisfied") is False
-           and len(occ_sig) == 1
-           and occ_sig[0].get("item_instance_id") is not None
-           and occ_sig[0].get("taken") is False,
-           f"the occupied ruin {occ_id} starts undiscovered with its whole "
-           f"persisted roster spawned ({len(occupants)} occupant(s) {occupants} "
-           f"for a roll of {occ_enc.get('rolled_count')!r}) and its guaranteed "
-           f"item in place ({occ_sig}); lifecycle "
-           f"{occ_inst.get('lifecycle')!r}")
-    st.occ_rolled = int(occ_enc.get("rolled_count", -1))
+    st.occ_rolled = int((occ.get("encounter") or {}).get("rolled_count", -1))
+    occ_inst = instance_by_id(port, PAGE, occ_id) or {}
+    chk.ok(occ_inst.get("lifecycle") == "unknown" and st.occ_rolled >= 1,
+           f"the occupied ruin {occ_id} starts undiscovered with a persisted "
+           f"encounter roll of {st.occ_rolled} (lifecycle "
+           f"{occ_inst.get('lifecycle')!r}; contents_spawned "
+           f"{occ_inst.get('contents_spawned')!r} — its chunk is paged in "
+           f"when its leg begins)")
     st.fp.update(occupied_instance=occ_id,
                  occupied_anchor=[int(occ["gx"]), int(occ["gy"])],
-                 occupied_rolled=int(occ_enc.get("rolled_count", -1)),
-                 occupant_uids=occupants)
+                 occupied_rolled=st.occ_rolled)
 
     inst = instance_by_id(port, PAGE, ruin_id)
     chk.ok(isinstance(inst, dict) and inst.get("lifecycle") == "unknown",

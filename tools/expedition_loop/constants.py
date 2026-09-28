@@ -145,19 +145,28 @@ OCCUPIED_MAX_DIST = 160
 OCCUPIED_MAX_STEP = 4.0
 OCCUPIED_MAX_WET_TILES = 2
 
-#: How far short of the occupied anchor the party musters before the
-#: approach: beyond MAX_SIGHT_TILES of its bounds, so the muster itself
-#: reveals nothing and the approach is what does.
-STAGING_BACKOFF_TILES = MAX_SIGHT_TILES + 8
-
-#: Budgets for the walk to the muster / the approach, and for the fight.
-ENCOUNTER_SECONDS = 420.0
+#: Budgets for the gather at the first ruin, the ~100-tile leg on to the
+#: occupied one (at the ~0.3-0.4 tiles/s these colonists were observed
+#: to walk), and the fight. The gather does not wait on a straggler,
+#: because the occupants' own physiology is on a clock (see
+#: encounter.set_out): it goes on with whoever has arrived.
+MUSTER_SECONDS = 300.0
+ENCOUNTER_SECONDS = 600.0
 FIGHT_SECONDS = 300.0
+
+#: How recent an occupant's last hit from the party must be, relative
+#: to when it is first seen dead, for its death to be credited to the
+#: fight. Wide enough for a stab wound to bleed out; far narrower than
+#: the ~1100 game-seconds a neglected occupant takes to die on its own.
+DEATH_BLOW_SECONDS = 120.0
 
 #: The walk home. Since #2640 the carrier comes back from the occupied
 #: ruin (~75 tiles on seed 14, against the first ruin's ~30) with an
 #: empty stomach, and an observed run needed more than 420 s.
 RETURN_SECONDS = 900.0
 
-STAGES = ["setup", "prepare", "travel", "extract", "encounter", "reward",
-          "return", "save", "load", "control"]
+#: In the order they first run. `return` runs twice: the first ruin's
+#: loot comes home straight after `extract`, and the stage is re-entered
+#: for the occupied ruin's item after `reward`.
+STAGES = ["setup", "prepare", "travel", "extract", "return", "encounter",
+          "reward", "save", "load", "control"]

@@ -3783,8 +3783,12 @@ has straight colony and first-ruin corridors that step at most 4 levels
 and cross at most 2 wet tiles — the pathfinder will route a party up a
 cliff it does not survive, which is why the default seed moved from 42 to
 14. The first ruin's guaranteed item is followed rather than its expected
-carrier on the way home: a colonist can pick it up unordered and then walk
-on with the party. The leg proves the natural clearing order only: unknown
+carrier on the way home: a colonist can pick it up unordered. Colony
+storage is spawned and finished inside one PAUSED window: its brief
+`constructing` ghost otherwise lets a colonist plan a delivery that goes on
+to fetch the hold's materials — on seed 14 including that `processing_unit`
+off the ruin floor, which the hold's material list consumes. The leg
+proves the natural clearing order only: unknown
 when the leg begins, discovered by sight once, `active` and uncleared
 while every assigned occupant lives, still uncleared once they are all
 dead with the guaranteed item on the ground, and `cleared` exactly once
@@ -3804,17 +3808,6 @@ ordering stays with #917's hspec coverage. Three instrument rules:
   and it re-acquires the party in a new episode with its own notice. The
   occupant's notices must therefore alternate aggression / disengage,
   starting with aggression, each emitted once.
-
-**Known hazard: the occupants do not outlive a slow run.** Observed while
-building the leg (2026-09-28, seed 14): an unvisited `nomad_primitive`
-occupant has no way to eat or drink and "died of electrolyte imbalance"
-about 1100 game-seconds after its contents spawned (the occupied ruin's
-chunk is loaded at setup). A normal run fights at roughly half that, but a
-run delayed long enough finds the roster already dead, the encounter
-cleared by physiology and the ruin still `unknown`, and fails `encounter`
-with the death in its notice trail. That is shipped occupant behaviour,
-not a probe defect; it is to be filed separately rather than papered over
-here.
 - **Tutorial latch order is read at the write boundary.** The four trip
   objectives may latch during the zero-occupant leg and several in one
   evaluation pass, so the probe wraps `tutorial_progress.completeObjectives`
@@ -3828,6 +3821,35 @@ here.
   headless boot already loads it ticking through `scripts/init_loader.lua`
   — and `Secure` is false in the reloaded world (both guaranteed items are
   in storage), so a plain post-load read cannot tell restored from lost.
+
+**Known hazard: the occupants do not outlive a long wait.** Observed while
+building the leg (2026-09-28, seed 14): an unvisited `nomad_primitive`
+occupant has no way to eat or drink. It turns `delirious` and "died of
+electrolyte imbalance" — at about 1180 game-seconds of world time when its
+chunk loaded at setup, and within minutes of a page-in that came late in
+another run, so the clock is not simply time since spawn — and while
+delirious the mental-state wander reads its AI config's missing
+`wander_radius`, which raises `Lua error in update()` every tick and
+freezes EVERY unit's AI (observed as a party that stops mid-walk). Both
+are shipped behaviour, to be filed separately rather than papered over
+here. The gate works around the clock rather than the defects: the fight
+has to come early in world time. The confrontation party is ordered to the
+first ruin the moment `travel` is done, walking while `extract` and the
+prepared traveller's `return` run; it then walks straight on to the
+occupied ruin with no second muster; and setup never pages the occupied
+ruin's chunk in (its corridors are read up to that chunk's edge), so its
+contents spawn as the party sets out. The gather is bounded (300 s, going
+on with whoever has arrived), and the leg credits each death to the fight
+explicitly: the occupant's `unit.getLastAttacker` must be a party
+member, hit after the activation and within 120 s of the death.
+
+**Who goes (owner directive on #2640).** The prepared traveller carries
+its loot home on the calibrated return straight after `extract`; the
+confrontation party is the scout and the stay-at-home colonists, each
+with its spawn-kit canteen and rations, gathered at the first ruin. Sent
+on instead, the prepared traveller — seeded hungry and already 60 tiles
+into its day — was observed crawling at the muster and falling asleep,
+starving, on the ~75-tile walk home.
 
 ---
 

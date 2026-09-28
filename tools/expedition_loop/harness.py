@@ -275,6 +275,14 @@ class ExpeditionState:
     #: fingerprinted: how often a nomad breaks off and re-engages is a
     #: combat outcome, not an identity.
     occ_episodes: int = 0
+    #: The ledger cursor and game time at the first sample that showed
+    #: the encounter activated — what the first aggression notice is
+    #: pinned to, and what the party's killing blows must postdate.
+    activation_cursor: int = 0
+    activation_time: float = 0.0
+    #: Game time when the party set out from the first ruin, for a
+    #: failure message about the occupants' clock.
+    page_in_time: float = 0.0
 
 
 # --------------------------------------------------------------------------

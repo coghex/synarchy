@@ -77,16 +77,21 @@ def load_occupied(chk: Checks, st: ExpeditionState) -> None:
            f"its persisted encounter roll and occupant membership are "
            f"unchanged ({enc.get('rolled_count')!r}, {members} vs "
            f"{sorted(st.occ_members)}), encounter still cleared")
-    alive = [u for u in members
-             if send(port, f"return tostring(unit.exists({u}))") == "true"
-             and send(port, f"return unit.getPose({u})") != "dead"]
+    # Each ORIGINAL occupant, by uid: it must still exist — a dead unit
+    # persists as a corpse — and be dead. A missing uid is a dropped
+    # unit, not a dead one.
     time.sleep(3.0)
+    state = {u: (send(port, f"return tostring(unit.exists({u}))"),
+                 send(port, f"return tostring(unit.getPose({u}))"))
+             for u in sorted(st.occ_members)}
     respawned = [o for o in (instance_by_id(port, PAGE, occ_id) or {})
                  .get("encounter", {}).get("occupants", [])
-                 if int(o["uid"]) not in members]
-    chk.ok(not alive and not respawned,
-           f"every occupant is still dead and none has respawned "
-           f"(alive {alive}, new members {respawned})")
+                 if int(o["uid"]) not in st.occ_members]
+    chk.ok(all(s_ == ("true", "dead") for s_ in state.values())
+           and not respawned,
+           f"every original occupant uid still exists and is still dead, and "
+           f"no new member has appeared (uid -> (exists, pose): {state}; "
+           f"new members {respawned})")
     rows = significant_rows(port, occ_id)
     chk.ok(len(rows) == 1 and rows[0].get("item_instance_id") == phys
            and rows[0].get("taken") is True

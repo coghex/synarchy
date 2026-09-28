@@ -42,8 +42,8 @@ own:
   setup     a real world, a real placed zero-occupant ruin, a
             portal-eligible colony site, the portal, its own spawned
             roster, colony storage — and the OCCUPIED ruin the second
-            leg goes to, still unknown, its roster and guaranteed item
-            spawned in place
+            leg goes to, still unknown, and deliberately not yet paged
+            in (its occupants' clock starts when it is)
   prepare   water secured by a real acolyte's own FOV scan; the
             traveller provisioned off the technomule through the normal
             inventory-transfer surface; the shipped first_session
@@ -55,8 +55,15 @@ own:
   extract   the retrieval order is issued at the ruin and the ruin's own
             seed-stable loot-table output is picked up through the real
             pickup_ground action
-  encounter the party walks on to the occupied ruin, which was unknown
-            when the leg began and is discovered by sight exactly once;
+  return    the carrier walks home and deposits into colony storage from
+            an adjacent tile — exactly the calibrated leg this gate
+            always had; re-entered after `reward` for the occupied
+            ruin's guaranteed item
+  encounter a party of the colony's other acolytes (not the prepared
+            traveller, not the control) gathers at the first ruin; the
+            occupied ruin is paged in, its roster and guaranteed item
+            checked in place; the party walks on to it, and it was
+            unknown when the leg began and is discovered by sight once;
             its occupants acquire the party through their own
             sight/aggression path (activated; exactly one aggression
             notice per episode — a wounded nomad that breaks off and
@@ -70,9 +77,6 @@ own:
             clears exactly once with exactly one notice; the four trip
             objectives have latched through the real evaluator in
             authored order
-  return    the carriers walk home and deposit into colony storage from
-            an adjacent tile — the first ruin's items and the occupied
-            ruin's guaranteed item alike
   save      the session is captured through the real save barrier
   load      a FRESH PROCESS loads it and every durable identity is
             re-checked: both location instances, the occupied ruin's
@@ -379,10 +383,18 @@ def main() -> int:
             setup.run(chk, st)
             prepare.run(chk, st)
             travel.run(chk, st)
+            # Orders only: the confrontation party starts for the first
+            # ruin now, walking while extract and return run (see
+            # encounter.set_out).
+            encounter.set_out(st)
             extract.run(chk, st)
+            # The prepared traveller's calibrated return, unchanged; the
+            # confrontation party then sets out from the first ruin
+            # (owner directive on #2640), and the `return` stage is
+            # re-entered for the occupied ruin's item.
+            extract.deliver(chk, st)
             encounter.run(chk, st)
             encounter.reward(chk, st)
-            extract.deliver(chk, st)
             encounter.deliver_home(chk, st)
             persistence.save(chk, st)
             # Measured HERE, in engine A, from the observations `travel`
