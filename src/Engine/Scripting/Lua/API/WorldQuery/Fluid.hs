@@ -96,9 +96,18 @@ worldGetSurfaceAtFn wsc = do
             Lua.pushnil
             return 1
 
--- | world.getAreaFluid(gx, gy, radius) → table of {x,y,type,surface,terrainZ}
+-- | world.getAreaFluid(gx, gy, radius)
+--     → table of {x,y,type,surface,terrainZ,surfaceUnits,level}
 --   Scans a square area and returns all fluid cells found.
 --   Useful for debugging river coverage around a point.
+--
+--   @surface@ keeps its integer meaning: the ceiling compatibility view
+--   ('fluidSurfaceCeilZ'), the same value 'worldGetFluidAtFn' returns.
+--   @surfaceUnits@ and @level@ are ADDITIVE structured fields (#2535):
+--   the authoritative exact surface in eighths of a z ('fcExactSurface')
+--   and its top fill level 1..8 ('fluidTopLevel'). They are fields
+--   rather than extra return values, so no caller's arity changes. A dry
+--   tile produces no entry at all, never a level-0 cell.
 worldGetAreaFluidFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetAreaFluidFn wsc = do
     mGx ← Lua.tointeger 1
@@ -145,6 +154,10 @@ worldGetAreaFluidFn wsc = do
                                                 Lua.setfield (Lua.nth 2) "surface"
                                                 Lua.pushinteger (fromIntegral terrZ)
                                                 Lua.setfield (Lua.nth 2) "terrainZ"
+                                                Lua.pushinteger (fromIntegral (fcExactSurface fc))
+                                                Lua.setfield (Lua.nth 2) "surfaceUnits"
+                                                Lua.pushinteger (fromIntegral (fluidTopLevel fc))
+                                                Lua.setfield (Lua.nth 2) "level"
                                                 Lua.rawseti (Lua.nth 2) n
                                                 go (n + 1) (x + 1) y
                     _ ← go 1 (gx - radius) (gy - radius)

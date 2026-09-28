@@ -290,8 +290,8 @@ coordinate order carrying each cell's coordinate, type and exact surface. The
 layers are cumulative because each closes a hole the one above leaves open: a
 type swap survives the page totals, and a compensating `+8`/`-8` pair or a
 permutation of two cells' surfaces survives the histogram too, a histogram
-being a multiset. The whole-z Lua and dump views cannot see a remainder at
-all.
+being a multiset. The integer Lua returns and the dump's `fluidSurf` cannot
+see a remainder at all; DFL-6's exact diagnostics can.
 
 When CRS-12 later replaces resident snapshots with a sparse versioned fluid
 component, its migration input includes both pre-v4 whole-z snapshots and v4

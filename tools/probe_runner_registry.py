@@ -125,6 +125,14 @@ PROBES = [
      "derived flora growth/age/phase under the advancing calendar (#332)"),
     ("follow_command_priority", "follow_command_priority_probe.py",
      "follow-command priority against other AI goals (#306)"),
+    ("fluid_exact_restart", "fluid_exact_restart_probe.py",
+     "a simulation-made PARTIAL fluid cell keeps its exact units and level "
+     "(and its integer ceiling) across a save, a process exit and a "
+     "fresh-process load, compared while paused (#2535)"),
+    ("fluid_exact_restart_render", "fluid_exact_restart_render_probe.py",
+     "the reloaded partial cell from fluid_exact_restart RENDERS with the "
+     "level mask matching its fluidLevel, graded in its own screen box "
+     "against freshly authored levels 1..8 (#2535; offscreen, needs a GPU)"),
     ("fluid_reaction", "fluid_reaction_probe.py",
      "lava-water solidification is DURABLE: the product stone survives a "
      "save, a process exit and a fresh-process load (#2485), and the unit "
@@ -559,6 +567,9 @@ def timeout_plan(chosen, explicit: float | None = None) -> str:
 # is the order dispatch will consider them in.
 PROBE_EXPECTED_SECONDS: dict[str, float] = {
     "audio_null": 8.0,
+    # #2535: measured locally (macOS/aarch64) rather than on a PR run,
+    # since it is new; refresh it from CI's per-probe line like the rest.
+    "fluid_exact_restart": 13.0,
     "persistence_contract": 206.0,
     "craft": 97.0,
     "repair_item": 88.0,

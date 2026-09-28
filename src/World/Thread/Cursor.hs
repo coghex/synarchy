@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module World.Thread.Cursor
     ( pollCursorInfo
+    , fluidCursorText
     ) where
 
 import UPrelude
@@ -305,6 +306,19 @@ chunkWeatherInfo params cx cy =
 
 -- * sendTileInfo: world-level (tile) selection
 
+-- | The HUD's fluid line for one column (#2535): the fluid type, the
+--   integer ceiling compatibility surface every older reader knows,
+--   and beside it the AUTHORITATIVE exact surface in eighths of a z
+--   with its top fill level 1..8. A dry column prints nothing at all —
+--   dry is absence, never a level-0 fluid.
+fluidCursorText ∷ Maybe FluidCell → Text
+fluidCursorText Nothing   = ""
+fluidCursorText (Just fc) =
+    "Fluid: " <> tshow (fcType fc)
+        <> " (surface z=" <> tshow (fluidSurfaceCeilZ fc)
+        <> ", exact " <> tshow (fcExactSurface fc) <> "/8"
+        <> ", level " <> tshow (fluidTopLevel fc) <> "/8)"
+
 -- | Format and send HUD info for a selected tile (zoomed-in view).
 --   gx/gy are global grid coords, z is the z-level the cursor hit.
 sendTileInfo ∷ EngineEnv → WorldState → Maybe WorldGenParams
@@ -330,15 +344,9 @@ sendTileInfo env worldState _mParams gx gy z = do
                         else 0
                     props = getMaterialProps materials
                                              (MaterialId selectedMat)
-                    -- Fluid info
-                    mFluid = (lcFluidMap lc) V.! colIdx
-                    fluidStr = case mFluid of
-                        Nothing → ""
-                        Just fc → "Fluid: " <> tshow (fcType fc)
-                                <> " (surface z=" <> tshow (fluidSurfaceCeilZ fc) <> ")"
                 in ( mpName props
                    , tshow surfZ
-                   , fluidStr
+                   , fluidCursorText ((lcFluidMap lc) V.! colIdx)
                    )
 
     let basicLines = T.unlines $ filter (not . T.null)

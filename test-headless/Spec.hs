@@ -353,6 +353,7 @@ import qualified Test.Headless.Core.DebugConsoleStop as DebugConsoleStop
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.DumpSettleWait as DumpSettleWait
+import qualified Test.Headless.World.FluidDiagnostics as FluidDiagnostics
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
 import qualified Test.Headless.Camera.Finite as CameraFinite
@@ -1258,6 +1259,8 @@ main = hspec $ do
     AppCli.spec
     AppChunkRegion.spec
     DumpSettleWait.spec
+    -- #2535: exact fluid units/level in the dump, cursor and getAreaFluid.
+    FluidDiagnostics.spec
     AppResourceRoot.spec
     describe "App.Preview.Config" PreviewConfig.spec
     describe "Camera.GotoClamp" GotoClamp.spec

@@ -11,6 +11,8 @@ module App.Dump
   , settleWaitFailure
   , fastSettleBudgetSeconds
   , settleReportGraceSeconds
+    -- * Per-tile serialization (#2535's diagnostics gate)
+  , dumpTilesJSON
   ) where
 
 import UPrelude
@@ -545,6 +547,13 @@ dumpTilesJSON layers registry worldSize climate td region =
               | otherwise = []
             -- Enum labels are plain values handed to the encoder, which
             -- quotes and escapes them — nothing here writes JSON text.
+            --
+            -- Two views of one surface (#2535): @fluidSurfaceUnits@ is
+            -- the AUTHORITATIVE exact plane in eighths of a z and
+            -- @fluidLevel@ its top fill level 1..8; @fluidSurf@ stays
+            -- the integer CEILING compatibility view every older tool
+            -- reads. A dry tile is null in all four — never a level-0
+            -- cell — because dry is absence, not an empty fluid.
             fluidFields ∷ [Pair]
             fluidFields
               | dlFluid layers =
@@ -556,8 +565,12 @@ dumpTilesJSON layers registry worldSize climate td region =
                                   River → "river"
                                   Lava  → "lava"
                           in [ "fluidType" .= (ftype ∷ Text)
-                             , "fluidSurf" .= fluidSurfaceCeilZ fc ]
-                      Nothing → [ "fluidType" .= Null, "fluidSurf" .= Null ]
+                             , "fluidSurf" .= fluidSurfaceCeilZ fc
+                             , "fluidSurfaceUnits" .= fcExactSurface fc
+                             , "fluidLevel" .= fluidTopLevel fc ]
+                      Nothing → [ "fluidType" .= Null, "fluidSurf" .= Null
+                                , "fluidSurfaceUnits" .= Null
+                                , "fluidLevel" .= Null ]
               | otherwise = []
             iceFields ∷ [Pair]
             iceFields
