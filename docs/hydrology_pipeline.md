@@ -290,7 +290,11 @@ writeback and equilibrium deactivation all go through
 survives back into the map and into the save. Integer consumers (the surface
 map, flora, ice, soil gates, and render slice ownership) read the documented ceiling view,
 `fluidSurfaceCeilZ`. Fluid vertices use the exact plane at the rendering
-boundary. See engine contracts §The exact fluid plane.
+boundary. See engine contracts §The exact fluid plane, and §Fluid precision:
+diagnostics and integration contracts (#2535) for the exact dump, cursor and
+`world.getAreaFluid` diagnostics, the fresh-process `fluid_exact_restart`
+gate, and what sparse fluid storage (#1997) and unlike-fluid reactions (#2480)
+must preserve.
 
 ## 8. The two carving mechanisms
 

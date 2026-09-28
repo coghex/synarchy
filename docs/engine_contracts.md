@@ -85,6 +85,7 @@ exactly why the detail could move out of the always-loaded file.
 - [The exact fluid plane (#2520)](#the-exact-fluid-plane-2520)
 - [Exact fluid rendering (#2529)](#exact-fluid-rendering-2529)
 - [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485-2490)
+- [Fluid precision: diagnostics and integration contracts (#2535)](#fluid-precision-diagnostics-and-integration-contracts-2535)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
 - [Audio runtime and authored sounds](#audio-runtime-and-authored-sounds)
@@ -5730,12 +5731,14 @@ corrected, so it needs no such record.
 **Integer consumers are documented compatibility views.** Terrain shading,
 `lcSurfaceMap` and the rendered-surface rule (§Flora visual state and
 fallback names the same rule for flora), flora placement, vegetation
-depth, ice, soil gates, ground-item and terrain tile quads and the
-cursor all read `fluidSurfaceCeilZ` — the lowest whole z at or above the
-exact surface — so a partially filled top level still reads as one
-occupied z. `world.getFluidAt`, `world.getSurfaceAt` and
-`world.getAreaFluid` keep their arity and integer returns, and the
-dump's `fluidSurf` stays that same ceiling.
+depth, ice, soil gates, and ground-item and terrain tile quads all read
+`fluidSurfaceCeilZ` — the lowest whole z at or above the exact surface —
+so a partially filled top level still reads as one occupied z.
+`world.getFluidAt`, `world.getSurfaceAt` and `world.getAreaFluid` keep
+their arity and integer returns, and the dump's `fluidSurf` stays that
+same ceiling; since #2535 the dump, the cursor and `getAreaFluid` also
+show the exact units and level beside it (§Fluid precision: diagnostics
+and integration contracts).
 
 **Persistence.** `WeSetFluidSnapshot`'s surface is the exact plane, and
 the `world-edits` component is at v4. The wire SHAPE did not change —
@@ -5791,8 +5794,10 @@ terrain is regenerated from the page's own gen params rather than
 stored. Surface is the durable quantity, and against the deterministic
 terrain a given seed regenerates it fixes the volume too; the
 volume-over-terrain identity itself is proved at a KNOWN terrain by the
-hspec round trip. The whole-z Lua and dump views cannot see a remainder
-at all, so neither can stand in for any of this.
+hspec round trip. The integer Lua returns and the dump's `fluidSurf`
+cannot see a remainder at all, so neither can stand in for any of this;
+the exact diagnostics #2535 added can, and `fluid_exact_restart` uses
+them for the fresh-process chain.
 
 ---
 
@@ -6430,6 +6435,111 @@ made of. The neighbouring groups `Sim.Fluid.Seam`,
 unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
 the reaction never fires in it and a change there is a regression in
 compatible transfers, not a fixture that needs relaxing.
+
+---
+
+## Fluid precision: diagnostics and integration contracts (#2535)
+
+Design record:
+[`docs/discrete_fluid_levels_design.md`](discrete_fluid_levels_design.md)
+(§Queries and diagnostics, §Verification strategy, §DFL-6; D-1 through
+D-12). DFL-6 closes epic #2514. It is the single place a maintainer
+starts from to find where fluid is exact, where it is deliberately
+integer, how to observe the exact state without reading pixels, and what
+two later arcs must preserve.
+
+**The exact/integer boundary.** `FluidCell.fcExactSurface` is THE fluid
+height: a signed absolute surface in eighths of a z for every
+`FluidType`. The scale lives only in `World.Fluid.Exact.fluidUnitsPerZ`,
+and every conversion goes through that module's named helpers —
+`exactSurfaceOfZ` (whole z → units), `exactSurfaceCeilZ` (the integer
+compatibility view), `exactSurfaceFloorZ` (the last completely filled
+z), `exactTopLevel` (the top fill level 1..8, where an exact multiple is
+8, never 0), `exactSurfaceRenderZ` (render-only `Float`) and
+`exactVolumeOverTerrain` — with the `FluidCell` wrappers
+`fluidCellAtZ`, `fluidSurfaceCeilZ`, `fluidSurfaceFloorZ`,
+`fluidTopLevel` and `fluidVolumeOverTerrain` in `World.Fluid.Types`.
+§The exact fluid plane owns the arithmetic and its gates.
+
+**Integer surfaces are compatibility views, never authority.**
+`lcSurfaceMap`, the rendered-surface rule, render slice ownership and
+every integer consumer §The exact fluid plane lists read the CEILING of
+the exact plane. `world.getFluidAt`, `world.getSurfaceAt` and
+`world.getAreaFluid`'s `surface` keep their return counts and their
+integer ceiling meaning. Nothing may derive, restore or migrate an exact
+surface FROM one of these views: a ceiling cannot say whether its top
+level holds one unit or eight.
+
+**Diagnostics show both views, and only where fluid exists.** Each
+reader prints the retained integer ceiling beside the exact state:
+
+| Reader | Integer view | Exact state | Dry column |
+|---|---|---|---|
+| `--dump` fluid layer (`App.Dump`) | `fluidSurf` | `fluidSurfaceUnits`, `fluidLevel` | all four fields `null` |
+| HUD cursor (`World.Thread.Cursor.fluidCursorText`) | `surface z=<n>` | `exact <u>/8, level <l>/8` | no fluid line |
+| `world.getAreaFluid` entries | `surface` | `surfaceUnits`, `level` (additive fields) | no entry |
+
+`fluidSurf` equals the mathematical ceiling of `fluidSurfaceUnits / 8`
+and `fluidLevel` equals `1 + ((fluidSurfaceUnits - 1) mod 8)` on every
+wet tile, for negative and zero surfaces too. Dry is ABSENCE, never a
+level-0 cell. With the fluid layer disabled the dump emits none of the
+four fields. The dump's field set is in
+[`headless_console.md`](headless_console.md); the four tools that read
+`fluidSurf` read it unchanged. `getAreaFluid`'s exact fields are
+additive structured fields registered through the ordinary
+`registerLuaFunction` wrapper under
+[`lua_api_contract.md`](lua_api_contract.md) §Descriptor convention and
+adding a verb; no existing query gained a return value.
+
+**The sparse-fluid integration contract (#1997).** Epic #1997's sparse
+durable fluid slice — its checklist item CRS-10,
+[`chunk_residency_streaming_design.md`](chunk_residency_streaming_design.md)
+§CRS-12 — replaces resident-chunk `WeSetFluidSnapshot` edits with a
+versioned sparse fluid component. Its migration input includes BOTH
+shapes the `world-edits` history can hold: pre-v4 whole-z snapshots
+(already scaled once to `z * 8` by `migrateWorldEditDTOv3`, never again)
+and v4 exact snapshots. It must carry exact units unit-for-unit, preserve
+`needsSettlement`, and take authority only from accepted fluid state —
+never from `lcSurfaceMap`, an integer query, the dump, or any other
+rounded cache. The `fluid_exact_restart` gate below must pass unchanged
+across that migration.
+
+**The reaction contract is on the eight-unit scale (#2480).** Unlike-fluid
+contact (§Fluid reaction) resolves live VOLUMES, and a volume is already
+in exact units: an active cell's exact surface is `terrainZ * 8 +
+volume`, and annihilation subtracts the smaller live volume from both
+sides in those units. There are four transfer mechanisms with FIVE
+protected occupied-destination branches in `Sim.Fluid.Active` — seam
+exchange, gravity, BOTH lateral branches (snapshot-occupied, and
+snapshot-empty but filled live earlier in the same phase) and the
+waterfall — all routed through `Sim.Fluid.Reaction.applyTransfer`. A
+future reaction change keeps that shared applier and that unit; it may
+not compare ceilings or re-scale a difference of two exact surfaces.
+
+**The end-to-end gate.** `tools/fluid_exact_restart_probe.py`
+(`fluid_exact_restart`, CI-eligible) drives one chain on a real
+generated worldSize-8 page with an isolated resource root: a
+`world.setFluidTile` edit, the simulation flowing that full cell to a
+PARTIAL level (only a writeback can), a paused and settled expectation
+read through `getAreaFluid`'s exact fields, a completed save, a real
+process exit, and a fresh-process load compared while paused — the
+edited cell and its whole neighbourhood, with nothing missing, extra or
+changed. `tools/ci_probes.py` selects it for every fluid simulation,
+persistence and render path; its self-test pins that.
+`tools/fluid_exact_restart_render_probe.py`
+(`fluid_exact_restart_render`) is its manual-only `needs-gpu`
+extension: it consumes the same saved scenario offscreen and grades the
+reloaded cell's own screen box against the same cell freshly authored at
+levels 1..8, retaining the frames, crops and a manifest as evidence. It
+is never a headless gate, and no scheduled GPU run exists for it.
+
+Gates: hspec `--match "Fluid exact diagnostics"` (production dump
+serialization, cursor text and `getAreaFluid` over every exact surface
+from -40 to 40, dry nulls, and the disabled layer),
+`python3 tools/run_probes.py --only fluid_exact_restart --exact`,
+`python3 tools/ci_probes.py --self-test`, `python3 tools/test_determinism.py`
+and `python3 tools/world_check.py` (the dump's content hash now covers the
+exact fields; baselines were re-captured by #2535).
 
 ---
 

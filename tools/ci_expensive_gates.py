@@ -64,8 +64,10 @@ WORLDGEN_GLOBS = [
     #   * Writeback application — World.Thread.Command's
     #     handleApplyFluidsCommand overwrites lcFluidMap,
     #     lcTerrainSurfaceMap, lcSurfaceMap and lcSideDeco on the live
-    #     chunk, and the dump reads terrainZ/surfaceZ/fluidType/fluidSurf
-    #     straight out of those just-overwritten fields.
+    #     chunk, and the dump reads terrainZ/surfaceZ/fluidType and the
+    #     fluid surface (the integer fluidSurf plus, since #2535, the exact
+    #     fluidSurfaceUnits/fluidLevel) straight out of those
+    #     just-overwritten fields.
     # So a change to any of these stages can move baseline-observed dump
     # output. src/Sim* is whole-tree (and picks up a future src/Sim.hs
     # facade) because every module there feeds that settle, including ones

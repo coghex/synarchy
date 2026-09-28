@@ -103,6 +103,19 @@ CI_ELIGIBLE = {
     # and cost ~2 s together — the probe stays in the seconds range that
     # makes it CI-eligible.
     "debug_console_boot",
+    # #2535: the only end-to-end gate on the EXACT fluid level. A partial
+    # cell made by the real simulation must keep its exact units and level
+    # through writeback, save, a process exit and a fresh-process load.
+    # Deterministic by construction: one player edit on a generated
+    # worldSize-8 page, the expectation captured only once the PAUSED
+    # neighbourhood has held still, and the reload compared while paused
+    # -- no AI, no GPU. It needs no feature rule: the fluid simulation
+    # (src/Sim/*), fluid render (src/World/Render/*) and fluid state
+    # (src/World/Fluid/*) paths are unclassified and so select the whole
+    # eligible set, and fluid persistence (src/World/Save/*) is CORE; the
+    # self-test pins all four. A narrowing rule for them would drop every
+    # other probe they select today.
+    "fluid_exact_restart",
     # #1577: re-promoted. #600 promoted this probe on the strength of #593
     # making it self-contained, and direct commit b09c1518 removed it an
     # hour later with no recorded evidence. The #593 property still holds:
@@ -375,6 +388,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (Reason(NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),),
+    "fluid_exact_restart_render": (Reason(NEEDS_GPU, "offscreen boot: grades the reloaded "
+                                          "partial fluid cell's rendered level mask in "
+                                          "its own screen box (#2535)"),),
     "fluid_reaction_visual": (Reason(NEEDS_GPU, "offscreen boot: captures the detailed tile "
                                      "render and the zoom-map atlas either side of a real "
                                      "solidification, both of which need a real Vulkan "
@@ -1243,6 +1259,24 @@ def _self_test() -> int:
         (["scripts/hud.lua"], sorted(CI_ELIGIBLE),
          "hud is not a widget module -> full"),
     ]
+    # #2535: the exact-level restart gate is selected by every fluid
+    # simulation, persistence and render path, while its GPU extension
+    # never is. Asserted as membership rather than an exact set: these
+    # paths select the whole eligible set, which grows over time.
+    for path in ("src/Sim/Fluid/Active.hs", "src/Sim/Thread.hs",
+                 "src/World/Fluid/Exact.hs",
+                 "src/World/Save/Component/PageEdits.hs",
+                 "src/World/Edit/Apply.hs",
+                 "src/World/Render/FluidTopQuads.hs",
+                 "app/App/Dump.hs",
+                 "src/Engine/Scripting/Lua/API/WorldQuery/Fluid.hs"):
+        got, reason = select([path])
+        if "fluid_exact_restart" not in got:
+            problems.append(f"#2535: {path} does not select fluid_exact_restart "
+                            f"({reason})")
+        if "fluid_exact_restart_render" in got:
+            problems.append(f"#2535: {path} selects the manual-only GPU "
+                            f"extension fluid_exact_restart_render ({reason})")
     for files, expect, name in cases:
         got, reason = select(files)
         if got != expect:

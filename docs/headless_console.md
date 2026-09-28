@@ -84,7 +84,8 @@ Region coordinates are **chunk coords**. Per-tile fields:
 | `waterTableZ` | terrain | Finalized per-tile water-table z from the chunk's own map (climate baseline, fluid/shoreline-adjusted) |
 | `waterTableSummer`, `waterTableWinter` | terrain | Seasonal water-table z-levels for the tile, bilinearly interpolated from the climate model |
 | `matId` | material | Top surface material ID |
-| `fluidType`, `fluidSurf` | fluid | "ocean"/"lake"/"river"/"lava" or null |
+| `fluidType`, `fluidSurf` | fluid | "ocean"/"lake"/"river"/"lava" or null; `fluidSurf` is the integer CEILING of the exact surface (a compatibility view) |
+| `fluidSurfaceUnits`, `fluidLevel` | fluid | The authoritative exact surface in eighths of a z (signed) and its top fill level 1..8 (`1 + ((units - 1) mod 8)`; a whole z is 8). All four fluid fields are null on a dry tile — dry is never a level-0 cell (#2535; engine contracts §Fluid precision) |
 | `iceSurf`, `iceMode` | ice | Ice surface Z and "basin"/"drape" or null |
 | `oreId`, `oreTopZ`, `oreCount` | ore | Topmost ore band in the column (null/0 if none) |
 | `slope`, `hardness` | slope | Slope bitmask (bit0=N,1=E,2=S,3=W; 0=flat) + surface hardness |
