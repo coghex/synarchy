@@ -35,6 +35,7 @@ import Engine.Core.Log (LoggerState)
 import World.Material (MaterialRegistry)
 import Test.Headless.Harness (sendWorldCommand, waitForWorldInit)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Test.Headless.Harness.Isolation (isInsideIsolatedResourceRoot)
 import World.Types
 import World.Page.GeneratedId
     (GeneratedWorldId, newGeneratedWorldId, renderGeneratedWorldId)
@@ -403,6 +404,15 @@ isLeftE _        = False
 spec ∷ SpecWith EngineEnv
 spec = describe "generated world identity, at the engine boundary (#2021)" $ do
 
+    -- The guard that keeps this engine's filesystem boundary from being
+    -- quietly unwired (#2650): the examples below save to, overwrite and
+    -- remove FIXED paths under the cwd-relative saves/, which from the
+    -- checkout would destroy a developer's own saves at those names.
+    -- Every other assertion here passes either way, so nothing else
+    -- would notice.
+    it "runs inside the scratch resource root, never the checkout" $ \_ →
+        isInsideIsolatedResourceRoot `shouldReturn` True
+
     it "gives two worlds created from the SAME seed, size and plate \
        \count DIFFERENT ids — there is no deduplication by content \
        \(requirement 3)" $ \env → do
@@ -537,7 +547,8 @@ spec = describe "generated world identity, at the engine boundary (#2021)" $ do
         smGeneratedWorldIds (sdMetadata sdAfter) `shouldBe` []
 
 -- | Where the engine half writes its hand-built legacy envelope. Under
---   @saves/@, the directory these specs already write into, and removed
+--   @saves/@, the directory these specs already write into — the scratch
+--   resource root's own, never the checkout's (#2650) — and removed
 --   again by the example that creates it.
 legacySourcePath ∷ FilePath
 legacySourcePath = "saves/gwid_legacy_v8_source.bin"

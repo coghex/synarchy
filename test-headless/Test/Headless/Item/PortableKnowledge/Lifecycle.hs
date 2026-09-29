@@ -29,6 +29,8 @@ import Data.IORef (readIORef, writeIORef)
 import System.Directory (removePathForcibly)
 import Engine.Core.Init (EngineInitResult(..))
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
+import Test.Headless.Harness.Isolation
+    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State
 import Item.Knowledge
@@ -112,8 +114,19 @@ withLiveCrateSession act = do
             writeIORef (nextItemInstanceIdRef env) 1000
             act env ws
 
+-- | Every example runs WHOLLY inside a scratch resource root (#2650) —
+--   its private engine's initialization, every save and load, and the
+--   fixed-slot cleanup — because the save cases publish to, and remove,
+--   fixed @saves/hspec_portable_knowledge_2512_*@ slots under the
+--   cwd-relative @saves/@, which from the checkout are ordinary player
+--   save names.
 spec ∷ Spec
-spec = do
+spec = around_ withIsolatedResourceRoot $ do
+    -- The guard that keeps that boundary from being quietly unwired:
+    -- every other assertion here passes from the checkout too.
+    it "runs inside the scratch resource root, never the checkout" $
+        isInsideIsolatedResourceRoot `shouldReturn` True
+
     describe "the live owner" $ do
         it "starts EMPTY: an engine that has remembered nothing reports \
            \nothing, and every crate reads never-inspected" $ do
