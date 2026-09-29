@@ -41,8 +41,10 @@ LOCK_WAIT_SECONDS = 1800  # AGENTS.md: wait for cabal-build for up to 30 minutes
 # adapter's own runner in .quruntul/), and the build configuration. Whole trees
 # are hashed deliberately; a narrower list is how an input gets left out.
 IDENTITY_TREES = ("src", "app", "app-save-codec", "scripts", "data", "config", "assets", "cbits", "test",
-                  "test-headless", "tools", ".quruntul", "BuildSupport")
-IDENTITY_FILES = ("synarchy.cabal", "cabal.project", "cabal.project.freeze", "Setup.hs")
+                  "test-headless", "tools", ".quruntul", "BuildSupport",
+                  "docs/save_compat")  # the save-compat baselines the spec and probe read
+IDENTITY_FILES = ("synarchy.cabal", "cabal.project", "cabal.project.freeze", "Setup.hs",
+                  "docs/audio_authoring.md")  # read by the headless audio catalog spec
 # Exit probes run through run_probes.py --port BASE, which binds the probe's
 # declared span from BASE. Spans are laid end to end in registry order, so no
 # two suites share a port however many sessions run them at once.
@@ -200,24 +202,32 @@ class Synarchy:
         return outcomes
 
     def seed(self, ctx, suite, trial):
-        """A probe's census measurement becomes its tests' first status."""
+        """A probe's current census cohort becomes its tests' first status.
+
+        Every sample in the cohort counts, so a failure recorded by an earlier
+        sample is never hidden by a later clean one."""
         key = suite.data.get("key")
         entry = (_census(ctx.checkout).get(key) or {}).get("census") or {} if key else {}
         current = entry.get("current")
         if not current:
             return {}
-        samples = current.get("samples") or []
-        sample = samples[-1] if samples else current
-        runs = sample.get("completed_runs", 0)
-        evidence = dict(census_commit=current.get("commit_sha"), completed_runs=runs,
-                        failure_count=sample.get("failure_count"))
+        samples = current.get("samples") or [current]
+        runs = sum(s.get("completed_runs", 0) for s in samples)
+        failures = sum(s.get("failure_count") or 0 for s in samples)
+        counts_by_check: dict[str, dict[str, int]] = {}
+        for sample in samples:
+            for check, counts in (sample.get("check_counts") or {}).items():
+                total = counts_by_check.setdefault(check, {"PASS": 0, "FAIL": 0, "MISSING": 0})
+                for outcome in total:
+                    total[outcome] += counts.get(outcome, 0)
+        evidence = dict(census_commit=current.get("commit_sha"), samples=len(samples), completed_runs=runs,
+                        failure_count=failures)
         if suite.framework == "exit":
-            if sample.get("failure_count"):
-                return {"run": dict(status="flaky", reason=f"census: {sample['failure_count']} failed of {runs}",
-                                    evidence=evidence)}
+            if failures:
+                return {"run": dict(status="flaky", reason=f"census: {failures} failed of {runs}", evidence=evidence)}
             return {"run": dict(status="stable", reason=f"census: {runs} clean runs", evidence=evidence)} if runs >= 10 else {}
         seeds = {}
-        for check, counts in (sample.get("check_counts") or {}).items():
+        for check, counts in counts_by_check.items():
             if check not in suite.checks:
                 continue  # measured under a name the probe no longer declares
             bad = counts.get("FAIL", 0) + counts.get("MISSING", 0)

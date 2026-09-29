@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -164,10 +165,12 @@ class AdapterChecks(unittest.TestCase):
 
     def test_identities_cover_runner_tool_and_build_inputs(self):
         inputs = self.module._identity_inputs(ROOT, Context().revision)
-        for required in (".quruntul", "tools", "synarchy.cabal", "cabal.project", "Setup.hs"):
+        for required in (".quruntul", "tools", "synarchy.cabal", "cabal.project", "Setup.hs",
+                         "docs/save_compat", "docs/audio_authoring.md"):
             self.assertIn(required, inputs)
         original = self.module._git
-        for changed in (".quruntul", "tools", "cabal.project", "Setup.hs"):
+        for changed in (".quruntul", "tools", "cabal.project", "Setup.hs", "docs/save_compat",
+                        "docs/audio_authoring.md"):
             def altered(checkout, *args, _path=changed):
                 value = original(checkout, *args)
                 return value[::-1] if args[:1] == ("rev-parse",) and args[1].endswith(":" + _path) else value
@@ -189,6 +192,85 @@ class AdapterChecks(unittest.TestCase):
                 Path(prefix + ".probe-flake.json").write_text(json.dumps(
                     {"schema": "probe-flake-result/v1", "status": status, "completed_runs": 0, "check_counts": zero}))
                 self.assertEqual(self.adapter.outcomes(Context(), suite, dict(prefix=prefix)), expected, status)
+
+    def test_seeds_count_every_sample_of_the_current_cohort(self):
+        command = next(s for s in self.probes().values() if s.framework == "command")
+        exit_suite = next(s for s in self.probes().values() if s.framework == "exit")
+        check = command.checks[0]
+        failed_then_clean = {"current": {"commit_sha": "c", "samples": [
+            {"completed_runs": 10, "failure_count": 1,
+             "check_counts": {check: {"PASS": 9, "FAIL": 1, "MISSING": 0}}},
+            {"completed_runs": 10, "failure_count": 0,
+             "check_counts": {check: {"PASS": 10, "FAIL": 0, "MISSING": 0}}}]}}
+        original = self.module._census
+        self.module._census = lambda checkout: {command.data["key"]: {"census": failed_then_clean},
+                                                exit_suite.data["key"]: {"census": failed_then_clean}}
+        try:
+            self.assertEqual(self.adapter.seed(Context(), command, {})[check]["status"], "flaky")
+            self.assertEqual(self.adapter.seed(Context(), exit_suite, {})["run"]["status"], "flaky")
+        finally:
+            self.module._census = original
+
+    def test_the_trial_bounds_every_lock_wait_including_both_preflights(self):
+        import runpy
+        import types
+        calls = []
+
+        class Hold:
+            def __init__(self, name):
+                self.name = name
+
+            def release(self):
+                calls.append(("release", self.name))
+
+        lock = types.ModuleType("probe_resource_lock")
+        lock.repository_namespace = lambda root: "ns"
+        def wait_acquire(**kwargs):
+            calls.append(("wait", kwargs))
+            return Hold("build" if kwargs.get("exclusive") == ("cabal-build",) else "probe")
+        lock.wait_acquire = wait_acquire
+        resources = types.ModuleType("probe_runner_resources")
+        resources.BUILD_RESOURCE = "cabal-build"
+        resources.ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
+        resources.ENV_HELD_EXCLUSIVE = "SYNARCHY_PROBE_HELD_EXCLUSIVE"
+        def preflight(kind):
+            def run(namespace, environ=None, announce=None):
+                calls.append((kind, environ.get(resources.ENV_HELD_NAMESPACE), environ.get(resources.ENV_HELD_EXCLUSIVE)))
+                return f"/bin/{kind}"
+            return run
+        resources.engine_preflight = preflight("engine")
+        resources.codec_preflight = preflight("codec")
+        resources.exclusive_resources = lambda key: set()
+        resources.shared_resources = lambda key: {"cabal-build"}
+        flake = types.ModuleType("probe_flake")
+        flake.main = lambda argv: calls.append(("measure", argv)) or 0
+        saved = {name: sys.modules.get(name) for name in ("probe_flake", "probe_resource_lock", "probe_runner_resources")}
+        sys.modules.update(probe_flake=flake, probe_resource_lock=lock, probe_runner_resources=resources)
+        argv, cwd = sys.argv, os.getcwd()
+        with tempfile.TemporaryDirectory() as temp:
+            os.environ["QURUNTUL_TRIAL_PREFIX"] = str(Path(temp) / "trial-0001")
+            sys.argv = ["probe_trial.py", "blood_impact"]
+            try:
+                with self.assertRaises(SystemExit):
+                    runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
+            finally:
+                sys.argv = argv
+                os.chdir(cwd)
+                del os.environ["QURUNTUL_TRIAL_PREFIX"]
+                for name, module in saved.items():
+                    if module is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = module
+        waits = [c[1] for c in calls if c[0] == "wait"]
+        self.assertEqual(waits[0]["exclusive"], ("cabal-build",))
+        self.assertTrue(all(w.get("deadline") is not None for w in waits))
+        self.assertEqual(len({w["deadline"] for w in waits}), 1, "one deadline from the first lock wait")
+        self.assertIn(("engine", "ns", "cabal-build"), calls)
+        self.assertIn(("codec", "ns", "cabal-build"), calls)
+        order = [c[0] if c[0] != "release" else "release-" + c[1] for c in calls]
+        self.assertLess(order.index("codec"), order.index("release-build"))
+        self.assertLess(order.index("release-build"), order.index("measure"))
 
     def test_the_adapter_imports_nothing_from_quruntul(self):
         tree = ast.parse((ROOT / ".quruntul" / "adapter.py").read_text())

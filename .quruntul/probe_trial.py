@@ -4,13 +4,16 @@
 This does what `tools/deflake.py` does around a measurement, through the public
 pieces it is built from:
 
-1. Resolve the engine and save-codec executables once, under the `cabal-build`
-   hold (`probe_runner_resources.engine_preflight` / `codec_preflight`), and put
-   them in the cells `probe_runner_lifecycle.run_one` hands to the probe. A
-   probe left to build its own engine prints a bracketed preparation line, which
+1. Take `cabal-build` exclusively, waiting no longer than AGENTS.md's 30
+   minutes, and hand that hold to both preflights through the runner's
+   held-resource environment, so neither waits on the lock itself without a
+   bound. Resolve the engine and save-codec executables
+   (`probe_runner_resources.engine_preflight` / `codec_preflight`) and put them
+   in the cells `probe_runner_lifecycle.run_one` hands to the probe. A probe left
+   to build its own engine prints a bracketed preparation line, which
    probe_flake rightly rejects in protocol mode.
-2. Take the probe's declared resource interests across processes, waiting up to
-   the 30 minutes AGENTS.md allows for lock contention.
+2. Take the probe's declared resource interests across processes, within the
+   same 30 minutes, counted from the first lock wait.
 3. Run probe_flake with one run, its result document at
    `$QURUNTUL_TRIAL_PREFIX.probe-flake.json`, where the adapter's `outcomes`
    hook reads it. Its raw artifacts go under the temp directory — probe_flake
@@ -40,8 +43,19 @@ import probe_runner_resources  # noqa: E402
 
 namespace = probe_resource_lock.repository_namespace(root)
 announce = lambda message: print(f"quruntul: {message}", flush=True)  # noqa: E731
-probe_runner_resources.ENGINE_EXECUTABLE = probe_runner_resources.engine_preflight(namespace, announce=announce)
-probe_runner_resources.CODEC_EXECUTABLE = probe_runner_resources.codec_preflight(namespace, announce=announce)
+deadline = time.monotonic() + LOCK_WAIT_SECONDS  # counted from the first lock wait
+build = probe_resource_lock.wait_acquire(
+    exclusive=(probe_runner_resources.BUILD_RESOURCE,), namespace=namespace,
+    purpose=f"quruntul preflight for {key}", deadline=deadline)
+try:
+    held = dict(os.environ, **{probe_runner_resources.ENV_HELD_NAMESPACE: namespace,
+                               probe_runner_resources.ENV_HELD_EXCLUSIVE: probe_runner_resources.BUILD_RESOURCE})
+    probe_runner_resources.ENGINE_EXECUTABLE = probe_runner_resources.engine_preflight(
+        namespace, environ=held, announce=announce)
+    probe_runner_resources.CODEC_EXECUTABLE = probe_runner_resources.codec_preflight(
+        namespace, environ=held, announce=announce)
+finally:
+    build.release()
 
 artifacts = Path(tempfile.gettempdir()) / "quruntul-synarchy" / hashlib.sha256(prefix.encode()).hexdigest()[:16]
 artifacts.mkdir(parents=True, exist_ok=True)
@@ -50,7 +64,7 @@ Path(prefix + ".probe-artifacts.path").write_text(str(artifacts) + "\n")
 hold = probe_resource_lock.wait_acquire(
     exclusive=probe_runner_resources.exclusive_resources(key),
     shared=probe_runner_resources.shared_resources(key),
-    namespace=namespace, purpose=f"quruntul {key}", deadline=time.monotonic() + LOCK_WAIT_SECONDS)
+    namespace=namespace, purpose=f"quruntul {key}", deadline=deadline)
 try:
     code = probe_flake.main(["--probe", key, "--runs", "1", "--result", prefix + ".probe-flake.json",
                              "--artifact-root", str(artifacts)])
