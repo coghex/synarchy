@@ -12,6 +12,7 @@ by `manifest.json`. No engine or renderer implementation changed.
 | Hspec `--match "Preview.StructurePack"` | 31 examples, zero failures |
 | Hspec `--match "structure ghost"` | 63 examples, zero failures after the canonical review corrections |
 | Hspec `--match "Structure.ArtCatalog"` | 41 examples, zero failures |
+| Hspec `--match "Preview.Building" --seed 416602199` | 77 examples, zero failures after correcting the shipped default-entry expectation |
 | `python3 tools/dungeon_lifecycle_art.py` | All 14 selected states, six masks, YAML handoffs and final floor mask boundary pass |
 | `python3 tools/texture_subset_audit.py` | All 13 subsets pass |
 | `python3 tools/dungeon_lifecycle_capture.py` | All 12 pieces placed with expected texture/facemap palette paths; four distinct camera captures |
@@ -31,6 +32,13 @@ paid-floor test verifies every progress-selected frame and the lifecycle alpha
 flag on an unbuilt slot; the undeclared case uses a ceiling. The corresponding
 contract and source comments now describe the shipped floor/post sequences.
 These corrections change no approved colour sprite or facemap.
+
+CI run `36581929597` found one deterministic failure among 10,522 examples:
+the YAML-less building preview expected `ceiling.png` to sort first, but the
+new `broken/floor.png` now precedes it. The exact test and CI seed reproduced
+the same failure locally at `29fefaf5e`. Correcting that inventory expectation
+made the 77-example building-preview group pass; the preview selection
+implementation and approved artwork were unchanged.
 
 After `cabal build all`, the required native window was launched from this
 worktree with:
