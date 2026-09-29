@@ -63,6 +63,7 @@ import qualified Test.Headless.Unit.SourceDrinkingHydration as SourceDrinkingHyd
 import qualified Test.Headless.Unit.ResourceTickCarry as ResourceTickCarry
 import qualified Test.Headless.Unit.RegrowthPrecision as RegrowthPrecision
 import qualified Test.Headless.Unit.SourceDrinkPose as SourceDrinkPose
+import qualified Test.Headless.Unit.MentalWanderFallback as MentalWanderFallback
 import qualified Test.Headless.Unit.TerminalDeathPose as TerminalDeathPose
 import qualified Test.Headless.Unit.StaminaCommit as StaminaCommit
 import qualified Test.Headless.Unit.AddXpApi as UnitAddXpApi
@@ -938,6 +939,7 @@ main = hspec $ do
     ResourceTickCarry.spec
     RegrowthPrecision.spec
     SourceDrinkPose.spec
+    MentalWanderFallback.spec
     TerminalDeathPose.spec
     StaminaCommit.spec
     AccessoryUnequip.spec

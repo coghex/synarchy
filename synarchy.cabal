@@ -1476,6 +1476,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.ResourceTickCarry
                    Test.Headless.Unit.RegrowthPrecision
                    Test.Headless.Unit.SourceDrinkPose
+                   Test.Headless.Unit.MentalWanderFallback
                    Test.Headless.Unit.TerminalDeathPose
                    Test.Headless.Unit.StaminaCommit
                    Test.Headless.Unit.AddXpApi

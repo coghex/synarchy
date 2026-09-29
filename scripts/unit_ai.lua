@@ -80,7 +80,8 @@ local hold = require("scripts.unit_ai_hold")
 -- not a cycle; core re-exports maintainTask but is at its line budget.
 local stall = require("scripts.unit_ai_stall")
 
-local config = require("scripts.unit_ai_tunables")
+local configDefaults = require("scripts.unit_ai_config_defaults")
+local config = configDefaults.applyAll(require("scripts.unit_ai_tunables"))
 
 local needs        = require("scripts.unit_ai_needs")
 local water         = require("scripts.unit_ai_water")
@@ -158,7 +159,7 @@ local UNIVERSAL_ACTIONS = {
 }
 
 function unitAi.setConfig(defName, cfg)
-    config[defName] = cfg
+    config[defName] = configDefaults.apply(cfg)
 end
 
 function unitAi.registerActions(defName, ambientActions, options)
@@ -456,7 +457,6 @@ end
 function unitAi.onSaveLoaded(survUnitIds, survBuildingIds, reconcileCtx)
     reconcile.reconcile(aiState, survUnitIds, survBuildingIds, reconcileCtx)
 end
-
 
 function unitAi.update(dt)
     -- #1610: nothing runs between Exit to Menu and the next session --
