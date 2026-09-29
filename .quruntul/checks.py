@@ -146,6 +146,50 @@ class AdapterChecks(unittest.TestCase):
                 self.assertIn(seed["status"], ("stable", "flaky"))
                 self.assertIn(check, suite.checks)
 
+    def test_exit_suites_have_disjoint_port_spans(self):
+        spans = sorted((s.data["port"], s.data["port"] + s.data["span"], k)
+                       for k, s in self.probes().items() if s.framework == "exit")
+        for (start, end, key), (next_start, _, next_key) in zip(spans, spans[1:]):
+            self.assertLessEqual(end, next_start, f"{key} and {next_key} overlap")
+        self.assertTrue(all(not start <= 8008 < end for start, end, _ in spans), "port 8008 is the user's GUI")
+        ports = {k: s.data["port"] for k, s in self.probes().items() if s.framework == "exit"}
+        # The pairs CRC32 placement collided on.
+        for a, b in (("canteen_instance", "follow_command_priority"), ("etymology", "transfer_context_menu"),
+                     ("cargo_capacity", "startup_asset_logging")):
+            if a in ports and b in ports:
+                self.assertNotEqual(ports[a], ports[b], (a, b))
+        for key, suite in self.probes().items():
+            if suite.framework == "exit":
+                self.assertEqual(self.adapter.prepare(Context(), suite).argv[-2:], ["--port", str(suite.data["port"])])
+
+    def test_identities_cover_runner_tool_and_build_inputs(self):
+        inputs = self.module._identity_inputs(ROOT, Context().revision)
+        for required in (".quruntul", "tools", "synarchy.cabal", "cabal.project", "Setup.hs"):
+            self.assertIn(required, inputs)
+        original = self.module._git
+        for changed in (".quruntul", "tools", "cabal.project", "Setup.hs"):
+            def altered(checkout, *args, _path=changed):
+                value = original(checkout, *args)
+                return value[::-1] if args[:1] == ("rev-parse",) and args[1].endswith(":" + _path) else value
+            self.module._git = altered
+            try:
+                again = {s.id: s.identity for s in self.adapter.suites(Context())}
+            finally:
+                self.module._git = original
+            self.assertTrue(all(again[k] != s.identity for k, s in self.suites.items()), changed)
+
+    def test_a_harness_error_measurement_stops_the_batch(self):
+        # The status probe_flake really writes for malformed or truncated protocol output.
+        self.assertIn('measurement.status = "harness-error"', (ROOT / "tools" / "probe_flake.py").read_text())
+        suite = next(s for s in self.suites.values() if s.framework == "command")
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = str(Path(temp) / "trial-0001")
+            zero = {c: {"PASS": 0, "FAIL": 0, "MISSING": 0} for c in suite.checks}
+            for status, expected in (("harness-error", None), ("ok", {})):
+                Path(prefix + ".probe-flake.json").write_text(json.dumps(
+                    {"schema": "probe-flake-result/v1", "status": status, "completed_runs": 0, "check_counts": zero}))
+                self.assertEqual(self.adapter.outcomes(Context(), suite, dict(prefix=prefix)), expected, status)
+
     def test_the_adapter_imports_nothing_from_quruntul(self):
         tree = ast.parse((ROOT / ".quruntul" / "adapter.py").read_text())
         imported = [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]

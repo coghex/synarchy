@@ -33,15 +33,20 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-import zlib
 
 HSPEC_SLICE = 400
 LOCK_WAIT_SECONDS = 1800  # AGENTS.md: wait for cabal-build for up to 30 minutes
-SOURCE_TREES = ("src", "app", "app-save-codec", "scripts", "data", "config", "assets", "cbits", "test",
-                "test-headless")
-HELPERS = ("probelib.py", "probe_protocol.py", "probe_engine.py", "probe_runner_lifecycle.py",
-           "probe_runner_resources.py", "probe_runner_registry.py", "probe_resource_lock.py", "run_probes.py",
-           "probe_flake.py")
+# Everything a suite's behaviour can depend on, taken from the pinned revision:
+# the sources, every tool a trial executes or imports (tools/, and this
+# adapter's own runner in .quruntul/), and the build configuration. Whole trees
+# are hashed deliberately; a narrower list is how an input gets left out.
+IDENTITY_TREES = ("src", "app", "app-save-codec", "scripts", "data", "config", "assets", "cbits", "test",
+                  "test-headless", "tools", ".quruntul", "BuildSupport")
+IDENTITY_FILES = ("synarchy.cabal", "cabal.project", "cabal.project.freeze", "Setup.hs")
+# Exit probes run through run_probes.py --port BASE, which binds the probe's
+# declared span from BASE. Spans are laid end to end in registry order, so no
+# two suites share a port however many sessions run them at once.
+PORT_BASE = 20000
 
 
 def _tools(checkout: Path):
@@ -75,6 +80,26 @@ def _census(checkout: Path) -> dict:
     return {}
 
 
+def _identity_inputs(checkout: Path, revision: str) -> dict[str, str]:
+    """Git object ids of every identity input present at the revision."""
+    found = {}
+    for path in IDENTITY_TREES + IDENTITY_FILES:
+        try:
+            found[path] = _git(checkout, "rev-parse", f"{revision}:{path}")
+        except subprocess.CalledProcessError:
+            continue
+    return found
+
+
+def _port_bases(registry, keys) -> dict[str, int]:
+    """A disjoint [base, base + declared span) for each key, in registry order."""
+    bases, cursor = {}, PORT_BASE
+    for key in keys:
+        bases[key] = cursor
+        cursor += int(registry.port_span(key))
+    return bases
+
+
 def _suite_id(key: str) -> str:
     return "probe:" + key.replace("_", "-")
 
@@ -89,16 +114,7 @@ class Synarchy:
         checkout = ctx.checkout
         tools = _tools(checkout)
         census = _census(checkout)
-        trees = {}
-        for name in SOURCE_TREES:
-            try:
-                trees[name] = _git(checkout, "rev-parse", f"{ctx.revision}:{name}")
-            except subprocess.CalledProcessError:
-                continue
-        helpers = {name: ctx.digest((checkout / "tools" / name).read_text())
-                   for name in HELPERS if (checkout / "tools" / name).is_file()}
-        adapter = ctx.digest((checkout / ".quruntul" / "adapter.py").read_text())
-        base = dict(trees=trees, adapter=adapter, cabal=ctx.digest((checkout / "synarchy.cabal").read_text()))
+        base = dict(inputs=_identity_inputs(checkout, ctx.revision))
         suites = [
             ctx.Suite(id="synarchy-test-headless", kind="ci", framework="hspec",
                       description="GPU-free Hspec specs (test-headless/), run by CI", area="headless",
@@ -112,6 +128,7 @@ class Synarchy:
         ]
         registry, eligible = tools["probe_runner_registry"], tools["ci_probes"].CI_ELIGIBLE
         protocol = tools["probe_flake"].PROTOCOL_PROBES
+        ports = _port_bases(registry, [key for key, _, _ in registry.PROBES])
         for key, script, description in registry.PROBES:
             entry = census.get(key) or {}
             if (entry.get("census") or {}).get("deferred"):
@@ -124,10 +141,9 @@ class Synarchy:
             suites.append(ctx.Suite(
                 id=_suite_id(key), kind="ci" if ci else "probe", framework=framework,
                 description=description, area=key.split("_")[0],
-                identity=ctx.digest(dict(base, script=ctx.digest((checkout / "tools" / script).read_text()),
-                                         helpers=helpers, key=key)),
+                identity=ctx.digest(dict(base, key=key)),
                 checks=checks, trial_seconds=trial, batch_seconds=86400,
-                data=dict(key=key, script=script)))
+                data=dict(key=key, script=script, port=ports[key], span=int(registry.port_span(key)))))
         return suites
 
     @staticmethod
@@ -160,10 +176,8 @@ class Synarchy:
         if suite.framework == "command":
             argv = [sys.executable, str(checkout / ".quruntul" / "probe_trial.py"), key]
         else:
-            # A per-probe port base keeps two concurrently measured probes apart.
-            port = 20000 + (zlib.crc32(key.encode()) % 400) * 50
             argv = [sys.executable, "tools/run_probes.py", "--only", key, "--exact", "--jobs", "1",
-                    "--port", str(port)]
+                    "--port", str(suite.data["port"])]
         return ctx.Prepared(argv=argv, cwd=str(checkout), environment={}, provenance=dict(key=key))
 
     def outcomes(self, ctx, suite, trial):
@@ -172,7 +186,10 @@ class Synarchy:
         if not path.is_file():
             return None
         document = json.loads(path.read_text())
-        if document.get("schema") != "probe-flake-result/v1" or document.get("status") == "error":
+        # Only a valid measurement is evidence. probe_flake writes "harness-error"
+        # for malformed or truncated protocol output; then there is nothing to
+        # read, and quruntul stops the batch as blocked.
+        if document.get("schema") != "probe-flake-result/v1" or document.get("status") != "ok":
             return None
         mapped = {"PASS": "passed", "FAIL": "failed", "MISSING": "missing"}
         outcomes = {}
