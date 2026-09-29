@@ -243,18 +243,25 @@ WHAT IS DELIBERATELY NOT DONE
 -----------------------------
   * No lifecycle is manufactured, no encounter, occupant or health state
     is written, and no tutorial latch is set. `world.setLocationLifecycle`
-    is never called. The selected ruin's persisted zero-occupant encounter starts
-    clear internally but stays `unknown` until sight, then becomes
-    `discovered` — and only reaches `cleared` once its #917 guaranteed
-    significant item has actually been carried out, which this run does
-    through the real pickup boundary. The OCCUPIED ruin does become
-    `discovered`, then `active` on autonomous aggression, and remains
-    uncleared until every assigned nomad is dead AND that item is taken
-    — and there the pickup is asserted to be the player's own gesture,
-    made after the fight, because that ordering is what the leg proves. WHO carries it is not asserted:
-    `processing_unit` is a Materials def, so a colonist standing in the
-    ruin may recover it of its own accord before the player's gesture,
-    which clears the location just as legitimately.
+    is never called.
+  * The two ruins' guaranteed items are held to DIFFERENT rules, on
+    purpose:
+      - the ZERO-OCCUPANT ruin's encounter starts clear internally; it
+        stays `unknown` until sight, becomes `discovered`, and reaches
+        `cleared` only once its #917 guaranteed item has been carried
+        out. There WHO takes it is not asserted: `processing_unit` is a
+        Materials def, a colonist standing in the ruin may recover it of
+        its own accord before the player's gesture, and that clears the
+        location just as legitimately (`extract` accepts either, and
+        `return` follows the item home by instance).
+      - the OCCUPIED ruin becomes `discovered`, then `active` on
+        autonomous aggression, and stays uncleared until every assigned
+        occupant is dead AND its item is taken. There the item must be
+        observed untaken on the ground after the fight, and the only
+        pass is an ACCEPTED player pickup order moving that exact
+        instance into a living party member's pack (`encounter.reward`);
+        an earlier autonomous recovery fails the leg, because the
+        natural clearing order is what it proves.
   * No item is staged in the ruin. The measured extraction target is
     whichever def the ruin's own two `ruin_common` rolls produced (#921
     removed the fixed entries; #948 made the draw seed-stable per

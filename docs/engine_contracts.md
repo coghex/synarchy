@@ -3847,22 +3847,27 @@ occupant's death is credited to the fight only when its last hit came
 from a party member holding a player attack order on it that took (read
 back off its AI state), after the activation and within 120 s of the death,
 its corpse carries wounds, its salt/thermal failure meters are below 1,
-and no "died of" notice names a physiological cause for it — every
-physiological death announces one, while a combat kill
-(`Combat.Resolution.setDead`) puts nothing on the event log at all.
+and there is NO death notice for it at all on the complete ledger:
+every non-combat kill path announces "X died of <cause>" (the Lua
+`unit.kill` sites under `survival_critical`, solidification under
+`unit_warning`), while a killing hit (`Combat.Resolution.setDead`) and
+bleeding out from wounds (`Combat.Wounds.Tick`) put nothing on the event
+log.
 
 **Reconnoitre before advancing.** An occupant announces its aggression
 only if the ruin is already discovered, and the world thread's discovery
 pass can lag the occupant's quarter-second AI tick: one run had the nomad
 acquire the party while the ruin still read `unknown`, so that first
 episode was never announced (and the exactly-once-per-episode check
-correctly failed it). The party therefore walks to a far post 14 tiles
-out, then to an observation post computed from the shipped sight rule —
-radius `floor(perception × 6 × night factor)`, with each unit's own
-perception and the ruin's local sun angle — where its sharpest eye
-reaches the ruin's bounds and every occupant's radius falls at least a
-tile short of it; it waits there for the discovery, and only then
-advances. The bounds' two-tile margin is what usually makes such a post
+correctly failed it). The whole party therefore walks together to a far
+post 14 tiles out, then creeps through the safe observation posts on the
+line in, computed from the shipped sight rule — radius
+`floor(perception × 6 × night factor)`, with each unit's own perception
+and the ruin's local sun angle — where its weakest eye reaches the ruin's
+bounds and every occupant's radius falls at least a tile short. It waits
+at each for the discovery and advances only once it has one; with no safe
+post, or none that reveals the ruin, the stage fails rather than walking
+on blind. The bounds' two-tile margin is what usually makes such a post
 exist.
 
 **The activation edge is watched, not inferred.** `activated` latches, so

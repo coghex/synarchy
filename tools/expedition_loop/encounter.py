@@ -70,12 +70,9 @@ from .readers import (_as_float, carried, current_action, dist, ground_items,
 
 
 #: The failure meters (scripts/unit_resource_failure.lua) that kill by
-#: the occupant's OWN physiology rather than by trauma, and the causes
-#: their deaths and the resource deaths (scripts/unit_resource_alerts.lua
-#: `deathCauseFor`) report.
+#: the occupant's OWN physiology rather than by trauma — read at each
+#: death as corroboration of the no-death-notice rule in `run`.
 PHYSIOLOGICAL_METERS = ("salt_imbalance", "hypothermia", "hyperthermia")
-PHYSIOLOGICAL_CAUSES = {"electrolyte imbalance", "hypothermia", "heat stroke",
-                        "dehydration", "starvation", "exhaustion"}
 
 #: The widest the activation edge may be: game-seconds between the last
 #: sample reading "not activated" and the first reading "activated". A
@@ -146,9 +143,10 @@ def death_physiology(port: int, uid: int) -> dict:
 
 def death_cause(ledger, uid: int):
     """The cause `uid`'s own death notice names ("X died of <cause>"),
-    or None — which, for a combat kill, is the expected answer."""
-    for r in ledger.matching(lambda r: r.get("category") == "survival_critical"
-                             and r.get("uid") == uid):
+    or None — which, for a combat kill, is the expected answer. Any
+    category: the Lua kill paths announce under `survival_critical`, a
+    solidification death under `unit_warning`."""
+    for r in ledger.matching(lambda r: r.get("uid") == uid):
         text = r.get("text") or ""
         if " died of " in text:
             return text.split(" died of ", 1)[1].rstrip(".")
@@ -207,18 +205,18 @@ def sight_radius(perception: float, night: float) -> int:
     return max(1, int(math.floor(perception * 6.0 * night)))
 
 
-def observation_post(port: int, st, fighters, members, first, anchor) -> dict:
-    """The farthest tile on the line in from which the party's sharpest
-    eye reaches the ruin's bounds while every occupant's sight falls
-    short of it by a tile's margin — or no tile, if the occupants
-    out-see the party today."""
+def observation_posts(port: int, st, fighters, first, anchor) -> dict:
+    """Every safe observation post on the line in, farthest first: tiles
+    from which the party's WEAKEST eye (so any member standing there can
+    look) reaches the ruin's bounds, while every occupant's sight falls
+    short of the tile by at least a tile's margin."""
     sun = _as_float(send(port, f"return world.getSunAngleAt({anchor[0]},"
                                f"{anchor[1]})")) or 0.5
     night = night_factor(sun)
 
     def perception(u):
         return _as_float(send(port, f"return unit.getStat({u},'perception')")) or 1.0
-    radii = sorted(sight_radius(perception(u), night) for u in fighters)
+    rp = min(sight_radius(perception(u), night) for u in fighters)
     inst = instance_by_id(port, PAGE, st.occ_id) or {}
     homes = [(int(math.floor(float(o["home_x"]))),
               int(math.floor(float(o["home_y"]))),
@@ -227,29 +225,18 @@ def observation_post(port: int, st, fighters, members, first, anchor) -> dict:
     b = st.occ.get("bounds") or {}
     bounds = [(x, y) for x in range(int(b["min_x"]), int(b["max_x"]) + 1)
               for y in range(int(b["min_y"]), int(b["max_y"]) + 1)]
-    span = int(dist(first, anchor))
-
-    def post_for(rp):
-        """The farthest tile from which an eye of radius `rp` reaches
-        the bounds, and whether every occupant is blind to it."""
-        for back in range(min(span, FAR_POST_TILES), 0, -1):
-            px, py = line_point(first, anchor, back)
-            if min((bx - px) ** 2 + (by - py) ** 2
-                   for bx, by in bounds) > rp * rp:
-                continue
-            unseen = all((px - hx) ** 2 + (py - hy) ** 2 > (rn + 1) ** 2
-                         for hx, hy, rn in homes)
-            return (px, py), back, unseen
-        return None, None, False
-
-    # The weakest eye first, so EVERY member standing at the post can see
-    # the ruin; the sharpest only if the weakest's post would be seen.
-    for rp in (radii[0], radii[-1]):
-        tile, back, unseen = post_for(rp)
-        if tile is not None and unseen:
-            break
-    return {"tile": tile if unseen else None, "back": back,
-            "party_radius": rp, "party_radii": radii,
+    posts = []
+    for back in range(min(int(dist(first, anchor)), FAR_POST_TILES), 0, -1):
+        px, py = line_point(first, anchor, back)
+        if (px, py) in posts:
+            continue
+        sees = min((bx - px) ** 2 + (by - py) ** 2
+                   for bx, by in bounds) <= rp * rp
+        unseen = all((px - hx) ** 2 + (py - hy) ** 2 > (rn + 1) ** 2
+                     for hx, hy, rn in homes)
+        if sees and unseen:
+            posts.append((px, py))
+    return {"posts": posts, "party_radius": rp,
             "occupant_radii": [rn for _x, _y, rn in homes],
             "night": round(night, 2)}
 
@@ -503,48 +490,75 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             time.sleep(1.0)
         return False
 
-    def anyone_within(tile, r):
-        return lambda status: any(p and dist(p, tile) <= r
+
+    def everyone_within(tile, r):
+        return lambda status: all(p and dist(p, tile) <= r
                                   for p, _a, _o in status.values())
 
     # 1. A far post on the line in, FAR_POST_TILES from the ruin: beyond
     #    anything an occupant can see (radius <= 6 x the highest shipped
-    #    perception), so the party arrives unseen.
+    #    perception), so the party arrives unseen. The WHOLE party, as
+    #    directed: nobody goes on until every member has come this far.
     far = line_point(first, anchor, FAR_POST_TILES)
-    walk(far, ENCOUNTER_SECONDS, anyone_within(far, 2.0))
+    reached = walk(far, ENCOUNTER_SECONDS, everyone_within(far, 2.0))
+    if not chk.ok(reached,
+                  f"the whole party walks on together from the first ruin to "
+                  f"the far post {far}, {FAR_POST_TILES} tiles out "
+                  f"({party_state(port, fighters)})"):
+        raise StageAbort("the party never reached the far post together")
+
     # 2. RECONNOITRE. The occupants' notice of an acquisition is emitted
     #    only if the ruin is already discovered, and the world thread's
     #    discovery pass can lag an occupant's quarter-second AI tick —
     #    observed: an occupant acquiring the party while the ruin still
     #    read `unknown`, whose first episode was never announced. So the
-    #    party does what a player does: it stops where it can see the
+    #    party does what a player does: it looks from where it can see the
     #    ruin's bounds but its occupants cannot see it, and advances only
-    #    once the ruin is discovered. The post is computed from the
+    #    once the ruin is discovered. The candidate posts come from the
     #    shipped sight rule (radius = floor(perception x 6 x night
-    #    factor), `Unit.LineOfSight`) with every unit's own perception
-    #    and the ruin's local sun angle; the ruin's 5x5 bounds give the
-    #    watchers a two-tile head start.
-    post = observation_post(port, st, fighters, members, first, anchor)
-    st.recon = post
-    if post["tile"] is not None:
-        # The whole party at the post, not just its first arrival: the
-        # post was chosen for an eye a straggler may be carrying.
-        walk(post["tile"], ENCOUNTER_SECONDS / 2,
-             lambda status: all(p and dist(p, post["tile"]) <= 1.5
-                                for p, _a, _o in status.values()))
+    #    factor), `Unit.LineOfSight`) with every unit's own perception and
+    #    the ruin's local sun angle; the ruin's 5x5 bounds give the
+    #    watchers a two-tile head start. The party creeps from the
+    #    farthest to the nearest safe post — each step forward also turns
+    #    its sight cone back onto the ruin — and the stage fails, rather
+    #    than walking on blind, if no safe post reveals it.
+    recon = observation_posts(port, st, fighters, first, anchor)
+    st.recon = recon
+    if not chk.ok(bool(recon["posts"]),
+                  f"a safe observation post exists on the line in — a tile "
+                  f"from which the party's weakest eye reaches the ruin's "
+                  f"bounds and every occupant's sight falls at least a tile "
+                  f"short ({recon})"):
+        raise StageAbort("no safe observation post")
+    discovered, used = False, []
+    for tile in recon["posts"]:
+        arrived = walk(tile, ENCOUNTER_SECONDS / 2,
+                       everyone_within(tile, 1.5))
+        used.append((tile, arrived))
+        if not arrived:
+            break
         stop = time.time() + RECON_SECONDS
         while time.time() < stop:
-            if (encounter_state(port, occ_id) or {}).get("lifecycle") \
-                    in ("discovered", "active"):
+            now = encounter_state(port, occ_id) or {}
+            if now.get("lifecycle") in ("discovered", "active") \
+                    or now.get("activated"):
+                discovered = now.get("lifecycle") in ("discovered", "active")
                 break
             for u, (p, _a, _o) in party_status(port, fighters,
-                                               post["tile"]).items():
+                                               tile).items():
                 if p:
                     samples.setdefault(u, []).append(p)
             time.sleep(0.5)
-    print(f"  reconnaissance: {post}; ruin now "
-          f"{(encounter_state(port, occ_id) or {}).get('lifecycle')!r}",
-          flush=True)
+        if discovered or (encounter_state(port, occ_id) or {}).get("activated"):
+            break
+    state_now = encounter_state(port, occ_id) or {}
+    print(f"  reconnaissance: {recon}; posts used {used}; ruin now "
+          f"{state_now.get('lifecycle')!r}", flush=True)
+    if not chk.ok(discovered and not state_now.get("activated"),
+                  f"the party, standing together at a safe post, discovers "
+                  f"the ruin before any occupant has acquired it (posts "
+                  f"walked {used}; ruin {state_now})"):
+        raise StageAbort("the reconnaissance did not reveal the ruin safely")
 
     # 3. The advance. The activation EDGE is watched at a fine cadence —
     #    one round trip a sample (`encounter_state`) — and the heavier
@@ -591,15 +605,13 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"running (lifecycles seen {lifecycles}, encounter "
            f"{(instance_by_id(port, PAGE, occ_id) or {}).get('encounter')}"
            f"{'' if active else '; party ' + str(party_state(port, fighters)) + '; occupants ' + str(party_state(port, members)) + '; game time ' + str(send(port, 'return engine.gameTime()')) + ' (paged in at ' + str(st.page_in_time) + '); notices ' + str(notice_trail(ledger))})")
-    # Asserted on a member that set out from the first ruin.
-    walked = sorted(u for u in gathered if len(samples.get(u, [])) >= 2)
-    if not walked:
-        chk.ok(False, "some party member that gathered at the first ruin "
-                      "walked the leg to the occupied one")
-    for u in walked[:1]:
-        assert_real_travel(chk, samples[u], occ_xy,
-                           "the party's leg from the first ruin to the "
-                           "occupied one", min_samples=10, min_closed=10.0)
+    # Asserted on EVERY member: each one set out from the first ruin
+    # and made the leg to the occupied one.
+    for u in fighters:
+        assert_real_travel(chk, samples.get(u, []), occ_xy,
+                           f"party member {u}'s leg from the first ruin to "
+                           f"the occupied one", min_samples=10,
+                           min_closed=10.0)
     if active is None:
         raise StageAbort("the occupied ruin's encounter never activated")
     # The activation EDGE, pinned to the notice it must have produced.
@@ -738,17 +750,22 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # docs/engine_contracts.md §The expedition loop): each occupant's
     # last recorded hit came from a party member, after the activation,
     # and within DEATH_BLOW_SECONDS of when it was first seen dead.
-    # ...and by a COMBAT cause, not a physiological one. A hit, however
-    # recent, only proves a hit landed; the independent physiological
-    # kill paths (salt imbalance, hypo/hyperthermia, dehydration,
-    # starvation) each leave their own mark, so each is ruled out at the
-    # death itself: the occupant's physiological failure meters are
-    # below 1, its corpse carries wounds, and it has no death notice
-    # naming a physiological cause. Every physiological death — the
-    # meters, and the meterless resource deaths (dehydration, starvation,
-    # exhaustion) — announces itself "X died of <cause>"; a combat kill
-    # (`Combat.Resolution.setDead`) announces nothing on the event log at
-    # all, so with the ledger proven complete below, silence is evidence.
+    # ...and by COMBAT, not by any other kill path. A hit, however
+    # recent, only proves a hit landed, so the kill path itself is
+    # identified. Every unit death in the engine goes through one of:
+    #   * a Lua `unit.kill` (unit_resource_failure / _injury / _tick /
+    #     _energy — every failure meter, hypoxia and shock included, the
+    #     injury tick, and the resource deaths), each preceded by
+    #     `emitDeathAlert`'s "X died of <cause>" notice on the event log;
+    #   * `Unit.Thread.Command.Solidify`, which reports its own "died of";
+    #   * `Combat.Resolution.setDead` (a killing hit) and
+    #     `Combat.Wounds.Tick` (bleeding out from wounds), which put their
+    #     death on the drained combat stream and NOTHING on the event log.
+    # So an occupant with NO death notice, over a ledger proven complete,
+    # was killed by a combat hit or by the wounds combat gave it; with
+    # its last hit from a party member holding an order on it, that is
+    # the party's combat. Wounds on the corpse and its physiological
+    # failure meters below 1 are read too, as corroboration.
     ledger.poll(port)
     blows = {}
     for m in members:
@@ -768,8 +785,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
         b["physiology"].get("wounds", 0) > 0
         and all(float(b["physiology"].get(k) or 0) < 1.0
                 for k in PHYSIOLOGICAL_METERS)
-        and b["cause"] not in PHYSIOLOGICAL_CAUSES
-        for b in blows.values())
+        and b["cause"] is None
+        for b in blows.values()) and not ledger.unexplained()
     chk.ok(by_party,
            f"and the party's combat is what felled each one: its last hit "
            f"came from a party member holding a player attack order on it, "
@@ -777,11 +794,12 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"{st.activation_time:.1f}) and within {DEATH_BLOW_SECONDS:.0f} s "
            f"of its death ({blows})")
     chk.ok(by_wounds,
-           f"...and each died of its wounds, not of its own physiology: "
-           f"wounds on the corpse, every physiological failure meter "
-           f"{PHYSIOLOGICAL_METERS} below 1 at the death, and no death "
-           f"notice naming a physiological cause "
-           f"{sorted(PHYSIOLOGICAL_CAUSES)} ({blows})")
+           f"...and each died by combat, not by any other kill path: no "
+           f"death notice at all for it on a complete event-log ledger "
+           f"(every non-combat kill path announces \"died of <cause>\"), "
+           f"wounds on the corpse, and its physiological failure meters "
+           f"{PHYSIOLOGICAL_METERS} below 1 ({blows}; unexplained ledger "
+           f"intervals {ledger.unexplained()})")
     chk.ok(uncleared_while_alive,
            "at no point while any occupant lived was the encounter, the "
            "clearance predicate or the lifecycle reported cleared")
