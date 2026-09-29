@@ -56,7 +56,7 @@ import time
 
 from probelib import poll_until, send, send_json
 
-from .constants import (ACOLYTE_DEF, DEATH_BLOW_SECONDS, ENCOUNTER_SECONDS,
+from .constants import (ACOLYTE_DEF, ENCOUNTER_SECONDS,
                         FAR_POST_TILES, FIGHT_SECONDS, MUSTER_SECONDS,
                         OCCUPIED_RETURN_SECONDS, PAGE, PARTY_WATER_L,
                         RATIONS_DEF, RECON_SECONDS, TRIP_OBJECTIVES)
@@ -559,10 +559,10 @@ def run(chk: Checks, st: ExpeditionState) -> None:
         while time.time() < stop:
             observe()
             status = party_status(port, fighters, tile)
-            for u, (p, action, ordered) in status.items():
+            for u, (p, action, has_order) in status.items():
                 if p:
                     samples.setdefault(u, []).append(p)
-                if action in IDLE_ACTIONS and not ordered:
+                if action in IDLE_ACTIONS and not has_order:
                     send(port, f"require('scripts.unit_ai').commandMove({u},"
                                f"{tile[0]},{tile[1]}); return 'ok'")
             if until(status):
@@ -650,6 +650,44 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     #    first is to open AND close inside that gap — and a closing
     #    episode sends its guard home, from where it re-engages only once
     #    it stands at its post again.
+    # The player's attack orders — the one `init_context_menu.lua`'s
+    # Attack entry issues (committed). Given the INSTANT the occupants
+    # acquire the party, and every fight pass after, to each member not
+    # already holding a committed attack on a living occupant: dropped at
+    # once for a straggler out of reach, or broken off later, an order is
+    # given again, as a player re-clicks. commandAttack returns nothing,
+    # so each order is read back off the unit's own AI state, and an
+    # accepted one is stamped from the moment it was ISSUED — a hit can
+    # land before the readback does.
+    ordered: dict[int, int] = {}
+    order_samples: dict[int, list] = {u: [] for u in fighters}
+    accepted: list[tuple] = []
+    rejected: list[tuple] = []
+
+    def give_orders(alive):
+        for u in fighters:
+            if not alive or pose(port, u) == "dead" \
+                    or ordered.get(u) in alive:
+                continue
+            p = unit_pos(port, u)
+            target = min(alive, key=lambda t: dist(
+                p or occ_xy, unit_pos(port, t) or occ_xy))
+            t_cmd = _as_float(send(port, "return engine.gameTime()")) or 0.0
+            send(port, f"require('scripts.unit_ai').commandAttack("
+                       f"{u},{target},true); return 'ok'")
+            held = send(
+                port, f"local ai=require('scripts.unit_ai'); "
+                      f"local s=ai.getState({u}); "
+                      f"return tostring(s and s.attackTargetUid)..','.."
+                      f"tostring(s and s.committed == true)..','.."
+                      f"tostring(s and ai.isGoalActive(s,'attack'))")
+            if held == f"{target},true,true":
+                ordered[u] = target
+                accepted.append((u, target, held))
+                order_samples[u].append((t_cmd, target, True, True))
+            else:
+                rejected.append((u, target, held))
+
     for u in fighters:
         send(port, f"require('scripts.unit_ai').commandMove({u},"
                    f"{anchor[0]},{anchor[1]}); return 'ok'")
@@ -672,10 +710,10 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             next_slow = time.time() + 1.0
             ledger.poll(port)
             status = party_status(port, fighters, anchor)
-            for u, (p, action, ordered) in status.items():
+            for u, (p, action, has_order) in status.items():
                 if p:
                     samples.setdefault(u, []).append(p)
-                if action in IDLE_ACTIONS and not ordered:
+                if action in IDLE_ACTIONS and not has_order:
                     send(port, f"require('scripts.unit_ai').commandMove({u},"
                                f"{anchor[0]},{anchor[1]}); return 'ok'")
         time.sleep(0.1)
@@ -694,6 +732,13 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                            min_closed=10.0)
     if active is None:
         raise StageAbort("the occupied ruin's encounter never activated")
+    # Requirement 5's snapshot, taken AT the activation edge — before the
+    # player's orders go out, since an ordered party can finish a lone
+    # occupant in seconds: every assigned occupant alive, the location
+    # `active`, neither clearance half satisfied.
+    alive_at_activation = living(port, members)
+    # The player answers the acquisition at once, before any check below.
+    give_orders(alive_at_activation)
     # The activation EDGE, pinned to the notice it must have produced.
     # `unit_ai_encounter.engageExecute` emits the aggression notice
     # before it queues the episode state, so by the time the instance
@@ -745,8 +790,9 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"the lifecycle only ever moves forward from unknown "
            f"({' -> '.join(str(x) for x in lifecycles)})")
 
-    # Requirement 5, while every assigned occupant is alive.
-    alive_now = living(port, members)
+    # Requirement 5, while every assigned occupant is alive — read at the
+    # activation edge (see above).
+    alive_now = alive_at_activation
     chk.ok(len(alive_now) == len(members)
            and active.get("lifecycle") == "active"
            and (active.get("encounter") or {}).get("cleared") is False
@@ -766,15 +812,15 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # off later — is given again, as a player re-clicks. The samples are
     # kept, so the killing blow can be matched to an order that was
     # still in force when it landed.
-    ordered: dict[int, int] = {}
-    order_samples: dict[int, list] = {u: [] for u in fighters}
     combat_events: dict[tuple, dict] = {}
     injury_events: dict[tuple, dict] = {}
-    accepted: list[tuple] = []
-    rejected: list[tuple] = []
     #: occupant uid -> (game time first seen dead, its last attacker).
     deaths: dict[int, tuple] = {}
-    cleared_seen: list[bool] = []
+    # Seeded with the activation snapshot's own reading, taken while
+    # every occupant was alive, so the latch's false -> true transition
+    # is observed even when the fight is over within a pass.
+    cleared_seen: list[bool] = [bool((active.get("encounter") or {})
+                                     .get("cleared"))]
     uncleared_while_alive = True
     deadline = time.time() + FIGHT_SECONDS
     while time.time() < deadline:
@@ -801,32 +847,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             uncleared_while_alive = False
         if not alive:
             break
-        for u in fighters:
-            if pose(port, u) == "dead":
-                continue
-            if ordered.get(u) not in alive:
-                p = unit_pos(port, u)
-                target = min(alive, key=lambda t: dist(
-                    p or occ_xy, unit_pos(port, t) or occ_xy))
-                send(port, f"require('scripts.unit_ai').commandAttack("
-                           f"{u},{target},true); return 'ok'")
-                # commandAttack returns nothing, so the order is read
-                # back off the unit's own AI state: target and goal set.
-                # An order the AI dropped at once (a straggler still out
-                # of reach) is not recorded as given, so the next pass
-                # gives it again — as a player re-clicks.
-                held = send(
-                    port, f"local ai=require('scripts.unit_ai'); "
-                          f"local s=ai.getState({u}); "
-                          f"return tostring(s and s.attackTargetUid)..','.."
-                          f"tostring(s and ai.isGoalActive(s,'attack'))")
-                if held == f"{target},true":
-                    ordered[u] = target
-                    accepted.append((u, target, held))
-                    t_now = _as_float(send(port, "return engine.gameTime()")) or 0.0
-                    order_samples[u].append((t_now, target, True, True))
-                else:
-                    rejected.append((u, target, held))
+        give_orders(alive)
         time.sleep(0.5)
     dead = [u for u in members if u not in living(port, members)]
     chk.ok(len(dead) == len(members),
@@ -845,9 +866,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"re-given: {rejected})")
     # The PARTY killed them, not the occupants' own physiology (a
     # neglected occupant dies of electrolyte imbalance on its own — see
-    # docs/engine_contracts.md §The expedition loop): each occupant's
-    # last recorded hit came from a party member, after the activation,
-    # and within DEATH_BLOW_SECONDS of when it was first seen dead.
+    # docs/engine_contracts.md §The expedition loop), proved below from
+    # each occupant's terminal injury.
     # One last read of both retained rings, so a blow landed in the
     # final pass is on the record.
     for ev in combat_log_events(port, members):
@@ -899,8 +919,13 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                        "dealt by party members under order")
         else:
             verdict = f"died of {death.get('cause')!r}, not combat"
+        def governing(u, ts):
+            held = [smp for smp in order_samples.get(u, []) if smp[0] <= ts]
+            return held[-1] if held else None
         kills[m] = {"verdict": verdict, "death": death,
-                    "hits": [(h["ts"], h["attacker"]) for h in hits],
+                    "hits": [(h["ts"], h["attacker"],
+                              governing(h["attacker"], h["ts"]))
+                             for h in hits],
                     "falls_or_hazards": other_wounds}
     chk.ok(all(k["verdict"] in ("killing hit by a party member under order",
                                 "bled out of wounds all dealt by party "
@@ -936,28 +961,15 @@ def run(chk: Checks, st: ExpeditionState) -> None:
         cause = death_cause(ledger, m)
         blows[m] = {"last_attacker": att, "seen_dead": seen_at,
                     "physiology": phys, "cause": cause}
-    by_party = all(
-        b["last_attacker"] is not None
-        and b["last_attacker"].get("uid") in ordered_on.get(m, [])
-        and float(b["last_attacker"].get("at") or -1) >= st.activation_time
-        and b["seen_dead"] is not None
-        and b["seen_dead"] - float(b["last_attacker"].get("at") or -1)
-        <= DEATH_BLOW_SECONDS
-        for m, b in blows.items())
     by_wounds = all(
         b["physiology"].get("wounds", 0) > 0
         and all(float(b["physiology"].get(k) or 0) < 1.0
                 for k in PHYSIOLOGICAL_METERS)
         and b["cause"] is None
         for b in blows.values()) and not ledger.unexplained()
-    chk.ok(by_party,
-           f"and the party's combat is what felled each one: its last hit "
-           f"came from a party member holding a player attack order on it, "
-           f"after the activation (game time "
-           f"{st.activation_time:.1f}) and within {DEATH_BLOW_SECONDS:.0f} s "
-           f"of its death ({blows})")
     chk.ok(by_wounds,
-           f"...and each died by combat, not by any other kill path: no "
+           f"...and, as corroboration, each died by combat and not by any "
+           f"other kill path: no "
            f"death notice at all for it on a complete event-log ledger "
            f"(every non-combat kill path announces the death: \"died of "
            f"<cause>\", or a `{SOLIDIFY_SOURCE}` entombment), "

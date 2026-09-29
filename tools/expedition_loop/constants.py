@@ -170,12 +170,6 @@ FAR_POST_TILES = MAX_SIGHT_TILES + 2
 RECON_SECONDS = 30.0
 FIGHT_SECONDS = 300.0
 
-#: How recent an occupant's last hit from the party must be, relative
-#: to when it is first seen dead, for its death to be credited to the
-#: fight. Wide enough for a stab wound to bleed out; far narrower than
-#: the ~1100 game-seconds a neglected occupant takes to die on its own.
-DEATH_BLOW_SECONDS = 120.0
-
 #: The prepared traveller's calibrated walk home from the first ruin —
 #: the budget this gate always gave it, and deliberately unchanged.
 RETURN_SECONDS = 420.0
