@@ -3838,10 +3838,40 @@ first ruin the moment `travel` is done, walking while `extract` and the
 prepared traveller's `return` run; it then walks straight on to the
 occupied ruin with no second muster; and setup never pages the occupied
 ruin's chunk in (its corridors are read up to that chunk's edge), so its
-contents spawn as the party sets out. The gather is bounded (300 s, going
-on with whoever has arrived), and the leg credits each death to the fight
-explicitly: the occupant's `unit.getLastAttacker` must be a party
-member, hit after the activation and within 120 s of the death.
+contents spawn as the party sets out. The whole party must stand
+together at the first ruin within 300 s, each member having left the
+colony carrying at least 2 L and a ration (the tutorial's own expedition
+predicate, read as it sets out — a hungry colonist eats on the road;
+rations are topped up off the technomule first if the wait ate them). And because a physiological death can follow a recent hit, each
+occupant's death is credited to the fight only when its last hit came
+from a party member holding a player attack order on it that took (read
+back off its AI state), after the activation and within 120 s of the death,
+its corpse carries wounds, its salt/thermal failure meters are below 1,
+and no "died of" notice names a physiological cause for it — every
+physiological death announces one, while a combat kill
+(`Combat.Resolution.setDead`) puts nothing on the event log at all.
+
+**Reconnoitre before advancing.** An occupant announces its aggression
+only if the ruin is already discovered, and the world thread's discovery
+pass can lag the occupant's quarter-second AI tick: one run had the nomad
+acquire the party while the ruin still read `unknown`, so that first
+episode was never announced (and the exactly-once-per-episode check
+correctly failed it). The party therefore walks to a far post 14 tiles
+out, then to an observation post computed from the shipped sight rule —
+radius `floor(perception × 6 × night factor)`, with each unit's own
+perception and the ruin's local sun angle — where its sharpest eye
+reaches the ruin's bounds and every occupant's radius falls at least a
+tile short of it; it waits there for the discovery, and only then
+advances. The bounds' two-tile margin is what usually makes such a post
+exist.
+
+**The activation edge is watched, not inferred.** `activated` latches, so
+an episode that opened and closed unseen before the observed one would
+otherwise hide. The probe samples the encounter at ~0.1 s in one round
+trip and requires the last "not activated" and first "activated" samples
+to show the ruin already visible (so any episode in between was
+announced) or to be under 1 game-second apart, with the activating
+episode running, announced and opened on a visible ruin.
 
 **Who goes (owner directive on #2640).** The prepared traveller carries
 its loot home on the calibrated return straight after `extract`; the

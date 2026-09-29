@@ -62,8 +62,10 @@ own:
   encounter a party of the colony's other acolytes (not the prepared
             traveller, not the control) gathers at the first ruin; the
             occupied ruin is paged in, its roster and guaranteed item
-            checked in place; the party walks on to it, and it was
-            unknown when the leg began and is discovered by sight once;
+            checked in place; the party walks on to it, reconnoitring
+            from a post where it can see the ruin but no occupant can
+            see it, so the ruin — unknown when the leg began — is
+            discovered by sight once, before any occupant acquires it;
             its occupants acquire the party through their own
             sight/aggression path (activated; exactly one aggression
             notice per episode — a wounded nomad that breaks off and

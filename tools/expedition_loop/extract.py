@@ -76,6 +76,15 @@ def locate(port: int, phys: int) -> str:
     return "not carried by a live acolyte, not on the ground"
 
 
+def ordered_to(port: int, uid: int, tile) -> bool:
+    """Whether `uid` already holds a pending player move order to `tile`."""
+    got = send(port, f"local s=require('scripts.unit_ai').getState({uid}); "
+                     f"local t=s and s.commandedTask; "
+                     f"return t and (math.floor(t.x)..','..math.floor(t.y)) "
+                     f"or 'none'").strip().strip('"')
+    return got == f"{int(tile[0])},{int(tile[1])}"
+
+
 def bank_home(port: int, st: ExpeditionState, phys: int,
               seconds: float = RETURN_SECONDS):
     """Bring physical instance `phys` home and into colony storage,
@@ -101,7 +110,12 @@ def bank_home(port: int, st: ExpeditionState, phys: int,
                 item = find_instance(inventory(port, uid), phys) or {}
                 send(port, f"return unit.depositToCargo({uid},{st.storage_bid},"
                            f"'{item.get('defName', '')}',{phys})")
-            elif current_action(port, uid) != "follow_command":
+            elif current_action(port, uid) != "follow_command" \
+                    and not ordered_to(port, uid, st.deposit_spot):
+                # Only when no order home is pending: re-issuing one
+                # resets the unit's path, and a long path can take longer
+                # to plan than this loop's second — observed: a carrier
+                # re-ordered every second never left the occupied ruin.
                 send(port, f"require('scripts.unit_ai').commandMove({uid},"
                            f"{st.deposit_spot[0]},{st.deposit_spot[1]}); "
                            f"return 'ok'")

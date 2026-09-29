@@ -32,7 +32,8 @@ from .constants import (DEPART_STOMACH_FRAC, REQUIRED_PREPARATION_COMPLETED,
                         STAGING_RADIUS, SUB_FOOD, SUB_WATER)
 from .harness import Checks, ExpeditionState, StageAbort
 from .readers import (_as_float, bearing_gap, carried, current_action, dist,
-                      paired_positions, progress, stat_fraction, unit_pos)
+                      ground_items, paired_positions, progress,
+                      significant_rows, stat_fraction, unit_pos)
 
 
 # --------------------------------------------------------------------------
@@ -305,8 +306,15 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"{c_rations} rations)")
     # Headroom for the loot: commandPickup refuses at command
     # time when the instance would not fit (#920), so a carrier
-    # that merely fits ITSELF is turned away at the ruin.
-    headroom = float(target.get("weight") or 0.0)
+    # that merely fits ITSELF is turned away at the ruin. Room for
+    # BOTH items the extract stage has this carrier take: the loot
+    # roll and #917's guaranteed item (whose pickup was observed
+    # refused for want of 0.4 kg once nothing else took it first).
+    sig_ids = {r.get("item_instance_id")
+               for r in significant_rows(port, st.ruin_id)}
+    sig_kg = sum(float(g.get("weight") or 0.0) for g in ground_items(port)
+                 if g.get("instanceId") in sig_ids)
+    headroom = float(target.get("weight") or 0.0) + sig_kg
     shed = {u: shed_to_capacity(port, u, headroom)
             for u in (prepared, control)}
     room = {}
@@ -319,7 +327,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     chk.ok(all(room[u][0] + headroom <= room[u][1]
                for u in (prepared, control)),
            f"both travellers set out INSIDE their carrying capacity with "
-           f"room for the {target['defName']} ({headroom:.2f} kg) — an "
+           f"room for the {target['defName']} and the guaranteed item "
+           f"({headroom:.2f} kg) — an "
            f"over-encumbered acolyte walks at a fraction of comfort "
            f"speed and has its orders stall-timed-out, and one with no "
            f"headroom has its retrieval order refused outright (prepared "

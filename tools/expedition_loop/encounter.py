@@ -51,20 +51,37 @@ comes near the occupied one.
 """
 from __future__ import annotations
 
+import math
 import time
 
 from probelib import poll_until, send, send_json
 
 from .constants import (ACOLYTE_DEF, DEATH_BLOW_SECONDS, ENCOUNTER_SECONDS,
-                        FIGHT_SECONDS, MUSTER_SECONDS, PAGE, TRIP_OBJECTIVES)
+                        FAR_POST_TILES, FIGHT_SECONDS, MUSTER_SECONDS,
+                        OCCUPIED_RETURN_SECONDS, PAGE, PARTY_WATER_L,
+                        RATIONS_DEF, RECON_SECONDS, TRIP_OBJECTIVES)
 from .extract import bank_home, locate
 from .harness import Checks, ExpeditionState, StageAbort, assert_real_travel
 from .notices import EventLedger, latch_passes
-from .readers import (_as_float, current_action, dist, ground_items,
+from .readers import (_as_float, carried, current_action, dist, ground_items,
                       in_arrival_box, instance_by_id, inventory,
                       known_locations, load_region, pose, progress, roster,
                       significant_rows, unit_pos)
 
+
+#: The failure meters (scripts/unit_resource_failure.lua) that kill by
+#: the occupant's OWN physiology rather than by trauma, and the causes
+#: their deaths and the resource deaths (scripts/unit_resource_alerts.lua
+#: `deathCauseFor`) report.
+PHYSIOLOGICAL_METERS = ("salt_imbalance", "hypothermia", "hyperthermia")
+PHYSIOLOGICAL_CAUSES = {"electrolyte imbalance", "hypothermia", "heat stroke",
+                        "dehydration", "starvation", "exhaustion"}
+
+#: The widest the activation edge may be: game-seconds between the last
+#: sample reading "not activated" and the first reading "activated". A
+#: closed episode sends its guard home and it re-engages only from its
+#: post, which takes longer than this.
+ACTIVATION_EDGE_SECONDS = 1.0
 
 #: Actions that mean a party member has stopped following its order and
 #: is doing nothing in particular, so re-ordering it overrides nothing.
@@ -95,15 +112,146 @@ def living(port: int, uids) -> list:
     return out
 
 
-def ordered_to(port: int, uid: int, tile) -> bool:
-    """Whether `uid` already holds a pending player move order to
-    `tile` — re-issuing one resets the unit's path, so a probe that
-    re-orders every poll can keep a unit from ever setting off."""
-    got = send(port, f"local s=require('scripts.unit_ai').getState({uid}); "
-                     f"local t=s and s.commandedTask; "
-                     f"return t and (math.floor(t.x)..','..math.floor(t.y)) "
-                     f"or 'none'").strip().strip('"')
-    return got == f"{tile[0]},{tile[1]}"
+def encounter_state(port: int, occ_id: int):
+    """The fields the activation edge is judged on, and the game time,
+    in ONE console round trip."""
+    raw = send(port,
+               f"local i=world.getLocationInstance({occ_id},'{PAGE}'); "
+               f"local e=i and i.encounter; if not e then return 'nil' end; "
+               f"return tostring(i.lifecycle)..','..tostring(e.activated)..','"
+               f"..tostring(e.episode_active)..','"
+               f"..tostring(e.aggression_announced)..','"
+               f"..tostring(engine.gameTime())").strip().strip('"')
+    parts = raw.split(",")
+    if len(parts) != 5:
+        return None
+    t = _as_float(parts[4])
+    return {"lifecycle": parts[0], "activated": parts[1] == "true",
+            "episode_active": parts[2] == "true",
+            "aggression_announced": parts[3] == "true", "t": t or 0.0}
+
+
+def death_physiology(port: int, uid: int) -> dict:
+    """The state that says which kill path took `uid`, read at the moment
+    it is first seen dead: its physiological failure meters and how many
+    wounds its corpse carries."""
+    stats = ",".join(f"'{k}'" for k in PHYSIOLOGICAL_METERS)
+    got = send_json(
+        port, f"local o={{}}; for _,k in ipairs({{{stats}}}) do "
+              f"o[k]=unit.getStat({uid},k) end; "
+              f"local w=unit.getWounds({uid}); "
+              f"o.wounds=type(w)=='table' and #w or 0; return o")
+    return got if isinstance(got, dict) else {}
+
+
+def death_cause(ledger, uid: int):
+    """The cause `uid`'s own death notice names ("X died of <cause>"),
+    or None — which, for a combat kill, is the expected answer."""
+    for r in ledger.matching(lambda r: r.get("category") == "survival_critical"
+                             and r.get("uid") == uid):
+        text = r.get("text") or ""
+        if " died of " in text:
+            return text.split(" died of ", 1)[1].rstrip(".")
+    return None
+
+
+def party_status(port: int, uids, tile) -> dict:
+    """uid -> (position, current action, already ordered to `tile`) for
+    the whole party, in ONE console round trip."""
+    ids = ",".join(str(u) for u in uids)
+    raw = send(port,
+               f"local ai=require('scripts.unit_ai'); local o={{}}; "
+               f"for _,u in ipairs({{{ids}}}) do local i=unit.getInfo(u); "
+               f"local s=ai.getState(u); local t=s and s.commandedTask; "
+               f"o[#o+1]=u..':'..(i and (i.gridX..'/'..i.gridY) or 'nil')..':'"
+               f"..tostring(s and s.currentAction)..':'"
+               f"..tostring(t~=nil and math.floor(t.x)=={tile[0]} "
+               f"and math.floor(t.y)=={tile[1]}) end; "
+               f"return table.concat(o,';')").strip().strip('"')
+    out = {}
+    for part in raw.split(";"):
+        bits = part.split(":")
+        if len(bits) != 4:
+            continue
+        try:
+            uid = int(bits[0])
+        except ValueError:
+            continue
+        pos = None
+        if "/" in bits[1]:
+            x, y = bits[1].split("/")
+            pos = (_as_float(x), _as_float(y))
+            pos = pos if None not in pos else None
+        out[uid] = (pos, bits[2], bits[3] == "true")
+    return out
+
+
+def line_point(start, end, back: float):
+    """The tile on the straight line from `start` to `end`, `back` tiles
+    short of `end`."""
+    span = dist(start, end)
+    k = max(0.0, (span - back) / span) if span else 0.0
+    return (int(start[0] + (end[0] - start[0]) * k),
+            int(start[1] + (end[1] - start[1]) * k))
+
+
+def night_factor(sun: float) -> float:
+    """`Unit.LineOfSight.nightPerceptionFactor`: 1.0 at noon, 0.5 at
+    midnight."""
+    height = math.cos((sun - 0.5) * 2 * math.pi)
+    return 0.5 + 0.5 * (height + 1.0) / 2.0
+
+
+def sight_radius(perception: float, night: float) -> int:
+    """`Unit.LineOfSight.visibleTilesOnPage`'s binary radius."""
+    return max(1, int(math.floor(perception * 6.0 * night)))
+
+
+def observation_post(port: int, st, fighters, members, first, anchor) -> dict:
+    """The farthest tile on the line in from which the party's sharpest
+    eye reaches the ruin's bounds while every occupant's sight falls
+    short of it by a tile's margin — or no tile, if the occupants
+    out-see the party today."""
+    sun = _as_float(send(port, f"return world.getSunAngleAt({anchor[0]},"
+                               f"{anchor[1]})")) or 0.5
+    night = night_factor(sun)
+
+    def perception(u):
+        return _as_float(send(port, f"return unit.getStat({u},'perception')")) or 1.0
+    radii = sorted(sight_radius(perception(u), night) for u in fighters)
+    inst = instance_by_id(port, PAGE, st.occ_id) or {}
+    homes = [(int(math.floor(float(o["home_x"]))),
+              int(math.floor(float(o["home_y"]))),
+              sight_radius(perception(int(o["uid"])), night))
+             for o in occupants_of(inst)]
+    b = st.occ.get("bounds") or {}
+    bounds = [(x, y) for x in range(int(b["min_x"]), int(b["max_x"]) + 1)
+              for y in range(int(b["min_y"]), int(b["max_y"]) + 1)]
+    span = int(dist(first, anchor))
+
+    def post_for(rp):
+        """The farthest tile from which an eye of radius `rp` reaches
+        the bounds, and whether every occupant is blind to it."""
+        for back in range(min(span, FAR_POST_TILES), 0, -1):
+            px, py = line_point(first, anchor, back)
+            if min((bx - px) ** 2 + (by - py) ** 2
+                   for bx, by in bounds) > rp * rp:
+                continue
+            unseen = all((px - hx) ** 2 + (py - hy) ** 2 > (rn + 1) ** 2
+                         for hx, hy, rn in homes)
+            return (px, py), back, unseen
+        return None, None, False
+
+    # The weakest eye first, so EVERY member standing at the post can see
+    # the ruin; the sharpest only if the weakest's post would be seen.
+    for rp in (radii[0], radii[-1]):
+        tile, back, unseen = post_for(rp)
+        if tile is not None and unseen:
+            break
+    return {"tile": tile if unseen else None, "back": back,
+            "party_radius": rp, "party_radii": radii,
+            "occupant_radii": [rn for _x, _y, rn in homes],
+            "night": round(night, 2)}
 
 
 def last_attacker(port: int, uid: int):
@@ -150,8 +298,8 @@ def notice_at(row: dict, page: str, anchor) -> bool:
 # --------------------------------------------------------------------------
 def muster(port: int, party, tile, seconds: float, observe,
            samples: dict) -> set:
-    """Gather `party` at `tile` under ordinary move orders; return who got
-    there.
+    """Gather `party` at `tile` under ordinary move orders; return who
+    stood there in the last sample.
 
     Bounded, and it does not wait on a straggler: the occupants' clock is
     running once the ruin is paged in (a neglected occupant dies of its
@@ -166,11 +314,14 @@ def muster(port: int, party, tile, seconds: float, observe,
     while time.time() < deadline:
         observe()
         pos = {u: unit_pos(port, u) for u in party}
+        # Who is there in THIS sample: the party counts as gathered only
+        # when every member stands there at once, not when each has
+        # passed through at some point.
+        arrived = {u for u, p in pos.items()
+                   if p and dist(p, tile) <= 4.0}
         for u, p in pos.items():
             if p:
                 samples.setdefault(u, []).append(p)
-                if dist(p, tile) <= 4.0:
-                    arrived.add(u)
         if arrived >= set(party):
             break
         for u, p in pos.items():
@@ -200,8 +351,23 @@ def set_out(st: ExpeditionState) -> None:
     after its seeded hunger, it was observed falling asleep, starving, on
     the way home), and never the control."""
     port = st.port
-    st.fighters = [u for u in [st.scout] + list(st.stay_home)
-                   if pose(port, u) not in ("dead", "collapsed")]
+    # Every one of them, as directed: none is silently dropped here, and
+    # `run` asserts they are all alive and together before going on.
+    st.fighters = [st.scout] + list(st.stay_home)
+    # Prepared as the directive describes — a full canteen and at least
+    # one ration each. Anyone who has eaten their rations while the
+    # survival leg ran is topped up off the technomule before leaving
+    # the colony, through the same inventory-transfer surface `prepare`
+    # provisions the traveller with; nothing is set directly.
+    for u in st.fighters:
+        if carried(port, u)[1] < 1:
+            send(port, f"return tostring(unit.transferItemToUnit("
+                       f"{st.mule},{u},'{RATIONS_DEF}'))")
+    # What each member carries as it LEAVES the colony — the moment the
+    # tutorial's "prepared" predicate is about. (A hungry colonist eats
+    # its rations on the road, so the same reading at the far end of
+    # the walk would measure appetite, not preparation.)
+    st.party_kit = {u: carried(port, u) for u in st.fighters}
     first = (int(st.ruin_xy[0]), int(st.ruin_xy[1]))
     for u in st.fighters:
         send(port, f"require('scripts.unit_ai').commandMove({u},"
@@ -234,11 +400,14 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                   f"(lifecycle {inst0.get('lifecycle')!r}, known by "
                   f"{known_by or 'nobody'})"):
         raise StageAbort("the occupied ruin was revealed before its leg")
-    chk.ok(st.control not in fighters and st.prepared not in fighters
-           and len(fighters) >= 2,
-           f"the party is {fighters} — player acolytes from the colony "
-           f"roster, NOT the control traveller {st.control}, and not the "
-           f"prepared traveller {st.prepared}, whose loot is already home")
+    chk.ok(fighters == [st.scout] + list(st.stay_home)
+           and all(pose(port, u) not in ("dead", "collapsed")
+                   for u in fighters),
+           f"the party is exactly the scout and the stay-at-home colonists "
+           f"{fighters}, every one on its feet — NOT the control traveller "
+           f"{st.control}, and not the prepared traveller {st.prepared}, "
+           f"whose loot is already home (poses "
+           f"{ {u: pose(port, u) for u in fighters} })")
 
     samples: dict[int, list] = {}
     box = st.occ_box
@@ -257,13 +426,26 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             control_near = True
         return i
 
-    # The leg proceeds FROM the first ruin: the party gathers there.
+    # The leg proceeds FROM the first ruin: the whole party gathers
+    # there, together in one sample, before anyone goes on.
     first = (int(st.ruin_xy[0]), int(st.ruin_xy[1]))
     gathered = muster(port, fighters, first, MUSTER_SECONDS, observe, {})
-    chk.ok(len(gathered) >= 1,
-           f"the party gathers at the zero-occupant ruin {first} to set out "
-           f"from it — {sorted(gathered)} there within {MUSTER_SECONDS:.0f} s, "
-           f"any straggler following on ({party_state(port, fighters)})")
+    together = gathered >= set(fighters)
+    if not chk.ok(together,
+                  f"the whole party stands together at the zero-occupant "
+                  f"ruin {first} to set out from it ({sorted(gathered)} of "
+                  f"{fighters} there within {MUSTER_SECONDS:.0f} s; "
+                  f"{party_state(port, fighters)})"):
+        raise StageAbort("the confrontation party never gathered")
+    kit = st.party_kit
+    chk.ok(set(kit) == set(fighters)
+           and all(litres >= PARTY_WATER_L and rations >= 1
+                   for litres, rations in kit.values()),
+           f"and every member left the colony prepared as directed — at "
+           f"least {PARTY_WATER_L:.1f} L of water and a ration each, the "
+           f"tutorial's own expedition predicate, read as it set out "
+           f"(uid -> (litres, rations): {kit}; now "
+           f"{ {u: carried(port, u) for u in fighters} })")
 
     # Page the ruin in NOW, not at setup: its contents spawn the first
     # time its chunk loads, and that starts its occupants' clock (see
@@ -292,38 +474,117 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"in place ({sig0})")
     st.fp["occupant_uids"] = sorted(members)
 
-    # The leg: an ordinary move from the first ruin to the occupied
-    # one, and nothing else. The party sets out together from one place,
-    # so it arrives roughly together; its occupants have to FIND it. A
-    # member an interrupt has left idle is ordered on again, as a player
-    # would; one that is busy (treating an ally, fighting) is left to it.
+    # The leg: ordinary moves from the first ruin to the occupied one,
+    # and nothing else — its occupants have to FIND the party. A member
+    # an interrupt has left idle is ordered on again, as a player would;
+    # one that is busy (treating an ally, fighting) is left to it.
     ox, oy = occ_xy
+    anchor = (int(ox), int(oy))
     st.page_in_time = _as_float(send(port, "return engine.gameTime()")) or 0.0
+
+    def walk(tile, seconds, until):
+        """Order the party to `tile` and keep sampling (once a second,
+        in two round trips) until `until()` holds or time runs out."""
+        for u in fighters:
+            send(port, f"require('scripts.unit_ai').commandMove({u},"
+                       f"{tile[0]},{tile[1]}); return 'ok'")
+        stop = time.time() + seconds
+        while time.time() < stop:
+            observe()
+            status = party_status(port, fighters, tile)
+            for u, (p, action, ordered) in status.items():
+                if p:
+                    samples.setdefault(u, []).append(p)
+                if action in IDLE_ACTIONS and not ordered:
+                    send(port, f"require('scripts.unit_ai').commandMove({u},"
+                               f"{tile[0]},{tile[1]}); return 'ok'")
+            if until(status):
+                return True
+            time.sleep(1.0)
+        return False
+
+    def anyone_within(tile, r):
+        return lambda status: any(p and dist(p, tile) <= r
+                                  for p, _a, _o in status.values())
+
+    # 1. A far post on the line in, FAR_POST_TILES from the ruin: beyond
+    #    anything an occupant can see (radius <= 6 x the highest shipped
+    #    perception), so the party arrives unseen.
+    far = line_point(first, anchor, FAR_POST_TILES)
+    walk(far, ENCOUNTER_SECONDS, anyone_within(far, 2.0))
+    # 2. RECONNOITRE. The occupants' notice of an acquisition is emitted
+    #    only if the ruin is already discovered, and the world thread's
+    #    discovery pass can lag an occupant's quarter-second AI tick —
+    #    observed: an occupant acquiring the party while the ruin still
+    #    read `unknown`, whose first episode was never announced. So the
+    #    party does what a player does: it stops where it can see the
+    #    ruin's bounds but its occupants cannot see it, and advances only
+    #    once the ruin is discovered. The post is computed from the
+    #    shipped sight rule (radius = floor(perception x 6 x night
+    #    factor), `Unit.LineOfSight`) with every unit's own perception
+    #    and the ruin's local sun angle; the ruin's 5x5 bounds give the
+    #    watchers a two-tile head start.
+    post = observation_post(port, st, fighters, members, first, anchor)
+    st.recon = post
+    if post["tile"] is not None:
+        # The whole party at the post, not just its first arrival: the
+        # post was chosen for an eye a straggler may be carrying.
+        walk(post["tile"], ENCOUNTER_SECONDS / 2,
+             lambda status: all(p and dist(p, post["tile"]) <= 1.5
+                                for p, _a, _o in status.values()))
+        stop = time.time() + RECON_SECONDS
+        while time.time() < stop:
+            if (encounter_state(port, occ_id) or {}).get("lifecycle") \
+                    in ("discovered", "active"):
+                break
+            for u, (p, _a, _o) in party_status(port, fighters,
+                                               post["tile"]).items():
+                if p:
+                    samples.setdefault(u, []).append(p)
+            time.sleep(0.5)
+    print(f"  reconnaissance: {post}; ruin now "
+          f"{(encounter_state(port, occ_id) or {}).get('lifecycle')!r}",
+          flush=True)
+
+    # 3. The advance. The activation EDGE is watched at a fine cadence —
+    #    one round trip a sample (`encounter_state`) — and the heavier
+    #    bookkeeping (ledger, positions, re-orders; two round trips)
+    #    only once a second, so the last sample that still says "not
+    #    activated" and the first that says "activated" are well under a
+    #    game-second apart. `activated` latches, so the only way an
+    #    unobserved (and possibly unannounced) episode could have come
+    #    first is to open AND close inside that gap — and a closing
+    #    episode sends its guard home, from where it re-engages only once
+    #    it stands at its post again.
     for u in fighters:
         send(port, f"require('scripts.unit_ai').commandMove({u},"
-                   f"{int(ox)},{int(oy)}); return 'ok'")
-    # Stop at the FIRST sample where the encounter reports `activated`,
-    # not the first with an episode running: `activated` latches, so a
-    # sample that already shows it with no episode running would mean
-    # an earlier episode had opened and closed unobserved.
+                   f"{anchor[0]},{anchor[1]}); return 'ok'")
     active = None
+    prev_state = None
+    edge = None
+    next_slow = 0.0
     deadline = time.time() + ENCOUNTER_SECONDS
     while time.time() < deadline:
-        i = observe()
-        enc = i.get("encounter") or {}
-        if enc.get("activated"):
-            active = i
+        now = encounter_state(port, occ_id)
+        if now and now["activated"]:
+            edge = (prev_state, now)
+            active = observe()
             break
-        for u in fighters:
-            p = unit_pos(port, u)
-            if p:
-                samples.setdefault(u, []).append(p)
-        for u in fighters:
-            if current_action(port, u) in IDLE_ACTIONS \
-                    and not ordered_to(port, u, (int(ox), int(oy))):
-                send(port, f"require('scripts.unit_ai').commandMove({u},"
-                           f"{int(ox)},{int(oy)}); return 'ok'")
-        time.sleep(0.5)
+        if now:
+            prev_state = now
+            if not lifecycles or lifecycles[-1] != now["lifecycle"]:
+                lifecycles.append(now["lifecycle"])
+        if time.time() >= next_slow:
+            next_slow = time.time() + 1.0
+            ledger.poll(port)
+            status = party_status(port, fighters, anchor)
+            for u, (p, action, ordered) in status.items():
+                if p:
+                    samples.setdefault(u, []).append(p)
+                if action in IDLE_ACTIONS and not ordered:
+                    send(port, f"require('scripts.unit_ai').commandMove({u},"
+                               f"{anchor[0]},{anchor[1]}); return 'ok'")
+        time.sleep(0.1)
     chk.ok(active is not None,
            f"the occupants acquire the approaching party through their own "
            f"sight/aggression path — encounter activated with an episode "
@@ -350,16 +611,30 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     ledger.poll(port)
     st.activation_cursor = ledger.cursor or 0
     st.activation_time = _as_float(send(port, "return engine.gameTime()")) or 0.0
-    act_enc = active.get("encounter") or {}
-    chk.ok(act_enc.get("episode_active") is True
-           and act_enc.get("aggression_announced") is True
-           and active.get("lifecycle") in ("discovered", "active"),
-           f"that activation is the acquisition itself, observed as it "
-           f"happened: the episode that activated it is still running, it "
-           f"was announced, and the ruin was already visible (episode_active "
-           f"{act_enc.get('episode_active')!r}, aggression_announced "
-           f"{act_enc.get('aggression_announced')!r}, lifecycle "
-           f"{active.get('lifecycle')!r})")
+    # No episode can hide in the gap between those two samples. Either
+    # the ruin was ALREADY visible at the last not-activated sample —
+    # the reconnaissance's purpose — so every episode that could have
+    # opened after it opened on a visible ruin and announced itself; or,
+    # failing that, the gap is too short for an episode to open, close
+    # and send its guard home before another opens.
+    before, after = edge
+    gap = (after["t"] - before["t"]) if before else None
+    seen_first = bool(before) and before["lifecycle"] in ("discovered",
+                                                          "active")
+    chk.ok(before is not None and before["activated"] is False
+           and (seen_first or (gap is not None
+                               and gap < ACTIVATION_EDGE_SECONDS))
+           and after["episode_active"] is True
+           and after["aggression_announced"] is True
+           and after["lifecycle"] in ("discovered", "active"),
+           f"that activation is the FIRST episode's own opening, caught at "
+           f"its edge: the last sample before it read not-activated "
+           f"{gap if gap is None else round(gap, 2)} game-s earlier with "
+           f"the ruin {'already visible' if seen_first else 'still unknown'}"
+           f" (a visible ruin, or a gap under {ACTIVATION_EDGE_SECONDS} s, "
+           f"leaves no room for an unannounced episode), and the episode "
+           f"that activated it is running, was announced, and opened on a "
+           f"visible ruin (before {before}, after {after})")
 
     disc = [r for r in ledger.matching(
                 lambda r: r.get("category") == "location_discovery")
@@ -411,7 +686,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
         now_t = _as_float(send(port, "return engine.gameTime()")) or 0.0
         for m in members:
             if m not in alive and m not in deaths:
-                deaths[m] = (now_t, last_attacker(port, m))
+                deaths[m] = (now_t, last_attacker(port, m),
+                             death_physiology(port, m))
         if alive and (enc.get("cleared") or i.get("lifecycle") == "cleared"
                       or i.get("clearance_satisfied")):
             uncleared_while_alive = False
@@ -426,16 +702,21 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                     p or occ_xy, unit_pos(port, t) or occ_xy))
                 send(port, f"require('scripts.unit_ai').commandAttack("
                            f"{u},{target},true); return 'ok'")
-                ordered[u] = target
                 # commandAttack returns nothing, so the order is read
                 # back off the unit's own AI state: target and goal set.
+                # An order the AI dropped at once (a straggler still out
+                # of reach) is not recorded as given, so the next pass
+                # gives it again — as a player re-clicks.
                 held = send(
                     port, f"local ai=require('scripts.unit_ai'); "
                           f"local s=ai.getState({u}); "
                           f"return tostring(s and s.attackTargetUid)..','.."
                           f"tostring(s and ai.isGoalActive(s,'attack'))")
-                (accepted if held == f"{target},true"
-                 else rejected).append((u, target, held))
+                if held == f"{target},true":
+                    ordered[u] = target
+                    accepted.append((u, target, held))
+                else:
+                    rejected.append((u, target, held))
         time.sleep(0.5)
     dead = [u for u in members if u not in living(port, members)]
     chk.ok(len(dead) == len(members),
@@ -444,31 +725,63 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"{'' if len(dead) == len(members) else '; notices ' + str(notice_trail(ledger))})")
     if len(dead) != len(members):
         raise StageAbort("an assigned occupant survived the fight")
-    chk.ok(accepted and not rejected,
-           f"every attack order the party was given took: each one's AI "
-           f"state holds that target under an active attack goal "
-           f"(accepted {accepted}, not taken {rejected})")
+    ordered_on = {m: sorted({u for u, t, _h in accepted if t == m})
+                  for m in members}
+    chk.ok(all(ordered_on[m] for m in members),
+           f"every assigned occupant was attacked under a player order that "
+           f"took — read back off the attacker's AI state, target set under "
+           f"an active attack goal (occupant -> ordered attackers "
+           f"{ordered_on}; orders the AI dropped at once and that were "
+           f"re-given: {rejected})")
     # The PARTY killed them, not the occupants' own physiology (a
     # neglected occupant dies of electrolyte imbalance on its own — see
     # docs/engine_contracts.md §The expedition loop): each occupant's
     # last recorded hit came from a party member, after the activation,
     # and within DEATH_BLOW_SECONDS of when it was first seen dead.
+    # ...and by a COMBAT cause, not a physiological one. A hit, however
+    # recent, only proves a hit landed; the independent physiological
+    # kill paths (salt imbalance, hypo/hyperthermia, dehydration,
+    # starvation) each leave their own mark, so each is ruled out at the
+    # death itself: the occupant's physiological failure meters are
+    # below 1, its corpse carries wounds, and it has no death notice
+    # naming a physiological cause. Every physiological death — the
+    # meters, and the meterless resource deaths (dehydration, starvation,
+    # exhaustion) — announces itself "X died of <cause>"; a combat kill
+    # (`Combat.Resolution.setDead`) announces nothing on the event log at
+    # all, so with the ledger proven complete below, silence is evidence.
+    ledger.poll(port)
     blows = {}
     for m in members:
-        seen_at, att = deaths.get(m, (None, None))
-        blows[m] = (att, seen_at)
+        seen_at, att, phys = deaths.get(m, (None, None, {}))
+        cause = death_cause(ledger, m)
+        blows[m] = {"last_attacker": att, "seen_dead": seen_at,
+                    "physiology": phys, "cause": cause}
     by_party = all(
-        att is not None and att.get("uid") in fighters
-        and float(att.get("at") or -1) >= st.activation_time
-        and seen_at is not None
-        and seen_at - float(att.get("at") or -1) <= DEATH_BLOW_SECONDS
-        for att, seen_at in blows.values())
+        b["last_attacker"] is not None
+        and b["last_attacker"].get("uid") in ordered_on.get(m, [])
+        and float(b["last_attacker"].get("at") or -1) >= st.activation_time
+        and b["seen_dead"] is not None
+        and b["seen_dead"] - float(b["last_attacker"].get("at") or -1)
+        <= DEATH_BLOW_SECONDS
+        for m, b in blows.items())
+    by_wounds = all(
+        b["physiology"].get("wounds", 0) > 0
+        and all(float(b["physiology"].get(k) or 0) < 1.0
+                for k in PHYSIOLOGICAL_METERS)
+        and b["cause"] not in PHYSIOLOGICAL_CAUSES
+        for b in blows.values())
     chk.ok(by_party,
-           f"and the party's combat is what killed each one: its last hit "
-           f"came from a party member after the activation (game time "
+           f"and the party's combat is what felled each one: its last hit "
+           f"came from a party member holding a player attack order on it, "
+           f"after the activation (game time "
            f"{st.activation_time:.1f}) and within {DEATH_BLOW_SECONDS:.0f} s "
-           f"of its death (occupant -> (last attacker, first seen dead): "
-           f"{blows})")
+           f"of its death ({blows})")
+    chk.ok(by_wounds,
+           f"...and each died of its wounds, not of its own physiology: "
+           f"wounds on the corpse, every physiological failure meter "
+           f"{PHYSIOLOGICAL_METERS} below 1 at the death, and no death "
+           f"notice naming a physiological cause "
+           f"{sorted(PHYSIOLOGICAL_CAUSES)} ({blows})")
     chk.ok(uncleared_while_alive,
            "at no point while any occupant lived was the encounter, the "
            "clearance predicate or the lifecycle reported cleared")
@@ -682,7 +995,7 @@ def deliver_home(chk: Checks, st: ExpeditionState) -> None:
     # Re-entered: the first ruin's items came home, under this same
     # stage, before the confrontation leg set out.
     chk.enter("return", "the occupied ruin's guaranteed item comes home too")
-    got = bank_home(port, st, phys)
+    got = bank_home(port, st, phys, OCCUPIED_RETURN_SECONDS)
     chk.ok(got is not None and got.get("defName") == st.occ_sig_def,
            f"the occupied ruin's guaranteed item is carried home and banked "
            f"in colony storage as that exact physical instance ({phys}, "

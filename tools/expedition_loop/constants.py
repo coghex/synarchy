@@ -125,6 +125,12 @@ REQUIRED_PREPARATION_COMPLETED = {OBJ_PORTAL, OBJ_WATER, OBJ_EXPEDITION}
 TRIP_OBJECTIVES = ["first_session_confront", "first_session_recover",
                    "first_session_secure", "first_session_clear"]
 
+#: The confrontation party's supplies bar: the tutorial evaluator's own
+#: expedition predicate (`scripts/tutorial_eval.lua` EXPEDITION_WATER_L,
+#: with EXPEDITION_RATIONS = 1), which is what "prepared" means in the
+#: owner's directive on #2640.
+PARTY_WATER_L = 2.0
+
 #: Every latch the fresh process must restore from the save.
 REQUIRED_RELOAD_COMPLETED = REQUIRED_PREPARATION_COMPLETED | set(TRIP_OBJECTIVES)
 
@@ -152,6 +158,16 @@ OCCUPIED_MAX_WET_TILES = 2
 #: encounter.set_out): it goes on with whoever has arrived.
 MUSTER_SECONDS = 300.0
 ENCOUNTER_SECONDS = 600.0
+
+#: The far post on the line in: tiles short of the occupied anchor,
+#: beyond any occupant's sight (6 x perception, and no shipped unit's
+#: perception exceeds 2.0 — MAX_SIGHT_TILES), so the party arrives
+#: unseen and the observation post is computed from there.
+FAR_POST_TILES = MAX_SIGHT_TILES + 2
+
+#: How long the party watches from the observation post for the
+#: world thread's discovery pass to register the ruin.
+RECON_SECONDS = 30.0
 FIGHT_SECONDS = 300.0
 
 #: How recent an occupant's last hit from the party must be, relative
@@ -160,10 +176,13 @@ FIGHT_SECONDS = 300.0
 #: the ~1100 game-seconds a neglected occupant takes to die on its own.
 DEATH_BLOW_SECONDS = 120.0
 
-#: The walk home. Since #2640 the carrier comes back from the occupied
-#: ruin (~75 tiles on seed 14, against the first ruin's ~30) with an
-#: empty stomach, and an observed run needed more than 420 s.
-RETURN_SECONDS = 900.0
+#: The prepared traveller's calibrated walk home from the first ruin —
+#: the budget this gate always gave it, and deliberately unchanged.
+RETURN_SECONDS = 420.0
+
+#: The occupied ruin's item coming home: a ~75-tile walk on seed 14
+#: against the first ruin's ~30, so it gets its own, longer budget.
+OCCUPIED_RETURN_SECONDS = 900.0
 
 #: In the order they first run. `return` runs twice: the first ruin's
 #: loot comes home straight after `extract`, and the stage is re-entered

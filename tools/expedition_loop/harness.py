@@ -283,6 +283,10 @@ class ExpeditionState:
     #: Game time when the party set out from the first ruin, for a
     #: failure message about the occupants' clock.
     page_in_time: float = 0.0
+    #: uid -> (litres, rations) each party member carried as it left
+    #: the colony, and the reconnaissance post the leg computed.
+    party_kit: dict = field(default_factory=dict)
+    recon: dict = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------
