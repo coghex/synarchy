@@ -111,11 +111,75 @@ OBJ_EXPEDITION = "first_session_prepare_expedition"
 SUB_WATER = "first_session_prepare_water"
 SUB_FOOD = "first_session_prepare_food"
 
-#: Preparation latches required by this survival-control scenario. Later
-#: expedition objectives may also complete during the trip (#2301); EXP-3
-#: owns extending the integrated gate to require them. These three latches
-#: must survive reload; the two supply subobjectives remain live checks.
+#: Preparation latches required by this survival-control scenario. These
+#: three latches must survive reload; the two supply subobjectives remain
+#: live checks.
 REQUIRED_PREPARATION_COMPLETED = {OBJ_PORTAL, OBJ_WATER, OBJ_EXPEDITION}
 
-STAGES = ["setup", "prepare", "travel", "extract", "return",
-          "save", "load", "control"]
+#: The four durable trip objectives #2301 added, in AUTHORED presentation
+#: order (each is the next one's parent in data/tutorials/first_session.yaml).
+#: They may latch as early as the zero-occupant leg — `tutorial_eval`
+#: accepts a discovered zero-roll ruin for Confront and aggregates facts
+#: across every known location — and several may latch in one evaluation
+#: pass; the gate requires only that none latches before its predecessor.
+TRIP_OBJECTIVES = ["first_session_confront", "first_session_recover",
+                   "first_session_secure", "first_session_clear"]
+
+#: The confrontation party's supplies bar: the tutorial evaluator's own
+#: expedition predicate (`scripts/tutorial_eval.lua` EXPEDITION_WATER_L,
+#: with EXPEDITION_RATIONS = 1), which is what "prepared" means in the
+#: owner's directive on #2640.
+PARTY_WATER_L = 2.0
+
+#: Every latch the fresh process must restore from the save.
+REQUIRED_RELOAD_COMPLETED = REQUIRED_PREPARATION_COMPLETED | set(TRIP_OBJECTIVES)
+
+# ---- the occupied ruin (#2640) -------------------------------------------
+#: The furthest the occupied ruin may sit from the colony. `ruin_small`
+#: declares `min_spacing: 5` chunks, so a second ruin is never closer than
+#: ~80 tiles to the first; this bounds the confrontation leg to a trip the
+#: party can walk and return from inside the stage budgets below.
+OCCUPIED_MAX_DIST = 160
+
+#: The occupied ruin's walkability bar, applied to the straight lines
+#: from the colony and from the zero-occupant ruin, sampled at every tile.
+#: Looser than MAX_CORRIDOR_STEP because these lines are three or four
+#: times as long and the pathfinder detours around a small rise, but far
+#: below the gorges that killed a party on seed 42 (12-30 levels): a
+#: step no higher than a unit climbs without injury, and a stream, not a
+#: lake.
+OCCUPIED_MAX_STEP = 4.0
+OCCUPIED_MAX_WET_TILES = 2
+
+#: Budgets for the gather at the first ruin, the ~100-tile leg on to the
+#: occupied one (at the ~0.3-0.4 tiles/s these colonists were observed
+#: to walk), and the fight. The gather does not wait on a straggler,
+#: because the occupants' own physiology is on a clock (see
+#: encounter.set_out): it goes on with whoever has arrived.
+MUSTER_SECONDS = 300.0
+ENCOUNTER_SECONDS = 600.0
+
+#: The far post on the line in: tiles short of the occupied anchor,
+#: beyond any occupant's sight (6 x perception, and no shipped unit's
+#: perception exceeds 2.0 — MAX_SIGHT_TILES), so the party arrives
+#: unseen and the observation post is computed from there.
+FAR_POST_TILES = MAX_SIGHT_TILES + 2
+
+#: How long the party watches from the observation post for the
+#: world thread's discovery pass to register the ruin.
+RECON_SECONDS = 30.0
+FIGHT_SECONDS = 300.0
+
+#: The prepared traveller's calibrated walk home from the first ruin —
+#: the budget this gate always gave it, and deliberately unchanged.
+RETURN_SECONDS = 420.0
+
+#: The occupied ruin's item coming home: a ~75-tile walk on seed 14
+#: against the first ruin's ~30, so it gets its own, longer budget.
+OCCUPIED_RETURN_SECONDS = 900.0
+
+#: In the order they first run. `return` runs twice: the first ruin's
+#: loot comes home straight after `extract`, and the stage is re-entered
+#: for the occupied ruin's item after `reward`.
+STAGES = ["setup", "prepare", "travel", "extract", "return", "encounter",
+          "reward", "save", "load", "control"]

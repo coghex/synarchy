@@ -113,8 +113,11 @@ PROBES = [
      "colony from a real portal roster, water secured by a real FOV scan, "
      "provisioning off the technomule, a two-traveller journey whose "
      "unprepared control is measurably worse off, discovery by sight, "
-     "extraction of the ruin's own loot roll, return and deposit, and a "
-     "fresh-process reload verifying every durable identity (#923)"),
+     "extraction of the ruin's own loot roll, a confrontation at a second, "
+     "occupied ruin cleared in the natural order through real combat and "
+     "the player's pickup, return and deposit, and a fresh-process reload "
+     "verifying every durable identity and restored tutorial latch "
+     "(#923, #2640)"),
     ("expedition_retrieval", "expedition_retrieval_probe.py",
      "player-driven remote retrieval end to end: command-time capacity refusal, "
      "travel/pickup/carrier identity, survival interruption, save-restart-load "

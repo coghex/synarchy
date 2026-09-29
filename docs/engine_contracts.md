@@ -3709,7 +3709,7 @@ an unreachable anchor expires instead of re-pathing forever.
 ## The expedition loop: the unprepared control
 
 Enforced by `tools/expedition_loop_probe.py` (manual-only, fixed-seed,
-~15 min, two engine boots). `docs/expedition_gameplay_loop.md` is the
+~30 min, two engine boots). `docs/expedition_gameplay_loop.md` is the
 design authority for the arc; CLAUDE.md states that the control exists and
 must end measurably worse off. This enumerates the six conditions that
 keep the comparison honest — weakening any one turns the control into
@@ -3772,6 +3772,125 @@ at all**: `uiFrozen` only makes
 walking while `unit.getInfo` reports where it was when the flag went up.
 Use `engine.setPaused` when you need a unit to actually stay put, and
 re-read positions after pausing.
+
+**The confrontation leg (#2640, EXP-3).** After the control leg the same
+session goes on to a SECOND `ruin_small` whose persisted encounter roll is
+at least one; the six conditions above cover only the first leg and are
+not moved by it, and the control traveller takes no part. Setup chooses
+that ruin by a total order (distance from the colony, then instance id)
+and refuses with exit 2, naming it, when no occupied ruin within 160 tiles
+has straight colony and first-ruin corridors that step at most 4 levels
+and cross at most 2 wet tiles — the pathfinder will route a party up a
+cliff it does not survive, which is why the default seed moved from 42 to
+14. The first ruin's guaranteed item is followed rather than its expected
+carrier on the way home: a colonist can pick it up unordered. Colony
+storage is spawned and finished inside one PAUSED window: its brief
+`constructing` ghost otherwise lets a colonist plan a delivery that goes on
+to fetch the hold's materials — on seed 14 including that `processing_unit`
+off the ruin floor, which the hold's material list consumes. The leg
+proves the natural clearing order only: unknown
+when the leg begins, discovered by sight once, `active` and uncleared
+while every assigned occupant lives, still uncleared once they are all
+dead with the guaranteed item on the ground, and `cleared` exactly once
+when the player's pickup gesture takes that item. The taken-while-hostile
+ordering stays with #917's hspec coverage. Three instrument rules:
+
+- **Count notices from a retained ledger, never a final snapshot.**
+  `engine.getEventLogProgress()` is polled from the moment the leg begins and
+  every row is kept by `sequence`; an interval the ledger never saw is
+  explained only while the ring is below `eventStoreCap` (coalescing), and
+  one seen at capacity fails the exactly-once checks as unprovable. Both
+  ruins share the def label in a language-less world, so notices are
+  attributed by page and anchor coordinates, and aggression by occupant uid.
+  Aggression is exactly once PER EPISODE (owner directive on #2640), not
+  once per leg: a lone nomad wounded by a stronger acolyte retreats, the
+  ruin guard walks it home — closing the episode with a disengage notice —
+  and it re-acquires the party in a new episode with its own notice. The
+  occupant's notices must therefore alternate aggression / disengage,
+  starting with aggression, each emitted once.
+- **Tutorial latch order is read at the write boundary.** The four trip
+  objectives may latch during the zero-occupant leg and several in one
+  evaluation pass, so the probe wraps `tutorial_progress.completeObjectives`
+  to record the pass that latched each id (observation only) and requires
+  the pass numbers never decrease in authored order.
+- **Restored, not recomputed.** The same recorder runs in the fresh
+  process: the save component's `apply()` writes the completed set
+  directly and never passes through `completeObjectives`, so a required
+  latch present after the load publishes and absent from that engine's
+  record came off the disk. Holding the evaluator back does not work — a
+  headless boot already loads it ticking through `scripts/init_loader.lua`
+  — and `Secure` is false in the reloaded world (both guaranteed items are
+  in storage), so a plain post-load read cannot tell restored from lost.
+
+**Known hazard: the occupants do not outlive a long wait.** Observed while
+building the leg (2026-09-28, seed 14): an unvisited `nomad_primitive`
+occupant has no way to eat or drink. It turns `delirious` and "died of
+electrolyte imbalance" — at about 1180 game-seconds of world time when its
+chunk loaded at setup, and within minutes of a page-in that came late in
+another run, so the clock is not simply time since spawn — and while
+delirious the mental-state wander reads its AI config's missing
+`wander_radius`, which raises `Lua error in update()` every tick and
+freezes EVERY unit's AI (observed as a party that stops mid-walk). Both
+are shipped behaviour, to be filed separately rather than papered over
+here. The gate works around the clock rather than the defects: the fight
+has to come early in world time. The confrontation party is ordered to the
+first ruin the moment `travel` is done, walking while `extract` and the
+prepared traveller's `return` run; it then walks straight on to the
+occupied ruin with no second muster; and setup never pages the occupied
+ruin's chunk in (its corridors are read up to that chunk's edge), so its
+contents spawn as the party sets out. The whole party must stand
+together at the first ruin within 300 s, each member having left the
+colony carrying at least 2 L and a ration (the tutorial's own expedition
+predicate, read as it sets out — a hungry colonist eats on the road;
+rations are topped up off the technomule first if the wait ate them).
+And because a physiological death can follow a recent hit, each
+occupant's death is credited to the fight only by its TERMINAL INJURY, read
+from the engine's own streams. The combat stream's `death` event either
+names an attacker (a lethal hit, `Combat.Resolution.setDead`), which must
+be a party member whose AI state, sampled every pass, still held a
+committed player attack order on that occupant at the blow; or names none
+(bleeding out, `Combat.Wounds.Tick`, cause `exsanguination`, which sums
+every wound), in which case every combat `hit` on the occupant must have
+been landed by such a member and the injury stream — the record of falls
+and hazards, the only other ways a unit is wounded — must have nothing on
+it. Orders the AI drops are re-given. Both streams are read from their
+panels' retained rings (`combat_log.lua`, `injury_log_panel.lua`), never
+drained. As corroboration the corpse carries wounds, its salt/thermal
+failure meters are below 1, and it has no event-log death notice (the Lua
+`unit.kill` sites announce "died of <cause>", solidification "was entombed
+by solidifying lava").
+
+**Reconnoitre before advancing.** An occupant announces its aggression
+only if the ruin is already discovered, and the world thread's discovery
+pass can lag the occupant's quarter-second AI tick: one run had the nomad
+acquire the party while the ruin still read `unknown`, so that first
+episode was never announced (and the exactly-once-per-episode check
+correctly failed it). The whole party therefore walks together to a far
+post 14 tiles out, then creeps through the safe observation posts on the
+line in, computed from the shipped sight rule — radius
+`floor(perception × 6 × night factor)`, with each unit's own perception
+and the ruin's local sun angle — where its weakest eye reaches the ruin's
+bounds and every occupant's radius falls at least a tile short. It waits
+at each for the discovery and advances only once it has one; with no safe
+post, or none that reveals the ruin, the stage fails rather than walking
+on blind. The bounds' two-tile margin is what usually makes such a post
+exist.
+
+**The activation edge is watched, not inferred.** `activated` latches, so
+an episode that opened and closed unseen before the observed one would
+otherwise hide. The probe samples the encounter at ~0.1 s in one round
+trip and requires the last "not activated" and first "activated" samples
+to show the ruin already visible (so any episode in between was
+announced) or to be under 1 game-second apart, with the activating
+episode running, announced and opened on a visible ruin.
+
+**Who goes (owner directive on #2640).** The prepared traveller carries
+its loot home on the calibrated return straight after `extract`; the
+confrontation party is the scout and the stay-at-home colonists, each
+with its spawn-kit canteen and rations, gathered at the first ruin. Sent
+on instead, the prepared traveller — seeded hungry and already 60 tiles
+into its day — was observed crawling at the muster and falling asleep,
+starving, on the ~75-tile walk home.
 
 ---
 

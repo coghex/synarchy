@@ -1226,6 +1226,8 @@ type icon its reveal resolves to.
 ### EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
 
 > Filed as #2640 (2026-09-17). Owner decisions folded into the issue: two ruins in one session (the calibrated zero-occupant survival control is unchanged; a second occupied `ruin_small` hosts confront → recover → clear), map state observed through lifecycle with the pure `Location map icons` spec as icon evidence, and the natural clearing order only.
+>
+> Delivered by #2640's pull request: `tools/expedition_loop_probe.py` gains the `encounter` and `reward` stages (owner module `tools/expedition_loop/encounter.py`, evidence library `notices.py`), its default seed moves from 42 to 14 because seed 42's only reachable-looking occupied ruin sits behind a gorge that killed the party, and two further owner decisions were taken while implementing it: the occupants' aggression notice is exactly once **per episode**, since a wounded nomad that breaks off and re-engages opens a new episode under shipped #916 behaviour; and the confrontation party is the colony's other acolytes gathered at the first ruin, the prepared traveller having carried its loot home first. See "9. Gate the full slice" and `docs/engine_contracts.md` §The expedition loop.
 
 - **Outcome:** The existing end-to-end scenario proves the completed prepare →
   travel → discover → confront → extract → return → invest loop across two
@@ -1397,16 +1399,25 @@ spawn colony from a real portal roster
 → travel and discover the location by sight
 → SURVIVE the journey through a zero-occupant ruin (the #916 encounter roll
   is real, but this control path deliberately excludes combat)
-→ extract the ruin's own loot-table output (no guaranteed reward — #917)
+→ extract the ruin's own loot-table output and recover its guaranteed
+  significant item (#917), which is what clears it
 → return and deposit into colony storage
+→ CONFRONT a second, occupied ruin in the same world (#2640): a party gathers
+  at the first ruin and walks on; the ruin is unknown until the party sees it,
+  its nomads acquire the party themselves, the party kills them under ordinary
+  attack orders, and the ruin stays uncleared until the player's pickup takes
+  its guaranteed item, which is then carried home and banked too
 → save / reload in a fresh process
-→ location, per-unit knowledge, objective and inventory state remain correct
+→ location, encounter, per-unit knowledge, objective and inventory state
+  remain correct
 ```
 
 The scenario selects a `ruin_small` whose persistent #916 encounter roll is
 zero. That keeps the survival control isolated from combat timing while still
-proving the shipped zero-occupant semantics: discovery reaches `cleared` from
-the start and remains so across reload without emitting a fake clearance. The
+proving the shipped zero-occupant semantics: its encounter half is satisfied
+from placement, so sight reveals it as `discovered` and recovering its
+guaranteed item is what clears it — once, and still cleared across reload
+without a fake second notice. The
 remaining substitution is still explicit: "collect progression item → complete
 colony project" is **extract real loot → bank it as usable colony stock**. The
 scenario runs a second, **unprepared control party** over the same route under
@@ -1415,20 +1426,34 @@ carried out of the colony. The control must end measurably worse off in named
 physiological metrics — otherwise the gate would be proving that walking works,
 not that preparation matters.
 
-The probe reports eight independent stages (`setup`, `prepare`, `travel`,
-`extract`, `return`, `save`, `load`, `control`) so a failure names which part
-of the loop broke, and prints a fingerprint of its selected ruin, loot and
-sites so two consecutive runs can be compared for identity. It is manual-only
-by classification in `tools/ci_probes.py`: a real worldSize-64 generation plus
-two travellers walking ~30 tiles each way is too slow for a blocking per-PR
-gate, and it leans on AI arbitration timing.
+The probe reports ten independent stages (`setup`, `prepare`, `travel`,
+`extract`, `return`, `encounter`, `reward`, `save`, `load`, `control`) so a
+failure names which part of the loop broke, and prints a fingerprint of both
+selected ruins, the occupied one's roll and occupants, both guaranteed items,
+the loot and the sites so two consecutive runs can be compared for identity.
+It is manual-only by classification in `tools/ci_probes.py`: a real
+worldSize-64 generation, two legs of real-time travel and a real fight are too
+slow for a blocking per-PR gate, and it leans on AI arbitration timing.
 
-The hostile branch of #916 belongs between travel and extract, but remains out
-of this survival-control probe so combat cannot confound its food comparison.
-When #917 lands, its guaranteed significant item can strengthen the existing
-deposit assertion. (As of 2026-08-11 this replaces the earlier wording, "the
-progression project turns the existing deposit assertion into a capability
-change" — see D-17.)
+**EXP-3 (#2640) extended it through confrontation and advancement.** The
+hostile branch of #916 runs on a SECOND `ruin_small` whose persisted roll is
+at least one, reached from the first ruin after the survival control has been
+measured, so combat still cannot confound the food comparison. The prepared
+traveller carries its loot home first, unchanged; the confrontation party is
+the colony's other acolytes, gathered at the first ruin (owner directive: the
+prepared traveller, after its seeded hunger and the first leg, was observed
+crawling and falling asleep on the longer journey). The leg
+observes map state through lifecycle — `unknown` → `discovered`/`active` →
+`cleared` — with the pure `Location map icons` spec as the evidence that those
+lifecycles draw the shared unknown marker, the type icon and the dark-tinted
+type icon. It proves the natural clearing order only (hostiles first, then the
+item); the item-taken-while-a-hostile-is-capable state stays with #917's
+focused hspec coverage. The four #2301 trip objectives are required to latch
+through the real evaluator in authored order — they may do so as early as the
+zero-occupant leg — and the fresh process finds them present straight after the
+load with none written by an evaluation pass there, so they are proved restored
+rather than recomputed. The default seed moved from 42 to 14: seed 42's only
+occupied ruin within reach sits behind a gorge that killed the party sent to it.
 
 ## Deferred systems
 

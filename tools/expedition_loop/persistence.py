@@ -29,10 +29,11 @@ import time
 from probelib import (capture_request_id, send, send_json, poll_until,
                       wait_load_published, wait_save_complete)
 
-from .constants import (ACOLYTE_DEF, REQUIRED_PREPARATION_COMPLETED, LOG_A, LOG_B, PAGE,
-                        SLOT)
+from .constants import (ACOLYTE_DEF, LOG_A, LOG_B, PAGE,
+                        REQUIRED_RELOAD_COMPLETED, SLOT, TRIP_OBJECTIVES)
 from .harness import (Checks, ExpeditionState, StageAbort,
                       check_ai_tick_clean)
+from .notices import latch_passes
 from .readers import (clearance_events, find_instance, instance_by_id,
                       inventory, known_locations, progress, properties, roster,
                       significant_rows)
@@ -49,6 +50,63 @@ def save(chk: Checks, st: ExpeditionState) -> None:
     done, status = wait_save_complete(port, rid)
     chk.ok(done, f"save {rid} reached SaveCaptureComplete ({status})")
     check_ai_tick_clean(chk, LOG_A, "engine A")
+
+
+def load_occupied(chk: Checks, st: ExpeditionState) -> None:
+    """The occupied ruin (#2640), re-checked off the disk under the SAME
+    `(page, instance id)`: cleared, its persisted roll and membership
+    intact with every member still dead and nobody respawned, its
+    guaranteed item's identity, provenance and latch, its spent notice,
+    and that item in colony storage."""
+    port, occ_id, phys = st.port, st.occ_id, st.occ_sig_phys
+    inst = instance_by_id(port, PAGE, occ_id) or {}
+    enc = inst.get("encounter") or {}
+    members = sorted(int(o["uid"]) for o in enc.get("occupants") or [])
+    chk.ok(inst.get("lifecycle") == "cleared"
+           and inst.get("contents_spawned") is True
+           and inst.get("clearance_satisfied") is True
+           and int(inst.get("gx", 0)) == int(st.occ["gx"])
+           and int(inst.get("gy", 0)) == int(st.occ["gy"]),
+           f"the occupied ruin comes back as {PAGE}#{occ_id} at the same "
+           f"anchor, 'cleared', with contents_spawned "
+           f"(lifecycle {inst.get('lifecycle')!r}, contents_spawned "
+           f"{inst.get('contents_spawned')!r})")
+    chk.ok(int(enc.get("rolled_count", -1)) == st.occ_rolled
+           and members == sorted(st.occ_members)
+           and enc.get("cleared") is True,
+           f"its persisted encounter roll and occupant membership are "
+           f"unchanged ({enc.get('rolled_count')!r}, {members} vs "
+           f"{sorted(st.occ_members)}), encounter still cleared")
+    # Each ORIGINAL occupant, by uid: it must still exist — a dead unit
+    # persists as a corpse — and be dead. A missing uid is a dropped
+    # unit, not a dead one.
+    time.sleep(3.0)
+    state = {u: (send(port, f"return tostring(unit.exists({u}))"),
+                 send(port, f"return tostring(unit.getPose({u}))"))
+             for u in sorted(st.occ_members)}
+    respawned = [o for o in (instance_by_id(port, PAGE, occ_id) or {})
+                 .get("encounter", {}).get("occupants", [])
+                 if int(o["uid"]) not in st.occ_members]
+    chk.ok(all(s_ == ("true", "dead") for s_ in state.values())
+           and not respawned,
+           f"every original occupant uid still exists and is still dead, and "
+           f"no new member has appeared (uid -> (exists, pose): {state}; "
+           f"new members {respawned})")
+    rows = significant_rows(port, occ_id)
+    chk.ok(len(rows) == 1 and rows[0].get("item_instance_id") == phys
+           and rows[0].get("taken") is True
+           and rows[0].get("item") == st.occ_sig_def,
+           f"its guaranteed item's identity, provenance and taken latch "
+           f"survive the restart ({rows})")
+    chk.ok(inst.get("clear_event_emitted") is True,
+           f"its one clearance notice is recorded as spent "
+           f"(clear_event_emitted={inst.get('clear_event_emitted')!r})")
+    stored = send_json(port, f"return building.getStorage({st.storage_bid})")
+    hit = find_instance(stored if isinstance(stored, list) else [], phys)
+    chk.ok(hit is not None
+           and hit.get("defName") == st.occ_sig_def,
+           f"and that item is still colony stock under its own instance id "
+           f"and definition ({phys}, {(hit or {}).get('defName')!r})")
 
 
 def enter_load(chk: Checks) -> None:
@@ -73,6 +131,24 @@ def load(chk: Checks, st: ExpeditionState) -> None:
     published, status = wait_load_published(port, 240)
     if not chk.ok(published, f"the save loads and publishes ({status})"):
         raise StageAbort("the save did not load")
+
+    # RESTORED, not recomputed — read straight after the publish, before
+    # the session is unpaused. The latch recorder `bootstrap` installed
+    # in this fresh engine logs every latch an evaluation pass writes;
+    # the save component's apply() writes the set directly and never
+    # passes through it. So a required latch that is present here and
+    # ABSENT from this engine's record came off the disk. It matters
+    # most for Secure, whose predicate (a living acolyte CARRYING a taken
+    # item) is false in this world, where both guaranteed items sit in
+    # colony storage.
+    restored, _ = progress(port)
+    recomputed = sorted(set(latch_passes(port)) & REQUIRED_RELOAD_COMPLETED)
+    chk.ok(REQUIRED_RELOAD_COMPLETED <= restored and not recomputed,
+           f"the tutorial latches come back FROM THE SAVE: every required "
+           f"preparation and trip latch is present straight after the "
+           f"publish, and none of them was written by an evaluation pass "
+           f"in this process (recomputed: {recomputed or 'none'}; restored "
+           f"{sorted(restored)})")
     send(port, f"world.show('{PAGE}'); return 'ok'")
     # Loads come up paused by design. scripts/tutorial_eval.lua
     # is deliberately not pause-gated, but scripts/unit_ai.lua
@@ -151,9 +227,12 @@ def load(chk: Checks, st: ExpeditionState) -> None:
     completed, _checked = poll_until(
         45.0, lambda: (lambda p: p if p[0] else None)(progress(port)),
         interval=1.0) or progress(port)
-    chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
-           f"all required preparation completions survive the reload "
-           f"({sorted(completed)})")
+    chk.ok(REQUIRED_RELOAD_COMPLETED <= completed,
+           f"all required preparation completions and the four trip "
+           f"objectives {TRIP_OBJECTIVES} still hold once the session is "
+           f"running again ({sorted(completed)})")
+
+    load_occupied(chk, st)
 
     stored = send_json(port, f"return building.getStorage({storage_bid})")
     stored = stored if isinstance(stored, list) else []
