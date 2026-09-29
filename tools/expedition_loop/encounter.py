@@ -165,6 +165,74 @@ def death_cause(ledger, uid: int):
     return None
 
 
+def attack_orders(port: int, uids) -> dict:
+    """uid -> (attack target, committed, attack goal active), read off
+    each unit's AI state in ONE console round trip."""
+    ids = ",".join(str(u) for u in uids)
+    raw = send(port,
+               f"local ai=require('scripts.unit_ai'); local o={{}}; "
+               f"for _,u in ipairs({{{ids}}}) do local s=ai.getState(u); "
+               f"o[#o+1]=u..':'..tostring(s and s.attackTargetUid)..':'"
+               f"..tostring(s and s.committed == true)..':'"
+               f"..tostring(s and ai.isGoalActive(s,'attack')) end; "
+               f"return table.concat(o,';')").strip().strip('"')
+    out = {}
+    for part in raw.split(";"):
+        bits = part.split(":")
+        if len(bits) != 4:
+            continue
+        try:
+            uid = int(bits[0])
+        except ValueError:
+            continue
+        target = int(bits[1]) if bits[1].lstrip("-").isdigit() else None
+        out[uid] = (target, bits[2] == "true", bits[3] == "true")
+    return out
+
+
+def combat_log_events(port: int, targets) -> list:
+    """The `hit`/`death` events about `targets` that
+    `scripts/combat_log.lua` has drained into its retained All-tab ring
+    — read, never drained: that panel owns `combat.drainEvents`."""
+    ids = ",".join(str(t) for t in targets)
+    got = send_json(
+        port, f"local want={{}}; for _,t in ipairs({{{ids}}}) do want[t]=true end; "
+              f"local cl=package.loaded['scripts.combat_log']; local o={{}}; "
+              f"for _,e in ipairs((cl and cl.allEvents) or {{}}) do "
+              f"if want[e.target] and (e.kind=='death' or e.kind=='hit') then "
+              f"local pl=e.payload or {{}}; "
+              f"o[#o+1]={{ts=e.ts,kind=e.kind,attacker=e.attacker or -1,"
+              f"target=e.target,cause=pl.cause,part=pl.part}} end end; "
+              f"return o")
+    rows = got if isinstance(got, list) else []
+    return [{"ts": float(r.get("ts") or 0), "kind": r.get("kind"),
+             "attacker": (None if r.get("attacker") in (None, -1)
+                          else int(r.get("attacker"))),
+             "target": int(r.get("target")),
+             "cause": r.get("cause"), "part": r.get("part")}
+            for r in rows if isinstance(r, dict) and r.get("target") is not None]
+
+
+def injury_log_events(port: int, targets) -> list:
+    """The injury stream's events (`fall` | `injure` | `death`) about
+    `targets`, from `scripts/injury_log_panel.lua`'s retained ring — read,
+    never drained: that panel owns `injury.drainEvents`. A fall or a
+    hazard is the only way a unit is wounded outside combat, and each is
+    recorded here."""
+    ids = ",".join(str(t) for t in targets)
+    got = send_json(
+        port, f"local want={{}}; for _,t in ipairs({{{ids}}}) do want[t]=true end; "
+              f"local il=package.loaded['scripts.injury_log_panel']; local o={{}}; "
+              f"for _,e in ipairs((il and il.allEvents) or {{}}) do "
+              f"if want[e.target] then "
+              f"o[#o+1]={{ts=e.ts,kind=e.kind,target=e.target}} end end; "
+              f"return o")
+    rows = got if isinstance(got, list) else []
+    return [{"ts": float(r.get("ts") or 0), "kind": r.get("kind"),
+             "target": int(r.get("target"))}
+            for r in rows if isinstance(r, dict) and r.get("target") is not None]
+
+
 def party_status(port: int, uids, tile) -> dict:
     """uid -> (position, current action, already ordered to `tile`) for
     the whole party, in ONE console round trip."""
@@ -692,9 +760,16 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 
     # The player's answer: an ordinary attack order per party member,
     # the one `init_context_menu.lua`'s Attack entry issues (committed).
-    # Re-issued only when its target has died, so every order is one a
-    # player would give.
+    # Every pass reads each member's AI state back (one round trip): an
+    # order that is no longer held as a COMMITTED attack on a living
+    # occupant — dropped at once for a straggler out of reach, or broken
+    # off later — is given again, as a player re-clicks. The samples are
+    # kept, so the killing blow can be matched to an order that was
+    # still in force when it landed.
     ordered: dict[int, int] = {}
+    order_samples: dict[int, list] = {u: [] for u in fighters}
+    combat_events: dict[tuple, dict] = {}
+    injury_events: dict[tuple, dict] = {}
     accepted: list[tuple] = []
     rejected: list[tuple] = []
     #: occupant uid -> (game time first seen dead, its last attacker).
@@ -708,6 +783,15 @@ def run(chk: Checks, st: ExpeditionState) -> None:
         cleared_seen.append(bool(enc.get("cleared")))
         alive = living(port, members)
         now_t = _as_float(send(port, "return engine.gameTime()")) or 0.0
+        for u, held in attack_orders(port, fighters).items():
+            order_samples[u].append((now_t,) + held)
+            if held[0] != ordered.get(u) or not (held[1] and held[2]):
+                ordered.pop(u, None)
+        for ev in combat_log_events(port, members):
+            combat_events[(ev["ts"], ev["kind"], ev["attacker"],
+                           ev["target"])] = ev
+        for ev in injury_log_events(port, members):
+            injury_events[(ev["ts"], ev["kind"], ev["target"])] = ev
         for m in members:
             if m not in alive and m not in deaths:
                 deaths[m] = (now_t, last_attacker(port, m),
@@ -739,6 +823,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                 if held == f"{target},true":
                     ordered[u] = target
                     accepted.append((u, target, held))
+                    t_now = _as_float(send(port, "return engine.gameTime()")) or 0.0
+                    order_samples[u].append((t_now, target, True, True))
                 else:
                     rejected.append((u, target, held))
         time.sleep(0.5)
@@ -762,6 +848,70 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # docs/engine_contracts.md §The expedition loop): each occupant's
     # last recorded hit came from a party member, after the activation,
     # and within DEATH_BLOW_SECONDS of when it was first seen dead.
+    # One last read of both retained rings, so a blow landed in the
+    # final pass is on the record.
+    for ev in combat_log_events(port, members):
+        combat_events[(ev["ts"], ev["kind"], ev["attacker"],
+                       ev["target"])] = ev
+    for ev in injury_log_events(port, members):
+        injury_events[(ev["ts"], ev["kind"], ev["target"])] = ev
+
+    def under_order(u, m, ts):
+        """Whether party member `u`'s AI state, at its last sample at or
+        before `ts`, held a COMMITTED player attack order on `m`."""
+        held = [smp for smp in order_samples.get(u, []) if smp[0] <= ts]
+        return bool(held) and held[-1][1:] == (m, True, True)
+
+    # The TERMINAL INJURY, from the engine's own streams. The combat
+    # stream records every `death`: a lethal hit (`Combat.Resolution.
+    # setDead`) names its attacker; bleeding out (`Combat.Wounds.Tick`,
+    # cause `exsanguination`) names none, because blood loss sums EVERY
+    # wound — so a bleed-out is credited only when every wound on the
+    # occupant came from the party: every combat `hit` on it was landed
+    # by a party member under a committed player order on it, and the
+    # injury stream — the record of the only other ways a unit is
+    # wounded, a `fall` or a hazard (`injure`) — has nothing on it.
+    # Both streams are read from their panels' retained rings
+    # (`combat_log.lua`, `injury_log_panel.lua`), never drained.
+    events = sorted(combat_events.values(), key=lambda e: e["ts"])
+    kills = {}
+    for m in members:
+        death = next((e for e in events
+                      if e["kind"] == "death" and e["target"] == m), None)
+        hits = [e for e in events if e["kind"] == "hit" and e["target"] == m
+                and (death is None or e["ts"] <= death["ts"])]
+        other_wounds = [e for e in injury_events.values()
+                        if e["target"] == m and e["kind"] in ("fall", "injure")]
+        if death is None:
+            verdict = "no death on the combat stream"
+        elif death["attacker"] is not None:
+            verdict = ("killing hit by a party member under order"
+                       if death["attacker"] in fighters
+                       and under_order(death["attacker"], m, death["ts"])
+                       else "killing hit NOT by a party member under order")
+        elif death.get("cause") == "exsanguination":
+            ok = (bool(hits) and not other_wounds
+                  and all(h["attacker"] in fighters
+                          and under_order(h["attacker"], m, h["ts"])
+                          for h in hits))
+            verdict = ("bled out of wounds all dealt by party members under "
+                       "order" if ok else "bled out of wounds NOT all "
+                       "dealt by party members under order")
+        else:
+            verdict = f"died of {death.get('cause')!r}, not combat"
+        kills[m] = {"verdict": verdict, "death": death,
+                    "hits": [(h["ts"], h["attacker"]) for h in hits],
+                    "falls_or_hazards": other_wounds}
+    chk.ok(all(k["verdict"] in ("killing hit by a party member under order",
+                                "bled out of wounds all dealt by party "
+                                "members under order")
+               for k in kills.values()),
+           f"each occupant's terminal injury came from the party's ordered "
+           f"combat — a killing hit by a party member still under a "
+           f"committed player attack order on it, or bleeding out of wounds "
+           f"every one of which such a member dealt, with no fall or hazard "
+           f"wound on record (occupant -> {kills})")
+
     # ...and by COMBAT, not by any other kill path. A hit, however
     # recent, only proves a hit landed, so the kill path itself is
     # identified. Every unit death in the engine goes through one of:

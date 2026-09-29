@@ -3842,18 +3842,23 @@ contents spawn as the party sets out. The whole party must stand
 together at the first ruin within 300 s, each member having left the
 colony carrying at least 2 L and a ration (the tutorial's own expedition
 predicate, read as it sets out — a hungry colonist eats on the road;
-rations are topped up off the technomule first if the wait ate them). And because a physiological death can follow a recent hit, each
-occupant's death is credited to the fight only when its last hit came
-from a party member holding a player attack order on it that took (read
-back off its AI state), after the activation and within 120 s of the death,
-its corpse carries wounds, its salt/thermal failure meters are below 1,
-and there is NO death notice for it at all on the complete ledger:
-every non-combat kill path announces the death — the Lua `unit.kill`
-sites as "X died of <cause>" under `survival_critical`, solidification as
-"X was entombed by solidifying lava" from source `Unit.Solidify` under
-`unit_warning` — while a killing hit (`Combat.Resolution.setDead`) and
-bleeding out from wounds (`Combat.Wounds.Tick`) put nothing on the event
-log.
+rations are topped up off the technomule first if the wait ate them).
+And because a physiological death can follow a recent hit, each
+occupant's death is credited to the fight only by its TERMINAL INJURY, read
+from the engine's own streams. The combat stream's `death` event either
+names an attacker (a lethal hit, `Combat.Resolution.setDead`), which must
+be a party member whose AI state, sampled every pass, still held a
+committed player attack order on that occupant at the blow; or names none
+(bleeding out, `Combat.Wounds.Tick`, cause `exsanguination`, which sums
+every wound), in which case every combat `hit` on the occupant must have
+been landed by such a member and the injury stream — the record of falls
+and hazards, the only other ways a unit is wounded — must have nothing on
+it. Orders the AI drops are re-given. Both streams are read from their
+panels' retained rings (`combat_log.lua`, `injury_log_panel.lua`), never
+drained. As corroboration the corpse carries wounds, its salt/thermal
+failure meters are below 1, and it has no event-log death notice (the Lua
+`unit.kill` sites announce "died of <cause>", solidification "was entombed
+by solidifying lava").
 
 **Reconnoitre before advancing.** An occupant announces its aggression
 only if the ruin is already discovered, and the world thread's discovery
