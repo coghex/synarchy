@@ -336,9 +336,10 @@ today's behaviour: the site draws NOTHING until the piece appears. No
 blueprint, no fade, no other appearance's frames, no static sprite scaled
 by progress.
 
-Every shipped pack is in that state today; authoring production frames
-for `dungeon_1` and `wire` is BDA-15/BDA-16, and enforcing that every
-shipped appearance declares them is BDA-13.
+The Dungeon default floor and post declare construction frames. Its ceiling,
+walls and variants, and every Wire connection, remain in the undeclared
+state. Remaining production art belongs to BDA-15/BDA-16; enforcing that
+every shipped appearance declares frames is BDA-13.
 
 The gap is reported once per (pack, appearance) at REGISTRATION, at info
 level, by

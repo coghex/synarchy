@@ -35,7 +35,9 @@ import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import qualified Data.Yaml as Y
+import qualified Codec.Picture as JP
 import Data.Aeson ((.:), (.:?), Value, withObject)
 import Data.Aeson.Key (Key, fromText)
 import Data.Aeson.Types (Parser, parseEither)
@@ -79,7 +81,16 @@ decodePack path parser = do
         Left err → fail (path ⧺ ": " ⧺ show err)
         Right v  → case parseEither parser v of
             Left err → fail (path ⧺ ": " ⧺ err)
-            Right pf → pure pf
+            Right pf → do
+                let reg = pfRegistration pf
+                sizes ← forM [ a | (_, cs) ← parFrames reg
+                                 , a ← csStatic cs : V.toList (csFrames cs) ] $ \a → do
+                    JP.readImage (T.unpack (aaPath a)) ⌦ \case
+                        Left err → fail (T.unpack (aaPath a) ⧺ ": " ⧺ err)
+                        Right image → do
+                            let rgba = JP.convertRGBA8 image
+                            pure (aaPath a, (JP.imageWidth rgba, JP.imageHeight rgba))
+                pure pf { pfRegistration = reg { parSizes = HM.fromList sizes } }
 
 -- | Every decoded pack, registered. 'registerPackArt' is the production
 --   entry point and refuses an incomplete pack, so a fixture that
@@ -128,6 +139,12 @@ parsePiecePack = withObject "structure pack" $ \o → do
             (,) c <$> (faces .: fromText (wallCapsCode c))
         pure (edge, tex ∷ Text, caps)
     costs ← parseBuild build
+    pieceFrames ← concat <$> forM [(ApFloor, "floor"), (ApCeiling, "ceiling"), (ApPost, "post")] (\(slot, key) → do
+        entry ← pieces .: key
+        parseConstruction slot entry)
+    wallFrames ← concat <$> forM allWallEdges (\edge → do
+        entry ← walls .: edgeKey edge
+        parseConstruction (ApWall edge) entry)
     let artFor kind = [ a | (k, a) ← simple, k ≡ kind ]
         wallEntries =
             [ (AkWall e c, asset tex face)
@@ -144,7 +161,7 @@ parsePiecePack = withObject "structure pack" $ \o → do
                                 , (KPost, AkPost)]
                 , a ← artFor kind ]
                 ⧺ wallEntries
-            , parFrames  = []
+            , parFrames  = pieceFrames ⧺ wallFrames
             , parDestruction = []
             , parVariants = []
             , parSizes   = HM.empty
@@ -184,6 +201,19 @@ parseWirePack = withObject "wire pack" $ \o → do
 parseArt ∷ Value → Parser PieceArt
 parseArt = withObject "piece art" $ \o →
     asset <$> o .: "texture" <*> o .: "facemap"
+
+-- | Keep the shipped declarations rather than silently turning every
+--   paid site into an undeclared one. Sizes are measured after parsing.
+parseConstruction ∷ AppearanceSlot → Value → Parser [(AppearanceKey, ConstructionSequence)]
+parseConstruction slot = withObject "construction owner" $ \o → do
+    paths ← o .:? "construction"
+    case paths of
+        Nothing → pure []
+        Just frames → do
+            tex ← o .: "texture"
+            let frame path = ArtAsset path (handleForPath path)
+            pure [(AppearanceKey Nothing slot,
+                   ConstructionSequence (frame tex) (V.fromList (map frame frames)))]
 
 asset ∷ Text → Text → PieceArt
 asset tex face = PieceArt

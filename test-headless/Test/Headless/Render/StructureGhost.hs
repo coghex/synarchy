@@ -31,7 +31,8 @@ import Building.Render (ghostTint)
 import Engine.Asset.Handle (toInt)
 import Engine.Graphics.Camera
     (Camera2D(..), CameraFacing(..), defaultCamera)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex
+    (Vertex(..), Vec2(..), Vec4(..), renderFlagLifecycleAlpha)
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog
     ( ArtAsset(..), PackArtRegistration(..), PieceArt(..)
@@ -480,8 +481,8 @@ missingArtSpec =
 --   'structureConstructionGhosts'. What stays true, and is what this
 --   example is about, is that payment ends the state THIS pass draws:
 --   the two passes are disjoint, so nothing is ever drawn twice. The
---   shipped packs declare no frames, so a paid site of one still shows
---   nothing at all — which "structure construction frames" covers.
+--   shipped Dungeon floor now declares frames, so the construction pass
+--   must take over with the actual progress-selected art from its YAML.
 workSpec ∷ SpecWith [PackFixture]
 workSpec =
     it "a paid designation leaves the DESIGNATED state" $ \packs → do
@@ -489,18 +490,29 @@ workSpec =
             unpaid = newConstructDesignation surfaceZ (CtStructure sp)
                          (ConstructAttemptId 1)
             paid = unpaid { cdPayment = CpPaid (MaterialReceipt []) }
-            ghosts d = snd (structureDesignationGhosts
-                (ghostEnvAt packs FaceSouth (HM.singleton (canon homeTile) d)))
+            -- This floor is under construction, so no committed floor
+            -- may already occupy its slot (that ends the presentation).
+            env d = ghostEnvWith packs FaceSouth
+                (HM.singleton (canon homeTile) d) HM.empty emptyStructureStage
+            ghosts d = snd (structureDesignationGhosts (env d))
         ghosts unpaid `shouldSatisfy` (not ∘ V.null)
         ghosts paid `shouldSatisfy` V.null
-        -- …and the SHIPPED packs declare no construction sequence, so
-        -- the pass that took over from payment draws nothing for them
-        -- either: a paid site of a shipped pack is still empty
-        -- (#2488 requirement 8), and this is the suite that reads the
-        -- real pack YAML.
-        let construction d = snd (structureConstructionGhosts
-                (ghostEnvAt packs FaceSouth (HM.singleton (canon homeTile) d)))
-        construction paid `shouldSatisfy` V.null
+        let construction d = snd (structureConstructionGhosts (env d))
+        construction unpaid `shouldSatisfy` V.null
+        forM_ [(0, "build/floor_0.png"), (0.25, "build/floor_1.png")
+              , (0.5, "build/floor_2.png"), (0.75, "floor.png"), (1, "floor.png")] $
+          \(progress, path) → do
+            let quads = construction (paid { cdProgress = progress })
+            quads `shouldSatisfy` (not ∘ V.null)
+            L.nub (map sqTexture (V.toList quads)) `shouldBe`
+                [handleForPath ("assets/textures/buildings/dungeon_1/" <> path)]
+            L.nub [renderFlags v | q ← V.toList quads, v ← quadVerts q]
+                `shouldBe` [renderFlagLifecycleAlpha]
+        -- The undeclared case still matters, but is now a ceiling.
+        let ceiling = paid { cdTarget = CtStructure
+                (StructurePiece dungeonPack "ceiling" Nothing) }
+            ceilingEnv = ghostEnvAt packs FaceSouth (HM.singleton (canon homeTile) ceiling)
+        snd (structureConstructionGhosts ceilingEnv) `shouldSatisfy` V.null
 
 -- * Line mode
 

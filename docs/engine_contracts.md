@@ -4731,9 +4731,11 @@ A pack declares an ordered frame list per authored APPEARANCE — one per
 `pieces.<kind>`, per `walls.<edge>` (all four caps share the sprite), per
 `variants.<name>` override and per Wire `connections.<name>`. Keyed to
 exactly that appearance: a variant never inherits the default's, and an
-appearance with no declaration resolves NONE, which is every shipped
-appearance today and draws nothing (BDA-15/BDA-16 author the art,
-BDA-13 enforces coverage). The gap is reported once per (pack,
+appearance with no declaration resolves NONE and draws nothing. The shipped
+Dungeon default floor declares four construction frames and its default post
+declares two; Dungeon ceiling/walls, every variant, and all Wire connections
+still declare none (BDA-15/BDA-16 author the remaining art, BDA-13 enforces
+coverage). The gap is reported once per (pack,
 appearance) at registration, never per frame or per candidate.
 
 Five rules the schema doc spells out and the gates hold:

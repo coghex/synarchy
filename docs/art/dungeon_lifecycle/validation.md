@@ -10,6 +10,8 @@ by `manifest.json`. No engine or renderer implementation changed.
 | `cabal build synarchy-test-headless` | Passed |
 | Hspec `--match "structure construction frames"` | 91 examples, zero failures |
 | Hspec `--match "Preview.StructurePack"` | 31 examples, zero failures |
+| Hspec `--match "structure ghost"` | 63 examples, zero failures after the canonical review corrections |
+| Hspec `--match "Structure.ArtCatalog"` | 41 examples, zero failures |
 | `python3 tools/dungeon_lifecycle_art.py` | All 14 selected states, six masks, YAML handoffs and final floor mask boundary pass |
 | `python3 tools/texture_subset_audit.py` | All 13 subsets pass |
 | `python3 tools/dungeon_lifecycle_capture.py` | All 12 pieces placed with expected texture/facemap palette paths; four distinct camera captures |
@@ -21,6 +23,14 @@ new damage appearances, and checks that damage variants do not inherit
 construction or receive a disappearing destruction clip. The preview group
 checks the production manifest and its Lua boundary, including all 19
 appearances and the two declared construction sequences.
+
+Canonical review requested that the engine contract and the shipped ghost
+fixture reflect the first production construction declarations. The fixture
+now parses default piece/wall frame lists and measures the actual PNGs. Its
+paid-floor test verifies every progress-selected frame and the lifecycle alpha
+flag on an unbuilt slot; the undeclared case uses a ceiling. The corresponding
+contract and source comments now describe the shipped floor/post sequences.
+These corrections change no approved colour sprite or facemap.
 
 After `cabal build all`, the required native window was launched from this
 worktree with:

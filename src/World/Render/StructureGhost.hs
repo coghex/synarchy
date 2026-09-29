@@ -176,7 +176,7 @@ resolvedArt pa = ResolvedPieceArt
 --   state), so this pass ends exactly where payment lands. What happens
 --   from there is 'structureConstructionGhosts' (#2488): the authored
 --   frame the site's own progress selects, or — for an appearance that
---   declares none, which is every shipped one today — still nothing.
+--   declares none — still nothing.
 --
 --   Each designation is resolved on behalf of its OWN attempt
 --   ('PlanForAttempt'), or every one of them would count itself as the
@@ -229,7 +229,7 @@ structureDesignationGhosts ge
 --       and 'postToQuad'\'s inset are not reimplemented (requirement 3).
 --     * Not a fallback. An appearance with no declaration resolves no
 --       frame and the site keeps drawing nothing, which is requirement
---       8 and is what every shipped pack does today. Nothing substitutes
+--       8. Nothing substitutes
 --       a blueprint, a fade, another appearance's frames or the static
 --       sprite.
 --     * Not a duplicate of the finished piece. A site stops drawing the

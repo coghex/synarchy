@@ -420,7 +420,7 @@ data PackArt = PackArt
       --   declares, keyed by ('AppearanceKey') variant and appearance —
       --   never inherited, never substituted. An appearance absent here
       --   resolves no sequence, which is requirement 8's "the site draws
-      --   nothing" and is what every shipped pack does today.
+      --   nothing".
     , pkVariantArt ∷ !(M.Map AppearanceKey ArtAsset)
       -- ^ #2491: every authored VARIANT appearance's static sprite.
       --
@@ -533,8 +533,7 @@ data PackArtRegistration = PackArtRegistration
     , parEntries ∷ ![(ArtKey, PieceArt)]
     , parFrames  ∷ ![(AppearanceKey, ConstructionSequence)]
       -- ^ #2488: the construction sequences this pack declares, at most
-      --   one per appearance. Empty for a pack that declares none, which
-      --   is every shipped pack today.
+      --   one per appearance. Empty for a pack that declares none.
     , parVariants ∷ ![(AppearanceKey, ArtAsset)]
       -- ^ #2491: every authored VARIANT appearance and the static sprite
       --   it is placed with, overridden or inherited. Empty for a pack
