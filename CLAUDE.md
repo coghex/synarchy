@@ -112,6 +112,7 @@ another owner's processes. User cancellation still ends the wait immediately.
   | `world_audit.py` / `world_check.py` | `test_audit.py` |
   | `run_probes.py` | `test_run_probes.py` |
   | `persistence_contract_sweep.py`'s `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` / `probe_runner_registry.PROBES` | `test_persistence_contract_sweep.py` |
+  | `probe_runner_registry.PROBES`, `ci_probes.CI_ELIGIBLE`, `probe_flake.PROTOCOL_PROBES` or `.quruntul/` | `python3 .quruntul/checks.py` (the quruntul adapter) |
 
 - **Do not run full suites by default:** no whole headless suite, 21-seed
   world check, or bare probe sweep. Focused probes use
@@ -119,6 +120,19 @@ another owner's processes. User cancellation still ends the wait immediately.
   Probe eligibility and path selection live in `tools/ci_probes.py`
   (`--status`; run `--self-test` when changing it). Tool documentation:
   [tools/README.md](tools/README.md).
+- **Local lab.** Coordinated local testing (`$flake`, `$deflake`, `$test`,
+  `$assess-tests`) runs through the external
+  [quruntul](https://github.com/coghex/quruntul) lab, which reads
+  `.quruntul/adapter.py`. Both Hspec suites are in it, the headless one measured
+  in 400-example slices, and so is every registered probe: CI-eligible probes
+  as CI suites, manual-only ones as probes. Protocol probes run through
+  `tools/probe_flake.py --runs 1`, the rest through
+  `tools/run_probes.py --only KEY --exact`, so the `cabal-build` lock, resource
+  holds and port spans keep applying. The probe census stays authoritative for
+  deferrals, and its measurements seed each probe's first status. The engine
+  and codec are built once per batch, before any trial. `audio_manual`, which
+  needs a mode flag on a direct invocation, is left out. `$playtest` keeps its
+  own harness.
 - **Worldgen-output changes require the full tier**, rebaselining, world
   checks, and a save-version bump: follow `src/World/CLAUDE.md`. Iteration
   sanity check: `python3 tools/world_check.py --quick`.

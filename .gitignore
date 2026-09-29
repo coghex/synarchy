@@ -64,3 +64,6 @@ tools/playtest/sessions/
 # leaves nothing to commit.
 assets/textures/buildings/probe_matrix_fixture/
 data/buildings/probe_matrix_fixture.yaml
+
+# quruntul imports the adapter; its bytecode cache is never tracked.
+/.quruntul/__pycache__/
