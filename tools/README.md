@@ -4,6 +4,17 @@ Python scripts for auditing/regression-testing world generation, and for
 driving/verifying engine and game-logic behavior against a real headless
 engine instance.
 
+## Dungeon floor/post art pilot
+
+`python3 tools/dungeon_lifecycle_art.py` audits the owner-approved source
+hashes, construction handoffs, variant declarations, and six derived facemaps.
+`--write-facemaps` rebuilds only those masks. Requires Pillow and PyYAML.
+`python3 tools/dungeon_lifecycle_capture.py --out /tmp/dungeon-lifecycle-capture`
+places the four damage levels in a Vulkan offscreen arena, verifies their
+palette paths, and captures all four camera facings. It stops its own engine.
+Both tools are manual; the [art archive](../docs/art/dungeon_lifecycle/README.md)
+contains the owner signoff, provenance, scope and validation results.
+
 ## Manual chunk memory measurement (#2625)
 
 `chunk_memory_measure.py` drives one fresh headless or offscreen process through

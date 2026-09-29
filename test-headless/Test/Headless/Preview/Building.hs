@@ -525,7 +525,8 @@ spec = do
             -- default.png, so the ladder falls all the way through.
             meta ← loadBuildingPreviewMeta (T.pack dungeonBuilding)
             meta `shouldBe` emptyBuildingPreviewMeta
-            fmap pbDefault got `shouldBe` Right "ceiling.png"
+            -- The ruin variants precede ceiling.png in label order.
+            fmap pbDefault got `shouldBe` Right "broken/floor.png"
             fmap (pbName) got `shouldBe` Right (T.pack dungeonBuilding)
 
         it "rejects a bad target with the shared containment error" $ do

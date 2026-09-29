@@ -1,0 +1,72 @@
+[
+  {
+    "key": "floor_damage",
+    "stage": 1,
+    "description": "Make this floor mildly worn: three thin cracks across the paving and chipped brick corners. Keep the exact diamond outline and brick pattern. Dry hard stone, muted original palette. Transparent background, no white spots, no checkerboard.",
+    "seed": 251355,
+    "tool": "edit_image_pixen",
+    "job_id": "818c648e-332b-4800-9245-4032a36bd506",
+    "asset_id": "9c669d0e-7cc0-51f3-8a18-a2175362b8c7"
+  },
+  {
+    "key": "floor_damage",
+    "stage": 2,
+    "description": "Make this floor a moderately damaged ruin: about six bricks are broken or partly missing, cracks connect those spots, small chips lie at rest in the holes. Keep the full diamond extent and most original brick paving. Original palette, no plants or bright colours. Transparent holes and background.",
+    "seed": 251356,
+    "tool": "edit_image_pixen",
+    "job_id": "b2ca7a0b-78b7-41ac-8fa9-cf5a58f60ecf",
+    "asset_id": "d7e92ce8-317d-5a0a-b778-00ad24be5d31"
+  },
+  {
+    "key": "post_construction",
+    "stage": 0,
+    "description": "Refine this single square pillar block. Preserve EXACTLY the input silhouette, short height, base position, transparent area and seated diamond top. This is one completed bottom block, with nothing above it. Match the original muted blue-gray hard-edged pixel-art style. No cap floating above, no extra block.",
+    "seed": 251373,
+    "tool": "edit_image_pixen",
+    "input": "deterministic/post_construction/state_00.png",
+    "job_id": "a7b2ebfd-4b4a-4b21-8b5f-645cdbb0c98a",
+    "asset_id": "826bdc7c-447c-5161-86d0-2e22ef2597a4"
+  },
+  {
+    "key": "post_damage",
+    "stage": 1,
+    "description": "Edit this one sprite into ONE STABLE STRUCTURAL STATE, not animation. Exact same camera, projection, native pixel scale, original anchor and canvas. Keep the original muted blue-gray palette and crisp pixel-art style on a transparent background. Every visible piece must be permanently seated and physically supported. No airborne blocks, particles, floating fragments, motion lines, suspended pieces, falling things, side-entry materials, hands, scenery, smoke, mist, liquid or glow. Show this SAME two-block pillar in mild stable disrepair: both blocks remain fully stacked at the original base and height, with a small chipped top corner and a thin crack through one side. Preserve the geometry, palette and identity of the pillar. No detached fragments or motion. ",
+    "seed": 251328,
+    "job_id": "9d84685e-a3de-4e24-b268-38e736f0c3da",
+    "asset_id": "f7b8bbc5-b47f-5c9e-9bff-c08e4cb7ee68"
+  },
+  {
+    "key": "post_damage",
+    "stage": 2,
+    "description": "Edit this one sprite into ONE STABLE STRUCTURAL STATE, not animation. Exact same camera, projection, native pixel scale, original anchor and canvas. Keep the original muted blue-gray palette and crisp pixel-art style on a transparent background. Every visible piece must be permanently seated and physically supported. No airborne blocks, particles, floating fragments, motion lines, suspended pieces, falling things, side-entry materials, hands, scenery, smoke, mist, liquid or glow. Show this SAME two-block pillar in moderate stable disrepair: the lower block is intact and supporting a heavily cracked upper block with one broken corner. Reduce the upper silhouette slightly where the corner is missing, not by shrinking the whole pillar. Add two tiny pieces of rubble already resting beside the base at the same ground plane. The pillar remains mostly upright, grounded, and recognizably the original structure. ",
+    "seed": 251329,
+    "job_id": "7f2d314a-baca-4e47-abb4-acd5220ba53c",
+    "asset_id": "aceeaf30-2700-530b-8ac1-c8c2f68ab566"
+  },
+  {
+    "key": "post_damage",
+    "stage": 3,
+    "job_id": "9b08b812-3a1f-41d9-9a87-f00df75c7a17",
+    "tool": "inpaint_image",
+    "input": "deterministic/post_damage/state_03.png",
+    "mask": {
+      "x": 9,
+      "y": 14,
+      "width": 14,
+      "height": 9
+    },
+    "seed": 251390,
+    "fill": "A jagged chipped broken top surface on this short square masonry pillar stump. Dark blue-gray hard-edged pixel stone matching the surrounding original pixels. Thin cracks and small angular missing corners. Keep the stump short and grounded. No objects above it, no floating fragments, no white pixels or checker pattern.",
+    "asset_id": "dbba6c8f-a12f-5335-a564-2148d7c060c7"
+  },
+  {
+    "job_id": "f4092457-81a5-4b3f-955f-d91b5f5f09ac",
+    "tool": "inpaint_image",
+    "prompt": "The same floor at a later stage of disrepair. Within the marked patches, break a few more of the EXISTING rectangular bricks along their current mortar lines. Enlarge existing cracks and leave low dry angular rubble seated in those exact brick sockets. Keep the SAME brick sizes, orientation, row pattern, original blue-gray colours and ground plane. Surrounding unmasked paving stays unchanged. Do not re-tile the floor, add a new pattern, rotate bricks, create a pile, dust or floating fragments. This remains a recognizable intact-footprint floor ruin.",
+    "seed": 251401,
+    "source": "floor_damage_reference.png",
+    "mask": "floor_damage_mask.png",
+    "fill": "The same floor at a later stage of disrepair. Within the marked patches, break a few more of the EXISTING rectangular bricks along their current mortar lines. Enlarge existing cracks and leave low dry angular rubble seated in those exact brick sockets. Keep the SAME brick sizes, orientation, row pattern, original blue-gray colours and ground plane. Surrounding unmasked paving stays unchanged. Do not re-tile the floor, add a new pattern, rotate bricks, create a pile, dust or floating fragments. This remains a recognizable intact-footprint floor ruin.",
+    "asset_id": "d430de8a-fdfa-5de2-9906-3d2eb1dc62d0"
+  }
+]

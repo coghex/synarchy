@@ -1,0 +1,98 @@
+[
+  {
+    "x": -12,
+    "y": -10,
+    "slot": "floor",
+    "face": "assets/textures/facemap/floorface.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/floor.png"
+  },
+  {
+    "x": -12,
+    "y": -7,
+    "slot": "floor",
+    "face": "assets/textures/facemap/floorface.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/floor.png"
+  },
+  {
+    "x": -12,
+    "y": -7,
+    "slot": "post_s",
+    "face": "assets/textures/facemap/postface.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/post.png"
+  },
+  {
+    "x": -10,
+    "y": -10,
+    "slot": "floor",
+    "face": "assets/textures/facemap/dungeon_1/weathered_floor.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/weathered/floor.png"
+  },
+  {
+    "x": -10,
+    "y": -7,
+    "slot": "floor",
+    "face": "assets/textures/facemap/dungeon_1/weathered_floor.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/weathered/floor.png"
+  },
+  {
+    "x": -10,
+    "y": -7,
+    "slot": "post_s",
+    "face": "assets/textures/facemap/dungeon_1/weathered_post.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/weathered/post.png"
+  },
+  {
+    "x": -8,
+    "y": -10,
+    "slot": "floor",
+    "face": "assets/textures/facemap/dungeon_1/broken_floor.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/broken/floor.png"
+  },
+  {
+    "x": -8,
+    "y": -7,
+    "slot": "floor",
+    "face": "assets/textures/facemap/dungeon_1/broken_floor.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/broken/floor.png"
+  },
+  {
+    "x": -8,
+    "y": -7,
+    "slot": "post_s",
+    "face": "assets/textures/facemap/dungeon_1/broken_post.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/broken/post.png"
+  },
+  {
+    "x": -6,
+    "y": -10,
+    "slot": "floor",
+    "face": "assets/textures/facemap/dungeon_1/ruined_floor.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/ruined/floor.png"
+  },
+  {
+    "x": -6,
+    "y": -7,
+    "slot": "floor",
+    "face": "assets/textures/facemap/dungeon_1/ruined_floor.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/ruined/floor.png"
+  },
+  {
+    "x": -6,
+    "y": -7,
+    "slot": "post_s",
+    "face": "assets/textures/facemap/dungeon_1/ruined_post.png",
+    "z": 1,
+    "tex": "assets/textures/buildings/dungeon_1/ruined/post.png"
+  }
+]

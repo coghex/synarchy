@@ -1,0 +1,62 @@
+[
+  {
+    "selectedAppearance": "floor@ruined",
+    "selectedLifecycle": "static",
+    "state": "ready",
+    "path": "assets/textures/buildings/dungeon_1/ruined/floor.png",
+    "frameIndex": 0,
+    "frameCount": 1,
+    "alphaPolicy": "facemap-alpha",
+    "appearanceCount": 19,
+    "totals": {
+      "missingFacemaps": 0,
+      "missing": 0,
+      "undeclared": 36
+    }
+  },
+  {
+    "selectedAppearance": "post@ruined",
+    "selectedLifecycle": "static",
+    "state": "ready",
+    "path": "assets/textures/buildings/dungeon_1/ruined/post.png",
+    "frameIndex": 0,
+    "frameCount": 1,
+    "alphaPolicy": "facemap-alpha",
+    "appearanceCount": 19,
+    "totals": {
+      "missingFacemaps": 0,
+      "missing": 0,
+      "undeclared": 36
+    }
+  },
+  {
+    "selectedAppearance": "post",
+    "selectedLifecycle": "construction",
+    "state": "ready",
+    "path": "assets/textures/buildings/dungeon_1/build/post_0.png",
+    "frameIndex": 0,
+    "frameCount": 2,
+    "alphaPolicy": "frame-alpha",
+    "appearanceCount": 19,
+    "totals": {
+      "missingFacemaps": 0,
+      "missing": 0,
+      "undeclared": 36
+    }
+  },
+  {
+    "selectedAppearance": "floor",
+    "selectedLifecycle": "construction",
+    "state": "ready",
+    "path": "assets/textures/buildings/dungeon_1/build/floor_0.png",
+    "frameIndex": 0,
+    "frameCount": 4,
+    "alphaPolicy": "frame-alpha",
+    "appearanceCount": 19,
+    "totals": {
+      "missingFacemaps": 0,
+      "missing": 0,
+      "undeclared": 36
+    }
+  }
+]
