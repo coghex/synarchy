@@ -1,0 +1,106 @@
+{
+  "floor_damage": {
+    "method": "PixelLab",
+    "states": [
+      {
+        "path": "assets/textures/buildings/dungeon_1/floor.png",
+        "label": "Intact",
+        "file_sha256": "da71e9bd5d37bf28e2968c1d8e02076a1f1760647f8d76e945c8fff14b580d35",
+        "rgba_sha256": "7d4c891a963003246b51613d3dbfac9212a868811f40b184c89bc42341ddacee"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/weathered/floor.png",
+        "label": "Weathered",
+        "file_sha256": "10db320cfdee9b2b393448756c44a6c6b102c5c08580b63aa8462b8c2483c04b",
+        "rgba_sha256": "3771dbefe76f56640e72b3b111d5994a35ddfdf6013e1c9c9807356fe2a01f6a"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/broken/floor.png",
+        "label": "Broken",
+        "file_sha256": "a0c4ce4b4e153788c6822849934d3a9c05b7e924cd65885dbbfff8919a5b49d9",
+        "rgba_sha256": "4035ef92896002a1b6f1d63ddf727c903dfd9c43d121c3fcfb86ab810802d558"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/ruined/floor.png",
+        "label": "Ruined \u00b7 revised",
+        "file_sha256": "0506bda6d9dfae213645bd28583690adf3431c81a619832d5b7c91ffdeb6ad6e",
+        "rgba_sha256": "a0178f5bcf9e0a2459bd0ffac9028400ec172997d249d63489a4815316292cd6"
+      }
+    ]
+  },
+  "floor_construction": {
+    "method": "Deterministic",
+    "states": [
+      {
+        "path": "assets/textures/buildings/dungeon_1/build/floor_0.png",
+        "label": "First courses",
+        "file_sha256": "17f094619f9727a2ecac4e53a6b9000ea13b6a71495a236e37bd4f6e18e5a0d1",
+        "rgba_sha256": "866c093d1e1a3de90e8273c73a6e2189a7eb0308f44100ba47698805e6649453"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/build/floor_1.png",
+        "label": "Half paved",
+        "file_sha256": "234362813202580b79783c66b12737cab3d88648a3325b5133c7f58c9371e340",
+        "rgba_sha256": "4da6da480af1f1175982b0116f840f4e41ee9a507884ac8d0b892bed7eb0a498"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/build/floor_2.png",
+        "label": "Almost paved",
+        "file_sha256": "b04d8f31265d85b1281ea4bd4f7aa7907c50595239f32901c001c0b4fc376d78",
+        "rgba_sha256": "69d64b94d2d77d236129adb70e48f0a79b58b65f94887f250088ece5ba7c408e"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/floor.png",
+        "label": "Complete",
+        "file_sha256": "da71e9bd5d37bf28e2968c1d8e02076a1f1760647f8d76e945c8fff14b580d35",
+        "rgba_sha256": "7d4c891a963003246b51613d3dbfac9212a868811f40b184c89bc42341ddacee"
+      }
+    ]
+  },
+  "post_construction": {
+    "method": "PixelLab",
+    "states": [
+      {
+        "path": "assets/textures/buildings/dungeon_1/build/post_0.png",
+        "label": "Lower block",
+        "file_sha256": "3fe7cdac9894b55591cb7323da1bbc2f60dc5b08654972d4f346c4e03b18bc23",
+        "rgba_sha256": "6723ff400fecb5dc7f2934662a039dfaf5440cfca50948bcf1783f30017240f2"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/post.png",
+        "label": "Complete",
+        "file_sha256": "cba905c8db657dda99a331900d0eaa5c4aec4361919c8a42957db0ef7b5d6a60",
+        "rgba_sha256": "a374b9388334d664d45087a55a67df40cd6860488243a3f06180b0739e555210"
+      }
+    ]
+  },
+  "post_damage": {
+    "method": "PixelLab",
+    "states": [
+      {
+        "path": "assets/textures/buildings/dungeon_1/post.png",
+        "label": "Intact",
+        "file_sha256": "cba905c8db657dda99a331900d0eaa5c4aec4361919c8a42957db0ef7b5d6a60",
+        "rgba_sha256": "a374b9388334d664d45087a55a67df40cd6860488243a3f06180b0739e555210"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/weathered/post.png",
+        "label": "Weathered",
+        "file_sha256": "4cc56197f810de9c3c327a9bcbaf8dbd80537df34061a9f986e22828ac342f7a",
+        "rgba_sha256": "75f5575798df6722f2fa5097f85aedd7ba88ee467067245e07a1ad4abe2a2bb6"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/broken/post.png",
+        "label": "Broken",
+        "file_sha256": "ef58e8dcb83980cea862436fa0127a2b9faaf4ccf5e7a57df57a5d4aac7324ac",
+        "rgba_sha256": "5f35d84c2878c70f53b862b24bb434b57235f9e1752abd05bfbbc2bdda7fd3ea"
+      },
+      {
+        "path": "assets/textures/buildings/dungeon_1/ruined/post.png",
+        "label": "Ruined stump",
+        "file_sha256": "cbd42084258e36a78d0eb092bd016f02140ece5bddf5304d5166c56c6b96468c",
+        "rgba_sha256": "49c33517a292dc9b173a41088a05b2f801323f23095d52fb7feadff8a087bcc4"
+      }
+    ]
+  }
+}

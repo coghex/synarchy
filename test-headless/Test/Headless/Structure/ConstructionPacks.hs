@@ -92,6 +92,7 @@ canvasW, canvasH ∷ Int
 
 spec ∷ Spec
 spec = aroundAll setup $ describe "structure construction frames" $ do
+    shippedDungeonSpec
     pieceLoadSpec
     wireLoadSpec
     diagnosticSpec
@@ -104,6 +105,30 @@ spec = aroundAll setup $ describe "structure construction frames" $ do
         act env
 
 -- * The piece pack, through scripts/structures.lua
+
+shippedDungeonSpec ∷ SpecWith EngineEnv
+shippedDungeonSpec = describe "the shipped Dungeon pilot" $
+    it "registers the approved construction stages and uniquely addressable persistent ruin art" $ \env → do
+        ls ← newBareLuaBackend env
+        runLua ls "require('scripts.structures').registerPackArt();"
+        cat ← readIORef (structureArtCatalogRef env)
+        packArtResolves cat "dungeon_1" `shouldBe` True
+        let base = "assets/textures/buildings/dungeon_1/"
+        forM_ [("floor", ApFloor, 4 ∷ Int), ("post", ApPost, 2)] $ \(kind, slot, count) → do
+            let paths = [base <> "build/" <> kind <> "_" <> T.pack (show i) <> ".png"
+                        | i ← [0 .. count - 2]] ⧺ [base <> kind <> ".png"]
+                ak = appearance Nothing slot
+            framePathsOf cat "dungeon_1" ak `shouldBe` Just paths
+            -- Exercise progress resolution, not merely the YAML inventory.
+            forM_ (zip [0 ∷ Int ..] paths) $ \(i, path) →
+                fmap aaPath (resolveConstructionFrame cat "dungeon_1" ak
+                    (fromIntegral i / fromIntegral count)) `shouldBe` Just path
+            forM_ ["weathered", "broken", "ruined"] $ \variant → do
+                let vak = appearance (Just variant) slot
+                appearanceForTexturePath cat (base <> variant <> "/" <> kind <> ".png")
+                    `shouldBe` Just ("dungeon_1", vak)
+                resolveConstructionSequence cat "dungeon_1" vak `shouldBe` Nothing
+                resolveDestructionSequence cat "dungeon_1" vak `shouldBe` Nothing
 
 pieceLoadSpec ∷ SpecWith EngineEnv
 pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
@@ -159,7 +184,7 @@ pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
         handles `shouldSatisfy` all ((> 0) ∘ toInt)
 
     it "registers the pack whole when it declares NO construction at all — \
-       \today's shipped shape" $ \env → do
+       \the legacy static-only shape" $ \env → do
         _ ← loadPiecePack env "cf_none" barePack
         cat ← readIORef (structureArtCatalogRef env)
         packArtResolves cat "cf_none" `shouldBe` True
@@ -508,7 +533,7 @@ data PackSpec = PackSpec
       --   sequence at all.
     }
 
--- | Nothing declared anywhere — today's shipped shape.
+-- | Nothing declared anywhere — the legacy static-only shape.
 barePack ∷ PackSpec
 barePack = PackSpec
     { psPieces = [ (k, Nothing) | k ← ["floor", "ceiling", "post"] ]

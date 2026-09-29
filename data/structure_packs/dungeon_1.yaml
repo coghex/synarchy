@@ -29,12 +29,20 @@ pieces:
   floor:
     texture: assets/textures/buildings/dungeon_1/floor.png
     facemap: assets/textures/facemap/floorface.png
+    construction:
+      - assets/textures/buildings/dungeon_1/build/floor_0.png
+      - assets/textures/buildings/dungeon_1/build/floor_1.png
+      - assets/textures/buildings/dungeon_1/build/floor_2.png
+      - assets/textures/buildings/dungeon_1/floor.png
   ceiling:
     texture: assets/textures/buildings/dungeon_1/ceiling.png
     facemap: assets/textures/facemap/ceilingface.png
   post:
     texture: assets/textures/buildings/dungeon_1/post.png
     facemap: assets/textures/facemap/postface.png
+    construction:
+      - assets/textures/buildings/dungeon_1/build/post_0.png
+      - assets/textures/buildings/dungeon_1/post.png
 
 walls:
   ne:
@@ -70,8 +78,9 @@ walls:
 # may override any subset of pieces/walls; anything it doesn't list falls back
 # to the default art above, so variants stay backwards-compatible. Facemaps
 # are inherited from the default unless a variant overrides them — the damaged
-# art keeps the intact silhouette (tools/make_damaged_structures.py weathers
-# the default art in place), so the same sun-shading masks apply.
+# legacy "damaged" art keeps the intact silhouette
+# (tools/make_damaged_structures.py weathers the default art in place).
+# The newer damage stages override masks to retain their settled rubble.
 variants:
   damaged:
     pieces:
@@ -88,3 +97,29 @@ variants:
         texture: assets/textures/buildings/dungeon_1/damaged/wall_se.png
       sw:
         texture: assets/textures/buildings/dungeon_1/damaged/wall_sw.png
+
+  # Persistent art states for authored ruins; demolition remains unchanged.
+  weathered:
+    pieces:
+      floor:
+        texture: assets/textures/buildings/dungeon_1/weathered/floor.png
+        facemap: assets/textures/facemap/dungeon_1/weathered_floor.png
+      post:
+        texture: assets/textures/buildings/dungeon_1/weathered/post.png
+        facemap: assets/textures/facemap/dungeon_1/weathered_post.png
+  broken:
+    pieces:
+      floor:
+        texture: assets/textures/buildings/dungeon_1/broken/floor.png
+        facemap: assets/textures/facemap/dungeon_1/broken_floor.png
+      post:
+        texture: assets/textures/buildings/dungeon_1/broken/post.png
+        facemap: assets/textures/facemap/dungeon_1/broken_post.png
+  ruined:
+    pieces:
+      floor:
+        texture: assets/textures/buildings/dungeon_1/ruined/floor.png
+        facemap: assets/textures/facemap/dungeon_1/ruined_floor.png
+      post:
+        texture: assets/textures/buildings/dungeon_1/ruined/post.png
+        facemap: assets/textures/facemap/dungeon_1/ruined_post.png
