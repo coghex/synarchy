@@ -213,12 +213,12 @@ bootFromEngine = lns
 spec ∷ Spec
 spec = do
     describe "the shipped packs" $ do
-        it "dungeon_1: seven default appearances, six damaged overrides, four cap facemaps per wall edge" $ do
+        it "dungeon_1: seven defaults, six damaged overrides and six persistent ruin appearances" $ do
             loadStructurePack "dungeon_1" ⌦ \case
                 Right (Just p) → do
                     map psaIdentity (pspkAppearances p) `shouldBe`
-                        [ "floor", "floor@damaged", "ceiling"
-                        , "post", "post@damaged"
+                        [ "floor", "floor@damaged", "floor@weathered", "floor@broken", "floor@ruined", "ceiling"
+                        , "post", "post@damaged", "post@weathered", "post@broken", "post@ruined"
                         , "wall:ne", "wall:ne@damaged"
                         , "wall:nw", "wall:nw@damaged"
                         , "wall:se", "wall:se@damaged"
@@ -264,13 +264,21 @@ spec = do
                                       , pstMissing f ] `shouldBe` []
                     other → expectationFailure (name ⧺ ": " ⧺ show other)
 
-        it "no shipped appearance declares a lifecycle yet, and says so as UNDECLARED" $
+        it "only the default Dungeon floor and post declare construction; all other lifecycles remain UNDECLARED" $
             forM_ ["dungeon_1", "wire"] $ \name →
                 loadStructurePack name ⌦ \case
                     Right (Just p) → forM_ (pspkAppearances p) $ \a →
                         forM_ ["construction", "destruction"] $ \l → do
                             let lc = lifecycle a l
-                            (pslDeclared lc, pslFrames lc, pslFpsSource lc)
+                            if name ≡ "dungeon_1" ∧ l ≡ "construction"
+                                ∧ psaIdentity a `elem` ["floor", "post"]
+                              then do
+                                pslDeclared lc `shouldBe` True
+                                length (pslFrames lc) `shouldBe`
+                                    (if psaIdentity a ≡ "floor" then 4 else 2)
+                                all (not ∘ pstMissing) (pslFrames lc) `shouldBe` True
+                                pstPath (last (pslFrames lc)) `shouldBe` staticPath a
+                              else (pslDeclared lc, pslFrames lc, pslFpsSource lc)
                                 `shouldBe` (False, [], "undeclared")
                     other → expectationFailure (show other)
 
@@ -733,10 +741,10 @@ spec = do
                 Right (Just p) → runsWithPack p $ lns
                     [ bootFromEngine
                     , "local s = d()"
-                    , "assert(s.appearanceCount == 13 and s.selectedAppearance == 'floor')"
+                    , "assert(s.appearanceCount == 19 and s.selectedAppearance == 'floor')"
                     , "assert(s.path == 'assets/textures/buildings/dungeon_1/floor.png')"
                     , "assert(s.totals.missing == 0 and s.totals.missingFacemaps == 0)"
-                    , "assert(s.totals.undeclared == 26)"
-                    , "assert(s.appearances[6].edge == 'ne' and #s.appearances[6].facemaps == 4)"
+                    , "assert(s.totals.undeclared == 36)"
+                    , "assert(s.appearances[12].edge == 'ne' and #s.appearances[12].facemaps == 4)"
                     ]
                 other → expectationFailure (show other)

@@ -105,6 +105,12 @@ The scalar form is not deprecated. A connection with no sequence has
 nothing to say beyond its texture, and every shipped connection is in
 exactly that state.
 
+The shipped Dungeon pilot declares four construction stages for its default
+floor and two for its default post. Its `weathered`, `broken`, and `ruined`
+floor/post variants are independently placed static appearances, with matching
+facemaps, rather than timed destruction clips. See the
+[approved art and integration contract](art/dungeon_lifecycle/README.md).
+
 **A declaration is keyed to exactly one appearance.** A variant's
 override never inherits or substitutes the default's frames, and an
 appearance with no declaration resolves no sequence — never another
