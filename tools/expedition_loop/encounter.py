@@ -141,13 +141,25 @@ def death_physiology(port: int, uid: int) -> dict:
     return got if isinstance(got, dict) else {}
 
 
+#: The source tag `Unit.Thread.Command.Solidify` stamps on its death
+#: notice ("X was entombed by solidifying lava at (x, y).").
+SOLIDIFY_SOURCE = "Unit.Solidify"
+
+
 def death_cause(ledger, uid: int):
-    """The cause `uid`'s own death notice names ("X died of <cause>"),
-    or None — which, for a combat kill, is the expected answer. Any
-    category: the Lua kill paths announce under `survival_critical`, a
-    solidification death under `unit_warning`."""
+    """What `uid`'s own non-combat death notice says, or None — which,
+    for a combat kill, is the expected answer.
+
+    Every non-combat kill path announces the death on the event log,
+    tagged with the dead unit, in one of two shapes: the Lua `unit.kill`
+    sites via `emitDeathAlert` ("X died of <cause>", `survival_critical`),
+    and solidification (source `Unit.Solidify`, "X was entombed by
+    solidifying lava at (x, y)", `unit_warning`). A killing hit and
+    bleeding out post nothing there."""
     for r in ledger.matching(lambda r: r.get("uid") == uid):
         text = r.get("text") or ""
+        if r.get("source") == SOLIDIFY_SOURCE:
+            return text
         if " died of " in text:
             return text.split(" died of ", 1)[1].rstrip(".")
     return None
@@ -757,7 +769,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     #     _energy — every failure meter, hypoxia and shock included, the
     #     injury tick, and the resource deaths), each preceded by
     #     `emitDeathAlert`'s "X died of <cause>" notice on the event log;
-    #   * `Unit.Thread.Command.Solidify`, which reports its own "died of";
+    #   * `Unit.Thread.Command.Solidify`, which reports "X was entombed by
+    #     solidifying lava" under source `Unit.Solidify`;
     #   * `Combat.Resolution.setDead` (a killing hit) and
     #     `Combat.Wounds.Tick` (bleeding out from wounds), which put their
     #     death on the drained combat stream and NOTHING on the event log.
@@ -796,7 +809,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     chk.ok(by_wounds,
            f"...and each died by combat, not by any other kill path: no "
            f"death notice at all for it on a complete event-log ledger "
-           f"(every non-combat kill path announces \"died of <cause>\"), "
+           f"(every non-combat kill path announces the death: \"died of "
+           f"<cause>\", or a `{SOLIDIFY_SOURCE}` entombment), "
            f"wounds on the corpse, and its physiological failure meters "
            f"{PHYSIOLOGICAL_METERS} below 1 ({blows}; unexplained ledger "
            f"intervals {ledger.unexplained()})")

@@ -3848,9 +3848,10 @@ from a party member holding a player attack order on it that took (read
 back off its AI state), after the activation and within 120 s of the death,
 its corpse carries wounds, its salt/thermal failure meters are below 1,
 and there is NO death notice for it at all on the complete ledger:
-every non-combat kill path announces "X died of <cause>" (the Lua
-`unit.kill` sites under `survival_critical`, solidification under
-`unit_warning`), while a killing hit (`Combat.Resolution.setDead`) and
+every non-combat kill path announces the death — the Lua `unit.kill`
+sites as "X died of <cause>" under `survival_critical`, solidification as
+"X was entombed by solidifying lava" from source `Unit.Solidify` under
+`unit_warning` — while a killing hit (`Combat.Resolution.setDead`) and
 bleeding out from wounds (`Combat.Wounds.Tick`) put nothing on the event
 log.
 
