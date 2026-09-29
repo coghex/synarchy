@@ -3,6 +3,7 @@ module Main where
 import UPrelude
 import Test.Hspec
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
+import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
 import qualified Test.Headless.UPrelude as UPreludeSpec
 import qualified Test.Headless.Audio.Native as AudioNative
@@ -578,9 +579,13 @@ main = hspec $ do
     -- #2021 (WML-3). The pure half needs no engine. The boundary half
     -- gets its OWN engine for the same reason "World identity" does: it
     -- creates private w8 pages and saves EVERY live page, which the
-    -- shared-worlds engine above must not gain.
+    -- shared-worlds engine above must not gain. Its saves publish to
+    -- fixed slot names under the cwd-relative saves/, so the whole
+    -- engine lifetime runs inside a scratch resource root, entered
+    -- before boot and left after teardown (#2650).
     GeneratedIdentity.pureSpec
-    aroundAll withHeadlessEngine GeneratedIdentity.spec
+    aroundAll (withIsolatedResourceRoot ∘ withHeadlessEngine)
+        GeneratedIdentity.spec
     -- #2020 (WML-2). The pure half needs no engine at all. The
     -- boundary half gets its OWN engine: it creates a private w8 page
     -- and saves it, which the shared-worlds engine above must not gain,
