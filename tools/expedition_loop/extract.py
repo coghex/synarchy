@@ -30,7 +30,7 @@ from .readers import (clearance_events, current_action, event_log,
                       find_instance, find_instance_by_def, fmt_vitals,
                       ground_items, instance_by_id, inventory, is_adjacent,
                       pose, properties, roster, significant_rows, unit_pos,
-                      vitals)
+                      vitals, carried)
 
 
 # --------------------------------------------------------------------------
@@ -65,7 +65,17 @@ def locate(port: int, phys: int) -> str:
     message: a carrier, the ground, or nowhere this probe can see."""
     uid = holder_of(port, phys)
     if uid is not None:
-        return f"carried by {uid} at {unit_pos(port, uid)}"
+        # What the carrier is DOING, not just where: a survival
+        # interrupt (a canteen refill at the colony lake, sleep) takes
+        # over a move order home, and that is a finding, not noise.
+        task = send(port, f"local s=require('scripts.unit_ai').getState({uid}); "
+                          f"local t=s and s.commandedTask; "
+                          f"return t and (math.floor(t.x)..','..math.floor(t.y)) "
+                          f"or 'none'").strip().strip('"')
+        return (f"carried by {uid} at {unit_pos(port, uid)}, action "
+                f"{current_action(port, uid)}, pose {pose(port, uid)}, order "
+                f"{task}, water/rations {carried(port, uid)}, "
+                f"{fmt_vitals(vitals(port, uid))}")
     g = next((g for g in ground_items(port) if g.get("instanceId") == phys),
              None)
     if g is not None:
