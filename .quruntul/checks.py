@@ -68,6 +68,15 @@ class Context:
         self.revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
                                        check=True).stdout.strip()
         self.platform = "Darwin"
+        self.calls = []
+
+    def run(self, argv, name, timeout, cwd=None, environment=None):
+        """Stands in for quruntul's guardian; a preflight names two executables."""
+        self.calls.append(dict(argv=argv, name=name, timeout=timeout))
+        log = Path(tempfile.mkdtemp()) / f"{name}.log"
+        log.write_text("QURUNTUL_EXECUTABLES " + json.dumps(
+            {"SYNARCHY_PROBE_ENGINE_EXE": "/bin/engine", "SYNARCHY_SAVE_CODEC_EXE": "/bin/codec"}) + "\n")
+        return dict(outcome="passed", log=str(log), command=argv)
 
     @staticmethod
     def digest(value):
@@ -92,9 +101,9 @@ class AdapterChecks(unittest.TestCase):
     def probes(self):
         return {s.data["key"]: s for s in self.suites.values() if "key" in s.data}
 
-    def test_every_registered_probe_is_one_suite_unless_the_census_defers_it(self):
+    def test_every_registered_probe_is_one_suite_unless_deferred_or_direct_only(self):
         deferred = {k for k, p in self.census.items() if (p.get("census") or {}).get("deferred")}
-        expected = {key for key, _, _ in probe_runner_registry.PROBES} - deferred
+        expected = {key for key, _, _ in probe_runner_registry.PROBES} - deferred - set(self.module.DIRECT_ONLY)
         self.assertEqual(set(self.probes()), expected)
         self.assertEqual(len(self.suites), len(set(self.suites)))
 
@@ -130,12 +139,12 @@ class AdapterChecks(unittest.TestCase):
             suite = next(s for s in self.suites.values() if s.framework == "command")
             self.assertIsNone(self.adapter.outcomes(Context(), suite, dict(prefix=prefix)))
             Path(prefix + ".probe-flake.json").write_text(json.dumps({
-                "schema": "probe-flake-result/v1", "status": "ok",
+                "schema": "probe-flake-result/v1", "status": "ok", "runs": [{"outcome": "FAIL"}],
                 "check_counts": {"a": {"PASS": 1, "FAIL": 0, "MISSING": 0},
                                  "b": {"PASS": 0, "FAIL": 1, "MISSING": 0},
                                  "c": {"PASS": 0, "FAIL": 0, "MISSING": 1}}}))
             self.assertEqual(self.adapter.outcomes(Context(), suite, dict(prefix=prefix)),
-                             {"a": "passed", "b": "failed", "c": "missing"})
+                             {"a": "passed", "b": "failed", "c": "missing", "run": "failed"})
 
     def test_seeds_only_state_what_the_census_measured(self):
         for key, suite in self.probes().items():
@@ -188,9 +197,11 @@ class AdapterChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             prefix = str(Path(temp) / "trial-0001")
             zero = {c: {"PASS": 0, "FAIL": 0, "MISSING": 0} for c in suite.checks}
-            for status, expected in (("harness-error", None), ("ok", {})):
+            for status, runs, expected in (("harness-error", [], None), ("ok", [], None),
+                                           ("ok", [{"outcome": "PASS"}], {"run": "passed"})):
                 Path(prefix + ".probe-flake.json").write_text(json.dumps(
-                    {"schema": "probe-flake-result/v1", "status": status, "completed_runs": 0, "check_counts": zero}))
+                    {"schema": "probe-flake-result/v1", "status": status, "runs": runs,
+                     "completed_runs": len(runs), "check_counts": zero}))
                 self.assertEqual(self.adapter.outcomes(Context(), suite, dict(prefix=prefix)), expected, status)
 
     def test_seeds_count_every_sample_of_the_current_cohort(self):
@@ -211,66 +222,106 @@ class AdapterChecks(unittest.TestCase):
         finally:
             self.module._census = original
 
-    def test_the_trial_bounds_every_lock_wait_including_both_preflights(self):
+    def test_the_trial_adopts_prepared_executables_and_bounds_its_resource_wait(self):
         import runpy
         import types
         calls = []
 
         class Hold:
-            def __init__(self, name):
-                self.name = name
-
             def release(self):
-                calls.append(("release", self.name))
+                calls.append(("release",))
 
         lock = types.ModuleType("probe_resource_lock")
         lock.repository_namespace = lambda root: "ns"
-        def wait_acquire(**kwargs):
-            calls.append(("wait", kwargs))
-            return Hold("build" if kwargs.get("exclusive") == ("cabal-build",) else "probe")
-        lock.wait_acquire = wait_acquire
+        lock.wait_acquire = lambda **kwargs: calls.append(("wait", kwargs)) or Hold()
+        engine = types.ModuleType("probe_engine")
+        engine.runner_executable = lambda environ=None, env_var="SYNARCHY_PROBE_ENGINE_EXE": (environ or os.environ).get(env_var)
+        codec = types.ModuleType("save_compat_audit_codec")
+        codec.ENV_CODEC_EXE = "SYNARCHY_SAVE_CODEC_EXE"
         resources = types.ModuleType("probe_runner_resources")
-        resources.BUILD_RESOURCE = "cabal-build"
-        resources.ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
-        resources.ENV_HELD_EXCLUSIVE = "SYNARCHY_PROBE_HELD_EXCLUSIVE"
-        def preflight(kind):
-            def run(namespace, environ=None, announce=None):
-                calls.append((kind, environ.get(resources.ENV_HELD_NAMESPACE), environ.get(resources.ENV_HELD_EXCLUSIVE)))
-                return f"/bin/{kind}"
-            return run
-        resources.engine_preflight = preflight("engine")
-        resources.codec_preflight = preflight("codec")
+        resources.engine_preflight = lambda namespace, environ=None, announce=None: calls.append(("engine",)) or os.environ["SYNARCHY_PROBE_ENGINE_EXE"]
+        resources.codec_preflight = lambda namespace, environ=None, announce=None: calls.append(("codec",)) or os.environ["SYNARCHY_SAVE_CODEC_EXE"]
         resources.exclusive_resources = lambda key: set()
         resources.shared_resources = lambda key: {"cabal-build"}
         flake = types.ModuleType("probe_flake")
-        flake.main = lambda argv: calls.append(("measure", argv)) or 0
-        saved = {name: sys.modules.get(name) for name in ("probe_flake", "probe_resource_lock", "probe_runner_resources")}
-        sys.modules.update(probe_flake=flake, probe_resource_lock=lock, probe_runner_resources=resources)
-        argv, cwd = sys.argv, os.getcwd()
-        with tempfile.TemporaryDirectory() as temp:
-            os.environ["QURUNTUL_TRIAL_PREFIX"] = str(Path(temp) / "trial-0001")
-            sys.argv = ["probe_trial.py", "blood_impact"]
-            try:
+        flake.main = lambda argv: calls.append(("measure",)) or 0
+        names = ("probe_flake", "probe_resource_lock", "probe_runner_resources", "probe_engine", "save_compat_audit_codec")
+        saved = {name: sys.modules.get(name) for name in names}
+        sys.modules.update(probe_flake=flake, probe_resource_lock=lock, probe_runner_resources=resources,
+                           probe_engine=engine, save_compat_audit_codec=codec)
+        argv, cwd, environ = sys.argv, os.getcwd(), dict(os.environ)
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                os.environ["QURUNTUL_TRIAL_PREFIX"] = str(Path(temp) / "trial-0001")
+                sys.argv = ["probe_trial.py", "blood_impact"]
+                # Without prepared executables the trial refuses rather than building.
+                os.environ.pop("SYNARCHY_PROBE_ENGINE_EXE", None)
+                with self.assertRaises(SystemExit) as refused:
+                    runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
+                self.assertEqual(refused.exception.code, 3)
+                self.assertEqual(calls, [])
+                os.environ.update(SYNARCHY_PROBE_ENGINE_EXE="/bin/engine", SYNARCHY_SAVE_CODEC_EXE="/bin/codec")
                 with self.assertRaises(SystemExit):
                     runpy.run_path(str(ROOT / ".quruntul" / "probe_trial.py"), run_name="__main__")
-            finally:
-                sys.argv = argv
-                os.chdir(cwd)
-                del os.environ["QURUNTUL_TRIAL_PREFIX"]
-                for name, module in saved.items():
-                    if module is None:
-                        sys.modules.pop(name, None)
-                    else:
-                        sys.modules[name] = module
+        finally:
+            sys.argv = argv
+            os.chdir(cwd)
+            os.environ.clear()
+            os.environ.update(environ)
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
         waits = [c[1] for c in calls if c[0] == "wait"]
-        self.assertEqual(waits[0]["exclusive"], ("cabal-build",))
-        self.assertTrue(all(w.get("deadline") is not None for w in waits))
-        self.assertEqual(len({w["deadline"] for w in waits}), 1, "one deadline from the first lock wait")
-        self.assertIn(("engine", "ns", "cabal-build"), calls)
-        self.assertIn(("codec", "ns", "cabal-build"), calls)
-        order = [c[0] if c[0] != "release" else "release-" + c[1] for c in calls]
-        self.assertLess(order.index("codec"), order.index("release-build"))
-        self.assertLess(order.index("release-build"), order.index("measure"))
+        self.assertEqual(len(waits), 1, "a trial waits only for the probe's own resources")
+        self.assertIsNotNone(waits[0].get("deadline"))
+        self.assertNotIn(("cabal-build",), [w.get("exclusive") for w in waits])
+        self.assertEqual([c[0] for c in calls], ["engine", "codec", "wait", "measure", "release"])
+
+    def test_direct_only_probes_really_cannot_run_through_run_probes(self):
+        # run_probes.py passes only --port; these exit before testing anything.
+        registry = {key: script for key, script, _ in probe_runner_registry.PROBES}
+        for key in self.module.DIRECT_ONLY:
+            done = subprocess.run([sys.executable, str(ROOT / "tools" / registry[key]), "--port", "9"],
+                                  cwd=ROOT, capture_output=True, text=True, timeout=60)
+            self.assertEqual(done.returncode, 2, (key, done.stderr[-300:]))
+
+    def test_a_run_that_fails_with_every_check_passing_is_a_failure(self):
+        suite = next(s for s in self.suites.values() if s.framework == "command")
+        self.assertIn(self.module.RUN_CHECK, suite.checks)
+        declared = [c for c in suite.checks if c != self.module.RUN_CHECK]
+        with tempfile.TemporaryDirectory() as temp:
+            prefix = str(Path(temp) / "trial-0001")
+            for outcome, expected in (("FAIL", "failed"), ("TIMEOUT", "failed"), ("PASS", "passed")):
+                Path(prefix + ".probe-flake.json").write_text(json.dumps({
+                    "schema": "probe-flake-result/v1", "status": "ok",
+                    "runs": [{"outcome": outcome, "checks": {c: "PASS" for c in declared}}],
+                    "check_counts": {c: {"PASS": 1, "FAIL": 0, "MISSING": 0} for c in declared}}))
+                read = self.adapter.outcomes(Context(), suite, dict(prefix=prefix))
+                self.assertEqual(read[self.module.RUN_CHECK], expected, outcome)
+                self.assertTrue(all(read[c] == "passed" for c in declared))
+        census = {"current": {"commit_sha": "c", "samples": [{"completed_runs": 10, "failure_count": 1,
+                  "check_counts": {c: {"PASS": 10, "FAIL": 0, "MISSING": 0} for c in declared}}]}}
+        original = self.module._census
+        self.module._census = lambda checkout: {suite.data["key"]: {"census": census}}
+        try:
+            self.assertEqual(self.adapter.seed(Context(), suite, {})[self.module.RUN_CHECK]["status"], "flaky")
+        finally:
+            self.module._census = original
+
+    def test_prepare_builds_and_a_trial_only_waits_for_resources_and_runs(self):
+        for key, suite in self.probes().items():
+            ctx = Context()
+            prepared = self.adapter.prepare(ctx, suite)
+            preflight = ctx.calls[0]
+            self.assertTrue(preflight["argv"][-1].endswith("preflight.py"), key)
+            self.assertGreaterEqual(preflight["timeout"], self.module.LOCK_WAIT_SECONDS + self.module.BUILD_SECONDS)
+            self.assertEqual(prepared.environment, {"SYNARCHY_PROBE_ENGINE_EXE": "/bin/engine",
+                                                    "SYNARCHY_SAVE_CODEC_EXE": "/bin/codec"})
+            # A late resource release still leaves the probe its whole timeout.
+            self.assertGreaterEqual(suite.trial_seconds, probe_runner_registry.effective_timeout(key)
+                                    + self.module.LOCK_WAIT_SECONDS, key)
 
     def test_the_adapter_imports_nothing_from_quruntul(self):
         tree = ast.parse((ROOT / ".quruntul" / "adapter.py").read_text())

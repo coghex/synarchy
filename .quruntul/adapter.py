@@ -36,6 +36,15 @@ import time
 
 HSPEC_SLICE = 400
 LOCK_WAIT_SECONDS = 1800  # AGENTS.md: wait for cabal-build for up to 30 minutes
+BUILD_SECONDS = 5400  # a cold engine and codec build, in prepare's own budget
+TRIAL_MARGIN_SECONDS = 300  # process start-up and teardown around a probe
+# Probes run_probes.py cannot launch unattended: they need a mode flag on a
+# direct invocation (tools/ci_probes.py MANUAL_ONLY_REASONS says so).
+DIRECT_ONLY = {"audio_manual": "needs --interactive or --offscreen-check, which run_probes.py cannot pass"}
+# The run-level outcome of a protocol probe, beside its declared checks: a probe
+# can report every check PASS and still exit nonzero, which probe_flake records
+# as a failed run.
+RUN_CHECK = "run"
 # Everything a suite's behaviour can depend on, taken from the pinned revision:
 # the sources, every tool a trial executes or imports (tools/, and this
 # adapter's own runner in .quruntul/), and the build configuration. Whole trees
@@ -133,13 +142,14 @@ class Synarchy:
         ports = _port_bases(registry, [key for key, _, _ in registry.PROBES])
         for key, script, description in registry.PROBES:
             entry = census.get(key) or {}
-            if (entry.get("census") or {}).get("deferred"):
+            if (entry.get("census") or {}).get("deferred") or key in DIRECT_ONLY:
                 continue  # the census's deferral stays authoritative while the census exists
             ci = key in eligible
             framework = "command" if key in protocol and not ci else "exit"
-            checks = self._describe(checkout, tools, key, script) if framework == "command" else []
+            checks = self._describe(checkout, tools, key, script) + [RUN_CHECK] if framework == "command" else []
             timeout = float(registry.effective_timeout(key))
-            trial = int(min(7200, timeout + 1800))
+            # prepare builds; a trial only waits for the probe's resources and runs it.
+            trial = int(timeout + LOCK_WAIT_SECONDS + TRIAL_MARGIN_SECONDS)
             suites.append(ctx.Suite(
                 id=_suite_id(key), kind="ci" if ci else "probe", framework=framework,
                 description=description, area=key.split("_")[0],
@@ -175,12 +185,27 @@ class Synarchy:
             return ctx.Prepared(argv=[executable], cwd=str(checkout), environment={},
                                 provenance=dict(target=target, executable=executable))
         key = suite.data["key"]
+        environment = self._preflight(ctx)
         if suite.framework == "command":
             argv = [sys.executable, str(checkout / ".quruntul" / "probe_trial.py"), key]
         else:
             argv = [sys.executable, "tools/run_probes.py", "--only", key, "--exact", "--jobs", "1",
                     "--port", str(suite.data["port"])]
-        return ctx.Prepared(argv=argv, cwd=str(checkout), environment={}, provenance=dict(key=key))
+        return ctx.Prepared(argv=argv, cwd=str(checkout), environment=environment,
+                            provenance=dict(key=key, executables=environment))
+
+    @staticmethod
+    def _preflight(ctx) -> dict[str, str]:
+        """Build and locate the engine and codec once per batch, in prepare's budget."""
+        result = ctx.run([sys.executable, str(ctx.checkout / ".quruntul" / "preflight.py")], "preflight",
+                         LOCK_WAIT_SECONDS + BUILD_SECONDS)
+        if result["outcome"] != "passed":
+            raise RuntimeError(f"the engine preflight {result['outcome']}; see {result['log']}")
+        lines = [line for line in Path(result["log"]).read_text(errors="replace").splitlines()
+                 if line.startswith("QURUNTUL_EXECUTABLES ")]
+        if not lines:
+            raise RuntimeError(f"the engine preflight named no executables; see {result['log']}")
+        return json.loads(lines[-1].split(" ", 1)[1])
 
     def outcomes(self, ctx, suite, trial):
         """A protocol probe's checks from its probe-flake-result/v1 document."""
@@ -193,12 +218,17 @@ class Synarchy:
         # read, and quruntul stops the batch as blocked.
         if document.get("schema") != "probe-flake-result/v1" or document.get("status") != "ok":
             return None
+        runs = document.get("runs") or []
+        if not runs:
+            return None
         mapped = {"PASS": "passed", "FAIL": "failed", "MISSING": "missing"}
         outcomes = {}
         for check, counts in document.get("check_counts", {}).items():
             outcome = next((mapped[k] for k in ("FAIL", "MISSING", "PASS") if counts.get(k)), None)
             if outcome:
                 outcomes[check] = outcome
+        # A run can report every check PASS and still fail (nonzero exit) or time out.
+        outcomes[RUN_CHECK] = "passed" if runs[-1].get("outcome") == "PASS" else "failed"
         return outcomes
 
     def seed(self, ctx, suite, trial):
@@ -227,6 +257,10 @@ class Synarchy:
                 return {"run": dict(status="flaky", reason=f"census: {failures} failed of {runs}", evidence=evidence)}
             return {"run": dict(status="stable", reason=f"census: {runs} clean runs", evidence=evidence)} if runs >= 10 else {}
         seeds = {}
+        if failures:
+            seeds[RUN_CHECK] = dict(status="flaky", reason=f"census: {failures} failed runs of {runs}", evidence=evidence)
+        elif runs >= 10:
+            seeds[RUN_CHECK] = dict(status="stable", reason=f"census: {runs} clean runs", evidence=evidence)
         for check, counts in counts_by_check.items():
             if check not in suite.checks:
                 continue  # measured under a name the probe no longer declares

@@ -129,8 +129,10 @@ another owner's processes. User cancellation still ends the wait immediately.
   `tools/probe_flake.py --runs 1`, the rest through
   `tools/run_probes.py --only KEY --exact`, so the `cabal-build` lock, resource
   holds and port spans keep applying. The probe census stays authoritative for
-  deferrals, and its measurements seed each probe's first status. `$playtest`
-  keeps its own harness.
+  deferrals, and its measurements seed each probe's first status. The engine
+  and codec are built once per batch, before any trial. `audio_manual`, which
+  needs a mode flag on a direct invocation, is left out. `$playtest` keeps its
+  own harness.
 - **Worldgen-output changes require the full tier**, rebaselining, world
   checks, and a save-version bump: follow `src/World/CLAUDE.md`. Iteration
   sanity check: `python3 tools/world_check.py --quick`.
