@@ -4718,8 +4718,10 @@ arguments, and preprocesses every module with `ghc -E` for each build
 way. So includes resolve through the suite's own `-tmp` directory, and
 `ghc-options`, per-way and command-line options apply as they did.
 Freshness is content identity: the capture's commands, `setup-config`,
-the header, the compiler's bytes and `--info`, and every configuration
-input must be unchanged. A byte-identical restored cache passes, and a
+the header, the bytes the configured compiler path reaches now (resolved
+afresh, so a retargeted symlink counts) and `--info`, and every
+configuration input must be unchanged; recording checks the capture's
+compiler the same way. A byte-identical restored cache passes, and a
 rebuild that ran the same commands (such as `cabal test`) does too. A
 selected custom build directory is certified by its own plan. Source
 edits are not inputs, so an edited module is scanned as it now reads.

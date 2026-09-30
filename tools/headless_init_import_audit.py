@@ -91,7 +91,8 @@ FRESHNESS IS CONTENT IDENTITY: the gate (`configured_settings`) never
 plans. It verifies the record's schema field by field, then that the
 capture's content (`capture_fingerprint`: the same commands, however
 many rebuilds ran them), `setup-config`, the header, the compiler
-program's bytes and `--info`, every configuration input (a file
+program's bytes -- those its configured path reaches now, so a
+retargeted symlink counts -- and `--info`, every configuration input (a file
 appearing counts) and the global config cabal names are all unchanged.
 A byte-identical restored cache verifies whatever its mtimes. Source
 files are deliberately not inputs: an edited module is what the gate is
@@ -479,10 +480,19 @@ def configuration_closure(root: Path, roots: list[str], imports: list[str],
     return closure
 
 
+def _cabal_path(cabal: str, *queries: str) -> subprocess.CompletedProcess:
+    """`cabal path <queries>` from an empty scratch directory: the global
+    settings it reports do not depend on the project, and run inside the
+    checkout it would refresh the project's configuration cache."""
+    with tempfile.TemporaryDirectory() as scratch:
+        return subprocess.run([cabal, "path", *queries], cwd=scratch,
+                              capture_output=True, text=True, timeout=120)
+
+
 def _global_config(cabal: str, root: Path) -> str:
+    del root  # the global config does not depend on the project
     try:
-        result = subprocess.run([cabal, "path", "--config-file"], cwd=root,
-                                capture_output=True, text=True, timeout=120)
+        result = _cabal_path(cabal, "--config-file")
     except (OSError, subprocess.SubprocessError) as error:
         raise AuditError(f"cabal path --config-file could not run: {error}"
                          ) from None
@@ -830,6 +840,32 @@ def select_build(root: Path, builddir: str) -> SelectedBuild:
                          dist_dir / STAMP_NAME)
 
 
+def compiler_program(path: str) -> tuple[str, Path]:
+    """`(the executable path runs, the file it reaches now)`. A configured
+    compiler path can be a symlink (ghcup's always is); its identity is
+    the bytes the path reaches when it runs, resolved afresh each time,
+    never a target resolved earlier."""
+    ghc = shutil.which(path)
+    if ghc is None:
+        raise AuditError(f"the compiler Cabal built with, {path!r}, is not an "
+                         f"executable")
+    return ghc, Path(os.path.realpath(ghc))
+
+
+def captured_compiler(meta: dict[str, str]) -> tuple[str, Path]:
+    """The capture slot's compiler, provided its configured path still
+    reaches the bytes the build started with (`ghc-md5`); else an
+    `AuditError`, whether the file was overwritten or the path now
+    reaches another file."""
+    ghc, reached = compiler_program(meta["ghc"])
+    if _digest(reached, "md5") != meta["ghc-md5"]:
+        raise AuditError(
+            f"the compiler {meta['ghc']} now reaches {reached}, whose bytes "
+            f"differ from the program the suite was built with (then "
+            f"{meta['ghc-canonical']}); rebuild the suite and record again")
+    return ghc, reached
+
+
 def _checked_compiler(root: Path, path: str) -> str:
     ghc = shutil.which(path)
     if ghc is None:
@@ -970,10 +1006,7 @@ def record_settings(root: Path, builddir: str, cabal_args: list[str]) -> Path:
             f"{build.slot} was captured under another package configuration "
             f"than {setup_config}: the suite has not been built since Cabal "
             f"reconfigured; rebuild it and record again")
-    ghc_real = Path(meta["ghc-canonical"])
-    if _digest(ghc_real, "md5") != meta["ghc-md5"]:
-        raise AuditError(f"the compiler {ghc_real} changed since the suite "
-                         f"was built; rebuild it and record again")
+    _, ghc_real = captured_compiler(meta)
     ghc = _checked_compiler(root, meta["ghc"])
     invocations = read_invocations(ghc, build.slot, root)
     replays = distinct_replays(invocations, build.unit_id)
@@ -1094,8 +1127,14 @@ def configured_settings(root: Path = REPO_ROOT,
         changed.append(f"{build.dist_dir / 'setup-config'}")
     if _digest(Path(header["path"])) != header["sha256"]:
         changed.append(f"the generated header {header['path']}")
-    if _digest(Path(compiler["canonical"])) != compiler["sha256"]:
-        changed.append(f"the compiler program {compiler['canonical']}")
+    try:
+        _, reached = compiler_program(compiler["path"])
+        reached_digest = _digest(reached)
+    except AuditError:
+        reached, reached_digest = compiler["path"], None
+    if reached_digest != compiler["sha256"]:
+        changed.append(f"the compiler program {compiler['path']} (it now "
+                       f"reaches {reached}; recorded {compiler['canonical']})")
     for path, digest in configuration.items():
         if _digest(Path(path)) != digest:
             changed.append(f"configuration input {path}")
@@ -2220,8 +2259,16 @@ def _stamped_checkout(root: Path, ghc: str) -> dict:
     _write_record(slot, "inv.a", ["--make", "Main.hs"])
     (slot / "meta").write_text(
         "".join(f"{key}\t{key}-value\n" for key in _META_KEYS), encoding="utf-8")
-    compiler_copy = root / "ghc-program"
-    compiler_copy.write_bytes(b"#!/bin/sh\n# stands for the compiler file\n")
+    # The configured compiler: a symlink to a forwarding program, as a
+    # ghcup or `--with-compiler` path can be.
+    programs = root / "compilers"
+    programs.mkdir()
+    compiler_program_file = programs / "ghc-built"
+    compiler_program_file.write_text(_forwarding_compiler(ghc, "built"),
+                                     encoding="utf-8")
+    compiler_program_file.chmod(0o755)
+    configured = programs / "ghc"
+    configured.symlink_to(compiler_program_file)
     global_config = root / "global-config"
     global_config.write_text("-- global\n", encoding="utf-8")
     replay = [*_FIXTURE_ARGS, "-optP-include",
@@ -2236,8 +2283,9 @@ def _stamped_checkout(root: Path, ghc: str) -> dict:
         "replays": [replay],
         "header": {"path": str(header), "sha256": _digest(header)},
         "setup-config": _digest(dist / "setup-config"),
-        "compiler": {"path": ghc, "canonical": str(compiler_copy),
-                     "sha256": _digest(compiler_copy),
+        "compiler": {"path": str(configured),
+                     "canonical": str(compiler_program_file),
+                     "sha256": _digest(compiler_program_file),
                      "info-sha256": _text_digest(_compiler_info(ghc))},
         "configuration": {
             str((root / "cabal.project").resolve()):
@@ -2247,8 +2295,27 @@ def _stamped_checkout(root: Path, ghc: str) -> dict:
         "global-config": str(global_config)}
     stamp.write_text(json.dumps(document), encoding="utf-8")
     return {"stamp": stamp, "document": document, "slot": slot,
-            "header": header, "dist": dist, "compiler": compiler_copy,
+            "header": header, "dist": dist, "compiler": compiler_program_file,
+            "configured": configured, "ghc": ghc,
             "global": global_config}
+
+
+def _forwarding_compiler(ghc: str, tag: str) -> str:
+    """A program that runs `ghc` unchanged; `tag` only varies its bytes."""
+    return f'#!/bin/sh\n# forwarding compiler: {tag}\nexec "{ghc}" "$@"\n'
+
+
+def _retarget(tag: str | None):
+    """Point the configured compiler symlink at another program: a
+    different forwarder (`tag`), or a byte-identical copy (None)."""
+    def tamper(root: Path, pieces: dict) -> None:
+        target = root / "compilers" / f"ghc-{tag or 'copy'}"
+        target.write_bytes(pieces["compiler"].read_bytes() if tag is None
+                           else _forwarding_compiler(pieces["ghc"], tag).encode())
+        target.chmod(0o755)
+        pieces["configured"].unlink()
+        pieces["configured"].symlink_to(target)
+    return tamper
 
 
 def _drop(key: str):
@@ -2328,6 +2395,10 @@ VERIFY_FIXTURES = [
      "generated header"),
     ("same-version compiler, changed program bytes", _append("compiler"),
      "compiler program"),
+    ("the configured compiler symlink retargeted to another same-version "
+     "program (#2648 review 10)", _retarget("other"), "compiler program"),
+    ("the configured compiler symlink retargeted to a byte-identical copy",
+     _retarget(None), ""),
     ("changed compiler settings (--info)",
      lambda root, pieces: _edit_stamp(compiler={
          **pieces["document"]["compiler"], "info-sha256": "0" * 64})(
@@ -2382,6 +2453,31 @@ def _verify_failures(ghc: str, tmp: Path) -> list[str]:
         except AuditError as error:
             if "does not exist" not in str(error):
                 failures.append(f"VERIFY the unselected build directory: {error}")
+        # The record boundary: the slot's compiler must still be reached,
+        # byte for byte, through its configured path.
+        for label, tamper, needle in (
+                ("the capture's compiler, unchanged", None, ""),
+                ("the capture's compiler overwritten", _append("compiler"),
+                 "now reaches"),
+                ("the capture's compiler symlink retargeted (#2648 review 10)",
+                 _retarget("other"), "now reaches"),
+                ("the capture's compiler symlink retargeted to a copy",
+                 _retarget(None), "")):
+            case = tmp / ("capture-" + re.sub(r"\W+", "-", label))
+            case.mkdir()
+            pieces = _stamped_checkout(case, ghc)
+            meta = {"ghc": str(pieces["configured"]),
+                    "ghc-canonical": str(pieces["compiler"]),
+                    "ghc-md5": _digest(pieces["compiler"], "md5")}
+            if tamper:
+                tamper(case, pieces)
+            try:
+                captured_compiler(meta)
+                if needle:
+                    failures.append(f"CAPTURED COMPILER {label}: accepted")
+            except AuditError as error:
+                if not needle or needle not in str(error):
+                    failures.append(f"CAPTURED COMPILER {label}: {error}")
         # Recording refuses what it cannot bind before running cabal.
         for label, args, builddir, version, needle in (
                 ("no build command", ["test", HEADLESS_SUITE], "dist-alt",
@@ -2410,7 +2506,7 @@ def _verify_failures(ghc: str, tmp: Path) -> list[str]:
     return failures
 
 
-CAPTURE_CASES = (4 + len(SPLIT_RTS_FIXTURES) + 3 + 2
+CAPTURE_CASES = (4 + 4 + len(SPLIT_RTS_FIXTURES) + 3 + 2
                  + len(PROVENANCE_FIXTURES) + len(VERIFY_FIXTURES) + 2 + 5)
 
 
@@ -2453,6 +2549,9 @@ CABAL_REGRESSION_STEPS = (
     "a byte-identical cache restored beneath re-stamped configuration "
     "files verifies and records",
     "a failed build publishes nothing and cannot be recorded",
+    "a configured compiler symlink retargeted to another same-version "
+    "program fails both the scan and a re-record without a rebuild, and "
+    "restoring its target restores detection (#2648 review 10)",
 )
 
 _TINY_CABAL = """cabal-version: 3.0
@@ -2509,9 +2608,7 @@ def _cabal_paths(cabal: str) -> tuple[str, str]:
     """The store and package index the project build itself uses, as
     `cabal path` reports them, so the fixture's Setup is built offline
     on the same Cabal library."""
-    result = subprocess.run([cabal, "path", "--store-dir",
-                             "--remote-repo-cache"], capture_output=True,
-                            text=True, timeout=120)
+    result = _cabal_path(cabal, "--store-dir", "--remote-repo-cache")
     values = dict(line.split(": ", 1) for line in result.stdout.splitlines()
                   if ": " in line)
     store, cache = values.get("store-dir"), values.get("remote-repo-cache")
@@ -2720,6 +2817,37 @@ def cabal_regression() -> tuple[list[str], int]:
                 expect(9, scan(), "compiler program")
                 shim.write_bytes(with_define)
                 expect(9, scan(), banned)
+            # 13. A configured compiler symlink retargeted to another
+            # same-version program; the original target is left untouched.
+            positive = shim_dir / "ghc-positive"
+            positive.write_text(f'#!/bin/sh\nexec "{real}" '
+                                f'-optP-DREVIEW_COMPILER "$@"\n',
+                                encoding="utf-8")
+            clean = shim_dir / "ghc-clean"
+            clean.write_text(f'#!/bin/sh\nexec "{real}" "$@"\n',
+                             encoding="utf-8")
+            positive.chmod(0o755)
+            clean.chmod(0o755)
+            link = shim_dir / "ghc-link"
+            link.symlink_to(positive)
+            linked = f"--with-compiler={link}"
+            if build("build", suite, linked):
+                expect_recorded(13, record(DEFAULT_BUILDDIR, suite, linked))
+                expect(13, scan(), banned)
+                link.unlink()
+                link.symlink_to(clean)
+                expect(13, subprocess.run(
+                    [str(link), "--numeric-version"], capture_output=True,
+                    text=True).stdout.strip(), version)
+                expect(13, scan(), "compiler program")
+                expect(13, record(DEFAULT_BUILDDIR, suite, linked),
+                       "now reaches")
+                expect(13, scan(), "compiler program")
+                link.unlink()
+                link.symlink_to(positive)
+                expect(13, scan(), banned)
+                expect_recorded(13, record(DEFAULT_BUILDDIR, suite, linked))
+                expect(13, scan(), banned)
             # 10. RTS options and the profiling way's own options.
             project.write_text(project.read_text(encoding="utf-8")
                                + "  ghc-options: +RTS -A16m -RTS\n",
