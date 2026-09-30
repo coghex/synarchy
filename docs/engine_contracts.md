@@ -146,10 +146,11 @@ strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
 `src/Engine/Scripting/Lua/`), the headless init import audit
-(`headless_init_import_audit.py --self-test` then the bare audit,
-#2648 — no `test-headless/` import of the production
-`initializeEngineHeadless` outside `Test.Headless.Harness.Log`; see
-§Headless fixture logging), the config-write / persistence-inventory /
+(`headless_init_import_audit.py --self-test` in `static-audits`, the
+bare audit in `test-and-audits` after the suite build, #2648 — no
+`test-headless/` import of the production `initializeEngineHeadless`
+outside `Test.Headless.Harness.Log`, as the configured build compiles it;
+see §Headless fixture logging), the config-write / persistence-inventory /
 EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
@@ -4695,25 +4696,22 @@ module other than `Test.Headless.Harness.Log` brings
 `Engine.Core.Init.initializeEngineHeadless` into scope — an import list
 naming it, an unrestricted import (qualified or not), or a `hiding`
 list that leaves it in scope. Importing only `EngineInitResult` or the
-module's other exports stays allowed. It reads what GHC compiles: every
-module goes through the pinned GHC's `ghc -E`, under each
-`flag`/`os` configuration of the headless suite's `synarchy.cabal`
-stanzas. CPP modules stay allowed, and their directives, splices and
-configured macros are expanded, not refused. A pragma quoted in a string
-or comment, or one GHC ignores as misplaced, changes nothing. The gate
-needs `ghc` on PATH (or `SYNARCHY_AUDIT_GHC`) at the `tested-with`
-version, which the CI image provides. A missing or mismatched compiler
-stops it with that message. Every module is preprocessed under every
-configuration, and Cabal's dependency macros are rebuilt from the
-stanzas: `VERSION_<dep>` is defined as Cabal defines it, `base`'s and
-the package's own values are exact, and an `#if` comparing another
-dependency's `MIN_VERSION_<dep>` fails closed with the macro named.
-So does a directive naming a host-tool macro, or a function-like macro
-that pastes a parameter through a comment. Directives are read as cpp
-reads them (splices joined) from the module and every header cpp's
-`-MD` record lists for any configuration, markers suppressed or not. MultilineStrings literals
-are masked like other strings. GHC's own host-platform macros are the
-running compiler's; the tool's docstring lists that limit. The Chop authority fixture (#2121) landed on the
+module's other exports stays allowed. It reads what GHC compiles in the
+configured build (owner amendment on #2648): the bare audit runs in
+`test-and-audits` right after `cabal build synarchy-test-headless` (and
+in `tools/ci-local.sh` after its build), and preprocesses every module
+with `ghc -E` using exactly the arguments Cabal gave GHC for that suite.
+Those come from `build-info.json`, which Cabal writes because
+`cabal.project` sets `build-info: True`, and they include the suite's
+generated `cabal_macros.h`. CPP modules stay allowed; their directives,
+splices, macros and headers are expanded as the build expands them, and
+comments and string literals, MultilineStrings included, are ignored.
+Missing, stale, mismatched or unreadable build settings, or the wrong
+GHC, stop it with the cause rather than passing. **It certifies the
+configured environment only**: CI's Linux build, and the developer's
+native build under `make ci`, not other platforms, flags, tools or
+dependency versions. `--self-test` runs in `static-audits` with fixture
+settings and needs no build. The Chop authority fixture (#2121) landed on the
 production initializer after #2143 migrated the suite, because nothing
 checked.
 
