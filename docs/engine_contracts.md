@@ -3750,8 +3750,12 @@ to carry its rations (#2755). Setup therefore switches
 so the real roster asks `unit.spawn` for the test-only `"standard"`
 profile: definition base/mean inputs with no gameplay-RNG draw, derived
 values from the ordinary body authorities (~23.9 kg capacity, twice the
-kit), and name and kit rolls from a fixed spawn-local generator. Both
-travellers' spawn-time capacities are asserted equal to that value and
+kit), and name and kit rolls from a fixed spawn-local generator. Each
+acolyte's capacity is snapshotted the first roster poll it is seen, in one
+call with the body stats it derives from, and that snapshot is proved to
+predate any physiology (lean mass still at its spawn seed, `strength_base`
+at its base) — a read after the whole roster wait would be a live value.
+Both travellers' snapshots are asserted equal to the standard value and
 recorded in the `FINGERPRINT`, so two runs must print the same pair. This
 levels the travellers' BODIES; it does not replace any of the six
 conditions above. The switch is default-off, never serialized, and cleared

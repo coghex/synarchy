@@ -33,8 +33,8 @@ from probelib import poll_until, send, send_json
 from .constants import (ACOLYTE_DEF, HOME_MAX_DIST, HOME_MIN_DIST,
                         MAX_CORRIDOR_STEP, MULE_DEF, OCCUPIED_MAX_DIST,
                         OCCUPIED_MAX_STEP, OCCUPIED_MAX_WET_TILES, PAGE,
-                        PORTAL_DEF, STANDARD_ACOLYTE_CAPACITY, STORAGE_DEF,
-                        WATER_MAX_DIST)
+                        PORTAL_DEF, STANDARD_ACOLYTE_CAPACITY,
+                        STANDARD_LEAN_FRACTION, STORAGE_DEF, WATER_MAX_DIST)
 from .harness import Checks, ExpeditionState, StageAbort
 from .readers import (_as_float, arrival_box, dist, ground_items,
                       instance_by_id, load_region, placed, roster,
@@ -316,16 +316,72 @@ def enable_standard_roster(chk: Checks, port: int) -> bool:
                   f"before the portal exists (standardProfile -> {got!r})")
 
 
-def record_traveller_capacities(chk: Checks, port: int, st: ExpeditionState,
-                                travellers: list) -> None:
-    """Both travellers' carrying capacity at spawn — read straight after
-    the roster lands, before any physiology can move a body mass. Under
-    the standard roster both are the definition's base capacity, so the
-    values go into the FINGERPRINT: two runs must print the same pair."""
-    caps = [_as_float(send(port, f"return unit.getStat({u},'carrying_capacity')"))
-            for u in travellers]
-    rounded = [None if c is None else round(c, 3) for c in caps]
+#: The body stats `snapshot_spawn_body` reads in ONE Lua round trip:
+#: carrying_capacity is derived from the other three plus height
+#: (Unit.Thread.Command.Body.recomputeBodyDerivedStats), so while they
+#: still stand at their spawn seed the capacity is still the spawn one.
+SPAWN_BODY_STATS = ("carrying_capacity", "lean_mass", "frame_mass",
+                    "strength_base")
+
+#: How far (kg) a first-sight lean_mass may sit from its spawn seed and
+#: still count as pre-physiological — see `record_traveller_capacities`.
+PRISTINE_LEAN_TOLERANCE = 1e-4
+
+
+def snapshot_spawn_body(port: int, uid: int) -> dict | None:
+    """One unit's capacity and the body stats it derives from, read in a
+    single call so they describe one instant. None until the unit's
+    stats exist (its spawn command has not been drained yet)."""
+    raw = send(port, "local u=" + str(uid) + "; local out={}; "
+               "for _,k in ipairs({" + ",".join(f"'{k}'" for k in SPAWN_BODY_STATS)
+               + "}) do local v=unit.getStat(u,k); if v==nil then return 'nil' end; "
+               "out[#out+1]=string.format('%.6f',v) end; "
+               "return table.concat(out,'|')")
+    parts = (raw or "").split("|")
+    if len(parts) != len(SPAWN_BODY_STATS):
+        return None
+    try:
+        return dict(zip(SPAWN_BODY_STATS, (float(p) for p in parts)))
+    except ValueError:
+        return None
+
+
+def record_traveller_capacities(chk: Checks, st: ExpeditionState,
+                                spawn_bodies: dict, travellers: list) -> None:
+    """Both travellers' INITIAL carrying capacity (#2756), from the
+    snapshot `await_roster` took the first time each acolyte was seen —
+    not a read after the whole roster wait, while the simulation ran on.
+
+    The snapshot is proved to predate any physiological change rather
+    than assumed to: capacity is re-derived only from lean_mass and
+    strength_base (with height), and a standard acolyte spawns with
+    strength_base at its definition base and lean_mass at
+    STANDARD_LEAN_FRACTION of its frame. Both still standing there means
+    no catabolism or regrowth has touched the body, so the capacity read
+    in the same call is the spawn value.
+
+    "Still standing there" is a tolerance, not equality: physiology
+    starts on the first tick, and a live run's first-sight lean_mass is
+    already ~1e-5 kg off its seed. PRISTINE_LEAN_TOLERANCE (10x that)
+    bounds the capacity to within ~1e-4 kg of its spawn value, so the
+    FINGERPRINT rounds to 2 decimals — nowhere near a rounding boundary
+    for the standard 23.887 kg — and two runs must print the same pair.
+    Three decimals would sit 0.0002 kg from one, and a late read of the
+    same unit already rounds differently."""
+    snaps = [spawn_bodies.get(u) for u in travellers]
+    pristine = [s is not None
+                and abs(s["strength_base"] - 1.0) < 1e-4
+                and abs(s["lean_mass"] - STANDARD_LEAN_FRACTION * s["frame_mass"])
+                    < PRISTINE_LEAN_TOLERANCE
+                for s in snaps]
+    caps = [None if s is None else s["carrying_capacity"] for s in snaps]
+    rounded = [None if c is None else round(c, 2) for c in caps]
     st.fp["traveller_capacity"] = rounded
+    chk.ok(all(pristine),
+           f"both travellers' capacities were captured at first sight, "
+           f"before any physiological change: lean_mass still at its "
+           f"spawn seed and strength_base at its base "
+           f"(snapshots {snaps})")
     chk.ok(all(c is not None and abs(c - STANDARD_ACOLYTE_CAPACITY) < 0.01
                for c in caps),
            f"both travellers spawn as STANDARD acolytes with the base "
@@ -351,15 +407,26 @@ def place_portal(chk: Checks, port: int, gx: int, gy: int) -> int:
     return bid
 
 
-def await_roster(chk: Checks, port: int, bid: int):
+def await_roster(chk: Checks, port: int, bid: int, spawn_bodies: dict):
     """Wait for the portal's OWN spawn sequencer to deliver its roster
     (scripts/building_spawn.lua: five acolytes then the technomule that
-    hauls the colony's stock). Nothing here spawns a unit."""
+    hauls the colony's stock). Nothing here spawns a unit.
+
+    Every acolyte is snapshotted into `spawn_bodies` the first poll it
+    is seen (`snapshot_spawn_body`), so its spawn-time capacity is not
+    left to whenever the LAST roster entry happens to walk out."""
     remaining = _as_float(send(port, f"return building.getSpawnRemaining({bid})"))
-    got = poll_until(240.0, lambda: (
-        lambda r: r if (len(r.get(ACOLYTE_DEF, [])) >= 5
-                        and len(r.get(MULE_DEF, [])) >= 1) else None)(roster(port)),
-        interval=2.0)
+
+    def poll():
+        r = roster(port)
+        for uid in r.get(ACOLYTE_DEF, []):
+            if uid not in spawn_bodies:
+                snap = snapshot_spawn_body(port, uid)
+                if snap is not None:
+                    spawn_bodies[uid] = snap
+        return r if (len(r.get(ACOLYTE_DEF, [])) >= 5
+                     and len(r.get(MULE_DEF, [])) >= 1) else None
+    got = poll_until(240.0, poll, interval=0.5)
     if got is None:
         got = roster(port)
         chk.fail_setup(
@@ -608,7 +675,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     st.portal_bid = portal_bid = place_portal(chk, port, home[0], home[1])
     if portal_bid < 0:
         raise StageAbort("the colony tile refused the acolyte portal")
-    party = await_roster(chk, port, portal_bid)
+    spawn_bodies: dict = {}
+    party = await_roster(chk, port, portal_bid, spawn_bodies)
     if not party:
         raise StageAbort("the portal did not deliver its roster")
     acolytes = party[ACOLYTE_DEF]
@@ -617,7 +685,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # spawns its roster in a fixed sequence, so these are stable.
     st.scout, st.prepared, st.control = acolytes[0], acolytes[1], acolytes[2]
     scout, prepared, control = st.scout, st.prepared, st.control
-    record_traveller_capacities(chk, port, st, [prepared, control])
+    record_traveller_capacities(chk, st, spawn_bodies, [prepared, control])
     # The remaining acolytes are the never-went-there control for
     # the per-unit KNOWLEDGE layer (#915). They are NOT held:
     # `unit.setFrozen` freezes only the render publish, so a

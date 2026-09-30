@@ -43,6 +43,13 @@ MULE_DEF = "technomule"
 #: every run — about twice the ~12.3 kg starting kit.
 STANDARD_ACOLYTE_CAPACITY = 23.887
 
+#: A standard acolyte's spawn lean_mass as a fraction of its frame_mass:
+#: (1 - bodyfat mean 0.2) * 0.5 skeletal-muscle share, per
+#: Unit.Thread.Command.Body.seedBodyComposition (well above its 0.214
+#: viability floor, so never clamped). Still standing there proves no
+#: catabolism or regrowth has touched the body since spawn.
+STANDARD_LEAN_FRACTION = 0.4
+
 #: The widest a unit's night-aware sight radius can reach (#1230):
 #: perception * Unit.LineOfSight.awareRangeTiles (6.0), with the
 #: page-local night factor only ever shrinking it. No shipped unit
