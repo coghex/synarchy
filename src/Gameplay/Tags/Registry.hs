@@ -55,7 +55,6 @@ import UPrelude
 import Control.DeepSeq (NFData(..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import qualified Data.Text as T
 import Building.Types (BuildingId(..))
 import Gameplay.Tags.Types
 import Unit.Types.Manager (UnitId)
@@ -118,7 +117,7 @@ indexFromForward raw =
 --   disagreement. Empty records are unrepresentable ('NonEmptySet').
 indexViolations ∷ (Ord k, Show k) ⇒ TagCategory → CategoryIndex k → [Text]
 indexViolations cat ix =
-    [ T.pack (show cat) <> ": reverse index disagrees with the forward assignments"
+    [ tshow cat <> ": reverse index disagrees with the forward assignments"
     | ciReverse ix ≢ deriveReverse (ciForward ix) ]
 
 instance NFData k ⇒ NFData (CategoryIndex k) where
