@@ -74,10 +74,23 @@ stay undefined. Values are exact for `base` (the pinned GHC's, via
 `-hide-all-packages -package base`), for the package itself, and for
 `CURRENT_PACKAGE_VERSION`/`CURRENT_COMPONENT_ID`. Any other dependency's
 `MIN_VERSION_<p>` needs the build plan's version, so an `#if` comparing
-it fails the gate with a message naming the macro. A preprocessor
-directive, in the module or a header it includes, naming Cabal's
-host-tool macros (`TOOL_VERSION_*`, `MIN_TOOL_VERSION_*`) fails it too:
-those exist only for programs installed on the build host.
+it fails the gate with a message naming the macro.
+
+HOST-TOOL MACROS (`TOOL_VERSION_*`, `MIN_TOOL_VERSION_*`) exist only for
+programs Cabal finds on the build host, so no static environment is
+faithful and any module whose directives consult one fails closed
+(`unevaluable_directives`). The directives read are the ones cpp reads:
+  * from the module and from every file cpp's own `-MD -MF` dependency
+    record lists for any configuration's pass, so nested headers,
+    headers reachable only under one configuration, and headers read
+    with `-optP-P` all count, and headers no pass reads do not;
+  * with backslash-newline splices joined first, and with comments read
+    both as spaces and as nothing, since GCC's traditional preprocessor
+    pastes `TOOL_VERSION_/**/ghc` into one name inside a macro body.
+A function-like macro that pastes a parameter through a comment
+(`defined(a/**/b)`) fails as well: under GCC its expansions build a name
+from the call's arguments that no directive spells out. Clang's
+traditional mode pastes nothing and rejects such a test itself.
 
 THE COMPILER is `ghc` on PATH, or the executable named by
 `SYNARCHY_AUDIT_GHC`. Its `--numeric-version` must equal
@@ -91,11 +104,8 @@ LIMITS, all absent from `test-headless/` today:
     and the like) are the running host's. They cannot be overridden,
     because GHC passes them after every user flag. CI checks the Linux
     branches; a local `make ci` checks the macOS ones.
-  * Dependency version comparisons and host-tool macros fail closed, as
-    above, rather than being evaluated.
-  * The host-tool check reads the headers cpp's markers name, so it
-    does not see into an `#include` of a module that also suppresses the
-    markers.
+  * Dependency version comparisons, host-tool macros and parameter-
+    pasting macros fail closed, as above, rather than being evaluated.
 Source formats other than plain Haskell (`.lhs`, `.hsig`, Cabal's
 `.hsc`/`.x`/`.y`), custom preprocessors (`-F -pgmF`) and quasiquote
 contents are out of scope.
@@ -262,7 +272,13 @@ _DEPENDENCY = re.compile(r"\s*([A-Za-z0-9][A-Za-z0-9-]*)")
 # programs installed on the build host, so no static environment can
 # reproduce `#ifdef TOOL_VERSION_alex`; a directive naming one fails.
 _TOOL_MACRO = re.compile(r"(?<![\w'])(?:MIN_)?TOOL_VERSION_\w+")
-_DIRECTIVE_LINE = re.compile(r"(?m)^[^\S\n]*#(?:[^\n]*\\\n)*[^\n]*")
+# cpp's translation phase 2: a backslash, optional horizontal whitespace
+# (GCC and clang both accept it, with a warning), and a newline vanish.
+_SPLICE = re.compile(r"\\[ \t\f\v]*\n")
+_C_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_FUNCTION_MACRO = re.compile(
+    r"#[ \t\f\v]*define[ \t\f\v]+(\w+)\(([^)]*)\)(.*)", re.DOTALL)
+_COMMENT_PASTE = re.compile(r"(\w+)(?:/\*.*?\*/)+(\w+)", re.DOTALL)
 
 
 def _cabal_stanzas(text: str) -> dict[tuple[str, str], list[str]]:
@@ -525,7 +541,6 @@ class Preprocessed:
     text: str                                # markers blanked
     origins: tuple[tuple[str, int], ...]     # per output line
     cpp_ran: bool
-    files: frozenset[str] = frozenset()      # every file a marker names
 
 
 def map_output(output: str, source: str, verbatim: bool = False) -> Preprocessed:
@@ -539,7 +554,6 @@ def map_output(output: str, source: str, verbatim: bool = False) -> Preprocessed
     lines = output.split("\n")
     origins: list[tuple[str, int]] = []
     current, number, cpp_ran = source, 1, False
-    files: set[str] = set()
     for index, line in enumerate(lines):
         marker = _LINE_MARKER.match(line) if index == 0 or not verbatim else None
         if marker:
@@ -547,7 +561,6 @@ def map_output(output: str, source: str, verbatim: bool = False) -> Preprocessed
             number = int(marker.group(1) or marker.group(3))
             current = (marker.group(2) if marker.group(2) is not None
                        else marker.group(4)).replace('\\"', '"')
-            files.add(current)
             origins.append(("", 0))
             lines[index] = " " * len(line)
             continue
@@ -555,20 +568,33 @@ def map_output(output: str, source: str, verbatim: bool = False) -> Preprocessed
         if (current, number) == (source, 1) and line.startswith("#!"):
             lines[index] = " " * len(line)
         number += 1
-    return Preprocessed("\n".join(lines), tuple(origins), cpp_ran,
-                        frozenset(files))
+    return Preprocessed("\n".join(lines), tuple(origins), cpp_ran)
+
+
+def _make_dependencies(text: str) -> list[str]:
+    """The prerequisites in a make rule cpp wrote with `-MD -MF`."""
+    joined = re.sub(r"\\\n", " ", text)
+    _, _, prerequisites = joined.partition(":")
+    return [name.replace("\\ ", " ")
+            for name in re.split(r"(?<!\\)\s+", prerequisites) if name]
 
 
 def preprocess(ghc: str, root: Path, rel_path: str,
-               configuration: Configuration, work: Path) -> str:
-    """`ghc -E` of one module under one configuration. Raises
+               configuration: Configuration, work: Path
+               ) -> tuple[str, list[str]]:
+    """`ghc -E` of one module under one configuration: the output, and
+    every file cpp read for it. The file list is cpp's own `-MD -MF`
+    dependency record, so it holds nested includes and survives
+    `-optP-P`; it is empty when CPP did not run. Raises
     `PreprocessError` with GHC's message when it fails."""
     handle, name = tempfile.mkstemp(suffix=".hspp", dir=work)
     os.close(handle)
     output = Path(name)
+    dependencies = output.with_suffix(".d")
     try:
         result = subprocess.run(
-            [ghc, "-E", "-v0", *configuration.command, "-o", str(output),
+            [ghc, "-E", "-v0", *configuration.command,
+             "-optP-MD", f"-optP-MF{dependencies}", "-o", str(output),
              rel_path],
             cwd=root, capture_output=True, text=True,
             timeout=PREPROCESS_TIMEOUT_SECONDS)
@@ -579,9 +605,12 @@ def preprocess(ghc: str, root: Path, rel_path: str,
         raise PreprocessError(
             f"ghc -E failed under {configuration.label}: {message}")
     try:
-        return output.read_text(encoding="utf-8")
+        return (output.read_text(encoding="utf-8"),
+                _make_dependencies(dependencies.read_text(encoding="utf-8"))
+                if dependencies.exists() else [])
     finally:
         output.unlink(missing_ok=True)
+        dependencies.unlink(missing_ok=True)
 
 
 class PreprocessError(Exception):
@@ -630,10 +659,50 @@ def scan_preprocessed(pre: Preprocessed, rel_path: str
 _UNKNOWN_VERSION = re.compile(r"CABAL_VERSION_OF_(\w+)_IS_UNKNOWN_TO_THIS_GATE")
 
 
-def _directive_tool_macros(text: str) -> set[str]:
-    """The Cabal host-tool macros named on `text`'s preprocessor lines."""
-    return {name for line in _DIRECTIVE_LINE.findall(text)
-            for name in _TOOL_MACRO.findall(line)}
+def logical_directives(text: str) -> list[str]:
+    """`text`'s preprocessor directives as cpp reads them: backslash-
+    newline splices joined first, then each line whose first non-blank
+    character is `#`."""
+    return [line for line in _SPLICE.sub("", text).split("\n")
+            if line.lstrip(" \t\f\v").startswith("#")]
+
+
+def unevaluable_directives(text: str) -> list[str]:
+    """Why `text`'s directives depend on something this gate's macro
+    environment cannot reproduce, one reason per finding.
+
+      * Cabal's host-tool macros (`TOOL_VERSION_*`, `MIN_TOOL_VERSION_*`)
+        exist only for programs installed on the build host, so a
+        directive naming one fails. A directive is read with its comments
+        both as spaces and as nothing, because GCC's traditional
+        preprocessor deletes a comment inside a macro body, pasting
+        `TOOL_VERSION_/**/ghc` into one name.
+      * A function-like macro that pastes a PARAMETER through a comment
+        (`defined(a/**/b)`) fails too: under GCC its expansion builds a
+        name from the call's arguments that no directive spells out, so
+        no reading of the text can say which macro it tests. Clang's
+        traditional mode does not paste, and rejects such a test itself.
+    """
+    reasons: list[str] = []
+    for directive in logical_directives(text):
+        spaced = _C_COMMENT.sub(" ", directive)
+        pasted = _C_COMMENT.sub("", directive)
+        for name in sorted(set(_TOOL_MACRO.findall(spaced))
+                           | set(_TOOL_MACRO.findall(pasted))):
+            reasons.append(
+                f"a directive names Cabal's host-tool macro {name}, which "
+                f"Cabal defines only for programs installed on the build "
+                f"host")
+        macro = _FUNCTION_MACRO.match(directive.lstrip(" \t\f\v"))
+        if macro:
+            parameters = {p.strip() for p in macro.group(2).split(",")}
+            if any(left in parameters or right in parameters
+                   for left, right in _COMMENT_PASTE.findall(macro.group(3))):
+                reasons.append(
+                    f"macro {macro.group(1)} pastes a parameter through a "
+                    f"comment, so the names its expansions test depend on "
+                    f"its arguments")
+    return list(dict.fromkeys(reasons))
 
 
 def check_module(ghc: str, root: Path, rel_path: str,
@@ -646,16 +715,19 @@ def check_module(ghc: str, root: Path, rel_path: str,
     source = (root / rel_path).read_text(encoding="utf-8")
     verbatim = f'{{-# LINE 1 "{rel_path}" #-}}\n' + source
     outputs: list[tuple[Configuration, str]] = []
+    included: set[str] = set()
     for configuration in configurations:
         try:
-            outputs.append((configuration, preprocess(
-                ghc, root, rel_path, configuration, work)))
+            output, dependencies = preprocess(
+                ghc, root, rel_path, configuration, work)
+            outputs.append((configuration, output))
+            included.update(dependencies)
         except PreprocessError as error:
             unknown = sorted(
                 {name for name in _UNKNOWN_VERSION.findall(
                     " ".join(configuration.macros))
-                 if any(f"MIN_VERSION_{name}" in line
-                        for line in _DIRECTIVE_LINE.findall(source))})
+                 if any(f"MIN_VERSION_{name}" in _C_COMMENT.sub("", line)
+                        for line in logical_directives(source))})
             hint = (f"; its preprocessor conditionals compare "
                     f"{', '.join('MIN_VERSION_' + n for n in unknown)}, a "
                     f"dependency version only a configured Cabal build "
@@ -664,11 +736,8 @@ def check_module(ghc: str, root: Path, rel_path: str,
             return [Violation(rel_path, 1, f"{error}{hint}; a module GHC "
                               f"cannot preprocess cannot be certified")]
     found: dict[tuple[int, str], list[str]] = {}
-    included: set[str] = set()
     for configuration, output in outputs:
         pre = map_output(output, rel_path, verbatim=output == verbatim)
-        included.update(name for name in pre.files
-                        if name != rel_path and not name.startswith("<"))
         markerless = output != verbatim and not pre.cpp_ran
         for violation, text in scan_preprocessed(pre, rel_path):
             line, reason = violation.line, violation.reason
@@ -688,18 +757,22 @@ def check_module(ghc: str, root: Path, rel_path: str,
                                "line is the preprocessed text's)")
             found.setdefault((line, reason), []).append(configuration.label)
     if any(output != verbatim for _, output in outputs):
-        texts = [source] + [
-            (root / name).read_text(encoding="utf-8", errors="replace")
-            for name in sorted(included)
-            if (root / name).resolve().is_relative_to(root.resolve())
-            and (root / name).is_file()]
-        tools = sorted(set().union(*map(_directive_tool_macros, texts)))
-        if tools:
+        # Every file cpp read in any pass, the module itself included:
+        # its directives decide the branches whatever the markers say.
+        texts = {rel_path: source}
+        for name in sorted(included):
+            path = (root / name).resolve()
+            if path.is_relative_to(root.resolve()) and path.is_file():
+                texts.setdefault(path.relative_to(root.resolve()).as_posix(),
+                                 path.read_text(encoding="utf-8",
+                                                errors="replace"))
+        reasons = [(name, reason) for name, text in texts.items()
+                   for reason in unevaluable_directives(text)]
+        for name, reason in reasons:
+            where = "" if name == rel_path else f" (in {name})"
             found.setdefault((1, (
-                f"its preprocessor directives name Cabal's host-tool "
-                f"macro(s) {', '.join(tools)}, which Cabal defines only for "
-                f"programs installed on the build host, so this gate cannot "
-                f"certify the branch it takes")), []).extend(
+                f"{reason}{where}, so this gate cannot establish which "
+                f"branch the build takes")), []).extend(
                     c.label for c, _ in outputs)
     labels = [configuration.label for configuration, _ in outputs]
     return [Violation(rel_path, line,
@@ -934,6 +1007,25 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
      _CPP + _HEAD + _branch("if MIN_VERSION_hspec(2,0,0)", _BANNED), [1]),
     ("a host-tool macro fails closed", _CPP + _HEAD
      + _branch("ifdef TOOL_VERSION_alex", _ALLOWED), [1]),
+    # Directives as cpp reads them (#2648 review round 5).
+    ("a host-tool name split by a line splice (#2648 review round 5)",
+     _CPP + _HEAD + _branch("if defined(TOOL_VERSION_\\\nghc)", _BANNED),
+     [1]),
+    ("`#ifdef` on a spliced host-tool name",
+     _CPP + _HEAD + _branch("ifdef TOOL_VERSION_\\\nghc", _BANNED), [1]),
+    ("a splice with trailing whitespace, as GCC and clang both accept",
+     _CPP + _HEAD + _branch("ifdef TOOL_VERSION_\\ \nghc", _BANNED), [1]),
+    ("a spliced MIN_TOOL_VERSION comparison", _CPP + _HEAD
+     + _branch("if MIN_TOOL_\\\nVERSION_ghc(9,0,0)", _BANNED), [1]),
+    ("a macro body GCC pastes into a host-tool name", _CPP + _HEAD
+     + "#define T defined(TOOL_VERSION_/**/ghc)\n" + _branch("if T", _BANNED),
+     [1]),
+    ("an object-like macro GCC pastes, tested through defined(x)",
+     _CPP + _HEAD + "#define N TOOL_VERS/**/ION_ghc\n#define D(x) defined(x)\n"
+     + _branch("if D(N)", _ALLOWED, _BANNED), [1]),
+    ("a function-like macro that pastes its parameters (GCC takes the "
+     "branch)", _CPP + _HEAD + "#define D(a,b) defined(a/**/b)\n"
+     + _branch("if D(TOOL_VERS,ION_ghc)", _BANNED), [1]),
     # MultilineStrings (#2648 review round 4): real imports around the
     # literals are still read.
     ("a banned import before a multiline string with an embedded quote",
@@ -1061,6 +1153,19 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
      _CPP + _HEAD + _ALLOWED + "v :: String\nv = VERSION_hspec\n"),
     ("a host-tool macro named in a non-CPP module's comment",
      _HEAD + _ALLOWED + "-- #ifdef TOOL_VERSION_alex\n"),
+    ("a host-tool name in a CPP module's Haskell comment, not a directive",
+     _CPP + _HEAD + _ALLOWED + "-- TOOL_VERSION_ghc is Cabal's\n"),
+    ("a host-tool name inside a comment on a directive",
+     _CPP + _HEAD + _branch("ifdef DARWIN /* not TOOL_VERSION_ghc */",
+                            _ALLOWED)),
+    ("an ordinary spliced directive", _CPP + _HEAD
+     + _branch("if defined(DAR\\\nWIN)", _ALLOWED, _ALLOWED)),
+    ("an object-like macro pasting ordinary pieces", _CPP + _HEAD + _ALLOWED
+     + "#define GREETING hel/**/lo\n"),
+    ("a function-like macro with no paste", _CPP + _HEAD
+     + "#define D(x) defined(x)\n" + _branch("if D(NOT_A_MACRO)", _ALLOWED)),
+    ("a function-like macro whose comment joins no parameter", _CPP + _HEAD
+     + _ALLOWED + "#define F(x) (x) /* note */\n"),
     ("the review's multiline string: an embedded quote, then import text "
      "(#2648 review round 4)",
      _ML + "module M (message) where\nimport Prelude (Char)\n"
@@ -1095,6 +1200,11 @@ REASON_FIXTURES: list[tuple[str, str, tuple[str, ...]]] = [
      ("MIN_VERSION_hspec", "configured Cabal build")),
     ("the host-tool refusal names its macro", _CPP + _HEAD
      + _branch("ifdef TOOL_VERSION_alex", _ALLOWED), ("TOOL_VERSION_alex",)),
+    ("a spliced host-tool name is named whole", _CPP + _HEAD
+     + _branch("ifdef TOOL_VERSION_\\\nghc", _BANNED), ("TOOL_VERSION_ghc",)),
+    ("the parameter-paste refusal names its macro, even unused (clang "
+     "rejects a use itself)", _CPP + _HEAD + "#define D(a,b) defined(a/**/b)\n"
+     + _ALLOWED, ("macro D pastes a parameter",)),
     ("a markerless report says how it was located",
      _NO_MARKERS + _HEAD + _branch("ifdef DARWIN", _BANNED),
      ("located by its text", "under darwin, darwin+dev")),
@@ -1207,6 +1317,31 @@ TREE_FIXTURES: list[tuple[str, str, str, list[int], dict[str, str]]] = [
     ("scan_tree reports a banned import before a multiline string",
      _FIXTURE_CABAL, _ML + _HEAD + _BANNED
      + 'message :: String\nmessage = """\n  a " quote\n  """\n', [3], {}),
+    ("a header selects the banned import under a host-tool macro, with "
+     "markers suppressed (#2648 review round 5)", _FIXTURE_CABAL,
+     _NO_MARKERS + _HEAD + '#include "tool.h"\n', [1],
+     {"test-headless/Test/tool.h":
+      _branch("ifdef TOOL_VERSION_ghc", _BANNED)}),
+    ("a nested include's host-tool macro, markers suppressed",
+     _FIXTURE_CABAL, _NO_MARKERS + _HEAD + '#include "outer.h"\n' + _ALLOWED,
+     [1], {"test-headless/Test/outer.h": '#include "inner.h"\n',
+           "test-headless/Test/inner.h": "#ifdef TOOL_VERSION_gh\\\nc\n#endif\n"}),
+    ("a header reachable only under the darwin configuration",
+     _FIXTURE_CABAL + "    if os(darwin)\n        cpp-options: -DDARWIN\n",
+     _NO_MARKERS + _HEAD + '#ifdef DARWIN\n#include "tool.h"\n#endif\n'
+     + _ALLOWED, [1],
+     {"test-headless/Test/tool.h": "#ifdef TOOL_VERSION_ghc\n#endif\n"}),
+    ("a header no configuration reads is not consulted", _FIXTURE_CABAL,
+     _CPP + _HEAD + '#ifdef NEVER_DEFINED\n#include "tool.h"\n#endif\n'
+     + _ALLOWED, [],
+     {"test-headless/Test/tool.h": "#ifdef TOOL_VERSION_ghc\n#endif\n"}),
+    ("a clean header in a markerless module", _FIXTURE_CABAL,
+     _NO_MARKERS + _HEAD + '#include "ok.h"\n', [],
+     {"test-headless/Test/ok.h": _branch("ifdef DARWIN", _ALLOWED)}),
+    ("scan_tree reports a spliced host-tool name (#2648 review round 5)",
+     _FIXTURE_CABAL,
+     _CPP + _HEAD + _branch("if defined(TOOL_VERSION_\\\nghc)", _BANNED),
+     [1], {}),
     ("a host-tool macro in an included header fails closed",
      _FIXTURE_CABAL, _CPP + _HEAD + '#include "tool.h"\n' + _ALLOWED, [1],
      {"test-headless/Test/tool.h": "#ifdef TOOL_VERSION_happy\n#endif\n"}),

@@ -4707,8 +4707,11 @@ stops it with that message. Every module is preprocessed under every
 configuration, and Cabal's dependency macros are rebuilt from the
 stanzas: `VERSION_<dep>` is defined as Cabal defines it, `base`'s and
 the package's own values are exact, and an `#if` comparing another
-dependency's `MIN_VERSION_<dep>`, or a directive naming a host-tool
-macro, fails closed with the macro named. MultilineStrings literals
+dependency's `MIN_VERSION_<dep>` fails closed with the macro named.
+So does a directive naming a host-tool macro, or a function-like macro
+that pastes a parameter through a comment. Directives are read as cpp
+reads them (splices joined) from the module and every header cpp's
+`-MD` record lists for any configuration, markers suppressed or not. MultilineStrings literals
 are masked like other strings. GHC's own host-platform macros are the
 running compiler's; the tool's docstring lists that limit. The Chop authority fixture (#2121) landed on the
 production initializer after #2143 migrated the suite, because nothing
