@@ -308,3 +308,17 @@ No architecture, persistence, art, platform, or migration policy has been
 newly selected through silence or inferred from the replacement-engine plan.
 Any proposed additions or contradictions found during the remaining reading
 must be resolved with the owner before they become settled vision.
+
+## Continuing after a context reset
+
+Read [the guide cursor](guide/CURSOR.md) and [its review scope](guide/README.md).
+The owner accepted all work before the cursor's initial boundary on
+2026-09-29. Guide starts with the present project's position against these
+recorded decisions and current contracts, then reviews ongoing merges, open
+issues and PR context while carrying forward a project-wide assessment.
+
+That historical baseline does not approve the full vision, accept open
+specifications, or close qualification gates. Expected unfinished features and
+unresolved design remain separate from defects. Reports preserve evidence and
+coverage; the cursor records the next assessment or follow-up. Change direction
+only through an explicit owner decision.
