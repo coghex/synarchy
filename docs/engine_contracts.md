@@ -4701,13 +4701,17 @@ configured build (owner amendment on #2648): the bare audit runs in
 `test-and-audits` right after `cabal build synarchy-test-headless` (and
 in `tools/ci-local.sh` after its build), and preprocesses every module
 with `ghc -E` using exactly the arguments Cabal gave GHC for that suite.
-Those come from `build-info.json`, which Cabal writes because
-`cabal.project` sets `build-info: True`, and they include the suite's
-generated `cabal_macros.h`. CPP modules stay allowed; their directives,
+Those come from `build-info.json`, which Cabal writes when it builds
+the suite because `cabal.project` sets `build-info: True`, and they
+include the suite's generated `cabal_macros.h`. Cabal leaves that file
+alone on an up-to-date build, so freshness is Cabal's own verdict:
+`cabal build synarchy-test-headless --dry-run` must report "Up to
+date". A restored cache or re-stamped checkout passes; an unbuilt
+change to flags, cpp-options or project settings fails. CPP modules stay allowed; their directives,
 splices, macros and headers are expanded as the build expands them, and
 comments and string literals, MultilineStrings included, are ignored.
-Missing, stale, mismatched or unreadable build settings, or the wrong
-GHC, stop it with the cause rather than passing. **It certifies the
+A pending rebuild, missing, mismatched or unreadable build settings,
+or the wrong GHC or cabal, stop it with the cause rather than passing. **It certifies the
 configured environment only**: CI's Linux build, and the developer's
 native build under `make ci`, not other platforms, flags, tools or
 dependency versions. `--self-test` runs in `static-audits` with fixture

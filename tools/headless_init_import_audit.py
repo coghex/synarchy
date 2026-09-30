@@ -36,7 +36,8 @@ build, not the file on disk (#2648 owner amendment). The gate runs right
 after `cabal build synarchy-test-headless` and preprocesses every module
 with `ghc -E`, using exactly the arguments Cabal gave GHC for that
 component, read from the `build-info.json` Cabal writes because
-cabal.project sets `build-info: True` (`configured_settings`). Those
+cabal.project sets `build-info: True` when it builds the suite
+(`configured_settings`). Those
 arguments force-include the component's own generated `cabal_macros.h`
 (real dependency, package, host-tool and component macros) and carry the
 native `cpp-options`, extensions, include directories and `-package-id`s.
@@ -57,13 +58,22 @@ included it. When a module suppresses the markers (`-optP-P`), the
 report takes the one source line with the same text, or says the line is
 the preprocessed text's.
 
-NO SETTINGS, NO VERDICT: a missing or unreadable plan, `build-info.json`
-or generated header; build information older than a configuration input
-(`synarchy.cabal`, `cabal.project*`), for another checkout, or lacking
-the headless component; a header that is not that component's own; a
-compiler that is missing, reports another version, or differs from the
-`tested-with` pin: each stops the gate (exit 2) with the cause. A module
-`ghc -E` cannot preprocess fails it (exit 1).
+FRESHNESS IS CABAL'S VERDICT: Cabal rewrites `build-info.json` only
+when it builds, so after an up-to-date build (a restored cache, a
+re-stamped checkout) the file is older than the configuration but still
+this configuration's. The gate therefore asks Cabal: `cabal build
+synarchy-test-headless --dry-run`, run with the cabal that planned the
+build, must report "Up to date", which Cabal decides from its
+configuration hash and file monitors. A changed flag, cpp-option,
+include directory or project setting that has not been built fails.
+
+NO SETTINGS, NO VERDICT: a pending rebuild; a missing or unreadable
+plan, `build-info.json` or generated header; build information for
+another checkout, or lacking the headless component; a header that is
+not that component's own; a cabal or compiler that is missing, reports
+another version, or (for GHC) differs from the `tested-with` pin: each
+stops the gate (exit 2) with the cause. A module `ghc -E` cannot
+preprocess fails it (exit 1).
 
 THE CERTIFIED ENVIRONMENT is the configured build that just ran: Linux
 in CI's `test-and-audits`, and the developer's native configuration
@@ -71,10 +81,12 @@ under `tools/ci-local.sh`. Other platforms, flag settings, installed
 tools and dependency versions are not predicted: a branch that only
 another environment would take is that environment's build to check.
 
-The self-test (`--self-test`, run in `static-audits`) needs no build: it
-drives the same code with fixture settings and a fixture
-`cabal_macros.h`, through `ghc` on PATH or `SYNARCHY_AUDIT_GHC` at the
-`tested-with` version. Source formats other than plain Haskell (`.lhs`,
+The self-test (`--self-test`, run in `static-audits`) needs no build of
+this project: it drives the same code with fixture settings and a
+fixture `cabal_macros.h`, through `ghc` on PATH or `SYNARCHY_AUDIT_GHC`
+at the `tested-with` version, and checks the freshness verdict against
+real Cabal (`cabal` on PATH or `SYNARCHY_AUDIT_CABAL`) on a tiny package
+of its own (`cabal_cache_regression`). Source formats other than plain Haskell (`.lhs`,
 `.hsig`, Cabal's `.hsc`/`.x`/`.y`), custom preprocessors (`-F -pgmF`) and
 quasiquote contents are out of scope.
 
@@ -115,6 +127,7 @@ HARNESS_MODULE = "Test.Headless.Harness.Log"
 CABAL_FILE = "synarchy.cabal"
 HEADLESS_SUITE = "synarchy-test-headless"
 GHC_ENV = "SYNARCHY_AUDIT_GHC"
+CABAL_ENV = "SYNARCHY_AUDIT_CABAL"
 PREPROCESS_TIMEOUT_SECONDS = 120
 
 # Repo-relative path -> the reason it is exempt. Whole-file and exact.
@@ -214,10 +227,6 @@ _TESTED_WITH_GHC = re.compile(r"(?im)^tested-with\s*:.*?GHC\s*==\s*([0-9.]+)")
 _PACKAGE_NAME = re.compile(r"(?im)^name\s*:\s*(\S+)\s*$")
 HEADLESS_COMPONENT = f"test:{HEADLESS_SUITE}"
 PLAN_JSON = Path("dist-newstyle") / "cache" / "plan.json"
-# What decides the configuration: build settings older than any of these
-# describe a build of different inputs.
-CONFIGURATION_INPUTS = (CABAL_FILE, "cabal.project", "cabal.project.local",
-                        "cabal.project.freeze")
 
 
 @dataclass(frozen=True)
@@ -263,15 +272,72 @@ def _tested_with(root: Path) -> str:
     return pin.group(1)
 
 
-def configured_settings(root: Path = REPO_ROOT) -> BuildSettings:
+def cabal_command(version: str) -> str:
+    """The cabal that planned the build: `SYNARCHY_AUDIT_CABAL`, else
+    `cabal-<version>` or `cabal` on PATH, reporting exactly `version`."""
+    requested = os.environ.get(CABAL_ENV)
+    candidates = [requested] if requested else [f"cabal-{version}", "cabal"]
+    for candidate in candidates:
+        cabal = shutil.which(candidate)
+        if cabal is None:
+            continue
+        try:
+            found = subprocess.run(
+                [cabal, "--numeric-version"], capture_output=True, text=True,
+                timeout=PREPROCESS_TIMEOUT_SECONDS, check=True).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as error:
+            raise AuditError(f"{cabal} --numeric-version failed: {error}") from None
+        if found == version:
+            return cabal
+        if requested:
+            raise AuditError(f"{cabal} is cabal {found}, but the build was "
+                             f"planned by cabal {version}")
+    raise AuditError(
+        f"no cabal {version} executable ({' or '.join(candidates)}) is on "
+        f"PATH; set {CABAL_ENV} to the cabal that built the suite")
+
+
+def cabal_up_to_date(root: Path, cabal: str, extra: tuple[str, ...] = ()
+                     ) -> tuple[bool, str]:
+    """Cabal's own verdict on whether the headless suite's last build
+    still matches its configuration and sources: `cabal build
+    synarchy-test-headless --dry-run`, the build's own invocation.
+    Cabal decides from its configuration hash and file monitors, so a
+    byte-identical checkout or restored cache counts as current, and a
+    changed flag, cpp-option or include directory does not. Returns
+    `(up to date, Cabal's reason otherwise)`."""
+    try:
+        result = subprocess.run(
+            [cabal, "build", HEADLESS_SUITE, "--dry-run", *extra], cwd=root,
+            capture_output=True, text=True, timeout=PREPROCESS_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise AuditError(f"cabal build --dry-run could not run: {error}") from None
+    if result.returncode != 0:
+        raise AuditError("cabal build --dry-run failed: "
+                         + " ".join(result.stderr.split())[:400])
+    lines = [line.strip() for line in result.stdout.splitlines()]
+    if "Up to date" in lines:
+        return True, ""
+    pending = [line for line in lines if line.startswith("- ")]
+    if pending:
+        return False, "; ".join(line[2:] for line in pending)
+    raise AuditError("cabal build --dry-run gave no verdict: "
+                     + " ".join(result.stdout.split())[:400])
+
+
+def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
     """The headless suite's settings from the build that just ran here,
     each checked rather than trusted:
 
+      * Cabal itself must report the suite up to date (`cabal_up_to_date`,
+        or `verdict(root)` in the self-test): only then is the
+        `build-info.json` from its last build this configuration's, as
+        an up-to-date build leaves that file as it was;
       * `dist-newstyle/cache/plan.json` names the package's unit and the
-        `build-info.json` Cabal writes for it (`build-info: True`);
-      * that file must be newer than every configuration input, describe
-        this checkout, carry the `test:synarchy-test-headless` component,
-        and name the plan's compiler;
+        `build-info.json` Cabal wrote for it (`build-info: True`), which
+        must describe this checkout, carry the
+        `test:synarchy-test-headless` component, and name the plan's
+        compiler;
       * the compiler must exist, report that version, and match the
         `tested-with` pin;
       * the component's arguments must force-include its OWN generated
@@ -281,6 +347,17 @@ def configured_settings(root: Path = REPO_ROOT) -> BuildSettings:
     naming the cause: no settings, no verdict."""
     plan_path = root / PLAN_JSON
     plan = _load_json(plan_path, "Cabal's build plan")
+    if verdict is None:
+        cabal = cabal_command(str(plan.get("cabal-version")))
+        current, reason = cabal_up_to_date(root, cabal)
+    else:
+        current, reason = verdict(root)
+    if not current:
+        raise AuditError(
+            f"Cabal reports the headless suite is not up to date ({reason}), "
+            f"so its build information may describe another configuration; "
+            f"run cabal build {HEADLESS_SUITE} first")
+    plan = _load_json(plan_path, "Cabal's build plan")   # the dry run re-plans
     try:
         package = _PACKAGE_NAME.search(
             (root / CABAL_FILE).read_text(encoding="utf-8")).group(1)
@@ -296,13 +373,14 @@ def configured_settings(root: Path = REPO_ROOT) -> BuildSettings:
             f"{plan_path} has no local {package} unit with a build-info "
             f"path; re-run cabal build {HEADLESS_SUITE}")
     info_path = Path(unit["build-info"])
-    info = _load_json(info_path, "Cabal's build information")
-    newest = max(((root / name).stat().st_mtime, name)
-                 for name in CONFIGURATION_INPUTS if (root / name).exists())
-    if info_path.stat().st_mtime < newest[0]:
+    if not info_path.exists():
         raise AuditError(
-            f"{info_path} is stale: {newest[1]} changed after the last "
-            f"build; re-run cabal build {HEADLESS_SUITE}")
+            f"{info_path} does not exist. Cabal writes it only when it "
+            f"builds, so an up-to-date build will not restore it: force the "
+            f"suite to rebuild (remove {info_path.parent / 'cache'}, then "
+            f"cabal build {HEADLESS_SUITE}), with `build-info: True` for "
+            f"package synarchy in cabal.project")
+    info = _load_json(info_path, "Cabal's build information")
     component = next((c for c in info.get("components", [])
                       if c.get("name") == HEADLESS_COMPONENT), None)
     if component is None:
@@ -1246,8 +1324,6 @@ def _break(case: str, root: Path, pieces: dict, fake_ghc: str) -> None:
         plan["install-plan"] = []
     elif case == "no build-info":
         pieces["info_path"].unlink()
-    elif case == "stale build-info":
-        os.utime(root / CABAL_FILE, (time.time() + 60, time.time() + 60))
     elif case == "no headless component":
         component["name"] = "test:synarchy-test-graphical"
     elif case == "another checkout":
@@ -1277,10 +1353,9 @@ def _break(case: str, root: Path, pieces: dict, fake_ghc: str) -> None:
         pieces["header"].write_text(
             FIXTURE_HEADER.replace(HEADLESS_SUITE, "synarchy-test-graphical"),
             encoding="utf-8")
-    if case not in ("no plan", "unreadable plan", "no build-info"):
+    if case not in ("no plan", "unreadable plan", "no build-info",
+                    "pending rebuild"):
         _write_checkout(root, pieces)
-        if case != "stale build-info":
-            os.utime(pieces["info_path"], (time.time() + 1, time.time() + 1))
 
 
 # `(case, substring the AuditError names)`
@@ -1289,7 +1364,7 @@ SETTINGS_ERROR_FIXTURES: list[tuple[str, str]] = [
     ("unreadable plan", "unreadable"),
     ("no package unit", "no local synarchy unit"),
     ("no build-info", "does not exist"),
-    ("stale build-info", "is stale"),
+    ("pending rebuild", "not up to date (synarchy-0.1.0.0 "),
     ("no headless component", f"no {HEADLESS_COMPONENT} component"),
     ("another checkout", "describes a build of"),
     ("compiler mismatch", "names compiler ghc-9.10.1"),
@@ -1302,6 +1377,152 @@ SETTINGS_ERROR_FIXTURES: list[tuple[str, str]] = [
     ("unreadable header", "unreadable"),
     ("foreign header", "does not belong"),
 ]
+
+
+def _cabal_resolution_failures() -> list[str]:
+    """A missing cabal, and a cabal of another version, both stop."""
+    failures = []
+    saved = os.environ.get(CABAL_ENV)
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = Path(tmp) / "cabal-3.0.0.0"
+        fake.write_text("#!/bin/sh\necho 3.0.0.0\n", encoding="utf-8")
+        fake.chmod(0o755)
+        for label, value, needle in (
+                ("a missing cabal", str(Path(tmp) / "no-cabal"), "no cabal 9.9"),
+                ("a cabal of another version", str(fake), "planned by cabal")):
+            os.environ[CABAL_ENV] = value
+            try:
+                cabal_command("9.9.9.9")
+                failures.append(f"CABAL {label}: no AuditError")
+            except AuditError as error:
+                if needle not in str(error):
+                    failures.append(f"CABAL {label}: {error}")
+    if saved is None:
+        os.environ.pop(CABAL_ENV, None)
+    else:
+        os.environ[CABAL_ENV] = saved
+    return failures
+
+
+CACHE_REGRESSION_STEPS = (
+    "a normal build is current",
+    "an identical cache restored beneath re-stamped configuration files, "
+    "then an up-to-date build, is current (#2648 review round 7)",
+    "a cpp-option changed without rebuilding is stale",
+    "the rebuilt configuration's cpp-option selects the banned import",
+)
+
+
+def cabal_cache_regression(ghc: str, version: str) -> list[str]:
+    """The freshness check against REAL Cabal, on a tiny Custom package
+    shaped like this one (package `synarchy`, suite
+    `synarchy-test-headless`, `build-info: True`) with no dependencies
+    beyond the compiler's own base and Cabal: no download and no build
+    of this project. Needs the cabal that plans the project's builds
+    (`cabal_command`). Its own `CABAL_DIR` keeps it from the user's."""
+    failures: list[str] = []
+    cabal = shutil.which(os.environ.get(CABAL_ENV) or "cabal")
+    if cabal is None:
+        return [f"CACHE cabal not found; set {CABAL_ENV}"]
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "pkg"
+        (root / "test").mkdir(parents=True)
+        (root / CABAL_FILE).write_text(
+            "cabal-version: 3.0\nname: synarchy\nversion: 0.1.0.0\n"
+            f"build-type: Custom\ntested-with: GHC =={version}\n"
+            "custom-setup\n  setup-depends: base, Cabal\n"
+            f"test-suite {HEADLESS_SUITE}\n  type: exitcode-stdio-1.0\n"
+            "  main-is: Main.hs\n  hs-source-dirs: test\n"
+            "  build-depends: base\n  default-language: GHC2024\n"
+            "  cpp-options: -DFIRST\n", encoding="utf-8")
+        (root / "Setup.hs").write_text(
+            "import Distribution.Simple\nmain :: IO ()\nmain = defaultMain\n",
+            encoding="utf-8")
+        (root / "test" / "Main.hs").write_text(
+            "module Main where\nmain :: IO ()\nmain = pure ()\n",
+            encoding="utf-8")
+        (root / "cabal.project").write_text(
+            "packages: .\npackage synarchy\n  build-info: True\n",
+            encoding="utf-8")
+        # Sources settled before the build, outside Cabal's mtime-race
+        # window, as a real checkout's are.
+        for path in root.rglob("*"):
+            os.utime(path, (time.time() - 10, time.time() - 10))
+        env = {**os.environ, "CABAL_DIR": str(Path(tmp) / "cabal-dir")}
+        pinned = ("-w", ghc)
+
+        def build() -> bool:
+            result = subprocess.run(
+                [cabal, "build", HEADLESS_SUITE, "-v0", *pinned], cwd=root,
+                env=env, capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                failures.append("CACHE build failed: "
+                                + " ".join(result.stderr.split())[:300])
+            return result.returncode == 0
+
+        def settings() -> BuildSettings | str:
+            saved = os.environ.get("CABAL_DIR")
+            os.environ["CABAL_DIR"] = env["CABAL_DIR"]
+            try:
+                return configured_settings(
+                    root, verdict=lambda r: cabal_up_to_date(r, cabal, pinned))
+            except AuditError as error:
+                return str(error)
+            finally:
+                if saved is None:
+                    os.environ.pop("CABAL_DIR", None)
+                else:
+                    os.environ["CABAL_DIR"] = saved
+
+        if not build():
+            return failures
+        first = settings()
+        if isinstance(first, str):
+            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[0]}: {first}")
+            return failures
+        # The review's restore: identical products back under configuration
+        # files re-stamped after the build.
+        archived = Path(tmp) / "archived-dist"
+        shutil.copytree(root / "dist-newstyle", archived)
+        time.sleep(1.1)
+        for name in (CABAL_FILE, "cabal.project"):
+            os.utime(root / name, None)
+        shutil.rmtree(root / "dist-newstyle")
+        shutil.copytree(archived, root / "dist-newstyle")
+        if not build():
+            return failures
+        info = next((root / "dist-newstyle").rglob("build-info.json"))
+        if info.stat().st_mtime >= (root / CABAL_FILE).stat().st_mtime:
+            failures.append("CACHE the restore did not leave build-info.json "
+                            "older than the configuration, so the step proves "
+                            "nothing")
+        restored = settings()
+        if isinstance(restored, str):
+            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[1]}: {restored}")
+        # A genuine configuration change, not yet built.
+        text = (root / CABAL_FILE).read_text(encoding="utf-8")
+        (root / CABAL_FILE).write_text(text.replace("-DFIRST", "-DSECOND"),
+                                       encoding="utf-8")
+        stale = settings()
+        if not isinstance(stale, str) or "not up to date" not in stale:
+            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[2]}: {stale}")
+        if not build():
+            return failures
+        rebuilt = settings()
+        if isinstance(rebuilt, str):
+            failures.append(f"CACHE rebuilt configuration: {rebuilt}")
+            return failures
+        probe = _CPP + _HEAD + _branch("ifdef SECOND", _BANNED)
+        control = _CPP + _HEAD + _branch("ifdef FIRST", _BANNED)
+        (root / SCOPED_TREE / "Test").mkdir(parents=True)
+        (root / SCOPED_TREE / "Test" / "M.hs").write_text(probe, encoding="utf-8")
+        (root / SCOPED_TREE / "Test" / "C.hs").write_text(control,
+                                                          encoding="utf-8")
+        found = {v.path for v in scan_tree(root, rebuilt)}
+        if found != {f"{SCOPED_TREE}/Test/M.hs"}:
+            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[3]}: reported "
+                            f"{sorted(found)}")
+    return failures
 
 
 def self_test() -> int:
@@ -1319,10 +1540,13 @@ def self_test() -> int:
             root.mkdir()
             pieces = _settings_checkout(root, ghc, version)
             _write_checkout(root, pieces)
-            os.utime(pieces["info_path"], (time.time() + 1, time.time() + 1))
             _break(case, root, pieces, str(fake))
+            pending = (False, "synarchy-0.1.0.0 (test:synarchy-test-headless) "
+                              "(configuration changed)")
             try:
-                loaded = configured_settings(root)
+                loaded = configured_settings(
+                    root, verdict=lambda _root, pending=pending, case=case:
+                    pending if case == "pending rebuild" else (True, ""))
                 if needle:
                     failures.append(f"SETTINGS {case}: loaded, expected "
                                     f"an error naming {needle!r}")
@@ -1333,6 +1557,8 @@ def self_test() -> int:
             except AuditError as error:
                 if not needle or needle not in str(error):
                     failures.append(f"SETTINGS {case}: {error}")
+    failures += _cabal_resolution_failures()
+    failures += cabal_cache_regression(ghc, version)
     for label, output, source, origins, cpp_ran in MAP_FIXTURES:
         pre = map_output(output, source)
         if list(pre.origins) != origins or pre.cpp_ran != cpp_ran:
@@ -1403,6 +1629,7 @@ def self_test() -> int:
         if not reason.strip():
             failures.append(f"EXEMPTION {rel} carries no reason")
     total = (1 + len(SETTINGS_ERROR_FIXTURES) + len(MAP_FIXTURES) + 2
+             + 2 + len(CACHE_REGRESSION_STEPS)
              + len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
              + len(REASON_FIXTURES) + len(REPORTED_FIXTURES)
              + len(TREE_FIXTURES) + len(EXEMPTION_FIXTURES))

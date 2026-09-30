@@ -66,6 +66,8 @@ package synarchy
   ghc-options: -j
   -- Write build-info.json with each component's exact GHC arguments, so
   -- tools/headless_init_import_audit.py preprocesses test-headless/ as
-  -- the suite is really compiled (#2648). Every build sets it, so no
-  -- later command sees a changed configuration.
+  -- the suite is really compiled (#2648). Set here rather than on one
+  -- command, so every build carries it and no later command sees a
+  -- changed configuration. Cabal writes the file when it builds; an
+  -- up-to-date build leaves it as it was.
   build-info: True

@@ -547,8 +547,10 @@ jobs:
       # `build-info: True`), including its generated cabal_macros.h. That
       # initializer hard-wires the engine log to stdout (engine contracts
       # §Headless fixture logging, #1925). It certifies this Linux build's
-      # configuration only; missing or stale build settings fail it. It
-      # skips with the build it depends on.
+      # configuration only. Cabal must report the suite up to date (a
+      # restored cache counts; an unbuilt configuration change fails), and
+      # missing or mismatched build settings fail it. It skips with the
+      # build it depends on.
       - name: Headless init import audit (configured build)
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: python3 tools/headless_init_import_audit.py
@@ -975,6 +977,9 @@ jobs:
       - name: Headless init import audit self-test
         env:
           SYNARCHY_AUDIT_GHC: /usr/local/.ghcup/bin/ghc
+          # Its freshness check asks real Cabal about a tiny package of
+          # its own, in a private CABAL_DIR, with no download.
+          SYNARCHY_AUDIT_CABAL: /usr/local/.ghcup/bin/cabal
         run: python3 tools/headless_init_import_audit.py --self-test
 
       # Cheap, no-engine guard (#2202): every module that persists local
