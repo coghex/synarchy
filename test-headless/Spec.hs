@@ -460,7 +460,7 @@ main = do
     (measureConfig0, measureForest) ← MeasureRunner.evalSpec
         MeasureRunner.defaultConfig measuredSpec
     measureConfig ← MeasureRunner.readConfig measureConfig0
-        ∘ (["--match", "/@G456/", "--match", "/@G457/", "--match", "/@G463/", "--match", "/@G579/", "--match", "/@G588/", "--match", "/@G589/", "--match", "/@G595/", "--match", "/@G598/"] ⧺) =≪ MeasureEnv.getArgs
+        ∘ (["--skip", "/@G456/", "--skip", "/@G457/", "--skip", "/@G463/", "--skip", "/@G579/", "--skip", "/@G588/", "--skip", "/@G589/", "--skip", "/@G595/", "--skip", "/@G598/"] ⧺) =≪ MeasureEnv.getArgs
     let measureTee mk fc = do
             base ← mk fc
             pure $ \event → do
