@@ -950,6 +950,20 @@ jobs:
           python3 tools/lua_strict_decode_audit.py --self-test
           python3 tools/lua_strict_decode_audit.py
 
+      # Cheap, no-engine guard (#2648): fails if any test-headless/
+      # module imports the production Engine.Core.Init
+      # initializeEngineHeadless -- through an import list naming it, an
+      # unrestricted import, or a hiding list that leaves it in scope --
+      # outside Test.Headless.Harness.Log. That initializer hard-wires
+      # the engine log to stdout, so SYNARCHY_TEST_LOG cannot quiet or
+      # redirect a fixture booted through it (engine contracts §Headless
+      # fixture logging, #1925). The behavioral half stays the hspec
+      # "headless fixture logging" group in the headless suite.
+      - name: Headless init import audit
+        run: |
+          python3 tools/headless_init_import_audit.py --self-test
+          python3 tools/headless_init_import_audit.py
+
       # Cheap, no-engine guard (#2202): every module that persists local
       # configuration routes its write through Engine.Core.ConfigWrite --
       # a sibling temporary, fsync, atomic rename, then an fsync of the

@@ -145,7 +145,11 @@ baseline), the Lua
 strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
-`src/Engine/Scripting/Lua/`), the config-write / persistence-inventory /
+`src/Engine/Scripting/Lua/`), the headless init import audit
+(`headless_init_import_audit.py --self-test` then the bare audit,
+#2648 — no `test-headless/` import of the production
+`initializeEngineHeadless` outside `Test.Headless.Harness.Log`; see
+§Headless fixture logging), the config-write / persistence-inventory /
 EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
@@ -4662,8 +4666,17 @@ unset, empty and `quiet` are quiet; anything else is a hard error, not a
 silent quiet run). The variable steers only the quiet default, so it
 never overrules a spec that named its own backend. Production is
 unchanged: `initializeEngineHeadless` still logs to stdout for
-`App.Headless`, and `App.Dump` still picks stderr. Gate: hspec
-`--match "headless fixture logging"`.
+`App.Headless`, and `App.Dump` still picks stderr. Gates: hspec
+`--match "headless fixture logging"` for the behavior, and
+`tools/headless_init_import_audit.py` (`--self-test` then the bare
+audit, #2648) for the "never": it fails when any `test-headless/`
+module other than `Test.Headless.Harness.Log` brings
+`Engine.Core.Init.initializeEngineHeadless` into scope — an import list
+naming it, an unrestricted import (qualified or not), or a `hiding`
+list that leaves it in scope. Importing only `EngineInitResult` or the
+module's other exports stays allowed. The Chop authority fixture
+(#2121) landed on the production initializer after #2143 migrated the
+suite, because nothing checked.
 
 ---
 

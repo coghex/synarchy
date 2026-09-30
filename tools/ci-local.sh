@@ -215,6 +215,10 @@ step "lua strict-decode audit"
 python3 tools/lua_strict_decode_audit.py --self-test
 python3 tools/lua_strict_decode_audit.py
 
+step "headless init import audit"
+python3 tools/headless_init_import_audit.py --self-test
+python3 tools/headless_init_import_audit.py
+
 step "config write audit"
 python3 tools/config_write_audit.py --self-test
 python3 tools/config_write_audit.py

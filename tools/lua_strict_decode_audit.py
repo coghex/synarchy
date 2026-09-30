@@ -289,6 +289,15 @@ def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
     return decls
 
 
+def haskell_import_declarations(code_text: str) -> list[tuple[int, int, str]]:
+    """The public name for `_import_declarations`, so a sibling guard
+    that classifies imports (tools/headless_init_import_audit.py) reuses
+    this layout-aware splitter instead of keeping a second copy free to
+    drift from it -- the reason `unicode_operator_audit.py` publishes
+    `haskell_code_only`."""
+    return _import_declarations(code_text)
+
+
 def _classify_strict_import(decl: str, rel_path: str, line: int) -> str:
     """The module qualifier a `STRICT_MODULE` import establishes.
 
