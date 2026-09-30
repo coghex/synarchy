@@ -457,6 +457,7 @@ import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
 main ∷ IO ()
 main = do
+    MeasureEnv.setEnv "SYNARCHY_FULL_TESTS" "1"
     (measureConfig0, measureForest) ← MeasureRunner.evalSpec
         MeasureRunner.defaultConfig measuredSpec
     measureConfig ← MeasureRunner.readConfig measureConfig0
