@@ -4674,9 +4674,19 @@ module other than `Test.Headless.Harness.Log` brings
 `Engine.Core.Init.initializeEngineHeadless` into scope — an import list
 naming it, an unrestricted import (qualified or not), or a `hiding`
 list that leaves it in scope. Importing only `EngineInitResult` or the
-module's other exports stays allowed. The Chop authority fixture
-(#2121) landed on the production initializer after #2143 migrated the
-suite, because nothing checked.
+module's other exports stays allowed. It reads what GHC compiles: every
+module goes through the pinned GHC's `ghc -E`, under each
+`flag`/`os` configuration of the headless suite's `synarchy.cabal`
+stanzas. CPP modules stay allowed, and their directives, splices and
+configured macros are expanded, not refused. A pragma quoted in a string
+or comment, or one GHC ignores as misplaced, changes nothing. The gate
+needs `ghc` on PATH (or `SYNARCHY_AUDIT_GHC`) at the `tested-with`
+version, which the CI image provides. A missing or mismatched compiler
+stops it with that message. GHC's own host-platform macros and its
+package version macros are the running compiler's; the tool's docstring
+lists those limits. The Chop authority fixture (#2121) landed on the
+production initializer after #2143 migrated the suite, because nothing
+checked.
 
 ---
 

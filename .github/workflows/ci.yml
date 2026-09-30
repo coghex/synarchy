@@ -958,8 +958,18 @@ jobs:
       # the engine log to stdout, so SYNARCHY_TEST_LOG cannot quiet or
       # redirect a fixture booted through it (engine contracts §Headless
       # fixture logging, #1925). The behavioral half stays the hspec
-      # "headless fixture logging" group in the headless suite.
+      # "headless fixture logging" group in the headless suite. It reads
+      # the source GHC compiles: every module goes through this image's
+      # pinned ghc (tested-with, GHC_VERSION) as `ghc -E`, under the
+      # suite's cabal flag/os configurations, so CPP modules are checked
+      # after expansion rather than refused. It needs no Cabal build.
+      # The image's ENV PATH is not reliably propagated into this job's
+      # steps (see test-and-audits' toolchain step), so the compiler is
+      # named explicitly, and the audit checks its version against the
+      # pin before using it. cpp is the image's build-essential gcc.
       - name: Headless init import audit
+        env:
+          SYNARCHY_AUDIT_GHC: /usr/local/.ghcup/bin/ghc
         run: |
           python3 tools/headless_init_import_audit.py --self-test
           python3 tools/headless_init_import_audit.py
