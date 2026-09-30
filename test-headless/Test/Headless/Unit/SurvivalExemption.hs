@@ -20,7 +20,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
-import Data.IORef (writeIORef)
+import Data.IORef (modifyIORef', writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState)
@@ -169,6 +169,17 @@ killed env = do
     cmds ← Q.flushQueue (unitQueue env)
     pure [u | UnitKill u ← cmds]
 
+-- | The units a tick asked to stand back up.
+revivals ∷ EngineEnv → IO [UnitId]
+revivals env = do
+    cmds ← Q.flushQueue (unitQueue env)
+    pure [u | UnitRevive u ← cmds]
+
+-- | Put one fixture unit into a pose, as a restored save would carry it.
+setPose ∷ EngineEnv → UnitId → Text → IO ()
+setPose env uid pose = modifyIORef' (unitManagerRef env) $ \um →
+    um { umInstances = HM.adjust (\i → i { uiPose = pose }) uid (umInstances um) }
+
 -- | A stat as the nomad reads it through the real API.
 nomadReads ∷ LuaBackendState → Text → IO Text
 nomadReads ls expr = luaText ls ("local uid = 1; return " <> expr)
@@ -253,6 +264,30 @@ spec = describe "survival exemption" $ do
         -- And the paused update leaves everything where the hook put it.
         _ ← luaText ls "__resources.update(0.1); return true"
         nomadReads ls "unit.getStat(uid, 'core_temp') == 37" `shouldReturn` "true"
+
+    it "stands a nomad restored collapsed from a survival failure back up \
+       \once the load is unpaused" $
+      withHeadlessEngineNoWorld $ \env → do
+        let stale = HM.union (HM.fromList
+              [ ("salt_conc", 0.2), ("salt", 5), ("salt_imbalance", 0.9)
+              , ("consciousness", 0.1) ]) healthy
+        scene env stale fullBlood []
+        setPose env nomadUid "collapsed"
+        ls ← setupLua env
+        _ ← luaText ls "__resources.onSaveLoaded({ 1 }, {}); return true"
+        _ ← Q.flushQueue (unitQueue env)
+        _ ← run ls 1
+        revived ← revivals env
+        revived `shouldContain` [nomadUid]
+
+    it "keeps a collapsed nomad down while blood loss still gates the revive" $
+      withHeadlessEngineNoWorld $ \env → do
+        scene env healthy (fullBlood * 0.4) []
+        setPose env nomadUid "collapsed"
+        ls ← setupLua env
+        _ ← run ls 1
+        revived ← revivals env
+        revived `shouldNotContain` [nomadUid]
 
     it "keeps blood loss impairing an exempt nomad's circulation and oxygen" $
       withHeadlessEngineNoWorld $ \env → do

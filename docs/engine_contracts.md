@@ -2249,7 +2249,10 @@ and it has no hydration, hunger or calorie pools. It can therefore never
 go delirious from, or die of, heat, cold, thirst, hunger or electrolyte
 imbalance. Wounds, bleeding, circulation's blood-volume and sepsis
 factors, blood oxygen, pain, injury collapse and the injury failure meters
-all stay live. A load neutralizes exempt survivors in
+all stay live, and a collapsed exempt unit still rises through
+`resourceTick.checkRevive`'s knockdown, injury, consciousness and
+blood-loss gates (it has no resource thresholds to add). A load
+neutralizes exempt survivors in
 `unitResources.onSaveLoaded`, before the first paused frame reads them,
 because a save made before the exemption can carry an occupant whose
 temperature or salt had already drifted. Gate: hspec

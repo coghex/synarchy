@@ -188,6 +188,13 @@ function unitResources.update(dt)
                         -- A no-op for species with no live calorie pool.
                         starvation.refreshStrength(uid)
                         resourceTick.checkRevive(uid, defConfig)
+                    elseif survivalExempt.isExempt(info.defName) then
+                        -- No pools, but still a way back up (#2754): an
+                        -- exempt unit restored collapsed from a survival
+                        -- failure, or stabilized after an injury, rises
+                        -- once the knockdown, injury, consciousness and
+                        -- blood-loss gates all clear.
+                        resourceTick.checkRevive(uid, {})
                     end
                 end
             end
