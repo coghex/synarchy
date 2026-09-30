@@ -32,13 +32,18 @@ string literal. An `Engine.Core.Init` import in a shape the classifier
 does not model is a failure, not a pass.
 
 WHAT IS READ: the source GHC compiles in THIS checkout's configured
-build, not the file on disk (#2648 owner amendment). The gate runs right
-after `cabal build synarchy-test-headless` and preprocesses every module
-with `ghc -E`, using exactly the arguments Cabal gave GHC for that
-component, read from the `build-info.json` Cabal writes because
-cabal.project sets `build-info: True` when it builds the suite
-(`configured_settings`). Those
-arguments force-include the component's own generated `cabal_macros.h`
+build, not the file on disk (#2648 owner amendment). Right after
+`cabal build synarchy-test-headless`, `--record` exports the complete
+arguments Cabal gives GHC for that component (`record_settings`), and
+the gate preprocesses every module with `ghc -E` under them. They are
+Cabal's own invocation order: the configured ghc program's default
+arguments, the component's arguments from the `build-info.json` Cabal
+writes because cabal.project sets `build-info: True`, then the program's
+override arguments. build-info.json leaves out the first and last,
+where every `ghc-options` from cabal.project or the command line lands,
+so those are read from Cabal's persisted `setup-config` through Cabal's
+own API, built against the exact packages the package's Setup was. The
+component's arguments force-include the component's own generated `cabal_macros.h`
 (real dependency, package, host-tool and component macros) and carry the
 native `cpp-options`, extensions, include directories and `-package-id`s.
 So GHC decides whether CPP runs, and cpp expands directives, splices,
@@ -58,22 +63,31 @@ included it. When a module suppresses the markers (`-optP-P`), the
 report takes the one source line with the same text, or says the line is
 the preprocessed text's.
 
-FRESHNESS IS CABAL'S VERDICT: Cabal rewrites `build-info.json` only
-when it builds, so after an up-to-date build (a restored cache, a
-re-stamped checkout) the file is older than the configuration but still
-this configuration's. The gate therefore asks Cabal: `cabal build
-synarchy-test-headless --dry-run`, run with the cabal that planned the
-build, must report "Up to date", which Cabal decides from its
-configuration hash and file monitors. A changed flag, cpp-option,
-include directory or project setting that has not been built fails.
+FRESHNESS IS CONTENT IDENTITY: `--record` stores, beside
+`build-info.json`, the complete arguments with SHA-256 digests of
+`setup-config`, `build-info.json`, the generated header and the
+configuration inputs (`synarchy.cabal`, `cabal.project`,
+`cabal.project.local`, `cabal.project.freeze`). The gate verifies every
+digest, the checkout and the compiler before it preprocesses anything
+(`configured_settings`). So the settings are exactly those of the build
+the record followed, however it was invoked (`--ghc-options` included),
+and a restored cache that is byte-identical still verifies, whatever its
+mtimes. A genuinely changed configuration input, header, setup-config or
+compiler fails. Source files are deliberately not inputs: an edited
+module is what the gate is for, and it is scanned as it now reads. The
+gate never replans, because Cabal keeps no replayable form of the
+invocation that built. `--record` must follow the successful suite build
+directly, as CI and tools/ci-local.sh run it; a record taken after an
+unbuilt configuration edit is not detectable without replanning.
 
-NO SETTINGS, NO VERDICT: a pending rebuild; a missing or unreadable
-plan, `build-info.json` or generated header; build information for
+NO SETTINGS, NO VERDICT: a missing, unreadable or foreign record; a
+changed recorded input; a missing or unreadable plan, `build-info.json`,
+`setup-config` or generated header when recording; build information for
 another checkout, or lacking the headless component; a header that is
-not that component's own; a cabal or compiler that is missing, reports
-another version, or (for GHC) differs from the `tested-with` pin: each
-stops the gate (exit 2) with the cause. A module `ghc -E` cannot
-preprocess fails it (exit 1).
+not that component's own; a compiler that is missing, reports another
+version, or differs from the `tested-with` pin: each stops the gate
+(exit 2) with the cause. A module `ghc -E` cannot preprocess fails it
+(exit 1).
 
 THE CERTIFIED ENVIRONMENT is the configured build that just ran: Linux
 in CI's `test-and-audits`, and the developer's native configuration
@@ -84,9 +98,10 @@ another environment would take is that environment's build to check.
 The self-test (`--self-test`, run in `static-audits`) needs no build of
 this project: it drives the same code with fixture settings and a
 fixture `cabal_macros.h`, through `ghc` on PATH or `SYNARCHY_AUDIT_GHC`
-at the `tested-with` version, and checks the freshness verdict against
-real Cabal (`cabal` on PATH or `SYNARCHY_AUDIT_CABAL`) on a tiny package
-of its own (`cabal_cache_regression`). Source formats other than plain Haskell (`.lhs`,
+at the `tested-with` version. It runs `--record` and the gate against
+real Cabal (`cabal` on PATH or `SYNARCHY_AUDIT_CABAL`) on a tiny Custom
+package of its own (`cabal_regression`), with the Cabal library that
+cabal pairs with for its Setup when a local store has it. Source formats other than plain Haskell (`.lhs`,
 `.hsig`, Cabal's `.hsc`/`.x`/`.y`), custom preprocessors (`-F -pgmF`) and
 quasiquote contents are out of scope.
 
@@ -95,13 +110,15 @@ owns the backend choice (requirement 4). It is matched by exact path, so
 a sibling module or a same-named file elsewhere is scanned as usual.
 
 Usage:
-  python3 tools/headless_init_import_audit.py              # the gate (after
-                                                           # the suite build)
+  python3 tools/headless_init_import_audit.py --record     # right after the
+                                                           # suite build
+  python3 tools/headless_init_import_audit.py              # the gate
   python3 tools/headless_init_import_audit.py --self-test  # fixture suite
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -272,92 +289,89 @@ def _tested_with(root: Path) -> str:
     return pin.group(1)
 
 
-def cabal_command(version: str) -> str:
-    """The cabal that planned the build: `SYNARCHY_AUDIT_CABAL`, else
-    `cabal-<version>` or `cabal` on PATH, reporting exactly `version`."""
-    requested = os.environ.get(CABAL_ENV)
-    candidates = [requested] if requested else [f"cabal-{version}", "cabal"]
-    for candidate in candidates:
-        cabal = shutil.which(candidate)
-        if cabal is None:
-            continue
-        try:
-            found = subprocess.run(
-                [cabal, "--numeric-version"], capture_output=True, text=True,
-                timeout=PREPROCESS_TIMEOUT_SECONDS, check=True).stdout.strip()
-        except (OSError, subprocess.SubprocessError) as error:
-            raise AuditError(f"{cabal} --numeric-version failed: {error}") from None
-        if found == version:
-            return cabal
-        if requested:
-            raise AuditError(f"{cabal} is cabal {found}, but the build was "
-                             f"planned by cabal {version}")
-    raise AuditError(
-        f"no cabal {version} executable ({' or '.join(candidates)}) is on "
-        f"PATH; set {CABAL_ENV} to the cabal that built the suite")
+# Cabal's own API, reading the persisted LocalBuildInfo (`setup-config`)
+# for the configured `ghc` program's arguments. Cabal appends them to every
+# GHC invocation (`programInvocation`: default args, the component's
+# options, override args); build-info.json records only the middle part.
+_PROGRAM_ARGS_READER = """\
+import Distribution.Simple.Configure (getPersistBuildConfig)
+import Distribution.Simple.LocalBuildInfo (withPrograms)
+import Distribution.Simple.Program (ghcProgram, lookupProgram, programPath)
+import Distribution.Simple.Program.Types (ConfiguredProgram (..))
+import Distribution.Utils.Path (makeSymbolicPath)
+import System.Environment (getArgs)
+main :: IO ()
+main = do
+  [dist] <- getArgs
+  lbi <- getPersistBuildConfig Nothing (makeSymbolicPath dist)
+  case lookupProgram ghcProgram (withPrograms lbi) of
+    Nothing -> fail "setup-config configures no ghc program"
+    Just p -> do
+      putStrLn ("P " ++ programPath p)
+      mapM_ (putStrLn . ("D " ++)) (programDefaultArgs p)
+      mapM_ (putStrLn . ("O " ++)) (programOverrideArgs p)
+"""
+STAMP_NAME = "headless-import-audit.json"
+STAMP_SCHEMA = 1
+# The files Cabal reads the project's configuration from.
+CONFIGURATION_INPUTS = (CABAL_FILE, "cabal.project", "cabal.project.local",
+                        "cabal.project.freeze")
 
 
-def cabal_up_to_date(root: Path, cabal: str, extra: tuple[str, ...] = ()
-                     ) -> tuple[bool, str]:
-    """Cabal's own verdict on whether the headless suite's last build
-    still matches its configuration and sources: `cabal build
-    synarchy-test-headless --dry-run`, the build's own invocation.
-    Cabal decides from its configuration hash and file monitors, so a
-    byte-identical checkout or restored cache counts as current, and a
-    changed flag, cpp-option or include directory does not. Returns
-    `(up to date, Cabal's reason otherwise)`."""
+def _sha256(path: Path) -> str | None:
     try:
-        result = subprocess.run(
-            [cabal, "build", HEADLESS_SUITE, "--dry-run", *extra], cwd=root,
-            capture_output=True, text=True, timeout=PREPROCESS_TIMEOUT_SECONDS)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise AuditError(f"cabal build --dry-run could not run: {error}") from None
-    if result.returncode != 0:
-        raise AuditError("cabal build --dry-run failed: "
-                         + " ".join(result.stderr.split())[:400])
-    lines = [line.strip() for line in result.stdout.splitlines()]
-    if "Up to date" in lines:
-        return True, ""
-    pending = [line for line in lines if line.startswith("- ")]
-    if pending:
-        return False, "; ".join(line[2:] for line in pending)
-    raise AuditError("cabal build --dry-run gave no verdict: "
-                     + " ".join(result.stdout.split())[:400])
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise AuditError(f"{path} is unreadable: {error.strerror}") from None
 
 
-def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
-    """The headless suite's settings from the build that just ran here,
-    each checked rather than trusted:
-
-      * Cabal itself must report the suite up to date (`cabal_up_to_date`,
-        or `verdict(root)` in the self-test): only then is the
-        `build-info.json` from its last build this configuration's, as
-        an up-to-date build leaves that file as it was;
-      * `dist-newstyle/cache/plan.json` names the package's unit and the
-        `build-info.json` Cabal wrote for it (`build-info: True`), which
-        must describe this checkout, carry the
-        `test:synarchy-test-headless` component, and name the plan's
-        compiler;
-      * the compiler must exist, report that version, and match the
-        `tested-with` pin;
-      * the component's arguments must force-include its OWN generated
-        `cabal_macros.h`, which must be readable and name the component.
-
-    Anything missing, stale, mismatched or unreadable is an `AuditError`
-    naming the cause: no settings, no verdict."""
-    plan_path = root / PLAN_JSON
-    plan = _load_json(plan_path, "Cabal's build plan")
-    if verdict is None:
-        cabal = cabal_command(str(plan.get("cabal-version")))
-        current, reason = cabal_up_to_date(root, cabal)
-    else:
-        current, reason = verdict(root)
-    if not current:
+def _configured_program_args(ghc: str, root: Path, dist_dir: Path, unit: dict,
+                             component_args: tuple[str, ...]
+                             ) -> tuple[list[str], list[str]]:
+    """The configured ghc program's default and override arguments, read
+    from `<dist_dir>/setup-config` by Cabal's own API, built against the
+    exact packages the package's Setup was built with (plan.json's
+    `setup` component) from the component's own package databases."""
+    setup = (unit.get("components") or {}).get("setup")
+    if not setup:
         raise AuditError(
-            f"Cabal reports the headless suite is not up to date ({reason}), "
-            f"so its build information may describe another configuration; "
-            f"run cabal build {HEADLESS_SUITE} first")
-    plan = _load_json(plan_path, "Cabal's build plan")   # the dry run re-plans
+            "plan.json's unit has no Custom `setup` component, so the Cabal "
+            "library that wrote setup-config cannot be named")
+    databases = [component_args[i + 1] for i in range(len(component_args) - 1)
+                 if component_args[i] == "-package-db"]
+    with tempfile.TemporaryDirectory() as tmp:
+        reader = Path(tmp) / "ProgramArgs.hs"
+        reader.write_text(_PROGRAM_ARGS_READER, encoding="utf-8")
+        command = [ghc, "-v0", "-package-env", "-", "-hide-all-packages",
+                   "-no-user-package-db"]
+        for database in databases:
+            command += ["-package-db", database]
+        for package in setup.get("depends", []):
+            command += ["-package-id", package]
+        command += ["-e", f":main {json.dumps(str(dist_dir))}", str(reader)]
+        try:
+            result = subprocess.run(command, cwd=root, capture_output=True,
+                                    text=True, timeout=PREPROCESS_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise AuditError(f"reading setup-config could not run: {error}") from None
+    if result.returncode != 0:
+        raise AuditError("Cabal's API could not read "
+                         f"{dist_dir / 'setup-config'}: "
+                         + " ".join(result.stderr.split())[:500])
+    lines = result.stdout.splitlines()
+    defaults = [line[2:] for line in lines if line.startswith("D ")]
+    overrides = [line[2:] for line in lines if line.startswith("O ")]
+    if not any(line.startswith("P ") for line in lines):
+        raise AuditError("setup-config yielded no configured ghc program")
+    return defaults, overrides
+
+
+def _stamp_path(root: Path) -> tuple[Path, dict, dict, dict]:
+    """plan.json, its local package unit, and the stamp beside that unit's
+    build-info.json."""
+    plan = _load_json(root / PLAN_JSON, "Cabal's build plan")
     try:
         package = _PACKAGE_NAME.search(
             (root / CABAL_FILE).read_text(encoding="utf-8")).group(1)
@@ -368,10 +382,33 @@ def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
     unit = next((u for u in units if u.get("component-name")
                  == HEADLESS_COMPONENT), None) or next(
                      (u for u in units if u.get("component-name") is None), None)
-    if unit is None or not unit.get("build-info"):
+    if unit is None or not unit.get("build-info") or not unit.get("dist-dir"):
         raise AuditError(
-            f"{plan_path} has no local {package} unit with a build-info "
-            f"path; re-run cabal build {HEADLESS_SUITE}")
+            f"{root / PLAN_JSON} has no local {package} unit with a "
+            f"build-info path; re-run cabal build {HEADLESS_SUITE}")
+    return Path(unit["dist-dir"]) / STAMP_NAME, plan, unit, {}
+
+
+def record_settings(root: Path = REPO_ROOT) -> Path:
+    """`--record`: export the headless suite's complete realized settings
+    from the build that has JUST succeeded, with content hashes of what
+    they depend on, for the scan to verify. Run it immediately after
+    `cabal build synarchy-test-headless`; CI and tools/ci-local.sh do.
+
+      * plan.json names the unit, its `build-info.json` and `dist-dir`;
+      * `build-info.json` must describe this checkout, carry the
+        `test:synarchy-test-headless` component and name the plan's
+        compiler, which must exist, report that version and match the
+        `tested-with` pin;
+      * the component's arguments must force-include its OWN generated
+        `cabal_macros.h`, which must be readable and name the component;
+      * the configured ghc program's default and override arguments come
+        from `setup-config` through Cabal's API.
+
+    The complete arguments are Cabal's order: default, component,
+    override. Anything missing, mismatched or unreadable is an
+    `AuditError` naming the cause."""
+    stamp, plan, unit, _ = _stamp_path(root)
     info_path = Path(unit["build-info"])
     if not info_path.exists():
         raise AuditError(
@@ -396,14 +433,44 @@ def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
     compiler_id = compiler.get("compiler-id")
     if compiler_id != plan.get("compiler-id"):
         raise AuditError(
-            f"{info_path} names compiler {compiler_id}, but {plan_path} "
-            f"names {plan.get('compiler-id')}; re-run cabal build "
-            f"{HEADLESS_SUITE}")
-    ghc = shutil.which(compiler.get("path") or "")
+            f"{info_path} names compiler {compiler_id}, but "
+            f"{root / PLAN_JSON} names {plan.get('compiler-id')}; re-run "
+            f"cabal build {HEADLESS_SUITE}")
+    ghc = _checked_compiler(root, compiler.get("path") or "", compiler_id)
+    args = tuple(component.get("compiler-args", []))
+    header = _own_header(root, args, component.get("unit-id"), info_path)
+    dist_dir = Path(unit["dist-dir"])
+    defaults, overrides = _configured_program_args(ghc, root, dist_dir, unit,
+                                                   args)
+    document = {
+        "schema": STAMP_SCHEMA,
+        "checkout": str(root.resolve()),
+        "ghc": ghc,
+        "compiler-id": compiler_id,
+        "args": [*defaults, *args, *overrides],
+        "header": str(header),
+        "description": (f"{HEADLESS_COMPONENT} as built by {compiler_id} "
+                        f"({plan.get('os')}/{plan.get('arch')}, flags "
+                        f"{unit.get('flags')})"),
+        "hashes": {
+            "setup-config": _sha256(dist_dir / "setup-config"),
+            "build-info": _sha256(info_path),
+            "header": _sha256(header),
+            **{f"input:{name}": _sha256(root / name)
+               for name in CONFIGURATION_INPUTS},
+        },
+        "hashed": {"setup-config": str(dist_dir / "setup-config"),
+                   "build-info": str(info_path), "header": str(header)},
+    }
+    stamp.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+    return stamp
+
+
+def _checked_compiler(root: Path, path: str, compiler_id: str) -> str:
+    ghc = shutil.which(path)
     if ghc is None:
         raise AuditError(
-            f"the compiler Cabal built with, {compiler.get('path')!r}, is "
-            f"not an executable")
+            f"the compiler Cabal built with, {path!r}, is not an executable")
     version = _compiler_version(ghc)
     if f"ghc-{version}" != compiler_id:
         raise AuditError(f"{ghc} reports GHC {version}, not {compiler_id}")
@@ -412,7 +479,11 @@ def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
         raise AuditError(
             f"the headless suite was built with GHC {version}, but "
             f"{CABAL_FILE} pins GHC {pin}")
-    args = tuple(component.get("compiler-args", []))
+    return ghc
+
+
+def _own_header(root: Path, args: tuple[str, ...], unit_id: str | None,
+                where: Path) -> Path:
     header = next(
         (Path(args[i + 1][len("-optP"):]) for i in range(len(args) - 1)
          if args[i] == "-optP-include" and args[i + 1].startswith("-optP")),
@@ -420,9 +491,8 @@ def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
     if header is None or header.parts[-3:] != (HEADLESS_SUITE, "autogen",
                                                 "cabal_macros.h"):
         raise AuditError(
-            f"{info_path}'s {HEADLESS_COMPONENT} arguments do not "
-            f"force-include its own autogen/cabal_macros.h (found "
-            f"{header})")
+            f"{where}'s {HEADLESS_COMPONENT} arguments do not force-include "
+            f"its own autogen/cabal_macros.h (found {header})")
     header = header if header.is_absolute() else root / header
     try:
         text = header.read_text(encoding="utf-8")
@@ -430,15 +500,53 @@ def configured_settings(root: Path = REPO_ROOT, verdict=None) -> BuildSettings:
         raise AuditError(
             f"the suite's generated {header} is unreadable: "
             f"{error.strerror}; re-run cabal build {HEADLESS_SUITE}") from None
-    identity = f'#define CURRENT_COMPONENT_ID "{component.get("unit-id")}"'
-    if identity not in text:
+    if f'#define CURRENT_COMPONENT_ID "{unit_id}"' not in text:
         raise AuditError(
-            f"{header} does not belong to {component.get('unit-id')}; "
-            f"re-run cabal build {HEADLESS_SUITE}")
-    return BuildSettings(
-        ghc, args, header,
-        f"{HEADLESS_COMPONENT} as built by {compiler_id} "
-        f"({plan.get('os')}/{plan.get('arch')}, flags {unit.get('flags')})")
+            f"{header} does not belong to {unit_id}; re-run cabal build "
+            f"{HEADLESS_SUITE}")
+    return header
+
+
+def configured_settings(root: Path = REPO_ROOT) -> BuildSettings:
+    """The settings `--record` exported after the last build, verified
+    by CONTENT: the configuration inputs and the three build products
+    (`setup-config`, `build-info.json`, the generated header) must be
+    byte-identical to what was recorded, the checkout the same, and the
+    compiler present at the recorded version. Source files are not
+    configuration: editing a module never invalidates the settings, so
+    an injected import reaches the import diagnosis. Anything else that
+    differs is an `AuditError` naming it."""
+    stamp, _plan, _unit, _ = _stamp_path(root)
+    if not stamp.exists():
+        raise AuditError(
+            f"{stamp} does not exist: record the build's settings right "
+            f"after building (cabal build {HEADLESS_SUITE}, then "
+            f"python3 tools/headless_init_import_audit.py --record)")
+    document = _load_json(stamp, "The recorded build settings")
+    if document.get("schema") != STAMP_SCHEMA:
+        raise AuditError(f"{stamp} has schema {document.get('schema')}, not "
+                         f"{STAMP_SCHEMA}; record again")
+    if document.get("checkout") != str(root.resolve()):
+        raise AuditError(f"{stamp} records {document.get('checkout')}, not "
+                         f"{root}")
+    recorded = document.get("hashes", {})
+    hashed = document.get("hashed", {})
+    current = {
+        **{key: _sha256(Path(hashed.get(key, "")))
+           for key in ("setup-config", "build-info", "header")},
+        **{f"input:{name}": _sha256(root / name)
+           for name in CONFIGURATION_INPUTS},
+    }
+    changed = sorted(key for key in current if current[key] != recorded.get(key))
+    if changed:
+        raise AuditError(
+            f"{', '.join(k.removeprefix('input:') for k in changed)} changed "
+            f"since the settings were recorded; build the suite (cabal build "
+            f"{HEADLESS_SUITE}) and record them again (--record)")
+    ghc = _checked_compiler(root, document.get("ghc") or "",
+                            document.get("compiler-id") or "")
+    return BuildSettings(ghc, tuple(document.get("args", [])),
+                         Path(document["header"]), document.get("description", ""))
 
 
 def ghc_command(repo_root: Path = REPO_ROOT) -> str:
@@ -1277,9 +1385,9 @@ def _run_tree(settings: BuildSettings, files: dict[str, str]
 
 
 def _settings_checkout(root: Path, ghc: str, version: str) -> dict:
-    """A synthetic built checkout for `configured_settings`: its cabal
-    file, plan, build-info and generated header. Returns the pieces so a
-    case can break one."""
+    """A synthetic built checkout for `record_settings`: its cabal file,
+    plan, build-info and generated header. Returns the pieces so a case
+    can break one."""
     (root / CABAL_FILE).write_text(
         f"name: synarchy\nversion: 0.1.0.0\ntested-with: GHC =={version}\n",
         encoding="utf-8")
@@ -1293,7 +1401,7 @@ def _settings_checkout(root: Path, ghc: str, version: str) -> dict:
             "arch": "fixture-arch", "install-plan": [
                 {"pkg-name": "synarchy", "style": "local",
                  "component-name": None, "flags": {},
-                 "build-info": str(info_path)}]}
+                 "dist-dir": str(build), "build-info": str(info_path)}]}
     info = {"compiler": {"compiler-id": f"ghc-{version}", "path": ghc},
             "components": [{
                 "name": HEADLESS_COMPONENT, "src-dir": str(root) + "/",
@@ -1338,7 +1446,6 @@ def _break(case: str, root: Path, pieces: dict, fake_ghc: str) -> None:
         text = (root / CABAL_FILE).read_text(encoding="utf-8")
         (root / CABAL_FILE).write_text(
             re.sub(r"GHC ==\S+", "GHC ==9.10.1", text), encoding="utf-8")
-        os.utime(root / CABAL_FILE, (time.time() - 60, time.time() - 60))
     elif case == "no header argument":
         component["compiler-args"] = list(_FIXTURE_ARGS)
     elif case == "another component's header":
@@ -1353,18 +1460,19 @@ def _break(case: str, root: Path, pieces: dict, fake_ghc: str) -> None:
         pieces["header"].write_text(
             FIXTURE_HEADER.replace(HEADLESS_SUITE, "synarchy-test-graphical"),
             encoding="utf-8")
-    if case not in ("no plan", "unreadable plan", "no build-info",
-                    "pending rebuild"):
+    if case not in ("no plan", "unreadable plan", "no build-info"):
         _write_checkout(root, pieces)
 
 
-# `(case, substring the AuditError names)`
-SETTINGS_ERROR_FIXTURES: list[tuple[str, str]] = [
+# `(case, substring the AuditError names)` for `--record`. The valid
+# synthetic checkout has no Custom setup, so it stops exactly there,
+# after every identity check has passed.
+RECORD_ERROR_FIXTURES: list[tuple[str, str]] = [
+    ("valid up to setup-config", "no Custom `setup` component"),
     ("no plan", "does not exist"),
     ("unreadable plan", "unreadable"),
     ("no package unit", "no local synarchy unit"),
-    ("no build-info", "does not exist"),
-    ("pending rebuild", "not up to date (synarchy-0.1.0.0 "),
+    ("no build-info", "does not exist. Cabal writes it only when it builds"),
     ("no headless component", f"no {HEADLESS_COMPONENT} component"),
     ("another checkout", "describes a build of"),
     ("compiler mismatch", "names compiler ghc-9.10.1"),
@@ -1379,186 +1487,449 @@ SETTINGS_ERROR_FIXTURES: list[tuple[str, str]] = [
 ]
 
 
-def _cabal_resolution_failures() -> list[str]:
-    """A missing cabal, and a cabal of another version, both stop."""
-    failures = []
-    saved = os.environ.get(CABAL_ENV)
-    with tempfile.TemporaryDirectory() as tmp:
-        fake = Path(tmp) / "cabal-3.0.0.0"
-        fake.write_text("#!/bin/sh\necho 3.0.0.0\n", encoding="utf-8")
-        fake.chmod(0o755)
-        for label, value, needle in (
-                ("a missing cabal", str(Path(tmp) / "no-cabal"), "no cabal 9.9"),
-                ("a cabal of another version", str(fake), "planned by cabal")):
-            os.environ[CABAL_ENV] = value
-            try:
-                cabal_command("9.9.9.9")
-                failures.append(f"CABAL {label}: no AuditError")
-            except AuditError as error:
-                if needle not in str(error):
-                    failures.append(f"CABAL {label}: {error}")
-    if saved is None:
-        os.environ.pop(CABAL_ENV, None)
-    else:
-        os.environ[CABAL_ENV] = saved
-    return failures
+def _stamped_checkout(root: Path, ghc: str, version: str) -> Path:
+    """A synthetic checkout with a stamp as `record_settings` writes it,
+    over real files, for `configured_settings` to verify."""
+    pieces = _settings_checkout(root, ghc, version)
+    _write_checkout(root, pieces)
+    (root / "cabal.project").write_text("packages: .\n", encoding="utf-8")
+    setup_config = pieces["info_path"].parent / "setup-config"
+    setup_config.write_text("Saved package config (fixture)\n",
+                            encoding="utf-8")
+    header, info = pieces["header"], pieces["info_path"]
+    stamp = pieces["info_path"].parent / STAMP_NAME
+    stamp.write_text(json.dumps({
+        "schema": STAMP_SCHEMA, "checkout": str(root.resolve()), "ghc": ghc,
+        "compiler-id": f"ghc-{version}",
+        "args": list(_FIXTURE_ARGS) + ["-optP-DRECORDED"],
+        "header": str(header), "description": "fixture",
+        "hashes": {"setup-config": _sha256(setup_config),
+                   "build-info": _sha256(info), "header": _sha256(header),
+                   **{f"input:{n}": _sha256(root / n)
+                      for n in CONFIGURATION_INPUTS}},
+        "hashed": {"setup-config": str(setup_config), "build-info": str(info),
+                   "header": str(header)}}), encoding="utf-8")
+    return stamp
 
 
-CACHE_REGRESSION_STEPS = (
-    "a normal build is current",
-    "an identical cache restored beneath re-stamped configuration files, "
-    "then an up-to-date build, is current (#2648 review round 7)",
-    "a cpp-option changed without rebuilding is stale",
-    "the rebuilt configuration's cpp-option selects the banned import",
+def _tamper(case: str, root: Path, stamp: Path, fake_ghc: str) -> None:
+    document = json.loads(stamp.read_text(encoding="utf-8"))
+    hashed = document["hashed"]
+    if case == "no stamp":
+        stamp.unlink()
+        return
+    if case == "schema":
+        document["schema"] = 0
+    elif case == "another checkout":
+        document["checkout"] = "/nonexistent/checkout"
+    elif case == "changed cabal.project":
+        (root / "cabal.project").write_text(
+            "packages: .\npackage synarchy\n  ghc-options: -optP-DNEW\n",
+            encoding="utf-8")
+    elif case == "new cabal.project.local":
+        (root / "cabal.project.local").write_text("-- new\n", encoding="utf-8")
+    elif case == "changed synarchy.cabal":
+        with (root / CABAL_FILE).open("a", encoding="utf-8") as handle:
+            handle.write("-- changed\n")
+    elif case == "changed setup-config":
+        Path(hashed["setup-config"]).write_text("reconfigured\n",
+                                                encoding="utf-8")
+    elif case == "changed build-info":
+        Path(hashed["build-info"]).write_text("{}", encoding="utf-8")
+    elif case == "changed header":
+        with Path(hashed["header"]).open("a", encoding="utf-8") as handle:
+            handle.write("#define LATER 1\n")
+    elif case == "missing compiler":
+        document["ghc"] = str(root / "no-ghc")
+    elif case == "wrong compiler version":
+        document["ghc"] = fake_ghc
+    elif case == "source edit only":
+        (root / SCOPED_TREE).mkdir(exist_ok=True)
+        (root / SCOPED_TREE / "M.hs").write_text(_HEAD + _BANNED,
+                                                 encoding="utf-8")
+    stamp.write_text(json.dumps(document), encoding="utf-8")
+
+
+# `(case, substring the AuditError names, or "" when it must load)`
+VERIFY_FIXTURES: list[tuple[str, str]] = [
+    ("valid", ""),
+    ("source edit only", ""),
+    ("no stamp", "does not exist: record the build's settings"),
+    ("schema", "has schema 0"),
+    ("another checkout", "records /nonexistent/checkout"),
+    ("changed cabal.project", "cabal.project changed since"),
+    ("new cabal.project.local", "cabal.project.local changed since"),
+    ("changed synarchy.cabal", "synarchy.cabal changed since"),
+    ("changed setup-config", "setup-config changed since"),
+    ("changed build-info", "build-info changed since"),
+    ("changed header", "header changed since"),
+    ("missing compiler", "not an executable"),
+    ("wrong compiler version", "reports GHC 9.10.1"),
+]
+
+
+CABAL_REGRESSION_STEPS = (
+    "the local build order (build all, headless, graphical) records and "
+    "scans clean",
+    "the scan still passes after cabal test (#2648 review round 8)",
+    "a source-only injection is diagnosed without a rebuild (#2648 review "
+    "round 8)",
+    "the recorded arguments are Cabal's program defaults, the component's "
+    "and its overrides, a cabal.project ghc-options define among the "
+    "overrides though not in build-info.json (#2648 review round 8)",
+    "that define selects the banned import, and its negation stays clean",
+    "a build with command-line --ghc-options is current under its own "
+    "arguments and selects by them (#2648 review round 8)",
+    "an identical cache restored beneath re-stamped configuration files "
+    "still verifies (#2648 review round 7)",
+    "a configuration edit after recording fails",
+    "a changed generated header fails",
 )
 
 
-def cabal_cache_regression(ghc: str, version: str) -> list[str]:
-    """The freshness check against REAL Cabal, on a tiny Custom package
-    shaped like this one (package `synarchy`, suite
-    `synarchy-test-headless`, `build-info: True`) with no dependencies
-    beyond the compiler's own base and Cabal: no download and no build
-    of this project. Needs the cabal that plans the project's builds
-    (`cabal_command`). Its own `CABAL_DIR` keeps it from the user's."""
+def _pinned_setup_sources(cabal_version: str, version: str
+                          ) -> tuple[Path, Path] | None:
+    """A cabal store holding, for this GHC, the Cabal library this
+    cabal-install pairs with, and the downloaded package index the solver
+    needs to choose it, so the fixture package's Setup is built exactly as
+    the project's is, offline; None when either is out of reach. The store
+    abbreviates unit names (`Cbl-3.16.1.0-…`), so the unit's own `name:`
+    field decides."""
+    candidates = [os.environ.get("CABAL_DIR"), str(Path.home() / ".cabal")]
+    for base in filter(None, candidates):
+        index = Path(base, "packages", "hackage.haskell.org", "01-index.tar")
+        if not index.is_file():
+            continue
+        for conf in sorted(Path(base, "store").glob(
+                f"ghc-{version}*/package.db/*-{cabal_version}-*.conf")):
+            try:
+                text = conf.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if re.search(r"^name:\s*Cabal\s*$", text, re.MULTILINE):
+                return conf.parents[2], index.parents[1]
+    return None
+
+
+def cabal_regression(ghc: str, version: str) -> tuple[list[str], str]:
+    """`--record` and the scan against REAL Cabal, on a tiny Custom
+    package shaped like this one (library, executable, the headless and
+    graphical suites, `build-info: True`, ci-local's -fforce-recomp) with
+    no dependency beyond the compiler's own. It builds with the
+    project's cabal-install, in a private CABAL_DIR and without any
+    download, and uses the Cabal library that cabal-install pairs with
+    for the Setup when a store and the downloaded index have it (offline),
+    otherwise the compiler's bundled
+    Cabal. Returns failures and which Setup library ran."""
     failures: list[str] = []
     cabal = shutil.which(os.environ.get(CABAL_ENV) or "cabal")
     if cabal is None:
-        return [f"CACHE cabal not found; set {CABAL_ENV}"]
+        return [f"CABAL cabal not found; set {CABAL_ENV}"], ""
+    cabal_version = subprocess.run([cabal, "--numeric-version"],
+                                   capture_output=True, text=True).stdout.strip()
+    sources = _pinned_setup_sources(cabal_version, version)
+    setup_cabal = f"Cabal =={cabal_version}" if sources else "Cabal"
+    used = (f"Setup Cabal-{cabal_version} from {sources[0]}" if sources
+            else "Setup on the compiler's bundled Cabal")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "pkg"
-        (root / "test").mkdir(parents=True)
+        for sub in ("src", "app", "test", SCOPED_TREE):
+            (root / sub).mkdir(parents=True)
         (root / CABAL_FILE).write_text(
             "cabal-version: 3.0\nname: synarchy\nversion: 0.1.0.0\n"
             f"build-type: Custom\ntested-with: GHC =={version}\n"
-            "custom-setup\n  setup-depends: base, Cabal\n"
-            f"test-suite {HEADLESS_SUITE}\n  type: exitcode-stdio-1.0\n"
-            "  main-is: Main.hs\n  hs-source-dirs: test\n"
+            f"custom-setup\n  setup-depends: base, {setup_cabal}\n"
+            "library\n  exposed-modules: Lib\n  hs-source-dirs: src\n"
             "  build-depends: base\n  default-language: GHC2024\n"
-            "  cpp-options: -DFIRST\n", encoding="utf-8")
+            "executable synarchy\n  main-is: Main.hs\n  hs-source-dirs: app\n"
+            "  build-depends: base, synarchy\n  default-language: GHC2024\n"
+            f"test-suite {HEADLESS_SUITE}\n  type: exitcode-stdio-1.0\n"
+            f"  main-is: Spec.hs\n  hs-source-dirs: {SCOPED_TREE}\n"
+            "  build-depends: base, synarchy\n  default-language: GHC2024\n"
+            "  cpp-options: -DFIRST\n"
+            "test-suite synarchy-test-graphical\n  type: exitcode-stdio-1.0\n"
+            "  main-is: Main.hs\n  hs-source-dirs: test\n"
+            "  build-depends: base\n  default-language: GHC2024\n",
+            encoding="utf-8")
         (root / "Setup.hs").write_text(
             "import Distribution.Simple\nmain :: IO ()\nmain = defaultMain\n",
             encoding="utf-8")
-        (root / "test" / "Main.hs").write_text(
-            "module Main where\nmain :: IO ()\nmain = pure ()\n",
-            encoding="utf-8")
-        (root / "cabal.project").write_text(
-            "packages: .\npackage synarchy\n  build-info: True\n",
-            encoding="utf-8")
-        # Sources settled before the build, outside Cabal's mtime-race
-        # window, as a real checkout's are.
+        (root / "src" / "Lib.hs").write_text("module Lib where\n",
+                                             encoding="utf-8")
+        for main in (root / "app" / "Main.hs", root / "test" / "Main.hs"):
+            main.write_text("module Main where\nmain :: IO ()\nmain = pure ()\n",
+                            encoding="utf-8")
+        spec = root / SCOPED_TREE / "Spec.hs"
+        spec.write_text("module Main where\nmain :: IO ()\nmain = pure ()\n",
+                        encoding="utf-8")
+        project = root / "cabal.project"
+        project.write_text("packages: .\npackage synarchy\n  build-info: True\n",
+                           encoding="utf-8")
+        (root / "cabal.project.local").write_text(
+            "package synarchy\n  ghc-options: -fforce-recomp\n", encoding="utf-8")
         for path in root.rglob("*"):
             os.utime(path, (time.time() - 10, time.time() - 10))
-        env = {**os.environ, "CABAL_DIR": str(Path(tmp) / "cabal-dir")}
-        pinned = ("-w", ghc)
+        cabal_dir = Path(tmp) / "cabal-dir"
+        cabal_dir.mkdir()
+        (cabal_dir / "config").write_text(
+            "repository hackage.haskell.org\n  url: http://hackage.haskell.org/\n"
+            f"remote-repo-cache: {sources[1]}\nstore-dir: {sources[0]}\n"
+            if sources else "active-repositories: :none\n", encoding="utf-8")
+        env = {**os.environ, "CABAL_DIR": str(cabal_dir)}
 
-        def build() -> bool:
-            result = subprocess.run(
-                [cabal, "build", HEADLESS_SUITE, "-v0", *pinned], cwd=root,
-                env=env, capture_output=True, text=True, timeout=600)
+        def cabal_run(*command: str) -> bool:
+            result = subprocess.run([cabal, *command, "-v0", "--offline",
+                                     "-w", ghc],
+                                    cwd=root, env=env, capture_output=True,
+                                    text=True, timeout=600)
             if result.returncode != 0:
-                failures.append("CACHE build failed: "
-                                + " ".join(result.stderr.split())[:300])
+                failures.append(f"CABAL `cabal {' '.join(command)}` failed: "
+                                + " ".join((result.stdout + result.stderr)
+                                           .split())[-400:])
             return result.returncode == 0
 
-        def settings() -> BuildSettings | str:
-            saved = os.environ.get("CABAL_DIR")
-            os.environ["CABAL_DIR"] = env["CABAL_DIR"]
+        def attempt(action):
             try:
-                return configured_settings(
-                    root, verdict=lambda r: cabal_up_to_date(r, cabal, pinned))
+                return action()
             except AuditError as error:
-                return str(error)
-            finally:
-                if saved is None:
-                    os.environ.pop("CABAL_DIR", None)
-                else:
-                    os.environ["CABAL_DIR"] = saved
+                return error
 
-        if not build():
-            return failures
-        first = settings()
-        if isinstance(first, str):
-            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[0]}: {first}")
-            return failures
-        # The review's restore: identical products back under configuration
-        # files re-stamped after the build.
+        def scan(step: int, expect: set[str]) -> None:
+            settings = attempt(lambda: configured_settings(root))
+            if isinstance(settings, AuditError):
+                failures.append(f"CABAL {CABAL_REGRESSION_STEPS[step]}: "
+                                f"{settings}")
+                return
+            found = {v.path for v in scan_tree(root, settings)}
+            if found != expect:
+                failures.append(f"CABAL {CABAL_REGRESSION_STEPS[step]}: "
+                                f"reported {sorted(found)}")
+
+        def record(step: int) -> bool:
+            outcome = attempt(lambda: record_settings(root))
+            if isinstance(outcome, AuditError):
+                failures.append(f"CABAL {CABAL_REGRESSION_STEPS[step]}: "
+                                f"recording failed: {outcome}")
+                return False
+            return True
+
+        # The local order: build all, both suites, record, scan, then test.
+        if not (cabal_run("build", "all") and cabal_run("build", HEADLESS_SUITE)
+                and cabal_run("build", "synarchy-test-graphical")
+                and record(0)):
+            return failures, used
+        scan(0, set())
+        if not cabal_run("test", HEADLESS_SUITE):
+            return failures, used
+        scan(1, set())
+        # The required negative injection, into a built, monitored module.
+        clean_spec = spec.read_text(encoding="utf-8")
+        spec.write_text(clean_spec.replace(
+            "module Main where\n", "module Main where\n" + _BANNED),
+            encoding="utf-8")
+        scan(2, {f"{SCOPED_TREE}/Spec.hs"})
+        spec.write_text(clean_spec, encoding="utf-8")
+        # A package ghc-options define from cabal.project.
+        project.write_text(project.read_text(encoding="utf-8")
+                           + "  ghc-options: -optP-DREVIEW_ACTUAL\n",
+                           encoding="utf-8")
+        if not (cabal_run("build", HEADLESS_SUITE) and record(3)):
+            return failures, used
+        stamp, _plan, unit, _ = _stamp_path(root)
+        recorded = json.loads(stamp.read_text(encoding="utf-8"))["args"]
+        info = json.loads(Path(unit["build-info"]).read_text(encoding="utf-8"))
+        component_args = next(c for c in info["components"]
+                              if c["name"] == HEADLESS_COMPONENT)["compiler-args"]
+        # Cabal 3.16's ghc program has default arguments (`-package-env=-`);
+        # the compiler's bundled Cabal, when that is the Setup, has none.
+        defaults, overrides = _configured_program_args(
+            info["compiler"]["path"], root, Path(unit["dist-dir"]), unit,
+            tuple(component_args))
+        if recorded != [*defaults, *component_args, *overrides] \
+                or (sources and not defaults) \
+                or "-optP-DREVIEW_ACTUAL" not in overrides \
+                or "-fforce-recomp" not in overrides \
+                or "-optP-DREVIEW_ACTUAL" in component_args:
+            failures.append(f"CABAL {CABAL_REGRESSION_STEPS[3]}: recorded "
+                            f"{recorded[:2]}…{recorded[-4:]}, Cabal's program "
+                            f"has {defaults} and {overrides}")
+        probe = root / SCOPED_TREE / "Probe.hs"
+        control = root / SCOPED_TREE / "Control.hs"
+        probe.write_text(_CPP + _HEAD + _branch("ifdef REVIEW_ACTUAL", _BANNED),
+                         encoding="utf-8")
+        control.write_text(_CPP + _HEAD + _branch("ifndef REVIEW_ACTUAL",
+                                                  _BANNED), encoding="utf-8")
+        scan(4, {f"{SCOPED_TREE}/Probe.hs"})
+        # A production build with command-line options, current as built.
+        project.write_text("packages: .\npackage synarchy\n  build-info: True\n",
+                           encoding="utf-8")
+        probe.write_text(_CPP + _HEAD + _branch("ifdef REVIEW_CLI", _BANNED),
+                         encoding="utf-8")
+        control.write_text(_CPP + _HEAD + _branch("ifndef REVIEW_CLI", _BANNED),
+                           encoding="utf-8")
+        cli = ("--ghc-options=-optP-DREVIEW_CLI",)
+        if not (cabal_run("build", HEADLESS_SUITE, *cli) and record(5)):
+            return failures, used
+        scan(5, {f"{SCOPED_TREE}/Probe.hs"})
+        # The review's cache restore: identical products beneath re-stamped,
+        # byte-identical configuration files, then an up-to-date build.
         archived = Path(tmp) / "archived-dist"
         shutil.copytree(root / "dist-newstyle", archived)
         time.sleep(1.1)
-        for name in (CABAL_FILE, "cabal.project"):
+        for name in (CABAL_FILE, "cabal.project", "cabal.project.local"):
             os.utime(root / name, None)
         shutil.rmtree(root / "dist-newstyle")
         shutil.copytree(archived, root / "dist-newstyle")
-        if not build():
-            return failures
-        info = next((root / "dist-newstyle").rglob("build-info.json"))
-        if info.stat().st_mtime >= (root / CABAL_FILE).stat().st_mtime:
-            failures.append("CACHE the restore did not leave build-info.json "
-                            "older than the configuration, so the step proves "
-                            "nothing")
-        restored = settings()
-        if isinstance(restored, str):
-            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[1]}: {restored}")
-        # A genuine configuration change, not yet built.
-        text = (root / CABAL_FILE).read_text(encoding="utf-8")
-        (root / CABAL_FILE).write_text(text.replace("-DFIRST", "-DSECOND"),
-                                       encoding="utf-8")
-        stale = settings()
-        if not isinstance(stale, str) or "not up to date" not in stale:
-            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[2]}: {stale}")
-        if not build():
-            return failures
-        rebuilt = settings()
-        if isinstance(rebuilt, str):
-            failures.append(f"CACHE rebuilt configuration: {rebuilt}")
-            return failures
-        probe = _CPP + _HEAD + _branch("ifdef SECOND", _BANNED)
-        control = _CPP + _HEAD + _branch("ifdef FIRST", _BANNED)
-        (root / SCOPED_TREE / "Test").mkdir(parents=True)
-        (root / SCOPED_TREE / "Test" / "M.hs").write_text(probe, encoding="utf-8")
-        (root / SCOPED_TREE / "Test" / "C.hs").write_text(control,
-                                                          encoding="utf-8")
-        found = {v.path for v in scan_tree(root, rebuilt)}
-        if found != {f"{SCOPED_TREE}/Test/M.hs"}:
-            failures.append(f"CACHE {CACHE_REGRESSION_STEPS[3]}: reported "
-                            f"{sorted(found)}")
-    return failures
+        if not cabal_run("build", HEADLESS_SUITE, *cli):
+            return failures, used
+        scan(6, {f"{SCOPED_TREE}/Probe.hs"})
+        # Genuine changes after recording.
+        project.write_text(project.read_text(encoding="utf-8")
+                           + "  ghc-options: -optP-DLATER\n", encoding="utf-8")
+        outcome = attempt(lambda: configured_settings(root))
+        if not isinstance(outcome, AuditError) \
+                or "cabal.project changed" not in str(outcome):
+            failures.append(f"CABAL {CABAL_REGRESSION_STEPS[7]}: {outcome}")
+        project.write_text("packages: .\npackage synarchy\n  build-info: True\n",
+                           encoding="utf-8")
+        header = Path(json.loads(stamp.read_text(encoding="utf-8"))["header"])
+        header.write_text(header.read_text(encoding="utf-8")
+                          + "#define LATER 1\n", encoding="utf-8")
+        outcome = attempt(lambda: configured_settings(root))
+        if not isinstance(outcome, AuditError) \
+                or "header changed" not in str(outcome):
+            failures.append(f"CABAL {CABAL_REGRESSION_STEPS[8]}: {outcome}")
+    return failures, used
+
+
+_RECORD_COMMAND = "python3 tools/headless_init_import_audit.py --record"
+_GATE_COMMAND = "python3 tools/headless_init_import_audit.py"
+# What must run, in this order, in each entry point (#2648 review round
+# 8): the builds, `--record`, the gate, and only then the tests.
+GATE_ORDER = {
+    "tools/ci-local.sh": (
+        "cabal build all -v0", "cabal build synarchy-test-headless -v0",
+        "cabal build synarchy-test-graphical -v0", _RECORD_COMMAND,
+        _GATE_COMMAND, "cabal test synarchy-test-headless"),
+    ".github/workflows/ci.yml": (
+        "cabal build all -v0", "cabal build synarchy-test-headless -v0",
+        "cabal build synarchy-test-graphical -v0", _RECORD_COMMAND,
+        _GATE_COMMAND, "cabal test synarchy-test-headless"),
+}
+
+
+def gate_order_failures(name: str, text: str) -> list[str]:
+    """Where entry point `name` (its text) runs the configured gate out
+    of order: each command in GATE_ORDER[name] must first run after the
+    first run of the one before it. For the workflow, only the
+    `test-and-audits` job counts, and a step's `run: ` prefix is not
+    part of its command. Commands match exactly, except that the test
+    run may carry arguments and a leading environment assignment.
+    Comment lines never count."""
+    lines = text.splitlines()
+    if name.endswith(".yml"):
+        start = next((i for i, line in enumerate(lines)
+                      if line.rstrip() == "  test-and-audits:"), None)
+        if start is None:
+            return [f"{name}: no test-and-audits job"]
+        end = next((i for i in range(start + 1, len(lines))
+                    if re.match(r"  [\w-]+:\s*$", lines[i])), len(lines))
+        lines = lines[start:end]
+    commands = [re.sub(r"^run:\s*", "", line.strip()) for line in lines
+                if line.strip() and not line.strip().startswith("#")]
+
+    def first(wanted: str) -> int | None:
+        return next((i for i, command in enumerate(commands)
+                     if command == wanted
+                     or (wanted.startswith("cabal test")
+                         and re.match(r"(\w+=\S*\s+)*" + re.escape(wanted)
+                                      + r"(\s|$)", command))), None)
+    order = GATE_ORDER[name]
+    for earlier, later in zip(order, order[1:]):
+        if first(earlier) is None or first(later) is None \
+                or first(later) <= first(earlier):
+            return [f"{name}: `{later}` must first run after `{earlier}`"]
+    return []
+
+
+def _move_line(text: str, command: str, before: str | None) -> str:
+    """`text` with its first line running `command` moved to just before
+    the first line containing `before`, or dropped when `before` is None."""
+    lines = text.splitlines(keepends=True)
+    index = next(i for i, line in enumerate(lines) if line.strip() == command)
+    moved = lines.pop(index)
+    if before is not None:
+        target = next(i for i, line in enumerate(lines) if before in line)
+        lines.insert(target, moved)
+    return "".join(lines)
+
+
+def _after_tests(text: str) -> str:
+    """`text` with the gate moved to just after the headless test run."""
+    lines = text.splitlines(keepends=True)
+    index = next(i for i, line in enumerate(lines)
+                 if line.strip() == _GATE_COMMAND)
+    moved = lines.pop(index)
+    target = next(i for i, line in enumerate(lines)
+                  if "cabal test synarchy-test-headless -v0" in line)
+    lines.insert(target + 1, moved)
+    return "".join(lines)
+
+
+# Reorderings of each entry point that the order check must refuse.
+ORDER_MUTATIONS = (
+    ("gate after the tests", _after_tests),
+    ("no record", lambda text: _move_line(text, _RECORD_COMMAND, None)),
+    ("record before the suite build", lambda text: _move_line(
+        text, _RECORD_COMMAND, "cabal build synarchy-test-headless -v0")),
+)
 
 
 def self_test() -> int:
     failures: list[str] = []
     ghc = ghc_command(REPO_ROOT)
     version = _compiler_version(ghc)
-    # The configured settings: a valid checkout loads, every broken one
-    # stops with its cause.
+    # Recording: every broken checkout stops with its cause.
     with tempfile.TemporaryDirectory() as tmp:
         fake = Path(tmp) / "ghc-9.10.1"
         fake.write_text("#!/bin/sh\necho 9.10.1\n", encoding="utf-8")
         fake.chmod(0o755)
-        for case, needle in [("valid", "")] + SETTINGS_ERROR_FIXTURES:
-            root = Path(tmp) / case.replace(" ", "-").replace("'", "")
+        for case, needle in RECORD_ERROR_FIXTURES:
+            root = Path(tmp) / ("record-" + re.sub(r"\W", "-", case))
             root.mkdir()
             pieces = _settings_checkout(root, ghc, version)
             _write_checkout(root, pieces)
             _break(case, root, pieces, str(fake))
-            pending = (False, "synarchy-0.1.0.0 (test:synarchy-test-headless) "
-                              "(configuration changed)")
             try:
-                loaded = configured_settings(
-                    root, verdict=lambda _root, pending=pending, case=case:
-                    pending if case == "pending rebuild" else (True, ""))
+                record_settings(root)
+                failures.append(f"RECORD {case}: recorded")
+            except AuditError as error:
+                if needle not in str(error):
+                    failures.append(f"RECORD {case}: {error}")
+        # Verifying: the recorded settings load only while every recorded
+        # input and product is unchanged; a source edit is not one.
+        for case, needle in VERIFY_FIXTURES:
+            root = Path(tmp) / ("verify-" + re.sub(r"\W", "-", case))
+            root.mkdir()
+            stamp = _stamped_checkout(root, ghc, version)
+            _tamper(case, root, stamp, str(fake))
+            try:
+                loaded = configured_settings(root)
                 if needle:
-                    failures.append(f"SETTINGS {case}: loaded, expected "
-                                    f"an error naming {needle!r}")
-                elif loaded.header.resolve() != pieces["header"].resolve() \
-                        or loaded.args[-2:] != tuple(
-                            pieces["info"]["components"][0]["compiler-args"][-2:]):
-                    failures.append(f"SETTINGS valid: {loaded}")
+                    failures.append(f"VERIFY {case}: loaded")
+                elif loaded.args[-1] != "-optP-DRECORDED":
+                    failures.append(f"VERIFY {case}: args {loaded.args}")
             except AuditError as error:
                 if not needle or needle not in str(error):
-                    failures.append(f"SETTINGS {case}: {error}")
-    failures += _cabal_resolution_failures()
-    failures += cabal_cache_regression(ghc, version)
+                    failures.append(f"VERIFY {case}: {error}")
+    for name in GATE_ORDER:
+        text = (REPO_ROOT / name).read_text(encoding="utf-8")
+        failures += [f"ORDER {f}" for f in gate_order_failures(name, text)]
+        for label, mutate in ORDER_MUTATIONS:
+            if not gate_order_failures(name, mutate(text)):
+                failures.append(f"ORDER {name}: {label} was accepted")
+    cabal_failures, setup_used = cabal_regression(ghc, version)
+    failures += cabal_failures
     for label, output, source, origins, cpp_ran in MAP_FIXTURES:
         pre = map_output(output, source)
         if list(pre.origins) != origins or pre.cpp_ran != cpp_ran:
@@ -1628,8 +1999,9 @@ def self_test() -> int:
     for rel, reason in EXEMPTIONS.items():
         if not reason.strip():
             failures.append(f"EXEMPTION {rel} carries no reason")
-    total = (1 + len(SETTINGS_ERROR_FIXTURES) + len(MAP_FIXTURES) + 2
-             + 2 + len(CACHE_REGRESSION_STEPS)
+    total = (len(RECORD_ERROR_FIXTURES) + len(VERIFY_FIXTURES)
+             + len(CABAL_REGRESSION_STEPS) + len(MAP_FIXTURES) + 2
+             + len(GATE_ORDER) * (1 + len(ORDER_MUTATIONS))
              + len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
              + len(REASON_FIXTURES) + len(REPORTED_FIXTURES)
              + len(TREE_FIXTURES) + len(EXEMPTION_FIXTURES))
@@ -1640,7 +2012,7 @@ def self_test() -> int:
             print(f"  {failure}")
         return 1
     print(f"headless_init_import_audit self-test: all {total} cases passed "
-          f"({ghc}).")
+          f"({ghc}; {setup_used}).")
     return 0
 
 
@@ -1648,10 +2020,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--self-test", action="store_true",
                         help="run the fixture suite instead of the gate")
+    parser.add_argument("--record", action="store_true",
+                        help="export the suite's settings right after its build")
     args = parser.parse_args(argv)
     try:
         if args.self_test:
             return self_test()
+        if args.record:
+            stamp = record_settings(REPO_ROOT)
+            print(f"Recorded the headless suite's build settings in {stamp}.")
+            return 0
         missing = [rel for rel in EXEMPTIONS if not (REPO_ROOT / rel).is_file()]
         if missing:
             print(f"Stale exemption(s), no such file: {', '.join(missing)}")

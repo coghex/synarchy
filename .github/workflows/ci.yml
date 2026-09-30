@@ -541,19 +541,25 @@ jobs:
 
       # Fails if any test-headless/ module imports the production
       # Engine.Core.Init initializeEngineHeadless outside
-      # Test.Headless.Harness.Log, as GHC compiles it here (#2648): every
-      # module goes through `ghc -E` with the exact arguments Cabal just
-      # used for the suite (build-info.json, from cabal.project's
-      # `build-info: True`), including its generated cabal_macros.h. That
+      # Test.Headless.Harness.Log, as GHC compiles it here (#2648). That
       # initializer hard-wires the engine log to stdout (engine contracts
-      # §Headless fixture logging, #1925). It certifies this Linux build's
-      # configuration only. Cabal must report the suite up to date (a
-      # restored cache counts; an unbuilt configuration change fails), and
-      # missing or mismatched build settings fail it. It skips with the
-      # build it depends on.
+      # §Headless fixture logging, #1925). `--record` exports, straight
+      # after the build above, the complete arguments Cabal just gave GHC
+      # for the suite: the configured ghc program's default and override
+      # arguments from setup-config (where every ghc-options lands) around
+      # the component's own from build-info.json (cabal.project's
+      # `build-info: True`), which force-include its generated
+      # cabal_macros.h. The gate then runs every module through `ghc -E`
+      # with them, after verifying by content hash that the configuration,
+      # setup-config, build-info, header and compiler are the ones
+      # recorded. It certifies this Linux build's configuration only;
+      # missing or mismatched settings fail it. It skips with the build it
+      # depends on.
       - name: Headless init import audit (configured build)
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        run: python3 tools/headless_init_import_audit.py
+        run: |
+          python3 tools/headless_init_import_audit.py --record
+          python3 tools/headless_init_import_audit.py
 
       # The suite itself is unconditional; SYNARCHY_FULL_TESTS only
       # decides whether its full-tier examples run or report pending
@@ -977,8 +983,8 @@ jobs:
       - name: Headless init import audit self-test
         env:
           SYNARCHY_AUDIT_GHC: /usr/local/.ghcup/bin/ghc
-          # Its freshness check asks real Cabal about a tiny package of
-          # its own, in a private CABAL_DIR, with no download.
+          # It records and scans a tiny package of its own with real
+          # Cabal, in a private CABAL_DIR, offline.
           SYNARCHY_AUDIT_CABAL: /usr/local/.ghcup/bin/cabal
         run: python3 tools/headless_init_import_audit.py --self-test
 

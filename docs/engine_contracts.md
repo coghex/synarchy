@@ -146,8 +146,9 @@ strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
 `src/Engine/Scripting/Lua/`), the headless init import audit
-(`headless_init_import_audit.py --self-test` in `static-audits`, the
-bare audit in `test-and-audits` after the suite build, #2648 — no
+(`headless_init_import_audit.py --self-test` in `static-audits`,
+`--record` then the bare audit in `test-and-audits` after the suite
+build, #2648 — no
 `test-headless/` import of the production `initializeEngineHeadless`
 outside `Test.Headless.Harness.Log`, as the configured build compiles it;
 see §Headless fixture logging), the config-write / persistence-inventory /
@@ -4690,28 +4691,39 @@ never overrules a spec that named its own backend. Production is
 unchanged: `initializeEngineHeadless` still logs to stdout for
 `App.Headless`, and `App.Dump` still picks stderr. Gates: hspec
 `--match "headless fixture logging"` for the behavior, and
-`tools/headless_init_import_audit.py` (`--self-test` then the bare
-audit, #2648) for the "never": it fails when any `test-headless/`
+`tools/headless_init_import_audit.py` (`--self-test`, and `--record`
+then the bare audit, #2648) for the "never": it fails when any `test-headless/`
 module other than `Test.Headless.Harness.Log` brings
 `Engine.Core.Init.initializeEngineHeadless` into scope — an import list
 naming it, an unrestricted import (qualified or not), or a `hiding`
 list that leaves it in scope. Importing only `EngineInitResult` or the
 module's other exports stays allowed. It reads what GHC compiles in the
-configured build (owner amendment on #2648): the bare audit runs in
-`test-and-audits` right after `cabal build synarchy-test-headless` (and
-in `tools/ci-local.sh` after its build), and preprocesses every module
-with `ghc -E` using exactly the arguments Cabal gave GHC for that suite.
-Those come from `build-info.json`, which Cabal writes when it builds
-the suite because `cabal.project` sets `build-info: True`, and they
-include the suite's generated `cabal_macros.h`. Cabal leaves that file
-alone on an up-to-date build, so freshness is Cabal's own verdict:
-`cabal build synarchy-test-headless --dry-run` must report "Up to
-date". A restored cache or re-stamped checkout passes; an unbuilt
-change to flags, cpp-options or project settings fails. CPP modules stay allowed; their directives,
-splices, macros and headers are expanded as the build expands them, and
-comments and string literals, MultilineStrings included, are ignored.
-A pending rebuild, missing, mismatched or unreadable build settings,
-or the wrong GHC or cabal, stop it with the cause rather than passing. **It certifies the
+configured build (owner amendment on #2648). Right after
+`cabal build synarchy-test-headless`, in `test-and-audits` and in
+`tools/ci-local.sh` before its `cabal test`, `--record` exports the
+complete arguments Cabal gave GHC for that suite, and the bare audit
+preprocesses every module with `ghc -E` under them. They are Cabal's
+invocation order: the configured ghc program's default arguments, the
+component's arguments from `build-info.json` (written because
+`cabal.project` sets `build-info: True`, and force-including the
+suite's generated `cabal_macros.h`), then the program's override
+arguments, where every `ghc-options` from `cabal.project` or the
+command line lands. `build-info.json` omits the default and override
+arguments, so they are read from Cabal's `setup-config` through Cabal's
+own API. Freshness is content identity: the record holds SHA-256
+digests of `setup-config`, `build-info.json`, the header and the
+configuration inputs (`synarchy.cabal`, `cabal.project`,
+`cabal.project.local`, `cabal.project.freeze`), and the audit verifies
+them and the compiler before scanning. A byte-identical restored cache
+or re-stamped checkout passes, and a build made with command-line
+options is scanned under them; a changed input, header, `setup-config`
+or compiler fails. Source edits are not inputs, so an edited module is
+scanned as it now reads. The record must follow the suite build
+directly. CPP modules stay allowed; their directives, splices, macros
+and headers are expanded as the build expands them, and comments and
+string literals, MultilineStrings included, are ignored. A missing,
+foreign or outdated record, missing, mismatched or unreadable build
+settings, or the wrong GHC stop it with the cause rather than passing. **It certifies the
 configured environment only**: CI's Linux build, and the developer's
 native build under `make ci`, not other platforms, flags, tools or
 dependency versions. `--self-test` runs in `static-audits` with fixture
