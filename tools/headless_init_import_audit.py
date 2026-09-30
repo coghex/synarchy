@@ -42,10 +42,14 @@ one GHC ignores as misplaced, changes nothing. The imports are then read
 from that output with `unicode_operator_audit.py`'s comment/string lexer
 (`haskell_code_only`) and `lua_strict_decode_audit.py`'s layout-aware
 splitter (`haskell_import_declarations`), which follow GHC's whitespace
-and eight-column tab stops. Masked comment tabs stay tabs, and a line-1
-`#!` line is blanked, as GHC skips it. A reported line is mapped back
-through the `LINE` pragma and cpp line markers to the module's own
-source line (for text from an `#include`, the including line).
+and eight-column tab stops. The lexer also masks GHC MultilineStrings
+literals, whatever quotes, comment openers or marker-like lines they
+hold. Masked comment tabs stay tabs, and a line-1 `#!` line is blanked,
+as GHC skips it. A reported line is mapped back through the `LINE`
+pragma and cpp line markers to the module's own source line; text from
+an `#include` maps to the including line. When a module suppresses the
+markers (`-optP-P`), the report takes the one source line with the same
+text, or says the line is the preprocessed text's.
 
 THE CONFIGURATION is the headless suite's own, read from
 `synarchy.cabal`: the `test-suite synarchy-test-headless` stanza and
@@ -54,13 +58,26 @@ the `common` stanzas it imports supply `default-language`,
 `include-dirs` (as `-I`), and the `ghc-options` that reach the
 preprocessor (`-optP`, `-D`, `-U`, `-I`, `-X`, `-cpp`). Every value of
 the `flag(...)` and `os(linux|darwin)` conditions they sit under is
-enumerated. A module is preprocessed once under the first configuration.
-It is preprocessed under all of them only when that pass shows CPP ran,
-because the configurations differ only in what reaches the preprocessor.
-So a macro from `cpp-options`, such as the darwin-only `-DDARWIN`, is
-checked on a Linux runner too. A condition, field or preprocessor this
-reader does not know, such as `-pgmP`, `-F` or `arch(...)`, stops the
-gate with the reason rather than being skipped.
+enumerated, and EVERY module is preprocessed under every distinct
+configuration: nothing is inferred from the output, since `-optP-P`
+hides the markers that would show CPP ran. So a macro from
+`cpp-options`, such as the darwin-only `-DDARWIN`, is checked on a Linux
+runner too. A condition, field or preprocessor this reader does not
+know, such as `-pgmP`, `-F` or `arch(...)`, stops the gate with the
+reason rather than being skipped.
+
+CABAL'S MACROS (`_cabal_macro_flags`) are rebuilt from the same stanzas,
+without a configured build. Every `build-depends` package gets
+`VERSION_<p>` defined, as in Cabal's `cabal_macros.h`, so `#ifdef` and
+`defined(...)` read exactly as the build reads them; non-dependencies
+stay undefined. Values are exact for `base` (the pinned GHC's, via
+`-hide-all-packages -package base`), for the package itself, and for
+`CURRENT_PACKAGE_VERSION`/`CURRENT_COMPONENT_ID`. Any other dependency's
+`MIN_VERSION_<p>` needs the build plan's version, so an `#if` comparing
+it fails the gate with a message naming the macro. A preprocessor
+directive, in the module or a header it includes, naming Cabal's
+host-tool macros (`TOOL_VERSION_*`, `MIN_TOOL_VERSION_*`) fails it too:
+those exist only for programs installed on the build host.
 
 THE COMPILER is `ghc` on PATH, or the executable named by
 `SYNARCHY_AUDIT_GHC`. Its `--numeric-version` must equal
@@ -69,20 +86,19 @@ GHC_VERSION). A missing or mismatched compiler, an unreadable
 configuration, or a module `ghc -E` cannot preprocess fails the gate
 with GHC's own message; nothing is certified silently.
 
-LIMITS, all absent from `test-headless/` today. The compiler supplies
-what only it can:
+LIMITS, all absent from `test-headless/` today:
   * GHC's own platform macros (`darwin_HOST_OS`, `x86_64_HOST_ARCH`
     and the like) are the running host's. They cannot be overridden,
     because GHC passes them after every user flag. CI checks the Linux
     branches; a local `make ci` checks the macOS ones.
-  * Package version macros come from that compiler's global package
-    database, not from Cabal's `cabal_macros.h`. So `VERSION_<dep>` and
-    `MIN_VERSION_<dep>` for a dependency GHC does not ship are
-    undefined: `#if MIN_VERSION_hspec(..)` fails the gate with cpp's
-    error, while `#ifdef VERSION_hspec` reads as false.
+  * Dependency version comparisons and host-tool macros fail closed, as
+    above, rather than being evaluated.
+  * The host-tool check reads the headers cpp's markers name, so it
+    does not see into an `#include` of a module that also suppresses the
+    markers.
 Source formats other than plain Haskell (`.lhs`, `.hsig`, Cabal's
-`.hsc`/`.x`/`.y`) and custom preprocessors (`-F -pgmF`) are out of
-scope.
+`.hsc`/`.x`/`.y`), custom preprocessors (`-F -pgmF`) and quasiquote
+contents are out of scope.
 
 The single exemption is `Test.Headless.Harness.Log`, the boundary that
 owns the backend choice (requirement 4). It is matched by exact path, so
@@ -219,11 +235,16 @@ def _classify(decl: str) -> str | None:
 
 @dataclass(frozen=True)
 class Configuration:
+    """One preprocessing configuration: the cabal-derived `flags`, and
+    `macros`, the flags that rebuild Cabal's `cabal_macros.h`
+    environment for the suite's dependencies (`_cabal_macro_flags`)."""
     label: str
     flags: tuple[str, ...]
+    macros: tuple[str, ...] = ()
 
-
-DEFAULT_CONFIGURATIONS = (Configuration("default", ("-XGHC2024",)),)
+    @property
+    def command(self) -> tuple[str, ...]:
+        return self.flags + self.macros
 
 _STANZA = re.compile(
     r"(?i)(common|test-suite|library|executable|benchmark|foreign-library"
@@ -235,6 +256,13 @@ _CONDITION = re.compile(r"(?P<negated>!?)\s*(?P<kind>flag|os)\s*\(\s*"
 _PREPROCESSOR_OPTION = re.compile(r"-(?:optP|D|U|I|X)\S*\Z|-cpp\Z")
 _CUSTOM_PREPROCESSOR = re.compile(r"-(?:pgmP|pgmF|optF|pgmL)\S*\Z|-F\Z")
 _TESTED_WITH_GHC = re.compile(r"(?im)^tested-with\s*:.*?GHC\s*==\s*([0-9.]+)")
+_PACKAGE_FIELD = re.compile(r"(?im)^(name|version)\s*:\s*(\S+)\s*$")
+_DEPENDENCY = re.compile(r"\s*([A-Za-z0-9][A-Za-z0-9-]*)")
+# A Cabal host-tool macro. Which ones Cabal defines depends on the
+# programs installed on the build host, so no static environment can
+# reproduce `#ifdef TOOL_VERSION_alex`; a directive naming one fails.
+_TOOL_MACRO = re.compile(r"(?<![\w'])(?:MIN_)?TOOL_VERSION_\w+")
+_DIRECTIVE_LINE = re.compile(r"(?m)^[^\S\n]*#(?:[^\n]*\\\n)*[^\n]*")
 
 
 def _cabal_stanzas(text: str) -> dict[tuple[str, str], list[str]]:
@@ -338,6 +366,60 @@ def _field_flags(name: str, value: str, where: str) -> list[str]:
     return []
 
 
+def _dependency_names(value: str) -> list[str]:
+    """The package names in one `build-depends` value."""
+    return [match.group(1) for entry in value.split(",")
+            if (match := _DEPENDENCY.match(entry)) and entry.strip()]
+
+
+def _min_version(version: str) -> str:
+    """Cabal's `MIN_VERSION_<p>(major1,major2,minor)` body for `version`."""
+    a, b, c = ([int(part) for part in version.split(".")] + [0, 0, 0])[:3]
+    return (f"((major1) < {a} || (major1) == {a} && (major2) < {b} || "
+            f"(major1) == {a} && (major2) == {b} && (minor) <= {c})")
+
+
+def _cabal_macro_flags(package: str, version: str,
+                       dependencies: list[str]) -> tuple[str, ...]:
+    """The `ghc -E` flags that rebuild the headless suite's Cabal macro
+    environment, exact wherever the value is knowable without a build
+    plan and unevaluable where it is not.
+
+    Cabal defines `VERSION_<p>` and `MIN_VERSION_<p>` for exactly the
+    component's direct dependencies (`-` spelled `_`), plus
+    `CURRENT_PACKAGE_VERSION` and `CURRENT_COMPONENT_ID`. Here:
+
+      * GHC's own package macros are switched off with
+        `-hide-all-packages`, then `-package base` restores base's --
+        exact, since the pinned GHC's base cannot be replaced;
+      * the package itself, a dependency of its own test suite, gets its
+        exact `version:` values;
+      * every other dependency gets `VERSION_<p>` DEFINED, so `#ifdef`
+        and `defined(...)` read exactly as Cabal would, but
+        `MIN_VERSION_<p>` expands to a call of an undefined function-like
+        macro, so an `#if` that compares its version fails with cpp's
+        error instead of silently taking a branch;
+      * `CURRENT_*` follow Cabal's in-place naming for a local package.
+    """
+    flags = ["-hide-all-packages"]
+    for dependency in dict.fromkeys(dependencies):
+        macro = dependency.replace("-", "_")
+        if dependency == "base":
+            flags += ["-package", "base"]
+        elif dependency == package:
+            flags += [f'-optP-DVERSION_{macro}="{version}"',
+                      f"-optP-DMIN_VERSION_{macro}(major1,major2,minor)="
+                      f"{_min_version(version)}"]
+        else:
+            flags += [f'-optP-DVERSION_{macro}="unknown"',
+                      f"-optP-DMIN_VERSION_{macro}(major1,major2,minor)="
+                      f"CABAL_VERSION_OF_{macro}_IS_UNKNOWN_TO_THIS_GATE("]
+    flags += [f'-optP-DCURRENT_PACKAGE_VERSION="{version}"',
+              f'-optP-DCURRENT_COMPONENT_ID='
+              f'"{package}-{version}-inplace-{HEADLESS_SUITE}"']
+    return tuple(flags)
+
+
 def headless_configurations(repo_root: Path) -> list[Configuration]:
     """Every distinct preprocessing configuration of the headless suite,
     one per assignment of the `flag`/`os` conditions its fields sit
@@ -345,7 +427,12 @@ def headless_configurations(repo_root: Path) -> list[Configuration]:
     cabal = repo_root / CABAL_FILE
     if not cabal.is_file():
         raise AuditError(f"{CABAL_FILE} not found under {repo_root}")
-    stanzas = _cabal_stanzas(cabal.read_text(encoding="utf-8"))
+    text = cabal.read_text(encoding="utf-8")
+    package_fields = {m.group(1).lower(): m.group(2)
+                      for m in _PACKAGE_FIELD.finditer(text)}
+    package = package_fields.get("name", "")
+    version = package_fields.get("version", "0")
+    stanzas = _cabal_stanzas(text)
     suite = ("test-suite", HEADLESS_SUITE)
     if suite not in stanzas:
         raise AuditError(f"{CABAL_FILE} has no `test-suite {HEADLESS_SUITE}`")
@@ -370,20 +457,25 @@ def headless_configurations(repo_root: Path) -> list[Configuration]:
                 fields.append((conditions, name, value))
     flags = sorted({c.lstrip("!")[5:-1].lower() for conds, _, _ in fields
                     for c in conds if c.lstrip("!").startswith("flag(")})
-    configurations: dict[tuple[str, ...], str] = {}
+    configurations: dict[tuple[tuple[str, ...], tuple[str, ...]], str] = {}
     for os_name, *values in itertools.product(
             SUPPORTED_OS, *([False, True] for _ in flags)):
         assignment: dict[str, object] = {"os": os_name}
         assignment.update({f"flag:{flag}": value
                            for flag, value in zip(flags, values)})
         result: list[str] = []
+        dependencies: list[str] = []
         for conditions, name, value in fields:
             if all(_holds(c, assignment) for c in conditions):
                 result.extend(_field_flags(name, value, CABAL_FILE))
+                if name == "build-depends":
+                    dependencies.extend(_dependency_names(value))
         label = "+".join([os_name] + [f for f, v in zip(flags, values) if v])
-        configurations.setdefault(tuple(result), label)
-    return [Configuration(label, flags)
-            for flags, label in configurations.items()]
+        configurations.setdefault(
+            (tuple(result), _cabal_macro_flags(package, version, dependencies)),
+            label)
+    return [Configuration(label, flags, macros)
+            for (flags, macros), label in configurations.items()]
 
 
 # ---------------------------------------------------------------------
@@ -433,22 +525,29 @@ class Preprocessed:
     text: str                                # markers blanked
     origins: tuple[tuple[str, int], ...]     # per output line
     cpp_ran: bool
+    files: frozenset[str] = frozenset()      # every file a marker names
 
 
-def map_output(output: str, source: str) -> Preprocessed:
+def map_output(output: str, source: str, verbatim: bool = False) -> Preprocessed:
     """GHC's `-E` output with its line markers blanked, each remaining
     line tagged with the `(file, line)` it came from. A line-1 `#!` line
-    of the module itself is blanked too, as GHC's lexer skips it."""
+    of the module itself is blanked too, as GHC's lexer skips it.
+
+    `verbatim` says the output is GHC's untouched copy of the source
+    behind its one `LINE` pragma, so no later line is a marker, however
+    much a comment or string line looks like `# 7 "x.hs"`."""
     lines = output.split("\n")
     origins: list[tuple[str, int]] = []
     current, number, cpp_ran = source, 1, False
+    files: set[str] = set()
     for index, line in enumerate(lines):
-        marker = _LINE_MARKER.match(line)
+        marker = _LINE_MARKER.match(line) if index == 0 or not verbatim else None
         if marker:
             cpp_ran = cpp_ran or marker.group(3) is not None
             number = int(marker.group(1) or marker.group(3))
             current = (marker.group(2) if marker.group(2) is not None
                        else marker.group(4)).replace('\\"', '"')
+            files.add(current)
             origins.append(("", 0))
             lines[index] = " " * len(line)
             continue
@@ -456,7 +555,8 @@ def map_output(output: str, source: str) -> Preprocessed:
         if (current, number) == (source, 1) and line.startswith("#!"):
             lines[index] = " " * len(line)
         number += 1
-    return Preprocessed("\n".join(lines), tuple(origins), cpp_ran)
+    return Preprocessed("\n".join(lines), tuple(origins), cpp_ran,
+                        frozenset(files))
 
 
 def preprocess(ghc: str, root: Path, rel_path: str,
@@ -468,7 +568,7 @@ def preprocess(ghc: str, root: Path, rel_path: str,
     output = Path(name)
     try:
         result = subprocess.run(
-            [ghc, "-E", "-v0", *configuration.flags, "-o", str(output),
+            [ghc, "-E", "-v0", *configuration.command, "-o", str(output),
              rel_path],
             cwd=root, capture_output=True, text=True,
             timeout=PREPROCESS_TIMEOUT_SECONDS)
@@ -488,15 +588,21 @@ class PreprocessError(Exception):
     """GHC could not preprocess one module; the module cannot compile."""
 
 
-def scan_preprocessed(pre: Preprocessed, rel_path: str) -> list[Violation]:
-    """Every banned import in GHC's preprocessed text of one module."""
+def scan_preprocessed(pre: Preprocessed, rel_path: str
+                      ) -> list[tuple[Violation, str]]:
+    """Every banned import in GHC's preprocessed text of one module,
+    each with the text of the output line it starts on."""
     # Blank what the lexer masked, keeping a tab a tab: GHC advances a
     # comment's tab to the next tab stop, and a space would shift every
-    # later column on the line out of layout.
+    # later column on the line out of layout. MultilineStrings literals
+    # are masked whether or not the module enables the extension: no
+    # string literal can precede an import except a package qualifier,
+    # so masking more can hide a false match but never a real import.
     code_text = "".join(
         ("\t" if original == "\t" else " ") if masked == "\0" else masked
-        for masked, original in zip(haskell_code_only(pre.text), pre.text))
-    violations: list[Violation] = []
+        for masked, original in zip(
+            haskell_code_only(pre.text, multiline_strings=True), pre.text))
+    violations: list[tuple[Violation, str]] = []
     for start, _end, decl in haskell_import_declarations(code_text):
         if not _MENTIONS_INIT_MODULE.search(decl):
             continue
@@ -516,32 +622,86 @@ def scan_preprocessed(pre: Preprocessed, rel_path: str) -> list[Violation]:
             own = [n for o, n in pre.origins[:index] if o == rel_path]
             reason += f" (from {origin}:{line})"
             line = own[-1] if own else 1
-        violations.append(Violation(rel_path, line, reason))
+        violations.append((Violation(rel_path, line, reason),
+                           pre.text.split("\n")[index]))
     return violations
+
+
+_UNKNOWN_VERSION = re.compile(r"CABAL_VERSION_OF_(\w+)_IS_UNKNOWN_TO_THIS_GATE")
+
+
+def _directive_tool_macros(text: str) -> set[str]:
+    """The Cabal host-tool macros named on `text`'s preprocessor lines."""
+    return {name for line in _DIRECTIVE_LINE.findall(text)
+            for name in _TOOL_MACRO.findall(line)}
 
 
 def check_module(ghc: str, root: Path, rel_path: str,
                  configurations: tuple[Configuration, ...] | list[Configuration],
                  work: Path) -> list[Violation]:
-    """Every banned import GHC would see in one module, under the first
-    configuration, and under every one when CPP runs on it."""
+    """Every banned import GHC would see in one module, under EVERY
+    distinct configuration. Nothing about CPP is inferred from the
+    output -- `-optP-P` removes the line markers that would show it ran
+    -- so each pass is run and scanned."""
+    source = (root / rel_path).read_text(encoding="utf-8")
+    verbatim = f'{{-# LINE 1 "{rel_path}" #-}}\n' + source
+    outputs: list[tuple[Configuration, str]] = []
+    for configuration in configurations:
+        try:
+            outputs.append((configuration, preprocess(
+                ghc, root, rel_path, configuration, work)))
+        except PreprocessError as error:
+            unknown = sorted(
+                {name for name in _UNKNOWN_VERSION.findall(
+                    " ".join(configuration.macros))
+                 if any(f"MIN_VERSION_{name}" in line
+                        for line in _DIRECTIVE_LINE.findall(source))})
+            hint = (f"; its preprocessor conditionals compare "
+                    f"{', '.join('MIN_VERSION_' + n for n in unknown)}, a "
+                    f"dependency version only a configured Cabal build "
+                    f"knows, so this gate cannot choose the branch"
+                    if unknown else "")
+            return [Violation(rel_path, 1, f"{error}{hint}; a module GHC "
+                              f"cannot preprocess cannot be certified")]
     found: dict[tuple[int, str], list[str]] = {}
-    try:
-        first = map_output(preprocess(ghc, root, rel_path, configurations[0],
-                                      work), rel_path)
-        passes = [(configurations[0], first)]
-        if first.cpp_ran:
-            passes += [(configuration, map_output(
-                preprocess(ghc, root, rel_path, configuration, work), rel_path))
-                for configuration in configurations[1:]]
-    except PreprocessError as error:
-        return [Violation(rel_path, 1, f"{error}; a module GHC cannot "
-                          f"preprocess cannot be certified")]
-    for configuration, pre in passes:
-        for violation in scan_preprocessed(pre, rel_path):
-            found.setdefault((violation.line, violation.reason),
-                             []).append(configuration.label)
-    labels = [configuration.label for configuration, _ in passes]
+    included: set[str] = set()
+    for configuration, output in outputs:
+        pre = map_output(output, rel_path, verbatim=output == verbatim)
+        included.update(name for name in pre.files
+                        if name != rel_path and not name.startswith("<"))
+        markerless = output != verbatim and not pre.cpp_ran
+        for violation, text in scan_preprocessed(pre, rel_path):
+            line, reason = violation.line, violation.reason
+            if markerless:
+                # Preprocessed, yet no cpp marker maps it back
+                # (`-optP-P`): take the one source line with the same
+                # text, or say the line is the preprocessed text's.
+                same = [n for n, source_line in
+                        enumerate(source.split("\n"), 1)
+                        if source_line.strip() == text.strip()]
+                if len(same) == 1:
+                    line = same[0]
+                    reason += (" (cpp line markers were suppressed; located "
+                               "by its text)")
+                else:
+                    reason += (" (cpp line markers were suppressed, so the "
+                               "line is the preprocessed text's)")
+            found.setdefault((line, reason), []).append(configuration.label)
+    if any(output != verbatim for _, output in outputs):
+        texts = [source] + [
+            (root / name).read_text(encoding="utf-8", errors="replace")
+            for name in sorted(included)
+            if (root / name).resolve().is_relative_to(root.resolve())
+            and (root / name).is_file()]
+        tools = sorted(set().union(*map(_directive_tool_macros, texts)))
+        if tools:
+            found.setdefault((1, (
+                f"its preprocessor directives name Cabal's host-tool "
+                f"macro(s) {', '.join(tools)}, which Cabal defines only for "
+                f"programs installed on the build host, so this gate cannot "
+                f"certify the branch it takes")), []).extend(
+                    c.label for c, _ in outputs)
+    labels = [configuration.label for configuration, _ in outputs]
     return [Violation(rel_path, line,
                       reason if seen == labels
                       else f"{reason} (under {', '.join(seen)})")
@@ -571,11 +731,21 @@ def scan_tree(root: Path, ghc: str | None = None) -> list[Violation]:
 
 def find_violations(text: str, ghc: str,
                     rel_path: str = "Fixture.hs") -> list[Violation]:
-    """One module's source checked under the default configuration."""
+    """One module's source checked under the real headless suite's
+    configurations, as `scan_tree` checks it."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / rel_path).write_text(text, encoding="utf-8")
-        return check_module(ghc, root, rel_path, DEFAULT_CONFIGURATIONS, root)
+        return check_module(ghc, root, rel_path, _suite_configurations(), root)
+
+
+_SUITE_CONFIGURATIONS: list[Configuration] = []
+
+
+def _suite_configurations() -> list[Configuration]:
+    if not _SUITE_CONFIGURATIONS:
+        _SUITE_CONFIGURATIONS.extend(headless_configurations(REPO_ROOT))
+    return _SUITE_CONFIGURATIONS
 
 
 # ---------------------------------------------------------------------
@@ -591,6 +761,15 @@ _ALLOWED = "import Engine.Core.Init (EngineInitResult(..))\n"
 # GHC preprocesses it.
 _CPP_PROBE = ("{-\n#define EngineInitResult initializeEngineHeadless\n-}\n"
               + _ALLOWED)
+
+
+_CPP = "{-# LANGUAGE CPP #-}\n"
+_NO_MARKERS = _CPP + "{-# OPTIONS_GHC -optP-P #-}\n"
+_ML = "{-# LANGUAGE MultilineStrings #-}\n"
+
+
+def _branch(condition: str, taken: str, other: str = _ALLOWED) -> str:
+    return f"#{condition}\n{taken}#else\n{other}#endif\n"
 
 
 def _probe(header: str) -> tuple[str, list[int]]:
@@ -728,6 +907,45 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
      "version macro only Cabal defines",
      "{-# LANGUAGE CPP #-}\n" + _HEAD + "#if MIN_VERSION_hspec(2,0,0)\n"
      + _ALLOWED + "#endif\n", [1]),
+    # Every configuration is preprocessed: `-P` drops the markers that
+    # would show CPP ran (#2648 review round 4).
+    ("a marker-suppressing CPP module takes the banned branch under the "
+     "darwin configurations", _NO_MARKERS + _HEAD
+     + _branch("ifdef DARWIN", _BANNED), [5]),
+    ("the same under the dev configurations",
+     _NO_MARKERS + _HEAD + _branch("ifdef DEVELOPMENT", _BANNED), [5]),
+    ("a marker-suppressed banned import found in every configuration",
+     _NO_MARKERS + _HEAD + _BANNED, [4]),
+    # Cabal's dependency macros (#2648 review round 4): definedness is
+    # Cabal's, a dependency version comparison fails closed.
+    ("`#ifdef VERSION_hspec`: hspec is a dependency, so Cabal defines it",
+     _CPP + _HEAD + _branch("ifdef VERSION_hspec", _BANNED), [4]),
+    ("`defined(MIN_VERSION_hspec)` is true under Cabal too",
+     _CPP + _HEAD + _branch("if defined(MIN_VERSION_hspec)", _BANNED), [4]),
+    ("a dependency with a dash in its name", _CPP + _HEAD
+     + _branch("ifdef VERSION_cryptohash_sha256", _BANNED), [4]),
+    ("base's version comes from the pinned GHC, exactly",
+     _CPP + _HEAD + _branch("if MIN_VERSION_base(4,0,0)", _BANNED), [4]),
+    ("the package's own version is exact",
+     _CPP + _HEAD + _branch("if MIN_VERSION_synarchy(0,1,0)", _BANNED), [4]),
+    ("`CURRENT_COMPONENT_ID` is defined, as Cabal defines it",
+     _CPP + _HEAD + _branch("ifdef CURRENT_COMPONENT_ID", _BANNED), [4]),
+    ("a dependency version comparison fails closed",
+     _CPP + _HEAD + _branch("if MIN_VERSION_hspec(2,0,0)", _BANNED), [1]),
+    ("a host-tool macro fails closed", _CPP + _HEAD
+     + _branch("ifdef TOOL_VERSION_alex", _ALLOWED), [1]),
+    # MultilineStrings (#2648 review round 4): real imports around the
+    # literals are still read.
+    ("a banned import before a multiline string with an embedded quote",
+     _ML + _HEAD + _BANNED + 'message = """\n  A double quote: "\n  """\n',
+     [3]),
+    ("a banned import after a `\"\"\"` inside a comment and a line comment",
+     _ML + _HEAD + '{- """ -}\n-- """\n' + _BANNED, [5]),
+    ("a banned package-qualified import under MultilineStrings",
+     _ML + _HEAD
+     + 'import "synarchy" Engine.Core.Init (initializeEngineHeadless)\n', [3]),
+    ("a comment line that looks like a cpp marker does not move the report",
+     _HEAD + '{-\n# 7 "elsewhere.hs"\n-}\n' + _BANNED, [5]),
 ] + [
     (f"the `where`-line import after U+{ord(space):04X} -- GHC skips every "
      f"Unicode space separator, form feed and vertical tab (#2648 review)",
@@ -829,9 +1047,57 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
      "{-# LANGUAGE CPP #-}\n" + _HEAD + "import Engine.Core.Init\n"
      "#ifdef NOT_DEFINED\n" + "  -- skipped\n" * 12 + "#else\n"
      "  (EngineInitResult(..))\n#endif\nx = 1\n"),
+    ("a marker-suppressing CPP module whose branches are all allowed",
+     _NO_MARKERS + _HEAD + _branch("ifdef DARWIN", _ALLOWED)),
+    ("`#ifndef VERSION_hspec`: Cabal defines it, so the banned branch is "
+     "skipped", _CPP + _HEAD + _branch("ifndef VERSION_hspec", _BANNED)),
+    ("`#ifdef` on a package that is not a dependency",
+     _CPP + _HEAD + _branch("ifdef VERSION_yaml_light", _BANNED)),
+    ("base's exact version picks the allowed branch", _CPP + _HEAD
+     + _branch("if MIN_VERSION_base(4,0,0)", _ALLOWED, _BANNED)),
+    ("the package's exact version picks the allowed branch", _CPP + _HEAD
+     + _branch("if MIN_VERSION_synarchy(0,1,0)", _ALLOWED, _BANNED)),
+    ("a dependency version macro used as a value, outside a conditional",
+     _CPP + _HEAD + _ALLOWED + "v :: String\nv = VERSION_hspec\n"),
+    ("a host-tool macro named in a non-CPP module's comment",
+     _HEAD + _ALLOWED + "-- #ifdef TOOL_VERSION_alex\n"),
+    ("the review's multiline string: an embedded quote, then import text "
+     "(#2648 review round 4)",
+     _ML + "module M (message) where\nimport Prelude (Char)\n"
+     "message :: [Char]\nmessage = \"\"\"\n  A double quote: \"\n"
+     "  import Engine.Core.Init (initializeEngineHeadless)\n  \"\"\"\n"),
+    ("an escaped delimiter does not close the multiline string",
+     _ML + _HEAD + _ALLOWED + 'message :: String\nmessage = """a\\"""\n'
+     "  import Engine.Core.Init (initializeEngineHeadless)\n  \"\"\"\n"),
+    ("a quote run at the close, comment openers and a marker-looking line "
+     "inside", _ML + _HEAD + _ALLOWED + 'message :: String\nmessage = """\n'
+     '  "" -- {- not comments\n# 1 "fake.hs"\n'
+     "import Engine.Core.Init (initializeEngineHeadless)\n"
+     '  tail quote\\""""\n'),
+    ("a gap inside a multiline string", _ML + _HEAD + _ALLOWED
+     + 'message :: String\nmessage = """gap\\   \\\n'
+     "import Engine.Core.Init (initializeEngineHeadless)\n\"\"\"\n"),
+    ("a multiline string in a CPP module", _ML + _CPP + _HEAD + _ALLOWED
+     + 'message :: String\nmessage = """\n  a " quote\n'
+     "  import Engine.Core.Init (initializeEngineHeadless)\n  \"\"\"\n"),
+    ("a module without the extension: three quotes are two strings",
+     _HEAD + _ALLOWED + "join :: String -> String -> String\n"
+     "join a b = a <> b\n" 'joined :: String\njoined = join """x"\n'),
     ("a CPP module's tab-containing comment keeps GHC's columns",
      "{-# LANGUAGE CPP #-}\n" + _HEAD + "{-\t-} " + _ALLOWED
      + "           fixture = EngineInitResult\n"),
+]
+
+# `(label, source, substrings the single report must contain)`
+REASON_FIXTURES: list[tuple[str, str, tuple[str, ...]]] = [
+    ("the version comparison names its macro and why it cannot be chosen",
+     _CPP + _HEAD + _branch("if MIN_VERSION_hspec(2,0,0)", _BANNED),
+     ("MIN_VERSION_hspec", "configured Cabal build")),
+    ("the host-tool refusal names its macro", _CPP + _HEAD
+     + _branch("ifdef TOOL_VERSION_alex", _ALLOWED), ("TOOL_VERSION_alex",)),
+    ("a markerless report says how it was located",
+     _NO_MARKERS + _HEAD + _branch("ifdef DARWIN", _BANNED),
+     ("located by its text", "under darwin, darwin+dev")),
 ]
 
 _FIXTURE_CABAL = f"test-suite {HEADLESS_SUITE}\n    default-language: GHC2024\n"
@@ -911,6 +1177,39 @@ TREE_FIXTURES: list[tuple[str, str, str, list[int], dict[str, str]]] = [
     ("another component's CPP does not reach the suite",
      "library\n    default-extensions: CPP\n\n" + _FIXTURE_CABAL,
      _HEAD + _CPP_PROBE, [], {}),
+    ("scan_tree checks every configuration of a marker-suppressing module "
+     "(#2648 review round 4)",
+     _FIXTURE_CABAL + "    if os(darwin)\n        cpp-options: -DDARWIN\n",
+     _NO_MARKERS + _HEAD + _branch("ifdef DARWIN", _BANNED), [5], {}),
+    ("-optP-P from the suite's own ghc-options",
+     _FIXTURE_CABAL + "    ghc-options: -optP-P\n"
+     "    if os(darwin)\n        cpp-options: -DDARWIN\n",
+     _CPP + _HEAD + _branch("ifdef DARWIN", _BANNED), [4], {}),
+    ("scan_tree defines VERSION_hspec for a suite that depends on hspec "
+     "(#2648 review round 4)",
+     _FIXTURE_CABAL + "    build-depends: base >=4 && <5, hspec\n",
+     _CPP + _HEAD + _branch("ifdef VERSION_hspec", _BANNED), [4], {}),
+    ("and leaves it undefined for a suite that does not",
+     _FIXTURE_CABAL + "    build-depends: base >=4 && <5\n",
+     _CPP + _HEAD + _branch("ifdef VERSION_hspec", _BANNED), [], {}),
+    ("a dependency added under a flag is defined in that configuration",
+     _DEV_FLAG + _FIXTURE_CABAL + "    build-depends: base\n"
+     "    if flag(dev)\n        build-depends: hspec\n",
+     _CPP + _HEAD + _branch("ifdef VERSION_hspec", _BANNED), [4], {}),
+    ("scan_tree fails closed on a dependency version comparison",
+     _FIXTURE_CABAL + "    build-depends: base, hspec\n",
+     _CPP + _HEAD + _branch("if MIN_VERSION_hspec(2,0,0)", _BANNED), [1], {}),
+    ("scan_tree certifies the review's multiline string",
+     _FIXTURE_CABAL, _ML + "module M (message) where\nimport Prelude (Char)\n"
+     "message :: [Char]\nmessage = \"\"\"\n  A double quote: \"\n"
+     "  import Engine.Core.Init (initializeEngineHeadless)\n  \"\"\"\n",
+     [], {}),
+    ("scan_tree reports a banned import before a multiline string",
+     _FIXTURE_CABAL, _ML + _HEAD + _BANNED
+     + 'message :: String\nmessage = """\n  a " quote\n  """\n', [3], {}),
+    ("a host-tool macro in an included header fails closed",
+     _FIXTURE_CABAL, _CPP + _HEAD + '#include "tool.h"\n' + _ALLOWED, [1],
+     {"test-headless/Test/tool.h": "#ifdef TOOL_VERSION_happy\n#endif\n"}),
     ("an #include is reported at the including line",
      _FIXTURE_CABAL, "{-# LANGUAGE CPP #-}\n" + _HEAD
      + "#include \"banned.h\"\n", [3],
@@ -953,11 +1252,19 @@ _LANG = ("-XGHC2024", "-XDefaultSignatures", "-XDuplicateRecordFields",
          "-XQuasiQuotes")
 _DARWIN = ("-optP-DDARWIN", "-optP-Wno-nonportable-include-path")
 EXPECTED_HEADLESS_CONFIGURATIONS = [
-    Configuration("linux", _LANG),
-    Configuration("linux+dev", _LANG + ("-optP-DDEVELOPMENT",)),
-    Configuration("darwin", _LANG + _DARWIN),
-    Configuration("darwin+dev", _LANG + ("-optP-DDEVELOPMENT",) + _DARWIN),
+    ("linux", _LANG),
+    ("linux+dev", _LANG + ("-optP-DDEVELOPMENT",)),
+    ("darwin", _LANG + _DARWIN),
+    ("darwin+dev", _LANG + ("-optP-DDEVELOPMENT",) + _DARWIN),
 ]
+# The `VERSION_<p>` names Cabal's generated cabal_macros.h defines for
+# the suite (read from a configured build), which every configuration's
+# macro environment must define too, and nothing else.
+EXPECTED_DEPENDENCY_MACROS = frozenset(
+    "GLFW_b JuicyPixels aeson async base base_unicode_symbols bytestring "
+    "cereal containers cryptohash_sha256 deepseq directory filepath hslua "
+    "hspec linear mtl network process random scientific stm synarchy text "
+    "unix unordered_containers vector vulkan yaml zlib".split())
 
 # `(label, ghc -E output, source path, expected origins, cpp ran)`
 MAP_FIXTURES: list[tuple[str, str, str, list[tuple[str, int]], bool]] = [
@@ -989,11 +1296,20 @@ def self_test() -> int:
     failures: list[str] = []
     # Compiler-free: the configuration reader and the source map.
     derived = headless_configurations(REPO_ROOT)
-    if derived != EXPECTED_HEADLESS_CONFIGURATIONS:
+    if [(c.label, c.flags) for c in derived] != EXPECTED_HEADLESS_CONFIGURATIONS:
         failures.append(
-            f"CONFIG {CABAL_FILE}: derived {derived}, expected "
-            f"{EXPECTED_HEADLESS_CONFIGURATIONS}; reread the headless "
+            f"CONFIG {CABAL_FILE}: derived "
+            f"{[(c.label, c.flags) for c in derived]}; reread the headless "
             f"suite's stanzas and update EXPECTED_HEADLESS_CONFIGURATIONS")
+    for configuration in derived:
+        defined = {m.group(1) for flag in configuration.macros
+                   if (m := re.match(r"-optP-DVERSION_(\w+)=", flag))}
+        defined |= {"base"} if "base" in configuration.macros else set()
+        if defined != EXPECTED_DEPENDENCY_MACROS:
+            failures.append(
+                f"CONFIG {configuration.label}: VERSION_ macros "
+                f"{sorted(defined ^ EXPECTED_DEPENDENCY_MACROS)} differ from "
+                f"Cabal's; update EXPECTED_DEPENDENCY_MACROS")
     for label, cabal, needle in CONFIG_ERROR_FIXTURES:
         with tempfile.TemporaryDirectory() as tmp:
             if cabal is not None:
@@ -1035,6 +1351,8 @@ def self_test() -> int:
                                  DETECTED_FIXTURES))
         clean = list(pool.map(lambda f: find_violations(f[1], ghc),
                               CLEAN_FIXTURES))
+        reasons = list(pool.map(lambda f: find_violations(f[1], ghc),
+                                REASON_FIXTURES))
         trees = list(pool.map(
             lambda f: _run_tree(ghc, f[1],
                                 {f"{SCOPED_TREE}/Test/M.hs": f[2], **f[4]}),
@@ -1043,6 +1361,9 @@ def self_test() -> int:
         if [v.line for v in got] != lines:
             failures.append(f"DETECT {label}: expected lines {lines}, got "
                             f"{[str(v) for v in got]}")
+    for (label, _, needles), got in zip(REASON_FIXTURES, reasons):
+        if len(got) != 1 or not all(n in got[0].reason for n in needles):
+            failures.append(f"REASON {label}: {[str(v) for v in got]}")
     for (label, _), got in zip(CLEAN_FIXTURES, clean):
         if got:
             failures.append(f"CLEAN {label}: unexpected {[str(v) for v in got]}")
@@ -1062,6 +1383,7 @@ def self_test() -> int:
             failures.append(f"EXEMPTION {rel} carries no reason")
     total = (1 + len(CONFIG_ERROR_FIXTURES) + len(MAP_FIXTURES) + 2
              + len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
+             + len(REASON_FIXTURES)
              + len(TREE_FIXTURES) + len(EXEMPTION_FIXTURES))
     if failures:
         print(f"headless_init_import_audit self-test: {len(failures)} of "
@@ -1106,8 +1428,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(f"No {SCOPED_TREE}/ module imports {INIT_MODULE}."
           f"{BANNED_IDENTIFIER} outside {HARNESS_MODULE} "
-          f"({len(_modules(REPO_ROOT))} modules preprocessed by {ghc}; "
-          f"CPP modules under {', '.join(c.label for c in configurations)}).")
+          f"({len(_modules(REPO_ROOT))} modules preprocessed by {ghc} "
+          f"under {', '.join(c.label for c in configurations)}).")
     return 0
 
 

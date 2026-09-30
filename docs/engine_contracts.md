@@ -4703,9 +4703,14 @@ configured macros are expanded, not refused. A pragma quoted in a string
 or comment, or one GHC ignores as misplaced, changes nothing. The gate
 needs `ghc` on PATH (or `SYNARCHY_AUDIT_GHC`) at the `tested-with`
 version, which the CI image provides. A missing or mismatched compiler
-stops it with that message. GHC's own host-platform macros and its
-package version macros are the running compiler's; the tool's docstring
-lists those limits. The Chop authority fixture (#2121) landed on the
+stops it with that message. Every module is preprocessed under every
+configuration, and Cabal's dependency macros are rebuilt from the
+stanzas: `VERSION_<dep>` is defined as Cabal defines it, `base`'s and
+the package's own values are exact, and an `#if` comparing another
+dependency's `MIN_VERSION_<dep>`, or a directive naming a host-tool
+macro, fails closed with the macro named. MultilineStrings literals
+are masked like other strings. GHC's own host-platform macros are the
+running compiler's; the tool's docstring lists that limit. The Chop authority fixture (#2121) landed on the
 production initializer after #2143 migrated the suite, because nothing
 checked.
 
