@@ -30,6 +30,7 @@
 local cardio   = require("scripts.cardio")
 local thermo   = require("scripts.thermo")
 local salts    = require("scripts.salts")
+local survivalExempt = require("scripts.unit_survival_exempt")
 local brain    = require("scripts.brain")
 local thoughts = require("scripts.thoughts")
 local mental   = require("scripts.mental_state")
@@ -132,8 +133,14 @@ function unitResources.update(dt)
                 -- temp + circulation + sweat-salt-drain + frostbite); then salt
                 -- balance. The failure meters read all of these afterward.
                 cardio.tick(uid, dt)
-                thermo.tick(uid, info, dt)
-                salts.tick(uid, dt)
+                -- Enemy definitions ignore survival physiology (#2754):
+                -- their temperature and salt stay pinned at homeostasis.
+                if survivalExempt.isExempt(info.defName) then
+                    survivalExempt.neutralize(uid)
+                else
+                    thermo.tick(uid, info, dt)
+                    salts.tick(uid, dt)
+                end
                 -- Brain consciousness reads the above (core_temp, blood_oxygen,
                 -- salt_conc), so it ticks last. Low consciousness → collapse
                 -- (in tickInjuries); checkRevive keeps the unit down until
@@ -181,6 +188,13 @@ function unitResources.update(dt)
                         -- A no-op for species with no live calorie pool.
                         starvation.refreshStrength(uid)
                         resourceTick.checkRevive(uid, defConfig)
+                    elseif survivalExempt.isExempt(info.defName) then
+                        -- No pools, but still a way back up (#2754): an
+                        -- exempt unit restored collapsed from a survival
+                        -- failure, or stabilized after an injury, rises
+                        -- once the knockdown, injury, consciousness and
+                        -- blood-loss gates all clear.
+                        resourceTick.checkRevive(uid, {})
                     end
                 end
             end
@@ -210,6 +224,10 @@ function unitResources.onSaveLoaded(survUnitIds, _survBuildingIds)
     for _, uid in ipairs(survUnitIds or {}) do
         unit.recomputeBody(uid)
     end
+    -- A save can predate the #2754 exemption and carry an occupant whose
+    -- temperature or salt had already drifted; clear that before the
+    -- first (still paused) frame reads it.
+    survivalExempt.neutralizeLoaded(survUnitIds)
 end
 
 -- Exposed for debug console: inspect what a unit's drain/regen
