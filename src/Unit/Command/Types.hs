@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Unit.Command.Types
     ( UnitCommand(..)
+    , SpawnProfile(..)
     , motionCoordinateInDomain
     , motionSpeedInDomain
     ) where
@@ -13,9 +14,28 @@ import Unit.Pathing.Hazard (MoveHazardPolicy(..))
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Residency (ChunkGeneration)
 
+-- | How a spawn draws the unit's per-individual values (#2756).
+--
+--   'SpawnRolled' is gameplay: every stat, skill, knowledge value and
+--   body input is rolled from the shared stat RNG, and so are the
+--   personal name and the starting loadout's item rolls.
+--
+--   'SpawnStandard' is a TEST profile, reachable only through
+--   @unit.spawn@'s explicit profile argument: every template takes its
+--   definition's @base@ \/ @mean@ with no draw, and the name and item
+--   rolls come from a fixed, spawn-local generator. It consumes nothing
+--   from the shared stat RNG, so a gate can compare units across runs
+--   without the gameplay spread (a weak roll that cannot carry its kit)
+--   making it flaky. Derived values still come from the body and stat
+--   authorities, exactly as for a rolled unit with those inputs.
+data SpawnProfile
+    = SpawnRolled
+    | SpawnStandard
+    deriving (Show, Eq)
+
 data UnitCommand
     = UnitSpawn !UnitId !Text !Float !Float !Int !Faction !WorldPageId
-               !ChunkGeneration
+               !ChunkGeneration !SpawnProfile
         -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, faction,
         --   owning world page (stamped from the active world at spawn so
         --   the unit is world-scoped, #78).
@@ -39,6 +59,9 @@ data UnitCommand
         --   materialising on its replacement — the case a queued
         --   page clear cannot catch, because the command may already
         --   have been dequeued when that clear was enqueued.
+        --
+        --   The trailing 'SpawnProfile' (#2756) chooses rolled or
+        --   standard draws; every gameplay source sends 'SpawnRolled'.
     | UnitDestroy !UnitId
     | UnitTeleport !UnitId !Float !Float !(Maybe Int)
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)

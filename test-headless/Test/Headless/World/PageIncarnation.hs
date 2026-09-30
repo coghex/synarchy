@@ -1254,10 +1254,10 @@ interleavingSpec = describe "a transition landing mid-commit" $ do
             let seams = productionSpawnSeams
                     { seamAfterEpochCheck = pathRun p env }
             forM_ held $ \cmd → case cmd of
-                UnitSpawn uid nm sx sy sz fac pg ep →
+                UnitSpawn uid nm sx sy sz fac pg ep prof →
                     handleUnitSpawnCommandWith seams env
                         (ucUtsRef (toUnitCombatCapability env))
-                        uid nm sx sy sz fac pg ep
+                        uid nm sx sy sz fac pg ep prof
                 _ → pure ()
             rUnits <$> rowsOn env incPage `shouldReturn` []
             simStateIds env `shouldReturn` []

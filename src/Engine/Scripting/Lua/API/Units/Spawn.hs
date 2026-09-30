@@ -37,7 +37,7 @@ import qualified Engine.Core.Queue as Q
 import Unit.Types
 import Unit.Faction
     ( defaultSpawnFaction, fallbackFaction, factionTag, parseFaction )
-import Unit.Command.Types (UnitCommand(..))
+import Unit.Command.Types (UnitCommand(..), SpawnProfile(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Sim.Types (Pose(..))
 import Unit.Pathing.Hazard
@@ -55,7 +55,8 @@ import World.Chunk.Admit (pageIncarnation)
 --   Falls back to Z=0 if chunk isn't loaded. Returns unit ID or -1.
 --
 --   Signature:
---   unit.spawn(defName, gx, gy, [gz], [factionId], [pageId], [bindGen])
+--   unit.spawn(defName, gx, gy, [gz], [factionId], [pageId], [bindGen],
+--              [profile])
 --   factionId is the spawn-time faction tag — one of the canonical
 --   'Unit.Faction.factionTag' values ("player", "wildlife", "hostile",
 --   "neutral", "debug"). This is the ingress boundary (#912): the tag is
@@ -100,6 +101,16 @@ import World.Chunk.Admit (pageIncarnation)
 --   the binding — location content spawning, AI staking, debug spawns,
 --   world-gen animals — keeps the @-1@ contract exactly (#1687 owns
 --   that convention).
+--
+--   @profile@ (slot 8, #2756) is TEST-ONLY: absent, @nil@ or
+--   @"rolled"@ is the gameplay roll every production caller gets;
+--   @"standard"@ spawns the unit at its definition's base\/mean values
+--   with no draw from the shared stat RNG (see
+--   'Unit.Command.Types.SpawnProfile'). No player-facing script passes
+--   it — the portal forwards it only while a test has switched
+--   @buildingSpawn@'s standard roster on. Anything else is refused
+--   with a warning and @-1@ before any id is allocated or command
+--   queued, so a typo never silently degrades a test to rolled units.
 unitSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSpawnFn env = do
     nameArg     ← Lua.tostring 1
@@ -130,12 +141,32 @@ unitSpawnFn env = do
     bindArg7    ← case slot7Ty of
         Lua.TypeNumber → Lua.tointeger 7
         _              → return Nothing
+    -- Slot 8 by Lua type as well: only a real string can name a
+    -- profile, so a number is refused rather than coerced.
+    slot8Ty     ← Lua.ltype 8
+    profileArg8 ← case slot8Ty of
+        Lua.TypeString → Lua.tostring 8
+        _              → return Nothing
+    let mProfile = case (slot8Ty, profileArg8) of
+            (Lua.TypeNil, _)            → Right SpawnRolled
+            (Lua.TypeNone, _)           → Right SpawnRolled
+            (_, Just "rolled")          → Right SpawnRolled
+            (_, Just "standard")        → Right SpawnStandard
+            (_, Just other)             → Left (TE.decodeUtf8Lenient other)
+            (ty, Nothing)               → Left (tshow ty)
 
-    case nameArg of
-        Nothing → do
+    case (nameArg, mProfile) of
+        (Nothing, _) → do
             Lua.pushnumber (-1)
             return 1
-        Just nameBS → do
+        (_, Left bad) → do
+            logger ← Lua.liftIO $ readIORef (loggerRef env)
+            Lua.liftIO $ logWarn logger CatAsset $
+                "unit.spawn: unknown spawn profile " <> bad
+                <> " (expected \"rolled\" or \"standard\")"
+            Lua.pushnumber (-1)
+            return 1
+        (Just nameBS, Right profile) → do
             let name = TE.decodeUtf8Lenient nameBS
                 gx = case xArg of
                          Just (Lua.Number n) → realToFrac n
@@ -250,6 +281,7 @@ unitSpawnFn env = do
                         -- world so the unit is world-scoped (#78).
                         Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                             UnitSpawn uid name gx gy gz faction pageId epoch
+                                      profile
 
                         return (Right (fromIntegral (unUnitId uid) ∷ Int))
 

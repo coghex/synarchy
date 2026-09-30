@@ -16,6 +16,11 @@ module Unit.Thread.Command.Spawn
     , buildStartingInventory
     , buildStartingEquipment
     , buildStartingAccessories
+      -- * The per-individual draws (#2756)
+    , rollTemplates
+    , standardTemplates
+    , standardItemSeed
+    , standardNameGen
     ) where
 
 import UPrelude
@@ -24,7 +29,8 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
+import System.Random (StdGen, mkStdGen)
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, freshItemInstanceId, loggerRef)
 import Engine.Core.Capability.ContentRegistriesView
@@ -33,7 +39,9 @@ import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState
 import Unit.Types
 import Unit.Faction (Faction(..))
 import Unit.Sim.Types
-import Unit.Stats (rollStat, pickName, applyItemBuffs, effectiveStat)
+import Unit.Command.Types (SpawnProfile(..))
+import Unit.Stats (rollStat, standardStat, pickName, applyItemBuffs,
+                   effectiveStat)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         lookupEquipmentClass)
@@ -68,14 +76,15 @@ productionSpawnSeams = SpawnSeams { seamAfterEpochCheck = pure () }
 
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
                        → Float → Float → Int → Faction → WorldPageId
-                       → ChunkGeneration → IO ()
+                       → ChunkGeneration → SpawnProfile → IO ()
 handleUnitSpawnCommand = handleUnitSpawnCommandWith productionSpawnSeams
 
 handleUnitSpawnCommandWith
     ∷ SpawnSeams → EngineEnv → IORef UnitThreadState → UnitId → Text
-    → Float → Float → Int → Faction → WorldPageId → ChunkGeneration → IO ()
+    → Float → Float → Int → Faction → WorldPageId → ChunkGeneration
+    → SpawnProfile → IO ()
 handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
-                           pageId epoch = do
+                           pageId epoch profile = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Drop the spawn if its world no longer exists. A spawn queued
     -- before a teardown would otherwise be drained after it and
@@ -116,15 +125,25 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
             logWarn logger CatThread $
                 "UnitSpawn: unknown def '" <> defName <> "'"
         Just def → do
+            -- #2756: the profile decides every per-individual draw
+            -- below. Rolled draws advance the shared stat RNG exactly
+            -- as before; standard draws never touch it — templates take
+            -- their base/mean, and the name and item rolls use
+            -- generators local to this spawn.
+            --
+            -- Every write names 'ucStatRNGRef' inline, as the argument
+            -- of the primitive, so the capability audit's writer scan
+            -- still attributes it to this module.
+            let drawTemplates ts = case profile of
+                    SpawnRolled   → atomicModifyIORef'
+                        (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
+                        let (vs, g') = rollTemplates ts g0 in (g', vs)
+                    SpawnStandard → return (standardTemplates ts)
             initialStats ←
                 if udEagerStats def
-                then atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
-                    let (rolled, g')   = HM.foldlWithKey'
-                            (\(acc, g) name (b, r) →
-                                let (v, g'') = rollStat b r g
-                                in (HM.insert name v acc, g''))
-                            (HM.empty, g0)
-                            (udStatTemplates def)
+                then case profile of
+                  SpawnRolled → atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
+                    let (rolled, g')   = rollTemplates (udStatTemplates def) g0
                         -- Roll bulk + bodyfat from the body templates.
                         -- Merge them in so seedBodyComposition can see
                         -- all three of height/bulk/bodyfat; it then
@@ -132,41 +151,37 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                         -- never end up in uiStats (a getStat for
                         -- "bulk" later returns nil — the plan's
                         -- contract).
-                        (rolledB, g'') = HM.foldlWithKey'
-                            (\(acc, g) name (b, r) →
-                                let (v, gn) = rollStat b r g
-                                in (HM.insert name v acc, gn))
-                            (HM.empty, g')
-                            (udBodyTemplates def)
+                        (rolledB, g'') = rollTemplates (udBodyTemplates def) g'
                         merged = HM.union rolled rolledB
                         seeded = seedBodyComposition merged
                     in (g'', seeded)
+                  -- The same merge and the same body authority, fed
+                  -- the definition's own centres instead of rolls.
+                  SpawnStandard → return $ seedBodyComposition $
+                      HM.union (standardTemplates (udStatTemplates def))
+                               (standardTemplates (udBodyTemplates def))
                 else return HM.empty
             -- Skills always roll at spawn so they have a starting
             -- level for the addSkillXP formula to operate on.
-            initialSkills ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
-                let (rolled, g') = HM.foldlWithKey'
-                        (\(acc, g) name (b, r) →
-                            let (v, g'') = rollStat b r g
-                            in (HM.insert name v acc, g''))
-                        (HM.empty, g0)
-                        (udSkillTemplates def)
-                in (g', rolled)
+            initialSkills ← drawTemplates (udSkillTemplates def)
             -- Knowledge the unit spawns KNOWING, rolled like skills.
-            initialKnowledge ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
-                let (rolled, g') = HM.foldlWithKey'
-                        (\(acc, g) name (b, r) →
-                            let (v, g'') = rollStat b r g
-                            in (HM.insert name v acc, g''))
-                        (HM.empty, g0)
-                        (udKnowledgeTemplates def)
-                in (g', rolled)
+            initialKnowledge ← drawTemplates (udKnowledgeTemplates def)
             -- Persistent personal name (#264): draw from the def's name
             -- pool if it has one (humanoids); animals stay unnamed ("").
             initialName ← case udNamePool def of
                 Nothing   → return ""
-                Just pool → atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
-                    let (nm, g') = pickName pool g0 in (g', nm)
+                Just pool → case profile of
+                    SpawnRolled → atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
+                        let (nm, g') = pickName pool g0 in (g', nm)
+                    SpawnStandard → return (fst (pickName pool (standardNameGen uid)))
+            -- The generator every starting-loadout item roll (quality,
+            -- weight, default contents) draws from: the shared stat
+            -- RNG for a rolled unit, a fresh fixed-seed one for a
+            -- standard unit, so every standard unit's kit is identical
+            -- and the shared generator is never advanced-then-restored.
+            itemRNG ← case profile of
+                SpawnRolled   → return (ucStatRNGRef (toUnitCombatCapability env))
+                SpawnStandard → newIORef (mkStdGen standardItemSeed)
             -- Starting inventory: look each entry up in the ItemManager
             -- and build an ItemInstance. Unknown names are dropped
             -- with a warning (load-order issue: items loaded after
@@ -177,17 +192,17 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
             let regs = toContentRegistriesViewCapability env
             itemMgr ← readReadOnlyRef (crvItemManagerRef regs)
             logger  ← readIORef (loggerRef env)
-            taggedInventory ← buildStartingInventory env logger itemMgr
+            taggedInventory ← buildStartingInventory env itemRNG logger itemMgr
                                   (udStartingInventory def)
             -- Pre-equipped items declared by the unit def's
             -- starting_equipment. Resolved against the EquipmentClass
             -- so each item's kind can be validated against the slot.
             ecMgr ← readReadOnlyRef (crvEquipmentClassManagerRef regs)
             let mClass = udEquipmentClass def ⌦ (`lookupEquipmentClass` ecMgr)
-            initialEquipment ← buildStartingEquipment env logger itemMgr mClass
-                                  (udStartingEquipment def)
-            initialAccessories ← buildStartingAccessories env logger itemMgr
-                                  (udStartingAccessories def)
+            initialEquipment ← buildStartingEquipment env itemRNG logger itemMgr
+                                  mClass (udStartingEquipment def)
+            initialAccessories ← buildStartingAccessories env itemRNG logger
+                                  itemMgr (udStartingAccessories def)
             -- The one spawn-time modifier map: the def's innate
             -- modifiers (technomule's "cybernetic enhancements") plus
             -- the just-built accessories' buffs (same effect as if the
@@ -333,6 +348,35 @@ spawnEffectiveCapacity now stats mods =
                  (HM.lookupDefault [] "carrying_capacity" mods))
       ⊚ HM.lookup "carrying_capacity" stats
 
+-- | Roll every template of one map from the shared generator, in the
+--   map's own fold order — the draw sequence a rolled spawn has always
+--   consumed.
+rollTemplates ∷ HM.HashMap Text (Float, Float) → StdGen
+              → (HM.HashMap Text Float, StdGen)
+rollTemplates ts g0 = HM.foldlWithKey'
+    (\(acc, g) name (b, r) →
+        let (v, g') = rollStat b r g
+        in (HM.insert name v acc, g'))
+    (HM.empty, g0)
+    ts
+
+-- | Every template at its definition's base/mean, with no draw
+--   (#2756's standard profile).
+standardTemplates ∷ HM.HashMap Text (Float, Float) → HM.HashMap Text Float
+standardTemplates = HM.map (\(b, _) → standardStat b)
+
+-- | The fixed seed a standard spawn's starting-loadout item rolls draw
+--   from (#2756). A fresh generator per spawn, so every standard unit
+--   of one definition carries an identical kit.
+standardItemSeed ∷ Int
+standardItemSeed = 2756
+
+-- | The generator a standard spawn's personal name is drawn from:
+--   seeded by the unit's own id, so names stay deterministic across
+--   runs yet differ between the units of one roster.
+standardNameGen ∷ UnitId → StdGen
+standardNameGen (UnitId n) = mkStdGen (fromIntegral n)
+
 -- | One entry of a spawn-shed decision's audit trail — pure so tests
 --   can assert exactly what the spawn path would log.
 data ShedEvent
@@ -405,15 +449,15 @@ shedToCapacity logger uid itemW cap fixedW tagged = do
 --   list, each tagged with its capacity-shed drop priority. Unknown
 --   item names log a warning and are dropped. Every value below the
 --   entry's own fill is "Item.Materialize"'s to decide (#1418).
-buildStartingInventory ∷ EngineEnv → LoggerState → ItemManager
+buildStartingInventory ∷ EngineEnv → IORef StdGen → LoggerState → ItemManager
                        → [(Text, Maybe Float, Int)]
                        → IO [(ItemInstance, Int)]
-buildStartingInventory env logger itemMgr entries = do
+buildStartingInventory env rng logger itemMgr entries = do
     mInsts ← mapM resolve entries
     return [i | Just i ← mInsts]
   where
     resolve (name, mFill, prio) = do
-        mi ← rollInstance env logger itemMgr name mFill
+        mi ← rollInstance env rng logger itemMgr name mFill
         case mi of
             Nothing → do
                 logWarn logger CatThread $
@@ -430,11 +474,10 @@ buildStartingInventory env logger itemMgr entries = do
 --   Since #1418 this is a thin adapter over "Item.Materialize", the ONE
 --   mint boundary; the caller's explicit fill is the single root-scoped
 --   override starting inventory contributes.
-rollInstance ∷ EngineEnv → LoggerState → ItemManager → Text → Maybe Float
-             → IO (Maybe ItemInstance)
-rollInstance env logger itemMgr name mFill =
-    materializeItem itemMgr logger
-                    (ucStatRNGRef (toUnitCombatCapability env))
+rollInstance ∷ EngineEnv → IORef StdGen → LoggerState → ItemManager → Text
+             → Maybe Float → IO (Maybe ItemInstance)
+rollInstance env rng logger itemMgr name mFill =
+    materializeItem itemMgr logger rng
                     (freshItemInstanceId env)
                     (filledItem mFill)
                     name
@@ -447,11 +490,11 @@ rollInstance env logger itemMgr name mFill =
 --   override at all, so an equipped container now takes its
 --   definition's own default_fill and default contents instead of the
 --   hardcoded empty it used to get.
-buildStartingEquipment ∷ EngineEnv → LoggerState → ItemManager
+buildStartingEquipment ∷ EngineEnv → IORef StdGen → LoggerState → ItemManager
                        → Maybe EquipmentClass
                        → HM.HashMap Text Text
                        → IO (HM.HashMap Text ItemInstance)
-buildStartingEquipment env logger itemMgr mClass entries =
+buildStartingEquipment env rng logger itemMgr mClass entries =
     case mClass of
         Nothing
             | HM.null entries → return HM.empty
@@ -491,9 +534,7 @@ buildStartingEquipment env logger itemMgr mClass entries =
                                         <> esKind slot <> ") — skipping"
                                     return m
                                 | otherwise → do
-                                    mInst ← materializeItem itemMgr logger
-                                              (ucStatRNGRef
-                                                 (toUnitCombatCapability env))
+                                    mInst ← materializeItem itemMgr logger rng
                                               (freshItemInstanceId env)
                                               pristineItem itemName
                                     return $ case mInst of
@@ -541,9 +582,9 @@ applyAccessoryBuffs itemMgr mods inst =
 --   Unknown items log a warning and are dropped. Like starting
 --   equipment, this path contributes no override: every value is
 --   "Item.Materialize"'s (#1418).
-buildStartingAccessories ∷ EngineEnv → LoggerState → ItemManager
+buildStartingAccessories ∷ EngineEnv → IORef StdGen → LoggerState → ItemManager
                          → [Text] → IO [ItemInstance]
-buildStartingAccessories env logger itemMgr names = do
+buildStartingAccessories env rng logger itemMgr names = do
     mInsts ← mapM resolve names
     return [i | Just i ← mInsts]
   where
@@ -553,7 +594,6 @@ buildStartingAccessories env logger itemMgr names = do
                 "starting_accessories: unknown item '" <> name
                 <> "' — skipping"
             return Nothing
-        Just _ → materializeItem itemMgr logger
-                                 (ucStatRNGRef (toUnitCombatCapability env))
+        Just _ → materializeItem itemMgr logger rng
                                  (freshItemInstanceId env)
                                  pristineItem name

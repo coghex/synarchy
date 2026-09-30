@@ -182,13 +182,21 @@ recomputeBodyDerivedStats s =
                 -- Carrying capacity from muscle: more lean mass AND
                 -- more strength = more capacity, sub-linearly in both
                 -- so the product doesn't explode at the tails.
-                -- Calibration (acolyte body block): average roll
-                -- (lm ≈ 28.5, strength 1.0) → ~23 kg; an exceptional
-                -- 2-sigma strongman (strength_base 1.4, lm ≈ 46)
-                -- → ~41 kg. The weakest rolls (~11 kg) sit just under
-                -- the full starting kit (~12 kg) — by design, the
-                -- spawn-time capacity check sheds the pick/shovel
-                -- instead of flooring the formula. Extrapolates to
+                -- Calibration (acolyte body block): the all-mean
+                -- acolyte (height 1.8, bulk 1.0, bodyfat 0.2,
+                -- strength_base 1.0 → lm ≈ 28.5, strength 1.0)
+                -- → ~23.9 kg, about twice the full ~12.3 kg starting
+                -- kit; an exceptional 2-sigma strongman
+                -- (strength_base 1.4, lm ≈ 46) → ~41 kg. Across the
+                -- shipped roll windows the unmodified capacity spans
+                -- ~4.05 kg (short, slight, fat and weak) to ~76 kg,
+                -- so the weak tail really does fall BELOW the kit —
+                -- intentionally: some acolytes are too weak to travel
+                -- laden. The spawn-time capacity check sheds the
+                -- pick/shovel for them rather than flooring the
+                -- formula, and a unit still over capacity spawns so
+                -- (tests that need a steady carrier use the standard
+                -- spawn profile, #2756). Extrapolates to
                 -- pack species: the technomule body (lm ≈ 87,
                 -- strength ≈ 8) → ~163 kg base, before its +50%
                 -- percentage modifier.
