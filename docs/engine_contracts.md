@@ -2240,6 +2240,24 @@ remain in the roster, while an occupant resolved on another page is a hard
 load-integrity error. Hand-stamped locations without a placed instance do
 not acquire an encounter.
 
+Occupants are enemy units and ignore survival requirements (#2754), so
+a roster can only be completed by combat. `nomad_primitive` is listed in
+`scripts/unit_survival_exempt.lua`: in place of thermoregulation and salt
+balance, `scripts/unit_resources.lua` pins its core temperature, salt and
+the hypothermia / hyperthermia / salt-imbalance meters at homeostasis,
+and it has no hydration, hunger or calorie pools. It can therefore never
+go delirious from, or die of, heat, cold, thirst, hunger or electrolyte
+imbalance. Wounds, bleeding, circulation's blood-volume and sepsis
+factors, blood oxygen, pain, injury collapse and the injury failure meters
+all stay live. A load neutralizes exempt survivors in
+`unitResources.onSaveLoaded`, before the first paused frame reads them,
+because a save made before the exemption can carry an occupant whose
+temperature or salt had already drifted. Gate: hspec
+`--match "ruin occupant survival (#2754)"`, which runs the reported
+seed-14 world's ruin 4 for 10,800 engine seconds per occupant (spawned
+early and into an older world), plus the nested "survival exemption"
+cases.
+
 Queries: `world.listPlacedLocations([pageId])` (extended, not
 repurposed — `id` is still the DEFINITION id), `getLocationInstance`,
 `setLocationLifecycle`, `markLocationContentsSpawnedById`
@@ -3822,18 +3840,17 @@ ordering stays with #917's hspec coverage. Three instrument rules:
   — and `Secure` is false in the reloaded world (both guaranteed items are
   in storage), so a plain post-load read cannot tell restored from lost.
 
-**Known hazard: the occupants do not outlive a long wait.** Observed while
-building the leg (2026-09-28, seed 14): an unvisited `nomad_primitive`
-occupant has no way to eat or drink. It turns `delirious` and "died of
-electrolyte imbalance" — at about 1180 game-seconds of world time when its
-chunk loaded at setup, and within minutes of a page-in that came late in
-another run, so the clock is not simply time since spawn — and while
-delirious the mental-state wander reads its AI config's missing
-`wander_radius`, which raises `Lua error in update()` every tick and
-freezes EVERY unit's AI (observed as a party that stops mid-walk). Both
-are shipped behaviour, to be filed separately rather than papered over
-here. The gate works around the clock rather than the defects: the fight
-has to come early in world time. The confrontation party is ordered to the
+**Resolved hazard: the occupants did not outlive a long wait.** Observed
+while building the leg (2026-09-28, seed 14): an unvisited
+`nomad_primitive` occupant had no way to eat or drink, turned `delirious`
+and "died of electrolyte imbalance" about 1180 game-seconds into the
+session, and while delirious its mental-state wander raised
+`Lua error in update()` every tick, freezing EVERY unit's AI. #2753 fixed
+the wander crash; #2754 exempted occupants from survival physiology
+(see Location instances above), which its regression proves on this
+seed's ruin 4 for 10,800 engine seconds. The gate's ordering below
+predates both fixes and still stands: the fight comes early in world
+time. The confrontation party is ordered to the
 first ruin the moment `travel` is done, walking while `extract` and the
 prepared traveller's `return` run; it then walks straight on to the
 occupied ruin with no second muster; and setup never pages the occupied
