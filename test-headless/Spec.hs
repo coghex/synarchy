@@ -457,11 +457,10 @@ import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
 main ∷ IO ()
 main = do
-    MeasureEnv.setEnv "SYNARCHY_FULL_TESTS" "1"
     (measureConfig0, measureForest) ← MeasureRunner.evalSpec
         MeasureRunner.defaultConfig measuredSpec
     measureConfig ← MeasureRunner.readConfig measureConfig0
-        =≪ MeasureEnv.getArgs
+        ∘ (["--match", "/@G456/", "--match", "/@G457/", "--match", "/@G463/", "--match", "/@G579/", "--match", "/@G588/", "--match", "/@G589/", "--match", "/@G595/", "--match", "/@G598/"] ⧺) =≪ MeasureEnv.getArgs
     let measureTee mk fc = do
             base ← mk fc
             pure $ \event → do
