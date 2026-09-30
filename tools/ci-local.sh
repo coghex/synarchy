@@ -137,6 +137,17 @@ step "build test suites"
 cabal build synarchy-test-headless -v0
 cabal build synarchy-test-graphical -v0
 
+# Straight after the suite build and before `cabal test`, matching CI's
+# order (#2648). Setup.hs captured the exact compiler commands of that
+# build; `--record` binds them to the configuration it re-reads with the
+# build's own cabal arguments, the gate scans what GHC compiles under
+# them, and the regression proves the capture on a tiny real-Cabal
+# package. See the audit's docstring.
+step "headless init import audit (configured build)"
+python3 tools/headless_init_import_audit.py --record --builddir dist-newstyle -- build synarchy-test-headless -v0
+python3 tools/headless_init_import_audit.py --builddir dist-newstyle
+python3 tools/headless_init_import_audit.py --cabal-regression
+
 step "headless hspec suite (full tier)"
 # SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
 # real runs (#1364) -- today exactly one, the w128 seed-42 volcano
@@ -214,6 +225,9 @@ python3 tools/haddock_link_audit.py
 step "lua strict-decode audit"
 python3 tools/lua_strict_decode_audit.py --self-test
 python3 tools/lua_strict_decode_audit.py
+
+step "headless init import audit self-test"
+python3 tools/headless_init_import_audit.py --self-test
 
 step "config write audit"
 python3 tools/config_write_audit.py --self-test

@@ -27,7 +27,7 @@ import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), LogEntry(..), LoggerState
     , defaultLogConfig, initLogger )
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv(..), loggerRef, worldManagerRef)
@@ -54,6 +54,7 @@ import World.Thread.Command.Cursor.Chop
     , handleWorldEraseChopInstancesCommand)
 import World.Tile.Types (WorldTileData(..))
 import World.Types (WorldManager(..), emptyWorldManager)
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 
 fixturePage ∷ WorldPageId
 fixturePage = WorldPageId "chop_authority_probe"
@@ -441,5 +442,5 @@ spec = describe "Chop authority" $ beforeAll setup $ do
                      , (plantId 3, False) ]
   where
     setup = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         pure env

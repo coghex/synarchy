@@ -261,7 +261,7 @@ _CHAR_LITERAL = re.compile(r"'(?:\\(?:[A-Za-z0-9^]+|.)|[^'\\\n])'")
 
 
 def _scan_code(
-    text: str,
+    text: str, multiline_strings: bool = False,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]], list[tuple[int, int]]]:
     """`(code spans, char-literal spans, comment spans)`.
 
@@ -285,7 +285,16 @@ def _scan_code(
     subtracting the code spans from the file: the complement of the code
     spans also holds string literals, which are not comments (#2292).
     Each span covers the comment's delimiters and body -- for a line
-    comment, up to but not including its terminating newline."""
+    comment, up to but not including its terminating newline.
+
+    `multiline_strings` also reads GHC's MultilineStrings literals
+    (#2648): three double quotes open one, and it closes at the first
+    unescaped three, whatever quotes, comment openers or newlines lie
+    between. A backslash starts an escape or a gap exactly as in an
+    ordinary string, so an escaped quote never begins the closing
+    three. It is opt-in because without the extension GHC reads three
+    quotes as an empty string followed by a new one, and every caller
+    that audits `src/`+`app/` keeps that reading."""
     i, n = 0, len(text)
     runs: list[tuple[int, int]] = []
     char_literals: list[tuple[int, int]] = []
@@ -350,7 +359,10 @@ def _scan_code(
                 if run_start is not None:
                     runs.append((run_start, i))
                     run_start = None
-                state, i = "STRING", i + 1
+                if multiline_strings and text.startswith('"""', i):
+                    state, i = "MULTILINE", i + 3
+                else:
+                    state, i = "STRING", i + 1
                 continue
             if run_start is None:
                 run_start = i
@@ -377,7 +389,7 @@ def _scan_code(
                     state = "CODE"
             else:
                 i += 1
-        else:  # STRING
+        else:  # STRING or MULTILINE
             if c == "\\":
                 # Report SS2.6: a backslash followed by WHITESPACE opens a
                 # string GAP (`\ whitechar {whitechar} \`), not an
@@ -398,6 +410,11 @@ def _scan_code(
                     i = j + 1 if j < n and text[j] == "\\" else j
                 else:
                     i = j + 1
+            elif state == "MULTILINE":
+                if text.startswith('"""', i):
+                    state, i = "CODE", i + 3
+                else:
+                    i += 1
             elif c == '"':
                 state, i = "CODE", i + 1
             else:
@@ -412,10 +429,11 @@ def _scan_code(
     return runs, char_literals, comments
 
 
-def _code_runs(text: str) -> list[tuple[int, int]]:
+def _code_runs(text: str, multiline_strings: bool = False
+               ) -> list[tuple[int, int]]:
     """`_scan_code`'s code spans alone, for callers with no interest in
     where the char literals sit."""
-    return _scan_code(text)[0]
+    return _scan_code(text, multiline_strings)[0]
 
 
 def haskell_code_spans(text: str) -> list[tuple[int, int]]:
@@ -446,15 +464,15 @@ def haskell_comment_spans(text: str) -> list[tuple[int, int]]:
     return _scan_code(text)[2]
 
 
-def haskell_code_only(text: str) -> str:
+def haskell_code_only(text: str, multiline_strings: bool = False) -> str:
     """`text` with every non-code position blanked, positions and line
     numbers preserved.
 
     The public name for `_code_only`, for the same reuse reason as
     `haskell_code_spans`: a sibling guard that hunts for a DECLARATION
     (an import, say) must not find one inside a comment that merely
-    quotes it."""
-    return _code_only(text)
+    quotes it. `multiline_strings` is `_scan_code`'s."""
+    return _code_only(text, multiline_strings)
 
 
 def _within(pos: int, spans: list[tuple[int, int]]) -> bool:
@@ -465,12 +483,12 @@ def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
-def _code_only(text: str) -> str:
+def _code_only(text: str, multiline_strings: bool = False) -> str:
     """`text` with everything OUTSIDE a `_code_runs` span blanked out --
     used to hunt for a construct (like a GLSL quasiquote's opening/
     closing marker) without a comment that merely CONTAINS that
     construct's text being mistaken for the real thing."""
-    code_spans = _code_runs(text)
+    code_spans = _code_runs(text, multiline_strings)
     non_code_spans = []
     prev_end = 0
     for start, end in code_spans:

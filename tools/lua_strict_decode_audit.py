@@ -205,22 +205,59 @@ class Violation:
 # Import resolution
 # ---------------------------------------------------------------------
 
+def _is_layout_space(char: str) -> bool:
+    """True for a character the layout rule treats as intra-line
+    whitespace: anything `str.isspace` accepts except the newline.
+
+    GHC's lexer skips every Unicode space separator, form feed and
+    vertical tab as whitespace (#2648: `module M where\u00a0import ...`
+    compiles). The NUL `haskell_code_only` leaves where a comment was is
+    NOT whitespace here, because this audit's classifier reads it as
+    text; tools/headless_init_import_audit.py blanks those positions to
+    spaces before splitting, so a comment is whitespace there. Only `\n` starts a
+    new line for layout -- GHC's `advanceSrcLoc` special-cases it and
+    the tab and nothing else -- and `Path.read_text` has already folded
+    `\r\n` and lone `\r` into it. Accepting more characters here than
+    GHC does could only find more declarations, never fewer."""
+    return char != "\n" and char.isspace()
+
+
+def _layout_column(code_text: str, line_start: int, pos: int) -> int:
+    """GHC's 0-based layout column of `pos`: a tab advances to the next
+    multiple of eight (`advanceSrcLoc`'s tab stop), every other
+    character by one."""
+    column = 0
+    for char in code_text[line_start:pos]:
+        column = (column // 8 + 1) * 8 if char == "\t" else column + 1
+    return column
+
+
 def _opens_declaration(code_text: str, start: int) -> bool:
     """True if the `import` token at `start` opens a declaration rather
     than sitting inside one.
 
-    It does when only spaces separate it from the start of its line, or
-    from an explicit-layout `{` or `;`. Those are the only positions the
-    Haskell grammar allows a declaration to begin at, in either layout
-    style -- which is why declarations are found by TOKEN here and never
-    by column: GHC accepts a top-level layout indented to any column,
-    and an explicit-brace module body puts imports inline. Where the
-    declaration then ENDS depends on which layout it is in; see
-    `_declaration_end`."""
+    It does when only whitespace (`_is_layout_space`) separates it from
+    the start of its line,
+    from an explicit-layout `{` or `;`, or from the `where` keyword
+    itself: the layout rule opens the module body's implicit block at
+    the first token after `where`, so `module M where import X` puts the
+    first import on the header's own line (#2648). Those are the only
+    positions the Haskell grammar allows a declaration to begin at, in
+    either layout style -- which is why declarations are found by TOKEN
+    here and never by column: GHC accepts a top-level layout indented to
+    any column, and an explicit-brace module body puts imports inline.
+    Where the declaration then ENDS depends on which layout it is in;
+    see `_declaration_end`."""
     i = start - 1
-    while i >= 0 and code_text[i] in " \t":
+    while i >= 0 and _is_layout_space(code_text[i]):
         i -= 1
-    return i < 0 or code_text[i] in "\n{;"
+    if i < 0 or code_text[i] in "\n{;":
+        return True
+    keyword_start = i - len("where") + 1
+    return (keyword_start >= 0
+            and code_text.startswith("where", keyword_start)
+            and (keyword_start == 0
+                 or not _is_ident_char(code_text[keyword_start - 1])))
 
 
 def _in_explicit_layout(code_text: str, pos: int) -> bool:
@@ -242,7 +279,9 @@ def _declaration_end(code_text: str, pos: int, column: int,
     across lines at any column and `module M where { import qualified\n
     Data.Text.Encoding as TE; ... }` is one import. In an IMPLICIT
     layout it ends at the first line indented no further than its own
-    opening `column`, or at a `;`/`}`, whichever comes first.
+    opening `column`, or at a `;`/`}`, whichever comes first. Columns
+    are GHC's (`_layout_column`), and a line holding only whitespace is
+    blank, as it is to the layout rule.
 
     Bracket depth is tracked either way, so a `;` inside an import list
     cannot end the declaration early. In the implicit case a
@@ -263,10 +302,11 @@ def _declaration_end(code_text: str, pos: int, column: int,
         elif char == "\n" and not explicit:
             line_start = i + 1
             j = line_start
-            while j < n and code_text[j] in " \t":
+            while j < n and _is_layout_space(code_text[j]):
                 j += 1
             if j < n and code_text[j] != "\n":
-                if (j - line_start) <= column or _IMPORT_TOKEN.match(code_text, j):
+                if (_layout_column(code_text, line_start, j) <= column
+                        or _IMPORT_TOKEN.match(code_text, j)):
                     return i
         i += 1
     return n
@@ -282,11 +322,21 @@ def _import_declarations(code_text: str) -> list[tuple[int, int, str]]:
         start = match.start()
         if not _opens_declaration(code_text, start):
             continue
-        column = start - (code_text.rfind("\n", 0, start) + 1)
+        column = _layout_column(
+            code_text, code_text.rfind("\n", 0, start) + 1, start)
         end = _declaration_end(code_text, match.end(), column,
                                _in_explicit_layout(code_text, start))
         decls.append((start, end, code_text[start:end]))
     return decls
+
+
+def haskell_import_declarations(code_text: str) -> list[tuple[int, int, str]]:
+    """The public name for `_import_declarations`, so a sibling guard
+    that classifies imports (tools/headless_init_import_audit.py) reuses
+    this layout-aware splitter instead of keeping a second copy free to
+    drift from it -- the reason `unicode_operator_audit.py` publishes
+    `haskell_code_only`."""
+    return _import_declarations(code_text)
 
 
 def _classify_strict_import(decl: str, rel_path: str, line: int) -> str:
@@ -551,6 +601,31 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         " import qualified Data.Text.Encoding as TE\n"
         " f raw = TE.decodeUtf8 raw\n",
         [3],
+    ),
+    (
+        "the first import on the `module ... where` line itself -- the "
+        "layout block opens at the token after `where`, so no newline, "
+        "`{` or `;` precedes it (#2648)",
+        "module M where import qualified Data.Text.Encoding as TE\n"
+        "               f raw = TE.decodeUtf8 raw\n",
+        [2],
+    ),
+    (
+        "a non-breaking space after `where` -- GHC skips every Unicode "
+        "space separator as whitespace (#2648)",
+        "module M where\u00a0import qualified Data.Text.Encoding as TE\n"
+        "               f raw = TE.decodeUtf8 raw\n",
+        [2],
+    ),
+    (
+        "a tab-indented continuation of an indented import: GHC puts the "
+        "tab at column 8, past the import's column 2, so the module and "
+        "its alias still belong to the declaration (#2648)",
+        "module M where\n"
+        "  import qualified\n"
+        "\tData.Text.Encoding as Enc\n"
+        "  f raw = Enc.decodeUtf8 raw\n",
+        [4],
     ),
     (
         "an indented layout whose import list also continues, so the "
