@@ -24,7 +24,7 @@ from unicode_operator_audit import (  # type: ignore
     find_violations, FORBIDDEN_TOKENS, TOKEN_REPLACEMENTS,
     NONCANONICAL_TOKENS, ALL_REPLACEMENTS,
     GLSL_QUASIQUOTE_FILE, EQ_INSTANCE_FILE, MONAD_INSTANCE_FILE,
-    WHOLE_FILE_EXEMPT,
+    WHOLE_FILE_EXEMPT, haskell_code_only,
 )
 
 import selftestlib  # noqa: E402
@@ -190,6 +190,46 @@ def test_multi_line_string_gap_keeps_its_body_out_of_the_scan():
     v = find_violations(text, ORDINARY_FILE)
     expect(_tokens(v) == {">>="}, f"the gapped string's body stays a "
            f"literal and the code after it is scanned (got {v})")
+
+
+# ----- MultilineStrings (#2648): opt-in -----------------------------------
+
+_MULTILINE = ('message = """\n'
+              '  A double quote: " and two: ""\n'
+              '  -- not a comment {- nor this\n'
+              '  # 1 "fake.hs"\n'
+              '  escaped close \\""" still inside\n'
+              '  gap \\   \\ignored\n'
+              '  import Engine.Core.Init (initializeEngineHeadless)\n'
+              '  """\n'
+              'go = 1\n')
+
+
+def test_multiline_string_masks_its_whole_body_when_enabled():
+    code = haskell_code_only(_MULTILINE, multiline_strings=True)
+    expect("import" not in code and "double" not in code
+           and "escaped" not in code and "ignored" not in code,
+           f"every line of the multiline literal is masked, including an "
+           f"embedded quote, comment openers, a line-marker-looking line, "
+           f"an escaped delimiter and a gap (got {code!r})")
+    expect("go = 1" in code and "message =" in code,
+           f"the code on either side of the literal survives (got {code!r})")
+
+
+def test_multiline_string_closes_at_the_first_unescaped_triple_quote():
+    code = haskell_code_only('a = """x""" ++ "y"\nb = 2\n',
+                             multiline_strings=True)
+    expect("++" in code and "b = 2" in code and "x" not in code,
+           f"`\"\"\"x\"\"\"` is one literal and the code after it is code "
+           f"(got {code!r})")
+
+
+def test_triple_quote_keeps_its_plain_haskell_reading_by_default():
+    # Without the extension GHC reads `"""x"` as `""` then `"x"`.
+    code = haskell_code_only('a = """x" ++ b\nc = 3\n')
+    expect("++ b" in code and "c = 3" in code,
+           f"the default lexer still ends `\"\"\"x\"` after `\"x\"` "
+           f"(got {code!r})")
 
 
 # ----- Char literals -----------------------------------------------------
@@ -649,6 +689,9 @@ def main() -> int:
         test_noncanonical_inequality_is_not_exempt_in_uprelude,
         test_noncanonical_inequality_in_glsl_quasiquote_is_exempt,
         test_ascii_and_noncanonical_violations_report_in_source_order,
+        test_multiline_string_masks_its_whole_body_when_enabled,
+        test_multiline_string_closes_at_the_first_unescaped_triple_quote,
+        test_triple_quote_keeps_its_plain_haskell_reading_by_default,
     ]:
         fn()
     if FAILURES:

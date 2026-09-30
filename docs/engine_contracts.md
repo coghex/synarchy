@@ -145,7 +145,13 @@ baseline), the Lua
 strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
-`src/Engine/Scripting/Lua/`), the config-write / persistence-inventory /
+`src/Engine/Scripting/Lua/`), the headless init import audit
+(`headless_init_import_audit.py --self-test` in `static-audits`,
+`--record` then the bare audit in `test-and-audits` after the suite
+build, #2648 — no
+`test-headless/` import of the production `initializeEngineHeadless`
+outside `Test.Headless.Harness.Log`, as the configured build compiles it;
+see §Headless fixture logging), the config-write / persistence-inventory /
 EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
@@ -4703,8 +4709,57 @@ unset, empty and `quiet` are quiet; anything else is a hard error, not a
 silent quiet run). The variable steers only the quiet default, so it
 never overrules a spec that named its own backend. Production is
 unchanged: `initializeEngineHeadless` still logs to stdout for
-`App.Headless`, and `App.Dump` still picks stderr. Gate: hspec
-`--match "headless fixture logging"`.
+`App.Headless`, and `App.Dump` still picks stderr. Gates: hspec
+`--match "headless fixture logging"` for the behavior, and
+`tools/headless_init_import_audit.py` (`--self-test`; `--record`, the
+bare audit and `--cabal-regression`, #2648) for the "never": it fails when any `test-headless/`
+module other than `Test.Headless.Harness.Log` brings
+`Engine.Core.Init.initializeEngineHeadless` into scope — an import list
+naming it, an unrestricted import (qualified or not), or a `hiding`
+list that leaves it in scope. Importing only `EngineInitResult` or the
+module's other exports stays allowed. It reads what GHC compiles in the
+configured build (owner amendments on #2648). `Setup.hs`
+(`BuildSupport/GhcCapture.hs`) runs the configured `ghc` through
+`BuildSupport/ghc-capture-wrapper.sh` for every package build. The
+wrapper records each exact command, response files included, and passes
+it through unchanged; a successful build publishes each compiled unit's
+commands with the `setup-config` and compiler bytes they belong to.
+Right after `cabal build synarchy-test-headless`, in `test-and-audits`
+and in `tools/ci-local.sh` before its `cabal test`, `--record --builddir
+dist-newstyle -- build synarchy-test-headless -v0` binds them. It makes
+the pinned cabal-install 3.16.1.0 re-read every configuration input
+(Cabal keeps an edited imported project file's old settings and still
+calls the build up to date), requires the build to be up to date with
+its own arguments, and hashes the files Cabal names in its provenance
+messages, their absent `.local`/`.freeze` companions and the global
+config. The gate reads each captured command back with the captured
+compiler's own response-file reader and flag parser, drops the source
+arguments, and preprocesses every module with `ghc -E` for each build
+way. So includes resolve through the suite's own `-tmp` directory, and
+`ghc-options`, per-way and command-line options apply as they did.
+Freshness is content identity: the capture's commands, `setup-config`,
+the header, the bytes the configured compiler path reaches now (resolved
+afresh, so a retargeted symlink counts) and `--info`, and every
+configuration input must be unchanged; recording checks the capture's
+compiler the same way. A byte-identical restored cache passes, and a
+rebuild that ran the same commands (such as `cabal test`) does too. A
+selected custom build directory is certified by its own plan. Source
+edits are not inputs, so an edited module is scanned as it now reads.
+`--cabal-regression`, run after the build in the same places, proves the
+capture on a tiny real-Cabal package. CPP modules stay allowed; their
+directives, splices, macros and headers are expanded as the build
+expands them, and comments and
+string literals, MultilineStrings included, are ignored. A missing
+capture or record, an incomplete record, stale or mismatched settings, a
+build not up to date with its own arguments, another cabal-install than
+3.16.1.0, or a changed or unpinned compiler stop it with the cause
+rather than passing. **It certifies the
+configured environment only**: CI's Linux build, and the developer's
+native build under `make ci`, not other platforms, flags, tools or
+dependency versions. `--self-test` runs in `static-audits` with fixture
+captures and settings and needs no build and no cabal. The Chop authority fixture (#2121) landed on the
+production initializer after #2143 migrated the suite, because nothing
+checked.
 
 ---
 

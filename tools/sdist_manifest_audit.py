@@ -110,6 +110,8 @@ REQUIRED_FAMILIES: tuple[tuple[str, str], ...] = (
     ("cbits/vendor/miniaudio/LICENSE", "the pinned dependency's redistribution license"),
     ("cbits/vendor/miniaudio/provenance.json", "upstream tag and content checksums"),
     ("BuildSupport/AudioDependencies.hs", "Setup's shared audio-header dependency hook"),
+    ("BuildSupport/GhcCapture.hs", "Setup's compiler-command capture hook (#2648)"),
+    ("BuildSupport/ghc-capture-wrapper.sh", "the compiler wrapper that hook installs (#2648)"),
     ("test-headless/cbits/*.c", "standalone native audio sanitizer tests"),
     ("test-headless/cbits/*.h", "native audio test fixtures and assertions"),
     ("tools/test_audio_native.py", "standalone native audio test build driver"),
@@ -348,6 +350,8 @@ FIXTURE_TRACKED = {
     "cbits/vendor/miniaudio/LICENSE",
     "cbits/vendor/miniaudio/provenance.json",
     "BuildSupport/AudioDependencies.hs",
+    "BuildSupport/GhcCapture.hs",
+    "BuildSupport/ghc-capture-wrapper.sh",
     "test-headless/cbits/audio_native_test.c",
     "test-headless/cbits/audio_test_helpers.h",
     "tools/test_audio_native.py",
@@ -449,7 +453,8 @@ def self_test() -> int:
     check("a complete listing", FIXTURE_LISTING, FIXTURE_TRACKED, clean=True)
 
     for path in ("cbits/audio/syn_audio.h", "cbits/vendor/miniaudio/LICENSE",
-                 "BuildSupport/AudioDependencies.hs", "test-headless/data/audio/tone.wav",
+                 "BuildSupport/AudioDependencies.hs", "BuildSupport/GhcCapture.hs",
+                 "BuildSupport/ghc-capture-wrapper.sh", "test-headless/data/audio/tone.wav",
                  "test-headless/data/audio/tone.flac", "test-headless/data/audio/tone.mp3",
                  "config/audio_runtime.yaml", "test-headless/cbits/audio_native_test.c",
                  "test-headless/cbits/audio_test_helpers.h", "tools/test_audio_native.py",

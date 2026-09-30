@@ -64,3 +64,11 @@ semaphore: False
 
 package synarchy
   ghc-options: -j
+  -- Write build-info.json, which names each component's unit id and
+  -- source directory: tools/headless_init_import_audit.py finds the
+  -- headless suite's captured compiler commands by it (#2648; Setup.hs
+  -- captures the commands themselves). Set here rather than on one
+  -- command, so every build carries it and no later command sees a
+  -- changed configuration. Cabal writes the file when it builds; an
+  -- up-to-date build leaves it as it was.
+  build-info: True

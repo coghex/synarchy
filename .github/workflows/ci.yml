@@ -539,6 +539,28 @@ jobs:
             echo "Skipping graphical test-suite build: no graphics-facing paths changed."
           fi
 
+      # Fails if any test-headless/ module imports the production
+      # Engine.Core.Init initializeEngineHeadless outside
+      # Test.Headless.Harness.Log, as GHC compiles it here (#2648). That
+      # initializer hard-wires the engine log to stdout (engine contracts
+      # §Headless fixture logging, #1925). Setup.hs captured the exact
+      # compiler commands of the build above (BuildSupport/GhcCapture.hs).
+      # `--record`, given that build's own cabal arguments, makes the pinned
+      # cabal-install 3.16.1.0 re-read every configuration input, requires
+      # the build to be up to date with them, and binds the captured
+      # commands to the content of those inputs, the package configuration,
+      # the header and the compiler. The gate verifies all of it, then runs
+      # every module through `ghc -E` with each captured way. The
+      # regression proves the capture on a tiny real-Cabal package. It
+      # certifies this Linux build's configuration only; missing, stale or
+      # mismatched settings fail it. It skips with the build it depends on.
+      - name: Headless init import audit (configured build)
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: |
+          python3 tools/headless_init_import_audit.py --record --builddir dist-newstyle -- build synarchy-test-headless -v0
+          python3 tools/headless_init_import_audit.py --builddir dist-newstyle
+          python3 tools/headless_init_import_audit.py --cabal-regression
+
       # The suite itself is unconditional; SYNARCHY_FULL_TESTS only
       # decides whether its full-tier examples run or report pending
       # (#1364). Today that is exactly one example --
@@ -949,6 +971,22 @@ jobs:
         run: |
           python3 tools/lua_strict_decode_audit.py --self-test
           python3 tools/lua_strict_decode_audit.py
+
+      # The engine-free half of the headless init import audit (#2648):
+      # its fixture suite, which drives the same preprocessing and import
+      # classification through this image's pinned ghc with fixture build
+      # settings. The real-tree scan needs the suite's configured build,
+      # so it runs in test-and-audits right after that build. The image's
+      # ENV PATH is not reliably propagated into this job's steps (see
+      # test-and-audits' toolchain step), so the compiler is named
+      # explicitly and checked against the tested-with pin.
+      - name: Headless init import audit self-test
+        env:
+          # It needs no build and no cabal: GHC's own response-file
+          # reader and flag parser (the `ghc` library) decode fixture
+          # captures, and GHC preprocesses the fixtures.
+          SYNARCHY_AUDIT_GHC: /usr/local/.ghcup/bin/ghc
+        run: python3 tools/headless_init_import_audit.py --self-test
 
       # Cheap, no-engine guard (#2202): every module that persists local
       # configuration routes its write through Engine.Core.ConfigWrite --
