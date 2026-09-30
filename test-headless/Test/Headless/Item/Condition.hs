@@ -768,7 +768,7 @@ spec = describe "Item.Condition" $ do
            \recursively materialised container contents included" $ \env → do
             _ ← resetScene env
             logger ← readIORef (loggerRef env)
-            out ← buildStartingInventory env logger testItems
+            out ← buildStartingInventory env (statRNGRef env) logger testItems
                     [("worn_tool", Nothing, 0), ("kit", Nothing, 1)]
             map iiDefName (map fst out) `shouldBe` ["worn_tool", "kit"]
             map iiCondition (map fst out) `shouldBe` [100, 100]
@@ -784,14 +784,14 @@ spec = describe "Item.Condition" $ do
         it "starting_equipment fills its slot with a pristine instance" $ \env → do
             _ ← resetScene env
             logger ← readIORef (loggerRef env)
-            eq ← buildStartingEquipment env logger testItems (Just humanoid)
+            eq ← buildStartingEquipment env (statRNGRef env) logger testItems (Just humanoid)
                     (HM.singleton "right_hand" "worn_tool")
             map iiCondition (HM.elems eq) `shouldBe` [100]
 
         it "starting_accessories are pristine" $ \env → do
             _ ← resetScene env
             logger ← readIORef (loggerRef env)
-            accs ← buildStartingAccessories env logger testItems ["worn_tool"]
+            accs ← buildStartingAccessories env (statRNGRef env) logger testItems ["worn_tool"]
             map iiCondition accs `shouldBe` [100]
 
         it "unit.addItem grants a pristine instance" $ \env → do

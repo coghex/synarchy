@@ -41,7 +41,11 @@ own:
 
   setup     a real world, a real placed zero-occupant ruin, a
             portal-eligible colony site, the portal, its own spawned
-            roster, colony storage — and the OCCUPIED ruin the second
+            roster of STANDARD units (the sequencer's test-only
+            standard profile, #2756: definition base/mean values, no
+            gameplay roll, so both travellers start at the same
+            capacity every run), colony storage — and the OCCUPIED
+            ruin the second
             leg goes to, still unknown, and deliberately not yet paged
             in (its occupants' clock starts when it is)
   prepare   water secured by a real acolyte's own FOV scan; the
@@ -292,8 +296,10 @@ then instance id) over the same list. The run prints a single
 `FINGERPRINT` line carrying both ruins' instance ids and anchors, the
 first ruin's rolled loot, the extraction target, both guaranteed
 significant items' defs and physical instance ids, the occupied ruin's
-rolled count and occupant uids, the colony and water tiles, the
-completed objective set, and the per-stage outcomes — so two consecutive invocations can be diffed as one line for
+rolled count and occupant uids, the colony and water tiles, both
+travellers' spawn-time carrying capacities (fixed by the standard
+roster, #2756), the completed objective set, and the per-stage
+outcomes — so two consecutive invocations can be diffed as one line for
 identity AND result, not merely compared on exit status. Sampled
 measurements (the control's stomach delta) are printed separately and
 deliberately kept OUT of the fingerprint: two honest runs of the same

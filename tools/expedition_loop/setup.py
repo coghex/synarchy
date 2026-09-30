@@ -11,7 +11,11 @@ placement list, so the ruin and the colony are a function of the seed
 alone. Nothing here spawns a unit, stages an item, or writes a
 lifecycle: the portal's own sequencer delivers the party
 (`scripts/building_spawn.lua`) and the ruin's own `ruin_common` rolls
-are the loot.
+are the loot. The one test switch it throws is the sequencer's
+standard roster (#2756), BEFORE the portal exists: every unit the portal
+delivers then takes its definition's base/mean values instead of a
+gameplay roll, so the two travellers carry the same capacity every run
+rather than, now and then, one too weak to carry its rations.
 
 LOOT SELECTION lives here rather than with the extraction owner because
 requirement 9 puts it here: "setup selects and creates the real world,
@@ -29,7 +33,8 @@ from probelib import poll_until, send, send_json
 from .constants import (ACOLYTE_DEF, HOME_MAX_DIST, HOME_MIN_DIST,
                         MAX_CORRIDOR_STEP, MULE_DEF, OCCUPIED_MAX_DIST,
                         OCCUPIED_MAX_STEP, OCCUPIED_MAX_WET_TILES, PAGE,
-                        PORTAL_DEF, STORAGE_DEF, WATER_MAX_DIST)
+                        PORTAL_DEF, STANDARD_ACOLYTE_CAPACITY, STORAGE_DEF,
+                        WATER_MAX_DIST)
 from .harness import Checks, ExpeditionState, StageAbort
 from .readers import (_as_float, arrival_box, dist, ground_items,
                       instance_by_id, load_region, placed, roster,
@@ -298,6 +303,36 @@ def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict):
 # --------------------------------------------------------------------------
 # The colony
 # --------------------------------------------------------------------------
+def enable_standard_roster(chk: Checks, port: int) -> bool:
+    """Switch the portal sequencer's TEST-ONLY standard roster on
+    (#2756) before the portal is placed, so every roster spawn asks
+    `unit.spawn` for the standard profile. Read back rather than
+    assumed: a silently-off switch would quietly restore rolled units."""
+    got = send(port, "local BS=require('scripts.building_spawn'); "
+                     "BS.setTestStandardProfile(true); "
+                     "return tostring(BS.standardProfile)", timeout=20.0)
+    return chk.ok(got == "true",
+                  f"the portal sequencer's standard roster is switched on "
+                  f"before the portal exists (standardProfile -> {got!r})")
+
+
+def record_traveller_capacities(chk: Checks, port: int, st: ExpeditionState,
+                                travellers: list) -> None:
+    """Both travellers' carrying capacity at spawn — read straight after
+    the roster lands, before any physiology can move a body mass. Under
+    the standard roster both are the definition's base capacity, so the
+    values go into the FINGERPRINT: two runs must print the same pair."""
+    caps = [_as_float(send(port, f"return unit.getStat({u},'carrying_capacity')"))
+            for u in travellers]
+    rounded = [None if c is None else round(c, 3) for c in caps]
+    st.fp["traveller_capacity"] = rounded
+    chk.ok(all(c is not None and abs(c - STANDARD_ACOLYTE_CAPACITY) < 0.01
+               for c in caps),
+           f"both travellers spawn as STANDARD acolytes with the base "
+           f"capacity {STANDARD_ACOLYTE_CAPACITY} kg (prepared, control -> "
+           f"{rounded})")
+
+
 def place_portal(chk: Checks, port: int, gx: int, gy: int) -> int:
     valid = send(port, f"return tostring(building.canPlaceAt('{PORTAL_DEF}',{gx},{gy}))",
                  timeout=20.0)
@@ -568,6 +603,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"{enc0.get('cleared')!r}), so the item is the ONLY "
            f"outstanding condition")
 
+    if not enable_standard_roster(chk, port):
+        raise StageAbort("the standard roster did not switch on")
     st.portal_bid = portal_bid = place_portal(chk, port, home[0], home[1])
     if portal_bid < 0:
         raise StageAbort("the colony tile refused the acolyte portal")
@@ -580,6 +617,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # spawns its roster in a fixed sequence, so these are stable.
     st.scout, st.prepared, st.control = acolytes[0], acolytes[1], acolytes[2]
     scout, prepared, control = st.scout, st.prepared, st.control
+    record_traveller_capacities(chk, port, st, [prepared, control])
     # The remaining acolytes are the never-went-there control for
     # the per-unit KNOWLEDGE layer (#915). They are NOT held:
     # `unit.setFrozen` freezes only the render publish, so a
