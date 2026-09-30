@@ -3827,6 +3827,38 @@ than quietly emitting five thousand success lines on half the runs. The
 same check asserts that no `.hspec` file and no `Spec.hs` formatter
 selection has appeared to leak the compact presentation into local runs.
 
+### `headless_lane_measurement.py` — per-group headless timing on CI (#2743)
+
+The collection and aggregation behind
+`docs/headless_suite_lane_measurement.md` (CIR-14). Like
+`ci_timing_report.py` it is a diagnostic run from a developer machine: it
+adds no CI step, and nothing in `.github/workflows/ci.yml` or
+`tools/ci-local.sh` invokes it.
+
+```bash
+# Rewrite a checkout's Spec.hs and harness into the TEMPORARY collection
+# form (never merged); push it on a draft PR and let CI run it.
+python3 tools/headless_lane_measurement.py instrument [--full-tier]
+python3 tools/headless_lane_measurement.py instrument --lane-match @G456,@G463
+python3 tools/headless_lane_measurement.py instrument --lane-skip @G456,@G463
+
+# Tabulate the resulting runs as Markdown.
+python3 tools/headless_lane_measurement.py aggregate --spec-commit <base> \
+    --run <id>:<attempt> ... [--full-run ...] [--lane-run ...] \
+    [--baseline-run <id> ...] [--master-run <id> ...] [--cache <dir>]
+python3 tools/headless_lane_measurement.py self-test
+```
+
+`instrument` wraps every top-level statement of `Spec.hs`'s `main` in
+`describe "@G<line>"` (and each statement of a top-level do-block in
+`@S<line>`), tees every Hspec `ItemDone` event to the log with its
+unrounded duration and source location, and makes the harness report
+shared-world generations/hits and engine boot/teardown times. `aggregate`
+downloads each run's `test-and-audits` job log with `gh`, refuses runs
+whose item records disagree with Hspec's footer or whose example order
+differs, and prints the report's tables. Only the report's
+collection commits ever carry the instrumented files.
+
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
 `tools/gameplay_scenarios.py` is a small on-demand runner for *watching*
