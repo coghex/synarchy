@@ -38,14 +38,26 @@ failure, not a pass: a file whose import was not understood cannot be
 certified as clean. So is a CPP directive that can rewrite or hide an
 import (`#define`, `#undef`, `#include`) in a file CPP actually
 preprocesses; `test-headless/` uses none. CPP is on for a file when one
-of its `LANGUAGE CPP` or `OPTIONS_GHC -XCPP`/`-cpp` pragmas says so, or
-when any `*.cabal` file at the repository root enables CPP. The cabal
-check is deliberately coarse: a CPP extension or flag anywhere in the
-package counts, which can only make the audit stricter. Where CPP is on,
-directive lines are read from the RAW text, because the preprocessor
-runs before Haskell comments exist. Where it is off, a `#define` line
-can only be comment or string text -- GHC would reject it anywhere
-else -- so it is ignored along with every other comment.
+of its real `LANGUAGE CPP` or `OPTIONS_GHC -XCPP`/`-cpp` pragmas says
+so, or when any `*.cabal` file at the repository root enables CPP. A
+real pragma is a top-level comment span, as the shared lexer reports it,
+that itself opens with `{-#`. Pragma text inside a string literal, a
+line comment or an enclosing block comment is quoted, and GHC does not
+act on it. Every real pragma counts, not only those in the file header
+GHC reads. The cabal check is deliberately coarse too: a CPP extension
+or flag anywhere in the package counts. Both can only make the audit
+stricter. Where CPP is on, directive lines are read from the RAW text,
+because the preprocessor runs before Haskell comments exist. Where it is
+off, a `#define` line can only be comment or string text -- GHC would
+reject it anywhere else -- so it is ignored along with every other
+comment.
+
+Whitespace is GHC's: `lua_strict_decode_audit`'s splitter skips every
+character `str.isspace` accepts except the newline, so a non-breaking
+space, form feed or vertical tab between `where`, `;` or `{` and an
+import hides nothing, and it measures layout columns with GHC's
+eight-column tab stops. Comments are blanked to spaces before splitting,
+so `{- note -} import ...` is a declaration too.
 
 The single exemption is `Test.Headless.Harness.Log`, the boundary that
 owns the backend choice (requirement 4). It is matched by exact path, so
@@ -66,7 +78,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from unicode_operator_audit import haskell_code_only  # type: ignore  # noqa: E402
+from unicode_operator_audit import (  # type: ignore  # noqa: E402
+    haskell_code_only, haskell_comment_spans)
 from lua_strict_decode_audit import (  # type: ignore  # noqa: E402
     haskell_import_declarations)
 
@@ -102,18 +115,19 @@ _HIDING = re.compile(r"\Ahiding(?![\w'])\s*(?P<list>[\s\S]*)\Z")
 _BANNED_TOKEN = re.compile(
     r"(?<![\w'.])" + re.escape(BANNED_IDENTIFIER) + r"(?![\w'])")
 
+# Any horizontal whitespace, and backslash-newline splices, may sit
+# around the `#`; matching more than cpp accepts only refuses more.
 _REWRITING_CPP_DIRECTIVE = re.compile(
-    r"^[ \t]*#[ \t]*(define|undef|include)\b", re.MULTILINE)
+    r"^[^\S\n]*#(?:[^\S\n]|\\\n)*(define|undef|include)\b", re.MULTILINE)
 
-# File pragmas that can switch CPP on. Pragma keywords are
-# case-insensitive in GHC; extension names and flags are not. Read from
-# the raw text, so a pragma quoted in a comment also counts -- which can
-# only make the audit stricter.
+# Pragmas that can switch CPP on, each matched against ONE whole real
+# pragma span (`_real_pragmas`). Pragma keywords are case-insensitive in
+# GHC; extension names and flags are not.
 _LANGUAGE_PRAGMA = re.compile(
-    r"\{-#\s*LANGUAGE(?![\w'])(?P<body>.*?)#-\}", re.DOTALL | re.IGNORECASE)
+    r"\A\{-#\s*LANGUAGE(?![\w'])(?P<body>[\s\S]*)#-\}\Z", re.IGNORECASE)
 _OPTIONS_PRAGMA = re.compile(
-    r"\{-#\s*OPTIONS(?:_GHC)?(?![\w'])(?P<body>.*?)#-\}",
-    re.DOTALL | re.IGNORECASE)
+    r"\A\{-#\s*OPTIONS(?:_GHC)?(?![\w'])(?P<body>[\s\S]*)#-\}\Z",
+    re.IGNORECASE)
 
 # CPP enabled at the package level: the extension in an extensions field
 # or the flag in `ghc-options`. `cpp-options` names no extension and
@@ -174,12 +188,26 @@ def _classify(decl: str) -> str | None:
             if named else None)
 
 
+def _real_pragmas(text: str) -> list[str]:
+    """Every pragma GHC could act on: each top-level comment span that
+    itself opens with `{-#`. The lexer reports a nested block comment as
+    its outermost span and never reports string contents, so a pragma
+    quoted in a string, a line comment or another block comment is not
+    one of these."""
+    return [text[start:end] for start, end in haskell_comment_spans(text)
+            if text.startswith("{-#", start)]
+
+
 def _pragma_enables_cpp(text: str) -> bool:
-    """True if one of the file's pragmas switches CPP on."""
-    return (any("CPP" in re.split(r"[\s,]+", m.group("body"))
-                for m in _LANGUAGE_PRAGMA.finditer(text))
-            or any({"-XCPP", "-cpp"} & set(m.group("body").split())
-                   for m in _OPTIONS_PRAGMA.finditer(text)))
+    """True if one of the file's real pragmas switches CPP on."""
+    for pragma in _real_pragmas(text):
+        language = _LANGUAGE_PRAGMA.match(pragma)
+        if language and "CPP" in re.split(r"[\s,]+", language.group("body")):
+            return True
+        options = _OPTIONS_PRAGMA.match(pragma)
+        if options and {"-XCPP", "-cpp"} & set(options.group("body").split()):
+            return True
+    return False
 
 
 def cabal_enables_cpp(repo_root: Path) -> bool:
@@ -304,6 +332,36 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
      "{-# OPTIONS_GHC -Wall -XCPP #-}\n" + _HEAD + "#define X Y\n", [3]),
     ("CPP through OPTIONS_GHC -cpp",
      "{-# OPTIONS_GHC -cpp #-}\n" + _HEAD + "  #  define X Y\n", [3]),
+    ("an import at the start of a line indented with a non-breaking space",
+     _HEAD + "\u00a0import Engine.Core.Init (initializeEngineHeadless)\n", [2]),
+    ("a non-breaking space after an explicit-layout `;`",
+     "module M where { import Data.IORef (newIORef);\u00a0"
+     "import Engine.Core.Init (initializeEngineHeadless) }\n", [1]),
+    ("a block comment before the import on its own line",
+     _HEAD + "{- note -} import Engine.Core.Init (initializeEngineHeadless)\n",
+     [2]),
+    ("a list continued on lines indented with non-breaking spaces",
+     _HEAD + "import Engine.Core.Init\n"
+     "\u00a0\u00a0( EngineInitResult(..)\n"
+     "\u00a0\u00a0, initializeEngineHeadless )\n", [2]),
+    ("a real CPP pragma after a header comment",
+     "-- header\n{-# LANGUAGE CPP #-}\n" + _HEAD
+     + "{-\n#define X Y\n-}\n", [5]),
+    ("a real CPP pragma carrying a nested comment is still one pragma",
+     "{-# LANGUAGE CPP {- explanatory note -} #-}\n" + _HEAD
+     + "#define MOD Engine.Core.Init\n", [3]),
+    ("a real CPP pragma spaced with non-breaking spaces",
+     "{-#\u00a0LANGUAGE\u00a0CPP\u00a0#-}\n" + _HEAD + "#define X Y\n", [3]),
+    ("form feed and vertical tab around a directive's `#`",
+     "{-# LANGUAGE CPP #-}\n" + _HEAD + "\f#\vdefine X Y\n", [3]),
+    ("a backslash-newline splice between `#` and the directive",
+     "{-# LANGUAGE CPP #-}\n" + _HEAD + "# \\\ninclude \"boot.h\"\n", [3]),
+] + [
+    (f"the `where`-line import after U+{ord(space):04X} -- GHC skips every "
+     f"Unicode space separator, form feed and vertical tab (#2648 review)",
+     f"module M where{space}import Engine.Core.Init "
+     f"(initializeEngineHeadless); fixture = initializeEngineHeadless\n", [1])
+    for space in ("\u00a0", "\f", "\v", "\u2003", "\u3000")
 ]
 
 CLEAN_FIXTURES: list[tuple[str, str]] = [
@@ -344,6 +402,29 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
      "{-\n#include \"boot.h\"\n#undef BOOT\n-}\n"),
     ("an extension merely containing the letters CPP is not CPP",
      "{-# LANGUAGE NoCPPish #-}\n" + _HEAD + "{-\n#define X Y\n-}\n"),
+    ("an allowed list continued on non-breaking-space-indented lines is "
+     "one declaration, not an unrestricted import",
+     _HEAD + "import Engine.Core.Init\n"
+     "\u00a0\u00a0( EngineInitResult(..) )\n"),
+    ("a tab-indented continuation sits at GHC's column 8, past an "
+     "indented import's column 2",
+     "module M where\n  import Engine.Core.Init\n\t(EngineInitResult(..))\n"
+     "  x = 1\n"),
+    ("a hiding list on a non-breaking-space-indented line",
+     _HEAD + "import Engine.Core.Init hiding\n"
+     "\u00a0(initializeEngineHeadless)\n"),
+    ("a CPP pragma quoted in a string literal (#2648 review)",
+     _HEAD + "message = \"{-# LANGUAGE CPP #-}\"\n"
+     "{-\n#define BOOT initializeEngineHeadless\n-}\n"),
+    ("a CPP pragma nested inside a block comment (#2648 review)",
+     _HEAD + "{- {-# LANGUAGE CPP #-} -}\n"
+     "{-\n#define BOOT initializeEngineHeadless\n-}\n"),
+    ("a CPP pragma quoted in a haddock line comment",
+     "-- | Enable with {-# LANGUAGE CPP #-}\n" + _HEAD
+     + "{-\n#include \"boot.h\"\n-}\n"),
+    ("OPTIONS_GHC -XCPP quoted in a string literal",
+     _HEAD + "flags = \"{-# OPTIONS_GHC -XCPP #-}\"\n"
+     "{-\n#undef BOOT\n-}\n"),
     ("the `where` keyword is matched whole: an identifier ending in it "
      "is not the layout keyword",
      _HEAD + "import Engine.Core.Init (EngineInitResult(..))\n"
@@ -371,6 +452,23 @@ TREE_FIXTURES: list[tuple[str, str | None, str, bool]] = [
     ("scan_tree reports the `where`-line import (#2648 review)", None,
      "module M where import Engine.Core.Init (initializeEngineHeadless); "
      "fixture = initializeEngineHeadless\n", True),
+    ("scan_tree reports it after a non-breaking space", None,
+     "module M where\u00a0import Engine.Core.Init (initializeEngineHeadless); "
+     "fixture = initializeEngineHeadless\n", True),
+    ("scan_tree reports it after a form feed", None,
+     "module M where\fimport Engine.Core.Init (initializeEngineHeadless)\n",
+     True),
+    ("scan_tree certifies an allowed list on non-breaking-space lines", None,
+     _HEAD + "import Engine.Core.Init\n\u00a0\u00a0( EngineInitResult(..) )\n",
+     False),
+    ("scan_tree ignores a string-quoted CPP pragma", None,
+     _HEAD + "message = \"{-# LANGUAGE CPP #-}\"\n"
+     "{-\n#define BOOT initializeEngineHeadless\n-}\n", False),
+    ("scan_tree ignores a CPP pragma nested in a block comment", None,
+     _HEAD + "{- {-# LANGUAGE CPP #-} -}\n"
+     "{-\n#define BOOT initializeEngineHeadless\n-}\n", False),
+    ("scan_tree still refuses a real CPP pragma's quoted directive", None,
+     "{-# LANGUAGE CPP #-}\n" + _QUOTED_DIRECTIVE, True),
     ("no cabal file: quoted CPP text is only a comment", None,
      _QUOTED_DIRECTIVE, False),
     ("cpp-options alone does not enable CPP",
