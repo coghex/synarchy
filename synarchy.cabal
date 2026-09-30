@@ -1451,6 +1451,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Pathing.MotionArgs
                    Test.Headless.Unit.Pathing.MoveToApi
                    Test.Headless.Unit.SimPageOwnership
+                   Test.Headless.Unit.StandardSpawn
                    Test.Headless.Unit.Pathing.AStar
                    Test.Headless.Unit.Pathing.Config
                    Test.Headless.Unit.Render.PickFrame

@@ -35,6 +35,21 @@ RATIONS_DEF = "rations"
 ACOLYTE_DEF = "acolyte"
 MULE_DEF = "technomule"
 
+#: Carrying capacity (kg) of a STANDARD acolyte (#2756): the shipped
+#: definition's base/mean inputs (height 1.8, bulk 1.0, bodyfat 0.2,
+#: strength 1.0) through Unit.Thread.Command.Body's formula,
+#: 3.2*(lean_mass*strength)^0.6. The portal delivers the party under the
+#: test-only standard profile, so both travellers start at exactly this,
+#: every run — about twice the ~12.3 kg starting kit.
+STANDARD_ACOLYTE_CAPACITY = 23.887
+
+#: A standard acolyte's spawn lean_mass as a fraction of its frame_mass:
+#: (1 - bodyfat mean 0.2) * 0.5 skeletal-muscle share, per
+#: Unit.Thread.Command.Body.seedBodyComposition (well above its 0.214
+#: viability floor, so never clamped). Still standing there proves no
+#: catabolism or regrowth has touched the body since spawn.
+STANDARD_LEAN_FRACTION = 0.4
+
 #: The widest a unit's night-aware sight radius can reach (#1230):
 #: perception * Unit.LineOfSight.awareRangeTiles (6.0), with the
 #: page-local night factor only ever shrinking it. No shipped unit

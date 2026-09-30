@@ -51,7 +51,7 @@ import Item.Ground (GroundItems(..), spawnGroundItem)
 import Item.Types (ItemInstance(..))
 import Sim.Fluid.Reaction (ReactionResult(..), SolidProduct(..))
 import Unit.Faction (Faction(..))
-import Unit.Command.Types (UnitCommand(..))
+import Unit.Command.Types (UnitCommand(..), SpawnProfile(..))
 import Unit.Sim.Types
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Command.Spawn (handleUnitSpawnCommand)
@@ -178,7 +178,7 @@ spawnAt env ws pageId raw (gx, gy) z = do
     Q.writeQueue (unitQueue env)
         (UnitSpawn uid occupantDefName
                    (fromIntegral gx + 0.5) (fromIntegral gy + 0.5) z
-                   FactionPlayer pageId epoch)
+                   FactionPlayer pageId epoch SpawnRolled)
     drainUnits env
     pure uid
 
@@ -1208,6 +1208,7 @@ spec = describe "solidification occupants (#2490)" $ do
                                 (fromIntegral (fst doomed) + 0.5)
                                 (fromIntegral (snd doomed) + 0.5)
                                 baseZ FactionPlayer coherentPageId epoch
+                                SpawnRolled
                             putMVar spawnDone ()
                       -- Long enough for an unlocked spawn to have
                       -- finished several times over.

@@ -68,9 +68,10 @@ processAllUnitCommands env utsRef = do
 
 handleUnitCommand ∷ EngineEnv → IORef UnitThreadState → UnitCommand → IO ()
 handleUnitCommand env utsRef
-                  (UnitSpawn uid defName gx gy gz factionId pageId epoch)
+                  (UnitSpawn uid defName gx gy gz factionId pageId epoch
+                             profile)
   = handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId
-                           epoch
+                           epoch profile
 handleUnitCommand env utsRef (UnitDestroy uid)
   = handleUnitDestroyCommand env utsRef uid
 handleUnitCommand env utsRef UnitClearAll
