@@ -185,6 +185,7 @@ import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.World.SessionEpoch as SessionEpoch
 import qualified Test.Headless.World.PageIncarnation as PageIncarnation
+import qualified Test.Headless.Unit.RuinOccupantSurvival as RuinOccupantSurvival
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Equipment.Reconcile as EquipmentReconcile
@@ -985,6 +986,9 @@ main = hspec $ do
     -- draining worldQueue beside it would buy nothing.
     SessionEpoch.spec
     PageIncarnation.spec
+    -- Own engine AND world thread per example (#2754): each boots the
+    -- reported seed-14 world and steps its ruin roster through the bound.
+    RuinOccupantSurvival.spec
     describe "Load.Status" LoadStatus.spec
     describe "Load.Terminalize" LoadTerminalize.spec
     describe "Save.Snapshot" SaveSnapshot.spec
