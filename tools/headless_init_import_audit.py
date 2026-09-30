@@ -36,7 +36,16 @@ layout-aware declaration splitter is `lua_strict_decode_audit.py`'s
 An `Engine.Core.Init` import in a shape this module does not model is a
 failure, not a pass: a file whose import was not understood cannot be
 certified as clean. So is a CPP directive that can rewrite or hide an
-import (`#define`, `#undef`, `#include`); `test-headless/` uses none.
+import (`#define`, `#undef`, `#include`) in a file CPP actually
+preprocesses; `test-headless/` uses none. CPP is on for a file when one
+of its `LANGUAGE CPP` or `OPTIONS_GHC -XCPP`/`-cpp` pragmas says so, or
+when any `*.cabal` file at the repository root enables CPP. The cabal
+check is deliberately coarse: a CPP extension or flag anywhere in the
+package counts, which can only make the audit stricter. Where CPP is on,
+directive lines are read from the RAW text, because the preprocessor
+runs before Haskell comments exist. Where it is off, a `#define` line
+can only be comment or string text -- GHC would reject it anywhere
+else -- so it is ignored along with every other comment.
 
 The single exemption is `Test.Headless.Harness.Log`, the boundary that
 owns the backend choice (requirement 4). It is matched by exact path, so
@@ -96,6 +105,21 @@ _BANNED_TOKEN = re.compile(
 _REWRITING_CPP_DIRECTIVE = re.compile(
     r"^[ \t]*#[ \t]*(define|undef|include)\b", re.MULTILINE)
 
+# File pragmas that can switch CPP on. Pragma keywords are
+# case-insensitive in GHC; extension names and flags are not. Read from
+# the raw text, so a pragma quoted in a comment also counts -- which can
+# only make the audit stricter.
+_LANGUAGE_PRAGMA = re.compile(
+    r"\{-#\s*LANGUAGE(?![\w'])(?P<body>.*?)#-\}", re.DOTALL | re.IGNORECASE)
+_OPTIONS_PRAGMA = re.compile(
+    r"\{-#\s*OPTIONS(?:_GHC)?(?![\w'])(?P<body>.*?)#-\}",
+    re.DOTALL | re.IGNORECASE)
+
+# CPP enabled at the package level: the extension in an extensions field
+# or the flag in `ghc-options`. `cpp-options` names no extension and
+# matches neither spelling.
+_CABAL_ENABLES_CPP = re.compile(r"(?<![\w-])(?:CPP|-XCPP|-cpp)(?![\w-])")
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -150,9 +174,31 @@ def _classify(decl: str) -> str | None:
             if named else None)
 
 
-def find_violations(text: str, rel_path: str) -> list[Violation]:
-    """Every banned import in one module's source."""
-    directive = _REWRITING_CPP_DIRECTIVE.search(text)
+def _pragma_enables_cpp(text: str) -> bool:
+    """True if one of the file's pragmas switches CPP on."""
+    return (any("CPP" in re.split(r"[\s,]+", m.group("body"))
+                for m in _LANGUAGE_PRAGMA.finditer(text))
+            or any({"-XCPP", "-cpp"} & set(m.group("body").split())
+                   for m in _OPTIONS_PRAGMA.finditer(text)))
+
+
+def cabal_enables_cpp(repo_root: Path) -> bool:
+    """True if any root `*.cabal` file enables CPP anywhere in it."""
+    for cabal in sorted(repo_root.glob("*.cabal")):
+        code = "\n".join(
+            line for line in cabal.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("--"))
+        if _CABAL_ENABLES_CPP.search(code):
+            return True
+    return False
+
+
+def find_violations(text: str, rel_path: str,
+                    cpp_everywhere: bool = False) -> list[Violation]:
+    """Every banned import in one module's source. `cpp_everywhere` says
+    the package enables CPP for every module (`cabal_enables_cpp`)."""
+    directive = (_REWRITING_CPP_DIRECTIVE.search(text)
+                 if cpp_everywhere or _pragma_enables_cpp(text) else None)
     if directive:
         return [Violation(
             rel_path, _line_of(text, directive.start()),
@@ -178,13 +224,15 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
 
 def scan_tree(repo_root: Path) -> list[Violation]:
     violations: list[Violation] = []
+    cpp_everywhere = cabal_enables_cpp(repo_root)
     tree = repo_root / SCOPED_TREE
     paths = sorted({*tree.glob("**/*.hs"), *tree.glob("**/*.hs-boot")})
     for path in paths:
         rel = path.relative_to(repo_root).as_posix()
         if rel in EXEMPTIONS:
             continue
-        violations.extend(find_violations(path.read_text(encoding="utf-8"), rel))
+        violations.extend(find_violations(
+            path.read_text(encoding="utf-8"), rel, cpp_everywhere))
     return violations
 
 
@@ -236,9 +284,26 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
      _HEAD + "import Engine.Core.Init (EngineInitResult(..)) junk\n", [2]),
     ("an unterminated list fails rather than passing",
      _HEAD + "import Engine.Core.Init (EngineInitResult(..)\n", [2]),
+    ("the first import on the `module ... where` line itself (#2648 "
+     "review): no newline, `{` or `;` precedes it",
+     "module M where import Engine.Core.Init (initializeEngineHeadless); "
+     "fixture = initializeEngineHeadless\n", [1]),
+    ("an unrestricted import on the `where` line, layout continuing below",
+     "module M (spec) where import Engine.Core.Init\n"
+     "                      import Data.IORef (newIORef)\n", [1]),
     ("a rewriting CPP directive refuses the file",
      "{-# LANGUAGE CPP #-}\n" + _HEAD + "#define BOOT initializeEngineHeadless\n"
      "import Engine.Core.Init (EngineInitResult(..))\n", [3]),
+    ("CPP in a LANGUAGE list, and a directive inside a Haskell comment: "
+     "the preprocessor runs before comments exist",
+     "{-# LANGUAGE OverloadedStrings, CPP #-}\n" + _HEAD
+     + "{-\n#include \"boot.h\"\n-}\n", [4]),
+    ("a lower-case pragma keyword still enables CPP",
+     "{-# language CPP #-}\n" + _HEAD + "#undef X\n", [3]),
+    ("CPP through OPTIONS_GHC -XCPP",
+     "{-# OPTIONS_GHC -Wall -XCPP #-}\n" + _HEAD + "#define X Y\n", [3]),
+    ("CPP through OPTIONS_GHC -cpp",
+     "{-# OPTIONS_GHC -cpp #-}\n" + _HEAD + "  #  define X Y\n", [3]),
 ]
 
 CLEAN_FIXTURES: list[tuple[str, str]] = [
@@ -271,6 +336,18 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
      _HEAD + "import Engine.Core.Init.Extra (initializeEngineHeadless)\n"),
     ("a different module exporting the same name",
      _HEAD + "import Other.Init (initializeEngineHeadless)\n"),
+    ("quoted CPP text in a block comment of a non-CPP module (#2648 "
+     "review)",
+     _HEAD + "{-\n#define BOOT initializeEngineHeadless\n-}\n"),
+    ("the same comment beside an allowed import",
+     _HEAD + "import Engine.Core.Init (EngineInitResult(..))\n"
+     "{-\n#include \"boot.h\"\n#undef BOOT\n-}\n"),
+    ("an extension merely containing the letters CPP is not CPP",
+     "{-# LANGUAGE NoCPPish #-}\n" + _HEAD + "{-\n#define X Y\n-}\n"),
+    ("the `where` keyword is matched whole: an identifier ending in it "
+     "is not the layout keyword",
+     _HEAD + "import Engine.Core.Init (EngineInitResult(..))\n"
+     "nowhere = 0\n"),
 ]
 
 _BANNED_SOURCE = _HEAD + "import Engine.Core.Init (initializeEngineHeadless)\n"
@@ -286,8 +363,43 @@ EXEMPTION_FIXTURES: list[tuple[str, bool]] = [
 ]
 
 
+_QUOTED_DIRECTIVE = _HEAD + "{-\n#define BOOT initializeEngineHeadless\n-}\n"
+
+# `(label, root *.cabal text or None, module source, expected reported)`,
+# each scanned as the only module of its own temporary tree.
+TREE_FIXTURES: list[tuple[str, str | None, str, bool]] = [
+    ("scan_tree reports the `where`-line import (#2648 review)", None,
+     "module M where import Engine.Core.Init (initializeEngineHeadless); "
+     "fixture = initializeEngineHeadless\n", True),
+    ("no cabal file: quoted CPP text is only a comment", None,
+     _QUOTED_DIRECTIVE, False),
+    ("cpp-options alone does not enable CPP",
+     "test-suite t\n    cpp-options: -DDARWIN\n", _QUOTED_DIRECTIVE, False),
+    ("a commented-out cabal line does not enable CPP",
+     "test-suite t\n    -- default-extensions: CPP\n",
+     _QUOTED_DIRECTIVE, False),
+    ("CPP in cabal default-extensions preprocesses every module",
+     "test-suite t\n    default-extensions: GHC2024, CPP\n",
+     _QUOTED_DIRECTIVE, True),
+    ("-cpp in cabal ghc-options preprocesses every module",
+     "test-suite t\n    ghc-options: -Wall -cpp\n", _QUOTED_DIRECTIVE, True),
+]
+
+
 def self_test() -> int:
     failures: list[str] = []
+    for label, cabal, source, expected in TREE_FIXTURES:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            module = root / SCOPED_TREE / "Test" / "Fixture.hs"
+            module.parent.mkdir(parents=True)
+            module.write_text(source, encoding="utf-8")
+            if cabal is not None:
+                (root / "fixture.cabal").write_text(cabal, encoding="utf-8")
+            got = bool(scan_tree(root))
+            if got != expected:
+                failures.append(
+                    f"TREE {label}: expected reported={expected}, got {got}")
     for label, source, lines in DETECTED_FIXTURES:
         got = [v.line for v in find_violations(source, "Fixture.hs")]
         if got != lines:
@@ -312,7 +424,7 @@ def self_test() -> int:
         if not reason.strip():
             failures.append(f"EXEMPTION {rel} carries no reason")
     total = (len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
-             + len(EXEMPTION_FIXTURES))
+             + len(EXEMPTION_FIXTURES) + len(TREE_FIXTURES))
     if failures:
         print(f"headless_init_import_audit self-test: {len(failures)} of "
               f"{total} case(s) FAILED:")

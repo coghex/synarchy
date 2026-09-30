@@ -209,18 +209,27 @@ def _opens_declaration(code_text: str, start: int) -> bool:
     """True if the `import` token at `start` opens a declaration rather
     than sitting inside one.
 
-    It does when only spaces separate it from the start of its line, or
-    from an explicit-layout `{` or `;`. Those are the only positions the
-    Haskell grammar allows a declaration to begin at, in either layout
-    style -- which is why declarations are found by TOKEN here and never
-    by column: GHC accepts a top-level layout indented to any column,
-    and an explicit-brace module body puts imports inline. Where the
-    declaration then ENDS depends on which layout it is in; see
-    `_declaration_end`."""
+    It does when only spaces separate it from the start of its line,
+    from an explicit-layout `{` or `;`, or from the `where` keyword
+    itself: the layout rule opens the module body's implicit block at
+    the first token after `where`, so `module M where import X` puts the
+    first import on the header's own line (#2648). Those are the only
+    positions the Haskell grammar allows a declaration to begin at, in
+    either layout style -- which is why declarations are found by TOKEN
+    here and never by column: GHC accepts a top-level layout indented to
+    any column, and an explicit-brace module body puts imports inline.
+    Where the declaration then ENDS depends on which layout it is in;
+    see `_declaration_end`."""
     i = start - 1
     while i >= 0 and code_text[i] in " \t":
         i -= 1
-    return i < 0 or code_text[i] in "\n{;"
+    if i < 0 or code_text[i] in "\n{;":
+        return True
+    keyword_start = i - len("where") + 1
+    return (keyword_start >= 0
+            and code_text.startswith("where", keyword_start)
+            and (keyword_start == 0
+                 or not _is_ident_char(code_text[keyword_start - 1])))
 
 
 def _in_explicit_layout(code_text: str, pos: int) -> bool:
@@ -560,6 +569,14 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         " import qualified Data.Text.Encoding as TE\n"
         " f raw = TE.decodeUtf8 raw\n",
         [3],
+    ),
+    (
+        "the first import on the `module ... where` line itself -- the "
+        "layout block opens at the token after `where`, so no newline, "
+        "`{` or `;` precedes it (#2648)",
+        "module M where import qualified Data.Text.Encoding as TE\n"
+        "               f raw = TE.decodeUtf8 raw\n",
+        [2],
     ),
     (
         "an indented layout whose import list also continues, so the "
