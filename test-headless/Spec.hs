@@ -441,6 +441,8 @@ import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
 import qualified Test.Headless.Unit.FactionCatalogue as UnitFactionCatalogue
 import qualified Test.Headless.Unit.FactionProfile as UnitFactionProfile
+import qualified Test.Headless.Gameplay.Tags as GameplayTags
+import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -1296,6 +1298,11 @@ main = hspec $ do
     UnitStandardSpawn.spec
     UnitFactionProfile.spec
     UnitFactionCatalogue.spec
+    -- #2700: the pure gameplay tag registry and query evaluator. No
+    -- engine. The memory group registers nothing unless
+    -- SYNARCHY_TAG_MEMORY=1 (see its module header).
+    describe "Gameplay.Tags" GameplayTags.spec
+    describe "Gameplay.Tags memory" GameplayTagsMemory.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec

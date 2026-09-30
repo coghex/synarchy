@@ -620,6 +620,9 @@ library
                      Unit.Faction
                      Unit.Faction.Catalogue
                      Unit.Faction.Profile
+                     Gameplay.Tags.Types
+                     Gameplay.Tags.Registry
+                     Gameplay.Tags.Query
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
@@ -1817,6 +1820,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Faction
                    Test.Headless.Unit.FactionCatalogue
                    Test.Headless.Unit.FactionProfile
+                   Test.Headless.Gameplay.Tags
+                   Test.Headless.Gameplay.TagsMemory
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
@@ -1980,4 +1985,8 @@ test-suite synarchy-test-headless
                 -- supervision it proves is exactly what a mocked
                 -- transport would not exercise.
                 , network
-    ghc-options: "-with-rtsopts=-N -A128M"
+    -- -rtsopts lets one run pass +RTS -T for the opt-in retained-memory
+    -- measurement in Test.Headless.Gameplay.TagsMemory (#2700); the
+    -- default RTS options are unchanged.
+    ghc-options: -rtsopts
+                 "-with-rtsopts=-N -A128M"
