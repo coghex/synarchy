@@ -21,6 +21,8 @@ module Test.Headless.Harness
   ) where
 
 import UPrelude
+import qualified GHC.Clock as MeasureClock
+import qualified System.IO as MeasureIO
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (isEmptyMVar)
 import Control.Exception (bracket)
@@ -224,7 +226,8 @@ withHeadlessEngine = withHeadlessEngineExpectingStopped []
 withHeadlessEngineExpectingStopped ∷ [HeadlessWorker] → (EngineEnv → IO α)
                                    → IO α
 withHeadlessEngineExpectingStopped expectedStopped action =
-    bracket setup teardown $ \(env, workers) →
+    bracket (measureTimed "boot world" setup)
+             (measureTimed "teardown world" ∘ teardown) $ \(env, workers) →
         withHeadlessWorkerCheck expectedStopped workers (action env)
   where
     setup = do
@@ -285,7 +288,8 @@ withHeadlessEngineExpectingStopped expectedStopped action =
 --   it only so 'updateChunkLoading' triggers, and there is no worker
 --   here to trigger.
 withHeadlessEngineNoWorld ∷ (EngineEnv → IO α) → IO α
-withHeadlessEngineNoWorld = bracket setup teardown
+withHeadlessEngineNoWorld = bracket (measureTimed "boot noworld" setup)
+                                    (measureTimed "teardown noworld" ∘ teardown)
   where
     setup = do
         EngineInitResult env ← initializeEngineHeadlessQuiet
@@ -317,10 +321,19 @@ sharedWorld env seed size plateCount = do
     let pid = sharedWorldPageId seed size plateCount
     mWs ← getWorldState env pid
     case mWs of
-        Just _ → waitForWorldInit env pid 300
-        Nothing → do
-            sendWorldCommand env (WorldInit pid seed size plateCount Nothing)
+        Just _ → do
+            MeasureIO.hPutStrLn MeasureIO.stdout $ "@@SHARED-WORLD-HIT "
+                ⧺ show (seed, size, plateCount) ⧺ " @@END"
             waitForWorldInit env pid 300
+        Nothing → do
+            measureT0 ← MeasureClock.getMonotonicTime
+            sendWorldCommand env (WorldInit pid seed size plateCount Nothing)
+            measureWs ← waitForWorldInit env pid 300
+            measureT1 ← MeasureClock.getMonotonicTime
+            MeasureIO.hPutStrLn MeasureIO.stdout $ "@@SHARED-WORLD-GEN "
+                ⧺ show (seed, size, plateCount) ⧺ " "
+                ⧺ show (measureT1 - measureT0) ⧺ " @@END"
+            pure measureWs
 
 -- | The page id 'sharedWorld' registers a world under. Exposed because
 --   a chunk request is page-qualified (#2001), so a caller that queues
@@ -402,3 +415,13 @@ waitForChunksAt ws coord timeoutSecs = go 0
 --   'waitForChunksAt' on the last coord to block until generated.
 queueChunks ∷ WorldPageId → WorldState → [ChunkCoord] → IO ()
 queueChunks pid ws coords = void (enqueueChunkRequest pid ws coords)
+
+-- | Temporary #2743 collection helper: time one harness phase.
+measureTimed ∷ String → IO α → IO α
+measureTimed label act = do
+    t0 ← MeasureClock.getMonotonicTime
+    r ← act
+    t1 ← MeasureClock.getMonotonicTime
+    MeasureIO.hPutStrLn MeasureIO.stdout $ "@@ENGINE " ⧺ label ⧺ " "
+        ⧺ show (t1 - t0) ⧺ " @@END"
+    pure r
