@@ -3745,6 +3745,27 @@ theatre — and the traps found while building it.
    can still carry a held unit off its anchor while the second is walking,
    so the coherent snapshot is still what the check needs.
 
+**Both travellers are STANDARD acolytes (#2756).** Ordinary spawns roll
+every stat, skill, knowledge value and body input from the entropy-seeded
+stat RNG, and the weak tail is intentional gameplay: capacity spans about
+4–76 kg over the shipped windows, so a rolled traveller can spawn unable
+to carry its rations (#2755). Setup therefore switches
+`buildingSpawn.setTestStandardProfile(true)` on before placing the portal,
+so the real roster asks `unit.spawn` for the test-only `"standard"`
+profile: definition base/mean inputs with no gameplay-RNG draw, derived
+values from the ordinary body authorities (~23.9 kg capacity, twice the
+kit), and name and kit rolls from a fixed spawn-local generator. Each
+acolyte's capacity is snapshotted the first roster poll it is seen, in one
+call with the body stats it derives from, and that snapshot is proved to
+predate any physiology (lean mass still at its spawn seed, `strength_base`
+at its base) — a read after the whole roster wait would be a live value.
+Both travellers' snapshots are asserted equal to the standard value and
+recorded in the `FINGERPRINT`, so two runs must print the same pair. This
+levels the travellers' BODIES; it does not replace any of the six
+conditions above. The switch is default-off, never serialized, and cleared
+by session teardown, a save load and shutdown; gameplay, the new-game flow
+and loaded units are unaffected. Gate: hspec `Standard spawn profile`.
+
 **Canteens stay full on both.** A dry one puts `refill_canteen` at its 7.5
 peak, above `follow_command`, and the control then abandons the leg to
 walk to the water the scout radioed about — a behavioural difference, not

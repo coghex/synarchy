@@ -1,16 +1,21 @@
 {-# LANGUAGE Strict #-}
 -- | Pure stat-rolling primitives.
 --
--- 'rollStat' draws from a truncated normal distribution with mean
--- = @base@ and sigma = @range@ / 4, rejecting samples outside the
--- window [base - range/2, base + range/2]. A final clamp keeps
+-- 'rollStat' draws ONE sample from a normal distribution with mean
+-- = @base@ and sigma = @range@ / 4, then CLAMPS it to the window
+-- [base - range/2, base + range/2] — an out-of-window sample is
+-- pinned to the nearest bound, never rejected and redrawn, so each
+-- bound carries the ~2.3% tail mass beyond it. A final clamp keeps
 -- results at or above zero — strength below zero is meaningless
 -- (\"too weak to breathe\"); the upper bound is intentionally soft
 -- so creatures like dragons (base ≫ 100) work the same way.
 --
 -- Range = 0 returns @base@ unchanged (no roll, no RNG consumption).
+-- 'standardStat' is the no-draw value a template centres on, for the
+-- test-only standard spawn profile (#2756).
 module Unit.Stats
     ( rollStat
+    , standardStat
     , effectiveStat
     , applySkillXP
     , applyItemBuffs
@@ -39,11 +44,6 @@ boxMuller g0 =
         z        = r * cos (2 * pi * u2)
     in (z, g2)
 
--- | Roll one stat. With range = 0 returns base exactly (no RNG draw).
---   Otherwise: truncated normal (sigma = range/4) on
---   [base - range/2, base + range/2]. Values outside the window are
---   clamped to the nearest bound (very rare with sigma = range/4 —
---   ~5% of raw draws). Final clamp to >= 0.
 -- | Apply XP to a skill and return the new skill level.
 --
 --   Formula: @newLevel = level + xp / max (level * level, 1e-4)@.
@@ -140,6 +140,11 @@ refreshAccessoryBuffs ∷ ItemManager → [ItemInstance]
 refreshAccessoryBuffs itemMgr accs mods0 =
     foldl' (\mods inst → applyAccessoryBuffs itemMgr inst mods) mods0 accs
 
+-- | Roll one stat. With range = 0 returns base exactly (no RNG draw).
+--   Otherwise ONE normal sample (sigma = range/4) is CLAMPED to
+--   [base - range/2, base + range/2]: a sample outside the window is
+--   pinned to the nearest bound rather than rejected (about 4.6% of
+--   draws land on a bound — 2σ each side). Final clamp to >= 0.
 {-# NOINLINE rollStat #-}
 rollStat ∷ Float → Float → StdGen → (Float, StdGen)
 rollStat base range g
@@ -153,6 +158,12 @@ rollStat base range g
                             (base + z * (range / 4))))
                 , g'
                 )
+
+-- | The value a template takes under the standard spawn profile
+--   (#2756): its @base@ \/ @mean@ exactly, with no draw — the centre
+--   'rollStat' samples around, under the same non-negative floor.
+standardStat ∷ Float → Float
+standardStat base = max 0 base
 
 -- | Draw a persistent display name from a name pool (#264). Picks one
 --   `given` name and, if the pool has any, one `family` name, joining

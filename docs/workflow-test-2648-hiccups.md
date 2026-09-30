@@ -1,0 +1,23 @@
+# Synarchy workflow test — issue 2648
+
+Requested: one small issue through Claude Code Opus 5.5 solve, GPT-6.1-Sol reviews, required CI, and merge. GitHub target: coghex/synarchy. Active issues 2754/2756 and unrelated docs-wip edits protected.
+
+- Preparation: primary master was clean at 59150765113cfa4e10ce732116b52c8c153f529a. Selected #2648 (quiet Chop fixture plus import audit), bounded acceptance and no art/product decisions. Canonical --check approved true; no open PR collision.
+- Hiccup: sandbox `gh issue list -R coghex/synarchy ...` could not reach api.github.com. Retried authorized read with sandbox escalation; succeeded. No tool changes needed.
+- Models: `claude -p --model claude-opus-5-5 --tools '' --strict-mcp-config ...` returned MODEL_OK; modelUsage confirms canonicalModel claude-opus-5-5. `RUST_LOG=error codex exec --model gpt-6.1-sol --sandbox read-only --ignore-user-config --ephemeral ...` returned MODEL_OK with CLI header model gpt-6.1-sol.
+- Hiccup: installed Kanban roster assigns GPT-6-Sol to PR review and Codex coordinator does not pin models. Use explicitly pinned fresh GPT-6.1-Sol CLI reviewer with canonical self-review context/publication; no shared roster edits.
+- Hiccup: Claude plugin solve (1.0.0) has older comment trust instructions. Solver directed to current 1.68.0 trusted_issue_spec.py (exact coghex only), repository-scoped calls, and Claude origin marker.
+- Solve: invoking Claude Opus 5.5 high with current solve contract, claim/collision checks, isolated worktree, focused validations, draft PR. Execution evidence in /tmp/synarchy-workflow-2648/solve.jsonl (do not copy unsanitized agent telemetry into durable log).
+
+- Solve complete: draft PR #2762 at bf046539f6d3cc9da3ea1325afb92b52b05c64f6; Opus modelUsage contains only claude-opus-5-5. Local build and 3 stream modes passed, Chop 20/0, fixture logging 8/0, new audit 35 cases, Lua parser 60 cases, negative import injection and CI parity passed. Solver fixed a minor zsh loop word-splitting hiccup by listing filenames explicitly.
+- Review launch hiccups before model call: Codex CLI rejects --sandbox together with --approve-for-me. Removed redundant --sandbox; --approve-for-me selects workspace-write. Canonical schema AST contains an annotated assignment and named numeric limits; substituted those exact constants and verified schema exists before retry. No source/shared-tool changes.
+
+- Review round 1 (fresh GPT-6.1-Sol xhigh, CLI header verified): CHANGES_REQUESTED on bf046539. Independently compiled reproductions prove two audit defects: immediate import after module where bypasses scanning; harmless CPP text inside a non-CPP block comment is rejected. Canonical coordinator publishes verdict; Opus 5.5 will fix both with regression cases. Static audits and required behavior-probes already passed; headless CI still pending.
+
+- Opus revision pushed c8f7519704d3870df63850e04b919d454c4d0ccb without force, after remote-head check. Only the two audit Python files changed. New audit 51 cases, Lua parser 61 cases, mutation checks (3/6/7/2 catching deliberately reverted behavior), real-tree import injection, and parity all pass. Updated PR validation note; still draft/changes requested. Fresh GPT-6.1-Sol rereview round 2 starts on this head; new CI run pending.
+
+- Fresh GPT-6.1-Sol rereview round 2 on c8f75197: both original cases fixed; CHANGES_REQUESTED for compiler-confirmed Unicode/form-feed/vertical-tab whitespace bypass and pragma text quoted in string/nested comment falsely activating CPP grading. Opus 5.5 will handle full lexical/whitespace fixes with tree-level regression coverage. No product/owner decision needed. Revised-head static CI audits passed; runtime jobs pending.
+
+- Opus revision 3 pushed 46145449e585c55bc742ad0df36c41cf214e9c7f with remote-head check and no force. GHC whitespace/tab-column handling and lexer-derived active pragma detection; 78 audit cases, 63 Lua parser fixtures, negative import injection, saved reviewer reproductions, GHC2024 layout compilations, mutation checks and parity passed. ModelUsage only claude-opus-5-5. Fresh GPT-6.1-Sol rereview round 3 starts on this head; current-head CI starts anew.
+
+- Fresh GPT-6.1-Sol round 3 on 46145449: previous blockers fixed, but CHANGES_REQUESTED for valid commented/quoted-option CPP pragma activation, preprocessor line-spliced module names, and masked-comment tabs changing layout columns. All compiler-confirmed, no product decision. Returning exact concerns to Opus 5.5 with direct/tree regressions; no general preprocessor scope expansion. Earlier CI runs were cancelled when superseded, current-head CI is authoritative.

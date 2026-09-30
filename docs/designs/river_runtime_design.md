@@ -38,10 +38,10 @@ not tracked separately · `[deferred]` blocked on a concrete precondition.
 - [x] RVR-17. Publish compact surfaces and promote affected edits — [#2734]
 - [x] RVR-18. Prove the end-to-end arena river milestone — [#2735]
 - [x] RVR-19. Implement the solid-fill job and material transaction — [no-issue]: moved out of this arc (D-29 revised 2026-09-28); player-orderable dams are a separate future feature
-- [ ] RVR-20. Expose and visually validate the fill build order
-- [ ] RVR-21. Define climate units and persist contributing-area summaries
-- [ ] RVR-22. Apply climate budgets to the current water owner
-- [ ] RVR-23. Build generated river and basin summaries
+- [x] RVR-20. Expose and visually validate the fill build order — [no-issue]: moved out of this arc (D-29 revised 2026-09-28); player-orderable dams are a separate future feature
+- [x] RVR-21. Define climate units and persist contributing-area summaries — [#2750]
+- [x] RVR-22. Apply climate budgets to the current water owner — [#2751]
+- [x] RVR-23. Build generated river and basin summaries — [#2752]
 - [ ] RVR-24. Admit compact routes that encounter lava
 - [ ] RVR-25. Discover off-network spills and update edited basins
 - [ ] RVR-26. Initialize generated worlds and legacy graphs coherently

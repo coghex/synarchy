@@ -75,6 +75,28 @@ local config = {
 buildingSpawn.state = buildingSpawn.state or {}
 local state = buildingSpawn.state
 
+-- TEST-ONLY standard roster (#2756). While on, every roster spawn asks
+-- unit.spawn for the "standard" profile: the unit takes its
+-- definition's base/mean stats, skills, knowledge and body inputs with
+-- no draw from the gameplay RNG, so a gate driving the real portal gets
+-- the same party every run instead of an occasional acolyte too weak
+-- to carry its kit.
+--
+-- Default OFF, and nothing a player can reach turns it on: only a test
+-- calls setTestStandardProfile. Never serialized. Its lifetime is one
+-- session: Exit to Menu's session teardown, a save load (onSaveLoaded)
+-- and shutdown all switch it back off, so it cannot leak into the next
+-- ordinary session. Reading it draws nothing from math.random.
+if buildingSpawn.standardProfile == nil then
+    buildingSpawn.standardProfile = false
+end
+
+function buildingSpawn.setTestStandardProfile(enabled)
+    buildingSpawn.standardProfile = (enabled == true)
+    engine.logInfo("Building spawn: standard roster profile "
+        .. (buildingSpawn.standardProfile and "ON (test)" or "off"))
+end
+
 -- How many consecutive spawn failures to log per building before
 -- suppressing further warnings (we keep retrying quietly so the spawn
 -- self-heals once the tile clears, but we don't flood the log).
@@ -224,8 +246,12 @@ local function tickOne(bid, info, bindGen)
     -- enumerated while its page was active could still spawn into it
     -- after the page stopped being active, off-view, spending a roster
     -- entry the player never saw come out.
+    -- The eighth argument is nil (the gameplay roll) unless a test has
+    -- switched the standard roster on (#2756).
+    local profile = buildingSpawn.standardProfile and "standard" or nil
     local rawUid, spawnReason = unit.spawn(unitType, spawnX, spawnY,
-                                           nil, "player", info.page, bindGen)
+                                           nil, "player", info.page, bindGen,
+                                           profile)
     if spawnReason == PAGE_BINDING_STALE then
         -- The page moved between update()'s snapshot and this commit.
         -- Abandon the whole tick: no items, no walk-out, no roster
@@ -565,6 +591,8 @@ function buildingSpawn.init(scriptId)
         function()
             local n = 0
             for k in pairs(state) do state[k] = nil; n = n + 1 end
+            -- #2756: the test-only standard roster ends with the session.
+            buildingSpawn.standardProfile = false
             engine.logInfo("Building spawn: cleared " .. n
                 .. " sequencer row(s) on session teardown")
         end)
@@ -590,6 +618,10 @@ end
 -- spawn-rate state) and the nested s.lastUid scrub against the surviving
 -- unit set, so a stale/colliding uid can't gate spawning.
 function buildingSpawn.onSaveLoaded(survUnitIds, survBuildingIds)
+    -- #2756: a load replaces the whole session, and the test-only
+    -- standard roster belongs to the session it was switched on in.
+    -- Restored units keep their saved values; later portal spawns roll.
+    buildingSpawn.standardProfile = false
     local survUnitSet, survBuildingSet = {}, {}
     for _, uid in ipairs(survUnitIds or {})     do survUnitSet[uid] = true end
     for _, bid in ipairs(survBuildingIds or {}) do survBuildingSet[bid] = true end
@@ -677,6 +709,7 @@ end
 
 function buildingSpawn.shutdown()
     for k in pairs(state) do state[k] = nil end
+    buildingSpawn.standardProfile = false
     engine.logDebug("Building spawn sequencer shut down")
 end
 

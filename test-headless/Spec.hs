@@ -437,6 +437,7 @@ import qualified Test.Headless.Lua.CraftBillQueuePriority as LuaCraftBillQueue
 import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
+import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
 import qualified Test.Headless.Unit.FactionCatalogue as UnitFactionCatalogue
 import qualified Test.Headless.Unit.FactionProfile as UnitFactionProfile
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
@@ -1288,6 +1289,7 @@ main = hspec $ do
     LocationBounds.spec
     LocationDiscovery.spec
     UnitFaction.spec
+    UnitStandardSpawn.spec
     UnitFactionProfile.spec
     UnitFactionCatalogue.spec
     ContainerKnowledge.spec
