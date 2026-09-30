@@ -138,12 +138,15 @@ cabal build synarchy-test-headless -v0
 cabal build synarchy-test-graphical -v0
 
 # Straight after the suite build and before `cabal test`, matching CI's
-# order (#2648): `--record` exports the complete arguments this build
-# gave GHC for the headless suite, and the gate scans what GHC compiles
-# under them. See the audit's docstring.
+# order (#2648). Setup.hs captured the exact compiler commands of that
+# build; `--record` binds them to the configuration it re-reads with the
+# build's own cabal arguments, the gate scans what GHC compiles under
+# them, and the regression proves the capture on a tiny real-Cabal
+# package. See the audit's docstring.
 step "headless init import audit (configured build)"
-python3 tools/headless_init_import_audit.py --record
-python3 tools/headless_init_import_audit.py
+python3 tools/headless_init_import_audit.py --record --builddir dist-newstyle -- build synarchy-test-headless -v0
+python3 tools/headless_init_import_audit.py --builddir dist-newstyle
+python3 tools/headless_init_import_audit.py --cabal-regression
 
 step "headless hspec suite (full tier)"
 # SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into

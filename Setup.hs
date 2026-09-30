@@ -8,10 +8,11 @@ import System.Info (os)
 import System.IO (hPutStrLn, stderr)
 import System.Process (callProcess)
 import BuildSupport.AudioDependencies (invalidateAudioDependencies)
+import BuildSupport.GhcCapture (withGhcCapture)
 
 main :: IO ()
 main =
-    defaultMainWithHooks
+    defaultMainWithHooks . withGhcCapture $
         simpleUserHooks
             { buildHook = \pkg lbi hooks flags -> do
                 invalidateAudioDependencies (interpretSymbolicPathLBI lbi (buildDir lbi))
