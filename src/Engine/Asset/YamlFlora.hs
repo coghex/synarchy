@@ -1,6 +1,13 @@
 {-# LANGUAGE Strict, DeriveGeneric #-}
+-- | The flora definition schema and its authoring-boundary checks.
+--
+--   The selector vocabularies — context, life phase, annual stage,
+--   condition and cause — and the @textureVariants@ / @corpsePolicy@
+--   schemas follow @docs/flora_visual_state_contract.md@ (#2530), which
+--   is their authority; this module only decodes and validates them.
 module Engine.Asset.YamlFlora
     ( FloraYamlDef(..)
+    , FloraYamlTextureVariant(..)
     , FloraYamlFile(..)
     , FloraYamlPhase(..)
     , FloraYamlCycleStage(..)
@@ -18,6 +25,15 @@ module Engine.Asset.YamlFlora
     , lifePhaseVocabulary
     , annualStageVocabulary
     , lifecycleVocabulary
+    , contextText
+    , conditionText
+    , deathCauseText
+    , successorText
+    , contextVocabulary
+    , conditionVocabulary
+    , deathCauseVocabulary
+    , successorVocabulary
+    , variantSelectorText
     ) where
 
 import UPrelude
@@ -29,11 +45,16 @@ import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Types as Aeson (Parser)
+import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
 import qualified Data.Vector as V
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlListOutcome)
-import World.Flora.Types (LifePhaseTag(..), AnnualStageTag(..))
+import World.Flora.Types
+    ( LifePhaseTag(..), AnnualStageTag(..), FloraContext(..)
+    , FloraCondition(..), FloraDeathCause(..), FloraVariantSelector(..)
+    , CorpseSuccessor(..), CorpseOutcome(..), CorpseOverrideSelector(..)
+    , CorpsePolicyProvenance(..), FloraCorpsePolicy(..)
+    , legacyCorpsePolicy )
 import World.Flora.Growth (lifePhaseText, annualStageText)
 
 -- * Closed vocabularies (#2315)
@@ -148,11 +169,18 @@ requireVocabularyToken species path key parse vocabulary v =
 --   could ever select.
 requireDeclared ∷ Eq α ⇒ Text → Text → Text → Text → (α → Text) → [α] → α
                 → Aeson.Parser ()
-requireDeclared species path key declaredIn render declared tag
+requireDeclared = requireDeclaredBy "an override"
+
+-- | 'requireDeclared' naming what kind of declaration did the
+--   selecting, so a @textureVariants@ refusal does not call itself an
+--   override.
+requireDeclaredBy ∷ Eq α ⇒ Text → Text → Text → Text → Text → (α → Text)
+                  → [α] → α → Aeson.Parser ()
+requireDeclaredBy what species path key declaredIn render declared tag
     | tag `elem` declared = pure ()
     | otherwise = vocabularyFailure species path key $
         "names '" <> render tag <> "', which this species does not \
-        \declare in its " <> declaredIn <> " — an override can only \
+        \declare in its " <> declaredIn <> " — " <> what <> " can only \
         \select a state this species can actually be in. Declared "
         <> declaredIn <> ": " <> declaredList
   where
@@ -511,6 +539,317 @@ instance FromJSON FloraYamlWorldGen where
         ⊛ v .:? "footprint"
         ⊛ v .:? "soils" .!= []
 
+-- * Visual-state selectors and corpse policy (#2539)
+--
+--   Both blocks follow @docs/flora_visual_state_contract.md@ (#2530):
+--   the vocabularies below are its §1 axes and §7.1 fields, and every
+--   rule enforced here is one it states. Nothing here is consumed yet —
+--   the resolver (EFM-3) and retention (EFM-10) read what this loads.
+
+contextText ∷ FloraContext → Text
+contextText ContextWild       = "wild"
+contextText ContextCultivated = "cultivated"
+
+conditionText ∷ FloraCondition → Text
+conditionText ConditionAlive = "alive"
+conditionText ConditionDead  = "dead"
+
+deathCauseText ∷ FloraDeathCause → Text
+deathCauseText CauseNatural = "natural"
+deathCauseText CauseDrought = "drought"
+deathCauseText CauseFrost   = "frost"
+deathCauseText CauseFire    = "fire"
+deathCauseText CauseDisease = "disease"
+deathCauseText CauseDamage  = "damage"
+deathCauseText CauseUnknown = "unknown"
+
+successorText ∷ CorpseSuccessor → Text
+successorText SuccessorReseed = "reseed"
+successorText SuccessorAbsent = "absent"
+
+contextVocabulary ∷ [Text]
+contextVocabulary = map contextText [minBound .. maxBound]
+
+conditionVocabulary ∷ [Text]
+conditionVocabulary = map conditionText [minBound .. maxBound]
+
+deathCauseVocabulary ∷ [Text]
+deathCauseVocabulary = map deathCauseText [minBound .. maxBound]
+
+-- | @await_replanting@ is deliberately absent: it names the CULTIVATED
+--   outcome, which is a rule of the render context, and a species
+--   declaring it is refused like any other unknown token (contract
+--   §7.2).
+successorVocabulary ∷ [Text]
+successorVocabulary = map successorText [minBound .. maxBound]
+
+-- | Parse a token by rendering every constructor and comparing, so the
+--   parser is the exact inverse of its renderer by construction.
+parseByText ∷ (Enum α, Bounded α) ⇒ (α → Text) → Text → Maybe α
+parseByText render t =
+    lookup t [ (render x, x) | x ← [minBound .. maxBound] ]
+
+data CorpseVisibility = VisibilityTransient | VisibilityPersistent
+    deriving (Eq, Enum, Bounded)
+
+visibilityText ∷ CorpseVisibility → Text
+visibilityText VisibilityTransient  = "transient"
+visibilityText VisibilityPersistent = "persistent"
+
+-- | A selector as one readable token: the axes it NAMES, in contract
+--   order, as @axis=value@ joined by commas, or @*@ when it names none.
+--   It keys a variant's texture-registry name and matches the
+--   @variant:<selector>@ label @tools/texture_subset_audit.py@ prints.
+variantSelectorText ∷ FloraVariantSelector → Text
+variantSelectorText (FloraVariantSelector c p st cd ca) =
+    case named of
+        [] → "*"
+        xs → T.intercalate "," xs
+  where
+    named = catMaybes
+        [ ("context=" <>)   ∘ contextText    ⊚ c
+        , ("phase=" <>)     ∘ lifePhaseText  ⊚ p
+        , ("stage=" <>)     ∘ annualStageText ⊚ st
+        , ("condition=" <>) ∘ conditionText  ⊚ cd
+        , ("cause=" <>)     ∘ deathCauseText ⊚ ca ]
+
+-- | Read an OPTIONAL closed-vocabulary token. Absent is 'Nothing' — a
+--   wildcard — but a PRESENT key must name a token, so an authored
+--   @null@ is refused rather than read as absent (#1191).
+optionalVocabularyToken ∷ Text → Text → Text → (Text → Maybe α) → [Text]
+                        → Aeson.Object → Aeson.Parser (Maybe α)
+optionalVocabularyToken species path key parse vocabulary v =
+    case KM.lookup (Key.fromText key) v of
+        Nothing → pure Nothing
+        Just _  → Just ⊚ requireVocabularyToken species path key parse
+                             vocabulary v
+
+-- | Refuse any key outside @allowed@. In these blocks an omitted axis
+--   is a WILDCARD, so a misspelled key would otherwise widen a selector
+--   silently instead of failing.
+rejectUnknownKeys ∷ Text → Text → [Text] → Aeson.Object → Aeson.Parser ()
+rejectUnknownKeys species path allowed v =
+    forM_ (map Key.toText (KM.keys v)) $ \k → when (k `notElem` allowed) $
+        vocabularyFailure species path k $
+            "is not a field of this block. Fields: "
+            <> T.intercalate ", " allowed
+
+-- | Refuse @phase: dead@ at a selector position. @dead@ is a legacy
+--   @phases[]@ / @cycleOverrides[].phase@ token only; no selector ever
+--   carries it, so a declaration naming it is unreachable (contract
+--   §1.1, §2.1).
+refuseDeadPhase ∷ Text → Text → LifePhaseTag → Aeson.Parser ()
+refuseDeadPhase species path PhaseDead = vocabularyFailure species path
+    "phase" "names 'dead', a legacy phases[] token that no selector \
+    \carries — death is declared with condition: dead"
+refuseDeadPhase _ _ _ = pure ()
+
+-- | Read a selector's optional @phase@: in the vocabulary, not @dead@,
+--   and declared by this species.
+optionalSelectorPhase ∷ Text → Text → Text → [LifePhaseTag] → Aeson.Object
+                      → Aeson.Parser (Maybe LifePhaseTag)
+optionalSelectorPhase what species path declared v = do
+    mp ← optionalVocabularyToken species path "phase" parsePhaseTag
+             lifePhaseVocabulary v
+    forM_ mp $ \p → do
+        refuseDeadPhase species path p
+        requireDeclaredBy what species path "phase" "phases[]" lifePhaseText
+            declared p
+    pure mp
+
+-- | One authored @textureVariants@ entry: its semantic selector and its
+--   path relative to the species' @texDir@.
+data FloraYamlTextureVariant = FloraYamlTextureVariant
+    { fytvSelector ∷ FloraVariantSelector
+    , fytvTexture  ∷ Text
+    } deriving (Show, Eq, Generic)
+
+-- | Parse one @textureVariants[i]@ entry (contract §2). Every axis is
+--   optional (a wildcard), present axes must be non-null tokens of
+--   their vocabulary, a phase or stage must be one this species
+--   declares, and a cause requires @condition: dead@ (§2 rule 4).
+parseTextureVariant ∷ Text → [LifePhaseTag] → [AnnualStageTag]
+                    → (Int, Aeson.Value)
+                    → Aeson.Parser FloraYamlTextureVariant
+parseTextureVariant species declaredPhases declaredStages (i, val) =
+  case val of
+    Aeson.Object v → do
+        rejectUnknownKeys species path
+            ["context", "phase", "stage", "condition", "cause", "texture"] v
+        ctx ← optionalVocabularyToken species path "context"
+                  (parseByText contextText) contextVocabulary v
+        ph ← optionalSelectorPhase "a texture variant" species path
+                 declaredPhases v
+        st ← optionalVocabularyToken species path "stage" parseCycleTag
+                 annualStageVocabulary v
+        forM_ st $ requireDeclaredBy "a texture variant" species path "stage"
+            "annualCycle[]" annualStageText declaredStages
+        cd ← optionalVocabularyToken species path "condition"
+                 (parseByText conditionText) conditionVocabulary v
+        ca ← optionalVocabularyToken species path "cause"
+                 (parseByText deathCauseText) deathCauseVocabulary v
+        forM_ ca $ \c → when (cd ≢ Just ConditionDead) $
+            vocabularyFailure species path "cause" $
+                "names '" <> deathCauseText c <> "' without condition: \
+                \dead — only a dead occurrence carries a cause, so \
+                \nothing could ever select this declaration"
+        tex ← case KM.lookup "texture" v of
+            Nothing → vocabularyFailure species path "texture"
+                "is required: a path relative to texDir"
+            Just (Aeson.String t)
+                | T.null (T.strip t) → vocabularyFailure species path
+                    "texture" "must be a non-empty path relative to \
+                    \texDir, got ''"
+                | otherwise → pure t
+            Just other → vocabularyFailure species path "texture" $
+                "must be a path relative to texDir, got "
+                <> authoredToken other
+        pure (FloraYamlTextureVariant (FloraVariantSelector ctx ph st cd ca)
+                                      tex)
+    _ → fail ∘ T.unpack $
+        "flora species '" <> species <> "': " <> path <> " must be a \
+        \block authoring a texture and optional selector axes, got "
+        <> authoredToken val
+  where
+    path = "textureVariants[" <> tshow i <> "]"
+
+-- | Refuse two declarations of one selector (contract §2 rule 2),
+--   including a variant restating a selector the LEGACY entries already
+--   declare: a @phases[]@ tag @dead@ normalizes to @{condition: dead}@
+--   and a @cycleOverrides[]@ entry on phase @dead@ to
+--   @{condition: dead, stage: …}@ (§1.1).
+requireDistinctVariants ∷ Text → [LifePhaseTag] → [FloraYamlCycleOverride]
+                        → [FloraYamlTextureVariant] → Aeson.Parser ()
+requireDistinctVariants species phases overrides variants =
+    go [] (zip [0 ∷ Int ..] (map fytvSelector variants))
+  where
+    deadSel = FloraVariantSelector Nothing Nothing Nothing
+                  (Just ConditionDead) Nothing
+    legacy = [ (deadSel, "the legacy phases[] tag 'dead'")
+             | PhaseDead `elem` phases ]
+          ⧺ [ ( deadSel { fvsStage = Just (fycoCycle o) }
+              , "the legacy cycleOverrides[] entry on phase 'dead', cycle '"
+                <> annualStageText (fycoCycle o) <> "'" )
+            | o ← overrides, fycoPhase o ≡ PhaseDead ]
+    go _ [] = pure ()
+    go seen ((i, sel) : rest) = do
+        let path = "textureVariants[" <> tshow i <> "]"
+            clash why = vocabularyFailure species path "selector" $
+                "declares " <> variantSelectorText sel <> ", which "
+                <> why <> " already declares — two declarations of one \
+                \selector are an authoring error"
+        case lookup sel seen of
+            Just j  → clash ("textureVariants[" <> tshow j <> "]")
+            Nothing → case lookup sel legacy of
+                Just desc → clash desc
+                Nothing   → go ((sel, i) : seen) rest
+
+-- | Read the optional @corpsePolicy:@ block (contract §7).
+--
+--   ABSENT loads the legacy default and says so through
+--   'CorpsePolicyDefaulted'. A PRESENT key must be a block: an authored
+--   @corpsePolicy: null@ is refused like @lifecycle: null@ rather than
+--   silently read as the default (#1191).
+requireCorpsePolicy ∷ Text → [LifePhaseTag] → Aeson.Object
+                    → Aeson.Parser FloraCorpsePolicy
+requireCorpsePolicy species declaredPhases v =
+    case KM.lookup "corpsePolicy" v of
+        Nothing → pure legacyCorpsePolicy
+        Just (Aeson.Object p) → do
+            rejectUnknownKeys species "corpsePolicy"
+                ["visibility", "durationDays", "successor", "overrides"] p
+            outcome ← parseCorpseOutcome species "corpsePolicy" p
+            overrides ← case KM.lookup "overrides" p of
+                Nothing               → pure []
+                Just (Aeson.Array xs) → traverse
+                    (parseCorpseOverride species declaredPhases)
+                    (zip [0 ..] (V.toList xs))
+                Just other → vocabularyFailure species
+                    "corpsePolicy.overrides" "overrides" $
+                    "must be a list of override blocks, got "
+                    <> authoredToken other
+            requireDistinctOverrides overrides
+            pure FloraCorpsePolicy
+                { fcpOutcome    = outcome
+                , fcpOverrides  = HM.fromList [ (s, o) | (_, s, o) ← overrides ]
+                , fcpProvenance = CorpsePolicyAuthored
+                }
+        Just other → vocabularyFailure species "corpsePolicy" "corpsePolicy" $
+            "must be a block declaring visibility (transient or \
+            \persistent), got " <> authoredToken other
+  where
+    requireDistinctOverrides = go []
+      where
+        go _ [] = pure ()
+        go seen ((i, sel, _) : rest) = case lookup sel seen of
+            Just j → vocabularyFailure species
+                ("corpsePolicy.overrides[" <> tshow i <> "]") "selector" $
+                "repeats the phase/cause selector of \
+                \corpsePolicy.overrides[" <> tshow (j ∷ Int) <> "] — two \
+                \overrides of one selector are an authoring error"
+            Nothing → go ((sel, i) : seen) rest
+
+-- | One @corpsePolicy.overrides[i]@ entry: a @phase@ and/or @cause@
+--   selector (at least one) and its own COMPLETE outcome (§7.3).
+parseCorpseOverride ∷ Text → [LifePhaseTag] → (Int, Aeson.Value)
+                    → Aeson.Parser (Int, CorpseOverrideSelector, CorpseOutcome)
+parseCorpseOverride species declaredPhases (i, val) = case val of
+    Aeson.Object o → do
+        rejectUnknownKeys species path
+            ["phase", "cause", "visibility", "durationDays", "successor"] o
+        ph ← optionalSelectorPhase "a corpse-policy override" species path
+                 declaredPhases o
+        ca ← optionalVocabularyToken species path "cause"
+                 (parseByText deathCauseText) deathCauseVocabulary o
+        when (isNothing ph ∧ isNothing ca) $
+            vocabularyFailure species path "phase" "selects neither a \
+                \phase nor a cause — an override naming neither restates \
+                \the species-level policy"
+        outcome ← parseCorpseOutcome species path o
+        pure (i, CorpseOverrideSelector ph ca, outcome)
+    _ → fail ∘ T.unpack $
+        "flora species '" <> species <> "': " <> path <> " must be a block \
+        \authoring a phase and/or cause and its own outcome, got "
+        <> authoredToken val
+  where
+    path = "corpsePolicy.overrides[" <> tshow i <> "]"
+
+-- | One complete outcome (§7.1): @visibility@, with @durationDays@ and
+--   @successor@ required for @transient@ and refused for @persistent@.
+parseCorpseOutcome ∷ Text → Text → Aeson.Object → Aeson.Parser CorpseOutcome
+parseCorpseOutcome species path o = do
+    vis ← requireVocabularyToken species path "visibility"
+              (parseByText visibilityText)
+              (map visibilityText [minBound .. maxBound]) o
+    case vis of
+        VisibilityPersistent → do
+            forM_ ["durationDays", "successor"] $ \k →
+                when (KM.member (Key.fromText k) o) $
+                    vocabularyFailure species path k "is refused when \
+                        \visibility is persistent — a persistent corpse \
+                        \stays until it is cleared, so it has no window \
+                        \and no successor"
+            pure CorpsePersistent
+        VisibilityTransient → CorpseTransient
+            ⊚ requireDurationDays
+            ⊛ requireVocabularyToken species path "successor"
+                  (parseByText successorText) successorVocabulary o
+  where
+    -- A whole number of days of at least 1, checked on the authored
+    -- 'Scientific' before any conversion: aeson's bounded 'Int' parser
+    -- refuses a fractional value and one too large for 'Int', so
+    -- nothing that would overflow or truncate reaches the loaded record.
+    requireDurationDays = case KM.lookup "durationDays" o of
+        Nothing → vocabularyFailure species path "durationDays"
+            "is required when visibility is transient and has no default"
+        Just val@(Aeson.Number _) → case Aeson.parseMaybe parseJSON val of
+            Just (n ∷ Int) | n ≥ 1 → pure n
+            _ → badDays val
+        Just val → badDays val
+    badDays val = vocabularyFailure species path "durationDays" $
+        "must be a whole number of days of at least 1, got "
+        <> authoredToken val
+
 -- * Top-level species definition
 
 data FloraYamlDef = FloraYamlDef
@@ -526,6 +865,10 @@ data FloraYamlDef = FloraYamlDef
     , fydCycleOverrides ∷ [FloraYamlCycleOverride]
     , fydHarvest        ∷ Maybe FloraYamlHarvest
     , fydWorldGen       ∷ FloraYamlWorldGen
+    , fydTextureVariants ∷ [FloraYamlTextureVariant]
+      -- ^ Absent or null = none declared.
+    , fydCorpsePolicy   ∷ FloraCorpsePolicy
+      -- ^ Absent = 'legacyCorpsePolicy', marked defaulted.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON FloraYamlDef where
@@ -561,6 +904,21 @@ instance FromJSON FloraYamlDef where
         overrides ← parseFloraList name "cycleOverrides"
                         (parseFloraYamlCycleOverride name
                             (map fypTag phases) (map fycsTag cycleStages)) v
+        -- #2539: both selector blocks validate against the declared
+        -- phases and stages, and the variants against the legacy
+        -- entries they could restate, so they are read last.
+        variants ← case KM.lookup "textureVariants" v of
+            Nothing               → pure []
+            Just Aeson.Null       → pure []
+            Just (Aeson.Array xs) → traverse
+                (parseTextureVariant name (map fypTag phases)
+                    (map fycsTag cycleStages))
+                (zip [0 ..] (V.toList xs))
+            Just other → vocabularyFailure name "textureVariants"
+                "textureVariants" $
+                "must be a list of variant blocks, got " <> authoredToken other
+        requireDistinctVariants name (map fypTag phases) overrides variants
+        corpsePolicy ← requireCorpsePolicy name (map fypTag phases) v
         FloraYamlDef name
             ⊚ v .:  "type"
             ⊛ v .:  "texDir"
@@ -573,6 +931,8 @@ instance FromJSON FloraYamlDef where
             ⊛ pure overrides
             ⊛ pure harvest
             ⊛ v .:  "worldGen"
+            ⊛ pure variants
+            ⊛ pure corpsePolicy
 
 -- | Read the optional @lifecycle:@ key (#2315 requirement 2).
 --

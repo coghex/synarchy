@@ -913,6 +913,142 @@
         }
       ]
     },
+    "World.Flora.Types.CorpseOutcome": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "carriers": [],
+      "constructors": [
+        {
+          "name": "CorpsePersistent",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CorpseTransient",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "CorpseSuccessor"
+          ]
+        }
+      ]
+    },
+    "World.Flora.Types.CorpsePolicyProvenance": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "carriers": [],
+      "constructors": [
+        {
+          "name": "CorpsePolicyAuthored",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CorpsePolicyDefaulted",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
+    "World.Flora.Types.CorpseSuccessor": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "carriers": [],
+      "constructors": [
+        {
+          "name": "SuccessorReseed",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "SuccessorAbsent",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
+    "World.Flora.Types.FloraCondition": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "carriers": [],
+      "constructors": [
+        {
+          "name": "ConditionAlive",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ConditionDead",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
+    "World.Flora.Types.FloraContext": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "carriers": [],
+      "constructors": [
+        {
+          "name": "ContextWild",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "ContextCultivated",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
+    "World.Flora.Types.FloraDeathCause": {
+      "source": "src/World/Flora/Types.hs",
+      "onSaveWire": false,
+      "components": [],
+      "carriers": [],
+      "constructors": [
+        {
+          "name": "CauseNatural",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CauseDrought",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CauseFrost",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CauseFire",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CauseDisease",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CauseDamage",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "CauseUnknown",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
     "World.Flora.Types.LifePhaseTag": {
       "source": "src/World/Flora/Types.hs",
       "onSaveWire": false,

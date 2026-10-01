@@ -65,6 +65,10 @@ flora:
         texture: "dead.png"
     # Decorative exposed-marsh flora. The placement pipeline rejects
     # standing-fluid tiles before habitat fitness is evaluated.
+    corpsePolicy:
+      visibility: transient
+      durationDays: 60
+      successor: reseed
     worldGen:
       category: wildflower
       minTemp: -5

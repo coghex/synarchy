@@ -42,6 +42,10 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    corpsePolicy:
+      visibility: transient
+      durationDays: 60
+      successor: reseed
     worldGen:
       category: wildflower
       minTemp: 2
@@ -114,6 +118,10 @@ flora:
           count: [1, 2]
       regrowth_time: 43200
       harvested_texture: "senescing.png"
+    corpsePolicy:
+      visibility: transient
+      durationDays: 60
+      successor: reseed
     worldGen:
       category: wildflower
       minTemp: 5

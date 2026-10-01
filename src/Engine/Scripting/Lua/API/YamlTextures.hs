@@ -446,15 +446,34 @@ registerFloraSpecies env backendState lteq catRef def = do
                 , fhHarvestedTexture = depletedH
                 }
 
+    -- Build the declared texture variants (#2539), keyed by semantic
+    -- selector. The decoder has already refused unknown tokens,
+    -- undeclared phases and stages, and duplicate selectors, so every
+    -- entry is distinct; registered in authored order so the load queue
+    -- is deterministic. Nothing resolves against the table until EFM-3.
+    variants ← foldM (\vMap yv → do
+        let sel  = fytvSelector yv
+            path = texDir <> "/" <> T.unpack (fytvTexture yv)
+        resolved ← resolveTexturePath env "Flora texture variant"
+                       unknownFloraTexture path
+        h ← loadAndRegister env backendState lteq UploadGlobalSampler
+                ("flora_variant_" <> name <> "_" <> variantSelectorText sel)
+                resolved
+        atomicModifyIORef' texCount (\n → (n + 1, ()))
+        return (HM.insert sel h vMap)
+        ) HM.empty (fydTextureVariants def)
+
     -- Assemble the FloraSpecies
     let species = FloraSpecies
-            { fsName           = name
-            , fsBaseTexture    = baseH
-            , fsLifecycle      = lifecycle
-            , fsPhases         = phases
-            , fsAnnualCycle    = cycleStages
-            , fsCycleOverrides = overrides
-            , fsHarvest        = harvest
+            { fsName            = name
+            , fsBaseTexture     = baseH
+            , fsLifecycle       = lifecycle
+            , fsPhases          = phases
+            , fsAnnualCycle     = cycleStages
+            , fsCycleOverrides  = overrides
+            , fsHarvest         = harvest
+            , fsTextureVariants = variants
+            , fsCorpsePolicy    = fydCorpsePolicy def
             }
 
     -- Insert species into catalog

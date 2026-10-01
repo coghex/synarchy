@@ -73,6 +73,10 @@ flora:
           count: [2, 4]
       regrowth_time: 43200
       harvested_texture: "matured_senescing.png"
+    corpsePolicy:
+      visibility: transient
+      durationDays: 60
+      successor: reseed
     worldGen:
       category: row_crop
       minTemp: 10
@@ -154,6 +158,10 @@ flora:
           count: [1, 2]
       regrowth_time: 43200
       harvested_texture: "dead.png"
+    corpsePolicy:
+      visibility: transient
+      durationDays: 60
+      successor: reseed
     worldGen:
       category: groundcover_crop
       minTemp: 5

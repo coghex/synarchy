@@ -716,6 +716,8 @@ assertCattailTextures def = do
             , fsAnnualCycle = cycleRows
             , fsCycleOverrides = HM.fromList overrideRows
             , fsHarvest = Nothing
+            , fsTextureVariants = HM.empty
+            , fsCorpsePolicy = fydCorpsePolicy def
             }
         catalog = insertSpecies fid species emptyFloraCatalog
         mkInstance age health = FloraInstance

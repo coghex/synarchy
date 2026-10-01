@@ -13,6 +13,19 @@ module World.Flora.Types
     , AnnualStage(..)
     , AnnualStageTag(..)
     , AnnualCycleKey(..)
+      -- * Visual state and corpse policy (#2530, #2539)
+    , FloraContext(..)
+    , FloraCondition(..)
+    , FloraDeathCause(..)
+    , FloraVariantSelector(..)
+    , wildcardVariantSelector
+    , CorpseSuccessor(..)
+    , CorpseOutcome(..)
+    , CorpseOverrideSelector(..)
+    , CorpsePolicyProvenance(..)
+    , FloraCorpsePolicy(..)
+    , legacyCorpsePolicy
+    , legacyCorpseDurationDays
       -- * Species Definition
     , FloraSpecies(..)
     , FloraHarvest(..)
@@ -136,6 +149,131 @@ instance Hashable AnnualCycleKey where
     hashWithSalt s (AnnualCycleKey p c) =
         s `hashWithSalt` fromEnum p `hashWithSalt` fromEnum c
 
+-- * Visual state and corpse policy (#2530, #2539)
+--
+--   The selector axes and the corpse-retention schema that
+--   @docs/flora_visual_state_contract.md@ (#2530) defines. This module
+--   holds them as loaded CONTENT only: 'FloraSpecies' carries the
+--   declared variant table and the corpse policy, and nothing reads
+--   either yet — the resolver (EFM-3) and retention (EFM-10) do.
+--   Phase and stage reuse 'LifePhaseTag' and 'AnnualStageTag'; the
+--   contract adds no token to either.
+
+-- | The render context a selector is requested in (contract §1, §6).
+data FloraContext
+    = ContextWild
+    | ContextCultivated
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
+instance NFData FloraContext where rnf x = x `seq` ()
+instance Hashable FloraContext where
+    hashWithSalt s t = hashWithSalt s (fromEnum t)
+
+data FloraCondition
+    = ConditionAlive
+    | ConditionDead
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
+instance NFData FloraCondition where rnf x = x `seq` ()
+instance Hashable FloraCondition where
+    hashWithSalt s t = hashWithSalt s (fromEnum t)
+
+-- | Why an occurrence died (contract §1). Only meaningful with
+--   'ConditionDead'.
+data FloraDeathCause
+    = CauseNatural
+    | CauseDrought
+    | CauseFrost
+    | CauseFire
+    | CauseDisease
+    | CauseDamage
+    | CauseUnknown
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
+instance NFData FloraDeathCause where rnf x = x `seq` ()
+instance Hashable FloraDeathCause where
+    hashWithSalt s t = hashWithSalt s (fromEnum t)
+
+-- | One authored @textureVariants@ selector pattern: 'Nothing' at an
+--   axis is a deliberately declared wildcard (contract §2 rule 1). This
+--   is the SEMANTIC key a variant is stored under — never its path.
+data FloraVariantSelector = FloraVariantSelector
+    { fvsContext   ∷ !(Maybe FloraContext)
+    , fvsPhase     ∷ !(Maybe LifePhaseTag)
+    , fvsStage     ∷ !(Maybe AnnualStageTag)
+    , fvsCondition ∷ !(Maybe FloraCondition)
+    , fvsCause     ∷ !(Maybe FloraDeathCause)
+    } deriving (Show, Eq, Ord, Generic, Serialize, NFData)
+instance Hashable FloraVariantSelector where
+    hashWithSalt s (FloraVariantSelector c p st cd ca) =
+        s `hashWithSalt` fmap fromEnum c `hashWithSalt` fmap fromEnum p
+          `hashWithSalt` fmap fromEnum st `hashWithSalt` fmap fromEnum cd
+          `hashWithSalt` fmap fromEnum ca
+
+-- | The selector naming no axis at all.
+wildcardVariantSelector ∷ FloraVariantSelector
+wildcardVariantSelector =
+    FloraVariantSelector Nothing Nothing Nothing Nothing Nothing
+
+-- | What follows a transient corpse in the WILD context (contract
+--   §7.1, D-19). The cultivated outcome, awaiting replanting, is a rule
+--   of the render context and deliberately has no constructor here.
+data CorpseSuccessor
+    = SuccessorReseed
+    | SuccessorAbsent
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
+instance NFData CorpseSuccessor where rnf x = x `seq` ()
+
+-- | One complete retention outcome. The contract's field coupling —
+--   @durationDays@ and @successor@ required for @transient@ and refused
+--   for @persistent@ — is the shape of this type: a persistent outcome
+--   has nowhere to put either.
+data CorpseOutcome
+    = CorpsePersistent
+    | CorpseTransient !Int !CorpseSuccessor
+      -- ^ Visible for this many whole days (at least 1), then the
+      --   successor.
+    deriving (Show, Eq, Generic, Serialize, NFData)
+
+-- | A @corpsePolicy.overrides[]@ selector (contract §7.3). The decoder
+--   refuses one naming neither axis.
+data CorpseOverrideSelector = CorpseOverrideSelector
+    { cosPhase ∷ !(Maybe LifePhaseTag)
+    , cosCause ∷ !(Maybe FloraDeathCause)
+    } deriving (Show, Eq, Ord, Generic, Serialize, NFData)
+instance Hashable CorpseOverrideSelector where
+    hashWithSalt s (CorpseOverrideSelector p c) =
+        s `hashWithSalt` fmap fromEnum p `hashWithSalt` fmap fromEnum c
+
+-- | Whether a species' policy was authored or is the legacy default
+--   an omitted @corpsePolicy@ loads as (contract §7.6). Tests and audits
+--   read this to tell the two apart.
+data CorpsePolicyProvenance
+    = CorpsePolicyAuthored
+    | CorpsePolicyDefaulted
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
+instance NFData CorpsePolicyProvenance where rnf x = x `seq` ()
+
+data FloraCorpsePolicy = FloraCorpsePolicy
+    { fcpOutcome    ∷ !CorpseOutcome
+      -- ^ The species-level outcome.
+    , fcpOverrides  ∷ !(HM.HashMap CorpseOverrideSelector CorpseOutcome)
+      -- ^ Each override's own COMPLETE outcome; nothing is inherited.
+    , fcpProvenance ∷ !CorpsePolicyProvenance
+    } deriving (Show, Eq, Generic, Serialize, NFData)
+
+-- | The dead window an omitted policy keeps: today's 60 days, pinned
+--   against 'World.Flora.Growth.deadWindowDays' by the
+--   @Asset.FloraVisualSchema@ gate.
+legacyCorpseDurationDays ∷ Int
+legacyCorpseDurationDays = 60
+
+-- | The policy an omitted @corpsePolicy@ loads as: transient for
+--   'legacyCorpseDurationDays', then the wild successor @reseed@.
+legacyCorpsePolicy ∷ FloraCorpsePolicy
+legacyCorpsePolicy = FloraCorpsePolicy
+    { fcpOutcome    = CorpseTransient legacyCorpseDurationDays SuccessorReseed
+    , fcpOverrides  = HM.empty
+    , fcpProvenance = CorpsePolicyDefaulted
+    }
+
 -- * Species Definition
 
 -- | Harvestable-species data (#94): what foraging a tile of this plant
@@ -202,17 +340,26 @@ data FloraSpecies = FloraSpecies
     , fsCycleOverrides ∷ !(HM.HashMap AnnualCycleKey TextureHandle)
     , fsHarvest        ∷ !(Maybe FloraHarvest)
       -- ^ Present ⇒ foraging units can harvest this species (#94).
+    , fsTextureVariants ∷ !(HM.HashMap FloraVariantSelector TextureHandle)
+      -- ^ Declared @textureVariants@ (#2539), keyed by semantic
+      --   selector. Loaded content only: nothing resolves against it
+      --   until EFM-3.
+    , fsCorpsePolicy    ∷ !FloraCorpsePolicy
+      -- ^ Authored or defaulted corpse retention (#2539). Loaded
+      --   content only: retention reads it from EFM-10.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
 newFloraSpecies ∷ Text → TextureHandle → FloraSpecies
 newFloraSpecies name baseTex = FloraSpecies
-    { fsName           = name
-    , fsBaseTexture    = baseTex
-    , fsLifecycle      = Evergreen
-    , fsPhases         = HM.empty
-    , fsAnnualCycle    = []
-    , fsCycleOverrides = HM.empty
-    , fsHarvest        = Nothing
+    { fsName            = name
+    , fsBaseTexture     = baseTex
+    , fsLifecycle       = Evergreen
+    , fsPhases          = HM.empty
+    , fsAnnualCycle     = []
+    , fsCycleOverrides  = HM.empty
+    , fsHarvest         = Nothing
+    , fsTextureVariants = HM.empty
+    , fsCorpsePolicy    = legacyCorpsePolicy
     }
 
 -- * World Generation Registration

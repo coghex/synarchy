@@ -65,6 +65,13 @@ flora:
         texture: "dead.png"
     # Decorative initially. Harvestable fruit and its item content are a
     # separate gameplay decision from making the species part of worldgen.
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: cactus
       minTemp: 18
