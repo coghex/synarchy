@@ -28,6 +28,8 @@ module Test.Headless.World.Save.Components.Fixture
     ) where
 
 import UPrelude
+import Unit.Faction.Membership (inertUnitProfile)
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Serialize as S
@@ -304,7 +306,7 @@ minimalUnitInstance inv = UnitInstanceSnapshot
     , uisAnimReverse = False, uisActivity = "idle", uisPose = "standing"
     , uisAnimStride = 0, uisStats = HM.empty, uisModifiers = HM.empty
     , uisSkills = HM.empty, uisKnowledge = HM.empty, uisInventory = inv
-    , uisEquipped = HM.empty, uisAccessories = [], uisFactionId = ""
+    , uisEquipped = HM.empty, uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
     , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
 

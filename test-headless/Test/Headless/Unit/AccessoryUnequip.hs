@@ -31,6 +31,7 @@ import Item.Types (ItemBuff(..), ItemDef(..), ItemInstance(..),
                    ItemManager(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Stats (applyItemBuffs)
 import Unit.Types (StatModifier(..), UnitId(..), UnitInstance(..),
                    UnitManager(..), emptyUnitManager)
@@ -122,7 +123,7 @@ unitWearing worn inv = UnitInstance
         [ ("perception", [stimulant]), ("strength", [oldWound]) ]
     , uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = inv, uiEquipment = HM.empty
-    , uiAccessories = worn, uiFactionId = FactionPlayer, uiWounds = []
+    , uiAccessories = worn, uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

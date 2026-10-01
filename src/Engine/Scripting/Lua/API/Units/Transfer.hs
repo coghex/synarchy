@@ -97,6 +97,7 @@ import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Faction (isPlayerCommandable)
+import Unit.Faction.Membership (legacyFactionOf)
 import Unit.Stats (effectiveStat)
 import Unit.Transfer
 import Building.Types
@@ -158,7 +159,8 @@ unitEndpoint ls uid = do
     pure $ UnitEndpointAt UnitEndpointView
         { uevPage          = uiPage u
         , uevTile          = (floor (uiGridX u), floor (uiGridY u))
-        , uevCommandable   = isPlayerCommandable (uiFactionId u)
+        , uevCommandable   =
+              isPlayerCommandable (legacyFactionOf (uiFaction u))
         , uevCapacity      = effectiveStat (lsNow ls) capBase capMods
         , uevInventory     = uiInventory u
         , uevEquipped      = HM.elems (uiEquipment u) ⧺ uiAccessories u
@@ -621,7 +623,7 @@ popUnit uid = (pop, restore)
             case HM.lookup uid (umInstances um) of
                 Nothing → (um, Left ReasonSourceMissing)
                 Just u
-                    | not (isPlayerCommandable (uiFactionId u)) →
+                    | not (isPlayerCommandable (legacyFactionOf (uiFaction u))) →
                         (um, Left ReasonSourceIneligible)
                     | otherwise → case drop ix (uiInventory u) of
                         (live : _)
@@ -731,7 +733,7 @@ pushUnit uid env item srcPlace = do
         case HM.lookup uid (umInstances um) of
             Nothing → (um, Left ReasonReceiverMissing)
             Just u
-                | not (isPlayerCommandable (uiFactionId u)) →
+                | not (isPlayerCommandable (legacyFactionOf (uiFaction u))) →
                     (um, Left ReasonReceiverIneligible)
                 | not (inReach srcPlace (uiPage u)
                                 ( floor (uiGridX u), floor (uiGridY u) )

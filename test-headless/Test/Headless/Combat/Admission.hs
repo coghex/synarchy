@@ -45,6 +45,7 @@ import Combat.Thread (processAllCommands)
 import Combat.Types (AttackMode(..), CombatCommand(..), CombatEvent(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
 import Unit.Command.Types (UnitCommand(..))
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
@@ -164,7 +165,7 @@ testUnit page gx gy stance = UnitInstance
         , ("stamina", startStamina), ("stance", stance) ]
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 100, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

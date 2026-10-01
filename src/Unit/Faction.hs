@@ -25,13 +25,12 @@
 --   trigger its discovery. Those are different questions; asking the
 --   wrong one is a silent, player-visible behavior change.
 --
---   __Wire format:__ a faction is NOT serialized as an enum. Saves carry
---   the lowercase 'factionTag' text and parse back through
---   'factionFromTag' at the load boundary, so this type can grow
---   constructors in any order without the append-only constraint the
---   positional @Generic Serialize@ policy imposes (see
---   "World.Save.Types"). There is no migration and no
---   @currentSaveVersion@ interaction.
+--   __Wire format:__ a faction is NOT serialized as an enum. Since
+--   #2515 a unit carries a faction PROFILE ("Unit.Faction.Membership")
+--   and this scalar survives only as the compatibility adapter's answer
+--   and as the legacy string the @units@ v1\/v2 shapes stored, which a
+--   load parses through 'parseFaction' and resolves by D-26. The type
+--   can still grow constructors in any order.
 --
 --   __Wildlife is deliberately one faction.__ Every animal is mutually
 --   allied. That is an interim, not the end state: predation (a hungry
@@ -70,7 +69,7 @@ data Faction
       -- ^ The player's own colonists. The only player-OWNED faction.
     | FactionWildlife
       -- ^ Animals. One mutually-allied faction by design (see header).
-      --   Also the documented default for a 'unit.spawn' with no tag.
+      --   Also the D-26 row a tag-less @unit.spawn@ maps through (#2515).
     | FactionHostile
       -- ^ Ruin occupants and other units placed to be fought.
       --   @scripts/locations.lua@ spawns location contents with this tag
@@ -136,12 +135,13 @@ fallbackFaction = FactionNeutral
 factionFromTag ∷ Text → Faction
 factionFromTag = fromMaybe fallbackFaction . parseFaction
 
--- | What @unit.spawn(def, x, y)@ assigns when no faction tag is given.
---   Deliberate and long-standing: world-gen animal spawns are the
---   overwhelmingly common tag-less caller, and every unit source that
---   means something else (portal spawns → 'FactionPlayer', debug overlay
---   → 'FactionDebug', location contents → 'FactionHostile') passes its
---   tag explicitly.
+-- | The legacy row a @unit.spawn(def, x, y)@ with NO faction tag maps
+--   through. Since #2515 the spawn resolves a profile from it by D-26
+--   against the definition's default tags (D-31), so a tag-less animal
+--   is still wildlife while a tag-less acolyte is an uncontrolled
+--   acolyte. Every unit source that means something else (portal spawns
+--   → 'FactionPlayer', debug overlay → 'FactionDebug', location contents
+--   → 'FactionHostile') passes its tag explicitly.
 defaultSpawnFaction ∷ Faction
 defaultSpawnFaction = FactionWildlife
 

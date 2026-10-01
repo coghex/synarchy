@@ -59,6 +59,7 @@ import System.Directory (listDirectory)
 import System.FilePath (takeExtension)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Sim.Types
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Command.Lifecycle (handleUnitTeleportCommand)
@@ -154,7 +155,7 @@ motionInstance = UnitInstance
     , uiStats = HM.empty
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.25, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

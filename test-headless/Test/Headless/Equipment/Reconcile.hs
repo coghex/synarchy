@@ -19,6 +19,8 @@
 module Test.Headless.Equipment.Reconcile (pureSpec, stagingSpec) where
 
 import UPrelude
+import Unit.Faction.Membership (inertUnitProfile)
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -365,7 +367,7 @@ minimalUnitSnapshot equipped inventory = UnitInstanceSnapshot
     , uisAnimStride = 0, uisStats = HM.empty, uisModifiers = HM.empty
     , uisSkills = HM.empty, uisKnowledge = HM.empty
     , uisInventory = inventory, uisEquipped = equipped
-    , uisAccessories = [], uisFactionId = "neutral"
+    , uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
     , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
 

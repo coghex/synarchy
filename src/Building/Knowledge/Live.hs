@@ -92,6 +92,7 @@ import Building.Types
     , BuildingInstance(..), BuildingManager(..), currentActivity )
 import Item.Types (ItemInstance, ItemManager)
 import Unit.Faction (isPlayerCommandable)
+import Unit.Faction.Membership (legacyFactionOf)
 import Unit.Types (UnitId, UnitInstance(..), UnitManager(..))
 import World.Page.Resolve (resolveBuildingPageWith)
 import World.State.Types (WorldManager(..), WorldState(..))
@@ -196,8 +197,9 @@ revealContainerForUnit
     ∷ ContainerObserver → IORef UnitManager → UnitId → BuildingId → IO Bool
 revealContainerForUnit co unitsRef uid bid = do
     um ← readIORef unitsRef
-    let commandable = maybe False (isPlayerCommandable ∘ uiFactionId)
-                            (HM.lookup uid (umInstances um))
+    let commandable =
+            maybe False (isPlayerCommandable ∘ legacyFactionOf ∘ uiFaction)
+                  (HM.lookup uid (umInstances um))
     if commandable then revealContainer co bid else pure False
 
 -- | Seed a just-completed storage building as KNOWN-EMPTY (requirement

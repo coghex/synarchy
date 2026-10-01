@@ -49,6 +49,7 @@ import Location.Instance
     , locationAuthorsClearance, locationClearanceSatisfied )
 import Location.Bounds (AbsBounds(..))
 import Unit.Faction (isPlayerOwned)
+import Unit.Faction.Membership (legacyFactionOf)
 import Unit.LineOfSight (visibleTilesOnPage)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Generate.Coordinates (globalToChunk)
@@ -234,11 +235,11 @@ locationAwarenessRows env = do
                             [ (uid, inst)
                             | (uid, inst) ← allUnits
                             , uiPage inst ≡ pageId
-                            , isPlayerOwned (uiFactionId inst) ]
+                            , isPlayerOwned (legacyFactionOf (uiFaction inst)) ]
                     sights ← forM pageUnits $ \(uid, inst) → do
                         tiles ← visibleTilesOnPage ws inst
                         pure UnitSight { usUnit    = uid
-                                       , usFaction = uiFactionId inst
+                                       , usFaction = legacyFactionOf (uiFaction inst)
                                        , usTiles   = tiles }
                     pure [ (pageText, hit)
                          | hit ← findAwareness (wgpWorldSize p)

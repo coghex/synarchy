@@ -2,8 +2,8 @@
 -- | The "Unit faction model" gate (#912): the typed faction's wire tags,
 --   its PROPERTIES (player-owned / player-commandable /
 --   unrestricted-combat), the total symmetric ally-neutral-hostile
---   RELATION, and the units-component save path that carries a faction
---   as 'Text' either side of the typed runtime field.
+--   RELATION, and the units-component save path that carries a unit's
+--   faction profile (#2515) and migrates the legacy v2 string into one.
 --
 --   Pure fixtures only, no engine. See 'Test.Headless.Lua.Faction' for
 --   the same model asserted through the Lua API, and
@@ -33,8 +33,13 @@ import Equipment.Reconcile (EquipmentOrphan)
 import Item.Types (emptyItemManager)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component (saveComponentRegistry)
+import Unit.Faction.Membership
+    ( UnitFactionProfile, inertUnitProfile, legacyFactionOf
+    , resolveLegacyFaction )
 import World.Save.Component.Entities
-    ( UnitInstanceDTO(..), fromUnitInstanceDTO, toUnitInstanceDTO )
+    ( UnitInstanceDTO(..), UnitInstanceDTOv2, fromUnitInstanceDTO
+    , migrateUnitInstanceDTOv2, toUnitInstanceDTO, toUnitInstanceDTOv2 )
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import World.Save.Component.Types (RegisteredComponent(..))
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Types
@@ -84,19 +89,21 @@ instWith f = UnitInstance
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = f, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] f
+    , uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing, uiTrailState = Nothing
     }
 
--- | Take the given (unit id, raw faction tag) pairs all the way through
---   the REAL units-component path — snapshot adapter, component DTO,
---   cereal encode/decode, DTO adapter, snapshot restore — and hand back
---   what the load side produced. Overriding 'uisFactionId' after the
---   snapshot adapter is what lets a tag OUTSIDE the vocabulary be fed in:
---   a live 'UnitInstance' can no longer hold one.
+-- | Take the given (unit id, raw legacy faction string) pairs all the
+--   way through the REAL units-component path a v2 save takes — snapshot
+--   adapter, the frozen v2 DTO and its cereal bytes, the v2 → v3
+--   migration, DTO adapter, snapshot restore — and hand back what the
+--   load side produced. Overriding 'uisFaction' after the snapshot
+--   adapter is what lets a string OUTSIDE the vocabulary be fed in: a
+--   live 'UnitInstance' can no longer hold one.
 loadTags ∷ [(UnitId, Text)]
          → ( UnitManager, [UnitId], [Text], ImmunityScrub
            , [EquipmentOrphan] )
@@ -106,28 +113,46 @@ loadTags tagged =
                   , umInstances = HM.fromList
                       [ (uid, instWith FactionNeutral) | (uid, _) ← tagged ] }
         tags  = HM.fromList tagged
-        retag uid s = maybe s (\t → s { uisFactionId = t }) (HM.lookup uid tags)
+        retag uid s = maybe s (\t → s { uisFaction = FactionLegacyPending t })
+                            (HM.lookup uid tags)
         snap0 = toUnitSnapshot pageA um0
         wire  = snap0 { usnInstances =
                           HM.mapWithKey retag (usnInstances snap0) }
         snap1 = wire { usnInstances =
-                         HM.map throughComponent (usnInstances wire) }
-    in fromUnitSnapshot pageA defs emptyInfectionManager
-           emptyEquipmentClassManager emptyItemManager snap1
+                         HM.map throughV2 (usnInstances wire) }
+    in restore snap1
 
--- | One instance snapshot through the units component's own DTO and its
---   derived cereal layout — the bytes a @world.synworld@ actually holds.
---   A decode failure is surfaced as a poisoned tag rather than an
---   exception so the assertion reports it.
-throughComponent ∷ UnitInstanceSnapshot → UnitInstanceSnapshot
-throughComponent s =
+restore ∷ UnitSnapshot
+        → ( UnitManager, [UnitId], [Text], ImmunityScrub
+          , [EquipmentOrphan] )
+restore = fromUnitSnapshot pageA defs emptyInfectionManager
+              emptyEquipmentClassManager emptyItemManager
+
+-- | One instance snapshot through the FROZEN v2 DTO's cereal bytes and
+--   the v2 → v3 migration. A decode failure is surfaced as a poisoned
+--   string rather than an exception so the assertion reports it.
+throughV2 ∷ UnitInstanceSnapshot → UnitInstanceSnapshot
+throughV2 s =
+    case S.decode (S.encode (toUnitInstanceDTOv2 s)) of
+        Right dto → fromUnitInstanceDTO
+                        (migrateUnitInstanceDTOv2 (dto ∷ UnitInstanceDTOv2))
+        Left  err → s { uisFaction = FactionLegacyPending
+                            ("<decode failed: " <> fromString err <> ">") }
+
+-- | One instance snapshot through the CURRENT (v3) DTO's cereal bytes.
+throughV3 ∷ UnitInstanceSnapshot → UnitInstanceSnapshot
+throughV3 s =
     case S.decode (S.encode (toUnitInstanceDTO s)) of
         Right dto → fromUnitInstanceDTO (dto ∷ UnitInstanceDTO)
-        Left  err → s { uisFactionId = "<decode failed: "
-                                        <> fromString err <> ">" }
+        Left  err → s { uisFaction = FactionLegacyPending
+                            ("<decode failed: " <> fromString err <> ">") }
 
+-- | What an unported consumer sees: the legacy adapter's answer.
 factionOf ∷ UnitManager → UnitId → Maybe Faction
-factionOf um uid = uiFactionId <$> HM.lookup uid (umInstances um)
+factionOf um uid = legacyFactionOf ∘ uiFaction <$> HM.lookup uid (umInstances um)
+
+profileOf ∷ UnitManager → UnitId → Maybe UnitFactionProfile
+profileOf um uid = uiFaction <$> HM.lookup uid (umInstances um)
 
 -- | Every faction's wire tag, as the load path receives them.
 allTags ∷ [(UnitId, Text)]
@@ -168,7 +193,7 @@ spec = describe "Unit faction model" $ do
             forM_ allFactions $ \f →
                 canAttack fallbackFaction f `shouldBe` hasUnrestrictedCombat f
 
-        it "the tag-less unit.spawn default is wildlife" $
+        it "a tag-less unit.spawn maps through D-26's wildlife row" $
             defaultSpawnFaction `shouldBe` FactionWildlife
 
     describe "properties" $ do
@@ -247,27 +272,35 @@ spec = describe "Unit faction model" $ do
                      ∨ hasUnrestrictedCombat a
                      ∨ hasUnrestrictedCombat b )
 
-    describe "units-component save path (the wire stays Text)" $ do
-        it "all five recognized tags survive the real component path \
-           \unchanged, with nothing reported" $ do
+    describe "units-component save path (the profile wire)" $ do
+        it "all five legacy v2 strings migrate by D-26 with nothing \
+           \reported, and the adapter reads each back unchanged" $ do
             let (um, orphans, unknowns, _, _) = loadTags allTags
             orphans  `shouldBe` []
             unknowns `shouldBe` []
+            -- The fixture definition declares no defaults, so D-26's
+            -- wildlife row falls back to the wildlife tag and the
+            -- adapter is exact on all five.
             map (factionOf um . fst) allTags
                 `shouldBe` map (Just . factionFromTag . snd) allTags
+            map (profileOf um . fst) allTags
+                `shouldBe` map (Just . resolveLegacyFaction []
+                                     . factionFromTag . snd) allTags
 
-        it "a live unit re-serializes to the canonical lowercase TAG, \
-           \not a positional enum — the component format is unchanged" $ do
+        it "a live unit re-serializes as a v3 profile, never a legacy \
+           \string" $ do
             let um0 = emptyUnitManager
                         { umDefs = defs
                         , umInstances = HM.fromList
                             (zip (map UnitId [1 ..])
                                  (map instWith allFactions)) }
-            map uisFactionId (HM.elems (usnInstances (toUnitSnapshot pageA um0)))
-                `shouldMatchList` map factionTag allFactions
+            map uisFaction (HM.elems (usnInstances (toUnitSnapshot pageA um0)))
+                `shouldMatchList`
+                    map (FactionProfileSnap . resolveLegacyFaction [])
+                        allFactions
 
-        it "unrecognized tags load as the fallback and are reported ONCE \
-           \per distinct tag, however many units carry them" $ do
+        it "unrecognized strings load inert and are reported ONCE per \
+           \distinct string, however many units carry them" $ do
             let (um, orphans, unknowns, _, _) = loadTags
                     [ (UnitId 1, "player")
                     , (UnitId 2, "made_up")
@@ -279,30 +312,33 @@ spec = describe "Unit faction model" $ do
             orphans  `shouldBe` []
             unknowns `shouldBe` ["also_bogus", "made_up"]
             factionOf um (UnitId 1) `shouldBe` Just FactionPlayer
-            forM_ [2, 3, 4, 5] $ \n →
+            forM_ [2, 3, 4, 5] $ \n → do
+                profileOf um (UnitId n) `shouldBe` Just inertUnitProfile
                 factionOf um (UnitId n) `shouldBe` Just fallbackFaction
             factionOf um (UnitId 6) `shouldBe` Just FactionDebug
 
-        it "a unit loaded from an unrecognized tag re-serializes as the \
-           \fallback's canonical tag" $ do
+        it "a unit loaded from an unrecognized string re-serializes as \
+           \the inert profile" $ do
             let (um, _, _, _, _) = loadTags [(UnitId 1, "made_up")]
                 back = toUnitSnapshot pageA um { umDefs = defs }
-            map uisFactionId (HM.elems (usnInstances back))
-                `shouldBe` [factionTag fallbackFaction]
+            map uisFaction (HM.elems (usnInstances back))
+                `shouldBe` [FactionProfileSnap inertUnitProfile]
 
-        it "typing the runtime field is not a wire change — the units \
-           \component still accepts the version it did before, and the \
-           \faction tag is still carried as Text" $ do
-            -- The original assertion pinned the component at v1. #1233
-            -- later bumped it to v2 for an unrelated reason (the item
-            -- tree gained physical values), so what this case actually
-            -- means is that the FACTION work added no version of its own:
-            -- v1 is still an accepted input, and the tag round-trips
-            -- through it unchanged.
+        it "the units component is at v3 and still accepts v1 and v2" $
             [ rcInputVers c
               | c ← saveComponentRegistry
-              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2]]
-            let (um, _, _, _, _) = loadTags [(UnitId 1, "player")]
-                back = toUnitSnapshot pageA um { umDefs = defs }
-            map uisFactionId (HM.elems (usnInstances back))
-                `shouldBe` [factionTag FactionPlayer]
+              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2, 3]]
+
+        it "a live profile survives the v3 component path and restore \
+           \exactly" $ do
+            let um0 = emptyUnitManager
+                        { umDefs = defs
+                        , umInstances = HM.fromList
+                            (zip (map UnitId [1 ..])
+                                 (map instWith allFactions)) }
+                snap0 = toUnitSnapshot pageA um0
+                (um, _, unknowns, _, _) = restore snap0
+                    { usnInstances = HM.map throughV3 (usnInstances snap0) }
+            unknowns `shouldBe` []
+            HM.map uiFaction (umInstances um)
+                `shouldBe` HM.map uiFaction (umInstances um0)

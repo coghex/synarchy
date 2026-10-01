@@ -58,6 +58,7 @@ import Item.Ground (GroundItems(..), spawnGroundItem)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
 import World.Chunk.Types
     (ChunkCoord(..), LoadedChunk(..), chunkSize, wrapChunkCoordU)
@@ -118,7 +119,7 @@ testUnit page faction gx gy = UnitInstance
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = faction, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] faction, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

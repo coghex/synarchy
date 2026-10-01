@@ -11,7 +11,7 @@ import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Types (ItemInstance(..))
 import Unit.Direction (Direction(..))
-import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (UnitFactionProfile)
 import World.Page.Types (WorldPageId(..))
 import Unit.Types.Def (StatModifier(..))
 import Unit.Types.Wound (Wound(..), Scar(..))
@@ -99,17 +99,15 @@ data UnitInstance = UnitInstance
       --   stable UI display. Populated at spawn from the def's
       --   `udStartingAccessories`. Mutated by equipment.equipAccessory
       --   / unequipAccessory.
-    , uiFactionId   ∷ !Faction
-      -- ^ Which faction this unit belongs to (#912). Assigned at
-      --   spawn-time only (no faction field on UnitDef): player-spawn
-      --   paths pass 'FactionPlayer', the debug overlay 'FactionDebug',
-      --   location contents 'FactionHostile'; a tag-less @unit.spawn@
-      --   gets 'Unit.Faction.defaultSpawnFaction'. Ownership,
-      --   commandability, alliance, and attack permission are ALL
-      --   answered by "Unit.Faction" — never by comparing this field to
-      --   another with @==@. Roundtrips through SaveData as the
-      --   canonical 'Unit.Faction.factionTag' text (v8+), so the wire
-      --   format is unchanged by the typing.
+    , uiFaction     ∷ !UnitFactionProfile
+      -- ^ Who this unit is (#2515): optional controller, every tag
+      --   membership with its provenance, and capabilities. Resolved at
+      --   spawn ingress from the spawn tag and the definition's default
+      --   tags by D-26 ('Unit.Faction.Membership.resolveSpawnFaction').
+      --   Unported consumers read it ONLY through
+      --   'Unit.Faction.Membership.legacyFactionOf'; never compare two of
+      --   these with @==@ to decide policy. Persisted exactly by the
+      --   @units@ component (v3+).
     , uiWounds      ∷ ![Wound]
       -- ^ Newest-first wound list. Mutated by Combat.Resolution on
       --   hits and by Combat.Wounds during the per-tick heal pass.

@@ -9,6 +9,8 @@
 module Test.Headless.Save.Snapshot (spec) where
 
 import UPrelude
+import Unit.Faction.Membership (inertUnitProfile)
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import Test.Hspec
 import Control.Exception (evaluate)
 import qualified Data.HashMap.Strict as HM
@@ -123,7 +125,7 @@ minimalUnitInstance inv = UnitInstanceSnapshot
     , uisAnimReverse = False, uisActivity = "idle", uisPose = "standing"
     , uisAnimStride = 0, uisStats = HM.empty, uisModifiers = HM.empty
     , uisSkills = HM.empty, uisKnowledge = HM.empty, uisInventory = inv
-    , uisEquipped = HM.empty, uisAccessories = [], uisFactionId = ""
+    , uisEquipped = HM.empty, uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
     , uisImmunities = HM.empty, uisBlood = 5, uisName = ""
     }

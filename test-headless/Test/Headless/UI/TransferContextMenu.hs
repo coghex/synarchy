@@ -38,6 +38,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import World.Page.Types (WorldPageId(..))
 
@@ -354,7 +355,7 @@ spec = describe "Transfer context menu" $ do
         -- engine query and REAL faction data rather than a Boolean
         -- stub: 'liveEndpointInfo' puts unit.transferEndpointInfo back,
         -- and 'withLiveUnits' installs live instances the projection
-        -- reads uiFactionId out of.
+        -- reads uiFaction out of.
         it "an ordinary player acolyte target -> Transfer appears (A2 widening)" $ \env → do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
@@ -1298,7 +1299,7 @@ transferOrderStub uid entries = T.concat
 liveEndpointInfo ∷ Text
 liveEndpointInfo = "unit.transferEndpointInfo = _G.__realTransferEndpointInfo; "
 
--- | A live unit of the given faction. Only 'uiFactionId' matters to
+-- | A live unit of the given faction. Only 'uiFaction' matters to
 -- the endpoint projection's eligibility rule; with no matching entry
 -- in @umDefs@ the display name falls back to the prettified def name,
 -- which is exactly what a real unmapped unit would report.
@@ -1313,7 +1314,7 @@ liveUnit f = UnitInstance
     , uiStats = HM.singleton "carrying_capacity" 100
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = f, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] f, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

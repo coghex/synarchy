@@ -124,7 +124,8 @@ import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
                   , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
 import Unit.Direction (Direction(..))
-import Unit.Faction (factionFromTag, factionTag, parseFaction)
+import World.Save.UnitFaction
+    (UnitFactionSnapshot(..), resolveUnitFactionSnapshot)
 import Unit.Sim.Types (UnitSimState(..))
 import Item.Types (ItemInstance(..), ItemManager)
 
@@ -153,7 +154,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 104
+currentSaveVersion = 105
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -776,17 +777,12 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       --   Order preserved. An item container added to this record must
       --   also be listed in 'unitItemContainers' — see
       --   'bisStorage''s note (#1090).
-    , uisFactionId   ∷ !Text
-      -- ^ v16: spawn-time-only faction tag (no def-level default).
-      --   Deliberately stays 'Text' on the wire even though the runtime
-      --   field is a typed 'Unit.Faction.Faction' (#912): a
-      --   'Generic'-derived @Serialize@ enum is positional by
-      --   constructor tag, so serializing the type would make its
-      --   constructor ORDER load-bearing forever for no gain here.
-      --   Rendered by 'Unit.Faction.factionTag' and parsed by
-      --   'Unit.Faction.factionFromTag' at the two adapters below, so
-      --   this field's format — and the units component's schema
-      --   version — are unchanged.
+    , uisFaction     ∷ !UnitFactionSnapshot
+      -- ^ The unit's faction profile with membership provenance
+      --   (#2515), or a v1\/v2 legacy string still awaiting D-26
+      --   resolution against the unit's definition, which
+      --   'fromUnitSnapshot' performs before any unit is published.
+      --   Its @units@ wire shape is "World.Save.UnitFaction"'s DTO.
     , uisWounds      ∷ ![Wound]
       -- ^ v16: per-unit wound list. Roundtrips faithfully. Generic
       --   Serialize over the Wound record below; fields are
@@ -837,7 +833,7 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisInventory   = uiInventory ui
     , uisEquipped    = uiEquipment ui
     , uisAccessories = uiAccessories ui
-    , uisFactionId   = factionTag (uiFactionId ui)   -- typed → wire (#912)
+    , uisFaction     = FactionProfileSnap (uiFaction ui)
     , uisWounds      = uiWounds ui
     , uisScars       = uiScars ui
     , uisImmuneResponse = uiImmuneResponse ui
@@ -853,11 +849,13 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
 --   target, "main_world"); every restored unit is stamped with it so the
 --   runtime-only world scoping holds after a load (#78).
 --
---   The third component is every DISTINCT unrecognized faction tag seen
---   in this snapshot, sorted (#912). Those units load as
---   'Unit.Faction.fallbackFaction' — a bad tag never fails a load — and
---   the list exists so the caller can warn once per distinct tag instead
---   of once per unit, however many units share it.
+--   The third component is every DISTINCT unrecognized LEGACY faction
+--   string seen in this snapshot, sorted (#912, #2515). A v1\/v2 string
+--   is resolved here by D-26 against the unit's own definition defaults
+--   ('World.Save.UnitFaction.resolveUnitFactionSnapshot'); an
+--   unrecognized one loads as the inert profile — a bad tag never fails
+--   a load — and the list exists so the caller can warn once per
+--   distinct string instead of once per unit, however many share it.
 --
 --   The fourth is the 'ImmunityScrub' diagnostic for the acquired-immunity
 --   entries this restore dropped against @infMgr@ (#2305). The scrub lives
@@ -919,9 +917,10 @@ fromUnitSnapshot page defs infMgr ecMgr itemMgr snap =
                    , not (HM.member (uisDefName s) defs)
                    ]
         unknownFactions = L.sort $ HS.toList $ HS.fromList
-                   [ uisFactionId s
-                   | (_, _, s) ← kept
-                   , isNothing (parseFaction (uisFactionId s))
+                   [ t
+                   | (_, d, s) ← kept
+                   , Just t ← [snd (resolveUnitFactionSnapshot
+                                        (udFactionTags d) (uisFaction s))]
                    ]
         -- #2305: acquired immunity is keyed by infection definition id
         -- and restored verbatim before this. An entry whose def has been
@@ -989,10 +988,13 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s
-    -- wire → typed (#912). An unrecognized tag degrades to the inert
-    -- fallback rather than failing the load; 'fromUnitSnapshot' hands
-    -- the raw tags back so the caller can say so once each.
-    , uiFactionId   = factionFromTag (uisFactionId s)
+    -- #2515: a saved profile is restored exactly; a legacy v1\/v2
+    -- string resolves by D-26 against THIS definition's defaults, and
+    -- an unrecognized one degrades to the inert profile rather than
+    -- failing the load. 'fromUnitSnapshot' hands the raw strings back
+    -- so the caller can say so once each.
+    , uiFaction     = fst (resolveUnitFactionSnapshot (udFactionTags def)
+                                                      (uisFaction s))
     , uiWounds      = uisWounds s
     , uiScars       = uisScars s
     , uiImmuneResponse = uisImmuneResponse s

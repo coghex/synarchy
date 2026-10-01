@@ -61,6 +61,7 @@ import Power.Types
 import Structure.Types (emptyChunkStructures)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
     , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
@@ -155,7 +156,7 @@ mkUnit page inv = UnitInstance
     , uiStats = HM.singleton "carrying_capacity" 100
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = inv, uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

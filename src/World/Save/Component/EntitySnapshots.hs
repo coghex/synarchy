@@ -80,6 +80,12 @@ module World.Save.Component.EntitySnapshots
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , UnitInstanceDTOv2(..)
+    , PageUnitsDTOv2(..)
+    , UnitsDTOv2(..)
+    , toUnitInstanceDTOv2
+    , migrateUnitInstanceDTOv2
+    , migrateUnitsDTOv2
     , UnitInstanceDTOv1(..)
     , PageUnitsDTOv1(..)
     , UnitsDTOv1(..)
@@ -104,6 +110,9 @@ import World.Save.Component.Page
     ( ItemInstanceDTO(..), toItemInstanceDTO, fromItemInstanceDTO
     , ItemInstanceDTOv1, toItemInstanceDTOv1, migrateItemInstanceDTOv1 )
 import World.Save.Snapshot (PageSnapshot(..))
+import World.Save.UnitFaction
+    ( UnitFactionDTO(..), fromUnitFactionDTO, legacyFactionText
+    , toUnitFactionDTO )
 import World.Save.Component.Types
 import World.Save.PageOrder (orderedPages)
 
@@ -239,6 +248,22 @@ data PageBuildingsDTO = PageBuildingsDTO
 newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
+
+-- | The FROZEN v2 page slice (#2515), carrying the frozen v2 instances.
+data PageUnitsDTOv2 = PageUnitsDTOv2
+    { pu2PageId    ∷ !WorldPageId
+    , pu2Instances ∷ !(HM.HashMap UnitId UnitInstanceDTOv2)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitsDTOv2 = UnitsDTOv2 { ud2Pages ∷ [PageUnitsDTOv2] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+migrateUnitsDTOv2 ∷ UnitsDTOv2 → UnitsDTO
+migrateUnitsDTOv2 (UnitsDTOv2 slices) = UnitsDTO
+    [ PageUnitsDTO (pu2PageId s)
+          (HM.map migrateUnitInstanceDTOv2 (pu2Instances s))
+    | s ← slices ]
 
 -- | The FROZEN v1 page slice (#1233), carrying the frozen v1 instances.
 data PageBuildingsDTOv1 = PageBuildingsDTOv1
@@ -395,9 +420,10 @@ fromScarDTO d = Scar
 --   via the shared 'ItemInstanceDTO', the three unit records via
 --   'StatModifierDTO'/'WoundDTO'/'ScarDTO' above. 'Direction' is an
 --   append-only leaf enum, reused as-is. Field order + leaf types mirror
---   'UnitInstanceSnapshot' exactly, so the derived cereal bytes were
---   unchanged from the earlier direct embedding. This is the CURRENT (v2)
---   shape; the pre-#1233 one is 'UnitInstanceDTOv1' below.
+--   'UnitInstanceSnapshot', with one exception: the faction is
+--   "World.Save.UnitFaction"'s frozen 'UnitFactionDTO'. This is the
+--   CURRENT (v3, #2515) shape; the scalar-faction one is
+--   'UnitInstanceDTOv2' and the pre-#1233 one 'UnitInstanceDTOv1' below.
 data UnitInstanceDTO = UnitInstanceDTO
     { uidDefName        ∷ !Text
     , uidBaseWidth      ∷ !Float
@@ -418,7 +444,7 @@ data UnitInstanceDTO = UnitInstanceDTO
     , uidInventory      ∷ ![ItemInstanceDTO]
     , uidEquipped       ∷ !(HM.HashMap Text ItemInstanceDTO)
     , uidAccessories    ∷ ![ItemInstanceDTO]
-    , uidFactionId      ∷ !Text
+    , uidFaction        ∷ !UnitFactionDTO
     , uidWounds         ∷ ![WoundDTO]
     , uidScars          ∷ ![ScarDTO]
     , uidImmuneResponse ∷ !Float
@@ -448,7 +474,7 @@ toUnitInstanceDTO u = UnitInstanceDTO
     , uidInventory      = map toItemInstanceDTO (uisInventory u)
     , uidEquipped       = HM.map toItemInstanceDTO (uisEquipped u)
     , uidAccessories    = map toItemInstanceDTO (uisAccessories u)
-    , uidFactionId      = uisFactionId u
+    , uidFaction        = toUnitFactionDTO (uisFaction u)
     , uidWounds         = map toWoundDTO (uisWounds u)
     , uidScars          = map toScarDTO (uisScars u)
     , uidImmuneResponse = uisImmuneResponse u
@@ -478,7 +504,7 @@ fromUnitInstanceDTO d = UnitInstanceSnapshot
     , uisInventory      = map fromItemInstanceDTO (uidInventory d)
     , uisEquipped       = HM.map fromItemInstanceDTO (uidEquipped d)
     , uisAccessories    = map fromItemInstanceDTO (uidAccessories d)
-    , uisFactionId      = uidFactionId d
+    , uisFaction        = fromUnitFactionDTO (uidFaction d)
     , uisWounds         = map fromWoundDTO (uidWounds d)
     , uisScars          = map fromScarDTO (uidScars d)
     , uisImmuneResponse = uidImmuneResponse d
@@ -487,12 +513,109 @@ fromUnitInstanceDTO d = UnitInstanceSnapshot
     , uisName           = uidName d
     }
 
+-- | The FROZEN v2 unit instance (#1233 → #2515), preserved verbatim for
+--   decode-only backward compatibility: identical to the current DTO but
+--   for the faction, which v2 held as one legacy string. Never edited.
+data UnitInstanceDTOv2 = UnitInstanceDTOv2
+    { uid2DefName        ∷ !Text
+    , uid2BaseWidth      ∷ !Float
+    , uid2GridX          ∷ !Float
+    , uid2GridY          ∷ !Float
+    , uid2GridZ          ∷ !Int
+    , uid2Facing         ∷ !Direction
+    , uid2CurrentAnim    ∷ !Text
+    , uid2AnimStart      ∷ !Double
+    , uid2AnimReverse    ∷ !Bool
+    , uid2Activity       ∷ !Text
+    , uid2Pose           ∷ !Text
+    , uid2AnimStride     ∷ !Int
+    , uid2Stats          ∷ !(HM.HashMap Text Float)
+    , uid2Modifiers      ∷ !(HM.HashMap Text [StatModifierDTO])
+    , uid2Skills         ∷ !(HM.HashMap Text Float)
+    , uid2Knowledge      ∷ !(HM.HashMap Text Float)
+    , uid2Inventory      ∷ ![ItemInstanceDTO]
+    , uid2Equipped       ∷ !(HM.HashMap Text ItemInstanceDTO)
+    , uid2Accessories    ∷ ![ItemInstanceDTO]
+    , uid2FactionId      ∷ !Text
+    , uid2Wounds         ∷ ![WoundDTO]
+    , uid2Scars          ∷ ![ScarDTO]
+    , uid2ImmuneResponse ∷ !Float
+    , uid2Immunities     ∷ !(HM.HashMap Text Float)
+    , uid2Blood          ∷ !Float
+    , uid2Name           ∷ !Text
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen v2 shape — the round-trip partner a v2
+--   fixture and a migration test are built with. A resolved profile is
+--   written as its legacy adapter tag.
+toUnitInstanceDTOv2 ∷ UnitInstanceSnapshot → UnitInstanceDTOv2
+toUnitInstanceDTOv2 u = UnitInstanceDTOv2
+    { uid2DefName        = uisDefName u
+    , uid2BaseWidth      = uisBaseWidth u
+    , uid2GridX          = uisGridX u
+    , uid2GridY          = uisGridY u
+    , uid2GridZ          = uisGridZ u
+    , uid2Facing         = uisFacing u
+    , uid2CurrentAnim    = uisCurrentAnim u
+    , uid2AnimStart      = uisAnimStart u
+    , uid2AnimReverse    = uisAnimReverse u
+    , uid2Activity       = uisActivity u
+    , uid2Pose           = uisPose u
+    , uid2AnimStride     = uisAnimStride u
+    , uid2Stats          = uisStats u
+    , uid2Modifiers      = HM.map (map toStatModifierDTO) (uisModifiers u)
+    , uid2Skills         = uisSkills u
+    , uid2Knowledge      = uisKnowledge u
+    , uid2Inventory      = map toItemInstanceDTO (uisInventory u)
+    , uid2Equipped       = HM.map toItemInstanceDTO (uisEquipped u)
+    , uid2Accessories    = map toItemInstanceDTO (uisAccessories u)
+    , uid2FactionId      = legacyFactionText (uisFaction u)
+    , uid2Wounds         = map toWoundDTO (uisWounds u)
+    , uid2Scars          = map toScarDTO (uisScars u)
+    , uid2ImmuneResponse = uisImmuneResponse u
+    , uid2Immunities     = uisImmunities u
+    , uid2Blood          = uisBlood u
+    , uid2Name           = uisName u
+    }
+
+-- | v2 → v3 (#2515): every field crosses unchanged except the faction
+--   string, which becomes a PENDING legacy faction for the load stage to
+--   resolve by D-26 against the unit's loaded definition.
+migrateUnitInstanceDTOv2 ∷ UnitInstanceDTOv2 → UnitInstanceDTO
+migrateUnitInstanceDTOv2 d = UnitInstanceDTO
+    { uidDefName        = uid2DefName d
+    , uidBaseWidth      = uid2BaseWidth d
+    , uidGridX          = uid2GridX d
+    , uidGridY          = uid2GridY d
+    , uidGridZ          = uid2GridZ d
+    , uidFacing         = uid2Facing d
+    , uidCurrentAnim    = uid2CurrentAnim d
+    , uidAnimStart      = uid2AnimStart d
+    , uidAnimReverse    = uid2AnimReverse d
+    , uidActivity       = uid2Activity d
+    , uidPose           = uid2Pose d
+    , uidAnimStride     = uid2AnimStride d
+    , uidStats          = uid2Stats d
+    , uidModifiers      = uid2Modifiers d
+    , uidSkills         = uid2Skills d
+    , uidKnowledge      = uid2Knowledge d
+    , uidInventory      = uid2Inventory d
+    , uidEquipped       = uid2Equipped d
+    , uidAccessories    = uid2Accessories d
+    , uidFaction        = UnitFactionLegacyDTO (uid2FactionId d)
+    , uidWounds         = uid2Wounds d
+    , uidScars          = uid2Scars d
+    , uidImmuneResponse = uid2ImmuneResponse d
+    , uidImmunities     = uid2Immunities d
+    , uidBlood          = uid2Blood d
+    , uidName           = uid2Name d
+    }
+
 -- | The FROZEN pre-#1233 unit instance, preserved verbatim for
 --   decode-only backward compatibility: identical to the current DTO but
 --   for the item shape its three item fields carry
---   ('ItemInstanceDTOv1'). Never edited; a further unit schema change
---   freezes the CURRENT shape as 'UnitInstanceDTOv2' rather than touching
---   this one.
+--   ('ItemInstanceDTOv1') and the scalar faction string v2 kept. Never
+--   edited.
 data UnitInstanceDTOv1 = UnitInstanceDTOv1
     { uid1DefName        ∷ !Text
     , uid1BaseWidth      ∷ !Float
@@ -545,7 +668,7 @@ toUnitInstanceDTOv1 u = UnitInstanceDTOv1
     , uid1Inventory      = map toItemInstanceDTOv1 (uisInventory u)
     , uid1Equipped       = HM.map toItemInstanceDTOv1 (uisEquipped u)
     , uid1Accessories    = map toItemInstanceDTOv1 (uisAccessories u)
-    , uid1FactionId      = uisFactionId u
+    , uid1FactionId      = legacyFactionText (uisFaction u)
     , uid1Wounds         = map toWoundDTO (uisWounds u)
     , uid1Scars          = map toScarDTO (uisScars u)
     , uid1ImmuneResponse = uisImmuneResponse u
@@ -554,9 +677,12 @@ toUnitInstanceDTOv1 u = UnitInstanceDTOv1
     , uid1Name           = uisName u
     }
 
--- | v1 → v2: every non-item field crosses unchanged; the inventory,
---   equipment and accessory items each migrate through
---   'migrateItemInstanceDTOv1' (physical values decode absent).
+-- | v1 → v3, explicitly (#2515): every non-item field crosses
+--   unchanged except the faction; the inventory, equipment and accessory
+--   items each migrate through 'migrateItemInstanceDTOv1' (physical
+--   values decode absent), and the faction string becomes a PENDING
+--   legacy faction that the load stage resolves by D-26 against the
+--   unit's loaded definition ("World.Save.UnitFaction").
 migrateUnitInstanceDTOv1 ∷ UnitInstanceDTOv1 → UnitInstanceDTO
 migrateUnitInstanceDTOv1 d = UnitInstanceDTO
     { uidDefName        = uid1DefName d
@@ -578,7 +704,7 @@ migrateUnitInstanceDTOv1 d = UnitInstanceDTO
     , uidInventory      = map migrateItemInstanceDTOv1 (uid1Inventory d)
     , uidEquipped       = HM.map migrateItemInstanceDTOv1 (uid1Equipped d)
     , uidAccessories    = map migrateItemInstanceDTOv1 (uid1Accessories d)
-    , uidFactionId      = uid1FactionId d
+    , uidFaction        = UnitFactionLegacyDTO (uid1FactionId d)
     , uidWounds         = uid1Wounds d
     , uidScars          = uid1Scars d
     , uidImmuneResponse = uid1ImmuneResponse d
@@ -623,10 +749,16 @@ migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTO
 -- v2 (#1233): a unit's inventory, equipment and accessories carry the
 -- physical values #1233 appended to the recursive item tree, so the shape
 -- changed and v1 decodes through its own frozen tree.
+--
+-- v3 (#2515): the scalar faction string became the unit's faction
+-- profile with membership provenance. v1 and v2 each migrate EXPLICITLY
+-- to v3, their faction string arriving as a pending legacy faction that
+-- the load stage resolves by D-26 against the unit's loaded definition
+-- ("World.Save.UnitFaction"). Re-encoding emits v3 only.
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = componentCodec ComponentSpec
     { csComponent     = unitsComponentId
-    , csVersion       = 2
+    , csVersion       = 3
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → UnitsDTO
@@ -634,7 +766,8 @@ unitsCodec = componentCodec ComponentSpec
               (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 migrateUnitsDTOv1 ]
+    , csOlderVersions = [ atVersion 1 migrateUnitsDTOv1
+                        , atVersion 2 migrateUnitsDTOv2 ]
     , csValidate      = const []
     }
 

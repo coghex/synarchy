@@ -80,6 +80,7 @@ import Test.Headless.Unit.TransferApi
     (mkBuilding, mkItem, mkUnit, minimalDef, storageDef)
 import UI.Types (emptyUIPageManager)
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldManager(..), emptyWorldState, emptyWorldManager)
@@ -220,7 +221,7 @@ setFaction ∷ EngineEnv → UnitId → Faction → IO ()
 setFaction env uid f =
     atomicModifyIORef' (unitManagerRef env) $ \um →
         (um { umInstances = HM.adjust
-                (\u → u { uiFactionId = f }) uid (umInstances um) }
+                (\u → u { uiFaction = resolveLegacyFaction [] f }) uid (umInstances um) }
         , ())
 
 -- | Move one unit onto another world page, leaving its coordinates

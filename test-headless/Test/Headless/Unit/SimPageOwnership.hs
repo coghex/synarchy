@@ -48,6 +48,7 @@ import Infection.Types
     (InfectionDef(..), InfectionManager(..))
 import Structure.Types (emptyChunkStructures)
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Sim.Types
 import Unit.Thread.Command.Lifecycle
     (handleUnitReGroundCommand, handleUnitTeleportCommand, lookupSurfaceZ)
@@ -213,7 +214,7 @@ mkUnit page wounds = UnitInstance
     , uiStats = HM.empty
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = wounds
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = wounds
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

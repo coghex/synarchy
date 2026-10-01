@@ -35,8 +35,9 @@ import World.Page.Types (WorldPageId(..))
 import Engine.Core.Log (LogCategory(..), logWarn)
 import qualified Engine.Core.Queue as Q
 import Unit.Types
-import Unit.Faction
-    ( defaultSpawnFaction, fallbackFaction, factionTag, parseFaction )
+import Unit.Faction (fallbackFaction, factionTag, parseFaction)
+import Unit.Faction.Membership
+    (inertUnitProfile, legacyFactionOf, resolveSpawnFaction)
 import Unit.Command.Types (UnitCommand(..), SpawnProfile(..))
 import Unit.Thread.Command (recomputeBodyDerivedStats)
 import Unit.Sim.Types (Pose(..))
@@ -59,16 +60,21 @@ import World.Chunk.Admit (pageIncarnation)
 --              [profile])
 --   factionId is the spawn-time faction tag — one of the canonical
 --   'Unit.Faction.factionTag' values ("player", "wildlife", "hostile",
---   "neutral", "debug"). This is the ingress boundary (#912): the tag is
---   parsed to a typed 'Faction' here, and an unrecognized one warns once
---   for this request and resolves to 'Unit.Faction.fallbackFaction'
---   rather than travelling onward as an unvalidated string.
+--   "neutral", "debug"). This is the ingress boundary (#912, #2515):
+--   the tag is parsed here and resolved, by the D-26 mapping against the
+--   spawned definition's authored default tags, into the unit's faction
+--   PROFILE ('Unit.Faction.Membership.resolveSpawnFaction'). An
+--   unrecognized tag warns once for this request and yields the inert
+--   profile rather than travelling onward as an unvalidated string.
 --
---   Omitting it is DELIBERATE, not an oversight: it yields
---   'Unit.Faction.defaultSpawnFaction' ("wildlife"), which is what the
---   world-gen animal spawns want. Every source that means something else
---   already passes its tag explicitly (portal spawns → "player", the
---   debug overlay → "debug", location contents → "hostile").
+--   Omitting it is D-26's @wildlife@ row applied literally (D-31): the
+--   definition's default tags, falling back to @wildlife@ only for a
+--   definition that declares none. A tag-less animal is therefore still
+--   wildlife, but a tag-less acolyte is an UNCONTROLLED acolyte — which
+--   the legacy adapter reads as @neutral@. Every source that means
+--   something else passes its tag explicitly (portal spawns →
+--   "player", the debug overlay → "debug", location contents →
+--   "hostile").
 --
 --   The arg can sit at slot 4 (when gz is
 --   omitted) or slot 5 (when both are supplied); both shapes work
@@ -176,7 +182,8 @@ unitSpawnFn env = do
                          _                   → 0.0
                 -- Resolve the RAW faction tag: slot 5 wins if present,
                 -- else slot 4 (only when it's actually a Lua string).
-                -- Nothing = the caller omitted it → defaultSpawnFaction.
+                -- Nothing = the caller omitted it → the definition's
+                -- defaults (D-31).
                 rawFactionTag = case factionArg5 of
                     Just fbs → Just (TE.decodeUtf8Lenient fbs)
                     Nothing  → TE.decodeUtf8Lenient <$> factionArg4
@@ -222,7 +229,7 @@ unitSpawnFn env = do
                         logWarn logger CatAsset
                             "unit.spawn: no world to spawn into"
                         return (Right (-1))
-                    (_, Just _, Just (pageId, ws)) → do
+                    (_, Just def, Just (pageId, ws)) → do
                         -- Resolve Z from the SAME page the unit is stamped
                         -- into (ws), not whatever world happens to be
                         -- visible — otherwise an explicit pageId could be
@@ -245,21 +252,25 @@ unitSpawnFn env = do
                                             <> "), defaulting Z=0"
                                         return 0
 
-                        -- Ingress parse (#912): from here on the faction
-                        -- is typed. An unrecognized tag warns ONCE for
-                        -- this request and degrades to the inert
-                        -- fallback rather than rejecting the spawn.
+                        -- Ingress parse (#912) and D-26 resolution
+                        -- (#2515): from here on the faction is the
+                        -- unit's profile. An unrecognized tag warns ONCE
+                        -- for this request and degrades to the inert
+                        -- profile rather than rejecting the spawn.
+                        let defaults = udFactionTags def
                         faction ← case rawFactionTag of
-                            Nothing  → return defaultSpawnFaction
+                            Nothing  →
+                                return (resolveSpawnFaction defaults Nothing)
                             Just tag → case parseFaction tag of
-                                Just f  → return f
+                                Just f  → return
+                                    (resolveSpawnFaction defaults (Just f))
                                 Nothing → do
                                     logger ← readIORef (loggerRef env)
                                     logWarn logger CatAsset $
                                         "unit.spawn: unrecognized faction tag '"
                                         <> tag <> "' — spawning as '"
                                         <> factionTag fallbackFaction <> "'"
-                                    return fallbackFaction
+                                    return inertUnitProfile
 
                         -- Allocate ID
                         uid ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
@@ -763,7 +774,10 @@ unitGetFactionFn env = do
             let uid = UnitId (fromIntegral n)
             mFac ← Lua.liftIO $ do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                pure (uiFactionId <$> HM.lookup uid (umInstances um))
+                -- Through the legacy adapter (#2515): the return type
+                -- and the five legacy answers are unchanged.
+                pure (legacyFactionOf ∘ uiFaction
+                        <$> HM.lookup uid (umInstances um))
             case mFac of
                 Just f  → Lua.pushstring (TE.encodeUtf8 (factionTag f))
                               >> return 1

@@ -2011,8 +2011,8 @@ refusal is decided for every definition in the file BEFORE any of them
 is registered — the registration loop publishes incrementally, so a
 refusal decided partway through would already have allocated handles and
 queued uploads for the definitions ahead of it. The resolved set is
-carried on `UnitDef` only; no `UnitInstance` field, spawn argument,
-snapshot, DTO or save byte changes here.
+carried on `UnitDef`; spawn ingress and legacy-save migration read it
+there (below).
 
 **The legacy mapping is a pure function** of a legacy `Faction` value
 and a definition's authored defaults (D-26): `player` = local controller
@@ -2021,6 +2021,23 @@ and a definition's authored defaults (D-26): `player` = local controller
 + `legacy_hostile`, `neutral` = the empty inert profile, `debug` = no
 controller, no tags, both capabilities. It never reads a unit name or
 any live relation.
+
+**Unit profiles (#2515).** Every live unit carries a
+`Unit.Faction.Membership.UnitFactionProfile` (`uiFaction`): an optional
+controller, each tag membership with its provenance (definition default
+or named runtime owner), and capabilities. `unit.spawn` resolves it at
+ingress by D-26 against the spawned definition's defaults; an OMITTED
+tag is the `wildlife` row (D-31), so a tag-less animal stays wildlife
+while a tag-less acolyte is an uncontrolled acolyte. An unrecognized tag
+warns once per request and spawns the inert profile. The one local
+controller is the constant `localController`. Until FTS-4/FTS-5 port
+them, consumers read faction ONLY through `legacyFactionOf`: local
+controller → `player`, both debug capabilities → `debug`,
+`legacy_hostile` → `hostile`, `wildlife` → `wildlife`, otherwise
+`neutral` (so an uncontrolled acolyte or nomad reads `neutral`). The
+`units` component (v3) persists profiles exactly; v1/v2 faction strings
+resolve by D-26 at the load boundary
+(`docs/persistence_state_inventory.md`, `UnitsDTO` and `umInstances`).
 
 **Capabilities.** `factionCatalogueRef` is a `content-registries` field,
 written only by `Engine.Scripting.Lua.API.Factions` through
@@ -2031,7 +2048,8 @@ Gates: hspec `--match "Faction tag catalogue"` (every refusal through
 the real loaders and the real Lua bindings, the shipped corpus, and the
 D-26 mapping), `--match "Unit faction profile policy"` (both five-by-five
 legacy matrices re-asserted against the shipped catalogue),
-`--match "Startup readiness"` / `"Startup asset logging"`, and
+`--match "Unit faction profile wire"` (adapter, units v1/v2/v3 wire,
+spawn ingress), `--match "Startup readiness"` / `"Startup asset logging"`, and
 `tools/startup_asset_logging_probe.py`.
 
 ---

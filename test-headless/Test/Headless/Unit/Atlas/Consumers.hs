@@ -49,6 +49,7 @@ import Unit.Atlas.Index
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import UI.Manager
     ( createPage, createSprite, getElement, setSpriteFrame, setSpriteTexture )
 import UI.Types
@@ -138,7 +139,7 @@ testInstance = UnitInstance
     , uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionNeutral
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionNeutral
     , uiWounds = [], uiScars = [], uiImmuneResponse = 0
     , uiImmunities = HM.empty, uiBlood = 0
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0

@@ -18,6 +18,7 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Combat.Types (AttackMode(..))
 import Combat.Resolution.Common (mentalEffectiveness, maxStaminaFor)
 import Combat.Resolution.Strike
@@ -43,7 +44,7 @@ mkInst stats skills = UnitInstance
     , uiStats = stats
     , uiModifiers = HM.empty, uiSkills = skills, uiKnowledge = HM.empty
     , uiInventory = [], uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = FactionNeutral, uiWounds = [], uiScars = []
+    , uiFaction = resolveLegacyFaction [] FactionNeutral, uiWounds = [], uiScars = []
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 100
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

@@ -36,6 +36,7 @@ import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Pathing.Hazard (MoveHazardPolicy(..))
 import Unit.Sim.Types (Direction(..), emptyUnitThreadState)
 import Unit.Types
@@ -84,7 +85,7 @@ mkNomad uid stats = UnitInstance
     , uiStats = HM.union stats (HM.singleton "consciousness" 1.0)
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionWildlife, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionWildlife, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

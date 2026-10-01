@@ -255,7 +255,11 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
     # near-empty).
     atk = as_int(send(port, "return unit.spawn('acolyte', 2, 2, 0, 'player')"))
     chk.ok(atk is not None and atk >= 0, f"attacker unit.spawn succeeded (got {atk!r})")
-    tgt = as_int(send(port, "return unit.spawn('acolyte', 5, 5, 0, 'wildlife')"))
+    # #2515: the target is a legacy-HOSTILE acolyte. Before the faction
+    # profile a 'wildlife' acolyte was hostile to the player; under D-26
+    # it is now an uncontrolled acolyte the legacy adapter reads as
+    # neutral, so 'hostile' is what keeps this an attack on an enemy.
+    tgt = as_int(send(port, "return unit.spawn('acolyte', 5, 5, 0, 'hostile')"))
     chk.ok(tgt is not None and tgt >= 0, f"target unit.spawn succeeded (got {tgt!r})")
     send(port, f"require('scripts.unit_ai').commandAttack({atk}, {tgt}); return 'ok'")
     time.sleep(0.5)
@@ -263,6 +267,24 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
     chk.ok(attack_target == tgt,
            f"commandAttack set a real, live attackTargetUid ({attack_target} "
            f"vs expected {tgt})")
+
+    # #2515: the session holds every legacy faction's profile, so the
+    # fresh-process cycles below compare each one's controller,
+    # memberships with provenance, and capabilities. The bear's wildlife
+    # tag is its definition default; the attacker carries the local
+    # controller; the target legacy_hostile.
+    FACTION_ROSTER.clear()
+    FACTION_ROSTER.update({atk: "player", tgt: "hostile"})
+    for spawn, tag in (("unit.spawn('bear_brown', 8, 2)", "wildlife"),
+                       ("unit.spawn('acolyte', 2, 8, 0, 'neutral')", "neutral"),
+                       ("unit.spawn('acolyte', 8, 8, 0, 'debug')", "debug")):
+        uid = as_int(send(port, f"return {spawn}"))
+        chk.ok(uid is not None and uid >= 0,
+               f"{tag} unit {spawn} succeeded (got {uid!r})")
+        if uid is not None:
+            FACTION_ROSTER[uid] = tag
+    time.sleep(0.5)  # unit.spawn only queues; let the unit thread commit
+    assert_faction_roster(chk, port, "before the initial save")
 
     # world.setMapMode(pageId, mode) -- a bare-mode call (missing pageId)
     # is a silent no-op (round-1 review finding); there is no live
@@ -314,6 +336,19 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
            f"tool mode is genuinely non-default before saving (got {tool_before!r})")
 
     return portal_bid, atk, tgt
+
+
+# uid -> the legacy faction tag unit.getFaction must report for it,
+# filled by build_scenario (#2515).
+FACTION_ROSTER: dict[int, str] = {}
+
+
+def assert_faction_roster(chk: Checks, port: int, when: str) -> None:
+    """Every roster unit reads its legacy tag through the adapter."""
+    for uid, tag in sorted(FACTION_ROSTER.items()):
+        got = send(port, f"return unit.getFaction({uid})").strip().strip('"')
+        chk.ok(got == tag,
+               f"unit {uid} reads as '{tag}' {when} (got {got!r})")
 
 
 def atk_in_selection(raw: str, uid: int) -> bool:
@@ -485,6 +520,7 @@ def main() -> int:
                        f"replaces the whole session, it does not merge")
 
             assert_reset_policy(chk, port, f"after loading {prev_slot}")
+            assert_faction_roster(chk, port, f"after loading {prev_slot}")
             attack_target = get_attack_target(port, atk)
             chk.ok(attack_target == tgt,
                    f"lua.unit_ai's attackTargetUid survived the fresh-process "
@@ -508,6 +544,20 @@ def main() -> int:
             gen_paths.append(next_path)
 
             if letter == "D":
+                # #2515: a player spawned AFTER a fresh-process load (and
+                # after this generation's save, so the compared files are
+                # untouched) reads as the player through the adapter,
+                # exactly as the restored attacker does -- the adapter's
+                # 'player' answer requires the ONE local controller.
+                fresh = as_int(send(port, "return unit.spawn('acolyte', 3, 3, 0, 'player')"))
+                chk.ok(fresh is not None and fresh >= 0,
+                       f"post-load player unit.spawn succeeded (got {fresh!r})")
+                time.sleep(0.5)
+                got = send(port, f"return unit.getFaction({fresh})").strip().strip('"')
+                chk.ok(got == "player" and FACTION_ROSTER.get(atk) == "player",
+                       f"a player spawned after the load shares the restored "
+                       f"player's local controller (got {got!r})")
+
                 # Unpause ONLY to confirm the default speed (requirement 8)
                 # -- never comparing any subsequent random gameplay outcome.
                 send(port, "require('scripts.pause').set(false); return 'ok'",

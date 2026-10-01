@@ -16,6 +16,7 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Thread.Command (injurySpeedMult)
 
 -- A body part builder: id plus the two locomotion-relevant flags.
@@ -48,7 +49,7 @@ inst ws = UnitInstance
     , uiStats = HM.fromList [("body_mass", 70)]
     , uiModifiers = HM.empty, uiSkills = HM.empty, uiKnowledge = HM.empty
     , uiInventory = [], uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = FactionNeutral, uiWounds = ws, uiScars = []
+    , uiFaction = resolveLegacyFaction [] FactionNeutral, uiWounds = ws, uiScars = []
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 70 * bloodMassRatio
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

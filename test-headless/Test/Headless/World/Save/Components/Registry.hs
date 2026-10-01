@@ -913,7 +913,9 @@ goldenRichPayloads =
       -- page's own attempt allocator.
     , ("world-activity",      (242,  "d5f6a72687031136"))
     , ("buildings",           (151,  "3dafc93879ea3b82"))
-    , ("units",               (249,  "fc6ed2ffd1c79265"))
+      -- #2515 re-pinned: @units@ v3 carries each unit's faction
+      -- profile (a tagged DTO) where v2 held one faction string.
+    , ("units",               (259,  "d677d5adbde589fd"))
     , ("unit-sim",            (123,  "81797b8874157310"))
     , ("craft-bills",         (58,   "beec8f6ff4c58c26"))
     , ("power-nodes",         (58,   "beec8f6ff4c58c26"))
@@ -949,7 +951,8 @@ goldenFullPayloads =
       -- goldenRichPayloads is.
     , ("world-activity",      (378, "401b1ef21412a4ee"))
     , ("buildings",           (130, "2b6c80ab8c216329"))
-    , ("units",               (228, "4b3dd9531385aafc"))
+      -- #2515 re-pinned: @units@ v3's faction profile DTO.
+    , ("units",               (238, "24b5e310f60cd59c"))
     , ("unit-sim",            (102, "2977ea9721e11313"))
     , ("craft-bills",         (125, "687f006dbc839e32"))
     , ("power-nodes",         (58,  "0cadd98f962a6b12"))
