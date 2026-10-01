@@ -143,6 +143,8 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
         f["screenshots"] = refs
         f["evidence"]["screenshots"] = f["screenshots"]
     data["critic_model"] = getattr(critic, "model", "fake")
+    # The effort is resolved from Class B at run time, so it is recorded too.
+    data["critic_effort"] = getattr(critic, "effort", "fake")
     data["candidates"] = candidates  # the full pre-analysis, for audit
     data["adjudication_calls"] = audit_calls  # who saw which frames
 

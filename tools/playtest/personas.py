@@ -67,9 +67,8 @@ REQUIRED_FIELDS = ("name", "temperament", "goal", "tendencies")
 TEMPLATE_AXES = ("experience", "patience", "reads_guidance", "play_style",
                  "persistence")
 
-# Configurable one-paragraph blurb, using the same Claude model family as
-# the player and critic.
-DEFAULT_FLAVOR_MODEL = "claude-opus-5-5"
+# The optional one-paragraph blurb runs on the owner's Class B Claude model,
+# like the player and critic, resolved by model_class unless --model is given.
 
 FLAVOR_SCHEMA = {
     "type": "object",
@@ -412,7 +411,7 @@ def _anthropic_complete(prompt: str, model: str) -> dict:
         return json.loads(m.group(0))
 
 
-def llm_flavor(spec: dict, model: str = DEFAULT_FLAVOR_MODEL,
+def llm_flavor(spec: dict, model: str | None = None,
                _complete=None) -> dict:
     """Rewrite name + temperament with an LLM, FREEZING the result into
     the returned spec: this is the only point prose is ever generated —
@@ -425,6 +424,12 @@ def llm_flavor(spec: dict, model: str = DEFAULT_FLAVOR_MODEL,
     every completion is validated here. A rejected one raises and
     returns no spec at all — never the template prose carrying a
     `flavored: true` claim it didn't earn."""
+    if model is None:
+        import model_class
+        try:
+            model = model_class.resolve("claude")[0]
+        except model_class.ModelClassError as e:
+            raise SystemExit(f"personas --llm: {e}") from e
     complete = _complete or _anthropic_complete
     data = complete(_flavor_prompt(spec), model)
     if not isinstance(data, dict):
@@ -697,8 +702,9 @@ def main(argv=None) -> int:
     ap.add_argument("--llm", action="store_true",
                     help="rewrite name+blurb with a cheap model (frozen "
                          "into the spec; needs an Anthropic key)")
-    ap.add_argument("--model", default=DEFAULT_FLAVOR_MODEL,
-                    help="flavor model (with --llm)")
+    ap.add_argument("--model", default=None,
+                    help="flavor model (with --llm); default: the owner's "
+                         "Class B Claude model (modelclass)")
     ap.add_argument("--out", metavar="DIR", default=None,
                     help="write <name>.yaml per persona instead of printing")
     ap.add_argument("--selftest", action="store_true",

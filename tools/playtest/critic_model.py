@@ -23,14 +23,14 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from critic_contract import (DEFAULT_EFFORT, DEFAULT_MAX_TOKENS,  # noqa: E402
-                             DEFAULT_MODEL, FINDINGS_SCHEMA, SYSTEM_PROMPT)
+from critic_contract import (DEFAULT_MAX_TOKENS,  # noqa: E402
+                             FINDINGS_SCHEMA, SYSTEM_PROMPT)
 
 
 class Critic:
     """One multimodal, oracle-armed adjudication call."""
 
-    def __init__(self, model: str = DEFAULT_MODEL, effort: str = DEFAULT_EFFORT,
+    def __init__(self, model: str, effort: str,
                  max_tokens: int = DEFAULT_MAX_TOKENS):
         try:
             import anthropic
