@@ -76,19 +76,32 @@ def regex_missing(yaml_dir):
     return missing
 
 
-def flora_missing():
+VARIANT_AXES = ("context", "phase", "stage", "condition", "cause")
+
+
+def variant_selector_text(variant):
+    """A textureVariants entry's selector as Engine.Asset.YamlFlora's
+    variantSelectorText renders it: the axes it names, in contract
+    order, as axis=value joined by commas, or `*` when it names none."""
+    named = [f"{axis}={variant[axis]}" for axis in VARIANT_AXES if axis in variant]
+    return ",".join(named) if named else "*"
+
+
+def flora_missing(root=ROOT):
     """Flora splits texDir (base) + per-entry texture (relative filename),
     so literal-path regex can't catch it — reconstruct paths per the
-    schema in Engine.Asset.YamlFlora."""
+    schema in Engine.Asset.YamlFlora, including every declared
+    `textureVariants` path (#2539)."""
     missing = []
-    d = ap("data/flora")
+    d = os.path.join(root, "data/flora")
     if not os.path.isdir(d):
         return missing
     for fn in sorted(os.listdir(d)):
         if not fn.endswith((".yaml", ".yml")):
             continue
         rel = f"data/flora/{fn}"
-        doc = yaml.safe_load(read(rel)) or {}
+        with open(os.path.join(root, rel), encoding="utf-8", errors="ignore") as fh:
+            doc = yaml.safe_load(fh.read()) or {}
         for entry in doc.get("flora", []):
             tex_dir = entry.get("texDir", "")
             name = entry.get("name", "?")
@@ -105,13 +118,57 @@ def flora_missing():
             harvest = entry.get("harvestable") or {}
             if harvest.get("harvested_texture"):
                 candidates.append(("harvested", harvest.get("harvested_texture")))
+            for v in entry.get("textureVariants") or []:
+                if isinstance(v, dict):
+                    candidates.append((f"variant:{variant_selector_text(v)}",
+                                       v.get("texture")))
             for label, tex in candidates:
                 if not tex:
                     continue
                 relpath = f"{tex_dir}/{tex}"
-                if not exists(relpath):
+                if not os.path.isfile(os.path.join(root, relpath)):
                     missing.append(f"{rel}:{name}:{label}: {relpath}")
     return missing
+
+
+def self_test():
+    """Prove flora_missing reports a declared-but-missing textureVariants
+    path, with its variant:<selector> label, and not a present one."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="texture-subset-audit-") as root:
+        tex_dir = "assets/textures/flora/probe"
+        os.makedirs(os.path.join(root, tex_dir, "cultivated"))
+        os.makedirs(os.path.join(root, "data/flora"))
+        for present in ("matured.png", "cultivated/dead.png", "dead.png"):
+            open(os.path.join(root, tex_dir, present), "wb").close()
+        with open(os.path.join(root, "data/flora/probe.yaml"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(
+                "flora:\n"
+                "  - name: probe\n"
+                f"    texDir: \"{tex_dir}\"\n"
+                "    phases:\n"
+                "      - {tag: matured, texture: \"matured.png\", age: 0}\n"
+                "    textureVariants:\n"
+                "      - {context: cultivated, condition: dead,"
+                " texture: \"cultivated/dead.png\"}\n"
+                "      - {texture: \"dead.png\"}\n"
+                "      - {phase: matured, condition: dead, cause: fire,"
+                " texture: \"charred.png\"}\n"
+            )
+        got = flora_missing(root)
+    want = [
+        "data/flora/probe.yaml:probe:"
+        "variant:phase=matured,condition=dead,cause=fire: "
+        "assets/textures/flora/probe/charred.png"
+    ]
+    if got != want:
+        print(f"self-test FAILED: expected {want}, got {got}")
+        return 1
+    print("self-test OK — a missing variant path is reported with its "
+          "selector label; present ones are not")
+    return 0
 
 
 SUBSETS = [
@@ -214,4 +271,9 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        sys.exit(self_test())
+    if sys.argv[1:]:
+        print("usage: texture_subset_audit.py [--self-test]")
+        sys.exit(2)
     sys.exit(main())

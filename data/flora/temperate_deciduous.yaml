@@ -76,6 +76,13 @@ flora:
         sprout: []
       regrowth_time: 345600
       harvested_texture: "dead.png"
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: tree
       minTemp: 0
@@ -159,6 +166,13 @@ flora:
         sprout: []
       regrowth_time: 259200
       harvested_texture: "dead.png"
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: tree
       minTemp: -5
@@ -229,6 +243,13 @@ flora:
       - phase: dead
         cycle: senescing
         texture: "dead.png"
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: tree
       minTemp: 2
@@ -312,6 +333,13 @@ flora:
         sprout: []
       regrowth_time: 345600
       harvested_texture: "dead.png"
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: tree
       minTemp: -2

@@ -10,6 +10,13 @@ flora:
       - tag: matured
         texture: "matured.png"
         age: 900
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: tree
       minTemp: 20
@@ -39,6 +46,13 @@ flora:
       - tag: matured
         texture: "matured.png"
         age: 720
+    corpsePolicy:
+      visibility: persistent
+      overrides:
+        - phase: sprout
+          visibility: transient
+          durationDays: 60
+          successor: reseed
     worldGen:
       category: tree
       minTemp: 18

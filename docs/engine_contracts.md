@@ -5418,19 +5418,24 @@ be added or renamed without migrating a save.
 Design record:
 [`docs/environmental_flora_mortality_design.md`](environmental_flora_mortality_design.md).
 Gates: TODAY, `tools/texture_subset_audit.py` (declared flora texture
-paths resolve to real files — note it enumerates `phases`,
-`annualCycle`, `cycleOverrides` and `harvested_texture`, and does NOT
-yet inspect `textureVariants`), plus hspec `--match
+paths resolve to real files — `phases`, `annualCycle`,
+`cycleOverrides`, `harvested_texture` and, since #2539, every
+`textureVariants` path, reported missing as `variant:<selector>`; its
+`--self-test` proves a declared-but-missing variant is reported and a
+present one is not), plus hspec `--match "Asset.FloraVisualSchema"`
+(#2539: `textureVariants` and `corpsePolicy` refusals — unknown
+vocabulary, null at a present key, undeclared or `dead` phases,
+undeclared stages, cause without `condition: dead`, duplicate and
+legacy-colliding selectors, the transient/persistent field coupling and
+a `durationDays` that is not a whole number of days of at least 1 — the
+defaulted legacy policy, every shipped species declaring its policy,
+and variant registration through `engine.loadFloraYaml`), `--match
 "Asset.FloraVocabularySchema"` (closed phase/stage/lifecycle
 vocabularies refused at the authoring boundary), `--match
 "Asset.FloraContent"` (whole-file refusal atomicity) and `--match
 "World.FloraGrowth"` (the lifespan and dead-window behaviour the legacy
-default preserves). This section is documentation and adds no gate of
-its own. OWED by the epic's children, each with its own issue: EFM-2
-owes loader and audit gates for `textureVariants` and `corpsePolicy`
-declarations, including the duplicate-selector, unknown-vocabulary and
-legacy-collision refusals and the extension of the texture-subset audit
-to declared variants; EFM-3 owes table-driven resolver tests covering
+default preserves). OWED by the epic's children, each with its own
+issue: EFM-3 owes table-driven resolver tests covering
 all ten ladder steps and both fallbacks; EFM-4 through EFM-6 owe
 occurrence-identity, render-context and persistence gates; EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
