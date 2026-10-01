@@ -86,6 +86,16 @@ def locate(port: int, phys: int) -> str:
     return "not carried by a live acolyte, not on the ground"
 
 
+def carrier_of(port: int, phys: int):
+    """`[uid]` of whoever carries `phys`, for an expired wait's
+    diagnostics; None when nobody does or the console cannot say."""
+    try:
+        uid = holder_of(port, phys)
+    except Exception:  # noqa: BLE001 - diagnostics never raise
+        return None
+    return None if uid is None else [uid]
+
+
 def ordered_to(port: int, uid: int, tile) -> bool:
     """Whether `uid` already holds a pending player move order to `tile`."""
     got = send(port, f"local s=require('scripts.unit_ai').getState({uid}); "
@@ -152,6 +162,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"(commandPickup -> {acc_p!r})")
     saw_pickup = False
     picked = None
+    t0 = st.day.now()
     deadline = time.time() + 180.0
     while time.time() < deadline:
         if current_action(port, prepared) == "pickup_ground":
@@ -170,6 +181,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                   f"itself rolled (action "
                   f"{current_action(port, prepared)}, pose "
                   f"{pose(port, prepared)})"):
+        st.day.timed_out("the loot pickup", [prepared], t0)
         raise StageAbort("the carrier never picked the target up")
     st.recovered = recovered = picked
     st.instance_id = instance_id = recovered["instanceId"]
@@ -235,6 +247,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
               "colony's own AI before the player gesture — the loop "
               "is unaffected, only who carried it", flush=True)
 
+    t0 = st.day.now()
     sig_after = poll_until(
         180.0,
         lambda: (significant_rows(port, ruin_id)
@@ -242,20 +255,24 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                         for r in significant_rows(port, ruin_id))
                  else None),
         interval=1.0)
-    chk.ok(sig_after is not None
-           and sig_after[0].get("item_instance_id") == sig_phys,
-           f"recovering it latches THAT physical item as taken, keeping "
-           f"its provenance ({sig_after})")
+    if not chk.ok(sig_after is not None
+                  and sig_after[0].get("item_instance_id") == sig_phys,
+                  f"recovering it latches THAT physical item as taken, "
+                  f"keeping its provenance ({sig_after})"):
+        st.day.timed_out("the guaranteed item's recovery", [prepared], t0)
+    t0 = st.day.now()
     cleared_inst = poll_until(
         60.0,
         lambda: (lambda i: i if isinstance(i, dict)
                  and i.get("lifecycle") == "cleared" else None)(
                      instance_by_id(port, PAGE, ruin_id)),
         interval=1.0)
-    chk.ok(cleared_inst is not None
-           and cleared_inst.get("clearance_satisfied") is True,
-           f"and THAT is what clears the ruin — the last outstanding "
-           f"condition ({(cleared_inst or {}).get('lifecycle')!r})")
+    if not chk.ok(cleared_inst is not None
+                  and cleared_inst.get("clearance_satisfied") is True,
+                  f"and THAT is what clears the ruin — the last outstanding "
+                  f"condition ({(cleared_inst or {}).get('lifecycle')!r})"):
+        st.day.timed_out("the ruin's clearance (the world thread, not a "
+                         "unit, is what is awaited)", None, t0)
     # Exactly one notice for THIS ruin across the whole run,
     # counted by its own name rather than by a delta, since the
     # recovery may have happened before this stage.
@@ -284,13 +301,16 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
     send(port, f"require('scripts.unit_ai').commandMove({prepared},"
                f"{deposit_spot[0]},{deposit_spot[1]}); return 'ok'")
     r_samples: list = []
+    t0 = st.day.now()
     arrived = walk_until_adjacent(port, prepared, foot, RETURN_SECONDS,
                                   r_samples)
-    chk.ok(bool(arrived),
-           f"the carrier walks the whole way home and arrives adjacent to "
-           f"colony storage (at {unit_pos(port, prepared)}, footprint "
-           f"{foot}, action {current_action(port, prepared)}, "
-           f"{fmt_vitals(vitals(port, prepared))})")
+    if not chk.ok(bool(arrived),
+                  f"the carrier walks the whole way home and arrives "
+                  f"adjacent to colony storage (at "
+                  f"{unit_pos(port, prepared)}, footprint {foot}, action "
+                  f"{current_action(port, prepared)}, "
+                  f"{fmt_vitals(vitals(port, prepared))})"):
+        st.day.timed_out("the walk home", [prepared], t0)
     assert_real_travel(chk, r_samples, deposit_spot, "the return leg",
                        min_samples=10, min_closed=10.0)
     chk.ok(find_instance(inventory(port, prepared), instance_id) is not None,
@@ -324,11 +344,14 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
     # follows the item rather than this carrier, and the assertion is
     # on the OUTCOME: that exact physical instance ends up in colony
     # storage.
+    t0 = st.day.now()
     banked = bank_home(port, st, sig_phys)
-    chk.ok(banked is not None,
-           f"the guaranteed item is banked in colony storage as that "
-           f"exact physical instance ({sig_phys}"
-           f"{'' if banked else '; now ' + locate(port, sig_phys)})")
+    if not chk.ok(banked is not None,
+                  f"the guaranteed item is banked in colony storage as that "
+                  f"exact physical instance ({sig_phys}"
+                  f"{'' if banked else '; now ' + locate(port, sig_phys)})"):
+        st.day.timed_out("the guaranteed item's walk home",
+                         carrier_of(port, sig_phys), t0)
     # Taking it out of the ruin and moving it around cannot undo
     # the latch: the ruin was looted, and that does not become
     # untrue.

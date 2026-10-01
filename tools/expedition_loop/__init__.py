@@ -19,6 +19,9 @@ as one new owner (`encounter`) plus its evidence library (`notices`).
     the one `Fingerprint` accumulator.
   * `readers` — every engine/world/entity query more than one owner
     needs, plus the deterministic geometry over their answers.
+  * `day_budget` — the run's day budget (#2755): the clock reading at
+    every stage boundary, the one deadline derived from the shipped
+    sleep tunables, the overrun failure, and the timeout diagnostics.
   * `setup` — the world, the seed-stable site and ruin choice, the
     portal and the roster it spawns, colony storage, the loot rolls.
   * `prepare` — water, provisioning, capacity levelling, and the muster

@@ -290,7 +290,9 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 
     chk.enter("prepare", "secure water, provision the party, "
                          "read the objective state")
+    t0 = st.day.now()
     if not secure_water(chk, port, st.scout, st.site["shore"]):
+        st.day.timed_out("the scout's walk to water", [st.scout], t0)
         raise StageAbort("the scout did not secure a water source")
     if not provision(chk, port, st.mule, prepared):
         raise StageAbort("the traveller was not provisioned")
@@ -337,13 +339,18 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"tool(s), control {room[control][0]:.1f}+{headroom:.2f} of "
            f"{room[control][1]:.1f} kg after {shed[control]})")
 
+    t0 = st.day.now()
     completed, checked = poll_until(
         45.0, lambda: (lambda p: p if REQUIRED_PREPARATION_COMPLETED <= p[0] else None)(
             progress(port)), interval=1.0) or progress(port)
-    chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
-           f"the shipped first_session tree includes its required preparation "
-           f"completed set {sorted(REQUIRED_PREPARATION_COMPLETED)} (got "
-           f"{sorted(completed)})")
+    if not chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
+                  f"the shipped first_session tree includes its required "
+                  f"preparation completed set "
+                  f"{sorted(REQUIRED_PREPARATION_COMPLETED)} (got "
+                  f"{sorted(completed)})"):
+        st.day.timed_out("the preparation objectives' latch (the tutorial "
+                         "evaluator, not a unit, is what is awaited)",
+                         None, t0)
     chk.ok({SUB_WATER, SUB_FOOD} <= checked,
            f"both live preparation subobjectives are checked while a "
            f"provisioned traveller is standing in the colony "

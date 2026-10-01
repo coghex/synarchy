@@ -243,6 +243,21 @@ acolytes' separately rolled body masses — which is also why both
 metrics are fractions of each unit's OWN maximum rather than absolute
 litres or kcal.
 
+THE DAY BUDGET
+--------------
+The scenario runs on the world's own clock, and sleep is one of the
+survival mechanics it tests (#2755, owner direction): an acolyte awake
+long enough grows sleepy at dusk, `go_to_sleep` can then outrank a move
+order, and a run still walking at that point has overrun its day. Every
+stage boundary prints the engine game time and the colony-local sun
+angle; a stage that STARTS past the budget's deadline fails, saying the
+run overran its day; and every expired wait prints each involved unit's
+action and pose, naming a sleeper as such, with the budget status. The
+deadline — the first colony-local circadian window after go_to_sleep
+becomes eligible, derived from the shipped tunables at the moment the
+colony is planted — is `expedition_loop/day_budget.py`'s. Nothing sets
+the clock and no unit's sleep or needs are touched to stay inside it.
+
 WHAT IS DELIBERATELY NOT DONE
 -----------------------------
   * No lifecycle is manufactured, no encounter, occupant or health state
@@ -321,7 +336,7 @@ are here, and nothing else is. `tools/expedition_loop/__init__.py` is
 the ownership map; the short version is `harness` (checks, isolation,
 bootstrap, the shared state record and the one fingerprint accumulator),
 `readers` (the shared engine queries and geometry), `constants`, `notices` (the retained event-log and tutorial-latch
-evidence), and one module per stage group — `setup`, `prepare`,
+evidence), `day_budget` (the clock readings and the day budget), and one module per stage group — `setup`, `prepare`,
 `travel` (which owns the `control` measurement scored from its own
 paired samples), `extract` (which owns the `return` leg the same
 recovered instance makes), `encounter` (`encounter` and `reward`, plus
@@ -356,6 +371,7 @@ from probelib import quit_engine
 from expedition_loop import (encounter, extract, persistence, prepare, setup,
                              travel)
 from expedition_loop.constants import LOG_A, LOG_B
+from expedition_loop.day_budget import DayClock
 from expedition_loop.harness import (Checks, ExpeditionState, Fingerprint,
                                      SetupError, StageAbort, boot_probe,
                                      bootstrap, make_isolated_root,
@@ -384,6 +400,10 @@ def main() -> int:
     port = args.port
     st = ExpeditionState(port=port, fp=fingerprint, seed=args.seed,
                          size=args.size, plates=args.plates)
+    # The day budget (#2755): a clock reading at every stage boundary,
+    # and an overrun recorded against the stage that starts too late.
+    st.day = DayClock(port)
+    chk.on_enter.append(st.day.boundary)
     # An early refusal exits 2, distinct from a failed check's 1. It was
     # eleven `return 2`s inside this function before the stage bodies
     # had owners; it is one exception the owners raise and this function
@@ -417,7 +437,9 @@ def main() -> int:
             # last.
             travel.measure_control(chk, st)
         finally:
+            st.day.close(f"engine A ends in stage '{chk.stage}'")
             quit_engine(port, proc)
+            st.day.live = False
 
         # ============ engine B: a genuinely fresh process ==============
         # Entered before the boot, so an engine that dies before READY
@@ -428,6 +450,7 @@ def main() -> int:
             bootstrap(port)
             persistence.load(chk, st)
         finally:
+            st.day.close(f"engine B ends in stage '{chk.stage}'")
             quit_engine(port, proc)
     except StageAbort:
         # A stage could not go on and has ALREADY recorded its own

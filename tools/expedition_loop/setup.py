@@ -672,12 +672,18 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 
     if not enable_standard_roster(chk, port):
         raise StageAbort("the standard roster did not switch on")
+    # The day budget's reference (#2755): read at the colony immediately
+    # BEFORE the portal, so it is no later than any party member's spawn.
+    st.day.establish(chk, home)
     st.portal_bid = portal_bid = place_portal(chk, port, home[0], home[1])
     if portal_bid < 0:
         raise StageAbort("the colony tile refused the acolyte portal")
     spawn_bodies: dict = {}
+    t0 = st.day.now()
     party = await_roster(chk, port, portal_bid, spawn_bodies)
     if not party:
+        st.day.timed_out("the portal's spawn roster (its sequencer, not "
+                         "a unit, is what is awaited)", None, t0)
         raise StageAbort("the portal did not deliver its roster")
     acolytes = party[ACOLYTE_DEF]
     st.mule = mule = party[MULE_DEF][0]

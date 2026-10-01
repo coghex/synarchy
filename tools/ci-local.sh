@@ -625,6 +625,13 @@ python3 tools/world_check.py --quick
 # to reach it; this companion boots nothing and answers from a fake
 # console in under a second.
 #
+# test_expedition_loop_day_budget is #2755's: tools/expedition_loop_probe.py
+# fails a stage that starts past its day budget and prints each involved
+# unit's action and pose, naming sleepers, when a wait expires. The probe
+# never moves the clock and a normal run finishes inside the budget, so
+# those paths are reached only over synthetic timings; this companion
+# boots nothing and runs in under a second.
+#
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
 # approved rereview amendment scopes the diagnosis lab's own self-test
@@ -660,6 +667,7 @@ python3 tools/test_farm_ai_probe.py
 python3 tools/test_probe_boot_logs.py
 python3 tools/test_item_list_widget_probe.py
 python3 tools/test_construction_probe.py
+python3 tools/test_expedition_loop_day_budget.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the

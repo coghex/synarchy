@@ -57,6 +57,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # departure positions still: everything from here to the
     # paired orders happens inside that one window, so nothing
     # moves between the check and the departure.
+    t0 = st.day.now()
     staged, sep, spread, bearing = muster_travellers(
         port, (prepared, control), deposit_spot, ruin_xy)
     at_start = staged or {u: unit_pos(port, u)
@@ -74,12 +75,14 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                   f"bearings to the ruin {bearing:.1f} deg apart; "
                   f"verified with the simulation stopped)"):
         send(port, "engine.setPaused(false); return 'ok'")
+        st.day.timed_out("the travellers' muster", [prepared, control], t0)
         raise StageAbort("the travellers never mustered at a shared origin")
 
     # Already paused by the muster. Seed the shared deficit and
     # issue both orders inside that same window, so the two
     # travellers genuinely leave from the same place, in the same
     # state, under the same command.
+    t0 = st.day.now()
     seeded = seed_departure_deficit(port, (prepared, control))
     depart = {u: vitals(port, u) for u in (prepared, control)}
     # Rations in the pack at departure. Consumption is the
@@ -103,6 +106,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             f"the same seeded hunger (seeded={seeded}; prepared "
             f"{depart[prepared]['pose']!r}, control "
             f"{depart[control]['pose']!r})"):
+        st.day.timed_out("the paused departure window", [prepared, control],
+                         t0)
         raise StageAbort("a traveller did not set out on its feet")
 
     already = {it["instanceId"] for it in inventory(port, prepared)
@@ -153,6 +158,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # leg has been there, and is therefore not evidence about
     # units that have NOT been there.
     visited_ruin: set[int] = set()
+    t0 = st.day.now()
     start = time.time()
     deadline = start + 480.0
     together = None
@@ -209,16 +215,18 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             send(port, "engine.setPaused(false); return 'ok'")
         time.sleep(1.0)
 
-    chk.ok(together is not None,
-           f"BOTH travellers are at the ruin {box} "
-           f"in ONE COHERENT SNAPSHOT — a single paired read, "
-           f"revalidated with the simulation STOPPED, and the control's "
-           f"metrics taken from that same stopped window — so it is "
-           f"measured where the prepared one is, not part-way behind it "
-           f"and not from two positions sampled moments apart "
-           f"(snapshot {together}; first entered after "
-           f"{arrived_at.get(prepared, -1):.0f}s / "
-           f"{arrived_at.get(control, -1):.0f}s)")
+    if not chk.ok(together is not None,
+                  f"BOTH travellers are at the ruin {box} "
+                  f"in ONE COHERENT SNAPSHOT — a single paired read, "
+                  f"revalidated with the simulation STOPPED, and the control's "
+                  f"metrics taken from that same stopped window — so it is "
+                  f"measured where the prepared one is, not part-way behind it "
+                  f"and not from two positions sampled moments apart "
+                  f"(snapshot {together}; first entered after "
+                  f"{arrived_at.get(prepared, -1):.0f}s / "
+                  f"{arrived_at.get(control, -1):.0f}s)"):
+        st.day.timed_out("the outbound leg to the ruin", [prepared, control],
+                         t0)
     if arrive is None:
         arrive = {u: vitals(port, u) for u in (prepared, control)}
     if arrive_food is None:
