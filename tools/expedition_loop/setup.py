@@ -462,15 +462,18 @@ def retire_find_water(chk: Checks, st: ExpeditionState, uids) -> bool:
                   f"if not s then return false end; "
                   f"ai.markGoalAccomplished(s,'find_water'); return true") == "true")
         if not done:
-            unretired.append((uid, t0))
-    ok = chk.ok(not unretired,
-                f"the standing find_water goal is retired on every acolyte "
-                f"{sorted(uids)} (no AI state within 10 s: "
-                f"{[u for u, _t in unretired] or 'none'})")
-    for uid, t0 in unretired:
-        st.day.timed_out(f"acolyte {uid}'s AI state, to retire its "
-                         f"find_water goal", [uid], t0)
-    return ok
+            # Recorded and diagnosed the moment THIS wait expires, so its
+            # clock reading, action and pose are its own and not those
+            # of a later unit's wait.
+            unretired.append(uid)
+            chk.ok(False, f"acolyte {uid}'s standing find_water goal is "
+                          f"retired (no AI state within 10 s)")
+            st.day.timed_out(f"acolyte {uid}'s AI state, to retire its "
+                             f"find_water goal", [uid], t0)
+    if not unretired:
+        chk.ok(True, f"the standing find_water goal is retired on every "
+                     f"acolyte {sorted(uids)}")
+    return not unretired
 
 
 def build_storage(chk: Checks, port: int, hx: int, hy: int) -> int:
@@ -614,18 +617,29 @@ def choose_target(port: int, loot: list):
 # --------------------------------------------------------------------------
 # The stage
 # --------------------------------------------------------------------------
+#: The exact text the debug console's `world.waitForInit` built-in
+#: matches (see `await_world_init`).
+WAIT_FOR_INIT = "return world.waitForInit(400)"
+
+
 def await_world_init(chk: Checks, st: ExpeditionState) -> None:
     """Wait for world generation, and refuse to go on if it never ends.
 
-    `world.waitForInit` returns `world.getInitProgress`'s four values
-    rather than failing when its timeout passes; the parens keep only
-    the first, the load phase, which is 3 once generation is done. Its
-    expiry used to pass unnoticed (#2755)."""
+    The command text is exactly WAIT_FOR_INIT on purpose: the debug
+    console serves that literal call as an off-Lua-thread built-in
+    (`Engine.Scripting.Lua.Thread.Console.debugBuiltin`), with no 30 s
+    response cap. Any other spelling — parenthesised, say — falls
+    through to the Lua thread and is cut off at 30 s. The built-in
+    answers rather than fails when its timeout passes, with
+    `world.getInitProgress`'s four tab-separated values; the first is
+    the load phase, 3 once generation is done. Its expiry used to pass
+    unnoticed (#2755)."""
     t0 = st.day.now()
-    phase = send(st.port, "return (world.waitForInit(400))", timeout=420.0)
-    if not chk.ok(phase.strip() == "3",
-                  f"world generation finishes within 400 s (load phase "
-                  f"{phase!r}; 3 is done)"):
+    raw = send(st.port, WAIT_FOR_INIT, timeout=420.0)
+    phase = raw.strip().strip('"').split("\t")[0].strip()
+    if not chk.ok(phase == "3",
+                  f"world generation finishes within 400 s (progress "
+                  f"{raw!r}; load phase 3 is done)"):
         st.day.timed_out("world generation (the world thread, not a unit, "
                          "is what is awaited)", None, t0)
         raise StageAbort("world generation did not finish")

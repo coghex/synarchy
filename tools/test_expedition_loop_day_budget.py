@@ -485,11 +485,49 @@ class CallSites(unittest.TestCase):
             ok, out = quiet(setup.retire_find_water, chk, st, [2, 3, 4])
         self.assertFalse(ok)
         self.assertEqual(chk.failed, 1)
-        self.assertIn("no AI state within 10 s: [3]", out)
+        self.assertIn("[FAIL][setup] acolyte 3's standing find_water goal is "
+                      "retired (no AI state within 10 s)", out)
         self.assertIn("timeout diagnostics [acolyte 3's AI state", out)
         self.assertIn("unit 3: action nil, pose standing — awake", out)
         self.assertIn("inside the day budget, 300 s left", out)
         self.assertNotIn("unit 2:", out)
+
+    def test_find_water_expiries_are_reported_as_each_ends(self):
+        # Unit 2's wait expires inside the budget; unit 3's poll then
+        # carries the clock past it. Unit 2's diagnostics must carry its
+        # own end time and state, not unit 3's.
+        from expedition_loop import setup
+        console = FakeConsole()
+        chk, st = self.state(console)
+        deadline = st.day.budget.deadline
+        console.t = deadline - 25.0
+        console.actors = {2: "idle|standing|nil",
+                          3: "go_to_sleep|sleeping|sleeping"}
+
+        def poll(_seconds, fn, **_k):
+            console.t += 10.0
+            if fn.__defaults__ == (3,):
+                console.t = deadline + 25.0
+            return None
+
+        with mock.patch.object(setup, "poll_until", poll):
+            ok, out = quiet(setup.retire_find_water, chk, st, [2, 3])
+        self.assertFalse(ok)
+        self.assertEqual(chk.failed, 2)
+        first, second = out.split("timeout diagnostics [acolyte 3")
+        self.assertIn("timeout diagnostics [acolyte 2", first)
+        self.assertIn(f"game time {deadline - 15.0:.1f}", first)
+        self.assertIn("inside the day budget, 15 s left", first)
+        self.assertNotIn("expired after it", first)
+        self.assertIn("unit 2: action idle, pose standing — awake", first)
+        self.assertNotIn("unit 3", first)
+        self.assertIn(f"game time {deadline + 25.0:.1f}", second)
+        self.assertIn("unit 3: action go_to_sleep", second)
+        # Each failure is recorded before its own diagnostics.
+        self.assertLess(out.index("[FAIL][setup] acolyte 2"),
+                        out.index("timeout diagnostics [acolyte 2"))
+        self.assertLess(out.index("timeout diagnostics [acolyte 2"),
+                        out.index("[FAIL][setup] acolyte 3"))
 
     def test_find_water_retirement_on_time_passes_quietly(self):
         from expedition_loop import setup
@@ -508,9 +546,16 @@ class CallSites(unittest.TestCase):
         chk, st = self.state(console)
         phase = {"value": "2"}
 
+        sent = []
+
         def send(port, lua, *a, **k):
-            if lua == "return (world.waitForInit(400))":
-                return phase["value"]
+            if "waitForInit" in lua:
+                sent.append(lua)
+                # The console built-in's reply: getInitProgress's four
+                # tab-separated values.
+                # Shapes as observed from the live built-in.
+                return {"2": '2\t10\t40\t"chunks',
+                        "3": '3\t1\t1\t"done'}[phase["value"]]
             return console(port, lua, *a, **k)
 
         with mock.patch.object(setup, "send", send):
@@ -520,12 +565,21 @@ class CallSites(unittest.TestCase):
                 setup.await_world_init(chk, st)
             out = buf.getvalue()
             self.assertEqual(chk.failed, 1)
-            self.assertIn("load phase '2'", out)
+            self.assertIn("load phase 3 is done", out)
+            self.assertIn("2\\t10\\t40", out)
             self.assertIn("timeout diagnostics [world generation", out)
             phase["value"] = "3"
             _, out = quiet(setup.await_world_init, chk, st)
             self.assertEqual(chk.failed, 1)
             self.assertNotIn("timeout diagnostics", out)
+        # Exactly the literal the console serves off the Lua thread with
+        # no 30 s cap — and that literal is what the engine matches.
+        self.assertEqual(sent, ["return world.waitForInit(400)"] * 2)
+        with open(os.path.join(REPO, "src/Engine/Scripting/Lua/Thread/"
+                                     "Console.hs")) as fh:
+            console_src = fh.read()
+        self.assertIn('stripPrefix "return " t0', console_src)
+        self.assertIn('matchCall "world.waitForInit" t2', console_src)
 
     def test_chunk_wait_reports_pending_chunks(self):
         from expedition_loop import readers
