@@ -46,6 +46,10 @@ class Checks:
         self.stage = STAGES[0]
         self.by_stage: dict[str, list[int]] = {s: [0, 0] for s in STAGES}
         self.reached: list[str] = []
+        #: Called as hook(checks, stage, title) after every entry — the
+        #: day budget's boundary reading (`day_budget.DayClock`), which
+        #: records an overrun against the stage it is entering.
+        self.on_enter: list = []
 
     def enter(self, stage: str, title: str) -> None:
         assert stage in STAGES, stage
@@ -53,6 +57,8 @@ class Checks:
         if stage not in self.reached:
             self.reached.append(stage)
         print(f"\n=== [{stage}] {title} ===", flush=True)
+        for hook in self.on_enter:
+            hook(self, stage, title)
 
     def ok(self, cond: bool, label: str) -> bool:
         cond = bool(cond)
@@ -185,6 +191,10 @@ class ExpeditionState:
     seed: int
     size: int
     plates: int
+    #: The run's day budget and clock readings (#2755): a
+    #: `day_budget.DayClock`, created by the facade and carried across
+    #: both engines so the one deadline survives the fresh process.
+    day: object = None
 
     # ---- [setup]: the world, the ruin, the colony, the party --------
     #: The selected ruin's placement row, as `pick_site` read it.
@@ -235,6 +245,10 @@ class ExpeditionState:
     visited_ruin: set = field(default_factory=set)
 
     # ---- [extract]: what was recovered ------------------------------
+    #: physical instance id -> the last live acolyte `extract.bank_home`
+    #: saw carrying it, so an expired walk home can still name its
+    #: carrier when the console no longer answers (#2755).
+    last_carrier: dict = field(default_factory=dict)
     #: The recovered target's inventory row and its physical instance
     #: id — the identity the return, save and load stages re-check.
     recovered: dict = field(default_factory=dict)

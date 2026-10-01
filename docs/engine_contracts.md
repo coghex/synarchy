@@ -3939,6 +3939,70 @@ on instead, the prepared traveller — seeded hungry and already 60 tiles
 into its day — was observed crawling at the muster and falling asleep,
 starving, on the ~75-tile walk home.
 
+**The day budget (#2755): sleep is under test, not masked.** The run uses
+the world's own clock. Sleep is one of the survival mechanics the gate
+exercises (owner direction, 2026-09-28). After 1260 awake game-seconds,
+`go_to_sleep` becomes eligible: `sleep_min_deficit` 0.35 at
+`drain_constant_frac` 1/3600, from the full pool a unit spawns with.
+Inside the dusk window (`circadian_center` 0.75 ± `circadian_width`
+0.125, colony-local 15:00–21:00), sleep can then outrank a player move
+order, and a unit that lies down stays down until it wakes. A run still
+walking at that point has overrun its day.
+
+`tools/expedition_loop/day_budget.py` reports this explicitly:
+
+- **Clock readings.** Every stage entry, including both entries into
+  `return`, prints the engine game time and the colony-local sun angle.
+  So does the end of each engine. A reading with no live colony or
+  engine says it is unavailable. The `load` reading is taken once the
+  save has published, because before that the fresh process's
+  `engine.gameTime()` is its own rather than the save's.
+- **The deadline.** It is the first instant after eligibility at which
+  the colony-local sun angle is inside the window. It is derived from
+  the shipped tunables, read live, using the game time and colony sun
+  angle sampled just before the portal spawns the party. It is one
+  absolute `engine.gameTime()`. A midnight wrap does not reset it, and
+  neither does the fresh process.
+- **Overruns.** A stage that STARTS at or past the deadline records a
+  failing check that says the run overran its day. From the world's
+  10:00 start, the deadline is when day 2's window opens, about 1740
+  game-seconds after the colony is planted. A normal run has been
+  observed home by about game time 1300–1400.
+- **Expired waits.** Every wait that times out prints the game time and
+  budget status beneath its own failure, and says whether the wait began
+  inside the budget and expired past it. It also prints each involved
+  unit's action and pose, naming a `go_to_sleep`/`sleeping` unit ASLEEP,
+  or says no specific unit is involved. An item's walk home names its
+  known or last-observed carrier even when the console no longer
+  answers. Observed sleep and the budget status are reported
+  separately, because a unit can sleep before the colony-local
+  deadline. When the clock cannot be read, the established deadline is
+  still printed and the current status is declared undeterminable.
+  Each wait takes its own start reading immediately before it. Waits
+  that report rather than raise are checked too: `world.waitForInit`'s
+  load phase, `world.waitForChunks`' pending count, and each acolyte's
+  `find_water` retirement. The wait's own failure is
+  recorded first: every live read in its message goes through
+  `day_budget.safe`, so a console that stops answering as the wait
+  expires leaves the original failure standing beside an "unreadable"
+  note, rather than replacing it with an unexpected exception. The
+  engine's READY wait and blocking engine waits (`world.waitForInit`,
+  `world.waitForChunks`) end in the facade's `SystemExit` and exception
+  handlers, which print the same block after recording the failure.
+
+The budget is conservative for the scenario. It is not a prediction of
+when any one unit falls asleep: arbitration also weighs the urge's ramp
+and exhaustion, and `scripts/circadian.lua` reads each unit's OWN
+longitude. That is why sleepers are reported per unit. Nothing sets the
+clock (`world.setTime`/`setSunAngle` stay forbidden), and no unit's
+sleep or needs are changed to fit the budget. The calibrated hunger
+fixture and the symmetric canteens above are part of the experiment, not
+exemptions. Readings stay out of the `FINGERPRINT`. Gate:
+`python3 tools/test_expedition_loop_day_budget.py` covers the derivation,
+the boundary, the overrun and timeout messages, and exit accounting over
+synthetic timings. The probe itself never moves the clock to exercise
+them.
+
 ---
 
 ## Autosave: staging, rotation order, and the intent mutex

@@ -61,10 +61,24 @@ def surface_z(port: int, gx: int, gy: int):
     return _as_float(send(port, f"return (world.getSurfaceAt({gx},{gy}))"))
 
 
-def load_region(port: int, cx: int, cy: int, pad: int = 4) -> None:
+def load_region(port: int, cx: int, cy: int, pad: int = 4, day=None):
+    """Page a region in and wait for it; returns how many chunks were
+    still pending when `world.waitForChunks` gave up (0 when all loaded).
+
+    `day`, when given, is the run's `day_budget.DayClock`: an expired
+    wait prints its timeout diagnostics (#2755). Reporting only — a
+    chunk still pending may yet load, and whatever needed it checks its
+    own outcome."""
+    t0 = day.now() if day is not None else None
     send(port, f"return world.loadChunksInRegion({cx-pad},{cy-pad},"
                f"{cx+pad},{cy+pad})", timeout=60.0)
-    send(port, "return world.waitForChunks(180)", timeout=190.0)
+    pending = int(_as_float(send(port, "return world.waitForChunks(180)",
+                                 timeout=190.0)) or 0)
+    if pending and day is not None:
+        day.timed_out(f"chunk loading around chunk ({cx},{cy}): {pending} "
+                      f"chunk(s) still pending (the chunk loader, not a "
+                      f"unit, is what is awaited)", None, t0)
+    return pending
 
 
 def ground_items(port: int) -> list:

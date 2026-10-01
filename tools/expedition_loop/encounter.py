@@ -60,7 +60,8 @@ from .constants import (ACOLYTE_DEF, ENCOUNTER_SECONDS,
                         FAR_POST_TILES, FIGHT_SECONDS, MUSTER_SECONDS,
                         OCCUPIED_RETURN_SECONDS, PAGE, PARTY_WATER_L,
                         RATIONS_DEF, RECON_SECONDS, TRIP_OBJECTIVES)
-from .extract import bank_home, locate
+from .day_budget import safe
+from .extract import bank_home, carrier_of, locate
 from .harness import Checks, ExpeditionState, StageAbort, assert_real_travel
 from .notices import EventLedger, latch_passes
 from .readers import (_as_float, carried, current_action, dist, ground_items,
@@ -496,13 +497,15 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # The leg proceeds FROM the first ruin: the whole party gathers
     # there, together in one sample, before anyone goes on.
     first = (int(st.ruin_xy[0]), int(st.ruin_xy[1]))
+    t0 = st.day.now()
     gathered = muster(port, fighters, first, MUSTER_SECONDS, observe, {})
     together = gathered >= set(fighters)
     if not chk.ok(together,
                   f"the whole party stands together at the zero-occupant "
                   f"ruin {first} to set out from it ({sorted(gathered)} of "
                   f"{fighters} there within {MUSTER_SECONDS:.0f} s; "
-                  f"{party_state(port, fighters)})"):
+                  f"{safe(lambda: party_state(port, fighters))})"):
+        st.day.timed_out("the party's gather at the first ruin", fighters, t0)
         raise StageAbort("the confrontation party never gathered")
     kit = st.party_kit
     chk.ok(set(kit) == set(fighters)
@@ -519,26 +522,30 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # setup.pick_occupied). Default padding, so the approach the party
     # is about to walk is paged in with it.
     already = inst0.get("contents_spawned")
-    load_region(port, int(st.occ["cx"]), int(st.occ["cy"]))
+    load_region(port, int(st.occ["cx"]), int(st.occ["cy"]), day=st.day)
+    t0 = st.day.now()
     inst0 = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
                                       and i.get("contents_spawned") else None)(
         instance_by_id(port, PAGE, occ_id)), interval=1.0) or {}
     st.occ_members = members = [int(o["uid"]) for o in occupants_of(inst0)]
     enc0 = inst0.get("encounter") or {}
-    sig0 = significant_rows(port, occ_id)
-    chk.ok(len(members) == int(enc0.get("rolled_count", -1)) == st.occ_rolled
-           and enc0.get("activated") is False
-           and enc0.get("cleared") is False
-           and len(living(port, members)) == len(members)
-           and inst0.get("lifecycle") == "unknown"
-           and len(sig0) == 1 and sig0[0].get("item_instance_id") is not None
-           and sig0[0].get("taken") is False,
-           f"paged in as the party sets out (contents already spawned "
-           f"before: {already!r}), its persisted roll is spawned in full and "
-           f"untouched: {len(members)} assigned occupant(s) {members} for a "
-           f"roll of {enc0.get('rolled_count')!r}, all alive, encounter not "
-           f"yet activated or cleared, still unknown, and its guaranteed item "
-           f"in place ({sig0})")
+    sig0 = safe(lambda: significant_rows(port, occ_id), [])
+    if not chk.ok(
+            len(members) == int(enc0.get("rolled_count", -1)) == st.occ_rolled
+            and enc0.get("activated") is False
+            and enc0.get("cleared") is False
+            and len(safe(lambda: living(port, members), [])) == len(members)
+            and inst0.get("lifecycle") == "unknown"
+            and len(sig0) == 1 and sig0[0].get("item_instance_id") is not None
+            and sig0[0].get("taken") is False,
+            f"paged in as the party sets out (contents already spawned "
+            f"before: {already!r}), its persisted roll is spawned in full and "
+            f"untouched: {len(members)} assigned occupant(s) {members} for a "
+            f"roll of {enc0.get('rolled_count')!r}, all alive, encounter not "
+            f"yet activated or cleared, still unknown, and its guaranteed item "
+            f"in place ({sig0})"):
+        st.day.timed_out("the occupied ruin's contents spawning (the world "
+                         "thread spawns them)", members or None, t0)
     st.fp["occupant_uids"] = sorted(members)
 
     # The leg: ordinary moves from the first ruin to the occupied one,
@@ -580,11 +587,13 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     #    perception), so the party arrives unseen. The WHOLE party, as
     #    directed: nobody goes on until every member has come this far.
     far = line_point(first, anchor, FAR_POST_TILES)
+    t0 = st.day.now()
     reached = walk(far, ENCOUNTER_SECONDS, everyone_within(far, 2.0))
     if not chk.ok(reached,
                   f"the whole party walks on together from the first ruin to "
                   f"the far post {far}, {FAR_POST_TILES} tiles out "
-                  f"({party_state(port, fighters)})"):
+                  f"({safe(lambda: party_state(port, fighters))})"):
+        st.day.timed_out("the walk to the far post", fighters, t0)
         raise StageAbort("the party never reached the far post together")
 
     # 2. RECONNOITRE. The occupants' notice of an acquisition is emitted
@@ -611,6 +620,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                   f"short ({recon})"):
         raise StageAbort("no safe observation post")
     discovered, used = False, []
+    t0 = st.day.now()
     for tile in recon["posts"]:
         arrived = walk(tile, ENCOUNTER_SECONDS / 2,
                        everyone_within(tile, 1.5))
@@ -631,13 +641,14 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             time.sleep(0.5)
         if discovered or (encounter_state(port, occ_id) or {}).get("activated"):
             break
-    state_now = encounter_state(port, occ_id) or {}
+    state_now = safe(lambda: encounter_state(port, occ_id), None) or {}
     print(f"  reconnaissance: {recon}; posts used {used}; ruin now "
           f"{state_now.get('lifecycle')!r}", flush=True)
     if not chk.ok(discovered and not state_now.get("activated"),
                   f"the party, standing together at a safe post, discovers "
                   f"the ruin before any occupant has acquired it (posts "
                   f"walked {used}; ruin {state_now})"):
+        st.day.timed_out("the reconnaissance", fighters, t0)
         raise StageAbort("the reconnaissance did not reveal the ruin safely")
 
     # 3. The advance. The activation EDGE is watched at a fine cadence —
@@ -695,6 +706,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     prev_state = None
     edge = None
     next_slow = 0.0
+    t0 = st.day.now()
     deadline = time.time() + ENCOUNTER_SECONDS
     while time.time() < deadline:
         now = encounter_state(port, occ_id)
@@ -717,12 +729,14 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                     send(port, f"require('scripts.unit_ai').commandMove({u},"
                                f"{anchor[0]},{anchor[1]}); return 'ok'")
         time.sleep(0.1)
-    chk.ok(active is not None,
-           f"the occupants acquire the approaching party through their own "
-           f"sight/aggression path — encounter activated with an episode "
-           f"running (lifecycles seen {lifecycles}, encounter "
-           f"{(instance_by_id(port, PAGE, occ_id) or {}).get('encounter')}"
-           f"{'' if active else '; party ' + str(party_state(port, fighters)) + '; occupants ' + str(party_state(port, members)) + '; game time ' + str(send(port, 'return engine.gameTime()')) + ' (paged in at ' + str(st.page_in_time) + '); notices ' + str(notice_trail(ledger))})")
+    if not chk.ok(active is not None,
+                  f"the occupants acquire the approaching party through their own "
+                  f"sight/aggression path — encounter activated with an episode "
+                  f"running (lifecycles seen {lifecycles}, encounter "
+                  f"{safe(lambda: (instance_by_id(port, PAGE, occ_id) or {}).get('encounter'))}"
+                  f"{'' if active else '; party ' + str(safe(lambda: party_state(port, fighters))) + '; occupants ' + str(safe(lambda: party_state(port, members))) + '; game time ' + str(safe(lambda: send(port, 'return engine.gameTime()'))) + ' (paged in at ' + str(st.page_in_time) + '); notices ' + str(notice_trail(ledger))})"):
+        st.day.timed_out("the occupants' acquisition of the party",
+                         list(fighters) + list(members), t0)
     # Asserted on EVERY member: each one set out from the first ruin
     # and made the leg to the occupied one.
     for u in fighters:
@@ -822,6 +836,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     cleared_seen: list[bool] = [bool((active.get("encounter") or {})
                                      .get("cleared"))]
     uncleared_while_alive = True
+    t0 = st.day.now()
     deadline = time.time() + FIGHT_SECONDS
     while time.time() < deadline:
         i = observe()
@@ -849,12 +864,18 @@ def run(chk: Checks, st: ExpeditionState) -> None:
             break
         give_orders(alive)
         time.sleep(0.5)
-    dead = [u for u in members if u not in living(port, members)]
+    # Read through `safe`: an unreadable roll call is a fight that did
+    # not end, recorded as such before any diagnostic read.
+    alive_end = safe(lambda: living(port, members), None)
+    dead = [] if alive_end is None else [u for u in members
+                                         if u not in alive_end]
     chk.ok(len(dead) == len(members),
            f"every assigned occupant is dead ({len(dead)} of {len(members)}; "
-           f"party poses { {u: pose(port, u) for u in fighters} }"
+           f"party poses "
+           f"{safe(lambda: {u: pose(port, u) for u in fighters})}"
            f"{'' if len(dead) == len(members) else '; notices ' + str(notice_trail(ledger))})")
     if len(dead) != len(members):
+        st.day.timed_out("the fight", list(fighters) + list(members), t0)
         raise StageAbort("an assigned occupant survived the fight")
     ordered_on = {m: sorted({u for u, t, _h in accepted if t == m})
                   for m in members}
@@ -982,17 +1003,21 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 
     # The encounter half latches once the world thread has processed the
     # last death: one false -> true transition, and then it stays.
+    t0 = st.day.now()
     settled = poll_until(30.0, lambda: (lambda i: i if (
         (i.get("encounter") or {}).get("cleared") is True) else None)(
             observe()), interval=0.5)
     cleared_seen.append(bool(((settled or {}).get("encounter") or {})
                              .get("cleared")))
     flips = sum(1 for a, b in zip(cleared_seen, cleared_seen[1:]) if a != b)
-    chk.ok(settled is not None and cleared_seen[0] is False
-           and cleared_seen[-1] is True and flips == 1,
-           f"after the last death encounter.cleared becomes true in ONE "
-           f"false -> true transition and stays latched "
-           f"({flips} transition(s) over {len(cleared_seen)} samples)")
+    if not chk.ok(settled is not None and cleared_seen[0] is False
+                  and cleared_seen[-1] is True and flips == 1,
+                  f"after the last death encounter.cleared becomes true in "
+                  f"ONE false -> true transition and stays latched "
+                  f"({flips} transition(s) over {len(cleared_seen)} "
+                  f"samples)") and settled is None:
+        st.day.timed_out("the encounter's cleared latch (the world thread, "
+                         "not a unit, is what is awaited)", None, t0)
 
     # The natural clearing order's middle state, observed and not
     # inferred: hostiles down, reward still lying where it spawned.
@@ -1024,6 +1049,39 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 # --------------------------------------------------------------------------
 # [reward]
 # --------------------------------------------------------------------------
+def await_taken_and_cleared(chk: Checks, st: ExpeditionState, phys):
+    """The two world-thread latches the player's pickup sets: the item's
+    taken latch, then the location's clearance. Each wait takes its own
+    start reading immediately before it, so an expired clearance wait is
+    never reported against the taken-latch wait's start (#2755).
+    Returns the cleared instance row, or None."""
+    port, occ_id = st.port, st.occ_id
+    t0 = st.day.now()
+    rows = poll_until(60.0, lambda: (lambda r: r if r and all(
+        x.get("taken") for x in r) else None)(significant_rows(port, occ_id)),
+        interval=0.5)
+    if not chk.ok(rows is not None and rows[0].get("item_instance_id") == phys,
+                  f"its taken latch is set for that physical instance id "
+                  f"({rows})") and rows is None:
+        st.day.timed_out("the guaranteed item's taken latch (the world "
+                         "thread, not a unit, is what is awaited)", None, t0)
+    t0 = st.day.now()
+    cleared = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
+                                        and i.get("lifecycle") == "cleared"
+                                        else None)(
+        instance_by_id(port, PAGE, occ_id)), interval=0.5)
+    if not chk.ok(cleared is not None
+                  and cleared.get("clearance_satisfied") is True
+                  and cleared.get("clear_event_emitted") is True,
+                  f"and THAT promotes the location to 'cleared' "
+                  f"({(cleared or {}).get('lifecycle')!r}, satisfied "
+                  f"{(cleared or {}).get('clearance_satisfied')!r})") \
+            and cleared is None:
+        st.day.timed_out("the occupied ruin's clearance (the world thread, "
+                         "not a unit, is what is awaited)", None, t0)
+    return cleared
+
+
 def reward(chk: Checks, st: ExpeditionState) -> None:
     """Recover the guaranteed item by the player's gesture; the location
     clears, exactly once."""
@@ -1058,6 +1116,7 @@ def reward(chk: Checks, st: ExpeditionState) -> None:
     st.occ_carrier = carrier
 
     saw_pickup, held = False, None
+    t0 = st.day.now()
     deadline = time.time() + 180.0
     while time.time() < deadline:
         ledger.poll(port)
@@ -1069,27 +1128,16 @@ def reward(chk: Checks, st: ExpeditionState) -> None:
             break
         time.sleep(0.5)
     chk.ok(saw_pickup and held is not None,
-           f"the carrier ({carrier}, {pose(port, carrier)}) walks to it and "
+           f"the carrier ({carrier}, {safe(lambda: pose(port, carrier))}) "
+           f"walks to it and "
            f"takes THAT physical instance ({phys}) into its own pack through "
            f"the real pickup_ground action (seen={saw_pickup}, held "
            f"{ {k: (held or {}).get(k) for k in ('defName', 'instanceId')} })")
     if held is None:
+        st.day.timed_out("the guaranteed item's pickup", [carrier], t0)
         raise StageAbort("the guaranteed item never reached the carrier")
 
-    rows = poll_until(60.0, lambda: (lambda r: r if r and all(
-        x.get("taken") for x in r) else None)(significant_rows(port, occ_id)),
-        interval=0.5)
-    chk.ok(rows is not None and rows[0].get("item_instance_id") == phys,
-           f"its taken latch is set for that physical instance id ({rows})")
-    cleared = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
-                                        and i.get("lifecycle") == "cleared"
-                                        else None)(
-        instance_by_id(port, PAGE, occ_id)), interval=0.5)
-    chk.ok(cleared is not None and cleared.get("clearance_satisfied") is True
-           and cleared.get("clear_event_emitted") is True,
-           f"and THAT promotes the location to 'cleared' "
-           f"({(cleared or {}).get('lifecycle')!r}, satisfied "
-           f"{(cleared or {}).get('clearance_satisfied')!r})")
+    cleared = await_taken_and_cleared(chk, st, phys)
 
     # Settle, then read the retained notice evidence for this ruin.
     time.sleep(3.0)
@@ -1189,11 +1237,14 @@ def deliver_home(chk: Checks, st: ExpeditionState) -> None:
     # Re-entered: the first ruin's items came home, under this same
     # stage, before the confrontation leg set out.
     chk.enter("return", "the occupied ruin's guaranteed item comes home too")
+    t0 = st.day.now()
     got = bank_home(port, st, phys, OCCUPIED_RETURN_SECONDS)
-    chk.ok(got is not None and got.get("defName") == st.occ_sig_def,
-           f"the occupied ruin's guaranteed item is carried home and banked "
-           f"in colony storage as that exact physical instance ({phys}, "
-           f"{(got or {}).get('defName')!r}"
-           f"{'' if got else '; now ' + locate(port, phys)})")
+    if not chk.ok(got is not None and got.get("defName") == st.occ_sig_def,
+                  f"the occupied ruin's guaranteed item is carried home and "
+                  f"banked in colony storage as that exact physical "
+                  f"instance ({phys}, {(got or {}).get('defName')!r}"
+                  f"{'' if got else '; now ' + safe(lambda: locate(port, phys))})"):
+        st.day.timed_out("the occupied ruin's item's walk home",
+                         carrier_of(port, st, phys, st.occ_carrier), t0)
     chk.ok(all(r.get("taken") for r in significant_rows(port, st.occ_id)),
            "and its taken latch is unmoved by the walk and the deposit")

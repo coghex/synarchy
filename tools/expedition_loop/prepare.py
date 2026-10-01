@@ -30,6 +30,7 @@ from probelib import poll_until, send
 from .constants import (DEPART_STOMACH_FRAC, REQUIRED_PREPARATION_COMPLETED,
                         MAX_START_SEPARATION, MAX_START_SPREAD, RATIONS_DEF,
                         STAGING_RADIUS, SUB_FOOD, SUB_WATER)
+from .day_budget import safe
 from .harness import Checks, ExpeditionState, StageAbort
 from .readers import (_as_float, bearing_gap, carried, current_action, dist,
                       ground_items, paired_positions, progress,
@@ -59,8 +60,9 @@ def secure_water(chk: Checks, port: int, scout: int, shore) -> bool:
         interval=1.0)
     return chk.ok(bool(found),
                   f"the scout reaches the water and registers it through its own "
-                  f"FOV scan (at {unit_pos(port, scout)}, target shore {shore}, "
-                  f"action {current_action(port, scout)})")
+                  f"FOV scan (at {safe(lambda: unit_pos(port, scout))}, "
+                  f"target shore {shore}, action "
+                  f"{safe(lambda: current_action(port, scout))})")
 
 
 def provision(chk: Checks, port: int, mule: int, traveller: int) -> bool:
@@ -244,7 +246,9 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
                 return held, sep, spread, gap
             send(port, "engine.setPaused(false); return 'ok'")
         time.sleep(0.5)
-    live = {u: unit_pos(port, u) for u in uids}
+    # Read for the failure message, so a console that has stopped
+    # answering must not raise here (`day_budget.safe`).
+    live = {u: safe(lambda u=u: unit_pos(port, u), None) for u in uids}
     _ok, sep, spread, gap = origin_ok(live, uids, staging, ruin_xy)
     return None, sep, spread, gap
 
@@ -290,7 +294,9 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 
     chk.enter("prepare", "secure water, provision the party, "
                          "read the objective state")
+    t0 = st.day.now()
     if not secure_water(chk, port, st.scout, st.site["shore"]):
+        st.day.timed_out("the scout's walk to water", [st.scout], t0)
         raise StageAbort("the scout did not secure a water source")
     if not provision(chk, port, st.mule, prepared):
         raise StageAbort("the traveller was not provisioned")
@@ -337,13 +343,19 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"tool(s), control {room[control][0]:.1f}+{headroom:.2f} of "
            f"{room[control][1]:.1f} kg after {shed[control]})")
 
+    t0 = st.day.now()
     completed, checked = poll_until(
         45.0, lambda: (lambda p: p if REQUIRED_PREPARATION_COMPLETED <= p[0] else None)(
-            progress(port)), interval=1.0) or progress(port)
-    chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
-           f"the shipped first_session tree includes its required preparation "
-           f"completed set {sorted(REQUIRED_PREPARATION_COMPLETED)} (got "
-           f"{sorted(completed)})")
+            progress(port)), interval=1.0) \
+        or safe(lambda: progress(port), (set(), set()))
+    if not chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
+                  f"the shipped first_session tree includes its required "
+                  f"preparation completed set "
+                  f"{sorted(REQUIRED_PREPARATION_COMPLETED)} (got "
+                  f"{sorted(completed)})"):
+        st.day.timed_out("the preparation objectives' latch (the tutorial "
+                         "evaluator, not a unit, is what is awaited)",
+                         None, t0)
     chk.ok({SUB_WATER, SUB_FOOD} <= checked,
            f"both live preparation subobjectives are checked while a "
            f"provisioned traveller is standing in the colony "

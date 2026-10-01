@@ -31,6 +31,7 @@ from probelib import (capture_request_id, send, send_json, poll_until,
 
 from .constants import (ACOLYTE_DEF, LOG_A, LOG_B, PAGE,
                         REQUIRED_RELOAD_COMPLETED, SLOT, TRIP_OBJECTIVES)
+from .day_budget import safe
 from .harness import (Checks, ExpeditionState, StageAbort,
                       check_ai_tick_clean)
 from .notices import latch_passes
@@ -47,8 +48,11 @@ def save(chk: Checks, st: ExpeditionState) -> None:
     saved = send(port, f"return engine.saveWorld('{PAGE}', '{SLOT}')")
     chk.ok(saved.strip() == "true", f"engine.saveWorld accepted ({saved!r})")
     rid = capture_request_id(port, "return engine.getSaveStatus()")
+    t0 = st.day.now()
     done, status = wait_save_complete(port, rid)
-    chk.ok(done, f"save {rid} reached SaveCaptureComplete ({status})")
+    if not chk.ok(done, f"save {rid} reached SaveCaptureComplete ({status})"):
+        st.day.timed_out("the save capture (the save barrier, not a unit, "
+                         "is what is awaited)", None, t0)
     check_ai_tick_clean(chk, LOG_A, "engine A")
 
 
@@ -130,7 +134,14 @@ def load(chk: Checks, st: ExpeditionState) -> None:
     send(port, f"engine.loadSave('{SLOT}'); return 'queued'")
     published, status = wait_load_published(port, 240)
     if not chk.ok(published, f"the save loads and publishes ({status})"):
+        # Not read against the budget: the fresh process's game time is
+        # its own until a publish installs the save's.
+        st.day.timed_out("the load publish (the load pipeline, not a "
+                         "unit, is what is awaited)")
         raise StageAbort("the save did not load")
+    # The `load` stage's boundary reading, now that a loaded session
+    # exists: its game time is the save's, so engine A's deadline holds.
+    st.day.loaded(chk)
 
     # RESTORED, not recomputed — read straight after the publish, before
     # the session is unpaused. The latch recorder `bootstrap` installed
@@ -217,20 +228,25 @@ def load(chk: Checks, st: ExpeditionState) -> None:
            f"({(inst or {}).get('gx')},{(inst or {}).get('gy')}))")
 
     key = f"{PAGE}#{ruin['instance_id']}"
+    t0 = st.day.now()
     knew = poll_until(30.0, lambda: key in known_locations(port, prepared),
                       interval=1.0)
-    chk.ok(bool(knew),
-           f"the expedition unit still knows that exact (page, instance) "
-           f"pair after the restart ({key} in "
-           f"{sorted(known_locations(port, prepared))})")
+    if not chk.ok(bool(knew),
+                  f"the expedition unit still knows that exact (page, "
+                  f"instance) pair after the restart ({key} in "
+                  f"{safe(lambda: sorted(known_locations(port, prepared)))})"):
+        st.day.timed_out("the restored location knowledge", [prepared], t0)
 
+    t0 = st.day.now()
     completed, _checked = poll_until(
         45.0, lambda: (lambda p: p if p[0] else None)(progress(port)),
-        interval=1.0) or progress(port)
-    chk.ok(REQUIRED_RELOAD_COMPLETED <= completed,
-           f"all required preparation completions and the four trip "
-           f"objectives {TRIP_OBJECTIVES} still hold once the session is "
-           f"running again ({sorted(completed)})")
+        interval=1.0) or safe(lambda: progress(port), (set(), set()))
+    if not chk.ok(REQUIRED_RELOAD_COMPLETED <= completed,
+                  f"all required preparation completions and the four trip "
+                  f"objectives {TRIP_OBJECTIVES} still hold once the "
+                  f"session is running again ({sorted(completed)})"):
+        st.day.timed_out("the restored objectives (the tutorial state, not "
+                         "a unit, is what is awaited)", None, t0)
 
     load_occupied(chk, st)
 
