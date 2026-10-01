@@ -729,9 +729,18 @@ def selftest() -> int:
               any(n == -c7["turn"] for subset, frames in batches
                   for n, _ in frames))
 
-        report_path, findings_path = run_critic(tdir, FakeCritic())
+        attributed = FakeCritic()
+        attributed.model, attributed.effort = "class-b-critic", "high"
+        report_path, findings_path = run_critic(tdir, attributed)
         with open(findings_path) as f:
             data = json.load(f)
+        with open(report_path) as f:
+            report_text = f.read()
+        check("the critic run records both its model and its effort",
+              data.get("critic_model") == "class-b-critic"
+              and data.get("critic_effort") == "high"
+              and '"model": "class-b-critic", "effort": "high"' in report_text,
+              f"{data.get('critic_model')} {data.get('critic_effort')}")
         check("findings.json written and parseable",
               isinstance(data.get("findings"), list)
               and len(data["findings"]) >= 3)
