@@ -27,6 +27,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Scene.Types (SortableQuad(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.HitTest (frameSampleOf, unitHitRect)
 import Unit.Render (unitToQuad)
 import Unit.Types
@@ -83,7 +84,7 @@ unitAt gz rz = UnitInstance
     , uiAnimStride = 1
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionNeutral
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionNeutral
     , uiWounds = [], uiScars = [], uiImmuneResponse = 0
     , uiImmunities = HM.empty, uiBlood = 0
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0

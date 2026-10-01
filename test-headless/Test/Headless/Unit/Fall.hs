@@ -29,6 +29,7 @@ import Substance.Types (emptySubstanceManager)
 import Unit.Types
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import World.Page.Types (WorldPageId(..))
 import Unit.Injury (bruiseCap)
 import Combat.Wounds.Bleed (bleedRateFor)
@@ -81,7 +82,7 @@ mkInst mass ws = UnitInstance
     , uiStats = HM.fromList [("body_mass", mass), ("constitution", 1.0)]
     , uiModifiers = HM.empty, uiSkills = HM.empty, uiKnowledge = HM.empty
     , uiInventory = [], uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = FactionNeutral, uiWounds = ws, uiScars = []
+    , uiFaction = resolveLegacyFaction [] FactionNeutral, uiWounds = ws, uiScars = []
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = mass * bloodMassRatio
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

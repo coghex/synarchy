@@ -60,6 +60,7 @@ import Test.Headless.Unit.TransferApi
 import Unit.Anim (poseTag)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Sim.Types
 import Unit.Thread.Command.Motion (handleUnitMoveToCommand)
 import Unit.Thread.Command.Pose
@@ -211,7 +212,7 @@ mkAcolyte stats ws = UnitInstance
     , uiStats = stats
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = ws
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = ws
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

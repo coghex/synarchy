@@ -124,6 +124,7 @@ import Substance.Types (emptySubstanceManager)
 import System.Random (StdGen, mkStdGen, randomR)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Thread.Command.Spawn
     ( buildStartingAccessories, buildStartingEquipment
     , buildStartingInventory )
@@ -239,7 +240,7 @@ holder = UnitInstance
     , uiInventory = [ mkItem "ration" 10 100, mkItem "worn_tool" 11 74 ]
     , uiEquipment = HM.singleton "right_hand" (mkItem "worn_tool" 12 100)
     , uiAccessories = [ mkItem "ration" 13 100 ]
-    , uiFactionId = FactionPlayer, uiWounds = []
+    , uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

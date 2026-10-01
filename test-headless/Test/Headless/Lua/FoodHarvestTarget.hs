@@ -57,6 +57,7 @@ import Item.Types
     ( ItemDef(..), ItemFood(..), ItemInstance(..), ItemManager(..) )
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
     , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
@@ -292,7 +293,7 @@ mkWorker (gx, gy) = UnitInstance
     , uiModifiers = HM.empty
     , uiSkills = HM.singleton "farming" 50
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
+    , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

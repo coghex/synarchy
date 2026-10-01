@@ -619,6 +619,7 @@ library
                      Unit.Direction
                      Unit.Faction
                      Unit.Faction.Catalogue
+                     Unit.Faction.Membership
                      Unit.Faction.Profile
                      Gameplay.Tags.Types
                      Gameplay.Tags.Registry
@@ -1018,6 +1019,7 @@ library
                      World.Region.Types
                      World.State.Types
                      World.Save.Types
+                     World.Save.UnitFaction
                      World.Save.Snapshot
                      World.Save.PageOrder
                      World.Save.Snapshot.Adapter
@@ -1820,6 +1822,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Faction
                    Test.Headless.Unit.FactionCatalogue
                    Test.Headless.Unit.FactionProfile
+                   Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
                    Test.Headless.Lua.Faction

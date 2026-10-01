@@ -24,6 +24,7 @@
 module Test.Headless.World.SolidificationOccupants (spec, pureSpec) where
 
 import UPrelude
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -178,7 +179,7 @@ spawnAt env ws pageId raw (gx, gy) z = do
     Q.writeQueue (unitQueue env)
         (UnitSpawn uid occupantDefName
                    (fromIntegral gx + 0.5) (fromIntegral gy + 0.5) z
-                   FactionPlayer pageId epoch SpawnRolled)
+                   (resolveLegacyFaction [] FactionPlayer) pageId epoch SpawnRolled)
     drainUnits env
     pure uid
 
@@ -1207,7 +1208,7 @@ spec = describe "solidification occupants (#2490)" $ do
                                 (UnitId 9986) occupantDefName
                                 (fromIntegral (fst doomed) + 0.5)
                                 (fromIntegral (snd doomed) + 0.5)
-                                baseZ FactionPlayer coherentPageId epoch
+                                baseZ (resolveLegacyFaction [] FactionPlayer) coherentPageId epoch
                                 SpawnRolled
                             putMVar spawnDone ()
                       -- Long enough for an unlocked spawn to have

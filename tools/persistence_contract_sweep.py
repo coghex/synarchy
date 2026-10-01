@@ -446,7 +446,7 @@ def build_rich_scenario(chk: Checks, port: int, seed: int, size: int, plates: in
     # spawned, idle unit's AI state is otherwise near-empty).
     atk = as_int(send(port, "return unit.spawn('acolyte', 2, 2, 0, 'player')"))
     chk.ok(atk is not None and atk >= 0, f"attacker unit.spawn succeeded (got {atk!r})")
-    tgt = as_int(send(port, "return unit.spawn('acolyte', 6, 6, 0, 'wildlife')"))
+    tgt = as_int(send(port, "return unit.spawn('acolyte', 6, 6, 0, 'hostile')"))
     chk.ok(tgt is not None and tgt >= 0, f"target unit.spawn succeeded (got {tgt!r})")
     send(port, f"require('scripts.unit_ai').commandAttack({atk}, {tgt}); return 'ok'")
     time.sleep(0.5)

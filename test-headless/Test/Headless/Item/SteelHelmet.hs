@@ -39,6 +39,7 @@ import Item.Types
 import Substance.Types (SubstanceDef(..), SubstanceManager(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
     , defaultNaturalResistance, emptyUnitManager )
@@ -130,7 +131,7 @@ holder = UnitInstance
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [helmetInstance 100]
     , uiEquipment = HM.empty, uiAccessories = []
-    , uiFactionId = FactionPlayer, uiWounds = [], uiScars = []
+    , uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = [], uiScars = []
     , uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

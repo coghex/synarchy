@@ -39,6 +39,7 @@
 module Test.Headless.Building.PortalSpawnBinding (spec) where
 
 import UPrelude
+import Unit.Faction.Membership (legacyFactionOf)
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
@@ -278,7 +279,7 @@ spawnedUnits ∷ EngineEnv
              → IO [(Text, Double, Double, Int, Faction, WorldPageId)]
 spawnedUnits env = do
     cmds ← drainUnitQueue env
-    pure [ (n, realToFrac gx, realToFrac gy, gz, f, p)
+    pure [ (n, realToFrac gx, realToFrac gy, gz, legacyFactionOf f, p)
          | UnitSpawn _ n gx gy gz f p _ _ ← cmds ]
 
 -- | The portal's remaining roster count, read straight off the manager

@@ -34,6 +34,7 @@ import Structure.Facing (WallCaps(..), WallEdge(..))
 import Structure.Wire (allWireShapes)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types (UnitInstance(..))
 import World.Page.Types (WorldPageId)
 
@@ -164,7 +165,7 @@ payerUnit page inv = UnitInstance
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = inv, uiEquipment = HM.empty
     , uiAccessories = []
-    , uiFactionId = FactionPlayer, uiWounds = []
+    , uiFaction = resolveLegacyFaction [] FactionPlayer, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

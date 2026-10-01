@@ -22,6 +22,7 @@
 module Test.Headless.Unit.StandardSpawn (spec) where
 
 import UPrelude
+import Unit.Faction.Membership (legacyFactionOf, resolveLegacyFaction)
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
@@ -234,7 +235,8 @@ spawnWith ∷ EngineEnv → WorldState → Word32 → SpawnProfile → IO UnitIn
 spawnWith env ws raw profile = do
     epoch ← pageIncarnation ws
     handleUnitSpawnCommand env (ucUtsRef (toUnitCombatCapability env))
-        (UnitId raw) acolyteName 2.5 3.5 terrainZ FactionPlayer page epoch
+        (UnitId raw) acolyteName 2.5 3.5 terrainZ
+        (resolveLegacyFaction [] FactionPlayer) page epoch
         profile
     unitOf env (UnitId raw)
 
@@ -427,7 +429,7 @@ portalSpec = describe "the portal roster" $ do
             def ← acolyteDef env
             case HM.elems (umInstances um) of
                 [u] → do
-                    uiFactionId u `shouldBe` FactionPlayer
+                    legacyFactionOf (uiFaction u) `shouldBe` FactionPlayer
                     uiSkills u `shouldBe` HM.map fst (udSkillTemplates def)
                     stat u "carrying_capacity" `shouldSatisfy` approx 23.887
                 other → expectationFailure

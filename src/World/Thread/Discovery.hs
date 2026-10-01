@@ -32,6 +32,7 @@ import Location.Instance
     , markLocationEncounterCleared, resolveLocationClearance
     , promoteLifecycle, setLocationLifecycle )
 import Unit.Faction (isPlayerOwned)
+import Unit.Faction.Membership (legacyFactionOf)
 import Unit.LineOfSight (visibleTilesOnPage)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
@@ -208,12 +209,12 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
                 [ (uid, inst)
                 | (uid, inst) ← sortOn fst (HM.toList (umInstances um))
                 , uiPage inst ≡ pageId
-                , isPlayerOwned (uiFactionId inst)
+                , isPlayerOwned (legacyFactionOf (uiFaction inst))
                 ]
         sights ← forM pageUnits $ \(uid, inst) → do
             tiles ← visibleTilesOnPage ws inst
             pure UnitSight { usUnit    = uid
-                           , usFaction = uiFactionId inst
+                           , usFaction = legacyFactionOf (uiFaction inst)
                            , usTiles   = tiles }
         let hits = findDiscoveries (wgpWorldSize p)
                                    (wgpLocationInstances p)

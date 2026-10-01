@@ -31,6 +31,8 @@
 module Test.Headless.Unit.StopTransition (spec) where
 
 import UPrelude
+import Unit.Faction.Membership (inertUnitProfile)
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import Test.Hspec
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
@@ -253,7 +255,7 @@ owningUnit = UnitInstanceSnapshot
     , uisAnimReverse = False, uisActivity = "idle", uisPose = "standing"
     , uisAnimStride = 0, uisStats = HM.empty, uisModifiers = HM.empty
     , uisSkills = HM.empty, uisKnowledge = HM.empty, uisInventory = []
-    , uisEquipped = HM.empty, uisAccessories = [], uisFactionId = ""
+    , uisEquipped = HM.empty, uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
     , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
 

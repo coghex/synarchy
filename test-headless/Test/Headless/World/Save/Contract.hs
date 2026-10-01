@@ -125,6 +125,12 @@ import Unit.Sim.Types
     (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..)
     , MoveHazardPolicy(..))
 import Unit.Direction (Direction(..))
+import Unit.Faction.Membership
+    ( MembershipSource(..), TagMembership(..), legacyMappingOwner
+    , localController, mkUnitFactionProfile )
+import Unit.Faction.Profile
+    (FactionCapability(..), tagAcolyte, tagLegacyHostile)
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import World.Flora.Identity
     ( firstPlantedFloraCursor, generatedFloraInstanceId
     , plantedFloraInstanceId )
@@ -184,7 +190,15 @@ richUnit = UnitInstanceSnapshot
     , uisInventory = [richItem 950]
     , uisEquipped = HM.fromList [("main_hand", richItem 960)]
     , uisAccessories = [richItem 970]
-    , uisFactionId = "player"
+    -- #2515: every part of a profile the units wire must keep — the
+    -- local controller, an authored default AND a runtime-owned
+    -- membership, and a capability.
+    , uisFaction = FactionProfileSnap $ mkUnitFactionProfile
+        (Just localController)
+        [ TagMembership tagAcolyte MemberDefinitionDefault
+        , TagMembership tagLegacyHostile
+                        (MemberRuntimeOwner legacyMappingOwner) ]
+        [CapLocalCommandable]
     , uisWounds =
         [ Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.4
                 , woundAt = 100.0, woundBandage = 0.3, woundClot = 0.2

@@ -39,11 +39,14 @@ import World.Save.Compat.SessionV90
 import Language.Generated.Types (LanguageProvenance(..))
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
+import World.Save.UnitFaction
+    ( UnitFactionSnapshot(..), legacyFactionText, resolveUnitFactionSnapshot )
 import Test.Headless.Location.Fixture (expectGeometry)
 import Location.Types (emptyLocationRegistry)
 import World.Save.Types
     ( SaveMetadata(..), BuildingInstanceSnapshot(..)
-    , UnitInstanceSnapshot(..), MissingDefRef(..), renderMissingDefRef
+    , UnitInstanceSnapshot(..), UnitSnapshot(..), MissingDefRef(..)
+    , renderMissingDefRef
     , MissingItemDefRef(..), MissingRecipeRef(..)
     , MissingBillOutputItemRef(..), MissingConstructDefRef(..)
     , renderMissingItemDefRef, renderMissingRecipeRef
@@ -158,7 +161,7 @@ spec = do
                     [ PageUnitsDTOv1 page1
                         (HM.singleton (UnitId 1)
                             (toUnitInstanceDTOv1 inst)) ])
-            ccInputVers unitsCodec `shouldBe` [1, 2]
+            ccInputVers unitsCodec `shouldBe` [1, 2, 3]
             mv ← expectDecode "units v1" (ccDecode unitsCodec 1 bytes)
             case mv of
                 Nothing → pure ()
@@ -175,7 +178,13 @@ spec = do
                                , uisEquipped = HM.singleton "head"
                                    (stripPhysicals richItem)
                                , uisAccessories =
-                                   [stripPhysicals richItem] } ]
+                                   [stripPhysicals richItem]
+                                 -- #2515: v1 held one faction string;
+                                 -- it arrives PENDING, for the load
+                                 -- stage to resolve against the unit's
+                                 -- definition.
+                               , uisFaction = FactionLegacyPending
+                                   (legacyFactionText (uisFaction inst)) } ]
 
         it "container-knowledge accepts v1 — being OPTIONAL governs \
            \ABSENCE, not migration of a payload that IS present" $ do
@@ -667,7 +676,16 @@ resolveFixturePages snap = snap
     resolvePage p = p
         { pgsGenParams = expectGeometry
             (resolveLegacyLocationParams emptyLocationRegistry
-                                         (pgsGenParams p)) }
+                                         (pgsGenParams p))
+        , pgsUnits = resolveUnits (pgsUnits p) }
+    -- #2515: @units@ v2 bytes carry a legacy faction STRING, which the
+    -- load path resolves by D-26 against the unit's definition before
+    -- publication. The fixture's definition declares no default tags.
+    resolveUnits u = u
+        { usnInstances = HM.map
+            (\i → i { uisFaction = FactionProfileSnap
+                         (fst (resolveUnitFactionSnapshot [] (uisFaction i))) })
+            (usnInstances u) }
 
 -- | Pre-v13 worlds retain their historical terrain policy; enabling the
 -- new positive-depth repair here would change regenerated old river beds.

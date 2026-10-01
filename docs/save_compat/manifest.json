@@ -2877,6 +2877,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z5-exact-generated-rivers.expected.json"
         }
       ]
+    },
+    {
+      "id": "z6-unit-faction-profile",
+      "description": "Units carry faction profiles (units v3): the local controller, definition-default and legacy-mapping memberships with provenance, and debug capabilities, for player, legacy-hostile, debug, neutral, wildlife (authored and fallback) and an uncontrolled acolyte.",
+      "declaredAt": "2026-10-01",
+      "declaredByIssue": 2515,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / migrateUnitsDTOv1, migrateUnitsDTOv2 + World.Save.UnitFaction.resolveUnitFactionSnapshot",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 13,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z6-unit-faction-profile",
+          "path": "test-headless/data/save-compat/z6-unit-faction-profile.bin",
+          "kind": "complete-session",
+          "sha256": "80dc96a063847c7a7884a8a09fce631a8c10f32eac6ea9f48fd426922f19e3e8",
+          "sizeBytes": 924538,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then unit.spawn('acolyte', 3, 2, 0, 'hostile'); unit.spawn('acolyte', 2, 3, 0, 'debug'); unit.spawn('acolyte', 3, 3, 0, 'neutral'); unit.spawn('bear_brown', 4, 2); unit.spawn('tiller', 2, 4); unit.spawn('acolyte', 4, 4), settled 6.0s and held until `unit.getFaction(1) == 'player' and unit.getFaction(2) == 'hostile' and unit.getFaction(3) == 'debug' and unit.getFaction(4) == 'neutral' and unit.getFaction(5) == 'wildlife' and unit.getFaction(6) == 'wildlife' and unit.getFaction(7) == 'neutral'`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z6-unit-faction-profile.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

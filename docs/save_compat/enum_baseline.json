@@ -2677,6 +2677,64 @@
         }
       ]
     },
+    "World.Save.UnitFaction.MembershipSourceDTO": {
+      "source": "src/World/Save/UnitFaction.hs",
+      "onSaveWire": true,
+      "components": [
+        "units"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"units\" — World.Save.Component.EntitySnapshots",
+          "via": "PageUnitsDTO → UnitInstanceDTO → UnitFactionDTO → MembershipDTO → MembershipSourceDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "SourceDefinitionDefaultDTO",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "SourceRuntimeOwnerDTO",
+          "arity": 1,
+          "payload": [
+            "Text"
+          ]
+        }
+      ]
+    },
+    "World.Save.UnitFaction.UnitFactionDTO": {
+      "source": "src/World/Save/UnitFaction.hs",
+      "onSaveWire": true,
+      "components": [
+        "units"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"units\" — World.Save.Component.EntitySnapshots",
+          "via": "PageUnitsDTO → UnitInstanceDTO → UnitFactionDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "UnitFactionProfileDTO",
+          "arity": 3,
+          "payload": [
+            "Maybe ControllerDTO",
+            "[MembershipDTO]",
+            "[Text]"
+          ]
+        },
+        {
+          "name": "UnitFactionLegacyDTO",
+          "arity": 1,
+          "payload": [
+            "Text"
+          ]
+        }
+      ]
+    },
     "World.Tool.Types.ToolMode": {
       "source": "src/World/Tool/Types.hs",
       "onSaveWire": true,

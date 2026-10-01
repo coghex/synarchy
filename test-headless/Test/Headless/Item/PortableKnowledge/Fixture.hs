@@ -28,6 +28,7 @@ import Item.Types
     , ItemStorage(..) )
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types (UnitInstance(..))
 import World.Page.Types (WorldPageId(..))
 
@@ -217,7 +218,7 @@ mkUnitOfFaction faction page inventory equipment accessories = UnitInstance
     , uiStats = HM.empty, uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = inventory
     , uiEquipment = equipment
-    , uiAccessories = accessories, uiFactionId = faction, uiWounds = []
+    , uiAccessories = accessories, uiFaction = resolveLegacyFaction [] faction, uiWounds = []
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False

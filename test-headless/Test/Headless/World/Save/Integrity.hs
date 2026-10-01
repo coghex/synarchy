@@ -37,6 +37,8 @@ module Test.Headless.World.Save.Integrity
     ) where
 
 import UPrelude
+import Unit.Faction.Membership (inertUnitProfile)
+import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -232,7 +234,7 @@ minimalUnit = UnitInstanceSnapshot
     , uisPose = "standing", uisAnimStride = 0, uisStats = HM.empty
     , uisModifiers = HM.empty, uisSkills = HM.empty, uisKnowledge = HM.empty
     , uisInventory = [], uisEquipped = HM.empty, uisAccessories = []
-    , uisFactionId = "", uisWounds = [], uisScars = [], uisImmuneResponse = 0
+    , uisFaction = FactionProfileSnap inertUnitProfile, uisWounds = [], uisScars = [], uisImmuneResponse = 0
     , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
 
 minimalGlobals ∷ WorldPageId → SessionGlobals

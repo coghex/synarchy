@@ -8,7 +8,7 @@ module Unit.Command.Types
 
 import UPrelude
 import Unit.Types (UnitId(..))
-import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (UnitFactionProfile)
 import Unit.Sim.Types (Pose(..))
 import Unit.Pathing.Hazard (MoveHazardPolicy(..))
 import World.Page.Types (WorldPageId(..))
@@ -34,17 +34,17 @@ data SpawnProfile
     deriving (Show, Eq)
 
 data UnitCommand
-    = UnitSpawn !UnitId !Text !Float !Float !Int !Faction !WorldPageId
+    = UnitSpawn !UnitId !Text !Float !Float !Int !UnitFactionProfile
+               !WorldPageId
                !ChunkGeneration !SpawnProfile
         -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, faction,
         --   owning world page (stamped from the active world at spawn so
         --   the unit is world-scoped, #78).
-        --   The faction is spawn-time-only (no def-level default) and is
-        --   already TYPED here: @unit.spawn@ parses the caller's tag at
-        --   ingress (#912), so an unrecognized tag is reported once at
-        --   the boundary rather than travelling as a string nobody
-        --   validates. Ownership/alliance/attack questions are answered
-        --   by "Unit.Faction", never by comparing two of these.
+        --   The faction profile is already RESOLVED here: @unit.spawn@
+        --   parses the caller's tag and applies D-26 against the spawned
+        --   definition's default tags at ingress (#912, #2515), so an
+        --   unrecognized tag is reported once at the boundary rather
+        --   than travelling as a string nobody validates.
         --
         --   The 'World.Chunk.Residency.ChunkGeneration' is the page
         --   INCARNATION this request was admitted against (#2476), read

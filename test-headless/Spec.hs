@@ -441,6 +441,7 @@ import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
 import qualified Test.Headless.Unit.FactionCatalogue as UnitFactionCatalogue
 import qualified Test.Headless.Unit.FactionProfile as UnitFactionProfile
+import qualified Test.Headless.Unit.FactionProfileWire as UnitFactionProfileWire
 import qualified Test.Headless.Gameplay.Tags as GameplayTags
 import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
@@ -1297,6 +1298,7 @@ main = hspec $ do
     UnitFaction.spec
     UnitStandardSpawn.spec
     UnitFactionProfile.spec
+    UnitFactionProfileWire.spec
     UnitFactionCatalogue.spec
     -- #2700: the pure gameplay tag registry and query evaluator. No
     -- engine. The memory group registers nothing unless

@@ -37,7 +37,7 @@ import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Log (logDebug, logInfo, logWarn, LogCategory(..), LoggerState)
 import Unit.Types
-import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (UnitFactionProfile)
 import Unit.Sim.Types
 import Unit.Command.Types (SpawnProfile(..))
 import Unit.Stats (rollStat, standardStat, pickName, applyItemBuffs,
@@ -75,13 +75,13 @@ productionSpawnSeams ∷ SpawnSeams
 productionSpawnSeams = SpawnSeams { seamAfterEpochCheck = pure () }
 
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
-                       → Float → Float → Int → Faction → WorldPageId
+                       → Float → Float → Int → UnitFactionProfile → WorldPageId
                        → ChunkGeneration → SpawnProfile → IO ()
 handleUnitSpawnCommand = handleUnitSpawnCommandWith productionSpawnSeams
 
 handleUnitSpawnCommandWith
     ∷ SpawnSeams → EngineEnv → IORef UnitThreadState → UnitId → Text
-    → Float → Float → Int → Faction → WorldPageId → ChunkGeneration
+    → Float → Float → Int → UnitFactionProfile → WorldPageId → ChunkGeneration
     → SpawnProfile → IO ()
 handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                            pageId epoch profile = do
@@ -256,7 +256,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     , uiInventory   = initialInventory
                     , uiEquipment   = initialEquipment
                     , uiAccessories = initialAccessories
-                    , uiFactionId   = faction
+                    , uiFaction     = faction
                     , uiWounds      = []
                     , uiScars       = []
                     , uiImmuneResponse = 0

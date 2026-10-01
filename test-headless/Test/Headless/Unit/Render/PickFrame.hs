@@ -20,6 +20,7 @@
 module Test.Headless.Unit.Render.PickFrame (spec) where
 
 import UPrelude
+import Unit.Faction.Membership (resolveLegacyFaction)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -98,7 +99,7 @@ mkInst animName start = UnitInstance
     , uiInventory   = []
     , uiEquipment   = HM.empty
     , uiAccessories = []
-    , uiFactionId       = FactionNeutral
+    , uiFaction         = resolveLegacyFaction [] FactionNeutral
     , uiWounds          = []
     , uiScars           = []
     , uiImmuneResponse  = 0
