@@ -1604,6 +1604,10 @@ timings and a fake console:
 - a wait that begins inside the budget and expires past it;
 - sleeping and waking actors, a missing unit, and a console that does
   not answer, all reported and none raised;
+- real stage owners (`extract.deliver`, `encounter.deliver_home`) whose
+  wait expires as the console dies, which still record their own
+  failure before anything raises, and the facade's READY failure
+  printing its diagnostics;
 - the one deadline carrying across the fresh process's load;
 - an overrun recording a failing stage and exit status 1 through the
   facade's real `main`.

@@ -28,6 +28,7 @@ from probelib import poll_until, send
 
 from .constants import (MAX_START_SEPARATION, MAX_START_SPREAD,
                         MIN_STOMACH_DELTA, PAGE)
+from .day_budget import safe
 from .harness import Checks, ExpeditionState, StageAbort, assert_real_travel
 from .prepare import muster_travellers, seed_departure_deficit
 from .readers import (arrival_box, carried, current_action, dist, event_log,
@@ -60,7 +61,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     t0 = st.day.now()
     staged, sep, spread, bearing = muster_travellers(
         port, (prepared, control), deposit_spot, ruin_xy)
-    at_start = staged or {u: unit_pos(port, u)
+    at_start = staged or {u: safe(lambda u=u: unit_pos(port, u), None)
                           for u in (prepared, control)}
     if not chk.ok(staged is not None,
                   f"both travellers depart from the SAME PLACE, not just "
@@ -69,13 +70,13 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                   f"(prepared at {at_start[prepared]}, control at "
                   f"{at_start[control]}; {sep:.2f} tiles apart, bar "
                   f"{MAX_START_SEPARATION}; "
-                  f"{dist(at_start[prepared], ruin_xy):.1f} vs "
-                  f"{dist(at_start[control], ruin_xy):.1f} tiles out, "
+                  f"{safe(lambda: f'{dist(at_start[prepared], ruin_xy):.1f}')} vs "
+                  f"{safe(lambda: f'{dist(at_start[control], ruin_xy):.1f}')} tiles out, "
                   f"spread {spread:.2f}, bar {MAX_START_SPREAD}; "
                   f"bearings to the ruin {bearing:.1f} deg apart; "
                   f"verified with the simulation stopped)"):
-        send(port, "engine.setPaused(false); return 'ok'")
         st.day.timed_out("the travellers' muster", [prepared, control], t0)
+        send(port, "engine.setPaused(false); return 'ok'")
         raise StageAbort("the travellers never mustered at a shared origin")
 
     # Already paused by the muster. Seed the shared deficit and
@@ -84,21 +85,27 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # state, under the same command.
     t0 = st.day.now()
     seeded = seed_departure_deficit(port, (prepared, control))
-    depart = {u: vitals(port, u) for u in (prepared, control)}
+    # Read through `safe`: the check below is the paused window's own
+    # wait (`seed_departure_deficit`), and it must be recorded even when
+    # the console stops answering as that wait expires.
+    unread = {"hydration": None, "stomach": None, "load": None, "pose": None}
+    depart = {u: safe(lambda u=u: vitals(port, u), unread)
+              for u in (prepared, control)}
     # Rations in the pack at departure. Consumption is the
     # DURABLE record that a meal happened: `unit.feed` removes a
     # discrete ration outright, so a count that has gone down
     # cannot be missed by a sampling loop the way the
     # `eat_from_inventory` action itself can.
-    depart_food = {u: carried(port, u)[1] for u in (prepared, control)}
+    depart_food = {u: safe(lambda u=u: carried(port, u)[1], 0)
+                   for u in (prepared, control)}
     print(f"  departure  prepared {prepared}: "
           f"{fmt_vitals(depart[prepared])}, "
-          f"{dist(at_start[prepared], ruin_xy):.1f} tiles to go",
-          flush=True)
+          f"{safe(lambda: f'{dist(at_start[prepared], ruin_xy):.1f}')} "
+          f"tiles to go", flush=True)
     print(f"  departure  control  {control}: "
           f"{fmt_vitals(depart[control])}, "
-          f"{dist(at_start[control], ruin_xy):.1f} tiles to go",
-          flush=True)
+          f"{safe(lambda: f'{dist(at_start[control], ruin_xy):.1f}')} "
+          f"tiles to go", flush=True)
     if not chk.ok(seeded and all(
             depart[u]["pose"] not in ("collapsed", "dead")
             for u in (prepared, control)),
@@ -277,16 +284,20 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # which clears it legitimately, just not by the player's
     # gesture. `active` remains accepted for the occupied ruins
     # this scenario does not select.
+    t0 = st.day.now()
     inst = poll_until(60.0, lambda: (
         lambda i: i if isinstance(i, dict)
         and i.get("lifecycle") in ("discovered", "active", "cleared")
         else None)(
             instance_by_id(port, PAGE, ruin_id)), interval=1.0)
-    chk.ok(inst is not None,
-           f"approaching the ruin reveals it — lifecycle "
-           f"'discovered' (its guaranteed item is still outstanding), "
-           f"or 'active'/'cleared' "
-           f"({(instance_by_id(port, PAGE, ruin_id) or {}).get('lifecycle')!r})")
+    life = inst.get("lifecycle") if inst else safe(
+        lambda: (instance_by_id(port, PAGE, ruin_id) or {}).get("lifecycle"))
+    if not chk.ok(inst is not None,
+                  f"approaching the ruin reveals it — lifecycle "
+                  f"'discovered' (its guaranteed item is still "
+                  f"outstanding), or 'active'/'cleared' ({life!r})"):
+        st.day.timed_out("the ruin's discovery (the world thread, not a "
+                         "unit, is what is awaited)", None, t0)
     # The WHOLE log, deliberately not a slice from a mark taken
     # before departure. `Engine.PlayerEvent.Emit.pushBounded`
     # keeps a bounded ring buffer and drops the oldest rows past
@@ -306,11 +317,15 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"discovery emits exactly one player-facing event naming the "
            f"location ({[h.get('text') for h in hits]})")
     key = f"{PAGE}#{ruin_id}"
+    t0 = st.day.now()
     knew = poll_until(30.0, lambda: key in known_locations(port, prepared),
                       interval=1.0)
-    chk.ok(bool(knew),
-           f"the traveller that walked there personally KNOWS the location "
-           f"({key} in {sorted(known_locations(port, prepared))})")
+    if not chk.ok(bool(knew),
+                  f"the traveller that walked there personally KNOWS the "
+                  f"location ({key} in "
+                  f"{safe(lambda: sorted(known_locations(port, prepared)))})"):
+        st.day.timed_out("the traveller's knowledge of the ruin",
+                         [prepared], t0)
     # The premise is asserted, not assumed: each held colonist
     # must genuinely still be away from the ruin, and its position
     # and memory are both reported so a failure says which.

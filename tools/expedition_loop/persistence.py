@@ -31,6 +31,7 @@ from probelib import (capture_request_id, send, send_json, poll_until,
 
 from .constants import (ACOLYTE_DEF, LOG_A, LOG_B, PAGE,
                         REQUIRED_RELOAD_COMPLETED, SLOT, TRIP_OBJECTIVES)
+from .day_budget import safe
 from .harness import (Checks, ExpeditionState, StageAbort,
                       check_ai_tick_clean)
 from .notices import latch_passes
@@ -233,13 +234,13 @@ def load(chk: Checks, st: ExpeditionState) -> None:
     if not chk.ok(bool(knew),
                   f"the expedition unit still knows that exact (page, "
                   f"instance) pair after the restart ({key} in "
-                  f"{sorted(known_locations(port, prepared))})"):
+                  f"{safe(lambda: sorted(known_locations(port, prepared)))})"):
         st.day.timed_out("the restored location knowledge", [prepared], t0)
 
     t0 = st.day.now()
     completed, _checked = poll_until(
         45.0, lambda: (lambda p: p if p[0] else None)(progress(port)),
-        interval=1.0) or progress(port)
+        interval=1.0) or safe(lambda: progress(port), (set(), set()))
     if not chk.ok(REQUIRED_RELOAD_COMPLETED <= completed,
                   f"all required preparation completions and the four trip "
                   f"objectives {TRIP_OBJECTIVES} still hold once the "

@@ -286,9 +286,9 @@ class AcrossTheLoad(unittest.TestCase):
         budget = clock.budget
         clock.live = False                      # engine A has quit
         _, out = quiet(chk.enter, "load", "load")
-        self.assertIn("no engine is running", out)
+        self.assertIn("no session clock is live", out)
         _, out = quiet(clock.timed_out, "the load", None, None)
-        self.assertIn("game time unavailable — no restored game time", out)
+        self.assertIn("game time unavailable — no session clock is live", out)
         self.assertIn("no specific unit is involved", out)
         # Engine B publishes the save: its game time is the save's own,
         # and the deadline fixed in engine A is the one applied.
@@ -307,6 +307,121 @@ class AcrossTheLoad(unittest.TestCase):
         console.t = clock.budget.deadline - 1.0
         quiet(clock.loaded, chk)
         self.assertEqual(chk.failed, 0)
+
+
+class CallSites(unittest.TestCase):
+    """A real stage owner's wait expires and the console stops answering
+    in the same moment: the wait's own failure must still be recorded,
+    with the diagnostics beneath it, before anything raises."""
+
+    def run_owner(self, fn, console, chk, st):
+        from expedition_loop import encounter, extract, readers
+        patches = [mock.patch.object(m, name, console)
+                   for m in (extract, encounter, readers)
+                   for name in ("send", "send_json")]
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            buf = io.StringIO()
+            raised = None
+            with contextlib.redirect_stdout(buf):
+                try:
+                    fn(chk, st)
+                except Exception as exc:  # noqa: BLE001
+                    raised = exc
+        return buf.getvalue(), raised
+
+    def state(self, console):
+        from expedition_loop.harness import ExpeditionState, Fingerprint
+        chk, clock = established(console)
+        st = ExpeditionState(port=0, fp=Fingerprint(1, 2, 3), seed=1,
+                             size=2, plates=3, day=clock)
+        st.prepared, st.foot, st.deposit_spot = 11, (0, 0, 2, 2), (3, 3)
+        st.storage_bid, st.instance_id, st.occ_sig_phys = 5, 77, 88
+        st.recovered = {"defName": "first_aid_kit", "instanceId": 77}
+        return chk, st
+
+    def failing_label(self, chk, out: str, needle: str) -> str:
+        lines = [ln for ln in out.splitlines()
+                 if ln.lstrip().startswith("[FAIL][return]") and needle in ln]
+        self.assertEqual(len(lines), 1, out)
+        return lines[0]
+
+    def test_walk_home_expiring_into_a_dead_console(self):
+        from expedition_loop import extract
+        console = FakeConsole()
+        chk, st = self.state(console)
+        console.t = st.day.budget.deadline - 50.0
+
+        def walk_expires(*_a, **_k):
+            console.t = st.day.budget.deadline + 10.0
+            console.dead = True
+            return False
+
+        # The order home is accepted on a live console; the walk then
+        # expires as the console dies.
+        def send(port, lua, *a, **k):
+            if "commandMove" in lua and not console.dead:
+                return "ok"
+            return console(port, lua, *a, **k)
+
+        with mock.patch.object(extract, "walk_until_adjacent", walk_expires):
+            out, raised = self.run_owner(extract.deliver, send, chk, st)
+        line = self.failing_label(chk, out, "walks the whole way home")
+        self.assertIn("<unreadable: ConnectionRefusedError", line)
+        self.assertIn("timeout diagnostics [the walk home]", out)
+        self.assertIn("game time unavailable — the console did not answer",
+                      out)
+        self.assertIn("unit 11: unreadable (console unavailable", out)
+        self.assertGreater(out.index("timeout diagnostics [the walk home]"),
+                           out.index(line))
+        # Whatever raises afterwards does so after the wait's own failure.
+        self.assertIsInstance(raised, ConnectionRefusedError)
+
+    def test_occupied_item_walk_home_expiring_into_a_dead_console(self):
+        from expedition_loop import encounter
+        console = FakeConsole()
+        chk, st = self.state(console)
+
+        def bank_expires(*_a, **_k):
+            console.dead = True
+            return None
+
+        with mock.patch.object(encounter, "bank_home", bank_expires):
+            out, raised = self.run_owner(encounter.deliver_home, console,
+                                         chk, st)
+        line = self.failing_label(chk, out, "carried home and banked")
+        self.assertIn("now <unreadable: ConnectionRefusedError", line)
+        self.assertIn("timeout diagnostics [the occupied ruin's item's walk "
+                      "home]", out)
+        # The carrier cannot be named on a dead console: said, not raised.
+        self.assertIn("no specific unit is involved in this wait", out)
+        self.assertIsInstance(raised, ConnectionRefusedError)
+
+    def test_engine_ready_timeout_reports_through_the_facade(self):
+        import expedition_loop_probe as probe
+        console = FakeConsole()
+        console.dead = True
+
+        def boot_fails(*_a, **_k):
+            raise SystemExit("[engine A] never printed READY")
+
+        noop = lambda *a, **k: None  # noqa: E731
+        with contextlib.ExitStack() as stack:
+            for p in (mock.patch("probelib.send", console),
+                      mock.patch.object(probe, "boot_probe", boot_fails),
+                      mock.patch.object(probe, "make_isolated_root",
+                                        lambda base: base),
+                      mock.patch.object(probe, "remove_root", noop),
+                      mock.patch.object(sys, "argv", ["probe"])):
+                stack.enter_context(p)
+            code, out = quiet(probe.main)
+        self.assertEqual(code, 1, out)
+        self.assertIn("never printed READY", out)
+        self.assertIn("timeout diagnostics [the engine's boot or life", out)
+        self.assertIn("no specific unit is involved in this wait", out)
+        self.assertLess(out.index("never printed READY"),
+                        out.index("timeout diagnostics"))
 
 
 class Facade(unittest.TestCase):

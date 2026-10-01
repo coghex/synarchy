@@ -170,6 +170,26 @@ def clock_text(phase: float) -> str:
 
 
 # --------------------------------------------------------------------------
+# Best-effort reads around an expired wait
+# --------------------------------------------------------------------------
+def safe(read, *fallback):
+    """`read()`, or — when the console has stopped answering — the given
+    fallback, else a text naming what failed.
+
+    A wait's failure message is built from live reads, and it has to be
+    RECORDED even when the console dies as the wait expires: a read that
+    raised inside the message would replace the wait's own failing check
+    with an unexpected-exception one. So every read in an expired wait's
+    message, and in the condition it checks, goes through here."""
+    try:
+        return read()
+    except Exception as exc:  # noqa: BLE001 - diagnostics never raise
+        if fallback:
+            return fallback[0]
+        return f"<unreadable: {type(exc).__name__}: {exc}>"
+
+
+# --------------------------------------------------------------------------
 # What a unit was doing when a wait expired
 # --------------------------------------------------------------------------
 SLEEP_ACTION = "go_to_sleep"
@@ -268,6 +288,11 @@ TUNABLES_LUA = (
     f"world.getTimeScale('{PAGE}')")
 
 
+#: Why no clock is read while a `DayClock` is not `live`.
+NOT_LIVE = ("no session clock is live — engine A has exited and the fresh "
+            "process is read only once its save has loaded")
+
+
 def actor_lua(uid: int) -> str:
     return (f"if not unit.exists({uid}) then return 'missing' end; "
             f"local s=require('scripts.unit_ai').getState({uid}); "
@@ -317,8 +342,7 @@ class DayClock:
         """(game time, colony sun angle, note) — either value None with
         the note saying why."""
         if not self.live:
-            return None, None, ("no engine is running — the fresh process "
-                                "is read once its save has loaded")
+            return None, None, NOT_LIVE
         raw, err = self._ask("return engine.gameTime()")
         if err:
             return None, None, f"console unavailable ({err})"
@@ -402,7 +426,7 @@ class DayClock:
             actors = []
             for uid in uids:
                 if not self.live:
-                    actors.append((uid, "no engine is running"))
+                    actors.append((uid, NOT_LIVE))
                     continue
                 raw, err = self._ask(actor_lua(uid))
                 if err:
@@ -413,9 +437,7 @@ class DayClock:
                     parts = raw.split("|")
                     actors.append((uid, tuple(parts) if len(parts) == 3
                                    else f"unexpected reply {raw!r}"))
-        unread = ("the console did not answer" if self.live else
-                  "no restored game time: the fresh process is read once "
-                  "its save has loaded")
+        unread = "the console did not answer" if self.live else NOT_LIVE
         for line in timeout_lines(what, self.budget, now, started, actors,
                                   unread):
             print(f"    {line}", flush=True)

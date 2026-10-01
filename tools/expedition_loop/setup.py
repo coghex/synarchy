@@ -35,6 +35,7 @@ from .constants import (ACOLYTE_DEF, HOME_MAX_DIST, HOME_MIN_DIST,
                         OCCUPIED_MAX_STEP, OCCUPIED_MAX_WET_TILES, PAGE,
                         PORTAL_DEF, STANDARD_ACOLYTE_CAPACITY,
                         STANDARD_LEAN_FRACTION, STORAGE_DEF, WATER_MAX_DIST)
+from .day_budget import safe
 from .harness import Checks, ExpeditionState, StageAbort
 from .readers import (_as_float, arrival_box, dist, ground_items,
                       instance_by_id, load_region, placed, roster,
@@ -428,11 +429,12 @@ def await_roster(chk: Checks, port: int, bid: int, spawn_bodies: dict):
                      and len(r.get(MULE_DEF, [])) >= 1) else None
     got = poll_until(240.0, poll, interval=0.5)
     if got is None:
-        got = roster(port)
+        got = safe(lambda: roster(port), {})
         chk.fail_setup(
             f"the portal's own spawn roster delivers five acolytes and the "
             f"technomule (got {[(k, len(v)) for k, v in sorted(got.items())]}, "
-            f"spawnRemaining {send(port, f'return building.getSpawnRemaining({bid})')!r}, "
+            f"spawnRemaining "
+            f"{safe(lambda: send(port, f'return building.getSpawnRemaining({bid})'))!r}, "
             f"seeded from {remaining})")
         return None
     chk.ok(True, f"the portal spawns its own roster: "
@@ -489,11 +491,12 @@ def build_storage(chk: Checks, port: int, hx: int, hy: int) -> int:
     built = poll_until(30.0, lambda: send(
         port, f"return building.getActivity({bid})") == "built")
     send(port, "engine.setPaused(false); return 'ok'")
-    cap = _as_float(send(port, f"return building.getStorageCapacity({bid})"))
+    cap = safe(lambda: _as_float(send(
+        port, f"return building.getStorageCapacity({bid})")), None)
     if not chk.ok(bool(built) and (cap or 0) > 0,
                   f"the colony has finished storage at {spot} "
                   f"(bid {bid}, activity "
-                  f"{send(port, f'return building.getActivity({bid})')!r}, "
+                  f"{safe(lambda: send(port, f'return building.getActivity({bid})'))!r}, "
                   f"capacity {cap})"):
         return -1
     return bid
@@ -606,8 +609,11 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     send(port, f"world.show('{PAGE}'); return 'ok'")
 
     chk.enter("setup", "a real world, a real ruin, and a real colony")
+    t0 = st.day.now()
     picked = pick_site(chk, port)
     if not picked:
+        st.day.timed_out("the site search (world placement and chunk "
+                         "loading, not a unit, are what is awaited)", None, t0)
         raise StageAbort("no ruin with a usable colony site")
     st.ruin, st.site = picked
     ruin, site = st.ruin, st.site
@@ -709,8 +715,11 @@ def run(chk: Checks, st: ExpeditionState) -> None:
           f"unprepared control {control}, technomule {mule}, "
           f"stay-at-home colonists {stay_home}", flush=True)
 
+    t0 = st.day.now()
     st.storage_bid = storage_bid = build_storage(chk, port, home[0], home[1])
     if storage_bid < 0:
+        st.day.timed_out("colony storage's construction (the building, not "
+                         "a unit, is what is awaited)", None, t0)
         raise StageAbort("the colony has no finished storage")
     st.deposit_spot, st.foot = adjacent_tile(port, storage_bid)
 

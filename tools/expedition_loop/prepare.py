@@ -30,6 +30,7 @@ from probelib import poll_until, send
 from .constants import (DEPART_STOMACH_FRAC, REQUIRED_PREPARATION_COMPLETED,
                         MAX_START_SEPARATION, MAX_START_SPREAD, RATIONS_DEF,
                         STAGING_RADIUS, SUB_FOOD, SUB_WATER)
+from .day_budget import safe
 from .harness import Checks, ExpeditionState, StageAbort
 from .readers import (_as_float, bearing_gap, carried, current_action, dist,
                       ground_items, paired_positions, progress,
@@ -59,8 +60,9 @@ def secure_water(chk: Checks, port: int, scout: int, shore) -> bool:
         interval=1.0)
     return chk.ok(bool(found),
                   f"the scout reaches the water and registers it through its own "
-                  f"FOV scan (at {unit_pos(port, scout)}, target shore {shore}, "
-                  f"action {current_action(port, scout)})")
+                  f"FOV scan (at {safe(lambda: unit_pos(port, scout))}, "
+                  f"target shore {shore}, action "
+                  f"{safe(lambda: current_action(port, scout))})")
 
 
 def provision(chk: Checks, port: int, mule: int, traveller: int) -> bool:
@@ -244,7 +246,9 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
                 return held, sep, spread, gap
             send(port, "engine.setPaused(false); return 'ok'")
         time.sleep(0.5)
-    live = {u: unit_pos(port, u) for u in uids}
+    # Read for the failure message, so a console that has stopped
+    # answering must not raise here (`day_budget.safe`).
+    live = {u: safe(lambda u=u: unit_pos(port, u), None) for u in uids}
     _ok, sep, spread, gap = origin_ok(live, uids, staging, ruin_xy)
     return None, sep, spread, gap
 
@@ -342,7 +346,8 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     t0 = st.day.now()
     completed, checked = poll_until(
         45.0, lambda: (lambda p: p if REQUIRED_PREPARATION_COMPLETED <= p[0] else None)(
-            progress(port)), interval=1.0) or progress(port)
+            progress(port)), interval=1.0) \
+        or safe(lambda: progress(port), (set(), set()))
     if not chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
                   f"the shipped first_session tree includes its required "
                   f"preparation completed set "

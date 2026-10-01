@@ -472,6 +472,10 @@ def main() -> int:
         # shape, as any other operational failure.
         chk.ok(False, f"the engine could not be started, or died, during stage "
                       f"'{chk.stage}' (SystemExit: {exc.code})")
+        # Covers the engine's READY wait (#2755): recorded first, then
+        # the clock is read best-effort, never raising.
+        st.day.timed_out("the engine's boot or life (its READY wait, not a "
+                         "unit, is what is awaited)")
     except Exception as exc:  # noqa: BLE001
         # An operational failure — a dead engine, a socket timeout, a
         # malformed console response — is a real probe failure and must
@@ -483,6 +487,11 @@ def main() -> int:
         chk.ok(False, f"unexpected {type(exc).__name__} while running stage "
                       f"'{chk.stage}': {exc}")
         traceback.print_exc()
+        # A blocking engine wait (`world.waitForInit`, `waitForChunks`)
+        # that overruns its socket timeout surfaces here (#2755).
+        st.day.timed_out(f"the operation that raised {type(exc).__name__} "
+                         f"(a blocking engine wait or a console round trip; "
+                         f"no specific unit)")
     finally:
         remove_root(base, args.keep_root)
         fingerprint["stages"] = chk.outcomes()

@@ -3972,7 +3972,14 @@ walking at that point has overrun its day.
   budget status beneath its own failure, and says whether the wait began
   inside the budget and expired past it. It also prints each involved
   unit's action and pose, naming a `go_to_sleep`/`sleeping` unit ASLEEP,
-  or says no specific unit is involved.
+  or says no specific unit is involved. The wait's own failure is
+  recorded first: every live read in its message goes through
+  `day_budget.safe`, so a console that stops answering as the wait
+  expires leaves the original failure standing beside an "unreadable"
+  note, rather than replacing it with an unexpected exception. The
+  engine's READY wait and blocking engine waits (`world.waitForInit`,
+  `world.waitForChunks`) end in the facade's `SystemExit` and exception
+  handlers, which print the same block after recording the failure.
 
 The budget is conservative for the scenario. It is not a prediction of
 when any one unit falls asleep: arbitration also weighs the urge's ramp

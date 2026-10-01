@@ -25,6 +25,7 @@ import time
 from probelib import poll_until, send, send_json
 
 from .constants import ACOLYTE_DEF, PAGE, RETURN_SECONDS
+from .day_budget import safe
 from .harness import Checks, ExpeditionState, StageAbort, assert_real_travel
 from .readers import (clearance_events, current_action, event_log,
                       find_instance, find_instance_by_def, fmt_vitals,
@@ -175,12 +176,12 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     chk.ok(saw_pickup,
            f"the carrier acts on the order through the real "
            f"pickup_ground AI action (last action "
-           f"{current_action(port, prepared)})")
+           f"{safe(lambda: current_action(port, prepared))})")
     if not chk.ok(picked is not None,
                   f"the carrier picks up the {target['defName']} the ruin "
                   f"itself rolled (action "
-                  f"{current_action(port, prepared)}, pose "
-                  f"{pose(port, prepared)})"):
+                  f"{safe(lambda: current_action(port, prepared))}, pose "
+                  f"{safe(lambda: pose(port, prepared))})"):
         st.day.timed_out("the loot pickup", [prepared], t0)
         raise StageAbort("the carrier never picked the target up")
     st.recovered = recovered = picked
@@ -307,9 +308,10 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
     if not chk.ok(bool(arrived),
                   f"the carrier walks the whole way home and arrives "
                   f"adjacent to colony storage (at "
-                  f"{unit_pos(port, prepared)}, footprint {foot}, action "
-                  f"{current_action(port, prepared)}, "
-                  f"{fmt_vitals(vitals(port, prepared))})"):
+                  f"{safe(lambda: unit_pos(port, prepared))}, footprint "
+                  f"{foot}, action "
+                  f"{safe(lambda: current_action(port, prepared))}, "
+                  f"{safe(lambda: fmt_vitals(vitals(port, prepared)))})"):
         st.day.timed_out("the walk home", [prepared], t0)
     assert_real_travel(chk, r_samples, deposit_spot, "the return leg",
                        min_samples=10, min_closed=10.0)
@@ -349,7 +351,7 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
     if not chk.ok(banked is not None,
                   f"the guaranteed item is banked in colony storage as that "
                   f"exact physical instance ({sig_phys}"
-                  f"{'' if banked else '; now ' + locate(port, sig_phys)})"):
+                  f"{'' if banked else '; now ' + safe(lambda: locate(port, sig_phys))})"):
         st.day.timed_out("the guaranteed item's walk home",
                          carrier_of(port, sig_phys), t0)
     # Taking it out of the ruin and moving it around cannot undo
