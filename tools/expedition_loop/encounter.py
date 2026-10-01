@@ -1049,6 +1049,39 @@ def run(chk: Checks, st: ExpeditionState) -> None:
 # --------------------------------------------------------------------------
 # [reward]
 # --------------------------------------------------------------------------
+def await_taken_and_cleared(chk: Checks, st: ExpeditionState, phys):
+    """The two world-thread latches the player's pickup sets: the item's
+    taken latch, then the location's clearance. Each wait takes its own
+    start reading immediately before it, so an expired clearance wait is
+    never reported against the taken-latch wait's start (#2755).
+    Returns the cleared instance row, or None."""
+    port, occ_id = st.port, st.occ_id
+    t0 = st.day.now()
+    rows = poll_until(60.0, lambda: (lambda r: r if r and all(
+        x.get("taken") for x in r) else None)(significant_rows(port, occ_id)),
+        interval=0.5)
+    if not chk.ok(rows is not None and rows[0].get("item_instance_id") == phys,
+                  f"its taken latch is set for that physical instance id "
+                  f"({rows})") and rows is None:
+        st.day.timed_out("the guaranteed item's taken latch (the world "
+                         "thread, not a unit, is what is awaited)", None, t0)
+    t0 = st.day.now()
+    cleared = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
+                                        and i.get("lifecycle") == "cleared"
+                                        else None)(
+        instance_by_id(port, PAGE, occ_id)), interval=0.5)
+    if not chk.ok(cleared is not None
+                  and cleared.get("clearance_satisfied") is True
+                  and cleared.get("clear_event_emitted") is True,
+                  f"and THAT promotes the location to 'cleared' "
+                  f"({(cleared or {}).get('lifecycle')!r}, satisfied "
+                  f"{(cleared or {}).get('clearance_satisfied')!r})") \
+            and cleared is None:
+        st.day.timed_out("the occupied ruin's clearance (the world thread, "
+                         "not a unit, is what is awaited)", None, t0)
+    return cleared
+
+
 def reward(chk: Checks, st: ExpeditionState) -> None:
     """Recover the guaranteed item by the player's gesture; the location
     clears, exactly once."""
@@ -1104,29 +1137,7 @@ def reward(chk: Checks, st: ExpeditionState) -> None:
         st.day.timed_out("the guaranteed item's pickup", [carrier], t0)
         raise StageAbort("the guaranteed item never reached the carrier")
 
-    t0 = st.day.now()
-    rows = poll_until(60.0, lambda: (lambda r: r if r and all(
-        x.get("taken") for x in r) else None)(significant_rows(port, occ_id)),
-        interval=0.5)
-    if not chk.ok(rows is not None and rows[0].get("item_instance_id") == phys,
-                  f"its taken latch is set for that physical instance id "
-                  f"({rows})") and rows is None:
-        st.day.timed_out("the guaranteed item's taken latch (the world "
-                         "thread, not a unit, is what is awaited)", None, t0)
-        t0 = st.day.now()
-    cleared = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
-                                        and i.get("lifecycle") == "cleared"
-                                        else None)(
-        instance_by_id(port, PAGE, occ_id)), interval=0.5)
-    if not chk.ok(cleared is not None
-                  and cleared.get("clearance_satisfied") is True
-                  and cleared.get("clear_event_emitted") is True,
-                  f"and THAT promotes the location to 'cleared' "
-                  f"({(cleared or {}).get('lifecycle')!r}, satisfied "
-                  f"{(cleared or {}).get('clearance_satisfied')!r})"):
-        st.day.timed_out("the occupied ruin's taken latch and clearance "
-                         "(the world thread, not a unit, is what is "
-                         "awaited)", None, t0)
+    cleared = await_taken_and_cleared(chk, st, phys)
 
     # Settle, then read the retained notice evidence for this ruin.
     time.sleep(3.0)
@@ -1234,6 +1245,6 @@ def deliver_home(chk: Checks, st: ExpeditionState) -> None:
                   f"instance ({phys}, {(got or {}).get('defName')!r}"
                   f"{'' if got else '; now ' + safe(lambda: locate(port, phys))})"):
         st.day.timed_out("the occupied ruin's item's walk home",
-                         carrier_of(port, phys), t0)
+                         carrier_of(port, st, phys, st.occ_carrier), t0)
     chk.ok(all(r.get("taken") for r in significant_rows(port, st.occ_id)),
            "and its taken latch is unmoved by the walk and the deposit")

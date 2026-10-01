@@ -87,14 +87,21 @@ def locate(port: int, phys: int) -> str:
     return "not carried by a live acolyte, not on the ground"
 
 
-def carrier_of(port: int, phys: int):
-    """`[uid]` of whoever carries `phys`, for an expired wait's
-    diagnostics; None when nobody does or the console cannot say."""
+def carrier_of(port: int, st: ExpeditionState, phys: int, known=None):
+    """Who to report for an expired walk home with `phys`: whoever holds
+    it now, plus the last carrier `bank_home` saw and any carrier the
+    caller already `known` — kept even when the console cannot answer,
+    so their actions and poses are reported as unreadable rather than
+    dropped. None only when no carrier was ever known."""
+    uids = []
     try:
         uid = holder_of(port, phys)
     except Exception:  # noqa: BLE001 - diagnostics never raise
-        return None
-    return None if uid is None else [uid]
+        uid = None
+    for u in (uid, st.last_carrier.get(phys), known):
+        if u is not None and u >= 0 and u not in uids:
+            uids.append(u)
+    return uids or None
 
 
 def ordered_to(port: int, uid: int, tile) -> bool:
@@ -126,6 +133,7 @@ def bank_home(port: int, st: ExpeditionState, phys: int,
             return row
         uid = holder_of(port, phys)
         if uid is not None:
+            st.last_carrier[phys] = uid
             p = unit_pos(port, uid)
             if p and is_adjacent(p, st.foot):
                 item = find_instance(inventory(port, uid), phys) or {}
@@ -353,7 +361,7 @@ def deliver(chk: Checks, st: ExpeditionState) -> None:
                   f"exact physical instance ({sig_phys}"
                   f"{'' if banked else '; now ' + safe(lambda: locate(port, sig_phys))})"):
         st.day.timed_out("the guaranteed item's walk home",
-                         carrier_of(port, sig_phys), t0)
+                         carrier_of(port, st, sig_phys), t0)
     # Taking it out of the ruin and moving it around cannot undo
     # the latch: the ruin was looted, and that does not become
     # untrue.

@@ -233,6 +233,16 @@ def timeout_lines(what: str, budget, now, started, actors,
     out = [f"timeout diagnostics [{what}]:"]
     if now is None:
         out.append(f"  game time unavailable — {unread}")
+        if budget is not None:
+            out.append(f"  the day budget's deadline is {budget.deadline:.1f} "
+                       f"(day {budget.day_of(budget.deadline)}, colony "
+                       f"{clock_text(budget.phase_at(budget.deadline))}); "
+                       f"whether the run is past it now cannot be "
+                       f"determined")
+            if started is not None:
+                began = "inside" if not budget.overran(started) else "past"
+                out.append(f"  the wait began at {started:.1f}, {began} the "
+                           f"budget")
     elif budget is None:
         out.append(f"  game time {now:.1f}; no day budget established yet")
     else:
@@ -254,16 +264,23 @@ def timeout_lines(what: str, budget, now, started, actors,
         out.extend("  " + actor_line(uid, row) for uid, row in actors)
         asleep = [uid for uid, row in actors
                   if isinstance(row, tuple) and classify(*row) == "ASLEEP"]
-    over = budget is not None and now is not None and budget.overran(now)
+    # Observed sleep and the budget are reported independently: a unit's
+    # sleep window follows its OWN longitude, so it can lie down before
+    # the colony-local deadline, and a run can be past the deadline with
+    # nobody asleep yet.
+    if budget is None or now is None:
+        budget_part = "the day budget's status cannot be determined"
+    elif budget.overran(now):
+        budget_part = "the run is PAST its day budget — it overran its day"
+    else:
+        budget_part = "the run is inside its day budget"
     if asleep:
-        out.append(f"  verdict: unit(s) {asleep} observed ASLEEP — the run "
-                   f"overran its day")
-    elif over:
-        out.append("  verdict: past the day budget, but no involved unit is "
-                   "observed asleep")
-    elif now is not None and budget is not None:
-        out.append("  verdict: inside the day budget and nobody asleep — "
-                   "not a day overrun")
+        sleep_part = f"unit(s) {asleep} observed ASLEEP"
+    elif actors is None:
+        sleep_part = "no unit to observe"
+    else:
+        sleep_part = "no involved unit observed asleep"
+    out.append(f"  verdict: {sleep_part}; {budget_part}")
     return out
 
 

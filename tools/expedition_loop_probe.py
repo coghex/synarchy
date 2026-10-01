@@ -488,10 +488,13 @@ def main() -> int:
                       f"'{chk.stage}': {exc}")
         traceback.print_exc()
         # A blocking engine wait (`world.waitForInit`, `waitForChunks`)
-        # that overruns its socket timeout surfaces here (#2755).
-        st.day.timed_out(f"the operation that raised {type(exc).__name__} "
-                         f"(a blocking engine wait or a console round trip; "
-                         f"no specific unit)")
+        # that overruns its socket timeout, or a console that stopped
+        # answering mid-wait, surfaces here as an OSError (#2755). Any
+        # other exception is a defect in the probe, not a wait.
+        if isinstance(exc, OSError):
+            st.day.timed_out(f"the console round trip or blocking engine "
+                             f"wait that raised {type(exc).__name__} (no "
+                             f"specific unit)")
     finally:
         remove_root(base, args.keep_root)
         fingerprint["stages"] = chk.outcomes()

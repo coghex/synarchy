@@ -219,8 +219,8 @@ class Timeouts(unittest.TestCase):
         self.assertIn("began inside the day and expired after it", out)
         self.assertIn("unit 7: action follow_command, pose standing — awake",
                       out)
-        self.assertIn("past the day budget, but no involved unit is observed "
-                      "asleep", out)
+        self.assertIn("verdict: no involved unit observed asleep; the run is "
+                      "PAST its day budget — it overran its day", out)
 
     def test_sleeping_actors_are_named(self):
         console = FakeConsole()
@@ -235,8 +235,8 @@ class Timeouts(unittest.TestCase):
         self.assertIn("unit 2: action idle, pose sleeping — ASLEEP", out)
         self.assertIn("unit 3: action follow_command, pose walking — awake",
                       out)
-        self.assertIn("unit(s) [1, 2] observed ASLEEP — the run overran its "
-                      "day", out)
+        self.assertIn("verdict: unit(s) [1, 2] observed ASLEEP; the run is "
+                      "PAST its day budget", out)
 
     def test_inside_the_budget_is_not_an_overrun(self):
         console = FakeConsole()
@@ -245,8 +245,24 @@ class Timeouts(unittest.TestCase):
         console.t = clock.budget.deadline - 600.0
         _, out = quiet(clock.timed_out, "the pickup", [4], console.t - 180)
         self.assertIn("inside the day budget, 600 s left", out)
-        self.assertIn("not a day overrun", out)
+        self.assertIn("verdict: no involved unit observed asleep; the run is "
+                      "inside its day budget", out)
         self.assertNotIn("ASLEEP", out)
+        self.assertNotIn("overran", out)
+
+    def test_asleep_before_the_colony_deadline_is_not_an_overrun(self):
+        # A unit's sleep window follows its OWN longitude, so it can lie
+        # down while the run is still inside the colony-local budget.
+        console = FakeConsole()
+        _, clock = established(console)
+        console.actors = {8: "go_to_sleep|sleeping|sleeping"}
+        console.t = clock.budget.deadline - 120.0
+        _, out = quiet(clock.timed_out, "the far post", [8], console.t - 60)
+        self.assertIn("unit 8: action go_to_sleep, pose sleeping", out)
+        self.assertIn("verdict: unit(s) [8] observed ASLEEP; the run is "
+                      "inside its day budget", out)
+        self.assertNotIn("overran", out)
+        self.assertNotIn("PAST", out)
 
     def test_missing_unit_and_no_actor_waits(self):
         console = FakeConsole()
@@ -262,6 +278,15 @@ class Timeouts(unittest.TestCase):
         console.dead = True
         _, out = quiet(clock.timed_out, "the walk home", [5, 6], 10.0)
         self.assertIn("game time unavailable", out)
+        # The established deadline is still stated, with the current
+        # status declared undeterminable rather than omitted.
+        self.assertIn(f"the day budget's deadline is "
+                      f"{clock.budget.deadline:.1f} (day 2, colony 15:00); "
+                      f"whether the run is past it now cannot be determined",
+                      out)
+        self.assertIn("the wait began at 10.0, inside the budget", out)
+        self.assertIn("verdict: no involved unit observed asleep; the day "
+                      "budget's status cannot be determined", out)
         self.assertIn("unit 5: unreadable (console unavailable "
                       "(ConnectionRefusedError", out)
         chk = Checks()
@@ -289,6 +314,8 @@ class AcrossTheLoad(unittest.TestCase):
         self.assertIn("no session clock is live", out)
         _, out = quiet(clock.timed_out, "the load", None, None)
         self.assertIn("game time unavailable — no session clock is live", out)
+        self.assertIn(f"the day budget's deadline is {budget.deadline:.1f}",
+                      out)
         self.assertIn("no specific unit is involved", out)
         # Engine B publishes the save: its game time is the save's own,
         # and the deadline fixed in engine A is the one applied.
@@ -338,6 +365,7 @@ class CallSites(unittest.TestCase):
                              size=2, plates=3, day=clock)
         st.prepared, st.foot, st.deposit_spot = 11, (0, 0, 2, 2), (3, 3)
         st.storage_bid, st.instance_id, st.occ_sig_phys = 5, 77, 88
+        st.occ_carrier = 21
         st.recovered = {"defName": "first_aid_kit", "instanceId": 77}
         return chk, st
 
@@ -394,9 +422,106 @@ class CallSites(unittest.TestCase):
         self.assertIn("now <unreadable: ConnectionRefusedError", line)
         self.assertIn("timeout diagnostics [the occupied ruin's item's walk "
                       "home]", out)
-        # The carrier cannot be named on a dead console: said, not raised.
-        self.assertIn("no specific unit is involved in this wait", out)
+        # The carrier the reward stage chose is still named on a dead
+        # console, its action and pose reported as unreadable.
+        self.assertIn("unit 21: unreadable (console unavailable", out)
+        self.assertNotIn("no specific unit", out)
         self.assertIsInstance(raised, ConnectionRefusedError)
+
+    def test_last_observed_carrier_survives_a_dead_console(self):
+        from expedition_loop import extract
+        console = FakeConsole()
+        _, st = self.state(console)
+        st.last_carrier[88] = 9
+        console.dead = True
+        with mock.patch.object(extract, "holder_of",
+                               mock.Mock(side_effect=ConnectionRefusedError)):
+            self.assertEqual(extract.carrier_of(0, st, 88, 21), [9, 21])
+            self.assertEqual(extract.carrier_of(0, st, 99), None)
+        with mock.patch.object(extract, "holder_of", lambda *_a: 4):
+            self.assertEqual(extract.carrier_of(0, st, 88, 21), [4, 9, 21])
+
+    def test_clearance_wait_reports_its_own_start(self):
+        # The taken latch arrives after 90 s; the clearance wait then
+        # starts 10 s before the deadline and expires 50 s after it. Its
+        # diagnostics must name ITS start, not the taken-latch wait's.
+        from expedition_loop import encounter
+        console = FakeConsole()
+        chk, st = self.state(console)
+        deadline = st.day.budget.deadline
+        console.t = deadline - 100.0
+        calls = []
+
+        def poll(seconds, _fn, interval=0.5):
+            calls.append(console.t)
+            if len(calls) == 1:
+                console.t = deadline - 10.0
+                return [{"item_instance_id": 88, "taken": True}]
+            console.t = deadline + 50.0
+            return None
+
+        with mock.patch.object(encounter, "poll_until", poll):
+            got, out = quiet(encounter.await_taken_and_cleared, chk, st, 88)
+        self.assertIsNone(got)
+        self.assertEqual(calls, [deadline - 100.0, deadline - 10.0])
+        self.assertIn("timeout diagnostics [the occupied ruin's clearance", out)
+        self.assertIn(f"the wait began at {deadline - 10.0:.1f}, inside the "
+                      f"budget — it began inside the day and expired after it",
+                      out)
+        self.assertNotIn(f"{deadline - 100.0:.1f}", out)
+        self.assertNotIn("taken latch (the world", out)
+
+    def test_latches_on_time_return_the_cleared_row(self):
+        from expedition_loop import encounter
+        console = FakeConsole()
+        chk, st = self.state(console)
+        row = {"lifecycle": "cleared", "clearance_satisfied": True,
+               "clear_event_emitted": True, "name": "Ruin"}
+        answers = iter([[{"item_instance_id": 88, "taken": True}], row])
+        with mock.patch.object(encounter, "poll_until",
+                               lambda *_a, **_k: next(answers)):
+            got, out = quiet(encounter.await_taken_and_cleared, chk, st, 88)
+        self.assertIs(got, row)
+        self.assertEqual(chk.failed, 0, out)
+        self.assertNotIn("timeout diagnostics", out)
+
+    def facade_raising(self, exc):
+        import expedition_loop_probe as probe
+        console = FakeConsole()
+
+        def setup_raises(chk, st):
+            chk.enter("setup", "setup")
+            raise exc
+
+        noop = lambda *a, **k: None  # noqa: E731
+        with contextlib.ExitStack() as stack:
+            for p in (mock.patch("probelib.send", console),
+                      mock.patch.object(probe, "boot_probe",
+                                        lambda *a, **k: object()),
+                      mock.patch.object(probe, "bootstrap", noop),
+                      mock.patch.object(probe, "quit_engine", noop),
+                      mock.patch.object(probe.setup, "run", setup_raises),
+                      mock.patch.object(probe, "make_isolated_root",
+                                        lambda base: base),
+                      mock.patch.object(probe, "remove_root", noop),
+                      mock.patch.object(sys, "argv", ["probe"]),
+                      contextlib.redirect_stderr(io.StringIO())):
+                stack.enter_context(p)
+            return quiet(probe.main)
+
+    def test_blocking_wait_timeout_reports_through_the_facade(self):
+        code, out = self.facade_raising(TimeoutError("timed out"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("unexpected TimeoutError while running stage 'setup'",
+                      out)
+        self.assertIn("timeout diagnostics [the console round trip or "
+                      "blocking engine wait that raised TimeoutError", out)
+
+    def test_a_probe_defect_is_not_reported_as_a_wait(self):
+        code, out = self.facade_raising(NameError("name 'x' is not defined"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("unexpected NameError", out)
+        self.assertNotIn("timeout diagnostics", out)
 
     def test_engine_ready_timeout_reports_through_the_facade(self):
         import expedition_loop_probe as probe

@@ -245,6 +245,10 @@ class ExpeditionState:
     visited_ruin: set = field(default_factory=set)
 
     # ---- [extract]: what was recovered ------------------------------
+    #: physical instance id -> the last live acolyte `extract.bank_home`
+    #: saw carrying it, so an expired walk home can still name its
+    #: carrier when the console no longer answers (#2755).
+    last_carrier: dict = field(default_factory=dict)
     #: The recovered target's inventory row and its physical instance
     #: id — the identity the return, save and load stages re-check.
     recovered: dict = field(default_factory=dict)
