@@ -522,7 +522,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # setup.pick_occupied). Default padding, so the approach the party
     # is about to walk is paged in with it.
     already = inst0.get("contents_spawned")
-    load_region(port, int(st.occ["cx"]), int(st.occ["cy"]))
+    load_region(port, int(st.occ["cx"]), int(st.occ["cy"]), day=st.day)
     t0 = st.day.now()
     inst0 = poll_until(60.0, lambda: (lambda i: i if isinstance(i, dict)
                                       and i.get("contents_spawned") else None)(

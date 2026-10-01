@@ -170,7 +170,7 @@ def shore_tile(port: int, wx: int, wy: int):
     return int(x), int(y)
 
 
-def pick_site(chk: Checks, port: int):
+def pick_site(chk: Checks, port: int, day=None):
     """Choose the ruin and the colony site.
 
     Zero-occupant ruins are considered in `world.listPlacedLocations`' own order —
@@ -194,7 +194,7 @@ def pick_site(chk: Checks, port: int):
 
     for ruin in ruins:
         gx, gy = int(ruin["gx"]), int(ruin["gy"])
-        load_region(port, int(ruin["cx"]), int(ruin["cy"]))
+        load_region(port, int(ruin["cx"]), int(ruin["cy"]), day=day)
         rz = surface_z(port, gx, gy)
         if rz is None:
             print(f"  ruin {ruin['instance_id']} ({gx},{gy}): anchor unresolved, "
@@ -226,7 +226,8 @@ def pick_site(chk: Checks, port: int):
     return None
 
 
-def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict):
+def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict,
+                  day=None):
     """Choose the second, OCCUPIED ruin the confrontation leg goes to.
 
     Candidates are the placed `ruin_small` instances whose persisted
@@ -282,7 +283,7 @@ def pick_occupied(chk: Checks, port: int, ruin: dict, site: dict):
             for c in dict.fromkeys((x // CHUNK_TILES, y // CHUNK_TILES)
                                    for x, y in outside):
                 if chunk_gap(c, ruin_chunk) >= 2:
-                    load_region(port, c[0], c[1], pad=1)
+                    load_region(port, c[0], c[1], pad=1, day=day)
             end = outside[-1] if outside else (x0, y0)
             profiles.append(corridor_profile(port, x0, y0, end[0], end[1]))
         ok = all(p is not None and p[0] <= OCCUPIED_MAX_STEP
@@ -441,15 +442,35 @@ def await_roster(chk: Checks, port: int, bid: int, spawn_bodies: dict):
                  f"{len(got[ACOLYTE_DEF])} acolytes + "
                  f"{len(got[MULE_DEF])} technomule (uids "
                  f"{sorted(got[ACOLYTE_DEF])} / {sorted(got[MULE_DEF])})")
-    # The standing find_water goal is retired on every acolyte — the
-    # same scenario condition every probe in tools/ applies, and applied
-    # here to the whole colony so the two travellers are treated alike.
-    for uid in got[ACOLYTE_DEF]:
-        poll_until(10.0, lambda u=uid: send(
+    return got
+
+
+def retire_find_water(chk: Checks, st: ExpeditionState, uids) -> bool:
+    """Retire the standing find_water goal on every acolyte — the same
+    scenario condition every probe in tools/ applies, and applied here
+    to the whole colony so the two travellers are treated alike.
+
+    Each unit's wait is for its AI state to exist. One that never does
+    is a failing check with its own timeout diagnostics (#2755), not a
+    silently skipped scenario condition."""
+    port = st.port
+    unretired = []
+    for uid in uids:
+        t0 = st.day.now()
+        done = poll_until(10.0, lambda u=uid: send(
             port, f"local ai=require('scripts.unit_ai'); local s=ai.getState({u}); "
                   f"if not s then return false end; "
                   f"ai.markGoalAccomplished(s,'find_water'); return true") == "true")
-    return got
+        if not done:
+            unretired.append((uid, t0))
+    ok = chk.ok(not unretired,
+                f"the standing find_water goal is retired on every acolyte "
+                f"{sorted(uids)} (no AI state within 10 s: "
+                f"{[u for u, _t in unretired] or 'none'})")
+    for uid, t0 in unretired:
+        st.day.timed_out(f"acolyte {uid}'s AI state, to retire its "
+                         f"find_water goal", [uid], t0)
+    return ok
 
 
 def build_storage(chk: Checks, port: int, hx: int, hy: int) -> int:
@@ -593,6 +614,23 @@ def choose_target(port: int, loot: list):
 # --------------------------------------------------------------------------
 # The stage
 # --------------------------------------------------------------------------
+def await_world_init(chk: Checks, st: ExpeditionState) -> None:
+    """Wait for world generation, and refuse to go on if it never ends.
+
+    `world.waitForInit` returns `world.getInitProgress`'s four values
+    rather than failing when its timeout passes; the parens keep only
+    the first, the load phase, which is 3 once generation is done. Its
+    expiry used to pass unnoticed (#2755)."""
+    t0 = st.day.now()
+    phase = send(st.port, "return (world.waitForInit(400))", timeout=420.0)
+    if not chk.ok(phase.strip() == "3",
+                  f"world generation finishes within 400 s (load phase "
+                  f"{phase!r}; 3 is done)"):
+        st.day.timed_out("world generation (the world thread, not a unit, "
+                         "is what is awaited)", None, t0)
+        raise StageAbort("world generation did not finish")
+
+
 def run(chk: Checks, st: ExpeditionState) -> None:
     """Generate the world, choose the site, plant the colony, read the
     ruin's loot.
@@ -605,12 +643,12 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     port = st.port
     send(port, f"world.init('{PAGE}', {st.seed}, {st.size}, "
                f"{st.plates}, 'First Expedition'); return 'ok'")
-    send(port, "return world.waitForInit(400)", timeout=420.0)
+    await_world_init(chk, st)
     send(port, f"world.show('{PAGE}'); return 'ok'")
 
     chk.enter("setup", "a real world, a real ruin, and a real colony")
     t0 = st.day.now()
-    picked = pick_site(chk, port)
+    picked = pick_site(chk, port, st.day)
     if not picked:
         st.day.timed_out("the site search (world placement and chunk "
                          "loading, not a unit, are what is awaited)", None, t0)
@@ -630,7 +668,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
     # lacks, rather than half an hour later. Its chunk is deliberately
     # NOT paged in yet (see `pick_occupied`); its roster is spawned and
     # checked by `encounter.run`.
-    occ = pick_occupied(chk, port, ruin, site)
+    occ = pick_occupied(chk, port, ruin, site, st.day)
     if occ is None:
         raise StageAbort("no reachable occupied ruin")
     st.occ = occ
@@ -692,6 +730,7 @@ def run(chk: Checks, st: ExpeditionState) -> None:
                          "a unit, is what is awaited)", None, t0)
         raise StageAbort("the portal did not deliver its roster")
     acolytes = party[ACOLYTE_DEF]
+    retire_find_water(chk, st, acolytes)
     st.mule = mule = party[MULE_DEF][0]
     # Deterministic role assignment by uid order: the portal
     # spawns its roster in a fixed sequence, so these are stable.

@@ -3978,8 +3978,10 @@ walking at that point has overrun its day.
   separately, because a unit can sleep before the colony-local
   deadline. When the clock cannot be read, the established deadline is
   still printed and the current status is declared undeterminable.
-  Each wait takes its own start reading immediately before it. The
-  wait's own failure is
+  Each wait takes its own start reading immediately before it. Waits
+  that report rather than raise are checked too: `world.waitForInit`'s
+  load phase, `world.waitForChunks`' pending count, and each acolyte's
+  `find_water` retirement. The wait's own failure is
   recorded first: every live read in its message goes through
   `day_budget.safe`, so a console that stops answering as the wait
   expires leaves the original failure standing beside an "unreadable"

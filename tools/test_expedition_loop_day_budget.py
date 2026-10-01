@@ -471,6 +471,84 @@ class CallSites(unittest.TestCase):
         self.assertNotIn(f"{deadline - 100.0:.1f}", out)
         self.assertNotIn("taken latch (the world", out)
 
+    def test_find_water_retirement_reports_an_expired_wait(self):
+        from expedition_loop import setup
+        console = FakeConsole()
+        chk, st = self.state(console)
+        console.actors = {3: "nil|standing|nil"}
+        console.t = st.day.budget.deadline - 300.0
+
+        def poll(_seconds, fn, **_k):
+            return None if fn.__defaults__ == (3,) else True
+
+        with mock.patch.object(setup, "poll_until", poll):
+            ok, out = quiet(setup.retire_find_water, chk, st, [2, 3, 4])
+        self.assertFalse(ok)
+        self.assertEqual(chk.failed, 1)
+        self.assertIn("no AI state within 10 s: [3]", out)
+        self.assertIn("timeout diagnostics [acolyte 3's AI state", out)
+        self.assertIn("unit 3: action nil, pose standing — awake", out)
+        self.assertIn("inside the day budget, 300 s left", out)
+        self.assertNotIn("unit 2:", out)
+
+    def test_find_water_retirement_on_time_passes_quietly(self):
+        from expedition_loop import setup
+        console = FakeConsole()
+        chk, st = self.state(console)
+        with mock.patch.object(setup, "poll_until", lambda *_a, **_k: True):
+            ok, out = quiet(setup.retire_find_water, chk, st, [2, 3])
+        self.assertTrue(ok)
+        self.assertEqual(chk.failed, 0)
+        self.assertNotIn("timeout diagnostics", out)
+
+    def test_world_generation_expiry_is_a_failing_refusal(self):
+        from expedition_loop import setup
+        from expedition_loop.harness import StageAbort
+        console = FakeConsole()
+        chk, st = self.state(console)
+        phase = {"value": "2"}
+
+        def send(port, lua, *a, **k):
+            if lua == "return (world.waitForInit(400))":
+                return phase["value"]
+            return console(port, lua, *a, **k)
+
+        with mock.patch.object(setup, "send", send):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), \
+                    self.assertRaises(StageAbort):
+                setup.await_world_init(chk, st)
+            out = buf.getvalue()
+            self.assertEqual(chk.failed, 1)
+            self.assertIn("load phase '2'", out)
+            self.assertIn("timeout diagnostics [world generation", out)
+            phase["value"] = "3"
+            _, out = quiet(setup.await_world_init, chk, st)
+            self.assertEqual(chk.failed, 1)
+            self.assertNotIn("timeout diagnostics", out)
+
+    def test_chunk_wait_reports_pending_chunks(self):
+        from expedition_loop import readers
+        console = FakeConsole()
+        _, st = self.state(console)
+        replies = {"return world.waitForChunks(180)": "3"}
+
+        def send(port, lua, *a, **k):
+            if lua.startswith("return world.loadChunksInRegion("):
+                return "true"
+            return replies.get(lua) or console(port, lua, *a, **k)
+
+        with mock.patch.object(readers, "send", send):
+            pending, out = quiet(readers.load_region, 0, 4, 5, day=st.day)
+            self.assertEqual(pending, 3)
+            self.assertIn("timeout diagnostics [chunk loading around chunk "
+                          "(4,5): 3 chunk(s) still pending", out)
+            self.assertIn("no specific unit is involved in this wait", out)
+            replies["return world.waitForChunks(180)"] = "0"
+            pending, out = quiet(readers.load_region, 0, 4, 5, day=st.day)
+            self.assertEqual(pending, 0)
+            self.assertNotIn("timeout diagnostics", out)
+
     def test_latches_on_time_return_the_cleared_row(self):
         from expedition_loop import encounter
         console = FakeConsole()
