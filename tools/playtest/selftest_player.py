@@ -65,21 +65,42 @@ def run(check) -> None:
               player_params == ["persona", "manual", "player_profile",
                                 "decision_timeout"],
               str(player_params))
-        check("approved player profiles pin both medium-effort models",
+        check("player profiles are brands; models come from Class B",
               agent_mod.PLAYER_PROFILES == {
-                  "codex-sol": {
-                      "backend": "codex-cli", "model": "gpt-6-sol",
-                      "effort": "medium", "binary": "codex"},
-                  "claude-opus": {
-                      "backend": "claude-cli", "model": "claude-opus-5-5",
-                      "effort": "medium", "binary": "claude"},
-              })
+                  "codex": {"backend": "codex-cli", "binary": "codex"},
+                  "claude": {"backend": "claude-cli", "binary": "claude"},
+              } and agent_mod.DEFAULT_PLAYER_PROFILE == "codex",
+              str(agent_mod.PLAYER_PROFILES))
+        asked = []
+
+        def fixture_class(brand):
+            asked.append(brand)
+            return (f"{brand}-class-b-model", "medium")
+
+        codex_profile = agent_mod.resolve_player_profile(
+            "codex", resolver=fixture_class)
+        claude_profile = agent_mod.resolve_player_profile(
+            "claude", resolver=fixture_class)
+        check("a profile resolves its brand's Class B model and effort",
+              asked == ["codex", "claude"]
+              and codex_profile == {"backend": "codex-cli", "binary": "codex",
+                                    "model": "codex-class-b-model",
+                                    "effort": "medium"}
+              and claude_profile["model"] == "claude-class-b-model",
+              f"{asked} {codex_profile} {claude_profile}")
+        try:
+            agent_mod.resolve_player_profile("codex-sol", resolver=fixture_class)
+            unknown_rejected = False
+        except ValueError:
+            unknown_rejected = True
+        check("a model-named or unknown profile is refused", unknown_rejected)
         codex_cmd = agent_mod._build_codex_command(
             "/usr/bin/codex", "frame.png", os.path.join(tmp, "empty"),
-            os.path.join(tmp, "turn.schema.json"), os.path.join(tmp, "turn.json"))
-        check("Codex profile invokes gpt-6-sol medium",
+            os.path.join(tmp, "turn.schema.json"), os.path.join(tmp, "turn.json"),
+            codex_profile)
+        check("Codex player invokes the resolved model and effort",
               codex_cmd[:2] == ["/usr/bin/codex", "exec"]
-              and "gpt-6-sol" in codex_cmd
+              and "codex-class-b-model" in codex_cmd
               and 'model_reasoning_effort="medium"' in codex_cmd)
         check("Codex player cannot inspect the repo or acquire oracle data",
               "--ignore-user-config" in codex_cmd
@@ -89,10 +110,11 @@ def run(check) -> None:
               and all(feature in codex_cmd for feature in
                       ("shell_tool", "multi_agent", "plugins", "skill_search")))
         claude_cmd = agent_mod._build_claude_command(
-            "/usr/bin/claude", os.path.join(tmp, "empty"), "SYSTEM")
-        check("Claude profile invokes claude-opus-5-5 medium in safe mode",
+            "/usr/bin/claude", os.path.join(tmp, "empty"), "SYSTEM",
+            claude_profile)
+        check("Claude player invokes the resolved model and effort in safe mode",
               claude_cmd[:2] == ["/usr/bin/claude", "-p"]
-              and "claude-opus-5-5" in claude_cmd
+              and "claude-class-b-model" in claude_cmd
               and claude_cmd[claude_cmd.index("--effort") + 1] == "medium"
               and "--safe-mode" in claude_cmd
               and "--no-session-persistence" in claude_cmd)
@@ -720,15 +742,16 @@ def run(check) -> None:
 
         def decide_with_reply(backend, stdout="", file_text=None):
             """One real decide() turn against a faked provider process."""
-            profile_name = ("codex-sol" if backend == "codex-cli"
-                            else "claude-opus")
+            profile_name = ("codex" if backend == "codex-cli"
+                            else "claude")
             player = object.__new__(agent_mod.PlayerAgent)
             player.provider_bin = "/nonexistent/provider"
             player.player_profile = profile_name
             player.backend = backend
             player.persona = p
             player.manual = "MANUAL"
-            player.profile = dict(agent_mod.PLAYER_PROFILES[profile_name])
+            player.profile = agent_mod.resolve_player_profile(
+                profile_name, resolver=lambda brand: ("fixture-model", "medium"))
             player.model = player.profile["model"]
             player.effort = player.profile["effort"]
             player.decision_timeout = 30.0

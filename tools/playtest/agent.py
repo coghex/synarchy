@@ -22,26 +22,26 @@ import tempfile
 
 from engine import (ACTION_KINDS, SCROLL_DY_MAX, SCROLL_DY_MIN,
                     SCROLL_DY_NOTCH)
+import model_class
 
-# These are fixed, audited profiles rather than arbitrary model overrides.  A
-# run selects one complete profile, so it cannot silently drift to a costly
-# model or a different effort level. The critic and optional persona-flavor
-# generator are separate workflows with their own model choices.
+# A run picks a player brand, never a model. The model and effort come from the
+# owner's Class B (model_class.resolve) when the run starts, so they follow the
+# owner's master file instead of drifting in code, and meta.json records what
+# actually ran. Arbitrary provider/model/effort strings are still not accepted.
 PLAYER_PROFILES = {
-    "codex-sol": {
-        "backend": "codex-cli",
-        "model": "gpt-6-sol",
-        "effort": "medium",
-        "binary": "codex",
-    },
-    "claude-opus": {
-        "backend": "claude-cli",
-        "model": "claude-opus-5-5",
-        "effort": "medium",
-        "binary": "claude",
-    },
+    "codex": {"backend": "codex-cli", "binary": "codex"},
+    "claude": {"backend": "claude-cli", "binary": "claude"},
 }
-DEFAULT_PLAYER_PROFILE = "codex-sol"
+DEFAULT_PLAYER_PROFILE = "codex"
+
+
+def resolve_player_profile(name: str, resolver=None) -> dict:
+    """The complete profile for player brand `name`: backend, binary, and the
+    model and effort Class B resolves to right now."""
+    if name not in PLAYER_PROFILES:
+        raise ValueError(f"unknown player profile {name!r}")
+    model, effort = (resolver or model_class.resolve)(name)
+    return {**PLAYER_PROFILES[name], "model": model, "effort": effort}
 DEFAULT_DECISION_TIMEOUT = 90.0
 CLAUDE_SCREENSHOT_READ_RULE = "Read(./screenshot.png)"
 
@@ -247,7 +247,7 @@ def _build_codex_command(codex_bin: str, screenshot_path: str, workspace: str,
     the player can reason over the attached screenshot and prompt, but cannot
     inspect the game repository or acquire outside information.
     """
-    profile = profile or PLAYER_PROFILES["codex-sol"]
+    profile = profile or resolve_player_profile("codex")
     return [
         codex_bin, "exec",
         "--model", profile["model"],
@@ -289,7 +289,7 @@ def _build_claude_command(claude_bin: str, workspace: str,
     image-attachment flag in print mode; its permission rule names that one
     relative path exactly, so a guessed absolute repository path is denied.
     """
-    profile = profile or PLAYER_PROFILES["claude-opus"]
+    profile = profile or resolve_player_profile("claude")
     return [
         claude_bin, "-p",
         "--safe-mode",
@@ -410,7 +410,8 @@ def _parse_claude_result(output: str) -> tuple[dict | None, dict | None, str]:
 
 class PlayerAgent:
     """The naive LLM player. decide() sees the screenshot + rolling
-    memory only. Provider/model/effort come from one fixed profile."""
+    memory only. The provider is the chosen brand; its model and effort
+    come from Class B, resolved once here."""
 
     def __init__(self, persona: dict, manual: str,
                  player_profile: str = DEFAULT_PLAYER_PROFILE,
@@ -428,6 +429,10 @@ class PlayerAgent:
                 "--selftest/--replay runs don't)")
         if decision_timeout <= 0:
             raise ValueError("decision_timeout must be positive")
+        try:
+            profile = resolve_player_profile(player_profile)
+        except model_class.ModelClassError as e:
+            raise SystemExit(f"the {player_profile} player: {e}") from e
         self.provider_bin = provider_bin
         self.player_profile = player_profile
         self.backend = profile["backend"]

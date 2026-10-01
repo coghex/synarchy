@@ -36,13 +36,14 @@ turns.
 
 Usage:
   python3 tools/playtest/run.py                       # LLM player, defaults
-  python3 tools/playtest/run.py --player claude-opus
+  python3 tools/playtest/run.py --player claude       # Claude player (Class B)
   python3 tools/playtest/run.py --render-mode offscreen  # no window (#650)
   python3 tools/playtest/run.py --smoke               # 3 scripted turns, no LLM
   python3 tools/playtest/run.py --replay <trace_dir>  # re-inject a session
   python3 tools/playtest/run.py --selftest            # offline loop/trace check
 
-The player uses one audited medium-effort profile through the installed Codex
+The player runs on the owner's Class B model (resolved by `modelclass` at
+start and recorded in meta.json) through the installed Codex
 or Claude CLI and its existing subscription login (`codex login status` or
 `claude auth status`); scripted/smoke/replay/selftest runs don't.
 """
@@ -111,7 +112,8 @@ def main() -> int:
                     help="maximum seconds for each player decision")
     ap.add_argument("--player", choices=sorted(agent_mod.PLAYER_PROFILES),
                     default=agent_mod.DEFAULT_PLAYER_PROFILE,
-                    help="fixed medium-effort player profile")
+                    help="player brand; its model and effort come from "
+                         "the owner's Class B (modelclass)")
     ap.add_argument("--turns", type=int, default=DEFAULT_TURNS)
     ap.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS,
                     help="wall-clock PLAYER-SESSION budget, counted from the "
@@ -221,8 +223,10 @@ def main() -> int:
         meta["player_model"] = {
             "profile": args.player,
             "backend": profile["backend"],
-            "model": profile["model"],
-            "effort": profile["effort"],
+            # Filled from the player itself once it has resolved Class B,
+            # so the trace records exactly the model and effort that ran.
+            "model": None,
+            "effort": None,
             "decision_timeout_seconds": args.decision_timeout,
             "session_persistence": "ephemeral",
             "tools": ("disabled" if profile["backend"] == "codex-cli" else
@@ -240,6 +244,7 @@ def main() -> int:
         player = agent_mod.PlayerAgent(
             persona, manual, player_profile=args.player,
             decision_timeout=args.decision_timeout)
+        meta["player_model"].update(model=player.model, effort=player.effort)
 
     if args.render_mode == "windowed":
         print("playtest: this launches a WINDOWED instance that will take "

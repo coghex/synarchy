@@ -18,8 +18,8 @@ is mechanically enforced against these enums.
 from __future__ import annotations
 
 
-DEFAULT_MODEL = "claude-opus-5-5"   # strong + multimodal; runs once per session
-DEFAULT_EFFORT = "high"
+# No default model: the critic runs on the owner's Class B (Claude), resolved
+# by model_class when critic.py starts unless --model/--effort are given.
 DEFAULT_MAX_TOKENS = 16000
 DEFAULT_MAX_FRAMES = 8
 

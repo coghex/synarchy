@@ -29,7 +29,7 @@ Pipeline:
 
 Usage:
   python3 tools/playtest/critic.py <trace_dir>            # writes into the trace dir
-  python3 tools/playtest/critic.py <trace_dir> --out DIR --model claude-opus-5-5
+  python3 tools/playtest/critic.py <trace_dir> --out DIR --model M --effort E
   python3 tools/playtest/critic.py --selftest             # offline, no API key
   python3 tools/playtest/critic.py --eval                 # canned trace + REAL model
                                                           # (needs ANTHROPIC_API_KEY)
@@ -47,8 +47,9 @@ sys.path.insert(0, os.path.dirname(HERE))
 # The implementation lives in one module per ownership boundary (#2069);
 # this file is the documented command and performs CLI dispatch only.
 # See tools/playtest/README.md ("The critic") for the ownership table.
-from critic_contract import (DEFAULT_EFFORT, DEFAULT_MAX_FRAMES,  # noqa: E402
-                             DEFAULT_MAX_TOKENS, DEFAULT_MODEL)
+from critic_contract import (DEFAULT_MAX_FRAMES,  # noqa: E402
+                             DEFAULT_MAX_TOKENS)
+import model_class  # noqa: E402
 from critic_model import Critic  # noqa: E402
 from critic_pipeline import run_critic  # noqa: E402
 
@@ -57,9 +58,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("trace_dir", nargs="?", help="H1 session-trace directory")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
-    ap.add_argument("--effort", default=DEFAULT_EFFORT,
-                    choices=["low", "medium", "high"])
+    ap.add_argument("--model", default=None,
+                    help="default: the owner's Class B Claude model (modelclass)")
+    ap.add_argument("--effort", default=None,
+                    choices=["low", "medium", "high"],
+                    help="default: Class B's effort")
     ap.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     ap.add_argument("--max-frames", type=int, default=DEFAULT_MAX_FRAMES,
                     help="screenshot budget for the multimodal call")
@@ -81,6 +84,13 @@ def main() -> int:
         # the fixture and the fake critics load only on this branch
         from critic_selftest import selftest
         return selftest()
+    if args.model is None or args.effort is None:
+        try:
+            class_model, class_effort = model_class.resolve("claude")
+        except model_class.ModelClassError as e:
+            raise SystemExit(f"critic: {e}") from e
+        args.model = args.model or class_model
+        args.effort = args.effort or class_effort
     if args.eval:
         from critic_eval import eval_run
         return eval_run(args.model, args.effort)

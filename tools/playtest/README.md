@@ -23,8 +23,8 @@ records everything into a replayable **session trace** for the critic
 python3 tools/playtest/run.py
 python3 tools/playtest/run.py --persona impatient_imogen --dt 3
 
-# Opus 5.5 medium through an existing Claude Code subscription login
-python3 tools/playtest/run.py --player claude-opus
+# the Claude player, through an existing Claude Code subscription login
+python3 tools/playtest/run.py --player claude
 
 # Same session, but unattended: windowless offscreen render (#650) —
 # no focus steal, and several sessions can run in parallel on
@@ -48,9 +48,11 @@ wall-clock, `dt` 2.0 s, a 90-second decision timeout, a **200K**
 input-plus-output player-token ceiling, stuck detection after 3 identical
 no-change turns, and a 1800-second `--setup-timeout` watchdog for
 everything *before* the session starts (see
-[Budgets and the player-ready boundary](#budgets-and-the-player-ready-boundary)). `--player` selects one complete audited medium-effort profile:
-`codex-sol` (the default, `gpt-6-sol`) or `claude-opus`
-(`claude-opus-5-5`). Arbitrary provider/model/effort strings are not accepted.
+[Budgets and the player-ready boundary](#budgets-and-the-player-ready-boundary)). `--player` selects the player's brand: `codex` (the default) or `claude`.
+Its model and effort are the owner's **Class B**, resolved by `modelclass`
+from `~/.config/model-classes.toml` when the run starts and recorded in
+`meta.json`'s `player_model`. Arbitrary provider/model/effort strings are not
+accepted; change Class B to change the player's model.
 
 After every decision the console shows compact `K`/`M`/`G` values for tokens
 used that turn, cumulative player tokens, and remaining session budget. The
@@ -329,7 +331,7 @@ Latin-hypercube-style spread across the axis space, reproducible from
 `(seed, count)`, so a campaign deliberately spans combinations instead
 of clustering). The default blurb is a deterministic template;
 **`--llm`** rewrites the name + blurb with a configurable model
-(`claude-opus-5-5` by default, `--model` to change — needs an
+(the Class B Claude model by default, `--model` to change — needs an
 Anthropic key). LLM prose is **frozen into the spec at generation
 time** — files, the H1 trace, and replay always reuse the stored text,
 never regenerate — so the prose can't drift between runs while the
@@ -498,7 +500,7 @@ destination does not discard historical rows.
 
 ```bash
 python3 tools/playtest/critic.py tools/playtest/sessions/<dir>
-python3 tools/playtest/critic.py <dir> --model claude-opus-5-5 --effort high
+python3 tools/playtest/critic.py <dir> --model M --effort high   # override Class B
 python3 tools/playtest/critic.py --selftest   # offline, no API key
 python3 tools/playtest/critic.py --eval       # REAL model vs the canned
                                               # planted-issue trace (needs a key)
@@ -544,7 +546,7 @@ shown-but-disabled affordance, the one case that still correlates to
 itself). Right/middle clicks and drags keep the older
 `(paintKey, paintOrder)` topmost-eligible join, and so does any trace
 recorded before those fields existed.
-Adjudication (default `claude-opus-5-5`, high effort — cost is
+Adjudication (default: the Class B Claude model and effort — cost is
 per-session, not per-turn) is **batched** so that every candidate's
 own screenshot is actually shown in the call that judges it:
 `--max-frames` is a per-call budget, and a tight budget means more
@@ -629,7 +631,7 @@ analysis functions from `critic_signals.py` directly.
   diagnostics with null boundary stamps, lifecycle metadata is
   chronological, the group reap and port wait really happen, and
   pre-#1539 traces still load), and the oracle-blind prompt
-  shape plus both pinned medium-effort provider invocations, normalized usage,
+  shape plus both provider invocations built from an injected Class B profile, normalized usage,
   and projected token reserve (FakeEngine + scripted agent; no window, no
   build, no model call).
 
