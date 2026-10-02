@@ -1,0 +1,17 @@
+{
+  "source_commit": "3e9f8688711fc9b0fcb031922efcfe8ed8f8aaf4",
+  "engine": "/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2719-hydraulic-harness/dist-newstyle/build/aarch64-osx/ghc-9.12.2/synarchy-0.1.0.0/build/synarchy/synarchy",
+  "engine_sha256": "e86339f0392e1dcc0b2355bf2a939e5dab61a6542f22fb1902f62f4031752444",
+  "driver": "tools/river_runtime_arena.py",
+  "driver_sha256": "53254ad1e30d223f2f12945e1eaa2a53cd6997688e78874491b43af4566135da",
+  "recipe_sha256": "afdb83a224819acb608fab9d0e6ce0a21f9aba40d5cbf01fde09721a4548b21e",
+  "classification": "characterization, not behaviour approval",
+  "resource_root": "isolated copy under the output directory",
+  "limitations": [
+    "finite initial water, no continuous supply",
+    "all 25 arena chunks are resident",
+    "socket surface observations are rounded ceilings",
+    "wall-clock observation; no exact tick-count claim"
+  ],
+  "completed": true
+}

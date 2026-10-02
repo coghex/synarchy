@@ -11,6 +11,8 @@ archive beside the old ones.
 |---|---|---|
 | `baseline-solver.json`, `baseline-solver-manifest.json` | `tools/river_runtime/Characterize.hs` | Eight two-cell cases through the real `Sim.Fluid.Active.simulateActiveTick`, ten fixed ticks each: exact source, target and total units per tick. |
 | `arena-v1/`, `arena-v2/` | `tools/river_runtime_arena.py` | A finite-charge arena laboratory driven over the debug console: recipe, wet/dry and whole-z ceiling observations after wall-clock intervals, the socket transcript, and a manifest. |
+| `arena-v3/` | `tools/river_runtime_arena.py` at `3e9f86887` | #2719's bounded smoke run of the recovered tool: the same recipe as `arena-v2` (byte-identical `recipe.json`), with the same stated limitations. |
+| `harness-v1/` | `exe:river-runtime-harness` at `3e9f86887` | The five authored fixtures through the legacy adapter at origin, ordinary and wrapped-seam placements, every check result, origin-versus-translation comparisons, and the eight baseline cases reproduced exactly. |
 
 Both sources were recovered from #2533's worktree and committed byte for byte
 in #2719 (commit `2c69fe475`), so each archive names a tracked blob:
