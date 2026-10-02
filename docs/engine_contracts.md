@@ -2766,7 +2766,18 @@ realized}` plus `item_instance_id` once bound — and, since #2510, no
 `item.listGround` / `item.getGroundForUnit` rows carry `contentsKey`, the
 ids-masked contents signature `unit.getInventory` already reports, so a
 realized crate's cargo is observable on the ground, and `weight` is the
-realized tree's recursive mass the moment the operation returns. The whole FIELD is omitted
+realized tree's recursive mass the moment the operation returns. Both
+are GROUPING views — `contentsKey` sorts its children and drops fields —
+so equality of physical trees is asked of the read-only
+`item.debugGroundTree(gid[, pageId])` / `item.debugHeldTree(uid,
+instanceId)` instead: the root's own fields apart from its contents,
+rendered in ORDER with every physical field and only the instance id and
+tracked temperature masked (`Item.Types.itemTreeSnapshot`). The probe's
+cross-process comparison holds a shell's realization INPUTS identical
+(definition, storage, bulk, fill, exact ordered contents) while its
+salvage rolls — quality, condition, weight, sharpness, drawn off the
+entropy-seeded shared stat RNG — differ per process; hspec pins that
+realization reads none of those and preserves them exactly. The whole FIELD is omitted
 for an instance with no slots — unlike `significant`, which is always an
 array because its cardinality is what makes the clearance predicate
 vacuous. A container confers nothing, so "carries no slots" and "carries

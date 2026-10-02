@@ -224,9 +224,8 @@ def _crate_slots(port: int, page: str) -> list[dict]:
 
 def _shell_rows(port: int, item_id: str) -> list[dict]:
     """Every ground shell of definition `item_id`, as
-    `{gid, instance, weight, key}` rows -- `key` being the ids-masked
-    contents signature (`contentsKey`, #2510) that tells a realized tree
-    from a pending one and two realized trees apart.
+    `{gid, instance, weight}` rows. Trees are compared through
+    `_ground_tree`, never through these.
 
     `item.listGround()` is ACTIVE-page scoped with no page argument, and
     every phase here shows CRATE_PAGE before reading — which is also
@@ -238,7 +237,7 @@ def _shell_rows(port: int, item_id: str) -> list[dict]:
         "for _, g in ipairs(item.listGround() or {}) do "
         f"  if g.defName == '{item_id}' then "
         "    out[#out + 1] = { gid = g.id, instance = g.instanceId, "
-        "                      weight = g.weight, key = g.contentsKey } "
+        "                      weight = g.weight } "
         "  end "
         "end "
         "return out", timeout=20.0))
@@ -337,9 +336,12 @@ def check_no_respawn_and_realize(args, state, failures: list[str]) -> None:
     realized by being picked up, and the rest are left pending for the
     save.
 
-    Every shell's pending tree is recorded first, keyed by its location
-    slot, and so is every realized one: the opposite-order processes
-    compare against both."""
+    Every comparison is of EXACT trees (`item.debugGroundTree` /
+    `item.debugHeldTree`: ordered, every physical field, ids masked),
+    never of `contentsKey`, which is a sorted grouping key. Each shell's
+    realization INPUTS are recorded before anything is realized, keyed by
+    its location slot, and so is every realized tree: the opposite-order
+    processes compare against both."""
     send(args.port, "return world.loadChunksInRegion(-1,-1,1,1)")
     time.sleep(1.0)
     shells = _shell_rows(args.port, "probe_pending_crate")
@@ -357,40 +359,50 @@ def check_no_respawn_and_realize(args, state, failures: list[str]) -> None:
             f"need at least three bound shells to realize one in place, pick "
             f"one up and keep one pending; found {len(shells)}")
         return
-    state.crate_pending_trees = {_slot_key(slots[s["instance"]]): s["key"]
-                                 for s in shells}
+    pending = {s["gid"]: _ground_tree(args.port, s["gid"]) for s in shells}
+    if any(t is None for t in pending.values()):
+        failures.append("item.debugGroundTree could not describe a pending "
+                        "shell")
+        return
+    state.crate_pending_trees = {
+        _slot_key(slots[s["instance"]]): _inputs(pending[s["gid"]])
+        for s in shells}
     ground, held = shells[0], shells[1]
 
     # Explicit realization: in place, exactly once.
+    before = pending[ground["gid"]]
     first = _realize(args.port, ground["gid"])
-    after = [s for s in _shell_rows(args.port, "probe_pending_crate")
-             if s["gid"] == ground["gid"]]
-    if (first == "realized" and after
-            and after[0]["instance"] == ground["instance"]
-            and after[0]["key"] != ground["key"]
-            and after[0]["weight"] > ground["weight"]):
+    after = _ground_tree(args.port, ground["gid"])
+    row = [s for s in _shell_rows(args.port, "probe_pending_crate")
+           if s["gid"] == ground["gid"]]
+    if (first == "realized" and after and row
+            and row[0]["instance"] == ground["instance"]
+            and _own(after) == _own(before)
+            and after["contents"] != before["contents"]
+            and row[0]["weight"] > ground["weight"]):
         print("PASS: item.realizeGround realized a pending shell IN PLACE -- "
-              "same ground id and instance id, its cargo visible at once in "
-              "the row's contents and recursive weight")
+              "same ground id and instance id, the shell's own values exactly "
+              "as they were, its cargo visible at once in its tree and its "
+              "recursive weight")
     else:
         failures.append(
             "item.realizeGround should realize a pending shell in place; "
-            f"answered {first!r}, row before {ground}, after {after}")
+            f"answered {first!r}, tree before {before}, after {after}, "
+            f"row {row}")
         return
     second = _realize(args.port, ground["gid"])
-    again = [s for s in _shell_rows(args.port, "probe_pending_crate")
-             if s["gid"] == ground["gid"]]
-    if second == "already-realized" and again and again[0]["key"] == after[0]["key"]:
+    again = _ground_tree(args.port, ground["gid"])
+    if second == "already-realized" and again == after:
         print("PASS: a second item.realizeGround answered already-realized "
-              "and re-rolled nothing")
+              "and left the exact tree untouched")
     else:
         failures.append(
-            f"a repeat realization answered {second!r} with contents "
-            f"{again[0]['key'] if again else '<gone>'!r}, expected "
-            f"already-realized and {after[0]['key']!r}")
+            f"a repeat realization answered {second!r} with tree {again}, "
+            f"expected already-realized and {after}")
+    ground_slot = _slot_key(slots[ground["instance"]])
     state.crate_ground_shell = ground["instance"]
-    state.crate_realized_trees[_slot_key(slots[ground["instance"]])] = \
-        after[0]["key"]
+    state.crate_realized_trees[ground_slot] = after["contents"]
+    state.crate_saved_trees[ground_slot] = after
 
     # The pickup backstop: a still-pending shell arrives in the
     # inventory already realized.
@@ -405,23 +417,27 @@ def check_no_respawn_and_realize(args, state, failures: list[str]) -> None:
     if uid < 0:
         failures.append(f"could not spawn a pickup unit: {uid}")
         return
+    before = pending[held["gid"]]
     picked = send(args.port,
                   f"return item.pickupGround({uid}, {held['gid']})").strip()
-    carried = [r for r in _inventory_rows(args.port, uid)
-               if r["instance"] == held["instance"]]
-    if picked == "true" and carried and carried[0]["key"] != held["key"]:
+    carried = _held_tree(args.port, uid, held["instance"])
+    if (picked == "true" and carried
+            and _own(carried) == _own(before)
+            and carried["contents"] != before["contents"]):
         print("PASS: picking up a PENDING shell realized it first -- it "
-              "arrived in the inventory carrying its cargo")
+              "arrived in the inventory carrying its cargo, its own values "
+              "untouched")
     else:
         failures.append(
             "a pending shell's pickup should realize it and move it; "
             f"pickupGround={picked!r}, carried={carried}, pending tree "
-            f"{held['key']!r}")
+            f"{before}")
         return
+    held_slot = _slot_key(slots[held["instance"]])
     state.crate_held_shell = held["instance"]
     state.crate_holder_uid = uid
-    state.crate_realized_trees[_slot_key(slots[held["instance"]])] = \
-        carried[0]["key"]
+    state.crate_realized_trees[held_slot] = carried["contents"]
+    state.crate_saved_trees[held_slot] = carried
 
     _check_slot_states(args.port, state, failures, "after realizing two")
 
@@ -465,19 +481,42 @@ def _realize(port: int, gid: int) -> str:
                 ).strip().strip('"')
 
 
-def _inventory_rows(port: int, uid: int) -> list[dict]:
-    return _decode_rows(send(
-        port,
-        "local out = {} "
-        f"for _, r in ipairs(unit.getInventory({uid}) or {{}}) do "
-        "  out[#out + 1] = { instance = r.instanceId, key = r.contentsKey } "
-        "end "
-        "return out"))
+def _ground_tree(port: int, gid: int) -> dict | None:
+    """The EXACT tree of ground item `gid` on the crate page."""
+    t = send_json(port, f"return item.debugGroundTree({gid}, '{CRATE_PAGE}')")
+    return t if isinstance(t, dict) else None
+
+
+def _held_tree(port: int, uid: int, instance: int) -> dict | None:
+    """The EXACT tree of the item `uid` carries with id `instance`."""
+    t = send_json(port, f"return item.debugHeldTree({uid}, {instance})")
+    return t if isinstance(t, dict) else None
+
+
+#: The root fields a shell's salvage spawn ROLLS off the shared,
+#: entropy-seeded stat RNG -- so two processes give the same slot's shell
+#: different values here. Realization reads none of them (hspec
+#: "Location container shells" pins that two shells differing only in
+#: these realize into one ordered tree), and must preserve them exactly.
+_ROLLED = ("quality", "condition", "weight", "sharpness")
+
+
+def _own(tree: dict) -> dict:
+    """A tree's ROOT values: every field but its contents."""
+    return {k: v for k, v in tree.items() if k != "contents"}
+
+
+def _inputs(tree: dict) -> dict:
+    """What realization READS from a shell: its definition, storage and
+    bulk, its fill, and its exact ordered contents -- everything but the
+    rolled values above. Two processes must agree on this before their
+    realized trees can be compared like for like."""
+    return {k: v for k, v in tree.items() if k not in _ROLLED}
 
 
 def check_shell_survived_reload(args, state, failures: list[str]) -> None:
     """Every slot comes back from save -> quit -> fresh process -> load in
-    the state it was saved in, both realized trees come back exactly, and
+    the state it was saved in, both realized trees come back EXACTLY, and
     (#2510) realization stays exactly-once across the round trip."""
     slots = _crate_slots(args.port, CRATE_PAGE)
     bound = [s for s in slots if s.get("bound", -1) > 0]
@@ -505,32 +544,32 @@ def check_shell_survived_reload(args, state, failures: list[str]) -> None:
         return
 
     ground = [s for s in shells if s["instance"] == state.crate_ground_shell]
-    carried = [r for r in _inventory_rows(args.port, state.crate_holder_uid)
-               if r["instance"] == state.crate_held_shell]
-    ground_key = _slot_key(slot_of[state.crate_ground_shell])
-    held_key = _slot_key(slot_of[state.crate_held_shell])
-    if (ground and carried
-            and ground[0]["key"] == state.crate_realized_trees[ground_key]
-            and carried[0]["key"] == state.crate_realized_trees[held_key]):
+    ground_tree = _ground_tree(args.port, ground[0]["gid"]) if ground else None
+    carried = _held_tree(args.port, state.crate_holder_uid,
+                         state.crate_held_shell)
+    ground_slot = _slot_key(slot_of[state.crate_ground_shell])
+    held_slot = _slot_key(slot_of[state.crate_held_shell])
+    if (ground_tree == state.crate_saved_trees.get(ground_slot)
+            and carried == state.crate_saved_trees.get(held_slot)):
         print("PASS: both realized trees -- one on the ground, one in an "
-              "inventory -- round-tripped exactly")
+              "inventory -- round-tripped EXACTLY, order and every field")
     else:
         failures.append(
-            f"a realized tree changed across save/load: ground {ground}, "
-            f"carried {carried}, saved {state.crate_realized_trees}")
+            f"a realized tree changed across save/load: ground "
+            f"{ground_tree}, carried {carried}, saved "
+            f"{state.crate_saved_trees}")
         return
 
     # Exactly once ACROSS the round trip: the restored latch is honoured.
     answer = _realize(args.port, ground[0]["gid"])
-    again = [s for s in _shell_rows(args.port, "probe_pending_crate")
-             if s["gid"] == ground[0]["gid"]]
-    if answer == "already-realized" and again and again[0]["key"] == ground[0]["key"]:
+    again = _ground_tree(args.port, ground[0]["gid"])
+    if answer == "already-realized" and again == ground_tree:
         print("PASS: after the reload a realized shell answers "
-              "already-realized and re-rolls nothing")
+              "already-realized and its exact tree is untouched")
     else:
         failures.append(
             f"after the reload a realized shell answered {answer!r} with "
-            f"contents {again}, expected already-realized and unchanged")
+            f"tree {again}, expected already-realized and {ground_tree}")
 
     # …and a shell still pending after the load realizes now, into the
     # tree its slot's context determines -- which the opposite-order
@@ -539,17 +578,20 @@ def check_shell_survived_reload(args, state, failures: list[str]) -> None:
                if s["instance"] not in (state.crate_ground_shell,
                                         state.crate_held_shell)]
     target = pending[0]
+    before = _ground_tree(args.port, target["gid"])
     answer = _realize(args.port, target["gid"])
-    after = [s for s in _shell_rows(args.port, "probe_pending_crate")
-             if s["gid"] == target["gid"]]
-    if answer == "realized" and after and after[0]["key"] != target["key"]:
+    after = _ground_tree(args.port, target["gid"])
+    if (answer == "realized" and before and after
+            and _own(after) == _own(before)
+            and after["contents"] != before["contents"]):
         state.crate_realized_trees[_slot_key(slot_of[target["instance"]])] = \
-            after[0]["key"]
-        print("PASS: a shell still pending after the reload realized now")
+            after["contents"]
+        print("PASS: a shell still pending after the reload realized now, "
+              "its own values untouched")
     else:
         failures.append(
             f"a pending shell after the reload answered {answer!r} with "
-            f"contents {after}, expected a fresh realization")
+            f"tree {after} (was {before}), expected a fresh realization")
 
 
 def visit_crate_chunks(port: int, reverse: bool) -> None:
@@ -567,11 +609,17 @@ def visit_crate_chunks(port: int, reverse: bool) -> None:
 def check_realization_order(args, state, failures: list[str],
                             label: str, reverse: bool) -> None:
     """#2510 requirement 8, in a fresh process on the same seed whose
-    chunks were visited in `label` order: every bound shell starts from
-    the same pending tree the crate world recorded for its slot, and --
-    realized here, in that order too -- ends as the tree every earlier
-    process realized for that slot. The first order's trees must then be
-    reproduced exactly by the second."""
+    chunks were visited in `label` order.
+
+    Like for like first: every bound shell's realization INPUTS -- its
+    definition, storage, bulk, fill and EXACT ordered contents -- must
+    equal what the crate world recorded for the same slot. Only the
+    shell's own salvage rolls may differ, because they come off the
+    shared entropy-seeded stat RNG; realization reads none of them, and
+    must leave them exactly as they were. Then, realized here in that
+    order too, every slot's EXACT ordered contents must equal what every
+    earlier process realized for it, and the first visit order's trees
+    must be reproduced exactly by the second."""
     bound = []
     for _ in range(40):
         bound = list(_slots_by_shell(args.port).values())
@@ -586,39 +634,51 @@ def check_realization_order(args, state, failures: list[str],
     slot_of = _slots_by_shell(args.port)
     shells = sorted(_shell_rows(args.port, "probe_pending_crate"),
                     key=lambda s: s["gid"], reverse=reverse)
-    pending = {_slot_key(slot_of[s["instance"]]): s["key"] for s in shells}
-    if pending != state.crate_pending_trees:
+    before = {s["gid"]: _ground_tree(args.port, s["gid"]) for s in shells}
+    inputs = {_slot_key(slot_of[s["instance"]]): _inputs(before[s["gid"]])
+              for s in shells if before[s["gid"]] is not None}
+    if inputs != state.crate_pending_trees:
         failures.append(
-            f"#2510 ({label}): the pending trees differ from the crate "
+            f"#2510 ({label}): the realization inputs differ from the crate "
             f"world's, so the comparison below would not be like for like: "
-            f"{pending} vs {state.crate_pending_trees}")
+            f"{inputs} vs {state.crate_pending_trees}")
         return
+    print(f"PASS: #2510 fresh process, {label} -- every shell's realization "
+          "inputs (definition, storage, exact ordered contents) match the "
+          "crate world's slot for slot")
 
     realized = {}
     for s in shells:
         if _realize(args.port, s["gid"]) != "realized":
             failures.append(f"#2510 ({label}): shell {s} did not realize")
             return
-        row = [r for r in _shell_rows(args.port, "probe_pending_crate")
-               if r["gid"] == s["gid"]]
-        realized[_slot_key(slot_of[s["instance"]])] = row[0]["key"] if row else None
+        after = _ground_tree(args.port, s["gid"])
+        if after is None or _own(after) != _own(before[s["gid"]]):
+            failures.append(
+                f"#2510 ({label}): realizing shell {s} changed its own "
+                f"values: {before[s['gid']]} -> {after}")
+            return
+        realized[_slot_key(slot_of[s["instance"]])] = after["contents"]
 
-    earlier = {k: v for k, v in state.crate_realized_trees.items()}
-    mismatched = {k: (realized.get(k), v) for k, v in earlier.items()
+    mismatched = {k: (realized.get(k), v)
+                  for k, v in state.crate_realized_trees.items()
                   if realized.get(k) != v}
     if mismatched:
         failures.append(
             f"#2510 ({label}): a slot realized differently from the crate "
             f"world and its reload: {mismatched}")
     else:
-        print(f"PASS: #2510 fresh process, {label} -- the {len(earlier)} "
-              "slot(s) realized before (in place, by pickup, and after a "
-              "reload) realized into exactly the same trees")
+        print(f"PASS: #2510 fresh process, {label} -- the "
+              f"{len(state.crate_realized_trees)} slot(s) realized before "
+              "(in place, by pickup, and after a reload) realized into "
+              "exactly the same ordered trees, every shell's own values "
+              "untouched")
     if not state.crate_order_trees:
         state.crate_order_trees = realized
     elif realized == state.crate_order_trees:
         print(f"PASS: #2510 fresh process, {label} -- all {len(realized)} "
-              "shells realized exactly as in the opposite visit order")
+              "shells realized into exactly the ordered trees of the "
+              "opposite visit order")
     else:
         failures.append(
             f"#2510 ({label}): the realized trees differ from the opposite "

@@ -48,8 +48,9 @@ import Engine.Core.Log
     (LogBackend(..), LogConfig(..), LogEntry(..), defaultLogConfig, initLogger)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.API.Items.Ground
-    ( itemGetGroundForUnitFn, itemListGroundFn, itemPickupGroundFn
-    , itemRealizeGroundFn, pickupGroundOnPage )
+    ( itemDebugGroundTreeFn, itemDebugHeldTreeFn, itemGetGroundForUnitFn
+    , itemListGroundFn, itemPickupGroundFn, itemRealizeGroundFn
+    , pickupGroundOnPage )
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Item.Types
 import Location.Instance
@@ -89,6 +90,10 @@ spec = beforeAll initEnv $
         -- the salvage profile always proposes exactly two rations.
         map iiDefName (iiContents (giInst after))
             `shouldBe` ["packing_straw", "rations", "rations"]
+        -- The shell's OWN values — its salvage rolls included — are
+        -- preserved exactly; only its contents changed (D-22).
+        (giInst after) { iiContents = [] }
+            `shouldBe` (giInst before) { iiContents = [] }
         slotOf ws `shouldReturn`
             (Just (iiInstanceId (giInst before)), True, Nothing)
         -- The cargo's nested identities came from the engine's REAL
@@ -278,6 +283,79 @@ spec = beforeAll initEnv $
         renderContents shell `shouldBe` (pinnedVectors !! 2)
         writeIORef (itemManagerRef env) containerItemDefs
 
+    it "draws the SAME cargo whatever the shell's own rolled values are, \
+       \so those are not realization inputs — and leaves them as they \
+       \were" $ \env → do
+        -- The cross-process comparison in tools/location_content_probe.py
+        -- holds the realization INPUTS identical (definition, storage,
+        -- the ordered authored contents) while the shell's salvage
+        -- rolls — drawn off the entropy-seeded shared stat RNG — differ
+        -- per process. This is what licenses that: two shells differing
+        -- ONLY in those rolls realize into one ordered tree.
+        let pageId = WorldPageId "realize_rolls"
+            vectorCrate = fromMaybe (error "probeItems has no crate")
+                (lookupItemDef "crate" probeItems)
+            items = ItemManager $ HM.insert "crate"
+                (vectorCrate { idStorage = Just (ItemStorage 1000 1000) })
+                (case probeItems of ItemManager m → m)
+            table = instanceTable 7
+                (mkDef "vector_site" [containerContent "crate" "probe_vectors" 3])
+        ws ← emptyWorldState
+        writeIORef (wsGenParamsRef ws)
+            (Just (paramsWith table) { wgpSeed = 99 })
+        installPages env [(pageId, ws)]
+        writeIORef (itemManagerRef env) items
+        writeIORef (lootProfileRegistryRef env)
+            (registerLootProfile vectorProfile emptyLootProfileRegistry)
+        spawnContainer env pageId 7 3 (8, 8) `shouldReturn` True
+        gid ← onlyGroundId ws
+        let reroll gi = gi { giInst = (giInst gi)
+                { iiQuality = 3.5, iiCondition = 12.25, iiWeight = 41
+                , iiSharpness = 7, iiTemp = Just 80 } }
+        atomicModifyIORef' (wsGroundItemsRef ws) $ \g →
+            (g { gisItems = HM.adjust reroll gid (gisItems g) }, ())
+        before ← giInst <$> groundItem ws gid
+        realizeVia env gid Nothing `shouldReturn` Just "realized"
+        shell ← giInst <$> groundItem ws gid
+        renderContents shell `shouldBe` (pinnedVectors !! 2)
+        shell { iiContents = [] } `shouldBe` before { iiContents = [] }
+        writeIORef (itemManagerRef env) containerItemDefs
+
+    it "describes an EXACT ordered tree, ids masked, through \
+       \item.debugGroundTree and item.debugHeldTree" $ \env → do
+        ws ← onePage env "realize_tree" "fixture_salvage"
+        installUnit env "realize_tree" 629
+        gid ← onlyGroundId ws
+        realizeVia env gid Nothing `shouldReturn` Just "realized"
+        shell ← giInst <$> groundItem ws gid
+        let expected = treeRow shell
+        groundTreeVia env gid Nothing `shouldReturn` Just expected
+        groundTreeVia env gid (Just "realize_tree") `shouldReturn` Just expected
+        groundTreeVia env 999 Nothing `shouldReturn` Nothing
+        groundTreeVia env gid (Just "no_such_page") `shouldReturn` Nothing
+        pickupVia env 629 gid `shouldReturn` True
+        heldTreeVia env 629 (iiInstanceId shell) `shouldReturn` Just expected
+        heldTreeVia env 629 4242 `shouldReturn` Nothing
+        heldTreeVia env 9999 (iiInstanceId shell) `shouldReturn` Nothing
+
+    it "renders a tree's ORDER and every physical field, and masks only \
+       \identity and temperature" $ \_ → do
+        let a = plainInstance 1 "rations"
+            b = (plainInstance 2 "packing_straw") { iiQuality = 40 }
+            box cs = (plainInstance 10 "fixture_crate") { iiContents = cs }
+        itemTreeSnapshot (box [a, b]) `shouldNotBe` itemTreeSnapshot (box [b, a])
+        -- itemContentsSig is the GROUPING key and cannot tell them apart,
+        -- which is exactly why the probe no longer compares with it.
+        itemContentsSig (box [a, b]) `shouldBe` itemContentsSig (box [b, a])
+        itemTreeSnapshot (box [a, b])
+            `shouldBe` itemTreeSnapshot
+                ((box [ a { iiInstanceId = 77, iiTemp = Just 30 }
+                      , b { iiInstanceId = 78 } ]) { iiInstanceId = 99 })
+        itemTreeSnapshot (box [a]) `shouldNotBe`
+            itemTreeSnapshot (box [a { iiCondition = 99 }])
+        itemTreeSnapshot (box []) `shouldNotBe`
+            itemTreeSnapshot ((box []) { iiStorage = Nothing })
+
 -- * Fixtures ------------------------------------------------------------
 
 -- | Two rations, always: two lots of one, so a realized shell's contents
@@ -460,6 +538,58 @@ realizeRawVia env pushGid pushPage = Lua.run $ do
         _ → do
             b ← Lua.toboolean Lua.top
             pure (if b then Just "<true>" else Nothing)
+
+-- | What both tree verbs answer, built from the instance itself: the
+--   root's definition and ORDERED contents, and its numeric fields as
+--   the Doubles they were pushed as (an absent one reads as -1).
+type TreeRow = (Text, Text, [Double])
+
+treeRow ∷ ItemInstance → TreeRow
+treeRow i =
+    ( iiDefName i
+    , T.intercalate ";" (map itemTreeSnapshot (iiContents i))
+    , map realToFrac
+        [ iiQuality i, iiCondition i, iiWeight i, iiCurrentFill i
+        , iiSharpness i, fromMaybe (-1) (iiBulk i)
+        , maybe (-1) isWeightCapacity (iiStorage i)
+        , maybe (-1) isBulkCapacity (iiStorage i) ] )
+
+-- | Call a tree verb through its real Lua function and read its answer
+--   back into a 'TreeRow'.
+treeVia ∷ Lua.LuaE Lua.Exception Lua.NumResults → Text → IO (Maybe TreeRow)
+treeVia fn call = Lua.run $ do
+    Lua.openlibs
+    Lua.pushHaskellFunction fn
+    Lua.setglobal "real"
+    status ← Lua.dostring $ TE.encodeUtf8 $ T.unlines
+        [ "local t = " <> call
+        , "if t == nil then return nil end"
+        , "return t.defName, t.contents, t.quality, t.condition, t.weight,"
+        , "  t.fill, t.sharpness, t.bulk or -1, t.storageWeight or -1,"
+        , "  t.storageBulk or -1" ]
+    case status of
+        Lua.OK → do
+            isNil ← Lua.isnil (Lua.nth 1)
+            if isNil then pure Nothing else do
+                name ← Lua.tostring (Lua.nth 10)
+                contents ← Lua.tostring (Lua.nth 9)
+                nums ← forM [8, 7 .. 1] $ \ix → Lua.tonumber (Lua.nth ix)
+                case (name, contents, sequence nums) of
+                    (Just n, Just c, Just ns) → pure $ Just
+                        ( TE.decodeUtf8Lenient n, TE.decodeUtf8Lenient c
+                        , [ d | Lua.Number d ← ns ] )
+                    _ → error "treeVia: a tree field was missing"
+        _ → do
+            err ← Lua.tostring Lua.top
+            error ("treeVia failed: " <> maybe "<no message>" show err)
+
+groundTreeVia ∷ EngineEnv → Int → Maybe Text → IO (Maybe TreeRow)
+groundTreeVia env gid mPage = treeVia (itemDebugGroundTreeFn env) $
+    "real(" <> tshow gid <> maybe "" (\pg → ", '" <> pg <> "'") mPage <> ")"
+
+heldTreeVia ∷ EngineEnv → Int → Word64 → IO (Maybe TreeRow)
+heldTreeVia env uid itemId = treeVia (itemDebugHeldTreeFn env) $
+    "real(" <> tshow uid <> ", " <> tshow itemId <> ")"
 
 -- | @item.pickupGround(uid, gid)@.
 pickupVia ∷ EngineEnv → Int → Int → IO Bool

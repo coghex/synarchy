@@ -434,12 +434,15 @@ class ScenarioState:
     #: processes that read it — the round-trip and the missing-profile
     #: refusal — name the same one the façade created.
     crate_slot_name: str = ""
-    #: #2510: every shell's ids-masked contents BEFORE realization, and
-    #: every tree realized so far, both keyed "<instance>:<slot>" -- the
-    #: stable realization context, which is what the fresh processes in
-    #: the opposite-order loop compare against.
-    crate_pending_trees: dict[str, str] = field(default_factory=dict)
+    #: #2510, all keyed "<instance>:<slot>" -- the stable realization
+    #: context the fresh opposite-order processes compare against: each
+    #: shell's realization INPUTS before anything was realized, the EXACT
+    #: ordered contents of every tree realized so far, and the whole exact
+    #: tree of the two realized before the save, which the reload must
+    #: bring back unchanged.
+    crate_pending_trees: dict[str, dict] = field(default_factory=dict)
     crate_realized_trees: dict[str, str] = field(default_factory=dict)
+    crate_saved_trees: dict[str, dict] = field(default_factory=dict)
     #: The two shells the crate world realized -- one in place on the
     #: ground, one by being picked up -- and the unit holding the second,
     #: so the reload phase can find both again.

@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.Items.Ground
     , itemSetGroundTempFn
     , itemPickupGroundFn
     , itemRealizeGroundFn
+    , itemDebugGroundTreeFn
+    , itemDebugHeldTreeFn
     , itemGetGroundForUnitFn
     , pickupGroundOnPage
     , GroundRealization(..)
@@ -34,6 +36,7 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -1210,6 +1213,97 @@ itemRealizeGroundFn env = do
         Just t  → Lua.pushstring (TE.encodeUtf8 t)
         Nothing → Lua.pushboolean False
     return 1
+
+-- | item.debugGroundTree(gid [, pageId]) → tree | nil (#2510).
+--
+--   An EXACT, ids-masked description of one ground item's whole tree,
+--   for probes that must compare physical trees across saves and across
+--   processes: the root's own @defName@, @quality@, @condition@,
+--   @weight@ (empty), @fill@, @sharpness@, @bulk@ (omitted when the
+--   instance carries none) and @storageWeight@ \/ @storageBulk@
+--   (omitted for an item with no internal storage), plus @contents@ —
+--   every child, in ORDER, rendered by 'Item.Types.itemTreeSnapshot'.
+--
+--   Not a grouping key: @contentsKey@ on a ground row sorts its children
+--   and drops fields, which is right for stacking and wrong for "is this
+--   the same tree". Root and contents are reported apart so a caller can
+--   tell the shell's own values from what was put inside it.
+--
+--   Page resolution is 'resolveItemPage''s: the active page when
+--   @pageId@ is omitted, exactly that page otherwise. @nil@ for an
+--   unknown page, a missing ground item, or a mistyped argument.
+--   Read-only.
+itemDebugGroundTreeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemDebugGroundTreeFn env = do
+    gidTy  ← Lua.ltype 1
+    pageTy ← Lua.ltype 2
+    gidArg ← case gidTy of
+        Lua.TypeNumber → Lua.tointeger 1
+        _              → pure Nothing
+    pageArg ← case pageTy of
+        Lua.TypeNone   → pure (Right Nothing)
+        Lua.TypeNil    → pure (Right Nothing)
+        Lua.TypeString → Right ∘ fmap TE.decodeUtf8Lenient <$> Lua.tostring 2
+        _              → pure (Left ())
+    mInst ← case (gidArg, pageArg) of
+        (Just g, Right mPage) → Lua.liftIO $ do
+            mWs ← resolveItemPage env mPage
+            case mWs of
+                Nothing → pure Nothing
+                Just ws → fmap giInst ∘ HM.lookup (fromIntegral g) ∘ gisItems
+                              <$> readIORef (wsGroundItemsRef ws)
+        _ → pure Nothing
+    maybe (Lua.pushnil) pushItemTree mInst
+    return 1
+
+-- | item.debugHeldTree(uid, instanceId) → tree | nil (#2510).
+--
+--   'itemDebugGroundTreeFn''s description for an item a unit CARRIES:
+--   the top-level inventory entry of unit @uid@ whose 'iiInstanceId' is
+--   @instanceId@. @nil@ for an unknown unit, an id the unit is not
+--   carrying at top level, or a mistyped argument. Read-only.
+itemDebugHeldTreeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemDebugHeldTreeFn env = do
+    uidTy ← Lua.ltype 1
+    idTy  ← Lua.ltype 2
+    uidArg ← case uidTy of
+        Lua.TypeNumber → Lua.tointeger 1
+        _              → pure Nothing
+    idArg ← case idTy of
+        Lua.TypeNumber → Lua.tointeger 2
+        _              → pure Nothing
+    mInst ← case (uidArg, idArg) of
+        (Just u, Just i) | i > 0 → Lua.liftIO $ do
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            pure $ do
+                unit ← HM.lookup (UnitId (fromIntegral u)) (umInstances um)
+                find ((≡ fromIntegral i) ∘ iiInstanceId) (uiInventory unit)
+        _ → pure Nothing
+    maybe (Lua.pushnil) pushItemTree mInst
+    return 1
+
+-- | The table both tree verbs answer.
+pushItemTree ∷ ItemInstance → Lua.LuaE Lua.Exception ()
+pushItemTree inst = do
+    Lua.newtable
+    Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
+    Lua.setfield (Lua.nth 2) "defName"
+    num "quality" (iiQuality inst)
+    num "condition" (iiCondition inst)
+    num "weight" (iiWeight inst)
+    num "fill" (iiCurrentFill inst)
+    num "sharpness" (iiSharpness inst)
+    forM_ (iiBulk inst) (num "bulk")
+    forM_ (iiStorage inst) $ \st → do
+        num "storageWeight" (isWeightCapacity st)
+        num "storageBulk" (isBulkCapacity st)
+    Lua.pushstring (TE.encodeUtf8 (T.intercalate ";"
+        (map itemTreeSnapshot (iiContents inst))))
+    Lua.setfield (Lua.nth 2) "contents"
+  where
+    num key v = do
+        Lua.pushnumber (Lua.Number (realToFrac v))
+        Lua.setfield (Lua.nth 2) key
 
 -- | The original remove → insert → rollback core, with no realization in
 --   front of it. Split out so the realization step above reads as one

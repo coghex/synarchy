@@ -100,6 +100,10 @@ registerItemAPI callStats env = do
   -- container shell on the ground. pickupGround performs the same one
   -- as a backstop, so a shell can never enter an inventory unrealized.
   registerLuaFunction callStats "item" "realizeGround" (itemRealizeGroundFn env)
+  -- Exact ids-masked tree descriptions, for probes comparing physical
+  -- trees across saves and processes (#2510). Read-only.
+  registerLuaFunction callStats "item" "debugGroundTree" (itemDebugGroundTreeFn env)
+  registerLuaFunction callStats "item" "debugHeldTree" (itemDebugHeldTreeFn env)
   registerLuaFunction callStats "item" "getGroundForUnit" (itemGetGroundForUnitFn env)
   registerLuaFunction callStats "item" "getFood"      (itemGetFoodFn env)
   registerLuaFunction callStats "item" "debugQuads"   (itemDebugQuadsFn env)
