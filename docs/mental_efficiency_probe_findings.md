@@ -30,13 +30,13 @@ under `/Users/vincentcoghlan/work/.deflake-diagnostics/mental_efficiency_2026092
 
 ## Status
 
-- [ ] CH-1. Mental-efficiency combat fixture places unarmed targets outside melee reach
+- [x] CH-1. Mental-efficiency combat fixture places unarmed targets outside melee reach — [#2772]
 
 ---
 
 ## 1. Combat sampling fixture
 
-### CH-1. Mental-efficiency combat fixture places unarmed targets outside melee reach
+### [#2772] CH-1. Mental-efficiency combat fixture places unarmed targets outside melee reach
 
 **Verification:** Verified, high confidence. The probe spawns its attacker at
 `(2,2)` and target at `(4,2)`, removes the attacker's weapons, and pins height

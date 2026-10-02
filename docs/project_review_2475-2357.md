@@ -16,11 +16,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Haddock open-type resolution ignores imports that withhold record fields
+- [x] PRR-1. Haddock open-type resolution ignores imports that withhold record fields — [#2770]
 
 ## 1. Qualified Haddock link validation
 
-### PRR-1. Haddock open-type resolution ignores imports that withhold record fields
+### [#2770] PRR-1. Haddock open-type resolution ignores imports that withhold record fields
 
 > **Captured note:** PR #2358's `open_type_fields` follows the module that
 > declares a type but does not preserve the field restrictions on the path

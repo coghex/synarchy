@@ -18,7 +18,7 @@ Repository-wide counts were used only to establish scale and were not treated as
 - [x] EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry — [#1910]
 - [x] EA-3. The Lua API is a large manually maintained runtime ABI — [#1995]
 - [x] EA-4. Persistence discards structured information and decodes components twice — [#1919]
-- [ ] EA-5. Integrated and graphical behavior remains mostly outside blocking validation — [deferred]: #1426 census 3/91 migrated; no GPU host exists
+- [ ] EA-5. Integrated and graphical behavior remains mostly outside blocking validation — [deferred]: awaiting #2717 (SCN-17) scenarios
 - [x] EA-6. Dynamic scene assembly relies on unmeasured small-colony assumptions — [#1921]
 
 ---
@@ -107,7 +107,7 @@ The component persistence design provides strong versioning and validation, but 
 
 ### [deferred] EA-5. Integrated and graphical behavior remains mostly outside blocking validation
 
-> **Deferred:** Both halves of this finding's expected direction are currently unscopable, for different reasons. **Probe promotion** is owned by open epic #1426, whose arc landed the machinery — #1441 reports reliability-qualified candidates and explicitly leaves breadth, cost, runner support and the promotion decision to a human — but that report yields nothing yet: `docs/probe_census.json` (`probe-census/v3`, 91 rows) carries 88 `legacy` rows against 3 on `probe-result/v1`, and #1441 requires `probe-result/v1` plus a complete current cohort. **Periodic GPU execution** has no host: the project owner confirmed on 2026-08-30 that the only graphics-capable machine is a laptop that is frequently powered off, so there is no runner to schedule against at any cadence. Clears when enough census rows carry `probe-result/v1` for #1441's report to produce real candidates, or when a GPU-capable runner becomes available — whichever comes first; the residual simulated-time vertical-scenario work can then be scoped against what those actually leave uncovered.
+> **Deferred:** The deterministic-scenario half depends on epic #2698's authored scenarios; building vertical scenarios before them would hand-roll fixtures #2698 replaces. Probe promotion is settled: the census promotion report finds 10 reliability-qualified probes, all held out on grounds no measurement can clear (targeted / scenario-heavy / worldgen-heavy), so no promotion candidates are expected. Periodic GPU execution is dropped: no GPU-capable runner exists and scheduled GPU runs are ruled out. Clears when #2717 (SCN-17) merges; then scope the remaining simulated-time scenario work against what its shipped scenarios leave uncovered.
 
 Headless logic coverage is extensive and the probe inventory has improved substantially, including the removal of all currently classified base-failing probes. Nevertheless, only a minority of registered behavior probes are suitable for blocking CI, while real graphical tests require manual execution on a graphics-capable machine.
 

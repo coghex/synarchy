@@ -17,11 +17,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. The tshow spelling guard silently accepts an in-scope wrapper before an unspaced composition dot
+- [x] PRR-1. The tshow spelling guard silently accepts an in-scope wrapper before an unspaced composition dot — [#2774]
 
 ## 1. Shared text-rendering spelling guard
 
-### PRR-1. The tshow spelling guard silently accepts an in-scope wrapper before an unspaced composition dot
+### [#2774] PRR-1. The tshow spelling guard silently accepts an in-scope wrapper before an unspaced composition dot
 
 > **Captured note:** PR #2411's guard consumes the composition after `show`
 > as part of its name. Consequently, removing whitespace from a valid

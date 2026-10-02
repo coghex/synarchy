@@ -12,7 +12,7 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 - [x] PRR-2. Structure quads do not follow the cylindrical render alias — [#1706]
 - [x] PRR-3. Front-wall handling is fixed to the FaceSouth edge pair — [#1712]
 - [x] PRR-4. Hidden walls can still lift visible flora and vegetation — [#1715]
-- [ ] PRR-5. Guaranteed placement can bypass the location water-safety rule — [deferred]: no measured wet-footprint case
+- [x] PRR-5. Guaranteed placement can bypass the location water-safety rule — [no-issue]
 - [x] PRR-6. A partial location stamp is permanently recorded as complete — [#1719]
 - [x] PRR-7. Non-positive location-content counts become successful empty spawns — [#1721]
 
@@ -115,9 +115,9 @@ The settings-log gating, production warning policy, algorithm-comment numbering,
 
 ## 5. Water-safe guaranteed locations
 
-### [deferred] PRR-5. Guaranteed placement can bypass the location water-safety rule
+### [no-issue] PRR-5. Guaranteed placement can bypass the location water-safety rule
 
-> **Deferred:** Severity is unmeasured and the fix is an undecided three-way choice — a safer builder, tile-level footprint validation, or an explicit no-valid-location outcome. `src/Location/Overlay.hs:230` falls back to the wet pool only when NO land chunk in the world is `dryEnough`, and `dryEnough` is chunk-coarse, so even then water need not reach the 5x5 footprint; the only fixture that reaches this path (`test-headless/Test/Headless/WorldGen.hs:417-460`) contains no actual lakes, rivers, or ocean. Clears when a seed sweep over real generations reports whether any tuple reaches an empty dry pool and, for one that does, whether the guaranteed footprint is adjacent to a real lake, river, or ocean tile.
+> **Disposition:** No issue — a 30-seed sweep (worldSize 64, 10 plates, seeds 0–29, `master@dc766cdb2`) never reached the #997 guaranteed fallback: every world's strict pass placed 4–6 water-safe ruins, so the wet fallback is reachable only from the synthetic all-wet fixture, and its worst case is a cosmetic water overhang beside the single ruin of an otherwise location-less world.
 
 > **Captured note:** Reconcile the “at least one location” guarantee with the earlier no-infinity-pool contract instead of satisfying one by knowingly violating the other. When strict placement finds no dry candidate, the current fallback chooses wet land and stamps the same lowest-ground room whose proximity to water motivated #416.
 
