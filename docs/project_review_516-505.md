@@ -9,7 +9,7 @@ The current tilling path and its later dedicated art, wire builder, page-owned p
 ## Status
 
 - [x] PRR-1. Secondary visible worlds inherit the active page's solar uniforms — [#1869]
-- [ ] PRR-2. Create World advertises sizes with unsafe whole-world memory bounds — [deferred]: no isolated w512/w1024 residency measurement
+- [ ] PRR-2. Create World advertises sizes with unsafe whole-world memory bounds — [deferred]: awaiting #2769's isolated w512/w1024 measurement
 - [x] PRR-3. Powered-workshop probe descriptions document the superseded consumer model — [#1871]
 
 ## 1. Multi-world rendering
@@ -44,7 +44,7 @@ The current tilling path and its later dedicated art, wire builder, page-owned p
 
 ### [deferred] PRR-2. Create World advertises sizes with unsafe whole-world memory bounds
 
-> **Deferred:** No isolated peak-residency measurement exists above w256, so the issue cannot state which advertised sizes it gates or what threshold it gates on — the only w512 datapoint (PR #508) ran two generations concurrently and was killed at 63/64 GB. Clears when one isolated generation each at `--worldSize 512` and `--worldSize 1024` has been run on the reference machine with `+RTS -s` and its maximum residency recorded, which is the owner's scheduling call on a shared box.
+> **Deferred:** No isolated peak-residency measurement exists above w256, so the issue cannot state which advertised sizes it gates or what threshold it gates on — the only w512 datapoint (PR #508) ran two generations concurrently and was killed at 63/64 GB. Clears when #2769 merges with isolated w512 and w1024 generation peaks recorded in `docs/chunk_memory_measurement.md`.
 
 > **Captured note:** Give world size an explicit supported resource boundary. The normal Create World picker advertises 512 and 1024 chunks, while generation materializes quadratic whole-world bordered caches whose raw vector payload alone reaches several to tens of GiB. Reject or clearly preflight sizes beyond a measured budget, or redesign the pipeline so an ordinary menu choice cannot exhaust the host.
 

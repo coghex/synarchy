@@ -1,0 +1,30 @@
+{
+  "2526": {
+    "title": "[epic] Make flora condition persistent and texture fallback expressive",
+    "labels": [
+      "epic",
+      "flora",
+      "reviewed:changes"
+    ]
+  },
+  "2559": {
+    "title": "[flora] Create the saguaro dead-sprout texture",
+    "labels": [
+      "art",
+      "flora"
+    ]
+  },
+  "charred": {
+    "title": "[flora] Create the saguaro charred-remains texture",
+    "labels": [
+      "art",
+      "flora"
+    ]
+  },
+  "2562": {
+    "title": "[flora] Demonstrate the complete condition and fallback path on the saguaro pilot",
+    "labels": [
+      "flora"
+    ]
+  }
+}

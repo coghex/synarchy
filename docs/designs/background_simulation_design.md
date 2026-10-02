@@ -17,6 +17,22 @@ not tracked separately · `[deferred]` blocked on a concrete precondition.
 No child slices allocated. Consumer inventory and catch-up policies precede
 delivery decomposition and readiness signoff.
 
+## Epic contract
+
+- **Goal:** Keep existing hidden pages' gameplay time and time-dependent
+  effects coherent without making render visibility the authority for elapsed
+  time.
+- **Done when:** The consumer inventory and owner-approved policies cover
+  hidden-page eligibility, catch-up, bounded work, persistence, pause, and
+  save/load; residual behavior is integrated with the coordinated timing
+  contract; and evidence shows hide/show does not lose, duplicate, or invent
+  elapsed gameplay effects.
+- **Users and operators:** Players returning to existing worlds, and maintainers
+  of gameplay timing, world simulation, persistence, and residency.
+- **Tracker relationship:** Reuse coordinated timing epic #2478. This draft
+  owns only residual all-existing-page behavior after auditing that arc; tracker
+  creation still requires separate approval.
+
 ## Goal and observable outcome
 
 Returning to an existing page reveals water, calendar, and time-dependent
@@ -156,3 +172,12 @@ process save/load. Test existing hidden-page discovery/reconciliation contracts
 as well as new progression. Run targeted subsystem gates from
 `docs/engine_contracts.md` and persistence behavioral probes as their owners
 change. Headless correctness and rendered revisit behavior are separate gates.
+
+## Delivery plan
+
+No child delivery slices are allocated yet. First complete the coordinated
+timing consumer audit, settle the open policies, and identify residual work
+that is not already owned by `docs/gameplay_timing_design.md` or the river
+design. Then allocate only those remaining slices, with their dependencies
+and acceptance gates. This document remains `exploring` until that work is
+ready for issue processing.

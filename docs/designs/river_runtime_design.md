@@ -54,6 +54,22 @@ new tracker artifacts have been created. The ledger matches Appendix C. Open
 parameter and integration gates are assigned to their affected slices; they do
 not imply approval to invent defaults or silently expand a PR.
 
+## Epic contract
+
+- **Goal:** Make river behavior independent of detailed chunk residency while
+  preserving exact water ownership, accounting, and save/load continuity.
+- **Done when:** The accepted hydraulic model and generated-world integration
+  meet the accounting, steady-flow, profile, timing, memory, and persistence
+  gates; existing hidden pages progress coherently; and production activates
+  one river backend after the coordinated timing and residency capabilities
+  are in place.
+- **Users and operators:** Players changing rivers and viewing existing world
+  pages, and maintainers of hydrology, simulation, persistence, and world
+  generation.
+- **Tracker relationship:** Epic #2718 owns this arc. Coordinated timing #2478
+  and chunk residency #1997 supply explicit integration capabilities; the
+  completed design ledgers do not imply those capabilities have landed.
+
 ## Goal and observable outcome
 
 A dam or diversion changes river flow downstream, including in unloaded chunks
@@ -1250,7 +1266,7 @@ on the relevant timing adapters and activation. Audit the background draft for
 residual all-page membership/catch-up requirements, not duplicate consumer
 migrations. The earlier river-owned clock proposal is superseded.
 
-## Delivery plan
+## Delivery overview
 
 The approved plan contains **27 active delivery slices** in four active
 milestones. Milestone C (RVR-19, RVR-20) moved out of this arc under D-29
@@ -1378,7 +1394,9 @@ or thresholds to tune after failures.
 | Runtime budget | Accepted initial target: aggregate hydraulic work at most 5 ms p95 / 10 ms p99 per 100-ms service interval at the approved game speed 1.0 on Apple M3 Max / 64 GiB (D-22); no growing logical-time backlog over ten minutes. Test 1k/10k/100k **total** links distributed over 1/4/16 pages, plus a separate stress matrix up to 100k links **per page**. Report detailed-cell count and substeps; no 1.6M-link guarantee is implied. |
 | New-world publication | Sustainable steady fixtures meet steady-flow/profile targets over 100 subsequent fixed-climate reference intervals. D-21 lakes retain generated initial storage and show only accounted drying under the transient targets, not a numerical startup pulse. Report init time and memory separately. |
 
-## Appendix C. Delivery slices
+<a id="appendix-c-delivery-slices"></a>
+
+## Delivery plan
 
 The scope boundaries below are approved for issue processing under D-34, not
 filed issues or implementation authorization. RVR IDs are stable; process the

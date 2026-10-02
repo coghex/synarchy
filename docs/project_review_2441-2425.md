@@ -27,11 +27,11 @@ Status legend: `[ ]` unprocessed · `[#N]` filed as issue N · `[no-issue]` revi
 
 ## Status
 
-- [ ] PRR-1. The etymology probe grades page activation before the queued switch completes
+- [x] PRR-1. The etymology probe grades page activation before the queued switch completes — [#2771]
 
 ## 1. Probe page-switch synchronization
 
-### PRR-1. The etymology probe grades page activation before the queued switch completes
+### [#2771] PRR-1. The etymology probe grades page activation before the queued switch completes
 
 > **Captured note:** Synchronize phase 7 of the etymology probe with actual
 > activation of its custom-named page before grading that page. PR #2434

@@ -1,0 +1,31 @@
+{
+  "issue": 2552,
+  "title": "[flora] Persist groundcover-crop condition records through the same model",
+  "labels": [
+    "save-load",
+    "reviewed:changes",
+    "flora"
+  ],
+  "non_verdict_labels": [
+    "flora",
+    "save-load"
+  ],
+  "body_file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2552_rereview/2552_body.md",
+  "body_sha256": "785ff21c8669f74320dfdc698da43eb8bc8781b9f661d042792f8bb679074a5a",
+  "owner_decision": "Keep EFM-6 persistence-only; defer condition-based harvest refusal to EFM-7 (#2555). User confirmed yes, that sounds fine for now.",
+  "status": "canonical rereview approved; reviewed:approve applied",
+  "skill_path": "/Users/vincentcoghlan/.codex/plugins/cache/kanban/kanban/1.46.0/skills/issue-rereview/SKILL.md",
+  "trusted_spec_helper": "/Users/vincentcoghlan/.codex/plugins/cache/kanban/kanban/1.46.0/skills/solve/scripts/trusted_issue_spec.py",
+  "resolved_backend": "/Users/vincentcoghlan/Library/Application Support/kanban/issue-review/approve_issues.py",
+  "published_at": "2026-09-10T21:55:25.724975+00:00",
+  "spec_sha": "7b5c960cb034b0800ec392fb527ddb00e0c4aece0df6e9d88f911f47fdb3cec7",
+  "review_url": "https://github.com/coghex/synarchy/issues/2552#issuecomment-5625998295",
+  "models": "claude-fable-5-1@high",
+  "route": "rereview triggered by codex dissent; reviewer claude",
+  "final_labels": [
+    "flora",
+    "reviewed:approve",
+    "save-load"
+  ],
+  "remaining_blockers": []
+}

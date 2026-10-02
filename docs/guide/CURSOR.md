@@ -1,41 +1,41 @@
 # Guide cursor
 
-Resume after: `59150765113cfa4e10ce732116b52c8c153f529a` · [2026-09-30T042315Z-5915076](2026-09-30T042315Z-5915076.md) · 2026-09-30T04:23:15Z
+Resume after: `313657b59b9d478b3429fa0a850d25d1f67f23dd` · [2026-09-30T042734Z-313657b](2026-09-30T042734Z-313657b.md) · 2026-09-30T04:27:34Z
 Covered beyond the boundary: none
 
-Owner-accepted legacy baseline: all past work through this commit is assumed
-satisfactory; no retrospective audit is required. See [review scope](README.md).
+Owner accepted historical work through `59150765113cfa4e10ce732116b52c8c153f529a`.
+First current-project assessment and 103 selected effective issue specs recorded.
+Scope: [README](README.md). No retrospective queue.
 
 ## Next
 
-Take the first current-project assessment against the published V-1–V-10;
-review open issue specifications and open PR context, then the post-boundary delta.
-Later runs retain a project-wide synthesis while reviewing changed work.
+All three findings are dispositioned through #2519/#2699/#2562 and #2526.
+Next audit reviews changed code/specifications and retains project-wide synthesis.
 
 ## Open findings
 
-None recorded; this is manual baseline registration, not an assessment.
+None. Corrected specifications do not mean their runtime work has merged.
 
 ## Pending handoff
 
-- Initial whole-project alignment readings and current qualification evidence.
-- All open issue bodies/comments; none has inherited guide coverage yet.
-- All open PRs as prospective context and merges after this boundary.
-- Vision is an incomplete published draft: recorded owner decisions are context;
-  unresolved choices and full vision approval remain pending.
-- Historical vision-reading inventory is separate from code-review coverage.
+- Recheck: no new commits/spec/vision changes; PRs #2764/#2763/#2762 updated.
+- Open PRs #2764/#2763/#2762 were context, not merged-work reviews.
+- Expedition qualification remains constrained by #2754/#2755/#2756/#2761.
+- Timing/residency/river production and 4-GiB target remain unqualified.
+- Group missions, durable history, vertical focus and dungeon floors need settled slices.
+- Published vision is an incomplete draft; full reconciliation/approval pending.
 
 ## Alignment
 
 | Principle | Reading | Since | Note |
 |---|---|---|---|
-| V-1 | not exercised | — | Initial current-project assessment pending |
-| V-2 | not exercised | — | Initial current-project assessment pending |
-| V-3 | not exercised | — | Initial current-project assessment pending |
-| V-4 | not exercised | — | Initial current-project assessment pending |
-| V-5 | not exercised | — | Initial current-project assessment pending |
-| V-6 | not exercised | — | Initial current-project assessment pending |
-| V-7 | not exercised | — | Initial current-project assessment pending |
-| V-8 | not exercised | — | Initial current-project assessment pending |
-| V-9 | not exercised | — | Initial current-project assessment pending |
-| V-10 | not exercised | — | Initial current-project assessment pending |
+| V-1 | aligned | 2026-09-30T042734Z-313657b | Game-specific owners retained |
+| V-2 | aligned | 2026-09-30T042734Z-313657b | Story ingredients; event system future |
+| V-3 | aligned | 2026-09-30T042734Z-313657b | Expedition foundations; qualification pending |
+| V-4 | aligned | 2026-09-30T042734Z-313657b | Controls; history/vertical focus future |
+| V-5 | aligned | 2026-09-30T042734Z-313657b | Ruin foundation; multi-floor design pending |
+| V-6 | aligned | 2026-09-30T042734Z-313657b | Colony support; later progression pending |
+| V-7 | aligned | 2026-09-30T042734Z-313657b | Expedition priority retained |
+| V-8 | drifting | 2026-09-30T042734Z-313657b | Last audit GUIDE-3; clock specifications now corrected |
+| V-9 | drifting | 2026-09-30T042734Z-313657b | Last audit GUIDE-1; approved amendment now posted |
+| V-10 | drifting | 2026-09-30T042734Z-313657b | Last audit GUIDE-2; amendment posted; continuity unqualified |

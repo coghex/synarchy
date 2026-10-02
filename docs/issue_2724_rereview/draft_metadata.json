@@ -1,0 +1,14 @@
+{
+  "issue": 2724,
+  "title": "Make wet terrain edits conservative and acknowledged",
+  "labels": [
+    "enhancement",
+    "fluid"
+  ],
+  "status": "approved",
+  "owner_decision": "Each affected dig increment commits atomically; cancellation preserves prior commits; final acknowledgement gates completion XP.",
+  "original_spec_sha": "f297dfd41a733316eabf22cb2fea2499431d0e8732d31ce5d0e90a1c3a5f8bbc",
+  "spec_sha": "fe9f88abc62b14982f5ed9ba5f8e12f00b3c3be231b7feb3e040768430ebc98e",
+  "review_url": "https://github.com/coghex/synarchy/issues/2724#issuecomment-5890955596",
+  "reviewer": "claude-fable-5-1@high"
+}

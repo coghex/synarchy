@@ -14,11 +14,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. The lash-out preference probe can grade an expired attacker as a policy failure
+- [x] PRR-1. The lash-out preference probe can grade an expired attacker as a policy failure — [#2773]
 
 ## 1. Mental-state probe fixture validity
 
-### PRR-1. The lash-out preference probe can grade an expired attacker as a policy failure
+### [#2773] PRR-1. The lash-out preference probe can grade an expired attacker as a policy failure
 
 > **Captured note:** Phase 9a of `mental_state_probe.py` needs to establish
 > that its staged attacker is still recent and eligible when lash-out chooses
