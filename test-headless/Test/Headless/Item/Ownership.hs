@@ -778,6 +778,14 @@ ownershipModule = "src" </> "Item" </> "Ownership.hs"
 --     would have fitted that shell empty. The copy is a measurement,
 --     never published anywhere and never owning anything — the
 --     simulation's real admissions all go through 'insertInstance'.
+--   * @realizeGroundOnPage@ (#2510) PUBLISHES a tree PLC-13 already
+--     built: 'LootProfile.Realize.realizeLootProfile' admits every lot
+--     through 'insertInstance' against the shell, and this function
+--     installs the resulting contents onto that same shell's ground
+--     entry, in place. Its second write puts back the contents the draw
+--     started from if the slot latch cannot be set. Neither moves an
+--     item between owners: both replace one shell's contents with a
+--     tree computed for exactly that shell.
 contentsWriterAllowlist ∷ [(FilePath, String)]
 contentsWriterAllowlist =
     [ ("src" </> "Item" </> "Materialize.hs", "materializeNode")
@@ -793,6 +801,8 @@ contentsWriterAllowlist =
     , ("src" </> "Engine" </> "Scripting" </> "Lua" </> "API" </> "Units"
         </> "Medical.hs", "consumeKitFill")
     , ("src" </> "LootProfile" </> "Simulate.hs", "simulateLootProfile")
+    , ("src" </> "Engine" </> "Scripting" </> "Lua" </> "API" </> "Items"
+        </> "Ground.hs", "realizeGroundOnPage")
     ]
 
 -- | Every @iiContents@ assignment in the whole production tree, deduped

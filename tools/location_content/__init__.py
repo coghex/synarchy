@@ -26,14 +26,15 @@ means growing a single 980-line `run`.
     regeneration.
   * `container` — (#2505) pending container shells: one unrolled shell
     minted per authored occurrence on first chunk load and bound to its
-    persisted slot, no second on revisit, an ordinary pickup of a pending
-    shell refused with nothing moved, the slot surviving save/quit/load,
-    and a save whose slot names a deregistered profile refused before the
-    replacement session is staged. Owns its own four inline YAML
+    persisted slot, no second on revisit, (#2510) realized exactly once --
+    in place, by pickup, and after a reload -- into the same tree in two
+    fresh processes visiting in opposite orders, every slot surviving
+    save/quit/load, and a save whose slot names a deregistered profile
+    refused before the replacement session is staged. Owns its own four inline YAML
     fixtures, on the same rule as `dispatch` — nine across the package.
 
 No module here boots an engine: `location_content_probe.run` owns the
-process sequence (ten `boot_isolated` call sites, eleven engine
-launches, because the loot-stability site runs once for same order and
-once for reversed) and hands each owner the live port it opened.
+process sequence (eleven `boot_isolated` call sites, thirteen engine
+launches, because the loot-stability site and #2510's realization site
+each run once for same order and once for reversed) and hands each owner the live port it opened.
 """

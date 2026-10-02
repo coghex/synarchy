@@ -2,7 +2,9 @@
 -- | "Location container shells" (#2505, epic #1231 PLC-14): the PENDING
 --   container shells a placed location spawns as incidental content, and
 --   the strict intermediate lifecycle that keeps one addressable until
---   PLC-15 (#2510) realizes it.
+--   PLC-15 (#2510) realizes it. The realization boundary itself is
+--   "Test.Headless.Location.ContainerRealization"'s; the codec and
+--   integrity rules for a realized slot are pinned here, with the rest.
 --
 --   Four layers, because a regression in one is invisible from the
 --   other three:
@@ -15,8 +17,8 @@
 --     loot-profile registries, which is the only layer that can show the
 --     loader consults them at all and rejects the whole FILE rather than
 --     the offending definition.
---   * 'engineSpec' — the real @world.spawnLocationContainer@ binding and
---     the real @item.pickupGround@ refusal, driven through their own Lua
+--   * 'engineSpec' — the real @world.spawnLocationContainer@ binding,
+--     driven through its own Lua
 --     functions against a live 'EngineEnv', the pattern
 --     'Test.Headless.World.LocationDiscovery's #917 coverage established.
 --   * 'luaSpec' — @scripts/locations.lua@'s incidental dispatch, in a
@@ -37,6 +39,20 @@ module Test.Headless.Location.ContainerShells
     , yamlSpec
     , engineSpec
     , luaSpec
+      -- * Fixtures shared with "Test.Headless.Location.ContainerRealization"
+    , crateItemDef
+    , containerItemDefs
+    , containerContent
+    , mkDef
+    , pendingTable
+    , paramsWith
+    , containerUnit
+    , initEnv
+    , newContainerPage
+    , spawnContainer
+    , onlyGroundId
+    , inventoryOf
+    , plainInstance
     ) where
 
 import UPrelude
@@ -99,13 +115,13 @@ import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager )
 import World.Chunk.Types (ChunkCoord(..))
-import World.Cursor.Types (CursorState(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Page
     ( PageCoreDTO(..), PageCoreDTOv11(..), WorldPagesDTO(..)
     , WorldPagesDTOv11(..), WorldPages(..), basePageSnapshots
-    , migrateWorldPagesV11, toWorldGenParamsDTO, toWorldGenParamsDTOv8 )
+    , migrateWorldPagesV11, toWorldGenParamsDTO, toWorldGenParamsDTOv8
+    , validatePages )
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Save.Types (SaveData(..))
 import Test.Headless.World.Save.Integrity
@@ -258,7 +274,8 @@ pureSpec = describe "Location container shells (#2505)" $ do
             map lcsItemDefName slots
                 `shouldBe` ["fixture_crate", "fixture_locker", "fixture_locker"]
             map lcsProfile slots
-                `shouldBe` ["fixture_salvage", "fixture_tools", "fixture_tools"]
+                `shouldBe` [ Just "fixture_salvage", Just "fixture_tools"
+                           , Just "fixture_tools" ]
             -- The whole point of the slice: the descriptor exists with
             -- NO shell bound and NOTHING realized.
             map lcsInstanceId slots `shouldBe` [Nothing, Nothing, Nothing]
@@ -359,6 +376,21 @@ pureSpec = describe "Location container shells (#2505)" $ do
                                         `T.isInfixOf`)
             containerSlotEntryErrors (slotAt 1) `shouldBe` []
 
+        it "rejects a realized slot still carrying its profile, and a \
+           \pending slot naming none (#2510)" $ do
+            -- D-3 discards the profile at realization: a realized slot
+            -- naming one claims a draw that can never happen, and a
+            -- pending slot without one could never be realized at all.
+            containerSlotEntryErrors (realizedSlotAt 1 900)
+                `shouldBe` []
+            containerSlotEntryErrors
+                ((realizedSlotAt 1 900) { lcsProfile = Just "fixture_salvage" })
+                `shouldSatisfy` any ("still carries loot profile"
+                                        `T.isInfixOf`)
+            containerSlotEntryErrors ((slotAt 1) { lcsProfile = Nothing })
+                `shouldSatisfy` any ("pending but names no loot profile"
+                                        `T.isInfixOf`)
+
         it "rejects a duplicated slot number on one instance" $
             locationContainerSlotErrors
                 (withSlots [slotAt 1, slotAt 1]) `shouldSatisfy`
@@ -415,7 +447,7 @@ pureSpec = describe "Location container shells (#2505)" $ do
         it "reports an unbound slot and hides a bound one" $ do
             let table = tableFor crateDef
             lcsProfile <$> pendingContainerSlotFor iid 1 table
-                `shouldBe` Just "fixture_salvage"
+                `shouldBe` Just (Just "fixture_salvage")
             pendingContainerSlotFor iid 2 table `shouldBe` Nothing
             pendingContainerSlotFor iid 1
                 (mustBind 1 "fixture_crate" 900 table) `shouldBe` Nothing
@@ -480,19 +512,43 @@ pureSpec = describe "Location container shells (#2505)" $ do
             codesOf (sessionIntegrityWarnings snap)
                 `shouldBe` ["dangling-reference"]
 
-        it "applies none of those rules once the slot is REALIZED" $ do
-            -- D-3 discards the profile and the source at realization, and
-            -- the shell becomes an ordinary item that may be carried,
-            -- stored or destroyed. Nothing in THIS slice produces a
-            -- realized slot; the rule is pinned so PLC-15 cannot land
-            -- against a graph that would refuse its own output.
-            let realized = mapSlots (map (\s → s { lcsRealized = True }))
-                               pendingTable
+        it "relaxes WHERE a REALIZED shell may be, and whether it still \
+           \exists, exactly as a taken obligation is relaxed (#2510)" $ do
+            -- D-3: once realized the shell is an ordinary item that may
+            -- be carried, stored, nested or destroyed.
+            let realized = realizedTable 900
             sessionIntegrityErrors
                 (inInventory (snapshotWith (Just 900) realized)) `shouldBe` []
+            sessionIntegrityErrors
+                (inBuildingStorage (snapshotWith (Just 900) realized))
+                `shouldBe` []
+            sessionIntegrityErrors
+                (nestedOnGround (snapshotWith (Just 900) realized))
+                `shouldBe` []
+            sessionIntegrityErrors (otherPage 900 realized) `shouldBe` []
             sessionIntegrityWarnings
                 (removedFromGround (snapshotWith (Just 900) realized))
                 `shouldBe` []
+
+        it "still enforces WHICH identity a realized slot names: unique \
+           \ownership across both families, and the allocator bound" $ do
+            -- The two rules the #917 walk keeps for a taken obligation.
+            -- A realized slot still OWNS its id, and "gone" — which a
+            -- realized shell may legitimately be — is exactly what an id
+            -- the allocator never minted looks like.
+            let realizedCross = mapInstance
+                    (\i → i { liSignificant =
+                        [ LocationSignificantItem 1 "fixture_crate"
+                                                  (Just 900) False ] })
+                    (realizedTable 900)
+            codesOf (sessionIntegrityErrors
+                        (snapshotWith (Just 900) realizedCross))
+                `shouldSatisfy` elem "duplicate-identity"
+            codesOf (sessionIntegrityErrors
+                        ((removedFromGround
+                            (snapshotWith (Just 900) (realizedTable 900)))
+                            { snapNextItemId = 900 }))
+                `shouldBe` ["unmintable-identity"]
 
     describe "load-time profile validation" $ do
         it "rejects a load whose UNBOUND pending slot names an \
@@ -518,11 +574,8 @@ pureSpec = describe "Location container shells (#2505)" $ do
             missingContainerProfileReferences
                 (HS.fromList ["fixture_salvage"]) [pageSave pendingTable]
                 `shouldBe` []
-            let realized = mapSlots
-                    (map (\s → s { lcsRealized = True
-                                 , lcsInstanceId = Just 900 })) pendingTable
-            missingContainerProfileReferences HS.empty [pageSave realized]
-                `shouldBe` []
+            missingContainerProfileReferences HS.empty
+                [pageSave (realizedTable 900)] `shouldBe` []
 
     describe "the v11 wire shape" $ do
         it "migrates a frozen pre-#2505 page with NO container slots" $ do
@@ -554,9 +607,48 @@ pureSpec = describe "Location container shells (#2505)" $ do
                             (instancesOfPages (basePageSnapshots dto'))
                     map lcsSlot slots `shouldBe` [1]
                     map lcsItemDefName slots `shouldBe` ["fixture_crate"]
-                    map lcsProfile slots `shouldBe` ["fixture_salvage"]
+                    map lcsProfile slots `shouldBe` [Just "fixture_salvage"]
                     map lcsInstanceId slots `shouldBe` [Just 900]
                     map lcsRealized slots `shouldBe` [False]
+
+        it "round-trips a REALIZED slot carrying NO profile through the \
+           \current shape, unchanged on the wire (#2510)" $ do
+            -- D-3 discards the profile; the wire keeps #2505's plain
+            -- Text and spells the absence as the empty string, which no
+            -- loader can register as a profile id.
+            let dto = WorldPagesDTO
+                    [ currentPageCore { pcGenParams =
+                          toWorldGenParamsDTO (paramsWith (realizedTable 900)) } ]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let pages = basePageSnapshots dto'
+                        slots = concatMap liContainers (instancesOfPages pages)
+                    map lcsProfile slots `shouldBe` [Nothing]
+                    map lcsInstanceId slots `shouldBe` [Just 900]
+                    map lcsRealized slots `shouldBe` [True]
+                    -- Scoped to the slot rules: the fixture page core is
+                    -- a minimal one, and this is about the CONTAINER
+                    -- rules accepting the shape the transition leaves.
+                    filter ("container slot" `L.isInfixOf`)
+                           (map show (validatePages pages)) `shouldBe` []
+
+        it "refuses at component decode a realized slot that still carries \
+           \a profile (#2510)" $ do
+            -- Only a payload can carry this shape: the live transition
+            -- discards the profile in the same write that sets the latch.
+            let forged = mapSlots (map (\s → s { lcsProfile =
+                                                    Just "fixture_salvage" }))
+                                  (realizedTable 900)
+                dto = WorldPagesDTO
+                    [ currentPageCore { pcGenParams =
+                          toWorldGenParamsDTO (paramsWith forged) } ]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err → expectationFailure err
+                Right dto' →
+                    map show (validatePages (basePageSnapshots dto'))
+                        `shouldSatisfy` any ("still carries loot profile"
+                                                `L.isInfixOf`)
 
         it "keeps an instance that has SPAWNED its contents but still \
            \carries an unbound slot, which decode must not reject" $ do
@@ -720,34 +812,11 @@ engineSpec = beforeAll initEnv $
         groundCount ws `shouldReturn` 0
         boundIds ws `shouldReturn` [Nothing]
 
-    it "REFUSES an ordinary pickup of a bound pending shell, without \
-       \touching the ground, the inventory, the cursor or the slot" $
-       \env → do
-        let pageId = WorldPageId "shell_pickup"
-        ws ← newContainerPage env pageId pendingTable
-        writeIORef (unitManagerRef env) $ emptyUnitManager
-            { umInstances = HM.singleton (UnitId 611)
-                (containerUnit pageId) }
-        spawnContainer env pageId 1 1 (8, 8) `shouldReturn` True
-        gid ← onlyGroundId ws
-        atomicModifyIORef' (wsCursorRef ws) $ \cs →
-            (cs { selectedGroundItem = Just gid }, ())
-        before ← readIORef (wsGroundItemsRef ws)
-        beforeBound ← boundIds ws
-        pickupGroundOnPage env ws (UnitId 611) gid `shouldReturn` False
-        after ← readIORef (wsGroundItemsRef ws)
-        gisNextId after `shouldBe` gisNextId before
-        HM.keys (gisItems after) `shouldBe` HM.keys (gisItems before)
-        map (iiInstanceId ∘ giInst) (HM.elems (gisItems after))
-            `shouldBe` map (iiInstanceId ∘ giInst)
-                           (HM.elems (gisItems before))
-        inventoryOf env (UnitId 611) `shouldReturn` []
-        cs ← readIORef (wsCursorRef ws)
-        selectedGroundItem cs `shouldBe` Just gid
-        boundIds ws `shouldReturn` beforeBound
-
+    -- The pickup of a PENDING shell — which this slice refused and
+    -- #2510 now realizes — is covered by
+    -- "Test.Headless.Location.ContainerRealization".
     it "still permits an ordinary pickup of ordinary salvage lying \
-       \beside it, so the refusal is keyed on the SLOT" $ \env → do
+       \beside a pending shell" $ \env → do
         let pageId = WorldPageId "shell_pickup_other"
         ws ← newContainerPage env pageId pendingTable
         writeIORef (unitManagerRef env) $ emptyUnitManager
@@ -1324,10 +1393,25 @@ slotAt ∷ Int → LocationContainerSlot
 slotAt n = LocationContainerSlot
     { lcsSlot        = n
     , lcsItemDefName = "fixture_crate"
-    , lcsProfile     = "fixture_salvage"
+    , lcsProfile     = Just "fixture_salvage"
     , lcsInstanceId  = Nothing
     , lcsRealized    = False
     }
+
+-- | A slot in the shape the live transition leaves (#2510): bound,
+--   latched, and carrying no profile.
+realizedSlotAt ∷ Int → Word64 → LocationContainerSlot
+realizedSlotAt n shell = (slotAt n)
+    { lcsProfile = Nothing, lcsInstanceId = Just shell, lcsRealized = True }
+
+-- | 'pendingTable' with its one slot bound to @shell@ and then realized
+--   through the REAL transition, so the fixture is exactly what play
+--   produces rather than a hand-set latch.
+realizedTable ∷ Word64 → LocationInstances
+realizedTable shell =
+    fromMaybe (error "realizedTable: the realization latch was refused")
+        (realizeLocationContainerSlot iid 1 shell
+            (mustBind 1 "fixture_crate" shell pendingTable))
 
 withSlots ∷ [LocationContainerSlot] → LocationInstances
 withSlots slots = withSlotsAndObligation slots []
@@ -1446,8 +1530,8 @@ snapshotWithDef defName mShell table = buildSnap cratePage [page]
         }
 
 -- | The same session, with the shell moved off the ground and into a
---   unit's inventory on that same page — the state an untaken slot must
---   never be in, and the one this slice's pickup refusal makes
+--   unit's inventory on that same page — the state an unrealized slot
+--   must never be in, and the one realizing at pickup (#2510) makes
 --   unreachable by play.
 inInventory ∷ SessionSnapshot → SessionSnapshot
 inInventory = moveShell $ \page →

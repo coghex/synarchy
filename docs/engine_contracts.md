@@ -2574,17 +2574,24 @@ under the opposite omission rule; see §Pending container shells.
 Enforced by hspec `--match "Location container shells"` — four layers in
 `Test.Headless.Location.ContainerShells`: a pure spec (placement, the
 authoring RULE SET, decode rules, the provenance graph, the load-time
-profile check, the v11→v12 migration), a YAML spec driving the real
+profile check, the v11→v12 migration, and #2510's realized-slot codec and
+integrity rules), a YAML spec driving the real
 `engine.loadLocationYaml` against the live item and loot-profile
 registries, an engine spec driving the real
-`world.spawnLocationContainer` and the real `item.pickupGround` refusal,
-and a standalone stubbed-VM spec over `scripts/locations.lua`'s
-incidental dispatch — plus `--match "save migrations"`,
+`world.spawnLocationContainer`, and a standalone stubbed-VM spec over
+`scripts/locations.lua`'s incidental dispatch — plus #2510's realization
+layer in `Test.Headless.Location.ContainerRealization`, driving the real
+`item.realizeGround` and `item.pickupGround` against a live engine — and
+by `--match "Loot realization"`, `--match "save migrations"`,
+`--match "persistence reference integrity"`,
 `tools/save_compat_audit.py`, `tools/persistence_inventory_audit.py`, and
-`tools/location_content_probe.py`'s container scenario — whose last phase
-is the only place the load-time profile refusal below can be seen, since
-it lives in `continueLoad` and needs a real envelope. Design authority:
-`docs/portable_loot_containers.md` D-2, D-3, D-17, D-18, D-22, D-23.
+`tools/location_content_probe.py`'s container scenario (with its
+companion `tools/test_location_content_probe.py`) — whose last phase is
+the only place the load-time profile refusal below can be seen, since it
+lives in `continueLoad` and needs a real envelope, and whose
+opposite-order pair is the only place cross-process determinism can be.
+Design authority: `docs/portable_loot_containers.md` D-2, D-3, D-17,
+D-18, D-22, D-23.
 
 **What a pending shell IS.** A portable container enters the world
 unrolled: an ordinary item instance lying on the ground, plus a persisted
@@ -2593,9 +2600,9 @@ The descriptor lives on the placed `LocationInstance` as a
 `LocationContainerSlot` — `{slot, container def name, profile,
 iiInstanceId once bound, realized}` — and the stable SOURCE identity D-2
 asks for is the `(WorldPageId, LocationInstanceId, slot)` address itself,
-so nothing extra is stored for it. This slice creates only
-`realized = false` slots and never transitions one; PLC-15 (#2510) owns
-the atomic `Pending → Realized` step.
+so nothing extra is stored for it. Placement creates only
+`realized = false` slots; the one `Pending → Realized` transition is
+#2510's, below.
 
 **Authoring.** Content kind `container` takes `id` (the container item
 definition) and `profile` (a loot-profile id), plus `position` and
@@ -2652,22 +2659,59 @@ the materializer unchanged, authored default contents included (D-22):
 "unrolled" means no PROFILE draw has happened, not an empty tree, and
 this verb never reads `lcsProfile` at all.
 
-**Pickup is REFUSED while a shell is pending, and that is temporary.**
-`pickupGroundOnPage` is remove-first, so the refusal is decided from the
-ground item's `iiInstanceId` BEFORE `takeGroundItemOnPage`, against the
-owning page's container slots, and returns false with the ground map,
-`gisNextId`, the unit's inventory, the cursor and the slot table
-untouched. It is faction-blind and command-blind because every carry path
-in the tree arrives there — `item.pickupGround` is the only
-ground→inventory boundary; the other two `takeGroundItemOnPage` callers
-are the significant-spawn rollback and `item.removeGround`, which deletes
-rather than moves. This is the ONLY pickup behaviour change in the slice,
-and it exists to keep the provenance rule below satisfiable until PLC-15
-realizes the shell atomically in that same function (D-23's fail-closed
-principle).
+**Realization (#2510, PLC-15) is ONE operation with two callers.**
+`Engine.Scripting.Lua.API.Items.Ground.realizeGroundOnPage`, keyed by a
+ground item on a page, resolves the shell's slot by its `iiInstanceId`
+across that page's placed instances, runs PLC-13's `realizeLootProfile`
+with the context `(the page's persisted wgpSeed, the slot's
+LocationInstanceId, the slot number)` — nothing else, no shared RNG — and,
+only if the draw completed, installs the realized contents into the
+ground entry IN PLACE (same ground id, same `iiInstanceId`, same position,
+same root values; PLC-13 appends admitted lots after the authored
+defaults, D-22) and latches the slot realized while DISCARDING its
+profile (`Location.Instance.realizeLocationContainerSlot`). Both writes
+are direct `atomicModifyIORef'`s on the Lua thread with nothing between
+them, the same discipline as #917's latch: every caller that could
+observe the slot or move the shell is a Lua verb serialized behind this
+one, and the save barrier quiesces the Lua thread before capture. The
+ground write is conditional on the entry still holding the same instance
+with the same contents the draw saw, because the world thread can remove
+a ground item; a shell that changed refuses rather than receiving cargo
+drawn for something else. Its two callers:
 
-**Provenance is strict while pending, and stops entirely at
-realization.** `containerProvenanceErrors` hard-fails a bound unrealized
+- `item.realizeGround(gid[, pageId])` answers `"realized"`,
+  `"already-realized"` (any repeat, from any path — exactly once; nothing
+  is written or re-rolled and no id is spent), `"not-pending"` (an
+  ordinary item), or `false` (no such ground item or page, a non-integer
+  `gid` or non-string `pageId` — type-checked before conversion — or a
+  realization that could not complete). An omitted `pageId` is the
+  active page; an explicit one selects exactly that live page, with no
+  fallback. It is what PLC-16's arrival flow calls before its capacity
+  test.
+- `pickupGroundOnPage` — so `item.pickupGround` and every carry path
+  behind it: player command, AI fetch, needs, repair, a hostile unit —
+  realizes a still-pending shell BEFORE `takeGroundItemOnPage`, faction-
+  and command-blind. A shell can never enter an inventory unrealized. A
+  realized shell, and an ordinary item, pick up exactly as before. A
+  vanished-unit rollback after a successful realization restores the
+  REALIZED tree (the removal takes whatever is on the ground) under a
+  fresh ground id, with the latch and the discarded profile untouched, so
+  a later pickup finds it already realized; #917's `taken` latch stays
+  conditional on a successful insert.
+
+**Realization fails CLOSED (D-23).** A slot naming no profile, a profile
+this build no longer registers, a shell with no `iiStorage`, and every
+other PLC-13 refusal (an entry naming an unknown item) leave the ground
+entry, the slot, the inventory, the selection and the item-instance
+cursor exactly as they were; `item.realizeGround` answers `false` and
+`item.pickupGround` answers `false` with nothing moved, and each logs a
+warning naming the shell, the location instance, the slot, the page and
+the reason. An EMPTY realization — every lot absent or rejected — is a
+completed one: the latch is set, the authored default contents stay, no
+cargo is added, and no path can roll it again.
+
+**Provenance is strict while pending, and relaxes at realization exactly
+as `lsiTaken` relaxes it.** `containerProvenanceErrors` hard-fails a bound unrealized
 shell that resolves on another page, in an inventory, in a building's
 store, or nested inside another ground container — "outer" being
 `peGroundItems` rather than the flattened `peItems`, because an id that
@@ -2683,12 +2727,19 @@ significant claims alone stays `significantProvenanceErrors`' to report,
 so the two partition the cases. A bound-but-ABSENT shell is a tolerated
 warning, because `item.removeGround` can really delete one; the slot then
 stays pending for ever and nothing is realized from it. Once
-`lcsRealized` is true NO rule applies — D-3 discards the profile and the
-source, and the shell is an ordinary item.
+`lcsRealized` is true the rules about WHERE the shell is and WHETHER it
+still exists stop applying — the shell is an ordinary item that may be
+carried, stored, nested, dropped or destroyed, and its absence is no
+warning — while the rules about WHICH identity the slot names keep
+applying: cross-family unique ownership and the allocator bound, the two
+#917 keeps for a taken obligation, for the same reason ("gone" is what
+an id above the cursor looks like).
 
 **Component decode** (`locationContainerSlotErrors`, run by
 `validatePages`) rejects a slot below 1, a bound id of 0, a duplicated
-slot number, and a realized slot naming no shell. It deliberately has NO
+slot number, a realized slot naming no shell, a realized slot still
+carrying a profile (#2510 — D-3 discards it), and a pending slot naming
+none. It deliberately has NO
 "contents spawned ⇒ every slot bound" rule: that is #917's obligation
 invariant, and under D-18 a failed container spawn leaves exactly that
 shape.
@@ -2710,7 +2761,24 @@ lift.
 
 **Queries.** `world.listPlacedLocations` / `world.getLocationInstance`
 expose `containers` beside `significant`: `{slot, item, profile,
-realized}` plus `item_instance_id` once bound. The whole FIELD is omitted
+realized}` plus `item_instance_id` once bound — and, since #2510, no
+`profile` once realized, because the slot no longer carries one.
+`item.listGround` / `item.getGroundForUnit` rows carry `contentsKey`, the
+ids-masked contents signature `unit.getInventory` already reports, so a
+realized crate's cargo is observable on the ground, and `weight` is the
+realized tree's recursive mass the moment the operation returns. Both
+are GROUPING views — `contentsKey` sorts its children and drops fields —
+so equality of physical trees is asked of the read-only
+`item.debugGroundTree(gid[, pageId])` / `item.debugHeldTree(uid,
+instanceId)` instead: the root's own fields apart from its contents,
+rendered in ORDER with every physical field and only the instance id and
+tracked temperature masked (`Item.Types.itemTreeSnapshot`). A shell's
+own salvage rolls come off the entropy-seeded shared stat RNG, so the
+probe's two opposite-order processes LOAD one pristine save (taken after
+the shells spawned, before anything was realized) to start from
+identical complete shells, and compare complete realized trees; hspec
+additionally pins that realization reads none of those rolls and
+preserves them exactly. The whole FIELD is omitted
 for an instance with no slots — unlike `significant`, which is always an
 array because its cardinality is what makes the clearance predicate
 vacuous. A container confers nothing, so "carries no slots" and "carries
@@ -2721,7 +2789,15 @@ an empty list" are the same fact.
 `WorldGenParamsDTOv8` / `LocationInstancesDTOv6` / `LocationInstanceDTOv6`
 with `migrateWorldPagesV11`. #2471's own v10 freeze had its gen-params
 field repointed onto that same `WorldGenParamsDTOv8`, leaving its bytes
-unchanged — the repointing rule `PageCoreDTOv8` documents.
+unchanged — the repointing rule `PageCoreDTOv8` documents. #2510 changes
+no wire shape: the live `lcsProfile` became a `Maybe` (D-3 discards it at
+realization) and `LocationContainerSlotDTO` keeps #2505's plain `Text`,
+spelling the absence as `""`. That is unambiguous rather than a
+convention — the loot-profile loader refuses an empty id, so no
+placement can derive a pending slot naming `""`, and decode rejects both
+mixed shapes above — and every payload written before #2510 holds only
+pending slots with non-empty profiles, so its bytes mean what they
+meant.
 
 ## Location discovery, map icons, and per-unit knowledge (#780/#781/#915)
 
@@ -3354,16 +3430,23 @@ root's weight capacity, and `itemTotalWeight` partially applied to the
 live `ItemManager`) and applies the list the policy returns. PLC-8 and
 PLC-9 are its first production callers.
 
-**Five other writers exist, in four modules, and none is a move.**
+**Seven other writers exist, in six modules, and none is a move.**
 `Item.Materialize.materializeNode` MINTS a tree (#1418's one mint
 boundary), `World.Save.Component.PageActivity.fromItemInstanceDTO`
 REBUILDS one already materialized, `Item.Temperature.coolItem` RE-VALUES
-temperatures in place, and the two medical draws
+temperatures in place, the two medical draws
 (`Engine.Scripting.Lua.API.Units.Medical.consumeBandages` /
-`consumeKitFill`) DESTROY contents rather than re-owning them. That
-allowlist is scoped per FUNCTION, not per module, so a later unrelated
-writer in the same file is still a finding. It holds nine entries: those
-five exceptions plus the four functions inside the boundary itself.
+`consumeKitFill`) DESTROY contents rather than re-owning them,
+`LootProfile.Simulate.simulateLootProfile` (#2502) measures a THROWAWAY
+emptied copy of a shell that is never published, and
+`Engine.Scripting.Lua.API.Items.Ground.realizeGroundOnPage` (#2510)
+PUBLISHES onto a pending shell's own ground entry the contents
+`LootProfile.Realize` already admitted through `insertInstance` — and,
+if the slot latch cannot be set, puts back the contents the draw started
+from. That allowlist is scoped per FUNCTION, not per module, so a later
+unrelated writer in the same file is still a finding. It holds eleven
+entries: those seven exceptions plus the four functions inside the
+boundary itself.
 
 **What a move must satisfy.** Exact instance identity survives —
 `iiInstanceId` and every descendant, in authored order. An insert needs
