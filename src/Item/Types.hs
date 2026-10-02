@@ -11,6 +11,7 @@ module Item.Types
     , ItemInstance(..)
     , itemMatches
     , itemContentsSig
+    , itemTreeSnapshot
     , itemTotalWeight
     , ItemManager(..)
     , emptyItemManager
@@ -510,6 +511,38 @@ data ItemInstance = ItemInstance
                                 --   (positional Generic Serialize) —
                                 --   appended for #1233.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | An ORDERED, recursive, ids-masked rendering of one whole item tree
+--   (#2510): the node's definition, quality, condition, empty weight,
+--   fill, sharpness, external bulk and internal storage, then — in
+--   'iiContents' order — every child rendered the same way.
+--
+--   The deliberate opposite of 'itemContentsSig'. That one is a
+--   GROUPING key, so it sorts its children and keeps only what decides
+--   interchangeability; this one is an EQUALITY witness for "is this
+--   exactly the same physical tree", so it keeps the order and every
+--   physical field, and two trees differing only in where a child sits
+--   render differently. Exactly two fields are masked:
+--
+--   * 'iiInstanceId' — identity, which is process-local by design: the
+--     same realization in two processes allocates different ids;
+--   * 'iiTemp' — tracked temperature, which the per-page tick relaxes
+--     toward ambient continuously, so it is a reading rather than part
+--     of what the tree IS.
+itemTreeSnapshot ∷ ItemInstance → Text
+itemTreeSnapshot i = node <> case iiContents i of
+    [] → T.empty
+    cs → "[" <> T.intercalate ";" (map itemTreeSnapshot cs) <> "]"
+  where
+    node = T.intercalate ":"
+        [ iiDefName i
+        , tshow (iiQuality i)
+        , tshow (iiCondition i)
+        , tshow (iiWeight i)
+        , tshow (iiCurrentFill i)
+        , tshow (iiSharpness i)
+        , tshow (iiBulk i)
+        , tshow (iiStorage i) ]
 
 -- | A stable, order-independent signature of an item's nested contents
 --   (#67A). Two ITEM-containers (a first-aid kit, a toolbox) are

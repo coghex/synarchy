@@ -23,6 +23,9 @@ module Engine.Scripting.Lua.API.Items
     , itemDeselectFn
     , itemGetSelectedFn
     , itemPickupGroundFn
+    , itemRealizeGroundFn
+    , itemDebugGroundTreeFn
+    , itemDebugHeldTreeFn
     , itemGetGroundForUnitFn
     , itemDebugQuadsFn
     ) where

@@ -108,6 +108,8 @@ module Location.Instance
     , latchLocationSignificantTaken
     , registerLocationContainerSpawn
     , pendingContainerSlotFor
+    , containerSlotForShell
+    , realizeLocationContainerSlot
     , resolveLocationClearance
       -- * v1 chunk-set migration
     , pendingLegacyFlags
@@ -372,15 +374,17 @@ significantItemsFromDef def =
 --   identity D-2 asks for is the @(page, 'LocationInstanceId', slot)@
 --   address itself — nothing extra is stored for it.
 --
---   /'lcsRealized' is a LATCH, and this slice never sets it./ PLC-15
---   (#2510) owns the atomic @Pending → Realized@ transition inside
---   'Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'. Until
---   then every slot this module can build reads 'False', and the same
---   boundary REFUSES to pick a bound unrealized shell up at all — which
---   is what keeps the strict provenance rule in
---   'World.Save.Integrity' satisfiable while the transition is still
---   somewhere else. After realization D-3 discards the profile and the
---   source, so a realized slot keeps only its latch and its bound id.
+--   /'lcsRealized' is a LATCH./ PLC-15 (#2510) sets it, once, in
+--   'realizeLocationContainerSlot', which
+--   'Engine.Scripting.Lua.API.Items.Ground.realizeGroundOnPage' calls in
+--   the same synchronous step that installs the realized cargo — from
+--   @item.realizeGround@ and from inside @pickupGroundOnPage@ alike, so
+--   no carry path can lift a shell that is still pending. Nothing ever
+--   clears it. At that same step D-3 discards the profile: a realized
+--   slot keeps only its latch and its bound id, which is why
+--   'lcsProfile' is a 'Maybe' — 'Just' exactly while the slot is
+--   pending, 'Nothing' exactly once it is realized
+--   ('containerSlotEntryErrors' enforces both directions).
 data LocationContainerSlot = LocationContainerSlot
     { lcsSlot        ∷ !Int
       -- ^ Stable per-instance slot, 1-based in authored order — the
@@ -393,17 +397,19 @@ data LocationContainerSlot = LocationContainerSlot
     , lcsItemDefName ∷ !Text
       -- ^ the authored 'Location.Types.lconId' — the container item
       --   definition this slot's shell mints from
-    , lcsProfile     ∷ !Text
+    , lcsProfile     ∷ !(Maybe Text)
       -- ^ the authored 'Location.Types.lconProfile' — the loot profile
-      --   PLC-15 will realize this shell's cargo from. Validated
-      --   against the live registry at load while the slot is still
-      --   unrealized ('World.Save.Types.missingContainerProfileReferences').
+      --   this shell's cargo is realized from — while the slot is
+      --   PENDING, and 'Nothing' once it is realized (D-3 discards it).
+      --   Validated against the live registry at load while the slot is
+      --   still unrealized
+      --   ('World.Save.Types.missingContainerProfileReferences').
     , lcsInstanceId  ∷ !(Maybe Word64)
       -- ^ the spawned shell's 'Item.Types.iiInstanceId'; 'Nothing'
       --   until the content spawn binds one
     , lcsRealized    ∷ !Bool
-      -- ^ has this shell's cargo been drawn and installed? Always
-      --   'False' in this slice; see the record haddock.
+      -- ^ has this shell's cargo been drawn and installed? A latch:
+      --   see the record haddock.
     } deriving (Show, Eq, Generic, NFData, Serialize)
 
 -- | The pending container shells a definition's authored contents give
@@ -419,7 +425,7 @@ containerSlotsFromDef def =
     [ LocationContainerSlot
         { lcsSlot        = slot
         , lcsItemDefName = lconId c
-        , lcsProfile     = profile
+        , lcsProfile     = Just profile
         , lcsInstanceId  = Nothing
         , lcsRealized    = False
         }
@@ -1096,10 +1102,11 @@ itemAlreadyOwed itemId lis = or
 --
 --   Unlike the obligation binding this one is NOT the guard that keeps a
 --   location clearable — a container confers no clearance condition
---   (D-18). What it does guard is the pickup refusal: the refusal reads
---   the bound id off this table, so a slot bound to an item that is not
---   the shell just spawned would refuse the wrong pickup and permit the
---   right one.
+--   (D-18). What it does guard is realization (#2510): the pickup
+--   boundary reads the bound id off this table to decide which item to
+--   realize, so a slot bound to an item that is not the shell just
+--   spawned would pour the profile's cargo into the wrong item and let
+--   the real shell be carried away unrealized.
 --
 --   'Nothing' when the instance or slot is unknown, the slot is already
 --   bound (the edge a resuming spawn uses to skip it), the item is the
@@ -1140,6 +1147,51 @@ pendingContainerSlotFor iid slot lis = do
     entry ← find ((≡ slot) . lcsSlot) (liContainers inst)
     guard (isNothing (lcsInstanceId entry))
     pure entry
+
+-- | The container slot of ANY instance on this page whose bound shell
+--   is the physical item @itemId@, in whatever state it is — pending or
+--   realized — together with the instance that owns it.
+--
+--   'Nothing' for an item no slot claims, which is how an ordinary item
+--   is told apart from a shell. At most one slot can claim an id:
+--   'registerLocationContainerSpawn' refuses a second owner and
+--   'locationContainerSlotErrors' rejects one at decode, so the first
+--   match is the only one.
+containerSlotForShell
+    ∷ Word64 → LocationInstances
+    → Maybe (LocationInstance, LocationContainerSlot)
+containerSlotForShell itemId lis = listToMaybe
+    [ (inst, entry)
+    | inst ← instancesToList lis
+    , entry ← liContainers inst
+    , lcsInstanceId entry ≡ Just itemId ]
+
+-- | Latch slot @slot@ of instance @iid@ REALIZED (#2510, PLC-15; design
+--   D-3, D-17) and discard its profile, leaving only the latch and the
+--   bound id.
+--
+--   'Nothing' — and nothing written — unless the slot exists, is bound
+--   to exactly @itemId@, and is still pending. That precondition is what
+--   makes the transition exactly-once: a second request for the same
+--   shell, from any path, finds the latch already set and changes
+--   nothing. The resulting entry is checked against
+--   'containerSlotEntryErrors' like every other write here, so a rule
+--   added to the decode set binds this transition too.
+realizeLocationContainerSlot
+    ∷ LocationInstanceId → Int → Word64 → LocationInstances
+    → Maybe LocationInstances
+realizeLocationContainerSlot iid slot itemId lis = do
+    inst ← lookupLocationInstance iid lis
+    entry ← find ((≡ slot) . lcsSlot) (liContainers inst)
+    guard (lcsInstanceId entry ≡ Just itemId)
+    guard (not (lcsRealized entry))
+    let realized = entry { lcsRealized = True, lcsProfile = Nothing }
+    guard (null (containerSlotEntryErrors realized))
+    pure $ adjustLocationInstance iid (\i → i
+        { liContainers =
+            [ if lcsSlot e ≡ slot then realized else e
+            | e ← liContainers i ]
+        }) lis
 
 -- | Latch @taken@ on whichever obligation of ANY instance on this page
 --   owns @itemId@ (#917 requirement 3), the first time that physical
@@ -1555,7 +1607,7 @@ containerSlotEntryErrors e =
     -- 0 is the never-minted "no id given" sentinel
     -- ('Item.Types.itemMatches' falls back on it), so a slot naming it
     -- names no shell that ever existed while reading as bound — and a
-    -- bound slot is exactly what the pickup refusal keys on.
+    -- bound slot is exactly what realization at pickup keys on.
     [ "container slot " <> tshow (lcsSlot e)
         <> " names item instance " <> tshow itemId
         <> ", which no allocator can ever have minted"
@@ -1567,6 +1619,21 @@ containerSlotEntryErrors e =
     [ "container slot " <> tshow (lcsSlot e)
         <> " is marked realized but names no item instance"
     | lcsRealized e, isNothing (lcsInstanceId e) ]
+    ⧺
+    -- D-3: realization DISCARDS the profile. A realized slot still
+    -- naming one is claiming a future draw that can never happen —
+    -- and, read the other way, an input that could re-roll it.
+    [ "container slot " <> tshow (lcsSlot e)
+        <> " is marked realized but still carries loot profile '"
+        <> profile <> "'"
+    | lcsRealized e, Just profile ← [lcsProfile e] ]
+    ⧺
+    -- …and a PENDING slot without one could never be realized at all.
+    -- The YAML boundary makes the profile mandatory on a container
+    -- entry, so only a payload can carry this shape.
+    [ "container slot " <> tshow (lcsSlot e)
+        <> " is pending but names no loot profile"
+    | not (lcsRealized e), isNothing (lcsProfile e) ]
 
 -- | Component-local container-slot invariants for a decoded table
 --   (#2505): every per-entry rule above, a slot number declared twice on

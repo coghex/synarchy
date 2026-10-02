@@ -13,14 +13,21 @@ module Engine.Scripting.Lua.API.Items.Ground
     , itemGetGroundTempFn
     , itemSetGroundTempFn
     , itemPickupGroundFn
+    , itemRealizeGroundFn
+    , itemDebugGroundTreeFn
+    , itemDebugHeldTreeFn
     , itemGetGroundForUnitFn
     , pickupGroundOnPage
+    , GroundRealization(..)
+    , realizeGroundOnPage
     , spawnSalvageOnPage
     , worldSpawnLocationSignificantItemFn
     , worldSpawnLocationContainerFn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
@@ -29,11 +36,14 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import GHC.Float (double2Float)
 import Data.IORef (readIORef, atomicModifyIORef')
+import Engine.Core.Log (logWarn)
+import Engine.Core.Log.Types (LogCategory(..))
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
@@ -53,10 +63,14 @@ import World.Weather.Ambient (ambientTempAt)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
     , LocationSignificantItem(..), LocationContainerSlot(..)
-    , LocationInstances(..)
     , latchLocationSignificantTaken
     , lookupLocationInstance, registerLocationSignificantSpawn
-    , pendingContainerSlotFor, registerLocationContainerSpawn )
+    , pendingContainerSlotFor, registerLocationContainerSpawn
+    , containerSlotForShell, realizeLocationContainerSlot )
+import LootProfile.Realize
+    ( RealizeContext(..), RealizeResult(..), realizeLootProfile
+    , realizeRefusalId )
+import LootProfile.Types (lookupLootProfile)
 import Data.List (find)
 
 -- | Resolve which world page a ground-item op targets: a named page
@@ -387,7 +401,8 @@ worldSpawnLocationSignificantItemFn env = do
 --   bind an unrelated crate of the right definition to an unbound slot.
 --   The location would then never mint its own shell —
 --   @scripts\/locations.lua@ skips a bound slot — while the substitute
---   carried the slot's pending status, including the pickup refusal.
+--   carried the slot's pending status — and the slot's cargo, the first
+--   time anything picked it up.
 --   So Lua never chooses WHICH item fills a slot. It chooses only WHERE:
 --   the definition comes from the slot's own persisted
 --   'Location.Instance.lcsItemDefName', the item is materialized here,
@@ -400,7 +415,8 @@ worldSpawnLocationSignificantItemFn env = do
 --   profile draw has happened — and NONE happens here. This verb never
 --   reads 'Location.Instance.lcsProfile', never consults the loot-profile
 --   registry, and never touches the RNG beyond the two salvage rolls
---   every ground item gets. PLC-15 (#2510) owns realization.
+--   every ground item gets. Realization is 'realizeGroundOnPage''s
+--   (#2510).
 --
 --   Answers whether the slot was filled: false for an unresolvable page,
 --   an unknown instance or slot, a slot already bound (which is how a
@@ -578,16 +594,26 @@ pushGroundRow im gid gi = do
     Lua.pushnumber (Lua.Number (realToFrac
         (itemTotalWeight im (giInst gi))))
     Lua.setfield (Lua.nth 2) "weight"
+    -- The ids-masked signature of the nested contents (#2510), spelled
+    -- and computed exactly as @unit.getInventory@'s @contentsKey@
+    -- ('Item.Types.itemContentsSig'), so a held row and a ground row
+    -- describing the same tree compare equal. It is what makes a
+    -- realized crate's CARGO observable on the ground — @weight@ alone
+    -- says that something arrived, not what — and @""@ for an item
+    -- holding nothing.
+    Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
+    Lua.setfield (Lua.nth 2) "contentsKey"
 
 -- | item.listGround() → array of {id, instanceId, defName, displayName,
 --   kind, x, y, fill, quality, qualityTier, condition, sharpness,
---   hasStorage, weight}.
+--   hasStorage, weight, contentsKey}.
 --   `weight` is the live total mass (itemTotalWeight: empty weight +
 --   fill + nested contents), not the static def weight. `qualityTier`
 --   (#345) is present only when the def declares a quality spec;
---   `condition`, `sharpness` (#1737), `kind` and `hasStorage` (#2527 —
+--   `condition`, `sharpness` (#1737), `kind`, `hasStorage` (#2527 —
 --   the def's own @storage:@ declaration, which nothing else on the row
---   implies) are always present.
+--   implies) and `contentsKey` (#2510 — the ids-masked contents
+--   signature @unit.getInventory@ also reports) are always present.
 --
 --   ACTIVE-page scoped, deliberately: this is the UI's listing, and
 --   the UI only ever shows the world the player is looking at. A
@@ -945,58 +971,349 @@ itemPickupGroundFn env = do
 --   from" true by construction rather than by inspection.
 pickupGroundOnPage ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
 pickupGroundOnPage env ws uid gid = do
-    -- #2505: a bound UNREALIZED container shell may not leave the
-    -- ground, and the refusal has to be decided BEFORE
-    -- 'takeGroundItemOnPage' — this function is remove-first, so
-    -- deciding afterwards would mean putting the crate back, which is a
-    -- different physical event (a fresh ground id) rather than a refusal.
+    -- #2510 (PLC-15, design D-3 / D-23): a bound PENDING container shell
+    -- is realized here, through the one operation @item.realizeGround@
+    -- uses, BEFORE anything moves — so no carry path can lift a shell
+    -- whose cargo was never drawn. Faction-blind and command-blind,
+    -- exactly like the #917 latch below, because every carry path in the
+    -- tree (player command, AI fetch, needs, repair, a hostile unit)
+    -- arrives at this function.
     --
-    -- Read through the ground map rather than the removal, for the same
-    -- reason: the id this keys on is the shell's durable
-    -- 'iiInstanceId', which the removal would already have decoupled
-    -- from @gid@.
+    -- Decided before 'takeGroundItemOnPage' because this function is
+    -- remove-first: a realization that cannot complete must REFUSE the
+    -- pickup with the ground entry, @gisNextId@, the inventory, the
+    -- cursor and the slot all untouched (D-23's fail-closed rule), and
+    -- deciding after the removal would mean putting the crate back,
+    -- which is a different physical event (a fresh ground id).
     --
-    -- TEMPORARY, and only until PLC-15 (#2510) lands the atomic
-    -- @Pending → Realized@ transition in this very function. Until then
-    -- it is what keeps the strict pending-slot provenance rule
-    -- (@World.Save.Integrity.containerProvenanceErrors@) satisfiable:
-    -- an unrealized shell is required to be an OUTER GROUND item on its
-    -- owning page, and this is the only path by which one could stop
-    -- being that without being destroyed. Faction-blind and
-    -- command-blind, exactly like the #917 latch below, because every
-    -- carry path in the tree — player and AI alike — arrives here.
-    pending ← pendingShellOnGround ws gid
-    if pending then pure False else pickupUnguarded env ws uid gid
+    -- Every other answer proceeds: an ordinary item and an already
+    -- realized shell pick up as they always did, a freshly realized one
+    -- picks up carrying its cargo, and a @gid@ that is not on the page
+    -- falls through to the removal, which reports it.
+    realization ← realizeGroundOnPage env ws gid
+    case realization of
+        GroundRealizeFailed _ → pure False
+        _                     → pickupUnguarded env ws uid gid
 
--- | Is the ground item @gid@ on @ws@ a shell bound to a PENDING (bound,
---   unrealized) container slot on that same page?
+-- | What 'realizeGroundOnPage' did with one ground item (#2510).
+data GroundRealization
+    = GroundRealized
+      -- ^ the shell was pending and is now realized: its cargo is
+      --   installed in place and its slot is latched
+    | GroundAlreadyRealized
+      -- ^ the shell's slot was already latched; nothing was written
+    | GroundNotPending
+      -- ^ an ordinary item: no container slot on the page claims it
+    | GroundMissing
+      -- ^ no ground item @gid@ on the page; nothing was written
+    | GroundRealizeFailed !Text
+      -- ^ a pending shell whose realization could not complete — the
+      --   ground entry and the slot are untouched, and the reason has
+      --   already been logged
+    deriving (Show, Eq)
+
+-- | THE pending → realized transition for one ground item on one page
+--   (#2510, epic #1231 PLC-15; design D-3, D-17, D-22, D-23).
 --
---   Pure inspection: reads the ground map and the page's own
---   'wgpLocationInstances', writes nothing. A page with no live gen
---   params, a @gid@ that is not there, and an id no slot claims all
---   answer 'False', so ordinary salvage pays one map lookup and a walk
---   of whatever container slots the page's locations declare.
-pendingShellOnGround ∷ WorldState → Int → IO Bool
-pendingShellOnGround ws gid = do
+--   Resolves the shell's container slot by its durable 'iiInstanceId'
+--   across the page's own placed instances, draws its cargo with
+--   "LootProfile.Realize" from the realization context — the page's
+--   PERSISTED generation seed, the slot's location-instance id and its
+--   slot number, and nothing else (no shared RNG) — and then, only if
+--   the draw completed:
+--
+--   1. replaces the ground entry's contents with the realized tree IN
+--      PLACE: same ground id, same 'iiInstanceId', same position, same
+--      root values. PLC-13 appends admitted lots to whatever the shell
+--      already held and leaves the root untouched (D-22), so the commit
+--      installs exactly the contents it returned; and
+--   2. latches the slot realized and discards its profile
+--      ('Location.Instance.realizeLocationContainerSlot').
+--
+--   Both writes are direct 'atomicModifyIORef''s on this, the Lua,
+--   thread, with no yield between them, which is what "one synchronous
+--   step" means here: every caller that could observe the slot or move
+--   the shell is a Lua verb serialized behind this one, and the save
+--   barrier quiesces this thread before capturing either ref. The same
+--   reasoning, and the same refs, as the #917 latch in
+--   'pickupUnguarded'.
+--
+--   The ground commit is CONDITIONAL — it lands only if the entry still
+--   holds the same instance with the same contents that were drawn
+--   against — because the world thread can also remove a ground item.
+--   A shell that changed under the draw refuses rather than installing
+--   cargo computed for something else, and the ids the draw allocated
+--   are simply never used: the allocator is monotonic, and an unused id
+--   is not a hazard.
+--
+--   Fails CLOSED (D-23): a slot naming no profile, a profile this build
+--   no longer registers, and every PLC-13 refusal (the shell has no
+--   'iiStorage', a profile entry names an unknown item) leave the ground
+--   entry and the slot exactly as they were, and log the reason naming
+--   the page, the location instance and the slot.
+realizeGroundOnPage ∷ EngineEnv → WorldState → Int → IO GroundRealization
+realizeGroundOnPage env ws gid = do
     gis ← readIORef (wsGroundItemsRef ws)
     case HM.lookup gid (gisItems gis) of
-        Nothing → pure False
+        Nothing → pure GroundMissing
         Just gi → do
             mParams ← readIORef (wsGenParamsRef ws)
-            let itemId = iiInstanceId (giInst gi)
-            pure $ case mParams of
-                Nothing → False
-                Just p → or
-                    [ lcsInstanceId slot ≡ Just itemId
-                    | inst ← HM.elems (lisById (wgpLocationInstances p))
-                    , slot ← liContainers inst
-                    , not (lcsRealized slot) ]
+            let shell = giInst gi
+                owner = do
+                    p ← mParams
+                    (inst, slot) ← containerSlotForShell (iiInstanceId shell)
+                                       (wgpLocationInstances p)
+                    pure (p, inst, slot)
+            case owner of
+                Nothing → pure GroundNotPending
+                Just (p, inst, slot)
+                    | lcsRealized slot → pure GroundAlreadyRealized
+                    | otherwise → realizePending p inst slot shell
+  where
+    realizePending p inst slot shell = do
+        logger ← readIORef (ccLoggerRef (toCoreCapability env))
+        let iid = liId inst
+            refuse reason = do
+                page ← pageLabel
+                let msg = "cannot realize the pending container shell "
+                        <> tshow (iiInstanceId shell) <> " of location #"
+                        <> tshow (unLocationInstanceId iid)
+                        <> " slot " <> tshow (lcsSlot slot) <> " on page "
+                        <> page <> ": " <> reason
+                        <> "; the shell stays on the ground, pending"
+                logWarn logger CatWorld msg
+                pure (GroundRealizeFailed reason)
+        case lcsProfile slot of
+            Nothing → refuse "its slot names no loot profile"
+            Just profileId → do
+                reg ← readIORef (crLootProfileRegistryRef
+                                     (toContentRegistriesCapability env))
+                case lookupLootProfile profileId reg of
+                    Nothing → refuse ("loot profile '" <> profileId
+                                         <> "' is no longer registered")
+                    Just profile → do
+                        im ← readReadOnlyRef (crvItemManagerRef
+                                 (toContentRegistriesViewCapability env))
+                        let ctx = RealizeContext
+                                { rcWorldSeed  = fromIntegral (wgpSeed p)
+                                , rcInstanceId = unLocationInstanceId iid
+                                , rcSlot       = lcsSlot slot }
+                        result ← realizeLootProfile im logger
+                                     (freshItemInstanceId env) ctx profile shell
+                        case result of
+                            RealizeRefused r →
+                                refuse ("the realization refused ("
+                                           <> realizeRefusalId r <> ")")
+                            RealizeDone realized _ →
+                                commit iid slot shell realized
+                                    ⌦ \ok → if ok then pure GroundRealized
+                                         else refuse "the shell changed while \
+                                                     \its cargo was drawn"
 
--- | The original remove → insert → rollback core, with no pending-shell
---   guard in front of it. Split out so the guard above reads as one
---   decision rather than as an extra branch woven through the rollback,
---   and so PLC-15 has an obvious seam to replace: its realization runs
---   where the guard now refuses, and then calls this.
+    -- 'WorldState' does not carry its own page id, so the diagnostic
+    -- finds it the way the manager knows it: by the page whose
+    -- generation-params ref IS this one. Only ever read on a refusal.
+    pageLabel = do
+        mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+        pure $ case [ pid | (pid, w) ← wmWorlds mgr
+                          , wsGenParamsRef w ≡ wsGenParamsRef ws ] of
+            (WorldPageId pid : _) → "'" <> pid <> "'"
+            []                    → "<unregistered page>"
+
+    commit iid slot shell realized = do
+        installed ← atomicModifyIORef' (wsGroundItemsRef ws) $ \g →
+            case HM.lookup gid (gisItems g) of
+                Just cur
+                    | iiInstanceId (giInst cur) ≡ iiInstanceId shell
+                    , iiContents (giInst cur) ≡ iiContents shell →
+                        let cur' = cur { giInst = (giInst cur)
+                                           { iiContents = iiContents realized } }
+                        in (g { gisItems = HM.insert gid cur' (gisItems g) }
+                           , True)
+                _ → (g, False)
+        if not installed then pure False else do
+            latched ← atomicModifyIORef' (wsGenParamsRef ws) $ \mP →
+                case mP of
+                    Just p → case realizeLocationContainerSlot iid
+                                      (lcsSlot slot) (iiInstanceId shell)
+                                      (wgpLocationInstances p) of
+                        Just instances' →
+                            (Just p { wgpLocationInstances = instances' }, True)
+                        Nothing → (mP, False)
+                    Nothing → (mP, False)
+            -- Unreachable while the slot is only ever written from this
+            -- thread — it was pending a moment ago — but if that stops
+            -- being true the cargo comes back OUT rather than leaving a
+            -- realized tree under a pending slot that a second request
+            -- would draw into again.
+            unless latched $
+                atomicModifyIORef' (wsGroundItemsRef ws) $ \g →
+                    ( g { gisItems = HM.adjust
+                            (\cur → cur { giInst = (giInst cur)
+                                             { iiContents = iiContents shell } })
+                            gid (gisItems g) }
+                    , () )
+            pure latched
+
+-- | item.realizeGround(gid [, pageId]) → "realized" | "already-realized"
+--   | "not-pending" | false (#2510, PLC-15; design D-23).
+--
+--   The explicit form of the transition 'pickupGroundOnPage' performs as
+--   a backstop: PLC-16's arrival flow calls it BEFORE its capacity test,
+--   so the weight it measures is the realized crate's. Same operation,
+--   'realizeGroundOnPage', so the two can never disagree about what a
+--   shell realizes into.
+--
+--   Page resolution: an omitted @pageId@ selects the ACTIVE page; an
+--   explicit one selects exactly that live page ('resolveItemPage'),
+--   with no fallback to the active one — ground ids are page-local, so a
+--   same-numbered gid elsewhere is a different item.
+--
+--   Answers:
+--
+--   * @"realized"@ — the shell was pending and now holds its cargo, in
+--     place, with its slot latched;
+--   * @"already-realized"@ — a repeat request from any path; nothing is
+--     written and nothing is re-rolled (exactly once);
+--   * @"not-pending"@ — an ordinary item lying on that page;
+--   * @false@ — no such ground item, no such page, a non-integer @gid@ or
+--     a non-string @pageId@, or a realization that could not complete
+--     (logged, naming the location instance and slot). Nothing moves in
+--     any of these.
+itemRealizeGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemRealizeGroundFn env = do
+    gidTy  ← Lua.ltype 1
+    pageTy ← Lua.ltype 2
+    -- Types checked BEFORE converting: 'Lua.tointeger' and 'Lua.tostring'
+    -- both coerce, so @'7'@ would otherwise address ground item 7 and a
+    -- numeric page argument would name a page spelled with its digits.
+    gidArg ← case gidTy of
+        Lua.TypeNumber → Lua.tointeger 1
+        _              → pure Nothing
+    pageArg ← case pageTy of
+        Lua.TypeNone   → pure (Right Nothing)
+        Lua.TypeNil    → pure (Right Nothing)
+        Lua.TypeString → Right ∘ fmap TE.decodeUtf8Lenient <$> Lua.tostring 2
+        _              → pure (Left ())
+    answer ← case (gidArg, pageArg) of
+        (Just g, Right mPage) → Lua.liftIO $ do
+            mWs ← resolveItemPage env mPage
+            case mWs of
+                Nothing → pure Nothing
+                Just ws → do
+                    r ← realizeGroundOnPage env ws (fromIntegral g)
+                    pure $ case r of
+                        GroundRealized        → Just "realized"
+                        GroundAlreadyRealized → Just "already-realized"
+                        GroundNotPending      → Just "not-pending"
+                        GroundMissing         → Nothing
+                        GroundRealizeFailed _ → Nothing
+        _ → pure Nothing
+    case answer of
+        Just t  → Lua.pushstring (TE.encodeUtf8 t)
+        Nothing → Lua.pushboolean False
+    return 1
+
+-- | item.debugGroundTree(gid [, pageId]) → tree | nil (#2510).
+--
+--   An EXACT, ids-masked description of one ground item's whole tree,
+--   for probes that must compare physical trees across saves and across
+--   processes: the root's own @defName@, @quality@, @condition@,
+--   @weight@ (empty), @fill@, @sharpness@, @bulk@ (omitted when the
+--   instance carries none) and @storageWeight@ \/ @storageBulk@
+--   (omitted for an item with no internal storage), plus @contents@ —
+--   every child, in ORDER, rendered by 'Item.Types.itemTreeSnapshot'.
+--
+--   Not a grouping key: @contentsKey@ on a ground row sorts its children
+--   and drops fields, which is right for stacking and wrong for "is this
+--   the same tree". Root and contents are reported apart so a caller can
+--   tell the shell's own values from what was put inside it.
+--
+--   Page resolution is 'resolveItemPage''s: the active page when
+--   @pageId@ is omitted, exactly that page otherwise. @nil@ for an
+--   unknown page, a missing ground item, or a mistyped argument.
+--   Read-only.
+itemDebugGroundTreeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemDebugGroundTreeFn env = do
+    gidTy  ← Lua.ltype 1
+    pageTy ← Lua.ltype 2
+    gidArg ← case gidTy of
+        Lua.TypeNumber → Lua.tointeger 1
+        _              → pure Nothing
+    pageArg ← case pageTy of
+        Lua.TypeNone   → pure (Right Nothing)
+        Lua.TypeNil    → pure (Right Nothing)
+        Lua.TypeString → Right ∘ fmap TE.decodeUtf8Lenient <$> Lua.tostring 2
+        _              → pure (Left ())
+    mInst ← case (gidArg, pageArg) of
+        (Just g, Right mPage) → Lua.liftIO $ do
+            mWs ← resolveItemPage env mPage
+            case mWs of
+                Nothing → pure Nothing
+                Just ws → fmap giInst ∘ HM.lookup (fromIntegral g) ∘ gisItems
+                              <$> readIORef (wsGroundItemsRef ws)
+        _ → pure Nothing
+    maybe (Lua.pushnil) pushItemTree mInst
+    return 1
+
+-- | item.debugHeldTree(uid, instanceId) → tree | nil (#2510).
+--
+--   'itemDebugGroundTreeFn''s description for an item a unit CARRIES:
+--   the top-level inventory entry of unit @uid@ whose 'iiInstanceId' is
+--   @instanceId@. @nil@ for an unknown unit, an id the unit is not
+--   carrying at top level, or a mistyped argument. Read-only.
+itemDebugHeldTreeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+itemDebugHeldTreeFn env = do
+    uidTy ← Lua.ltype 1
+    idTy  ← Lua.ltype 2
+    uidArg ← case uidTy of
+        Lua.TypeNumber → Lua.tointeger 1
+        _              → pure Nothing
+    idArg ← case idTy of
+        Lua.TypeNumber → Lua.tointeger 2
+        _              → pure Nothing
+    mInst ← case (uidArg, idArg) of
+        (Just u, Just i) | i > 0 → Lua.liftIO $ do
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            pure $ do
+                unit ← HM.lookup (UnitId (fromIntegral u)) (umInstances um)
+                find ((≡ fromIntegral i) ∘ iiInstanceId) (uiInventory unit)
+        _ → pure Nothing
+    maybe (Lua.pushnil) pushItemTree mInst
+    return 1
+
+-- | The table both tree verbs answer.
+pushItemTree ∷ ItemInstance → Lua.LuaE Lua.Exception ()
+pushItemTree inst = do
+    Lua.newtable
+    Lua.pushstring (TE.encodeUtf8 (iiDefName inst))
+    Lua.setfield (Lua.nth 2) "defName"
+    num "quality" (iiQuality inst)
+    num "condition" (iiCondition inst)
+    num "weight" (iiWeight inst)
+    num "fill" (iiCurrentFill inst)
+    num "sharpness" (iiSharpness inst)
+    forM_ (iiBulk inst) (num "bulk")
+    forM_ (iiStorage inst) $ \st → do
+        num "storageWeight" (isWeightCapacity st)
+        num "storageBulk" (isBulkCapacity st)
+    Lua.pushstring (TE.encodeUtf8 (T.intercalate ";"
+        (map itemTreeSnapshot (iiContents inst))))
+    Lua.setfield (Lua.nth 2) "contents"
+  where
+    num key v = do
+        Lua.pushnumber (Lua.Number (realToFrac v))
+        Lua.setfield (Lua.nth 2) key
+
+-- | The original remove → insert → rollback core, with no realization in
+--   front of it. Split out so the realization step above reads as one
+--   decision rather than as an extra branch woven through the rollback.
+--
+--   A realized shell needs nothing special here: 'takeGroundItemOnPage'
+--   removes whatever tree is CURRENTLY on the ground, so a vanished-unit
+--   rollback restores the realized tree (with its latch and discarded
+--   profile untouched, since nothing here writes the slot) and a later
+--   pickup finds it already realized rather than drawing again.
 pickupUnguarded ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
 pickupUnguarded env ws uid gid = do
     mGi ← takeGroundItemOnPage ws gid

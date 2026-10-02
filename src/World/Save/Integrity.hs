@@ -722,17 +722,21 @@ significantDanglingWarnings snap =
 
 -- Pending container shells (#2505) -----------------------------------
 
--- | One placed location's PENDING container slot, flattened with the
---   page it belongs to and the data path a diagnostic needs — the
---   container half of 'significantRefs', and THE single enumeration the
---   rules below walk.
+-- | One placed location's container slot, PENDING or REALIZED,
+--   flattened with the page it belongs to and the data path a diagnostic
+--   needs — the container half of 'significantRefs', and THE single
+--   enumeration the rules below walk.
 --
---   Restricted to UNREALIZED slots. After realization (PLC-15) the slot
---   keeps only its latch and its bound id (design D-3): the shell is an
+--   Every state, exactly as 'significantRefs' enumerates taken and
+--   untaken obligations alike: the per-rule carve-out lives in each
+--   rule, not here. After realization (#2510, PLC-15) the slot keeps
+--   only its latch and its bound id (design D-3) and the shell is an
 --   ordinary item that may be carried, stored, nested, dropped or
---   destroyed like any other, so every rule below would be asserting
---   something about it that is no longer true. That is the same carve-out
---   'lsiTaken' gets from the significant rules, one state earlier.
+--   destroyed like any other, so the rules about WHERE it is and WHETHER
+--   it still exists stop applying — the same relaxation 'lsiTaken' gets.
+--   The rules about WHICH identity it names do not: a realized slot
+--   still owns its id against every other slot, and that id must still
+--   be one the allocator minted.
 containerRefs
     ∷ SessionSnapshot
     → [(WorldPageId, LocationInstance, LocationContainerSlot, Text)]
@@ -741,26 +745,27 @@ containerRefs snap =
     | (pid, page) ← L.sortOn fst (HM.toList (snapPages snap))
     , inst ← instancesToList (wgpLocationInstances (pgsGenParams page))
     , slot ← liContainers inst
-    , not (lcsRealized slot)
     , let path = "world-pages[page=" <> unWorldPageId pid
               <> "].locations[" <> tshow (unLocationInstanceId (liId inst))
               <> "].containers[" <> tshow (lcsSlot slot) <> "].item"
     ]
 
--- | The BLOCKING provenance rules for PENDING container shells (#2505).
+-- | The BLOCKING provenance rules for container shells (#2505, #2510).
 --   The #917 rules applied to the other slot family, and they hold at
 --   exactly the same strength for one structural reason: an unrealized
 --   shell has nowhere else it could legitimately be.
 --
---   * a bound unrealized shell must be an OUTER GROUND item on its own
+--   * a bound UNREALIZED shell must be an OUTER GROUND item on its own
 --     page. Resolving on another page means the durable
 --     @(page, instance, slot)@ source (design D-2\/D-17) is wrong.
 --     Resolving in an inventory, in a building's store, or nested inside
---     another container means it was picked up — and this slice REFUSES
---     to pick a pending shell up
+--     another container means it was picked up — and the pickup
+--     boundary REALIZES a pending shell before it moves it
 --     ('Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'), so
---     that state is unreachable by play and a payload claiming it is
---     claiming something the engine cannot do. "Outer" is
+--     a shell that left the ground while still pending is unreachable
+--     by play and a payload claiming it is claiming something the
+--     engine cannot do. A REALIZED shell is exempt from this rule and
+--     the next, exactly as a taken obligation is. "Outer" is
 --     'PageEntities.peGroundItems' rather than the flattened
 --     'peItems' for the same reason it is there: an id that exists only
 --     INSIDE a ground container is not pickable as its own ground item,
@@ -777,10 +782,13 @@ containerRefs snap =
 --     one CONTAINER claim; a group of significant claims alone stays
 --     'significantProvenanceErrors'', so the two walks partition the
 --     cases instead of double-reporting the overlap.
+--     Applies to REALIZED slots too: a realized slot still owns its id,
+--     exactly as a taken obligation does.
 --   * a bound identity is BELOW the session's item-id cursor — the only
---     ids the monotonic allocator can have minted. Unlike the #917
---     version this needs no taken-obligation carve-out, because an
---     unrealized slot has no state that excuses its shell from existing.
+--     ids the monotonic allocator can have minted. Realized slots
+--     included, for the reason the #917 version keeps taken ones: a
+--     realized shell may legitimately be gone, and "gone" is exactly
+--     what an id above the cursor looks like to a resolution check.
 containerProvenanceErrors ∷ SessionSnapshot → [IntegrityError]
 containerProvenanceErrors snap =
     resolutionErrors ⧺ ownershipErrors ⧺ allocatorErrors
@@ -807,6 +815,7 @@ containerProvenanceErrors snap =
                 <> " on page '" <> unWorldPageId pid <> "' " <> actual
             }
         | (pid, inst, slot, path) ← refs
+        , not (lcsRealized slot)
         , Just itemId ← [lcsInstanceId slot]
         , Just actual ← [misresolution pid (lcsItemDefName slot) itemId]
         ]
@@ -865,7 +874,7 @@ containerProvenanceErrors snap =
                                 \allocator)"
             , ieActual        = "claimed by " <> ownersText
             , ieCode          = "duplicate-identity"
-            , ieMessage       = "pending container shell " <> tshow itemId
+            , ieMessage       = "container shell " <> tshow itemId
                 <> " is owned by more than one location slot: " <> ownersText
             }
         | (itemId, owners) ← L.sortOn fst
@@ -888,7 +897,7 @@ containerProvenanceErrors snap =
             , ieActual        = "at or above that cursor, so no such "
                 <> "item was ever created"
             , ieCode          = "unmintable-identity"
-            , ieMessage       = "pending container shell " <> tshow itemId
+            , ieMessage       = "container shell " <> tshow itemId
                 <> " owed by location #"
                 <> tshow (unLocationInstanceId (liId inst))
                 <> " slot " <> tshow (lcsSlot slot)
@@ -933,6 +942,7 @@ containerDanglingWarnings snap =
                \slot stays pending)"
         }
     | (pid, inst, slot, path) ← containerRefs snap
+    , not (lcsRealized slot)
     , Just itemId ← [lcsInstanceId slot]
     , not (any (HS.member itemId ∘ peItems)
                (HM.elems (snapshotPageEntities snap)))

@@ -37,6 +37,13 @@
 module Test.Headless.Loot.Realization
     ( spec
     , luaSpec
+      -- * The pinned vectors, for PLC-15's engine-level comparison
+      --   ("Test.Headless.Location.ContainerRealization")
+    , probeItems
+    , vectorProfile
+    , vectorContexts
+    , pinnedVectors
+    , renderContents
     ) where
 
 import UPrelude

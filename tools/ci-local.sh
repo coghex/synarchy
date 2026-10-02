@@ -544,16 +544,16 @@ python3 tools/world_check.py --quick
 # scanning the COMPLETE reorganized surface (#2095 -- the facade plus
 # every scenario owner under tools/location_content/, so an
 # exclusion-style check cannot go vacuous once the bodies leave run):
-# all ten boot CALL SITES through the one funnel that hands each this
+# all eleven boot CALL SITES through the one funnel that hands each this
 # invocation's log and registers its process as it is launched, the
-# regeneration site still a loop over the two visit orders so a run
-# LAUNCHES eleven engine processes, every log-reading ASSERTION reading
+# two regeneration sites still loops over the two visit orders so a run
+# LAUNCHES thirteen engine processes, every log-reading ASSERTION reading
 # that same log, the nine fixture bodies by sha256 resolved at their
 # single source, their registration sequence and loaders,
 # load_fixture_yaml still guarding every registration, the topology
 # PROSE naming the current counts, and the three helpers
 # portal_ghost_probe imports still the same function objects. That probe
-# is manual-only and launches eleven engine processes; the companion
+# is manual-only and launches thirteen engine processes; the companion
 # boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
-"""Pending container shells: the end-to-end half of #2505 (epic #1231,
-PLC-14) that no hspec group can reach.
+"""Pending container shells and their realization: the end-to-end half
+of #2505 (epic #1231, PLC-14) and #2510 (PLC-15) that no hspec group can
+reach.
 
-`Test.Headless.Location.ContainerShells` already pins the pure rules, the
-spawn verb and the pickup refusal against hand-built pages. What it
-cannot see is the ONE-TIME content lifecycle running for real: a shell
+`Test.Headless.Location.ContainerShells` and
+`Test.Headless.Location.ContainerRealization` already pin the pure rules,
+the spawn verb and the realization boundary against hand-built pages.
+What they cannot see is the ONE-TIME lifecycle running for real: a shell
 minted the first time a chunk actually loads, NOT minted again when that
-chunk is revisited, and the pending slot surviving a save, a process
-exit and a load in a fresh engine. That is what this owner covers.
+chunk is revisited, realized exactly once -- in place through
+`item.realizeGround`, or by being picked up -- and every state of it
+surviving a save, a process exit and a load in a fresh engine; and two
+further fresh processes, each loading the same PRISTINE save (taken
+after the shells spawned, before anything was realized) and visiting its
+chunks and realizing its shells in opposite orders, realizing every shell
+into the same complete tree that the first process and the reloaded one
+realized for the same location slot. That is what this owner covers.
 
 Its four YAML fixtures are the reason the scenario exists at all: no
 SHIPPED location authors a `kind: container` entry yet (PLC-10 owns the
@@ -50,10 +58,13 @@ CONTAINER_ITEM_YAML = (
     "      - { item: rations, count: 1 }\n"
 )
 
-#: The profile the slot names. Never DRAWN in this slice — PLC-15 owns
-#: realization — but it must resolve against the live registry at
-#: location load AND at save load, which is exactly what this fixture
-#: makes real rather than hypothetical.
+#: The profile the slot names. It must resolve against the live registry
+#: at location load AND at save load, and (#2510) it is what every shell
+#: is realized from. The `rations` entry always appears, so a realized
+#: tree is always observably different from the pending one; the
+#: `steel_bar` coin flip is what makes two slots' trees differ, so the
+#: cross-process comparison is about each slot's OWN context rather than
+#: a constant.
 CONTAINER_PROFILE_YAML = (
     "id: probe_crate_salvage\n"
     "quantity_multiplier:\n"
@@ -63,13 +74,18 @@ CONTAINER_PROFILE_YAML = (
     "  - item: steel_bar\n"
     "    chance: 0.5\n"
     "    quantity_factor: 2\n"
+    "  - item: rations\n"
+    "    chance: 1.0\n"
+    "    quantity_factor: 1\n"
 )
 
 #: One per land chunk (the `dense_ruin` pattern this probe already uses
 #: for the hidden-page dispatch phase), so a container entry is
-#: guaranteed at the synchronous centre chunk (0,0). A fixed `position`
-#: keeps the shell on a known tile, which is what lets the pickup
-#: refusal below address it without searching.
+#: guaranteed at the synchronous centre chunk (0,0). THREE shells per
+#: location, so even a world whose loaded region holds a single crate
+#: ruin has one shell to realize in place, one to pick up, and one left
+#: pending across the save. A fixed `position` keeps them on a known
+#: tile.
 CONTAINER_LOCATION_YAML = (
     "locations:\n"
     "  - id: crate_ruin\n"
@@ -83,7 +99,7 @@ CONTAINER_LOCATION_YAML = (
     "    naming: { heads: [KEEP], modifiers: [ASH] }\n"
     "    contents:\n"
     "      - { kind: container, id: probe_pending_crate, "
-    "profile: probe_crate_salvage, count: 1, position: {x: 0, y: 0} }\n"
+    "profile: probe_crate_salvage, count: 3, position: {x: 0, y: 0} }\n"
 )
 
 #: The SAME location id over an EMPTY contents list. Registered by the
@@ -209,7 +225,8 @@ def _crate_slots(port: int, page: str) -> list[dict]:
 
 def _shell_rows(port: int, item_id: str) -> list[dict]:
     """Every ground shell of definition `item_id`, as
-    `{gid, instance, weight}` rows.
+    `{gid, instance, weight}` rows. Trees are compared through
+    `_ground_tree`, never through these.
 
     `item.listGround()` is ACTIVE-page scoped with no page argument, and
     every phase here shows CRATE_PAGE before reading — which is also
@@ -261,8 +278,8 @@ def observe_initial_shell(args, state, failures: list[str]) -> None:
           "first chunk load")
 
     if any(s.get("realized") for s in slots):
-        failures.append("a slot came back REALIZED — this slice never "
-                        "transitions one, PLC-15 does")
+        failures.append("a slot came back REALIZED before anything "
+                        "realized it")
     else:
         print("PASS: every slot is still PENDING (realized = false)")
 
@@ -314,9 +331,16 @@ def observe_initial_shell(args, state, failures: list[str]) -> None:
             "content did not materialize")
 
 
-def check_no_respawn_and_pickup(args, state, failures: list[str]) -> None:
-    """Revisiting the same chunks mints no second shell, and an ordinary
-    pickup of a pending one is REFUSED with the shell left where it is."""
+def check_no_respawn(args, state, failures: list[str]) -> None:
+    """Revisiting the same chunks mints no second shell -- and every
+    shell's COMPLETE pending tree is recorded, keyed by its location
+    slot, just before the façade takes the pristine save the
+    opposite-order processes load.
+
+    Every comparison in this owner is of EXACT trees
+    (`item.debugGroundTree` / `item.debugHeldTree`: ordered, every
+    physical field, ids masked), never of `contentsKey`, which is a
+    sorted grouping key."""
     send(args.port, "return world.loadChunksInRegion(-1,-1,1,1)")
     time.sleep(1.0)
     shells = _shell_rows(args.port, "probe_pending_crate")
@@ -327,7 +351,70 @@ def check_no_respawn_and_pickup(args, state, failures: list[str]) -> None:
         return
     print("PASS: revisiting the crate ruins respawned no shell")
 
-    target = shells[0]
+    slots = _slots_by_shell(args.port)
+    if len(shells) < 3 or any(s["instance"] not in slots for s in shells):
+        failures.append(
+            f"need at least three bound shells to realize one in place, pick "
+            f"one up and keep one pending; found {len(shells)}")
+        return
+    pending = {_slot_key(slots[s["instance"]]): _ground_tree(args.port, s["gid"])
+               for s in shells}
+    if any(t is None for t in pending.values()):
+        failures.append("item.debugGroundTree could not describe a pending "
+                        "shell")
+        return
+    state.crate_pending_trees = pending
+
+
+def check_realize(args, state, failures: list[str]) -> None:
+    """(#2510) One shell is realized IN PLACE through `item.realizeGround`,
+    a second is realized by being picked up, and the rest are left
+    pending for the save. Each realized tree is recorded COMPLETE, keyed
+    by its location slot, for the reload and the opposite-order
+    processes to reproduce exactly."""
+    slots = _slots_by_shell(args.port)
+    shells = sorted(_shell_rows(args.port, "probe_pending_crate"),
+                    key=lambda s: s["gid"])
+    ground, held = shells[0], shells[1]
+    pending = {s["gid"]: state.crate_pending_trees[_slot_key(slots[s["instance"]])]
+               for s in (ground, held)}
+
+    # Explicit realization: in place, exactly once.
+    before = pending[ground["gid"]]
+    first = _realize(args.port, ground["gid"])
+    after = _ground_tree(args.port, ground["gid"])
+    row = [s for s in _shell_rows(args.port, "probe_pending_crate")
+           if s["gid"] == ground["gid"]]
+    if (first == "realized" and after and row
+            and row[0]["instance"] == ground["instance"]
+            and _own(after) == _own(before)
+            and after["contents"] != before["contents"]
+            and row[0]["weight"] > ground["weight"]):
+        print("PASS: item.realizeGround realized a pending shell IN PLACE -- "
+              "same ground id and instance id, the shell's own values exactly "
+              "as they were, its cargo visible at once in its tree and its "
+              "recursive weight")
+    else:
+        failures.append(
+            "item.realizeGround should realize a pending shell in place; "
+            f"answered {first!r}, tree before {before}, after {after}, "
+            f"row {row}")
+        return
+    second = _realize(args.port, ground["gid"])
+    again = _ground_tree(args.port, ground["gid"])
+    if second == "already-realized" and again == after:
+        print("PASS: a second item.realizeGround answered already-realized "
+              "and left the exact tree untouched")
+    else:
+        failures.append(
+            f"a repeat realization answered {second!r} with tree {again}, "
+            f"expected already-realized and {after}")
+    ground_slot = _slot_key(slots[ground["instance"]])
+    state.crate_ground_shell = ground["instance"]
+    state.crate_realized_trees[ground_slot] = after
+
+    # The pickup backstop: a still-pending shell arrives in the
+    # inventory already realized.
     uid = send(args.port,
                "return unit.spawn('acolyte', 0, 0, nil, 'player', "
                f"'{CRATE_PAGE}')").strip().strip('"')
@@ -339,53 +426,90 @@ def check_no_respawn_and_pickup(args, state, failures: list[str]) -> None:
     if uid < 0:
         failures.append(f"could not spawn a pickup unit: {uid}")
         return
-    # An acolyte spawns holding its starting equipment, so the inventory
-    # is compared BEFORE and AFTER rather than to zero — the claim is
-    # "nothing moved", not "the unit is empty".
-    before_held = _inventory_size(args.port, uid)
-    # Requirement 7: refused BEFORE anything moves. The shell must still
-    # be on the ground afterwards, under the SAME ground id — a rollback
-    # would have given it a new one.
+    before = pending[held["gid"]]
     picked = send(args.port,
-                  f"return item.pickupGround({uid}, {target['gid']})")
-    after = _shell_rows(args.port, "probe_pending_crate")
-    still_there = [s for s in after if s["gid"] == target["gid"]]
-    after_held = _inventory_size(args.port, uid)
-    if (picked.strip() == "false" and still_there
-            and after_held == before_held
-            and len(after) == state.crate_shells):
-        print("PASS: picking up a pending shell was REFUSED, the shell kept "
-              "its ground id, and the unit's inventory is untouched")
+                  f"return item.pickupGround({uid}, {held['gid']})").strip()
+    carried = _held_tree(args.port, uid, held["instance"])
+    if (picked == "true" and carried
+            and _own(carried) == _own(before)
+            and carried["contents"] != before["contents"]):
+        print("PASS: picking up a PENDING shell realized it first -- it "
+              "arrived in the inventory carrying its cargo, its own values "
+              "untouched")
     else:
         failures.append(
-            "a pending shell's pickup should be refused with nothing moved; "
-            f"pickupGround={picked!r}, still on ground={bool(still_there)}, "
-            f"inventory {before_held} -> {after_held}, shells "
-            f"{state.crate_shells} -> {len(after)}")
+            "a pending shell's pickup should realize it and move it; "
+            f"pickupGround={picked!r}, carried={carried}, pending tree "
+            f"{before}")
+        return
+    held_slot = _slot_key(slots[held["instance"]])
+    state.crate_held_shell = held["instance"]
+    state.crate_holder_uid = uid
+    state.crate_realized_trees[held_slot] = carried
 
-    bound = [s for s in _crate_slots(args.port, CRATE_PAGE)
-             if s.get("bound", -1) > 0]
-    if any(s.get("realized") for s in bound):
-        failures.append("a refused pickup realized a slot")
-    elif len(bound) == state.crate_slots:
-        print("PASS: the refused pickup left every slot bound and pending")
+    _check_slot_states(args.port, state, failures, "after realizing two")
+
+
+def _check_slot_states(port: int, state, failures: list[str],
+                       when: str) -> None:
+    """Every bound slot is in the state the scenario left it: the two
+    realized shells latched with their profile DISCARDED, every other
+    one still pending and still naming the authored profile."""
+    realized_ids = {state.crate_ground_shell, state.crate_held_shell}
+    wrong = []
+    for s in _crate_slots(port, CRATE_PAGE):
+        if s.get("bound", -1) <= 0:
+            continue
+        want_realized = s["bound"] in realized_ids
+        want_profile = None if want_realized else "probe_crate_salvage"
+        if bool(s.get("realized")) != want_realized or s.get("profile") != want_profile:
+            wrong.append(s)
+    if wrong:
+        failures.append(f"slot states are wrong {when}: {wrong}")
     else:
-        failures.append(
-            f"the refused pickup changed the bound-slot count: "
-            f"{state.crate_slots} before, {len(bound)} after")
+        print(f"PASS: {when}, exactly the realized slots are latched with "
+              "their profile discarded, and every other one is pending")
 
 
-def _inventory_size(port: int, uid: int) -> int:
-    reply = send(port, f"return #(unit.getInventory({uid}) or {{}})")
-    try:
-        return int(float(reply.strip().strip('"')))
-    except (TypeError, ValueError):
-        return -1
+def _slots_by_shell(port: int) -> dict[int, dict]:
+    """Bound slot rows keyed by the shell instance id each one names."""
+    return {s["bound"]: s for s in _crate_slots(port, CRATE_PAGE)
+            if s.get("bound", -1) > 0}
+
+
+def _slot_key(slot: dict) -> str:
+    """The realization context's location half, `<instance>:<slot>` --
+    stable across processes, where the shell's own instance id is not."""
+    return f"{slot['instance']}:{slot['slot']}"
+
+
+def _realize(port: int, gid: int) -> str:
+    """`item.realizeGround` on the crate page, its answer unquoted."""
+    return send(port, f"return item.realizeGround({gid}, '{CRATE_PAGE}')"
+                ).strip().strip('"')
+
+
+def _ground_tree(port: int, gid: int) -> dict | None:
+    """The EXACT tree of ground item `gid` on the crate page."""
+    t = send_json(port, f"return item.debugGroundTree({gid}, '{CRATE_PAGE}')")
+    return t if isinstance(t, dict) else None
+
+
+def _held_tree(port: int, uid: int, instance: int) -> dict | None:
+    """The EXACT tree of the item `uid` carries with id `instance`."""
+    t = send_json(port, f"return item.debugHeldTree({uid}, {instance})")
+    return t if isinstance(t, dict) else None
+
+
+def _own(tree: dict) -> dict:
+    """A tree's ROOT values: every field but its contents."""
+    return {k: v for k, v in tree.items() if k != "contents"}
 
 
 def check_shell_survived_reload(args, state, failures: list[str]) -> None:
-    """The pending slot and its shell come back from save -> quit ->
-    fresh process -> load, still bound and still unrealized."""
+    """Every slot comes back from save -> quit -> fresh process -> load in
+    the state it was saved in, both realized trees come back EXACTLY, and
+    (#2510) realization stays exactly-once across the round trip."""
     slots = _crate_slots(args.port, CRATE_PAGE)
     bound = [s for s in slots if s.get("bound", -1) > 0]
     if len(bound) != state.crate_slots:
@@ -393,30 +517,155 @@ def check_shell_survived_reload(args, state, failures: list[str]) -> None:
             f"the load restored {len(bound)} bound container slot(s), "
             f"expected {state.crate_slots}")
         return
-    if any(s.get("realized") for s in slots):
-        failures.append("a restored slot came back REALIZED")
-        return
-    if any(s.get("profile") != "probe_crate_salvage" for s in bound):
-        failures.append("a restored slot lost or changed its profile id")
-        return
-    print("PASS: every pending slot round-tripped save/quit/load with its "
-          "shell id, its profile and its unrealized latch intact")
+    _check_slot_states(args.port, state, failures, "after the reload")
 
     shells = _shell_rows(args.port, "probe_pending_crate")
-    if len(shells) != state.crate_shells:
+    if len(shells) != state.crate_shells - 1:
         failures.append(
             f"the load restored {len(shells)} shell(s) on the ground, "
-            f"expected {state.crate_shells}")
+            f"expected {state.crate_shells - 1} (one was picked up)")
         return
-    if sorted(s["bound"] for s in bound) == sorted(s["instance"]
-                                                   for s in shells):
-        print("PASS: every restored shell is still the OUTER GROUND item its "
-              "own slot names — the pending-provenance rule the load "
-              "boundary enforces")
+    slot_of = _slots_by_shell(args.port)
+    if sorted(s["instance"] for s in shells) == sorted(
+            b for b in slot_of if b != state.crate_held_shell):
+        print("PASS: every restored ground shell is still the OUTER GROUND "
+              "item its own slot names")
+    else:
+        failures.append("the restored slots and ground shells name "
+                        "different item instances")
+        return
+
+    ground = [s for s in shells if s["instance"] == state.crate_ground_shell]
+    ground_tree = _ground_tree(args.port, ground[0]["gid"]) if ground else None
+    carried = _held_tree(args.port, state.crate_holder_uid,
+                         state.crate_held_shell)
+    ground_slot = _slot_key(slot_of[state.crate_ground_shell])
+    held_slot = _slot_key(slot_of[state.crate_held_shell])
+    if (ground_tree == state.crate_realized_trees.get(ground_slot)
+            and carried == state.crate_realized_trees.get(held_slot)):
+        print("PASS: both realized trees -- one on the ground, one in an "
+              "inventory -- round-tripped EXACTLY, order and every field")
     else:
         failures.append(
-            "the restored slots and ground shells name different item "
-            "instances")
+            f"a realized tree changed across save/load: ground "
+            f"{ground_tree}, carried {carried}, saved "
+            f"{state.crate_realized_trees}")
+        return
+
+    # Exactly once ACROSS the round trip: the restored latch is honoured.
+    answer = _realize(args.port, ground[0]["gid"])
+    again = _ground_tree(args.port, ground[0]["gid"])
+    if answer == "already-realized" and again == ground_tree:
+        print("PASS: after the reload a realized shell answers "
+              "already-realized and its exact tree is untouched")
+    else:
+        failures.append(
+            f"after the reload a realized shell answered {answer!r} with "
+            f"tree {again}, expected already-realized and {ground_tree}")
+
+    # …and a shell still pending after the load realizes now, into the
+    # tree its slot's context determines -- which the opposite-order
+    # processes must reproduce.
+    pending = [s for s in shells
+               if s["instance"] not in (state.crate_ground_shell,
+                                        state.crate_held_shell)]
+    target = pending[0]
+    before = _ground_tree(args.port, target["gid"])
+    answer = _realize(args.port, target["gid"])
+    after = _ground_tree(args.port, target["gid"])
+    if (answer == "realized" and before and after
+            and _own(after) == _own(before)
+            and after["contents"] != before["contents"]):
+        state.crate_realized_trees[_slot_key(slot_of[target["instance"]])] = \
+            after
+        print("PASS: a shell still pending after the reload realized now, "
+              "its own values untouched")
+    else:
+        failures.append(
+            f"a pending shell after the reload answered {answer!r} with "
+            f"tree {after} (was {before}), expected a fresh realization")
+
+
+def visit_crate_chunks(port: int, reverse: bool) -> None:
+    """Visit the restored crate world's 3x3 region ONE CHUNK AT A TIME,
+    in row-major order or its exact reverse."""
+    chunks = [(cx, cy) for cy in (-1, 0, 1) for cx in (-1, 0, 1)]
+    for cx, cy in (reversed(chunks) if reverse else chunks):
+        send(port, f"return world.loadChunksInRegion({cx},{cy},{cx},{cy})")
+        send(port, "return world.waitForChunks(30)", timeout=35)
+
+
+def check_realization_order(args, state, failures: list[str],
+                            label: str, reverse: bool) -> None:
+    """#2510 requirement 8, in a fresh process that LOADED the pristine
+    save -- taken after the shells spawned and before anything was
+    realized -- and then visited its chunks in `label` order.
+
+    Like for like first: every shell's COMPLETE pending tree (its own
+    rolled values included) must equal the one the crate world recorded
+    for the same slot, which the shared save is what guarantees. Then,
+    realized here in that order too, every slot's COMPLETE realized tree
+    must equal the one every earlier process realized for it -- in place,
+    by pickup, and after a reload -- with the shell's own values
+    untouched, and the first visit order's trees must be reproduced
+    exactly by the second."""
+    slot_of = _slots_by_shell(args.port)
+    shells = sorted(_shell_rows(args.port, "probe_pending_crate"),
+                    key=lambda s: s["gid"], reverse=reverse)
+    if len(slot_of) != state.crate_slots or len(shells) != state.crate_shells:
+        failures.append(
+            f"#2510 ({label}): the pristine save restored {len(slot_of)} "
+            f"bound slot(s) and {len(shells)} shell(s), the crate world had "
+            f"{state.crate_slots} and {state.crate_shells}")
+        return
+    before = {s["gid"]: _ground_tree(args.port, s["gid"]) for s in shells}
+    pending = {_slot_key(slot_of[s["instance"]]): before[s["gid"]]
+               for s in shells}
+    if pending != state.crate_pending_trees:
+        failures.append(
+            f"#2510 ({label}): the restored pending trees differ from the "
+            f"crate world's, so the comparison below would not be like for "
+            f"like: {pending} vs {state.crate_pending_trees}")
+        return
+    print(f"PASS: #2510 fresh process, {label} -- every shell's COMPLETE "
+          "pending tree matches the crate world's slot for slot")
+
+    realized = {}
+    for s in shells:
+        if _realize(args.port, s["gid"]) != "realized":
+            failures.append(f"#2510 ({label}): shell {s} did not realize")
+            return
+        after = _ground_tree(args.port, s["gid"])
+        if after is None or _own(after) != _own(before[s["gid"]]):
+            failures.append(
+                f"#2510 ({label}): realizing shell {s} changed its own "
+                f"values: {before[s['gid']]} -> {after}")
+            return
+        realized[_slot_key(slot_of[s["instance"]])] = after
+
+    mismatched = {k: (realized.get(k), v)
+                  for k, v in state.crate_realized_trees.items()
+                  if realized.get(k) != v}
+    if mismatched:
+        failures.append(
+            f"#2510 ({label}): a slot realized differently from the crate "
+            f"world and its reload: {mismatched}")
+    else:
+        print(f"PASS: #2510 fresh process, {label} -- the "
+              f"{len(state.crate_realized_trees)} slot(s) realized before "
+              "(in place, by pickup, and after a reload) realized into "
+              "exactly the same COMPLETE trees, every shell's own values "
+              "untouched")
+    if not state.crate_order_trees:
+        state.crate_order_trees = realized
+    elif realized == state.crate_order_trees:
+        print(f"PASS: #2510 fresh process, {label} -- all {len(realized)} "
+              "shells realized into exactly the complete trees of the "
+              "opposite visit order")
+    else:
+        failures.append(
+            f"#2510 ({label}): the realized trees differ from the opposite "
+            f"visit order's: {realized} vs {state.crate_order_trees}")
 
 
 def register_without_profile(port: int, item_yaml: str,

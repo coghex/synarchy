@@ -3,10 +3,10 @@
 (issues #1884, #2095).
 
 `tools/location_content_probe.py` is manual-only. It boots engines from
-ten `boot_isolated` CALL SITES, one of which runs twice -- once
-visiting the ruins in the same order, once in the exact reverse -- so an
-observable run LAUNCHES eleven engine processes across several generated
-worlds, and its own acceptance can only be seen by a run nothing in CI
+eleven `boot_isolated` CALL SITES, two of which run twice -- once
+visiting the world in the same order, once in the exact reverse -- so an
+observable run LAUNCHES thirteen engine processes across several
+generated worlds, and its own acceptance can only be seen by a run nothing in CI
 can make. The contract this file pins is the half that is pure Python
 and would otherwise regress silently: every file one invocation creates
 lives under ONE directory that invocation owns, and the whole tree goes
@@ -63,11 +63,11 @@ leak, collide, or stop proving what it claims:
   * Every boot goes through the one funnel that hands it this
     invocation's log and registers the process as it is launched, and
     every log-reading ASSERTION reads that same log.
-  * Only the façade boots at all, from exactly ten call sites, and the
-    regeneration site is still a loop over the two visit orders -- so the
-    run still LAUNCHES eleven processes. A call-site count alone would
-    accept that loop being unrolled, flattened to one case, or grown to
-    three, each of which changes the process count.
+  * Only the façade boots at all, from exactly eleven call sites, and the
+    two regeneration sites are each still a loop over the two visit
+    orders -- so the run still LAUNCHES thirteen processes. A call-site
+    count alone would accept either loop being unrolled, flattened to one
+    case, or grown to three, each of which changes the process count.
   * The façade still offers exactly one `run(args, art, token)` for
     `main` to call, with that parameter order: substituting it is the
     sole mechanism behind eight of the lifecycle tests below.
@@ -211,14 +211,15 @@ SURFACE = (Path(probe.__file__).resolve(),
 SCENARIO_OWNERS = ("container", "content", "dispatch", "knowledge", "naming")
 INFRASTRUCTURE = ("engine_queries", "invocation")
 
-#: #2095 requirement 11 and the acceptance's process count. Ten
+#: #2095 requirement 11 and the acceptance's process count. Eleven
 #: `boot_isolated` call sites — seven, plus #2505's three (the crate
 #: world, the fresh process that loads its save, and the fresh process
-#: that proves a deregistered profile refuses that load) — one of them
-#: inside a two-element loop over the visit orders, so a run launches
-#: eleven engine processes.
-BOOT_CALL_SITES = 10
-PROCESS_LAUNCHES = 11
+#: that proves a deregistered profile refuses that load), plus #2510's
+#: opposite-order realization pair — two of them inside a two-element
+#: loop over the visit orders, so a run launches thirteen engine
+#: processes.
+BOOT_CALL_SITES = 11
+PROCESS_LAUNCHES = 13
 
 #: How many places ASSERT against the engine log: the knowledge owner's
 #: integrity diagnostic, the dispatch owner's unknown-content warnings,
@@ -232,9 +233,11 @@ LOG_ASSERTION_SITES = 3
 #: PASS lines and eight failure records of the guaranteed-contents and
 #: compound-clearance scenario.
 #: …and #2505's container owner added the fifteen PASS lines and
-#: twenty-three failure records of the pending-shell scenario.
-TOTAL_PASS_DIAGNOSTICS = 66
-TOTAL_FAILURE_RECORDS = 98
+#: twenty-three failure records of the pending-shell scenario, and
+#: #2510's realization scenario took that owner to twenty-two and
+#: thirty-three.
+TOTAL_PASS_DIAGNOSTICS = 73
+TOTAL_FAILURE_RECORDS = 108
 
 #: The values `run` used to accumulate in local variables across its
 #: phases (#2095's cross-scenario handoff). Each is now a field of the
@@ -244,7 +247,9 @@ HANDOFF_FIELDS = (
     "placed_all", "ruins", "counts1", "geoms1", "loot1", "r0mem_key",
     "mem_uids", "dangling_uid", "sibling_keys", "saved_content",
     "saved_naming", "saved_crate", "named", "crate_slots", "crate_shells",
-    "crate_slot_name",
+    "crate_slot_name", "crate_pending_trees", "crate_realized_trees",
+    "crate_pristine_slot_name", "saved_crate_pristine", "crate_ground_shell", "crate_held_shell", "crate_holder_uid",
+    "crate_order_trees",
 )
 
 
@@ -346,7 +351,9 @@ def pass_diagnostic_text(node: ast.Call) -> str:
 #: asserts to the exact tile. Pinning the bytes makes an edit a
 #: deliberate, visible act rather than a silent change to what the probe
 #: proves. These digests are of the bodies as they stood before #1884
-#: moved WHERE they are written.
+#: moved WHERE they are written, except where a later issue changed what
+#: a body SAYS: #2510 gave the crate profile an always-present entry and
+#: the crate location three shells per occurrence.
 FIXTURE_DIGESTS = {
     "BOGUS_LOCATION_YAML":
         "407ebb91d16a57c874dee8d9395d620ccc6f640f4b067a2be7570c1a1357d8f9",
@@ -361,9 +368,9 @@ FIXTURE_DIGESTS = {
     "CONTAINER_ITEM_YAML":
         "59a5870edad79a5b5ad13b144a73c9ad119397ed642c008072c12925bfd96f86",
     "CONTAINER_PROFILE_YAML":
-        "1418a15e9bd66a2c99a8d583e15820b16354d2aeb0686d1250c13d8fab70e4b7",
+        "05d39cd048558e783fe68c96c5aad73fb2de3cd602660bb024645fcc6f3fc668",
     "CONTAINER_LOCATION_YAML":
-        "d0d46f15cb724aad4719f0e435f5211b603f455d935906e90bbd134fa4bd59f1",
+        "273e51f5c3b6a82ea351c45d68183020dbb48025d760e9adb3d630d718c82cc0",
     "CONTAINER_LOCATION_NOPROFILE_YAML":
         "35218be4a6fca87c197b5e77d362f8bc42ea9e38c13da9928e1900ee855bddc8",
 }
@@ -1221,6 +1228,7 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
 NUMBER_WORDS = {
     2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
     8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+    13: "thirteen",
 }
 
 #: Words that state a count without naming the number, keyed by the count
@@ -1580,9 +1588,10 @@ def test_the_facade_keeps_one_run_entry_point() -> None:
 
 def test_the_regeneration_boot_runs_once_per_visit_order() -> None:
     print("\ntest_the_regeneration_boot_runs_once_per_visit_order")
-    # #2095 requirement 11. Ten static call sites, eleven LAUNCHES,
-    # because one site is the body of a two-element loop. Asserting only
-    # the call-site count would accept that loop being unrolled,
+    # #2095 requirement 11. Eleven static call sites, thirteen LAUNCHES,
+    # because two sites are each the body of a two-element loop: #948's
+    # loot-stability pair and #2510's realization pair. Asserting only
+    # the call-site count would accept either loop being unrolled,
     # flattened to a single iteration, or grown to three — each of which
     # changes the process count the acceptance pins.
     loops = [node for node in ast.walk(facade_tree())
@@ -1591,29 +1600,30 @@ def test_the_regeneration_boot_runs_once_per_visit_order() -> None:
                      and isinstance(inner.func, ast.Name)
                      and inner.func.id == "boot_isolated"
                      for inner in ast.walk(node))]
-    expect(len(loops) == 1,
-           f"exactly one boot site is inside a loop (got {len(loops)})")
-    if not loops:
-        return
-    iterable = loops[0].iter
-    expect(isinstance(iterable, ast.Tuple),
-           f"...over a literal tuple, so its length is readable here "
-           f"(got {type(iterable).__name__})")
-    cases = getattr(iterable, "elts", [])
-    expect(len(cases) == 2,
-           f"...naming exactly the two visit orders (got {len(cases)})")
-    literals = {node.value for node in ast.walk(iterable)
-                if isinstance(node, ast.Constant)}
-    expect({"same order", False, "reversed order", True} <= literals,
-           f"...the SAME order and the REVERSED one, which is what proves "
-           f"a stable instance keeps its own loot rather than consuming a "
-           f"shared stream (got {sorted(map(str, literals))})")
+    expect(len(loops) == 2,
+           f"exactly two boot sites are inside a loop (got {len(loops)})")
     sites = surface_calls("boot_isolated")
-    in_loop = [pair for pair in sites
-               if any(inner is pair[1] for inner in ast.walk(loops[0]))]
-    expect(len(in_loop) == 1,
-           f"the loop holds one of them (got {len(in_loop)})")
-    launches = (len(sites) - len(in_loop)) + len(cases) * len(in_loop)
+    launches = len(sites)
+    for loop in loops:
+        iterable = loop.iter
+        expect(isinstance(iterable, ast.Tuple),
+               f"...each over a literal tuple, so its length is readable "
+               f"here (got {type(iterable).__name__})")
+        cases = getattr(iterable, "elts", [])
+        expect(len(cases) == 2,
+               f"...naming exactly the two visit orders (got {len(cases)})")
+        literals = {node.value for node in ast.walk(iterable)
+                    if isinstance(node, ast.Constant)}
+        expect({"same order", False, "reversed order", True} <= literals,
+               f"...the SAME order and the REVERSED one, which is what "
+               f"proves a stable instance keeps its own draw rather than "
+               f"consuming a shared stream (got "
+               f"{sorted(map(str, literals))})")
+        in_loop = [pair for pair in sites
+                   if any(inner is pair[1] for inner in ast.walk(loop))]
+        expect(len(in_loop) == 1,
+               f"each loop holds one of them (got {len(in_loop)})")
+        launches += (len(cases) - 1) * len(in_loop)
     expect(len(sites) == BOOT_CALL_SITES and launches == PROCESS_LAUNCHES,
            f"{BOOT_CALL_SITES} call sites launch {PROCESS_LAUNCHES} engine "
            f"processes (got {len(sites)} sites, {launches} launches)")
