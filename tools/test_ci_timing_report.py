@@ -698,9 +698,36 @@ def check_lane_measurements() -> None:
         expect(needle in text, f"the run block shows {needle!r}:\n{text}")
 
 
+def check_log_attempt() -> None:
+    """The log fetched for a run is the log of ITS attempt (#2745 review):
+    an earlier attempt's timings must not be reported beside the latest
+    attempt's cache and probe records."""
+    calls: list[list[str]] = []
+    saved = report.run_gh
+
+    def fake_gh(args: list[str]) -> str:
+        calls.append(list(args))
+        attempt = args[args.index("--attempt") + 1] if "--attempt" in args else "latest"
+        return f"job\tstep\tCI_CACHE_REPORT attempt={attempt}\n"
+
+    report.run_gh = fake_gh
+    try:
+        for attempt in (1, 2):
+            report.fetch_log("o/r", _lane_run(attempt=attempt))
+    finally:
+        report.run_gh = saved
+    attempts = [call[call.index("--attempt") + 1] if "--attempt" in call else None
+                for call in calls]
+    expect(attempts == ["1", "2"],
+           f"each attempt's log is requested by its own attempt: {calls}")
+    expect(all(call[-1] == "--log" and str(42) in call for call in calls),
+           f"the log request still names the run: {calls}")
+
+
 #: Every check group, in the order `--self-test` runs them.
 CHECKS = (
     ("lane measurements", check_lane_measurements),
+    ("log of the selected attempt", check_log_attempt),
     ("timestamp endpoints", check_timestamp_endpoints),
     ("missing timestamps", check_missing_timestamps),
     ("slowest job", check_slowest_job),

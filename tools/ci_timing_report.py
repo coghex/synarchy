@@ -229,8 +229,12 @@ def fetch_log(repo: str, run: model.RunTiming) -> model.LogDiagnostics:
         return model.LogDiagnostics.unavailable(
             f"run is {run.status or 'not completed'}; GitHub publishes no "
             "downloadable log until a run finishes")
+    # The log of THIS attempt: a re-run keeps the run id, and without the
+    # selector `gh` returns the latest attempt's log, whose probe and cache
+    # records would then be reported beside an earlier attempt's timings.
     try:
-        text = run_gh(["run", "view", str(run.run_id), "-R", repo, "--log"])
+        text = run_gh(["run", "view", str(run.run_id), "-R", repo,
+                       "--attempt", str(run.attempt), "--log"])
     except ReportError as error:
         return model.LogDiagnostics.unavailable(str(error))
     return model.read_log(text)
