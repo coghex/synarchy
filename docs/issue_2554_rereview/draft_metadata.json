@@ -1,0 +1,32 @@
+{
+  "issue": 2554,
+  "title": "Spawn with controllers, extra tags, and minted roster team tags",
+  "non_verdict_labels": [
+    "enhancement",
+    "locations",
+    "units"
+  ],
+  "current_verdict_label": "reviewed:changes",
+  "body_file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2554_rereview/2554_body.md",
+  "body_sha256": "e79806587a17648da45a006823ecf1229c79f8a9c833022602b5fda3758ebc16",
+  "baseline_body_sha256": "71ea99b6430ab41a73b073be5b5d7d0be29e916a5a0d75c5990adbc00558a77d",
+  "baseline_spec_sha256": "53697c5ba0844b9cbd908106ab3eb0ca4c590f152e573c80a4f0d297dc88d4cb",
+  "status": "canonical APPROVE; reviewed:approve applied",
+  "decisions": {
+    "cross_location_nomads": "Preserve shared-tag alliance and existing live-cause precedence.",
+    "explicit_location_overrides": "Preserve D-26 controls and capabilities; add occupant tag with normal relation participation."
+  },
+  "verified_checkout": "293df10fb6e6e74b9cdc9dd6ad3786c932d91ad7",
+  "backend_path": "/Users/vincentcoghlan/Library/Application Support/kanban/issue-review/approve_issues.py",
+  "spec_sha256": "fb29c8fdcb55545f5ee7f89d86d268fd60f6889fa3c6cc1d07c78dc52da36af7",
+  "review_url": "https://github.com/coghex/synarchy/issues/2554#issuecomment-5626778255",
+  "review_model": "claude-fable-5-1@high",
+  "review_route": "rereview; codex dissent -> claude",
+  "final_labels": [
+    "enhancement",
+    "locations",
+    "reviewed:approve",
+    "units"
+  ],
+  "remaining_blockers": []
+}

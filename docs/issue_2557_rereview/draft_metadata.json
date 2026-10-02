@@ -1,0 +1,27 @@
+{
+  "issue": 2557,
+  "title": "[flora] Apply corpse retention and successor policy",
+  "non_verdict_labels": [
+    "flora",
+    "save-load"
+  ],
+  "current_verdict_label": "reviewed:changes",
+  "body_file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2557_rereview/2557_body.md",
+  "body_sha256": "85e8557d573f86d6e51e342b5eeae07c750f63e14217818d01dfee987bfc8873",
+  "baseline_body_sha256": "049f2303750f7cef9247b39797d466f6ba02666c87b6e89535ad65a706595786",
+  "baseline_spec_sha256": "63d077e1e82745b3702b3e3223a174e1290f4c18248cbdb972a928e9f059c07c",
+  "status": "canonical APPROVE; reviewed:approve applied",
+  "decision": "Owner approved calendar-day retention, accepting changed reseeding dates for sub-full-health plants.",
+  "verified_checkout": "65ad8231916a0718877a942a63b27a7dd6316284",
+  "backend_path": "/Users/vincentcoghlan/Library/Application Support/kanban/issue-review/approve_issues.py",
+  "spec_sha256": "dcdde822a409029b92c94a7a73fbf46f6267e35841fd82c2f23ce778b007f660",
+  "review_url": "https://github.com/coghex/synarchy/issues/2557#issuecomment-5627103417",
+  "review_model": "claude-fable-5-1@high",
+  "review_route": "rereview; codex dissent -> claude",
+  "final_labels": [
+    "flora",
+    "reviewed:approve",
+    "save-load"
+  ],
+  "remaining_blockers": []
+}

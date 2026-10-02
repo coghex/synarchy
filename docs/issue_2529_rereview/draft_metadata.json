@@ -1,0 +1,28 @@
+{
+  "issue": 2529,
+  "title": "Render eighth-level fluid tops and partial step faces",
+  "labels": [
+    "enhancement",
+    "reviewed:changes",
+    "fluid"
+  ],
+  "non_verdict_labels": [
+    "enhancement",
+    "fluid"
+  ],
+  "body_file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2529_rereview/2529_body.md",
+  "body_sha256": "b75c32c6f841f4f66d50dfba6334300c4ab0e9342a8ca646e60bd982f31166b7",
+  "owner_decision": "Preserve existing ice elevations; fluid ceiling contributes only to ice base. User confirmed yes.",
+  "status": "canonical rereview approved; reviewed:approve applied",
+  "published_at": "2026-09-10T16:46:50.868934+00:00",
+  "spec_sha": "ad9a68c6a4b78093912dd2c734a2dbb517e0e471150bd051f7744b8d4d640618",
+  "review_url": "https://github.com/coghex/synarchy/issues/2529#issuecomment-5622294400",
+  "models": "claude-fable-5-1@high",
+  "route": "rereview triggered by codex dissent; reviewer claude",
+  "final_labels": [
+    "enhancement",
+    "fluid",
+    "reviewed:approve"
+  ],
+  "remaining_blockers": []
+}

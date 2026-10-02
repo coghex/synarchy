@@ -1,0 +1,38 @@
+{
+  "2526": {
+    "file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2526_rereview/2526_body.md",
+    "sha256": "d3ec9c807cfdeb8718502631c6e17334ff844803c5e67003acb8033f630415b6",
+    "title": "[epic] Make flora condition persistent and texture fallback expressive",
+    "labels": [
+      "epic",
+      "flora",
+      "reviewed:changes"
+    ]
+  },
+  "2559": {
+    "file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2526_rereview/2559_body.md",
+    "sha256": "4f09bcbef5449b60b0558200f978a785580a92b889d813d27b54cada76590893",
+    "title": "[flora] Create the saguaro dead-sprout texture",
+    "labels": [
+      "art",
+      "flora"
+    ]
+  },
+  "charred": {
+    "file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2526_rereview/charred_body.md",
+    "sha256": "dea060a2eb1515ebeba83a98d9bc7dd77cc93d9714a3467defdc41a1eaa60397",
+    "title": "[flora] Create the saguaro charred-remains texture",
+    "labels": [
+      "art",
+      "flora"
+    ]
+  },
+  "2562": {
+    "file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2526_rereview/2562_body.md",
+    "sha256": "d36116a9b80b8d6dc675ed6673ee0c4050b85249ac6a490f893fa6804e218cf3",
+    "title": "[flora] Demonstrate the complete condition and fallback path on the saguaro pilot",
+    "labels": [
+      "flora"
+    ]
+  }
+}
