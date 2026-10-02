@@ -624,6 +624,12 @@ library
                      Gameplay.Tags.Types
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
+                     Scenario.Types
+                     Scenario.Bounds
+                     Scenario.Decode.Monad
+                     Scenario.Decode
+                     Scenario.Validate
+                     Scenario.Schema
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
@@ -1826,6 +1832,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
+                   Test.Headless.Scenario.Schema
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
