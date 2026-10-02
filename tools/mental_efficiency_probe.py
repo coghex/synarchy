@@ -52,6 +52,8 @@ import argparse
 import glob
 import sys
 import time
+from collections import Counter
+from dataclasses import dataclass, field
 
 import probe_protocol
 from probelib import boot, quit_engine, send, send_json, spawn_acolyte, poll_until
@@ -111,11 +113,17 @@ recipes:
 """
 
 
-def check(passed, ok, label, detail=""):
+def check(passed, ok, label, detail="", show=False):
+    """Report one check. `show` also writes the detail as an INFO line,
+    so a standalone run prints what the structured payload carries — the
+    combat checks use it for their counts, refusal reasons and ratio."""
     if _REPORTER is None:
         raise RuntimeError("mental-efficiency reporter is not initialised")
     payload = {"detail": str(detail)} if detail != "" else None
     _REPORTER.check(CHECK_ID_BY_LABEL[label], bool(ok), label, payload)
+    if show and detail != "":
+        _REPORTER.info(f"{label}: {detail}",
+                       {"check": CHECK_ID_BY_LABEL[label], "detail": str(detail)})
     return passed and bool(ok)
 
 
@@ -349,6 +357,82 @@ def item_quality(port, uid, iid):
     return float(raw)
 
 
+#: Where the combat sample puts each unit. The attacker is unarmed with its
+#: height pinned to 1.8 m, so its live reach is 1.8 / 2.4 = 0.75 tiles
+#: (Combat.Resolution.Admission.attackRangeTiles), and commit-time
+#: admission (#2328) refuses any wider Chebyshev separation as
+#: `out_of_reach`. Half a tile is inside that reach; every attempt still
+#: reads the live range and separation and records any attempt that is
+#: not (`CombatSample.reach_problems`).
+COMBAT_ATTACKER_POS = (2, 2)
+COMBAT_TARGET_POS = (2.5, 2)
+
+
+@dataclass
+class CombatSample:
+    """One effectiveness setting's sampling: the landed-hit raw energies,
+    and what every attempt actually produced."""
+    vals: list = field(default_factory=list)
+    outcomes: Counter = field(default_factory=Counter)
+    reach_problems: list = field(default_factory=list)
+
+    def summary(self) -> str:
+        parts = [f"{k}={n}" for k, n in sorted(self.outcomes.items())] or ["no attempts"]
+        text = ", ".join(parts)
+        if self.reach_problems:
+            text += f"; out of live reach: {self.reach_problems[0]}"
+            if len(self.reach_problems) > 1:
+                text += f" (+{len(self.reach_problems) - 1} more)"
+        return text
+
+
+def strike_outcome(events):
+    """What one requested strike produced: (raw energy or None, token).
+
+    The token is `hit`, `miss`, `refused:<reason>` (the stable reason
+    Combat.Resolution.Events.refusedEvent carries, e.g.
+    `refused:out_of_reach`), or `no-event` when nothing came back."""
+    for e in events or []:
+        if e.get("kind") == "hit":
+            return float(e["payload"]["raw"]), "hit"
+    for e in events or []:
+        if e.get("kind") == "refused":
+            reason = (e.get("payload") or {}).get("reason") or "unknown"
+            return None, f"refused:{reason}"
+    for e in events or []:
+        if e.get("kind") == "miss":
+            return None, "miss"
+    return None, "no-event"
+
+
+def combat_samples_verdict(lo, hi, need=4):
+    """The `combat_samples` check: both settings landed at least `need`
+    hits. The detail always names each side's attempt outcomes, so a
+    fixture regression reads as its refusal reason, not only a count."""
+    ok = len(lo.vals) >= need and len(hi.vals) >= need
+    detail = (f"lo={len(lo.vals)} hi={len(hi.vals)} "
+              f"(eff=0.75: {lo.summary()}; eff=1.10: {hi.summary()})")
+    return ok, detail
+
+
+def damage_energy_verdict(lo_vals, hi_vals):
+    """The `damage_energy_unchanged` check. With no samples on either side
+    there is nothing to compare, so it fails with an explicit
+    "no samples" detail and computes no ratio."""
+    if not lo_vals or not hi_vals:
+        return False, (f"no samples: eff=0.75 has {len(lo_vals)}, "
+                       f"eff=1.10 has {len(hi_vals)}; no ratio computed")
+    mean_lo = sum(lo_vals) / len(lo_vals)
+    mean_hi = sum(hi_vals) / len(hi_vals)
+    if mean_lo == 0:
+        return False, (f"mean(eff=0.75)=0 mean(eff=1.10)={mean_hi:.3f}; "
+                       f"no ratio computed")
+    ratio = mean_hi / mean_lo
+    return (0.95 < ratio < 1.0526,
+            f"mean(eff=0.75)={mean_lo:.3f} mean(eff=1.10)={mean_hi:.3f} "
+            f"ratio={ratio:.3f}")
+
+
 def combat_damage_sample(port, conc, euphoric, want, retries):
     """Fire fresh attacker/defender swings (a fresh pair per attempt, so
     wound accumulation on one side can't drift the comparison) until
@@ -368,12 +452,14 @@ def combat_damage_sample(port, conc, euphoric, want, retries):
     the swing's work via staminaFrac) makes "raw" reproducible across
     independently-random swings, unlike "eff" (post target-resistance/
     toughness, and so dominated by which body part got hit)."""
-    vals = []
+    sample = CombatSample()
     attempts = 0
-    while len(vals) < want and attempts < retries:
+    ax, ay = COMBAT_ATTACKER_POS
+    tx, ty = COMBAT_TARGET_POS
+    while len(sample.vals) < want and attempts < retries:
         attempts += 1
-        atk = int(float(send(port, f"return unit.spawn('acolyte', 2, 2)")))
-        tgt = int(float(send(port, f"return unit.spawn('acolyte', 4, 2)")))
+        atk = int(float(send(port, f"return unit.spawn('acolyte', {ax}, {ay})")))
+        tgt = int(float(send(port, f"return unit.spawn('acolyte', {tx}, {ty})")))
         # An acolyte spawns with a steel dagger EQUIPPED by default —
         # strip it so mEquipped is Nothing and Combat.Resolution.Strike.
         # pickPartKind falls back to the "unarmed" natural-weapon
@@ -404,15 +490,24 @@ def combat_damage_sample(port, conc, euphoric, want, retries):
              f"return 'ok'")
         pin(port, atk, conc, euphoric)
         pin(port, tgt, conc, euphoric)
+        # The live reach and separation admission will measure, read the
+        # way the AI reads them (unit.getAttackRange `or 1.0`, gridX/gridY).
+        geo = send_json(port,
+            f"local a=unit.getInfo({atk}) local t=unit.getInfo({tgt}) "
+            f"return {{range=unit.getAttackRange({atk}) or 1.0, "
+            f"sep=math.max(math.abs(a.gridX-t.gridX), math.abs(a.gridY-t.gridY))}}")
+        if isinstance(geo, dict) and float(geo["sep"]) > float(geo["range"]):
+            sample.reach_problems.append(
+                f"separation {float(geo['sep']):.2f} > live reach {float(geo['range']):.2f}")
         send(port, "combat.drainEvents(); return 'ok'")  # clear stale events
         send(port, f"combat.attack({atk}, {tgt}, 'quick'); return 'ok'")
         evs = poll_until(3.0, lambda: send_json(port, "return combat.drainEvents()") or None)
-        for e in (evs or []):
-            if e.get("kind") == "hit":
-                vals.append(float(e["payload"]["raw"]))
-                break
+        raw, outcome = strike_outcome(evs)
+        sample.outcomes[outcome] += 1
+        if raw is not None:
+            sample.vals.append(raw)
         send(port, f"unit.destroy({atk}); unit.destroy({tgt}); return 'ok'")
-    return vals
+    return sample
 
 
 def main():
@@ -552,25 +647,20 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
                        f"quality={q_hi}")
 
         # --- 4. Combat damage energy unchanged across effectiveness ---
-        lo_vals = combat_damage_sample(port, 0.0, False, want=6, retries=20)
-        hi_vals = combat_damage_sample(port, 1.0, True, want=6, retries=20)
-        passed = check(passed, len(lo_vals) >= 4 and len(hi_vals) >= 4,
+        lo = combat_damage_sample(port, 0.0, False, want=6, retries=20)
+        hi = combat_damage_sample(port, 1.0, True, want=6, retries=20)
+        ok, detail = combat_samples_verdict(lo, hi)
+        passed = check(passed, ok,
                        "enough landed hits sampled at both effectiveness levels",
-                       f"lo={len(lo_vals)} hi={len(hi_vals)}")
-        mean_lo = sum(lo_vals) / len(lo_vals) if lo_vals else None
-        mean_hi = sum(hi_vals) / len(hi_vals) if hi_vals else None
-        ratio = (mean_hi / mean_lo
-                 if mean_lo not in (None, 0) and mean_hi is not None
-                 else float("inf"))
+                       detail, show=True)
         # "raw" (pre-target-resistance driver energy/momentum) is a function
         # of the attacker's pinned stats, so unlike "eff" it should reproduce
         # closely across independently-random swings. The hspec suite keeps
         # the deterministic invariance proof; this is the end-to-end check.
-        passed = check(passed, 0.95 < ratio < 1.0526,
+        ok, detail = damage_energy_verdict(lo.vals, hi.vals)
+        passed = check(passed, ok,
                        "mean landed-hit raw damage energy is not shifted by effectiveness",
-                       (f"mean(eff=0.75)={mean_lo:.3f} mean(eff=1.10)={mean_hi:.3f} ratio={ratio:.3f}"
-                        if mean_lo is not None and mean_hi is not None else
-                        f"mean(eff=0.75)={mean_lo} mean(eff=1.10)={mean_hi}"))
+                       detail, show=True)
 
         # --- 5. Attack recovery/cooldown (Lua, scripts/unit_ai_combat.lua)
         #        unchanged across effectiveness. computeAttackCooldown
