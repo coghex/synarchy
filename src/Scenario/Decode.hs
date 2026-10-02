@@ -70,23 +70,19 @@ decodeContent sourceVersion o = do
     family k dec = authoredOr [] <$> listField "" k o dec
 
 readMap ∷ A.Object → Dec (Maybe MapDimensions)
-readMap o = do
-    r ← optField "" "map" parseMap o
-    pure $ case r of
-        Authored d → Just d
-        Omitted    → Nothing
+readMap o = case KM.lookup "map" o of
+    Nothing → pure Nothing
+    Just v → do
+        mm ← subObject FieldRejected "map" ["width", "height"] v
+        case mm of
+            Nothing → pure Nothing
+            Just m → do
+                -- both are needed; a bad one drops the map (the arena)
+                w ← memberField FieldRejected "map" "width" dim m
+                h ← memberField FieldRejected "map" "height" dim m
+                pure (MapDimensions <$> w <*> h)
   where
-    parseMap v = case asObject v of
-        Just m | KM.size m ≡ 2 → do
-            w ← need "width" m
-            h ← need "height" m
-            Right (MapDimensions w h)
-        _ → Left dimsWanted
-    need k m = maybe (Left dimsWanted) (either (const (Left dimsWanted)) Right
-                                        ∘ pIntIn 1 maxScenarioDimension)
-                     (KM.lookup (K.fromText k) m)
-    dimsWanted = "exactly width and height, integers in [1, "
-              <> tshow maxScenarioDimension <> "]"
+    dim = pIntIn 1 maxScenarioDimension
 
 readCamera ∷ A.Object → Dec (Float, Float)
 readCamera o = case KM.lookup "camera" o of
@@ -208,9 +204,17 @@ readRegion p o = case (KM.lookup "rect" o, KM.lookup "tiles" o) of
     (Nothing, Nothing) → do
         diag (keyPath p "rect") MissingRequired EntryRejected
         pure Nothing
-    (Just _, Nothing) → do
-        r ← reqField p "rect" parseRect o
-        maybe (pure Nothing) clip r
+    (Just rv, Nothing) → do
+        let rp = keyPath p "rect"
+        mm ← subObject EntryRejected rp ["x0", "y0", "x1", "y1"] rv
+        case mm of
+            Nothing → pure Nothing
+            Just m → do
+                cs ← forM ["x0", "y0", "x1", "y1"] $ \k → memberField EntryRejected rp k pInt m
+                case sequence cs of
+                    Just [x0, y0, x1, y1] →
+                        clip (RegionRect (min x0 x1) (min y0 y1) (max x0 x1) (max y0 y1))
+                    _ → pure Nothing
     (Nothing, Just _) → do
         ts ← listField p "tiles" o $ \ip v → case parsePair v of
             Right t → pure (Just t)
@@ -223,14 +227,6 @@ readRegion p o = case (KM.lookup "rect" o, KM.lookup "tiles" o) of
                 pure Nothing
             xs → clip (RegionTiles xs)
   where
-    parseRect v = case asObject v of
-        Just m | KM.size m ≡ 4 → do
-            let g k = maybe (Left rectWanted) (either (const (Left rectWanted)) Right ∘ pInt)
-                            (KM.lookup (K.fromText k) m)
-            x0 ← g "x0"; y0 ← g "y0"; x1 ← g "x1"; y1 ← g "y1"
-            Right (RegionRect (min x0 x1) (min y0 y1) (max x0 x1) (max y0 y1))
-        _ → Left rectWanted
-    rectWanted = "a mapping of integers x0, y0, x1, y1"
     parsePair (A.Array xs) | [a, b] ← toList xs = (,) <$> pInt a <*> pInt b
     parsePair _ = Left "a pair [x, y] of integers"
     clip region = do
@@ -736,7 +732,18 @@ itemBody p o sid tags dn ic = do
     sharpness ← optField p "sharpness" (pFloatIn 0 100) o
     weight ← optField p "weight" (pFloatMin 0) o
     bulk ← optNullable p "bulk" (pFloatMin 0) o
-    storage ← optNullable p "storage_capacity" pStorage o
+    storage ← case KM.lookup "storage_capacity" o of
+        Nothing     → pure Omitted
+        Just A.Null → pure (Authored Nothing)
+        Just v → do
+            let sp = keyPath p "storage_capacity"
+            mm ← subObject FieldRejected sp ["weight", "bulk"] v
+            case mm of
+                Nothing → pure Omitted
+                Just m → do
+                    w ← memberField FieldRejected sp "weight" (pFloatMin 0) m
+                    b ← memberField FieldRejected sp "bulk" (pFloatMin 0) m
+                    pure (maybe Omitted (Authored ∘ Just) (StorageCapacity <$> w <*> b))
     temp ← optField p "temperature" pTemp o
     contents ← if icHoldsItems ic
         then listField p "contents" o (decodeItem p)
@@ -755,12 +762,6 @@ itemBody p o sid tags dn ic = do
     pure (ItemEntry sid tags dn fill quality condition sharpness weight bulk
                     storage temp contents)
   where
-    pStorage v = case asObject v of
-        Just m | KM.size m ≡ 2
-               , Just w ← KM.lookup "weight" m, Right wf ← pFloatMin 0 w
-               , Just b ← KM.lookup "bulk" m, Right bf ← pFloatMin 0 b
-               → Right (StorageCapacity wf bf)
-        _ → Left "null or exactly weight (kg ≥ 0) and bulk (litres ≥ 0)"
     pFill v = case icFluidCapacity ic of
         Just cap → pFloatIn 0 cap v
         Nothing  → do

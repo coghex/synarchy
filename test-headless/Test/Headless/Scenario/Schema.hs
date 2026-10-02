@@ -588,9 +588,7 @@ recoverySpec = describe "recoverable content" $ do
         forM_ [catalog, changed] $ \cat → do
             (s, ds) ← loaded =≪ loadWith cat doc
             ds `shouldBe`
-                [ d "ground_items[2].storage_capacity"
-                    (InvalidValue "null or exactly weight (kg ≥ 0) and bulk (litres ≥ 0)")
-                    FieldRejected ]
+                [ d "ground_items[2].storage_capacity.bulk" MissingRequired FieldRejected ]
             map giItem (scGroundItems s) `shouldBe`
                 [ (item (ex "legacy-kit") "first_aid_kit")
                     { ieBulk = Authored Nothing, ieStorage = Authored Nothing
@@ -612,6 +610,39 @@ recoverySpec = describe "recoverable content" $ do
                 (InvalidValue "a number on the exact fluid plane (a multiple of 1/8)")
                 EntryRejected ]
         map fpSurfaceEighths (scFluids s) `shouldBe` [16777217, -10]
+
+    it "rejects an unknown key inside a nested mapping without its siblings" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 1"
+            , "map: {width: 20, height: 10, depth: 3}"
+            , "camera: {x: 1, y: 2, zoom: 4}"
+            , "terrain:"
+            , "  - {id: pad, rect: {x0: 0, y0: 0, x1: 1, y1: 0, typo: 7},"
+            , "     material: granite, surface_z: 1}"
+            , "ground_items:"
+            , "  - {id: crate, definition: first_aid_kit, x: 0, y: 0,"
+            , "     storage_capacity: {weight: 12, bulk: 15, volume: 9}}"
+            ])
+        ds `shouldHaveDiagnostics`
+            [ d "camera.zoom" UnknownField FieldRejected
+            , d "ground_items[0].storage_capacity.volume" UnknownField FieldRejected
+            , d "map.depth" UnknownField FieldRejected
+            , d "terrain[0].rect.typo" UnknownField FieldRejected
+            ]
+        scMap s `shouldBe` Just (MapDimensions 20 10)
+        scCamera s `shouldBe` (1, 2)
+        map tpRegion (scTerrain s) `shouldBe` [RegionRect 0 0 1 0]
+        map (ieStorage ∘ giItem) (scGroundItems s)
+            `shouldBe` [Authored (Just (StorageCapacity 12 15))]
+    it "rejects a patch whose rectangle lacks a corner coordinate" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 1"
+            , "terrain:"
+            , "  - {id: pad, rect: {x0: 0, y0: 0, x1: 1}, material: granite, surface_z: 1}"
+            , "  - {id: ok, rect: {x0: 0, y0: 0, x1: 1, y1: 1}, material: granite, surface_z: 1}"
+            ])
+        ds `shouldBe` [ d "terrain[0].rect.y1" MissingRequired EntryRejected ]
+        map tpId (scTerrain s) `shouldBe` [ex "ok"]
 
 referenceSpec ∷ Spec
 referenceSpec = describe "identities and references" $ do
@@ -778,8 +809,7 @@ contentBoundsSpec = describe "content against finite bounds" $ do
         map ueId (scUnits s) `shouldBe` [ex "inside", ex "outside"]
     it "rejects an invalid map size as a field, falling back to the arena" $ do
         (s, ds) ← loaded =≪ load "version: 1\nmap: {width: 0, height: 10}\n"
-        ds `shouldBe` [ d "map" (InvalidValue "exactly width and height, integers in [1, 100000]")
-                          FieldRejected ]
+        ds `shouldBe` [ d "map.width" (InvalidValue "an integer in [1, 100000]") FieldRejected ]
         scMap s `shouldBe` Nothing
 
 failureSpec ∷ Spec

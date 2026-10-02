@@ -29,6 +29,8 @@ module Scenario.Decode.Monad
     , optField
     , optNullable
     , reqField
+    , memberField
+    , subObject
     , listField
     , mapField
       -- * Scalar parsers
@@ -183,15 +185,33 @@ optNullable p k parse = optField p k parse'
 
 -- | A required field: omitted or malformed rejects the entry.
 reqField ∷ Text → Text → Parser α → A.Object → Dec (Maybe α)
-reqField p k parse o = case lookupKey k o of
+reqField = memberField EntryRejected
+
+-- | A required member of a mapping, whose absence or malformation costs
+--   @effect@: 'EntryRejected' for an entry's own required data,
+--   'FieldRejected' for a member of an optional nested field.
+memberField ∷ DiagnosticEffect → Text → Text → Parser α → A.Object → Dec (Maybe α)
+memberField effect p k parse o = case lookupKey k o of
     Nothing → do
-        diag (keyPath p k) MissingRequired EntryRejected
+        diag (keyPath p k) MissingRequired effect
         pure Nothing
     Just v → case parse v of
         Right x  → pure (Just x)
         Left why → do
-            diag (keyPath p k) (InvalidValue why) EntryRejected
+            diag (keyPath p k) (InvalidValue why) effect
             pure Nothing
+
+-- | A nested mapping at path @p@. Its unknown keys are rejected one by
+--   one ('checkKeys') so they never cost the valid members beside them;
+--   a value that is not a mapping at all costs @effect@.
+subObject ∷ DiagnosticEffect → Text → [Text] → A.Value → Dec (Maybe A.Object)
+subObject effect p known v = case asObject v of
+    Nothing → do
+        diag p (InvalidValue "a mapping") effect
+        pure Nothing
+    Just m → do
+        checkKeys p known m
+        pure (Just m)
 
 -- | An optional list field read element by element. Omitted →
 --   'Omitted'; not a list → a field-level rejection and 'Omitted'; each

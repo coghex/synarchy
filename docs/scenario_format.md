@@ -75,7 +75,11 @@ expect. An unexpected one fails setup (D-15).
   whose definition is unknown, is rejected. Removed definitions follow the same
   rule.
 - **Optional fields.** An unknown key or an invalid optional value drops only that
-  field.
+  field. This includes an unknown key inside a nested mapping (`map`, `camera`,
+  `rect`, `storage_capacity`): only that key is dropped, and the valid members
+  beside it are kept. A missing or invalid required member of a nested mapping
+  costs what its parent costs: a `rect` corner rejects the patch, while a `map`
+  dimension or a `storage_capacity` member drops that optional field.
 - **Owned contents.** Rejecting an owner rejects everything it owns, recursively:
   a unit's inventory, equipment and accessories; a building's storage and delivered
   materials; an item's contents. Nothing spills into the retained scenario.
