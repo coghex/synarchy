@@ -88,10 +88,16 @@ FORMATTER_FLAG = "--format=failed-examples"
 #: Dropping it alongside a silent formatter would leave a passing run
 #: indistinguishable from a run that executed nothing.
 SHOW_DETAILS_FLAG = "--test-show-details=direct"
+#: CI's sites run ONE lane each (#2745): the same blob with the test
+#: executable's own `--lane` flag leading it, filled from the matrix leg.
+LANE_TEST_OPTIONS_FLAG = (
+    "--test-options='--lane ${{ matrix.lane }} --print-slow-items=20 "
+    "--format=failed-examples'")
 #: The invocation those flags have to sit on, at every site.
 HEADLESS_INVOCATION = "cabal test synarchy-test-headless"
 #: How many sites there are, and where. Two conditional branches in the
-#: workflow (full tier and fast tier) and one in the local gate. The
+#: workflow's `Headless lane` step (full tier and base tier, #2745) and one
+#: in the local gate, which still runs the whole suite in one process. The
 #: PR's own CI run can execute only ONE of the workflow's two branches,
 #: so all three are verified statically here instead.
 EXPECTED_WORKFLOW_SITES = 2
@@ -474,11 +480,11 @@ def _headless_invocations(text: str) -> list[str]:
             and HEADLESS_INVOCATION in line]
 
 
-def _check_site(site: str, where: str) -> None:
+def _check_site(site: str, where: str, options: str = TEST_OPTIONS_FLAG) -> None:
     """One headless invocation carries the whole agreed option set."""
-    expect(TEST_OPTIONS_FLAG in site,
+    expect(options in site,
            f"{where}'s headless invocation carries "
-           f"{TEST_OPTIONS_FLAG}: {site}")
+           f"{options}: {site}")
     # Named separately from the blob so the failure says WHICH way a
     # site drifted: losing the formatter fails both checks, while merely
     # reordering or respacing the two flags fails only the blob one.
@@ -514,7 +520,7 @@ def check_headless_options_wiring() -> None:
            f"{EXPECTED_WORKFLOW_SITES} time(s); got {len(sites)}, and a new "
            "site needs the same test options too")
     for site in sites:
-        _check_site(site, WORKFLOW_PATH.name)
+        _check_site(site, WORKFLOW_PATH.name, LANE_TEST_OPTIONS_FLAG)
 
     local_sites = _headless_invocations(local)
     expect(len(local_sites) == EXPECTED_LOCAL_SITES,
@@ -545,15 +551,15 @@ def check_headless_options_wiring() -> None:
 
     # The step's own comment has to tell a reader why the list is there,
     # and why the run is otherwise quiet.
-    step = re.search(r"\n((?:      #[^\n]*\n)+)      - name: Headless test "
-                     r"suite\n", workflow)
+    step = re.search(r"\n((?:      #[^\n]*\n)+)      - name: Headless lane\n",
+                     workflow)
     if expect(step is not None,
-              "the `Headless test suite` step still carries a comment block"):
+              "the `Headless lane` step still carries a comment block"):
         expect("slow" in step.group(1).lower(),
-               "the `Headless test suite` step comment mentions the "
+               "the `Headless lane` step comment mentions the "
                "slowest-examples list")
         expect("failed-examples" in step.group(1),
-               "the `Headless test suite` step comment explains the "
+               "the `Headless lane` step comment explains the "
                "compact formatter")
 
 
@@ -633,8 +639,68 @@ def check_run_selection_guard() -> None:
            f"{report.CI_WORKFLOW_PATH} exists")
 
 
+def _lane_run(attempt: int = 1) -> "model.RunTiming":
+    """A synthetic #2745 run: two lane jobs, one skipped job, overlaps."""
+    def job(name, start, end, steps=(), conclusion="success"):
+        return {"name": name, "status": "completed", "conclusion": conclusion,
+                "startedAt": start, "completedAt": end,
+                "steps": [dict(step, status="completed") for step in steps]}
+    jobs = [
+        job("resolve-image / resolve", "2026-10-02T10:00:00Z", "2026-10-02T10:01:00Z"),
+        # Starts the instant resolve-image ends: half-open, no overlap.
+        job("test-and-audits", "2026-10-02T10:01:00Z", "2026-10-02T10:12:00Z"),
+        job("headless-lanes (world)", "2026-10-02T10:01:05Z", "2026-10-02T10:19:00Z",
+            [{"name": "Headless lane", "number": 12, "conclusion": "success",
+              "startedAt": "2026-10-02T10:10:00Z", "completedAt": "2026-10-02T10:18:20Z"}]),
+        job("headless-lanes (rest)", "2026-10-02T10:01:05Z", "2026-10-02T10:17:00Z",
+            [{"name": "Headless lane", "number": 12, "conclusion": "success",
+              "startedAt": "2026-10-02T10:10:00Z", "completedAt": "2026-10-02T10:10:05Z"}]),
+        job("static-audits", "2026-10-02T10:01:10Z", "2026-10-02T10:07:00Z"),
+        job("behavior-probes", None, None, conclusion="skipped"),
+        job("build-test", "2026-10-02T10:19:05Z", "2026-10-02T10:19:10Z"),
+    ]
+    meta = {"databaseId": 42, "attempt": attempt, "event": "pull_request",
+            "status": "completed", "conclusion": "success",
+            "headSha": "abc123", "workflowName": "CI",
+            "createdAt": "2026-10-02T09:59:50Z",
+            "startedAt": "2026-10-02T09:59:55Z",
+            "updatedAt": "2026-10-02T10:19:10Z"}
+    return model.build_run(meta, jobs)
+
+
+def check_lane_measurements() -> None:
+    """#2745: lane headless steps, the attempt, the jobs' span and peak
+    concurrency, for the before/after measurement."""
+    run = _lane_run(attempt=3)
+    expect(run.attempt == 3, f"the attempt is kept: {run.attempt}")
+    steps = model.headless_steps(run)
+    expect([(step.job, step.seconds) for step in steps]
+           == [("headless-lanes (rest)", 5.0), ("headless-lanes (world)", 500.0)],
+           "every lane's headless step is reported, a 5 s one included: "
+           f"{[(step.job, step.seconds) for step in steps]}")
+    expect(model.peak_concurrency(run) == 4,
+           f"four jobs overlap at most, the skipped one not counted and a "
+           f"job starting as another ends not overlapping it: "
+           f"{model.peak_concurrency(run)}")
+    expect(model.job_span(run) == 1150.0,
+           f"the jobs span first start to last end: {model.job_span(run)}")
+    expect(model.peak_concurrency(model.build_run({}, [])) is None,
+           "no timed jobs has no peak")
+    expect(_lane_run(attempt=1).attempt == 1 and model.build_run({}, []).attempt == 1,
+           "an unspecified attempt is the first")
+
+    text = "\n".join(report.render_run(run, model.read_log(""), None, 30.0))
+    for needle in ("== run 42 attempt 3 -- CI", "revision     abc123",
+                   "peak jobs    4", "job span     1150s (19m10s)",
+                   "headless suite steps",
+                   "headless-lanes (rest) / Headless lane",
+                   "headless-lanes (world) / Headless lane"):
+        expect(needle in text, f"the run block shows {needle!r}:\n{text}")
+
+
 #: Every check group, in the order `--self-test` runs them.
 CHECKS = (
+    ("lane measurements", check_lane_measurements),
     ("timestamp endpoints", check_timestamp_endpoints),
     ("missing timestamps", check_missing_timestamps),
     ("slowest job", check_slowest_job),

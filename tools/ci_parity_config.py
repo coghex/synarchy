@@ -54,7 +54,37 @@ AGGREGATE_JOB = "build-test"
 #: The separate real-engine worker that runs alongside AUDITED_JOBS on PRs.
 PROBE_JOB = "behavior-probes"
 
-AGGREGATE_NEEDS = frozenset({AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB})
+#: The headless suite, one matrix leg per lane (#2745). Not an audited
+#: gate-set job: it runs `cabal test`, which the gate-set comparison does
+#: not collect, and its only Python commands are copies of
+#: test-and-audits' selection steps.
+LANE_JOB = "headless-lanes"
+#: The steps the lane job must copy VERBATIM from test-and-audits, so both
+#: decide the docs-only fast path, the worldgen gate and every cache key
+#: the same way.
+LANE_SHARED_STEPS = (
+    "Select docs-only fast path",
+    "Select project build cache epoch",
+    "Resolve dependency plan",
+    "Select expensive path-relevant gates",
+    "Restore dependency cache",
+    "Restore project build cache (dist-newstyle)",
+)
+LANE_RUN_STEP = "Headless lane"
+#: The guard on the full-tier branch: the worldgen selector's own output.
+LANE_FULL_TIER_GUARD = (
+    'if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then')
+LANE_TEST_OPTIONS = (
+    "--test-options='--lane ${{ matrix.lane }} --print-slow-items=20 "
+    "--format=failed-examples'")
+#: The one project-cache writer (#2745): after the aggregate, master
+#: pushes only, inheriting build-test's event-specific verdict.
+PROJECT_CACHE_JOB = "project-cache"
+PROJECT_CACHE_IF = (
+    "github.event_name == 'push' && github.ref == 'refs/heads/master' "
+    "&& needs.build-test.result == 'success' "
+    "&& needs.test-and-audits.outputs.docs_only != 'true'")
+AGGREGATE_NEEDS = frozenset({AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB, LANE_JOB})
 PROBE_JOB_IF = "github.event_name == 'pull_request'"
 PROBE_REQUIRED_COMMANDS = frozenset({
     "python3 tools/ci_probes.py --stdin",

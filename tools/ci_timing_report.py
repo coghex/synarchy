@@ -58,8 +58,15 @@ metadata and its job/step timings are still real, so the run block is
 printed with its probe and cache sections marked unavailable and the
 batch continues.
 
+Per run it also prints the attempt and tested revision, every
+headless-suite step whatever its duration (one per lane job since #2745),
+the jobs' own span, and the peak number of jobs whose execution intervals
+overlapped. `--attempt N` selects one attempt of a re-run run, since each
+attempt has its own jobs and timings under the same run id.
+
 Usage:
   python3 tools/ci_timing_report.py --run 33666483367
+  python3 tools/ci_timing_report.py --run 33666483367 --attempt 2
   python3 tools/ci_timing_report.py --last 10
   python3 tools/ci_timing_report.py --last 20 --event pull_request
   python3 tools/ci_timing_report.py --last 10 --branch master --threshold 60
@@ -169,10 +176,15 @@ def resolve_ci_workflow(repo: str) -> tuple[int, str]:
                       "report is about that workflow specifically.")
 
 
-def fetch_run(repo: str, run_id: int) -> model.RunTiming:
-    meta = gh_json(["run", "view", str(run_id), "-R", repo,
+def fetch_run(repo: str, run_id: int,
+              attempt: int | None = None) -> model.RunTiming:
+    """One run, or one ATTEMPT of it (`gh run view --attempt`): a re-run
+    keeps the run id, and each attempt has its own jobs and timings."""
+    selector = [] if attempt is None else ["--attempt", str(attempt)]
+    meta = gh_json(["run", "view", str(run_id), "-R", repo, *selector,
                     "--json", RUN_FIELDS])
-    jobs = gh_json(["run", "view", str(run_id), "-R", repo, "--json", "jobs"])
+    jobs = gh_json(["run", "view", str(run_id), "-R", repo, *selector,
+                    "--json", "jobs"])
     payload = jobs.get("jobs") if isinstance(jobs, dict) else None
     return model.build_run(meta, payload)
 
@@ -289,8 +301,11 @@ def describe_identity(run: model.RunTiming, pull_request: int | None) -> str:
 
 def render_run(run: model.RunTiming, diagnostics: model.LogDiagnostics,
                pull_request: int | None, threshold: float) -> list[str]:
-    lines = [f"== run {run.run_id} -- {run.workflow_name or '(unnamed)'}"]
+    lines = [f"== run {run.run_id} attempt {run.attempt} -- "
+             f"{run.workflow_name or '(unnamed)'}"]
     lines.append(f"   url          {run.url}")
+    if run.head_sha:
+        lines.append(f"   revision     {run.head_sha}")
     lines.append(f"   event        {run.event or '(unknown)'}  "
                  f"{describe_identity(run, pull_request)}")
     if run.display_title:
@@ -310,6 +325,13 @@ def render_run(run: model.RunTiming, diagnostics: model.LogDiagnostics,
     lines.append(f"   queued for   "
                  f"{model.format_duration(run.queued_seconds)}   "
                  f"[createdAt -> startedAt]")
+    lines.append(f"   job span     "
+                 f"{model.format_duration(model.job_span(run))}   "
+                 f"[first job startedAt -> last job completedAt]")
+    peak = model.peak_concurrency(run)
+    lines.append(f"   peak jobs    "
+                 f"{'unavailable' if peak is None else peak}   "
+                 f"[most overlapping job intervals]")
 
     slowest = model.slowest_jobs(run)
     lines.append("   jobs [startedAt -> completedAt]")
@@ -324,6 +346,17 @@ def render_run(run: model.RunTiming, diagnostics: model.LogDiagnostics,
     if len(slowest) > 1:
         lines.append(f"       (tie: {len(slowest)} jobs share the longest "
                      "duration)")
+
+    # One line per headless-suite step whatever its duration (#2745): with
+    # the suite split into lane jobs, each lane's step is the measurement.
+    lines.append("   headless suite steps [startedAt -> completedAt]")
+    headless = model.headless_steps(run)
+    if not headless:
+        lines.append("       (no headless suite step)")
+    for step in headless:
+        shown = ("skipped" if step.skipped
+                 else model.format_duration(step.seconds))
+        lines.append(f"       {shown:>16}  {step.job} / {step.name}")
 
     steps = model.slow_steps(run, threshold)
     lines.append(f"   steps at or above {threshold:.0f}s "
@@ -476,7 +509,7 @@ def run_report(args: argparse.Namespace) -> int:
     repo = args.repo or resolve_repo()
     workflow_id, workflow_name = resolve_ci_workflow(repo)
     if args.run is not None:
-        run = fetch_run(repo, args.run)
+        run = fetch_run(repo, args.run, args.attempt)
         mismatch = workflow_mismatch(run, workflow_id, workflow_name)
         if mismatch is not None:
             raise ReportError(mismatch)
@@ -527,6 +560,9 @@ def main(argv: list[str] | None = None) -> int:
     selection.add_argument("--self-test", action="store_true",
                            help="run this report's fixture checks instead "
                                 "of contacting GitHub")
+    parser.add_argument("--attempt", type=int, metavar="N",
+                        help="with --run: report that attempt of the run "
+                             "(default: its latest)")
     parser.add_argument("--repo", metavar="OWNER/NAME",
                         help="repository to report on (default: the one "
                              "this checkout points at)")
@@ -547,6 +583,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("pass --run ID, --last N, or --self-test")
     if args.last is not None and args.last < 1:
         parser.error("--last takes a positive count")
+    if args.attempt is not None and (args.run is None or args.attempt < 1):
+        parser.error("--attempt takes a positive attempt number of one --run")
     if args.run is not None and (args.event or args.branch):
         parser.error("--event and --branch filter a --last selection; a "
                      "--run names one run outright")

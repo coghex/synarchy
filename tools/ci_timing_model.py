@@ -243,6 +243,8 @@ class RunTiming:
     seconds: float | None
     queued_seconds: float | None
     jobs: tuple[JobTiming, ...]
+    #: Which attempt of the run these timings are (1 unless re-run).
+    attempt: int = 1
 
     @property
     def successful(self) -> bool:
@@ -325,6 +327,8 @@ def build_run(meta: object, jobs_payload: object) -> RunTiming:
         seconds=duration_seconds(started, updated),
         queued_seconds=duration_seconds(created, started),
         jobs=tuple(build_job(job) for job in jobs),
+        attempt=(int(record["attempt"]) if isinstance(record.get("attempt"), int)
+                 else 1),
     )
 
 
@@ -355,6 +359,60 @@ def slow_steps(run: RunTiming, threshold: float) -> list[StepTiming]:
                   if step.is_sample and step.seconds >= threshold]
     return sorted(candidates, key=lambda step: (-(step.seconds or 0.0),
                                                 step.job, step.number))
+
+
+#: The headless suite's step names: one per lane job since #2745, and the
+#: single-process step every run before it carried.
+HEADLESS_STEP_NAMES = ("Headless lane", "Headless test suite")
+
+
+def headless_steps(run: RunTiming) -> list[StepTiming]:
+    """Every headless-suite step, one per job that has one, whatever its
+    duration: a lane that was skipped or lost its timestamps is reported
+    as such rather than vanishing below a threshold."""
+    found = [step for job in run.jobs for step in job.steps
+             if step.name in HEADLESS_STEP_NAMES]
+    return sorted(found, key=lambda step: (step.job, step.number))
+
+
+def job_span(run: RunTiming) -> float | None:
+    """First job start to last job end, over the jobs that ran.
+
+    For a re-run attempt this is the attempt's own span; the run record's
+    `startedAt`/`updatedAt` belong to the run as a whole. Jobs a partial
+    re-run reused from an earlier attempt keep that attempt's timestamps,
+    so only a COMPLETE re-run gives an attempt-local span."""
+    timed = [job for job in run.jobs
+             if not job.skipped and job.started_at and job.completed_at]
+    if not timed:
+        return None
+    return duration_seconds(min(job.started_at for job in timed),
+                            max(job.completed_at for job in timed))
+
+
+def peak_concurrency(run: RunTiming) -> int | None:
+    """The most jobs whose `startedAt` -> `completedAt` intervals overlap.
+
+    Intervals are half-open: a job ending at the instant another starts
+    does not overlap it. Skipped jobs and jobs without both timestamps are
+    not counted. `None` when no job has both."""
+    events: list[tuple[datetime, int]] = []
+    for job in run.jobs:
+        start = parse_timestamp(job.started_at)
+        end = parse_timestamp(job.completed_at)
+        if job.skipped or start is None or end is None:
+            continue
+        events.append((start, 1))
+        events.append((end, -1))
+    if not events:
+        return None
+    # Ends sort before starts at the same instant (-1 < 1): half-open.
+    events.sort()
+    running = peak = 0
+    for _, delta in events:
+        running += delta
+        peak = max(peak, running)
+    return peak
 
 
 # ── Log framing ───────────────────────────────────────────────────────

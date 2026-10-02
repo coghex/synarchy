@@ -2919,8 +2919,13 @@ _GATE_COMMAND = ("python3 tools/headless_init_import_audit.py --builddir "
                  "dist-newstyle")
 _REGRESSION_COMMAND = ("python3 tools/headless_init_import_audit.py "
                        "--cabal-regression")
+# The lane coverage check (#2744), which runs the built test executable.
+_LANE_COVERAGE_COMMAND = "python3 tools/headless_lanes.py"
 # What must run, in this order, in each entry point (#2648 review round
-# 8): the builds, `--record`, the gate, and only then the tests.
+# 8): the builds, `--record`, the gate, and only then what runs the suite.
+# Locally that is the suite itself. In CI's test-and-audits it is the lane
+# coverage check over that job's build: since #2745 the suite runs in the
+# `headless-lanes` jobs, which build their own trees.
 GATE_ORDER = {
     "tools/ci-local.sh": (
         "cabal build all -v0", "cabal build synarchy-test-headless -v0",
@@ -2929,7 +2934,7 @@ GATE_ORDER = {
     ".github/workflows/ci.yml": (
         "cabal build all -v0", "cabal build synarchy-test-headless -v0",
         "cabal build synarchy-test-graphical -v0", _RECORD_COMMAND,
-        _GATE_COMMAND, _REGRESSION_COMMAND, "cabal test synarchy-test-headless"),
+        _GATE_COMMAND, _REGRESSION_COMMAND, _LANE_COVERAGE_COMMAND),
 }
 
 
@@ -2980,13 +2985,17 @@ def _move_line(text: str, command: str, before: str | None) -> str:
 
 
 def _after_tests(text: str) -> str:
-    """`text` with the gate moved to just after the headless test run."""
+    """`text` with the gate moved to just after what runs the suite: the
+    headless test run locally, the lane coverage check in CI."""
     lines = text.splitlines(keepends=True)
     index = next(i for i, line in enumerate(lines)
                  if line.strip() == _GATE_COMMAND)
     moved = lines.pop(index)
     target = next(i for i, line in enumerate(lines)
-                  if "cabal test synarchy-test-headless -v0" in line)
+                  if (line.strip().startswith("SYNARCHY_FULL_TESTS=1 cabal test "
+                                              "synarchy-test-headless -v0")
+                      or _LANE_COVERAGE_COMMAND in line)
+                  and not line.lstrip().startswith("#"))
     lines.insert(target + 1, moved)
     return "".join(lines)
 

@@ -35,9 +35,17 @@ an unassigned group, flag parsing, on synthetic lanes). That regression is
 in no lane, so the suite's examples stay exactly those the single block
 registered.
 
+CI runs each lane as one leg of `.github/workflows/ci.yml`'s
+`headless-lanes` matrix (#2745). The check therefore also reads that
+matrix and fails unless it names exactly the lanes the executable declares:
+a lane added to the suite but not to the matrix would otherwise never run
+in CI, and a matrix leg naming a lane that no longer exists would fail
+only at run time (`--no-workflow` skips this, for a tree without the
+workflow).
+
 Usage:
   cabal build synarchy-test-headless
-  python3 tools/headless_lanes.py [--exe PATH]
+  python3 tools/headless_lanes.py [--exe PATH] [--workflow PATH | --no-workflow]
 
 Without `--exe` the executable is found with `cabal list-bin` (the
 `CABAL` environment variable names the cabal binary; default `cabal`).
@@ -58,6 +66,9 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+#: The workflow job whose matrix runs one lane per leg (#2745).
+LANE_JOB = "headless-lanes"
 
 ITEM_MARKER = "headless-inventory-item "
 TOTAL_MARKER = "headless-inventory-total "
@@ -246,8 +257,46 @@ def check_self_test(run: Runner) -> str:
     return summary
 
 
-def check(run: Runner, out=sys.stdout) -> int:
+def workflow_lanes(yaml_text: str) -> list[str]:
+    """The lanes `.github/workflows/ci.yml`'s lane job runs, in matrix order."""
+    try:
+        import yaml  # type: ignore
+    except ImportError as exc:  # pragma: no cover - bare toolchain only
+        raise InventoryError("reading the workflow needs PyYAML "
+                             "(tools/requirements-assets.txt)") from exc
+    try:
+        document = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        raise InventoryError(f"the workflow is not valid YAML ({exc})") from None
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    job = jobs.get(LANE_JOB) if isinstance(jobs, dict) else None
+    if not isinstance(job, dict):
+        raise InventoryError(f"the workflow has no `{LANE_JOB}` job")
+    strategy = job.get("strategy")
+    matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+    lanes = matrix.get("lane") if isinstance(matrix, dict) else None
+    if (not isinstance(lanes, list) or not lanes
+            or not all(isinstance(lane, str) and lane.strip() for lane in lanes)):
+        raise InventoryError(f"`{LANE_JOB}` has no `strategy.matrix.lane` list of lane names")
+    duplicated = sorted({lane for lane in lanes if lanes.count(lane) > 1})
+    if duplicated:
+        raise InventoryError(f"`{LANE_JOB}` lists lane(s) {', '.join(duplicated)} more than once")
+    return lanes
+
+
+def compare_workflow(declared: Sequence[str], scheduled: Sequence[str]) -> list[str]:
+    """Every difference between the executable's lanes and the CI matrix."""
+    problems = [f"lane {name!r} has no `{LANE_JOB}` CI job, so CI would never run it"
+                for name in declared if name not in scheduled]
+    problems += [f"`{LANE_JOB}` runs lane {name!r}, which the executable does not declare"
+                 for name in scheduled if name not in declared]
+    return problems
+
+
+def check(run: Runner, out=sys.stdout, scheduled: Sequence[str] | None = None) -> int:
+    """The partition check; with `scheduled`, also the CI matrix check."""
     failed = False
+    declared: list[str] | None = None
     try:
         print(f"lane self-test: {check_self_test(run)}", file=out)
     except InventoryError as exc:
@@ -260,6 +309,7 @@ def check(run: Runner, out=sys.stdout) -> int:
             print(f"{label}: cannot trust the inventory: {exc}", file=out)
             failed = True
             continue
+        declared = declared if declared is not None else result.lanes
         print(f"{label}:", file=out)
         width = max(len(n) for n in result.lanes)
         for name in result.lanes:
@@ -270,7 +320,15 @@ def check(run: Runner, out=sys.stdout) -> int:
         for problem in result.problems:
             print(f"  FAIL {problem}", file=out)
         failed = failed or bool(result.problems)
-    print("FAIL: the lanes do not partition the suite" if failed
+    partitioned = not failed
+    if scheduled is not None and declared is not None:
+        mismatches = compare_workflow(declared, scheduled)
+        print(f"CI lane jobs ({LANE_JOB}): {', '.join(scheduled)}", file=out)
+        for problem in mismatches:
+            print(f"  FAIL {problem}", file=out)
+        failed = failed or bool(mismatches)
+    print("FAIL: the lanes do not partition the suite" if not partitioned
+          else "FAIL: CI does not run exactly the declared lanes" if failed
           else "OK: every example runs in exactly one lane", file=out)
     return 1 if failed else 0
 
@@ -292,9 +350,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--exe", help="the synarchy-test-headless executable "
                                       "(default: found with `cabal list-bin`)")
+    parser.add_argument("--workflow", default=str(WORKFLOW_PATH),
+                        help=f"the CI workflow whose `{LANE_JOB}` matrix must name "
+                             "exactly the declared lanes (default: %(default)s)")
+    parser.add_argument("--no-workflow", action="store_true",
+                        help="skip the CI matrix check")
     args = parser.parse_args(argv)
     exe = args.exe or find_executable()
-    return check(subprocess_runner(exe))
+    run = subprocess_runner(exe)
+    scheduled = None
+    if not args.no_workflow:
+        try:
+            scheduled = workflow_lanes(Path(args.workflow).read_text(encoding="utf-8"))
+        except (OSError, InventoryError) as exc:
+            print(f"FAIL: cannot read the CI lane matrix: {exc}")
+            return 1
+    return check(run, scheduled=scheduled)
 
 
 if __name__ == "__main__":

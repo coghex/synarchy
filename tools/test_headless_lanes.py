@@ -187,5 +187,48 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("FAIL an unknown lane ('__no_such_lane__') was not refused", out)
 
 
+def workflow(lanes) -> str:
+    rendered = "[" + ", ".join(lanes) + "]"
+    return ("jobs:\n  headless-lanes:\n    strategy:\n      fail-fast: false\n"
+            f"      matrix:\n        lane: {rendered}\n")
+
+
+class WorkflowMatrix(unittest.TestCase):
+    """#2745: CI's lane matrix must name exactly the declared lanes."""
+
+    def test_reads_the_matrix_in_order(self):
+        self.assertEqual(hl.workflow_lanes(workflow(["world", "rest"])), ["world", "rest"])
+
+    def test_the_real_workflow_names_the_real_lanes(self):
+        lanes = hl.workflow_lanes(hl.WORKFLOW_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(lanes), ["rest", "world"])
+
+    def test_unreadable_matrices_fail(self):
+        for bad in ("jobs: {}\n", "jobs:\n  headless-lanes:\n    steps: []\n",
+                    workflow([]), workflow(["world", "world"]), ": not yaml : [\n"):
+            with self.subTest(bad=bad), self.assertRaises(hl.InventoryError):
+                hl.workflow_lanes(bad)
+
+    def test_matching_matrix_passes(self):
+        code, out = self.run_with(["shared", "rest"])
+        self.assertEqual(code, 0, out)
+        self.assertIn("CI lane jobs (headless-lanes): shared, rest", out)
+
+    def test_unscheduled_lane_fails(self):
+        code, out = self.run_with(["rest"])
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL lane 'shared' has no `headless-lanes` CI job", out)
+        self.assertTrue(out.rstrip().endswith("FAIL: CI does not run exactly the declared lanes"))
+
+    def test_stale_matrix_leg_fails(self):
+        code, out = self.run_with(["shared", "rest", "gone"])
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL `headless-lanes` runs lane 'gone', which the executable does not declare", out)
+
+    def run_with(self, scheduled):
+        out = io.StringIO()
+        return hl.check(FakeExe(WHOLE, GOOD), out, scheduled=scheduled), out.getvalue()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -79,6 +79,10 @@ The wiring check
     in its human output.
   * the reporting step's `env:` block stops binding any variable read
     below to that step's output, or binds it to the wrong step.
+  * the project cache is saved anywhere but the one writer job,
+    `project-cache` (#2745), or that save loses a guard, or a job that
+    restores the project cache (the behavior probes, the headless lanes,
+    the writer) stops using test-and-audits' exact key and prefixes.
 
 Usage:
   python3 tools/ci_cache_report.py              # read the environment, report
@@ -112,6 +116,10 @@ WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 #: The workflow worker whose caches this reports on.
 AUDITED_JOB = "test-and-audits"
 PROBE_JOB = "behavior-probes"
+#: The headless lane jobs (#2745): restore-only, on test-and-audits' keys.
+LANE_JOB = "headless-lanes"
+#: The workflow's one project-cache writer (#2745), after the aggregate.
+WRITER_JOB = "project-cache"
 WORKFLOW_LABEL = ".github/workflows/ci.yml (job: %s)" % AUDITED_JOB
 
 #: This script's path as it appears in the workflow's `run:` block, used
@@ -362,32 +370,69 @@ def check_wiring(document: object) -> list[str]:
                 f"{WORKFLOW_LABEL}: legacy v2 bootstrap must be limited to "
                 f"its known creating image `{LEGACY_IMAGE_REF}`.")
 
-    save_steps = []
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        with_block = step.get("with")
-        path = str((with_block or {}).get("path", "")).strip() \
-            if isinstance(with_block, dict) else ""
-        if path == "dist-newstyle" and str(step.get("uses", "")).startswith(
-                SAVE_ACTION_PREFIX):
-            save_steps.append(step)
-    if len(save_steps) != 1:
+    # The project cache has exactly ONE writer in the whole workflow
+    # (#2745): `project-cache`, after the aggregate. A save anywhere else --
+    # a lane job, a probe job, or test-and-audits as before the split --
+    # would publish a tree whose run might still fail.
+    save_sites: list[tuple[str, dict]] = []
+    for job_name, job in jobs.items():
+        job_steps = job.get("steps") if isinstance(job, dict) else None
+        for step in job_steps if isinstance(job_steps, list) else []:
+            if not isinstance(step, dict):
+                continue
+            with_block = step.get("with")
+            path = str((with_block or {}).get("path", "")).strip() \
+                if isinstance(with_block, dict) else ""
+            if path == "dist-newstyle" and str(step.get("uses", "")).startswith(
+                    SAVE_ACTION_PREFIX):
+                save_sites.append((job_name, step))
+    if len(save_sites) != 1 or save_sites[0][0] != WRITER_JOB:
         problems.append(
-            f"{WORKFLOW_LABEL}: expected exactly one `{SAVE_ACTION_PREFIX}...` "
-            f"step for dist-newstyle, found {len(save_steps)}.")
+            f".github/workflows/ci.yml: expected exactly one "
+            f"`{SAVE_ACTION_PREFIX}...` step for dist-newstyle, in job "
+            f"`{WRITER_JOB}`, found {[name for name, _ in save_sites]}.")
     else:
-        condition = _normalize_expression(save_steps[0].get("if", ""))
+        condition = _normalize_expression(save_sites[0][1].get("if", ""))
         for required in (
                 "github.event_name=='push'",
                 "github.ref=='refs/heads/master'",
                 "steps.dist-cache.outputs.cache-hit!='true'",
                 "steps.dist-cache.outputs.cache-primary-key!=''",
-                "steps.docs-fast-path.outputs.docs_only!='true'"):
+                "needs.test-and-audits.outputs.docs_only!='true'"):
             if required not in condition:
                 problems.append(
-                    f"{WORKFLOW_LABEL}: project-cache save condition is "
-                    f"missing `{required}`; PRs must remain restore-only.")
+                    f".github/workflows/ci.yml (job: {WRITER_JOB}): project-cache "
+                    f"save condition is missing `{required}`; PRs must remain "
+                    "restore-only.")
+
+    # Every other job restoring the project cache does so on test-and-audits'
+    # exact key and prefixes, so an image-only change invalidates them all
+    # together and the writer saves under the key the readers look up.
+    for job_name, step_id in ((LANE_JOB, "dist-cache"), (WRITER_JOB, "dist-cache")):
+        job = jobs.get(job_name)
+        job_steps = job.get("steps") if isinstance(job, dict) else None
+        restores = [step for step in (job_steps or [])
+                    if isinstance(step, dict) and step.get("id") == step_id] \
+            if isinstance(job_steps, list) else []
+        where = f".github/workflows/ci.yml (job: {job_name})"
+        if len(restores) != 1:
+            problems.append(f"{where}: expected exactly one step with `id: {step_id}`.")
+            continue
+        if len(dist_steps) != 1:
+            continue
+        theirs, mine = dist_steps[0].get("with"), restores[0].get("with")
+        if not isinstance(theirs, dict) or not isinstance(mine, dict):
+            problems.append(f"{where}: project-cache restore has no `with:` mapping.")
+            continue
+        if not str(restores[0].get("uses", "")).startswith(RESTORE_ACTION_PREFIX):
+            problems.append(f"{where}: `{step_id}` must use `{RESTORE_ACTION_PREFIX}...`.")
+        for field in ("path", "key", "restore-keys"):
+            if _normalize_expression(mine.get(field, "")) != \
+                    _normalize_expression(theirs.get(field, "")):
+                problems.append(
+                    f"{where}: project-cache `{field}` differs from "
+                    f"{AUDITED_JOB}; an image-only change must invalidate every "
+                    "worker, and the writer must save the key the readers use.")
 
     probe_job = jobs.get(PROBE_JOB)
     probe_steps = probe_job.get("steps") if isinstance(probe_job, dict) else None
@@ -477,17 +522,6 @@ def _valid_wiring_document() -> dict:
             },
         })
     steps.append({
-        "name": "Save project build cache (dist-newstyle)",
-        "uses": f"{SAVE_ACTION_PREFIX}deadbeef",
-        "if": ("github.event_name == 'push' && "
-               "github.ref == 'refs/heads/master' && "
-               "steps.dist-cache.outputs.cache-hit != 'true' && "
-               "steps.dist-cache.outputs.cache-primary-key != '' && "
-               "steps.docs-fast-path.outputs.docs_only != 'true'"),
-        "with": {"path": "dist-newstyle",
-                 "key": "${{ steps.dist-cache.outputs.cache-primary-key }}"},
-    })
-    steps.append({
         "name": "Report cache restore outcomes",
         "env": dict(expected_env_bindings()),
         "run": f"python3 {SCRIPT_NAME} --self-test\npython3 {SCRIPT_NAME}\n",
@@ -500,9 +534,26 @@ def _valid_wiring_document() -> dict:
         "uses": f"{RESTORE_ACTION_PREFIX}deadbeef",
         "with": dict(dist_restore["with"]),
     }
+    copy = {"name": "Restore project build cache (dist-newstyle)",
+            "id": "dist-cache",
+            "uses": f"{RESTORE_ACTION_PREFIX}deadbeef",
+            "with": dict(dist_restore["with"])}
+    writer_save = {
+        "name": "Save project build cache (dist-newstyle)",
+        "uses": f"{SAVE_ACTION_PREFIX}deadbeef",
+        "if": ("github.event_name == 'push' && "
+               "github.ref == 'refs/heads/master' && "
+               "steps.dist-cache.outputs.cache-hit != 'true' && "
+               "steps.dist-cache.outputs.cache-primary-key != '' && "
+               "needs.test-and-audits.outputs.docs_only != 'true'"),
+        "with": {"path": "dist-newstyle",
+                 "key": "${{ steps.dist-cache.outputs.cache-primary-key }}"},
+    }
     return {"jobs": {
         AUDITED_JOB: {"steps": steps},
         PROBE_JOB: {"steps": [probe_restore]},
+        LANE_JOB: {"steps": [dict(copy, **{"with": dict(copy["with"])})]},
+        WRITER_JOB: {"steps": [dict(copy, **{"with": dict(copy["with"])}), writer_save]},
     }}
 
 
@@ -665,9 +716,38 @@ def _self_test() -> int:
     mutate(lambda steps: find(steps, dist.step_id)["with"].__setitem__(
                "restore-keys", (CACHE_IMAGE_OUTPUT * 3) + "\ndist-v2-Linux-"),
            "legacy v2 bootstrap must be limited")
-    mutate(lambda steps: dist_save_step(steps).__setitem__(
-               "if", "steps.dist-cache.outputs.cache-hit != 'true'"),
-           "PRs must remain restore-only")
+    def mutate_job(job: str, edit, expect: str) -> None:
+        document = _valid_wiring_document()
+        edit(document["jobs"][job]["steps"])
+        problems = check_wiring(document)
+        check(any(expect in problem for problem in problems),
+              f"a {job} wiring mutation should be reported with {expect!r}, "
+              f"got {problems!r}")
+
+    # #2745: one writer, after the aggregate; every reader on the same key.
+    mutate_job(WRITER_JOB, lambda steps: dist_save_step(steps).__setitem__(
+                   "if", "steps.dist-cache.outputs.cache-hit != 'true'"),
+               "PRs must remain restore-only")
+    mutate_job(WRITER_JOB, lambda steps: dist_save_step(steps).__setitem__(
+                   "if", dist_save_step(steps)["if"].replace(
+                       " && needs.test-and-audits.outputs.docs_only != 'true'", "")),
+               "needs.test-and-audits.outputs.docs_only!='true'")
+    mutate_job(WRITER_JOB, lambda steps: steps.remove(dist_save_step(steps)),
+               "in job `project-cache`, found []")
+    mutate_job(LANE_JOB, lambda steps: steps.append(
+                   dict(dist_save_step(_valid_wiring_document()["jobs"][WRITER_JOB]["steps"]))),
+               "found ['headless-lanes', 'project-cache']")
+    mutate(lambda steps: steps.append(
+               dict(dist_save_step(_valid_wiring_document()["jobs"][WRITER_JOB]["steps"]))),
+           "found ['test-and-audits', 'project-cache']")
+    mutate_job(LANE_JOB, lambda steps: steps[0]["with"].__setitem__(
+                   "key", "dist-v3-other"),
+               "(job: headless-lanes): project-cache `key` differs")
+    mutate_job(WRITER_JOB, lambda steps: steps[0]["with"].__setitem__(
+                   "restore-keys", "dist-v3-"),
+               "(job: project-cache): project-cache `restore-keys` differs")
+    mutate_job(LANE_JOB, lambda steps: steps[0].__setitem__("id", "renamed"),
+               "(job: headless-lanes): expected exactly one step with `id: dist-cache`")
 
     image_drift = _valid_wiring_document()
     image_drift["jobs"][PROBE_JOB]["steps"][0]["with"]["key"] = \
