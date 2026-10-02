@@ -171,6 +171,7 @@ import qualified Test.Headless.Sim.Admission as SimAdmission
 import qualified Test.Headless.Sim.ExactFluid as SimExactFluid
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Sim.Conservation as SimConservation
+import qualified Test.Headless.Sim.Harness as SimHarness
 import qualified Test.Headless.Sim.Reaction as SimReaction
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
@@ -1049,6 +1050,7 @@ main = hspec $ do
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Sim.Fluid.Conservation" SimConservation.spec
     describe "Sim.Fluid.Exact" SimExactFluid.spec
+    describe "Sim.Fluid.Harness" SimHarness.spec
     describe "unlike-fluid reaction" SimReaction.spec
     Solidification.pureSpec
     SolidificationOccupants.pureSpec
