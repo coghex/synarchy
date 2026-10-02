@@ -4,6 +4,8 @@ import UPrelude
 import Test.Hspec
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
+import Test.Headless.Lanes (Lanes(..), runLanes)
+import qualified Test.Headless.LaneSelection as LaneSelection
 import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
 import qualified Test.Headless.UPrelude as UPreludeSpec
 import qualified Test.Headless.Audio.Native as AudioNative
@@ -459,8 +461,26 @@ import qualified Test.Headless.Capability.Ui as CapabilityUi
 import qualified Test.Headless.Capability.UnitCombat as CapabilityUnitCombat
 import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
+-- | The suite, as selectable lanes (#2744). @--lane NAME@ runs one;
+--   with no @--lane@ every lane runs, in this order, exactly as the single
+--   block this replaced. See "Test.Headless.Lanes" and the headless-suite
+--   section of @tools/README.md@.
 main ∷ IO ()
-main = hspec $ do
+main = runLanes Lanes
+    { lanesInOrder = [("world", worldLane), ("rest", restLane)]
+    , lanesDefault = "rest"
+    }
+    LaneSelection.spec
+
+-- | Lane @world@: every registration before @PagedMapArtifact@, the
+--   partition #2743 measured (@docs/headless_suite_lane_measurement.md@
+--   §7). It holds the whole shared-world block, so every consumer of
+--   every 'Test.Headless.Harness.sharedWorld' key — including the full
+--   tier's — runs here, in one engine. Add a group here only to keep it
+--   beside the shared worlds it consumes; everything else goes in
+--   'restLane'.
+worldLane ∷ Spec
+worldLane = do
     describe "World.ZoomMap.Artifact" ZoomArtifact.spec
     ZoomOceanFill.spec
     -- ONE engine for all worldgen specs. Worlds are memoized by
@@ -604,6 +624,11 @@ main = hspec $ do
     -- #2298 (WML-5). Pure and engine-free; the goldens that need a
     -- generated world are MapPyramid.worldSpec, above.
     MapPyramid.spec
+
+-- | Lane @rest@, the DEFAULT lane: every other registration. A new
+--   top-level group belongs here unless it consumes a shared world.
+restLane ∷ Spec
+restLane = do
     -- #2693 (WML-7). Format and storage only: scratch library roots,
     -- no engine and no generated world.
     describe "paged map artifact" PagedMapArtifact.spec

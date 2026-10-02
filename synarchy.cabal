@@ -1487,6 +1487,8 @@ test-suite synarchy-test-headless
                    App.Preview.Config
                    App.ResourceRoot
                    Test.Headless.UPrelude
+                   Test.Headless.Lanes
+                   Test.Headless.LaneSelection
                    Test.Headless.Audio.Native
                    Test.Headless.Audio.Upload
                    Test.Headless.Audio.Transport
@@ -2022,6 +2024,10 @@ test-suite synarchy-test-headless
                 , GLFW-b
                 , hslua
                 , hspec
+                -- #2744: the lane runner's inventory formatter and the
+                -- spec-tree walk in its regression. hspec's own core, so
+                -- already in the build plan.
+                , hspec-core
                 , JuicyPixels
                 -- #2693's oversized-inflate fixture builds a real zlib stream.
                 , zlib
