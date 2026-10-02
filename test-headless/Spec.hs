@@ -140,6 +140,7 @@ import qualified Test.Headless.World.GeneratedLibrary as GeneratedLibrary
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
 import qualified Test.Headless.World.MapPyramid as MapPyramid
 import qualified Test.Headless.World.PagedMapArtifact as PagedMapArtifact
+import qualified Test.Headless.Scenario.Schema as ScenarioSchema
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -606,6 +607,9 @@ main = hspec $ do
     -- #2693 (WML-7). Format and storage only: scratch library roots,
     -- no engine and no generated world.
     describe "paged map artifact" PagedMapArtifact.spec
+    -- #2699 (SCN-01). The scenario file format: pure decode and
+    -- validation over scratch files, no engine, no world, no GPU.
+    describe "Scenario.Schema" ScenarioSchema.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
     -- #2278. Own engine: it registers an out-of-tree material into the
     -- ONE process-global material registry and creates two private w8

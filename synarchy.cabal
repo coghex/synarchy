@@ -624,6 +624,12 @@ library
                      Gameplay.Tags.Types
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
+                     Scenario.Types
+                     Scenario.Bounds
+                     Scenario.Decode.Monad
+                     Scenario.Decode
+                     Scenario.Validate
+                     Scenario.Schema
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
@@ -1208,6 +1214,10 @@ library
                  , conduit
                  , resourcet
                  , aeson
+                 -- #2699: scenario fluid surfaces are parsed from the
+                 -- document's exact decimal, not through a Float. Already
+                 -- in the build plan as aeson's own dependency.
+                 , scientific
                  , cryptohash-sha256
                  , random
                  , deepseq
@@ -1892,6 +1902,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
+                   Test.Headless.Scenario.Schema
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
