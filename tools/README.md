@@ -3867,7 +3867,9 @@ passing run distinguishable from one that executed nothing.
 footer reaches the log.
 
 The formatter is selected on the two CI **command lines** and nowhere
-else. Neither `test-headless/Spec.hs` (which still calls plain `hspec`)
+else. Neither the suite's runner (`test-headless/Spec.hs` hands the suite
+to `Test.Headless.Lanes.runLanes`, which runs Hspec's default
+configuration and only *offers* one extra formatter, `inventory`, below)
 nor a repo-root `.hspec` (which does not exist) selects one, so a
 developer running `cabal test synarchy-test-headless --test-options='--match "…"'`
 still gets the default per-example output.
@@ -3913,6 +3915,69 @@ downloads each run's `test-and-audits` job log with `gh`, refuses runs
 whose item records disagree with Hspec's footer or whose example order
 differs, and prints the report's tables. Only the report's
 collection commits ever carry the instrumented files.
+
+### Headless suite lanes (#2744) and `headless_lanes.py`
+
+The headless suite is split into **lanes** that together run every example
+exactly once (CIR-15; the partition is the one
+`docs/headless_suite_lane_measurement.md` §7 proposes). `test-headless/Spec.hs`
+registers the suite as an ordered list of named lanes:
+
+| Lane | Holds |
+|---|---|
+| `world` | every registration before `PagedMapArtifact`, including the whole shared-world block, so every consumer of every `sharedWorld` key — and the full tier — runs here, in one engine |
+| `rest` (default) | everything else, and any top-level group added later without an explicit lane |
+
+Run one lane by passing `--lane` through cabal's `--test-options`; with no
+`--lane` the executable runs every lane in order, which is exactly the suite
+it was before (same examples, same order, same descriptions). Any other
+Hspec flag combines with it as usual, including CI's:
+
+```bash
+cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane world'
+cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane rest --print-slow-items=20 --format=failed-examples'
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane world'
+cabal run -v0 test:synarchy-test-headless -- --list-lanes
+```
+
+`--list-lanes` prints the lane names in suite order, the default marked
+`(default)`. An unknown lane name fails before anything runs and names the
+known lanes. `--lane-self-test` runs the lane machinery's own regression
+(`Test.Headless.LaneSelection`, on synthetic lanes) instead of the suite; it
+is in no lane, so the suite's examples are exactly those it had before
+lanes. Lanes are blocks of `Spec.hs`'s registrations, not `--match`
+patterns, so they need no description prefix and survive renames.
+
+**Adding a group.** Register it in `restLane` (the default) unless it consumes
+a `sharedWorld` key, in which case it belongs in `worldLane` beside that key's
+other consumers: a shared world is generated once per process, so splitting
+its consumers across lanes would generate it twice.
+
+**The coverage check.** `tools/headless_lanes.py` proves the lanes partition
+the suite without running a single example. It asks the built executable for
+its lanes (`--list-lanes`) and for the inventory of every example the whole
+suite and each lane would run (`--dry-run --format=inventory`: one JSON path
+per example and a total line), then compares complete example paths with
+their multiplicity. It fails, naming each example, on one in no lane, one
+run more often across the lanes than in the whole suite (including twice in
+one lane), one in more than one lane, and one a lane runs that the whole
+suite does not; a failed command, a malformed or truncated inventory or a
+total that disagrees with the listing fails it too. It runs the comparison
+with `SYNARCHY_FULL_TESTS` unset and set to `1`, keeps inherited `HSPEC_*`
+variables and `.hspec` files out of every inventory, checks that an
+unknown lane is refused, and runs `--lane-self-test`. Its output lists each
+lane's example count and the whole suite's.
+
+```bash
+cabal build synarchy-test-headless
+python3 tools/headless_lanes.py              # finds the executable with `cabal list-bin`
+python3 tools/headless_lanes.py --exe PATH   # or names it
+python3 tools/test_headless_lanes.py         # self-test: synthetic input, no build
+```
+
+Neither runs in CI yet: lane jobs and the coverage check's CI step are
+CIR-16 (#2742), and `.github/workflows/ci.yml` and `tools/ci-local.sh` still
+run the whole suite in one process.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 

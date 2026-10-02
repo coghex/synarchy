@@ -531,9 +531,17 @@ def check_headless_options_wiring() -> None:
     spec = (REPO_ROOT / "test-headless" / "Spec.hs").read_text(
         encoding="utf-8")
     expect("failed-examples" not in spec and "hspecWith" not in spec,
-           "test-headless/Spec.hs still calls plain `hspec` with no "
-           "formatter selection, so a direct `cabal test` keeps its "
-           "per-example output")
+           "test-headless/Spec.hs selects no formatter (it hands the suite "
+           "to Test.Headless.Lanes.runLanes), so a direct `cabal test` "
+           "keeps its per-example output")
+    # #2744: the lane runner calls Hspec itself. It may OFFER an extra
+    # formatter (`inventory`, for tools/headless_lanes.py) but must not
+    # SELECT one.
+    lanes = (REPO_ROOT / "test-headless" / "Test" / "Headless"
+             / "Lanes.hs").read_text(encoding="utf-8")
+    expect("failed-examples" not in lanes and "configFormat" not in lanes,
+           "Test.Headless.Lanes runs Hspec's default formatter unless the "
+           "command line selects one")
 
     # The step's own comment has to tell a reader why the list is there,
     # and why the run is otherwise quiet.
