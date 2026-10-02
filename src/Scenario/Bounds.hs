@@ -19,6 +19,7 @@ module Scenario.Bounds
     , mapTileBounds
     , boundsTileCount
     , inBounds
+    , inBoundsI
     , clipRegion
     , regionTileCount
     , footprintInside
@@ -69,8 +70,13 @@ boundsTileCount (TileBounds x0 y0 x1 y1) =
     (toInteger x1 - toInteger x0 + 1) * (toInteger y1 - toInteger y0 + 1)
 
 inBounds ∷ TileBounds → (Int, Int) → Bool
-inBounds (TileBounds x0 y0 x1 y1) (x, y) =
-    x ≥ x0 ∧ x ≤ x1 ∧ y ≥ y0 ∧ y ≤ y1
+inBounds b (x, y) = inBoundsI b (toInteger x, toInteger y)
+
+-- | 'inBounds' over unbounded tile coordinates, so a position too large
+--   for 'Int' is outside every map instead of wrapping into it.
+inBoundsI ∷ TileBounds → (Integer, Integer) → Bool
+inBoundsI (TileBounds x0 y0 x1 y1) (x, y) =
+    x ≥ toInteger x0 ∧ x ≤ toInteger x1 ∧ y ≥ toInteger y0 ∧ y ≤ toInteger y1
 
 regionTileCount ∷ TileRegion → Integer
 regionTileCount (RegionRect x0 y0 x1 y1) =
@@ -97,10 +103,15 @@ clipRegion b@(TileBounds bx0 by0 bx1 by1) r = case r of
 --   and locations are indivisible (D-21).
 footprintInside ∷ TileBounds → (Int, Int) → Footprint → Bool
 footprintInside b (x, y) (Footprint dx0 dy0 dx1 dy1) =
-    inBounds b (x + dx0, y + dy0) ∧ inBounds b (x + dx1, y + dy1)
+    inBoundsI b (ix + toInteger dx0, iy + toInteger dy0)
+    ∧ inBoundsI b (ix + toInteger dx1, iy + toInteger dy1)
+  where
+    ix = toInteger x
+    iy = toInteger y
 
 -- | The tile an actor or ground item at a continuous position occupies:
 --   tile centres sit on integers, so the tile is the nearest integer,
---   halves rounding up.
-tileOf ∷ (Float, Float) → (Int, Int)
+--   halves rounding up. Unbounded: a huge finite coordinate stays huge
+--   rather than overflowing 'Int' (see 'inBoundsI').
+tileOf ∷ (Float, Float) → (Integer, Integer)
 tileOf (x, y) = (floor (x + 0.5), floor (y + 0.5))

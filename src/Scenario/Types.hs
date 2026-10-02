@@ -46,6 +46,7 @@ module Scenario.Types
     , ScarSpec(..)
     , ItemEntry(..)
     , ItemTemperature(..)
+    , StorageCapacity(..)
     , GroundItemEntry(..)
       -- * Definition catalog
     , ScenarioCatalog(..)
@@ -303,9 +304,23 @@ data ItemEntry = ItemEntry
     , ieCondition   ∷ !(Authored Float)     -- ^ 0..100
     , ieSharpness   ∷ !(Authored Float)     -- ^ 0..100
     , ieWeight      ∷ !(Authored Float)     -- ^ kg, empty weight
-    , ieBulk        ∷ !(Authored Float)     -- ^ litres, external
+    , ieBulk        ∷ !(Authored (Maybe Float))
+      -- ^ litres, external. @Authored Nothing@ (YAML @null@) is the
+      --   runtime's honest absence ('Item.Types.iiBulk' @Nothing@);
+      --   'Omitted' snapshots the current definition.
+    , ieStorage     ∷ !(Authored (Maybe StorageCapacity))
+      -- ^ internal capacities ('Item.Types.iiStorage'); @Authored
+      --   Nothing@ (YAML @null@) is explicit absence, 'Omitted'
+      --   snapshots the current definition
     , ieTemperature ∷ !(Authored ItemTemperature)
     , ieContents    ∷ !(Authored [ItemEntry])
+    } deriving (Show, Eq)
+
+-- | 'Item.Types.ItemStorage': kilograms of contents and litres of
+--   internal packing space.
+data StorageCapacity = StorageCapacity
+    { scWeight ∷ !Float
+    , scBulk   ∷ !Float
     } deriving (Show, Eq)
 
 data GroundItemEntry = GroundItemEntry

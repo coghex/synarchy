@@ -124,6 +124,8 @@ The bounds are inclusive and contain exactly `width × height` tiles:
   format decision, not an implementation detail.
 - **Continuous positions.** A unit or ground item at continuous `x, y` occupies the
   tile `(floor(x + 0.5), floor(y + 0.5))`, because tile centres sit on integers.
+  The tile is computed as an unbounded integer, so a huge finite coordinate such
+  as `1e30` lies outside every finite map instead of overflowing into it.
 - **Camera.** `camera: {x, y}` defaults to `(0, 0)` and never translates bounds
   or objects.
 - **Patches.** Terrain and fluid patches keep their in-bounds tiles and report one
@@ -137,7 +139,8 @@ The bounds are inclusive and contain exactly `width × height` tiles:
 ## Identity, references and tags (D-29)
 
 - **Explicit id.** `id:` is an explicit scenario identity made of letters, digits,
-  `_`, `-`, `:` and `.`. Capture writes one for every entry. A malformed `id` is a
+  `_`, `-`, `:` and `.`. Quote an id that YAML would read as another type: an
+  unquoted `off`, `yes` or `1` is a boolean or a number, not an id. Capture writes one for every entry. A malformed `id` is a
   field rejection, and the entry falls back to its automatic id.
 - **Automatic id.** An entry with no `id` gets its document path as an automatic
   identity, such as `units[2]` or `units[2].inventory[0]`. An explicit id cannot
@@ -214,7 +217,7 @@ neighbour state (SCN-11). These are derived, not authorable.
 |---|---|---|---|---|
 | `rect` / `tiles` | as terrain | req | — | Clipped per tile. |
 | `fluid` | `ocean` \| `lake` \| `river` \| `lava` | req | — | `World.Fluid.Types.FluidType`. |
-| `surface_z` | number on the eighth-z plane (multiple of 0.125) | req | — | Absolute fluid surface, stored in eighths (`World.Fluid.Exact`, `WeSetFluidSnapshot`). |
+| `surface_z` | number on the exact fluid plane (a multiple of `1/fluidUnitsPerZ`, currently 1/8) | req | — | Absolute fluid surface, stored in fluid units (`World.Fluid.Exact`, `WeSetFluidSnapshot`). It is read from the document's exact decimal, never through a float. A value off the plane, or one too large for `Int`, rejects the patch. |
 
 Derived: the per-cell fluid depth below the surface and active-simulation state.
 
@@ -263,7 +266,7 @@ membership and relationships.
 |---|---|---|---|---|
 | `definition` | location definition id | req | — | `liDefId`. |
 | `x`, `y` | integer tile anchor | req | — | `liAnchor`; footprint (`liBounds`) from the definition. |
-| `significant_items` | map `slot → item id` | opt | All slots unbound | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. |
+| `significant_items` | map `slot → item id` | opt | All slots unbound | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. Slot keys are plain decimals (`"1"`, never `"01"`), so two keys cannot name one slot. |
 
 Derived or excluded: display name, gloss and etymology are derived. Encounter roll
 and roster are derived from definition and identity; units join by `encounter`.
@@ -342,9 +345,10 @@ current definition.
 | `condition` | `[0, 100]` | opt | `100` | — | `iiCondition`. |
 | `sharpness` | `[0, 100]` % of the definition's base | opt | `100` | — | `iiSharpness`. |
 | `weight` | kg ≥ 0, the instance's own empty weight | opt | Definition weight or roll | — | `iiWeight`. |
-| `bulk` | litres ≥ 0 | opt | Definition bulk | — | `iiBulk`. |
+| `bulk` | litres ≥ 0, or `null` | opt | Snapshot of the current definition's bulk | `null` = no recorded bulk | `iiBulk`; `null` is the runtime's honest absence (`Nothing`) on legacy instances, and fails closed in gameplay. |
+| `storage_capacity` | `{weight: kg ≥ 0, bulk: litres ≥ 0}`, or `null` | opt | Snapshot of the current definition's storage | `null` = no internal capacity | `iiStorage` (`ItemStorage`); `null` is explicit absence (non-storage items and legacy instances). |
 | `temperature` | `ambient` or °C ≥ −273.15 | opt | Ambient | `ambient` | `iiTemp` (`Nothing` = ambient). |
-| `contents` | list of items | opt | Definition default contents | `[]` = empty | `iiContents`. Only for item containers (kits, toolboxes); otherwise a field rejection that drops the listed items. Exact contents, with no capacity check (D-57). |
+| `contents` | list of items | opt | Definition default contents | `[]` = empty | `iiContents`. Any item may state `contents: []`. Only item containers (kits, toolboxes) may list items; a non-empty list on any other item is a field rejection that drops the listed items. Exact contents, with no capacity check (D-57). |
 
 The item instance id (`iiInstanceId`) is allocated at construction and is never
 authorable. Carried and contained totals (`itemTotalWeight`) are derived.

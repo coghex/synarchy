@@ -1214,6 +1214,10 @@ library
                  , conduit
                  , resourcet
                  , aeson
+                 -- #2699: scenario fluid surfaces are parsed from the
+                 -- document's exact decimal, not through a Float. Already
+                 -- in the build plan as aeson's own dependency.
+                 , scientific
                  , cryptohash-sha256
                  , random
                  , deepseq

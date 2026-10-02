@@ -25,6 +25,8 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Foldable (toList)
 import Data.List (nub)
+import qualified Data.Scientific as Sci
+import World.Fluid.Exact (fluidUnitsPerZ)
 import Gameplay.Tags.Types (GameplayTag)
 import Unit.Direction (parseDirectionName)
 import Unit.Injury (bruiseCap, maxInjurySeverity)
@@ -139,11 +141,8 @@ excludeOwned owner keys o =
 
 excludeItemTree ∷ Text → Text → A.Value → Dec ()
 excludeItemTree owner ip iv = do
-    let mid = asObject iv ≫= \io → case KM.lookup "id" io of
-            Just (A.String t) | explicitIdOk t → Just t
-            _ → Nothing
     diag ip (OwnerRejected owner) CascadeRejected
-    emitNode (Node ip NodeItem mid (Just owner) False [] [])
+    emitNode (Node ip NodeItem (rawExplicitId iv) (Just owner) False [] [])
     forM_ (maybe [] (ownedItemValues ip ["contents"]) (asObject iv)) $
         \(cp, cv) → excludeItemTree owner cp cv
 
@@ -175,11 +174,11 @@ catalog ∷ Dec ScenarioCatalog
 catalog = envCatalog <$> askEnv
 
 -- | Reject an entry whose tile lies outside a finite map.
-tileInside ∷ Text → (Int, Int) → Dec Bool
+tileInside ∷ Text → (Integer, Integer) → Dec Bool
 tileInside p t = do
     b ← envBounds <$> askEnv
     case b of
-        Just bs | not (inBounds bs t) → do
+        Just bs | not (inBoundsI bs t) → do
             diag p OutsideBounds EntryRejected
             pure False
         _ → pure True
@@ -275,14 +274,15 @@ decodeFluid = entry NodeFluid Nothing ["rect", "tiles", "fluid", "surface_z"] []
             r ← region
             Just (pure (noRefs (FluidPatch sid tags r k s)))
   where
-    -- the exact eighth-z plane: 4.5 → 36
-    pEighths v = do
-        f ← pFloat v
-        let e = f * 8
-            n = round e ∷ Int
-        if fromIntegral n ≡ e
-            then Right n
-            else Left "a number on the eighth-z plane (a multiple of 0.125)"
+    -- The exact fluid plane ('World.Fluid.Exact'): 4.5 → 36 eighths.
+    -- Read from the document's own decimal, never through a Float, so
+    -- nothing is rounded onto or off the plane.
+    pEighths (A.Number s) =
+        maybe (Left planeWanted) Right
+              (Sci.toBoundedInteger (s * fromIntegral fluidUnitsPerZ))
+    pEighths _ = Left planeWanted
+    planeWanted = "a number on the exact fluid plane (a multiple of 1/"
+               <> tshow fluidUnitsPerZ <> ")"
 
 -- ** Flora and structures
 
@@ -295,7 +295,7 @@ decodeFlora = entry NodeFlora Nothing ["species", "x", "y", "z", "age", "health"
         x ← reqField p "x" pInt o
         y ← reqField p "y" pInt o
         inside ← case (sp, x, y) of
-            (Just _, Just xv, Just yv) → tileInside p (xv, yv)
+            (Just _, Just xv, Just yv) → tileInside p (toInteger xv, toInteger yv)
             _ → pure False
         pure $ do
             (s, ()) ← sp
@@ -339,7 +339,8 @@ decodeStructure = entry NodeStructure Nothing ["pack", "piece", "x", "y", "z"] [
         x ← reqField p "x" pInt o
         y ← reqField p "y" pInt o
         inside ← case (x, y) of
-            (Just xv, Just yv) | ok, isJust pack, isJust piece → tileInside p (xv, yv)
+            (Just xv, Just yv) | ok, isJust pack, isJust piece →
+                tileInside p (toInteger xv, toInteger yv)
             _ → pure False
         pure $ do
             (pn, _) ← pack
@@ -407,7 +408,7 @@ decodeMaterial owner mats ip v = do
             unless skip $ do
                 diag (keyPath ip "definition")
                      (InvalidValue "a material this building consumes") EntryRejected
-                emitNode (Node ip NodeItem Nothing (Just owner) False [] [])
+                emitNode (Node ip NodeItem (rawExplicitId v) (Just owner) False [] [])
                 forM_ (maybe [] (ownedItemValues ip ["contents"]) (asObject v)) $
                     \(cp, cv) → excludeItemTree ip cp cv
             pure Nothing
@@ -447,9 +448,11 @@ decodeLocation = entry NodeLocation Nothing ["definition", "x", "y", "significan
                      , []
                      , [ (fp, t, NodeItem) | (_, (_, t, fp)) ← bs ] )
   where
+    -- canonical decimal only ("1", never "01" or "+1"), so two keys can
+    -- never name the same slot
     parseSlot n key = case reads (T.unpack key) of
-        [(i, "")] | i ≥ 1 ∧ i ≤ n → Right i
-        _ → Left ("a significant-item slot in [1, " <> tshow n <> "]")
+        [(i, "")] | tshow i ≡ key, i ≥ 1 ∧ i ≤ n → Right i
+        _ → Left ("a significant-item slot in [1, " <> tshow n <> "], written plainly")
 
 -- | A reference value: the explicit id of another entry.
 pRef ∷ Parser Text
@@ -515,7 +518,7 @@ decodeUnit = entry NodeUnit Nothing unitKeys ["inventory", "equipment", "accesso
                             skip ← isRejectedPath fp
                             unless skip $ do
                                 diag fp UnknownField FieldRejected
-                                emitNode (Node fp NodeItem Nothing (Just p) False [] [])
+                                emitNode (Node fp NodeItem (rawExplicitId v) (Just p) False [] [])
                                 forM_ (maybe [] (ownedItemValues fp ["contents"]) (asObject v)) $
                                     \(cp, cv) → excludeItemTree fp cp cv
                             pure Nothing
@@ -704,7 +707,7 @@ bodyPart uc ip o = do
 itemKeys ∷ [Text]
 itemKeys =
     [ "definition", "fill", "quality", "condition", "sharpness", "weight"
-    , "bulk", "temperature", "contents" ]
+    , "bulk", "storage_capacity", "temperature", "contents" ]
 
 -- | One owned item (inventory, equipment, accessory, storage, delivered
 --   material, or a container's contents), recursively.
@@ -728,12 +731,15 @@ itemBody p o sid tags dn ic = do
     condition ← optField p "condition" (pFloatIn 0 100) o
     sharpness ← optField p "sharpness" (pFloatIn 0 100) o
     weight ← optField p "weight" (pFloatMin 0) o
-    bulk ← optField p "bulk" (pFloatMin 0) o
+    bulk ← optNullable p "bulk" (pFloatMin 0) o
+    storage ← optNullable p "storage_capacity" pStorage o
     temp ← optField p "temperature" pTemp o
     contents ← if icHoldsItems ic
         then listField p "contents" o (decodeItem p)
         else case KM.lookup "contents" o of
             Nothing → pure Omitted
+            -- an ordinary item's current contents are explicitly empty
+            Just (A.Array xs) | null xs → pure (Authored [])
             Just _ → do
                 skip ← isRejectedPath (keyPath p "contents")
                 unless skip $ do
@@ -742,8 +748,15 @@ itemBody p o sid tags dn ic = do
                     forM_ (ownedItemValues p ["contents"] o) $
                         \(cp, cv) → excludeItemTree (keyPath p "contents") cp cv
                 pure Omitted
-    pure (ItemEntry sid tags dn fill quality condition sharpness weight bulk temp contents)
+    pure (ItemEntry sid tags dn fill quality condition sharpness weight bulk
+                    storage temp contents)
   where
+    pStorage v = case asObject v of
+        Just m | KM.size m ≡ 2
+               , Just w ← KM.lookup "weight" m, Right wf ← pFloatMin 0 w
+               , Just b ← KM.lookup "bulk" m, Right bf ← pFloatMin 0 b
+               → Right (StorageCapacity wf bf)
+        _ → Left "null or exactly weight (kg ≥ 0) and bulk (litres ≥ 0)"
     pFill v = case icFluidCapacity ic of
         Just cap → pFloatIn 0 cap v
         Nothing  → do

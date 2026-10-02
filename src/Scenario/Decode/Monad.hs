@@ -27,6 +27,7 @@ module Scenario.Decode.Monad
       -- * Fields
     , Parser
     , optField
+    , optNullable
     , reqField
     , listField
     , mapField
@@ -43,6 +44,7 @@ module Scenario.Decode.Monad
       -- * Identity and tags
     , explicitIdOk
     , readId
+    , rawExplicitId
     , readTags
     ) where
 
@@ -166,6 +168,14 @@ optField p k parse o = case lookupKey k o of
         Left why → do
             diag (keyPath p k) (InvalidValue why) FieldRejected
             pure Omitted
+
+-- | 'optField' where an explicit YAML @null@ is a value of its own: the
+--   runtime's honest absence, distinct from omission.
+optNullable ∷ Text → Text → Parser α → A.Object → Dec (Authored (Maybe α))
+optNullable p k parse = optField p k parse'
+  where
+    parse' A.Null = Right Nothing
+    parse' v      = Just <$> parse v
 
 -- | A required field: omitted or malformed rejects the entry.
 reqField ∷ Text → Text → Parser α → A.Object → Dec (Maybe α)
@@ -291,6 +301,14 @@ readId p o = do
         if explicitIdOk t
             then Right t
             else Left "an id of letters, digits, '_', '-', ':' or '.'"
+
+-- | The valid explicit id of a raw entry value, if it has one — for
+--   entries rejected before their own fields are read, whose identity
+--   must still count as declared.
+rawExplicitId ∷ A.Value → Maybe Text
+rawExplicitId v = case asObject v of
+    Just o | Just (A.String t) ← KM.lookup "id" o, explicitIdOk t → Just t
+    _ → Nothing
 
 -- | Optional gameplay tags: any non-empty string is a tag
 --   ('Gameplay.Tags.Types.mkGameplayTag'); an empty one is dropped with

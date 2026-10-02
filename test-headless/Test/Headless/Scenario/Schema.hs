@@ -108,7 +108,7 @@ emptyScenario = Scenario 1 Nothing (0, 0) [] [] [] [] [] [] [] []
 -- | A bare item: definition only, everything else omitted.
 item ∷ ScenarioId → Text → ItemEntry
 item i defn = ItemEntry i [] defn Omitted Omitted Omitted Omitted Omitted
-                        Omitted Omitted Omitted
+                        Omitted Omitted Omitted Omitted
 
 -- | A bare unit at a position.
 unit ∷ ScenarioId → Float → Float → UnitEntry
@@ -268,7 +268,7 @@ fullExpected = Scenario
                 , (item (ex "canteen-1") "canteen")
                     { ieFill = Authored 0.5, ieQuality = Authored 80
                     , ieCondition = Authored 90, ieWeight = Authored 0.25
-                    , ieBulk = Authored 1.5, ieTemperature = Authored AtAmbient } ]
+                    , ieBulk = Authored (Just 1.5), ieTemperature = Authored AtAmbient } ]
             , ueEquipment = Authored (HM.fromList
                 [ ("main_hand", (item (ex "knife-1") "knife")
                     { ieSharpness = Authored 15, ieCondition = Authored 5
@@ -443,7 +443,8 @@ decodeSpec = describe "v1 decoding" $ do
             , "    blood: 0"
             , "    immunities: {}"
             , "    inventory: [{id: empty-kit, definition: first_aid_kit, contents: [],"
-            , "                 temperature: 0}]"
+            , "                 temperature: 0},"
+            , "                {id: bare-knife, definition: knife, contents: []}]"
             , "    equipment: {}"
             , "    accessories: []"
             , "ground_items:"
@@ -459,7 +460,8 @@ decodeSpec = describe "v1 decoding" $ do
                 , ueImmunities = Authored HM.empty
                 , ueInventory = Authored
                     [ (item (ex "empty-kit") "first_aid_kit")
-                        { ieContents = Authored [], ieTemperature = Authored (TrackedTemp 0) } ]
+                        { ieContents = Authored [], ieTemperature = Authored (TrackedTemp 0) }
+                    , (item (ex "bare-knife") "knife") { ieContents = Authored [] } ]
                 , ueEquipment = Authored HM.empty, ueAccessories = Authored [] } ]
         scGroundItems s `shouldBe`
             [ GroundItemEntry 0 0 ((item (ex "dry") "canteen")
@@ -570,6 +572,46 @@ recoverySpec = describe "recoverable content" $ do
                     [("strength", [ModifierSpec "b" 1 0 Nothing])])
                 , ueImmunities = Authored HM.empty } ]
 
+    it "keeps explicit absent bulk and storage apart from omission" $ do
+        let doc = unlines
+                [ "version: 1"
+                , "ground_items:"
+                , "  - {id: legacy-kit, definition: first_aid_kit, x: 0, y: 0, bulk: null,"
+                , "     storage_capacity: null, contents: [{id: old-bandage, definition: bandage}]}"
+                , "  - {id: crate, definition: first_aid_kit, x: 0, y: 0, bulk: 20,"
+                , "     storage_capacity: {weight: 12, bulk: 15}}"
+                , "  - {id: odd, definition: first_aid_kit, x: 0, y: 0, storage_capacity: {weight: 1}}"
+                ]
+            changed = catalog { catItems = HM.insert "first_aid_kit"
+                                    (ItemCatalogEntry (Just 2) True) (catItems catalog) }
+        forM_ [catalog, changed] $ \cat → do
+            (s, ds) ← loaded =≪ loadWith cat doc
+            ds `shouldBe`
+                [ d "ground_items[2].storage_capacity"
+                    (InvalidValue "null or exactly weight (kg ≥ 0) and bulk (litres ≥ 0)")
+                    FieldRejected ]
+            map giItem (scGroundItems s) `shouldBe`
+                [ (item (ex "legacy-kit") "first_aid_kit")
+                    { ieBulk = Authored Nothing, ieStorage = Authored Nothing
+                    , ieContents = Authored [item (ex "old-bandage") "bandage"] }
+                , (item (ex "crate") "first_aid_kit")
+                    { ieBulk = Authored (Just 20)
+                    , ieStorage = Authored (Just (StorageCapacity 12 15)) }
+                , item (ex "odd") "first_aid_kit" ]
+    it "reads fluid surfaces exactly on the fluid plane" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 1"
+            , "fluids:"
+            , "  - {id: deep, tiles: [[0, 0]], fluid: lake, surface_z: 2097152.125}"
+            , "  - {id: off-plane, tiles: [[0, 0]], fluid: lake, surface_z: 4.50000001}"
+            , "  - {id: low, tiles: [[0, 0]], fluid: lava, surface_z: -1.25}"
+            ])
+        ds `shouldBe`
+            [ d "fluids[1].surface_z"
+                (InvalidValue "a number on the exact fluid plane (a multiple of 1/8)")
+                EntryRejected ]
+        map fpSurfaceEighths (scFluids s) `shouldBe` [16777217, -10]
+
 referenceSpec ∷ Spec
 referenceSpec = describe "identities and references" $ do
     it "rejects missing, rejected and wrong-kind required targets transitively" $ do
@@ -592,7 +634,7 @@ referenceSpec = describe "identities and references" $ do
             , d "locations[0].significant_items.2" (RejectedReference "doomed-relic") FieldRejected
             , d "locations[1].significant_items.1" (AmbiguousBinding "shared") FieldRejected
             , d "locations[1].significant_items.3"
-                (InvalidValue "a significant-item slot in [1, 2]") FieldRejected
+                (InvalidValue "a significant-item slot in [1, 2], written plainly") FieldRejected
             , d "locations[2].significant_items.1" (AmbiguousBinding "shared") FieldRejected
             , d "units[0].definition" (UnknownDefinition "wraith") EntryRejected
             , d "units[0].inventory[0]" (OwnerRejected "units[0]") CascadeRejected
@@ -600,6 +642,30 @@ referenceSpec = describe "identities and references" $ do
         scLocations s `shouldBe`
             [ LocationEntry (ex r) [] "ruin" 0 0 HM.empty | r ← ["ruin-a", "ruin-b", "ruin-c"] ]
         map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "shared"]
+    it "keeps the ids of items rejected by slot or material checks" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 1"
+            , "locations:"
+            , "  - {id: ruin, definition: ruin, x: 0, y: 0,"
+            , "     significant_items: {\"1\": cape-item, \"2\": wrong-mat}}"
+            , "  - {id: ruin-2, definition: ruin, x: 0, y: 0, significant_items: {\"01\": cape-item}}"
+            , "units:"
+            , "  - {id: u, definition: acolyte, x: 0, y: 0,"
+            , "     equipment: {cape: {id: cape-item, definition: knife}}}"
+            , "buildings:"
+            , "  - {id: hold, definition: cargo_hold, x: 0, y: 0,"
+            , "     materials_delivered: [{id: wrong-mat, definition: knife}]}"
+            ])
+        ds `shouldHaveDiagnostics`
+            [ d "buildings[0].materials_delivered[0].definition"
+                (InvalidValue "a material this building consumes") EntryRejected
+            , d "locations[0].significant_items.1" (RejectedReference "cape-item") FieldRejected
+            , d "locations[0].significant_items.2" (RejectedReference "wrong-mat") FieldRejected
+            , d "locations[1].significant_items.01"
+                (InvalidValue "a significant-item slot in [1, 2], written plainly") FieldRejected
+            , d "units[0].equipment.cape" UnknownField FieldRejected
+            ]
+        map leSignificant (scLocations s) `shouldBe` [HM.empty, HM.empty]
     it "resolves references independently of declaration order" $ do
         let locs = [ "locations:"
                    , "  - {id: ruin-1, definition: ruin, x: 0, y: 0,"
@@ -671,6 +737,21 @@ contentBoundsSpec = describe "content against finite bounds" $ do
         scLocations s `shouldBe` []
         scGroundItems s `shouldBe` []
         scFlora s `shouldBe` []
+    it "never lets an unrepresentable position wrap into the map" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 1"
+            , "map: {width: 1, height: 1}"
+            , "units:"
+            , "  - {id: far, definition: acolyte, x: 1e30, y: 0}"
+            , "  - {id: here, definition: acolyte, x: 0.2, y: -0.4}"
+            , "ground_items:"
+            , "  - {id: far-item, definition: knife, x: 0, y: -1e30}"
+            ])
+        ds `shouldHaveDiagnostics`
+            [ d "ground_items[0]" OutsideBounds EntryRejected
+            , d "units[0]" OutsideBounds EntryRejected ]
+        map ueId (scUnits s) `shouldBe` [ex "here"]
+        tileOf (1e30, 0) `shouldSatisfy` ((> toInteger (maxBound ∷ Int)) ∘ fst)
     it "keeps everything when the map is the expandable arena" $ do
         let expandable = unlines (filter (≢ "map: {width: 20, height: 10}") (lines boundsV1))
         (s, ds) ← loaded =≪ load expandable
