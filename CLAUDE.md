@@ -33,24 +33,16 @@ and their validation gates. Use its contents to select sections; see
 
 - **Keep the primary checkout (`~/work/synarchy`) clean.** The PR drainer
   updates it after merges; conflicting uncommitted work can block the drainer.
-- Implement PRs in isolated worktrees, together with the documentation that
-  belongs to the change: choose the lane by task, not by file type. Put
-  uncommitted reports, drafts, and standalone documentation edits (no
-  accompanying code change; including this file) in the `docs-wip` worktree.
-  Resolve it by branch, never by an assumed directory:
-
-  ```bash
-  DOCS_WT="$(git worktree list --porcelain \
-    | awk '/^worktree /{p=substr($0,10)} /^branch refs\/heads\/docs-wip$/{print p; exit}')"
-  [ -n "$DOCS_WT" ] || { DOCS_WT=~/work/synarchy-docs
-                         git worktree add "$DOCS_WT" -b docs-wip origin/master; }
-  ```
-
-- **Land docs only when the user requests it**, through
-  `tools/docs_land.sh -m "Subject" <paths>` (`-n` dry run, `-f` proceeds past
-  the risk warning). Otherwise leave them uncommitted in `docs-wip`.
-  Never push `docs-wip` or hand-roll a landing; the helper integrates onto
-  `master` and pushes directly. Details: engine contracts §Docs landing.
+- Implement PRs in isolated worktrees.
+- **Documentation** is tracked but never gated on CI or review. Land it on
+  `master` with `docs-push [-m "message"] <paths...>` from any worktree as soon
+  as it is ready, including documentation that goes with a code change: link
+  it from the pull request instead of committing it to the pull request's
+  branch. Markdown that tests read or agents execute is code and goes in the
+  pull request; `docs-push` refuses it and says why.
+- Reports and drafts not ready to publish can wait uncommitted anywhere, for
+  example in the `docs-wip` worktree; it is optional scratch, not a
+  publication lane.
 - Workflow skills that create their own worktree or require the primary
   checkout may use it: `solve`, `pr-revise`, `repair`, read-only reviewers,
   `drain-prs`, `janitor`, `finalize`.
