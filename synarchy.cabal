@@ -1349,6 +1349,59 @@ executable synarchy-save-codec
     ghc-options: -rtsopts
                  "-with-rtsopts=-N"
 
+-- The controlled hydraulic experiment harness (#2719, RVR-01 of epic
+-- #2718): authored fixtures, a solver-adapter interface, explicit-step
+-- runs, solver-independent checks and reference comparisons, under
+-- tools/river_runtime/src. It is tool code that nothing in the engine
+-- links. A Custom build-type rules out an internal library, so its two
+-- consumers compile the same source directory: this archive runner and
+-- the headless suite's `Sim.Fluid.Harness` group. It wraps the
+-- production solver through its exported functions and changes none of
+-- them. Usage and archive layout: docs/evidence/river-runtime/README.md.
+executable river-runtime-harness
+    import: warnings, lang, build-policy
+    main-is: Harness.hs
+    hs-source-dirs: tools/river_runtime, tools/river_runtime/src
+    other-modules: RiverRuntime.Harness.Adapter
+                   RiverRuntime.Harness.Archive
+                   RiverRuntime.Harness.Catalog
+                   RiverRuntime.Harness.Compare
+                   RiverRuntime.Harness.Fixture
+                   RiverRuntime.Harness.Legacy
+                   RiverRuntime.Harness.Placement
+                   RiverRuntime.Harness.Run
+    build-depends: base >=4.20 && <5
+                 , base-unicode-symbols
+                 , aeson
+                 , bytestring
+                 , containers
+                 , cryptohash-sha256
+                 , directory
+                 , filepath
+                 , process
+                 , synarchy
+                 , text
+                 , unordered-containers
+                 , vector
+
+-- The baseline characterization program that produced
+-- docs/evidence/river-runtime/baseline-solver.json, tracked verbatim so
+-- the archive reproduces from tracked source: its SHA-256 is the
+-- archive manifest's source_sha256, and its output matches the archive
+-- byte for byte (`cabal run -v0 exe:river-runtime-characterize`).
+executable river-runtime-characterize
+    import: warnings, lang, build-policy
+    main-is: Characterize.hs
+    hs-source-dirs: tools/river_runtime
+    build-depends: base >=4.20 && <5
+                 , base-unicode-symbols
+                 , aeson
+                 , bytestring
+                 , synarchy
+                 , text
+                 , unordered-containers
+                 , vector
+
 -- BUILD-ONLY IN AUTOMATED GATES, AND REQUIRES A REAL DISPLAY (#1153).
 -- `.github/workflows/ci.yml` and `make ci` (`tools/ci-local.sh`) both
 -- `cabal build` this suite and neither ever `cabal test`s it, so it is a
@@ -1415,9 +1468,19 @@ test-suite synarchy-test-headless
     -- their policy without booting a process. `test-headless` stays
     -- FIRST so main-is resolves to test-headless/Spec.hs, not
     -- app/Main.hs.
-    hs-source-dirs: test-headless, app
+    -- `tools/river_runtime/src` is the hydraulic harness (#2719), which
+    -- its `Sim.Fluid.Harness` group exercises; see the
+    -- `river-runtime-harness` stanza for why it is not a library.
+    hs-source-dirs: test-headless, app, tools/river_runtime/src
     main-is: Spec.hs
     other-modules: App.Boot
+                   RiverRuntime.Harness.Adapter
+                   RiverRuntime.Harness.Catalog
+                   RiverRuntime.Harness.Compare
+                   RiverRuntime.Harness.Fixture
+                   RiverRuntime.Harness.Legacy
+                   RiverRuntime.Harness.Placement
+                   RiverRuntime.Harness.Run
                    App.Cli
                    App.Dump
                    App.Exception
@@ -1653,6 +1716,9 @@ test-suite synarchy-test-headless
                    Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
                    Test.Headless.Sim.ExactFluid
+                   Test.Headless.Sim.Harness
+                   Test.Headless.Sim.HarnessChecks
+                   Test.Headless.Sim.HarnessCompare
                    Test.Headless.Sim.Reaction
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames

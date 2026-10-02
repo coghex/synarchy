@@ -1,0 +1,2562 @@
+[
+  {
+    "label": "authored-paused",
+    "cells": [
+      {
+        "x": -20,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -19,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -18,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -17,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -16,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -15,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -14,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -13,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -12,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -11,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -10,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -9,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -8,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -6,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -5,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -4,
+        "y": 9,
+        "wet": false,
+        "terrain": 0
+      },
+      {
+        "x": -4,
+        "y": 10,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 11,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 12,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 13,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 14,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 15,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 16,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 17,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 18,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 19,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -3,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -2,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -1,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": 0,
+        "y": 8,
+        "wet": false,
+        "terrain": 0
+      },
+      {
+        "x": 1,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 2,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 3,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 4,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 5,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 6,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -12,
+        "ceiling": -1,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -8,
+        "ceiling": -1,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": -12,
+        "wet": false,
+        "terrain": -3
+      },
+      {
+        "x": 8,
+        "y": -8,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": 8,
+        "y": -4,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 9,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 10,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 11,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 12,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 13,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 14,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": -4,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 17,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 18,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 19,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 20,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 21,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 22,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 23,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 24,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 25,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 26,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 27,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 28,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      }
+    ],
+    "monotonic": 141156.627067041
+  },
+  {
+    "label": "dam-closed-diversion-closed",
+    "cells": [
+      {
+        "x": -20,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -19,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -18,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -17,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -16,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -15,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -14,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -13,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -12,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -11,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -10,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -9,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -8,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -6,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -5,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -4,
+        "y": 9,
+        "wet": false,
+        "terrain": 0
+      },
+      {
+        "x": -4,
+        "y": 10,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 11,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 12,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 13,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 14,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 15,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 16,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 17,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 18,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 19,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -3,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -2,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -1,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": 0,
+        "y": 8,
+        "wet": false,
+        "terrain": 0
+      },
+      {
+        "x": 1,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 2,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 3,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 4,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 5,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 6,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -12,
+        "ceiling": -1,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": -12,
+        "wet": false,
+        "terrain": -3
+      },
+      {
+        "x": 8,
+        "y": -8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": 8,
+        "y": -4,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 9,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 10,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 11,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 12,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 13,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 14,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 17,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 18,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 19,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 20,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 21,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 22,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 23,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 24,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 25,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 26,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 27,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 28,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      }
+    ],
+    "monotonic": 141160.867456666
+  },
+  {
+    "label": "dam-closed-diversion-open",
+    "cells": [
+      {
+        "x": -20,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -19,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -18,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -17,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -16,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -15,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -14,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -13,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -12,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -11,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -10,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -9,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -8,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -6,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -5,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -4,
+        "y": 9,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 10,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 11,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 12,
+        "ceiling": -4,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 13,
+        "ceiling": -4,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 14,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 15,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 16,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 17,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 18,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 19,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -3,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -2,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -1,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": 0,
+        "y": 8,
+        "wet": false,
+        "terrain": 0
+      },
+      {
+        "x": 1,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 2,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 3,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 4,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 5,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 6,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -12,
+        "ceiling": -1,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": -12,
+        "wet": false,
+        "terrain": -3
+      },
+      {
+        "x": 8,
+        "y": -8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": 8,
+        "y": -4,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 9,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 10,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 11,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 12,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 13,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 14,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 17,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 18,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 19,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 20,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 21,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 22,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 23,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 24,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 25,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 26,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 27,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 28,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      }
+    ],
+    "monotonic": 141165.727479958
+  },
+  {
+    "label": "dam-open-diversion-open",
+    "cells": [
+      {
+        "x": -20,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -19,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -18,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -17,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -16,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -15,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -14,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -13,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -12,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -11,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -10,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -9,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -8,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 8,
+        "ceiling": -2,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -7,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -7,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -6,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -6,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -5,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -5,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -4,
+        "y": 9,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 10,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 11,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 12,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 13,
+        "ceiling": -4,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 14,
+        "ceiling": -4,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 15,
+        "ceiling": -4,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 16,
+        "ceiling": -4,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 17,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 18,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 19,
+        "wet": false,
+        "terrain": -5
+      },
+      {
+        "x": -4,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -4,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -3,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -3,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -2,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -2,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": -1,
+        "y": 20,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 21,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 22,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": -1,
+        "y": 23,
+        "wet": false,
+        "terrain": -6
+      },
+      {
+        "x": 0,
+        "y": 8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 1,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 2,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 3,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 4,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 5,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 6,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -12,
+        "ceiling": -1,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 7,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": -12,
+        "wet": false,
+        "terrain": -3
+      },
+      {
+        "x": 8,
+        "y": -8,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -5
+      },
+      {
+        "x": 8,
+        "y": -4,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 8,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 9,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 10,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 11,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 12,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 13,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 14,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 15,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": -4,
+        "ceiling": -3,
+        "wet": true,
+        "kind": "river",
+        "terrain": -4
+      },
+      {
+        "x": 16,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 17,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 18,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 19,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 20,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 21,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 22,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 23,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 24,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 25,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 26,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 27,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      },
+      {
+        "x": 28,
+        "y": 8,
+        "wet": false,
+        "terrain": -4
+      }
+    ],
+    "monotonic": 141170.567446458
+  }
+]
