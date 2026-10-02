@@ -110,7 +110,7 @@ readCamera o = case KM.lookup "camera" o of
 entry
     ∷ NodeKind → Maybe Text → [Text] → [Text]
     → (Text → A.Object → ScenarioId → [GameplayTag]
-            → Dec (Maybe (Dec (α, [(Text, Text, NodeKind)], [(Text, Text, NodeKind)]))))
+            → Dec (Maybe (Dec (α, [(Text, Text, NodeKind)], [(Text, Text, NodeKind, Maybe Text)]))))
     → Text → A.Value → Dec (Maybe α)
 entry kind owner keys ownedKeys header p v = do
     skip ← isRejectedPath p
@@ -125,12 +125,12 @@ entry kind owner keys ownedKeys header p v = do
             h ← header p o sid tags
             case h of
                 Nothing → do
-                    emitNode (Node p kind mid owner False [] [])
+                    emitNode (Node p kind mid owner False [] [] (rawDefinition v))
                     excludeOwned p ownedKeys o
                     pure Nothing
                 Just body → do
                     (x, req, opt) ← body
-                    emitNode (Node p kind mid owner True req opt)
+                    emitNode (Node p kind mid owner True req opt (rawDefinition v))
                     pure (Just x)
 
 -- | Report (and record as dead nodes) every item an excluded owner held:
@@ -142,7 +142,7 @@ excludeOwned owner keys o =
 excludeItemTree ∷ Text → Text → A.Value → Dec ()
 excludeItemTree owner ip iv = do
     diag ip (OwnerRejected owner) CascadeRejected
-    emitNode (Node ip NodeItem (rawExplicitId iv) (Just owner) False [] [])
+    emitNode (Node ip NodeItem (rawExplicitId iv) (Just owner) False [] [] (rawDefinition iv))
     forM_ (maybe [] (ownedItemValues ip ["contents"]) (asObject iv)) $
         \(cp, cv) → excludeItemTree owner cp cv
 
@@ -192,7 +192,7 @@ footprintOk p a fp = do
             pure False
         _ → pure True
 
-noRefs ∷ α → (α, [(Text, Text, NodeKind)], [(Text, Text, NodeKind)])
+noRefs ∷ α → (α, [(Text, Text, NodeKind)], [(Text, Text, NodeKind, Maybe Text)])
 noRefs x = (x, [], [])
 
 -- ** Terrain and fluids
@@ -408,7 +408,8 @@ decodeMaterial owner mats ip v = do
             unless skip $ do
                 diag (keyPath ip "definition")
                      (InvalidValue "a material this building consumes") EntryRejected
-                emitNode (Node ip NodeItem (rawExplicitId v) (Just owner) False [] [])
+                emitNode (Node ip NodeItem (rawExplicitId v) (Just owner) False [] []
+                                (rawDefinition v))
                 forM_ (maybe [] (ownedItemValues ip ["contents"]) (asObject v)) $
                     \(cp, cv) → excludeItemTree ip cp cv
             pure Nothing
@@ -432,7 +433,7 @@ decodeLocation = entry NodeLocation Nothing ["definition", "x", "y", "significan
             Just $ do
                 env ← askEnv
                 bindings ← mapField p "significant_items" o $ \fp key v →
-                    case (parseSlot (lcSignificantSlots lc) key, pRef v) of
+                    case (parseSlot (length (lcSignificantSlots lc)) key, pRef v) of
                         (Left why, _) → do
                             diag fp (InvalidValue why) FieldRejected
                             pure Nothing
@@ -446,8 +447,10 @@ decodeLocation = entry NodeLocation Nothing ["definition", "x", "y", "significan
                 pure ( LocationEntry sid tags dn xv yv
                          (HM.fromList [ (slot, ExplicitId t) | (_, (slot, t, _)) ← bs ])
                      , []
-                     , [ (fp, t, NodeItem) | (_, (_, t, fp)) ← bs ] )
+                     , [ (fp, t, NodeItem, slotDefinition lc slot)
+                       | (_, (slot, t, fp)) ← bs ] )
   where
+    slotDefinition lc slot = listToMaybe (drop (slot - 1) (lcSignificantSlots lc))
     -- canonical decimal only ("1", never "01" or "+1"), so two keys can
     -- never name the same slot
     parseSlot n key = case reads (T.unpack key) of
@@ -518,7 +521,8 @@ decodeUnit = entry NodeUnit Nothing unitKeys ["inventory", "equipment", "accesso
                             skip ← isRejectedPath fp
                             unless skip $ do
                                 diag fp UnknownField FieldRejected
-                                emitNode (Node fp NodeItem (rawExplicitId v) (Just p) False [] [])
+                                emitNode (Node fp NodeItem (rawExplicitId v) (Just p) False [] []
+                                                (rawDefinition v))
                                 forM_ (maybe [] (ownedItemValues fp ["contents"]) (asObject v)) $
                                     \(cp, cv) → excludeItemTree fp cp cv
                             pure Nothing
@@ -715,7 +719,7 @@ decodeItem ∷ Text → Text → A.Value → Dec (Maybe ItemEntry)
 decodeItem owner = entry NodeItem (Just owner) itemKeys ["contents"] itemHeader
 
 itemHeader ∷ Text → A.Object → ScenarioId → [GameplayTag]
-           → Dec (Maybe (Dec (ItemEntry, [(Text, Text, NodeKind)], [(Text, Text, NodeKind)])))
+           → Dec (Maybe (Dec (ItemEntry, [(Text, Text, NodeKind)], [(Text, Text, NodeKind, Maybe Text)])))
 itemHeader p o sid tags = do
     cat ← catalog
     def ← definition p "definition" o (\n → HM.lookup n (catItems cat))

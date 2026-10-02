@@ -59,7 +59,8 @@ catalog = emptyScenarioCatalog
                             (HS.fromList ["steel_plate"]) Nothing)
         , ("battery", BuildingCatalogEntry (Footprint 0 0 0 0) 5 HS.empty (Just 100)) ]
     , catLocations = HM.fromList
-        [ ("ruin", LocationCatalogEntry (Footprint (-2) (-2) 2 2) 2) ]
+        [ ("ruin", LocationCatalogEntry (Footprint (-2) (-2) 2 2) ["knife", "knife"])
+        , ("vault", LocationCatalogEntry (Footprint 0 0 0 0) ["canteen"]) ]
     , catFlora = HS.fromList ["pine"]
     , catMaterials = HS.fromList ["granite", "loam"]
     , catStructurePacks = HM.fromList
@@ -642,6 +643,22 @@ referenceSpec = describe "identities and references" $ do
         scLocations s `shouldBe`
             [ LocationEntry (ex r) [] "ruin" 0 0 HM.empty | r ← ["ruin-a", "ruin-b", "ruin-c"] ]
         map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "shared"]
+    it "binds a significant slot only to an item of the slot's definition" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 1"
+            , "locations:"
+            , "  - {id: vault-a, definition: vault, x: 0, y: 0, significant_items: {\"1\": flask}}"
+            , "  - {id: vault-b, definition: vault, x: 1, y: 0, significant_items: {\"1\": blade}}"
+            , "ground_items:"
+            , "  - {id: flask, definition: canteen, x: 0, y: 0}"
+            , "  - {id: blade, definition: knife, x: 1, y: 0}"
+            ])
+        ds `shouldBe`
+            [ d "locations[1].significant_items.1" (DefinitionMismatch "canteen") FieldRejected ]
+        scLocations s `shouldBe`
+            [ LocationEntry (ex "vault-a") [] "vault" 0 0 (HM.fromList [(1, ex "flask")])
+            , LocationEntry (ex "vault-b") [] "vault" 1 0 HM.empty ]
+        map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "flask", ex "blade"]
     it "keeps the ids of items rejected by slot or material checks" $ do
         (s, ds) ← loaded =≪ load (unlines
             [ "version: 1"

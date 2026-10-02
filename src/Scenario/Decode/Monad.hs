@@ -45,6 +45,7 @@ module Scenario.Decode.Monad
     , explicitIdOk
     , readId
     , rawExplicitId
+    , rawDefinition
     , readTags
     ) where
 
@@ -78,8 +79,11 @@ data Node = Node
     , nAlive    ∷ !Bool                  -- ^ survived its own local checks
     , nRequired ∷ ![(Text, Text, NodeKind)]
       -- ^ required references: field path, target id, expected kind
-    , nOptional ∷ ![(Text, Text, NodeKind)]
-      -- ^ optional references (bindings), same shape
+    , nOptional ∷ ![(Text, Text, NodeKind, Maybe Text)]
+      -- ^ optional references (bindings): field path, target id, expected
+      --   kind, and the definition the target must have, if any
+    , nDefinition ∷ !(Maybe Text)
+      -- ^ the entry's own @definition@, as written
     } deriving (Show, Eq)
 
 data DecEnv = DecEnv
@@ -308,6 +312,12 @@ readId p o = do
 rawExplicitId ∷ A.Value → Maybe Text
 rawExplicitId v = case asObject v of
     Just o | Just (A.String t) ← KM.lookup "id" o, explicitIdOk t → Just t
+    _ → Nothing
+
+-- | The @definition@ of a raw entry value, as written.
+rawDefinition ∷ A.Value → Maybe Text
+rawDefinition v = case asObject v of
+    Just o | Just (A.String t) ← KM.lookup "definition" o → Just t
     _ → Nothing
 
 -- | Optional gameplay tags: any non-empty string is a tag

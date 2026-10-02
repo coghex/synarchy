@@ -42,7 +42,7 @@ write the file (D-24).
 The `ScenarioCatalog` argument describes the current definitions: unit stats and
 skills, body parts, equipment slots, item fluid capacity and container kind,
 building footprints, build work, materials and power capacity, location footprints
-and significant-slot counts, flora species, materials, structure packs, infections
+and the item definition each significant slot requires, flora species, materials, structure packs, infections
 and knowledge. It is plain data. The runtime adapters build it from the loaded
 registries, and the tests build fixtures. Validation never needs an engine.
 
@@ -55,7 +55,7 @@ Each `ScenarioDiagnostic` carries three things:
 - **`sdReason`**: the cause, for example `UnknownField`, `InvalidValue expected`,
   `MissingRequired`, `UnknownDefinition name`, `DuplicateId id`, `DerivedValue`,
   `EmptyTag`, `MissingReference id`, `WrongReferenceKind id`, `RejectedReference id`,
-  `OwnerRejected path`, `AmbiguousBinding id`, `OutsideBounds`,
+  `OwnerRejected path`, `AmbiguousBinding id`, `DefinitionMismatch definition`, `OutsideBounds`,
   `FootprintOutsideBounds` or `ClippedTiles n`.
 - **`sdEffect`**: what the rejection cost.
 
@@ -88,7 +88,8 @@ expect. An unexpected one fails setup (D-15).
 
   These rules apply transitively, to a fixpoint.
 - **Optional references.** A location's `significant_items` binding to a missing,
-  rejected or wrong-kind item, or to an item that another binding also claims
+  rejected or wrong-kind item, to an item of a definition other than the one that
+  slot requires (`DefinitionMismatch`), or to an item that another binding also claims
   (`AmbiguousBinding`, which drops every claimant), drops only that binding. The slot
   stays unbound, which is the ordinary not-yet-spawned state.
 - **Unrelated entries** always survive.
@@ -266,7 +267,7 @@ membership and relationships.
 |---|---|---|---|---|
 | `definition` | location definition id | req | — | `liDefId`. |
 | `x`, `y` | integer tile anchor | req | — | `liAnchor`; footprint (`liBounds`) from the definition. |
-| `significant_items` | map `slot → item id` | opt | All slots unbound | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. Slot keys are plain decimals (`"1"`, never `"01"`), so two keys cannot name one slot. |
+| `significant_items` | map `slot → item id` | opt | All slots unbound | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. Slot keys are plain decimals (`"1"`, never `"01"`), so two keys cannot name one slot. The target must be an item of the definition that slot requires (`lsiItemDefName`); a mismatch drops the binding with `DefinitionMismatch`. |
 
 Derived or excluded: display name, gloss and etymology are derived. Encounter roll
 and roster are derived from definition and identity; units join by `encounter`.

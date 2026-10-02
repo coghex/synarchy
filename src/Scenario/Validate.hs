@@ -92,15 +92,16 @@ analyseNodes nodes =
     survivors = [ n | n ← alive, not (HS.member (nPath n) rejected) ]
     survivingIds = HM.fromListWith (⧺) [ (i, [n]) | n ← survivors, Just i ← [nId n] ]
     bindings = [ b | n ← survivors, b ← nOptional n ]
-    bindingProblem (_, i, kind) = case HM.findWithDefault [] i survivingIds of
-        [t] | nKind t ≡ kind → Nothing
-            | otherwise → Just (WrongReferenceKind i)
+    bindingProblem (_, i, kind, want) = case HM.findWithDefault [] i survivingIds of
+        [t] | nKind t ≢ kind → Just (WrongReferenceKind i)
+            | Just w ← want, nDefinition t ≢ Just w → Just (DefinitionMismatch w)
+            | otherwise → Nothing
         _ | HS.member i declared → Just (RejectedReference i)
           | otherwise → Just (MissingReference i)
-    badBindings = [ (fp, why) | b@(fp, _, _) ← bindings, Just why ← [bindingProblem b] ]
+    badBindings = [ (fp, why) | b@(fp, _, _, _) ← bindings, Just why ← [bindingProblem b] ]
     goodBindings = [ b | b ← bindings, isNothing (bindingProblem b) ]
     boundTwice = HM.filter ((> 1) ∘ length) $
-        HM.fromListWith (⧺) [ (i, [fp]) | (fp, i, _) ← goodBindings ]
+        HM.fromListWith (⧺) [ (i, [fp]) | (fp, i, _, _) ← goodBindings ]
     ambiguous = [ (fp, AmbiguousBinding i) | (i, fps) ← HM.toList boundTwice, fp ← fps ]
     bindingDiags = [ ScenarioDiagnostic fp why FieldRejected
                    | (fp, why) ← badBindings ⧺ ambiguous ]

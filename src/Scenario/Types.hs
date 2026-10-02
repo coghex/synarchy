@@ -390,7 +390,9 @@ data Footprint = Footprint !Int !Int !Int !Int
 
 data LocationCatalogEntry = LocationCatalogEntry
     { lcFootprint        ∷ !Footprint
-    , lcSignificantSlots ∷ !Int
+    , lcSignificantSlots ∷ ![Text]
+      -- ^ the item definition each guaranteed significant slot must hold,
+      --   slot 1 first ('Location.Instance.lsiItemDefName')
     } deriving (Show, Eq)
 
 -- | Everything validation needs to know about the current definitions.
@@ -439,6 +441,7 @@ data DiagnosticReason
     | RejectedReference !Text       -- ^ target declared but rejected
     | OwnerRejected !Text           -- ^ path of the rejected owner
     | AmbiguousBinding !Text        -- ^ the same target bound twice
+    | DefinitionMismatch !Text      -- ^ target is not of this required definition
     | OutsideBounds
     | FootprintOutsideBounds
     | ClippedTiles !Integer         -- ^ how many tiles were dropped
