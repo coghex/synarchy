@@ -1,0 +1,35 @@
+{
+  "issue": 2563,
+  "title": "Propagate directed hostility through orders and team knowledge",
+  "non_verdict_labels": [
+    "enhancement",
+    "lua",
+    "units"
+  ],
+  "baseline_body_sha256": "6980e30688c2e58c1eb9fd1f0cab29f626e562e89cd48ccb50349e0ef7ee464e",
+  "baseline_spec_sha256": "7b782ca8b7a25ef8d04336769173a865640ef67afa0316c1f45c523eea0fdb76",
+  "review_url": "https://github.com/coghex/synarchy/issues/2563#issuecomment-5627665936",
+  "status": "complete; canonical rereview approved and trusted remote state verified",
+  "backend_path": "/Users/vincentcoghlan/Library/Application Support/kanban/issue-review/approve_issues.py",
+  "trusted_helper": "/Users/vincentcoghlan/.codex/plugins/cache/kanban/kanban/1.46.0/skills/solve/scripts/trusted_issue_spec.py",
+  "verified_checkout": "36090b94a39a773f65a7e9dc236efd971b38269d",
+  "decision": "The first successful report delivered to a living teammate makes the whole minted group hostile, including unreached members on other pages; incident details remain on witnessed/reached units only.",
+  "decision_date": "2026-09-10",
+  "decision_user_message": "recommendation approved",
+  "body_file": "/Users/vincentcoghlan/work/synarchy-docs/docs/issue_2563_rereview/2563_body.md",
+  "body_sha256": "3eba53ff16667ea0e7b2eda0d3bd1b3f1a33633f9fd5734b299a64e70b13beb0",
+  "pending_decisions": [],
+  "full_spec_approved": true,
+  "full_spec_approval_user_message": "approved",
+  "current_verdict_label": "reviewed:approve",
+  "spec_sha256": "57b9ace6610e700af0d7682ee77830e1cc874bdbdbe2b7010939aa680b20f18b",
+  "review_model": "claude-fable-5-1@high",
+  "review_route": "codex dissent -> claude rereview",
+  "final_labels": [
+    "enhancement",
+    "lua",
+    "reviewed:approve",
+    "units"
+  ],
+  "remaining_blockers": []
+}
