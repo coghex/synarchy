@@ -632,6 +632,15 @@ python3 tools/world_check.py --quick
 # those paths are reached only over synthetic timings; this companion
 # boots nothing and runs in under a second.
 #
+# test_mental_efficiency_probe is #2772's: the mental-efficiency
+# probe's combat sample placed its unarmed attacker outside live
+# reach, so every strike was refused at commit as out_of_reach and
+# the two combat checks failed as a bare count and an infinite
+# ratio. The probe now records each refusal's reason and fails its
+# energy comparison with an explicit "no samples" detail; a passing
+# run never reaches those paths, so this companion drives them over
+# a fake console and boots nothing.
+#
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
 # approved rereview amendment scopes the diagnosis lab's own self-test
@@ -668,6 +677,7 @@ python3 tools/test_probe_boot_logs.py
 python3 tools/test_item_list_widget_probe.py
 python3 tools/test_construction_probe.py
 python3 tools/test_expedition_loop_day_budget.py
+python3 tools/test_mental_efficiency_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the
