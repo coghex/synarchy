@@ -93,6 +93,31 @@ ground scatter on every chunk re-mesh, so two runs of the SAME build already
 disagree by a few thousand pixels; always capture a same-build control and
 report it beside the across-build number.
 
+## Manual river runtime characterization (#2719)
+
+Two tools characterize the runtime fluid solver for epic #2718. Neither is a
+CI or probe-runner gate, and neither is registered in
+`probe_runner_registry.PROBES` or `ci_probes.py`.
+
+- `cabal run -v0 exe:river-runtime-harness -- --out <new-dir>` is the
+  controlled hydraulic harness's archive runner (`river_runtime/Harness.hs`
+  over `river_runtime/src/`). It runs authored fixtures through a solver
+  adapter for an explicit number of logical steps, with no engine process,
+  clock or socket, checks them independently of the solver, compares
+  translated runs, and writes a deterministic JSON archive. Its gate is the
+  headless group `Sim.Fluid.Harness`.
+- `python3 tools/river_runtime_arena.py --engine "$(cabal list-bin
+  exe:synarchy)" --out <new-dir>` authors a finite-charge arena laboratory
+  over the debug console of one `--headless` engine and records wall-clock
+  observations. It uses a free loopback port (never 8008, or `--port`), a
+  resource root copied into the output directory, and stops only its own
+  engine, through its process handle (`python3
+  tools/test_river_runtime_arena.py` is that teardown's self-test).
+
+`cabal run -v0 exe:river-runtime-characterize` regenerates the archived
+baseline byte for byte. Archive layout, provenance and limitations:
+[the evidence README](../docs/evidence/river-runtime/README.md).
+
 ## Pre-push gate: `ci-local.sh`
 
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local
@@ -4282,6 +4307,9 @@ tools/
 ├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── action_outcome_layer_a_check.py (GUI-attached F4 Layer A check — see above)
 ├── *_probe.py              (headless behavior probes — see above; includes action_outcome_probe.py, #646)
+├── river_runtime/          (hydraulic harness runner + recovered baseline characterization, #2719 — manual, not a probe)
+├── river_runtime_arena.py  (manual socket river laboratory, #2719 — not a probe)
+├── test_river_runtime_arena.py (its owned-process teardown self-test)
 ├── baselines/
 │   ├── _seeds.json         (seed list config)
 │   └── seed*.json          (per-seed baseline data)
