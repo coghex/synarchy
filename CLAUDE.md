@@ -33,8 +33,10 @@ and their validation gates. Use its contents to select sections; see
 
 - **Keep the primary checkout (`~/work/synarchy`) clean.** The PR drainer
   updates it after merges; conflicting uncommitted work can block the drainer.
-- Implement PRs in isolated worktrees. Put uncommitted reports, drafts, and
-  documentation edits (including this file) in the `docs-wip` worktree.
+- Implement PRs in isolated worktrees, together with the documentation that
+  belongs to the change: choose the lane by task, not by file type. Put
+  uncommitted reports, drafts, and standalone documentation edits (no
+  accompanying code change; including this file) in the `docs-wip` worktree.
   Resolve it by branch, never by an assumed directory:
 
   ```bash
