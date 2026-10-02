@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """Author and observe a controlled river laboratory over the existing socket API.
 
-This is a manual characterization, not a green regression gate. It injects a
-FINITE initial water charge; it does not implement an upstream river source.
-Socket observations are whole-z ceilings and wet/dry only. Use the companion
-tools/river_runtime/Characterize.hs for exact, fixed-tick solver quantities.
-All config, saves, logs and results live in a fresh output directory. The recipe
-is ordinary JSON, independent of the parallel arena-scenario implementation.
+This is a manual characterization, not a green regression gate, and it is not
+registered with CI or the probe runner. It injects a FINITE initial water
+charge; it does not implement an upstream river source. Socket observations are
+whole-z ceilings and wet/dry only, taken after wall-clock intervals, so a run
+reproduces the recipe and the observation procedure, never an exact tick
+count or the historical samples. For exact, fixed-step solver quantities use
+the hydraulic harness (`cabal run -v0 exe:river-runtime-harness`, #2719).
+
+All config, saves, logs and results live in a fresh output directory: the
+engine boots with that directory's own resource root (a copy of the tracked
+config, without per-machine *.local.yaml), so its saves land there too. The
+console port is session-owned: by default a free loopback port the OS assigns,
+never 8008, and the driver stops only the engine it launched. The recipe is
+ordinary JSON, independent of the parallel arena-scenario implementation.
 """
 from __future__ import annotations
 
@@ -16,13 +24,25 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import time
 
-from probelib import boot, quit_engine, send_json, poll_until
+from probelib import GUI_PORT, boot, quit_engine, send_json, poll_until
 
 REPO = Path(__file__).resolve().parent.parent
 PAGE = "river_runtime_lab"
+CLASSIFICATION = "characterization, not behaviour approval"
+
+
+def session_port() -> int:
+    """A free loopback port for this session: the OS's choice, never 8008."""
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        if port != GUI_PORT:
+            return port
 
 
 def recipe() -> dict:
@@ -67,11 +87,21 @@ def recipe() -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=9533)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--engine", type=Path, required=True,
+                        help="the synarchy executable to characterize")
+    parser.add_argument("--out", type=Path, required=True,
+                        help="a NEW directory for the recipe, observations, "
+                             "transcript, manifest, engine log and resource root")
+    parser.add_argument("--port", type=int, default=None,
+                        help="console port (default: a free loopback port; "
+                             f"{GUI_PORT} is refused)")
     args = parser.parse_args()
+    if args.port is None:
+        args.port = session_port()
+    if args.port == GUI_PORT:
+        parser.error(f"port {GUI_PORT} belongs to the owner's GUI; omit --port")
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     root = out / "resource-root"
@@ -133,9 +163,19 @@ def main() -> int:
         observe(label)
 
     proc = None
+    ready = False
+
+    def own(launched):
+        nonlocal proc
+        proc = launched
+
     try:
-        proc = boot(args.port, log=str(out / "engine.log"),
-                    args=["--resource-root", str(root)], ready_timeout=60)
+        # Own the engine from the instant it exists, so an interrupt
+        # during boot cannot strand it (#1682).
+        boot(args.port, log=str(out / "engine.log"),
+             args=["--resource-root", str(root)], ready_timeout=60,
+             on_launch=own)
+        ready = True
         lua("engine.setPaused(true); return true")
         # Content setup only; no gameplay script or scenario-system dependency.
         for family, loader in (("substances", "loadSubstanceYaml"),
@@ -174,13 +214,23 @@ def main() -> int:
         manifest = dict(source_commit=subprocess.check_output(
             ["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True).strip(),
             engine=str(engine), engine_sha256=hashlib.sha256(engine.read_bytes()).hexdigest(),
+            driver="tools/river_runtime_arena.py",
             driver_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            recipe_sha256=hashlib.sha256((out / "recipe.json").read_bytes()).hexdigest(),
+            classification=CLASSIFICATION,
+            resource_root="isolated copy under the output directory",
             limitations=spec["limitations"], completed=True)
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return 0
     finally:
         if proc is not None:
-            quit_engine(args.port, proc)
+            if ready:
+                quit_engine(args.port, proc)
+            elif proc.poll() is None:
+                # Never READY: the port may not be ours, so the engine is
+                # stopped directly rather than asked over the console.
+                proc.kill()
+                proc.wait(timeout=10)
 
 
 if __name__ == "__main__":
