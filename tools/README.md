@@ -3766,14 +3766,19 @@ them.
 
 ```bash
 python3 tools/ci_timing_report.py --run 33666483367
+python3 tools/ci_timing_report.py --run 33666483367 --attempt 2
 python3 tools/ci_timing_report.py --last 10
 python3 tools/ci_timing_report.py --last 20 --event pull_request
 python3 tools/ci_timing_report.py --last 10 --branch master --threshold 60
 python3 tools/ci_timing_report.py --self-test
 ```
 
-**Per run** it prints the event, the branch (or the pull request, when the
-head SHA resolves to one), the conclusion, the run's wall time, every
+**Per run** it prints the attempt and tested revision, the event, the branch
+(or the pull request, when the head SHA resolves to one), the conclusion, the
+run's wall time, the jobs' own span (first job start to last job end), the
+**peak number of concurrent jobs** (the most job execution intervals that
+overlap, half-open, skipped jobs excluded), every headless-suite step
+whatever its duration (one per `headless-lanes` leg since #2745), every
 job's wall time with the **slowest job** marked, every step at or above
 `--threshold` seconds (default 30), the behavior-probe selection with each
 probe's observed attempts and durations, and every `CI_CACHE_REPORT`
@@ -3807,6 +3812,11 @@ Four rules are worth knowing before reading a number off it:
   self-test cross-checks against the standard library rather than
   restating the formula.
 
+`--attempt N` (with `--run`) reports one attempt of a re-run run: a re-run
+keeps the run id, and each attempt has its own jobs and timings. Only a
+complete re-run gives an attempt-local job span, because a partial re-run
+reuses the earlier attempt's timestamps for the jobs it did not repeat.
+
 `--last N` selects runs of the **`CI` workflow**, resolved by its file path
 `.github/workflows/ci.yml`, before any `--event`/`--branch` filter is
 applied; the repository also runs `review-gate` and `ntfy-notify` on pull
@@ -3833,11 +3843,14 @@ log framing, probe/cache diagnostics, the estimator, the aggregates),
 
 ### The headless suite's CI test options (#2277, #1916)
 
-Both of `.github/workflows/ci.yml`'s conditional headless invocations and
-`tools/ci-local.sh`'s full-tier one pass the same two Hspec flags through
-cabal's `--test-options`:
+Both of the conditional headless invocations in `.github/workflows/ci.yml`'s
+`Headless lane` step (full and base tier, one lane per `headless-lanes` leg,
+#2745) and `tools/ci-local.sh`'s full-tier one pass the same two Hspec flags
+through cabal's `--test-options`. CI's put the executable's own `--lane`
+flag first:
 
 ```bash
+cabal test synarchy-test-headless --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
 cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
 ```
 
@@ -3975,9 +3988,54 @@ python3 tools/headless_lanes.py --exe PATH   # or names it
 python3 tools/test_headless_lanes.py         # self-test: synthetic input, no build
 ```
 
-Neither runs in CI yet: lane jobs and the coverage check's CI step are
-CIR-16 (#2742), and `.github/workflows/ci.yml` and `tools/ci-local.sh` still
-run the whole suite in one process.
+**In CI (#2745, CIR-16).** `.github/workflows/ci.yml` runs each lane as
+one leg of the `headless-lanes` matrix job (`lane: [world, rest]`). Every leg
+needs only `resolve-image`, so all lanes start together; each restores the
+same dependency and project caches as `test-and-audits`, builds
+`synarchy-test-headless` itself (no artifact is handed between jobs) and runs
+exactly its lane with CI's flags:
+
+```bash
+cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane <lane> --print-slow-items=20 --format=failed-examples'
+```
+
+Its selection and cache-restore steps are copies of `test-and-audits`' steps
+of the same names (`ci_parity_audit.py` keeps them identical), it saves no
+cache, and it keeps `test-and-audits`' 90-minute timeout. `fail-fast` is off,
+so one failing lane cannot cancel the others before they report, and
+`build-test` requires the matrix result `success`, which only every lane
+succeeding produces. No CI job runs the unpartitioned suite any more;
+`tools/ci-local.sh` still does, in one process, after the coverage check.
+
+The coverage check runs in `test-and-audits` (step `Headless lane coverage`,
+on that job's build) and in `tools/ci-local.sh`. It also reads the
+workflow's `headless-lanes` matrix and fails unless it names exactly the
+lanes the executable declares, so a lane added to `Spec.hs` without a CI leg
+fails CI instead of never running (`--no-workflow` skips this; `--workflow
+PATH` reads another file).
+
+**The full tier in CI.** `SYNARCHY_FULL_TESTS=1` rides the same worldgen
+selector as `world_check --quick`, as it did when the suite ran in one
+process: each leg sets it exactly when the worldgen gate fired, so the lane
+holding the full-tier examples (today `world`) runs them on exactly those
+runs. A full-tier example registers in every tier and reads the variable at
+run time, so a lane without one is unaffected by it. When the gate did not
+fire, the variable is absent from the test process. It is never set to an
+empty value, because the test's guard treats any present value as enabled.
+
+**The project cache's one writer.** With the suite split across parallel
+jobs, no worker can tell whether the others succeeded, so the
+`dist-newstyle` save moved out of `test-and-audits` into the `project-cache`
+job. That job needs `build-test` and runs only on a master push whose
+aggregate succeeded (an expected master-push skip of `behavior-probes`
+included) and whose change was not docs-only. It keeps the old save guards:
+no save when the exact plan/epoch key was already restored, and none under an
+empty key. When it does save, it rebuilds the tree it saves (library,
+executables, both test suites) from the same restore. That costs master
+pushes only, after their verdict. Pull requests stay restore-only.
+`ci_cache_report.py --self-test` checks that this is the only dist-newstyle
+save in the workflow and that every job restoring the project cache uses
+`test-and-audits`' exact key and prefixes.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
