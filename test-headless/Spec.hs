@@ -400,6 +400,7 @@ import qualified Test.Headless.Item.PortableWindow as PortableWindow
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.SignificantContents as LocationSignificantContents
 import qualified Test.Headless.Location.ContainerShells as LocationContainerShells
+import qualified Test.Headless.Location.ContainerRealization as LocationContainerRealization
 import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
@@ -1320,6 +1321,7 @@ main = hspec $ do
     LocationContainerShells.luaSpec
     LocationContainerShells.yamlSpec
     LocationContainerShells.engineSpec
+    LocationContainerRealization.spec
     LocationNaming.spec
     RiverNaming.spec
     LocationLootDeterminism.spec

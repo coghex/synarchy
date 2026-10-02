@@ -1348,8 +1348,9 @@ missingSignificantItemReferences itemDefs pages =
 --   binding the shell brings that draw closer rather than retiring it.
 --
 --   REALIZED slots are exempt, and have nothing to check: D-3 discards
---   the profile once the cargo is installed, so a realized slot's stored
---   profile is not a reference to anything any more.
+--   the profile once the cargo is installed (#2510), so a realized slot
+--   carries no profile at all — component decode rejects one that
+--   does.
 data MissingContainerProfileRef = MissingContainerProfileRef
     { mcprPage     ∷ !WorldPageId
     , mcprInstance ∷ !Int          -- ^ the owning 'LocationInstanceId'
@@ -1373,12 +1374,13 @@ missingContainerProfileReferences
     → [MissingContainerProfileRef]
 missingContainerProfileReferences profiles pages =
     [ MissingContainerProfileRef pid (unLocationInstanceId (liId inst))
-                                 (lcsSlot e) (lcsProfile e)
+                                 (lcsSlot e) profile
     | (pid, w) ← pages
     , inst ← instancesToList (wgpLocationInstances (wpsGenParams w))
     , e ← liContainers inst
     , not (lcsRealized e)
-    , not (HS.member (lcsProfile e) profiles)
+    , Just profile ← [lcsProfile e]
+    , not (HS.member profile profiles)
     ]
 
 -- | A saved craft bill whose 'cbRecipe' does not resolve against the

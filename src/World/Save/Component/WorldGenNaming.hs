@@ -105,6 +105,7 @@ module World.Save.Component.WorldGenNaming
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import Location.Bounds (AbsBounds(..))
@@ -344,6 +345,21 @@ fromLocationSignificantItemDTO d = LocationSignificantItem
 --   spawn binds one — the same reference kind and the same scope
 --   'LocationSignificantItemDTO' declares, because it is the same
 --   allocator's identity pointing at the same page's ground.
+--
+--   @lcsdProfile@ is the EMPTY string for a realized slot (#2510). D-3
+--   discards the profile at realization, so the live
+--   'Location.Instance.lcsProfile' is a 'Maybe'; the wire keeps the
+--   plain 'Text' #2505 landed and spells 'Nothing' as @""@ rather than
+--   changing shape. That spelling is unambiguous, not a convention a
+--   reader has to trust: the loot-profile loader refuses an empty id
+--   ("Engine.Asset.YamlLootProfiles"), so no registered profile — and
+--   therefore no pending slot a placement could ever derive — is named
+--   @""@, and component decode
+--   ('Location.Instance.containerSlotEntryErrors') rejects both mixed
+--   shapes: a realized slot naming a profile, and a pending slot naming
+--   none. Every v12+ payload written before #2510 holds only pending
+--   slots with non-empty profiles, so its bytes mean exactly what they
+--   meant.
 data LocationContainerSlotDTO = LocationContainerSlotDTO
     { lcsdSlot        ∷ !Int
     , lcsdItemDefName ∷ !Text
@@ -357,7 +373,7 @@ toLocationContainerSlotDTO
 toLocationContainerSlotDTO e = LocationContainerSlotDTO
     { lcsdSlot        = lcsSlot e
     , lcsdItemDefName = lcsItemDefName e
-    , lcsdProfile     = lcsProfile e
+    , lcsdProfile     = fromMaybe T.empty (lcsProfile e)
     , lcsdInstanceId  = SamePageRef <$> lcsInstanceId e
     , lcsdRealized    = lcsRealized e
     }
@@ -367,7 +383,8 @@ fromLocationContainerSlotDTO
 fromLocationContainerSlotDTO d = LocationContainerSlot
     { lcsSlot        = lcsdSlot d
     , lcsItemDefName = lcsdItemDefName d
-    , lcsProfile     = lcsdProfile d
+    , lcsProfile     = if T.null (lcsdProfile d) then Nothing
+                                                     else Just (lcsdProfile d)
     , lcsInstanceId  = unSamePageRef <$> lcsdInstanceId d
     , lcsRealized    = lcsdRealized d
     }

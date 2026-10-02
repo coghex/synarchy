@@ -68,10 +68,17 @@ location's chunk loads, end to end:
      `kind: container` entry mints ONE unrolled shell per occurrence on
      first chunk load — bound to its persisted slot, carrying the
      definition's authored default contents and no profile draw —
-     revisiting the same chunks mints no second one, an ordinary pickup
-     of a pending shell is REFUSED with the shell left where it is, and
-     the whole pending slot survives save -> quit -> fresh restart ->
-     load. A final process then proves the OTHER half of the load-time
+     and revisiting the same chunks mints no second one. Realization
+     (#2510): one shell is realized IN PLACE through
+     `item.realizeGround` -- same ground id and instance id, its cargo
+     visible at once, a repeat answering already-realized -- a second is
+     realized by being PICKED UP, and the rest stay pending; every slot,
+     both realized trees and the pending ones survive save -> quit ->
+     fresh restart -> load, a realized shell stays realized after it and
+     a pending one realizes then. Two further fresh processes visit the
+     same world's chunks in opposite orders and must realize every shell
+     into the tree the earlier processes realized for its location slot.
+     A final process then proves the OTHER half of the load-time
      profile check: a save whose pending slot names a profile this build
      no longer registers is refused at content validation, with the
      rejection naming the location, the slot and the profile id, and the
@@ -109,7 +116,7 @@ here than for an ordinary artifact, because the engine log is not only
 diagnostics: three checks below ASSERT against it.
 
 Since #2095 this file is the stable FACADE: the CLI, the artifact guard,
-the eleven-process sequence, and the compatibility exports other probes
+the thirteen-process sequence, and the compatibility exports other probes
 import. Every scenario assertion belongs to an owner under
 `tools/location_content/` -- `content`, `knowledge`, `dispatch`,
 `naming` and (since #2505) `container` -- reached with the live port this
@@ -134,10 +141,10 @@ from probelib import FixtureNotRegistered, load_ai_stack, quit_engine, send
 from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 from location_content import container, content, dispatch, knowledge, naming
-from location_content.engine_queries import (gen_world, load_defs,
-                                             load_registries, placed_ready,
-                                             ruin_geometry, spawn_counts,
-                                             wait_floor)
+from location_content.engine_queries import (gen_world, init_world,
+                                             load_defs, load_registries,
+                                             placed_ready, ruin_geometry,
+                                             spawn_counts, wait_floor)
 # Re-exported, NOT wrapped: `tools/test_location_content_probe.py` asserts
 # object IDENTITY against `tools/portal_ghost_probe.py`'s imports and pins
 # `save_and_wait`'s exact signature, so a delegating wrapper would break
@@ -250,11 +257,11 @@ def main() -> int:
 
 
 def run(args, art: RunArtifacts, token: str) -> int:
-    """The eleven-process sequence, and nothing else.
+    """The thirteen-process sequence, and nothing else.
 
-    Ten `boot_isolated` call sites; the loot-stability one runs twice
-    (same order, then reversed), so a passing run launches eleven engine
-    processes. Every scenario assertion lives in a `location_content.*`
+    Eleven `boot_isolated` call sites; the loot-stability one and #2510's
+    realization one each run twice (same order, then reversed), so a
+    passing run launches thirteen engine processes. Every scenario assertion lives in a `location_content.*`
     owner, reached with the live port this function opened and the
     `ScenarioState` it threads between them — no owner boots an engine
     of its own, and no owner reaches another through a module global.
@@ -418,10 +425,12 @@ def run(args, art: RunArtifacts, token: str) -> int:
         finally:
             quit_engine(args.port, proc)
 
-    # ---- Process 9 (#2505): a location authoring a `kind: container`
-    #      entry mints ONE pending shell per occurrence on first chunk
-    #      load, revisiting mints no second, and an ordinary pickup of a
-    #      pending shell is refused. Registries only -- NOT
+    # ---- Process 9 (#2505, #2510): a location authoring a `kind:
+    #      container` entry mints ONE pending shell per occurrence on
+    #      first chunk load, and revisiting mints no second. One shell is
+    #      then realized in place through item.realizeGround, a second is
+    #      realized by being picked up, and the rest stay pending for the
+    #      save. Registries only -- NOT
     #      ruin_small.yaml, which would contend with crate_ruin for chunk
     #      (0,0) exactly as dense_ruin does, and would additionally put
     #      ruin_small's own ground items on the page the shell count is
@@ -437,7 +446,7 @@ def run(args, art: RunArtifacts, token: str) -> int:
         gen_world(args.port, container.CRATE_PAGE, args.seed, args.size)
         container.observe_initial_shell(args, state, failures)
         if state.crate_slots:
-            container.check_no_respawn_and_pickup(args, state, failures)
+            container.check_no_respawn_and_realize(args, state, failures)
             # Process 10 reads this fixture from a FRESH process, so the
             # save must be COMPLETE -- not merely accepted -- before that
             # process boots (#1620).
@@ -448,12 +457,14 @@ def run(args, art: RunArtifacts, token: str) -> int:
     finally:
         quit_engine(args.port, proc)
 
-    # ---- Process 10: the pending slot, its profile and its bound shell
-    #      all come back from that save in a fresh process. The crate and
-    #      profile fixtures are re-registered first: the LOAD boundary
-    #      refuses a save whose pending slot names an unregistered
-    #      profile, so a load that succeeds here is itself evidence the
-    #      reference resolved. ----
+    # ---- Process 10: every slot comes back from that save in a fresh
+    #      process in the state it was saved in -- pending ones with their
+    #      profile, realized ones with their exact trees, on the ground
+    #      and in an inventory -- a realized shell stays realized, and a
+    #      still-pending one realizes now. The crate and profile fixtures
+    #      are re-registered first: the LOAD boundary refuses a save whose
+    #      pending slot names an unregistered profile, so a load that
+    #      succeeds here is itself evidence the reference resolved. ----
     if state.crate_slots and state.saved_crate and not failures:
         proc = boot_isolated(args.port, art)
         try:
@@ -473,7 +484,36 @@ def run(args, art: RunArtifacts, token: str) -> int:
         finally:
             quit_engine(args.port, proc)
 
-    # ---- Process 11 (#2505, requirement 8): the OTHER half of the
+    # ---- Processes 11 and 12 (#2510): two more INDEPENDENT fresh
+    #      processes generate the crate world again, visit its chunks one
+    #      at a time -- once in the order process 9 loaded them, once in
+    #      the exact reverse -- and realize every shell, in that order
+    #      too. Each slot must start from the pending tree process 9
+    #      recorded and end as the tree processes 9 and 10 realized for
+    #      it, and the two orders must agree on every slot: realization
+    #      reads the slot's own context, never a shared stream.
+    #
+    #      ONE call site, TWO launches, exactly like the #948 loop
+    #      above. ----
+    if (state.crate_realized_trees and state.crate_pending_trees
+            and not failures):
+        for label, reverse in (("same order", False), ("reversed order", True)):
+            proc = boot_isolated(args.port, art)
+            try:
+                load_registries(args.port)
+                container.register_container_fixtures(args.port,
+                                                      crate_item_yaml,
+                                                      crate_profile_yaml,
+                                                      crate_location_yaml)
+                init_world(args.port, container.CRATE_PAGE, args.seed,
+                           args.size)
+                container.visit_crate_chunks(args.port, reverse)
+                container.check_realization_order(args, state, failures,
+                                                  label, reverse)
+            finally:
+                quit_engine(args.port, proc)
+
+    # ---- Process 13 (#2505, requirement 8): the OTHER half of the
     #      load-time profile check -- a save whose PENDING slot names a
     #      profile this build no longer registers is refused before the
     #      replacement session is published, and the old session is left

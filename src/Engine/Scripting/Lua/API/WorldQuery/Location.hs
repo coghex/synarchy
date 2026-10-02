@@ -329,7 +329,7 @@ pushInstanceTable inst = do
             Lua.setfield (-2) "taken"
             Lua.rawseti (-2) index
     Lua.setfield (-2) "significant"
-    -- #2505: this instance's PENDING container shells, in slot order.
+    -- #2505: this instance's container shells, in slot order.
     -- OMITTED entirely (not an empty table) for an instance that has
     -- none, unlike `significant` above — and deliberately so. An
     -- obligation list is a CARDINALITY a caller must be able to read as
@@ -346,8 +346,12 @@ pushInstanceTable inst = do
                 pushIntField "slot" (lcsSlot slot)
                 Lua.pushstring (TE.encodeUtf8 (lcsItemDefName slot))
                 Lua.setfield (-2) "item"
-                Lua.pushstring (TE.encodeUtf8 (lcsProfile slot))
-                Lua.setfield (-2) "profile"
+                -- OMITTED once the slot is realized: D-3 discards the
+                -- profile at realization (#2510), so a realized slot
+                -- names no future draw and reports none.
+                forM_ (lcsProfile slot) $ \profile → do
+                    Lua.pushstring (TE.encodeUtf8 profile)
+                    Lua.setfield (-2) "profile"
                 -- OMITTED until the content spawn binds a shell,
                 -- mirroring `significant`'s own id: absence means "not
                 -- spawned yet", which is exactly what

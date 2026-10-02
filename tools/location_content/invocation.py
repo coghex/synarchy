@@ -12,7 +12,7 @@ threads from one scenario owner to the next.
 Split out of the probe itself by #2095. Nothing here decides what a
 scenario proves, and nothing here boots on its own behalf --
 `location_content_probe.run` owns the process sequence and calls
-`boot_isolated` at each of its ten call sites.
+`boot_isolated` at each of its eleven call sites.
 """
 from __future__ import annotations
 
@@ -434,3 +434,18 @@ class ScenarioState:
     #: processes that read it — the round-trip and the missing-profile
     #: refusal — name the same one the façade created.
     crate_slot_name: str = ""
+    #: #2510: every shell's ids-masked contents BEFORE realization, and
+    #: every tree realized so far, both keyed "<instance>:<slot>" -- the
+    #: stable realization context, which is what the fresh processes in
+    #: the opposite-order loop compare against.
+    crate_pending_trees: dict[str, str] = field(default_factory=dict)
+    crate_realized_trees: dict[str, str] = field(default_factory=dict)
+    #: The two shells the crate world realized -- one in place on the
+    #: ground, one by being picked up -- and the unit holding the second,
+    #: so the reload phase can find both again.
+    crate_ground_shell: int = -1
+    crate_held_shell: int = -1
+    crate_holder_uid: int = -1
+    #: The first visit order's realized trees, which the second must
+    #: reproduce exactly.
+    crate_order_trees: dict[str, str] = field(default_factory=dict)

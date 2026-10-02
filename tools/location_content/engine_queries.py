@@ -54,10 +54,17 @@ def load_defs(port: int) -> None:
     send(port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
 
 
-def gen_world(port: int, page: str, seed: int, size: int) -> None:
+def init_world(port: int, page: str, seed: int, size: int) -> None:
+    """Generate and show `page`, loading no chunk region beyond what
+    `world.init` itself brings in -- so a caller can choose the ORDER the
+    rest of the region is visited in (#2510)."""
     send(port, f"world.init('{page}', {seed}, {size}, 3); return 'ok'")
     send(port, "return world.waitForInit(240)", timeout=250)
     send(port, f"world.show('{page}'); return 'ok'")
+
+
+def gen_world(port: int, page: str, seed: int, size: int) -> None:
+    init_world(port, page, seed, size)
     send(port, "return world.loadChunksInRegion(-1,-1,1,1)")
     send(port, "return world.waitForChunks(60)", timeout=65)
 

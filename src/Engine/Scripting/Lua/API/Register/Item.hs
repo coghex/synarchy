@@ -96,6 +96,10 @@ registerItemAPI callStats env = do
   registerLuaFunction callStats "item" "deselect"     (itemDeselectFn env)
   registerLuaFunction callStats "item" "getSelected"  (itemGetSelectedFn env)
   registerLuaFunction callStats "item" "pickupGround" (itemPickupGroundFn env)
+  -- #2510 (PLC-15): the explicit pending → realized transition for a
+  -- container shell on the ground. pickupGround performs the same one
+  -- as a backstop, so a shell can never enter an inventory unrealized.
+  registerLuaFunction callStats "item" "realizeGround" (itemRealizeGroundFn env)
   registerLuaFunction callStats "item" "getGroundForUnit" (itemGetGroundForUnitFn env)
   registerLuaFunction callStats "item" "getFood"      (itemGetFoodFn env)
   registerLuaFunction callStats "item" "debugQuads"   (itemDebugQuadsFn env)
