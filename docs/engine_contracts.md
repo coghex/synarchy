@@ -3418,16 +3418,23 @@ root's weight capacity, and `itemTotalWeight` partially applied to the
 live `ItemManager`) and applies the list the policy returns. PLC-8 and
 PLC-9 are its first production callers.
 
-**Five other writers exist, in four modules, and none is a move.**
+**Seven other writers exist, in six modules, and none is a move.**
 `Item.Materialize.materializeNode` MINTS a tree (#1418's one mint
 boundary), `World.Save.Component.PageActivity.fromItemInstanceDTO`
 REBUILDS one already materialized, `Item.Temperature.coolItem` RE-VALUES
-temperatures in place, and the two medical draws
+temperatures in place, the two medical draws
 (`Engine.Scripting.Lua.API.Units.Medical.consumeBandages` /
-`consumeKitFill`) DESTROY contents rather than re-owning them. That
-allowlist is scoped per FUNCTION, not per module, so a later unrelated
-writer in the same file is still a finding. It holds nine entries: those
-five exceptions plus the four functions inside the boundary itself.
+`consumeKitFill`) DESTROY contents rather than re-owning them,
+`LootProfile.Simulate.simulateLootProfile` (#2502) measures a THROWAWAY
+emptied copy of a shell that is never published, and
+`Engine.Scripting.Lua.API.Items.Ground.realizeGroundOnPage` (#2510)
+PUBLISHES onto a pending shell's own ground entry the contents
+`LootProfile.Realize` already admitted through `insertInstance` — and,
+if the slot latch cannot be set, puts back the contents the draw started
+from. That allowlist is scoped per FUNCTION, not per module, so a later
+unrelated writer in the same file is still a finding. It holds eleven
+entries: those seven exceptions plus the four functions inside the
+boundary itself.
 
 **What a move must satisfy.** Exact instance identity survives —
 `iiInstanceId` and every descendant, in authored order. An insert needs
