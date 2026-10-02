@@ -248,7 +248,7 @@ HANDOFF_FIELDS = (
     "mem_uids", "dangling_uid", "sibling_keys", "saved_content",
     "saved_naming", "saved_crate", "named", "crate_slots", "crate_shells",
     "crate_slot_name", "crate_pending_trees", "crate_realized_trees",
-    "crate_saved_trees", "crate_ground_shell", "crate_held_shell", "crate_holder_uid",
+    "crate_pristine_slot_name", "saved_crate_pristine", "crate_ground_shell", "crate_held_shell", "crate_holder_uid",
     "crate_order_trees",
 )
 

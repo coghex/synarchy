@@ -2772,12 +2772,13 @@ so equality of physical trees is asked of the read-only
 `item.debugGroundTree(gid[, pageId])` / `item.debugHeldTree(uid,
 instanceId)` instead: the root's own fields apart from its contents,
 rendered in ORDER with every physical field and only the instance id and
-tracked temperature masked (`Item.Types.itemTreeSnapshot`). The probe's
-cross-process comparison holds a shell's realization INPUTS identical
-(definition, storage, bulk, fill, exact ordered contents) while its
-salvage rolls — quality, condition, weight, sharpness, drawn off the
-entropy-seeded shared stat RNG — differ per process; hspec pins that
-realization reads none of those and preserves them exactly. The whole FIELD is omitted
+tracked temperature masked (`Item.Types.itemTreeSnapshot`). A shell's
+own salvage rolls come off the entropy-seeded shared stat RNG, so the
+probe's two opposite-order processes LOAD one pristine save (taken after
+the shells spawned, before anything was realized) to start from
+identical complete shells, and compare complete realized trees; hspec
+additionally pins that realization reads none of those rolls and
+preserves them exactly. The whole FIELD is omitted
 for an instance with no slots — unlike `significant`, which is always an
 array because its cardinality is what makes the clearance predicate
 vacuous. A container confers nothing, so "carries no slots" and "carries

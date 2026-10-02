@@ -75,9 +75,11 @@ location's chunk loads, end to end:
      realized by being PICKED UP, and the rest stay pending; every slot,
      both realized trees and the pending ones survive save -> quit ->
      fresh restart -> load, a realized shell stays realized after it and
-     a pending one realizes then. Two further fresh processes visit the
-     same world's chunks in opposite orders and must realize every shell
-     into the tree the earlier processes realized for its location slot.
+     a pending one realizes then. Two further fresh processes load a
+     PRISTINE save taken before anything was realized, so every pending
+     shell is identical, visit its chunks and realize its shells in
+     opposite orders, and must realize every shell into the complete
+     tree the earlier processes realized for its location slot.
      A final process then proves the OTHER half of the load-time
      profile check: a save whose pending slot names a profile this build
      no longer registers is refused at content validation, with the
@@ -141,10 +143,10 @@ from probelib import FixtureNotRegistered, load_ai_stack, quit_engine, send
 from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
 from location_content import container, content, dispatch, knowledge, naming
-from location_content.engine_queries import (gen_world, init_world,
-                                             load_defs, load_registries,
-                                             placed_ready, ruin_geometry,
-                                             spawn_counts, wait_floor)
+from location_content.engine_queries import (gen_world, load_defs,
+                                             load_registries, placed_ready,
+                                             ruin_geometry, spawn_counts,
+                                             wait_floor)
 # Re-exported, NOT wrapped: `tools/test_location_content_probe.py` asserts
 # object IDENTITY against `tools/portal_ghost_probe.py`'s imports and pins
 # `save_and_wait`'s exact signature, so a delegating wrapper would break
@@ -269,6 +271,7 @@ def run(args, art: RunArtifacts, token: str) -> int:
     slot_content = f"loc_content_probe_{token}"
     slot_naming = f"loc_naming_probe_{token}"
     slot_crate = f"loc_crate_probe_{token}"
+    slot_pristine = f"loc_crate_pristine_{token}"
 
     failures: list[str] = []
     state = ScenarioState()
@@ -427,10 +430,11 @@ def run(args, art: RunArtifacts, token: str) -> int:
 
     # ---- Process 9 (#2505, #2510): a location authoring a `kind:
     #      container` entry mints ONE pending shell per occurrence on
-    #      first chunk load, and revisiting mints no second. One shell is
+    #      first chunk load, and revisiting mints no second. A PRISTINE
+    #      save is taken then, before anything is realized. One shell is
     #      then realized in place through item.realizeGround, a second is
     #      realized by being picked up, and the rest stay pending for the
-    #      save. Registries only -- NOT
+    #      second save. Registries only -- NOT
     #      ruin_small.yaml, which would contend with crate_ruin for chunk
     #      (0,0) exactly as dense_ruin does, and would additionally put
     #      ruin_small's own ground items on the page the shell count is
@@ -446,7 +450,15 @@ def run(args, art: RunArtifacts, token: str) -> int:
         gen_world(args.port, container.CRATE_PAGE, args.seed, args.size)
         container.observe_initial_shell(args, state, failures)
         if state.crate_slots:
-            container.check_no_respawn_and_realize(args, state, failures)
+            container.check_no_respawn(args, state, failures)
+            # Processes 11 and 12 load this one: the shared fixture that
+            # makes their pending shells identical down to each shell's
+            # own salvage rolls. COMPLETE before they boot (#1620).
+            state.crate_pristine_slot_name = slot_pristine
+            state.saved_crate_pristine = save_and_wait(
+                args.port, container.CRATE_PAGE, slot_pristine, failures,
+                log=art.engine_log)
+            container.check_realize(args, state, failures)
             # Process 10 reads this fixture from a FRESH process, so the
             # save must be COMPLETE -- not merely accepted -- before that
             # process boots (#1620).
@@ -485,17 +497,19 @@ def run(args, art: RunArtifacts, token: str) -> int:
             quit_engine(args.port, proc)
 
     # ---- Processes 11 and 12 (#2510): two more INDEPENDENT fresh
-    #      processes generate the crate world again, visit its chunks one
-    #      at a time -- once in the order process 9 loaded them, once in
-    #      the exact reverse -- and realize every shell, in that order
-    #      too. Each slot must start from the pending tree process 9
-    #      recorded and end as the tree processes 9 and 10 realized for
-    #      it, and the two orders must agree on every slot: realization
-    #      reads the slot's own context, never a shared stream.
+    #      processes each LOAD the pristine save -- so every pending shell
+    #      is identical, its own salvage rolls included -- visit its
+    #      chunks one at a time, once in row-major order and once in the
+    #      exact reverse, and realize every shell in that order too. Each
+    #      slot must start from the complete pending tree process 9
+    #      recorded and end as the complete tree processes 9 and 10
+    #      realized for it, and the two orders must agree on every slot:
+    #      realization reads the slot's own context, never a shared
+    #      stream.
     #
     #      ONE call site, TWO launches, exactly like the #948 loop
     #      above. ----
-    if (state.crate_realized_trees and state.crate_pending_trees
+    if (state.saved_crate_pristine and state.crate_realized_trees
             and not failures):
         for label, reverse in (("same order", False), ("reversed order", True)):
             proc = boot_isolated(args.port, art)
@@ -505,11 +519,18 @@ def run(args, art: RunArtifacts, token: str) -> int:
                                                       crate_item_yaml,
                                                       crate_profile_yaml,
                                                       crate_location_yaml)
-                init_world(args.port, container.CRATE_PAGE, args.seed,
-                           args.size)
+                load_ai_stack(args.port)
+                if not load_and_wait(args.port, state.crate_pristine_slot_name,
+                                     failures, log=art.engine_log):
+                    raise _PhaseAborted
+                send(args.port,
+                     f"world.show('{container.CRATE_PAGE}'); return 'ok'")
+                time.sleep(1.0)
                 container.visit_crate_chunks(args.port, reverse)
                 container.check_realization_order(args, state, failures,
                                                   label, reverse)
+            except _PhaseAborted:
+                pass
             finally:
                 quit_engine(args.port, proc)
 
