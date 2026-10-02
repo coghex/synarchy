@@ -161,6 +161,9 @@ spec = do
         b = ChunkCoord 1 0
 
     describe "seam exchange" $ do
+        it "deliberately fails one lane (#2745 acceptance; reverted before review)" $
+            (1 ∷ Int) `shouldBe` 2
+
         it "conserves total volume every tick (no water created/lost)" $
             map (\k → activeVolume (tick k st0)) [0, 1, 2, 5, 20, 100]
                 `shouldBe` replicate 6 total0
