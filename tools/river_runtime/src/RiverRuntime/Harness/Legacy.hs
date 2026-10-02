@@ -79,7 +79,9 @@ legacySolver = SolverAdapter
         , ("face_records", "unavailable")
         ]
     , saIntervals = [legacyInterval]
-    , saInit      = legacyInit
+    -- 'saIntervals' admits only 'legacyInterval': one real tick IS the
+    -- step, so there is no other interval to bind.
+    , saInit      = \_ → legacyInit
     , saStep      = \s → ( s { lsWorld = simulateActiveTick (lsWorld s) }
                          , FaceRecordsUnavailable )
     , saEdit      = legacyEdit
@@ -112,10 +114,10 @@ legacyInit pm fx = do
     -- Every elevation the schedule will ever set must be representable,
     -- so a run cannot fail halfway for a reason visible at the start.
     forM_ [ e | Scheduled _ (SetTerrain _ e _) ← fxSchedule fx ] wholeZ
-    chunks ← forM (fxChunks fx) $ \(lc, residency) → do
-        let tiles = chunkTiles lc
-        terrain ← forM tiles (wholeZ . csTerrain . initialCell fx)
-        fluid ← forM tiles $ \t → case initialCell fx t of
+    chunks ← forM (M.toList (pmChunks pm)) $ \(cc, residency) → do
+        let cells = [ cellAt (StoredCell cc i) | i ← [0 .. chunkSize * chunkSize - 1] ]
+        terrain ← forM cells (wholeZ . csTerrain)
+        fluid ← forM cells $ \case
             CellSpec e (Just (FluidSpec ty q)) → do
                 _ ← activeVolume q
                 pure (Just (FluidCell ty (unElevation e + unQuantity q)))
@@ -124,17 +126,21 @@ legacyInit pm fx = do
             seeded = case residency of
                 ResidentActive   → activateChunk loaded
                 ResidentInactive → loaded
-        pure (pmChunks pm M.! lc, residency, seeded)
-    let topo = plTopology (pmPlacement pm)
+        pure (cc, residency, seeded)
     pure LegacyState
         { lsWorld = emptySimWorldState
             { swsChunks   = HM.fromList [ (cc, scs) | (cc, _, scs) ← chunks ]
             , swsActive   = True
-            , swsTopology = topo
+            , swsTopology = plTopology (pmPlacement pm)
             }
         , lsDeclaredActive = HS.fromList
             [ cc | (cc, ResidentActive, _) ← chunks ]
         }
+  where
+    -- A fixture tile's declared state, or a padding wall.
+    cellAt sc = case M.lookup sc (pmInverse pm) of
+        Just t  → initialCell fx t
+        Nothing → CellSpec (M.findWithDefault (fxBaseTerrain fx) sc (pmPadding pm)) Nothing
 
 legacyObserve ∷ LegacyState → Observation
 legacyObserve s = M.fromList

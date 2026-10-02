@@ -1,8 +1,9 @@
 -- | The interface a solver implements to run in the harness (#2719).
 --
---   An adapter is handed a placed fixture, advances it one logical step
---   at a time, accepts cell-level edits the harness has already
---   resolved, and reports EXACT per-cell state in its own stored frame.
+--   An adapter is handed a placed fixture and the step interval the run
+--   selected, advances it one logical step of that interval at a time,
+--   accepts cell-level edits the harness has already resolved, and
+--   reports EXACT per-cell state in its own stored frame.
 --   It knows nothing about the checks the harness makes: conservation,
 --   barriers, storage and edit accounting are all judged by the harness
 --   against the fixture's own declarations ("RiverRuntime.Harness.Run").
@@ -79,7 +80,10 @@ data SolverAdapter s = SolverAdapter
     , saIntervals ∷ [LogicalTime]
       -- ^ the step intervals this adapter genuinely implements; the
       --   harness refuses any other rather than relabel steps
-    , saInit      ∷ PlacementMap → Fixture → Either Text s
+    , saInit      ∷ LogicalTime → PlacementMap → Fixture → Either Text s
+      -- ^ seeds a run at the chosen step interval, one of 'saIntervals';
+      --   an adapter whose transition depends on the interval binds it
+      --   here, so every later 'saStep' advances by exactly that much
     , saStep      ∷ s → (s, FaceRecords)
     , saEdit      ∷ [CellEdit] → s → Either Text s
     , saObserve   ∷ s → Observation

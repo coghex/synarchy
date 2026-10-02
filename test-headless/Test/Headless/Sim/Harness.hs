@@ -87,17 +87,36 @@ fixtureSpec = do
                                                (RemoveFluid (Tile 3 7) (Quantity 1))] }
             `shouldSatisfy` any ("at or after the duration" `T.isInfixOf`)
 
-    it "places the wrapped translation across the cylindrical u seam" $ do
+    it "places whole-chunk translations across the cylindrical u seam" $ do
         pm ← expectRun (placementMap wrappedPlacement damDiversion)
         -- Local chunk (0,0) lands at u = 31, the last column before the
         -- seam of a worldSize-64 page; local (1,0) is physically (32,0),
         -- u = 32, stored on the far side as (0,32) with BOTH coordinates
         -- changed. Local (0,1) stays inside the seam at (31,1).
         M.toList (pmChunks pm) `shouldBe`
-            [ (LocalChunk 0 0, ChunkCoord 31 0), (LocalChunk 0 1, ChunkCoord 31 1)
-            , (LocalChunk 1 0, ChunkCoord 0 32), (LocalChunk 2 0, ChunkCoord 1 32) ]
+            [ (ChunkCoord 0 32, ResidentActive), (ChunkCoord 1 32, ResidentActive)
+            , (ChunkCoord 31 0, ResidentActive), (ChunkCoord 31 1, ResidentActive) ]
+        M.size (pmPadding pm) `shouldBe` 0
         normalizeCell pm (StoredCell (ChunkCoord 0 32) 0) `shouldBe` Just (Tile 16 0)
         normalizeCell pm (StoredCell (ChunkCoord 32 0) 0) `shouldBe` Nothing
+
+    it "re-partitions a fixture under a tile offset, onto the wrapped seam itself" $ do
+        pm ← expectRun (placementMap wrappedShiftedPlacement damDiversion)
+        -- Tile (7,8) + (504,3) = (511,11): the last column of physical
+        -- chunk (31,0). Tile (8,8) = (512,11): physical chunk (32,0),
+        -- stored across the wrapped seam as (0,32). The interior face
+        -- 7|8 is now the seam face.
+        M.lookup (Tile 7 8) (pmForward pm) `shouldBe` Just (StoredCell (ChunkCoord 31 0) 191)
+        M.lookup (Tile 8 8) (pmForward pm) `shouldBe` Just (StoredCell (ChunkCoord 0 32) 176)
+        -- The stored chunks also hold cells outside the fixture: padding.
+        M.size (pmPadding pm) `shouldBe` M.size (pmChunks pm) * 256 - length (fixtureTiles damDiversion)
+        M.elems (pmPadding pm) `shouldSatisfy` all (≡ zLevel 0)
+
+    it "refuses a translation that merges active and inactive fixture chunks" $ do
+        let inactive = CharacterizationCase "inactive-neighbor" (Tile 15 8) (Tile 16 8)
+                                            (-4) (-4) 24 True False
+        placementMap shiftedPlacement (characterizationFixture inactive)
+            `shouldSatisfy` either ("active and inactive" `T.isInfixOf`) (const False)
 
     it "starts every fixture at every placement exactly as declared" $
         forM_ catalog $ \fx → forM_ standardPlacements $ \pl → do
@@ -223,6 +242,19 @@ characterizationSpec ∷ Spec
 characterizationSpec = do
     it "names the eight archived cases in archive order" $
         map ccName characterizationCases `shouldBe` map fst archivedBaseline
+
+    -- The archive's own partition finding, through a translation: the
+    -- one-level interior pair (8/0) moved half a chunk lands on a seam,
+    -- ordinary or wrapped, and behaves exactly like the archived seam
+    -- case (4/4). Recorded, not endorsed.
+    it "reproduces the seam result when the interior pair is translated onto a seam" $ do
+        let interior = CharacterizationCase "one-level-interior" (Tile 7 8) (Tile 8 8)
+                                            (-4) (-4) 8 True True
+            seamExpected = fromMaybe [] (lookup "one-level-seam" archivedBaseline)
+        forM_ [shiftedPlacement, wrappedShiftedPlacement] $ \pl → do
+            tr ← expectRun (runLegacy pl (characterizationFixture interior))
+            (plName pl, characterizationSamples interior tr) `shouldBe` (plName pl, seamExpected)
+            trViolations tr `shouldBe` []
 
     forM_ (zip characterizationCases archivedBaseline) $ \(cc, (_, expected)) →
         it ("reproduces " <> T.unpack (ccName cc) <> " exactly") $ do

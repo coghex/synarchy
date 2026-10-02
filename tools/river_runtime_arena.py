@@ -28,7 +28,7 @@ import socket
 import subprocess
 import time
 
-from probelib import GUI_PORT, boot, quit_engine, send_json, poll_until
+from probelib import GUI_PORT, boot, send_json, poll_until
 
 REPO = Path(__file__).resolve().parent.parent
 PAGE = "river_runtime_lab"
@@ -43,6 +43,24 @@ def session_port() -> int:
             port = probe.getsockname()[1]
         if port != GUI_PORT:
             return port
+
+
+def stop_owned(proc: subprocess.Popen, timeout: float = 15.0) -> None:
+    """Stop the engine this driver launched, through its process handle only.
+
+    Never through the console port: once the child has exited, another
+    engine may have bound the same port, and an ``engine.quit()`` sent there
+    would stop that one instead. A child that has already exited is reaped
+    and nothing else is touched.
+    """
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
 
 
 def recipe() -> dict:
@@ -163,7 +181,6 @@ def main() -> int:
         observe(label)
 
     proc = None
-    ready = False
 
     def own(launched):
         nonlocal proc
@@ -175,7 +192,6 @@ def main() -> int:
         boot(args.port, log=str(out / "engine.log"),
              args=["--resource-root", str(root)], ready_timeout=60,
              on_launch=own)
-        ready = True
         lua("engine.setPaused(true); return true")
         # Content setup only; no gameplay script or scenario-system dependency.
         for family, loader in (("substances", "loadSubstanceYaml"),
@@ -224,13 +240,7 @@ def main() -> int:
         return 0
     finally:
         if proc is not None:
-            if ready:
-                quit_engine(args.port, proc)
-            elif proc.poll() is None:
-                # Never READY: the port may not be ours, so the engine is
-                # stopped directly rather than asked over the console.
-                proc.kill()
-                proc.wait(timeout=10)
+            stop_owned(proc)
 
 
 if __name__ == "__main__":

@@ -11,8 +11,8 @@ archive beside the old ones.
 |---|---|---|
 | `baseline-solver.json`, `baseline-solver-manifest.json` | `tools/river_runtime/Characterize.hs` | Eight two-cell cases through the real `Sim.Fluid.Active.simulateActiveTick`, ten fixed ticks each: exact source, target and total units per tick. |
 | `arena-v1/`, `arena-v2/` | `tools/river_runtime_arena.py` | A finite-charge arena laboratory driven over the debug console: recipe, wet/dry and whole-z ceiling observations after wall-clock intervals, the socket transcript, and a manifest. |
-| `arena-v3/` | `tools/river_runtime_arena.py` at `3e9f86887` | #2719's bounded smoke run of the recovered tool: the same recipe as `arena-v2` (byte-identical `recipe.json`), with the same stated limitations. |
-| `harness-v1/` | `exe:river-runtime-harness` at `3e9f86887` | The five authored fixtures through the legacy adapter at origin, ordinary and wrapped-seam placements, every check result, origin-versus-translation comparisons, and the eight baseline cases reproduced exactly. |
+| `arena-v3/` | `tools/river_runtime_arena.py` | #2719's bounded smoke run of the recovered tool: the same recipe as `arena-v2` (byte-identical `recipe.json`), with the same stated limitations. |
+| `harness-v1/` | `exe:river-runtime-harness` | The five authored fixtures through the legacy adapter at five placements, every check result, origin-versus-translation comparisons (identical under whole-chunk translations; partition-dependent under shifts), and the eight baseline cases reproduced exactly. |
 
 Both sources were recovered from #2533's worktree and committed byte for byte
 in #2719 (commit `2c69fe475`), so each archive names a tracked blob:
@@ -47,8 +47,10 @@ python3 tools/river_runtime_arena.py --engine "$(cabal list-bin exe:synarchy)" \
 
 It boots `--headless` on a free loopback port (never 8008), with a resource
 root copied into the output directory, so config, saves and the engine log
-stay there, and it stops only the engine it launched. It is a manual tool, not
-a CI or probe-runner gate.
+stay there, and it stops only the engine it launched, through the process handle and never
+the console port (`python3 tools/test_river_runtime_arena.py` covers an
+exited child beside a reused port). It is a manual tool, not a CI or
+probe-runner gate.
 
 ## The hydraulic harness (#2719, RVR-01)
 
@@ -62,10 +64,15 @@ Exact, fixed-step experiments use the controlled hydraulic harness under
   channel and reservoir, a closable dam with an openable side diversion, a
   raised sill on a chunk seam, a lake at rest that reaches equilibrium
   deactivation before a gate opens, and water beside dry cells.
-- **Placements** (`Placement`) translate a fixture by whole chunks, including
-  across the u seam of a cylindrical page, and normalize every report back
-  into the fixture's own frame.
-- **Adapters** (`Adapter`) are the interface a solver implements. The legacy
+- **Placements** (`Placement`) translate a fixture by any tile offset,
+  including onto and across the u seam of a cylindrical page, and normalize
+  every report back into the fixture's own frame. A whole-chunk offset keeps
+  the partition; any other offset moves flow faces relative to the chunk
+  grid, so an interior face can land on an ordinary or a wrapped seam. Cells
+  of the touched chunks outside the fixture are padding walls, checked to
+  stay untouched.
+- **Adapters** (`Adapter`) are the interface a solver implements; each run
+  hands its adapter the step interval it selected. The legacy
   adapter (`Legacy`) runs the real `simulateActiveTick`, one production tick
   per 100 ms logical step, and reports exact quantities only: it has no face
   records, and the harness reports face-level checks as unavailable for it.
@@ -88,9 +95,10 @@ cabal run -v0 exe:river-runtime-harness -- --list   # fixture names
 ```
 
 It runs every selected fixture (`--fixture <name>`, repeatable; all by
-default) through the legacy adapter at three placements (origin, an ordinary
-translation, and a translation across a wrapped seam), compares the origin run
-with each translation, and reproduces the eight baseline cases above against
+default) through the legacy adapter at five placements (origin, a whole-chunk
+translation, a re-partitioning half-chunk shift, a whole-chunk translation
+across a wrapped seam, and a shift onto the wrapped seam), compares the origin
+run with each translation, and reproduces the eight baseline cases above against
 `baseline-solver.json`. It writes `results.json` and `manifest.json`: the
 source commit, whether those sources were dirty, the SHA-256 of every harness
 and solver source and of the executable, each fixture's content hash, step

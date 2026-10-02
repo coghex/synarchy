@@ -126,20 +126,30 @@ spec = do
                 (Series (LogicalTime 100000) (S.insert (Tile 0 1) rowTiles) [(0, wetPrefix 1 8)])
                 `shouldSatisfy` either (const True) (const False)
 
-        it "compares runs across ordinary and wrapped seams tile for tile" $
+        it "compares whole-chunk translations, ordinary and wrapped, tile for tile" $
             forM_ [ordinaryPlacement, wrappedPlacement] $ \pl → do
-                let run p = either (\e → expectationFailure (show e) ≫ error "unreachable") pure
-                        (runFixture legacyAdapter (RunConfig p referenceInterval) damDiversion)
-                base ← run originPlacement
-                moved ← run pl
-                -- The legacy solver happens to be translation-invariant on
-                -- this fixture: recorded here, not required of a candidate.
+                base ← legacyRun originPlacement
+                moved ← legacyRun pl
+                -- With the partition unchanged the legacy solver gives the
+                -- same answer: recorded here, not required of a candidate.
                 seSamples (trajectorySeries moved) `shouldBe` seSamples (trajectorySeries base)
                 cmp ← compared [] (trajectorySeries base) (trajectorySeries moved)
                 length (cmpTimes cmp) `shouldBe` 301
                 cmpTimes cmp `shouldSatisfy` all (\tc →
                     zeroError (tcSurface tc)
                     ∧ tcWetDryCells tc ≡ 0 ∧ tcBoundary tc ≡ BoundaryTiles 0)
+
+        it "measures the legacy partition dependence under re-partitioning translations" $
+            forM_ [shiftedPlacement, wrappedShiftedPlacement] $ \pl → do
+                base ← legacyRun originPlacement
+                moved ← legacyRun pl
+                cmp ← compared [] (trajectorySeries base) (trajectorySeries moved)
+                -- Identical at step 0 (same declared state), different later:
+                -- the legacy answer depends on where chunk seams fall.
+                fmap tcSurface (listToMaybe (cmpTimes cmp)) `shouldSatisfy` maybe False zeroError
+                cmpTimes cmp `shouldSatisfy` any (not . zeroError . tcSurface)
   where
     zeroError (SurfaceError _ 0 0) = True
     zeroError _                    = False
+    legacyRun p = either (\e → expectationFailure (show e) ≫ error "unreachable") pure
+        (runFixture legacyAdapter (RunConfig p referenceInterval) damDiversion)

@@ -19,7 +19,9 @@ import qualified Data.Map.Strict as M
 import World.Chunk.Types (ChunkCoord(..))
 import World.Fluid.Types (FluidType(..))
 import RiverRuntime.Harness.Adapter
-import RiverRuntime.Harness.Catalog (originPlacement, referenceInterval, withWalls, zLevel)
+import RiverRuntime.Harness.Catalog
+    (originPlacement, referenceInterval, shiftedPlacement, withWalls, zLevel)
+import RiverRuntime.Harness.Compare
 import RiverRuntime.Harness.Fixture
 import RiverRuntime.Harness.Placement
 import RiverRuntime.Harness.Run
@@ -59,8 +61,9 @@ scripted corrupt script edit = Adapter SolverAdapter
     { saName      = "scripted"
     , saConfig    = []
     , saIntervals = [referenceInterval]
-    , saInit      = \pm fx → Right (Scripted pm (corrupt pm (M.fromList
-        [ (sc, seeded (initialCell fx t)) | (t, sc) ← M.toList (pmForward pm) ])))
+    , saInit      = \_ pm fx → Right (Scripted pm (corrupt pm (M.fromList $
+        [ (sc, seeded (initialCell fx t)) | (t, sc) ← M.toList (pmForward pm) ]
+        <> [ (sc, CellState e Nothing) | (sc, e) ← M.toList (pmPadding pm) ])))
     , saStep      = \s → let (cells, faces) = script (spPlacement s) (spCells s)
                          in (s { spCells = cells }, faces)
     , saEdit      = \es s → Right s { spCells = edit es (spCells s) }
@@ -169,6 +172,15 @@ spec = do
                 unavailable (\_ → M.insert (StoredCell (ChunkCoord 9 9) 0) (CellState (zLevel 0) Nothing))
             kinds extra `shouldBe` [UnexpectedCells]
 
+        it "quantity leaking into padding outside the fixture" $ do
+            tr ← either (\e → expectationFailure (show e) ≫ error "unreachable") pure $
+                runFixture (honest (unavailable (\pm o →
+                    let pad = M.findMin (pmPadding pm)
+                    in M.insert (fst pad) (CellState (snd pad) (Just (River, Quantity 1)))
+                                (addAt pm tileA (-1) o))))
+                    (RunConfig shiftedPlacement referenceInterval) checkFixture
+            kinds tr `shouldSatisfy` elem PaddingDisturbed
+
         it "terrain changed by a solver step" $ do
             tr ← check checkFixture $ honest $
                 unavailable (\pm → setAt pm tileB (CellState (zLevel (-5)) Nothing))
@@ -185,6 +197,8 @@ spec = do
                 recorded (\_ o → o) (\pm → [Exchange (StoredCell (ChunkCoord 9 9) 0) (at pm tileB) 1])
             kinds outside `shouldSatisfy` elem ExchangeOutsideFixture
 
+    describe "step interval" intervalSpec
+
     describe "edit accounting" $ do
         let sourced = checkFixture
                 { fxSchedule = [Scheduled (LogicalTime 100000) (AddFluid tileB River (Quantity 5))] }
@@ -200,3 +214,33 @@ spec = do
             tr ← check sourced $ scripted (\_ o → o) (unavailable (\_ o → o)) (\_ o → o)
             kinds tr `shouldBe` [EditAccountingMismatch]
             map vStep (trViolations tr) `shouldBe` [1, 1]
+
+-- | An adapter whose transition genuinely depends on the step interval:
+--   it moves one unit from A to B per 50 ms of logical time, so a 100 ms
+--   step moves two and a 50 ms step moves one.
+rated ∷ Adapter
+rated = Adapter SolverAdapter
+    { saName      = "rated"
+    , saConfig    = [("rate", "1 unit per 50 ms")]
+    , saIntervals = [LogicalTime 100000, LogicalTime 50000]
+    , saInit      = \(LogicalTime dt) pm fx → Right (dt `div` 50000, pm, M.fromList
+        [ (sc, CellState e (fmap (\(FluidSpec ty q) → (ty, q)) fl))
+        | (t, sc) ← M.toList (pmForward pm), let CellSpec e fl = initialCell fx t ])
+    , saStep      = \(n, pm, o) → ((n, pm, move n tileA tileB pm o), FaceRecordsUnavailable)
+    , saEdit      = \es (n, pm, o) → Right (n, pm, applyEdits es o)
+    , saObserve   = \(_, _, o) → o
+    }
+
+intervalSpec ∷ Spec
+intervalSpec = it "hands the selected interval to the adapter, so halved steps match full ones" $ do
+    let run dt = either (\e → expectationFailure (show e) ≫ error "unreachable") pure
+            (runFixture rated (RunConfig originPlacement (LogicalTime dt)) checkFixture)
+    full ← run 100000
+    half ← run 50000
+    map trSteps [full, half] `shouldBe` [3, 6]
+    concatMap trViolations [full, half] `shouldBe` []
+    cmp ← either (\e → expectationFailure (show e) ≫ error "unreachable") pure
+        (compareSeries [] (trajectorySeries full) (trajectorySeries half))
+    map (\tc → (tcStepA tc, tcStepB tc, tcSurface tc)) (cmpTimes cmp) `shouldBe`
+        -- B is dry at step 0, so the union of wet extents is the pool alone.
+        (0, 0, SurfaceError 4 0 0) : [ (k, 2 * k, SurfaceError 5 0 0) | k ← [1 .. 3] ]

@@ -111,6 +111,7 @@ data ViolationKind
     | NegativeStorage
     | StorageOverflow
     | EmptyWetCell
+    | PaddingDisturbed
     | TerrainChangedBySolver
     | EditAccountingMismatch
     | UnexplainedTotalChange
@@ -176,7 +177,7 @@ runFixtureWith sa cfg fx = do
             Left ("operation " <> tshow op <> " at " <> tshow at
                   <> " does not fall on a step of " <> tshow interval)
     pm ← placementMap (rcPlacement cfg) fx
-    s0 ← saInit sa pm fx
+    s0 ← saInit sa (rcInterval cfg) pm fx
     let steps = duration `div` interval
         initialTerrain = M.fromList
             [ (t, csTerrain (initialCell fx t)) | t ← fixtureTiles fx ]
@@ -234,18 +235,29 @@ runFixtureWith sa cfg fx = do
 --   placement never produced, missing cells, and invalid storage.
 normalize ∷ PlacementMap → Int → Observation
           → (M.Map Tile CellState, [Violation])
-normalize pm k obs = (cells, unexpected <> missing <> storage)
+normalize pm k obs = (cells, unexpected <> missing <> padding <> storage)
   where
     cells = M.fromList [ (t, c) | (sc, c) ← M.toList obs
                                 , Just t ← [normalizeCell pm sc] ]
     unexpected =
         [ Violation k UnexpectedCells (tshow (take 4 extra) <> " (" <> tshow (length extra) <> ")")
-        | let extra = [ sc | sc ← M.keys obs, isNothing (normalizeCell pm sc) ]
+        | let extra = [ sc | sc ← M.keys obs, isNothing (normalizeCell pm sc)
+                           , not (M.member sc (pmPadding pm)) ]
         , not (null extra) ]
     missing =
         [ Violation k MissingCells (tshow (take 4 gone) <> " (" <> tshow (length gone) <> ")")
         | let gone = M.keys (pmForward pm `M.difference` cells)
         , not (null gone) ]
+        <> [ Violation k MissingCells ("padding " <> tshow (take 4 gone) <> " ("
+                                       <> tshow (length gone) <> ")")
+           | let gone = M.keys (pmPadding pm `M.difference` obs)
+           , not (null gone) ]
+    -- Padding is outside the fixture: it must stay the dry wall it was
+    -- seeded as, or quantity has left the fixture's own cells.
+    padding =
+        [ Violation k PaddingDisturbed (tshow sc <> ": " <> tshow c)
+        | (sc, e) ← M.toList (pmPadding pm)
+        , Just c ← [M.lookup sc obs], c ≢ CellState e Nothing ]
     storage = concat
         [ [ Violation k NegativeStorage (tshow t <> " holds " <> tshow q) | q < 0 ]
           <> [ Violation k EmptyWetCell (tshow t <> " is wet with 0 units") | q ≡ 0 ]

@@ -21,7 +21,9 @@ module RiverRuntime.Harness.Catalog
       -- * Placements
     , originPlacement
     , ordinaryPlacement
+    , shiftedPlacement
     , wrappedPlacement
+    , wrappedShiftedPlacement
     , wrappedWorldSize
     , standardPlacements
       -- * Archived legacy characterization
@@ -221,28 +223,51 @@ dryBank = withWalls Fixture
     }
 
 -- * Placements
+--
+-- Offsets are in tiles. A whole-chunk offset keeps every flow face where
+-- it was relative to the chunk grid; any other offset re-partitions the
+-- fixture, so a face that was inside a chunk can land on a seam and the
+-- reverse. Comparing the origin run with each translation measures how
+-- much a solver's answer depends on where the chunk boundaries fall.
 
 originPlacement ∷ Placement
 originPlacement = Placement "origin" SimFlatTopology (0, 0)
 
--- | The same flat page, every chunk moved by a whole-chunk offset.
+-- | The same flat page, translated by whole chunks: the partition is
+--   unchanged.
 ordinaryPlacement ∷ Placement
-ordinaryPlacement = Placement "ordinary" SimFlatTopology (3, -2)
+ordinaryPlacement = Placement "ordinary" SimFlatTopology (48, -32)
+
+-- | The same flat page, translated by half a chunk in x and an odd
+--   number of tiles in y: every fixture face moves relative to the chunk
+--   grid, so local x = 7|8 (interior at the origin) lands on the
+--   x = 15|16 seam.
+shiftedPlacement ∷ Placement
+shiftedPlacement = Placement "shifted" SimFlatTopology (8, -5)
+
+cylindrical ∷ SimTopology
+cylindrical = simTopologyForParams defaultWorldGenParams { wgpWorldSize = wrappedWorldSize }
 
 -- | A cylindrical page where the u seam falls between local chunks
 --   x = 0 and x = 1: local chunk (0,0) lands at u = 31, the last column
 --   before the seam, so local chunk (1,0) is stored on the far side with
---   both coordinates changed.
+--   both coordinates changed. The partition is unchanged.
 wrappedPlacement ∷ Placement
-wrappedPlacement = Placement "wrapped"
-    (simTopologyForParams defaultWorldGenParams { wgpWorldSize = wrappedWorldSize })
-    (wrappedWorldSize `div` 2 - 1, 0)
+wrappedPlacement = Placement "wrapped" cylindrical (16 * (wrappedWorldSize `div` 2 - 1), 0)
+
+-- | The wrapped page, shifted like 'shiftedPlacement': local x = 7|8
+--   lands on the wrapped u seam itself.
+wrappedShiftedPlacement ∷ Placement
+wrappedShiftedPlacement =
+    Placement "wrapped-shifted" cylindrical (16 * (wrappedWorldSize `div` 2 - 1) + 8, 3)
 
 wrappedWorldSize ∷ Int
 wrappedWorldSize = 64
 
 standardPlacements ∷ [Placement]
-standardPlacements = [originPlacement, ordinaryPlacement, wrappedPlacement]
+standardPlacements =
+    [ originPlacement, ordinaryPlacement, shiftedPlacement
+    , wrappedPlacement, wrappedShiftedPlacement ]
 
 -- * The archived legacy characterization
 

@@ -1,8 +1,10 @@
 -- | The hydraulic harness archive runner (#2719, requirement 8).
 --
 --   Runs the selected catalog fixtures through the selected solver
---   adapters at every standard placement (origin, an ordinary
---   translation, and a translation across a wrapped cylindrical seam),
+--   adapters at every standard placement (origin, a whole-chunk
+--   translation, a re-partitioning half-chunk shift, a whole-chunk
+--   translation across a wrapped cylindrical seam, and a shift onto that
+--   seam),
 --   compares the origin run with each translation, reproduces the eight
 --   archived legacy characterization cases, and writes a JSON evidence
 --   archive:

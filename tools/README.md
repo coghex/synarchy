@@ -111,7 +111,8 @@ CI or probe-runner gate, and neither is registered in
   over the debug console of one `--headless` engine and records wall-clock
   observations. It uses a free loopback port (never 8008, or `--port`), a
   resource root copied into the output directory, and stops only its own
-  engine.
+  engine, through its process handle (`python3
+  tools/test_river_runtime_arena.py` is that teardown's self-test).
 
 `cabal run -v0 exe:river-runtime-characterize` regenerates the archived
 baseline byte for byte. Archive layout, provenance and limitations:
@@ -4307,6 +4308,7 @@ tools/
 ├── *_probe.py              (headless behavior probes — see above; includes action_outcome_probe.py, #646)
 ├── river_runtime/          (hydraulic harness runner + recovered baseline characterization, #2719 — manual, not a probe)
 ├── river_runtime_arena.py  (manual socket river laboratory, #2719 — not a probe)
+├── test_river_runtime_arena.py (its owned-process teardown self-test)
 ├── baselines/
 │   ├── _seeds.json         (seed list config)
 │   └── seed*.json          (per-seed baseline data)

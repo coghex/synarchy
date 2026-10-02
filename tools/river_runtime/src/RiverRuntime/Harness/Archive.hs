@@ -80,8 +80,11 @@ fixtureJson fx = A.object
     , "units"        .= ("eighths of a z-level; quantity is units over the cell's terrain" ∷ Text)
     ]
   where
-    residency ResidentActive   = "active" ∷ Text
-    residency ResidentInactive = "inactive"
+    residency = residencyName
+
+residencyName ∷ Residency → Text
+residencyName ResidentActive   = "active"
+residencyName ResidentInactive = "inactive"
 
 placementJson ∷ Placement → A.Value
 placementJson pl = A.object
@@ -90,7 +93,7 @@ placementJson pl = A.object
         SimFlatTopology     → A.object [ "kind" .= ("flat" ∷ Text) ]
         SimCylindricalU w   → A.object [ "kind" .= ("cylindrical-u" ∷ Text)
                                        , "world_size" .= w ]
-    , "chunk_offset" .= [fst (plOffset pl), snd (plOffset pl)]
+    , "tile_offset" .= [fst (plOffset pl), snd (plOffset pl)]
     ]
 
 adapterJson ∷ AdapterInfo → A.Value
@@ -113,8 +116,8 @@ trajectoryJson ∷ Bool → Trajectory → A.Value
 trajectoryJson full tr = A.object $
     [ "fixture"     .= fxName fx
     , "placement"   .= placementJson (rcPlacement (trConfig tr))
-    , "stored_chunks" .= [ A.object [ "local" .= [lx, ly], "stored" .= [sx, sy] ]
-                         | (LocalChunk lx ly, ChunkCoord sx sy) ← storedChunks ]
+    , "stored_chunks" .= [ A.object [ "stored" .= [sx, sy], "residency" .= residencyName r ]
+                         | (ChunkCoord sx sy, r) ← storedChunks ]
     , "adapter"     .= adapterJson (trAdapter tr)
     , "interval_us" .= unLogicalTime (rcInterval (trConfig tr))
     , "steps"       .= trSteps tr
