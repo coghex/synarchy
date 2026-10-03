@@ -43,6 +43,7 @@ audit through `python3 tools/ci_parity_audit.py`.
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 try:
@@ -71,6 +72,11 @@ from ci_parity_config import (
     CABAL_QUIET_SUBCOMMANDS,
     EXEMPT_COMMANDS,
     IMAGE_JOB,
+    LANE_JOB,
+    LANE_RUN_STEP,
+    LANE_SHARED_STEPS,
+    LANE_TEST_OPTIONS,
+    LANE_FULL_TIER_GUARD,
     LOCAL_GATE_LABEL,
     PROBE_FORBIDDEN_PREREQUISITES,
     PROBE_JOB,
@@ -78,6 +84,8 @@ from ci_parity_config import (
     PROBE_PREREQUISITE_STEP,
     PROBE_PREREQUISITE_TARGETS,
     PROBE_REQUIRED_COMMANDS,
+    PROJECT_CACHE_IF,
+    PROJECT_CACHE_JOB,
     STATIC_AUDIT_JOB,
     UNIT_ASSET_CI_IF,
     UNIT_ASSET_COMMAND,
@@ -364,6 +372,7 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
             "TESTS_RESULT": "${{ needs.test-and-audits.result }}",
             "AUDITS_RESULT": "${{ needs.static-audits.result }}",
             "PROBES_RESULT": "${{ needs.behavior-probes.result }}",
+            "LANES_RESULT": "${{ needs.headless-lanes.result }}",
         }
         if env != expected_env:
             problems.append(
@@ -377,6 +386,9 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
                   # job-level `if:`, so a failure, a cancellation and a skip
                   # are all non-success on every event this workflow runs on.
                   'test "$AUDITS_RESULT" = success',
+                  # A matrix job's result is success only when every leg
+                  # succeeded, on every event (#2745).
+                  'test "$LANES_RESULT" = success',
                   'test "$PROBES_RESULT" = success',
                   'test "$PROBES_RESULT" = skipped'):
         if token not in aggregate_text and token not in str(aggregate_steps):
@@ -434,6 +446,277 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
             f"{WORKFLOW_PATH}: `{PROBE_JOB}` no longer runs required "
             f"command `{command}`.")
     problems += audit_probe_prerequisite_build(probe)
+    return problems
+
+
+def _needs_set(job: dict) -> set[str]:
+    raw = job.get("needs")
+    return ({raw} if isinstance(raw, str)
+            else set(raw) if isinstance(raw, list) else set())
+
+
+def _steps_by_name(job: dict) -> dict[str, list[dict]]:
+    found: dict[str, list[dict]] = {}
+    steps = job.get("steps")
+    for step in steps if isinstance(steps, list) else []:
+        if isinstance(step, dict) and isinstance(step.get("name"), str):
+            found.setdefault(step["name"], []).append(step)
+    return found
+
+
+def _canonical_step(step: dict) -> object:
+    """A step with its strings' whitespace collapsed, for equality.
+
+    A `run:` body loses its whole-line shell comments first: they explain
+    a step, they do not change what it does, and the lane job keeps its
+    copies uncommented."""
+    def canon(value: object) -> object:
+        if isinstance(value, str):
+            return normalise_expression(value)
+        if isinstance(value, dict):
+            return {key: (normalise_expression("\n".join(
+                        line for line in item.splitlines()
+                        if not line.lstrip().startswith("#")))
+                          if key == "run" and isinstance(item, str)
+                          else canon(item))
+                    for key, item in value.items()}
+        if isinstance(value, list):
+            return [canon(item) for item in value]
+        return value
+    return canon(step)
+
+
+_STATUS_FUNCTIONS = ("always()", "!cancelled()", "success()", "failure()", "cancelled()")
+
+
+def job_would_run(condition: str, context: dict[str, object]) -> bool:
+    """Whether GitHub would start a job guarded by `condition`.
+
+    Models the scheduling rule the writer depends on, for the grammar its
+    condition uses: terms joined by `&&`, each a status function or a
+    `==`/`!=` comparison of a context path with a quoted string. A
+    condition WITHOUT a status function gets GitHub's implicit `success()`,
+    which is false as soon as any ANCESTOR job did not succeed -- a skipped
+    one included. `context` supplies the compared paths plus two booleans:
+    `ancestors_succeeded` and `cancelled`.
+    """
+    text = normalise_expression(condition)
+    if "||" in text or "(" in text.replace("()", ""):
+        raise AuditError(f"cannot model condition {condition!r}")
+    terms = [term.strip() for term in text.split("&&") if term.strip()]
+    status = {"always()": True,
+              "!cancelled()": not context["cancelled"],
+              "success()": bool(context["ancestors_succeeded"]) and not context["cancelled"],
+              "failure()": False,
+              "cancelled()": bool(context["cancelled"])}
+    if not any(term in _STATUS_FUNCTIONS for term in terms):
+        terms = ["success()"] + terms
+    for term in terms:
+        if term in status:
+            if not status[term]:
+                return False
+            continue
+        match = re.fullmatch(r"([\w.-]+)\s*(==|!=)\s*'([^']*)'", term)
+        if match is None:
+            raise AuditError(f"cannot model condition term {term!r}")
+        path, operator, literal = match.groups()
+        value = str(context.get(path, ""))
+        if (value == literal) != (operator == "=="):
+            return False
+    return True
+
+
+#: (label, context, whether the writer must run): the successful master
+#: push it exists for -- with behavior-probes skipped, as on every master
+#: push -- and each way it must stay off.
+WRITER_SCENARIOS: tuple[tuple[str, dict[str, object], bool], ...] = tuple(
+    (label, {"github.event_name": "push", "github.ref": "refs/heads/master",
+             "needs.build-test.result": "success",
+             "needs.test-and-audits.outputs.docs_only": "false",
+             "ancestors_succeeded": False, "cancelled": False, **override}, runs)
+    for label, override, runs in (
+        ("a successful master push with behavior-probes skipped", {}, True),
+        ("a pull request", {"github.event_name": "pull_request",
+                            "github.ref": "refs/pull/1/merge"}, False),
+        ("a push to another ref", {"github.ref": "refs/heads/other"}, False),
+        ("a failed aggregate", {"needs.build-test.result": "failure"}, False),
+        ("a skipped aggregate", {"needs.build-test.result": "skipped"}, False),
+        ("a docs-only master push", {"needs.test-and-audits.outputs.docs_only": "true"}, False),
+        ("a cancelled run", {"cancelled": True}, False),
+    ))
+
+
+def audit_headless_lane_wiring(yaml_text: str) -> list[str]:
+    """Pin the headless lane jobs and the one project-cache writer (#2745).
+
+    Lane jobs: eligible as soon as the image resolves (`needs:` exactly
+    resolve-image, no job-level condition), on the same image and with the
+    same timeout as test-and-audits, `fail-fast: false` so one failing lane
+    cannot cancel the others' verdicts, a non-empty `lane` matrix, the
+    selection and cache-restore steps copied VERBATIM from test-and-audits,
+    every `cabal test` of the suite restricted to `--lane ${{ matrix.lane }}`
+    with the CI flags, the full tier set only on the worldgen-gated branch
+    (and only as `=1`, never through `env:`), and no cache save. Whether the matrix names exactly the
+    declared lanes is checked against the built executable by
+    `tools/headless_lanes.py`, the one place that can see them.
+
+    Workflow-wide: no job runs the unpartitioned suite any more.
+
+    The cache writer: the ONLY job that saves dist-newstyle, needing
+    build-test so it is eligible only after every worker's outcome is known,
+    and guarded by build-test's own success so it inherits the aggregate's
+    event-specific policy (an expected master-push probe skip passes; a
+    failed, cancelled or unexpectedly skipped worker does not).
+    """
+    try:
+        document = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as error:
+        raise AuditError(
+            f"{WORKFLOW_PATH}: could not parse as YAML ({error}).") from error
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    if not isinstance(jobs, dict):
+        return [f"{WORKFLOW_PATH}: no `jobs:` mapping."]
+    problems: list[str] = []
+    for job in (AUDITED_JOB, LANE_JOB, PROJECT_CACHE_JOB, AGGREGATE_JOB):
+        if not isinstance(jobs.get(job), dict):
+            problems.append(f"{WORKFLOW_PATH}: no `{job}` job.")
+    if problems:
+        return problems
+    where = f"{WORKFLOW_PATH} (job: {LANE_JOB})"
+    lane, audited = jobs[LANE_JOB], jobs[AUDITED_JOB]
+
+    if _needs_set(lane) != {IMAGE_JOB}:
+        problems.append(
+            f"{where}: must need exactly ['{IMAGE_JOB}'], got "
+            f"{sorted(_needs_set(lane))}. Every lane is eligible as soon as "
+            "the image resolves; waiting on another job's build is the "
+            "artifact handoff #2745 decided against.")
+    if str(lane.get("if") or "").strip():
+        problems.append(
+            f"{where}: must carry no job-level `if:`; the docs-only fast path "
+            "skips its steps, so the aggregate still sees a success.")
+    if lane.get("container") != audited.get("container"):
+        problems.append(
+            f"{where}: must run in the same container as `{AUDITED_JOB}`.")
+    if lane.get("timeout-minutes") != audited.get("timeout-minutes"):
+        problems.append(
+            f"{where}: `timeout-minutes` must equal `{AUDITED_JOB}`'s "
+            f"({audited.get('timeout-minutes')!r}), got "
+            f"{lane.get('timeout-minutes')!r}.")
+    strategy = lane.get("strategy") if isinstance(lane.get("strategy"), dict) else {}
+    if strategy.get("fail-fast") is not False:
+        problems.append(
+            f"{where}: `strategy.fail-fast` must be false, so one failing "
+            "lane cannot cancel the others before they report.")
+    matrix = strategy.get("matrix") if isinstance(strategy.get("matrix"), dict) else {}
+    lanes = matrix.get("lane")
+    if not isinstance(lanes, list) or not lanes:
+        problems.append(f"{where}: `strategy.matrix.lane` must list the lanes.")
+
+    lane_steps, audited_steps = _steps_by_name(lane), _steps_by_name(audited)
+    for name in LANE_SHARED_STEPS:
+        mine, theirs = lane_steps.get(name, []), audited_steps.get(name, [])
+        if len(mine) != 1 or len(theirs) != 1:
+            problems.append(
+                f"{where}: expected exactly one `{name}` step here and in "
+                f"`{AUDITED_JOB}`, found {len(mine)} and {len(theirs)}.")
+        elif _canonical_step(mine[0]) != _canonical_step(theirs[0]):
+            problems.append(
+                f"{where}: `{name}` differs from `{AUDITED_JOB}`'s step of "
+                "the same name. Both jobs must decide the fast path, the "
+                "worldgen gate and the cache keys identically.")
+    runs = lane_steps.get(LANE_RUN_STEP, [])
+    if len(runs) != 1:
+        problems.append(
+            f"{where}: expected exactly one `{LANE_RUN_STEP}` step, found "
+            f"{len(runs)}.")
+    else:
+        body = str(runs[0].get("run") or "")
+        lines = [line.strip() for line in body.splitlines()]
+        if not lines or lines[0] != LANE_FULL_TIER_GUARD:
+            problems.append(
+                f"{where}: `{LANE_RUN_STEP}` must open with "
+                f"`{LANE_FULL_TIER_GUARD}`, so the full tier rides the same "
+                "worldgen selector as world_check --quick.")
+        elif not lines[2:3] or not lines[2].startswith("SYNARCHY_FULL_TESTS=1 "):
+            problems.append(
+                f"{where}: the worldgen-gated branch of `{LANE_RUN_STEP}` must "
+                "run the lane with `SYNARCHY_FULL_TESTS=1`.")
+        tests = [line.strip() for line in body.splitlines()
+                 if "cabal test synarchy-test-headless" in line]
+        if len(tests) != 2:
+            problems.append(
+                f"{where}: `{LANE_RUN_STEP}` must run the lane in exactly two "
+                f"branches (full and base tier), found {len(tests)}.")
+        full = [t for t in tests if "SYNARCHY_FULL_TESTS" in t]
+        if len(full) != 1 or not full[0].startswith("SYNARCHY_FULL_TESTS=1 "):
+            problems.append(
+                f"{where}: exactly one branch may set the full tier, and only "
+                "as `SYNARCHY_FULL_TESTS=1`; the other must leave it absent.")
+        for test in tests:
+            if LANE_TEST_OPTIONS not in test or "--test-show-details=direct" not in test:
+                problems.append(
+                    f"{where}: `{test}` must carry {LANE_TEST_OPTIONS} and "
+                    "--test-show-details=direct.")
+        if "SYNARCHY_FULL_TESTS" in str(runs[0].get("env") or ""):
+            problems.append(
+                f"{where}: `{LANE_RUN_STEP}` must not set SYNARCHY_FULL_TESTS "
+                "through `env:`, where an empty value would still enable it.")
+    for step in lane.get("steps") or []:
+        if isinstance(step, dict) and str(step.get("uses", "")).startswith(
+                "actions/cache/save@"):
+            problems.append(
+                f"{where}: lane jobs restore caches and save none; found a "
+                f"save step `{step.get('name') or step.get('uses')}`.")
+
+    for job_name, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        for step in job.get("steps") or []:
+            body = str(step.get("run") or "") if isinstance(step, dict) else ""
+            for line in body.splitlines():
+                if ("cabal test synarchy-test-headless" in line
+                        and "--lane " not in line):
+                    problems.append(
+                        f"{WORKFLOW_PATH} (job: {job_name}): `{line.strip()}` "
+                        "runs the unpartitioned headless suite; CI runs it "
+                        f"only as `{LANE_JOB}` lanes.")
+
+    writer = jobs[PROJECT_CACHE_JOB]
+    writer_where = f"{WORKFLOW_PATH} (job: {PROJECT_CACHE_JOB})"
+    if not {AGGREGATE_JOB, AUDITED_JOB} <= _needs_set(writer):
+        problems.append(
+            f"{writer_where}: must need `{AGGREGATE_JOB}` (so it is eligible "
+            f"only after every worker's outcome is known) and `{AUDITED_JOB}` "
+            "(for its docs-only decision).")
+    if normalise_expression(str(writer.get("if") or "")) != normalise_expression(PROJECT_CACHE_IF):
+        problems.append(
+            f"{writer_where}: must be guarded by exactly `if: {PROJECT_CACHE_IF}`.")
+    # Behaviourally, not just by text: under GitHub's scheduling rule the
+    # writer must run on the successful master push it exists for and on
+    # nothing else.
+    for label, context, runs in WRITER_SCENARIOS:
+        try:
+            got = job_would_run(str(writer.get("if") or ""), context)
+        except AuditError as error:
+            problems.append(f"{writer_where}: {error}")
+            break
+        if got != runs:
+            problems.append(
+                f"{writer_where}: would {'not ' if runs else ''}run on {label}"
+                + (" (a condition without a status function gets GitHub's "
+                   "implicit success(), which a skipped ancestor fails)" if runs else "")
+                + ".")
+    if AUDITED_JOB in _needs_set(jobs[AGGREGATE_JOB]) and PROJECT_CACHE_JOB in _needs_set(jobs[AGGREGATE_JOB]):
+        problems.append(
+            f"{writer_where}: `{AGGREGATE_JOB}` must not need the writer, "
+            "which needs it.")
+    outputs = audited.get("outputs") if isinstance(audited.get("outputs"), dict) else {}
+    if normalise_expression(str(outputs.get("docs_only") or "")) != \
+            "${{ steps.docs-fast-path.outputs.docs_only }}":
+        problems.append(
+            f"{WORKFLOW_PATH} (job: {AUDITED_JOB}): must export "
+            "`outputs.docs_only` from its docs-only fast path for the writer.")
     return problems
 
 

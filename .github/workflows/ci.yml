@@ -2,16 +2,18 @@
 # test tiers on Linux — the first automated validation of the Linux
 # build (development is on macOS).
 #
-# Job layout (five jobs, three of them workers):
+# Job layout (seven jobs, four of them workers):
 #   - resolve-image   resolves/publishes the immutable, content-addressed CI
 #                     image every worker below runs in (#784).
 #   - test-and-audits everything that needs a Cabal build product: the
 #                     library + executable + test suites, the headless hspec
 #                     suite, both save-compatibility steps (each execs the
 #                     compiled `exe:synarchy-save-codec` this job built,
-#                     #2273) and world_check --quick. It is also
-#                     the workflow's sole build-cache writer, so the
-#                     cache-outcome report lives here too.
+#                     #2273), world_check --quick and the headless lane
+#                     coverage check (#2744). It writes the dependency
+#                     cache, and the cache-outcome report lives here.
+#   - headless-lanes  the headless hspec suite, one matrix leg per lane
+#                     (#2745), each building the test executable itself.
 #   - static-audits   every engine-free `python3 tools/*.py` gate — the
 #                     audits, the module budgets, the probe-runner
 #                     self-tests, the unit-asset gate (#2272). Split out
@@ -21,21 +23,24 @@
 #                     condition, docs-only changes included.
 #   - behavior-probes the PR-only, path-selective real-engine probe tier.
 #   - build-test      the stable aggregate status context branch protection
-#                     and the PR drainer consume; it requires all three
-#                     workers.
+#                     and the PR drainer consume; it requires every worker.
+#   - project-cache   the one project-cache (dist-newstyle) writer: a master
+#                     push only, after build-test succeeded (#2745).
 # tools/ci_parity_audit.py mirrors the UNION of test-and-audits' and
 # static-audits' gate sets against tools/ci-local.sh, in both directions,
 # and rejects a command run by both jobs before taking that union.
 #
 # Coverage vs CLAUDE.md testing tiers:
-#   - tier 2 hspec:   cabal test synarchy-test-headless
+#   - tier 2 hspec:   cabal test synarchy-test-headless, one lane per
+#     headless-lanes leg (#2745)
 #   - tier 2 audit:   python3 tools/test_audit.py
 #   - tier 2 worldgen: tools/world_check.py --quick, a blocking gate for
 #     worldgen-output PRs and every post-merge master push.
 #   - tier 3 full:    the same worldgen selection additionally sets
-#     SYNARCHY_FULL_TESTS=1 on the hspec step (#1364), so the full-tier
-#     examples run and block on exactly the runs world_check --quick
-#     does. See that step for why it is not a conditional `env:`.
+#     SYNARCHY_FULL_TESTS=1 on the lane that holds the full-tier examples
+#     (#1364, #2745), so they run and block on exactly the runs
+#     world_check --quick does. See the `Headless lane` step for why it
+#     is not a conditional `env:`.
 #     Worldgen float math proved bit-stable across architectures on the
 #     first run (6/6 exact-match against the macOS/aarch64-captured
 #     baselines from #421, PR #449) — if it ever flakes cross-arch,
@@ -64,9 +69,10 @@
 # inputs after its checked-in anchor; docs, Lua and runtime resources do
 # not age this cache. Pull requests derive the epoch from their BASE SHA
 # and are restore-only, so the entry they consume is always master-scoped.
-# A successful master push is the sole writer. Each eighth relevant change
-# advances the key, restores the newest compatible older epoch, and saves
-# the freshly built tree at the very end of the job. This bounds compile
+# A successful master push is the sole writer, through the one
+# `project-cache` job that runs after build-test (#2745). Each eighth
+# relevant change advances the key, restores the newest compatible older
+# epoch, and saves the freshly built tree. This bounds compile
 # drift without a cron workflow or one cache per commit.
 #
 # `actions/cache` entries are immutable, so restore and save remain
@@ -93,8 +99,8 @@
 # resolve-image below calls ci-image.yml as a REUSABLE workflow
 # (`uses: ./.github/workflows/ci-image.yml`) — its jobs join THIS run's
 # dependency graph rather than running as a separate, unordered trigger
-# — and both test jobs declare `needs: resolve-image`, so GitHub cannot
-# start either container before resolve-image (and therefore ci-image.yml's
+# — and every container job declares `needs: resolve-image`, so GitHub cannot
+# start any of them before resolve-image (and therefore ci-image.yml's
 # own jobs) finishes. That's also why each container.image below is an
 # expression referencing needs.resolve-image.outputs.image rather than a
 # literal tag: GitHub resolves jobs.<job>.container.image using the `needs`
@@ -205,6 +211,11 @@ jobs:
     permissions:
       contents: read
       packages: read
+    # The docs-only decision, for the project-cache writer (#2745), which
+    # runs after the aggregate and must skip on exactly the runs whose
+    # build this job skipped.
+    outputs:
+      docs_only: ${{ steps.docs-fast-path.outputs.docs_only }}
     container:
       # Resolved from resolve-image's output (#784) rather than a
       # literal tag — see the header comment above for why this is safe
@@ -561,64 +572,18 @@ jobs:
           python3 tools/headless_init_import_audit.py --builddir dist-newstyle
           python3 tools/headless_init_import_audit.py --cabal-regression
 
-      # The suite itself is unconditional; SYNARCHY_FULL_TESTS only
-      # decides whether its full-tier examples run or report pending
-      # (#1364). Today that is exactly one example --
-      # test-headless/Test/Headless/WorldGen/Exposure.hs's w128 seed-42
-      # volcano regression, whose dedicated w128 generation is the whole
-      # reason it is not on every run. It rides the SAME worldgen
-      # selector as world_check --quick below, so a worldgen-output PR
-      # gets both and a push to master (where the selector reports every
-      # gate) gets them unconditionally.
-      #
-      # Deliberately an if/else around the command rather than a step
-      # `env:` with a conditional expression: an expression that
-      # evaluates to '' still SETS the variable, and the test's guard
-      # matches `Just _`, so the empty-string branch would silently run
-      # the expensive case on every PR. The disabled branch has to leave
-      # the variable genuinely ABSENT from the test process's
-      # environment, which the bare invocation below does.
-      #
-      # Both branches pass Hspec's --print-slow-items=20 through cabal's
-      # --test-options (#2277), so this step's log ends with the twenty
-      # slowest spec items and their durations, just before cabal's own
-      # footer. About four of this step's five minutes are a handful of
-      # world generations; that list is what names them without diffing
-      # log timestamps by hand. It is a DIAGNOSTIC, not a gate: no
-      # threshold here fails a run.
-      #
-      # The same --test-options carries Hspec's --format=failed-examples
-      # (#1916). test-headless/ holds over five thousand examples, and
-      # the default `specdoc` formatter prints a line for every one of
-      # them that PASSES, which --test-show-details=direct forwards
-      # straight into this log. `failed-examples` prints nothing per
-      # example -- no description and no progress mark -- so a passing
-      # run's formatter output is a constant handful of lines instead of
-      # one per example, and a failure is no longer buried in thousands
-      # of successes. It costs no failure detail: the formatter still
-      # emits the full Failures block (each failing example's
-      # describe/it path, source location and expectation diff), the
-      # seed, and the `Finished in ...` / `N examples, M failures`
-      # footer -- which is also what keeps a passing run distinguishable
-      # from a run that executed nothing. --print-slow-items is applied
-      # by the runner around whatever formatter is selected, so the
-      # slowest-items list above survives unchanged.
-      #
-      # This lives on the two CI command lines ON PURPOSE, and not in
-      # test-headless/Spec.hs or a repo-root .hspec: either of those
-      # would also silence a developer's own `cabal test`, where the
-      # per-example descriptions are the point. --test-show-details=direct
-      # stays on both branches so the footer still reaches this log.
-      - name: Headless test suite
+      # The headless suite runs as one job per lane (`headless-lanes` below,
+      # #2745); this job no longer runs it. What stays here is the proof
+      # that those lanes are the whole suite (#2744): every example runs in
+      # exactly one lane, in both tiers, checked from the executable this
+      # job just built without running a single example. It also checks
+      # that the lane matrix of `headless-lanes` names exactly the lanes
+      # the executable declares, so a lane added to the suite cannot go
+      # unscheduled in CI. A coverage failure fails this job and with it
+      # the build-test aggregate.
+      - name: Headless lane coverage
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        run: |
-          if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
-            echo "worldgen gate fired: running the full tier (SYNARCHY_FULL_TESTS=1)."
-            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
-          else
-            echo "worldgen gate did not fire: full-tier examples stay pending."
-            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
-          fi
+        run: python3 tools/headless_lanes.py
 
       # Guard (issue #766, save-overhaul C4 requirement 14): fails if a
       # tracked save-compatibility fixture drifts, goes missing, or the
@@ -687,47 +652,190 @@ jobs:
           && steps.docs-fast-path.outputs.docs_only != 'true'
         run: python3 tools/world_check.py --quick
 
-      # The other half of the #1358 restore/save split above. It has to
-      # reproduce the combined `actions/cache` action's post step, and it
-      # does so term for term:
-      #   * `post-if: success()` — a step `if:` naming no status function
-      #     has `success()` applied implicitly, so this is skipped
-      #     whenever an earlier step failed or the job was cancelled,
-      #     exactly as that post step was.
-      #   * LAST step in the job, so dist-newstyle is captured in the
-      #     same final state a post step would have seen.
-      #   * Save only on successful MASTER pushes when the EXACT key missed.
-      #     Pull requests are intentionally restore-only so every reusable
-      #     project snapshot lives in default-branch scope. The combined action's
-      #     save half compares its primary key against the key it
-      #     restored and skips on an exact match — that is what keeps one
-      #     immutable snapshot per plan/epoch. `actions/cache/save` has no
-      #     such check of its own, so the cache-hit term is load-bearing
-      #     here exactly as it is on the dependency save above.
-      #   * `key:` is the restore step's OWN `cache-primary-key` output,
-      #     not a second `hashFiles(...)` evaluation. The combined action
-      #     saves under the key its restore half evaluated, carried in
-      #     step state; re-hashing plan.json here would save under
-      #     whatever the file hashes to after the whole build instead —
-      #     a different key from the one the cache-hit term above was
-      #     decided against. That output is empty in exactly the case
-      #     where the combined action's save half logged "Error
-      #     retrieving key from state" and returned, so the emptiness
-      #     term keeps that a no-op rather than an invalid-input failure.
-      # The docs-only term is load-bearing for the same reason it is on
-      # the dependency save: a skipped restore step leaves cache-hit
-      # EMPTY, which satisfies `!= 'true'`.
-      - name: Save project build cache (dist-newstyle)
-        if: >-
-          github.event_name == 'push'
-          && github.ref == 'refs/heads/master'
-          && steps.dist-cache.outputs.cache-hit != 'true'
-          && steps.dist-cache.outputs.cache-primary-key != ''
-          && steps.docs-fast-path.outputs.docs_only != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+  # The headless suite, one job per lane (#2745, CIR-16 of epic #2742).
+  # The lanes are #2744's: `test-headless/Spec.hs` registers the suite as
+  # named lanes and `--lane NAME` runs exactly one of them. Each leg below
+  # restores the same dependency and project caches as test-and-audits,
+  # builds `synarchy-test-headless` itself and runs its own lane, so every
+  # lane is eligible as soon as the image resolves and none waits on
+  # another job's build (no artifact handoff; the duplicated compile is
+  # accepted, standard runners being free for this public repository).
+  #
+  # Its selection and cache steps are COPIES of test-and-audits' steps of
+  # the same names, so both jobs decide the docs-only fast path, the
+  # worldgen gate and the cache keys identically; tools/ci_parity_audit.py
+  # requires them to stay identical. It restores caches and saves none:
+  # the project cache has one writer, `project-cache` below, and the
+  # dependency cache stays test-and-audits'.
+  #
+  # The matrix must name exactly the lanes the test executable declares.
+  # test-and-audits' `Headless lane coverage` step checks that against the
+  # executable on every run, so a lane added to the suite and not here
+  # fails CI instead of silently never running.
+  #
+  # Same timeout as test-and-audits (#2745 requirement 7); no per-example
+  # or suite-level timer.
+  headless-lanes:
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [world, rest]
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Trust checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Toolchain (baked into the CI image)
+        run: |
+          /usr/local/.ghcup/bin/ghc --version
+          /usr/local/.ghcup/bin/cabal --version
+          echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
+          echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
+
+      - name: Select docs-only fast path
+        id: docs-fast-path
+        run: |
+          DOCS_ONLY=false
+          BASE=''
+          AFTER='${{ github.sha }}'
+          ZERO=0000000000000000000000000000000000000000
+          ELIGIBLE=no
+          : > /tmp/ci-changed-paths.txt
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+          elif [ "${{ github.event_name }}" = push ]; then
+            BASE='${{ github.event.before }}'
+          fi
+          if [ -n "$BASE" ] && [ "$BASE" != "$ZERO" ]; then
+            if git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              ELIGIBLE=yes
+            fi
+          fi
+          if [ "$ELIGIBLE" = yes ]; then
+            git diff --no-renames --name-status "$BASE" "$AFTER" > /tmp/ci-change-range.txt
+            git diff --name-only "$BASE" "$AFTER" > /tmp/ci-changed-paths.txt
+            DOCS_ONLY="$(python3 tools/ci_docs_fast_path.py --stdin --explain < /tmp/ci-change-range.txt)"
+          else
+            echo "ci_docs_fast_path: no resolvable change range; running the full job"
+          fi
+          echo "docs_only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
+          echo "docs-only fast path: $DOCS_ONLY"
+
+      - name: Select project build cache epoch
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        id: cache-epoch
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            CACHE_REF='${{ github.event.pull_request.base.sha }}'
+          else
+            CACHE_REF='${{ github.sha }}'
+          fi
+          python3 tools/ci_cache_epoch.py --ref "$CACHE_REF" --github-output "$GITHUB_OUTPUT" --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve dependency plan
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: |
+          cabal build all -v0 --dry-run
+          cabal update
+          cabal build all -v0 --dry-run
+
+      - name: Select expensive path-relevant gates
+        id: expensive-gates
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+            git fetch --no-tags origin "$BASE"
+            CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          elif [ "${{ steps.docs-fast-path.outputs.docs_only }}" = true ]; then
+            CHANGED="$(cat /tmp/ci-changed-paths.txt)"
+          else
+            CHANGED="$(git ls-files)"
+          fi
+          {
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate worldgen | \
+              sed 's/^/worldgen=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
+              sed 's/^/graphical=/'
+            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
+              sed 's/^/save-compat=/'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore dependency cache
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
+        with:
+          path: /usr/local/cabal/store
+          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+
+      - name: Restore project build cache (dist-newstyle)
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: dist-cache
         with:
           path: dist-newstyle
-          key: ${{ steps.dist-cache.outputs.cache-primary-key }}
+          key: dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
+          restore-keys: |
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
+            ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
+      - name: Build dependencies
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: cabal build all -v0 --only-dependencies
+
+      - name: Build headless test suite
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: cabal build synarchy-test-headless -v0
+
+      # Exactly this leg's lane, with the CI flags the single-process step
+      # used: --print-slow-items=20 (#2277) and --format=failed-examples
+      # (#1916) inside --test-options, --test-show-details=direct so the
+      # `N examples, M failures` footer reaches the log. `--lane` is the
+      # test executable's own flag (#2744), stripped before Hspec parses
+      # the rest.
+      #
+      # SYNARCHY_FULL_TESTS rides the SAME worldgen selector as
+      # world_check --quick (#1364): set to 1 exactly when the gate fired,
+      # so the lane holding the full-tier examples (today the w128 seed-42
+      # volcano regression in test-headless/Test/Headless/WorldGen/
+      # Exposure.hs, in `world`) runs them on exactly the runs the
+      # single-process step did. The variable is read only by full-tier
+      # examples, each of which registers in every tier and reads it at
+      # run time, so no inventory can tell which lane holds one; a lane
+      # without any is unaffected by it, exactly as every group was when
+      # the whole suite ran in one process with it set.
+      #
+      # Deliberately an if/else around the command rather than a step
+      # `env:` with a conditional expression: an expression that evaluates
+      # to '' still SETS the variable, and the test's guard matches any
+      # present value, so the empty-string branch would silently run the
+      # expensive case on every PR. The disabled branch leaves the variable
+      # genuinely ABSENT from the test process.
+      - name: Headless lane
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: |
+          if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
+            echo "worldgen gate fired: lane ${{ matrix.lane }} runs with the full tier (SYNARCHY_FULL_TESTS=1)."
+            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+          else
+            echo "worldgen gate did not fire: full-tier examples stay pending."
+            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+          fi
 
   # Engine-free static-audit worker (#2272), split out of test-and-audits so
   # every `python3 tools/*.py` gate that needs no Cabal build product starts
@@ -750,8 +858,8 @@ jobs:
   # PyYAML, Pillow and jsonschema) rather than whatever a hosted runner
   # happens to ship. No toolchain export, no `cabal`, no dependency store and
   # no dist-newstyle: nothing here compiles or reads a build product, so it
-  # restores no cache and saves none. test-and-audits remains the workflow's
-  # sole cache writer.
+  # restores no cache and saves none. The project cache's one writer is
+  # `project-cache`, after the aggregate (#2745).
   #
   # What deliberately did NOT move: the headless hspec suite, both
   # save-compatibility steps (each execs the compiled
@@ -1679,13 +1787,13 @@ jobs:
       # comparison is now `app-save-codec/Main.hs`'s `compare` operation,
       # so the suite is no longer an input to anything this job runs. On
       # the 2026-09-02 runs that build recompiled 211 of 348 modules and
-      # was the bulk of a 346-480 s step. No probe reads `test-headless/`,
-      # and `test-and-audits` remains the job that compiles and runs it.
+      # was the bulk of a 346-480 s step. No probe reads `test-headless/`;
+      # `headless-lanes` compiles and runs it (#2745).
       # `tools/ci_parity_audit.py` pins both halves of this: the two
       # targets that must be here, and the suite that must not.
       #
-      # This job never saves either cache; test-and-audits remains
-      # the sole cache writer for the workflow.
+      # This job never saves either cache; the project cache's one writer
+      # is `project-cache`, after the aggregate (#2745).
       - name: Build behavior probe prerequisites
         if: steps.probe-selection.outputs.selected == 'true'
         run: cabal build exe:synarchy exe:synarchy-save-codec
@@ -1704,7 +1812,10 @@ jobs:
 
   # Stable aggregate context consumed by branch protection and the PR
   # drainer. The drainer gates its --admin merge on exactly `build-test`, so
-  # this job must fail when any parallel PR worker fails. `static-audits`
+  # this job must fail when any parallel PR worker fails. `headless-lanes`
+  # is a matrix: its result is `success` only when every lane leg
+  # succeeded, so one failed, cancelled or skipped lane fails the aggregate
+  # on every event (#2745). `static-audits`
   # carries no job-level condition, so `= success` is the right assertion for
   # it on pull requests AND master pushes alike -- a failure, a cancellation
   # and a skip are all non-success, which is what keeps the engine-free gates
@@ -1717,6 +1828,7 @@ jobs:
       - test-and-audits
       - static-audits
       - behavior-probes
+      - headless-lanes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1726,11 +1838,129 @@ jobs:
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
           AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probes.result }}
+          LANES_RESULT: ${{ needs.headless-lanes.result }}
         run: |
           test "$TESTS_RESULT" = success
           test "$AUDITS_RESULT" = success
+          test "$LANES_RESULT" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$PROBES_RESULT" = success
           else
             test "$PROBES_RESULT" = skipped
           fi
+
+  # The workflow's ONE project-cache (dist-newstyle) writer (#2745). The
+  # save used to be test-and-audits' last step, which was right while that
+  # job ran the whole headless suite; once the suite runs as parallel lane
+  # jobs, no worker can know whether the others succeeded. This job runs
+  # AFTER the aggregate, so it is eligible only once every worker's outcome
+  # is known, and it inherits the aggregate's event-specific policy instead
+  # of restating it: on a master push behavior-probes is expected to be
+  # skipped, and `build-test` already accepts exactly that skip and nothing
+  # else. A failed, cancelled or unexpectedly skipped worker fails the
+  # aggregate, which skips this job.
+  #
+  # The save keeps the guards it always had, term for term: master pushes
+  # only (pull requests stay restore-only), never on a docs-only change,
+  # never when the EXACT plan/epoch key was already restored (one immutable
+  # snapshot per key), and never under an empty key. So it is one eligible
+  # writer, not a write on every successful push. When the exact key is
+  # already present it builds nothing.
+  #
+  # It rebuilds the tree it saves from that same restore -- the library,
+  # every executable and both test suites, which is what test-and-audits'
+  # tree held on a master push, where every expensive gate fires -- because
+  # no build tree is handed between jobs. That rebuild costs master pushes
+  # only, after their verdict; it is never on a pull request's path.
+  project-cache:
+    needs: [resolve-image, test-and-audits, build-test]
+    # `!cancelled()` is load-bearing: without a status function GitHub
+    # applies success() over every ANCESTOR, and behavior-probes -- skipped
+    # on every master push by design -- is one, through build-test. The
+    # aggregate's own verdict below is what decides; it already accepts
+    # exactly that expected skip and nothing else.
+    if: >-
+      !cancelled()
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/master'
+      && needs.build-test.result == 'success'
+      && needs.test-and-audits.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Trust checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Toolchain (baked into the CI image)
+        run: |
+          /usr/local/.ghcup/bin/ghc --version
+          /usr/local/.ghcup/bin/cabal --version
+          echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
+          echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
+
+      # A master push selects the epoch from its own pushed SHA, exactly as
+      # test-and-audits did when it was the writer.
+      - name: Select project build cache epoch
+        id: cache-epoch
+        run: >-
+          python3 tools/ci_cache_epoch.py
+          --ref '${{ github.sha }}'
+          --github-output "$GITHUB_OUTPUT"
+          --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve dependency plan
+        run: |
+          cabal build all -v0 --dry-run
+          cabal update
+          cabal build all -v0 --dry-run
+
+      - name: Restore dependency cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /usr/local/cabal/store
+          key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
+          restore-keys: deps-v2-${{ runner.os }}-ghc9.12.2-
+
+      - name: Restore project build cache (dist-newstyle)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: dist-cache
+        with:
+          path: dist-newstyle
+          key: dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-${{ steps.cache-epoch.outputs.epoch }}
+          restore-keys: |
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-${{ hashFiles('dist-newstyle/cache/plan.json') }}-epoch-
+            dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
+            ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
+
+      - name: Build the tree the snapshot holds
+        if: steps.dist-cache.outputs.cache-hit != 'true'
+        run: |
+          cabal build all -v0
+          cabal build synarchy-test-headless -v0
+          cabal build synarchy-test-graphical -v0
+
+      # `key:` is the restore step's own `cache-primary-key`, never a second
+      # hashFiles(...): the exact-hit term is decided against that key.
+      - name: Save project build cache (dist-newstyle)
+        if: >-
+          github.event_name == 'push'
+          && github.ref == 'refs/heads/master'
+          && steps.dist-cache.outputs.cache-hit != 'true'
+          && steps.dist-cache.outputs.cache-primary-key != ''
+          && needs.test-and-audits.outputs.docs_only != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-newstyle
+          key: ${{ steps.dist-cache.outputs.cache-primary-key }}

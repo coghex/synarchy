@@ -73,6 +73,9 @@ from ci_parity_shell import (  # noqa: E402
 from ci_parity_workflow import (  # noqa: E402
     audit_cabal_verbosity,
     audit_gate_sets,
+    audit_headless_lane_wiring,
+    job_would_run,
+    WRITER_SCENARIOS,
     audit_parallel_gate_wiring,
     audit_unit_asset_gate_wiring,
     local_gate_invocations,
@@ -332,6 +335,7 @@ def _self_test() -> list[str]:
     # 14. The stable build-test context must aggregate every parallel
     #     worker, and the split-out audit worker must keep its topology.
     failures.extend(_parallel_gate_wiring_self_test())
+    failures.extend(_headless_lane_wiring_self_test())
 
     # 14b. The unit-asset gate's selector and guard travelled together.
     failures.extend(_unit_asset_wiring_self_test())
@@ -479,7 +483,7 @@ jobs:
           --exact --retries 1 --jobs 2
   build-test:
     if: always()
-    needs: [test-and-audits, static-audits, behavior-probes]
+    needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -487,9 +491,11 @@ jobs:
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
           AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probes.result }}
+          LANES_RESULT: ${{ needs.headless-lanes.result }}
         run: |
           test "$TESTS_RESULT" = success
           test "$AUDITS_RESULT" = success
+          test "$LANES_RESULT" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$PROBES_RESULT" = success
           else
@@ -510,15 +516,15 @@ def _parallel_gate_wiring_self_test() -> list[str]:
     mutations = (
         ("drop aggregate probe dependency",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "needs: [test-and-audits, static-audits, behavior-probes]",
-             "needs: [test-and-audits, static-audits]"), "must need exactly"),
+             "needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]",
+             "needs: [test-and-audits, static-audits, headless-lanes]"), "must need exactly"),
         # The #2272 aggregate wiring, from both halves: the stable context
         # has to DEPEND on the split-out worker and has to ASSERT its
         # result. Dropping either one alone leaves the other looking fine.
         ("drop aggregate static-audit dependency",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "needs: [test-and-audits, static-audits, behavior-probes]",
-             "needs: [test-and-audits, behavior-probes]"),
+             "needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]",
+             "needs: [test-and-audits, behavior-probes, headless-lanes]"),
          "must need exactly"),
         ("drop static-audit verdict assertion",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
@@ -559,6 +565,27 @@ def _parallel_gate_wiring_self_test() -> list[str]:
              "      image: ${{ needs.resolve-image.outputs.image }}\n"
              "    steps:\n      - run: python3 tools/static_audit.py\n", ""),
          "no `static-audits` job"),
+        # #2745: the lane jobs are workers like any other. The stable
+        # context must depend on them AND assert their result, and the
+        # assertion must not tolerate a skipped or failed lane.
+        ("drop aggregate lane dependency",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]",
+             "needs: [test-and-audits, static-audits, behavior-probes]"),
+         "must need exactly"),
+        ("drop lane verdict assertion",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             '          test "$LANES_RESULT" = success\n', ""),
+         'test "$LANES_RESULT" = success'),
+        ("accept skipped lanes",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             'test "$LANES_RESULT" = success',
+             'test "$LANES_RESULT" = skipped'),
+         'test "$LANES_RESULT" = success'),
+        ("drop lane verdict env",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "          LANES_RESULT: ${{ needs.headless-lanes.result }}\n", ""),
+         "worker-result env must be exactly"),
         ("drop always",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace("    if: always()\n", ""),
          "must use `if: always()`"),
@@ -669,6 +696,256 @@ def _parallel_gate_wiring_self_test() -> list[str]:
             "the pinned targets in the other order should still pass, got "
             f"{problems(reordered)}")
     for label, mutated, needle in mutations:
+        got = problems(mutated)
+        _expect(failures, any(needle in problem for problem in got),
+                f"{label} should fail with {needle!r}, got {got}")
+    return failures
+
+
+_SELECT_STEPS = """\
+      - name: Select docs-only fast path
+        id: docs-fast-path
+        run: |
+          # explains the fast path
+          echo "docs_only=false" >> "$GITHUB_OUTPUT"
+      - name: Select project build cache epoch
+        id: cache-epoch
+        run: python3 tools/ci_cache_epoch.py --ref "$CACHE_REF"
+      - name: Resolve dependency plan
+        run: cabal build all -v0 --dry-run
+      - name: Select expensive path-relevant gates
+        id: expensive-gates
+        run: echo worldgen=true >> "$GITHUB_OUTPUT"
+      - name: Restore dependency cache
+        uses: actions/cache/restore@v6
+        with:
+          path: /usr/local/cabal/store
+          key: deps
+      - name: Restore project build cache (dist-newstyle)
+        uses: actions/cache/restore@v6
+        id: dist-cache
+        with:
+          path: dist-newstyle
+          key: dist
+"""
+
+_LANE_WORKFLOW_GOOD = """\
+name: fixture
+on: [push, pull_request]
+jobs:
+  test-and-audits:
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      docs_only: ${{ steps.docs-fast-path.outputs.docs_only }}
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
+    steps:
+""" + _SELECT_STEPS + """\
+      - name: Headless lane coverage
+        run: python3 tools/headless_lanes.py
+  headless-lanes:
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [world, rest]
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
+    steps:
+""" + _SELECT_STEPS.replace("          # explains the fast path\n", "") + """\
+      - name: Build headless test suite
+        run: cabal build synarchy-test-headless -v0
+      - name: Headless lane
+        run: |
+          if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
+            echo full tier
+            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+          else
+            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+          fi
+  build-test:
+    if: always()
+    needs: [test-and-audits, static-audits, behavior-probes, headless-lanes]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "$LANES_RESULT" = success
+  project-cache:
+    needs: [resolve-image, test-and-audits, build-test]
+    if: >-
+      !cancelled()
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/master'
+      && needs.build-test.result == 'success'
+      && needs.test-and-audits.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Save project build cache (dist-newstyle)
+        uses: actions/cache/save@v6
+        with:
+          path: dist-newstyle
+          key: ${{ steps.dist-cache.outputs.cache-primary-key }}
+"""
+
+
+def _headless_lane_wiring_self_test() -> list[str]:
+    """#2745: the lane jobs and the one project-cache writer."""
+    failures: list[str] = []
+
+    # The scheduling model itself, on hand-checkable conditions.
+    master = dict(WRITER_SCENARIOS[0][1])
+    _expect(failures, not job_would_run("github.event_name == 'push'", master),
+            "a condition without a status function fails on a skipped ancestor")
+    _expect(failures, job_would_run("github.event_name == 'push'",
+                                    dict(master, ancestors_succeeded=True)),
+            "and passes when every ancestor succeeded")
+    _expect(failures, job_would_run("!cancelled() && github.event_name == 'push'", master),
+            "`!cancelled()` replaces the implicit success()")
+    _expect(failures, not job_would_run("!cancelled()", dict(master, cancelled=True)),
+            "`!cancelled()` stays off in a cancelled run")
+    _expect(failures, not job_would_run(
+                "!cancelled() && needs.test-and-audits.outputs.docs_only != 'true'",
+                dict(master, **{"needs.test-and-audits.outputs.docs_only": "true"})),
+            "`!=` compares against the context")
+    try:
+        job_would_run("a == 'x' || b == 'y'", master)
+        _expect(failures, False, "an unmodelled `||` condition must be refused")
+    except AuditError:
+        pass
+
+    def problems(text: str) -> list[str]:
+        return audit_headless_lane_wiring(text)
+
+    _expect(failures, problems(_LANE_WORKFLOW_GOOD) == [],
+            "the known-good lane fixture should pass, got "
+            f"{problems(_LANE_WORKFLOW_GOOD)}")
+    good = _LANE_WORKFLOW_GOOD
+    lane_header = "  headless-lanes:\n    needs: resolve-image\n"
+    mutations = (
+        ("lanes waiting for another job's build",
+         good.replace(lane_header,
+                      "  headless-lanes:\n    needs: [resolve-image, test-and-audits]\n"),
+         "must need exactly ['resolve-image']"),
+        ("lanes behind a job-level condition",
+         good.replace(lane_header,
+                      "  headless-lanes:\n    if: github.event_name == 'pull_request'\n"
+                      "    needs: resolve-image\n"),
+         "must carry no job-level `if:`"),
+        ("a shorter lane timeout",
+         good.replace("    timeout-minutes: 90\n    strategy:",
+                      "    timeout-minutes: 30\n    strategy:"),
+         "`timeout-minutes` must equal"),
+        ("fail-fast lanes",
+         good.replace("      fail-fast: false\n", ""),
+         "`strategy.fail-fast` must be false"),
+        ("an empty lane matrix",
+         good.replace("        lane: [world, rest]\n", "        lane: []\n"),
+         "`strategy.matrix.lane` must list the lanes"),
+        ("a drifted selection step",
+         good.replace("      - name: Headless lane coverage\n",
+                      "      - name: Headless lane coverage\n", 1).replace(
+             "        run: echo worldgen=true >> \"$GITHUB_OUTPUT\"\n"
+             "      - name: Restore dependency cache\n"
+             "        uses: actions/cache/restore@v6\n"
+             "        with:\n"
+             "          path: /usr/local/cabal/store\n"
+             "          key: deps\n"
+             "      - name: Restore project build cache (dist-newstyle)\n"
+             "        uses: actions/cache/restore@v6\n"
+             "        id: dist-cache\n"
+             "        with:\n"
+             "          path: dist-newstyle\n"
+             "          key: dist\n"
+             "      - name: Build headless",
+             "        run: echo worldgen=false >> \"$GITHUB_OUTPUT\"\n"
+             "      - name: Restore dependency cache\n"
+             "        uses: actions/cache/restore@v6\n"
+             "        with:\n"
+             "          path: /usr/local/cabal/store\n"
+             "          key: deps\n"
+             "      - name: Restore project build cache (dist-newstyle)\n"
+             "        uses: actions/cache/restore@v6\n"
+             "        id: dist-cache\n"
+             "        with:\n"
+             "          path: dist-newstyle\n"
+             "          key: dist\n"
+             "      - name: Build headless"),
+         "`Select expensive path-relevant gates` differs"),
+        ("a lane that runs the whole suite",
+         good.replace("--test-options='--lane ${{ matrix.lane }} --print-slow-items=20 "
+                      "--format=failed-examples'\n          else",
+                      "--test-options='--print-slow-items=20 --format=failed-examples'\n"
+                      "          else"),
+         "runs the unpartitioned headless suite"),
+        ("the full tier set on both branches",
+         good.replace("          else\n            cabal test",
+                      "          else\n            SYNARCHY_FULL_TESTS=1 cabal test"),
+         "exactly one branch may set the full tier"),
+        ("an empty-valued full tier",
+         good.replace("SYNARCHY_FULL_TESTS=1 cabal test", "SYNARCHY_FULL_TESTS= cabal test"),
+         "exactly one branch may set the full tier"),
+        ("the full tier on a different selector",
+         good.replace('if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then',
+                      'if [ "${{ github.event_name }}" = push ]; then'),
+         "must open with"),
+        ("the full tier on the ungated branch",
+         good.replace("            echo full tier\n            SYNARCHY_FULL_TESTS=1 cabal test",
+                      "            echo full tier\n            cabal test").replace(
+             "          else\n            cabal test",
+             "          else\n            SYNARCHY_FULL_TESTS=1 cabal test"),
+         "must run the lane with `SYNARCHY_FULL_TESTS=1`"),
+        ("a lane that saves a cache",
+         good.replace("      - name: Build headless test suite\n",
+                      "      - name: Save it\n"
+                      "        uses: actions/cache/save@v6\n"
+                      "        with:\n          path: dist-newstyle\n          key: k\n"
+                      "      - name: Build headless test suite\n"),
+         "lane jobs restore caches and save none"),
+        ("an unpartitioned suite in another job",
+         good.replace("        run: python3 tools/headless_lanes.py\n",
+                      "        run: |\n          python3 tools/headless_lanes.py\n"
+                      "          cabal test synarchy-test-headless -v0\n"),
+         "runs the unpartitioned headless suite"),
+        ("a writer that does not wait for the aggregate",
+         good.replace("    needs: [resolve-image, test-and-audits, build-test]\n",
+                      "    needs: [resolve-image, test-and-audits]\n"),
+         "must need `build-test`"),
+        ("a writer on pull requests too",
+         good.replace("      && github.event_name == 'push'\n      && github.ref == 'refs/heads/master'\n",
+                      "      && github.ref == 'refs/heads/master'\n"),
+         "must be guarded by exactly"),
+        ("a writer on any push",
+         good.replace("      && github.event_name == 'push'\n      && github.ref == 'refs/heads/master'\n", ""),
+         "would run on a pull request"),
+        # #2745 round 2: without a status function GitHub applies success()
+        # over every ancestor, so the expected master-push probe skip would
+        # skip the writer on exactly the run it exists for.
+        ("a writer without a status function",
+         good.replace("      !cancelled()\n      && github.event_name", "      github.event_name"),
+         "would not run on a successful master push with behavior-probes skipped"),
+        ("a writer that runs even when cancelled",
+         good.replace("      !cancelled()\n", "      always()\n"),
+         "would run on a cancelled run"),
+        ("a writer that ignores the aggregate's verdict",
+         good.replace("      && needs.build-test.result == 'success'\n", ""),
+         "would run on a failed aggregate"),
+        ("a writer that ignores the docs-only path",
+         good.replace("      && needs.test-and-audits.outputs.docs_only != 'true'\n", ""),
+         "would run on a docs-only master push"),
+        ("no docs-only output for the writer",
+         good.replace("    outputs:\n      docs_only: ${{ steps.docs-fast-path.outputs.docs_only }}\n", ""),
+         "must export `outputs.docs_only`"),
+        ("no writer at all",
+         good[:good.index("  project-cache:\n")],
+         "no `project-cache` job"),
+    )
+    for label, mutated, needle in mutations:
+        if mutated == good:
+            _expect(failures, False, f"mutation {label!r} did not change the fixture")
+            continue
         got = problems(mutated)
         _expect(failures, any(needle in problem for problem in got),
                 f"{label} should fail with {needle!r}, got {got}")

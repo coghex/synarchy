@@ -148,7 +148,18 @@ python3 tools/headless_init_import_audit.py --record --builddir dist-newstyle --
 python3 tools/headless_init_import_audit.py --builddir dist-newstyle
 python3 tools/headless_init_import_audit.py --cabal-regression
 
+step "headless lane coverage"
+# CI runs the suite as one job per lane (#2745); this checks, without
+# running an example, that those lanes are exactly the whole suite in both
+# tiers and that CI's lane matrix names exactly the lanes the executable
+# declares (#2744). It matches test-and-audits' `Headless lane coverage`.
+python3 tools/headless_lanes.py
+
 step "headless hspec suite (full tier)"
+# This gate still runs the whole suite in ONE process: the lanes above
+# partition exactly this set, so running them one by one here would add
+# nothing locally (#2745).
+#
 # SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
 # real runs (#1364) -- today exactly one, the w128 seed-42 volcano
 # exposure regression in test-headless/Test/Headless/WorldGen/Exposure.hs.
@@ -160,11 +171,11 @@ step "headless hspec suite (full tier)"
 # enabled.
 #
 # --test-options carries Hspec's --print-slow-items=20 (#2277), matching
-# both of CI's branches, so this step ends with the twenty slowest spec
+# both of CI's lane branches, so this step ends with the twenty slowest spec
 # items locally too. It is a diagnostic: no threshold here fails the gate.
 #
 # It also carries --format=failed-examples (#1916), again matching both
-# of CI's branches -- this gate mirrors the workflow, so the two entry
+# of CI's lane branches -- this gate mirrors the workflow, so the two entry
 # points must request the SAME presentation. That formatter prints
 # nothing per example, so a passing run's output is a constant handful
 # of lines rather than one per each of test-headless/'s five-thousand-odd

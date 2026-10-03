@@ -154,6 +154,7 @@ from ci_parity_shell import (
 from ci_parity_workflow import (
     audit_cabal_verbosity,
     audit_gate_sets,
+    audit_headless_lane_wiring,
     audit_parallel_gate_wiring,
     audit_probe_prerequisite_build,
     audit_unit_asset_gate_wiring,
@@ -203,6 +204,7 @@ __all__ = [
     "WORKFLOW_UNION_LABEL",
     "audit_cabal_verbosity",
     "audit_gate_sets",
+    "audit_headless_lane_wiring",
     "audit_parallel_gate_wiring",
     "audit_probe_prerequisite_build",
     "audit_save_compat_reproducibility_wiring",
@@ -240,6 +242,7 @@ def run_repository_audit() -> int:
         # live in the split-out worker (#2272).
         problems.extend(audit_unit_asset_gate_wiring(yaml_text))
         problems.extend(audit_parallel_gate_wiring(yaml_text))
+        problems.extend(audit_headless_lane_wiring(yaml_text))
         # Nor for the Cabal commands themselves, which the gate-set
         # comparison deliberately does not carry (#1920): their verbosity
         # is a cross-file contract nothing else can see.

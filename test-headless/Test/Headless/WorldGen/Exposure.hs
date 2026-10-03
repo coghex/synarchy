@@ -172,8 +172,8 @@ spec = do
         -- lava columns at the known volcano repro.
         --
         -- SYNARCHY_FULL_TESTS is enabled WHOLESALE, not per test
-        -- (#1364): .github/workflows/ci.yml's "Headless test suite"
-        -- step sets it whenever the worldgen gate fires — every
+        -- (#1364): .github/workflows/ci.yml's "Headless lane" step
+        -- (#2745) sets it whenever the worldgen gate fires — every
         -- worldgen-output PR and every push to master — and
         -- tools/ci-local.sh (`make ci`) sets it unconditionally. So
         -- ANY future full-tier example added behind this variable
