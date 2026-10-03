@@ -581,9 +581,9 @@ def perturb_lashout_case(port, case, attempt, lash, attacker):
                      record unchanged (stale_wait_chunk). Game time keeps
                      running; nothing is frozen. That attempt must then
                      be discarded and RESTAGED. Without the dressing, a
-                     traced run had the subject bleed out from the staged
-                     neck slash inside the >10 s wait, so no stale
-                     selection ever happened;
+                     traced run had the subject dead by the observer
+                     timeout (the staged neck slash bled it out), so no
+                     stale selection ever happened;
       * ineligible — every attempt: teleport the attacker beyond
                      lash-out range, so no attempt is gradable and 9a
                      must end in a named SETUP failure.
@@ -676,9 +676,9 @@ def neuter_snapshot_problems(snap, uids):
         if abs(r["base"] - NEUTERED_STRENGTH_BASE) > 1e-6:
             problems.append(f"{u}: strength_base {r['base']} != "
                             f"{NEUTERED_STRENGTH_BASE}")
-        if r["height"] <= 0 or r["lean"] <= 0:
+        if r["height"] <= 0 or r["lean"] <= 0 or r["mass"] <= 0:
             problems.append(f"{u}: height {r['height']} / lean_mass "
-                            f"{r['lean']} not positive")
+                            f"{r['lean']} / body_mass {r['mass']} not positive")
             continue
         expected = (NEUTERED_STRENGTH_BASE
                     * (r["lean"] / (8.8 * r["height"] ** 2)) ** 0.7)
@@ -709,30 +709,33 @@ def stale_dress_chunk(lash, attacker):
         "local real = _G.__probe_lash_real_gla;",
         "if type(real) ~= 'function' then return { err = 'setup mask not installed' } end;",
         "local function rec() local a = real(u);",
-        " if not a then return nil end; return { uid = a.uid, at = a.at } end;",
+        " if not a then return nil end;",
+        " return { uid = a.uid, at = a.at, typed = fin(a.uid) and fin(a.at) } end;",
         "local before = rec(); _G.__probe_stale_rec = before;",
         "unit.setKnowledge(u, 'bleed_control', 100);",
-        "local n, stalled, typed = 0, 0, true;",
+        "local n, stalled, typed, reason = 0, 0, true, 'bound';",
         "local function rate() local b = unit.getBlood(u);",
         " return b and b.bleedRate or nil end;",
         "local last = rate();",
         f"for _ = 1, {STANCH_ATTEMPTS} do",
-        f" local now0 = rate(); if not fin(now0) or now0 <= {STANCH_SETTLED_RATE} then break end;",
+        " local now0 = rate(); if not fin(now0) then reason = 'rate_unreadable'; break end;",
+        f" if now0 <= {STANCH_SETTLED_RATE} then reason = 'settled'; break end;",
         " local r = unit.treatBleeding(u, u);",
-        " if type(r) ~= 'table' or type(r.ok) ~= 'boolean' then typed = false; break end;",
-        " if not r.ok then break end;",
+        " if type(r) ~= 'table' or type(r.ok) ~= 'boolean' then",
+        "  typed = false; reason = 'untyped'; break end;",
+        " if not r.ok then reason = 'treatment_failed'; break end;",
         " n = n + 1;",
         " local now = rate();",
         " if fin(now) and fin(last) and now < last - 1e-6 then stalled = 0"
         " else stalled = stalled + 1 end;",
         " last = now;",
-        f" if stalled >= {STANCH_STALLED_PASSES} then break end end;",
+        f" if stalled >= {STANCH_STALLED_PASSES} then reason = 'stalled'; break end end;",
         "unit.setKnowledge(u, 'bleed_control', 0);",
         "local after = rec(); local b = unit.getBlood(u);",
         "return { before = before, after = after, attacker = A,",
-        " same = (before ~= nil and after ~= nil and before.uid == after.uid",
-        "  and before.at == after.at),",
-        " dressed = n, stalled = stalled, typed = typed,",
+        " same = (before ~= nil and after ~= nil and before.typed and after.typed",
+        "  and before.uid == after.uid and before.at == after.at),",
+        " dressed = n, stalled = stalled, typed = typed, reason = reason,",
         " bleedRate = b and b.bleedRate or nil, blood = b and b.current or nil,",
         " finite = b ~= nil and fin(b.bleedRate) and fin(b.current),",
         " pose = tostring(unit.getPose(u)) }",
@@ -740,41 +743,74 @@ def stale_dress_chunk(lash, attacker):
         "if not ok then return { err = tostring(res) } end; return res"))
 
 
+def _finite_num(v):
+    """A real, finite number (bool excluded)."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
+
+
+def _record_problems(rec, attacker, label):
+    """A real attacker record must be present, typed (finite uid and 'at')
+    and name the expected attacker."""
+    if not isinstance(rec, dict):
+        return [f"no real attacker record {label}"]
+    if (rec.get("typed") is not True or not _finite_num(rec.get("uid"))
+            or not _finite_num(rec.get("at"))):
+        return [f"real attacker record {label} untyped "
+                f"(uid {rec.get('uid')!r}, at {rec.get('at')!r})"]
+    if rec.get("uid") != attacker:
+        return [f"real record {label} names {rec.get('uid')}, not "
+                f"attacker {attacker}"]
+    return []
+
+
+def _blood_problems(blood, rate):
+    """Blood and bleed rate must be present, finite and non-negative, with
+    blood left."""
+    if not _finite_num(blood) or not _finite_num(rate):
+        return [f"blood unreadable ({blood!r}, {rate!r})"]
+    problems = []
+    if not blood > 0:
+        problems.append(f"blood {blood} not > 0")
+    if rate < 0:
+        problems.append(f"bleed rate {rate} negative")
+    return problems
+
+
 def stale_dressing_problems(d, attacker):
-    """Everything wrong with a stale_dress_chunk answer; empty only when the
-    real record exists, names the attacker and was identical before and
-    after (compared in Lua), every treatment result was typed, the subject
-    is alive and standing with blood left, and it no longer bleeds
-    (bleedRate <= STANCH_SETTLED_RATE). A failed, stalled or missing
-    result never passes."""
+    """Everything wrong with a stale_dress_chunk answer; empty only when:
+    the loop stopped because the subject SETTLED (an explicit treatment
+    failure, an untyped result, a stall, an unreadable rate or running
+    out of attempts each fail on their own, whatever the final readings);
+    the real record exists, is typed and names the attacker before AND
+    after, and was identical across the dressing (compared in Lua); the
+    subject is standing; and blood and rate are present, finite and
+    non-negative with blood left and bleedRate <= STANCH_SETTLED_RATE."""
     if not isinstance(d, dict):
         return [f"dressing chunk answered {d!r}"]
     if "err" in d:
         return [f"dressing chunk raised: {d['err']}"]
     problems = []
-    before = d.get("before")
-    if not isinstance(before, dict):
-        problems.append("no real attacker record before dressing")
-    elif before.get("uid") != attacker:
-        problems.append(f"real record names {before.get('uid')}, not "
-                        f"attacker {attacker}")
-    if d.get("same") is not True:
-        problems.append(f"real record changed across dressing ({before} -> "
-                        f"{d.get('after')})")
+    reason = d.get("reason")
+    if reason != "settled":
+        problems.append(f"dressing stopped by {reason!r} after "
+                        f"{d.get('dressed')} treatment(s) (stalled "
+                        f"{d.get('stalled')})")
     if d.get("typed") is not True:
         problems.append("a treatment returned an untyped result")
+    problems += _record_problems(d.get("before"), attacker, "before dressing")
+    problems += _record_problems(d.get("after"), attacker, "after dressing")
+    if d.get("same") is not True:
+        problems.append(f"real record changed across dressing "
+                        f"({d.get('before')} -> {d.get('after')})")
     if d.get("pose") != "standing":
-        problems.append(f"subject pose {d.get('pose')}, not standing")
-    if d.get("finite") is not True:
-        problems.append(f"blood unreadable ({d.get('blood')}, "
-                        f"{d.get('bleedRate')})")
-    else:
-        if not d["blood"] > 0:
-            problems.append(f"blood {d['blood']} not > 0")
-        if not d["bleedRate"] <= STANCH_SETTLED_RATE:
-            problems.append(f"still bleeding {d['bleedRate']:.4g} after "
-                            f"{d.get('dressed')} dressing(s) (stalled "
-                            f"{d.get('stalled')})")
+        problems.append(f"subject pose {d.get('pose')!r}, not standing")
+    blood = _blood_problems(d.get("blood"), d.get("bleedRate"))
+    if not blood and d.get("finite") is not True:
+        blood = ["blood unreadable in Lua"]
+    problems += blood
+    if not blood and not d["bleedRate"] <= STANCH_SETTLED_RATE:
+        problems.append(f"still bleeding {d['bleedRate']:.4g}")
     return problems
 
 
@@ -787,29 +823,36 @@ def stale_wait_chunk(lash):
         "local ok, res = pcall(function()",
         f"local a = _G.__probe_lash_real_gla and _G.__probe_lash_real_gla({lash});",
         "local r = _G.__probe_stale_rec;",
+        _LUA_FINITE,
         "local now = engine.gameTime();",
-        f"return {{ pose = tostring(unit.getPose({lash})),",
-        " same = (a ~= nil and r ~= nil and a.uid == r.uid and a.at == r.at),",
-        " age = a and (now - (a.at or 0)) or -1 }",
+        f"local b = unit.getBlood({lash});",
+        f"return {{ pose = unit.getPose({lash}),",
+        " same = (a ~= nil and r ~= nil and r.typed == true and fin(a.uid)",
+        "  and fin(a.at) and a.uid == r.uid and a.at == r.at),",
+        " age = (a ~= nil and fin(a.at)) and (now - a.at) or nil,",
+        " blood = b and b.current or nil, bleedRate = b and b.bleedRate or nil }",
         "end);",
         "if not ok then return { err = tostring(res) } end; return res"))
 
 
 def stale_wait_verdict(w):
-    """'aged' once the unchanged hit is older than 10.5 game-s with the
-    subject alive; 'waiting' before that; otherwise the named reason the
-    wait is invalid."""
+    """'aged' once the unchanged, typed hit is older than 10.5 game-s with
+    the subject standing and its blood readable; 'waiting' before that;
+    otherwise the named reason the wait is invalid (a missing, unknown or
+    non-standing pose included)."""
     if not isinstance(w, dict):
         return f"age poll answered {w!r}"
     if "err" in w:
         return f"age poll raised: {w['err']}"
-    if w.get("pose") in ("dead", "collapsed"):
-        return f"subject {w.get('pose')} during the wait"
+    if w.get("pose") != "standing":
+        return f"subject pose {w.get('pose')!r} during the wait, not standing"
     if w.get("same") is not True:
-        return "real attacker record changed during the wait"
+        return "real attacker record missing, untyped or changed during the wait"
+    blood = _blood_problems(w.get("blood"), w.get("bleedRate"))
+    if blood:
+        return "; ".join(blood) + " during the wait"
     age = w.get("age")
-    if (not isinstance(age, (int, float)) or isinstance(age, bool)
-            or not math.isfinite(age)):
+    if not _finite_num(age):
         return f"hit age unreadable ({age!r})"
     return "aged" if age > 10.5 else "waiting"
 
@@ -1123,12 +1166,18 @@ def self_test():
     check("neuter: raw strength left at the old value fails (setter after recompute)",
           neuter_snapshot_problems({"u2": dict(good, raw=1.0, body=1.0), "u1": good}, (2, 1)) != [])
     check("neuter: a raised chunk fails", neuter_snapshot_problems({"err": "boom"}, (2, 1)) != [])
+    check("neuter: a malformed setter result fails",
+          neuter_snapshot_problems({"u2": dict(good, setBase="ok"), "u1": good}, (2, 1)) != [])
+    check("neuter: a non-positive body_mass fails",
+          neuter_snapshot_problems({"u2": dict(good, mass=0.0), "u1": good}, (2, 1)) != [])
     check("neuter: no answer fails", neuter_snapshot_problems(None, (2, 1)) != [])
 
     # stale_dressing_problems
-    dgood = {"before": {"uid": 2, "at": 10.5}, "after": {"uid": 2, "at": 10.5},
-             "same": True, "typed": True, "pose": "standing", "finite": True,
-             "blood": 4.9, "bleedRate": 0.0, "dressed": 1, "stalled": 0}
+    rgood = {"uid": 2, "at": 10.5, "typed": True}
+    dgood = {"before": dict(rgood), "after": dict(rgood), "same": True,
+             "typed": True, "reason": "settled", "pose": "standing",
+             "finite": True, "blood": 4.9, "bleedRate": 0.0, "dressed": 1,
+             "stalled": 0}
     check("dressing: a dressed, unchanged, standing subject passes",
           stale_dressing_problems(dgood, 2) == [])
     check("dressing: still bleeding fails",
@@ -1142,20 +1191,49 @@ def self_test():
     check("dressing: no blood left fails", stale_dressing_problems(dict(dgood, blood=0.0), 2) != [])
     check("dressing: unreadable blood fails", stale_dressing_problems(dict(dgood, finite=False), 2) != [])
     check("dressing: no answer fails", stale_dressing_problems(None, 2) != [])
+    check("dressing: an explicit treatment failure fails even with a low final rate",
+          stale_dressing_problems(dict(dgood, reason="treatment_failed", bleedRate=0.0), 2) != [])
+    check("dressing: a stall fails even with a low final rate",
+          stale_dressing_problems(dict(dgood, reason="stalled", stalled=3, bleedRate=0.0), 2) != [])
+    check("dressing: running out of attempts fails",
+          stale_dressing_problems(dict(dgood, reason="bound"), 2) != [])
+    check("dressing: a missing stop reason fails",
+          stale_dressing_problems({k: v for k, v in dgood.items() if k != "reason"}, 2) != [])
+    check("dressing: a missing timestamp fails",
+          stale_dressing_problems(dict(dgood, before={"uid": 2, "at": None, "typed": False}), 2) != [])
+    check("dressing: nil == nil never passes",
+          stale_dressing_problems(dict(dgood, before=None, after=None, same=True), 2) != [])
+    check("dressing: a negative bleed rate fails",
+          stale_dressing_problems(dict(dgood, bleedRate=-0.1), 2) != [])
+    check("dressing: missing blood fails",
+          stale_dressing_problems(dict(dgood, blood=None), 2) != [])
 
     # stale_wait_verdict
+    wgood = {"pose": "standing", "same": True, "age": 10.6, "blood": 4.9,
+             "bleedRate": 0.0}
     check("wait: an aged, unchanged hit on a live subject is 'aged'",
-          stale_wait_verdict({"pose": "standing", "same": True, "age": 10.6}) == "aged")
+          stale_wait_verdict(wgood) == "aged")
     check("wait: a young hit is 'waiting'",
-          stale_wait_verdict({"pose": "standing", "same": True, "age": 4.0}) == "waiting")
+          stale_wait_verdict(dict(wgood, age=4.0)) == "waiting")
+    check("wait: a missing pose is invalid",
+          stale_wait_verdict({k: v for k, v in wgood.items() if k != "pose"})
+          not in ("aged", "waiting"))
+    check("wait: a malformed pose is invalid",
+          stale_wait_verdict(dict(wgood, pose=7)) not in ("aged", "waiting"))
+    check("wait: an unknown pose is invalid",
+          stale_wait_verdict(dict(wgood, pose="crawling")) not in ("aged", "waiting"))
+    check("wait: missing blood is invalid",
+          stale_wait_verdict(dict(wgood, blood=None)) not in ("aged", "waiting"))
+    check("wait: a negative bleed rate is invalid",
+          stale_wait_verdict(dict(wgood, bleedRate=-1.0)) not in ("aged", "waiting"))
     check("wait: a dead subject is invalid",
-          stale_wait_verdict({"pose": "dead", "same": True, "age": 11.0}) not in ("aged", "waiting"))
+          stale_wait_verdict(dict(wgood, pose="dead")) not in ("aged", "waiting"))
     check("wait: a collapsed subject is invalid",
-          stale_wait_verdict({"pose": "collapsed", "same": True, "age": 11.0}) not in ("aged", "waiting"))
+          stale_wait_verdict(dict(wgood, pose="collapsed")) not in ("aged", "waiting"))
     check("wait: a changed record is invalid",
-          stale_wait_verdict({"pose": "standing", "same": False, "age": 11.0}) not in ("aged", "waiting"))
+          stale_wait_verdict(dict(wgood, same=False)) not in ("aged", "waiting"))
     check("wait: an unreadable age is invalid",
-          stale_wait_verdict({"pose": "standing", "same": True, "age": None}) not in ("aged", "waiting"))
+          stale_wait_verdict(dict(wgood, age=None)) not in ("aged", "waiting"))
     check("wait: no answer is invalid", stale_wait_verdict(None) not in ("aged", "waiting"))
 
     # stale_demo_verdict
