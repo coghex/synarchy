@@ -70,7 +70,7 @@ Usage: python3 tools/mental_state_probe.py [--port 9352]
 Exit 0 = pass.
 """
 from __future__ import annotations
-import argparse, glob, json, sys, time
+import argparse, glob, json, math, sys, time
 from probelib import (boot, init_arena, load_ai_stack, poll_until,
                       quit_engine, send, send_json, spawn_acolyte)
 
@@ -369,12 +369,16 @@ def stage_lashout_cluster(port, x, y):
     # fracture). toughness=100 is kept: it caps Combat.Resolution's
     # energy-transfer reduction at its 50% max (clamp(toughness*0.05, 0,
     # 0.5)), a second, independent line of defense.
-    send(port, f"unit.setStat({attacker},'strength_base',{NEUTERED_STRENGTH_BASE}); "
-               f"unit.setStat({attacker},'toughness',100); "
-               f"unit.recomputeBody({attacker}); "
-               f"unit.setStat({lash},'strength_base',{NEUTERED_STRENGTH_BASE}); "
-               f"unit.setStat({lash},'toughness',100); "
-               f"unit.recomputeBody({lash}); return 'ok'")
+    #
+    # Verified, not trusted (#2773): the same chunk answers every setter's
+    # and recomputeBody's boolean and a typed snapshot of both fighters,
+    # and neuter_snapshot_problems refuses anything short of a neuter that
+    # took — BEFORE the attack order, so an unbounded hit never happens.
+    neutered = send_json(port, neuter_chunk((attacker, lash)), timeout=15.0)
+    problems = neuter_snapshot_problems(neutered, (attacker, lash))
+    if problems:
+        return lash, attacker, None, ("neuter not established: "
+                                      + "; ".join(problems))
     send(port, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
                f"return 'ok'")
     hit = poll_until(35, lambda: send(
@@ -568,25 +572,254 @@ def perturb_lashout_case(port, case, attempt, lash, attacker):
     preconditions before the break, through the real engine, so the
     classification can be shown on the actual selection path. Staging
     has already stood the attacker down, so its hit can age and it stays
-    where it is put.
+    where it is put. Answers a named setup problem, or None.
 
-      * stale      — first attempt only: wait until the staged hit is
-                     older than the attacker window (game time keeps
-                     running; nothing is frozen), so that attempt must be
-                     discarded and RESTAGED;
+      * stale      — first attempt only: dress the staged wound
+                     (stale_dress_chunk), then wait until the staged hit
+                     is older than the attacker window, checking at every
+                     poll that the subject is alive and its real attacker
+                     record unchanged (stale_wait_chunk). Game time keeps
+                     running; nothing is frozen. That attempt must then
+                     be discarded and RESTAGED. Without the dressing, a
+                     traced run had the subject bleed out from the staged
+                     neck slash inside the >10 s wait, so no stale
+                     selection ever happened;
       * ineligible — every attempt: teleport the attacker beyond
                      lash-out range, so no attempt is gradable and 9a
                      must end in a named SETUP failure.
     """
     if case == "stale" and attempt == 1:
-        poll_until(30, lambda: send(
-            port, f"local a=_G.__probe_lash_real_gla({lash}); "
-                  f"return (a and engine.gameTime()-a.at > 10.5) and 'yes' or 'no'"
-        ) == "yes", interval=0.5)
+        dressed = send_json(port, stale_dress_chunk(lash, attacker), timeout=30.0)
+        problems = stale_dressing_problems(dressed, attacker)
+        if problems:
+            return "stale dressing not established: " + "; ".join(problems)
+        last = {}
+
+        def aged():
+            got = send_json(port, stale_wait_chunk(lash))
+            last["v"] = got
+            verdict = stale_wait_verdict(got)
+            return verdict if verdict != "waiting" else None
+        verdict = poll_until(30, aged, interval=0.5)
+        if verdict is None:
+            return ("stale wait timed out before the hit aged past 10.5 s "
+                    f"({last.get('v')})")
+        if verdict != "aged":
+            return f"stale wait invalid: {verdict}"
     elif case == "ineligible":
         lx, ly = unit_pos(port, lash)
         send(port, f"unit.setPos({attacker}, {lx + 12}, {ly}); return 'ok'")
         poll_until(5, lambda: abs(unit_pos(port, attacker)[0] - (lx + 12)) < 0.25)
+    return None
+
+
+# ---- #2773 setup verification. The pure validators below are exercised
+# ---- with no engine by `--self-test`.
+
+#: The finite-number test, spelled once for every Lua chunk below.
+_LUA_FINITE = ("local function fin(v) return type(v) == 'number' and v == v "
+               "and v ~= math.huge and v ~= -math.huge end;")
+
+
+def neuter_chunk(uids):
+    """ONE console chunk: neuter each fighter (strength_base, toughness,
+    unit.recomputeBody) and answer every call's boolean plus a typed
+    snapshot read back after the recompute. All three verbs write the
+    unit manager synchronously, so the snapshot reflects them."""
+    per = " ".join(
+        f"do local u = {u}; local r = {{}};"
+        f" r.setBase = unit.setStat(u, 'strength_base', {NEUTERED_STRENGTH_BASE});"
+        f" r.setTough = unit.setStat(u, 'toughness', 100);"
+        f" r.recompute = unit.recomputeBody(u);"
+        f" local function g(k) return unit.getStatBase(u, k) end;"
+        f" r.raw = g('strength'); r.eff = unit.getStat(u, 'strength');"
+        f" r.base = g('strength_base'); r.body = g('strength_body');"
+        f" r.tough = g('toughness'); r.height = g('height');"
+        f" r.lean = g('lean_mass'); r.mass = g('body_mass');"
+        f" r.finite = fin(r.raw) and fin(r.eff) and fin(r.base) and fin(r.body)"
+        f" and fin(r.tough) and fin(r.height) and fin(r.lean) and fin(r.mass);"
+        f" out['u{u}'] = r end"
+        for u in uids)
+    return ("local ok, res = pcall(function() " + _LUA_FINITE
+            + " local out = {}; " + per + " return out end);"
+            " if not ok then return { err = tostring(res) } end; return res")
+
+
+def neuter_snapshot_problems(snap, uids):
+    """Everything wrong with a neuter_chunk answer; empty when the neuter
+    took on every fighter: all three calls true, every snapshot value a
+    finite number, strength_base exactly NEUTERED_STRENGTH_BASE, toughness
+    100, and the raw strength (and strength_body, which mirrors it) equal
+    to recomputeBodyDerivedStats's strength_base*(lean/(8.8*height^2))^0.7
+    within tolerance (Unit.Thread.Command.Body)."""
+    if not isinstance(snap, dict):
+        return [f"neuter chunk answered {snap!r}"]
+    if "err" in snap:
+        return [f"neuter chunk raised: {snap['err']}"]
+    problems = []
+    for u in uids:
+        r = snap.get(f"u{u}")
+        if not isinstance(r, dict):
+            problems.append(f"{u}: no snapshot")
+            continue
+        for k in ("setBase", "setTough", "recompute"):
+            if r.get(k) is not True:
+                problems.append(f"{u}: {k} returned {r.get(k)!r}")
+        keys = ("raw", "eff", "base", "body", "tough", "height", "lean", "mass")
+        bad = [k for k in keys
+               if not (isinstance(r.get(k), (int, float))
+                       and not isinstance(r.get(k), bool)
+                       and math.isfinite(r[k]))]
+        if bad or r.get("finite") is not True:
+            problems.append(f"{u}: missing or non-finite {bad or ['(lua)']}")
+            continue
+        if abs(r["base"] - NEUTERED_STRENGTH_BASE) > 1e-6:
+            problems.append(f"{u}: strength_base {r['base']} != "
+                            f"{NEUTERED_STRENGTH_BASE}")
+        if r["height"] <= 0 or r["lean"] <= 0:
+            problems.append(f"{u}: height {r['height']} / lean_mass "
+                            f"{r['lean']} not positive")
+            continue
+        expected = (NEUTERED_STRENGTH_BASE
+                    * (r["lean"] / (8.8 * r["height"] ** 2)) ** 0.7)
+        tol = 1e-5 + 1e-3 * expected
+        if abs(r["raw"] - expected) > tol:
+            problems.append(f"{u}: raw strength {r['raw']:.6g} != expected "
+                            f"{expected:.6g}")
+        if abs(r["body"] - r["raw"]) > tol:
+            problems.append(f"{u}: strength_body {r['body']:.6g} != raw "
+                            f"strength {r['raw']:.6g}")
+        if abs(r["tough"] - 100) > 1e-6:
+            problems.append(f"{u}: toughness {r['tough']} != 100")
+    return problems
+
+
+def stale_dress_chunk(lash, attacker):
+    """ONE console chunk for the stale demo's first attempt: read the
+    subject's REAL attacker record through the setup mask's own saved
+    original (_G.__probe_lash_real_gla — the mask stays in place and is
+    neither lifted nor rewritten), dress its wounds by self-treatment
+    with stanch's loop and bounds, read the record again, and answer
+    both records (compared here, in Lua, on the raw values), the
+    treatment results, the subject's pose and its blood."""
+    return " ".join((
+        "local ok, res = pcall(function()",
+        _LUA_FINITE,
+        f"local u, A = {lash}, {attacker};",
+        "local real = _G.__probe_lash_real_gla;",
+        "if type(real) ~= 'function' then return { err = 'setup mask not installed' } end;",
+        "local function rec() local a = real(u);",
+        " if not a then return nil end; return { uid = a.uid, at = a.at } end;",
+        "local before = rec(); _G.__probe_stale_rec = before;",
+        "unit.setKnowledge(u, 'bleed_control', 100);",
+        "local n, stalled, typed = 0, 0, true;",
+        "local function rate() local b = unit.getBlood(u);",
+        " return b and b.bleedRate or nil end;",
+        "local last = rate();",
+        f"for _ = 1, {STANCH_ATTEMPTS} do",
+        f" local now0 = rate(); if not fin(now0) or now0 <= {STANCH_SETTLED_RATE} then break end;",
+        " local r = unit.treatBleeding(u, u);",
+        " if type(r) ~= 'table' or type(r.ok) ~= 'boolean' then typed = false; break end;",
+        " if not r.ok then break end;",
+        " n = n + 1;",
+        " local now = rate();",
+        " if fin(now) and fin(last) and now < last - 1e-6 then stalled = 0"
+        " else stalled = stalled + 1 end;",
+        " last = now;",
+        f" if stalled >= {STANCH_STALLED_PASSES} then break end end;",
+        "unit.setKnowledge(u, 'bleed_control', 0);",
+        "local after = rec(); local b = unit.getBlood(u);",
+        "return { before = before, after = after, attacker = A,",
+        " same = (before ~= nil and after ~= nil and before.uid == after.uid",
+        "  and before.at == after.at),",
+        " dressed = n, stalled = stalled, typed = typed,",
+        " bleedRate = b and b.bleedRate or nil, blood = b and b.current or nil,",
+        " finite = b ~= nil and fin(b.bleedRate) and fin(b.current),",
+        " pose = tostring(unit.getPose(u)) }",
+        "end);",
+        "if not ok then return { err = tostring(res) } end; return res"))
+
+
+def stale_dressing_problems(d, attacker):
+    """Everything wrong with a stale_dress_chunk answer; empty only when the
+    real record exists, names the attacker and was identical before and
+    after (compared in Lua), every treatment result was typed, the subject
+    is alive and standing with blood left, and it no longer bleeds
+    (bleedRate <= STANCH_SETTLED_RATE). A failed, stalled or missing
+    result never passes."""
+    if not isinstance(d, dict):
+        return [f"dressing chunk answered {d!r}"]
+    if "err" in d:
+        return [f"dressing chunk raised: {d['err']}"]
+    problems = []
+    before = d.get("before")
+    if not isinstance(before, dict):
+        problems.append("no real attacker record before dressing")
+    elif before.get("uid") != attacker:
+        problems.append(f"real record names {before.get('uid')}, not "
+                        f"attacker {attacker}")
+    if d.get("same") is not True:
+        problems.append(f"real record changed across dressing ({before} -> "
+                        f"{d.get('after')})")
+    if d.get("typed") is not True:
+        problems.append("a treatment returned an untyped result")
+    if d.get("pose") != "standing":
+        problems.append(f"subject pose {d.get('pose')}, not standing")
+    if d.get("finite") is not True:
+        problems.append(f"blood unreadable ({d.get('blood')}, "
+                        f"{d.get('bleedRate')})")
+    else:
+        if not d["blood"] > 0:
+            problems.append(f"blood {d['blood']} not > 0")
+        if not d["bleedRate"] <= STANCH_SETTLED_RATE:
+            problems.append(f"still bleeding {d['bleedRate']:.4g} after "
+                            f"{d.get('dressed')} dressing(s) (stalled "
+                            f"{d.get('stalled')})")
+    return problems
+
+
+def stale_wait_chunk(lash):
+    """One age-poll read: the hit's age, plus the subject's survival and
+    whether its REAL attacker record is still exactly the one the dressing
+    chunk saved (_G.__probe_stale_rec) — compared in Lua, on the raw
+    values, so no float round-trips through JSON."""
+    return " ".join((
+        "local ok, res = pcall(function()",
+        f"local a = _G.__probe_lash_real_gla and _G.__probe_lash_real_gla({lash});",
+        "local r = _G.__probe_stale_rec;",
+        "local now = engine.gameTime();",
+        f"return {{ pose = tostring(unit.getPose({lash})),",
+        " same = (a ~= nil and r ~= nil and a.uid == r.uid and a.at == r.at),",
+        " age = a and (now - (a.at or 0)) or -1 }",
+        "end);",
+        "if not ok then return { err = tostring(res) } end; return res"))
+
+
+def stale_wait_verdict(w):
+    """'aged' once the unchanged hit is older than 10.5 game-s with the
+    subject alive; 'waiting' before that; otherwise the named reason the
+    wait is invalid."""
+    if not isinstance(w, dict):
+        return f"age poll answered {w!r}"
+    if "err" in w:
+        return f"age poll raised: {w['err']}"
+    if w.get("pose") in ("dead", "collapsed"):
+        return f"subject {w.get('pose')} during the wait"
+    if w.get("same") is not True:
+        return "real attacker record changed during the wait"
+    age = w.get("age")
+    if (not isinstance(age, (int, float)) or isinstance(age, bool)
+            or not math.isfinite(age)):
+        return f"hit age unreadable ({age!r})"
+    return "aged" if age > 10.5 else "waiting"
+
+
+def stale_demo_verdict(stale_observed, graded_ok):
+    """--lashout-case stale passes ONLY when an observed AI selection with
+    the hit past the attacker window got its named stale discard AND a
+    valid restage then graded; a fresh pass alone is not the stale
+    demonstration."""
+    return bool(stale_observed and graded_ok)
 
 
 def provision_medical(port, uid):
@@ -670,11 +903,14 @@ def lashout_attacker_preference(port, case=None):
     a policy failure, and no later attempt runs to erase it. Running out
     of attempts is a SETUP failure, and fails the probe all the same.
 
-    Answers (ok, lash, attacker, decoy) for the attempt that was graded
-    (or the last one staged), which 9b keeps using.
+    Answers (ok, lash, attacker, decoy, stale_observed) for the attempt
+    that was graded (or the last one staged), which 9b keeps using;
+    stale_observed is True when --lashout-case stale's first attempt was
+    discarded on an OBSERVED selection with the hit past the window.
     """
     reasons = []
     lash = attacker = decoy = None
+    stale_observed = False
     for attempt, (x, y) in enumerate(LASHOUT_CLUSTERS, 1):
         if attempt > 1:
             # The discarded cluster's units go away entirely, so nothing
@@ -687,14 +923,23 @@ def lashout_attacker_preference(port, case=None):
         lash, attacker, decoy, problem = stage_lashout_cluster(port, x, y)
         problems = [problem] if problem else []
         sel = None
+        if not problems and case:
+            perturbed = perturb_lashout_case(port, case, attempt, lash, attacker)
+            if perturbed:
+                problems = [perturbed]
         if not problems:
-            if case:
-                perturb_lashout_case(port, case, attempt, lash, attacker)
             sel = observe_first_lashout_selection(port, lash, attacker, decoy)
             if sel is None:
                 problems = ["no lash-out target selection within 10s of the break"]
             else:
                 problems = lashout_setup_problems(sel, attacker, decoy)
+                if (case == "stale" and attempt == 1
+                        and sel["hitBy"] == attacker
+                        and sel["age"] > sel["window"]):
+                    stale_observed = True
+                    print(f"  [setup] stale demonstration: the AI selected with "
+                          f"the hit {sel['age']:.2f} s old (window "
+                          f"{sel['window']:g} s) — discarded, restaging")
         if problems:
             reasons.append(f"attempt {attempt}: " + "; ".join(problems))
             print(f"  [setup] lash-out attempt {attempt} at ({x},{y}) "
@@ -718,15 +963,15 @@ def lashout_attacker_preference(port, case=None):
         if sel["target"] == attacker:
             print(f"  [pass] lash-out prefers the recent attacker {attacker} "
                   f"over the closer decoy {decoy} — {detail}")
-            return True, lash, attacker, decoy
+            return True, lash, attacker, decoy, stale_observed
         print(f"  [FAIL] lash-out target={sel['target']}, expected attacker="
               f"{attacker} (decoy={decoy}) — preconditions held: {detail}")
-        return False, lash, attacker, decoy
+        return False, lash, attacker, decoy, stale_observed
     send(port, "if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end; "
                "return 'ok'")
     print(f"  [FAIL] setup: lash-out attacker preference could not be graded "
           f"— no attempt established its preconditions ({' | '.join(reasons)})")
-    return False, lash, attacker, decoy
+    return False, lash, attacker, decoy, stale_observed
 
 
 def install_swap_observer(port, lashB, victimB, attackerB, then_lua=""):
@@ -847,14 +1092,112 @@ def swap_exercised(calls, victimB, attackerB):
                     f"age={first['age']:.2f} d={first['d']:.2f}/{first['reach']:.2f} "
                     f"seen={first['seen']} real={first['real']}")
 
+def self_test():
+    """No-engine regression cases for #2773's pure setup validators and
+    gates (`--self-test`). Exit 0 when every case holds."""
+    fails = []
+
+    def check(name, cond):
+        print(("  ok   " if cond else "  FAIL ") + name)
+        if not cond:
+            fails.append(name)
+
+    # neuter_snapshot_problems
+    h, lean = 1.8, 28.5
+    raw = NEUTERED_STRENGTH_BASE * (lean / (8.8 * h * h)) ** 0.7
+    good = {"setBase": True, "setTough": True, "recompute": True, "raw": raw,
+            "eff": raw, "base": NEUTERED_STRENGTH_BASE, "body": raw,
+            "tough": 100.0, "height": h, "lean": lean, "mass": 71.0,
+            "finite": True}
+    snap = {"u2": dict(good), "u1": dict(good)}
+    check("neuter: a neuter that took passes", neuter_snapshot_problems(snap, (2, 1)) == [])
+    check("neuter: a false recomputeBody fails",
+          neuter_snapshot_problems({"u2": dict(good, recompute=False), "u1": good}, (2, 1)) != [])
+    check("neuter: a missing fighter fails", neuter_snapshot_problems({"u2": good}, (2, 1)) != [])
+    check("neuter: a non-finite value fails",
+          neuter_snapshot_problems({"u2": dict(good, raw=float("inf")), "u1": good}, (2, 1)) != [])
+    check("neuter: a Lua-side non-finite flag fails",
+          neuter_snapshot_problems({"u2": dict(good, finite=False), "u1": good}, (2, 1)) != [])
+    check("neuter: an un-neutered base fails",
+          neuter_snapshot_problems({"u2": dict(good, base=1.0), "u1": good}, (2, 1)) != [])
+    check("neuter: raw strength left at the old value fails (setter after recompute)",
+          neuter_snapshot_problems({"u2": dict(good, raw=1.0, body=1.0), "u1": good}, (2, 1)) != [])
+    check("neuter: a raised chunk fails", neuter_snapshot_problems({"err": "boom"}, (2, 1)) != [])
+    check("neuter: no answer fails", neuter_snapshot_problems(None, (2, 1)) != [])
+
+    # stale_dressing_problems
+    dgood = {"before": {"uid": 2, "at": 10.5}, "after": {"uid": 2, "at": 10.5},
+             "same": True, "typed": True, "pose": "standing", "finite": True,
+             "blood": 4.9, "bleedRate": 0.0, "dressed": 1, "stalled": 0}
+    check("dressing: a dressed, unchanged, standing subject passes",
+          stale_dressing_problems(dgood, 2) == [])
+    check("dressing: still bleeding fails",
+          stale_dressing_problems(dict(dgood, bleedRate=0.0012), 2) != [])
+    check("dressing: a changed record fails", stale_dressing_problems(dict(dgood, same=False), 2) != [])
+    check("dressing: a record naming someone else fails", stale_dressing_problems(dgood, 7) != [])
+    check("dressing: no record fails",
+          stale_dressing_problems(dict(dgood, before=None, same=False), 2) != [])
+    check("dressing: an untyped treatment fails", stale_dressing_problems(dict(dgood, typed=False), 2) != [])
+    check("dressing: a dead subject fails", stale_dressing_problems(dict(dgood, pose="dead"), 2) != [])
+    check("dressing: no blood left fails", stale_dressing_problems(dict(dgood, blood=0.0), 2) != [])
+    check("dressing: unreadable blood fails", stale_dressing_problems(dict(dgood, finite=False), 2) != [])
+    check("dressing: no answer fails", stale_dressing_problems(None, 2) != [])
+
+    # stale_wait_verdict
+    check("wait: an aged, unchanged hit on a live subject is 'aged'",
+          stale_wait_verdict({"pose": "standing", "same": True, "age": 10.6}) == "aged")
+    check("wait: a young hit is 'waiting'",
+          stale_wait_verdict({"pose": "standing", "same": True, "age": 4.0}) == "waiting")
+    check("wait: a dead subject is invalid",
+          stale_wait_verdict({"pose": "dead", "same": True, "age": 11.0}) not in ("aged", "waiting"))
+    check("wait: a collapsed subject is invalid",
+          stale_wait_verdict({"pose": "collapsed", "same": True, "age": 11.0}) not in ("aged", "waiting"))
+    check("wait: a changed record is invalid",
+          stale_wait_verdict({"pose": "standing", "same": False, "age": 11.0}) not in ("aged", "waiting"))
+    check("wait: an unreadable age is invalid",
+          stale_wait_verdict({"pose": "standing", "same": True, "age": None}) not in ("aged", "waiting"))
+    check("wait: no answer is invalid", stale_wait_verdict(None) not in ("aged", "waiting"))
+
+    # stale_demo_verdict
+    check("stale demo: observed stale discard + valid restage passes", stale_demo_verdict(True, True))
+    check("stale demo: a fresh pass alone fails", not stale_demo_verdict(False, True))
+    check("stale demo: an observed discard without a valid restage fails",
+          not stale_demo_verdict(True, False))
+
+    # swap_exercised (9c2)
+    V, A = 9, 10
+    sw = {"g": 10.0, "pre": V, "post": V, "la": A, "at": 8.5, "age": 1.5, "d": 1.0,
+          "reach": 1.4, "seen": "collapsed", "real": "standing", "victimElig": True,
+          "alive": True}
+    for name, calls, want in (
+            ("all valid calls keep the victim -> pass", [sw, dict(sw, g=10.1)], "pass"),
+            ("a valid swap then a good call -> policy", [dict(sw, post=A), dict(sw, g=10.2)], "policy"),
+            ("post nil -> policy", [dict(sw, post=-1)], "policy"),
+            ("post another uid -> policy", [dict(sw, post=42)], "policy"),
+            ("no valid calls -> setup", [dict(sw, age=3.5), dict(sw, la=-1), dict(sw, alive=False)], "setup"),
+            ("no calls -> setup", [], "setup"),
+            ("an invalid (stale) swap -> setup", [dict(sw, age=4.0, post=A)], "setup"),
+            ("valid good + invalid swap -> pass", [sw, dict(sw, seen="standing", post=A)], "pass")):
+        check(f"9c2 gate: {name}", swap_exercised(calls, V, A)[0] == want)
+
+    print(f"mental_state_probe self-test: "
+          f"{'all pass' if not fails else str(len(fails)) + ' FAIL'}")
+    return 1 if fails else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9352)
+    ap.add_argument("--self-test", action="store_true",
+                    help="#2773: run the no-engine regression cases for the "
+                         "setup validators and gates, then exit")
     ap.add_argument("--lashout-case", choices=("stale", "ineligible"),
                     help="#2773 demonstration: run ONLY phase 9a, with its "
                          "setup pushed off the fair-test preconditions "
                          "(see perturb_lashout_case)")
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
     P = args.port
 
     proc = boot(P, log=LOG)
@@ -864,11 +1207,18 @@ def main():
 
         if args.lashout_case:
             tune(P, EPISODE_MIN=LASHOUT_9AB_EPISODE, EPISODE_MAX=LASHOUT_9AB_EPISODE)
-            graded_ok, _, _, _ = lashout_attacker_preference(
+            graded_ok, _, _, _, stale_observed = lashout_attacker_preference(
                 P, case=args.lashout_case)
-            print(f"\n{'PASS' if graded_ok else 'FAIL'} — phase 9a only "
+            if args.lashout_case == "stale":
+                passed = stale_demo_verdict(stale_observed, graded_ok)
+                if not stale_observed:
+                    print("  [FAIL] stale demonstration not observed: no AI "
+                          "selection with the hit past the window was discarded")
+            else:
+                passed = graded_ok
+            print(f"\n{'PASS' if passed else 'FAIL'} — phase 9a only "
                   f"(--lashout-case {args.lashout_case})")
-            return 0 if graded_ok else 1
+            return 0 if passed else 1
 
         # ---- 1. Fresh unit is mentally stable. ----
         uid = spawn_acolyte(P, 0, 0)
@@ -1250,7 +1600,7 @@ def main():
             # 9a. Prefers a recent eligible attacker over a closer decoy —
             # graded only on a selection whose preconditions held at the
             # moment it was made (#2773). See lashout_attacker_preference.
-            graded_ok, lash, attacker, decoy = lashout_attacker_preference(
+            graded_ok, lash, attacker, decoy, _ = lashout_attacker_preference(
                 P, case=args.lashout_case)
             if not graded_ok:
                 ok = False
