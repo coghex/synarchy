@@ -484,6 +484,32 @@ def lashout_observer_lua(lash, attacker, decoy):
         negative, including the bracket's -1 "no position" sentinel), binds
         all of it to the chosen target, and restores every original.
 
+    The FIRST decision is final, whatever it returned. The chunk also
+    wraps unit_ai_mental.shortCircuit, which unit_ai.lua:299 calls
+    through the module table every tick. Only reads made inside the
+    subject's own tick count as the decision's. When a lash-out tick ends
+    without reaching attackTargetExecute (the decision returned no
+    target: lashOutExecute's nil path, unit_ai_mental.lua:159-172), the
+    wrapper finalizes that decision as a NIL selection, AFTER reading
+    included. Within the tick, the decision is the last subject getInfo
+    (its `me`) followed by the next getLastAttacker (the policy's hit
+    read, which arms it). The FIRST subject getInfo, getLastAttacker or
+    getActivity after that FREEZES it: the policy makes none of them while
+    picking, so such a read comes from code after the pick, e.g. the
+    no-target path's wander. A later read can neither erase nor replace
+    it. The no-target path reads getActivity(uid) before it wanders
+    (unit_ai_mental.lua:168). So a pick that returned nil without ever
+    reading its hit is frozen there too, and a hit read the wander makes
+    can never be mistaken for the decision's. A later tick
+    can never replace it either: every wrapper is inert once a selection
+    exists, and all are restored, on a nil, a normal or an error return.
+    A tick that RAISES keeps its first decision record if it made one
+    (finalized from the pending evidence), or else records a `raised`
+    one. Either way it is flagged `tickRaised`, every wrapper is
+    restored, and the error is re-raised unchanged. A tick that never
+    read its hit record yields `noHitRead`. All of these are named setup
+    discards, never valid evidence.
+
     The clock is bracketed, not captured. It never decreases between
     BEFORE and AFTER unless a load or a session reset writes it in
     between (classify_lashout_selection rejects a decreasing pair; the
@@ -503,12 +529,16 @@ def lashout_observer_lua(lash, attacker, decoy):
     return f"""
 local lash, attacker, decoy = {lash}, {attacker}, {decoy}
 if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end
-local policy = require('scripts.unit_ai_mental').lashoutPolicy
+local mentalAi = require('scripts.unit_ai_mental')
+local policy = mentalAi.lashoutPolicy
 local atk = require('scripts.unit_ai_combat_attack')
 local origGLA, origATE, origGI = unit.getLastAttacker, atk.attackTargetExecute, unit.getInfo
+local origSC = mentalAi.shortCircuit
 local origEx, origPose, origAll = unit.exists, unit.getPose, unit.getAllIds
+local origAct = unit.getActivity
 local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
-local rec = {{ observing = false, armed = false, decision = {{}},
+local rec = {{ observing = false, armed = false, tick = false, frozen = false,
+  meFresh = false, decision = {{}},
   dSamp = {{}}, dEx = {{}}, dPose = {{}}, dInf = {{}} }}
 _G.__probe_lash_rec = rec
 _G.__probe_lash_restore = function()
@@ -518,6 +548,8 @@ _G.__probe_lash_restore = function()
   unit.exists = origEx
   unit.getPose = origPose
   unit.getAllIds = origAll
+  unit.getActivity = origAct
+  mentalAi.shortCircuit = origSC
   _G.__probe_lash_restore = nil
 end
 local function infoCopy(r)
@@ -641,10 +673,14 @@ local function replay(me)
 end
 unit.getInfo = function(u)
   local r = origGI(u)
-  if u == lash and not rec.observing and not rec.selection then
-    rec.me = r and {{ gridX = r.gridX, gridY = r.gridY }} or nil
-    rec.pending = nil
-    rec.armed = false
+  if u == lash and rec.tick and not rec.observing and not rec.selection then
+    if rec.armed then
+      rec.armed = false
+      rec.frozen = true
+    elseif not rec.frozen then
+      rec.me = r and {{ gridX = r.gridX, gridY = r.gridY }} or nil
+      rec.meFresh = true
+    end
   end
   decisionRead('info', u, infoCopy(r))
   if rec.armed and not rec.observing and not rec.selection then
@@ -667,6 +703,13 @@ unit.getInfo = function(u)
     end
   end
   return r
+end
+unit.getActivity = function(u)
+  if u == lash and rec.tick and not rec.observing and not rec.selection then
+    if rec.armed then rec.armed = false; rec.frozen = true
+    elseif rec.meFresh then rec.frozen = true end
+  end
+  return origAct(u)
 end
 unit.getAllIds = function(...)
   if rec.armed and not rec.observing and not rec.selection then rec.fallbackRan = true end
@@ -691,7 +734,11 @@ unit.getPose = function(u)
 end
 unit.getLastAttacker = function(u)
   local a = origGLA(u)
-  if u == lash and not rec.observing and not rec.selection then
+  if u == lash and rec.tick and not rec.observing and not rec.selection
+     and (rec.armed or rec.frozen or not rec.meFresh) then
+    if rec.armed then rec.armed = false; rec.frozen = true end
+  elseif u == lash and rec.tick and not rec.observing and not rec.selection then
+    rec.meFresh = false
     rec.armed = false
     rec.hit = a
     rec.pending = {{ window = policy.attackerWindow, range = policy.range,
@@ -707,15 +754,21 @@ unit.getLastAttacker = function(u)
   end
   return a
 end
-atk.attackTargetExecute = function(u, s, params)
-  if u == lash and s and s.mentalLashoutActive and rec.pending and rec.armed
-     and not rec.selection then
+local function finalize(s, isNil)
     rec.armed = false
     local sel = rec.pending
+    if sel == nil then
+      rec.selection = {{ noHitRead = true, target = -1, targetNil = true,
+        meCaptured = rec.me ~= nil }}
+      _G.__probe_lash_restore()
+      return
+    end
     sel.after = reading(rec.me, rec.hit)
-    sel.ordered = fin(sel.before.now) and fin(sel.after.now)
+    sel.ordered = type(sel.before) == 'table' and type(sel.after) == 'table'
+                  and fin(sel.before.now) and fin(sel.after.now)
                   and sel.after.now >= sel.before.now
-    sel.target = s.attackTargetUid or -1
+    sel.targetNil = isNil
+    sel.target = isNil and -1 or (s.attackTargetUid or -1)
     sel.targetTyped = math.type(sel.target) == 'integer' and sel.target > 0
     local d = rec.decision
     local closer, aDists, dDists = decisionGeometry(rec.me, sel)
@@ -729,8 +782,34 @@ atk.attackTargetExecute = function(u, s, params)
                      attackerDists = aDists, decoyDists = dDists }}
     rec.selection = sel
     _G.__probe_lash_restore()
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u == lash and s and s.mentalLashoutActive and rec.pending and rec.armed
+     and not rec.selection then
+    finalize(s, false)
   end
   return origATE(u, s, params)
+end
+mentalAi.shortCircuit = function(uid, s, params, activity, actList)
+  if uid ~= lash or rec.selection then return origSC(uid, s, params, activity, actList) end
+  rec.tick, rec.me, rec.meFresh, rec.pending, rec.armed, rec.frozen =
+    true, nil, false, nil, false, false
+  local res = table.pack(pcall(origSC, uid, s, params, activity, actList))
+  rec.tick = false
+  if not res[1] then
+    if not rec.selection and rec.pending then finalize(s, true) end
+    if not rec.selection then
+      rec.selection = {{ raised = true, target = -1, targetNil = true, targetTyped = false }}
+    end
+    rec.selection.tickRaised = true
+    rec.selection.tickErr = tostring(res[2])
+    if _G.__probe_lash_restore then _G.__probe_lash_restore() end
+    error(res[2], 0)
+  end
+  if not rec.selection and type(s) == 'table' and s.mentalLashoutActive == true then
+    finalize(s, true)
+  end
+  return table.unpack(res, 2, res.n)
 end
 require('scripts.mental_state').forceBreak(lash, 'lash_out')
 return 'ok'"""
@@ -813,12 +892,18 @@ def lashout_record_problems(sel, attacker, decoy):
       * the decision replay's answer, one of _DECISION_REPLAY."""
     if not isinstance(sel, dict):
         return [f"selection record is {sel!r}"]
+    if sel.get("tickRaised") is True or sel.get("raised") is True:
+        return [f"the subject's first lash-out tick raised ({sel.get('tickErr')}), so "
+                f"its first decision record is not valid evidence"]
+    if sel.get("noHitRead") is True:
+        return ["the first decision returned no target without reading its hit "
+                "record, so none of its preconditions can be proven"]
     problems = []
     for k in ("window", "range"):
         if not (_finite_num(sel.get(k)) and sel[k] > 0):
             problems.append(f"{k} {sel.get(k)!r} is not a positive number")
     hit_by = sel.get("hitBy")
-    if hit_by == -1 and not isinstance(hit_by, bool):
+    if isinstance(hit_by, int) and not isinstance(hit_by, bool) and hit_by == -1:
         if not _finite_num(sel.get("hitAt")):
             problems.append(f"hitAt {sel.get('hitAt')!r} is not a finite number")
     elif not _uid(hit_by):
@@ -827,9 +912,18 @@ def lashout_record_problems(sel, attacker, decoy):
               and sel.get("hitTyped") is True):
         problems.append(f"hit by {hit_by} has no valid timestamp "
                         f"(hitAt {sel.get('hitAt')!r}, hitTyped {sel.get('hitTyped')!r})")
-    if not (_uid(sel.get("target")) and sel.get("targetTyped") is True):
+    if sel.get("targetNil") is True:
+        t = sel.get("target")
+        if not (isinstance(t, int) and not isinstance(t, bool) and t == -1
+                and sel.get("targetTyped") is False):
+            problems.append(f"a nil selection must carry the integer target -1 with "
+                            f"targetTyped false (target {t!r}, targetTyped "
+                            f"{sel.get('targetTyped')!r})")
+    elif not (sel.get("targetNil") is False and _uid(sel.get("target"))
+              and sel.get("targetTyped") is True):
         problems.append(f"selected target {sel.get('target')!r} is not a positive "
-                        f"integer uid (targetTyped {sel.get('targetTyped')!r})")
+                        f"integer uid (targetTyped {sel.get('targetTyped')!r}, "
+                        f"targetNil {sel.get('targetNil')!r})")
     me = sel.get("me")
     if sel.get("meCaptured") is not True or not isinstance(me, dict):
         problems.append("the subject position the decision measured from "
@@ -1009,6 +1103,14 @@ def grade_lashout_selection(sel, attacker, decoy):
     classify_lashout_selection found FAIR: the hit was inside the window
     and the attacker eligible on the decision's own reads.
 
+    A NIL first decision (no target) gets exactly the same gates as any
+    other outcome. It reaches here only when classify_lashout_selection
+    found it fair, which includes the attacker replaying ELIGIBLE on the
+    decision's own reads; a missing or failed replay is setup. It is then
+    a POLICY failure (no retry) only after decoy eligibility and geometry
+    are both proven. Anything unproved is setup, and the selection is
+    still finalized.
+
     The decoy's ELIGIBILITY comes first. decoyEligible means the
     production predicate, replayed on every captured decoy answer, held:
     each in-decision sample, and every decoy read the decision itself
@@ -1047,6 +1149,11 @@ def grade_lashout_selection(sel, attacker, decoy):
                          f"attacker {attacker} at the decision (target "
                          f"{sel['target']}, fallback ran: {dec['fallbackRan']}; "
                          f"{dists})")
+    if sel["targetNil"] is True:
+        return "fail", (f"the first decision returned NO target although the hit "
+                        f"was inside the window, attacker {attacker} eligible on "
+                        f"the decision's own reads, and decoy {decoy} proven "
+                        f"eligible and strictly closer (no retry; {dists})")
     if sel["target"] == attacker and not dec["fallbackRan"]:
         return "pass", dists
     if sel["target"] == attacker:
@@ -1066,7 +1173,7 @@ def stale_selection_observed(sel, attacker, decoy):
     policy's own read saw it stale too. A hit crossing the window during
     the decision, or any other predicate crossing, is ambiguous and is
     not stale evidence."""
-    if lashout_record_problems(sel, attacker, decoy):
+    if lashout_record_problems(sel, attacker, decoy) or not _selected_target(sel):
         return False
     if classify_lashout_selection(sel, attacker, decoy)[0] != "setup":
         return False
@@ -1117,8 +1224,21 @@ def perturb_lashout_case(port, case, attempt, lash, attacker):
     elif case == "ineligible":
         lx, ly = unit_pos(port, lash)
         send(port, f"unit.setPos({attacker}, {lx + 12}, {ly}); return 'ok'")
-        poll_until(5, lambda: abs(unit_pos(port, attacker)[0] - (lx + 12)) < 0.25)
+        placed = poll_until(5, lambda: abs(unit_pos(port, attacker)[0] - (lx + 12)) < 0.25)
+        problem = ineligible_placement_problem(placed, attacker, lx + 12)
+        if problem:
+            return problem
     return None
+
+
+def ineligible_placement_problem(placed, attacker, x):
+    """The --lashout-case ineligible perturbation is established only when
+    the teleport was CONFIRMED. A placement timeout or an unconfirmed move
+    is a named setup problem, never a demonstration."""
+    if placed:
+        return None
+    return (f"ineligible placement not established: attacker {attacker} never "
+            f"confirmed at x={x:g} within 5 s")
 
 
 # ---- #2773 setup verification. The pure validators below are exercised
@@ -1365,6 +1485,76 @@ def stale_wait_verdict(w):
     return "aged" if age > 10.5 else "waiting"
 
 
+def _selected_target(sel):
+    """The first decision selected a real unit: not a nil (target -1 /
+    targetNil), and not a malformed or missing target. Only such a
+    selection can be stale or ineligible demonstration evidence."""
+    return (isinstance(sel, dict) and sel.get("targetNil") is False
+            and _uid(sel.get("target")) and sel.get("targetTyped") is True)
+
+
+def ineligible_selection_observed(sel, attacker, decoy):
+    """True only for an OBSERVED first selection of a real target with a
+    well-formed record that classifies as an UNAMBIGUOUS setup, whose
+    attacker was INELIGIBLE (the production predicate, as Lua computed
+    it) both before AND after the decision, AND on the decision's own
+    captured reads (the replay answered False). Any of these is never
+    ineligible evidence:
+      * the attacker eligible on any side or on the actual reads (an
+        eligible-ineligible-eligible ABA with ineligible endpoints
+        included);
+      * an ambiguous, malformed, noHitRead or raised record;
+      * a nil target, or no selection at all."""
+    if lashout_record_problems(sel, attacker, decoy) or not _selected_target(sel):
+        return False
+    if classify_lashout_selection(sel, attacker, decoy)[0] != "setup":
+        return False
+    return (sel["before"]["attacker"]["eligible"] is False
+            and sel["after"]["attacker"]["eligible"] is False
+            and sel["decision"]["attackerEligible"] is False)
+
+
+def demo_exit(case, graded_ok, evidence):
+    """(exit code, lines) for a --lashout-case run.
+
+      * stale — exit 0 and PASS only when an observed selection was
+        discarded as unambiguously stale and a valid restage then graded
+        and passed; otherwise FAIL, exit 1 (unchanged).
+      * ineligible — a NEGATIVE demonstration. It ALWAYS ends in a final
+        FAIL line and exit 1, the approved run-22 gate, MET or not. A
+        fresh eligible selection that graded and passed is FAIL and exit
+        1 too; there is no ordinary PASS/0 in this mode. The separate
+        explicit line says whether it was demonstrated: MET (3/3) only
+        when EVERY attempt confirmed its placement and ended in the named
+        setup with an observed attacker-ineligible first selection, and
+        nothing was graded. Otherwise UNMET, with the reason.
+    """
+    n = len(LASHOUT_CLUSTERS)
+    if case == "stale":
+        passed = stale_demo_verdict(evidence.get("stale"), graded_ok)
+        lines = []
+        if not evidence.get("stale"):
+            lines.append("  [FAIL] stale demonstration not observed: no AI selection "
+                         "with the hit past the window was discarded")
+        lines.append(f"{'PASS' if passed else 'FAIL'} — phase 9a only (--lashout-case stale)")
+        return (0 if passed else 1), lines
+    if case == "ineligible":
+        met = (not graded_ok and evidence.get("attempts") == n
+               and evidence.get("ineligible") == n and evidence.get("other") == 0)
+        if met:
+            demo = (f"ineligible demonstration: MET ({n}/{n} attempts placed and ended in "
+                    f"the named setup with an observed attacker-ineligible first selection)")
+        else:
+            why = ("a selection was graded (ordinary PASS/FAIL)" if graded_ok else
+                   f"{evidence.get('ineligible')}/{n} attempts observed attacker-ineligible, "
+                   f"{evidence.get('other')} other")
+            demo = f"ineligible demonstration: UNMET ({why})"
+        return 1, [
+            f"  [setup] {demo}",
+            "FAIL — phase 9a only (--lashout-case ineligible)"]
+    return 1, [f"FAIL — phase 9a only (unknown --lashout-case {case!r})"]
+
+
 def stale_demo_verdict(stale_observed, graded_ok):
     """--lashout-case stale passes ONLY when an observed AI selection with
     the hit past the attacker window got its named stale discard AND a
@@ -1454,15 +1644,17 @@ def lashout_attacker_preference(port, case=None):
     a policy failure, and no later attempt runs to erase it. Running out
     of attempts is a SETUP failure, and fails the probe all the same.
 
-    Answers (ok, lash, attacker, decoy, stale_observed) for the attempt
+    Answers (ok, lash, attacker, decoy, evidence) for the attempt
     that was graded (or the last one staged), which 9b keeps using;
-    stale_observed is True when --lashout-case stale's first attempt was
+    evidence counts the --lashout-case demonstrations (see demo_exit):
+    'stale' is True when --lashout-case stale's first attempt was
     discarded on an OBSERVED selection with the hit past the window.
     """
     reasons = []
     lash = attacker = decoy = None
-    stale_observed = False
+    evidence = {"stale": False, "attempts": 0, "ineligible": 0, "other": 0}
     for attempt, (x, y) in enumerate(LASHOUT_CLUSTERS, 1):
+        evidence["attempts"] = attempt
         if attempt > 1:
             # The discarded cluster's units go away entirely, so nothing
             # of that setup can take part in this one.
@@ -1491,11 +1683,20 @@ def lashout_attacker_preference(port, case=None):
                         problems = [graded_detail]
                 if (case == "stale" and attempt == 1 and kind == "setup"
                         and stale_selection_observed(sel, attacker, decoy)):
-                    stale_observed = True
+                    evidence["stale"] = True
                     age = lashout_decision_view(sel, "before")["age"]
                     print(f"  [setup] stale demonstration: the AI selected with "
                           f"the hit {age:.2f} s old before the decision (window "
                           f"{sel['window']:g} s) — discarded, restaging")
+        if case == "ineligible":
+            if (problems and sel is not None
+                    and ineligible_selection_observed(sel, attacker, decoy)):
+                evidence["ineligible"] += 1
+                print(f"  [setup] ineligible demonstration: attempt {attempt}'s first "
+                      f"selection had attacker {attacker} ineligible before and after "
+                      f"the decision")
+            else:
+                evidence["other"] += 1
         if problems:
             reasons.append(f"attempt {attempt}: " + "; ".join(problems))
             print(f"  [setup] lash-out attempt {attempt} at ({x},{y}) "
@@ -1521,15 +1722,15 @@ def lashout_attacker_preference(port, case=None):
         if verdict == "pass":
             print(f"  [pass] lash-out prefers the recent attacker {attacker} "
                   f"over the closer decoy {decoy} — {detail}; {graded_detail}")
-            return True, lash, attacker, decoy, stale_observed
+            return True, lash, attacker, decoy, evidence
         print(f"  [FAIL] lash-out policy: {graded_detail} — preconditions "
               f"held: {detail}")
-        return False, lash, attacker, decoy, stale_observed
+        return False, lash, attacker, decoy, evidence
     send(port, "if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end; "
                "return 'ok'")
     print(f"  [FAIL] setup: lash-out attacker preference could not be graded "
           f"— no attempt established its preconditions ({' | '.join(reasons)})")
-    return False, lash, attacker, decoy, stale_observed
+    return False, lash, attacker, decoy, evidence
 
 
 def swap_observer_lua(lashB, victimB, attackerB, then_lua=""):
@@ -2225,15 +2426,31 @@ local function stub(t) return function() return t end end
 package.preload['scripts.brain'] = stub({ isDelirious = function() return false end })
 package.preload['scripts.mental_state'] = stub({ isBreaking = function() return true end,
   breakBehavior = function() return 'lash_out' end, forceBreak = function() end })
-package.preload['scripts.unit_ai_needs'] = stub({ wanderExecute = function() end })
+-- The no-target path's wander reads the subject (as the real
+-- unit_ai_needs wander does) BEFORE shortCircuit returns.
+local wanderReads = 0
+package.preload['scripts.unit_ai_needs'] = stub({ wanderExecute = function(uid)
+  wanderReads = wanderReads + 1
+  unit.getInfo(uid); unit.getLastAttacker(uid); unit.getInfo(uid)
+  if %(wander_raises)s then error('wander boom') end
+end })
 package.preload['scripts.movement_speed'] = stub({})
 package.preload['scripts.unit_ai_core'] = stub({ suspendOrders = function() end,
   setGoal = function() end, markGoalAccomplished = function() end })
-package.preload['scripts.unit_ai_combat_attack'] = stub({ attackTargetExecute = function() end })
+package.preload['scripts.unit_ai_combat_attack'] = stub({ attackTargetExecute = function()
+  if %(attack_raises)s then error('attack boom') end
+end })
 package.preload['scripts.unit_ai_combat_lunge'] = stub({ clear = function() end })
 package.preload['scripts.unit_ai_mental'] = function() return assert(loadfile(POLICY))() end
+local SC0 = require('scripts.unit_ai_mental').shortCircuit
 assert(load(OBSERVER))()
-require('scripts.unit_ai_mental').shortCircuit(1, {}, {}, 'idle', {})
+local tickState = {}
+local okTick, errTick = pcall(function()
+  for _ = 1, %(ticks)d do
+    require('scripts.unit_ai_mental').shortCircuit(1, tickState, {}, 'idle', {})
+  end
+end)
+local scRestored = require('scripts.unit_ai_mental').shortCircuit == SC0
 local function enc(v)
   local t = type(v)
   if t == 'table' then
@@ -2258,7 +2475,9 @@ local function enc(v)
   return 'null'
 end
 local rec = _G.__probe_lash_rec
-io.write(enc({ selection = rec and rec.selection or false, clockCallers = seen }))
+io.write(enc({ selection = rec and rec.selection or false, clockCallers = seen,
+  wanderReads = wanderReads, scRestored = scRestored, okTick = okTick,
+  errTick = errTick and tostring(errTick) or false }))
 """
 
 
@@ -2267,7 +2486,9 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
                            attacker_pose_decision="standing",
                            policy_patch=None, attacker_x_bracket=None,
                            decoy_x_bracket=None, decoy_exists_seq=None,
-                           decoy_pose_seq=None, decoy_pose_bracket=None):
+                           decoy_pose_seq=None, decoy_pose_bracket=None,
+                           ticks=1, full=False, attack_raises=False,
+                           wander_raises=False):
     """Run the lash-out policy with the probe's observer chunk and no
     engine (needs a `lua` interpreter).
 
@@ -2288,7 +2509,11 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
     read. Its info reads take 'tech' (a technomule), 'nan' (a non-finite
     position) and None (missing) as well as positions.
     `decoy_pose_bracket` replaces its pose ('nil' = missing) in the
-    bracket readings. `policy_patch=(old, new)` runs a copy of
+    bracket readings. `ticks` runs that many AI ticks of the subject on
+    one state table (the first decision is final). With `full`, answers
+    the whole harness result instead, including wanderReads, scRestored
+    (unit_ai_mental.shortCircuit back to the original), okTick and
+    errTick. `policy_patch=(old, new)` runs a copy of
     scripts/unit_ai_mental.lua with that one substitution (a broken
     policy).
 
@@ -2332,6 +2557,9 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
         "attacker_seq": seq(attacker_x_decision, attacker_x),
         "decoy_seq": seq(decoy_x_decision, decoy_x),
         "attacker_pose_decision": attacker_pose_decision,
+        "ticks": int(ticks),
+        "attack_raises": "true" if attack_raises else "false",
+        "wander_raises": "true" if wander_raises else "false",
         "decoy_exists_seq": lua_vals(decoy_exists_seq, [True]),
         "decoy_pose_seq": lua_vals(decoy_pose_seq, ["standing"]),
         "decoy_pose_bracket": ("nil" if decoy_pose_bracket is None
@@ -2348,6 +2576,8 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
     if out.returncode != 0:
         raise RuntimeError(f"policy harness failed: {out.stderr.strip()}")
     got = json.loads(out.stdout)
+    if full:
+        return got
     return got["selection"] or None, got["clockCallers"]
 
 
@@ -2479,7 +2709,8 @@ def self_test():
         return {"window": 10.0, "range": 8.0, "meCaptured": True,
                 "me": {"gridX": 0, "gridY": 0},
                 "hitBy": hit_by, "hitAt": 0.0, "hitTyped": True,
-                "target": target, "targetTyped": True, "ordered": t1 >= t0,
+                "target": target, "targetTyped": True, "targetNil": False,
+                "ordered": t1 >= t0,
                 "before": side(t0, a0, d0, ae0, hit_by),
                 "after": side(t1, a1, d1, ae1, hit_by),
                 "decision": {"attackerEligible": replay, "fallbackRan": fallback,
@@ -2542,6 +2773,7 @@ def self_test():
             ("a malformed decision replay", ("decision", "attackerEligible"), 1),
             ("an absent decision replay value", ("decision", "attackerEligible"), KeyError),
             ("a missing fallback flag", ("decision", "fallbackRan"), KeyError),
+            ("hitBy -1 as a float", ("hitBy",), -1.0),
             ("a missing decoy-eligibility flag", ("decision", "decoyEligible"), KeyError),
             ("a bracket decoy pose not proven a string", ("before", "decoy", "poseOk"), False),
             ("a bracket attacker pose not proven a string", ("after", "attacker", "poseOk"), False),
@@ -2616,6 +2848,71 @@ def self_test():
     check("grade: proven geometry, attacker picked by the RANKING (fallback while preferred) "
           "-> policy failure",
           grade(mksel(5.0, 5.01, fallback=True)) == "fail")
+    check("record: hitBy -1.0 (a float 'no hit' tag) is itself malformed",
+          lashout_record_problems(with_(base, ("hitBy",), -1.0), 2, 3) != []
+          and lashout_record_problems(with_(with_(base, ("hitBy",), -1), ("hitAt",), -1.0), 2, 3) == [])
+    # Typed nil tags (laz): integer -1 with targetNil true and targetTyped false.
+    nil_rec = dict(mksel(5.0, 5.01), target=-1, targetNil=True, targetTyped=False)
+    check("record: a consistent typed nil (integer -1, targetNil, targetTyped false) is accepted",
+          lashout_record_problems(nil_rec, 2, 3) == [])
+    for name, kw in (("a float -1.0 target", dict(target=-1.0)),
+                     ("targetTyped true on a nil", dict(targetTyped=True)),
+                     ("a missing targetTyped on a nil", dict(targetTyped=None)),
+                     ("a nil tag with a real uid", dict(target=3))):
+        check(f"record: {name} is malformed", lashout_record_problems(dict(nil_rec, **kw), 2, 3) != [])
+
+    # Ineligible demonstration evidence (F2).
+    check("ineligible: a placement timeout is a named setup problem",
+          ineligible_placement_problem(False, 2, 12.0) is not None
+          and ineligible_placement_problem(True, 2, 12.0) is None)
+    inel_ok = mksel(5.0, 5.01, ae0=False, ae1=False, a0=12, a1=12, target=3, replay=False)
+    check("ineligible: an observed selection with the attacker ineligible on both sides AND on "
+          "the decision's own reads counts", ineligible_selection_observed(inel_ok, 2, 3))
+    check("ineligible (laz 5): ABA - ineligible endpoints but the decision's own reads found "
+          "the attacker ELIGIBLE - does not count",
+          not ineligible_selection_observed(with_(inel_ok, ("decision", "attackerEligible"), True), 2, 3))
+    check("ineligible (laz 5): an AMBIGUOUS record (window crossing) does not count",
+          not ineligible_selection_observed(
+              mksel(9.99, 10.01, ae0=False, ae1=False, a0=12, a1=12, target=3, replay=False), 2, 3))
+    check("ineligible (laz 5): a missing or unreplayable decision replay does not count",
+          not ineligible_selection_observed(with_(inel_ok, ("decision", "attackerEligible"), "missing"), 2, 3)
+          and not ineligible_selection_observed(with_(inel_ok, ("decision", "attackerEligible"), "error"), 2, 3))
+    check("ineligible (laz 5): noHitRead or raised records do not count",
+          not ineligible_selection_observed(dict(inel_ok, noHitRead=True), 2, 3)
+          and not ineligible_selection_observed(dict(inel_ok, tickRaised=True), 2, 3))
+    check("ineligible: the attacker still ELIGIBLE after placement does not count",
+          not ineligible_selection_observed(mksel(5.0, 5.01), 2, 3))
+    check("ineligible: eligible on one side only does not count",
+          not ineligible_selection_observed(mksel(5.0, 5.01, ae0=True, ae1=False), 2, 3))
+    check("ineligible: a malformed record does not count",
+          not ineligible_selection_observed(with_(mksel(5.0, 5.01, ae0=False, ae1=False),
+                                                  ("after",), KeyError), 2, 3))
+    full = {"stale": False, "attempts": 3, "ineligible": 3, "other": 0}
+    for name, args_, want_met in (
+            ("ineligible, every attempt demonstrated -> MET", ("ineligible", False, full), "MET"),
+            ("ineligible, a normal FRESH eligible PASS -> UNMET",
+             ("ineligible", True, {"stale": False, "attempts": 1, "ineligible": 0, "other": 1}),
+             "UNMET"),
+            ("ineligible, a placement timeout on one attempt -> UNMET",
+             ("ineligible", False, dict(full, ineligible=2, other=1)), "UNMET"),
+            ("ineligible, attacker still eligible on every attempt -> UNMET",
+             ("ineligible", False, dict(full, ineligible=0, other=3)), "UNMET"),
+            ("ineligible, all observed but something graded -> UNMET",
+             ("ineligible", True, full), "UNMET")):
+        code, lines = demo_exit(*args_)
+        text = "\n".join(lines)
+        check(f"CLI: {name}, and ALWAYS exit 1 with a final FAIL line (negative demo)",
+              code == 1 and lines[-1].startswith("FAIL")
+              and not any(l.startswith("PASS") for l in lines)
+              and f"ineligible demonstration: {want_met} (" in text)
+    for name, args_, want in (
+            ("stale, a fresh pass alone -> exit 1",
+             ("stale", True, {"stale": False, "attempts": 1, "ineligible": 0, "other": 0}), 1),
+            ("stale, observed stale discard + valid restage -> exit 0",
+             ("stale", True, {"stale": True, "attempts": 2, "ineligible": 0, "other": 0}), 0)):
+        code, lines = demo_exit(*args_)
+        check(f"CLI: {name}", code == want and lines[-1].startswith("PASS" if want == 0 else "FAIL"))
+
     check("grade: proven geometry, wrong target -> policy failure",
           grade(mksel(5.0, 5.01, target=3, fallback=True)) == "fail"
           and grade(mksel(5.0, 5.01, target=3)) == "fail"
@@ -2801,6 +3098,132 @@ def self_test():
         check("eligibility: correct policy, fresh valid reads -> PASS",
               sel.get("target") == 2 and sel["decision"]["decoyEligible"] is True
               and grade(sel) == "pass")
+
+        # The FIRST decision is final (round-5 review, issuecomment-5970681070
+        # F1). Two AI ticks on one state; each mutant misbehaves only on its
+        # first pick and returns the attacker on the second. A nil goes
+        # through the production no-target path, whose wander reads the
+        # subject before shortCircuit returns.
+        PICK = "local function pickLashoutTarget(uid, me)\n    local att = unit.getLastAttacker(uid)\n"
+        NIL_AFTER_GLA = (PICK, "local __pn = 0\n" + PICK
+                         + "    __pn = __pn + 1\n    if __pn == 1 then return nil end\n")
+        NIL_BEFORE_GLA = (PICK, "local __pn = 0\nlocal function pickLashoutTarget(uid, me)\n"
+                          "    __pn = __pn + 1\n    if __pn == 1 then return nil end\n"
+                          "    local att = unit.getLastAttacker(uid)\n")
+        NIL_AFTER_EVAL = ("        return att.uid\n    end",
+                          "        __pv = (__pv or 0) + 1\n"
+                          "        if __pv == 1 then return nil end\n        return att.uid\n    end")
+        WRONG_FIRST = ("        return att.uid\n    end",
+                       "        __pw = (__pw or 0) + 1\n"
+                       "        if __pw == 1 then return 3 end\n        return att.uid\n    end")
+        RAISES = ("local function pickLashoutTarget(uid, me)\n",
+                  "local function pickLashoutTarget(uid, me)\n    error('boom')\n")
+
+        def run2(patch, **kw):
+            return lashout_policy_harness(5.0, 5.01, 5.02, policy_patch=patch, ticks=2,
+                                          full=True, **kw)
+        r = run2(NIL_AFTER_EVAL)
+        sel = r["selection"]
+        check("first decision (F1): nil once AFTER fully evaluating the attacker, attacker next "
+              "tick -> the NIL first decision is kept through the production no-target path",
+              isinstance(sel, dict) and sel.get("targetNil") is True and sel.get("target") == -1
+              and r["wanderReads"] >= 1 and not sel.get("noHitRead"))
+        check("first decision (F1): ... the wander's subject reads did not erase or replace it "
+              "(its BEFORE reading and the decision's attacker read survive)",
+              isinstance(sel.get("before"), dict) and sel["decision"]["attackerEligible"] is True)
+        check("first decision (F1): ... eligible decoy + proven geometry + attacker replayed "
+              "eligible -> POLICY failure, never a pass",
+              kind(sel) == "fair" and grade(sel) == "fail")
+        check("first decision (F1): ... and shortCircuit is restored after the nil",
+              r["scRestored"] is True and r["okTick"] is True)
+        sel = run2(NIL_AFTER_EVAL, decoy_pose_seq=["collapsed"])["selection"]
+        check("first decision (B1): nil + decoy eligibility UNPROVED -> setup, not policy",
+              sel.get("targetNil") is True and grade(sel) == "setup")
+        sel = run2(NIL_AFTER_EVAL, attacker_x=1.50001, attacker_x_decision=1.49999,
+                   decoy_x=-1.5)["selection"]
+        check("first decision (B1): nil + geometry UNPROVED -> setup, not policy",
+              sel.get("targetNil") is True and kind(sel) == "fair" and grade(sel) == "setup")
+        sel = run2(NIL_AFTER_GLA)["selection"]
+        check("first decision (B1): nil with the attacker replay MISSING (never evaluated) -> "
+              "setup, not policy",
+              sel.get("targetNil") is True and sel["decision"]["attackerEligible"] == "missing"
+              and kind(sel) == "setup")
+        sel = run2(NIL_BEFORE_GLA)["selection"]
+        check("first decision (F1): nil WITHOUT reading the hit -> kept (noHitRead), setup",
+              sel.get("noHitRead") is True and kind(sel) == "setup")
+        r = run2(WRONG_FIRST)
+        sel = r["selection"]
+        check("first decision (F1): a valid WRONG target first, the attacker next tick -> "
+              "the wrong target is final -> POLICY failure (no retry)",
+              sel.get("target") == 3 and sel["decision"]["attackerEligible"] is True
+              and kind(sel) == "fair" and grade(sel) == "fail")
+        check("first decision (B3): shortCircuit restored after a NORMAL (target) return",
+              r["scRestored"] is True and r["okTick"] is True)
+        r = run2(None)
+        check("first decision (F1): the correct policy over two ticks still PASSES on its "
+              "first decision, shortCircuit restored",
+              r["selection"].get("target") == 2 and grade(r["selection"]) == "pass"
+              and r["scRestored"] is True)
+        r = run2(RAISES)
+        check("first decision (B3): a tick that RAISES -> the error propagates, shortCircuit "
+              "is restored, and the recorded selection is a named setup",
+              r["okTick"] is False and "boom" in str(r["errTick"]) and r["scRestored"] is True
+              and r["selection"].get("raised") is True and kind(r["selection"]) == "setup")
+        r = run2(None, attack_raises=True)
+        sel = r["selection"]
+        check("first decision (laz 3): an error AFTER the decision (the attack execute raises) "
+              "-> the first record keeps its identity (target 2, its BEFORE reading), is "
+              "flagged tickRaised, restored, error propagated",
+              sel.get("target") == 2 and isinstance(sel.get("before"), dict)
+              and sel.get("tickRaised") is True and r["okTick"] is False
+              and "attack boom" in str(r["errTick"]) and r["scRestored"] is True)
+        check("first decision (laz 3): ... and is a named SETUP, never a pass or a policy verdict",
+              kind(sel) == "setup")
+        r = run2(NIL_AFTER_EVAL, wander_raises=True)
+        sel = r["selection"]
+        check("first decision (laz 3): an error AFTER a nil decision (the wander raises) -> the "
+              "nil first record is kept, flagged tickRaised, setup, restored",
+              sel.get("targetNil") is True and isinstance(sel.get("before"), dict)
+              and sel.get("tickRaised") is True and kind(sel) == "setup"
+              and r["scRestored"] is True and r["okTick"] is False)
+        r = run2(RAISES)
+        check("first decision (laz 3): an error BEFORE any decision -> a raised record, flagged "
+              "tickRaised, setup, restored",
+              r["selection"].get("raised") is True and r["selection"].get("tickRaised") is True
+              and kind(r["selection"]) == "setup" and r["scRestored"] is True)
+        sel = run(attacker_x=12)
+        check("ineligible (harness): attacker 12 away on every read -> decoy picked, attacker "
+              "replayed INELIGIBLE -> counts as ineligible evidence",
+              sel.get("target") == 3 and sel["decision"]["attackerEligible"] is False
+              and ineligible_selection_observed(sel, 2, 3))
+        sel = run(attacker_x=12, attacker_x_decision=3)
+        check("ineligible (harness, laz 5 ABA): attacker 12 away at both readings but 3 on the "
+              "decision's own read -> picked by preference, replay ELIGIBLE -> does NOT count",
+              sel.get("target") == 2 and sel["decision"]["attackerEligible"] is True
+              and not ineligible_selection_observed(sel, 2, 3))
+        sel = run2(None, attacker_x=9, decoy_x=-9)["selection"]
+        check("first decision (F1): a GENUINE no-candidate decision (attacker and decoy out of "
+              "range) -> nil kept, setup, not a policy failure",
+              sel.get("targetNil") is True and kind(sel) == "setup")
+        # B4: a nil, malformed or missing target is never demonstration evidence.
+        stale_nil = with_(with_(with_(mksel(10.5, 10.52, target=3), ("target",), -1),
+                                ("targetNil",), True), ("targetTyped",), False)
+        check("evidence (B4): a stale-window NIL first decision is never stale evidence",
+              not stale_selection_observed(stale_nil, 2, 3)
+              and stale_selection_observed(mksel(10.5, 10.52, target=3), 2, 3))
+        inel = mksel(5.0, 5.01, ae0=False, ae1=False, a0=12, a1=12, target=3, replay=False)
+        inel_nil = with_(with_(with_(inel, ("target",), -1), ("targetNil",), True),
+                         ("targetTyped",), False)
+        check("evidence (B4): an attacker-ineligible NIL first decision is never ineligible "
+              "evidence", not ineligible_selection_observed(inel_nil, 2, 3)
+              and ineligible_selection_observed(inel, 2, 3))
+        for name, path, value in (("a missing target", ("target",), KeyError),
+                                  ("a string target", ("target",), "3"),
+                                  ("-1 without targetNil", ("target",), -1),
+                                  ("a missing targetNil", ("targetNil",), KeyError)):
+            check(f"evidence (B4): {name} is neither stale nor ineligible evidence",
+                  not stale_selection_observed(with_(mksel(10.5, 10.52, target=3), path, value), 2, 3)
+                  and not ineligible_selection_observed(with_(inel, path, value), 2, 3))
         # The bracket's -1 "no position" sentinel: candidate() gets nil from
         # its own getInfo, while the predicate's separate read still finds
         # the unit (the two reads are not atomic). Decoy bracket reads:
@@ -3022,18 +3445,11 @@ def main():
 
         if args.lashout_case:
             tune(P, EPISODE_MIN=LASHOUT_9AB_EPISODE, EPISODE_MAX=LASHOUT_9AB_EPISODE)
-            graded_ok, _, _, _, stale_observed = lashout_attacker_preference(
+            graded_ok, _, _, _, evidence = lashout_attacker_preference(
                 P, case=args.lashout_case)
-            if args.lashout_case == "stale":
-                passed = stale_demo_verdict(stale_observed, graded_ok)
-                if not stale_observed:
-                    print("  [FAIL] stale demonstration not observed: no AI "
-                          "selection with the hit past the window was discarded")
-            else:
-                passed = graded_ok
-            print(f"\n{'PASS' if passed else 'FAIL'} — phase 9a only "
-                  f"(--lashout-case {args.lashout_case})")
-            return 0 if passed else 1
+            code, lines = demo_exit(args.lashout_case, graded_ok, evidence)
+            print("\n" + "\n".join(lines))
+            return code
 
         # ---- 1. Fresh unit is mentally stable. ----
         uid = spawn_acolyte(P, 0, 0)
