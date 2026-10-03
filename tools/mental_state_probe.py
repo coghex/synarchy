@@ -1733,6 +1733,40 @@ def lashout_attacker_preference(port, case=None):
     return False, lash, attacker, decoy, evidence
 
 
+#: What swap_observer_lua's chunk answers, in its reply's 'installed'
+#: field, once the wrap and its `then_lua` have both run without raising
+#: (#2773).
+SWAP_OBSERVER_INSTALLED = "swap-observer-installed"
+
+#: A Lua function (one line, no comments, so it survives the console's
+#: line joining) reading the 9c2 SCENE: the subject's break, pose,
+#: activity, AI state, lash-out target and active flag, where the subject,
+#: victim and attacker stand, and the victim's and attacker's REAL poses
+#: (the attacker's under the 'collapsed' pin). Missing values answer -1 or
+#: 'nil'. It is a SNAPSHOT at the moment it runs: it proves state, never a
+#: decision the AI took (the AI may not have ticked yet, or may have
+#: ticked several times since).
+_SCENE_FN_LUA = " ".join((
+    "local function __probeScene(L, V, A)",
+    "local ms = require('scripts.mental_state');",
+    "local s = require('scripts.unit_ai').getState(L);",
+    "local function str(v) if v == nil then return 'nil' end return tostring(v) end;",
+    "local rp = _G.__probe_orig_getPose or unit.getPose;",
+    "local function at(u) local i = unit.getInfo(u);",
+    " if type(i) ~= 'table' then return { -1, -1 } end;",
+    " return { i.gridX or -1, i.gridY or -1 } end;",
+    "local br = ms.isBreaking(L) == true;",
+    "return { now = engine.gameTime(), exists = unit.exists(L) == true, breaking = br,",
+    " behavior = br and str(ms.breakBehavior(L)) or 'none',",
+    " mental_until = unit.getStat(L, 'mental_until') or -1,",
+    " pose = str(unit.getPose(L)), activity = str(unit.getActivity(L)),",
+    " aiState = s ~= nil, tgt = s and s.attackTargetUid or -1,",
+    " lashActive = s ~= nil and s.mentalLashoutActive == true,",
+    " lpos = at(L), vpos = at(V), apos = at(A),",
+    " vexists = unit.exists(V) == true, vpose = str(rp(V)),",
+    " aexists = unit.exists(A) == true, apose = str(rp(A)) } end"))
+
+
 def swap_observer_lua(lashB, victimB, attackerB, then_lua=""):
     """The console chunk install_swap_observer sends, kept as text so
     --self-test can run it against the PRODUCTION attack execute with no
@@ -1788,9 +1822,24 @@ def swap_observer_lua(lashB, victimB, attackerB, then_lua=""):
     both sides, the clock the execute (or a mutant without the
     exclusion) reads in between saw the hit inside the window too.
     `then_lua` runs in the SAME console chunk, after the wrap is in place.
+
+    The chunk answers { installed = SWAP_OBSERVER_INSTALLED, scene }
+    only when the wrap AND `then_lua` both ran without raising. Any other
+    reply (an error, an empty or lost reply) leaves completion UNPROVEN.
+    That is not proof that the break was never forced (a lost reply can
+    follow a chunk that ran whole), but the wrap may be in place without
+    it, so a later empty collection would otherwise look like a run with
+    no calls. `setup` is the record `then_lua` left in
+    _G.__probe_swap_setup, if any (9c2's fair-test record). `scene` is
+    _SCENE_FN_LUA's snapshot taken at the END of the
+    same chunk, right after `then_lua` (in 9c2, right after forceBreak and
+    before any AI tick): it proves the break was running, never a
+    decision. Taking it here costs no console round trip inside the
+    window; a scene that raises answers its error text instead.
     """
     return f"""
 local L, V, A = {lashB}, {victimB}, {attackerB}
+_G.__probe_swap_setup = nil
 local atk = require('scripts.unit_ai_combat_attack')
 local pol = require('scripts.unit_ai_mental').lashoutPolicy
 local WINDOW = require('scripts.unit_ai_combat').RETALIATE_WINDOW_SEC
@@ -1933,37 +1982,318 @@ atk.attackTargetExecute = function(u, s, params)
   return table.unpack(res, 2, res.n)
 end
 {then_lua}
-return 'ok'"""
+{_SCENE_FN_LUA}
+local okScene, scene = pcall(__probeScene, L, V, A)
+return {{ installed = '{SWAP_OBSERVER_INSTALLED}', scene = okScene and scene or ('error: ' .. tostring(scene)), setup = _G.__probe_swap_setup }}"""
+
+
+def swap_observer_chunk(lashB, victimB, attackerB, then_lua=""):
+    """The exact one-line console text install_swap_observer sends."""
+    return " ".join(line.strip() for line in
+                    swap_observer_lua(lashB, victimB, attackerB, then_lua).splitlines())
 
 
 def install_swap_observer(port, lashB, victimB, attackerB, then_lua=""):
     """Install swap_observer_lua for 9c2 (#2773), with `then_lua` in the
     same console chunk, after the wrap is in place. The Lua thread runs a
     chunk whole, so nothing it triggers can reach the execute unobserved.
-    collect_swap_calls removes the wrap."""
-    send(port, " ".join(line.strip() for line in
-                        swap_observer_lua(lashB, victimB, attackerB,
-                                          then_lua).splitlines()))
+    collect_swap_calls removes the wrap. Answers the console's raw reply,
+    which swap_setup_problems checks for SWAP_OBSERVER_INSTALLED."""
+    return send(port, swap_observer_chunk(lashB, victimB, attackerB, then_lua))
 
 
-def collect_swap_calls(port):
-    """Remove the attackTargetExecute wrap and answer the recorded calls."""
-    raw = send(port, "local c = _G.__probe_swap_calls or {}; "
-                     "if _G.__probe_swap_restore then _G.__probe_swap_restore() end; "
+#: Removes the wrap and answers the recorded calls. A missing observer
+#: (never installed, or already collected) answers its own marker rather
+#: than an empty list, so it can never read as "no calls".
+_SWAP_COLLECT_LUA = ("local c = _G.__probe_swap_calls; "
+                     "local restore = _G.__probe_swap_restore; "
+                     "if restore then restore() end; "
                      "_G.__probe_swap_calls = nil; "
+                     "if c == nil then return 'observer-missing' end; "
+                     "if restore == nil then return 'observer-restore-missing' end; "
                      "return #c == 0 and 'none' or c")
+
+
+def parse_swap_collection(raw):
+    """(status, calls) from _SWAP_COLLECT_LUA's console reply. Only 'ok'
+    makes `calls` evidence; an empty list is then a VALID 'no calls'.
+      * 'ok' — 'none' (no calls) or a JSON array of call records (or an
+        object keyed by index, which a Lua array with holes becomes);
+      * 'missing' — the observer was not installed or was already
+        removed;
+      * 'error' — the console answered a Lua error;
+      * 'no-reply' — nothing came back;
+      * 'malformed' — anything else."""
+    if not isinstance(raw, str) or raw == "":
+        return "no-reply", []
+    if raw == "none":
+        return "ok", []
+    if raw in ("observer-missing", "observer-restore-missing"):
+        return "missing", []
+    if raw.startswith("error"):
+        return "error", []
     try:
         calls = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        return []
+        return "malformed", []
     if isinstance(calls, dict):
         # A Lua array serializes as an object when it has holes; keep the
         # order by key.
         try:
             calls = [calls[k] for k in sorted(calls, key=int)]
         except (TypeError, ValueError):
-            return []
-    return calls if isinstance(calls, list) else []
+            return "malformed", []
+    if not isinstance(calls, list) or not calls:
+        return "malformed", []
+    return "ok", calls
+
+
+def collect_swap_calls(port):
+    """Remove the attackTargetExecute wrap; answer (status, calls, raw)
+    as parse_swap_collection classifies the reply."""
+    raw = send(port, _SWAP_COLLECT_LUA)
+    status, calls = parse_swap_collection(raw)
+    return status, calls, raw
+
+
+#: The activities unit_ai.lua's tick returns on before shortCircuit
+#: (scripts/unit_ai.lua:281-283), with the poses 'collapsed' and 'dead'.
+TICK_BLOCKING_ACTIVITIES = ("drinking", "eating", "pickup", "transitioning")
+#: 9c2's bounded re-stage: attempts, and how long to wait between them for
+#: the subject to be able to act again.
+NINE_C2_ATTEMPTS = 3
+NINE_C2_READY_WAIT_S = 15.0
+
+#: 9c2's FAIR-TEST then_lua (#2773), after the 'collapsed' pose pin. At the
+#: break, inside the install chunk, the subject must be able to act on a
+#: tick: standing, no tick-blocking activity, not knockedDown and not
+#: delirious. The staging chunk's unit.revive is a QUEUED command
+#: (Units/Spawn.hs:590-607 queues UnitRevive; Unit/Thread/Command/Pose.hs:
+#: 158-180 later snaps Collapsed/Crawling to Standing/Idle and clears the
+#: transition and getup timers, and is a no-op for other poses), so the
+#: subject can still be collapsed, mid-transition or otherwise unsettled
+#: when this chunk runs. This guard closes that false-failure path; it is
+#: not evidence of what happened in any earlier run. Only when the subject
+#: can act does the chunk (1) clear the subject's PRE-break stale target
+#: (its ordinary retaliation re-targets the recent attacker between the
+#: staging chunk and this one), leaving the first real lash-out decision
+#: observable, (2) install pass-through recorders that count the subject's
+#: tick entries and blocked ticks, and for EVERY shortCircuit its
+#: readiness, and whether it left a target, keeping the first one and
+#: the first able one, and (3) force the break. Otherwise nothing is
+#: forced and the record says why. The record lands in
+#: _G.__probe_swap_setup; the recorders are removed by
+#: _NINE_C2_SETUP_COLLECT_LUA. Plain fields only.
+#: ONE readiness predicate (one line, no comments), shared by the fair-test
+#: block and the re-stage wait: the subject can act on a tick.
+_READY_FN_LUA = " ".join((
+    "local __BLOCK = { drinking = true, eating = true, pickup = true, transitioning = true };",
+    "local function __probeReady(u)",
+    "local p, a, i = unit.getPose(u), unit.getActivity(u), unit.getInfo(u);",
+    "local kd = type(i) == 'table' and i.knockedDown == true;",
+    "local dl = require('scripts.brain').isDelirious(u) == true;",
+    "return { pose = tostring(p), activity = tostring(a), knockedDown = kd, delirious = dl,",
+    " ok = p == 'standing' and not __BLOCK[a] and not kd and not dl } end"))
+
+_NINE_C2_FAIR_LUA = r"""
+local FL = %(L)d
+local Fms = require('scripts.mental_state')
+local Fai = require('scripts.unit_ai')
+local Fmai = require('scripts.unit_ai_mental')
+local Flg = require('scripts.unit_ai_combat_lunge')
+local BLOCK = __BLOCK
+local ready = __probeReady
+local rec = { atBreak = ready(FL), broke = false, ticks = 0, blocked = 0, staleTgt = -1,
+  sc = 0, scAble = 0, scTargeted = 0 }
+_G.__probe_swap_setup = rec
+if rec.atBreak.ok then
+  local st = Fai.getState(FL)
+  rec.staleTgt = st and st.attackTargetUid or -1
+  if st then st.attackTargetUid = nil end
+  local oObs, oSC = Flg.observeTick, Fmai.shortCircuit
+  _G.__probe_9c2_restore = function()
+    Flg.observeTick = oObs
+    Fmai.shortCircuit = oSC
+    _G.__probe_9c2_restore = nil
+  end
+  Flg.observeTick = function(uid, pose, act)
+    local r = table.pack(oObs(uid, pose, act))
+    if uid == FL then
+      rec.ticks = rec.ticks + 1
+      if pose == 'collapsed' or pose == 'dead' or BLOCK[act] then rec.blocked = rec.blocked + 1 end
+      if rec.firstTick == nil then
+        rec.firstTick = { pose = tostring(pose), activity = tostring(act), t = engine.gameTime() }
+      end
+    end
+    return table.unpack(r, 1, r.n)
+  end
+  Fmai.shortCircuit = function(uid, s, ...)
+    if uid ~= FL then return oSC(uid, s, ...) end
+    local r0 = ready(FL)
+    r0.preTgt = s and s.attackTargetUid or -1
+    r0.t = engine.gameTime()
+    rec.sc = rec.sc + 1
+    if r0.ok then rec.scAble = rec.scAble + 1 end
+    if rec.firstSC == nil then rec.firstSC = r0 end
+    if r0.ok and rec.firstAbleSC == nil then rec.firstAbleSC = r0 end
+    local res = table.pack(oSC(uid, s, ...))
+    r0.postTgt = s and s.attackTargetUid or -1
+    if r0.postTgt ~= -1 then rec.scTargeted = rec.scTargeted + 1 end
+    return table.unpack(res, 1, res.n)
+  end
+  Fms.forceBreak(FL, 'lash_out')
+  rec.broke = true
+end
+"""
+
+#: Removes 9c2's recorders and answers the fair-test record, or its own
+#: marker when there is none.
+_NINE_C2_SETUP_COLLECT_LUA = ("local r = _G.__probe_swap_setup; "
+                              "if _G.__probe_9c2_restore then _G.__probe_9c2_restore() end; "
+                              "_G.__probe_swap_setup = nil; "
+                              "if r == nil then return 'setup-missing' end; "
+                              "return r")
+
+
+def nine_c2_then_lua(lashB, victimB, attackerB):
+    """9c2's whole then_lua: the 'collapsed' pose pin on attackerB, then the
+    fair-test block (which forces the break only when the subject can act)."""
+    return (f"if not _G.__probe_orig_getPose then "
+            f"_G.__probe_orig_getPose = unit.getPose end; "
+            f"unit.getPose = function(u) "
+            f"if u == {attackerB} then return 'collapsed' end "
+            f"return _G.__probe_orig_getPose(u) end; "
+            + _READY_FN_LUA + " "
+            + " ".join(line.strip() for line in
+                       (_NINE_C2_FAIR_LUA % {"L": lashB}).splitlines() if line.strip()))
+
+
+def subject_ready(port, uid):
+    """The shared readiness record for `uid` (a dict), or the raw reply."""
+    return send_json(port, _READY_FN_LUA + f" return __probeReady({uid})")
+
+
+def _ready_ok(r):
+    """True/False when a readiness record proves the subject could / could
+    not act (every field present and consistent with its own 'ok'); None
+    when it is malformed."""
+    if not isinstance(r, dict):
+        return None
+    if not isinstance(r.get("activity"), str) or not isinstance(r.get("pose"), str):
+        return None
+    if not (isinstance(r.get("knockedDown"), bool) and isinstance(r.get("delirious"), bool)):
+        return None
+    fields_ok = (r["pose"] == "standing" and r["activity"] not in TICK_BLOCKING_ACTIVITIES
+                 and r["knockedDown"] is False and r["delirious"] is False)
+    if r.get("ok") is not fields_ok:
+        return None
+    return fields_ok
+
+
+def nine_c2_precondition(reply):
+    """(met, detail) for the fair-test record in the install reply (a dict
+    from parse_install_reply). met is True (the break was forced on a
+    subject able to act), False (it was NOT forced: re-stage), or None (the
+    record is missing or malformed: setup unproven)."""
+    if not isinstance(reply, dict):
+        return None, "no install reply object"
+    rec = reply.get("setup")
+    if not isinstance(rec, dict):
+        return None, f"fair-test record missing ({rec!r})"
+    met = _ready_ok(rec.get("atBreak"))
+    if met is None:
+        return None, f"fair-test record malformed ({rec.get('atBreak')!r})"
+    if rec.get("broke") is not met:
+        return None, f"break forced={rec.get('broke')!r} disagrees with the precondition {met}"
+    return met, f"at the break {rec.get('atBreak')}"
+
+
+def _count_field(rec, k):
+    v = rec.get(k)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+
+
+def nine_c2_window_class(rec, samples, n_calls):
+    """After the window: ('graded', why), ('restage', why) or ('setup', why).
+
+    Re-staging can NEVER erase an observed decision: ANY non-nil target in
+    the samples, ANY recorded execute call, or ANY shortCircuit that left a
+    target makes the window GRADED (a wrong target, the collapsed attacker
+    included, is exactly the policy failure 9c2 exists to catch). Without
+    any of those, the window is re-staged only when the subject could not
+    act for the WHOLE window: it was ticked, every tick was either blocked
+    before shortCircuit or reached a shortCircuit at which it could not
+    act, and no shortCircuit found it able. A subject that could act at
+    any shortCircuit, that was never ticked, or whose unblocked ticks did
+    not all reach shortCircuit is GRADED, and fails: no target OBSERVED.
+    'setup' — the record is missing or malformed."""
+    if not isinstance(rec, dict):
+        return "setup", f"fair-test record not read back ({rec!r})"
+    c = {k: _count_field(rec, k) for k in ("ticks", "blocked", "sc", "scAble", "scTargeted")}
+    if (None in c.values() or c["blocked"] > c["ticks"] or c["scAble"] > c["sc"]
+            or c["scTargeted"] > c["sc"]):
+        return "setup", f"fair-test counts malformed ({ {k: rec.get(k) for k in c} })"
+    for k in ("firstSC", "firstAbleSC"):
+        if rec.get(k) is not None and _ready_ok(rec[k]) is None:
+            return "setup", f"{k} record malformed ({rec[k]!r})"
+    observed = sorted({t for t in samples if t != "nil"})
+    if observed or n_calls > 0 or c["scTargeted"] > 0:
+        return "graded", (f"a decision was observed: targets {observed}, {n_calls} execute "
+                          f"call(s), {c['scTargeted']} shortCircuit(s) leaving a target")
+    if c["ticks"] == 0:
+        return "graded", "no target observed; the subject was never ticked during the window"
+    unblocked = c["ticks"] - c["blocked"]
+    if c["scAble"] == 0 and c["sc"] >= unblocked:
+        return "restage", (f"the subject could not act for the whole window: {c['blocked']} of "
+                           f"{c['ticks']} tick(s) blocked, {c['sc']} shortCircuit(s) all unable "
+                           f"(first {rec.get('firstSC') or rec.get('firstTick')})")
+    return "graded", (f"no target observed although the subject could act: {c['scAble']} able "
+                      f"shortCircuit(s) of {c['sc']} (first able {rec.get('firstAbleSC')}), "
+                      f"{unblocked} unblocked tick(s)")
+
+
+def scene_state(port, lashB, victimB, attackerB):
+    """A LATER 9c2 scene snapshot (a dict), or the raw reply text: the same
+    _SCENE_FN_LUA read as the install chunk's, sent on its own after the
+    window. Mutable state at that moment, not first-decision proof."""
+    return send_json(port, _SCENE_FN_LUA + f" return __probeScene({lashB}, {victimB}, {attackerB})")
+
+
+def parse_install_reply(raw):
+    """The install chunk's reply as a dict, or None when it is not one."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        v = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def swap_setup_problems(install_raw, collect_status, collect_raw):
+    """Why 9c2's observation is NOT valid evidence (empty = valid): the
+    install chunk's reply must carry installed = SWAP_OBSERVER_INSTALLED
+    and a scene showing the subject breaking with lash_out right after
+    the chunk forced it, and the collection must have been read back as
+    'ok'. Missing or broken instrumentation is never read as 'no calls'."""
+    problems = []
+    reply = parse_install_reply(install_raw)
+    if reply is None or reply.get("installed") != SWAP_OBSERVER_INSTALLED:
+        # A lost or error reply leaves completion UNPROVEN; it does not
+        # show that forceBreak never ran (the chunk may have run in part,
+        # or whole with its reply lost).
+        problems.append(f"observer install completion UNPROVEN (reply {str(install_raw)[:300]!r})")
+    else:
+        scene = reply.get("scene")
+        if not isinstance(scene, dict):
+            problems.append(f"install-chunk scene unreadable ({scene!r})")
+        elif not (scene.get("exists") is True and scene.get("breaking") is True
+                  and scene.get("behavior") == "lash_out"):
+            problems.append(f"subject not in a lash-out break at the end of the install "
+                            f"chunk ({scene})")
+    if collect_status != "ok":
+        problems.append(f"observer collection {collect_status} (reply {str(collect_raw)[:200]!r})")
+    return problems
 
 
 #: Each bracket side's per-side preconditions (Lua booleans).
@@ -2214,6 +2544,8 @@ local atk = require('scripts.unit_ai_combat_attack')
 local saved = { getInfo = unit.getInfo, getPose = unit.getPose, exists = unit.exists,
   getLastAttacker = unit.getLastAttacker, getAttackRange = unit.getAttackRange }
 assert(load(OBSERVER))()
+-- The install chunk's own end-of-chunk scene read is not part of the call.
+seen = {}
 local pinned = unit.getPose
 local s = { attackTargetUid = 2, mentalLashoutActive = true }
 inCall = true
@@ -2319,6 +2651,188 @@ def swap_policy_harness(before, execute, after, attacker_x=1.0,
         calls = [calls[k] for k in sorted(calls, key=int)]
     return {"calls": calls, "post": got["post"], "restored": got["restored"],
             "clock": got["clockCallers"], "ok": got["okCall"], "err": got["errCall"]}
+
+
+#: --self-test's no-engine harness for 9c2's SETUP proof (#2773): the exact
+#: install chunk (swap_observer_chunk), the exact collection text
+#: (_SWAP_COLLECT_LUA) and the exact subject-state read
+#: (scene_state's _SCENE_FN_LUA read) run under the local Lua against stubbed
+#: modules. forceBreak is stubbed with its REAL zero-return shape. MODE:
+#:   ok        — install with a then_lua that forces the break;
+#:   raise     — install with a then_lua that raises AFTER the wrap is in
+#:               place (the observer exists, the break was never forced);
+#:   absent    — no install at all;
+#:   recorded  — install, then one call record lands before collection;
+#:   twice     — install, collect, then collect again.
+_SWAP_SETUP_HARNESS_LUA = r"""
+local INSTALL, COLLECT, STATE, MODE = ...
+local function noop() return nil end
+local function lenient(t) return setmetatable(t, { __index = function() return noop end }) end
+local broken = false
+engine = lenient({ gameTime = function() return 5.0 end })
+unit = lenient({ exists = function() return true end, getPose = function() return 'standing' end,
+  getActivity = function() return 'idle' end,
+  getInfo = function(u) if u ~= 3 then return { gridX = u * 1.0, gridY = 0.0 } end end,
+  getStat = function(u, k) if k == 'mental_until' then return broken and 11.0 or nil end end })
+local function stub(t) return function() return lenient(t) end end
+package.preload['scripts.unit_ai_combat_attack'] = stub({ attackTargetExecute = function() end })
+package.preload['scripts.unit_ai_mental'] = stub({ lashoutPolicy = {} })
+package.preload['scripts.unit_ai_combat'] = stub({ RETALIATE_WINDOW_SEC = 3.0 })
+package.preload['scripts.unit_ai'] = stub({ getState = function() return {} end })
+package.preload['scripts.mental_state'] = stub({
+  forceBreak = function() broken = true end,          -- returns NOTHING, like the real one
+  isBreaking = function() return broken end,
+  breakBehavior = function() return broken and 'lash_out' or nil end })
+local function run(chunk)
+  local f, perr = load(chunk)
+  if not f then return { ok = false, ret = 'error: ' .. tostring(perr) } end
+  local r = table.pack(pcall(f))
+  if not r[1] then return { ok = false, ret = 'error: ' .. tostring(r[2]) } end
+  local v = r[2]
+  if type(v) == 'table' then
+    local n = 0
+    for _ in pairs(v) do n = n + 1 end
+    if v.now ~= nil or v.installed ~= nil then return { ok = true, ret = v } end
+    return { ok = true, ret = 'table:' .. n }
+  end
+  return { ok = true, ret = tostring(v) }
+end
+local out = {}
+if MODE ~= 'absent' then out.install = run(INSTALL) end
+if MODE == 'recorded' then
+  _G.__probe_swap_calls[#_G.__probe_swap_calls + 1] = { pre = 2, post = 2 }
+end
+out.state = run(STATE)
+out.collect = run(COLLECT)
+if MODE == 'twice' then out.collect2 = run(COLLECT) end
+local function enc(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%q:%s', tostring(k), enc(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%q', v)
+  elseif t == 'number' then return string.format('%.14g', v)
+  elseif t == 'boolean' then return tostring(v) end
+  return 'null'
+end
+io.write(enc(out))
+"""
+
+
+def swap_setup_harness(mode):
+    """Run _SWAP_SETUP_HARNESS_LUA in `mode` (no engine; needs `lua`).
+    Answers {install, state, collect[, collect2]}, each {ok, ret}, or None
+    when no lua is installed."""
+    import shutil, subprocess, os, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    pin_and_break = ("if not _G.__probe_orig_getPose then _G.__probe_orig_getPose = unit.getPose end; "
+                     "unit.getPose = function(u) if u == 3 then return 'collapsed' end "
+                     "return _G.__probe_orig_getPose(u) end; "
+                     "require('scripts.mental_state').forceBreak(1,'lash_out');")
+    then_lua = pin_and_break if mode != "raise" else "error('then_lua boom')"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "setup.lua")
+        with open(path, "w") as fh:
+            fh.write(_SWAP_SETUP_HARNESS_LUA)
+        out = subprocess.run(
+            [lua, path, swap_observer_chunk(1, 2, 3, then_lua), _SWAP_COLLECT_LUA,
+             _SCENE_FN_LUA + " return __probeScene(1, 2, 3)", mode],
+            capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(f"swap setup harness failed: {out.stderr.strip()}")
+    return json.loads(out.stdout)
+
+
+#: --self-test's no-engine harness for 9c2's FAIR-TEST block (#2773): the
+#: exact install chunk the probe sends (swap_observer_chunk with
+#: nine_c2_then_lua), then optional driven ticks through the wrapped
+#: observeTick/shortCircuit, then the exact _NINE_C2_SETUP_COLLECT_LUA,
+#: under the local Lua against stubs. The subject (1) answers POSE,
+#: ACTIVITY, knockedDown KD and delirium DL; its AI state starts with a
+#: STALE target 10; forceBreak returns nothing; the production
+#: shortCircuit stub sets the target to 2. DRIVE is a list of
+#: {pose, activity} ticks, each followed by a shortCircuit call unless the
+#: tick is blocked, as unit_ai.lua does.
+_NINE_C2_FAIR_HARNESS_LUA = r"""
+local CHUNK, COLLECT, POSE, ACT, KD, DL, DRIVE = ...
+KD, DL = KD == 'true', DL == 'true'
+local function noop() end
+local function lenient(t) return setmetatable(t, { __index = function() return noop end }) end
+local broken, fbCalls = false, 0
+local S = { attackTargetUid = 10 }
+engine = lenient({ gameTime = function() return 5.0 end })
+unit = lenient({ exists = function() return true end,
+  getPose = function(u) if u == 1 then return POSE end return 'standing' end,
+  getActivity = function(u) if u == 1 then return ACT end return 'idle' end,
+  getInfo = function(u) return { gridX = u * 1.0, gridY = 0.0, knockedDown = (u == 1) and KD or false } end,
+  getStat = function() return 1.0 end })
+local function stub(t) return function() return lenient(t) end end
+local ORIG = {}
+package.preload['scripts.unit_ai_combat_attack'] = stub({ attackTargetExecute = function() end })
+package.preload['scripts.unit_ai_combat'] = stub({ RETALIATE_WINDOW_SEC = 3.0 })
+package.preload['scripts.unit_ai'] = stub({ getState = function(u) if u == 1 then return S end end })
+package.preload['scripts.brain'] = stub({ isDelirious = function(u) return u == 1 and DL end })
+package.preload['scripts.mental_state'] = stub({
+  forceBreak = function() fbCalls = fbCalls + 1 broken = true end,
+  isBreaking = function() return broken end,
+  breakBehavior = function() return broken and 'lash_out' or nil end })
+package.preload['scripts.unit_ai_mental'] = function()
+  local t = lenient({ lashoutPolicy = {}, shortCircuit = function(uid, s) s.attackTargetUid = 2 return true end })
+  ORIG.sc = t.shortCircuit return t end
+package.preload['scripts.unit_ai_combat_lunge'] = function()
+  local t = lenient({ observeTick = function() end }) ORIG.obs = t.observeTick return t end
+local inst = table.pack(pcall(assert(load(CHUNK))))
+local mai, lg = require('scripts.unit_ai_mental'), require('scripts.unit_ai_combat_lunge')
+local tgtAfterInstall = S.attackTargetUid
+local wrapped = mai.shortCircuit ~= ORIG.sc and lg.observeTick ~= ORIG.obs
+for p, a in string.gmatch(DRIVE, '(%w+):(%w+)') do
+  lg.observeTick(1, p, a)
+  if not (p == 'collapsed' or p == 'dead' or a == 'drinking' or a == 'eating'
+          or a == 'pickup' or a == 'transitioning') then mai.shortCircuit(1, S) end
+end
+local col = table.pack(pcall(assert(load(COLLECT))))
+local restored = mai.shortCircuit == ORIG.sc and lg.observeTick == ORIG.obs
+local function enc(v)
+  local t = type(v)
+  if t == 'table' then local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%q:%s', tostring(k), enc(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%q', v)
+  elseif t == 'number' then
+    if math.type(v) == 'integer' then return string.format('%d', v) end
+    return string.format('%.14g', v)
+  elseif t == 'boolean' then return tostring(v) end
+  return 'null'
+end
+io.write(enc({ installOk = inst[1], install = inst[2], fbCalls = fbCalls,
+  tgtAfterInstall = tgtAfterInstall or 'nil', wrapped = wrapped, restored = restored,
+  collectOk = col[1], collect = col[2] }))
+"""
+
+
+def nine_c2_fair_harness(pose="standing", activity="idle", knocked=False, delirious=False,
+                         drive=""):
+    """Run _NINE_C2_FAIR_HARNESS_LUA (no engine; needs `lua`); None without
+    lua. `drive` is 'pose:activity' ticks separated by spaces."""
+    import shutil, subprocess, os, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "fair.lua")
+        with open(path, "w") as fh:
+            fh.write(_NINE_C2_FAIR_HARNESS_LUA)
+        out = subprocess.run(
+            [lua, path, swap_observer_chunk(1, 2, 3, nine_c2_then_lua(1, 2, 3)),
+             _NINE_C2_SETUP_COLLECT_LUA, pose, activity, str(knocked).lower(),
+             str(delirious).lower(), drive],
+            capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(f"fair harness failed: {out.stderr.strip()}")
+    return json.loads(out.stdout)
 
 
 #: --self-test's no-engine harness: the PRODUCTION scripts/unit_ai_mental.lua
@@ -3418,6 +3932,208 @@ def self_test():
                       r["post"] == 2 and status(r) == "malformed" and sgate(r) == "setup")
 
 
+    # 9c2 setup proof (#2773): the install reply, the collection and the
+    # break are each proven, never inferred from an empty call list.
+    for raw, want in (("none", ("ok", [])),
+                      ('[{"pre": 2, "post": 2}]', ("ok", [{"pre": 2, "post": 2}])),
+                      ('{"2": {"post": 9}, "1": {"post": 2}}', ("ok", [{"post": 2}, {"post": 9}])),
+                      ("observer-missing", ("missing", [])),
+                      ("observer-restore-missing", ("missing", [])),
+                      ("error: [string]:1: attempt to index a nil value", ("error", [])),
+                      ("", ("no-reply", [])), (None, ("no-reply", [])),
+                      ("ok", ("malformed", [])), ("null", ("malformed", [])),
+                      ("[]", ("malformed", [])), ('{"a": 1}', ("malformed", [])),
+                      ("{not json", ("malformed", []))):
+        check(f"9c2 collection: {raw!r} -> {want[0]}", parse_swap_collection(raw) == want)
+    goodS = {"exists": True, "breaking": True, "behavior": "lash_out", "tgt": -1}
+
+    def inst(scene=goodS, installed=SWAP_OBSERVER_INSTALLED):
+        return json.dumps({"installed": installed, "scene": scene})
+    check("9c2 setup: installed + lash-out break in the chunk's scene + collected ok -> valid "
+          "(an EMPTY call list is then a real 'no calls')",
+          swap_setup_problems(inst(), "ok", "none") == [])
+    for name, args in (
+            ("the old bare 'ok' install reply", ("ok", "ok", "none")),
+            ("a bare marker string with no scene", (SWAP_OBSERVER_INSTALLED, "ok", "none")),
+            ("a wrong installed value", (inst(installed="ok"), "ok", "none")),
+            ("an install error reply", ("error: x:1: boom", "ok", "none")),
+            ("a lost install reply", ("", "ok", "none")),
+            ("a 'null' install reply", ("null", "ok", "none")),
+            ("a scene that raised", (inst(scene="error: y:1: bad"), "ok", "none")),
+            ("no break in the chunk's scene", (inst(scene=dict(goodS, breaking=False, behavior="none")), "ok", "none")),
+            ("a non-lash-out break", (inst(scene=dict(goodS, behavior="flee")), "ok", "none")),
+            ("a missing subject", (inst(scene=dict(goodS, exists=False)), "ok", "none")),
+            ("a truthy-but-not-true breaking", (inst(scene=dict(goodS, breaking=1)), "ok", "none")),
+            ("a missing observer at collection", (inst(), "missing", "observer-missing")),
+            ("a collection error", (inst(), "error", "error: y")),
+            ("a lost collection reply", (inst(), "no-reply", "")),
+            ("a malformed collection", (inst(), "malformed", "zz"))):
+        check(f"9c2 setup: {name} -> UNPROVEN, never 'no calls'", swap_setup_problems(*args) != [])
+    probs = swap_setup_problems("error: x:1: boom", "ok", "none")
+    check("9c2 setup: the install error text is kept in the reason",
+          any("x:1: boom" in p for p in probs))
+    sh = swap_setup_harness("ok")
+    if sh is None:
+        print("  skip 9c2 setup harness: no `lua` interpreter installed")
+    else:
+        ir = sh["install"]["ret"] if isinstance(sh["install"]["ret"], dict) else {}
+        check("9c2 setup harness: the exact install chunk (zero-return forceBreak) answers "
+              "the completion marker",
+              sh["install"]["ok"] is True and ir.get("installed") == SWAP_OBSERVER_INSTALLED)
+        sc = ir.get("scene") if isinstance(ir.get("scene"), dict) else {}
+        check("9c2 setup harness: ... with the chunk-end scene showing the lash-out break "
+              "(taken in the SAME chunk, no extra round trip)",
+              sc.get("breaking") is True and sc.get("behavior") == "lash_out" and sc.get("exists") is True)
+        check("9c2 setup harness: ... the scene has the victim's position and REAL pose, and the "
+              "attacker's REAL pose under the 'collapsed' pin; a missing position reads -1",
+              sc.get("vpos") == {"1": 2, "2": 0} and sc.get("vpose") == "standing"
+              and sc.get("apose") == "standing" and sc.get("apos") == {"1": -1, "2": -1})
+        check("9c2 setup harness: ... the separate LATER scene read gives the same fields",
+              sh["state"]["ok"] and sh["state"]["ret"].get("breaking") is True
+              and sh["state"]["ret"].get("vpose") == "standing")
+        check("9c2 setup harness: ... and an untouched observer collects as a VALID 'none'",
+              parse_swap_collection(sh["collect"]["ret"]) == ("ok", []))
+        check("9c2 setup harness: ... and the whole chain is valid setup",
+              swap_setup_problems(json.dumps(ir), parse_swap_collection(sh["collect"]["ret"])[0],
+                                  sh["collect"]["ret"]) == [])
+        sh = swap_setup_harness("raise")
+        check("9c2 setup harness: then_lua raising after the wrap -> an error reply, no marker",
+              sh["install"]["ok"] is False and "then_lua boom" in sh["install"]["ret"])
+        check("9c2 setup harness: ... the wrap WAS left in place, so the collection alone reads "
+              "'none' (the conflation the install proof exists for)",
+              parse_swap_collection(sh["collect"]["ret"]) == ("ok", []))
+        check("9c2 setup harness: ... and the later scene read shows NO break",
+              sh["state"]["ret"].get("breaking") is False and sh["state"]["ret"].get("behavior") == "none")
+        st = parse_swap_collection(sh["collect"]["ret"])[0]
+        check("9c2 setup harness: ... and the setup is UNPROVEN, with the error kept",
+              any("then_lua boom" in p for p in
+                  swap_setup_problems(sh["install"]["ret"], st, sh["collect"]["ret"])))
+        sh = swap_setup_harness("absent")
+        check("9c2 setup harness: no observer at all -> 'observer-missing', never 'none'",
+              sh["collect"]["ret"] == "observer-missing"
+              and parse_swap_collection(sh["collect"]["ret"])[0] == "missing")
+        sh = swap_setup_harness("recorded")
+        check("9c2 setup harness: a recorded call -> the collection answers the record (ok)",
+              sh["collect"]["ret"] == "table:1")
+        sh = swap_setup_harness("twice")
+        check("9c2 setup harness: a second collection -> 'observer-missing' (the wrap was removed)",
+              parse_swap_collection(sh["collect"]["ret"]) == ("ok", [])
+              and sh["collect2"]["ret"] == "observer-missing")
+
+    # 9c2 FAIR-TEST precondition (#2773): a subject that cannot act at the
+    # break is re-staged, never graded; one that could act is graded.
+    RDY = {"pose": "standing", "activity": "idle", "knockedDown": False, "delirious": False, "ok": True}
+    for name, r, want in (
+            ("standing + idle", RDY, True),
+            ("standing + walking", dict(RDY, activity="walking"), True),
+            ("collapsed", dict(RDY, pose="collapsed", ok=False), False),
+            ("dead", dict(RDY, pose="dead", ok=False), False),
+            ("falling (a leap or fall in the air)", dict(RDY, pose="falling", ok=False), False),
+            ("transitioning", dict(RDY, activity="transitioning", ok=False), False),
+            ("drinking", dict(RDY, activity="drinking", ok=False), False),
+            ("eating", dict(RDY, activity="eating", ok=False), False),
+            ("pickup", dict(RDY, activity="pickup", ok=False), False),
+            ("knockedDown", dict(RDY, knockedDown=True, ok=False), False),
+            ("delirious", dict(RDY, delirious=True, ok=False), False),
+            ("an 'ok' that contradicts its fields", dict(RDY, pose="collapsed"), None),
+            ("a missing knockedDown", {k: v for k, v in RDY.items() if k != "knockedDown"}, None),
+            ("a truthy-but-not-bool delirious", dict(RDY, delirious=0), None),
+            ("not a record", "error: x", None)):
+        check(f"9c2 readiness: {name} -> {want}", _ready_ok(r) is want)
+
+    def fair(at=RDY, broke=True):
+        return {"installed": SWAP_OBSERVER_INSTALLED, "setup": {"atBreak": at, "broke": broke}}
+    for name, reply, want in (
+            ("able subject, break forced -> met", fair(), True),
+            ("down subject, no break -> NOT met (re-stage)", fair(dict(RDY, pose="collapsed", ok=False), False), False),
+            ("able subject but no break -> malformed", fair(broke=False), None),
+            ("down subject but a break forced -> malformed", fair(dict(RDY, pose="collapsed", ok=False), True), None),
+            ("no fair-test record -> unproven", {"installed": SWAP_OBSERVER_INSTALLED}, None),
+            ("no reply object -> unproven", None, None)):
+        check(f"9c2 precondition: {name}", nine_c2_precondition(reply)[0] is want)
+    UN = dict(RDY, delirious=True, ok=False)
+    REC = {"ticks": 3, "blocked": 0, "sc": 3, "scAble": 3, "scTargeted": 0}
+    for name, rec, samples, calls, want in (
+            ("victim target seen -> graded", dict(REC, firstSC=RDY), ["9"], 0, "graded"),
+            # F1: an observed decision is NEVER erased by a re-stage
+            ("the collapsed attacker 10 observed while every shortCircuit was unable -> GRADED "
+             "(the policy failure 9c2 exists to catch)",
+             dict(REC, scAble=0, firstSC=UN), ["nil", "10"], 0, "graded"),
+            ("a mixed 9/10 sample -> graded", dict(REC, scAble=0, firstSC=UN), ["9", "10"], 0, "graded"),
+            ("an execute call recorded with only nil samples -> graded",
+             dict(REC, scAble=0, firstSC=UN), ["nil"], 1, "graded"),
+            ("a shortCircuit that left a target, nil samples -> graded",
+             dict(REC, scAble=0, scTargeted=1, firstSC=UN), ["nil"], 0, "graded"),
+            # F2: re-stage only when the subject could not act for the WHOLE window
+            ("first shortCircuit unable but a LATER one able, no target observed -> GRADED",
+             dict(REC, scAble=2, firstSC=UN, firstAbleSC=RDY), ["nil"], 0, "graded"),
+            ("every shortCircuit unable, nothing observed -> re-stage",
+             dict(REC, scAble=0, firstSC=UN), ["nil"], 0, "restage"),
+            ("every tick blocked, no shortCircuit, nothing observed -> re-stage",
+             {"ticks": 3, "blocked": 3, "sc": 0, "scAble": 0, "scTargeted": 0}, ["nil"], 0, "restage"),
+            ("some ticks blocked, the rest at unable shortCircuits -> re-stage",
+             {"ticks": 3, "blocked": 1, "sc": 2, "scAble": 0, "scTargeted": 0, "firstSC": UN}, ["nil"], 0, "restage"),
+            ("an unblocked tick that never reached shortCircuit -> graded",
+             {"ticks": 3, "blocked": 1, "sc": 1, "scAble": 0, "scTargeted": 0, "firstSC": UN}, ["nil"], 0, "graded"),
+            ("able at every shortCircuit, no target observed -> graded (a genuine FAIL)",
+             dict(REC, firstSC=RDY, firstAbleSC=RDY), ["nil"], 0, "graded"),
+            ("never ticked -> graded (a genuine FAIL)",
+             {"ticks": 0, "blocked": 0, "sc": 0, "scAble": 0, "scTargeted": 0}, ["nil"], 0, "graded"),
+            ("malformed first shortCircuit -> setup", dict(REC, firstSC={"pose": "standing"}), ["nil"], 0, "setup"),
+            ("blocked > ticks -> setup", dict(REC, blocked=4), ["nil"], 0, "setup"),
+            ("scAble > sc -> setup", dict(REC, scAble=4), ["nil"], 0, "setup"),
+            ("bool ticks -> setup", dict(REC, ticks=True), ["nil"], 0, "setup"),
+            ("a missing count -> setup", {"ticks": 1, "blocked": 0}, ["nil"], 0, "setup"),
+            ("no record -> setup", "setup-missing", ["nil"], 0, "setup")):
+        check(f"9c2 window: {name}", nine_c2_window_class(rec, samples, calls)[0] == want)
+    why = nine_c2_window_class(dict(REC, firstSC=RDY, firstAbleSC=RDY), ["nil"], 0)[1]
+    check("9c2 window: the graded no-target reason says 'no target observed', not 'never acquired'",
+          "no target observed" in why and "acquired" not in why)
+    fh = nine_c2_fair_harness()
+    if fh is None:
+        print("  skip 9c2 fair harness: no `lua` interpreter installed")
+    else:
+        ins = fh["install"] if isinstance(fh["install"], dict) else {}
+        check("9c2 fair harness: an ABLE subject -> the break is forced once, the reply carries "
+              "the met precondition and the completion marker",
+              fh["installOk"] is True and fh["fbCalls"] == 1 and ins.get("installed") == SWAP_OBSERVER_INSTALLED
+              and nine_c2_precondition(ins)[0] is True)
+        check("9c2 fair harness: ... the STALE target 10 was recorded and cleared before the break",
+              ins.get("setup", {}).get("staleTgt") == 10 and fh["tgtAfterInstall"] == "nil")
+        fh = nine_c2_fair_harness(drive="standing:idle standing:walking")
+        col = fh["collect"] if isinstance(fh["collect"], dict) else {}
+        check("9c2 fair harness: ... driven ticks are counted, the FIRST shortCircuit keeps "
+              "readiness and the target before (-1) and after (2), and the recorders are restored",
+              fh["wrapped"] is True and fh["restored"] is True and col.get("ticks") == 2
+              and col.get("blocked") == 0 and isinstance(col.get("firstSC"), dict)
+              and col["firstSC"].get("preTgt") == -1 and col["firstSC"].get("postTgt") == 2
+              and _ready_ok(col["firstSC"]) is True)
+        check("9c2 fair harness: ... EVERY shortCircuit is counted with its readiness and whether "
+              "it left a target",
+              col.get("sc") == 2 and col.get("scAble") == 2 and col.get("scTargeted") == 2
+              and _ready_ok(col.get("firstAbleSC")) is True)
+        check("9c2 fair harness: ... and a normal window is GRADED",
+              nine_c2_window_class(col, ["2"], 0)[0] == "graded")
+        fh = nine_c2_fair_harness(drive="standing:transitioning standing:transitioning")
+        col = fh["collect"] if isinstance(fh["collect"], dict) else {}
+        check("9c2 fair harness: every tick blocked (transitioning) and no shortCircuit -> "
+              "RE-STAGE", col.get("ticks") == 2 and col.get("blocked") == 2
+              and "firstSC" not in col and nine_c2_window_class(col, ["nil"], 0)[0] == "restage")
+        fh = nine_c2_fair_harness(drive="")
+        col = fh["collect"] if isinstance(fh["collect"], dict) else {}
+        check("9c2 fair harness: no tick at all -> GRADED (a genuine FAIL, never masked)",
+              col.get("ticks") == 0 and nine_c2_window_class(col, ["nil"], 0)[0] == "graded")
+        for name, kw in (("collapsed", {"pose": "collapsed"}), ("falling", {"pose": "falling"}),
+                         ("transitioning", {"activity": "transitioning"}),
+                         ("drinking", {"activity": "drinking"}),
+                         ("knockedDown", {"knocked": True}), ("delirious", {"delirious": True})):
+            fh = nine_c2_fair_harness(**kw)
+            ins = fh["install"] if isinstance(fh["install"], dict) else {}
+            check(f"9c2 fair harness: a {name} subject at the break -> NO break forced, no "
+                  f"recorders, the stale target left alone, precondition NOT met (re-stage)",
+                  fh["installOk"] is True and fh["fbCalls"] == 0 and fh["wrapped"] is False
+                  and fh["tgtAfterInstall"] == 10 and nine_c2_precondition(ins)[0] is False)
+
     print(f"mental_state_probe self-test: "
           f"{'all pass' if not fails else str(len(fails)) + ' FAIL'}")
     return 1 if fails else 0
@@ -3954,126 +4670,215 @@ def main():
                 f"unit.setStat({lashB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
                 f"unit.setStat({lashB},'toughness',100); "
                 f"unit.recomputeBody({lashB}); return 'ok'")
-        send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB}); "
-                f"return 'ok'")
-        hitB = poll_until(35, lambda: send(
-            P, f"local a=unit.getLastAttacker({lashB}); return a and a.uid or 'nil'"
-        ) == str(attackerB))
-        if not hitB:
-            ok = False
-            print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
-                  f"— can't test the retaliation-swap exclusion")
+        # 9c2 runs as a BOUNDED re-stage loop (#2773). Its FAIR-TEST
+        # precondition: the subject must be able to act on a tick at the
+        # break (standing, no tick-blocking activity, not knockedDown, not
+        # delirious; see _NINE_C2_FAIR_LUA), and must not have spent the
+        # whole window unable to act. A subject that cannot act gets no
+        # lash-out decision at all (scripts/unit_ai.lua:281-283 return
+        # before shortCircuit), which proves nothing about the target
+        # policy, so that attempt is re-staged from a NEW real hit, never
+        # graded. ANY observed decision (a non-nil target, an execute call,
+        # a shortCircuit leaving a target) is graded, as is a subject that
+        # could act and showed no target (a FAIL: no target observed);
+        # nothing here can erase a decision or turn a policy failure into a
+        # pass (nine_c2_window_class). After NINE_C2_ATTEMPTS ungradable
+        # attempts, 9c2 is a named SETUP failure.
+        prevHitAtB = -1.0
+        gradedB = abortedB = False
+        for attemptB in range(1, NINE_C2_ATTEMPTS + 1):
+            send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB}); "
+                    f"return 'ok'")
+            hitB = poll_until(35, lambda: send(
+                P, f"local a=unit.getLastAttacker({lashB}); "
+                   f"return (a and a.uid == {attackerB} and a.at > {prevHitAtB!r}) and 'hit' or 'nil'"
+            ) == "hit")
+            if not hitB:
+                ok = False
+                print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
+                      f"— can't test the retaliation-swap exclusion (attempt {attemptB})")
+                abortedB = True
+                break
 
-        # The swap this check exercises only lives within unit_ai_combat's
-        # 3 s RETALIATE_WINDOW_SEC of the hit, so everything between the
-        # hit and the break is ONE console chunk here and ONE below
-        # (#2773): a traced run spent 3.4 s on separate round trips and
-        # reached lash-out with the hit already 3.49 s old, so the swap
-        # was never reachable.
-        #
-        # Chunk 1, sent as soon as the hit is observed:
-        # * stop BOTH sides' ordinary combat AI — see the identical note
-        #   in the 9a setup above; this test wants attackerB's REPORTED
-        #   pose patched to 'collapsed' below while it stays actually
-        #   healthy underneath, and real mutual combat risks genuinely
-        #   collapsing lashB instead;
-        # * revive both, and drain attackerB's stamina below the acolyte
-        #   config's wander_min_stamina_fraction (0.2 — never to 0, the
-        #   universal death rule) so revival doesn't send it drifting off
-        #   before the teleport below is confirmed;
-        # * snap attackerB one tile east of lashB and victimB one tile
-        #   west, from lashB's position read IN this chunk. Knockback can
-        #   drift the attacker beyond LASHOUT_RANGE, and the subject can
-        #   wander or run during the hit staging, so neither spawn spot
-        #   says anything about range when the break is forced (a traced
-        #   run had the victim 19 tiles away).
-        # It answers lashB's position and the hit record, for diagnostics.
-        # victimB's goals and state are not touched.
-        stagedB = send_json(P, " ".join((
-            f"local A, L, V = {attackerB}, {lashB}, {victimB};",
-            "local ai = require('scripts.unit_ai');",
-            "for _, u in ipairs({A, L}) do local s = ai.getState(u);",
-            " if s then ai.markGoalAccomplished(s, 'attack'); s.attackTargetUid = nil end;",
-            " unit.stop(u) end;",
-            "unit.revive(A); unit.revive(L);",
-            "local st = require('scripts.unit_stats');",
-            "unit.setStat(A, 'stamina', st.get(A, 'max_stamina') * 0.1);",
-            "local i = unit.getInfo(L); local h = unit.getLastAttacker(L);",
-            "unit.setPos(A, i.gridX + 1, i.gridY); unit.setPos(V, i.gridX - 1, i.gridY);",
-            "return { lx = i.gridX, ly = i.gridY, g = engine.gameTime(),",
-            " hitBy = h and h.uid or -1, hitAt = h and h.at or -1 }")))
-        if not isinstance(stagedB, dict):
-            stagedB = {}
-        lbx, lby = stagedB.get("lx", 0.0), stagedB.get("ly", 0.0)
-        print(f"  [setup] 9c2 staged after the hit: {stagedB}")
-        # Confirm the (async) teleports actually landed — see the 9a note —
-        # with ONE console read per poll returning all three positions.
-        def landedB():
-            pos = send_json(P, " ".join((
-                f"local a, v, l = unit.getInfo({attackerB}), unit.getInfo({victimB}), "
-                f"unit.getInfo({lashB});",
-                "return { ax = a.gridX, ay = a.gridY, vx = v.gridX, vy = v.gridY,",
-                " lx = l.gridX, ly = l.gridY }")))
-            if not isinstance(pos, dict):
-                return False
-            return ((pos["ax"] - (lbx + 1)) ** 2 + (pos["ay"] - lby) ** 2 < 0.05
-                    and (pos["vx"] - (lbx - 1)) ** 2 + (pos["vy"] - lby) ** 2 < 0.05)
-        if not poll_until(5, landedB):
-            ok = False
-            print(f"  [FAIL] setup: teleporting {attackerB} and {victimB} "
-                  f"next to {lashB} never took effect")
+            # The swap this check exercises only lives within unit_ai_combat's
+            # 3 s RETALIATE_WINDOW_SEC of the hit, so everything between the
+            # hit and the break is ONE console chunk here and ONE below
+            # (#2773): a traced run spent 3.4 s on separate round trips and
+            # reached lash-out with the hit already 3.49 s old, so the swap
+            # was never reachable.
+            #
+            # Chunk 1, sent as soon as the hit is observed:
+            # * stop BOTH sides' ordinary combat AI — see the identical note
+            #   in the 9a setup above; this test wants attackerB's REPORTED
+            #   pose patched to 'collapsed' below while it stays actually
+            #   healthy underneath, and real mutual combat risks genuinely
+            #   collapsing lashB instead;
+            # * revive both, and drain attackerB's stamina below the acolyte
+            #   config's wander_min_stamina_fraction (0.2 — never to 0, the
+            #   universal death rule) so revival doesn't send it drifting off
+            #   before the teleport below is confirmed;
+            # * snap attackerB one tile east of lashB and victimB one tile
+            #   west, from lashB's position read IN this chunk. Knockback can
+            #   drift the attacker beyond LASHOUT_RANGE, and the subject can
+            #   wander or run during the hit staging, so neither spawn spot
+            #   says anything about range when the break is forced (a traced
+            #   run had the victim 19 tiles away).
+            # It answers lashB's position and the hit record, for diagnostics.
+            # victimB's goals and state are not touched.
+            stagedB = send_json(P, " ".join((
+                f"local A, L, V = {attackerB}, {lashB}, {victimB};",
+                "local ai = require('scripts.unit_ai');",
+                "for _, u in ipairs({A, L}) do local s = ai.getState(u);",
+                " if s then ai.markGoalAccomplished(s, 'attack'); s.attackTargetUid = nil end;",
+                " unit.stop(u) end;",
+                "unit.revive(A); unit.revive(L);",
+                "local st = require('scripts.unit_stats');",
+                "unit.setStat(A, 'stamina', st.get(A, 'max_stamina') * 0.1);",
+                "local i = unit.getInfo(L); local h = unit.getLastAttacker(L);",
+                "unit.setPos(A, i.gridX + 1, i.gridY); unit.setPos(V, i.gridX - 1, i.gridY);",
+                "return { lx = i.gridX, ly = i.gridY, g = engine.gameTime(),",
+                " hitBy = h and h.uid or -1, hitAt = h and h.at or -1 }")))
+            if not isinstance(stagedB, dict):
+                stagedB = {}
+            lbx, lby = stagedB.get("lx", 0.0), stagedB.get("ly", 0.0)
+            hitAtB = stagedB.get("hitAt")
+            if isinstance(hitAtB, (int, float)) and not isinstance(hitAtB, bool):
+                prevHitAtB = float(hitAtB)
+            print(f"  [setup] 9c2 attempt {attemptB} staged after the hit: {stagedB}")
+            # Confirm the (async) teleports actually landed — see the 9a note —
+            # with ONE console read per poll returning all three positions.
+            def landedB():
+                pos = send_json(P, " ".join((
+                    f"local a, v, l = unit.getInfo({attackerB}), unit.getInfo({victimB}), "
+                    f"unit.getInfo({lashB});",
+                    "return { ax = a.gridX, ay = a.gridY, vx = v.gridX, vy = v.gridY,",
+                    " lx = l.gridX, ly = l.gridY }")))
+                if not isinstance(pos, dict):
+                    return False
+                return ((pos["ax"] - (lbx + 1)) ** 2 + (pos["ay"] - lby) ** 2 < 0.05
+                        and (pos["vx"] - (lbx - 1)) ** 2 + (pos["vy"] - lby) ** 2 < 0.05)
+            if not poll_until(5, landedB):
+                ok = False
+                print(f"  [FAIL] setup: teleporting {attackerB} and {victimB} "
+                      f"next to {lashB} never took effect")
 
-        # Chunk 2: pin attackerB's reported pose to 'collapsed', observe
-        # every lash-out attack execute of lashB through the window
-        # (#2773; see install_swap_observer), and force the break — all in
-        # ONE send, so the first execute is seen. The pose pin is a
-        # wrap-and-delegate because unit.collapse() alone only holds while
-        # every gating resource sits below its revive threshold (see the
-        # dead/collapsed/technomule test below).
-        install_swap_observer(
-            P, lashB, victimB, attackerB,
-            then_lua=(f"if not _G.__probe_orig_getPose then "
-                      f"_G.__probe_orig_getPose = unit.getPose end; "
-                      f"unit.getPose = function(u) "
-                      f"if u == {attackerB} then return 'collapsed' end "
-                      f"return _G.__probe_orig_getPose(u) end; "
-                      f"require('scripts.mental_state').forceBreak({lashB},'lash_out');"))
+            # Chunk 2: pin attackerB's reported pose to 'collapsed', observe
+            # every lash-out attack execute of lashB through the window
+            # (#2773; see install_swap_observer), check the fair-test
+            # precondition, clear the stale target and force the break — all
+            # in ONE send, so the first execute is seen. The pose pin is a
+            # wrap-and-delegate because unit.collapse() alone only holds while
+            # every gating resource sits below its revive threshold (see the
+            # dead/collapsed/technomule test below).
+            installB = install_swap_observer(
+                P, lashB, victimB, attackerB,
+                then_lua=nine_c2_then_lua(lashB, victimB, attackerB))
+            # The reply carries the fair-test record and the scene at the
+            # END of the install chunk, right after forceBreak and before any
+            # AI tick: proof of the state at the break, NOT of any decision.
+            # No extra console round trip is spent before sampling.
+            print(f"  [setup] 9c2 observer install reply (scene = snapshot at the end of "
+                  f"the install chunk, not a decision): {installB}")
+            metB, whyMetB = nine_c2_precondition(parse_install_reply(installB))
 
-        # Sample rapidly through the retaliation-swap's own 3s window
-        # (RETALIATE_WINDOW_SEC, timed from the hit staged above) —
-        # lash-out must land on the eligible victimB and never once show
-        # the collapsed attackerB sneaking in via the shared swap.
-        samplesB = []
-        try:
-            deadline = time.time() + 3.0
-            while time.time() < deadline:
-                samplesB.append(lash_target(P, lashB))
-                time.sleep(0.15)
-        finally:
-            callsB = collect_swap_calls(P)
-        send(P, "if _G.__probe_orig_getPose then "
-                "unit.getPose = _G.__probe_orig_getPose; "
-                "_G.__probe_orig_getPose = nil end; return 'ok'")
+            # Sample rapidly through the retaliation-swap's own 3s window
+            # (RETALIATE_WINDOW_SEC, timed from the hit staged above) —
+            # lash-out must land on the eligible victimB and never once show
+            # the collapsed attackerB sneaking in via the shared swap. No
+            # window is sampled when the break was not forced.
+            samplesB = []
+            try:
+                deadline = time.time() + (3.0 if metB else 0.0)
+                while time.time() < deadline:
+                    samplesB.append(lash_target(P, lashB))
+                    time.sleep(0.15)
+            finally:
+                statusB, callsB, rawB = collect_swap_calls(P)
+                fairB = send_json(P, _NINE_C2_SETUP_COLLECT_LUA)
+            send(P, "if _G.__probe_orig_getPose then "
+                    "unit.getPose = _G.__probe_orig_getPose; "
+                    "_G.__probe_orig_getPose = nil end; return 'ok'")
+            # A LATER snapshot, after the window: mutable state, not a decision.
+            stateB1 = scene_state(P, lashB, victimB, attackerB)
+            print(f"  [setup] 9c2 scene after the window (LATER snapshot, not a decision): "
+                  f"{stateB1}")
+            print(f"  [setup] 9c2 fair-test record (first tick and first shortCircuit): {fairB}")
+            firstB = [(c.get("pre"), c.get("post")) for c in callsB[:3] if isinstance(c, dict)]
+            evidenceB = (f"install reply {installB}; fair-test record {fairB}; LATER scene "
+                         f"after the window {stateB1}; {len(callsB)} recorded execute "
+                         f"call(s), first target changes {firstB}")
 
-        if str(victimB) in samplesB and str(attackerB) not in samplesB:
-            print(f"  [pass] lash-out targeted the eligible {victimB} and never "
-                  f"the collapsed recent attacker {attackerB}: "
-                  f"{samplesB[:4]}...")
-        else:
+            if metB is False:
+                restageB = f"the subject could not act at the break ({whyMetB})"
+            elif metB is None:
+                ok = False
+                print(f"  [FAIL] setup: 9c2 observation unproven ({whyMetB}); {evidenceB}")
+                abortedB = True
+                break
+            else:
+                classB, whyClassB = nine_c2_window_class(fairB, samplesB, len(callsB))
+                restageB = whyClassB if classB == "restage" else None
+                if classB == "setup":
+                    ok = False
+                    print(f"  [FAIL] setup: 9c2 observation unproven ({whyClassB}); "
+                          f"{evidenceB}")
+                    abortedB = True
+                    break
+            if restageB is not None:
+                print(f"  [setup] 9c2 attempt {attemptB} not gradable, re-staging: {restageB}")
+                send(P, f"unit.setStat({lashB},'mental_until',0); "
+                        f"local st = require('scripts.unit_stats'); "
+                        f"unit.setStat({attackerB}, 'stamina', st.get({attackerB}, 'max_stamina')); "
+                        f"return 'ok'")
+                poll_until(5, lambda: mstate(P, lashB) != "break")
+                readyB = poll_until(NINE_C2_READY_WAIT_S, lambda: _ready_ok(
+                    subject_ready(P, lashB)) is True)
+                if not readyB:
+                    print(f"  [setup] 9c2 subject still unable to act after "
+                          f"{NINE_C2_READY_WAIT_S:.0f} s: {subject_ready(P, lashB)}")
+                    break
+                continue
+
+            # The observation is evidence only when the observer was proven
+            # installed and read back, and the break was proven running
+            # (#2773). Otherwise nothing below is attributable.
+            gradedB = True
+            setupB = swap_setup_problems(installB, statusB, rawB)
+            if setupB:
+                ok = False
+                print(f"  [FAIL] setup: 9c2 observation unproven ({'; '.join(setupB)}); "
+                      f"samples {samplesB}; {evidenceB}")
+            else:
+                if str(victimB) in samplesB and str(attackerB) not in samplesB:
+                    print(f"  [pass] lash-out targeted the eligible {victimB} and never "
+                          f"the collapsed recent attacker {attackerB}: "
+                          f"{samplesB[:4]}...")
+                else:
+                    ok = False
+                    never = (f" — no lash-out target OBSERVED although the observer "
+                             f"and the break were confirmed ({whyClassB})"
+                             if samplesB and all(t == "nil" for t in samplesB) and not callsB
+                             else "")
+                    print(f"  [FAIL] expected only {victimB}, saw: {samplesB}{never}; "
+                          f"{evidenceB}")
+                # The check above only means something if the swap it guards
+                # was actually reachable during the window (#2773).
+                verdictB, whyB = swap_exercised(callsB, victimB, attackerB)
+                if verdictB == "pass":
+                    print(f"  [setup] 9c2 swap precondition exercised: {whyB}")
+                elif verdictB == "policy":
+                    ok = False
+                    print(f"  [FAIL] 9c2 retaliation swap moved lash-out off the "
+                          f"eligible victim {victimB}: {whyB}")
+                else:
+                    ok = False
+                    print(f"  [FAIL] setup: 9c2 swap precondition not exercised ({whyB}); "
+                          f"{evidenceB}")
+            break
+        if not gradedB and not abortedB:
             ok = False
-            print(f"  [FAIL] expected only {victimB}, saw: {samplesB}")
-        # The check above only means something if the swap it guards was
-        # actually reachable during the window (#2773).
-        verdictB, whyB = swap_exercised(callsB, victimB, attackerB)
-        if verdictB == "pass":
-            print(f"  [setup] 9c2 swap precondition exercised: {whyB}")
-        elif verdictB == "policy":
-            ok = False
-            print(f"  [FAIL] 9c2 retaliation swap moved lash-out off the "
-                  f"eligible victim {victimB}: {whyB}")
-        else:
-            ok = False
-            print(f"  [FAIL] setup: 9c2 swap precondition not exercised ({whyB})")
+            print(f"  [FAIL] setup: 9c2 fair-test precondition never met — the subject "
+                  f"could not act in any of {attemptB} attempt(s); 9c2 not graded")
 
         send(P, f"unit.setStat({lashB},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, lashB) != "break")
