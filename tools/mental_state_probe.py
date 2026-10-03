@@ -461,7 +461,14 @@ def lashout_observer_lua(lash, attacker, decoy):
       * over the same span, records EVERY getInfo answer the decision got
         for the attacker and for the decoy, as an explicit INVALID entry
         when the answer is missing or malformed, so no sample can drop
-        out silently. Next to each attacker read it samples the decoy's
+        out silently. It also records every exists / getPose answer the
+        decision got for the decoy. Next to each attacker read it samples
+        the decoy's existence, pose AND info. At the end, the production
+        eligibility predicate is REPLAYED on exactly those captured
+        answers: each sample's own triple, and every combination of the
+        decision's own decoy answers. It is not re-asked fresh, and a
+        pose counts only as a string. Next to each attacker read the
+        sample also gives the decoy's
         position (the decision does not read the
         decoy when it keeps the attacker). It also records whether the
         decision called unit.getAllIds, which only the nearest-candidate
@@ -501,7 +508,8 @@ local atk = require('scripts.unit_ai_combat_attack')
 local origGLA, origATE, origGI = unit.getLastAttacker, atk.attackTargetExecute, unit.getInfo
 local origEx, origPose, origAll = unit.exists, unit.getPose, unit.getAllIds
 local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
-local rec = {{ observing = false, armed = false, decision = {{}} }}
+local rec = {{ observing = false, armed = false, decision = {{}},
+  dSamp = {{}}, dEx = {{}}, dPose = {{}}, dInf = {{}} }}
 _G.__probe_lash_rec = rec
 _G.__probe_lash_restore = function()
   unit.getLastAttacker = origGLA
@@ -525,6 +533,40 @@ local function decisionRead(kind, u, v)
      and rec.decision[kind] == nil then
     rec.decision[kind] = {{ v = v }}
   end
+end
+local function replayFor(oid, me, ex, pose, info)
+  if me == nil then return false end
+  local sx, sp, si = unit.exists, unit.getPose, unit.getInfo
+  rec.observing = true
+  unit.exists = function(u) if u == oid then return ex end; return origEx(u) end
+  unit.getPose = function(u) if u == oid then return pose end; return origPose(u) end
+  unit.getInfo = function(u) if u == oid then return info end; return origGI(u) end
+  local ok, res = pcall(policy.eligible, lash, me, oid)
+  unit.exists, unit.getPose, unit.getInfo = sx, sp, si
+  rec.observing = false
+  return ok and res == true
+end
+local function decoyEligibility(me)
+  if #rec.dSamp == 0 then return false end
+  for _, d in ipairs(rec.dSamp) do
+    if not (d.exOk and d.ex == true and d.poseOk and d.infoOk) then return false end
+    if not replayFor(decoy, me, d.ex, d.pose, d.info) then return false end
+  end
+  local nE, nP, nI = #rec.dEx, #rec.dPose, #rec.dInf
+  if nE + nP + nI > 0 then
+    if nE == 0 or nP == 0 or nI == 0 then return false end
+    for _, e in ipairs(rec.dEx) do
+      if not (e.ok and e.v == true) then return false end
+      for _, q in ipairs(rec.dPose) do
+        if not q.ok then return false end
+        for _, i in ipairs(rec.dInf) do
+          if not i.ok then return false end
+          if not replayFor(decoy, me, e.v, q.v, i.v) then return false end
+        end
+      end
+    end
+  end
+  return true
 end
 local function cheb(me, info)
   if not (me and info and not info.invalid and fin(info.gridX) and fin(info.gridY)) then
@@ -556,7 +598,8 @@ local function candidate(me, oid)
   if me and info then
     d = math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY))
   end
-  return {{ uid = oid, exists = origEx(oid), pose = origPose(oid) or 'none',
+  local p = origPose(oid)
+  return {{ uid = oid, exists = origEx(oid), pose = p or 'none', poseOk = type(p) == 'string',
            dist = d, eligible = (me ~= nil) and policy.eligible(lash, me, oid) }}
 end
 local function reading(me, a)
@@ -608,11 +651,19 @@ unit.getInfo = function(u)
     if u == attacker then
       rec.aInfo[#rec.aInfo + 1] = sample(r)
       rec.observing = true
-      local ok, z = pcall(origGI, decoy)
-      rec.dNear[#rec.dNear + 1] = sample(ok and z or nil)
+      local okE, ex = pcall(origEx, decoy)
+      local okP, po = pcall(origPose, decoy)
+      local okI, z = pcall(origGI, decoy)
       rec.observing = false
+      rec.dNear[#rec.dNear + 1] = sample(okI and z or nil)
+      rec.dSamp[#rec.dSamp + 1] = {{ ex = okE and ex or false, exOk = okE and type(ex) == 'boolean',
+        pose = okP and po or nil, poseOk = okP and type(po) == 'string',
+        info = (okI and type(z) == 'table') and infoCopy(z) or false,
+        infoOk = okI and type(z) == 'table' }}
     elseif u == decoy then
       rec.dInfo[#rec.dInfo + 1] = sample(r)
+      rec.dInf[#rec.dInf + 1] = {{ v = type(r) == 'table' and infoCopy(r) or false,
+        ok = type(r) == 'table' }}
     end
   end
   return r
@@ -621,14 +672,21 @@ unit.getAllIds = function(...)
   if rec.armed and not rec.observing and not rec.selection then rec.fallbackRan = true end
   return origAll(...)
 end
+local function decoyRead(list, r, ok)
+  if rec.armed and not rec.observing and not rec.selection then
+    list[#list + 1] = {{ v = r, ok = ok }}
+  end
+end
 unit.exists = function(u)
   local r = origEx(u)
   decisionRead('exists', u, r)
+  if u == decoy then decoyRead(rec.dEx, r, type(r) == 'boolean') end
   return r
 end
 unit.getPose = function(u)
   local r = origPose(u)
   decisionRead('pose', u, r)
+  if u == decoy then decoyRead(rec.dPose, r, type(r) == 'string') end
   return r
 end
 unit.getLastAttacker = function(u)
@@ -644,6 +702,7 @@ unit.getLastAttacker = function(u)
       before = reading(rec.me, a) }}
     rec.decision = {{}}
     rec.aInfo, rec.dInfo, rec.dNear, rec.fallbackRan = {{}}, {{}}, {{}}, false
+    rec.dSamp, rec.dEx, rec.dPose, rec.dInf = {{}}, {{}}, {{}}, {{}}
     rec.armed = true
   end
   return a
@@ -664,6 +723,9 @@ atk.attackTargetExecute = function(u, s, params)
                      attackerEligible = replay(rec.me),
                      fallbackRan = rec.fallbackRan == true,
                      decisionCloser = closer == true,
+                     decoyEligible = decoyEligibility(rec.me) == true,
+                     decoySamples = #rec.dSamp,
+                     decoyReads = #rec.dEx + #rec.dPose + #rec.dInf,
                      attackerDists = aDists, decoyDists = dDists }}
     rec.selection = sel
     _G.__probe_lash_restore()
@@ -804,6 +866,9 @@ def lashout_record_problems(sel, attacker, decoy):
                 problems.append(f"{side} {role} distance {c.get('dist')!r} is not a finite number")
             if not isinstance(c.get("eligible"), bool):
                 problems.append(f"{side} {role} eligible {c.get('eligible')!r} is not a boolean")
+            if c.get("poseOk") is not True:
+                problems.append(f"{side} {role} pose missing or not a string "
+                                f"(poseOk {c.get('poseOk')!r})")
     if sel.get("ordered") is not True:
         problems.append(f"clock not ordered across the decision (ordered "
                         f"{sel.get('ordered')!r}): a load or session reset, or a "
@@ -814,10 +879,12 @@ def lashout_record_problems(sel, attacker, decoy):
             else dec.get("attackerEligible") == v for v in _DECISION_REPLAY):
         problems.append(f"decision replay {dec!r} is malformed")
     elif not (isinstance(dec.get("fallbackRan"), bool)
-              and isinstance(dec.get("decisionCloser"), bool)):
-        problems.append(f"decision branch/geometry evidence is malformed "
-                        f"(fallbackRan {dec.get('fallbackRan')!r}, "
-                        f"decisionCloser {dec.get('decisionCloser')!r})")
+              and isinstance(dec.get("decisionCloser"), bool)
+              and isinstance(dec.get("decoyEligible"), bool)):
+        problems.append(f"decision branch/geometry/eligibility evidence is "
+                        f"malformed (fallbackRan {dec.get('fallbackRan')!r}, "
+                        f"decisionCloser {dec.get('decisionCloser')!r}, "
+                        f"decoyEligible {dec.get('decoyEligible')!r})")
     return problems
 
 
@@ -942,7 +1009,13 @@ def grade_lashout_selection(sel, attacker, decoy):
     classify_lashout_selection found FAIR: the hit was inside the window
     and the attacker eligible on the decision's own reads.
 
-    Geometry comes FIRST. The strictly-closer precondition must be PROVEN
+    The decoy's ELIGIBILITY comes first. decoyEligible means the
+    production predicate, replayed on every captured decoy answer, held:
+    each in-decision sample, and every decoy read the decision itself
+    made. A missing or invalid answer, or a pose that is not a string,
+    fails it. Without it, every outcome is a SETUP discard.
+
+    Geometry comes next. The strictly-closer precondition must be PROVEN
     at the decision (decisionCloser: Lua, unrounded, false when any
     sample is missing or malformed). The decoy has to be strictly closer
     than the attacker on every position sampled: each decision read of
@@ -964,6 +1037,11 @@ def grade_lashout_selection(sel, attacker, decoy):
     dec = sel["decision"]
     dists = (f"decision attacker distances {dec.get('attackerDists')}, "
              f"decoy samples {dec.get('decoyDists')}")
+    if not dec["decoyEligible"]:
+        return "setup", (f"decoy {decoy} eligibility not proven at the decision "
+                         f"({dec.get('decoySamples')} sample(s), "
+                         f"{dec.get('decoyReads')} decision read(s); target "
+                         f"{sel['target']}, fallback ran: {dec['fallbackRan']})")
     if not dec["decisionCloser"]:
         return "setup", (f"decoy {decoy} not provably strictly closer than "
                          f"attacker {attacker} at the decision (target "
@@ -2092,7 +2170,9 @@ end }
 local ATT_X, DEC_X = %(attacker_bracket)s, %(decoy_bracket)s
 local ATT_SEQ, DEC_SEQ = %(attacker_seq)s, %(decoy_seq)s
 local ATT_POSE_DEC = %(attacker_pose_decision)r
-local nA, nD, bA, bD = 0, 0, 0, 0
+local DEC_EX_SEQ, DEC_POSE_SEQ = %(decoy_exists_seq)s, %(decoy_pose_seq)s
+local DEC_POSE_BRACKET = %(decoy_pose_bracket)s
+local nA, nD, bA, bD, nDE, nDP = 0, 0, 0, 0, 0, 0
 local function armed() local r = _G.__probe_lash_rec; return r ~= nil and r.armed == true end
 local function nextOf(seq, n) return seq[math.min(n, #seq)] end
 unit = {
@@ -2110,13 +2190,30 @@ unit = {
       if armed() then nD = nD + 1; x = nextOf(DEC_SEQ, nD)
       else bD = bD + 1; x = nextOf(DEC_X, bD) end
       if x == 'missing' then return nil end
+      if x == 'tech' then return { gridX = -1.0, gridY = 0, defName = 'technomule' } end
+      if x == 'nan' then return { gridX = 0/0, gridY = 0, defName = 'acolyte' } end
       return { gridX = x, gridY = 0, defName = 'acolyte' }
     end
     return nil
   end,
-  exists = function(u) return u == 1 or u == 2 or u == 3 end,
+  exists = function(u)
+    if u == 3 and armed() then
+      nDE = nDE + 1
+      local v = nextOf(DEC_EX_SEQ, nDE)
+      if v == 'nil' then return nil end
+      return v
+    end
+    return u == 1 or u == 2 or u == 3
+  end,
   getPose = function(u)
     if u == 2 and armed() then return ATT_POSE_DEC end
+    if u == 3 then
+      local v = 'standing'
+      if armed() then nDP = nDP + 1; v = nextOf(DEC_POSE_SEQ, nDP)
+      elseif DEC_POSE_BRACKET then v = DEC_POSE_BRACKET end
+      if v == 'nil' then return nil end
+      return v
+    end
     return 'standing'
   end,
   getLastAttacker = function(u) if u == 1 then return { uid = 2, at = 0.0 } end end,
@@ -2169,7 +2266,8 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
                            attacker_x_decision=None, decoy_x_decision=None,
                            attacker_pose_decision="standing",
                            policy_patch=None, attacker_x_bracket=None,
-                           decoy_x_bracket=None):
+                           decoy_x_bracket=None, decoy_exists_seq=None,
+                           decoy_pose_seq=None, decoy_pose_bracket=None):
     """Run the lash-out policy with the probe's observer chunk and no
     engine (needs a `lua` interpreter).
 
@@ -2182,7 +2280,15 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
     there is `attacker_pose_decision`. Outside the decision, successive
     reads answer from `attacker_x_bracket` / `decoy_x_bracket` (default:
     `attacker_x` / `decoy_x`). A None inside any list makes that one read
-    answer nil. `policy_patch=(old, new)` runs a copy of
+    answer nil.
+
+    Inside the decision the decoy's existence and pose answer per read
+    from `decoy_exists_seq` / `decoy_pose_seq` (each a list; 'nil' answers
+    nil). Those reads include the probe's samples next to each attacker
+    read. Its info reads take 'tech' (a technomule), 'nan' (a non-finite
+    position) and None (missing) as well as positions.
+    `decoy_pose_bracket` replaces its pose ('nil' = missing) in the
+    bracket readings. `policy_patch=(old, new)` runs a copy of
     scripts/unit_ai_mental.lua with that one substitution (a broken
     policy).
 
@@ -2207,15 +2313,29 @@ def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
         # its length.
         v = default if v is None else v
         v = v if isinstance(v, (list, tuple)) else [v]
-        return "{" + ", ".join("'missing'" if x is None else repr(float(x))
-                               for x in v) + "}"
+        def one(x):
+            if x is None:
+                return "'missing'"
+            if isinstance(x, str):
+                return repr(x)
+            return repr(float(x))
+        return "{" + ", ".join(one(x) for x in v) + "}"
+
+    def lua_vals(v, default):
+        v = default if v is None else v
+        return "{" + ", ".join("true" if x is True else "false" if x is False
+                               else repr(x) for x in v) + "}"
     src = _HARNESS_LUA % {
         "before": before, "policy": policy, "after": after,
         "attacker_bracket": seq(attacker_x_bracket, attacker_x),
         "decoy_bracket": seq(decoy_x_bracket, decoy_x),
         "attacker_seq": seq(attacker_x_decision, attacker_x),
         "decoy_seq": seq(decoy_x_decision, decoy_x),
-        "attacker_pose_decision": attacker_pose_decision}
+        "attacker_pose_decision": attacker_pose_decision,
+        "decoy_exists_seq": lua_vals(decoy_exists_seq, [True]),
+        "decoy_pose_seq": lua_vals(decoy_pose_seq, ["standing"]),
+        "decoy_pose_bracket": ("nil" if decoy_pose_bracket is None
+                               else repr(decoy_pose_bracket))}
     with tempfile.TemporaryDirectory() as tmp:
         harness = os.path.join(tmp, "harness.lua")
         policy_path = os.path.join(tmp, "unit_ai_mental.lua")
@@ -2343,8 +2463,8 @@ def self_test():
     # compared across the bracket; the attacker is judged on the
     # decision's own reads.
     def cand(uid, dist, eligible=True, exists=True, pose="standing"):
-        return {"uid": uid, "exists": exists, "pose": pose, "dist": dist,
-                "eligible": eligible}
+        return {"uid": uid, "exists": exists, "pose": pose, "poseOk": True,
+                "dist": dist, "eligible": eligible}
 
     def side(t, a, d, ae, hit_by):
         # The booleans Lua would compute from these (unrounded) values.
@@ -2354,7 +2474,8 @@ def self_test():
                 "closer": d < a}
 
     def mksel(t0, t1, a0=3, a1=3, d0=1, d1=1, ae0=True, ae1=True,
-              hit_by=2, target=2, replay=True, fallback=False, closer=True):
+              hit_by=2, target=2, replay=True, fallback=False, closer=True,
+              decoy_ok=True):
         return {"window": 10.0, "range": 8.0, "meCaptured": True,
                 "me": {"gridX": 0, "gridY": 0},
                 "hitBy": hit_by, "hitAt": 0.0, "hitTyped": True,
@@ -2362,7 +2483,7 @@ def self_test():
                 "before": side(t0, a0, d0, ae0, hit_by),
                 "after": side(t1, a1, d1, ae1, hit_by),
                 "decision": {"attackerEligible": replay, "fallbackRan": fallback,
-                             "decisionCloser": closer}}
+                             "decisionCloser": closer, "decoyEligible": decoy_ok}}
 
     def kind(sel):
         return classify_lashout_selection(sel, 2, 3)[0]
@@ -2421,6 +2542,9 @@ def self_test():
             ("a malformed decision replay", ("decision", "attackerEligible"), 1),
             ("an absent decision replay value", ("decision", "attackerEligible"), KeyError),
             ("a missing fallback flag", ("decision", "fallbackRan"), KeyError),
+            ("a missing decoy-eligibility flag", ("decision", "decoyEligible"), KeyError),
+            ("a bracket decoy pose not proven a string", ("before", "decoy", "poseOk"), False),
+            ("a bracket attacker pose not proven a string", ("after", "attacker", "poseOk"), False),
             ("a non-boolean decision geometry flag", ("decision", "decisionCloser"), 1)):
         bad = with_(base, path, value)
         check(f"record: {name} is a named setup failure",
@@ -2486,6 +2610,9 @@ def self_test():
         for fb in (False, True):
             check(f"grade: unproved geometry, target {tgt}, fallback {fb} -> setup, never a verdict",
                   grade(mksel(5.0, 5.01, target=tgt, fallback=fb, closer=False)) == "setup")
+            check(f"grade: unproved DECOY ELIGIBILITY, target {tgt}, fallback {fb} -> setup, "
+                  f"never a verdict",
+                  grade(mksel(5.0, 5.01, target=tgt, fallback=fb, decoy_ok=False)) == "setup")
     check("grade: proven geometry, attacker picked by the RANKING (fallback while preferred) "
           "-> policy failure",
           grade(mksel(5.0, 5.01, fallback=True)) == "fail")
@@ -2622,6 +2749,58 @@ def self_test():
         check("geometry: ... so the geometry is unproved -> setup, not the policy verdict "
               "the remaining valid samples would give",
               sel["decision"]["decisionCloser"] is False and grade(sel) == "setup")
+        # Decoy ELIGIBILITY at the decision (round-4 review,
+        # issuecomment-5970512412). With the preference OFF, the decoy is
+        # read in this order while the decision runs: the probe's sample
+        # next to the attacker's eligibility read (#1), its sample next to
+        # the attacker's ranking read (#2), the decision's own eligibility
+        # reads (#3: exists, pose, info), and its ranking getInfo (info #4).
+        # With the preference ON, only sample #1 exists.
+        sel = run(decoy_pose_seq=["collapsed"])
+        check("eligibility: decoy 'collapsed' only while the decision runs (standing in both "
+              "bracket readings), correct policy -> the bracket says fair...",
+              sel.get("target") == 2 and kind(sel) == "fair"
+              and sel["before"]["decoy"]["eligible"] is True)
+        check("eligibility: ... but the replayed sample is ineligible -> setup, NOT a pass",
+              sel["decision"]["decoyEligible"] is False and grade(sel) == "setup")
+        sel = run(OFF, decoy_pose_seq=["collapsed"])
+        check("eligibility: the same with the preference DISABLED -> setup, never a pass",
+              grade(sel) == "setup")
+        for name, kw in (
+                ("exists false on the decision's own read (#3)",
+                 dict(decoy_exists_seq=[True, True, False])),
+                ("exists nil on a probe sample (#2)", dict(decoy_exists_seq=[True, "nil", True])),
+                ("pose 'dead' on a probe sample (#2)",
+                 dict(decoy_pose_seq=["standing", "dead", "standing"])),
+                ("pose 'collapsed' on the decision's own read (#3)",
+                 dict(decoy_pose_seq=["standing", "standing", "collapsed"])),
+                ("pose MISSING on a probe sample (#1), not 'not dead'",
+                 dict(decoy_pose_seq=["nil", "standing", "standing"])),
+                ("a technomule on a probe sample (#1)", dict(decoy_x_decision=["tech", -1, -1, -1])),
+                ("info missing on a probe sample (#2)", dict(decoy_x_decision=[-1, None, -1, -1])),
+                ("non-finite info on a probe sample (#1)", dict(decoy_x_decision=["nan", -1, -1, -1])),
+                ("out of range (9) on a probe sample (#2)", dict(decoy_x_decision=[-1, -9, -1, -1])),
+                ("eligibility read fine but the RANKING read a technomule (#4)",
+                 dict(decoy_x_decision=[-1, -1, -1, "tech"]))):
+            sel = run(OFF, **kw)
+            check(f"eligibility (preference OFF): ONE bad decoy read among valid ones, {name} "
+                  f"-> setup, never pass or policy",
+                  sel["decision"]["decoySamples"] == 2 and sel["decision"]["decoyReads"] > 0
+                  and sel["decision"]["decoyEligible"] is False and grade(sel) == "setup")
+        sel = run(decoy_pose_seq=["nil"])
+        check("eligibility: correct policy, the decoy's pose MISSING on the sample -> setup",
+              sel.get("target") == 2 and grade(sel) == "setup")
+        sel = run(decoy_pose_bracket="nil")
+        check("eligibility: the decoy's pose missing in the bracket readings -> malformed, setup",
+              kind(sel) == "setup")
+        sel = run(OFF)
+        check("eligibility: preference OFF, every decoy read valid -> decoy picked -> POLICY failure",
+              sel.get("target") == 3 and sel["decision"]["decoyEligible"] is True
+              and grade(sel) == "fail")
+        sel = run()
+        check("eligibility: correct policy, fresh valid reads -> PASS",
+              sel.get("target") == 2 and sel["decision"]["decoyEligible"] is True
+              and grade(sel) == "pass")
         # The bracket's -1 "no position" sentinel: candidate() gets nil from
         # its own getInfo, while the predicate's separate read still finds
         # the unit (the two reads are not atomic). Decoy bracket reads:
