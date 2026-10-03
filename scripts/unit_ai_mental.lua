@@ -112,6 +112,21 @@ local function pickLashoutTarget(uid, me)
     return best
 end
 
+-- A READ-ONLY view of the policy above, for probes that must judge a
+-- selection by the rules that made it (#2773: mental_state_probe grades
+-- attacker preference only when, at the moment of selection, the staged
+-- hit is inside the window and both candidates are eligible). Exposing
+-- the predicate rather than restating it keeps the probe from drifting
+-- away from the policy. Nothing here can change it: the constants are
+-- copies, and the predicate closes over this module's own locals.
+M.lashoutPolicy = {
+    attackerWindow = LASHOUT_ATTACKER_WINDOW,
+    range          = LASHOUT_RANGE,
+    eligible       = function(uid, me, oid)
+        return eligibleLashoutTarget(uid, me, oid)
+    end,
+}
+
 -- Lash-out execute: episode-owned combat. The mental short-circuit runs
 -- BEFORE candidate scoring (tickOne returns as soon as it sees true), so
 -- the ordinary attack_target candidate never gets a chance to fire on

@@ -53,14 +53,26 @@ short-circuit (scripts/unit_ai_mental.lua) to confirm:
      nearest-eligible by Chebyshev distance (not Euclidean); and stops
      a stale pursuit immediately (rather than walking it out) when a
      target leaves range with no replacement available.
+     The attacker preference (9a) is graded ONLY on a selection whose
+     preconditions held when it was made (#2773): the selection's own
+     reads are observed at the decision boundary — the hit and its
+     game-time age, both candidates' eligibility by the production
+     predicate, and the decoy strictly closer — and a setup that missed
+     them is discarded, named and restaged (bounded) rather than graded
+     as a policy failure. The hit age at selection is printed.
 
 Usage: python3 tools/mental_state_probe.py [--port 9352]
+       python3 tools/mental_state_probe.py --lashout-case stale|ineligible
+         (#2773: run only 9a with its setup pushed off the preconditions —
+         `stale` ages the first attempt's hit past the window, so it is
+         restaged; `ineligible` moves every attempt's attacker out of
+         range, so 9a ends in a named setup failure, exit 1)
 Exit 0 = pass.
 """
 from __future__ import annotations
-import argparse, glob, json, sys, time
+import argparse, glob, json, math, sys, time
 from probelib import (boot, init_arena, load_ai_stack, poll_until,
-                      quit_engine, send, spawn_acolyte)
+                      quit_engine, send, send_json, spawn_acolyte)
 
 LOG = "/tmp/mental_state_probe_engine.log"
 
@@ -257,16 +269,3187 @@ def leap_break_case(port, uid, leg):
     return None, samples
 
 
+#: Where 9a stages its lash/attacker/decoy cluster, one per attempt. Each
+#: is more than 8 tiles (LASHOUT_RANGE) from every other cluster this
+#: probe uses, so a discarded attempt's units can never be candidates in
+#: the next one, and every one is inside the 5x5-chunk arena.
+LASHOUT_CLUSTERS = ((-28, -25), (35, 0), (35, 15))
+
+#: Dressing the staged hit's wound (#2773), ported from
+#: retaliation_swap_probe.py (#1578) with its bounds unchanged; see
+#: `stanch` there for why each one is what it is. STANCH_ATTEMPTS is the
+#: runaway bound, not the termination condition: the loop stops when the
+#: bleed rate settles below STANCH_SETTLED_RATE (a dressed wound seeps at
+#: order 1e-4 L/s, never exactly zero) or after STANCH_STALLED_PASSES
+#: treatments in a row fail to lower it. MEDICAL_KITS stocked first-aid
+#: kits supply real bandages, without which the medic only improvises.
+STANCH_ATTEMPTS = 64
+STANCH_STALLED_PASSES = 3
+STANCH_SETTLED_RATE = 1e-3
+MEDICAL_KITS = 8
+
+#: The 9a/9b fighters' strength_base (#2773), retaliation_swap_probe's
+#: value: small rather than zero, because a swing that cannot land never
+#: stamps the attacker record the staged hit exists to create.
+NEUTERED_STRENGTH_BASE = 0.02
+
+#: The lash-out episode length scoped to 9a/9b (#2773). Phase 9's 6 s
+#: tune is shorter than staging, grading, dressing and a probabilistic
+#: landed hit together: traced 9b failures had the episode's expiry clear
+#: the target before any strike landed. 9a's grade is taken at the first
+#: selection, so the length cannot affect it.
+LASHOUT_9AB_EPISODE = 30.0
+
+#: Where 9a puts the attacker (east) and the decoy (west) relative to the
+#: subject before the break: the decoy strictly closer, both comfortably
+#: inside LASHOUT_RANGE.
+ATTACKER_OFFSET = 3.0
+DECOY_OFFSET = 1.5
+
+
+def stage_lashout_cluster(port, x, y):
+    """Spawn a lash-out subject at (x, y), stage a REAL landed hit on it
+    from an attacker, stand the attacker down and snap it back to exactly
+    ATTACKER_OFFSET tiles east, then spawn a decoy DECOY_OFFSET tiles
+    west. Answers (lash, attacker, decoy, problem): `problem` names a
+    setup step that did not take effect, else None.
+
+    Both offsets sit clear of the roughly one-tile spacing units settle
+    into on their own — a decoy spawned half a tile away was pushed out
+    to about 1.1, past an attacker at 1.0 — and well inside lash-out's
+    8-tile range. The decoy spawns LAST, so it has no time to wander.
+
+    The hit is a real one — there is no Lua setter for the last-attacker
+    memory (only unit.getLastAttacker) — via combat_anim_probe.py's
+    spawn-adjacent + commandAttack + wait-for-a-swing-to-land pattern.
+
+    The subject's OWN reaction to that hit is suppressed until the break
+    (#2773): its unit.getLastAttacker reads nil to every caller during
+    setup — the 9c isolation idiom — so its ordinary incoming_hit
+    engagement and retaliation never walk it toward the attacker, which
+    is what used to leave the attacker NEAREST at selection (so the old
+    check rarely tested the preference at all). The engine still records
+    the hit. observe_first_lashout_selection lifts the mask in the same
+    console chunk that forces the break, and the mental short-circuit
+    runs before any ordinary candidate, so the selection reads the real
+    memory. The geometry is still not trusted from here: it is observed
+    at the selection.
+    """
+    lash = spawn_acolyte(port, x, y)
+    set_wellbeing(port, lash, 1.0, 0.0)
+    poll_until(5, lambda: mstate(port, lash) == "stable")
+    # Its own kits, BEFORE the staged hit: dress_staged_wound treats it as
+    # its own medic, and by the time a wound is seeping every console round
+    # trip costs blood that never comes back.
+    provision_medical(port, lash)
+    send(port, f"_G.__probe_lash_real_gla = _G.__probe_lash_real_gla "
+               f"or unit.getLastAttacker; "
+               f"unit.getLastAttacker = function(u) "
+               f"if u == {lash} then return nil end "
+               f"return _G.__probe_lash_real_gla(u) end; "
+               f"_G.__probe_lash_unmask = function() "
+               f"unit.getLastAttacker = _G.__probe_lash_real_gla; "
+               f"_G.__probe_lash_real_gla = nil; "
+               f"_G.__probe_lash_unmask = nil end; return 'ok'")
+    attacker = spawn_acolyte(port, x + 1, y)
+    # Neuter BOTH fighters' damage output BEFORE the staged hit — a
+    # full-strength acolyte swing landed on an unarmored target can be
+    # lethal in one blow (Combat.Resolution's E_swing scales with
+    # strength), and a dead unit stops ticking mental_state entirely
+    # (unit_resources skips dead/collapsed units), which would wedge every
+    # check below forever. That includes lash's own lash-out swings in 9b.
+    #
+    # Written to `strength_base`, then unit.recomputeBody (#2773, after
+    # retaliation_swap_probe's `neuter`, #1578). Writing `strength` itself
+    # did not last: Unit.Thread.Command.Body.recomputeBodyDerivedStats
+    # re-derives it from strength_base, and every physiology pass's
+    # starvation.refreshStrength re-derives it again from strength_body, so
+    # the old 0.05 was gone before the hit and the staged hits landed at
+    # ordinary strength (a 0.37 slash; a heavy head stab with a skull
+    # fracture). toughness=100 is kept: it caps Combat.Resolution's
+    # energy-transfer reduction at its 50% max (clamp(toughness*0.05, 0,
+    # 0.5)), a second, independent line of defense.
+    #
+    # Verified, not trusted (#2773): the same chunk answers every setter's
+    # and recomputeBody's boolean and a typed snapshot of both fighters,
+    # and neuter_snapshot_problems refuses anything short of a neuter that
+    # took — BEFORE the attack order, so an unbounded hit never happens.
+    neutered = send_json(port, neuter_chunk((attacker, lash)), timeout=15.0)
+    problems = neuter_snapshot_problems(neutered, (attacker, lash))
+    if problems:
+        return lash, attacker, None, ("neuter not established: "
+                                      + "; ".join(problems))
+    send(port, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
+               f"return 'ok'")
+    hit = poll_until(35, lambda: send(
+        port, f"local a=_G.__probe_lash_real_gla({lash}); "
+              f"return a and a.uid or 'nil'"
+    ) == str(attacker))
+    if not hit:
+        return lash, attacker, None, (f"attacker {attacker} never landed a "
+                                      f"hit on {lash} — can't test attacker "
+                                      f"preference")
+    print(f"  [pass] staged a real hit: attacker {attacker} landed on "
+          f"lash-out subject {lash}")
+    stand_down_attacker(port, lash, attacker)
+    # Snap the attacker back to a fixed, known distance — its approach
+    # and swing leave it wherever combat physics did. unit.setPos just
+    # enqueues a UnitTeleport on the unit thread, so confirm it landed.
+    lx, ly = unit_pos(port, lash)
+    send(port, f"unit.setPos({attacker}, {lx + ATTACKER_OFFSET}, {ly}); "
+               f"return 'ok'")
+    if not poll_until(5, lambda: (lambda ax, ay:
+            (ax - (lx + ATTACKER_OFFSET)) ** 2 + (ay - ly) ** 2 < 0.05)(
+                *unit_pos(port, attacker))):
+        return lash, attacker, None, (f"teleporting {attacker} back to "
+                                      f"{ATTACKER_OFFSET:g} tiles from {lash} "
+                                      f"never took effect")
+    decoy = spawn_acolyte(port, lx - DECOY_OFFSET, ly)
+    return lash, attacker, decoy, None
+
+
+def stand_down_attacker(port, lash, attacker):
+    """End the attacker's own fight and keep both fighters standing.
+
+    Left running, the attacker's attack order keeps it on top of the
+    subject, and sustained combat can collapse either side from
+    accumulated blood loss even with strength/toughness reduced (those
+    shrink per-hit severity, not how long the fight runs) — a collapsed
+    unit is excluded by lash-out's eligibility, or stops ticking
+    altogether.
+
+    Its stamina is deliberately LEFT ALONE (#2773). The old setup drained
+    it to 0.1 of max to stop its ambient wander, but a unit left that low
+    after a fight was traced Collapsed by the time the setup finished —
+    and a collapsed attacker is excluded from lash-out, so the subject
+    took the decoy instead and 9b's "lands an attack on the attacker"
+    could never happen. Where the attacker stands is observed at the
+    selection, so a wander is a setup failure rather than a silent one.
+    """
+    send(port, f"local ai=require('scripts.unit_ai') "
+               f"local s=ai.getState({attacker}); "
+               f"if s then ai.markGoalAccomplished(s,'attack'); "
+               f"s.attackTargetUid=nil end; unit.stop({attacker}) "
+               f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
+
+
+def lashout_observer_lua(lash, attacker, decoy):
+    """The console chunk observe_first_lashout_selection sends, kept as
+    text so --self-test can run it against the production policy with no
+    engine (lashout_policy_harness).
+
+    The decision cannot be read atomically. The Unit thread advances
+    engine.gameTime() (Unit.Thread.unitTickWith) and moves units while
+    the Lua thread runs, so two reads in one chunk can differ.
+    pickLashoutTarget reads the hit, then its OWN clock, then the
+    attacker's live existence, pose and position, against the subject
+    position `me` that lashOutExecute read just before. So the chunk:
+
+      * records the subject's own position from lashOutExecute's read:
+        the exact `me` the policy measures from (unit.getInfo wrapper);
+        that read also drops any earlier snapshot, so a snapshot can
+        only belong to this call of the execute;
+      * keeps the hit record the policy is handed (the same table) and
+        takes reading BEFORE: clock plus both candidates, judged against
+        that `me` by the production predicate. The policy's clock read
+        comes after it (getLastAttacker wrapper);
+      * from there until the execute is called, records the FIRST
+        unit.exists / getPose / getInfo answer the decision itself got
+        for the attacker. Those are the reads the window-passing branch
+        of pickLashoutTarget's eligibility test makes (unit.exists /
+        getPose / getInfo wrappers; the probe's own reads are excluded);
+      * over the same span, records EVERY getInfo answer the decision got
+        for the attacker and for the decoy, as an explicit INVALID entry
+        when the answer is missing or malformed, so no sample can drop
+        out silently. It also records every exists / getPose answer the
+        decision got for the decoy. Next to each attacker read it samples
+        the decoy's existence, pose AND info. At the end, the production
+        eligibility predicate is REPLAYED on exactly those captured
+        answers: each sample's own triple, and every combination of the
+        decision's own decoy answers. It is not re-asked fresh, and a
+        pose counts only as a string. Next to each attacker read the
+        sample also gives the decoy's
+        position (the decision does not read the
+        decoy when it keeps the attacker). It also records whether the
+        decision called unit.getAllIds, which only the nearest-candidate
+        fallback ranking does (unit_ai_mental.lua:104-112). A decision
+        that keeps the attacker through the preference branch returns
+        before it;
+      * when lashOutExecute calls attackTargetExecute straight after the
+        pick: takes reading AFTER, replays the production predicate on
+        the attacker reads the decision actually got, computes in Lua
+        whether the decoy was strictly closer than the attacker on every
+        position sampled (each decision read of the attacker against
+        every sample of the decoy; false if ANY sample is invalid or
+        negative, including the bracket's -1 "no position" sentinel), binds
+        all of it to the chosen target, and restores every original.
+
+    The FIRST decision is final, whatever it returned. The chunk also
+    wraps unit_ai_mental.shortCircuit, which unit_ai.lua:299 calls
+    through the module table every tick. Only reads made inside the
+    subject's own tick count as the decision's. When a lash-out tick ends
+    without reaching attackTargetExecute (the decision returned no
+    target: lashOutExecute's nil path, unit_ai_mental.lua:159-172), the
+    wrapper finalizes that decision as a NIL selection, AFTER reading
+    included. Within the tick, the decision is the last subject getInfo
+    (its `me`) followed by the next getLastAttacker (the policy's hit
+    read, which arms it). The FIRST subject getInfo, getLastAttacker or
+    getActivity after that FREEZES it: the policy makes none of them while
+    picking, so such a read comes from code after the pick, e.g. the
+    no-target path's wander. A later read can neither erase nor replace
+    it. The no-target path reads getActivity(uid) before it wanders
+    (unit_ai_mental.lua:168). So a pick that returned nil without ever
+    reading its hit is frozen there too, and a hit read the wander makes
+    can never be mistaken for the decision's. A later tick
+    can never replace it either: every wrapper is inert once a selection
+    exists, and all are restored, on a nil, a normal or an error return.
+    A tick that RAISES keeps its first decision record if it made one
+    (finalized from the pending evidence), or else records a `raised`
+    one. Either way it is flagged `tickRaised`, every wrapper is
+    restored, and the error is re-raised unchanged. A tick that never
+    read its hit record yields `noHitRead`. All of these are named setup
+    discards, never valid evidence.
+
+    The clock is bracketed, not captured. It never decreases between
+    BEFORE and AFTER unless a load or a session reset writes it in
+    between (classify_lashout_selection rejects a decreasing pair; the
+    probe triggers neither). So, under that condition, the age the
+    policy tested lies between the two.
+
+    Every boundary comparison is made HERE, in Lua, on the original
+    values, and travels as a boolean:
+      * each reading's window, stale and closer tests;
+      * the clock order;
+      * the typing of the hit and the target.
+    The console prints numbers with Lua's tostring (Lua 5.4, "%.14g";
+    src/Engine/Scripting/Lua/API/Shell.hs). That rounds, so for example
+    10.000000000000002 arrives as 10.0. Python therefore never re-derives
+    a cutoff from a printed number.
+    """
+    return f"""
+local lash, attacker, decoy = {lash}, {attacker}, {decoy}
+if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end
+local mentalAi = require('scripts.unit_ai_mental')
+local policy = mentalAi.lashoutPolicy
+local atk = require('scripts.unit_ai_combat_attack')
+local origGLA, origATE, origGI = unit.getLastAttacker, atk.attackTargetExecute, unit.getInfo
+local origSC = mentalAi.shortCircuit
+local origEx, origPose, origAll = unit.exists, unit.getPose, unit.getAllIds
+local origAct = unit.getActivity
+local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+local rec = {{ observing = false, armed = false, tick = false, frozen = false,
+  meFresh = false, decision = {{}},
+  dSamp = {{}}, dEx = {{}}, dPose = {{}}, dInf = {{}} }}
+_G.__probe_lash_rec = rec
+_G.__probe_lash_restore = function()
+  unit.getLastAttacker = origGLA
+  atk.attackTargetExecute = origATE
+  unit.getInfo = origGI
+  unit.exists = origEx
+  unit.getPose = origPose
+  unit.getAllIds = origAll
+  unit.getActivity = origAct
+  mentalAi.shortCircuit = origSC
+  _G.__probe_lash_restore = nil
+end
+local function infoCopy(r)
+  if not r then return nil end
+  return {{ gridX = r.gridX, gridY = r.gridY, defName = r.defName }}
+end
+local function sample(r)
+  if type(r) ~= 'table' then return {{ invalid = true }} end
+  return {{ gridX = r.gridX, gridY = r.gridY }}
+end
+local function decisionRead(kind, u, v)
+  if rec.armed and not rec.observing and not rec.selection and u == attacker
+     and rec.decision[kind] == nil then
+    rec.decision[kind] = {{ v = v }}
+  end
+end
+local function replayFor(oid, me, ex, pose, info)
+  if me == nil then return false end
+  local sx, sp, si = unit.exists, unit.getPose, unit.getInfo
+  rec.observing = true
+  unit.exists = function(u) if u == oid then return ex end; return origEx(u) end
+  unit.getPose = function(u) if u == oid then return pose end; return origPose(u) end
+  unit.getInfo = function(u) if u == oid then return info end; return origGI(u) end
+  local ok, res = pcall(policy.eligible, lash, me, oid)
+  unit.exists, unit.getPose, unit.getInfo = sx, sp, si
+  rec.observing = false
+  return ok and res == true
+end
+local function decoyEligibility(me)
+  if #rec.dSamp == 0 then return false end
+  for _, d in ipairs(rec.dSamp) do
+    if not (d.exOk and d.ex == true and d.poseOk and d.infoOk) then return false end
+    if not replayFor(decoy, me, d.ex, d.pose, d.info) then return false end
+  end
+  local nE, nP, nI = #rec.dEx, #rec.dPose, #rec.dInf
+  if nE + nP + nI > 0 then
+    if nE == 0 or nP == 0 or nI == 0 then return false end
+    for _, e in ipairs(rec.dEx) do
+      if not (e.ok and e.v == true) then return false end
+      for _, q in ipairs(rec.dPose) do
+        if not q.ok then return false end
+        for _, i in ipairs(rec.dInf) do
+          if not i.ok then return false end
+          if not replayFor(decoy, me, e.v, q.v, i.v) then return false end
+        end
+      end
+    end
+  end
+  return true
+end
+local function cheb(me, info)
+  if not (me and info and not info.invalid and fin(info.gridX) and fin(info.gridY)) then
+    return nil
+  end
+  return math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY))
+end
+local function decisionGeometry(me, sel)
+  local aMin, dMax, ok = math.huge, -math.huge, true
+  local function a(d) if d == nil or not fin(d) or d < 0 then ok = false elseif d < aMin then aMin = d end end
+  local function d(x) if x == nil or not fin(x) or x < 0 then ok = false elseif x > dMax then dMax = x end end
+  if #rec.aInfo == 0 or #rec.dNear == 0 then ok = false end
+  for _, i in ipairs(rec.aInfo) do a(cheb(me, i)) end
+  for _, i in ipairs(rec.dInfo) do d(cheb(me, i)) end
+  for _, i in ipairs(rec.dNear) do d(cheb(me, i)) end
+  for _, side in ipairs({{ sel.before, sel.after }}) do
+    if side and side.attacker and side.decoy then a(side.attacker.dist); d(side.decoy.dist)
+    else ok = false end
+  end
+  local aDists, dDists = {{}}, {{}}
+  for _, i in ipairs(rec.aInfo) do aDists[#aDists + 1] = cheb(me, i) or -1 end
+  for _, i in ipairs(rec.dInfo) do dDists[#dDists + 1] = cheb(me, i) or -1 end
+  for _, i in ipairs(rec.dNear) do dDists[#dDists + 1] = cheb(me, i) or -1 end
+  return ok and dMax < aMin, aDists, dDists
+end
+local function candidate(me, oid)
+  local info = origGI(oid)
+  local d = -1
+  if me and info then
+    d = math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY))
+  end
+  local p = origPose(oid)
+  return {{ uid = oid, exists = origEx(oid), pose = p or 'none', poseOk = type(p) == 'string',
+           dist = d, eligible = (me ~= nil) and policy.eligible(lash, me, oid) }}
+end
+local function reading(me, a)
+  rec.observing = true
+  local ok, r = pcall(function()
+    local now = engine.gameTime()
+    local ac, dc = candidate(me, attacker), candidate(me, decoy)
+    local hit = a ~= nil and a.uid == attacker
+    local age = (a ~= nil and fin(a.at) and fin(now)) and (now - a.at) or nil
+    return {{ now = now, nowOk = fin(now) and now >= 0, attacker = ac, decoy = dc,
+             window = hit and age ~= nil and age >= 0 and age <= policy.attackerWindow,
+             stale = hit and age ~= nil and age > policy.attackerWindow,
+             closer = fin(dc.dist) and fin(ac.dist) and dc.dist < ac.dist }}
+  end)
+  rec.observing = false
+  if ok then return r end
+  return {{ err = tostring(r) }}
+end
+local function replay(me)
+  local d = rec.decision
+  if me == nil or d.exists == nil then return 'missing' end
+  local missing = false
+  local function val(k)
+    local r = d[k]
+    if r == nil then missing = true; return nil end
+    return r.v
+  end
+  local sx, sp, si = unit.exists, unit.getPose, unit.getInfo
+  rec.observing = true
+  unit.exists = function(u) if u == attacker then return val('exists') end; return origEx(u) end
+  unit.getPose = function(u) if u == attacker then return val('pose') end; return origPose(u) end
+  unit.getInfo = function(u) if u == attacker then return val('info') end; return origGI(u) end
+  local ok, res = pcall(policy.eligible, lash, me, attacker)
+  unit.exists, unit.getPose, unit.getInfo = sx, sp, si
+  rec.observing = false
+  if not ok then return 'error' end
+  if missing then return 'missing' end
+  return res and true or false
+end
+unit.getInfo = function(u)
+  local r = origGI(u)
+  if u == lash and rec.tick and not rec.observing and not rec.selection then
+    if rec.armed then
+      rec.armed = false
+      rec.frozen = true
+    elseif not rec.frozen then
+      rec.me = r and {{ gridX = r.gridX, gridY = r.gridY }} or nil
+      rec.meFresh = true
+    end
+  end
+  decisionRead('info', u, infoCopy(r))
+  if rec.armed and not rec.observing and not rec.selection then
+    if u == attacker then
+      rec.aInfo[#rec.aInfo + 1] = sample(r)
+      rec.observing = true
+      local okE, ex = pcall(origEx, decoy)
+      local okP, po = pcall(origPose, decoy)
+      local okI, z = pcall(origGI, decoy)
+      rec.observing = false
+      rec.dNear[#rec.dNear + 1] = sample(okI and z or nil)
+      rec.dSamp[#rec.dSamp + 1] = {{ ex = okE and ex or false, exOk = okE and type(ex) == 'boolean',
+        pose = okP and po or nil, poseOk = okP and type(po) == 'string',
+        info = (okI and type(z) == 'table') and infoCopy(z) or false,
+        infoOk = okI and type(z) == 'table' }}
+    elseif u == decoy then
+      rec.dInfo[#rec.dInfo + 1] = sample(r)
+      rec.dInf[#rec.dInf + 1] = {{ v = type(r) == 'table' and infoCopy(r) or false,
+        ok = type(r) == 'table' }}
+    end
+  end
+  return r
+end
+unit.getActivity = function(u)
+  if u == lash and rec.tick and not rec.observing and not rec.selection then
+    if rec.armed then rec.armed = false; rec.frozen = true
+    elseif rec.meFresh then rec.frozen = true end
+  end
+  return origAct(u)
+end
+unit.getAllIds = function(...)
+  if rec.armed and not rec.observing and not rec.selection then rec.fallbackRan = true end
+  return origAll(...)
+end
+local function decoyRead(list, r, ok)
+  if rec.armed and not rec.observing and not rec.selection then
+    list[#list + 1] = {{ v = r, ok = ok }}
+  end
+end
+unit.exists = function(u)
+  local r = origEx(u)
+  decisionRead('exists', u, r)
+  if u == decoy then decoyRead(rec.dEx, r, type(r) == 'boolean') end
+  return r
+end
+unit.getPose = function(u)
+  local r = origPose(u)
+  decisionRead('pose', u, r)
+  if u == decoy then decoyRead(rec.dPose, r, type(r) == 'string') end
+  return r
+end
+unit.getLastAttacker = function(u)
+  local a = origGLA(u)
+  if u == lash and rec.tick and not rec.observing and not rec.selection
+     and (rec.armed or rec.frozen or not rec.meFresh) then
+    if rec.armed then rec.armed = false; rec.frozen = true end
+  elseif u == lash and rec.tick and not rec.observing and not rec.selection then
+    rec.meFresh = false
+    rec.armed = false
+    rec.hit = a
+    rec.pending = {{ window = policy.attackerWindow, range = policy.range,
+      meCaptured = rec.me ~= nil, me = rec.me,
+      hitBy = a and a.uid or -1, hitAt = a and a.at or -1,
+      hitTyped = a ~= nil and math.type(a.uid) == 'integer' and a.uid > 0
+                 and fin(a.at) and a.at >= 0,
+      before = reading(rec.me, a) }}
+    rec.decision = {{}}
+    rec.aInfo, rec.dInfo, rec.dNear, rec.fallbackRan = {{}}, {{}}, {{}}, false
+    rec.dSamp, rec.dEx, rec.dPose, rec.dInf = {{}}, {{}}, {{}}, {{}}
+    rec.armed = true
+  end
+  return a
+end
+local function finalize(s, isNil)
+    rec.armed = false
+    local sel = rec.pending
+    if sel == nil then
+      rec.selection = {{ noHitRead = true, target = -1, targetNil = true,
+        meCaptured = rec.me ~= nil }}
+      _G.__probe_lash_restore()
+      return
+    end
+    sel.after = reading(rec.me, rec.hit)
+    sel.ordered = type(sel.before) == 'table' and type(sel.after) == 'table'
+                  and fin(sel.before.now) and fin(sel.after.now)
+                  and sel.after.now >= sel.before.now
+    sel.targetNil = isNil
+    sel.target = isNil and -1 or (s.attackTargetUid or -1)
+    sel.targetTyped = math.type(sel.target) == 'integer' and sel.target > 0
+    local d = rec.decision
+    local closer, aDists, dDists = decisionGeometry(rec.me, sel)
+    sel.decision = {{ exists = d.exists, pose = d.pose, info = d.info,
+                     attackerEligible = replay(rec.me),
+                     fallbackRan = rec.fallbackRan == true,
+                     decisionCloser = closer == true,
+                     decoyEligible = decoyEligibility(rec.me) == true,
+                     decoySamples = #rec.dSamp,
+                     decoyReads = #rec.dEx + #rec.dPose + #rec.dInf,
+                     attackerDists = aDists, decoyDists = dDists }}
+    rec.selection = sel
+    _G.__probe_lash_restore()
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u == lash and s and s.mentalLashoutActive and rec.pending and rec.armed
+     and not rec.selection then
+    finalize(s, false)
+  end
+  return origATE(u, s, params)
+end
+mentalAi.shortCircuit = function(uid, s, params, activity, actList)
+  if uid ~= lash or rec.selection then return origSC(uid, s, params, activity, actList) end
+  rec.tick, rec.me, rec.meFresh, rec.pending, rec.armed, rec.frozen =
+    true, nil, false, nil, false, false
+  local res = table.pack(pcall(origSC, uid, s, params, activity, actList))
+  rec.tick = false
+  if not res[1] then
+    if not rec.selection and rec.pending then finalize(s, true) end
+    if not rec.selection then
+      rec.selection = {{ raised = true, target = -1, targetNil = true, targetTyped = false }}
+    end
+    rec.selection.tickRaised = true
+    rec.selection.tickErr = tostring(res[2])
+    if _G.__probe_lash_restore then _G.__probe_lash_restore() end
+    error(res[2], 0)
+  end
+  if not rec.selection and type(s) == 'table' and s.mentalLashoutActive == true then
+    finalize(s, true)
+  end
+  return table.unpack(res, 2, res.n)
+end
+require('scripts.mental_state').forceBreak(lash, 'lash_out')
+return 'ok'"""
+
+
+def observe_first_lashout_selection(port, lash, attacker, decoy, timeout=10):
+    """Force a lash-out break on `lash` and record its FIRST target
+    selection, observed around and inside the decision (#2773;
+    lashout_observer_lua). The wrappers are installed in the SAME console
+    chunk that forces the break, and the Lua thread runs a chunk whole,
+    before the next AI tick.
+
+    Later target polls cannot reconstruct those historical
+    preconditions; this records them where the decision is made.
+    Answers the recorded selection dict, or None when no selection
+    happened within `timeout` seconds. The wrappers are always removed.
+    """
+    # One line: the console reads newline-terminated commands, and the
+    # chunk carries no comments, so joining its lines changes nothing.
+    send(port, " ".join(line.strip() for line in
+                        lashout_observer_lua(lash, attacker, decoy).splitlines()))
+
+    def selection():
+        raw = send(port, "local r=_G.__probe_lash_rec; "
+                         "return r and r.selection or 'nil'")
+        try:
+            sel = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return sel if isinstance(sel, dict) else None
+
+    try:
+        sel = poll_until(timeout, selection)
+        if sel is None:
+            # Name what the subject was doing instead, so a missing
+            # selection is diagnosable rather than a bare timeout.
+            raw = send(port, f"local r=_G.__probe_lash_rec; "
+                             f"local s=require('scripts.unit_ai').getState({lash}); "
+                             f"local m=require('scripts.mental_state').summary({lash}); "
+                             f"return {{ read = (r and r.pending) and true or false, "
+                             f"state = m and m.state or 'nil', "
+                             f"target = s and s.attackTargetUid or -1, "
+                             f"action = s and s.currentAction or 'nil', "
+                             f"pose = unit.getPose({lash}) or 'nil' }}")
+            print(f"  [setup] no lash-out selection observed for {lash}: {raw}")
+        return sel
+    finally:
+        send(port, "if _G.__probe_lash_restore then _G.__probe_lash_restore() end; "
+                   "_G.__probe_lash_rec = nil; return 'ok'")
+
+
+#: replay()'s answers in lashout_observer_lua: the production predicate
+#: on the decision's own attacker reads, or why it could not be replayed.
+_DECISION_REPLAY = (True, False, "missing", "error")
+
+
+def _uid(v):
+    """A unit id as it arrives from the console: a JSON integer (Lua
+    integers print without a decimal point), positive; never a bool."""
+    return isinstance(v, int) and not isinstance(v, bool) and v > 0
+
+
+def lashout_record_problems(sel, attacker, decoy):
+    """Everything malformed in a recorded selection, checked BEFORE any
+    use, so a partial or mistyped record fails closed with a name instead
+    of raising or passing on a default. Requires:
+      * finite positive window and range;
+      * a hit that is either absent (hitBy -1) or typed: a positive
+        integer hitBy and a finite, non-negative hitAt, confirmed by
+        Lua's own hitTyped (a missing 'at' that defaulted to -1 fails);
+      * the selected target, a positive integer uid (Lua's targetTyped).
+        Any genuine target is allowed, so a wrong target stays observable;
+      * the captured subject position `me`, with finite grid coordinates;
+      * both bracket readings: a finite, non-negative clock (Lua's
+        nowOk); boolean window, stale and closer tests; and both
+        candidates with the expected integer uid, boolean exists, string
+        pose, finite distance and boolean eligibility;
+      * a clock that did not go backwards (Lua's `ordered`, compared on
+        the unrounded values);
+      * the decision replay's answer, one of _DECISION_REPLAY."""
+    if not isinstance(sel, dict):
+        return [f"selection record is {sel!r}"]
+    if sel.get("tickRaised") is True or sel.get("raised") is True:
+        return [f"the subject's first lash-out tick raised ({sel.get('tickErr')}), so "
+                f"its first decision record is not valid evidence"]
+    if sel.get("noHitRead") is True:
+        return ["the first decision returned no target without reading its hit "
+                "record, so none of its preconditions can be proven"]
+    problems = []
+    for k in ("window", "range"):
+        if not (_finite_num(sel.get(k)) and sel[k] > 0):
+            problems.append(f"{k} {sel.get(k)!r} is not a positive number")
+    hit_by = sel.get("hitBy")
+    if isinstance(hit_by, int) and not isinstance(hit_by, bool) and hit_by == -1:
+        if not _finite_num(sel.get("hitAt")):
+            problems.append(f"hitAt {sel.get('hitAt')!r} is not a finite number")
+    elif not _uid(hit_by):
+        problems.append(f"hitBy {hit_by!r} is neither -1 nor a positive integer uid")
+    elif not (_finite_num(sel.get("hitAt")) and sel["hitAt"] >= 0
+              and sel.get("hitTyped") is True):
+        problems.append(f"hit by {hit_by} has no valid timestamp "
+                        f"(hitAt {sel.get('hitAt')!r}, hitTyped {sel.get('hitTyped')!r})")
+    if sel.get("targetNil") is True:
+        t = sel.get("target")
+        if not (isinstance(t, int) and not isinstance(t, bool) and t == -1
+                and sel.get("targetTyped") is False):
+            problems.append(f"a nil selection must carry the integer target -1 with "
+                            f"targetTyped false (target {t!r}, targetTyped "
+                            f"{sel.get('targetTyped')!r})")
+    elif not (sel.get("targetNil") is False and _uid(sel.get("target"))
+              and sel.get("targetTyped") is True):
+        problems.append(f"selected target {sel.get('target')!r} is not a positive "
+                        f"integer uid (targetTyped {sel.get('targetTyped')!r}, "
+                        f"targetNil {sel.get('targetNil')!r})")
+    me = sel.get("me")
+    if sel.get("meCaptured") is not True or not isinstance(me, dict):
+        problems.append("the subject position the decision measured from "
+                        "was not captured")
+    elif not (_finite_num(me.get("gridX")) and _finite_num(me.get("gridY"))):
+        problems.append(f"captured subject position {me!r} is malformed")
+    for side in ("before", "after"):
+        r = sel.get(side)
+        if not isinstance(r, dict):
+            problems.append(f"no {side} reading")
+            continue
+        if "err" in r:
+            problems.append(f"{side} reading raised: {r['err']}")
+            continue
+        if not (_finite_num(r.get("now")) and r["now"] >= 0 and r.get("nowOk") is True):
+            problems.append(f"{side} clock {r.get('now')!r} is not a finite "
+                            f"non-negative number (nowOk {r.get('nowOk')!r})")
+        for k in ("window", "stale", "closer"):
+            if not isinstance(r.get(k), bool):
+                problems.append(f"{side} {k} test {r.get(k)!r} is not a boolean")
+        for role, uid in (("attacker", attacker), ("decoy", decoy)):
+            c = r.get(role)
+            if not isinstance(c, dict):
+                problems.append(f"{side} {role} reading missing")
+                continue
+            if not (_uid(c.get("uid")) and c["uid"] == uid):
+                problems.append(f"{side} {role} reading is for {c.get('uid')!r}, "
+                                f"not integer uid {uid}")
+            if not isinstance(c.get("exists"), bool):
+                problems.append(f"{side} {role} exists {c.get('exists')!r} is not a boolean")
+            if not isinstance(c.get("pose"), str):
+                problems.append(f"{side} {role} pose {c.get('pose')!r} is not a string")
+            if not _finite_num(c.get("dist")):
+                problems.append(f"{side} {role} distance {c.get('dist')!r} is not a finite number")
+            if not isinstance(c.get("eligible"), bool):
+                problems.append(f"{side} {role} eligible {c.get('eligible')!r} is not a boolean")
+            if c.get("poseOk") is not True:
+                problems.append(f"{side} {role} pose missing or not a string "
+                                f"(poseOk {c.get('poseOk')!r})")
+    if sel.get("ordered") is not True:
+        problems.append(f"clock not ordered across the decision (ordered "
+                        f"{sel.get('ordered')!r}): a load or session reset, or a "
+                        f"missing reading, so the bracket proves nothing")
+    dec = sel.get("decision")
+    if not isinstance(dec, dict) or not any(
+            dec.get("attackerEligible") is v if isinstance(v, bool)
+            else dec.get("attackerEligible") == v for v in _DECISION_REPLAY):
+        problems.append(f"decision replay {dec!r} is malformed")
+    elif not (isinstance(dec.get("fallbackRan"), bool)
+              and isinstance(dec.get("decisionCloser"), bool)
+              and isinstance(dec.get("decoyEligible"), bool)):
+        problems.append(f"decision branch/geometry/eligibility evidence is "
+                        f"malformed (fallbackRan {dec.get('fallbackRan')!r}, "
+                        f"decisionCloser {dec.get('decisionCloser')!r}, "
+                        f"decoyEligible {dec.get('decoyEligible')!r})")
+    return problems
+
+
+def lashout_decision_view(sel, side):
+    """One bracket side of a well-formed selection ('before' or 'after'):
+    the hit record the policy was handed, with that side's Lua-computed
+    tests and candidates. `age` is for messages only: it is recomputed
+    from printed numbers, so no decision uses it."""
+    r = sel[side]
+    has_hit = sel["hitBy"] != -1
+    return {"window": sel["window"], "range": sel["range"],
+            "hitBy": sel["hitBy"], "hitAt": sel["hitAt"],
+            "hitOk": has_hit and sel.get("hitTyped") is True,
+            "windowOk": r["window"], "stale": r["stale"], "closer": r["closer"],
+            "age": (r["now"] - sel["hitAt"]) if has_hit else -1,
+            "attacker": r["attacker"], "decoy": r["decoy"]}
+
+
+def lashout_predicates(view, attacker, decoy):
+    """The fair-test preconditions on one reading, as (name, holds,
+    message) in a fixed order. Every `holds` is the boolean Lua computed
+    on the unrounded values (lashout_observer_lua); the numbers appear in
+    the messages only.
+
+      * hit      — the hit the decision read is `attacker`'s, typed;
+      * window   — and its age is inside the production window
+                   (inclusive);
+      * attacker — the attacker is eligible (exists, not dead or
+                   collapsed, within range: the production predicate);
+      * decoy    — the decoy is eligible too;
+      * closer   — the decoy is STRICTLY closer under the production
+                   Chebyshev metric.
+
+    Without every one of them, the decoy, or the attacker, would be the
+    correct pick for a reason that is not the preference under test."""
+    a, d = view["attacker"], view["decoy"]
+    hit = view["hitOk"] and view["hitBy"] == attacker
+    return [
+        ("hit", hit, f"the hit read at selection was by {view['hitBy']}, "
+                     f"not attacker {attacker}"),
+        ("window", hit and view["windowOk"],
+         f"hit age at selection ~{view['age']:.2f}s is outside the "
+         f"{view['window']:g}s attacker window"),
+        ("attacker", a["eligible"],
+         f"attacker {attacker} ineligible at selection (exists={a['exists']}, "
+         f"pose={a['pose']}, distance={a['dist']:.2f}, range={view['range']:g})"),
+        ("decoy", d["eligible"],
+         f"decoy {decoy} ineligible at selection (exists={d['exists']}, "
+         f"pose={d['pose']}, distance={d['dist']:.2f})"),
+        ("closer", view["closer"],
+         f"decoy {decoy} at {d['dist']:.2f} is not strictly closer than "
+         f"attacker {attacker} at {a['dist']:.2f}"),
+    ]
+
+
+def lashout_setup_problems(view, attacker, decoy):
+    """The failing preconditions on one reading, each named with its value."""
+    return [msg for _, holds, msg in lashout_predicates(view, attacker, decoy)
+            if not holds]
+
+
+def classify_lashout_selection(sel, attacker, decoy):
+    """('fair' | 'setup' | 'ambiguous', problems) for a recorded selection.
+
+      * setup     — the record is malformed (lashout_record_problems), or
+                    the preconditions failed, with every predicate giving
+                    the SAME answer before and after; or the decision's own
+                    attacker reads could not be replayed. Discarded and
+                    restaged.
+      * ambiguous — any single predicate answered differently before and
+                    after. This also covers sides failing for DIFFERENT
+                    reasons, and a hit aging past the window while the
+                    policy read it. It also covers the attacker reading
+                    eligible on both sides but INELIGIBLE on the reads the
+                    decision itself got (a there-and-back in range or pose).
+                    What the policy saw is then unknown or unfair, so it
+                    is a NAMED boundary-ambiguous setup discard, restaged
+                    and never graded.
+      * fair      — every predicate holds before and after, and the
+                    production predicate holds on the decision's OWN
+                    attacker reads. The clock is bracketed: monotone
+                    between the two readings, given no load or reset. So
+                    the policy's age test passed and its eligibility test
+                    saw an eligible attacker. A decoy target is then a
+                    POLICY failure, graded and never retried. The decoy's
+                    side is never read by a decision that keeps the
+                    attacker, so its predicates rest on the bracket. They
+                    make a pass meaningful; they cannot turn a correct
+                    fallback into a failure.
+    """
+    malformed = lashout_record_problems(sel, attacker, decoy)
+    if malformed:
+        return "setup", ["malformed selection record: " + "; ".join(malformed)]
+    pb = lashout_predicates(lashout_decision_view(sel, "before"), attacker, decoy)
+    pa = lashout_predicates(lashout_decision_view(sel, "after"), attacker, decoy)
+    crossed = [nb for (nb, hb, _), (_, ha, _) in zip(pb, pa) if hb != ha]
+    if crossed:
+        def failing(ps):
+            return "; ".join(m for _, h, m in ps if not h) or "all held"
+        return "ambiguous", [
+            f"boundary-ambiguous: {', '.join(crossed)} changed while the "
+            f"decision read it (before: {failing(pb)}; after: {failing(pa)})"]
+    fails = [m for _, h, m in pb if not h]
+    if fails:
+        return "setup", fails
+    replayed = sel["decision"]["attackerEligible"]
+    if replayed is True:
+        return "fair", []
+    if replayed is False:
+        return "ambiguous", [
+            f"boundary-ambiguous: attacker {attacker} was eligible before and "
+            f"after the decision but INELIGIBLE on the decision's own reads "
+            f"(exists={sel['decision'].get('exists')}, "
+            f"pose={sel['decision'].get('pose')}, "
+            f"info={sel['decision'].get('info')})"]
+    return "setup", [f"the decision's own attacker reads could not be "
+                     f"replayed ({replayed})"]
+
+
+def grade_lashout_selection(sel, attacker, decoy):
+    """('pass' | 'fail' | 'setup', detail) for a selection that
+    classify_lashout_selection found FAIR: the hit was inside the window
+    and the attacker eligible on the decision's own reads.
+
+    A NIL first decision (no target) gets exactly the same gates as any
+    other outcome. It reaches here only when classify_lashout_selection
+    found it fair, which includes the attacker replaying ELIGIBLE on the
+    decision's own reads; a missing or failed replay is setup. It is then
+    a POLICY failure (no retry) only after decoy eligibility and geometry
+    are both proven. Anything unproved is setup, and the selection is
+    still finalized.
+
+    The decoy's ELIGIBILITY comes first. decoyEligible means the
+    production predicate, replayed on every captured decoy answer, held:
+    each in-decision sample, and every decoy read the decision itself
+    made. A missing or invalid answer, or a pose that is not a string,
+    fails it. Without it, every outcome is a SETUP discard.
+
+    Geometry comes next. The strictly-closer precondition must be PROVEN
+    at the decision (decisionCloser: Lua, unrounded, false when any
+    sample is missing or malformed). The decoy has to be strictly closer
+    than the attacker on every position sampled: each decision read of
+    the attacker against the decoy before, after, next to each of those
+    reads, and at any read of its own. Without it, every outcome is a
+    SETUP discard, restaged and never graded. That covers the attacker
+    by preference, the attacker by ranking, and any other target.
+
+    With the geometry proven:
+      * pass — the target is the attacker, chosen by the PREFERENCE
+               branch: the decision never ran the nearest-candidate
+               ranking (no unit.getAllIds call);
+      * fail — a POLICY failure, graded and never retried: the target is
+               not the attacker, or the decision ranked candidates
+               although the preference held.
+    A preference-disabled policy therefore never passes. With proven
+    geometry it ranks, picks the decoy, and fails; without it, setup.
+    """
+    dec = sel["decision"]
+    dists = (f"decision attacker distances {dec.get('attackerDists')}, "
+             f"decoy samples {dec.get('decoyDists')}")
+    if not dec["decoyEligible"]:
+        return "setup", (f"decoy {decoy} eligibility not proven at the decision "
+                         f"({dec.get('decoySamples')} sample(s), "
+                         f"{dec.get('decoyReads')} decision read(s); target "
+                         f"{sel['target']}, fallback ran: {dec['fallbackRan']})")
+    if not dec["decisionCloser"]:
+        return "setup", (f"decoy {decoy} not provably strictly closer than "
+                         f"attacker {attacker} at the decision (target "
+                         f"{sel['target']}, fallback ran: {dec['fallbackRan']}; "
+                         f"{dists})")
+    if sel["targetNil"] is True:
+        return "fail", (f"the first decision returned NO target although the hit "
+                        f"was inside the window, attacker {attacker} eligible on "
+                        f"the decision's own reads, and decoy {decoy} proven "
+                        f"eligible and strictly closer (no retry; {dists})")
+    if sel["target"] == attacker and not dec["fallbackRan"]:
+        return "pass", dists
+    if sel["target"] == attacker:
+        return "fail", (f"the decision ranked candidates (nearest-candidate "
+                        f"fallback) although the hit was inside the window "
+                        f"and attacker {attacker} eligible on its own reads; "
+                        f"it picked the attacker only as the nearest ({dists})")
+    return "fail", (f"target {sel['target']}, expected attacker {attacker} "
+                    f"(decoy {decoy}; fallback ran: {dec['fallbackRan']}; {dists})")
+
+
+def stale_selection_observed(sel, attacker, decoy):
+    """True only for an UNAMBIGUOUS stale selection. The record is
+    well-formed, the selection classifies as a setup discard, the policy
+    was handed the attacker's typed hit, and Lua found that hit already
+    past the window BEFORE the decision (its unrounded `stale` test). The clock does not decrease, so the
+    policy's own read saw it stale too. A hit crossing the window during
+    the decision, or any other predicate crossing, is ambiguous and is
+    not stale evidence."""
+    if lashout_record_problems(sel, attacker, decoy) or not _selected_target(sel):
+        return False
+    if classify_lashout_selection(sel, attacker, decoy)[0] != "setup":
+        return False
+    view = lashout_decision_view(sel, "before")
+    return (view["hitOk"] and view["hitBy"] == attacker
+            and view["stale"] is True)
+
+
+def perturb_lashout_case(port, case, attempt, lash, attacker):
+    """`--lashout-case` (#2773): push ONE staged setup off the fair-test
+    preconditions before the break, through the real engine, so the
+    classification can be shown on the actual selection path. Staging
+    has already stood the attacker down, so its hit can age and it stays
+    where it is put. Answers a named setup problem, or None.
+
+      * stale      — first attempt only: dress the staged wound
+                     (stale_dress_chunk), then wait until the staged hit
+                     is older than the attacker window, checking at every
+                     poll that the subject is alive and its real attacker
+                     record unchanged (stale_wait_chunk). Game time keeps
+                     running; nothing is frozen. That attempt must then
+                     be discarded and RESTAGED. Without the dressing, a
+                     traced run had the subject dead by the observer
+                     timeout (the staged neck slash bled it out), so no
+                     stale selection ever happened;
+      * ineligible — every attempt: teleport the attacker beyond
+                     lash-out range, so no attempt is gradable and 9a
+                     must end in a named SETUP failure.
+    """
+    if case == "stale" and attempt == 1:
+        dressed = send_json(port, stale_dress_chunk(lash, attacker), timeout=30.0)
+        problems = stale_dressing_problems(dressed, attacker)
+        if problems:
+            return "stale dressing not established: " + "; ".join(problems)
+        last = {}
+
+        def aged():
+            got = send_json(port, stale_wait_chunk(lash))
+            last["v"] = got
+            verdict = stale_wait_verdict(got)
+            return verdict if verdict != "waiting" else None
+        verdict = poll_until(30, aged, interval=0.5)
+        if verdict is None:
+            return ("stale wait timed out before the hit aged past 10.5 s "
+                    f"({last.get('v')})")
+        if verdict != "aged":
+            return f"stale wait invalid: {verdict}"
+    elif case == "ineligible":
+        lx, ly = unit_pos(port, lash)
+        send(port, f"unit.setPos({attacker}, {lx + 12}, {ly}); return 'ok'")
+        placed = poll_until(5, lambda: abs(unit_pos(port, attacker)[0] - (lx + 12)) < 0.25)
+        problem = ineligible_placement_problem(placed, attacker, lx + 12)
+        if problem:
+            return problem
+    return None
+
+
+def ineligible_placement_problem(placed, attacker, x):
+    """The --lashout-case ineligible perturbation is established only when
+    the teleport was CONFIRMED. A placement timeout or an unconfirmed move
+    is a named setup problem, never a demonstration."""
+    if placed:
+        return None
+    return (f"ineligible placement not established: attacker {attacker} never "
+            f"confirmed at x={x:g} within 5 s")
+
+
+# ---- #2773 setup verification. The pure validators below are exercised
+# ---- with no engine by `--self-test`.
+
+#: The finite-number test, spelled once for every Lua chunk below.
+_LUA_FINITE = ("local function fin(v) return type(v) == 'number' and v == v "
+               "and v ~= math.huge and v ~= -math.huge end;")
+
+
+def neuter_chunk(uids):
+    """ONE console chunk: neuter each fighter (strength_base, toughness,
+    unit.recomputeBody) and answer every call's boolean plus a typed
+    snapshot read back after the recompute. All three verbs write the
+    unit manager synchronously, so the snapshot reflects them."""
+    per = " ".join(
+        f"do local u = {u}; local r = {{}};"
+        f" r.setBase = unit.setStat(u, 'strength_base', {NEUTERED_STRENGTH_BASE});"
+        f" r.setTough = unit.setStat(u, 'toughness', 100);"
+        f" r.recompute = unit.recomputeBody(u);"
+        f" local function g(k) return unit.getStatBase(u, k) end;"
+        f" r.raw = g('strength'); r.eff = unit.getStat(u, 'strength');"
+        f" r.base = g('strength_base'); r.body = g('strength_body');"
+        f" r.tough = g('toughness'); r.height = g('height');"
+        f" r.lean = g('lean_mass'); r.mass = g('body_mass');"
+        f" r.finite = fin(r.raw) and fin(r.eff) and fin(r.base) and fin(r.body)"
+        f" and fin(r.tough) and fin(r.height) and fin(r.lean) and fin(r.mass);"
+        f" out['u{u}'] = r end"
+        for u in uids)
+    return ("local ok, res = pcall(function() " + _LUA_FINITE
+            + " local out = {}; " + per + " return out end);"
+            " if not ok then return { err = tostring(res) } end; return res")
+
+
+def neuter_snapshot_problems(snap, uids):
+    """Everything wrong with a neuter_chunk answer; empty when the neuter
+    took on every fighter: all three calls true, every snapshot value a
+    finite number, strength_base exactly NEUTERED_STRENGTH_BASE, toughness
+    100, and the raw strength (and strength_body, which mirrors it) equal
+    to recomputeBodyDerivedStats's strength_base*(lean/(8.8*height^2))^0.7
+    within tolerance (Unit.Thread.Command.Body)."""
+    if not isinstance(snap, dict):
+        return [f"neuter chunk answered {snap!r}"]
+    if "err" in snap:
+        return [f"neuter chunk raised: {snap['err']}"]
+    problems = []
+    for u in uids:
+        r = snap.get(f"u{u}")
+        if not isinstance(r, dict):
+            problems.append(f"{u}: no snapshot")
+            continue
+        for k in ("setBase", "setTough", "recompute"):
+            if r.get(k) is not True:
+                problems.append(f"{u}: {k} returned {r.get(k)!r}")
+        keys = ("raw", "eff", "base", "body", "tough", "height", "lean", "mass")
+        bad = [k for k in keys
+               if not (isinstance(r.get(k), (int, float))
+                       and not isinstance(r.get(k), bool)
+                       and math.isfinite(r[k]))]
+        if bad or r.get("finite") is not True:
+            problems.append(f"{u}: missing or non-finite {bad or ['(lua)']}")
+            continue
+        if abs(r["base"] - NEUTERED_STRENGTH_BASE) > 1e-6:
+            problems.append(f"{u}: strength_base {r['base']} != "
+                            f"{NEUTERED_STRENGTH_BASE}")
+        if r["height"] <= 0 or r["lean"] <= 0 or r["mass"] <= 0:
+            problems.append(f"{u}: height {r['height']} / lean_mass "
+                            f"{r['lean']} / body_mass {r['mass']} not positive")
+            continue
+        expected = (NEUTERED_STRENGTH_BASE
+                    * (r["lean"] / (8.8 * r["height"] ** 2)) ** 0.7)
+        tol = 1e-5 + 1e-3 * expected
+        if abs(r["raw"] - expected) > tol:
+            problems.append(f"{u}: raw strength {r['raw']:.6g} != expected "
+                            f"{expected:.6g}")
+        if abs(r["body"] - r["raw"]) > tol:
+            problems.append(f"{u}: strength_body {r['body']:.6g} != raw "
+                            f"strength {r['raw']:.6g}")
+        if abs(r["tough"] - 100) > 1e-6:
+            problems.append(f"{u}: toughness {r['tough']} != 100")
+    return problems
+
+
+def stale_dress_chunk(lash, attacker):
+    """ONE console chunk for the stale demo's first attempt: read the
+    subject's REAL attacker record through the setup mask's own saved
+    original (_G.__probe_lash_real_gla — the mask stays in place and is
+    neither lifted nor rewritten), dress its wounds by self-treatment
+    with stanch's loop and bounds, read the record again, and answer
+    both records (compared here, in Lua, on the raw values), the
+    treatment results, the subject's pose and its blood."""
+    return " ".join((
+        "local ok, res = pcall(function()",
+        _LUA_FINITE,
+        f"local u, A = {lash}, {attacker};",
+        "local real = _G.__probe_lash_real_gla;",
+        "if type(real) ~= 'function' then return { err = 'setup mask not installed' } end;",
+        "local function rec() local a = real(u);",
+        " if not a then return nil end;",
+        " return { uid = a.uid, at = a.at, typed = fin(a.uid) and fin(a.at) } end;",
+        "local before = rec(); _G.__probe_stale_rec = before;",
+        "unit.setKnowledge(u, 'bleed_control', 100);",
+        "local n, stalled, typed, reason = 0, 0, true, 'bound';",
+        "local function rate() local b = unit.getBlood(u);",
+        " return b and b.bleedRate or nil end;",
+        "local last = rate();",
+        f"for _ = 1, {STANCH_ATTEMPTS} do",
+        " local now0 = rate(); if not fin(now0) then reason = 'rate_unreadable'; break end;",
+        f" if now0 <= {STANCH_SETTLED_RATE} then reason = 'settled'; break end;",
+        " local r = unit.treatBleeding(u, u);",
+        " if type(r) ~= 'table' or type(r.ok) ~= 'boolean' then",
+        "  typed = false; reason = 'untyped'; break end;",
+        " if not r.ok then reason = 'treatment_failed'; break end;",
+        " n = n + 1;",
+        " local now = rate();",
+        " if fin(now) and fin(last) and now < last - 1e-6 then stalled = 0"
+        " else stalled = stalled + 1 end;",
+        " last = now;",
+        f" if stalled >= {STANCH_STALLED_PASSES} then reason = 'stalled'; break end end;",
+        "unit.setKnowledge(u, 'bleed_control', 0);",
+        "local after = rec(); local b = unit.getBlood(u);",
+        "return { before = before, after = after, attacker = A,",
+        " same = (before ~= nil and after ~= nil and before.typed and after.typed",
+        "  and before.uid == after.uid and before.at == after.at),",
+        " dressed = n, stalled = stalled, typed = typed, reason = reason,",
+        " bleedRate = b and b.bleedRate or nil, blood = b and b.current or nil,",
+        " finite = b ~= nil and fin(b.bleedRate) and fin(b.current),",
+        " pose = tostring(unit.getPose(u)) }",
+        "end);",
+        "if not ok then return { err = tostring(res) } end; return res"))
+
+
+def _finite_num(v):
+    """A real, finite number (bool excluded)."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v))
+
+
+def _record_problems(rec, attacker, label):
+    """A real attacker record must be present, typed (finite uid and 'at')
+    and name the expected attacker."""
+    if not isinstance(rec, dict):
+        return [f"no real attacker record {label}"]
+    if (rec.get("typed") is not True or not _finite_num(rec.get("uid"))
+            or not _finite_num(rec.get("at"))):
+        return [f"real attacker record {label} untyped "
+                f"(uid {rec.get('uid')!r}, at {rec.get('at')!r})"]
+    if rec.get("uid") != attacker:
+        return [f"real record {label} names {rec.get('uid')}, not "
+                f"attacker {attacker}"]
+    return []
+
+
+def _blood_problems(blood, rate):
+    """Blood and bleed rate must be present, finite and non-negative, with
+    blood left."""
+    if not _finite_num(blood) or not _finite_num(rate):
+        return [f"blood unreadable ({blood!r}, {rate!r})"]
+    problems = []
+    if not blood > 0:
+        problems.append(f"blood {blood} not > 0")
+    if rate < 0:
+        problems.append(f"bleed rate {rate} negative")
+    return problems
+
+
+def stale_dressing_problems(d, attacker):
+    """Everything wrong with a stale_dress_chunk answer; empty only when:
+    the loop stopped because the subject SETTLED (an explicit treatment
+    failure, an untyped result, a stall, an unreadable rate or running
+    out of attempts each fail on their own, whatever the final readings);
+    the real record exists, is typed and names the attacker before AND
+    after, and was identical across the dressing (compared in Lua); the
+    subject is standing; and blood and rate are present, finite and
+    non-negative with blood left and bleedRate <= STANCH_SETTLED_RATE."""
+    if not isinstance(d, dict):
+        return [f"dressing chunk answered {d!r}"]
+    if "err" in d:
+        return [f"dressing chunk raised: {d['err']}"]
+    problems = []
+    reason = d.get("reason")
+    if reason != "settled":
+        problems.append(f"dressing stopped by {reason!r} after "
+                        f"{d.get('dressed')} treatment(s) (stalled "
+                        f"{d.get('stalled')})")
+    if d.get("typed") is not True:
+        problems.append("a treatment returned an untyped result")
+    problems += _record_problems(d.get("before"), attacker, "before dressing")
+    problems += _record_problems(d.get("after"), attacker, "after dressing")
+    if d.get("same") is not True:
+        problems.append(f"real record changed across dressing "
+                        f"({d.get('before')} -> {d.get('after')})")
+    if d.get("pose") != "standing":
+        problems.append(f"subject pose {d.get('pose')!r}, not standing")
+    blood = _blood_problems(d.get("blood"), d.get("bleedRate"))
+    if not blood and d.get("finite") is not True:
+        blood = ["blood unreadable in Lua"]
+    problems += blood
+    if not blood and not d["bleedRate"] <= STANCH_SETTLED_RATE:
+        problems.append(f"still bleeding {d['bleedRate']:.4g}")
+    return problems
+
+
+def stale_wait_chunk(lash):
+    """One age-poll read: the hit's age, plus the subject's survival and
+    whether its REAL attacker record is still exactly the one the dressing
+    chunk saved (_G.__probe_stale_rec) — compared in Lua, on the raw
+    values, so no float round-trips through JSON."""
+    return " ".join((
+        "local ok, res = pcall(function()",
+        f"local a = _G.__probe_lash_real_gla and _G.__probe_lash_real_gla({lash});",
+        "local r = _G.__probe_stale_rec;",
+        _LUA_FINITE,
+        "local now = engine.gameTime();",
+        f"local b = unit.getBlood({lash});",
+        f"return {{ pose = unit.getPose({lash}),",
+        " same = (a ~= nil and r ~= nil and r.typed == true and fin(a.uid)",
+        "  and fin(a.at) and a.uid == r.uid and a.at == r.at),",
+        " age = (a ~= nil and fin(a.at)) and (now - a.at) or nil,",
+        " blood = b and b.current or nil, bleedRate = b and b.bleedRate or nil }",
+        "end);",
+        "if not ok then return { err = tostring(res) } end; return res"))
+
+
+def stale_wait_verdict(w):
+    """'aged' once the unchanged, typed hit is older than 10.5 game-s with
+    the subject standing and its blood readable; 'waiting' before that;
+    otherwise the named reason the wait is invalid (a missing, unknown or
+    non-standing pose included)."""
+    if not isinstance(w, dict):
+        return f"age poll answered {w!r}"
+    if "err" in w:
+        return f"age poll raised: {w['err']}"
+    if w.get("pose") != "standing":
+        return f"subject pose {w.get('pose')!r} during the wait, not standing"
+    if w.get("same") is not True:
+        return "real attacker record missing, untyped or changed during the wait"
+    blood = _blood_problems(w.get("blood"), w.get("bleedRate"))
+    if blood:
+        return "; ".join(blood) + " during the wait"
+    age = w.get("age")
+    if not _finite_num(age):
+        return f"hit age unreadable ({age!r})"
+    return "aged" if age > 10.5 else "waiting"
+
+
+def _selected_target(sel):
+    """The first decision selected a real unit: not a nil (target -1 /
+    targetNil), and not a malformed or missing target. Only such a
+    selection can be stale or ineligible demonstration evidence."""
+    return (isinstance(sel, dict) and sel.get("targetNil") is False
+            and _uid(sel.get("target")) and sel.get("targetTyped") is True)
+
+
+def ineligible_selection_observed(sel, attacker, decoy):
+    """True only for an OBSERVED first selection of a real target with a
+    well-formed record that classifies as an UNAMBIGUOUS setup, whose
+    attacker was INELIGIBLE (the production predicate, as Lua computed
+    it) both before AND after the decision, AND on the decision's own
+    captured reads (the replay answered False). Any of these is never
+    ineligible evidence:
+      * the attacker eligible on any side or on the actual reads (an
+        eligible-ineligible-eligible ABA with ineligible endpoints
+        included);
+      * an ambiguous, malformed, noHitRead or raised record;
+      * a nil target, or no selection at all."""
+    if lashout_record_problems(sel, attacker, decoy) or not _selected_target(sel):
+        return False
+    if classify_lashout_selection(sel, attacker, decoy)[0] != "setup":
+        return False
+    return (sel["before"]["attacker"]["eligible"] is False
+            and sel["after"]["attacker"]["eligible"] is False
+            and sel["decision"]["attackerEligible"] is False)
+
+
+def demo_exit(case, graded_ok, evidence):
+    """(exit code, lines) for a --lashout-case run.
+
+      * stale — exit 0 and PASS only when an observed selection was
+        discarded as unambiguously stale and a valid restage then graded
+        and passed; otherwise FAIL, exit 1 (unchanged).
+      * ineligible — a NEGATIVE demonstration. It ALWAYS ends in a final
+        FAIL line and exit 1, the approved run-22 gate, MET or not. A
+        fresh eligible selection that graded and passed is FAIL and exit
+        1 too; there is no ordinary PASS/0 in this mode. The separate
+        explicit line says whether it was demonstrated: MET (3/3) only
+        when EVERY attempt confirmed its placement and ended in the named
+        setup with an observed attacker-ineligible first selection, and
+        nothing was graded. Otherwise UNMET, with the reason.
+    """
+    n = len(LASHOUT_CLUSTERS)
+    if case == "stale":
+        passed = stale_demo_verdict(evidence.get("stale"), graded_ok)
+        lines = []
+        if not evidence.get("stale"):
+            lines.append("  [FAIL] stale demonstration not observed: no AI selection "
+                         "with the hit past the window was discarded")
+        lines.append(f"{'PASS' if passed else 'FAIL'} — phase 9a only (--lashout-case stale)")
+        return (0 if passed else 1), lines
+    if case == "ineligible":
+        met = (not graded_ok and evidence.get("attempts") == n
+               and evidence.get("ineligible") == n and evidence.get("other") == 0)
+        if met:
+            demo = (f"ineligible demonstration: MET ({n}/{n} attempts placed and ended in "
+                    f"the named setup with an observed attacker-ineligible first selection)")
+        else:
+            why = ("a selection was graded (ordinary PASS/FAIL)" if graded_ok else
+                   f"{evidence.get('ineligible')}/{n} attempts observed attacker-ineligible, "
+                   f"{evidence.get('other')} other")
+            demo = f"ineligible demonstration: UNMET ({why})"
+        return 1, [
+            f"  [setup] {demo}",
+            "FAIL — phase 9a only (--lashout-case ineligible)"]
+    return 1, [f"FAIL — phase 9a only (unknown --lashout-case {case!r})"]
+
+
+def stale_demo_verdict(stale_observed, graded_ok):
+    """--lashout-case stale passes ONLY when an observed AI selection with
+    the hit past the attacker window got its named stale discard AND a
+    valid restage then graded; a fresh pass alone is not the stale
+    demonstration."""
+    return bool(stale_observed and graded_ok)
+
+
+def provision_medical(port, uid):
+    """Give `uid` its own stocked first-aid kits (retaliation_swap_probe's
+    helper, #1578). `unit.addItem` mints a container def's authored
+    contents (#1418), so each kit arrives holding real bandages."""
+    for _ in range(MEDICAL_KITS):
+        send(port, f"unit.addItem({uid}, 'first_aid_kit'); return 'ok'")
+
+
+def stanch(port, uid):
+    """Dress every bleeding wound on `uid` by self-treatment
+    (retaliation_swap_probe's helper, #1578, same loop and bounds).
+
+    `unit.treatBleeding` needs only `bleed_control` knowledge on the
+    medic; it is raised for the treatment and put back to 0 afterwards,
+    so the subject is not left a medic. This stops the seeping; it cannot
+    put blood back. Answers {dressed, bleedRate}, or None if the console
+    returned something else.
+    """
+    got = send_json(port, " ".join((
+        f"local u = {uid};",
+        "unit.setKnowledge(u, 'bleed_control', 100);",
+        "local n = 0; local stalled = 0;",
+        "local function rate() local b = unit.getBlood(u);",
+        " return b and b.bleedRate or 0 end;",
+        "local last = rate();",
+        f"for _ = 1, {STANCH_ATTEMPTS} do",
+        f" if rate() <= {STANCH_SETTLED_RATE} then break end;",
+        " local r = unit.treatBleeding(u, u);",
+        " if not r or not r.ok then break end;",
+        " n = n + 1;",
+        " local now = rate();",
+        " if now < last - 1e-6 then stalled = 0 else stalled = stalled + 1 end;",
+        " last = now;",
+        f" if stalled >= {STANCH_STALLED_PASSES} then break end end;",
+        "unit.setKnowledge(u, 'bleed_control', 0);",
+        "return { dressed = n, bleedRate = rate() }")), timeout=30.0)
+    return got if isinstance(got, dict) else None
+
+
+def dress_staged_wound(port, lash):
+    """After 9a is graded, before 9b's window: dress the wound the staged
+    hit left on the subject (#2773).
+
+    Without it 9b raced the subject's bleed-out against probabilistic
+    strikes. A traced failure had every strike admitted at reach but
+    missed or dodged, and the subject collapsed 'bleeding from r_bicep' 9 s
+    after the staged hit, before one landed — so 9b graded whether the
+    subject outlived a bleed, not whether lash-out produces a landed
+    attack.
+
+    The dressing must not touch what lash-out reads: the subject's real
+    attacker record — who, and when — is read before and after, and any
+    change is a fixture failure. Answers True when the record is
+    unchanged.
+    """
+    record = (f"local a=unit.getLastAttacker({lash}); "
+              f"return a and string.format('%s@%.6f', tostring(a.uid), a.at or -1) "
+              f"or 'nil'")
+    before = send(port, record)
+    dressed = stanch(port, lash)
+    after = send(port, record)
+    if before != after:
+        print(f"  [FAIL] setup: dressing {lash}'s staged wound changed its "
+              f"attacker record ({before} -> {after})")
+        return False
+    print(f"  [setup] dressed {lash}'s staged wound before 9b: {dressed}; "
+          f"attacker record unchanged ({after})")
+    return True
+
+
+def lashout_attacker_preference(port, case=None):
+    """Phase 9a (#717, #2773): lash-out prefers a recent eligible attacker
+    over a closer decoy — graded ONLY on a selection whose preconditions
+    held on both sides of the decision (classify_lashout_selection).
+
+    A setup that misses them is not a policy result: it is discarded,
+    named, and RESTAGED on a fresh cluster, at most len(LASHOUT_CLUSTERS)
+    times. The first gradable selection decides — a wrong target there is
+    a policy failure, and no later attempt runs to erase it. Running out
+    of attempts is a SETUP failure, and fails the probe all the same.
+
+    Answers (ok, lash, attacker, decoy, evidence) for the attempt
+    that was graded (or the last one staged), which 9b keeps using;
+    evidence counts the --lashout-case demonstrations (see demo_exit):
+    'stale' is True when --lashout-case stale's first attempt was
+    discarded on an OBSERVED selection with the hit past the window.
+    """
+    reasons = []
+    lash = attacker = decoy = None
+    evidence = {"stale": False, "attempts": 0, "ineligible": 0, "other": 0}
+    for attempt, (x, y) in enumerate(LASHOUT_CLUSTERS, 1):
+        evidence["attempts"] = attempt
+        if attempt > 1:
+            # The discarded cluster's units go away entirely, so nothing
+            # of that setup can take part in this one.
+            send(port, "if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end; "
+                       "return 'ok'")
+            for u in (lash, attacker, decoy):
+                if u is not None:
+                    send(port, f"unit.destroy({u}); return 'ok'")
+        lash, attacker, decoy, problem = stage_lashout_cluster(port, x, y)
+        problems = [problem] if problem else []
+        sel = None
+        if not problems and case:
+            perturbed = perturb_lashout_case(port, case, attempt, lash, attacker)
+            if perturbed:
+                problems = [perturbed]
+        if not problems:
+            sel = observe_first_lashout_selection(port, lash, attacker, decoy)
+            if sel is None:
+                problems = ["no lash-out target selection within 10s of the break"]
+            else:
+                kind, problems = classify_lashout_selection(sel, attacker, decoy)
+                if kind == "fair":
+                    verdict, graded_detail = grade_lashout_selection(
+                        sel, attacker, decoy)
+                    if verdict == "setup":
+                        problems = [graded_detail]
+                if (case == "stale" and attempt == 1 and kind == "setup"
+                        and stale_selection_observed(sel, attacker, decoy)):
+                    evidence["stale"] = True
+                    age = lashout_decision_view(sel, "before")["age"]
+                    print(f"  [setup] stale demonstration: the AI selected with "
+                          f"the hit {age:.2f} s old before the decision (window "
+                          f"{sel['window']:g} s) — discarded, restaging")
+        if case == "ineligible":
+            if (problems and sel is not None
+                    and ineligible_selection_observed(sel, attacker, decoy)):
+                evidence["ineligible"] += 1
+                print(f"  [setup] ineligible demonstration: attempt {attempt}'s first "
+                      f"selection had attacker {attacker} ineligible before and after "
+                      f"the decision")
+            else:
+                evidence["other"] += 1
+        if problems:
+            reasons.append(f"attempt {attempt}: " + "; ".join(problems))
+            print(f"  [setup] lash-out attempt {attempt} at ({x},{y}) "
+                  f"discarded before grading: {'; '.join(problems)}")
+            continue
+        # Graded below on the recorded selection, so nothing that moves
+        # from here on can change it. Put the attacker back next to the
+        # subject for 9b, the arrangement that check was written against:
+        # a three-tile walk across the arena's uneven terrain could end
+        # in a fall, and a fallen unit is Collapsed, which 9b cannot
+        # survive.
+        lx, ly = unit_pos(port, lash)
+        send(port, f"unit.setPos({attacker}, {lx + 1}, {ly}); return 'ok'")
+        poll_until(5, lambda: (lambda ax, ay:
+                (ax - (lx + 1)) ** 2 + (ay - ly) ** 2 < 0.05)(
+                    *unit_pos(port, attacker)))
+        pre = lashout_decision_view(sel, "before")
+        post = lashout_decision_view(sel, "after")
+        detail = (f"hit age {pre['age']:.2f}-{post['age']:.2f}s across the "
+                  f"decision (window {sel['window']:g}s), attacker at "
+                  f"{pre['attacker']['dist']:.2f}, decoy at "
+                  f"{pre['decoy']['dist']:.2f}")
+        if verdict == "pass":
+            print(f"  [pass] lash-out prefers the recent attacker {attacker} "
+                  f"over the closer decoy {decoy} — {detail}; {graded_detail}")
+            return True, lash, attacker, decoy, evidence
+        print(f"  [FAIL] lash-out policy: {graded_detail} — preconditions "
+              f"held: {detail}")
+        return False, lash, attacker, decoy, evidence
+    send(port, "if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end; "
+               "return 'ok'")
+    print(f"  [FAIL] setup: lash-out attacker preference could not be graded "
+          f"— no attempt established its preconditions ({' | '.join(reasons)})")
+    return False, lash, attacker, decoy, evidence
+
+
+def swap_observer_lua(lashB, victimB, attackerB, then_lua=""):
+    """The console chunk install_swap_observer sends, kept as text so
+    --self-test can run it against the PRODUCTION attack execute with no
+    engine (swap_policy_harness).
+
+    It wraps unit_ai_combat_attack.attackTargetExecute, the shared execute
+    lash-out drives. Its mid-fight retaliation swap
+    (scripts/unit_ai_combat_attack.lua:196-226) turns on a recent attacker
+    when all of these hold:
+      * the attacker is not the current target and exists;
+      * its pose is neither dead nor collapsed;
+      * its info is present and it is not a technomule;
+      * the hit is at most RETALIATE_WINDOW_SEC old (inclusive; 3.0 game
+        s, unit_ai_combat.lua:203), by the execute's OWN
+        engine.gameTime() read;
+      * it is within (unit.getAttackRange(uid) or 1.0) + 0.5 Chebyshev
+        tiles.
+
+    9c2 shows the collapsed exclusion holds. A call only counts if, with
+    that exclusion removed, the swap WOULD have fired. The Unit thread
+    advances the clock and moves units while the Lua thread runs, so one
+    reading taken before the call proves nothing about the reads the
+    execute makes inside it. For every call on `lashB`, the wrapper
+    therefore:
+
+      * takes reading BEFORE, right before the original runs, and
+        reading AFTER, right after it returns. Each reading has the
+        clock, lashB's and the attacker's positions, lashB's attack
+        range, the attacker's REAL pose (under the 'collapsed' pin),
+        lashB alive, and the victim's lash-out eligibility. A pose
+        counts only when the binding answers a string; nil (a missing
+        unit) proves neither not-dead nor alive;
+      * for the duration of the original call only, installs
+        pass-through recorders over the functions the execute will call.
+        They layer over whatever is installed then, the pose pin
+        included, and keep the swap block's OWN first answers: the hit
+        record, the attacker's pose, existence and info. They also keep
+        EVERY attacker and lashB position and range the call read, plus
+        a lashB position and range sampled next to each attacker read.
+        Missing or malformed answers are kept as invalid entries;
+      * restores every original right after the call, even when it
+        raises (the error is re-raised unchanged);
+      * computes every boundary test in Lua, on unrounded values, as
+        booleans:
+          - the window, on BEFORE and on AFTER, from the hit's own 'at';
+          - the clock order;
+          - the reach, which must hold for EVERY attacker sample against
+            EVERY lashB sample, within the smallest range sampled + 0.5;
+          - the typing.
+
+    The clock never decreases between BEFORE and AFTER unless a load or
+    a session reset writes it in between. So with the window holding on
+    both sides, the clock the execute (or a mutant without the
+    exclusion) reads in between saw the hit inside the window too.
+    `then_lua` runs in the SAME console chunk, after the wrap is in place.
+    """
+    return f"""
+local L, V, A = {lashB}, {victimB}, {attackerB}
+local atk = require('scripts.unit_ai_combat_attack')
+local pol = require('scripts.unit_ai_mental').lashoutPolicy
+local WINDOW = require('scripts.unit_ai_combat').RETALIATE_WINDOW_SEC
+local orig = atk.attackTargetExecute
+local calls = {{}}
+_G.__probe_swap_calls = calls
+_G.__probe_swap_restore = function()
+  atk.attackTargetExecute = orig
+  _G.__probe_swap_restore = nil
+end
+local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+local function pos(i)
+  if type(i) ~= 'table' then return {{ invalid = true }} end
+  return {{ gridX = i.gridX, gridY = i.gridY }}
+end
+local function rangeOf(r)
+  if r == nil then return 1.0 end
+  if fin(r) then return r end
+  return 'invalid'
+end
+local function cheb(p, q)
+  if type(p) ~= 'table' or type(q) ~= 'table' or p.invalid or q.invalid then return nil end
+  if not (fin(p.gridX) and fin(p.gridY) and fin(q.gridX) and fin(q.gridY)) then return nil end
+  return math.max(math.abs(p.gridX - q.gridX), math.abs(p.gridY - q.gridY))
+end
+local function realPose(u)
+  local rp = _G.__probe_orig_getPose or unit.getPose
+  return rp(u)
+end
+local function swapReading(sx)
+  local ok, r = pcall(function()
+    local now = engine.gameTime()
+    local me = sx.getInfo(L)
+    local pa, pl = realPose(A), realPose(L)
+    local paOk, plOk = type(pa) == 'string', type(pl) == 'string'
+    return {{ now = now, nowOk = fin(now) and now >= 0,
+      lpos = pos(me), apos = pos(sx.getInfo(A)), range = rangeOf(sx.getAttackRange(L)),
+      realOk = paOk, real = paOk and pa or 'invalid',
+      aliveOk = plOk, alive = plOk and pl ~= 'dead',
+      victimElig = (me ~= nil) and pol.eligible(L, me, V) and true or false }}
+  end)
+  if ok then return r end
+  return {{ err = tostring(r) }}
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u ~= L or not s or #calls >= 200 then return orig(u, s, params) end
+  local sx = {{ getInfo = unit.getInfo, getPose = unit.getPose, exists = unit.exists,
+    getLastAttacker = unit.getLastAttacker, getAttackRange = unit.getAttackRange }}
+  local rec = {{ pre = s.attackTargetUid or -1, ruin = s.ruinEncounterCombat and true or false,
+    aPos = {{}}, lPos = {{}}, ranges = {{}} }}
+  rec.before = swapReading(sx)
+  local dec = {{}}
+  unit.getLastAttacker = function(x)
+    local r = sx.getLastAttacker(x)
+    if x == L and dec.hit == nil then
+      dec.hit = {{ present = r ~= nil, uid = r and r.uid or -1, at = r and r.at or -1 }}
+    end
+    return r
+  end
+  unit.getPose = function(x)
+    local r = sx.getPose(x)
+    if x == A and dec.seen == nil then dec.seen = {{ v = tostring(r) }} end
+    return r
+  end
+  unit.exists = function(x)
+    local r = sx.exists(x)
+    if x == A and dec.exists == nil then dec.exists = {{ v = r == true }} end
+    return r
+  end
+  unit.getInfo = function(x)
+    local r = sx.getInfo(x)
+    if x == A then
+      if dec.attInfo == nil then
+        dec.attInfo = {{ present = type(r) == 'table', tech = type(r) == 'table' and r.defName == 'technomule' }}
+      end
+      rec.aPos[#rec.aPos + 1] = pos(r)
+      local okL, l = pcall(sx.getInfo, L)
+      rec.lPos[#rec.lPos + 1] = pos(okL and l or nil)
+      local okR, g = pcall(sx.getAttackRange, L)
+      rec.ranges[#rec.ranges + 1] = okR and rangeOf(g) or 'invalid'
+    elseif x == L then
+      rec.lPos[#rec.lPos + 1] = pos(r)
+    end
+    return r
+  end
+  unit.getAttackRange = function(x)
+    local r = sx.getAttackRange(x)
+    if x == L then rec.ranges[#rec.ranges + 1] = rangeOf(r) end
+    return r
+  end
+  local res = table.pack(pcall(orig, u, s, params))
+  unit.getLastAttacker, unit.getPose, unit.exists = sx.getLastAttacker, sx.getPose, sx.exists
+  unit.getInfo, unit.getAttackRange = sx.getInfo, sx.getAttackRange
+  rec.post = s.attackTargetUid or -1
+  rec.after = swapReading(sx)
+  rec.raised = not res[1]
+  local b, a, h = rec.before, rec.after, dec.hit
+  local okB, okA = b.err == nil, a.err == nil
+  rec.hitTyped = h ~= nil and h.present and math.type(h.uid) == 'integer' and h.uid > 0
+                 and fin(h.at) and h.at >= 0
+  rec.hitBy = (h ~= nil and h.present) and h.uid or -1
+  rec.hitAt = (h ~= nil and h.present and fin(h.at)) and h.at or -1
+  rec.hitIsA = rec.hitTyped and h.uid == A
+  rec.ordered = okB and okA and fin(b.now) and fin(a.now) and a.now >= b.now
+  local function win(side)
+    if not (rec.hitTyped and side.nowOk == true) then return false end
+    local age = side.now - h.at
+    return age >= 0 and age <= WINDOW
+  end
+  if okB then b.window = win(b); b.age = rec.hitTyped and (b.now - h.at) or -1 end
+  if okA then a.window = win(a); a.age = rec.hitTyped and (a.now - h.at) or -1 end
+  local aps, lps, rs = {{}}, {{}}, {{}}
+  for _, p in ipairs(rec.aPos) do aps[#aps + 1] = p end
+  for _, p in ipairs(rec.lPos) do lps[#lps + 1] = p end
+  for _, r in ipairs(rec.ranges) do rs[#rs + 1] = r end
+  if okB then aps[#aps + 1] = b.apos; lps[#lps + 1] = b.lpos; rs[#rs + 1] = b.range end
+  if okA then aps[#aps + 1] = a.apos; lps[#lps + 1] = a.lpos; rs[#rs + 1] = a.range end
+  local reach = okB and okA and #rec.aPos > 0
+  local rmin, dmax = math.huge, -math.huge
+  for _, r in ipairs(rs) do
+    if not fin(r) or r < 0 then reach = false elseif r < rmin then rmin = r end
+  end
+  for _, p in ipairs(aps) do
+    for _, q in ipairs(lps) do
+      local d = cheb(p, q)
+      if d == nil or d < 0 then reach = false elseif d > dmax then dmax = d end
+    end
+  end
+  rec.reach = reach and dmax <= rmin + 0.5
+  rec.dmax = fin(dmax) and dmax or -1
+  rec.rmin = fin(rmin) and rmin or -1
+  rec.samples = #aps * #lps
+  rec.seen = dec.seen and dec.seen.v or 'unread'
+  rec.seenCollapsed = dec.seen ~= nil and dec.seen.v == 'collapsed'
+  rec.existsA = dec.exists ~= nil and dec.exists.v == true
+  rec.attInfoOk = dec.attInfo ~= nil and dec.attInfo.present and not dec.attInfo.tech
+  rec.aPos, rec.lPos, rec.ranges = nil, nil, nil
+  calls[#calls + 1] = rec
+  if not res[1] then error(res[2], 0) end
+  return table.unpack(res, 2, res.n)
+end
+{then_lua}
+return 'ok'"""
+
+
+def install_swap_observer(port, lashB, victimB, attackerB, then_lua=""):
+    """Install swap_observer_lua for 9c2 (#2773), with `then_lua` in the
+    same console chunk, after the wrap is in place. The Lua thread runs a
+    chunk whole, so nothing it triggers can reach the execute unobserved.
+    collect_swap_calls removes the wrap."""
+    send(port, " ".join(line.strip() for line in
+                        swap_observer_lua(lashB, victimB, attackerB,
+                                          then_lua).splitlines()))
+
+
+def collect_swap_calls(port):
+    """Remove the attackTargetExecute wrap and answer the recorded calls."""
+    raw = send(port, "local c = _G.__probe_swap_calls or {}; "
+                     "if _G.__probe_swap_restore then _G.__probe_swap_restore() end; "
+                     "_G.__probe_swap_calls = nil; "
+                     "return #c == 0 and 'none' or c")
+    try:
+        calls = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if isinstance(calls, dict):
+        # A Lua array serializes as an object when it has holes; keep the
+        # order by key.
+        try:
+            calls = [calls[k] for k in sorted(calls, key=int)]
+        except (TypeError, ValueError):
+            return []
+    return calls if isinstance(calls, list) else []
+
+
+#: Each bracket side's per-side preconditions (Lua booleans).
+_SWAP_SIDE_TESTS = ("window", "victimElig", "alive")
+
+
+def swap_call_problems(c, victimB, attackerB):
+    """Everything malformed in one recorded execute call, checked before
+    any use; a malformed call is never valid evidence."""
+    if not isinstance(c, dict):
+        return [f"call record is {c!r}"]
+    problems = []
+    for k in ("pre", "post", "hitBy"):
+        v = c.get(k)
+        if not (isinstance(v, int) and not isinstance(v, bool)):
+            problems.append(f"{k} {v!r} is not an integer uid")
+    for k in ("ordered", "hitTyped", "hitIsA", "seenCollapsed", "existsA",
+              "attInfoOk", "reach", "ruin", "raised"):
+        if not isinstance(c.get(k), bool):
+            problems.append(f"{k} {c.get(k)!r} is not a boolean")
+    if not isinstance(c.get("seen"), str):
+        problems.append(f"seen pose {c.get('seen')!r} is not a string")
+    for k in ("dmax", "rmin"):
+        if not _finite_num(c.get(k)):
+            problems.append(f"{k} {c.get(k)!r} is not a finite number")
+    for side in ("before", "after"):
+        r = c.get(side)
+        if not isinstance(r, dict):
+            problems.append(f"no {side} reading")
+            continue
+        if "err" in r:
+            problems.append(f"{side} reading raised: {r['err']}")
+            continue
+        if not (_finite_num(r.get("now")) and r["now"] >= 0 and r.get("nowOk") is True):
+            problems.append(f"{side} clock {r.get('now')!r} is not a finite "
+                            f"non-negative number")
+        for k in _SWAP_SIDE_TESTS:
+            if not isinstance(r.get(k), bool):
+                problems.append(f"{side} {k} {r.get(k)!r} is not a boolean")
+        if r.get("realOk") is not True or not isinstance(r.get("real"), str):
+            problems.append(f"{side} attacker's real pose missing or invalid "
+                            f"(realOk {r.get('realOk')!r}), so not-dead is unproven")
+        if r.get("aliveOk") is not True:
+            problems.append(f"{side} subject's pose missing or invalid "
+                            f"(aliveOk {r.get('aliveOk')!r}), so alive is unproven")
+        if not _finite_num(r.get("age")):
+            problems.append(f"{side} age {r.get('age')!r} is not a finite number")
+    return problems
+
+
+def swap_call_status(c, victimB, attackerB):
+    """('valid' | 'ambiguous' | 'invalid' | 'malformed', misses) for one
+    recorded execute call. Every test is a boolean Lua computed on the
+    unrounded values; numbers appear in messages only.
+
+      * malformed — swap_call_problems found something;
+      * ambiguous — a per-side test (window, victim eligibility, lashB
+        alive, the attacker really not dead) answered differently BEFORE
+        and AFTER the call, e.g. a hit crossing the 3.0 s window during
+        it. What the execute's own reads saw is unknown, so the call is
+        never valid evidence;
+      * valid     — the execute returned normally (a raised or aborted
+        call is never valid), and the swap was provably reachable but for
+        the collapsed exclusion: target before the call the victim, no
+        ruin encounter,
+        the execute's own hit read is attackerB's (typed), its own pose
+        read 'collapsed', its own existence and info reads fine (not a
+        technomule), the window holding before AND after, the reach
+        holding for every attacker/lashB sample, the clock ordered, the
+        victim eligible, lashB alive and the attacker not really dead on
+        both sides;
+      * invalid   — otherwise, with the misses named.
+    """
+    malformed = swap_call_problems(c, victimB, attackerB)
+    if malformed:
+        return "malformed", malformed
+    b, a = c["before"], c["after"]
+    tests = [(k, b[k], a[k]) for k in _SWAP_SIDE_TESTS]
+    tests.append(("attacker not really dead", b["real"] != "dead", a["real"] != "dead"))
+    crossed = [k for k, hb, ha in tests if hb != ha]
+    if crossed:
+        return "ambiguous", [f"{', '.join(crossed)} changed during the call "
+                             f"(hit age {b['age']:.3f} -> {a['age']:.3f} game-s)"]
+    misses = []
+    if c["raised"]:
+        misses.append("the execute raised or aborted, so the call proves nothing")
+    if c["pre"] != victimB:
+        misses.append(f"target {c['pre']} not victim {victimB}")
+    if c["ruin"]:
+        misses.append("ruin-encounter combat")
+    if not c["hitIsA"]:
+        misses.append(f"the execute's hit read is by {c['hitBy']}, not {attackerB} "
+                      f"(typed: {c['hitTyped']})")
+    if not c["seenCollapsed"]:
+        misses.append(f"the execute read the attacker as {c['seen']}, not collapsed")
+    if not c["existsA"]:
+        misses.append("the execute read the attacker as not existing")
+    if not c["attInfoOk"]:
+        misses.append("the execute's attacker info was missing or a technomule")
+    if not c["ordered"]:
+        misses.append("clock not ordered across the call (a load or reset)")
+    for k, hb, _ in tests:
+        if not hb:
+            misses.append(f"{k} false on both sides" + (
+                f" (hit age ~{b['age']:.2f} game-s)" if k == "window" else ""))
+    if not c["reach"]:
+        misses.append(f"reach not proven (max distance {c['dmax']:.2f} vs "
+                      f"min range {c['rmin']:.2f} + 0.5 over {c.get('samples')} pair(s))")
+    return ("invalid", misses) if misses else ("valid", [])
+
+
+def swap_exercised(calls, victimB, attackerB):
+    """9c2's gate on the recorded lash-out attack executes (#2773).
+
+    INPUT validity and POLICY outcome are kept apart. A call is VALID
+    evidence only when swap_call_status proves the retaliation swap was
+    reachable on the execute's own reads, bracketed on both sides, with
+    only the collapsed exclusion standing in its way. What the call then
+    did (the target after it) is the policy outcome.
+
+    Answers (verdict, detail):
+      * ('setup', closest misses) — no valid call. This includes calls
+        that are all malformed, ambiguous (a boundary crossed during the
+        call), or invalid. The swap was never provably reachable and the
+        check proves nothing;
+      * ('policy', the offending call) — some VALID call left a target
+        other than the victim (attackerB, none, or anyone else); no
+        other call can excuse it;
+      * ('pass', a summary) — at least one valid call, and every one kept
+        the victim.
+    """
+    if not isinstance(calls, list) or not calls:
+        return "setup", "no lash-out attackTargetExecute call on the subject during the window"
+    valid, best, counts = [], None, {}
+    for c in calls:
+        status, misses = swap_call_status(c, victimB, attackerB)
+        counts[status] = counts.get(status, 0) + 1
+        if status == "valid":
+            valid.append(c)
+        elif best is None or len(misses) < len(best[1]):
+            best = (status, misses)
+    summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
+    if not valid:
+        return "setup", (f"{len(calls)} call(s) ({summary}); closest "
+                         f"{best[0]}: " + "; ".join(best[1]))
+    for c in valid:
+        if c["post"] != victimB:
+            return "policy", (f"target {c['pre']} -> {c['post']} with attacker "
+                              f"{c['hitBy']} at hit age {c['before']['age']:.2f}-"
+                              f"{c['after']['age']:.2f} game-s, max distance "
+                              f"{c['dmax']:.2f} vs range {c['rmin']:.2f}+0.5, "
+                              f"seen {c['seen']}")
+    first = valid[0]
+    return "pass", (f"{len(valid)} valid call(s) of {len(calls)} ({summary}), "
+                    f"all kept {victimB}; first: hit age {first['before']['age']:.2f}-"
+                    f"{first['after']['age']:.2f} game-s, max distance "
+                    f"{first['dmax']:.2f} vs range {first['rmin']:.2f}+0.5, "
+                    f"seen {first['seen']}, real {first['before']['real']}")
+
+
+#: --self-test's 9c2 no-engine harness: the PRODUCTION
+#: scripts/unit_ai_combat_attack.lua (or a copy with one substitution), with
+#: the REAL scripts/unit_ai_mental.lua for the victim's eligibility, driven
+#: through attackTargetExecute with the probe's own swap observer and the
+#: 9c2 'collapsed' pose pin installed, against stubbed engine bindings. The
+#: clock answers by caller: the observer's readings (swapReading on the
+#: stack) get BEFORE then AFTER, and everything the execute reads gets
+#: EXECUTE. Positions: lashB 1 at 0, victim 2 at -1, attacker 3 at
+#: `attacker_x`; while the execute runs, attacker positions, lashB
+#: positions and lashB's attack range answer per read from `attacker_seq`,
+#: `subject_seq` and `range_seq`. Those reads include the observer's own
+#: samples next to each attacker read, but not its BEFORE/AFTER readings.
+#: Results are serialized the way the console does (Lua 5.4 tostring).
+_SWAP_HARNESS_LUA = r"""
+local ATTACK, MENTAL, OBSERVER = ...
+local CLOCK = { before = %(before)r, execute = %(execute)r, after = %(after)r }
+local WINDOW = %(window)r
+local seen, obs = {}, 0
+local function inProbe()
+  for lvl = 3, 40 do
+    local i = debug.getinfo(lvl, 'n')
+    if not i then break end
+    if i.name == 'swapReading' then return true end
+  end
+  return false
+end
+local function noop() return nil end
+local function lenient(t) return setmetatable(t, { __index = function() return noop end }) end
+engine = lenient({ gameTime = function()
+  if inProbe() then
+    obs = obs + 1
+    seen[#seen + 1] = 'probe'
+    return obs == 1 and CLOCK.before or CLOCK.after
+  end
+  seen[#seen + 1] = 'execute'
+  return CLOCK.execute
+end, logDebug = noop })
+combat = lenient({})
+local inCall = false
+local MISSING_POSE = %(missing_pose)s
+local ATT_X, ATT_SEQ, nA = %(attacker_x)r, %(attacker_seq)s, 0
+local SUBJ_SEQ, RANGE_SEQ, nS, nR = %(subject_seq)s, %(range_seq)s, 0, 0
+unit = lenient({
+  getInfo = function(u)
+    if u == 1 then
+      local x = 0.0
+      if inCall and not inProbe() then nS = nS + 1; x = SUBJ_SEQ[math.min(nS, #SUBJ_SEQ)] end
+      return { gridX = x, gridY = 0.0, defName = 'acolyte' }
+    end
+    if u == 2 then return { gridX = -1.0, gridY = 0.0, defName = 'acolyte' } end
+    if u == 3 then
+      local x = ATT_X
+      if inCall and not inProbe() then nA = nA + 1; x = ATT_SEQ[math.min(nA, #ATT_SEQ)] end
+      if x == 'missing' then return nil end
+      return { gridX = x, gridY = 0.0, defName = 'acolyte' }
+    end
+    return nil
+  end,
+  exists = function(u) return u == 1 or u == 2 or u == 3 end,
+  getPose = function(u)
+    if inProbe() and MISSING_POSE[u] == obs then return nil end
+    return 'standing'
+  end,
+  getLastAttacker = function(u) if u == 1 then return { uid = 3, at = 0.0 } end end,
+  getAttackRange = function()
+    if inCall and not inProbe() then nR = nR + 1; return RANGE_SEQ[math.min(nR, #RANGE_SEQ)] end
+    return 1.0
+  end,
+  getStat = function() return 1.0 end,
+  getAnimDuration = function() return 0.5 end,
+  getActivity = function() return 'idle' end,
+})
+local function stub(t) return function() return lenient(t) end end
+package.loaded['scripts.unit_ai'] = lenient({})
+package.preload['scripts.unit_ai_core'] = stub({ isGoalActive = function() return true end })
+package.preload['scripts.movement_speed'] = stub({})
+package.preload['scripts.unit_ai_combat'] = stub({ RETALIATE_WINDOW_SEC = WINDOW,
+  staminaPct = function() return 1.0 end, chooseAttackMode = function() return 'quick' end,
+  computeAttackCooldown = function() return 1.0 end })
+package.preload['scripts.unit_ai_combat_lunge'] = stub({ tryLunge = function() return false end })
+package.preload['scripts.unit_stats'] = stub({ get = function() return 1.0 end })
+package.preload['scripts.brain'] = stub({})
+package.preload['scripts.mental_state'] = stub({})
+package.preload['scripts.unit_ai_needs'] = stub({})
+package.preload['scripts.unit_ai_combat_attack'] = function() return assert(loadfile(ATTACK))() end
+package.preload['scripts.unit_ai_mental'] = function() return assert(loadfile(MENTAL))() end
+local atk = require('scripts.unit_ai_combat_attack')
+local saved = { getInfo = unit.getInfo, getPose = unit.getPose, exists = unit.exists,
+  getLastAttacker = unit.getLastAttacker, getAttackRange = unit.getAttackRange }
+assert(load(OBSERVER))()
+local pinned = unit.getPose
+local s = { attackTargetUid = 2, mentalLashoutActive = true }
+inCall = true
+local okCall, errCall = pcall(atk.attackTargetExecute, 1, s, {})
+inCall = false
+local restored = unit.getInfo == saved.getInfo and unit.exists == saved.exists
+  and unit.getLastAttacker == saved.getLastAttacker
+  and unit.getAttackRange == saved.getAttackRange and unit.getPose == pinned
+local function enc(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%%q:%%s', tostring(k), enc(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%%q', v)
+  elseif t == 'boolean' then return tostring(v)
+  elseif t == 'number' then
+    if v ~= v then return '"nan"' end
+    if v == math.huge then return '"inf"' end
+    if v == -math.huge then return '"-inf"' end
+    if math.type(v) == 'integer' then return string.format('%%d', v) end
+    local s = string.format('%%.14g', v)
+    if not s:find('[^%%-0-9]') then s = s .. '.0' end
+    return s
+  end
+  return 'null'
+end
+local calls = _G.__probe_swap_calls or {}
+io.write(enc({ calls = calls, post = s.attackTargetUid, restored = restored,
+  clockCallers = seen, okCall = okCall, errCall = errCall and tostring(errCall) or false }))
+"""
+
+
+def swap_policy_harness(before, execute, after, attacker_x=1.0,
+                        attacker_seq=None, attack_patch=None,
+                        subject_seq=None, range_seq=None, missing_pose=None):
+    """Run the production attack execute once on lashB (1, target victim
+    2, attacker 3 whose hit is stamped at game time 0) with the probe's
+    swap observer and the 9c2 pose pin, and no engine (needs `lua`).
+
+    `attack_patch=(old, new)` runs a copy of unit_ai_combat_attack.lua
+    with that one substitution; the default is the real file.
+
+    Answers a dict, or None when no lua is installed:
+      * calls — as collect_swap_calls would see them after the console
+        round trip;
+      * post — the target after the call;
+      * restored — whether every wrapped function was restored, with the
+        pose pin left in place;
+      * clock — the clock callers, in order;
+      * ok / err — whether the execute returned or raised, and the error."""
+    import shutil, subprocess, os, re, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "scripts", "unit_ai_combat_attack.lua")) as fh:
+        attack_src = fh.read()
+    if attack_patch is not None:
+        old, new = attack_patch
+        if attack_src.count(old) != 1:
+            raise RuntimeError(f"attack patch target not unique: {old!r}")
+        attack_src = attack_src.replace(old, new)
+    with open(os.path.join(root, "scripts", "unit_ai_combat.lua")) as fh:
+        m = re.search(r"^local RETALIATE_WINDOW_SEC = ([0-9.]+)", fh.read(), re.M)
+    if m is None:
+        raise RuntimeError("RETALIATE_WINDOW_SEC not found in unit_ai_combat.lua")
+    pin = ("if not _G.__probe_orig_getPose then _G.__probe_orig_getPose = unit.getPose end; "
+           "unit.getPose = function(u) if u == 3 then return 'collapsed' end "
+           "return _G.__probe_orig_getPose(u) end;")
+    observer = " ".join(line.strip() for line in
+                        swap_observer_lua(1, 2, 3, then_lua=pin).splitlines())
+    seq = attacker_seq if attacker_seq is not None else [attacker_x]
+
+    def lua_list(v, default):
+        return "{" + ", ".join(repr(float(x)) for x in (v or [default])) + "}"
+    # missing_pose=(uid, reading): that unit's REAL pose answers nil in the
+    # observer's BEFORE (1) or AFTER (2) reading.
+    mp = "{}" if missing_pose is None else "{[%d] = %d}" % missing_pose
+    src = _SWAP_HARNESS_LUA % {
+        "missing_pose": mp,
+        "subject_seq": lua_list(subject_seq, 0.0),
+        "range_seq": lua_list(range_seq, 1.0),
+        "before": before, "execute": execute, "after": after,
+        "window": float(m.group(1)), "attacker_x": float(attacker_x),
+        "attacker_seq": "{" + ", ".join("'missing'" if x is None else repr(float(x))
+                                        for x in seq) + "}"}
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = {}
+        for name, text in (("harness.lua", src), ("attack.lua", attack_src)):
+            paths[name] = os.path.join(tmp, name)
+            with open(paths[name], "w") as fh:
+                fh.write(text)
+        out = subprocess.run(
+            [lua, paths["harness.lua"], paths["attack.lua"],
+             os.path.join(root, "scripts", "unit_ai_mental.lua"), observer],
+            capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(f"swap harness failed: {out.stderr.strip()}")
+    got = json.loads(out.stdout)
+    calls = got["calls"]
+    if isinstance(calls, dict):
+        calls = [calls[k] for k in sorted(calls, key=int)]
+    return {"calls": calls, "post": got["post"], "restored": got["restored"],
+            "clock": got["clockCallers"], "ok": got["okCall"], "err": got["errCall"]}
+
+
+#: --self-test's no-engine harness: the PRODUCTION scripts/unit_ai_mental.lua
+#: (or a deliberately broken copy of it) driven through M.shortCircuit, with
+#: the probe's own observer chunk installed, against stubbed engine
+#: bindings. Answers depend on WHO reads:
+#:   * the clock gives the observer's two readings BEFORE and AFTER in
+#:     turn, and the policy's own read (pickLashoutTarget) POLICY — the
+#:     reviewer's case (observer 9.99, production 10.01) exactly;
+#:   * the attacker's position and pose read by the probe (its readings
+#:     and replay, found on the call stack) can differ from what the
+#:     decision itself reads, so a there-and-back the bracket cannot see
+#:     is reproduced at production's ACTUAL eligibility reads;
+#:   * the result is serialized the way the production console does
+#:     (Lua 5.4 tostring, "%.14g"), so boundary values arrive rounded
+#:     exactly as they would from the engine.
+_HARNESS_LUA = r"""
+local POLICY, OBSERVER = ...
+local CLOCK = { before = %(before)r, policy = %(policy)r, after = %(after)r }
+local seen = {}
+local obs = 0
+local function probeRead()
+  for lvl = 3, 40 do
+    local i = debug.getinfo(lvl, 'n')
+    if not i then break end
+    if i.name == 'candidate' or i.name == 'reading' or i.name == 'replay' then return true end
+  end
+  return false
+end
+engine = { gameTime = function()
+  local caller = debug.getinfo(2, 'n')
+  local name = caller and caller.name or '?'
+  if name == 'pickLashoutTarget' then
+    seen[#seen + 1] = name
+    return CLOCK.policy
+  end
+  if probeRead() then
+    seen[#seen + 1] = 'reading'
+    obs = obs + 1
+    return obs == 1 and CLOCK.before or CLOCK.after
+  end
+  seen[#seen + 1] = name
+  return 0
+end }
+-- Positions by PHASE: outside the observer's armed window (the BEFORE
+-- and AFTER readings) every unit is where the bracket sees it; inside it
+-- (the decision, and the probe's decoy samples next to it) the attacker
+-- and decoy answer successive reads from their own sequences, the last
+-- value repeating.
+local ATT_X, DEC_X = %(attacker_bracket)s, %(decoy_bracket)s
+local ATT_SEQ, DEC_SEQ = %(attacker_seq)s, %(decoy_seq)s
+local ATT_POSE_DEC = %(attacker_pose_decision)r
+local DEC_EX_SEQ, DEC_POSE_SEQ = %(decoy_exists_seq)s, %(decoy_pose_seq)s
+local DEC_POSE_BRACKET = %(decoy_pose_bracket)s
+local nA, nD, bA, bD, nDE, nDP = 0, 0, 0, 0, 0, 0
+local function armed() local r = _G.__probe_lash_rec; return r ~= nil and r.armed == true end
+local function nextOf(seq, n) return seq[math.min(n, #seq)] end
+unit = {
+  getInfo = function(u)
+    if u == 1 then return { gridX = 0, gridY = 0, defName = 'acolyte' } end
+    if u == 2 then
+      local x
+      if armed() then nA = nA + 1; x = nextOf(ATT_SEQ, nA)
+      else bA = bA + 1; x = nextOf(ATT_X, bA) end
+      if x == 'missing' then return nil end
+      return { gridX = x, gridY = 0, defName = 'acolyte' }
+    end
+    if u == 3 then
+      local x
+      if armed() then nD = nD + 1; x = nextOf(DEC_SEQ, nD)
+      else bD = bD + 1; x = nextOf(DEC_X, bD) end
+      if x == 'missing' then return nil end
+      if x == 'tech' then return { gridX = -1.0, gridY = 0, defName = 'technomule' } end
+      if x == 'nan' then return { gridX = 0/0, gridY = 0, defName = 'acolyte' } end
+      return { gridX = x, gridY = 0, defName = 'acolyte' }
+    end
+    return nil
+  end,
+  exists = function(u)
+    if u == 3 and armed() then
+      nDE = nDE + 1
+      local v = nextOf(DEC_EX_SEQ, nDE)
+      if v == 'nil' then return nil end
+      return v
+    end
+    return u == 1 or u == 2 or u == 3
+  end,
+  getPose = function(u)
+    if u == 2 and armed() then return ATT_POSE_DEC end
+    if u == 3 then
+      local v = 'standing'
+      if armed() then nDP = nDP + 1; v = nextOf(DEC_POSE_SEQ, nDP)
+      elseif DEC_POSE_BRACKET then v = DEC_POSE_BRACKET end
+      if v == 'nil' then return nil end
+      return v
+    end
+    return 'standing'
+  end,
+  getLastAttacker = function(u) if u == 1 then return { uid = 2, at = 0.0 } end end,
+  getAllIds = function() return { 1, 2, 3 } end,
+  clearAnimOverride = function() end, stop = function() end,
+  getActivity = function() return 'idle' end,
+}
+local function stub(t) return function() return t end end
+package.preload['scripts.brain'] = stub({ isDelirious = function() return false end })
+package.preload['scripts.mental_state'] = stub({ isBreaking = function() return true end,
+  breakBehavior = function() return 'lash_out' end, forceBreak = function() end })
+-- The no-target path's wander reads the subject (as the real
+-- unit_ai_needs wander does) BEFORE shortCircuit returns.
+local wanderReads = 0
+package.preload['scripts.unit_ai_needs'] = stub({ wanderExecute = function(uid)
+  wanderReads = wanderReads + 1
+  unit.getInfo(uid); unit.getLastAttacker(uid); unit.getInfo(uid)
+  if %(wander_raises)s then error('wander boom') end
+end })
+package.preload['scripts.movement_speed'] = stub({})
+package.preload['scripts.unit_ai_core'] = stub({ suspendOrders = function() end,
+  setGoal = function() end, markGoalAccomplished = function() end })
+package.preload['scripts.unit_ai_combat_attack'] = stub({ attackTargetExecute = function()
+  if %(attack_raises)s then error('attack boom') end
+end })
+package.preload['scripts.unit_ai_combat_lunge'] = stub({ clear = function() end })
+package.preload['scripts.unit_ai_mental'] = function() return assert(loadfile(POLICY))() end
+local SC0 = require('scripts.unit_ai_mental').shortCircuit
+assert(load(OBSERVER))()
+local tickState = {}
+local okTick, errTick = pcall(function()
+  for _ = 1, %(ticks)d do
+    require('scripts.unit_ai_mental').shortCircuit(1, tickState, {}, 'idle', {})
+  end
+end)
+local scRestored = require('scripts.unit_ai_mental').shortCircuit == SC0
+local function enc(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%%q:%%s', tostring(k), enc(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%%q', v)
+  elseif t == 'boolean' then return tostring(v)
+  elseif t == 'number' then
+    -- Exactly what the console sends (luaValueToText,
+    -- src/Engine/Scripting/Lua/API/Shell.hs): Lua 5.4's tostring, i.e.
+    -- integers in full, floats as "%%.14g" plus ".0" when that looks
+    -- integral, and quoted stand-ins for inf and nan.
+    if v ~= v then return '"nan"' end
+    if v == math.huge then return '"inf"' end
+    if v == -math.huge then return '"-inf"' end
+    if math.type(v) == 'integer' then return string.format('%%d', v) end
+    local s = string.format('%%.14g', v)
+    if not s:find('[^%%-0-9]') then s = s .. '.0' end
+    return s
+  end
+  return 'null'
+end
+local rec = _G.__probe_lash_rec
+io.write(enc({ selection = rec and rec.selection or false, clockCallers = seen,
+  wanderReads = wanderReads, scRestored = scRestored, okTick = okTick,
+  errTick = errTick and tostring(errTick) or false }))
+"""
+
+
+def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
+                           attacker_x_decision=None, decoy_x_decision=None,
+                           attacker_pose_decision="standing",
+                           policy_patch=None, attacker_x_bracket=None,
+                           decoy_x_bracket=None, decoy_exists_seq=None,
+                           decoy_pose_seq=None, decoy_pose_bracket=None,
+                           ticks=1, full=False, attack_raises=False,
+                           wander_raises=False):
+    """Run the lash-out policy with the probe's observer chunk and no
+    engine (needs a `lua` interpreter).
+
+    Setup: subject 1 at x=0; attacker 2, whose hit is stamped at game time
+    0, at `attacker_x`; decoy 3 at `decoy_x`, as the bracket readings see
+    them. Inside the decision (the observer's armed window) the attacker
+    and decoy answer successive reads from `attacker_x_decision` and
+    `decoy_x_decision`. Each is a number or a list, the last value
+    repeating, and defaults to the bracket position. The attacker's pose
+    there is `attacker_pose_decision`. Outside the decision, successive
+    reads answer from `attacker_x_bracket` / `decoy_x_bracket` (default:
+    `attacker_x` / `decoy_x`). A None inside any list makes that one read
+    answer nil.
+
+    Inside the decision the decoy's existence and pose answer per read
+    from `decoy_exists_seq` / `decoy_pose_seq` (each a list; 'nil' answers
+    nil). Those reads include the probe's samples next to each attacker
+    read. Its info reads take 'tech' (a technomule), 'nan' (a non-finite
+    position) and None (missing) as well as positions.
+    `decoy_pose_bracket` replaces its pose ('nil' = missing) in the
+    bracket readings. `ticks` runs that many AI ticks of the subject on
+    one state table (the first decision is final). With `full`, answers
+    the whole harness result instead, including wanderReads, scRestored
+    (unit_ai_mental.shortCircuit back to the original), okTick and
+    errTick. `policy_patch=(old, new)` runs a copy of
+    scripts/unit_ai_mental.lua with that one substitution (a broken
+    policy).
+
+    Answers (selection, clock callers), or None when no lua is installed."""
+    import shutil, subprocess, os, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "scripts", "unit_ai_mental.lua")) as fh:
+        policy_src = fh.read()
+    if policy_patch is not None:
+        old, new = policy_patch
+        if policy_src.count(old) != 1:
+            raise RuntimeError(f"policy patch target not unique: {old!r}")
+        policy_src = policy_src.replace(old, new)
+    observer = " ".join(line.strip() for line in
+                        lashout_observer_lua(1, 2, 3).splitlines())
+    def seq(v, default):
+        # None inside a list makes that one read answer nil (a missing
+        # getInfo); it is spelled as a sentinel so the Lua sequence keeps
+        # its length.
+        v = default if v is None else v
+        v = v if isinstance(v, (list, tuple)) else [v]
+        def one(x):
+            if x is None:
+                return "'missing'"
+            if isinstance(x, str):
+                return repr(x)
+            return repr(float(x))
+        return "{" + ", ".join(one(x) for x in v) + "}"
+
+    def lua_vals(v, default):
+        v = default if v is None else v
+        return "{" + ", ".join("true" if x is True else "false" if x is False
+                               else repr(x) for x in v) + "}"
+    src = _HARNESS_LUA % {
+        "before": before, "policy": policy, "after": after,
+        "attacker_bracket": seq(attacker_x_bracket, attacker_x),
+        "decoy_bracket": seq(decoy_x_bracket, decoy_x),
+        "attacker_seq": seq(attacker_x_decision, attacker_x),
+        "decoy_seq": seq(decoy_x_decision, decoy_x),
+        "attacker_pose_decision": attacker_pose_decision,
+        "ticks": int(ticks),
+        "attack_raises": "true" if attack_raises else "false",
+        "wander_raises": "true" if wander_raises else "false",
+        "decoy_exists_seq": lua_vals(decoy_exists_seq, [True]),
+        "decoy_pose_seq": lua_vals(decoy_pose_seq, ["standing"]),
+        "decoy_pose_bracket": ("nil" if decoy_pose_bracket is None
+                               else repr(decoy_pose_bracket))}
+    with tempfile.TemporaryDirectory() as tmp:
+        harness = os.path.join(tmp, "harness.lua")
+        policy_path = os.path.join(tmp, "unit_ai_mental.lua")
+        with open(harness, "w") as fh:
+            fh.write(src)
+        with open(policy_path, "w") as fh:
+            fh.write(policy_src)
+        out = subprocess.run([lua, harness, policy_path, observer],
+                             capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(f"policy harness failed: {out.stderr.strip()}")
+    got = json.loads(out.stdout)
+    if full:
+        return got
+    return got["selection"] or None, got["clockCallers"]
+
+
+def self_test():
+    """No-engine regression cases for #2773's pure setup validators and
+    gates (`--self-test`). Exit 0 when every case holds."""
+    fails = []
+
+    def check(name, cond):
+        print(("  ok   " if cond else "  FAIL ") + name)
+        if not cond:
+            fails.append(name)
+
+    # neuter_snapshot_problems
+    h, lean = 1.8, 28.5
+    raw = NEUTERED_STRENGTH_BASE * (lean / (8.8 * h * h)) ** 0.7
+    good = {"setBase": True, "setTough": True, "recompute": True, "raw": raw,
+            "eff": raw, "base": NEUTERED_STRENGTH_BASE, "body": raw,
+            "tough": 100.0, "height": h, "lean": lean, "mass": 71.0,
+            "finite": True}
+    snap = {"u2": dict(good), "u1": dict(good)}
+    check("neuter: a neuter that took passes", neuter_snapshot_problems(snap, (2, 1)) == [])
+    check("neuter: a false recomputeBody fails",
+          neuter_snapshot_problems({"u2": dict(good, recompute=False), "u1": good}, (2, 1)) != [])
+    check("neuter: a missing fighter fails", neuter_snapshot_problems({"u2": good}, (2, 1)) != [])
+    check("neuter: a non-finite value fails",
+          neuter_snapshot_problems({"u2": dict(good, raw=float("inf")), "u1": good}, (2, 1)) != [])
+    check("neuter: a Lua-side non-finite flag fails",
+          neuter_snapshot_problems({"u2": dict(good, finite=False), "u1": good}, (2, 1)) != [])
+    check("neuter: an un-neutered base fails",
+          neuter_snapshot_problems({"u2": dict(good, base=1.0), "u1": good}, (2, 1)) != [])
+    check("neuter: raw strength left at the old value fails (setter after recompute)",
+          neuter_snapshot_problems({"u2": dict(good, raw=1.0, body=1.0), "u1": good}, (2, 1)) != [])
+    check("neuter: a raised chunk fails", neuter_snapshot_problems({"err": "boom"}, (2, 1)) != [])
+    check("neuter: a malformed setter result fails",
+          neuter_snapshot_problems({"u2": dict(good, setBase="ok"), "u1": good}, (2, 1)) != [])
+    check("neuter: a non-positive body_mass fails",
+          neuter_snapshot_problems({"u2": dict(good, mass=0.0), "u1": good}, (2, 1)) != [])
+    check("neuter: no answer fails", neuter_snapshot_problems(None, (2, 1)) != [])
+
+    # stale_dressing_problems
+    rgood = {"uid": 2, "at": 10.5, "typed": True}
+    dgood = {"before": dict(rgood), "after": dict(rgood), "same": True,
+             "typed": True, "reason": "settled", "pose": "standing",
+             "finite": True, "blood": 4.9, "bleedRate": 0.0, "dressed": 1,
+             "stalled": 0}
+    check("dressing: a dressed, unchanged, standing subject passes",
+          stale_dressing_problems(dgood, 2) == [])
+    check("dressing: still bleeding fails",
+          stale_dressing_problems(dict(dgood, bleedRate=0.0012), 2) != [])
+    check("dressing: a changed record fails", stale_dressing_problems(dict(dgood, same=False), 2) != [])
+    check("dressing: a record naming someone else fails", stale_dressing_problems(dgood, 7) != [])
+    check("dressing: no record fails",
+          stale_dressing_problems(dict(dgood, before=None, same=False), 2) != [])
+    check("dressing: an untyped treatment fails", stale_dressing_problems(dict(dgood, typed=False), 2) != [])
+    check("dressing: a dead subject fails", stale_dressing_problems(dict(dgood, pose="dead"), 2) != [])
+    check("dressing: no blood left fails", stale_dressing_problems(dict(dgood, blood=0.0), 2) != [])
+    check("dressing: unreadable blood fails", stale_dressing_problems(dict(dgood, finite=False), 2) != [])
+    check("dressing: no answer fails", stale_dressing_problems(None, 2) != [])
+    check("dressing: an explicit treatment failure fails even with a low final rate",
+          stale_dressing_problems(dict(dgood, reason="treatment_failed", bleedRate=0.0), 2) != [])
+    check("dressing: a stall fails even with a low final rate",
+          stale_dressing_problems(dict(dgood, reason="stalled", stalled=3, bleedRate=0.0), 2) != [])
+    check("dressing: running out of attempts fails",
+          stale_dressing_problems(dict(dgood, reason="bound"), 2) != [])
+    check("dressing: a missing stop reason fails",
+          stale_dressing_problems({k: v for k, v in dgood.items() if k != "reason"}, 2) != [])
+    check("dressing: a missing timestamp fails",
+          stale_dressing_problems(dict(dgood, before={"uid": 2, "at": None, "typed": False}), 2) != [])
+    check("dressing: nil == nil never passes",
+          stale_dressing_problems(dict(dgood, before=None, after=None, same=True), 2) != [])
+    check("dressing: a negative bleed rate fails",
+          stale_dressing_problems(dict(dgood, bleedRate=-0.1), 2) != [])
+    check("dressing: missing blood fails",
+          stale_dressing_problems(dict(dgood, blood=None), 2) != [])
+
+    # stale_wait_verdict
+    wgood = {"pose": "standing", "same": True, "age": 10.6, "blood": 4.9,
+             "bleedRate": 0.0}
+    check("wait: an aged, unchanged hit on a live subject is 'aged'",
+          stale_wait_verdict(wgood) == "aged")
+    check("wait: a young hit is 'waiting'",
+          stale_wait_verdict(dict(wgood, age=4.0)) == "waiting")
+    check("wait: a missing pose is invalid",
+          stale_wait_verdict({k: v for k, v in wgood.items() if k != "pose"})
+          not in ("aged", "waiting"))
+    check("wait: a malformed pose is invalid",
+          stale_wait_verdict(dict(wgood, pose=7)) not in ("aged", "waiting"))
+    check("wait: an unknown pose is invalid",
+          stale_wait_verdict(dict(wgood, pose="crawling")) not in ("aged", "waiting"))
+    check("wait: missing blood is invalid",
+          stale_wait_verdict(dict(wgood, blood=None)) not in ("aged", "waiting"))
+    check("wait: a negative bleed rate is invalid",
+          stale_wait_verdict(dict(wgood, bleedRate=-1.0)) not in ("aged", "waiting"))
+    check("wait: a dead subject is invalid",
+          stale_wait_verdict(dict(wgood, pose="dead")) not in ("aged", "waiting"))
+    check("wait: a collapsed subject is invalid",
+          stale_wait_verdict(dict(wgood, pose="collapsed")) not in ("aged", "waiting"))
+    check("wait: a changed record is invalid",
+          stale_wait_verdict(dict(wgood, same=False)) not in ("aged", "waiting"))
+    check("wait: an unreadable age is invalid",
+          stale_wait_verdict(dict(wgood, age=None)) not in ("aged", "waiting"))
+    check("wait: no answer is invalid", stale_wait_verdict(None) not in ("aged", "waiting"))
+
+    # stale_demo_verdict
+    check("stale demo: observed stale discard + valid restage passes", stale_demo_verdict(True, True))
+    check("stale demo: a fresh pass alone fails", not stale_demo_verdict(False, True))
+    check("stale demo: an observed discard without a valid restage fails",
+          not stale_demo_verdict(True, False))
+
+    # classify_lashout_selection / stale_selection_observed: a complete,
+    # typed record is required before any arithmetic; each predicate is
+    # compared across the bracket; the attacker is judged on the
+    # decision's own reads.
+    def cand(uid, dist, eligible=True, exists=True, pose="standing"):
+        return {"uid": uid, "exists": exists, "pose": pose, "poseOk": True,
+                "dist": dist, "eligible": eligible}
+
+    def side(t, a, d, ae, hit_by):
+        # The booleans Lua would compute from these (unrounded) values.
+        hit = hit_by == 2
+        return {"now": t, "nowOk": True, "attacker": cand(2, a, ae), "decoy": cand(3, d),
+                "window": hit and 0 <= t <= 10.0, "stale": hit and t > 10.0,
+                "closer": d < a}
+
+    def mksel(t0, t1, a0=3, a1=3, d0=1, d1=1, ae0=True, ae1=True,
+              hit_by=2, target=2, replay=True, fallback=False, closer=True,
+              decoy_ok=True):
+        return {"window": 10.0, "range": 8.0, "meCaptured": True,
+                "me": {"gridX": 0, "gridY": 0},
+                "hitBy": hit_by, "hitAt": 0.0, "hitTyped": True,
+                "target": target, "targetTyped": True, "targetNil": False,
+                "ordered": t1 >= t0,
+                "before": side(t0, a0, d0, ae0, hit_by),
+                "after": side(t1, a1, d1, ae1, hit_by),
+                "decision": {"attackerEligible": replay, "fallbackRan": fallback,
+                             "decisionCloser": closer, "decoyEligible": decoy_ok}}
+
+    def kind(sel):
+        return classify_lashout_selection(sel, 2, 3)[0]
+
+    def with_(sel, path, value):
+        import copy
+        out = copy.deepcopy(sel)
+        node = out
+        for k in path[:-1]:
+            node = node[k]
+        if value is KeyError:
+            node.pop(path[-1], None)
+        else:
+            node[path[-1]] = value
+        return out
+
+    base = mksel(5.0, 5.01)
+    check("record: a complete fair record is fair", kind(base) == "fair")
+    check("record: empty bracket sides fail closed, no exception",
+          kind({"before": {}, "after": {}, "meCaptured": True}) == "setup")
+    check("record: None fails closed", kind(None) == "setup")
+    for name, path, value in (
+            ("a missing hit timestamp", ("hitAt",), KeyError),
+            ("a hit timestamp defaulted to -1", ("hitAt",), -1),
+            ("a hit Lua found untyped", ("hitTyped",), False),
+            ("a negative hit timestamp", ("hitAt",), -0.5),
+            ("hitBy as a float", ("hitBy",), 2.0),
+            ("hitBy as a bool", ("hitBy",), True),
+            ("no selected target (-1)", ("target",), -1),
+            ("a float target", ("target",), 3.0),
+            ("a target Lua found untyped", ("targetTyped",), False),
+            ("a negative clock", ("before", "now"), -1.0),
+            ("a clock Lua found invalid", ("after", "nowOk"), False),
+            ("a window test that is not a boolean", ("before", "window"), "yes"),
+            ("a missing closer test", ("after", "closer"), KeyError),
+            ("a float candidate uid", ("before", "attacker", "uid"), 2.0),
+            ("a missing clock order", ("ordered",), KeyError),
+            ("a non-numeric hit timestamp", ("hitAt",), "10"),
+            ("an infinite hit timestamp", ("hitAt",), float("inf")),
+            ("a missing hitBy", ("hitBy",), KeyError),
+            ("a missing target", ("target",), KeyError),
+            ("a missing window", ("window",), KeyError),
+            ("a zero range", ("range",), 0),
+            ("an uncaptured subject position", ("meCaptured",), False),
+            ("a malformed subject position", ("me", "gridX"), None),
+            ("a missing before clock", ("before", "now"), KeyError),
+            ("a boolean clock", ("after", "now"), True),
+            ("eligibility as a string", ("before", "attacker", "eligible"), "true"),
+            ("exists as a number", ("after", "decoy", "exists"), 1),
+            ("a non-string pose", ("before", "attacker", "pose"), None),
+            ("a NaN distance", ("after", "attacker", "dist"), float("nan")),
+            ("a candidate for the wrong unit", ("before", "decoy", "uid"), 9),
+            ("a missing candidate", ("after", "attacker"), KeyError),
+            ("a raised reading", ("after",), {"err": "boom"}),
+            ("a missing decision replay", ("decision",), KeyError),
+            ("a malformed decision replay", ("decision", "attackerEligible"), 1),
+            ("an absent decision replay value", ("decision", "attackerEligible"), KeyError),
+            ("a missing fallback flag", ("decision", "fallbackRan"), KeyError),
+            ("hitBy -1 as a float", ("hitBy",), -1.0),
+            ("a missing decoy-eligibility flag", ("decision", "decoyEligible"), KeyError),
+            ("a bracket decoy pose not proven a string", ("before", "decoy", "poseOk"), False),
+            ("a bracket attacker pose not proven a string", ("after", "attacker", "poseOk"), False),
+            ("a non-boolean decision geometry flag", ("decision", "decisionCloser"), 1)):
+        bad = with_(base, path, value)
+        check(f"record: {name} is a named setup failure",
+              kind(bad) == "setup" and not stale_selection_observed(bad, 2, 3))
+    backwards = mksel(10.6, 10.5, target=3)
+    check("record: a clock going backwards (load or reset) is a setup failure",
+          classify_lashout_selection(backwards, 2, 3)[0] == "setup"
+          and "not ordered" in classify_lashout_selection(backwards, 2, 3)[1][0])
+    check("record: a genuine wrong target (any positive uid) stays observable",
+          kind(mksel(5.0, 5.01, target=7)) == "fair")
+    rounded = with_(mksel(10.0, 10.0, target=3), ("after", "window"), False)
+    rounded = with_(rounded, ("after", "stale"), True)
+    check("precision: Lua's unrounded test outranks the printed number "
+          "(after prints 10.0 but Lua found it past the window) -> ambiguous",
+          kind(rounded) == "ambiguous")
+    unordered = with_(mksel(10.0, 10.0), ("ordered",), False)
+    check("precision: equal printed clocks Lua found DEcreasing -> setup",
+          kind(unordered) == "setup")
+    check("record: ... and is never stale evidence",
+          not stale_selection_observed(backwards, 2, 3))
+
+    crossing = mksel(9.99, 10.01, target=3)
+    check("bracket: 9.99 -> 10.01 across the decision is ambiguous", kind(crossing) == "ambiguous")
+    check("bracket: a window crossing is not stale evidence",
+          not stale_selection_observed(crossing, 2, 3))
+    check("bracket: the old single reading would have graded the crossing (documents the bug)",
+          lashout_setup_problems(lashout_decision_view(crossing, "before"), 2, 3) == [])
+    check("bracket: a valid wrong target is still graded (a policy failure, never retried)",
+          kind(mksel(5.0, 5.01, target=3)) == "fair")
+    stale = mksel(10.5, 10.52, target=3)
+    check("bracket: past the window on both sides is a setup discard", kind(stale) == "setup")
+    check("bracket: past the window BEFORE the decision is stale evidence",
+          stale_selection_observed(stale, 2, 3))
+    check("bracket: exactly at the window on both sides is fair (inclusive, as the policy)",
+          kind(mksel(10.0, 10.0)) == "fair")
+    check("bracket: attacker crossing the range during the decision is ambiguous",
+          kind(mksel(5.0, 5.01, a0=8, a1=9, ae1=False)) == "ambiguous")
+    check("bracket: attacker out of range on both sides is a setup discard",
+          kind(mksel(5.0, 5.01, a0=9, a1=9, ae0=False, ae1=False)) == "setup")
+    check("bracket: decoy losing 'strictly closer' during the decision is ambiguous",
+          kind(mksel(5.0, 5.01, d0=2, d1=3)) == "ambiguous")
+    diff = mksel(9.5, 10.5, a0=9, a1=3, ae0=False, ae1=True, target=3)
+    check("bracket: DIFFERENT failures on the two sides are ambiguous, not setup",
+          kind(diff) == "ambiguous" and not stale_selection_observed(diff, 2, 3))
+    check("bracket: stale + a crossing elsewhere is ambiguous, not stale evidence",
+          not stale_selection_observed(mksel(10.5, 10.6, a0=8, a1=9, ae1=False, target=3), 2, 3))
+    check("bracket: a hit by someone else is a setup discard, not stale evidence",
+          kind(mksel(10.5, 10.6, hit_by=9)) == "setup"
+          and not stale_selection_observed(mksel(10.5, 10.6, hit_by=9), 2, 3))
+    check("decision: eligible on both sides but ineligible on the decision's own reads is ambiguous",
+          kind(mksel(5.0, 5.01, target=3, replay=False)) == "ambiguous")
+    check("decision: unreplayable decision reads are a setup discard",
+          kind(mksel(5.0, 5.01, replay="missing")) == "setup"
+          and kind(mksel(5.0, 5.01, replay="error")) == "setup")
+
+    # grade_lashout_selection: only the preference branch, with the decoy
+    # provably closer at the decision, is a pass.
+    def grade(sel):
+        return grade_lashout_selection(sel, 2, 3)[0]
+    check("grade: preference branch + decoy closer at the decision -> pass",
+          grade(mksel(5.0, 5.01)) == "pass")
+    for tgt in (2, 3, 7):
+        for fb in (False, True):
+            check(f"grade: unproved geometry, target {tgt}, fallback {fb} -> setup, never a verdict",
+                  grade(mksel(5.0, 5.01, target=tgt, fallback=fb, closer=False)) == "setup")
+            check(f"grade: unproved DECOY ELIGIBILITY, target {tgt}, fallback {fb} -> setup, "
+                  f"never a verdict",
+                  grade(mksel(5.0, 5.01, target=tgt, fallback=fb, decoy_ok=False)) == "setup")
+    check("grade: proven geometry, attacker picked by the RANKING (fallback while preferred) "
+          "-> policy failure",
+          grade(mksel(5.0, 5.01, fallback=True)) == "fail")
+    check("record: hitBy -1.0 (a float 'no hit' tag) is itself malformed",
+          lashout_record_problems(with_(base, ("hitBy",), -1.0), 2, 3) != []
+          and lashout_record_problems(with_(with_(base, ("hitBy",), -1), ("hitAt",), -1.0), 2, 3) == [])
+    # Typed nil tags (laz): integer -1 with targetNil true and targetTyped false.
+    nil_rec = dict(mksel(5.0, 5.01), target=-1, targetNil=True, targetTyped=False)
+    check("record: a consistent typed nil (integer -1, targetNil, targetTyped false) is accepted",
+          lashout_record_problems(nil_rec, 2, 3) == [])
+    for name, kw in (("a float -1.0 target", dict(target=-1.0)),
+                     ("targetTyped true on a nil", dict(targetTyped=True)),
+                     ("a missing targetTyped on a nil", dict(targetTyped=None)),
+                     ("a nil tag with a real uid", dict(target=3))):
+        check(f"record: {name} is malformed", lashout_record_problems(dict(nil_rec, **kw), 2, 3) != [])
+
+    # Ineligible demonstration evidence (F2).
+    check("ineligible: a placement timeout is a named setup problem",
+          ineligible_placement_problem(False, 2, 12.0) is not None
+          and ineligible_placement_problem(True, 2, 12.0) is None)
+    inel_ok = mksel(5.0, 5.01, ae0=False, ae1=False, a0=12, a1=12, target=3, replay=False)
+    check("ineligible: an observed selection with the attacker ineligible on both sides AND on "
+          "the decision's own reads counts", ineligible_selection_observed(inel_ok, 2, 3))
+    check("ineligible (laz 5): ABA - ineligible endpoints but the decision's own reads found "
+          "the attacker ELIGIBLE - does not count",
+          not ineligible_selection_observed(with_(inel_ok, ("decision", "attackerEligible"), True), 2, 3))
+    check("ineligible (laz 5): an AMBIGUOUS record (window crossing) does not count",
+          not ineligible_selection_observed(
+              mksel(9.99, 10.01, ae0=False, ae1=False, a0=12, a1=12, target=3, replay=False), 2, 3))
+    check("ineligible (laz 5): a missing or unreplayable decision replay does not count",
+          not ineligible_selection_observed(with_(inel_ok, ("decision", "attackerEligible"), "missing"), 2, 3)
+          and not ineligible_selection_observed(with_(inel_ok, ("decision", "attackerEligible"), "error"), 2, 3))
+    check("ineligible (laz 5): noHitRead or raised records do not count",
+          not ineligible_selection_observed(dict(inel_ok, noHitRead=True), 2, 3)
+          and not ineligible_selection_observed(dict(inel_ok, tickRaised=True), 2, 3))
+    check("ineligible: the attacker still ELIGIBLE after placement does not count",
+          not ineligible_selection_observed(mksel(5.0, 5.01), 2, 3))
+    check("ineligible: eligible on one side only does not count",
+          not ineligible_selection_observed(mksel(5.0, 5.01, ae0=True, ae1=False), 2, 3))
+    check("ineligible: a malformed record does not count",
+          not ineligible_selection_observed(with_(mksel(5.0, 5.01, ae0=False, ae1=False),
+                                                  ("after",), KeyError), 2, 3))
+    full = {"stale": False, "attempts": 3, "ineligible": 3, "other": 0}
+    for name, args_, want_met in (
+            ("ineligible, every attempt demonstrated -> MET", ("ineligible", False, full), "MET"),
+            ("ineligible, a normal FRESH eligible PASS -> UNMET",
+             ("ineligible", True, {"stale": False, "attempts": 1, "ineligible": 0, "other": 1}),
+             "UNMET"),
+            ("ineligible, a placement timeout on one attempt -> UNMET",
+             ("ineligible", False, dict(full, ineligible=2, other=1)), "UNMET"),
+            ("ineligible, attacker still eligible on every attempt -> UNMET",
+             ("ineligible", False, dict(full, ineligible=0, other=3)), "UNMET"),
+            ("ineligible, all observed but something graded -> UNMET",
+             ("ineligible", True, full), "UNMET")):
+        code, lines = demo_exit(*args_)
+        text = "\n".join(lines)
+        check(f"CLI: {name}, and ALWAYS exit 1 with a final FAIL line (negative demo)",
+              code == 1 and lines[-1].startswith("FAIL")
+              and not any(l.startswith("PASS") for l in lines)
+              and f"ineligible demonstration: {want_met} (" in text)
+    for name, args_, want in (
+            ("stale, a fresh pass alone -> exit 1",
+             ("stale", True, {"stale": False, "attempts": 1, "ineligible": 0, "other": 0}), 1),
+            ("stale, observed stale discard + valid restage -> exit 0",
+             ("stale", True, {"stale": True, "attempts": 2, "ineligible": 0, "other": 0}), 0)):
+        code, lines = demo_exit(*args_)
+        check(f"CLI: {name}", code == want and lines[-1].startswith("PASS" if want == 0 else "FAIL"))
+
+    check("grade: proven geometry, wrong target -> policy failure",
+          grade(mksel(5.0, 5.01, target=3, fallback=True)) == "fail"
+          and grade(mksel(5.0, 5.01, target=3)) == "fail"
+          and grade(mksel(5.0, 5.01, target=7)) == "fail")
+
+    # The PRODUCTION policy, no engine.
+    ran = lashout_policy_harness(9.99, 10.01, 10.02)
+    if ran is None:
+        print("  skip harness: no `lua` interpreter installed")
+    else:
+        sel, callers = ran
+        order = [callers[k] for k in sorted(callers, key=int)
+                 if callers[k] in ("reading", "pickLashoutTarget")] \
+            if isinstance(callers, dict) else None
+        check("harness: the policy reads the clock once, between the two observer readings",
+              order == ["reading", "pickLashoutTarget", "reading"])
+        check("harness: observer 9.99 / production 10.01 -> production falls back to the decoy",
+              isinstance(sel, dict) and sel.get("target") == 3)
+        check("harness: ... and the probe classifies it ambiguous, not a policy failure",
+              kind(sel) == "ambiguous")
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02)
+        check("harness: a fair decision picks the attacker, replays eligible, and passes",
+              sel.get("target") == 2 and sel["decision"]["attackerEligible"] is True
+              and kind(sel) == "fair" and grade(sel) == "pass"
+              and sel["decision"]["fallbackRan"] is False)
+        sel, _ = lashout_policy_harness(10.5, 10.51, 10.52)
+        check("harness: a hit stale before the decision -> decoy, setup discard, stale evidence",
+              sel.get("target") == 3 and kind(sel) == "setup"
+              and stale_selection_observed(sel, 2, 3))
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, attacker_x=9)
+        check("harness: attacker out of range on every read -> decoy, setup discard",
+              sel.get("target") == 3 and kind(sel) == "setup")
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, attacker_x_decision=9)
+        both = (lashout_setup_problems(lashout_decision_view(sel, "before"), 2, 3) == []
+                and lashout_setup_problems(lashout_decision_view(sel, "after"), 2, 3) == [])
+        check("harness: range there-and-back at production's own read -> decoy, though both "
+              "observer readings are fair (the bracket alone would grade it)",
+              sel.get("target") == 3 and both)
+        check("harness: ... and the decision replay classifies it ambiguous, not a policy failure",
+              sel["decision"]["attackerEligible"] is False and kind(sel) == "ambiguous")
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, attacker_pose_decision="collapsed")
+        check("harness: pose there-and-back (collapsed at production's read) -> decoy, ambiguous",
+              sel.get("target") == 3 and kind(sel) == "ambiguous")
+        eps = 10.000000000000002
+        sel, _ = lashout_policy_harness(10.0, eps, eps)
+        check("harness precision: 10+eps arrives printed as 10.0 (production tostring)",
+              sel["after"]["now"] == 10.0 and sel["before"]["now"] == 10.0)
+        check("harness precision: production saw 10+eps > window and fell back to the decoy",
+              sel.get("target") == 3)
+        check("harness precision: the printed numbers alone would read the window as held",
+              0 <= sel["after"]["now"] - sel["hitAt"] <= sel["window"])
+        check("harness precision: ... but Lua's own test says after is past the window "
+              "-> ambiguous, not a policy failure",
+              sel["after"]["window"] is False and kind(sel) == "ambiguous")
+        sel, _ = lashout_policy_harness(eps, eps, eps)
+        check("harness precision: 10+eps on every read -> decoy, setup, stale evidence "
+              "(printed as 10.0)",
+              sel.get("target") == 3 and sel["before"]["now"] == 10.0
+              and kind(sel) == "setup" and stale_selection_observed(sel, 2, 3))
+        sel, _ = lashout_policy_harness(10.0, 10.0, 10.0)
+        check("harness precision: exactly 10.0 everywhere -> attacker, fair (inclusive window)",
+              sel.get("target") == 2 and kind(sel) == "fair")
+        sel, _ = lashout_policy_harness(
+            5.0, 5.01, 5.02,
+            policy_patch=("<= LASHOUT_ATTACKER_WINDOW", "< -1"))
+        check("harness: a BROKEN policy picking the decoy under fair conditions is graded "
+              "fair, i.e. a policy failure",
+              sel.get("target") == 3 and kind(sel) == "fair" and grade(sel) == "fail")
+
+        # Decision-time geometry (round-2 review, issuecomment-5970096536).
+        # OFF = the preference disabled: the window test can never pass,
+        # so every decision goes to the nearest-candidate ranking.
+        OFF = ("<= LASHOUT_ATTACKER_WINDOW", "< -1")
+
+        def run(policy_patch=None, **kw):
+            sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, policy_patch=policy_patch, **kw)
+            return sel
+        # (a) attacker 1.50001 at both bracket readings, 1.49999 on the
+        # decision's own read; decoy 1.5 everywhere.
+        geo_a = dict(attacker_x=1.50001, attacker_x_decision=1.49999, decoy_x=-1.5)
+        sel = run(**geo_a)
+        check("geometry (a): the bracket alone says the decoy is closer (e33ac3935 would pass)",
+              sel["before"]["closer"] is True and sel["after"]["closer"] is True)
+        check("geometry (a): correct policy keeps the attacker by preference, but the decoy "
+              "is not provably closer at the decision -> setup discard",
+              sel.get("target") == 2 and kind(sel) == "fair" and grade(sel) == "setup")
+        sel = run(OFF, **geo_a)
+        check("geometry (a): preference DISABLED picks the attacker as the nearest -> "
+              "setup (geometry unproved), never a pass",
+              sel.get("target") == 2 and sel["decision"]["fallbackRan"] is True
+              and grade(sel) == "setup")
+        # (b) the decoy moves away (5 tiles) for the decision's reads and
+        # comes back for both bracket readings; attacker at 3.
+        geo_b = dict(attacker_x=3, decoy_x=-1, decoy_x_decision=-5)
+        sel = run(**geo_b)
+        check("geometry (b): correct policy keeps the attacker, but the decoy sampled at the "
+              "decision is 5 away -> setup discard",
+              sel.get("target") == 2 and grade(sel) == "setup")
+        sel = run(OFF, **geo_b)
+        check("geometry (b): preference DISABLED ranks the decoy at 5 and picks the attacker "
+              "-> setup (geometry unproved), never a pass",
+              sel.get("target") == 2 and sel["decision"]["fallbackRan"] is True
+              and grade(sel) == "setup")
+        # (c) the attacker's eligibility read and the ranking's own read
+        # differ: 3 then 0.5; decoy at 1.
+        geo_c = dict(attacker_x=3, decoy_x=-1, attacker_x_decision=[3, 0.5])
+        sel = run(OFF, **geo_c)
+        check("geometry (c): preference DISABLED, eligibility read 3 but ranking read 0.5 "
+              "-> picks the attacker -> setup (geometry unproved), never a pass",
+              sel.get("target") == 2 and grade(sel) == "setup")
+        check("geometry (c): ... and every decision read of the attacker is kept (3 and 0.5), "
+              "so the decoy is not provably closer",
+              sel["decision"]["decisionCloser"] is False)
+        sel = run(**geo_c)
+        check("geometry (c): correct policy reads the attacker once (3), decoy closer -> pass",
+              sel.get("target") == 2 and grade(sel) == "pass")
+        sel = run(OFF)
+        check("geometry: preference DISABLED with clean geometry picks the decoy -> "
+              "policy failure",
+              sel.get("target") == 3 and kind(sel) == "fair" and grade(sel) == "fail")
+        # One missing intermediate read among valid ones, through the REAL
+        # observer chunk. With the preference off, the decoy is sampled next
+        # to each attacker read (decoy reads #1 and #2) and read by the
+        # ranking (#3 and #4). Read #2 answers nil.
+        sel = run(OFF, decoy_x_decision=[-1, None, -1, -1])
+        check("geometry: a missing intermediate decoy sample is kept as INVALID, not dropped",
+              isinstance(sel["decision"].get("decoyDists"), (list, dict))
+              and -1 in (sel["decision"]["decoyDists"].values()
+                         if isinstance(sel["decision"]["decoyDists"], dict)
+                         else sel["decision"]["decoyDists"]))
+        check("geometry: ... so the geometry is unproved -> setup, not the policy verdict "
+              "the remaining valid samples would give",
+              sel["decision"]["decisionCloser"] is False and grade(sel) == "setup")
+        # Decoy ELIGIBILITY at the decision (round-4 review,
+        # issuecomment-5970512412). With the preference OFF, the decoy is
+        # read in this order while the decision runs: the probe's sample
+        # next to the attacker's eligibility read (#1), its sample next to
+        # the attacker's ranking read (#2), the decision's own eligibility
+        # reads (#3: exists, pose, info), and its ranking getInfo (info #4).
+        # With the preference ON, only sample #1 exists.
+        sel = run(decoy_pose_seq=["collapsed"])
+        check("eligibility: decoy 'collapsed' only while the decision runs (standing in both "
+              "bracket readings), correct policy -> the bracket says fair...",
+              sel.get("target") == 2 and kind(sel) == "fair"
+              and sel["before"]["decoy"]["eligible"] is True)
+        check("eligibility: ... but the replayed sample is ineligible -> setup, NOT a pass",
+              sel["decision"]["decoyEligible"] is False and grade(sel) == "setup")
+        sel = run(OFF, decoy_pose_seq=["collapsed"])
+        check("eligibility: the same with the preference DISABLED -> setup, never a pass",
+              grade(sel) == "setup")
+        for name, kw in (
+                ("exists false on the decision's own read (#3)",
+                 dict(decoy_exists_seq=[True, True, False])),
+                ("exists nil on a probe sample (#2)", dict(decoy_exists_seq=[True, "nil", True])),
+                ("pose 'dead' on a probe sample (#2)",
+                 dict(decoy_pose_seq=["standing", "dead", "standing"])),
+                ("pose 'collapsed' on the decision's own read (#3)",
+                 dict(decoy_pose_seq=["standing", "standing", "collapsed"])),
+                ("pose MISSING on a probe sample (#1), not 'not dead'",
+                 dict(decoy_pose_seq=["nil", "standing", "standing"])),
+                ("a technomule on a probe sample (#1)", dict(decoy_x_decision=["tech", -1, -1, -1])),
+                ("info missing on a probe sample (#2)", dict(decoy_x_decision=[-1, None, -1, -1])),
+                ("non-finite info on a probe sample (#1)", dict(decoy_x_decision=["nan", -1, -1, -1])),
+                ("out of range (9) on a probe sample (#2)", dict(decoy_x_decision=[-1, -9, -1, -1])),
+                ("eligibility read fine but the RANKING read a technomule (#4)",
+                 dict(decoy_x_decision=[-1, -1, -1, "tech"]))):
+            sel = run(OFF, **kw)
+            check(f"eligibility (preference OFF): ONE bad decoy read among valid ones, {name} "
+                  f"-> setup, never pass or policy",
+                  sel["decision"]["decoySamples"] == 2 and sel["decision"]["decoyReads"] > 0
+                  and sel["decision"]["decoyEligible"] is False and grade(sel) == "setup")
+        sel = run(decoy_pose_seq=["nil"])
+        check("eligibility: correct policy, the decoy's pose MISSING on the sample -> setup",
+              sel.get("target") == 2 and grade(sel) == "setup")
+        sel = run(decoy_pose_bracket="nil")
+        check("eligibility: the decoy's pose missing in the bracket readings -> malformed, setup",
+              kind(sel) == "setup")
+        sel = run(OFF)
+        check("eligibility: preference OFF, every decoy read valid -> decoy picked -> POLICY failure",
+              sel.get("target") == 3 and sel["decision"]["decoyEligible"] is True
+              and grade(sel) == "fail")
+        sel = run()
+        check("eligibility: correct policy, fresh valid reads -> PASS",
+              sel.get("target") == 2 and sel["decision"]["decoyEligible"] is True
+              and grade(sel) == "pass")
+
+        # The FIRST decision is final (round-5 review, issuecomment-5970681070
+        # F1). Two AI ticks on one state; each mutant misbehaves only on its
+        # first pick and returns the attacker on the second. A nil goes
+        # through the production no-target path, whose wander reads the
+        # subject before shortCircuit returns.
+        PICK = "local function pickLashoutTarget(uid, me)\n    local att = unit.getLastAttacker(uid)\n"
+        NIL_AFTER_GLA = (PICK, "local __pn = 0\n" + PICK
+                         + "    __pn = __pn + 1\n    if __pn == 1 then return nil end\n")
+        NIL_BEFORE_GLA = (PICK, "local __pn = 0\nlocal function pickLashoutTarget(uid, me)\n"
+                          "    __pn = __pn + 1\n    if __pn == 1 then return nil end\n"
+                          "    local att = unit.getLastAttacker(uid)\n")
+        NIL_AFTER_EVAL = ("        return att.uid\n    end",
+                          "        __pv = (__pv or 0) + 1\n"
+                          "        if __pv == 1 then return nil end\n        return att.uid\n    end")
+        WRONG_FIRST = ("        return att.uid\n    end",
+                       "        __pw = (__pw or 0) + 1\n"
+                       "        if __pw == 1 then return 3 end\n        return att.uid\n    end")
+        RAISES = ("local function pickLashoutTarget(uid, me)\n",
+                  "local function pickLashoutTarget(uid, me)\n    error('boom')\n")
+
+        def run2(patch, **kw):
+            return lashout_policy_harness(5.0, 5.01, 5.02, policy_patch=patch, ticks=2,
+                                          full=True, **kw)
+        r = run2(NIL_AFTER_EVAL)
+        sel = r["selection"]
+        check("first decision (F1): nil once AFTER fully evaluating the attacker, attacker next "
+              "tick -> the NIL first decision is kept through the production no-target path",
+              isinstance(sel, dict) and sel.get("targetNil") is True and sel.get("target") == -1
+              and r["wanderReads"] >= 1 and not sel.get("noHitRead"))
+        check("first decision (F1): ... the wander's subject reads did not erase or replace it "
+              "(its BEFORE reading and the decision's attacker read survive)",
+              isinstance(sel.get("before"), dict) and sel["decision"]["attackerEligible"] is True)
+        check("first decision (F1): ... eligible decoy + proven geometry + attacker replayed "
+              "eligible -> POLICY failure, never a pass",
+              kind(sel) == "fair" and grade(sel) == "fail")
+        check("first decision (F1): ... and shortCircuit is restored after the nil",
+              r["scRestored"] is True and r["okTick"] is True)
+        sel = run2(NIL_AFTER_EVAL, decoy_pose_seq=["collapsed"])["selection"]
+        check("first decision (B1): nil + decoy eligibility UNPROVED -> setup, not policy",
+              sel.get("targetNil") is True and grade(sel) == "setup")
+        sel = run2(NIL_AFTER_EVAL, attacker_x=1.50001, attacker_x_decision=1.49999,
+                   decoy_x=-1.5)["selection"]
+        check("first decision (B1): nil + geometry UNPROVED -> setup, not policy",
+              sel.get("targetNil") is True and kind(sel) == "fair" and grade(sel) == "setup")
+        sel = run2(NIL_AFTER_GLA)["selection"]
+        check("first decision (B1): nil with the attacker replay MISSING (never evaluated) -> "
+              "setup, not policy",
+              sel.get("targetNil") is True and sel["decision"]["attackerEligible"] == "missing"
+              and kind(sel) == "setup")
+        sel = run2(NIL_BEFORE_GLA)["selection"]
+        check("first decision (F1): nil WITHOUT reading the hit -> kept (noHitRead), setup",
+              sel.get("noHitRead") is True and kind(sel) == "setup")
+        r = run2(WRONG_FIRST)
+        sel = r["selection"]
+        check("first decision (F1): a valid WRONG target first, the attacker next tick -> "
+              "the wrong target is final -> POLICY failure (no retry)",
+              sel.get("target") == 3 and sel["decision"]["attackerEligible"] is True
+              and kind(sel) == "fair" and grade(sel) == "fail")
+        check("first decision (B3): shortCircuit restored after a NORMAL (target) return",
+              r["scRestored"] is True and r["okTick"] is True)
+        r = run2(None)
+        check("first decision (F1): the correct policy over two ticks still PASSES on its "
+              "first decision, shortCircuit restored",
+              r["selection"].get("target") == 2 and grade(r["selection"]) == "pass"
+              and r["scRestored"] is True)
+        r = run2(RAISES)
+        check("first decision (B3): a tick that RAISES -> the error propagates, shortCircuit "
+              "is restored, and the recorded selection is a named setup",
+              r["okTick"] is False and "boom" in str(r["errTick"]) and r["scRestored"] is True
+              and r["selection"].get("raised") is True and kind(r["selection"]) == "setup")
+        r = run2(None, attack_raises=True)
+        sel = r["selection"]
+        check("first decision (laz 3): an error AFTER the decision (the attack execute raises) "
+              "-> the first record keeps its identity (target 2, its BEFORE reading), is "
+              "flagged tickRaised, restored, error propagated",
+              sel.get("target") == 2 and isinstance(sel.get("before"), dict)
+              and sel.get("tickRaised") is True and r["okTick"] is False
+              and "attack boom" in str(r["errTick"]) and r["scRestored"] is True)
+        check("first decision (laz 3): ... and is a named SETUP, never a pass or a policy verdict",
+              kind(sel) == "setup")
+        r = run2(NIL_AFTER_EVAL, wander_raises=True)
+        sel = r["selection"]
+        check("first decision (laz 3): an error AFTER a nil decision (the wander raises) -> the "
+              "nil first record is kept, flagged tickRaised, setup, restored",
+              sel.get("targetNil") is True and isinstance(sel.get("before"), dict)
+              and sel.get("tickRaised") is True and kind(sel) == "setup"
+              and r["scRestored"] is True and r["okTick"] is False)
+        r = run2(RAISES)
+        check("first decision (laz 3): an error BEFORE any decision -> a raised record, flagged "
+              "tickRaised, setup, restored",
+              r["selection"].get("raised") is True and r["selection"].get("tickRaised") is True
+              and kind(r["selection"]) == "setup" and r["scRestored"] is True)
+        sel = run(attacker_x=12)
+        check("ineligible (harness): attacker 12 away on every read -> decoy picked, attacker "
+              "replayed INELIGIBLE -> counts as ineligible evidence",
+              sel.get("target") == 3 and sel["decision"]["attackerEligible"] is False
+              and ineligible_selection_observed(sel, 2, 3))
+        sel = run(attacker_x=12, attacker_x_decision=3)
+        check("ineligible (harness, laz 5 ABA): attacker 12 away at both readings but 3 on the "
+              "decision's own read -> picked by preference, replay ELIGIBLE -> does NOT count",
+              sel.get("target") == 2 and sel["decision"]["attackerEligible"] is True
+              and not ineligible_selection_observed(sel, 2, 3))
+        sel = run2(None, attacker_x=9, decoy_x=-9)["selection"]
+        check("first decision (F1): a GENUINE no-candidate decision (attacker and decoy out of "
+              "range) -> nil kept, setup, not a policy failure",
+              sel.get("targetNil") is True and kind(sel) == "setup")
+        # B4: a nil, malformed or missing target is never demonstration evidence.
+        stale_nil = with_(with_(with_(mksel(10.5, 10.52, target=3), ("target",), -1),
+                                ("targetNil",), True), ("targetTyped",), False)
+        check("evidence (B4): a stale-window NIL first decision is never stale evidence",
+              not stale_selection_observed(stale_nil, 2, 3)
+              and stale_selection_observed(mksel(10.5, 10.52, target=3), 2, 3))
+        inel = mksel(5.0, 5.01, ae0=False, ae1=False, a0=12, a1=12, target=3, replay=False)
+        inel_nil = with_(with_(with_(inel, ("target",), -1), ("targetNil",), True),
+                         ("targetTyped",), False)
+        check("evidence (B4): an attacker-ineligible NIL first decision is never ineligible "
+              "evidence", not ineligible_selection_observed(inel_nil, 2, 3)
+              and ineligible_selection_observed(inel, 2, 3))
+        for name, path, value in (("a missing target", ("target",), KeyError),
+                                  ("a string target", ("target",), "3"),
+                                  ("-1 without targetNil", ("target",), -1),
+                                  ("a missing targetNil", ("targetNil",), KeyError)):
+            check(f"evidence (B4): {name} is neither stale nor ineligible evidence",
+                  not stale_selection_observed(with_(mksel(10.5, 10.52, target=3), path, value), 2, 3)
+                  and not ineligible_selection_observed(with_(inel, path, value), 2, 3))
+        # The bracket's -1 "no position" sentinel: candidate() gets nil from
+        # its own getInfo, while the predicate's separate read still finds
+        # the unit (the two reads are not atomic). Decoy bracket reads:
+        # BEFORE dist (#1), BEFORE eligibility (#2), AFTER (#3, #4).
+        sel = run(decoy_x_bracket=[None, -1, -1, -1])
+        check("geometry: a -1 decoy bracket distance still reads 'closer' and fair on the bracket",
+              sel["before"]["decoy"]["dist"] == -1 and sel["before"]["decoy"]["eligible"] is True
+              and sel["before"]["closer"] is True and kind(sel) == "fair")
+        check("geometry: ... but the decision geometry rejects the -1 sentinel -> setup, not a pass",
+              sel.get("target") == 2 and sel["decision"]["decisionCloser"] is False
+              and grade(sel) == "setup")
+        sel = run(attacker_x_bracket=[None, 3, None, 3])
+        check("geometry: a -1 attacker bracket distance -> setup",
+              sel["before"]["attacker"]["dist"] == -1 and sel["after"]["attacker"]["dist"] == -1
+              and kind(sel) == "setup")
+
+    # swap_exercised (9c2): every test is a Lua boolean on the execute's
+    # own reads, bracketed before and after the call.
+    V, A = 9, 10
+
+    def sside(t, window=True, elig=True, alive=True, real="standing"):
+        return {"now": t, "nowOk": True, "window": window, "victimElig": elig,
+                "alive": alive, "aliveOk": True, "real": real, "realOk": True,
+                "age": t - 8.5}
+
+    def mkcall(post=V, **kw):
+        c = {"pre": V, "post": post, "hitBy": A, "hitTyped": True, "hitIsA": True,
+             "ordered": True, "seenCollapsed": True, "existsA": True,
+             "attInfoOk": True, "reach": True, "ruin": False, "raised": False,
+             "seen": "collapsed", "dmax": 1.0, "rmin": 1.0, "samples": 4,
+             "before": sside(10.0), "after": sside(10.01)}
+        c.update(kw)
+        return c
+
+    def gate(calls):
+        return swap_exercised(calls, V, A)[0]
+
+    good = mkcall()
+    check("9c2 call: a fully proven call is valid", swap_call_status(good, V, A)[0] == "valid")
+    check("9c2 call: a raised call is never valid", swap_call_status(mkcall(raised=True), V, A)[0] == "invalid"
+          and gate([mkcall(raised=True)]) == "setup")
+    for side in ("before", "after"):
+        for k in ("realOk", "aliveOk"):
+            bad_side = dict(sside(10.0 if side == "before" else 10.01))
+            bad_side[k] = False
+            check(f"9c2 call: {side} {k} false (pose missing) is malformed",
+                  swap_call_status(mkcall(**{side: bad_side}), V, A)[0] == "malformed")
+    for name, kw in (("a missing post", {"post": None}), ("a float pre", {"pre": 9.0}),
+                     ("a non-boolean reach", {"reach": 1}), ("a missing ordered flag", {"ordered": None}),
+                     ("a non-string seen pose", {"seen": None}), ("a NaN dmax", {"dmax": float("nan")}),
+                     ("a raised AFTER reading", {"after": {"err": "boom"}}),
+                     ("a negative clock", {"before": dict(sside(10.0), now=-1.0)}),
+                     ("a non-boolean window", {"after": dict(sside(10.01), window="yes")}),
+                     ("a missing BEFORE reading", {"before": None})):
+        check(f"9c2 call: {name} is malformed, never valid",
+              swap_call_status(mkcall(**kw), V, A)[0] == "malformed"
+              and gate([mkcall(**kw)]) == "setup")
+    check("9c2 call: a window crossing during the call is ambiguous, never valid",
+          swap_call_status(mkcall(after=sside(11.51, window=False)), V, A)[0] == "ambiguous")
+    check("9c2 call: victim eligibility changing during the call is ambiguous",
+          swap_call_status(mkcall(after=sside(10.01, elig=False)), V, A)[0] == "ambiguous")
+    for name, kw in (("stale on both sides", {"before": sside(12.0, window=False),
+                                              "after": sside(12.01, window=False)}),
+                     ("the hit read by someone else", {"hitIsA": False, "hitBy": 42}),
+                     ("the execute reading the attacker standing", {"seenCollapsed": False, "seen": "standing"}),
+                     ("reach unproven", {"reach": False}), ("a clock going backwards", {"ordered": False}),
+                     ("a ruin encounter", {"ruin": True}), ("target not the victim", {"pre": 42}),
+                     ("attacker info missing", {"attInfoOk": False})):
+        check(f"9c2 call: {name} is invalid",
+              swap_call_status(mkcall(**kw), V, A)[0] == "invalid")
+    amb = mkcall(after=sside(11.51, window=False), post=V)
+    bad = mkcall(seenCollapsed=False, seen="standing", post=A)
+    for name, calls, want in (
+            ("all valid calls keep the victim -> pass", [good, mkcall()], "pass"),
+            ("a valid swap then a good call -> policy", [mkcall(post=A), good], "policy"),
+            ("post nil -> policy", [mkcall(post=-1)], "policy"),
+            ("post another uid -> policy", [mkcall(post=42)], "policy"),
+            ("no calls -> setup", [], "setup"),
+            ("only ambiguous calls -> setup, never pass", [amb, amb], "setup"),
+            ("only malformed calls -> setup", [mkcall(post=None)], "setup"),
+            ("ambiguous + valid kept -> pass", [amb, good], "pass"),
+            ("invalid swap + valid kept -> pass", [bad, good], "pass"),
+            ("ambiguous + invalid + valid swap -> policy", [amb, bad, mkcall(post=A)], "policy"),
+            ("malformed + ambiguous + invalid -> setup", [mkcall(post=None), amb, bad], "setup")):
+        check(f"9c2 gate: {name}", gate(calls) == want)
+
+    # The PRODUCTION attack execute, no engine. MUTANT = the collapsed
+    # exclusion removed from the retaliation swap.
+    MUTANT = ('and attPose ~= "dead" and attPose ~= "collapsed"', 'and attPose ~= "dead"')
+    ran = swap_policy_harness(2.0, 2.01, 2.02)
+    if ran is None:
+        print("  skip 9c2 harness: no `lua` interpreter installed")
+    else:
+        def sgate(r):
+            return swap_exercised(r["calls"], 2, 3)[0]
+
+        def status(r):
+            return swap_call_status(r["calls"][0], 2, 3)[0]
+        check("9c2 harness: the execute's clock reads fall between the probe's two readings",
+              isinstance(ran["clock"], dict)
+              and [ran["clock"][k] for k in sorted(ran["clock"], key=int)][0] == "probe"
+              and [ran["clock"][k] for k in sorted(ran["clock"], key=int)][-1] == "probe")
+        check("9c2 harness (3): correct policy, fresh inputs -> keeps the victim, valid, PASS",
+              ran["post"] == 2 and status(ran) == "valid" and sgate(ran) == "pass"
+              and ran["restored"] is True)
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT)
+        check("9c2 harness (2): exclusion DISABLED, fresh inputs -> swaps onto the collapsed "
+              "attacker -> POLICY failure",
+              r["post"] == 3 and status(r) == "valid" and sgate(r) == "policy")
+        r = swap_policy_harness(2.99, 3.01, 3.02, attack_patch=MUTANT)
+        check("9c2 harness (1): exclusion DISABLED, observer 2.99 / execute 3.01 -> the "
+              "mutant skips the stale swap and keeps the victim",
+              r["post"] == 2)
+        check("9c2 harness (1): ... the single pre-call reading would have counted it valid "
+              "(documents the bug)",
+              r["calls"][0]["before"]["window"] is True)
+        check("9c2 harness (1): ... but the bracket makes it ambiguous -> setup, NOT a pass",
+              status(r) == "ambiguous" and sgate(r) == "setup")
+        r = swap_policy_harness(3.0, 3.0, 3.0)
+        check("9c2 harness (4): exactly 3.0 everywhere (inclusive) -> valid, correct policy passes",
+              r["post"] == 2 and status(r) == "valid" and sgate(r) == "pass")
+        r = swap_policy_harness(3.0, 3.0, 3.0, attack_patch=MUTANT)
+        check("9c2 harness (4): exactly 3.0, exclusion DISABLED -> swaps -> POLICY failure",
+              r["post"] == 3 and sgate(r) == "policy")
+        eps = 3.0000000000000004
+        r = swap_policy_harness(3.0, eps, eps, attack_patch=MUTANT)
+        check("9c2 harness (4): 3+eps arrives printed as 3.0 (production tostring)",
+              r["calls"][0]["after"]["now"] == 3.0 and r["post"] == 2)
+        check("9c2 harness (4): ... Lua's own test says AFTER is past the window -> ambiguous, "
+              "setup, NOT a pass",
+              r["calls"][0]["after"]["window"] is False and status(r) == "ambiguous"
+              and sgate(r) == "setup")
+        r = swap_policy_harness(eps, eps, eps)
+        check("9c2 harness (4): 3+eps on every read -> invalid (stale), setup",
+              status(r) == "invalid" and sgate(r) == "setup")
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT, attacker_x=1.0,
+                                attacker_seq=[1.6])
+        check("9c2 harness: attacker out of reach on the execute's own read (1.6 > 1.5), in "
+              "reach at both readings -> the mutant keeps the victim, reach unproven -> setup",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        # The SUBJECT's own position, read by the mutant at :216, goes out
+        # of reach and comes back. In-call lashB reads: the observer's sample
+        # next to the attacker read (0.0), the mutant's own read at :216
+        # (-0.6, so 1.6 > 1.5 from the attacker at 1.0), then :233 (0.0).
+        # Both bracket readings see 0.0.
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT,
+                                subject_seq=[0.0, -0.6, 0.0])
+        check("9c2 harness: SUBJECT out of reach on the mutant's own read (:216) and back -> "
+              "the mutant keeps the victim, captured, reach unproven -> setup, not a pass",
+              r["post"] == 2 and r["calls"][0]["dmax"] > 1.5
+              and status(r) == "invalid" and sgate(r) == "setup")
+        # lashB's attack RANGE, read by the mutant at :220, drops and comes
+        # back. In-call range reads: the observer's sample (1.0), the
+        # mutant's own (0.4, so 1.0 > 0.9), then :236 (1.0).
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT,
+                                range_seq=[1.0, 0.4, 1.0])
+        check("9c2 harness: RANGE dropped on the mutant's own read (:220) and back -> the "
+              "mutant keeps the victim, captured, reach unproven -> setup, not a pass",
+              r["post"] == 2 and r["calls"][0]["rmin"] == 0.4
+              and status(r) == "invalid" and sgate(r) == "setup")
+        r = swap_policy_harness(2.0, 2.01, 2.02, subject_seq=[0.0, -0.6, 0.0])
+        check("9c2 harness: the CORRECT policy short-circuits at :213 (no :216 read); its "
+              "next in-call lashB read (:233, after the swap decision) is also captured, so the "
+              "same excursion makes the call a conservative setup discard, never a verdict",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT, attacker_seq=[None])
+        check("9c2 harness: the execute's attacker info read missing -> invalid, setup",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        amb_r = swap_policy_harness(2.99, 3.01, 3.02, attack_patch=MUTANT)
+        good_r = swap_policy_harness(2.0, 2.01, 2.02)
+        swap_r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT)
+        check("9c2 harness (5): ambiguous + valid-kept calls -> pass",
+              swap_exercised(amb_r["calls"] + good_r["calls"], 2, 3)[0] == "pass")
+        check("9c2 harness (5): ambiguous + valid-swapped calls -> policy",
+              swap_exercised(amb_r["calls"] + swap_r["calls"], 2, 3)[0] == "policy")
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=(
+            "    local me  = unit.getInfo(uid)\n", "    error('boom')\n"))
+        check("9c2 harness: an execute that raises -> the error propagates, every wrapper "
+              "is restored, the call is still recorded",
+              r["ok"] is False and "boom" in str(r["err"]) and r["restored"] is True
+              and len(r["calls"]) == 1 and r["calls"][0]["raised"] is True)
+        check("9c2 harness: ... with otherwise valid inputs and the victim kept, the raised "
+              "call is NOT valid and the gate CANNOT pass",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        check("9c2 harness: raised call + a separate valid WRONG-target call -> POLICY failure",
+              swap_exercised(r["calls"] + swap_r["calls"], 2, 3)[0] == "policy")
+        for who, uid in (("attacker", 3), ("subject", 1)):
+            for side, n in (("BEFORE", 1), ("AFTER", 2)):
+                r = swap_policy_harness(2.0, 2.01, 2.02, missing_pose=(uid, n))
+                check(f"9c2 harness: {who}'s real pose missing (nil) in the {side} reading -> "
+                      f"malformed, cannot pass",
+                      r["post"] == 2 and status(r) == "malformed" and sgate(r) == "setup")
+
+
+    print(f"mental_state_probe self-test: "
+          f"{'all pass' if not fails else str(len(fails)) + ' FAIL'}")
+    return 1 if fails else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9352)
+    ap.add_argument("--self-test", action="store_true",
+                    help="#2773: run the no-engine regression cases for the "
+                         "setup validators and gates, then exit")
+    ap.add_argument("--lashout-case", choices=("stale", "ineligible"),
+                    help="#2773 demonstration: run ONLY phase 9a, with its "
+                         "setup pushed off the fair-test preconditions "
+                         "(see perturb_lashout_case)")
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
     P = args.port
 
     proc = boot(P, log=LOG)
     ok = True
     try:
         bootstrap(P)
+
+        if args.lashout_case:
+            tune(P, EPISODE_MIN=LASHOUT_9AB_EPISODE, EPISODE_MAX=LASHOUT_9AB_EPISODE)
+            graded_ok, _, _, _, evidence = lashout_attacker_preference(
+                P, case=args.lashout_case)
+            code, lines = demo_exit(args.lashout_case, graded_ok, evidence)
+            print("\n" + "\n".join(lines))
+            return code
 
         # ---- 1. Fresh unit is mentally stable. ----
         uid = spawn_acolyte(P, 0, 0)
@@ -641,138 +3824,55 @@ def main():
         # cluster (>8 tiles from every other cluster) so LASHOUT_RANGE
         # never bridges them.
 
-        # 9a. Prefers a recent eligible attacker over a closer decoy.
-        # There's no Lua setter for the last-attacker memory (only
-        # unit.getLastAttacker), so stage a REAL landed hit —
-        # combat_anim_probe.py's spawn-adjacent + commandAttack +
-        # wait-for-a-swing-to-land pattern.
-        lash = spawn_acolyte(P, -30, -25)
-        set_wellbeing(P, lash, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, lash) == "stable")
-        attacker = spawn_acolyte(P, -29, -25)
-        # Neuter BOTH units' damage output before staging the hit — a
-        # full-strength acolyte swing landed on an unarmored target can
-        # be lethal in one blow (Combat.Resolution's E_swing scales with
-        # strength), and a dead unit stops ticking mental_state entirely
-        # (unit_resources skips dead/collapsed units), which would wedge
-        # every check below forever. This includes lash's own retaliation
-        # once it's hit (ordinary combat AI fights back before lash-out
-        # takes over below) — either direction landing a full-strength
-        # hit risks killing the other side. We only need landed hits to
-        # register, not a realistic fight. toughness=100 caps
-        # Combat.Resolution's energy-transfer reduction at its 50% max
-        # (clamp(toughness*0.05, 0, 0.5)) regardless of roll variance —
-        # a second, independent line of defense on top of the strength
-        # nerf (strength alone left a small residual death chance).
-        send(P, f"unit.setStat({attacker},'strength',0.05); "
-                f"unit.setStat({attacker},'toughness',100); "
-                f"unit.setStat({lash},'strength',0.05); "
-                f"unit.setStat({lash},'toughness',100); return 'ok'")
-        send(P, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
-                f"return 'ok'")
-        hit = poll_until(35, lambda: send(
-            P, f"local a=unit.getLastAttacker({lash}); return a and a.uid or 'nil'"
-        ) == str(attacker))
-        if hit:
-            print(f"  [pass] staged a real hit: attacker {attacker} landed on "
-                  f"lash-out subject {lash}")
-        else:
-            ok = False
-            print(f"  [FAIL] attacker {attacker} never landed a hit on {lash} "
-                  f"— can't test attacker preference")
+        # 9a/9b run under their own, longer episode (LASHOUT_9AB_EPISODE),
+        # restored to phase 9's 6 s on EVERY path before 9c.
+        tune(P, EPISODE_MIN=LASHOUT_9AB_EPISODE, EPISODE_MAX=LASHOUT_9AB_EPISODE)
+        try:
+            # 9a. Prefers a recent eligible attacker over a closer decoy —
+            # graded only on a selection whose preconditions held at the
+            # moment it was made (#2773). See lashout_attacker_preference.
+            graded_ok, lash, attacker, decoy, _ = lashout_attacker_preference(
+                P, case=args.lashout_case)
+            if not graded_ok:
+                ok = False
+            if lash is not None and not dress_staged_wound(P, lash):
+                ok = False
 
-        # Stop BOTH sides' ordinary combat AI immediately. Lash's own AI
-        # retaliates against attacker via the normal incoming_hit/engage
-        # mechanism the instant it's hit — left running for the several
-        # seconds the rest of this setup takes, sustained mutual combat
-        # can collapse either side from accumulated blood loss even with
-        # toughness/strength reduced (those shrink per-hit severity, not
-        # how long the fight runs), and a collapsed attacker is exactly
-        # what lash-out's own eligibility correctly excludes — silently
-        # invalidating this "prefers a live attacker" scenario. Draining
-        # attacker's stamina below the acolyte config's
-        # wander_min_stamina_fraction (0.2 — never to 0, the engine's
-        # universal death rule) also disables its ambient wander, so it
-        # stays a stationary target once its goal is cleared.
-        send(P, f"local ai=require('scripts.unit_ai') "
-                f"local ids={{{attacker},{lash}}} "
-                f"for _,u in ipairs(ids) do "
-                f"local s=ai.getState(u); "
-                f"if s then ai.markGoalAccomplished(s,'attack'); "
-                f"s.attackTargetUid=nil end; unit.stop(u) end "
-                f"local st=require('scripts.unit_stats') "
-                f"unit.setStat({attacker},'stamina', "
-                f"st.get({attacker},'max_stamina')*0.1); return 'ok'")
+            # 9b. Produces real attack behavior through the short-circuit —
+            # confirm lash actually lands a swing on its chosen target.
+            landed = poll_until(20, lambda: send(
+                P, f"local a=unit.getLastAttacker({attacker}); "
+                   f"return a and a.uid or 'nil'"
+            ) == str(lash))
+            if landed:
+                print(f"  [pass] lash-out produced a real landed attack on {attacker}")
+            else:
+                ok = False
+                print(f"  [FAIL] lash-out never landed an attack on {attacker}")
 
-        # Unconditionally revive both — whatever the brief exchange above
-        # left them at, this scenario needs attacker standing to test
-        # "prefers a live recent attacker" at all (a collapsed one is
-        # correctly excluded by lash-out's own eligibility, invalidating
-        # the check for an unrelated reason), and needs lash conscious
-        # since a collapsed unit's AI doesn't tick at all.
-        send(P, f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
+            # Narration distinguishable from wander/flee (#717 requirement 7).
+            evs = send(P, "return engine.getEventLog()")
+            if "violent mental break" in evs:
+                print("  [pass] lash-out narrates distinctly in the event log")
+            else:
+                ok = False
+                print(f"  [FAIL] no lash-out-specific narration in the log: {evs[-400:]}")
 
-        # Snap attacker back to a fixed, known distance from lash — the
-        # swing that landed above can knock either side back by an
-        # unpredictable amount, and the stop command above only takes
-        # effect on the next tick, leaving a brief window where it could
-        # still drift. teleporting removes that uncertainty entirely
-        # rather than trusting wherever combat physics left it.
-        lx, ly = unit_pos(P, lash)
-        send(P, f"unit.setPos({attacker}, {lx + 1}, {ly}); return 'ok'")
-        # unit.setPos just enqueues a UnitTeleport — confirm it actually
-        # landed before trusting the new distance (it's processed on the
-        # unit thread, asynchronously from this console command).
-        if not poll_until(5, lambda: (lambda x, y:
-                (x - (lx + 1)) ** 2 + (y - ly) ** 2 < 0.05)(*unit_pos(P, attacker))):
-            ok = False
-            print(f"  [FAIL] setup: teleporting {attacker} back next to "
-                  f"{lash} never took effect")
-        d_att = 1.0
-        # Place the decoy at HALF that distance — always strictly closer.
-        decoy_dist = d_att / 2
-        decoy = spawn_acolyte(P, lx + decoy_dist, ly)
-
-        send(P, f"require('scripts.mental_state').forceBreak({lash},'lash_out'); "
-                f"return 'ok'")
-
-        def first_target():
-            t = lash_target(P, lash)
-            return t if t != "nil" else None
-        target = poll_until(10, first_target)
-        if target == str(attacker):
-            print(f"  [pass] lash-out prefers the recent attacker {attacker} "
-                  f"over the closer decoy {decoy}")
-        else:
-            ok = False
-            print(f"  [FAIL] lash-out target={target}, expected attacker="
-                  f"{attacker} (decoy={decoy})")
-
-        # 9b. Produces real attack behavior through the short-circuit —
-        # confirm lash actually lands a swing on its chosen target.
-        landed = poll_until(20, lambda: send(
-            P, f"local a=unit.getLastAttacker({attacker}); "
-               f"return a and a.uid or 'nil'"
-        ) == str(lash))
-        if landed:
-            print(f"  [pass] lash-out produced a real landed attack on {attacker}")
-        else:
-            ok = False
-            print(f"  [FAIL] lash-out never landed an attack on {attacker}")
-
-        # Narration distinguishable from wander/flee (#717 requirement 7).
-        evs = send(P, "return engine.getEventLog()")
-        if "violent mental break" in evs:
-            print("  [pass] lash-out narrates distinctly in the event log")
-        else:
-            ok = False
-            print(f"  [FAIL] no lash-out-specific narration in the log: {evs[-400:]}")
-
-        # Done with lash/attacker/decoy — end lash's episode; no further
-        # assertions need them (the dedicated cleanup test below uses its
-        # own isolated pair, see the note there for why).
-        send(P, f"unit.setStat({lash},'mental_until',0); return 'ok'")
-        poll_until(5, lambda: mstate(P, lash) != "break")
+            # Done with lash/attacker/decoy — end lash's episode; no further
+            # assertions need them (the dedicated cleanup test below uses its
+            # own isolated pair, see the note there for why).
+            send(P, f"unit.setStat({lash},'mental_until',0); return 'ok'")
+            poll_until(5, lambda: mstate(P, lash) != "break")
+            # …and remove all three (#2773). Nothing pins them in place any
+            # more — the attacker's stamina is no longer drained, and the
+            # decoy never was — so left alive they wander into the isolated
+            # clusters the later scenarios stage, and turn up there as
+            # unplanned lash-out candidates.
+            for u in (lash, attacker, decoy):
+                if u is not None:
+                    send(P, f"unit.destroy({u}); return 'ok'")
+        finally:
+            tune(P, EPISODE_MIN=6.0, EPISODE_MAX=6.0)
 
         # 9c. Episode end clears every lash-out-owned goal/target.
         # Isolated from ordinary re-engagement: attacker's original staged
@@ -844,11 +3944,16 @@ def main():
         attackerB = spawn_acolyte(P, -1, 20)  # becomes the disqualified
                                                # "recent attacker"
         # See the neutered-strength note in the 9a setup above — same
-        # one-shot-kill risk applies here, in both directions.
-        send(P, f"unit.setStat({attackerB},'strength',0.05); "
+        # one-shot-kill risk applies here, in both directions, and the
+        # same fix (#2773): strength_base + unit.recomputeBody, because a
+        # 'strength' write is re-derived away before the hit (a traced run
+        # had this staged hit bleed lashB out before the break).
+        send(P, f"unit.setStat({attackerB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
                 f"unit.setStat({attackerB},'toughness',100); "
-                f"unit.setStat({lashB},'strength',0.05); "
-                f"unit.setStat({lashB},'toughness',100); return 'ok'")
+                f"unit.recomputeBody({attackerB}); "
+                f"unit.setStat({lashB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
+                f"unit.setStat({lashB},'toughness',100); "
+                f"unit.recomputeBody({lashB}); return 'ok'")
         send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB}); "
                 f"return 'ok'")
         hitB = poll_until(35, lambda: send(
@@ -859,65 +3964,93 @@ def main():
             print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
                   f"— can't test the retaliation-swap exclusion")
 
-        # Stop BOTH sides' ordinary combat AI immediately — see the
-        # identical note in the 9a setup above. This test wants
-        # attackerB's REPORTED pose patched to 'collapsed' below while it
-        # stays actually healthy underneath; letting real mutual combat
-        # run first risks genuinely collapsing lashB instead.
-        send(P, f"local ai=require('scripts.unit_ai') "
-                f"local ids={{{attackerB},{lashB}}} "
-                f"for _,u in ipairs(ids) do "
-                f"local s=ai.getState(u); "
-                f"if s then ai.markGoalAccomplished(s,'attack'); "
-                f"s.attackTargetUid=nil end; unit.stop(u) end; return 'ok'")
-        # Unconditionally revive both (see the identical note in the 9a
-        # setup) — this test wants attackerB's REPORTED pose patched to
-        # 'collapsed' below while actually healthy underneath. Draining
-        # its stamina below the acolyte config's wander_min_stamina_
-        # fraction (0.2 — never to 0, the universal death rule) disables
-        # ambient wander too, so revival doesn't send it drifting off
-        # again before the teleport below is confirmed.
-        send(P, f"unit.revive({attackerB}); unit.revive({lashB}); "
-                f"local st=require('scripts.unit_stats') "
-                f"unit.setStat({attackerB},'stamina', "
-                f"st.get({attackerB},'max_stamina')*0.1); return 'ok'")
-
-        # Snap attackerB back to a fixed, known distance from lashB — see
-        # the identical note in the 9a setup above (knockback can drift
-        # them beyond LASHOUT_RANGE, which would invalidate this check
-        # for the wrong reason).
-        lbx, lby = unit_pos(P, lashB)
-        send(P, f"unit.setPos({attackerB}, {lbx + 1}, {lby}); return 'ok'")
-        # Confirm the (async) teleport actually landed — see the 9a note.
-        if not poll_until(5, lambda: (lambda x, y:
-                (x - (lbx + 1)) ** 2 + (y - lby) ** 2 < 0.05)(*unit_pos(P, attackerB))):
+        # The swap this check exercises only lives within unit_ai_combat's
+        # 3 s RETALIATE_WINDOW_SEC of the hit, so everything between the
+        # hit and the break is ONE console chunk here and ONE below
+        # (#2773): a traced run spent 3.4 s on separate round trips and
+        # reached lash-out with the hit already 3.49 s old, so the swap
+        # was never reachable.
+        #
+        # Chunk 1, sent as soon as the hit is observed:
+        # * stop BOTH sides' ordinary combat AI — see the identical note
+        #   in the 9a setup above; this test wants attackerB's REPORTED
+        #   pose patched to 'collapsed' below while it stays actually
+        #   healthy underneath, and real mutual combat risks genuinely
+        #   collapsing lashB instead;
+        # * revive both, and drain attackerB's stamina below the acolyte
+        #   config's wander_min_stamina_fraction (0.2 — never to 0, the
+        #   universal death rule) so revival doesn't send it drifting off
+        #   before the teleport below is confirmed;
+        # * snap attackerB one tile east of lashB and victimB one tile
+        #   west, from lashB's position read IN this chunk. Knockback can
+        #   drift the attacker beyond LASHOUT_RANGE, and the subject can
+        #   wander or run during the hit staging, so neither spawn spot
+        #   says anything about range when the break is forced (a traced
+        #   run had the victim 19 tiles away).
+        # It answers lashB's position and the hit record, for diagnostics.
+        # victimB's goals and state are not touched.
+        stagedB = send_json(P, " ".join((
+            f"local A, L, V = {attackerB}, {lashB}, {victimB};",
+            "local ai = require('scripts.unit_ai');",
+            "for _, u in ipairs({A, L}) do local s = ai.getState(u);",
+            " if s then ai.markGoalAccomplished(s, 'attack'); s.attackTargetUid = nil end;",
+            " unit.stop(u) end;",
+            "unit.revive(A); unit.revive(L);",
+            "local st = require('scripts.unit_stats');",
+            "unit.setStat(A, 'stamina', st.get(A, 'max_stamina') * 0.1);",
+            "local i = unit.getInfo(L); local h = unit.getLastAttacker(L);",
+            "unit.setPos(A, i.gridX + 1, i.gridY); unit.setPos(V, i.gridX - 1, i.gridY);",
+            "return { lx = i.gridX, ly = i.gridY, g = engine.gameTime(),",
+            " hitBy = h and h.uid or -1, hitAt = h and h.at or -1 }")))
+        if not isinstance(stagedB, dict):
+            stagedB = {}
+        lbx, lby = stagedB.get("lx", 0.0), stagedB.get("ly", 0.0)
+        print(f"  [setup] 9c2 staged after the hit: {stagedB}")
+        # Confirm the (async) teleports actually landed — see the 9a note —
+        # with ONE console read per poll returning all three positions.
+        def landedB():
+            pos = send_json(P, " ".join((
+                f"local a, v, l = unit.getInfo({attackerB}), unit.getInfo({victimB}), "
+                f"unit.getInfo({lashB});",
+                "return { ax = a.gridX, ay = a.gridY, vx = v.gridX, vy = v.gridY,",
+                " lx = l.gridX, ly = l.gridY }")))
+            if not isinstance(pos, dict):
+                return False
+            return ((pos["ax"] - (lbx + 1)) ** 2 + (pos["ay"] - lby) ** 2 < 0.05
+                    and (pos["vx"] - (lbx - 1)) ** 2 + (pos["vy"] - lby) ** 2 < 0.05)
+        if not poll_until(5, landedB):
             ok = False
-            print(f"  [FAIL] setup: teleporting {attackerB} back next to "
-                  f"{lashB} never took effect")
+            print(f"  [FAIL] setup: teleporting {attackerB} and {victimB} "
+                  f"next to {lashB} never took effect")
 
-        # Pin attackerB's reported pose to 'collapsed' — unit.collapse()
-        # alone only holds while every gating resource sits below its
-        # revive threshold (see the dead/collapsed/technomule test
-        # below), so this reuses the same wrap-and-delegate technique
-        # for a reliable, deterministic pose throughout this check.
-        send(P, f"if not _G.__probe_orig_getPose then "
-                f"_G.__probe_orig_getPose = unit.getPose end; "
-                f"unit.getPose = function(u) "
-                f"if u == {attackerB} then return 'collapsed' end "
-                f"return _G.__probe_orig_getPose(u) end; return 'ok'")
-
-        send(P, f"require('scripts.mental_state').forceBreak({lashB},'lash_out'); "
-                f"return 'ok'")
+        # Chunk 2: pin attackerB's reported pose to 'collapsed', observe
+        # every lash-out attack execute of lashB through the window
+        # (#2773; see install_swap_observer), and force the break — all in
+        # ONE send, so the first execute is seen. The pose pin is a
+        # wrap-and-delegate because unit.collapse() alone only holds while
+        # every gating resource sits below its revive threshold (see the
+        # dead/collapsed/technomule test below).
+        install_swap_observer(
+            P, lashB, victimB, attackerB,
+            then_lua=(f"if not _G.__probe_orig_getPose then "
+                      f"_G.__probe_orig_getPose = unit.getPose end; "
+                      f"unit.getPose = function(u) "
+                      f"if u == {attackerB} then return 'collapsed' end "
+                      f"return _G.__probe_orig_getPose(u) end; "
+                      f"require('scripts.mental_state').forceBreak({lashB},'lash_out');"))
 
         # Sample rapidly through the retaliation-swap's own 3s window
         # (RETALIATE_WINDOW_SEC, timed from the hit staged above) —
         # lash-out must land on the eligible victimB and never once show
         # the collapsed attackerB sneaking in via the shared swap.
         samplesB = []
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            samplesB.append(lash_target(P, lashB))
-            time.sleep(0.15)
+        try:
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                samplesB.append(lash_target(P, lashB))
+                time.sleep(0.15)
+        finally:
+            callsB = collect_swap_calls(P)
         send(P, "if _G.__probe_orig_getPose then "
                 "unit.getPose = _G.__probe_orig_getPose; "
                 "_G.__probe_orig_getPose = nil end; return 'ok'")
@@ -929,6 +4062,18 @@ def main():
         else:
             ok = False
             print(f"  [FAIL] expected only {victimB}, saw: {samplesB}")
+        # The check above only means something if the swap it guards was
+        # actually reachable during the window (#2773).
+        verdictB, whyB = swap_exercised(callsB, victimB, attackerB)
+        if verdictB == "pass":
+            print(f"  [setup] 9c2 swap precondition exercised: {whyB}")
+        elif verdictB == "policy":
+            ok = False
+            print(f"  [FAIL] 9c2 retaliation swap moved lash-out off the "
+                  f"eligible victim {victimB}: {whyB}")
+        else:
+            ok = False
+            print(f"  [FAIL] setup: 9c2 swap precondition not exercised ({whyB})")
 
         send(P, f"unit.setStat({lashB},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, lashB) != "break")
