@@ -433,76 +433,200 @@ def stand_down_attacker(port, lash, attacker):
                f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
 
 
-def observe_first_lashout_selection(port, lash, attacker, decoy, timeout=10):
-    """Force a lash-out break on `lash` and record its FIRST target
-    selection AT the decision boundary (#2773).
+def lashout_observer_lua(lash, attacker, decoy):
+    """The console chunk observe_first_lashout_selection sends, kept as
+    text so --self-test can run it against the production policy with no
+    engine (lashout_policy_harness).
 
-    pickLashoutTarget (scripts/unit_ai_mental.lua) opens with
-    unit.getLastAttacker(uid) and engine.gameTime(), and lashOutExecute
-    hands the result straight to combatAttack.attackTargetExecute in the
-    same synchronous call. So, installed in the SAME console chunk that
-    forces the break (the Lua thread runs it whole, before the next AI
-    tick):
+    The decision cannot be read atomically. The Unit thread advances
+    engine.gameTime() (Unit.Thread.unitTickWith) and moves units while
+    the Lua thread runs, so two reads in one chunk can differ.
+    pickLashoutTarget reads the hit, then its OWN clock, then the
+    attacker's live existence, pose and position, against the subject
+    position `me` that lashOutExecute read just before. So the chunk:
 
-      * a getLastAttacker wrapper snapshots, on every read for `lash`,
-        the hit, its game-time age, and both candidates' existence, pose,
-        Chebyshev distance and eligibility — judged by the production
-        predicate itself (unit_ai_mental.lashoutPolicy.eligible) — and
-      * an attackTargetExecute wrapper, on the first lash-out-owned call
-        for `lash`, binds the latest snapshot (the one that selection
-        just read) to the target it chose, then restores both originals.
+      * records the subject's own position from lashOutExecute's read:
+        the exact `me` the policy measures from (unit.getInfo wrapper);
+        that read also drops any earlier snapshot, so a snapshot can
+        only belong to this call of the execute;
+      * keeps the hit record the policy is handed (the same table) and
+        takes reading BEFORE: clock plus both candidates, judged against
+        that `me` by the production predicate. The policy's clock read
+        comes after it (getLastAttacker wrapper);
+      * from there until the execute is called, records the FIRST
+        unit.exists / getPose / getInfo answer the decision itself got
+        for the attacker. Those are the reads the window-passing branch
+        of pickLashoutTarget's eligibility test makes (unit.exists /
+        getPose / getInfo wrappers; the probe's own reads are excluded);
+      * when lashOutExecute calls attackTargetExecute straight after the
+        pick: takes reading AFTER, replays the production predicate on
+        the attacker reads the decision actually got, binds all of it to
+        the chosen target, and restores every original.
 
-    Later target polls cannot reconstruct those historical
-    preconditions; this reads them where the decision reads them.
-    Answers the recorded selection dict, or None when no selection
-    happened within `timeout` seconds. The wrappers are always removed.
+    The clock is bracketed, not captured. It never decreases between
+    BEFORE and AFTER unless a load or a session reset writes it in
+    between (classify_lashout_selection rejects a decreasing pair; the
+    probe triggers neither). So, under that condition, the age the
+    policy tested lies between the two.
+
+    Every boundary comparison is made HERE, in Lua, on the original
+    values, and travels as a boolean:
+      * each reading's window, stale and closer tests;
+      * the clock order;
+      * the typing of the hit and the target.
+    The console prints numbers with Lua's tostring (Lua 5.4, "%.14g";
+    src/Engine/Scripting/Lua/API/Shell.hs). That rounds, so for example
+    10.000000000000002 arrives as 10.0. Python therefore never re-derives
+    a cutoff from a printed number.
     """
-    # One line: the console reads newline-terminated commands, and the
-    # chunk carries no comments, so joining its lines changes nothing.
-    send(port, " ".join(line.strip() for line in f"""
+    return f"""
 local lash, attacker, decoy = {lash}, {attacker}, {decoy}
 if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end
 local policy = require('scripts.unit_ai_mental').lashoutPolicy
 local atk = require('scripts.unit_ai_combat_attack')
-local origGLA, origATE = unit.getLastAttacker, atk.attackTargetExecute
-local rec = {{}}
+local origGLA, origATE, origGI = unit.getLastAttacker, atk.attackTargetExecute, unit.getInfo
+local origEx, origPose = unit.exists, unit.getPose
+local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+local rec = {{ observing = false, armed = false, decision = {{}} }}
 _G.__probe_lash_rec = rec
 _G.__probe_lash_restore = function()
   unit.getLastAttacker = origGLA
   atk.attackTargetExecute = origATE
+  unit.getInfo = origGI
+  unit.exists = origEx
+  unit.getPose = origPose
   _G.__probe_lash_restore = nil
 end
+local function infoCopy(r)
+  if not r then return nil end
+  return {{ gridX = r.gridX, gridY = r.gridY, defName = r.defName }}
+end
+local function decisionRead(kind, u, v)
+  if rec.armed and not rec.observing and not rec.selection and u == attacker
+     and rec.decision[kind] == nil then
+    rec.decision[kind] = {{ v = v }}
+  end
+end
 local function candidate(me, oid)
-  local info = unit.getInfo(oid)
+  local info = origGI(oid)
   local d = -1
   if me and info then
     d = math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY))
   end
-  return {{ uid = oid, exists = unit.exists(oid), pose = unit.getPose(oid) or 'none',
+  return {{ uid = oid, exists = origEx(oid), pose = origPose(oid) or 'none',
            dist = d, eligible = (me ~= nil) and policy.eligible(lash, me, oid) }}
+end
+local function reading(me, a)
+  rec.observing = true
+  local ok, r = pcall(function()
+    local now = engine.gameTime()
+    local ac, dc = candidate(me, attacker), candidate(me, decoy)
+    local hit = a ~= nil and a.uid == attacker
+    local age = (a ~= nil and fin(a.at) and fin(now)) and (now - a.at) or nil
+    return {{ now = now, nowOk = fin(now) and now >= 0, attacker = ac, decoy = dc,
+             window = hit and age ~= nil and age >= 0 and age <= policy.attackerWindow,
+             stale = hit and age ~= nil and age > policy.attackerWindow,
+             closer = fin(dc.dist) and fin(ac.dist) and dc.dist < ac.dist }}
+  end)
+  rec.observing = false
+  if ok then return r end
+  return {{ err = tostring(r) }}
+end
+local function replay(me)
+  local d = rec.decision
+  if me == nil or d.exists == nil then return 'missing' end
+  local missing = false
+  local function val(k)
+    local r = d[k]
+    if r == nil then missing = true; return nil end
+    return r.v
+  end
+  local sx, sp, si = unit.exists, unit.getPose, unit.getInfo
+  rec.observing = true
+  unit.exists = function(u) if u == attacker then return val('exists') end; return origEx(u) end
+  unit.getPose = function(u) if u == attacker then return val('pose') end; return origPose(u) end
+  unit.getInfo = function(u) if u == attacker then return val('info') end; return origGI(u) end
+  local ok, res = pcall(policy.eligible, lash, me, attacker)
+  unit.exists, unit.getPose, unit.getInfo = sx, sp, si
+  rec.observing = false
+  if not ok then return 'error' end
+  if missing then return 'missing' end
+  return res and true or false
+end
+unit.getInfo = function(u)
+  local r = origGI(u)
+  if u == lash and not rec.observing and not rec.selection then
+    rec.me = r and {{ gridX = r.gridX, gridY = r.gridY }} or nil
+    rec.pending = nil
+    rec.armed = false
+  end
+  decisionRead('info', u, infoCopy(r))
+  return r
+end
+unit.exists = function(u)
+  local r = origEx(u)
+  decisionRead('exists', u, r)
+  return r
+end
+unit.getPose = function(u)
+  local r = origPose(u)
+  decisionRead('pose', u, r)
+  return r
 end
 unit.getLastAttacker = function(u)
   local a = origGLA(u)
-  if u == lash then
-    local me = unit.getInfo(lash)
-    local now = engine.gameTime()
-    rec.pending = {{ now = now, window = policy.attackerWindow, range = policy.range,
+  if u == lash and not rec.observing and not rec.selection then
+    rec.armed = false
+    rec.hit = a
+    rec.pending = {{ window = policy.attackerWindow, range = policy.range,
+      meCaptured = rec.me ~= nil, me = rec.me,
       hitBy = a and a.uid or -1, hitAt = a and a.at or -1,
-      age = a and (now - (a.at or 0)) or -1,
-      attacker = candidate(me, attacker), decoy = candidate(me, decoy) }}
+      hitTyped = a ~= nil and math.type(a.uid) == 'integer' and a.uid > 0
+                 and fin(a.at) and a.at >= 0,
+      before = reading(rec.me, a) }}
+    rec.decision = {{}}
+    rec.armed = true
   end
   return a
 end
 atk.attackTargetExecute = function(u, s, params)
-  if u == lash and s and s.mentalLashoutActive and rec.pending and not rec.selection then
-    rec.selection = rec.pending
-    rec.selection.target = s.attackTargetUid or -1
+  if u == lash and s and s.mentalLashoutActive and rec.pending and rec.armed
+     and not rec.selection then
+    rec.armed = false
+    local sel = rec.pending
+    sel.after = reading(rec.me, rec.hit)
+    sel.ordered = fin(sel.before.now) and fin(sel.after.now)
+                  and sel.after.now >= sel.before.now
+    sel.target = s.attackTargetUid or -1
+    sel.targetTyped = math.type(sel.target) == 'integer' and sel.target > 0
+    local d = rec.decision
+    sel.decision = {{ exists = d.exists, pose = d.pose, info = d.info,
+                     attackerEligible = replay(rec.me) }}
+    rec.selection = sel
     _G.__probe_lash_restore()
   end
   return origATE(u, s, params)
 end
 require('scripts.mental_state').forceBreak(lash, 'lash_out')
-return 'ok'""".splitlines()))
+return 'ok'"""
+
+
+def observe_first_lashout_selection(port, lash, attacker, decoy, timeout=10):
+    """Force a lash-out break on `lash` and record its FIRST target
+    selection, observed around and inside the decision (#2773;
+    lashout_observer_lua). The wrappers are installed in the SAME console
+    chunk that forces the break, and the Lua thread runs a chunk whole,
+    before the next AI tick.
+
+    Later target polls cannot reconstruct those historical
+    preconditions; this records them where the decision is made.
+    Answers the recorded selection dict, or None when no selection
+    happened within `timeout` seconds. The wrappers are always removed.
+    """
+    # One line: the console reads newline-terminated commands, and the
+    # chunk carries no comments, so joining its lines changes nothing.
+    send(port, " ".join(line.strip() for line in
+                        lashout_observer_lua(lash, attacker, decoy).splitlines()))
 
     def selection():
         raw = send(port, "local r=_G.__probe_lash_rec; "
@@ -533,38 +657,233 @@ return 'ok'""".splitlines()))
                    "_G.__probe_lash_rec = nil; return 'ok'")
 
 
-def lashout_setup_problems(sel, attacker, decoy):
-    """Every precondition the graded selection did NOT meet, each named
-    with the value observed at selection; empty when it is a fair test.
+#: replay()'s answers in lashout_observer_lua: the production predicate
+#: on the decision's own attacker reads, or why it could not be replayed.
+_DECISION_REPLAY = (True, False, "missing", "error")
 
-    A fair test of "prefers the recent attacker over a closer decoy":
-    the hit the selection read is `attacker`'s and within the production
-    window (inclusive), the attacker is eligible (exists, not dead or
-    collapsed, within range — the production predicate), and the decoy is
-    eligible too and STRICTLY closer under the production Chebyshev
-    metric. Anything else makes the decoy, or the attacker, the correct
-    pick for a reason that is not the preference under test.
-    """
-    a, d = sel["attacker"], sel["decoy"]
+
+def _uid(v):
+    """A unit id as it arrives from the console: a JSON integer (Lua
+    integers print without a decimal point), positive; never a bool."""
+    return isinstance(v, int) and not isinstance(v, bool) and v > 0
+
+
+def lashout_record_problems(sel, attacker, decoy):
+    """Everything malformed in a recorded selection, checked BEFORE any
+    use, so a partial or mistyped record fails closed with a name instead
+    of raising or passing on a default. Requires:
+      * finite positive window and range;
+      * a hit that is either absent (hitBy -1) or typed: a positive
+        integer hitBy and a finite, non-negative hitAt, confirmed by
+        Lua's own hitTyped (a missing 'at' that defaulted to -1 fails);
+      * the selected target, a positive integer uid (Lua's targetTyped).
+        Any genuine target is allowed, so a wrong target stays observable;
+      * the captured subject position `me`, with finite grid coordinates;
+      * both bracket readings: a finite, non-negative clock (Lua's
+        nowOk); boolean window, stale and closer tests; and both
+        candidates with the expected integer uid, boolean exists, string
+        pose, finite distance and boolean eligibility;
+      * a clock that did not go backwards (Lua's `ordered`, compared on
+        the unrounded values);
+      * the decision replay's answer, one of _DECISION_REPLAY."""
+    if not isinstance(sel, dict):
+        return [f"selection record is {sel!r}"]
     problems = []
-    if sel["hitBy"] != attacker:
-        problems.append(f"the hit read at selection was by {sel['hitBy']}, "
-                        f"not attacker {attacker}")
-    elif not (0 <= sel["age"] <= sel["window"]):
-        problems.append(f"hit age at selection {sel['age']:.2f}s is outside "
-                        f"the {sel['window']:g}s attacker window")
-    if not a["eligible"]:
-        problems.append(f"attacker {attacker} ineligible at selection "
-                        f"(exists={a['exists']}, pose={a['pose']}, "
-                        f"distance={a['dist']:.2f}, range={sel['range']:g})")
-    if not d["eligible"]:
-        problems.append(f"decoy {decoy} ineligible at selection "
-                        f"(exists={d['exists']}, pose={d['pose']}, "
-                        f"distance={d['dist']:.2f})")
-    elif a["eligible"] and not d["dist"] < a["dist"]:
-        problems.append(f"decoy {decoy} at {d['dist']:.2f} is not strictly "
-                        f"closer than attacker {attacker} at {a['dist']:.2f}")
+    for k in ("window", "range"):
+        if not (_finite_num(sel.get(k)) and sel[k] > 0):
+            problems.append(f"{k} {sel.get(k)!r} is not a positive number")
+    hit_by = sel.get("hitBy")
+    if hit_by == -1 and not isinstance(hit_by, bool):
+        if not _finite_num(sel.get("hitAt")):
+            problems.append(f"hitAt {sel.get('hitAt')!r} is not a finite number")
+    elif not _uid(hit_by):
+        problems.append(f"hitBy {hit_by!r} is neither -1 nor a positive integer uid")
+    elif not (_finite_num(sel.get("hitAt")) and sel["hitAt"] >= 0
+              and sel.get("hitTyped") is True):
+        problems.append(f"hit by {hit_by} has no valid timestamp "
+                        f"(hitAt {sel.get('hitAt')!r}, hitTyped {sel.get('hitTyped')!r})")
+    if not (_uid(sel.get("target")) and sel.get("targetTyped") is True):
+        problems.append(f"selected target {sel.get('target')!r} is not a positive "
+                        f"integer uid (targetTyped {sel.get('targetTyped')!r})")
+    me = sel.get("me")
+    if sel.get("meCaptured") is not True or not isinstance(me, dict):
+        problems.append("the subject position the decision measured from "
+                        "was not captured")
+    elif not (_finite_num(me.get("gridX")) and _finite_num(me.get("gridY"))):
+        problems.append(f"captured subject position {me!r} is malformed")
+    for side in ("before", "after"):
+        r = sel.get(side)
+        if not isinstance(r, dict):
+            problems.append(f"no {side} reading")
+            continue
+        if "err" in r:
+            problems.append(f"{side} reading raised: {r['err']}")
+            continue
+        if not (_finite_num(r.get("now")) and r["now"] >= 0 and r.get("nowOk") is True):
+            problems.append(f"{side} clock {r.get('now')!r} is not a finite "
+                            f"non-negative number (nowOk {r.get('nowOk')!r})")
+        for k in ("window", "stale", "closer"):
+            if not isinstance(r.get(k), bool):
+                problems.append(f"{side} {k} test {r.get(k)!r} is not a boolean")
+        for role, uid in (("attacker", attacker), ("decoy", decoy)):
+            c = r.get(role)
+            if not isinstance(c, dict):
+                problems.append(f"{side} {role} reading missing")
+                continue
+            if not (_uid(c.get("uid")) and c["uid"] == uid):
+                problems.append(f"{side} {role} reading is for {c.get('uid')!r}, "
+                                f"not integer uid {uid}")
+            if not isinstance(c.get("exists"), bool):
+                problems.append(f"{side} {role} exists {c.get('exists')!r} is not a boolean")
+            if not isinstance(c.get("pose"), str):
+                problems.append(f"{side} {role} pose {c.get('pose')!r} is not a string")
+            if not _finite_num(c.get("dist")):
+                problems.append(f"{side} {role} distance {c.get('dist')!r} is not a finite number")
+            if not isinstance(c.get("eligible"), bool):
+                problems.append(f"{side} {role} eligible {c.get('eligible')!r} is not a boolean")
+    if sel.get("ordered") is not True:
+        problems.append(f"clock not ordered across the decision (ordered "
+                        f"{sel.get('ordered')!r}): a load or session reset, or a "
+                        f"missing reading, so the bracket proves nothing")
+    dec = sel.get("decision")
+    if not isinstance(dec, dict) or not any(
+            dec.get("attackerEligible") is v if isinstance(v, bool)
+            else dec.get("attackerEligible") == v for v in _DECISION_REPLAY):
+        problems.append(f"decision replay {dec!r} is malformed")
     return problems
+
+
+def lashout_decision_view(sel, side):
+    """One bracket side of a well-formed selection ('before' or 'after'):
+    the hit record the policy was handed, with that side's Lua-computed
+    tests and candidates. `age` is for messages only: it is recomputed
+    from printed numbers, so no decision uses it."""
+    r = sel[side]
+    has_hit = sel["hitBy"] != -1
+    return {"window": sel["window"], "range": sel["range"],
+            "hitBy": sel["hitBy"], "hitAt": sel["hitAt"],
+            "hitOk": has_hit and sel.get("hitTyped") is True,
+            "windowOk": r["window"], "stale": r["stale"], "closer": r["closer"],
+            "age": (r["now"] - sel["hitAt"]) if has_hit else -1,
+            "attacker": r["attacker"], "decoy": r["decoy"]}
+
+
+def lashout_predicates(view, attacker, decoy):
+    """The fair-test preconditions on one reading, as (name, holds,
+    message) in a fixed order. Every `holds` is the boolean Lua computed
+    on the unrounded values (lashout_observer_lua); the numbers appear in
+    the messages only.
+
+      * hit      — the hit the decision read is `attacker`'s, typed;
+      * window   — and its age is inside the production window
+                   (inclusive);
+      * attacker — the attacker is eligible (exists, not dead or
+                   collapsed, within range: the production predicate);
+      * decoy    — the decoy is eligible too;
+      * closer   — the decoy is STRICTLY closer under the production
+                   Chebyshev metric.
+
+    Without every one of them, the decoy, or the attacker, would be the
+    correct pick for a reason that is not the preference under test."""
+    a, d = view["attacker"], view["decoy"]
+    hit = view["hitOk"] and view["hitBy"] == attacker
+    return [
+        ("hit", hit, f"the hit read at selection was by {view['hitBy']}, "
+                     f"not attacker {attacker}"),
+        ("window", hit and view["windowOk"],
+         f"hit age at selection ~{view['age']:.2f}s is outside the "
+         f"{view['window']:g}s attacker window"),
+        ("attacker", a["eligible"],
+         f"attacker {attacker} ineligible at selection (exists={a['exists']}, "
+         f"pose={a['pose']}, distance={a['dist']:.2f}, range={view['range']:g})"),
+        ("decoy", d["eligible"],
+         f"decoy {decoy} ineligible at selection (exists={d['exists']}, "
+         f"pose={d['pose']}, distance={d['dist']:.2f})"),
+        ("closer", view["closer"],
+         f"decoy {decoy} at {d['dist']:.2f} is not strictly closer than "
+         f"attacker {attacker} at {a['dist']:.2f}"),
+    ]
+
+
+def lashout_setup_problems(view, attacker, decoy):
+    """The failing preconditions on one reading, each named with its value."""
+    return [msg for _, holds, msg in lashout_predicates(view, attacker, decoy)
+            if not holds]
+
+
+def classify_lashout_selection(sel, attacker, decoy):
+    """('fair' | 'setup' | 'ambiguous', problems) for a recorded selection.
+
+      * setup     — the record is malformed (lashout_record_problems), or
+                    the preconditions failed, with every predicate giving
+                    the SAME answer before and after; or the decision's own
+                    attacker reads could not be replayed. Discarded and
+                    restaged.
+      * ambiguous — any single predicate answered differently before and
+                    after. This also covers sides failing for DIFFERENT
+                    reasons, and a hit aging past the window while the
+                    policy read it. It also covers the attacker reading
+                    eligible on both sides but INELIGIBLE on the reads the
+                    decision itself got (a there-and-back in range or pose).
+                    What the policy saw is then unknown or unfair, so it
+                    is a NAMED boundary-ambiguous setup discard, restaged
+                    and never graded.
+      * fair      — every predicate holds before and after, and the
+                    production predicate holds on the decision's OWN
+                    attacker reads. The clock is bracketed: monotone
+                    between the two readings, given no load or reset. So
+                    the policy's age test passed and its eligibility test
+                    saw an eligible attacker. A decoy target is then a
+                    POLICY failure, graded and never retried. The decoy's
+                    side is never read by a decision that keeps the
+                    attacker, so its predicates rest on the bracket. They
+                    make a pass meaningful; they cannot turn a correct
+                    fallback into a failure.
+    """
+    malformed = lashout_record_problems(sel, attacker, decoy)
+    if malformed:
+        return "setup", ["malformed selection record: " + "; ".join(malformed)]
+    pb = lashout_predicates(lashout_decision_view(sel, "before"), attacker, decoy)
+    pa = lashout_predicates(lashout_decision_view(sel, "after"), attacker, decoy)
+    crossed = [nb for (nb, hb, _), (_, ha, _) in zip(pb, pa) if hb != ha]
+    if crossed:
+        def failing(ps):
+            return "; ".join(m for _, h, m in ps if not h) or "all held"
+        return "ambiguous", [
+            f"boundary-ambiguous: {', '.join(crossed)} changed while the "
+            f"decision read it (before: {failing(pb)}; after: {failing(pa)})"]
+    fails = [m for _, h, m in pb if not h]
+    if fails:
+        return "setup", fails
+    replayed = sel["decision"]["attackerEligible"]
+    if replayed is True:
+        return "fair", []
+    if replayed is False:
+        return "ambiguous", [
+            f"boundary-ambiguous: attacker {attacker} was eligible before and "
+            f"after the decision but INELIGIBLE on the decision's own reads "
+            f"(exists={sel['decision'].get('exists')}, "
+            f"pose={sel['decision'].get('pose')}, "
+            f"info={sel['decision'].get('info')})"]
+    return "setup", [f"the decision's own attacker reads could not be "
+                     f"replayed ({replayed})"]
+
+
+def stale_selection_observed(sel, attacker, decoy):
+    """True only for an UNAMBIGUOUS stale selection. The record is
+    well-formed, the selection classifies as a setup discard, the policy
+    was handed the attacker's typed hit, and Lua found that hit already
+    past the window BEFORE the decision (its unrounded `stale` test). The clock does not decrease, so the
+    policy's own read saw it stale too. A hit crossing the window during
+    the decision, or any other predicate crossing, is ambiguous and is
+    not stale evidence."""
+    if lashout_record_problems(sel, attacker, decoy):
+        return False
+    if classify_lashout_selection(sel, attacker, decoy)[0] != "setup":
+        return False
+    view = lashout_decision_view(sel, "before")
+    return (view["hitOk"] and view["hitBy"] == attacker
+            and view["stale"] is True)
 
 
 def perturb_lashout_case(port, case, attempt, lash, attacker):
@@ -938,7 +1257,7 @@ def dress_staged_wound(port, lash):
 def lashout_attacker_preference(port, case=None):
     """Phase 9a (#717, #2773): lash-out prefers a recent eligible attacker
     over a closer decoy — graded ONLY on a selection whose preconditions
-    held when it was made (see lashout_setup_problems).
+    held on both sides of the decision (classify_lashout_selection).
 
     A setup that misses them is not a policy result: it is discarded,
     named, and RESTAGED on a fresh cluster, at most len(LASHOUT_CLUSTERS)
@@ -975,13 +1294,13 @@ def lashout_attacker_preference(port, case=None):
             if sel is None:
                 problems = ["no lash-out target selection within 10s of the break"]
             else:
-                problems = lashout_setup_problems(sel, attacker, decoy)
-                if (case == "stale" and attempt == 1
-                        and sel["hitBy"] == attacker
-                        and sel["age"] > sel["window"]):
+                kind, problems = classify_lashout_selection(sel, attacker, decoy)
+                if (case == "stale" and attempt == 1 and kind == "setup"
+                        and stale_selection_observed(sel, attacker, decoy)):
                     stale_observed = True
+                    age = lashout_decision_view(sel, "before")["age"]
                     print(f"  [setup] stale demonstration: the AI selected with "
-                          f"the hit {sel['age']:.2f} s old (window "
+                          f"the hit {age:.2f} s old before the decision (window "
                           f"{sel['window']:g} s) — discarded, restaging")
         if problems:
             reasons.append(f"attempt {attempt}: " + "; ".join(problems))
@@ -999,10 +1318,12 @@ def lashout_attacker_preference(port, case=None):
         poll_until(5, lambda: (lambda ax, ay:
                 (ax - (lx + 1)) ** 2 + (ay - ly) ** 2 < 0.05)(
                     *unit_pos(port, attacker)))
-        detail = (f"hit age at selection {sel['age']:.2f}s "
-                  f"(window {sel['window']:g}s), attacker at "
-                  f"{sel['attacker']['dist']:.2f}, decoy at "
-                  f"{sel['decoy']['dist']:.2f}")
+        pre = lashout_decision_view(sel, "before")
+        post = lashout_decision_view(sel, "after")
+        detail = (f"hit age {pre['age']:.2f}-{post['age']:.2f}s across the "
+                  f"decision (window {sel['window']:g}s), attacker at "
+                  f"{pre['attacker']['dist']:.2f}, decoy at "
+                  f"{pre['decoy']['dist']:.2f}")
         if sel["target"] == attacker:
             print(f"  [pass] lash-out prefers the recent attacker {attacker} "
                   f"over the closer decoy {decoy} — {detail}")
@@ -1135,6 +1456,157 @@ def swap_exercised(calls, victimB, attackerB):
                     f"age={first['age']:.2f} d={first['d']:.2f}/{first['reach']:.2f} "
                     f"seen={first['seen']} real={first['real']}")
 
+#: --self-test's no-engine harness: the PRODUCTION scripts/unit_ai_mental.lua
+#: (or a deliberately broken copy of it) driven through M.shortCircuit, with
+#: the probe's own observer chunk installed, against stubbed engine
+#: bindings. Answers depend on WHO reads:
+#:   * the clock gives the observer's two readings BEFORE and AFTER in
+#:     turn, and the policy's own read (pickLashoutTarget) POLICY — the
+#:     reviewer's case (observer 9.99, production 10.01) exactly;
+#:   * the attacker's position and pose read by the probe (its readings
+#:     and replay, found on the call stack) can differ from what the
+#:     decision itself reads, so a there-and-back the bracket cannot see
+#:     is reproduced at production's ACTUAL eligibility reads;
+#:   * the result is serialized the way the production console does
+#:     (Lua 5.4 tostring, "%.14g"), so boundary values arrive rounded
+#:     exactly as they would from the engine.
+_HARNESS_LUA = r"""
+local POLICY, OBSERVER = ...
+local CLOCK = { before = %(before)r, policy = %(policy)r, after = %(after)r }
+local seen = {}
+local obs = 0
+local function probeRead()
+  for lvl = 3, 40 do
+    local i = debug.getinfo(lvl, 'n')
+    if not i then break end
+    if i.name == 'candidate' or i.name == 'reading' or i.name == 'replay' then return true end
+  end
+  return false
+end
+engine = { gameTime = function()
+  local caller = debug.getinfo(2, 'n')
+  local name = caller and caller.name or '?'
+  if name == 'pickLashoutTarget' then
+    seen[#seen + 1] = name
+    return CLOCK.policy
+  end
+  if probeRead() then
+    seen[#seen + 1] = 'reading'
+    obs = obs + 1
+    return obs == 1 and CLOCK.before or CLOCK.after
+  end
+  seen[#seen + 1] = name
+  return 0
+end }
+local ATT_X, ATT_X_DEC, ATT_POSE_DEC = %(attacker_x)d, %(attacker_x_decision)d, %(attacker_pose_decision)r
+unit = {
+  getInfo = function(u)
+    if u == 1 then return { gridX = 0, gridY = 0, defName = 'acolyte' } end
+    if u == 2 then return { gridX = probeRead() and ATT_X or ATT_X_DEC, gridY = 0, defName = 'acolyte' } end
+    if u == 3 then return { gridX = %(decoy_x)d, gridY = 0, defName = 'acolyte' } end
+    return nil
+  end,
+  exists = function(u) return u == 1 or u == 2 or u == 3 end,
+  getPose = function(u)
+    if u == 2 and not probeRead() then return ATT_POSE_DEC end
+    return 'standing'
+  end,
+  getLastAttacker = function(u) if u == 1 then return { uid = 2, at = 0.0 } end end,
+  getAllIds = function() return { 1, 2, 3 } end,
+  clearAnimOverride = function() end, stop = function() end,
+  getActivity = function() return 'idle' end,
+}
+local function stub(t) return function() return t end end
+package.preload['scripts.brain'] = stub({ isDelirious = function() return false end })
+package.preload['scripts.mental_state'] = stub({ isBreaking = function() return true end,
+  breakBehavior = function() return 'lash_out' end, forceBreak = function() end })
+package.preload['scripts.unit_ai_needs'] = stub({ wanderExecute = function() end })
+package.preload['scripts.movement_speed'] = stub({})
+package.preload['scripts.unit_ai_core'] = stub({ suspendOrders = function() end,
+  setGoal = function() end, markGoalAccomplished = function() end })
+package.preload['scripts.unit_ai_combat_attack'] = stub({ attackTargetExecute = function() end })
+package.preload['scripts.unit_ai_combat_lunge'] = stub({ clear = function() end })
+package.preload['scripts.unit_ai_mental'] = function() return assert(loadfile(POLICY))() end
+assert(load(OBSERVER))()
+require('scripts.unit_ai_mental').shortCircuit(1, {}, {}, 'idle', {})
+local function enc(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%%q:%%s', tostring(k), enc(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%%q', v)
+  elseif t == 'boolean' then return tostring(v)
+  elseif t == 'number' then
+    -- Exactly what the console sends (luaValueToText,
+    -- src/Engine/Scripting/Lua/API/Shell.hs): Lua 5.4's tostring, i.e.
+    -- integers in full, floats as "%%.14g" plus ".0" when that looks
+    -- integral, and quoted stand-ins for inf and nan.
+    if v ~= v then return '"nan"' end
+    if v == math.huge then return '"inf"' end
+    if v == -math.huge then return '"-inf"' end
+    if math.type(v) == 'integer' then return string.format('%%d', v) end
+    local s = string.format('%%.14g', v)
+    if not s:find('[^%%-0-9]') then s = s .. '.0' end
+    return s
+  end
+  return 'null'
+end
+local rec = _G.__probe_lash_rec
+io.write(enc({ selection = rec and rec.selection or false, clockCallers = seen }))
+"""
+
+
+def lashout_policy_harness(before, policy, after, attacker_x=3, decoy_x=-1,
+                           attacker_x_decision=None,
+                           attacker_pose_decision="standing",
+                           policy_patch=None):
+    """Run the lash-out policy with the probe's observer chunk and no
+    engine (needs a `lua` interpreter).
+
+    Setup: subject 1 at x=0; attacker 2, whose hit is stamped at game time
+    0, at `attacker_x`; decoy 3 at `decoy_x`. The decision's OWN reads of
+    the attacker see `attacker_x_decision` (default: the same) and
+    `attacker_pose_decision`. `policy_patch=(old, new)` runs a copy of
+    scripts/unit_ai_mental.lua with that one substitution (a broken
+    policy).
+
+    Answers (selection, clock callers), or None when no lua is installed."""
+    import shutil, subprocess, os, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "scripts", "unit_ai_mental.lua")) as fh:
+        policy_src = fh.read()
+    if policy_patch is not None:
+        old, new = policy_patch
+        if policy_src.count(old) != 1:
+            raise RuntimeError(f"policy patch target not unique: {old!r}")
+        policy_src = policy_src.replace(old, new)
+    observer = " ".join(line.strip() for line in
+                        lashout_observer_lua(1, 2, 3).splitlines())
+    src = _HARNESS_LUA % {
+        "before": before, "policy": policy, "after": after,
+        "attacker_x": attacker_x, "decoy_x": decoy_x,
+        "attacker_x_decision": (attacker_x if attacker_x_decision is None
+                                else attacker_x_decision),
+        "attacker_pose_decision": attacker_pose_decision}
+    with tempfile.TemporaryDirectory() as tmp:
+        harness = os.path.join(tmp, "harness.lua")
+        policy_path = os.path.join(tmp, "unit_ai_mental.lua")
+        with open(harness, "w") as fh:
+            fh.write(src)
+        with open(policy_path, "w") as fh:
+            fh.write(policy_src)
+        out = subprocess.run([lua, harness, policy_path, observer],
+                             capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(f"policy harness failed: {out.stderr.strip()}")
+    got = json.loads(out.stdout)
+    return got["selection"] or None, got["clockCallers"]
+
+
 def self_test():
     """No-engine regression cases for #2773's pure setup validators and
     gates (`--self-test`). Exit 0 when every case holds."""
@@ -1241,6 +1713,204 @@ def self_test():
     check("stale demo: a fresh pass alone fails", not stale_demo_verdict(False, True))
     check("stale demo: an observed discard without a valid restage fails",
           not stale_demo_verdict(True, False))
+
+    # classify_lashout_selection / stale_selection_observed: a complete,
+    # typed record is required before any arithmetic; each predicate is
+    # compared across the bracket; the attacker is judged on the
+    # decision's own reads.
+    def cand(uid, dist, eligible=True, exists=True, pose="standing"):
+        return {"uid": uid, "exists": exists, "pose": pose, "dist": dist,
+                "eligible": eligible}
+
+    def side(t, a, d, ae, hit_by):
+        # The booleans Lua would compute from these (unrounded) values.
+        hit = hit_by == 2
+        return {"now": t, "nowOk": True, "attacker": cand(2, a, ae), "decoy": cand(3, d),
+                "window": hit and 0 <= t <= 10.0, "stale": hit and t > 10.0,
+                "closer": d < a}
+
+    def mksel(t0, t1, a0=3, a1=3, d0=1, d1=1, ae0=True, ae1=True,
+              hit_by=2, target=2, replay=True):
+        return {"window": 10.0, "range": 8.0, "meCaptured": True,
+                "me": {"gridX": 0, "gridY": 0},
+                "hitBy": hit_by, "hitAt": 0.0, "hitTyped": True,
+                "target": target, "targetTyped": True, "ordered": t1 >= t0,
+                "before": side(t0, a0, d0, ae0, hit_by),
+                "after": side(t1, a1, d1, ae1, hit_by),
+                "decision": {"attackerEligible": replay}}
+
+    def kind(sel):
+        return classify_lashout_selection(sel, 2, 3)[0]
+
+    def with_(sel, path, value):
+        import copy
+        out = copy.deepcopy(sel)
+        node = out
+        for k in path[:-1]:
+            node = node[k]
+        if value is KeyError:
+            node.pop(path[-1], None)
+        else:
+            node[path[-1]] = value
+        return out
+
+    base = mksel(5.0, 5.01)
+    check("record: a complete fair record is fair", kind(base) == "fair")
+    check("record: empty bracket sides fail closed, no exception",
+          kind({"before": {}, "after": {}, "meCaptured": True}) == "setup")
+    check("record: None fails closed", kind(None) == "setup")
+    for name, path, value in (
+            ("a missing hit timestamp", ("hitAt",), KeyError),
+            ("a hit timestamp defaulted to -1", ("hitAt",), -1),
+            ("a hit Lua found untyped", ("hitTyped",), False),
+            ("a negative hit timestamp", ("hitAt",), -0.5),
+            ("hitBy as a float", ("hitBy",), 2.0),
+            ("hitBy as a bool", ("hitBy",), True),
+            ("no selected target (-1)", ("target",), -1),
+            ("a float target", ("target",), 3.0),
+            ("a target Lua found untyped", ("targetTyped",), False),
+            ("a negative clock", ("before", "now"), -1.0),
+            ("a clock Lua found invalid", ("after", "nowOk"), False),
+            ("a window test that is not a boolean", ("before", "window"), "yes"),
+            ("a missing closer test", ("after", "closer"), KeyError),
+            ("a float candidate uid", ("before", "attacker", "uid"), 2.0),
+            ("a missing clock order", ("ordered",), KeyError),
+            ("a non-numeric hit timestamp", ("hitAt",), "10"),
+            ("an infinite hit timestamp", ("hitAt",), float("inf")),
+            ("a missing hitBy", ("hitBy",), KeyError),
+            ("a missing target", ("target",), KeyError),
+            ("a missing window", ("window",), KeyError),
+            ("a zero range", ("range",), 0),
+            ("an uncaptured subject position", ("meCaptured",), False),
+            ("a malformed subject position", ("me", "gridX"), None),
+            ("a missing before clock", ("before", "now"), KeyError),
+            ("a boolean clock", ("after", "now"), True),
+            ("eligibility as a string", ("before", "attacker", "eligible"), "true"),
+            ("exists as a number", ("after", "decoy", "exists"), 1),
+            ("a non-string pose", ("before", "attacker", "pose"), None),
+            ("a NaN distance", ("after", "attacker", "dist"), float("nan")),
+            ("a candidate for the wrong unit", ("before", "decoy", "uid"), 9),
+            ("a missing candidate", ("after", "attacker"), KeyError),
+            ("a raised reading", ("after",), {"err": "boom"}),
+            ("a missing decision replay", ("decision",), KeyError),
+            ("a malformed decision replay", ("decision", "attackerEligible"), 1),
+            ("an absent decision replay value", ("decision", "attackerEligible"), KeyError)):
+        bad = with_(base, path, value)
+        check(f"record: {name} is a named setup failure",
+              kind(bad) == "setup" and not stale_selection_observed(bad, 2, 3))
+    backwards = mksel(10.6, 10.5, target=3)
+    check("record: a clock going backwards (load or reset) is a setup failure",
+          classify_lashout_selection(backwards, 2, 3)[0] == "setup"
+          and "not ordered" in classify_lashout_selection(backwards, 2, 3)[1][0])
+    check("record: a genuine wrong target (any positive uid) stays observable",
+          kind(mksel(5.0, 5.01, target=7)) == "fair")
+    rounded = with_(mksel(10.0, 10.0, target=3), ("after", "window"), False)
+    rounded = with_(rounded, ("after", "stale"), True)
+    check("precision: Lua's unrounded test outranks the printed number "
+          "(after prints 10.0 but Lua found it past the window) -> ambiguous",
+          kind(rounded) == "ambiguous")
+    unordered = with_(mksel(10.0, 10.0), ("ordered",), False)
+    check("precision: equal printed clocks Lua found DEcreasing -> setup",
+          kind(unordered) == "setup")
+    check("record: ... and is never stale evidence",
+          not stale_selection_observed(backwards, 2, 3))
+
+    crossing = mksel(9.99, 10.01, target=3)
+    check("bracket: 9.99 -> 10.01 across the decision is ambiguous", kind(crossing) == "ambiguous")
+    check("bracket: a window crossing is not stale evidence",
+          not stale_selection_observed(crossing, 2, 3))
+    check("bracket: the old single reading would have graded the crossing (documents the bug)",
+          lashout_setup_problems(lashout_decision_view(crossing, "before"), 2, 3) == [])
+    check("bracket: a valid wrong target is still graded (a policy failure, never retried)",
+          kind(mksel(5.0, 5.01, target=3)) == "fair")
+    stale = mksel(10.5, 10.52, target=3)
+    check("bracket: past the window on both sides is a setup discard", kind(stale) == "setup")
+    check("bracket: past the window BEFORE the decision is stale evidence",
+          stale_selection_observed(stale, 2, 3))
+    check("bracket: exactly at the window on both sides is fair (inclusive, as the policy)",
+          kind(mksel(10.0, 10.0)) == "fair")
+    check("bracket: attacker crossing the range during the decision is ambiguous",
+          kind(mksel(5.0, 5.01, a0=8, a1=9, ae1=False)) == "ambiguous")
+    check("bracket: attacker out of range on both sides is a setup discard",
+          kind(mksel(5.0, 5.01, a0=9, a1=9, ae0=False, ae1=False)) == "setup")
+    check("bracket: decoy losing 'strictly closer' during the decision is ambiguous",
+          kind(mksel(5.0, 5.01, d0=2, d1=3)) == "ambiguous")
+    diff = mksel(9.5, 10.5, a0=9, a1=3, ae0=False, ae1=True, target=3)
+    check("bracket: DIFFERENT failures on the two sides are ambiguous, not setup",
+          kind(diff) == "ambiguous" and not stale_selection_observed(diff, 2, 3))
+    check("bracket: stale + a crossing elsewhere is ambiguous, not stale evidence",
+          not stale_selection_observed(mksel(10.5, 10.6, a0=8, a1=9, ae1=False, target=3), 2, 3))
+    check("bracket: a hit by someone else is a setup discard, not stale evidence",
+          kind(mksel(10.5, 10.6, hit_by=9)) == "setup"
+          and not stale_selection_observed(mksel(10.5, 10.6, hit_by=9), 2, 3))
+    check("decision: eligible on both sides but ineligible on the decision's own reads is ambiguous",
+          kind(mksel(5.0, 5.01, target=3, replay=False)) == "ambiguous")
+    check("decision: unreplayable decision reads are a setup discard",
+          kind(mksel(5.0, 5.01, replay="missing")) == "setup"
+          and kind(mksel(5.0, 5.01, replay="error")) == "setup")
+
+    # The PRODUCTION policy, no engine.
+    ran = lashout_policy_harness(9.99, 10.01, 10.02)
+    if ran is None:
+        print("  skip harness: no `lua` interpreter installed")
+    else:
+        sel, callers = ran
+        order = [callers[k] for k in sorted(callers, key=int)
+                 if callers[k] in ("reading", "pickLashoutTarget")] \
+            if isinstance(callers, dict) else None
+        check("harness: the policy reads the clock once, between the two observer readings",
+              order == ["reading", "pickLashoutTarget", "reading"])
+        check("harness: observer 9.99 / production 10.01 -> production falls back to the decoy",
+              isinstance(sel, dict) and sel.get("target") == 3)
+        check("harness: ... and the probe classifies it ambiguous, not a policy failure",
+              kind(sel) == "ambiguous")
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02)
+        check("harness: a fair decision picks the attacker, replays eligible, and is graded",
+              sel.get("target") == 2 and sel["decision"]["attackerEligible"] is True
+              and kind(sel) == "fair")
+        sel, _ = lashout_policy_harness(10.5, 10.51, 10.52)
+        check("harness: a hit stale before the decision -> decoy, setup discard, stale evidence",
+              sel.get("target") == 3 and kind(sel) == "setup"
+              and stale_selection_observed(sel, 2, 3))
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, attacker_x=9)
+        check("harness: attacker out of range on every read -> decoy, setup discard",
+              sel.get("target") == 3 and kind(sel) == "setup")
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, attacker_x_decision=9)
+        both = (lashout_setup_problems(lashout_decision_view(sel, "before"), 2, 3) == []
+                and lashout_setup_problems(lashout_decision_view(sel, "after"), 2, 3) == [])
+        check("harness: range there-and-back at production's own read -> decoy, though both "
+              "observer readings are fair (the bracket alone would grade it)",
+              sel.get("target") == 3 and both)
+        check("harness: ... and the decision replay classifies it ambiguous, not a policy failure",
+              sel["decision"]["attackerEligible"] is False and kind(sel) == "ambiguous")
+        sel, _ = lashout_policy_harness(5.0, 5.01, 5.02, attacker_pose_decision="collapsed")
+        check("harness: pose there-and-back (collapsed at production's read) -> decoy, ambiguous",
+              sel.get("target") == 3 and kind(sel) == "ambiguous")
+        eps = 10.000000000000002
+        sel, _ = lashout_policy_harness(10.0, eps, eps)
+        check("harness precision: 10+eps arrives printed as 10.0 (production tostring)",
+              sel["after"]["now"] == 10.0 and sel["before"]["now"] == 10.0)
+        check("harness precision: production saw 10+eps > window and fell back to the decoy",
+              sel.get("target") == 3)
+        check("harness precision: the printed numbers alone would read the window as held",
+              0 <= sel["after"]["now"] - sel["hitAt"] <= sel["window"])
+        check("harness precision: ... but Lua's own test says after is past the window "
+              "-> ambiguous, not a policy failure",
+              sel["after"]["window"] is False and kind(sel) == "ambiguous")
+        sel, _ = lashout_policy_harness(eps, eps, eps)
+        check("harness precision: 10+eps on every read -> decoy, setup, stale evidence "
+              "(printed as 10.0)",
+              sel.get("target") == 3 and sel["before"]["now"] == 10.0
+              and kind(sel) == "setup" and stale_selection_observed(sel, 2, 3))
+        sel, _ = lashout_policy_harness(10.0, 10.0, 10.0)
+        check("harness precision: exactly 10.0 everywhere -> attacker, fair (inclusive window)",
+              sel.get("target") == 2 and kind(sel) == "fair")
+        sel, _ = lashout_policy_harness(
+            5.0, 5.01, 5.02,
+            policy_patch=("<= LASHOUT_ATTACKER_WINDOW", "< -1"))
+        check("harness: a BROKEN policy picking the decoy under fair conditions is graded "
+              "fair, i.e. a policy failure",
+              sel.get("target") == 3 and kind(sel) == "fair")
 
     # swap_exercised (9c2)
     V, A = 9, 10
