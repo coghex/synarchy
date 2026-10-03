@@ -1454,49 +1454,217 @@ def lashout_attacker_preference(port, case=None):
     return False, lash, attacker, decoy, stale_observed
 
 
+def swap_observer_lua(lashB, victimB, attackerB, then_lua=""):
+    """The console chunk install_swap_observer sends, kept as text so
+    --self-test can run it against the PRODUCTION attack execute with no
+    engine (swap_policy_harness).
+
+    It wraps unit_ai_combat_attack.attackTargetExecute, the shared execute
+    lash-out drives. Its mid-fight retaliation swap
+    (scripts/unit_ai_combat_attack.lua:196-226) turns on a recent attacker
+    when all of these hold:
+      * the attacker is not the current target and exists;
+      * its pose is neither dead nor collapsed;
+      * its info is present and it is not a technomule;
+      * the hit is at most RETALIATE_WINDOW_SEC old (inclusive; 3.0 game
+        s, unit_ai_combat.lua:203), by the execute's OWN
+        engine.gameTime() read;
+      * it is within (unit.getAttackRange(uid) or 1.0) + 0.5 Chebyshev
+        tiles.
+
+    9c2 shows the collapsed exclusion holds. A call only counts if, with
+    that exclusion removed, the swap WOULD have fired. The Unit thread
+    advances the clock and moves units while the Lua thread runs, so one
+    reading taken before the call proves nothing about the reads the
+    execute makes inside it. For every call on `lashB`, the wrapper
+    therefore:
+
+      * takes reading BEFORE, right before the original runs, and
+        reading AFTER, right after it returns. Each reading has the
+        clock, lashB's and the attacker's positions, lashB's attack
+        range, the attacker's REAL pose (under the 'collapsed' pin),
+        lashB alive, and the victim's lash-out eligibility. A pose
+        counts only when the binding answers a string; nil (a missing
+        unit) proves neither not-dead nor alive;
+      * for the duration of the original call only, installs
+        pass-through recorders over the functions the execute will call.
+        They layer over whatever is installed then, the pose pin
+        included, and keep the swap block's OWN first answers: the hit
+        record, the attacker's pose, existence and info. They also keep
+        EVERY attacker and lashB position and range the call read, plus
+        a lashB position and range sampled next to each attacker read.
+        Missing or malformed answers are kept as invalid entries;
+      * restores every original right after the call, even when it
+        raises (the error is re-raised unchanged);
+      * computes every boundary test in Lua, on unrounded values, as
+        booleans:
+          - the window, on BEFORE and on AFTER, from the hit's own 'at';
+          - the clock order;
+          - the reach, which must hold for EVERY attacker sample against
+            EVERY lashB sample, within the smallest range sampled + 0.5;
+          - the typing.
+
+    The clock never decreases between BEFORE and AFTER unless a load or
+    a session reset writes it in between. So with the window holding on
+    both sides, the clock the execute (or a mutant without the
+    exclusion) reads in between saw the hit inside the window too.
+    `then_lua` runs in the SAME console chunk, after the wrap is in place.
+    """
+    return f"""
+local L, V, A = {lashB}, {victimB}, {attackerB}
+local atk = require('scripts.unit_ai_combat_attack')
+local pol = require('scripts.unit_ai_mental').lashoutPolicy
+local WINDOW = require('scripts.unit_ai_combat').RETALIATE_WINDOW_SEC
+local orig = atk.attackTargetExecute
+local calls = {{}}
+_G.__probe_swap_calls = calls
+_G.__probe_swap_restore = function()
+  atk.attackTargetExecute = orig
+  _G.__probe_swap_restore = nil
+end
+local function fin(v) return type(v) == 'number' and v == v and v ~= math.huge and v ~= -math.huge end
+local function pos(i)
+  if type(i) ~= 'table' then return {{ invalid = true }} end
+  return {{ gridX = i.gridX, gridY = i.gridY }}
+end
+local function rangeOf(r)
+  if r == nil then return 1.0 end
+  if fin(r) then return r end
+  return 'invalid'
+end
+local function cheb(p, q)
+  if type(p) ~= 'table' or type(q) ~= 'table' or p.invalid or q.invalid then return nil end
+  if not (fin(p.gridX) and fin(p.gridY) and fin(q.gridX) and fin(q.gridY)) then return nil end
+  return math.max(math.abs(p.gridX - q.gridX), math.abs(p.gridY - q.gridY))
+end
+local function realPose(u)
+  local rp = _G.__probe_orig_getPose or unit.getPose
+  return rp(u)
+end
+local function swapReading(sx)
+  local ok, r = pcall(function()
+    local now = engine.gameTime()
+    local me = sx.getInfo(L)
+    local pa, pl = realPose(A), realPose(L)
+    local paOk, plOk = type(pa) == 'string', type(pl) == 'string'
+    return {{ now = now, nowOk = fin(now) and now >= 0,
+      lpos = pos(me), apos = pos(sx.getInfo(A)), range = rangeOf(sx.getAttackRange(L)),
+      realOk = paOk, real = paOk and pa or 'invalid',
+      aliveOk = plOk, alive = plOk and pl ~= 'dead',
+      victimElig = (me ~= nil) and pol.eligible(L, me, V) and true or false }}
+  end)
+  if ok then return r end
+  return {{ err = tostring(r) }}
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u ~= L or not s or #calls >= 200 then return orig(u, s, params) end
+  local sx = {{ getInfo = unit.getInfo, getPose = unit.getPose, exists = unit.exists,
+    getLastAttacker = unit.getLastAttacker, getAttackRange = unit.getAttackRange }}
+  local rec = {{ pre = s.attackTargetUid or -1, ruin = s.ruinEncounterCombat and true or false,
+    aPos = {{}}, lPos = {{}}, ranges = {{}} }}
+  rec.before = swapReading(sx)
+  local dec = {{}}
+  unit.getLastAttacker = function(x)
+    local r = sx.getLastAttacker(x)
+    if x == L and dec.hit == nil then
+      dec.hit = {{ present = r ~= nil, uid = r and r.uid or -1, at = r and r.at or -1 }}
+    end
+    return r
+  end
+  unit.getPose = function(x)
+    local r = sx.getPose(x)
+    if x == A and dec.seen == nil then dec.seen = {{ v = tostring(r) }} end
+    return r
+  end
+  unit.exists = function(x)
+    local r = sx.exists(x)
+    if x == A and dec.exists == nil then dec.exists = {{ v = r == true }} end
+    return r
+  end
+  unit.getInfo = function(x)
+    local r = sx.getInfo(x)
+    if x == A then
+      if dec.attInfo == nil then
+        dec.attInfo = {{ present = type(r) == 'table', tech = type(r) == 'table' and r.defName == 'technomule' }}
+      end
+      rec.aPos[#rec.aPos + 1] = pos(r)
+      local okL, l = pcall(sx.getInfo, L)
+      rec.lPos[#rec.lPos + 1] = pos(okL and l or nil)
+      local okR, g = pcall(sx.getAttackRange, L)
+      rec.ranges[#rec.ranges + 1] = okR and rangeOf(g) or 'invalid'
+    elseif x == L then
+      rec.lPos[#rec.lPos + 1] = pos(r)
+    end
+    return r
+  end
+  unit.getAttackRange = function(x)
+    local r = sx.getAttackRange(x)
+    if x == L then rec.ranges[#rec.ranges + 1] = rangeOf(r) end
+    return r
+  end
+  local res = table.pack(pcall(orig, u, s, params))
+  unit.getLastAttacker, unit.getPose, unit.exists = sx.getLastAttacker, sx.getPose, sx.exists
+  unit.getInfo, unit.getAttackRange = sx.getInfo, sx.getAttackRange
+  rec.post = s.attackTargetUid or -1
+  rec.after = swapReading(sx)
+  rec.raised = not res[1]
+  local b, a, h = rec.before, rec.after, dec.hit
+  local okB, okA = b.err == nil, a.err == nil
+  rec.hitTyped = h ~= nil and h.present and math.type(h.uid) == 'integer' and h.uid > 0
+                 and fin(h.at) and h.at >= 0
+  rec.hitBy = (h ~= nil and h.present) and h.uid or -1
+  rec.hitAt = (h ~= nil and h.present and fin(h.at)) and h.at or -1
+  rec.hitIsA = rec.hitTyped and h.uid == A
+  rec.ordered = okB and okA and fin(b.now) and fin(a.now) and a.now >= b.now
+  local function win(side)
+    if not (rec.hitTyped and side.nowOk == true) then return false end
+    local age = side.now - h.at
+    return age >= 0 and age <= WINDOW
+  end
+  if okB then b.window = win(b); b.age = rec.hitTyped and (b.now - h.at) or -1 end
+  if okA then a.window = win(a); a.age = rec.hitTyped and (a.now - h.at) or -1 end
+  local aps, lps, rs = {{}}, {{}}, {{}}
+  for _, p in ipairs(rec.aPos) do aps[#aps + 1] = p end
+  for _, p in ipairs(rec.lPos) do lps[#lps + 1] = p end
+  for _, r in ipairs(rec.ranges) do rs[#rs + 1] = r end
+  if okB then aps[#aps + 1] = b.apos; lps[#lps + 1] = b.lpos; rs[#rs + 1] = b.range end
+  if okA then aps[#aps + 1] = a.apos; lps[#lps + 1] = a.lpos; rs[#rs + 1] = a.range end
+  local reach = okB and okA and #rec.aPos > 0
+  local rmin, dmax = math.huge, -math.huge
+  for _, r in ipairs(rs) do
+    if not fin(r) or r < 0 then reach = false elseif r < rmin then rmin = r end
+  end
+  for _, p in ipairs(aps) do
+    for _, q in ipairs(lps) do
+      local d = cheb(p, q)
+      if d == nil or d < 0 then reach = false elseif d > dmax then dmax = d end
+    end
+  end
+  rec.reach = reach and dmax <= rmin + 0.5
+  rec.dmax = fin(dmax) and dmax or -1
+  rec.rmin = fin(rmin) and rmin or -1
+  rec.samples = #aps * #lps
+  rec.seen = dec.seen and dec.seen.v or 'unread'
+  rec.seenCollapsed = dec.seen ~= nil and dec.seen.v == 'collapsed'
+  rec.existsA = dec.exists ~= nil and dec.exists.v == true
+  rec.attInfoOk = dec.attInfo ~= nil and dec.attInfo.present and not dec.attInfo.tech
+  rec.aPos, rec.lPos, rec.ranges = nil, nil, nil
+  calls[#calls + 1] = rec
+  if not res[1] then error(res[2], 0) end
+  return table.unpack(res, 2, res.n)
+end
+{then_lua}
+return 'ok'"""
+
+
 def install_swap_observer(port, lashB, victimB, attackerB, then_lua=""):
-    """Wrap unit_ai_combat_attack.attackTargetExecute — the shared execute
-    lash-out drives and the retaliation swap lives in — to record, for
-    every call on `lashB`, the facts 9c2's check depends on (#2773):
-    target before and after the call, lashB's recorded last attacker (uid,
-    at) and its age in GAME seconds, the Chebyshev distance to that
-    attacker against getAttackRange(lashB) + 0.5 (the swap's own reach
-    test), the attacker's pose as wrapped and as it really is, whether
-    the victim is lash-out eligible, and whether lashB is alive. Pure
-    observation: the original runs unchanged. collect_swap_calls removes
-    the wrap. `then_lua` runs in the SAME console chunk, after the wrap is
-    in place — the Lua thread runs a chunk whole, so nothing it triggers
-    can reach the execute unobserved."""
-    send(port, " ".join((
-        f"local L, V, A = {lashB}, {victimB}, {attackerB};",
-        "local atk = require('scripts.unit_ai_combat_attack');",
-        "local pol = require('scripts.unit_ai_mental').lashoutPolicy;",
-        "local orig = atk.attackTargetExecute;",
-        "local calls = {};",
-        "_G.__probe_swap_calls = calls;",
-        "_G.__probe_swap_restore = function() atk.attackTargetExecute = orig;",
-        " _G.__probe_swap_restore = nil end;",
-        "atk.attackTargetExecute = function(u, s, params)",
-        " if u ~= L or not s then return orig(u, s, params) end;",
-        " local rp = _G.__probe_orig_getPose or unit.getPose;",
-        " local me = unit.getInfo(L); local la = unit.getLastAttacker(L);",
-        " local now = engine.gameTime(); local d = -1;",
-        " local ai = la and unit.getInfo(la.uid);",
-        " if me and ai then d = math.max(math.abs(me.gridX-ai.gridX), math.abs(me.gridY-ai.gridY)) end;",
-        " local rec = { g = now, pre = s.attackTargetUid or -1,",
-        "  la = la and la.uid or -1, at = la and la.at or -1,",
-        "  age = la and (now - (la.at or 0)) or -1, d = d,",
-        "  reach = (unit.getAttackRange(L) or 1.0) + 0.5,",
-        "  seen = tostring(la and unit.getPose(la.uid)),",
-        "  real = tostring(la and rp(la.uid)),",
-        "  victimElig = (me ~= nil) and pol.eligible(L, me, V) or false,",
-        "  alive = rp(L) ~= 'dead' };",
-        " local r = orig(u, s, params);",
-        " rec.post = s.attackTargetUid or -1;",
-        " if #calls < 200 then calls[#calls+1] = rec end;",
-        " return r end;",
-        then_lua,
-        "return 'ok'")))
+    """Install swap_observer_lua for 9c2 (#2773), with `then_lua` in the
+    same console chunk, after the wrap is in place. The Lua thread runs a
+    chunk whole, so nothing it triggers can reach the execute unobserved.
+    collect_swap_calls removes the wrap."""
+    send(port, " ".join(line.strip() for line in
+                        swap_observer_lua(lashB, victimB, attackerB,
+                                          then_lua).splitlines()))
 
 
 def collect_swap_calls(port):
@@ -1509,68 +1677,370 @@ def collect_swap_calls(port):
         calls = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return []
+    if isinstance(calls, dict):
+        # A Lua array serializes as an object when it has holes; keep the
+        # order by key.
+        try:
+            calls = [calls[k] for k in sorted(calls, key=int)]
+        except (TypeError, ValueError):
+            return []
     return calls if isinstance(calls, list) else []
+
+
+#: Each bracket side's per-side preconditions (Lua booleans).
+_SWAP_SIDE_TESTS = ("window", "victimElig", "alive")
+
+
+def swap_call_problems(c, victimB, attackerB):
+    """Everything malformed in one recorded execute call, checked before
+    any use; a malformed call is never valid evidence."""
+    if not isinstance(c, dict):
+        return [f"call record is {c!r}"]
+    problems = []
+    for k in ("pre", "post", "hitBy"):
+        v = c.get(k)
+        if not (isinstance(v, int) and not isinstance(v, bool)):
+            problems.append(f"{k} {v!r} is not an integer uid")
+    for k in ("ordered", "hitTyped", "hitIsA", "seenCollapsed", "existsA",
+              "attInfoOk", "reach", "ruin", "raised"):
+        if not isinstance(c.get(k), bool):
+            problems.append(f"{k} {c.get(k)!r} is not a boolean")
+    if not isinstance(c.get("seen"), str):
+        problems.append(f"seen pose {c.get('seen')!r} is not a string")
+    for k in ("dmax", "rmin"):
+        if not _finite_num(c.get(k)):
+            problems.append(f"{k} {c.get(k)!r} is not a finite number")
+    for side in ("before", "after"):
+        r = c.get(side)
+        if not isinstance(r, dict):
+            problems.append(f"no {side} reading")
+            continue
+        if "err" in r:
+            problems.append(f"{side} reading raised: {r['err']}")
+            continue
+        if not (_finite_num(r.get("now")) and r["now"] >= 0 and r.get("nowOk") is True):
+            problems.append(f"{side} clock {r.get('now')!r} is not a finite "
+                            f"non-negative number")
+        for k in _SWAP_SIDE_TESTS:
+            if not isinstance(r.get(k), bool):
+                problems.append(f"{side} {k} {r.get(k)!r} is not a boolean")
+        if r.get("realOk") is not True or not isinstance(r.get("real"), str):
+            problems.append(f"{side} attacker's real pose missing or invalid "
+                            f"(realOk {r.get('realOk')!r}), so not-dead is unproven")
+        if r.get("aliveOk") is not True:
+            problems.append(f"{side} subject's pose missing or invalid "
+                            f"(aliveOk {r.get('aliveOk')!r}), so alive is unproven")
+        if not _finite_num(r.get("age")):
+            problems.append(f"{side} age {r.get('age')!r} is not a finite number")
+    return problems
+
+
+def swap_call_status(c, victimB, attackerB):
+    """('valid' | 'ambiguous' | 'invalid' | 'malformed', misses) for one
+    recorded execute call. Every test is a boolean Lua computed on the
+    unrounded values; numbers appear in messages only.
+
+      * malformed — swap_call_problems found something;
+      * ambiguous — a per-side test (window, victim eligibility, lashB
+        alive, the attacker really not dead) answered differently BEFORE
+        and AFTER the call, e.g. a hit crossing the 3.0 s window during
+        it. What the execute's own reads saw is unknown, so the call is
+        never valid evidence;
+      * valid     — the execute returned normally (a raised or aborted
+        call is never valid), and the swap was provably reachable but for
+        the collapsed exclusion: target before the call the victim, no
+        ruin encounter,
+        the execute's own hit read is attackerB's (typed), its own pose
+        read 'collapsed', its own existence and info reads fine (not a
+        technomule), the window holding before AND after, the reach
+        holding for every attacker/lashB sample, the clock ordered, the
+        victim eligible, lashB alive and the attacker not really dead on
+        both sides;
+      * invalid   — otherwise, with the misses named.
+    """
+    malformed = swap_call_problems(c, victimB, attackerB)
+    if malformed:
+        return "malformed", malformed
+    b, a = c["before"], c["after"]
+    tests = [(k, b[k], a[k]) for k in _SWAP_SIDE_TESTS]
+    tests.append(("attacker not really dead", b["real"] != "dead", a["real"] != "dead"))
+    crossed = [k for k, hb, ha in tests if hb != ha]
+    if crossed:
+        return "ambiguous", [f"{', '.join(crossed)} changed during the call "
+                             f"(hit age {b['age']:.3f} -> {a['age']:.3f} game-s)"]
+    misses = []
+    if c["raised"]:
+        misses.append("the execute raised or aborted, so the call proves nothing")
+    if c["pre"] != victimB:
+        misses.append(f"target {c['pre']} not victim {victimB}")
+    if c["ruin"]:
+        misses.append("ruin-encounter combat")
+    if not c["hitIsA"]:
+        misses.append(f"the execute's hit read is by {c['hitBy']}, not {attackerB} "
+                      f"(typed: {c['hitTyped']})")
+    if not c["seenCollapsed"]:
+        misses.append(f"the execute read the attacker as {c['seen']}, not collapsed")
+    if not c["existsA"]:
+        misses.append("the execute read the attacker as not existing")
+    if not c["attInfoOk"]:
+        misses.append("the execute's attacker info was missing or a technomule")
+    if not c["ordered"]:
+        misses.append("clock not ordered across the call (a load or reset)")
+    for k, hb, _ in tests:
+        if not hb:
+            misses.append(f"{k} false on both sides" + (
+                f" (hit age ~{b['age']:.2f} game-s)" if k == "window" else ""))
+    if not c["reach"]:
+        misses.append(f"reach not proven (max distance {c['dmax']:.2f} vs "
+                      f"min range {c['rmin']:.2f} + 0.5 over {c.get('samples')} pair(s))")
+    return ("invalid", misses) if misses else ("valid", [])
 
 
 def swap_exercised(calls, victimB, attackerB):
     """9c2's gate on the recorded lash-out attack executes (#2773).
 
-    INPUT validity and POLICY outcome are kept apart. A VALID-INPUT call
-    is one whose inputs make the retaliation swap reachable: target
-    before the call is the victim, the victim is lash-out eligible,
-    lashB's recorded last attacker is attackerB, hit no older than the
-    swap's 3.0 game-second window, within the swap's reach
-    (getAttackRange + 0.5), reading 'collapsed' while really not dead,
-    with lashB alive. What the call then did (the target after it) is the
-    policy outcome and is not part of that test.
+    INPUT validity and POLICY outcome are kept apart. A call is VALID
+    evidence only when swap_call_status proves the retaliation swap was
+    reachable on the execute's own reads, bracketed on both sides, with
+    only the collapsed exclusion standing in its way. What the call then
+    did (the target after it) is the policy outcome.
 
     Answers (verdict, detail):
-      * ('setup', closest misses) — no valid-input call, so the swap was
-        never reachable and the check proves nothing;
-      * ('policy', the offending call) — some valid-input call left a
-        target other than the victim (attackerB, none, or anyone else);
-        no other call can excuse it;
-      * ('pass', a summary) — at least one valid-input call, and every
-        one kept the victim.
+      * ('setup', closest misses) — no valid call. This includes calls
+        that are all malformed, ambiguous (a boundary crossed during the
+        call), or invalid. The swap was never provably reachable and the
+        check proves nothing;
+      * ('policy', the offending call) — some VALID call left a target
+        other than the victim (attackerB, none, or anyone else); no
+        other call can excuse it;
+      * ('pass', a summary) — at least one valid call, and every one kept
+        the victim.
     """
-    if not calls:
+    if not isinstance(calls, list) or not calls:
         return "setup", "no lash-out attackTargetExecute call on the subject during the window"
-    valid, best = [], None
+    valid, best, counts = [], None, {}
     for c in calls:
-        misses = []
-        if c.get("pre") != victimB:
-            misses.append(f"target {c.get('pre')} not victim {victimB}")
-        if not c.get("victimElig"):
-            misses.append("victim not lash-out eligible")
-        if c.get("la") != attackerB:
-            misses.append(f"last attacker {c.get('la')} not {attackerB}")
-        if not (0 <= c.get("age", -1) <= 3.0):
-            misses.append(f"hit age {c.get('age', -1):.2f} game-s outside 3.0")
-        if not (0 <= c.get("d", -1) <= c.get("reach", 0)):
-            misses.append(f"attacker at {c.get('d', -1):.2f} beyond reach {c.get('reach', 0):.2f}")
-        if c.get("seen") != "collapsed":
-            misses.append(f"attacker reads {c.get('seen')}, not collapsed")
-        if c.get("real") == "dead":
-            misses.append("attacker really dead")
-        if not c.get("alive"):
-            misses.append("subject dead")
-        if misses:
-            if best is None or len(misses) < len(best):
-                best = misses
-        else:
+        status, misses = swap_call_status(c, victimB, attackerB)
+        counts[status] = counts.get(status, 0) + 1
+        if status == "valid":
             valid.append(c)
+        elif best is None or len(misses) < len(best[1]):
+            best = (status, misses)
+    summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
     if not valid:
-        return "setup", f"{len(calls)} call(s); closest missed: " + "; ".join(best)
+        return "setup", (f"{len(calls)} call(s) ({summary}); closest "
+                         f"{best[0]}: " + "; ".join(best[1]))
     for c in valid:
-        if c.get("post") != victimB:
-            return "policy", (f"g={c['g']:.2f} target {c['pre']} -> {c.get('post')} "
-                              f"with attacker {c['la']} at age {c['age']:.2f} "
-                              f"d={c['d']:.2f}/{c['reach']:.2f} seen={c['seen']}")
+        if c["post"] != victimB:
+            return "policy", (f"target {c['pre']} -> {c['post']} with attacker "
+                              f"{c['hitBy']} at hit age {c['before']['age']:.2f}-"
+                              f"{c['after']['age']:.2f} game-s, max distance "
+                              f"{c['dmax']:.2f} vs range {c['rmin']:.2f}+0.5, "
+                              f"seen {c['seen']}")
     first = valid[0]
-    return "pass", (f"{len(valid)} valid-input call(s), all kept {victimB}; "
-                    f"first g={first['g']:.2f} attacker={first['la']} "
-                    f"age={first['age']:.2f} d={first['d']:.2f}/{first['reach']:.2f} "
-                    f"seen={first['seen']} real={first['real']}")
+    return "pass", (f"{len(valid)} valid call(s) of {len(calls)} ({summary}), "
+                    f"all kept {victimB}; first: hit age {first['before']['age']:.2f}-"
+                    f"{first['after']['age']:.2f} game-s, max distance "
+                    f"{first['dmax']:.2f} vs range {first['rmin']:.2f}+0.5, "
+                    f"seen {first['seen']}, real {first['before']['real']}")
+
+
+#: --self-test's 9c2 no-engine harness: the PRODUCTION
+#: scripts/unit_ai_combat_attack.lua (or a copy with one substitution), with
+#: the REAL scripts/unit_ai_mental.lua for the victim's eligibility, driven
+#: through attackTargetExecute with the probe's own swap observer and the
+#: 9c2 'collapsed' pose pin installed, against stubbed engine bindings. The
+#: clock answers by caller: the observer's readings (swapReading on the
+#: stack) get BEFORE then AFTER, and everything the execute reads gets
+#: EXECUTE. Positions: lashB 1 at 0, victim 2 at -1, attacker 3 at
+#: `attacker_x`; while the execute runs, attacker positions, lashB
+#: positions and lashB's attack range answer per read from `attacker_seq`,
+#: `subject_seq` and `range_seq`. Those reads include the observer's own
+#: samples next to each attacker read, but not its BEFORE/AFTER readings.
+#: Results are serialized the way the console does (Lua 5.4 tostring).
+_SWAP_HARNESS_LUA = r"""
+local ATTACK, MENTAL, OBSERVER = ...
+local CLOCK = { before = %(before)r, execute = %(execute)r, after = %(after)r }
+local WINDOW = %(window)r
+local seen, obs = {}, 0
+local function inProbe()
+  for lvl = 3, 40 do
+    local i = debug.getinfo(lvl, 'n')
+    if not i then break end
+    if i.name == 'swapReading' then return true end
+  end
+  return false
+end
+local function noop() return nil end
+local function lenient(t) return setmetatable(t, { __index = function() return noop end }) end
+engine = lenient({ gameTime = function()
+  if inProbe() then
+    obs = obs + 1
+    seen[#seen + 1] = 'probe'
+    return obs == 1 and CLOCK.before or CLOCK.after
+  end
+  seen[#seen + 1] = 'execute'
+  return CLOCK.execute
+end, logDebug = noop })
+combat = lenient({})
+local inCall = false
+local MISSING_POSE = %(missing_pose)s
+local ATT_X, ATT_SEQ, nA = %(attacker_x)r, %(attacker_seq)s, 0
+local SUBJ_SEQ, RANGE_SEQ, nS, nR = %(subject_seq)s, %(range_seq)s, 0, 0
+unit = lenient({
+  getInfo = function(u)
+    if u == 1 then
+      local x = 0.0
+      if inCall and not inProbe() then nS = nS + 1; x = SUBJ_SEQ[math.min(nS, #SUBJ_SEQ)] end
+      return { gridX = x, gridY = 0.0, defName = 'acolyte' }
+    end
+    if u == 2 then return { gridX = -1.0, gridY = 0.0, defName = 'acolyte' } end
+    if u == 3 then
+      local x = ATT_X
+      if inCall and not inProbe() then nA = nA + 1; x = ATT_SEQ[math.min(nA, #ATT_SEQ)] end
+      if x == 'missing' then return nil end
+      return { gridX = x, gridY = 0.0, defName = 'acolyte' }
+    end
+    return nil
+  end,
+  exists = function(u) return u == 1 or u == 2 or u == 3 end,
+  getPose = function(u)
+    if inProbe() and MISSING_POSE[u] == obs then return nil end
+    return 'standing'
+  end,
+  getLastAttacker = function(u) if u == 1 then return { uid = 3, at = 0.0 } end end,
+  getAttackRange = function()
+    if inCall and not inProbe() then nR = nR + 1; return RANGE_SEQ[math.min(nR, #RANGE_SEQ)] end
+    return 1.0
+  end,
+  getStat = function() return 1.0 end,
+  getAnimDuration = function() return 0.5 end,
+  getActivity = function() return 'idle' end,
+})
+local function stub(t) return function() return lenient(t) end end
+package.loaded['scripts.unit_ai'] = lenient({})
+package.preload['scripts.unit_ai_core'] = stub({ isGoalActive = function() return true end })
+package.preload['scripts.movement_speed'] = stub({})
+package.preload['scripts.unit_ai_combat'] = stub({ RETALIATE_WINDOW_SEC = WINDOW,
+  staminaPct = function() return 1.0 end, chooseAttackMode = function() return 'quick' end,
+  computeAttackCooldown = function() return 1.0 end })
+package.preload['scripts.unit_ai_combat_lunge'] = stub({ tryLunge = function() return false end })
+package.preload['scripts.unit_stats'] = stub({ get = function() return 1.0 end })
+package.preload['scripts.brain'] = stub({})
+package.preload['scripts.mental_state'] = stub({})
+package.preload['scripts.unit_ai_needs'] = stub({})
+package.preload['scripts.unit_ai_combat_attack'] = function() return assert(loadfile(ATTACK))() end
+package.preload['scripts.unit_ai_mental'] = function() return assert(loadfile(MENTAL))() end
+local atk = require('scripts.unit_ai_combat_attack')
+local saved = { getInfo = unit.getInfo, getPose = unit.getPose, exists = unit.exists,
+  getLastAttacker = unit.getLastAttacker, getAttackRange = unit.getAttackRange }
+assert(load(OBSERVER))()
+local pinned = unit.getPose
+local s = { attackTargetUid = 2, mentalLashoutActive = true }
+inCall = true
+local okCall, errCall = pcall(atk.attackTargetExecute, 1, s, {})
+inCall = false
+local restored = unit.getInfo == saved.getInfo and unit.exists == saved.exists
+  and unit.getLastAttacker == saved.getLastAttacker
+  and unit.getAttackRange == saved.getAttackRange and unit.getPose == pinned
+local function enc(v)
+  local t = type(v)
+  if t == 'table' then
+    local parts = {}
+    for k, x in pairs(v) do parts[#parts + 1] = string.format('%%q:%%s', tostring(k), enc(x)) end
+    return '{' .. table.concat(parts, ',') .. '}'
+  elseif t == 'string' then return string.format('%%q', v)
+  elseif t == 'boolean' then return tostring(v)
+  elseif t == 'number' then
+    if v ~= v then return '"nan"' end
+    if v == math.huge then return '"inf"' end
+    if v == -math.huge then return '"-inf"' end
+    if math.type(v) == 'integer' then return string.format('%%d', v) end
+    local s = string.format('%%.14g', v)
+    if not s:find('[^%%-0-9]') then s = s .. '.0' end
+    return s
+  end
+  return 'null'
+end
+local calls = _G.__probe_swap_calls or {}
+io.write(enc({ calls = calls, post = s.attackTargetUid, restored = restored,
+  clockCallers = seen, okCall = okCall, errCall = errCall and tostring(errCall) or false }))
+"""
+
+
+def swap_policy_harness(before, execute, after, attacker_x=1.0,
+                        attacker_seq=None, attack_patch=None,
+                        subject_seq=None, range_seq=None, missing_pose=None):
+    """Run the production attack execute once on lashB (1, target victim
+    2, attacker 3 whose hit is stamped at game time 0) with the probe's
+    swap observer and the 9c2 pose pin, and no engine (needs `lua`).
+
+    `attack_patch=(old, new)` runs a copy of unit_ai_combat_attack.lua
+    with that one substitution; the default is the real file.
+
+    Answers a dict, or None when no lua is installed:
+      * calls — as collect_swap_calls would see them after the console
+        round trip;
+      * post — the target after the call;
+      * restored — whether every wrapped function was restored, with the
+        pose pin left in place;
+      * clock — the clock callers, in order;
+      * ok / err — whether the execute returned or raised, and the error."""
+    import shutil, subprocess, os, re, tempfile
+    lua = shutil.which("lua")
+    if lua is None:
+        return None
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "scripts", "unit_ai_combat_attack.lua")) as fh:
+        attack_src = fh.read()
+    if attack_patch is not None:
+        old, new = attack_patch
+        if attack_src.count(old) != 1:
+            raise RuntimeError(f"attack patch target not unique: {old!r}")
+        attack_src = attack_src.replace(old, new)
+    with open(os.path.join(root, "scripts", "unit_ai_combat.lua")) as fh:
+        m = re.search(r"^local RETALIATE_WINDOW_SEC = ([0-9.]+)", fh.read(), re.M)
+    if m is None:
+        raise RuntimeError("RETALIATE_WINDOW_SEC not found in unit_ai_combat.lua")
+    pin = ("if not _G.__probe_orig_getPose then _G.__probe_orig_getPose = unit.getPose end; "
+           "unit.getPose = function(u) if u == 3 then return 'collapsed' end "
+           "return _G.__probe_orig_getPose(u) end;")
+    observer = " ".join(line.strip() for line in
+                        swap_observer_lua(1, 2, 3, then_lua=pin).splitlines())
+    seq = attacker_seq if attacker_seq is not None else [attacker_x]
+
+    def lua_list(v, default):
+        return "{" + ", ".join(repr(float(x)) for x in (v or [default])) + "}"
+    # missing_pose=(uid, reading): that unit's REAL pose answers nil in the
+    # observer's BEFORE (1) or AFTER (2) reading.
+    mp = "{}" if missing_pose is None else "{[%d] = %d}" % missing_pose
+    src = _SWAP_HARNESS_LUA % {
+        "missing_pose": mp,
+        "subject_seq": lua_list(subject_seq, 0.0),
+        "range_seq": lua_list(range_seq, 1.0),
+        "before": before, "execute": execute, "after": after,
+        "window": float(m.group(1)), "attacker_x": float(attacker_x),
+        "attacker_seq": "{" + ", ".join("'missing'" if x is None else repr(float(x))
+                                        for x in seq) + "}"}
+    with tempfile.TemporaryDirectory() as tmp:
+        paths = {}
+        for name, text in (("harness.lua", src), ("attack.lua", attack_src)):
+            paths[name] = os.path.join(tmp, name)
+            with open(paths[name], "w") as fh:
+                fh.write(text)
+        out = subprocess.run(
+            [lua, paths["harness.lua"], paths["attack.lua"],
+             os.path.join(root, "scripts", "unit_ai_mental.lua"), observer],
+            capture_output=True, text=True, timeout=30)
+    if out.returncode != 0:
+        raise RuntimeError(f"swap harness failed: {out.stderr.strip()}")
+    got = json.loads(out.stdout)
+    calls = got["calls"]
+    if isinstance(calls, dict):
+        calls = [calls[k] for k in sorted(calls, key=int)]
+    return {"calls": calls, "post": got["post"], "restored": got["restored"],
+            "clock": got["clockCallers"], "ok": got["okCall"], "err": got["errCall"]}
+
 
 #: --self-test's no-engine harness: the PRODUCTION scripts/unit_ai_mental.lua
 #: (or a deliberately broken copy of it) driven through M.shortCircuit, with
@@ -2168,21 +2638,183 @@ def self_test():
               sel["before"]["attacker"]["dist"] == -1 and sel["after"]["attacker"]["dist"] == -1
               and kind(sel) == "setup")
 
-    # swap_exercised (9c2)
+    # swap_exercised (9c2): every test is a Lua boolean on the execute's
+    # own reads, bracketed before and after the call.
     V, A = 9, 10
-    sw = {"g": 10.0, "pre": V, "post": V, "la": A, "at": 8.5, "age": 1.5, "d": 1.0,
-          "reach": 1.4, "seen": "collapsed", "real": "standing", "victimElig": True,
-          "alive": True}
+
+    def sside(t, window=True, elig=True, alive=True, real="standing"):
+        return {"now": t, "nowOk": True, "window": window, "victimElig": elig,
+                "alive": alive, "aliveOk": True, "real": real, "realOk": True,
+                "age": t - 8.5}
+
+    def mkcall(post=V, **kw):
+        c = {"pre": V, "post": post, "hitBy": A, "hitTyped": True, "hitIsA": True,
+             "ordered": True, "seenCollapsed": True, "existsA": True,
+             "attInfoOk": True, "reach": True, "ruin": False, "raised": False,
+             "seen": "collapsed", "dmax": 1.0, "rmin": 1.0, "samples": 4,
+             "before": sside(10.0), "after": sside(10.01)}
+        c.update(kw)
+        return c
+
+    def gate(calls):
+        return swap_exercised(calls, V, A)[0]
+
+    good = mkcall()
+    check("9c2 call: a fully proven call is valid", swap_call_status(good, V, A)[0] == "valid")
+    check("9c2 call: a raised call is never valid", swap_call_status(mkcall(raised=True), V, A)[0] == "invalid"
+          and gate([mkcall(raised=True)]) == "setup")
+    for side in ("before", "after"):
+        for k in ("realOk", "aliveOk"):
+            bad_side = dict(sside(10.0 if side == "before" else 10.01))
+            bad_side[k] = False
+            check(f"9c2 call: {side} {k} false (pose missing) is malformed",
+                  swap_call_status(mkcall(**{side: bad_side}), V, A)[0] == "malformed")
+    for name, kw in (("a missing post", {"post": None}), ("a float pre", {"pre": 9.0}),
+                     ("a non-boolean reach", {"reach": 1}), ("a missing ordered flag", {"ordered": None}),
+                     ("a non-string seen pose", {"seen": None}), ("a NaN dmax", {"dmax": float("nan")}),
+                     ("a raised AFTER reading", {"after": {"err": "boom"}}),
+                     ("a negative clock", {"before": dict(sside(10.0), now=-1.0)}),
+                     ("a non-boolean window", {"after": dict(sside(10.01), window="yes")}),
+                     ("a missing BEFORE reading", {"before": None})):
+        check(f"9c2 call: {name} is malformed, never valid",
+              swap_call_status(mkcall(**kw), V, A)[0] == "malformed"
+              and gate([mkcall(**kw)]) == "setup")
+    check("9c2 call: a window crossing during the call is ambiguous, never valid",
+          swap_call_status(mkcall(after=sside(11.51, window=False)), V, A)[0] == "ambiguous")
+    check("9c2 call: victim eligibility changing during the call is ambiguous",
+          swap_call_status(mkcall(after=sside(10.01, elig=False)), V, A)[0] == "ambiguous")
+    for name, kw in (("stale on both sides", {"before": sside(12.0, window=False),
+                                              "after": sside(12.01, window=False)}),
+                     ("the hit read by someone else", {"hitIsA": False, "hitBy": 42}),
+                     ("the execute reading the attacker standing", {"seenCollapsed": False, "seen": "standing"}),
+                     ("reach unproven", {"reach": False}), ("a clock going backwards", {"ordered": False}),
+                     ("a ruin encounter", {"ruin": True}), ("target not the victim", {"pre": 42}),
+                     ("attacker info missing", {"attInfoOk": False})):
+        check(f"9c2 call: {name} is invalid",
+              swap_call_status(mkcall(**kw), V, A)[0] == "invalid")
+    amb = mkcall(after=sside(11.51, window=False), post=V)
+    bad = mkcall(seenCollapsed=False, seen="standing", post=A)
     for name, calls, want in (
-            ("all valid calls keep the victim -> pass", [sw, dict(sw, g=10.1)], "pass"),
-            ("a valid swap then a good call -> policy", [dict(sw, post=A), dict(sw, g=10.2)], "policy"),
-            ("post nil -> policy", [dict(sw, post=-1)], "policy"),
-            ("post another uid -> policy", [dict(sw, post=42)], "policy"),
-            ("no valid calls -> setup", [dict(sw, age=3.5), dict(sw, la=-1), dict(sw, alive=False)], "setup"),
+            ("all valid calls keep the victim -> pass", [good, mkcall()], "pass"),
+            ("a valid swap then a good call -> policy", [mkcall(post=A), good], "policy"),
+            ("post nil -> policy", [mkcall(post=-1)], "policy"),
+            ("post another uid -> policy", [mkcall(post=42)], "policy"),
             ("no calls -> setup", [], "setup"),
-            ("an invalid (stale) swap -> setup", [dict(sw, age=4.0, post=A)], "setup"),
-            ("valid good + invalid swap -> pass", [sw, dict(sw, seen="standing", post=A)], "pass")):
-        check(f"9c2 gate: {name}", swap_exercised(calls, V, A)[0] == want)
+            ("only ambiguous calls -> setup, never pass", [amb, amb], "setup"),
+            ("only malformed calls -> setup", [mkcall(post=None)], "setup"),
+            ("ambiguous + valid kept -> pass", [amb, good], "pass"),
+            ("invalid swap + valid kept -> pass", [bad, good], "pass"),
+            ("ambiguous + invalid + valid swap -> policy", [amb, bad, mkcall(post=A)], "policy"),
+            ("malformed + ambiguous + invalid -> setup", [mkcall(post=None), amb, bad], "setup")):
+        check(f"9c2 gate: {name}", gate(calls) == want)
+
+    # The PRODUCTION attack execute, no engine. MUTANT = the collapsed
+    # exclusion removed from the retaliation swap.
+    MUTANT = ('and attPose ~= "dead" and attPose ~= "collapsed"', 'and attPose ~= "dead"')
+    ran = swap_policy_harness(2.0, 2.01, 2.02)
+    if ran is None:
+        print("  skip 9c2 harness: no `lua` interpreter installed")
+    else:
+        def sgate(r):
+            return swap_exercised(r["calls"], 2, 3)[0]
+
+        def status(r):
+            return swap_call_status(r["calls"][0], 2, 3)[0]
+        check("9c2 harness: the execute's clock reads fall between the probe's two readings",
+              isinstance(ran["clock"], dict)
+              and [ran["clock"][k] for k in sorted(ran["clock"], key=int)][0] == "probe"
+              and [ran["clock"][k] for k in sorted(ran["clock"], key=int)][-1] == "probe")
+        check("9c2 harness (3): correct policy, fresh inputs -> keeps the victim, valid, PASS",
+              ran["post"] == 2 and status(ran) == "valid" and sgate(ran) == "pass"
+              and ran["restored"] is True)
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT)
+        check("9c2 harness (2): exclusion DISABLED, fresh inputs -> swaps onto the collapsed "
+              "attacker -> POLICY failure",
+              r["post"] == 3 and status(r) == "valid" and sgate(r) == "policy")
+        r = swap_policy_harness(2.99, 3.01, 3.02, attack_patch=MUTANT)
+        check("9c2 harness (1): exclusion DISABLED, observer 2.99 / execute 3.01 -> the "
+              "mutant skips the stale swap and keeps the victim",
+              r["post"] == 2)
+        check("9c2 harness (1): ... the single pre-call reading would have counted it valid "
+              "(documents the bug)",
+              r["calls"][0]["before"]["window"] is True)
+        check("9c2 harness (1): ... but the bracket makes it ambiguous -> setup, NOT a pass",
+              status(r) == "ambiguous" and sgate(r) == "setup")
+        r = swap_policy_harness(3.0, 3.0, 3.0)
+        check("9c2 harness (4): exactly 3.0 everywhere (inclusive) -> valid, correct policy passes",
+              r["post"] == 2 and status(r) == "valid" and sgate(r) == "pass")
+        r = swap_policy_harness(3.0, 3.0, 3.0, attack_patch=MUTANT)
+        check("9c2 harness (4): exactly 3.0, exclusion DISABLED -> swaps -> POLICY failure",
+              r["post"] == 3 and sgate(r) == "policy")
+        eps = 3.0000000000000004
+        r = swap_policy_harness(3.0, eps, eps, attack_patch=MUTANT)
+        check("9c2 harness (4): 3+eps arrives printed as 3.0 (production tostring)",
+              r["calls"][0]["after"]["now"] == 3.0 and r["post"] == 2)
+        check("9c2 harness (4): ... Lua's own test says AFTER is past the window -> ambiguous, "
+              "setup, NOT a pass",
+              r["calls"][0]["after"]["window"] is False and status(r) == "ambiguous"
+              and sgate(r) == "setup")
+        r = swap_policy_harness(eps, eps, eps)
+        check("9c2 harness (4): 3+eps on every read -> invalid (stale), setup",
+              status(r) == "invalid" and sgate(r) == "setup")
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT, attacker_x=1.0,
+                                attacker_seq=[1.6])
+        check("9c2 harness: attacker out of reach on the execute's own read (1.6 > 1.5), in "
+              "reach at both readings -> the mutant keeps the victim, reach unproven -> setup",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        # The SUBJECT's own position, read by the mutant at :216, goes out
+        # of reach and comes back. In-call lashB reads: the observer's sample
+        # next to the attacker read (0.0), the mutant's own read at :216
+        # (-0.6, so 1.6 > 1.5 from the attacker at 1.0), then :233 (0.0).
+        # Both bracket readings see 0.0.
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT,
+                                subject_seq=[0.0, -0.6, 0.0])
+        check("9c2 harness: SUBJECT out of reach on the mutant's own read (:216) and back -> "
+              "the mutant keeps the victim, captured, reach unproven -> setup, not a pass",
+              r["post"] == 2 and r["calls"][0]["dmax"] > 1.5
+              and status(r) == "invalid" and sgate(r) == "setup")
+        # lashB's attack RANGE, read by the mutant at :220, drops and comes
+        # back. In-call range reads: the observer's sample (1.0), the
+        # mutant's own (0.4, so 1.0 > 0.9), then :236 (1.0).
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT,
+                                range_seq=[1.0, 0.4, 1.0])
+        check("9c2 harness: RANGE dropped on the mutant's own read (:220) and back -> the "
+              "mutant keeps the victim, captured, reach unproven -> setup, not a pass",
+              r["post"] == 2 and r["calls"][0]["rmin"] == 0.4
+              and status(r) == "invalid" and sgate(r) == "setup")
+        r = swap_policy_harness(2.0, 2.01, 2.02, subject_seq=[0.0, -0.6, 0.0])
+        check("9c2 harness: the CORRECT policy short-circuits at :213 (no :216 read); its "
+              "next in-call lashB read (:233, after the swap decision) is also captured, so the "
+              "same excursion makes the call a conservative setup discard, never a verdict",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT, attacker_seq=[None])
+        check("9c2 harness: the execute's attacker info read missing -> invalid, setup",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        amb_r = swap_policy_harness(2.99, 3.01, 3.02, attack_patch=MUTANT)
+        good_r = swap_policy_harness(2.0, 2.01, 2.02)
+        swap_r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=MUTANT)
+        check("9c2 harness (5): ambiguous + valid-kept calls -> pass",
+              swap_exercised(amb_r["calls"] + good_r["calls"], 2, 3)[0] == "pass")
+        check("9c2 harness (5): ambiguous + valid-swapped calls -> policy",
+              swap_exercised(amb_r["calls"] + swap_r["calls"], 2, 3)[0] == "policy")
+        r = swap_policy_harness(2.0, 2.01, 2.02, attack_patch=(
+            "    local me  = unit.getInfo(uid)\n", "    error('boom')\n"))
+        check("9c2 harness: an execute that raises -> the error propagates, every wrapper "
+              "is restored, the call is still recorded",
+              r["ok"] is False and "boom" in str(r["err"]) and r["restored"] is True
+              and len(r["calls"]) == 1 and r["calls"][0]["raised"] is True)
+        check("9c2 harness: ... with otherwise valid inputs and the victim kept, the raised "
+              "call is NOT valid and the gate CANNOT pass",
+              r["post"] == 2 and status(r) == "invalid" and sgate(r) == "setup")
+        check("9c2 harness: raised call + a separate valid WRONG-target call -> POLICY failure",
+              swap_exercised(r["calls"] + swap_r["calls"], 2, 3)[0] == "policy")
+        for who, uid in (("attacker", 3), ("subject", 1)):
+            for side, n in (("BEFORE", 1), ("AFTER", 2)):
+                r = swap_policy_harness(2.0, 2.01, 2.02, missing_pose=(uid, n))
+                check(f"9c2 harness: {who}'s real pose missing (nil) in the {side} reading -> "
+                      f"malformed, cannot pass",
+                      r["post"] == 2 and status(r) == "malformed" and sgate(r) == "setup")
+
 
     print(f"mental_state_probe self-test: "
           f"{'all pass' if not fails else str(len(fails)) + ' FAIL'}")
