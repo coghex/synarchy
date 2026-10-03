@@ -1383,71 +1383,80 @@ def main():
             print(f"  [FAIL] setup: {attackerB} never landed a hit on {lashB} "
                   f"— can't test the retaliation-swap exclusion")
 
-        # Stop BOTH sides' ordinary combat AI immediately — see the
-        # identical note in the 9a setup above. This test wants
-        # attackerB's REPORTED pose patched to 'collapsed' below while it
-        # stays actually healthy underneath; letting real mutual combat
-        # run first risks genuinely collapsing lashB instead.
-        send(P, f"local ai=require('scripts.unit_ai') "
-                f"local ids={{{attackerB},{lashB}}} "
-                f"for _,u in ipairs(ids) do "
-                f"local s=ai.getState(u); "
-                f"if s then ai.markGoalAccomplished(s,'attack'); "
-                f"s.attackTargetUid=nil end; unit.stop(u) end; return 'ok'")
-        # Unconditionally revive both (see the identical note in the 9a
-        # setup) — this test wants attackerB's REPORTED pose patched to
-        # 'collapsed' below while actually healthy underneath. Draining
-        # its stamina below the acolyte config's wander_min_stamina_
-        # fraction (0.2 — never to 0, the universal death rule) disables
-        # ambient wander too, so revival doesn't send it drifting off
-        # again before the teleport below is confirmed.
-        send(P, f"unit.revive({attackerB}); unit.revive({lashB}); "
-                f"local st=require('scripts.unit_stats') "
-                f"unit.setStat({attackerB},'stamina', "
-                f"st.get({attackerB},'max_stamina')*0.1); return 'ok'")
-
-        # Snap attackerB back to a fixed, known distance from lashB — see
-        # the identical note in the 9a setup above (knockback can drift
-        # them beyond LASHOUT_RANGE, which would invalidate this check
-        # for the wrong reason).
-        # victimB too, one tile on the OTHER side, in the same command
-        # (#2773): the subject can wander or run during the hit staging, so
-        # the victim's spawn spot says nothing about whether it is still in
-        # lash-out range when the break is forced (a traced run had it 19
-        # tiles away). Whether the hit is still inside the swap's
-        # retaliation window when the check runs is OBSERVED there
-        # (swap_exercised), not assumed from here.
-        lbx, lby = unit_pos(P, lashB)
-        send(P, f"unit.setPos({attackerB}, {lbx + 1}, {lby}); "
-                f"unit.setPos({victimB}, {lbx - 1}, {lby}); return 'ok'")
-        # Confirm the (async) teleports actually landed — see the 9a note.
+        # The swap this check exercises only lives within unit_ai_combat's
+        # 3 s RETALIATE_WINDOW_SEC of the hit, so everything between the
+        # hit and the break is ONE console chunk here and ONE below
+        # (#2773): a traced run spent 3.4 s on separate round trips and
+        # reached lash-out with the hit already 3.49 s old, so the swap
+        # was never reachable.
+        #
+        # Chunk 1, sent as soon as the hit is observed:
+        # * stop BOTH sides' ordinary combat AI — see the identical note
+        #   in the 9a setup above; this test wants attackerB's REPORTED
+        #   pose patched to 'collapsed' below while it stays actually
+        #   healthy underneath, and real mutual combat risks genuinely
+        #   collapsing lashB instead;
+        # * revive both, and drain attackerB's stamina below the acolyte
+        #   config's wander_min_stamina_fraction (0.2 — never to 0, the
+        #   universal death rule) so revival doesn't send it drifting off
+        #   before the teleport below is confirmed;
+        # * snap attackerB one tile east of lashB and victimB one tile
+        #   west, from lashB's position read IN this chunk. Knockback can
+        #   drift the attacker beyond LASHOUT_RANGE, and the subject can
+        #   wander or run during the hit staging, so neither spawn spot
+        #   says anything about range when the break is forced (a traced
+        #   run had the victim 19 tiles away).
+        # It answers lashB's position and the hit record, for diagnostics.
+        # victimB's goals and state are not touched.
+        stagedB = send_json(P, " ".join((
+            f"local A, L, V = {attackerB}, {lashB}, {victimB};",
+            "local ai = require('scripts.unit_ai');",
+            "for _, u in ipairs({A, L}) do local s = ai.getState(u);",
+            " if s then ai.markGoalAccomplished(s, 'attack'); s.attackTargetUid = nil end;",
+            " unit.stop(u) end;",
+            "unit.revive(A); unit.revive(L);",
+            "local st = require('scripts.unit_stats');",
+            "unit.setStat(A, 'stamina', st.get(A, 'max_stamina') * 0.1);",
+            "local i = unit.getInfo(L); local h = unit.getLastAttacker(L);",
+            "unit.setPos(A, i.gridX + 1, i.gridY); unit.setPos(V, i.gridX - 1, i.gridY);",
+            "return { lx = i.gridX, ly = i.gridY, g = engine.gameTime(),",
+            " hitBy = h and h.uid or -1, hitAt = h and h.at or -1 }")))
+        if not isinstance(stagedB, dict):
+            stagedB = {}
+        lbx, lby = stagedB.get("lx", 0.0), stagedB.get("ly", 0.0)
+        print(f"  [setup] 9c2 staged after the hit: {stagedB}")
+        # Confirm the (async) teleports actually landed — see the 9a note —
+        # with ONE console read per poll returning all three positions.
         def landedB():
-            ax, ay = unit_pos(P, attackerB)
-            vx, vy = unit_pos(P, victimB)
-            return ((ax - (lbx + 1)) ** 2 + (ay - lby) ** 2 < 0.05
-                    and (vx - (lbx - 1)) ** 2 + (vy - lby) ** 2 < 0.05)
+            pos = send_json(P, " ".join((
+                f"local a, v, l = unit.getInfo({attackerB}), unit.getInfo({victimB}), "
+                f"unit.getInfo({lashB});",
+                "return { ax = a.gridX, ay = a.gridY, vx = v.gridX, vy = v.gridY,",
+                " lx = l.gridX, ly = l.gridY }")))
+            if not isinstance(pos, dict):
+                return False
+            return ((pos["ax"] - (lbx + 1)) ** 2 + (pos["ay"] - lby) ** 2 < 0.05
+                    and (pos["vx"] - (lbx - 1)) ** 2 + (pos["vy"] - lby) ** 2 < 0.05)
         if not poll_until(5, landedB):
             ok = False
             print(f"  [FAIL] setup: teleporting {attackerB} and {victimB} "
                   f"next to {lashB} never took effect")
 
-        # Pin attackerB's reported pose to 'collapsed' — unit.collapse()
-        # alone only holds while every gating resource sits below its
-        # revive threshold (see the dead/collapsed/technomule test
-        # below), so this reuses the same wrap-and-delegate technique
-        # for a reliable, deterministic pose throughout this check.
-        send(P, f"if not _G.__probe_orig_getPose then "
-                f"_G.__probe_orig_getPose = unit.getPose end; "
-                f"unit.getPose = function(u) "
-                f"if u == {attackerB} then return 'collapsed' end "
-                f"return _G.__probe_orig_getPose(u) end; return 'ok'")
-
-        # Observe every lash-out attack execute of lashB through the
-        # window (#2773), installed in the same chunk that forces the
-        # break so the first one is seen; see observe_swap_calls.
+        # Chunk 2: pin attackerB's reported pose to 'collapsed', observe
+        # every lash-out attack execute of lashB through the window
+        # (#2773; see install_swap_observer), and force the break — all in
+        # ONE send, so the first execute is seen. The pose pin is a
+        # wrap-and-delegate because unit.collapse() alone only holds while
+        # every gating resource sits below its revive threshold (see the
+        # dead/collapsed/technomule test below).
         install_swap_observer(
             P, lashB, victimB, attackerB,
-            then_lua=f"require('scripts.mental_state').forceBreak({lashB},'lash_out');")
+            then_lua=(f"if not _G.__probe_orig_getPose then "
+                      f"_G.__probe_orig_getPose = unit.getPose end; "
+                      f"unit.getPose = function(u) "
+                      f"if u == {attackerB} then return 'collapsed' end "
+                      f"return _G.__probe_orig_getPose(u) end; "
+                      f"require('scripts.mental_state').forceBreak({lashB},'lash_out');"))
 
         # Sample rapidly through the retaliation-swap's own 3s window
         # (RETALIATE_WINDOW_SEC, timed from the hit staged above) —
