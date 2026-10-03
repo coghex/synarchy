@@ -1874,8 +1874,14 @@ jobs:
   # only, after their verdict; it is never on a pull request's path.
   project-cache:
     needs: [resolve-image, test-and-audits, build-test]
+    # `!cancelled()` is load-bearing: without a status function GitHub
+    # applies success() over every ANCESTOR, and behavior-probes -- skipped
+    # on every master push by design -- is one, through build-test. The
+    # aggregate's own verdict below is what decides; it already accepts
+    # exactly that expected skip and nothing else.
     if: >-
-      github.event_name == 'push'
+      !cancelled()
+      && github.event_name == 'push'
       && github.ref == 'refs/heads/master'
       && needs.build-test.result == 'success'
       && needs.test-and-audits.outputs.docs_only != 'true'

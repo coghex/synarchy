@@ -74,6 +74,8 @@ from ci_parity_workflow import (  # noqa: E402
     audit_cabal_verbosity,
     audit_gate_sets,
     audit_headless_lane_wiring,
+    job_would_run,
+    WRITER_SCENARIOS,
     audit_parallel_gate_wiring,
     audit_unit_asset_gate_wiring,
     local_gate_invocations,
@@ -774,7 +776,8 @@ jobs:
   project-cache:
     needs: [resolve-image, test-and-audits, build-test]
     if: >-
-      github.event_name == 'push'
+      !cancelled()
+      && github.event_name == 'push'
       && github.ref == 'refs/heads/master'
       && needs.build-test.result == 'success'
       && needs.test-and-audits.outputs.docs_only != 'true'
@@ -791,6 +794,27 @@ jobs:
 def _headless_lane_wiring_self_test() -> list[str]:
     """#2745: the lane jobs and the one project-cache writer."""
     failures: list[str] = []
+
+    # The scheduling model itself, on hand-checkable conditions.
+    master = dict(WRITER_SCENARIOS[0][1])
+    _expect(failures, not job_would_run("github.event_name == 'push'", master),
+            "a condition without a status function fails on a skipped ancestor")
+    _expect(failures, job_would_run("github.event_name == 'push'",
+                                    dict(master, ancestors_succeeded=True)),
+            "and passes when every ancestor succeeded")
+    _expect(failures, job_would_run("!cancelled() && github.event_name == 'push'", master),
+            "`!cancelled()` replaces the implicit success()")
+    _expect(failures, not job_would_run("!cancelled()", dict(master, cancelled=True)),
+            "`!cancelled()` stays off in a cancelled run")
+    _expect(failures, not job_would_run(
+                "!cancelled() && needs.test-and-audits.outputs.docs_only != 'true'",
+                dict(master, **{"needs.test-and-audits.outputs.docs_only": "true"})),
+            "`!=` compares against the context")
+    try:
+        job_would_run("a == 'x' || b == 'y'", master)
+        _expect(failures, False, "an unmodelled `||` condition must be refused")
+    except AuditError:
+        pass
 
     def problems(text: str) -> list[str]:
         return audit_headless_lane_wiring(text)
@@ -890,15 +914,27 @@ def _headless_lane_wiring_self_test() -> list[str]:
                       "    needs: [resolve-image, test-and-audits]\n"),
          "must need `build-test`"),
         ("a writer on pull requests too",
-         good.replace("      github.event_name == 'push'\n      && github.ref == 'refs/heads/master'\n",
-                      "      github.ref == 'refs/heads/master'\n"),
+         good.replace("      && github.event_name == 'push'\n      && github.ref == 'refs/heads/master'\n",
+                      "      && github.ref == 'refs/heads/master'\n"),
          "must be guarded by exactly"),
+        ("a writer on any push",
+         good.replace("      && github.event_name == 'push'\n      && github.ref == 'refs/heads/master'\n", ""),
+         "would run on a pull request"),
+        # #2745 round 2: without a status function GitHub applies success()
+        # over every ancestor, so the expected master-push probe skip would
+        # skip the writer on exactly the run it exists for.
+        ("a writer without a status function",
+         good.replace("      !cancelled()\n      && github.event_name", "      github.event_name"),
+         "would not run on a successful master push with behavior-probes skipped"),
+        ("a writer that runs even when cancelled",
+         good.replace("      !cancelled()\n", "      always()\n"),
+         "would run on a cancelled run"),
         ("a writer that ignores the aggregate's verdict",
          good.replace("      && needs.build-test.result == 'success'\n", ""),
-         "must be guarded by exactly"),
+         "would run on a failed aggregate"),
         ("a writer that ignores the docs-only path",
          good.replace("      && needs.test-and-audits.outputs.docs_only != 'true'\n", ""),
-         "must be guarded by exactly"),
+         "would run on a docs-only master push"),
         ("no docs-only output for the writer",
          good.replace("    outputs:\n      docs_only: ${{ steps.docs-fast-path.outputs.docs_only }}\n", ""),
          "must export `outputs.docs_only`"),

@@ -43,6 +43,7 @@ audit through `python3 tools/ci_parity_audit.py`.
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 try:
@@ -485,6 +486,66 @@ def _canonical_step(step: dict) -> object:
     return canon(step)
 
 
+_STATUS_FUNCTIONS = ("always()", "!cancelled()", "success()", "failure()", "cancelled()")
+
+
+def job_would_run(condition: str, context: dict[str, object]) -> bool:
+    """Whether GitHub would start a job guarded by `condition`.
+
+    Models the scheduling rule the writer depends on, for the grammar its
+    condition uses: terms joined by `&&`, each a status function or a
+    `==`/`!=` comparison of a context path with a quoted string. A
+    condition WITHOUT a status function gets GitHub's implicit `success()`,
+    which is false as soon as any ANCESTOR job did not succeed -- a skipped
+    one included. `context` supplies the compared paths plus two booleans:
+    `ancestors_succeeded` and `cancelled`.
+    """
+    text = normalise_expression(condition)
+    if "||" in text or "(" in text.replace("()", ""):
+        raise AuditError(f"cannot model condition {condition!r}")
+    terms = [term.strip() for term in text.split("&&") if term.strip()]
+    status = {"always()": True,
+              "!cancelled()": not context["cancelled"],
+              "success()": bool(context["ancestors_succeeded"]) and not context["cancelled"],
+              "failure()": False,
+              "cancelled()": bool(context["cancelled"])}
+    if not any(term in _STATUS_FUNCTIONS for term in terms):
+        terms = ["success()"] + terms
+    for term in terms:
+        if term in status:
+            if not status[term]:
+                return False
+            continue
+        match = re.fullmatch(r"([\w.-]+)\s*(==|!=)\s*'([^']*)'", term)
+        if match is None:
+            raise AuditError(f"cannot model condition term {term!r}")
+        path, operator, literal = match.groups()
+        value = str(context.get(path, ""))
+        if (value == literal) != (operator == "=="):
+            return False
+    return True
+
+
+#: (label, context, whether the writer must run): the successful master
+#: push it exists for -- with behavior-probes skipped, as on every master
+#: push -- and each way it must stay off.
+WRITER_SCENARIOS: tuple[tuple[str, dict[str, object], bool], ...] = tuple(
+    (label, {"github.event_name": "push", "github.ref": "refs/heads/master",
+             "needs.build-test.result": "success",
+             "needs.test-and-audits.outputs.docs_only": "false",
+             "ancestors_succeeded": False, "cancelled": False, **override}, runs)
+    for label, override, runs in (
+        ("a successful master push with behavior-probes skipped", {}, True),
+        ("a pull request", {"github.event_name": "pull_request",
+                            "github.ref": "refs/pull/1/merge"}, False),
+        ("a push to another ref", {"github.ref": "refs/heads/other"}, False),
+        ("a failed aggregate", {"needs.build-test.result": "failure"}, False),
+        ("a skipped aggregate", {"needs.build-test.result": "skipped"}, False),
+        ("a docs-only master push", {"needs.test-and-audits.outputs.docs_only": "true"}, False),
+        ("a cancelled run", {"cancelled": True}, False),
+    ))
+
+
 def audit_headless_lane_wiring(yaml_text: str) -> list[str]:
     """Pin the headless lane jobs and the one project-cache writer (#2745).
 
@@ -631,6 +692,21 @@ def audit_headless_lane_wiring(yaml_text: str) -> list[str]:
     if normalise_expression(str(writer.get("if") or "")) != normalise_expression(PROJECT_CACHE_IF):
         problems.append(
             f"{writer_where}: must be guarded by exactly `if: {PROJECT_CACHE_IF}`.")
+    # Behaviourally, not just by text: under GitHub's scheduling rule the
+    # writer must run on the successful master push it exists for and on
+    # nothing else.
+    for label, context, runs in WRITER_SCENARIOS:
+        try:
+            got = job_would_run(str(writer.get("if") or ""), context)
+        except AuditError as error:
+            problems.append(f"{writer_where}: {error}")
+            break
+        if got != runs:
+            problems.append(
+                f"{writer_where}: would {'not ' if runs else ''}run on {label}"
+                + (" (a condition without a status function gets GitHub's "
+                   "implicit success(), which a skipped ancestor fails)" if runs else "")
+                + ".")
     if AUDITED_JOB in _needs_set(jobs[AGGREGATE_JOB]) and PROJECT_CACHE_JOB in _needs_set(jobs[AGGREGATE_JOB]):
         problems.append(
             f"{writer_where}: `{AGGREGATE_JOB}` must not need the writer, "

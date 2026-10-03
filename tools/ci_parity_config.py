@@ -81,6 +81,7 @@ LANE_TEST_OPTIONS = (
 #: pushes only, inheriting build-test's event-specific verdict.
 PROJECT_CACHE_JOB = "project-cache"
 PROJECT_CACHE_IF = (
+    "!cancelled() && "
     "github.event_name == 'push' && github.ref == 'refs/heads/master' "
     "&& needs.build-test.result == 'success' "
     "&& needs.test-and-audits.outputs.docs_only != 'true'")
