@@ -53,14 +53,26 @@ short-circuit (scripts/unit_ai_mental.lua) to confirm:
      nearest-eligible by Chebyshev distance (not Euclidean); and stops
      a stale pursuit immediately (rather than walking it out) when a
      target leaves range with no replacement available.
+     The attacker preference (9a) is graded ONLY on a selection whose
+     preconditions held when it was made (#2773): the selection's own
+     reads are observed at the decision boundary — the hit and its
+     game-time age, both candidates' eligibility by the production
+     predicate, and the decoy strictly closer — and a setup that missed
+     them is discarded, named and restaged (bounded) rather than graded
+     as a policy failure. The hit age at selection is printed.
 
 Usage: python3 tools/mental_state_probe.py [--port 9352]
+       python3 tools/mental_state_probe.py --lashout-case stale|ineligible
+         (#2773: run only 9a with its setup pushed off the preconditions —
+         `stale` ages the first attempt's hit past the window, so it is
+         restaged; `ineligible` moves every attempt's attacker out of
+         range, so 9a ends in a named setup failure, exit 1)
 Exit 0 = pass.
 """
 from __future__ import annotations
 import argparse, glob, json, sys, time
 from probelib import (boot, init_arena, load_ai_stack, poll_until,
-                      quit_engine, send, spawn_acolyte)
+                      quit_engine, send, send_json, spawn_acolyte)
 
 LOG = "/tmp/mental_state_probe_engine.log"
 
@@ -257,9 +269,591 @@ def leap_break_case(port, uid, leg):
     return None, samples
 
 
+#: Where 9a stages its lash/attacker/decoy cluster, one per attempt. Each
+#: is more than 8 tiles (LASHOUT_RANGE) from every other cluster this
+#: probe uses, so a discarded attempt's units can never be candidates in
+#: the next one, and every one is inside the 5x5-chunk arena.
+LASHOUT_CLUSTERS = ((-28, -25), (35, 0), (35, 15))
+
+#: Dressing the staged hit's wound (#2773), ported from
+#: retaliation_swap_probe.py (#1578) with its bounds unchanged; see
+#: `stanch` there for why each one is what it is. STANCH_ATTEMPTS is the
+#: runaway bound, not the termination condition: the loop stops when the
+#: bleed rate settles below STANCH_SETTLED_RATE (a dressed wound seeps at
+#: order 1e-4 L/s, never exactly zero) or after STANCH_STALLED_PASSES
+#: treatments in a row fail to lower it. MEDICAL_KITS stocked first-aid
+#: kits supply real bandages, without which the medic only improvises.
+STANCH_ATTEMPTS = 64
+STANCH_STALLED_PASSES = 3
+STANCH_SETTLED_RATE = 1e-3
+MEDICAL_KITS = 8
+
+#: The 9a/9b fighters' strength_base (#2773), retaliation_swap_probe's
+#: value: small rather than zero, because a swing that cannot land never
+#: stamps the attacker record the staged hit exists to create.
+NEUTERED_STRENGTH_BASE = 0.02
+
+#: The lash-out episode length scoped to 9a/9b (#2773). Phase 9's 6 s
+#: tune is shorter than staging, grading, dressing and a probabilistic
+#: landed hit together: traced 9b failures had the episode's expiry clear
+#: the target before any strike landed. 9a's grade is taken at the first
+#: selection, so the length cannot affect it.
+LASHOUT_9AB_EPISODE = 30.0
+
+#: Where 9a puts the attacker (east) and the decoy (west) relative to the
+#: subject before the break: the decoy strictly closer, both comfortably
+#: inside LASHOUT_RANGE.
+ATTACKER_OFFSET = 3.0
+DECOY_OFFSET = 1.5
+
+
+def stage_lashout_cluster(port, x, y):
+    """Spawn a lash-out subject at (x, y), stage a REAL landed hit on it
+    from an attacker, stand the attacker down and snap it back to exactly
+    ATTACKER_OFFSET tiles east, then spawn a decoy DECOY_OFFSET tiles
+    west. Answers (lash, attacker, decoy, problem): `problem` names a
+    setup step that did not take effect, else None.
+
+    Both offsets sit clear of the roughly one-tile spacing units settle
+    into on their own — a decoy spawned half a tile away was pushed out
+    to about 1.1, past an attacker at 1.0 — and well inside lash-out's
+    8-tile range. The decoy spawns LAST, so it has no time to wander.
+
+    The hit is a real one — there is no Lua setter for the last-attacker
+    memory (only unit.getLastAttacker) — via combat_anim_probe.py's
+    spawn-adjacent + commandAttack + wait-for-a-swing-to-land pattern.
+
+    The subject's OWN reaction to that hit is suppressed until the break
+    (#2773): its unit.getLastAttacker reads nil to every caller during
+    setup — the 9c isolation idiom — so its ordinary incoming_hit
+    engagement and retaliation never walk it toward the attacker, which
+    is what used to leave the attacker NEAREST at selection (so the old
+    check rarely tested the preference at all). The engine still records
+    the hit. observe_first_lashout_selection lifts the mask in the same
+    console chunk that forces the break, and the mental short-circuit
+    runs before any ordinary candidate, so the selection reads the real
+    memory. The geometry is still not trusted from here: it is observed
+    at the selection.
+    """
+    lash = spawn_acolyte(port, x, y)
+    set_wellbeing(port, lash, 1.0, 0.0)
+    poll_until(5, lambda: mstate(port, lash) == "stable")
+    # Its own kits, BEFORE the staged hit: dress_staged_wound treats it as
+    # its own medic, and by the time a wound is seeping every console round
+    # trip costs blood that never comes back.
+    provision_medical(port, lash)
+    send(port, f"_G.__probe_lash_real_gla = _G.__probe_lash_real_gla "
+               f"or unit.getLastAttacker; "
+               f"unit.getLastAttacker = function(u) "
+               f"if u == {lash} then return nil end "
+               f"return _G.__probe_lash_real_gla(u) end; "
+               f"_G.__probe_lash_unmask = function() "
+               f"unit.getLastAttacker = _G.__probe_lash_real_gla; "
+               f"_G.__probe_lash_real_gla = nil; "
+               f"_G.__probe_lash_unmask = nil end; return 'ok'")
+    attacker = spawn_acolyte(port, x + 1, y)
+    # Neuter BOTH fighters' damage output BEFORE the staged hit — a
+    # full-strength acolyte swing landed on an unarmored target can be
+    # lethal in one blow (Combat.Resolution's E_swing scales with
+    # strength), and a dead unit stops ticking mental_state entirely
+    # (unit_resources skips dead/collapsed units), which would wedge every
+    # check below forever. That includes lash's own lash-out swings in 9b.
+    #
+    # Written to `strength_base`, then unit.recomputeBody (#2773, after
+    # retaliation_swap_probe's `neuter`, #1578). Writing `strength` itself
+    # did not last: Unit.Thread.Command.Body.recomputeBodyDerivedStats
+    # re-derives it from strength_base, and every physiology pass's
+    # starvation.refreshStrength re-derives it again from strength_body, so
+    # the old 0.05 was gone before the hit and the staged hits landed at
+    # ordinary strength (a 0.37 slash; a heavy head stab with a skull
+    # fracture). toughness=100 is kept: it caps Combat.Resolution's
+    # energy-transfer reduction at its 50% max (clamp(toughness*0.05, 0,
+    # 0.5)), a second, independent line of defense.
+    send(port, f"unit.setStat({attacker},'strength_base',{NEUTERED_STRENGTH_BASE}); "
+               f"unit.setStat({attacker},'toughness',100); "
+               f"unit.recomputeBody({attacker}); "
+               f"unit.setStat({lash},'strength_base',{NEUTERED_STRENGTH_BASE}); "
+               f"unit.setStat({lash},'toughness',100); "
+               f"unit.recomputeBody({lash}); return 'ok'")
+    send(port, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
+               f"return 'ok'")
+    hit = poll_until(35, lambda: send(
+        port, f"local a=_G.__probe_lash_real_gla({lash}); "
+              f"return a and a.uid or 'nil'"
+    ) == str(attacker))
+    if not hit:
+        return lash, attacker, None, (f"attacker {attacker} never landed a "
+                                      f"hit on {lash} — can't test attacker "
+                                      f"preference")
+    print(f"  [pass] staged a real hit: attacker {attacker} landed on "
+          f"lash-out subject {lash}")
+    stand_down_attacker(port, lash, attacker)
+    # Snap the attacker back to a fixed, known distance — its approach
+    # and swing leave it wherever combat physics did. unit.setPos just
+    # enqueues a UnitTeleport on the unit thread, so confirm it landed.
+    lx, ly = unit_pos(port, lash)
+    send(port, f"unit.setPos({attacker}, {lx + ATTACKER_OFFSET}, {ly}); "
+               f"return 'ok'")
+    if not poll_until(5, lambda: (lambda ax, ay:
+            (ax - (lx + ATTACKER_OFFSET)) ** 2 + (ay - ly) ** 2 < 0.05)(
+                *unit_pos(port, attacker))):
+        return lash, attacker, None, (f"teleporting {attacker} back to "
+                                      f"{ATTACKER_OFFSET:g} tiles from {lash} "
+                                      f"never took effect")
+    decoy = spawn_acolyte(port, lx - DECOY_OFFSET, ly)
+    return lash, attacker, decoy, None
+
+
+def stand_down_attacker(port, lash, attacker):
+    """End the attacker's own fight and keep both fighters standing.
+
+    Left running, the attacker's attack order keeps it on top of the
+    subject, and sustained combat can collapse either side from
+    accumulated blood loss even with strength/toughness reduced (those
+    shrink per-hit severity, not how long the fight runs) — a collapsed
+    unit is excluded by lash-out's eligibility, or stops ticking
+    altogether.
+
+    Its stamina is deliberately LEFT ALONE (#2773). The old setup drained
+    it to 0.1 of max to stop its ambient wander, but a unit left that low
+    after a fight was traced Collapsed by the time the setup finished —
+    and a collapsed attacker is excluded from lash-out, so the subject
+    took the decoy instead and 9b's "lands an attack on the attacker"
+    could never happen. Where the attacker stands is observed at the
+    selection, so a wander is a setup failure rather than a silent one.
+    """
+    send(port, f"local ai=require('scripts.unit_ai') "
+               f"local s=ai.getState({attacker}); "
+               f"if s then ai.markGoalAccomplished(s,'attack'); "
+               f"s.attackTargetUid=nil end; unit.stop({attacker}) "
+               f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
+
+
+def observe_first_lashout_selection(port, lash, attacker, decoy, timeout=10):
+    """Force a lash-out break on `lash` and record its FIRST target
+    selection AT the decision boundary (#2773).
+
+    pickLashoutTarget (scripts/unit_ai_mental.lua) opens with
+    unit.getLastAttacker(uid) and engine.gameTime(), and lashOutExecute
+    hands the result straight to combatAttack.attackTargetExecute in the
+    same synchronous call. So, installed in the SAME console chunk that
+    forces the break (the Lua thread runs it whole, before the next AI
+    tick):
+
+      * a getLastAttacker wrapper snapshots, on every read for `lash`,
+        the hit, its game-time age, and both candidates' existence, pose,
+        Chebyshev distance and eligibility — judged by the production
+        predicate itself (unit_ai_mental.lashoutPolicy.eligible) — and
+      * an attackTargetExecute wrapper, on the first lash-out-owned call
+        for `lash`, binds the latest snapshot (the one that selection
+        just read) to the target it chose, then restores both originals.
+
+    Later target polls cannot reconstruct those historical
+    preconditions; this reads them where the decision reads them.
+    Answers the recorded selection dict, or None when no selection
+    happened within `timeout` seconds. The wrappers are always removed.
+    """
+    # One line: the console reads newline-terminated commands, and the
+    # chunk carries no comments, so joining its lines changes nothing.
+    send(port, " ".join(line.strip() for line in f"""
+local lash, attacker, decoy = {lash}, {attacker}, {decoy}
+if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end
+local policy = require('scripts.unit_ai_mental').lashoutPolicy
+local atk = require('scripts.unit_ai_combat_attack')
+local origGLA, origATE = unit.getLastAttacker, atk.attackTargetExecute
+local rec = {{}}
+_G.__probe_lash_rec = rec
+_G.__probe_lash_restore = function()
+  unit.getLastAttacker = origGLA
+  atk.attackTargetExecute = origATE
+  _G.__probe_lash_restore = nil
+end
+local function candidate(me, oid)
+  local info = unit.getInfo(oid)
+  local d = -1
+  if me and info then
+    d = math.max(math.abs(me.gridX - info.gridX), math.abs(me.gridY - info.gridY))
+  end
+  return {{ uid = oid, exists = unit.exists(oid), pose = unit.getPose(oid) or 'none',
+           dist = d, eligible = (me ~= nil) and policy.eligible(lash, me, oid) }}
+end
+unit.getLastAttacker = function(u)
+  local a = origGLA(u)
+  if u == lash then
+    local me = unit.getInfo(lash)
+    local now = engine.gameTime()
+    rec.pending = {{ now = now, window = policy.attackerWindow, range = policy.range,
+      hitBy = a and a.uid or -1, hitAt = a and a.at or -1,
+      age = a and (now - (a.at or 0)) or -1,
+      attacker = candidate(me, attacker), decoy = candidate(me, decoy) }}
+  end
+  return a
+end
+atk.attackTargetExecute = function(u, s, params)
+  if u == lash and s and s.mentalLashoutActive and rec.pending and not rec.selection then
+    rec.selection = rec.pending
+    rec.selection.target = s.attackTargetUid or -1
+    _G.__probe_lash_restore()
+  end
+  return origATE(u, s, params)
+end
+require('scripts.mental_state').forceBreak(lash, 'lash_out')
+return 'ok'""".splitlines()))
+
+    def selection():
+        raw = send(port, "local r=_G.__probe_lash_rec; "
+                         "return r and r.selection or 'nil'")
+        try:
+            sel = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return sel if isinstance(sel, dict) else None
+
+    try:
+        sel = poll_until(timeout, selection)
+        if sel is None:
+            # Name what the subject was doing instead, so a missing
+            # selection is diagnosable rather than a bare timeout.
+            raw = send(port, f"local r=_G.__probe_lash_rec; "
+                             f"local s=require('scripts.unit_ai').getState({lash}); "
+                             f"local m=require('scripts.mental_state').summary({lash}); "
+                             f"return {{ read = (r and r.pending) and true or false, "
+                             f"state = m and m.state or 'nil', "
+                             f"target = s and s.attackTargetUid or -1, "
+                             f"action = s and s.currentAction or 'nil', "
+                             f"pose = unit.getPose({lash}) or 'nil' }}")
+            print(f"  [setup] no lash-out selection observed for {lash}: {raw}")
+        return sel
+    finally:
+        send(port, "if _G.__probe_lash_restore then _G.__probe_lash_restore() end; "
+                   "_G.__probe_lash_rec = nil; return 'ok'")
+
+
+def lashout_setup_problems(sel, attacker, decoy):
+    """Every precondition the graded selection did NOT meet, each named
+    with the value observed at selection; empty when it is a fair test.
+
+    A fair test of "prefers the recent attacker over a closer decoy":
+    the hit the selection read is `attacker`'s and within the production
+    window (inclusive), the attacker is eligible (exists, not dead or
+    collapsed, within range — the production predicate), and the decoy is
+    eligible too and STRICTLY closer under the production Chebyshev
+    metric. Anything else makes the decoy, or the attacker, the correct
+    pick for a reason that is not the preference under test.
+    """
+    a, d = sel["attacker"], sel["decoy"]
+    problems = []
+    if sel["hitBy"] != attacker:
+        problems.append(f"the hit read at selection was by {sel['hitBy']}, "
+                        f"not attacker {attacker}")
+    elif not (0 <= sel["age"] <= sel["window"]):
+        problems.append(f"hit age at selection {sel['age']:.2f}s is outside "
+                        f"the {sel['window']:g}s attacker window")
+    if not a["eligible"]:
+        problems.append(f"attacker {attacker} ineligible at selection "
+                        f"(exists={a['exists']}, pose={a['pose']}, "
+                        f"distance={a['dist']:.2f}, range={sel['range']:g})")
+    if not d["eligible"]:
+        problems.append(f"decoy {decoy} ineligible at selection "
+                        f"(exists={d['exists']}, pose={d['pose']}, "
+                        f"distance={d['dist']:.2f})")
+    elif a["eligible"] and not d["dist"] < a["dist"]:
+        problems.append(f"decoy {decoy} at {d['dist']:.2f} is not strictly "
+                        f"closer than attacker {attacker} at {a['dist']:.2f}")
+    return problems
+
+
+def perturb_lashout_case(port, case, attempt, lash, attacker):
+    """`--lashout-case` (#2773): push ONE staged setup off the fair-test
+    preconditions before the break, through the real engine, so the
+    classification can be shown on the actual selection path. Staging
+    has already stood the attacker down, so its hit can age and it stays
+    where it is put.
+
+      * stale      — first attempt only: wait until the staged hit is
+                     older than the attacker window (game time keeps
+                     running; nothing is frozen), so that attempt must be
+                     discarded and RESTAGED;
+      * ineligible — every attempt: teleport the attacker beyond
+                     lash-out range, so no attempt is gradable and 9a
+                     must end in a named SETUP failure.
+    """
+    if case == "stale" and attempt == 1:
+        poll_until(30, lambda: send(
+            port, f"local a=_G.__probe_lash_real_gla({lash}); "
+                  f"return (a and engine.gameTime()-a.at > 10.5) and 'yes' or 'no'"
+        ) == "yes", interval=0.5)
+    elif case == "ineligible":
+        lx, ly = unit_pos(port, lash)
+        send(port, f"unit.setPos({attacker}, {lx + 12}, {ly}); return 'ok'")
+        poll_until(5, lambda: abs(unit_pos(port, attacker)[0] - (lx + 12)) < 0.25)
+
+
+def provision_medical(port, uid):
+    """Give `uid` its own stocked first-aid kits (retaliation_swap_probe's
+    helper, #1578). `unit.addItem` mints a container def's authored
+    contents (#1418), so each kit arrives holding real bandages."""
+    for _ in range(MEDICAL_KITS):
+        send(port, f"unit.addItem({uid}, 'first_aid_kit'); return 'ok'")
+
+
+def stanch(port, uid):
+    """Dress every bleeding wound on `uid` by self-treatment
+    (retaliation_swap_probe's helper, #1578, same loop and bounds).
+
+    `unit.treatBleeding` needs only `bleed_control` knowledge on the
+    medic; it is raised for the treatment and put back to 0 afterwards,
+    so the subject is not left a medic. This stops the seeping; it cannot
+    put blood back. Answers {dressed, bleedRate}, or None if the console
+    returned something else.
+    """
+    got = send_json(port, " ".join((
+        f"local u = {uid};",
+        "unit.setKnowledge(u, 'bleed_control', 100);",
+        "local n = 0; local stalled = 0;",
+        "local function rate() local b = unit.getBlood(u);",
+        " return b and b.bleedRate or 0 end;",
+        "local last = rate();",
+        f"for _ = 1, {STANCH_ATTEMPTS} do",
+        f" if rate() <= {STANCH_SETTLED_RATE} then break end;",
+        " local r = unit.treatBleeding(u, u);",
+        " if not r or not r.ok then break end;",
+        " n = n + 1;",
+        " local now = rate();",
+        " if now < last - 1e-6 then stalled = 0 else stalled = stalled + 1 end;",
+        " last = now;",
+        f" if stalled >= {STANCH_STALLED_PASSES} then break end end;",
+        "unit.setKnowledge(u, 'bleed_control', 0);",
+        "return { dressed = n, bleedRate = rate() }")), timeout=30.0)
+    return got if isinstance(got, dict) else None
+
+
+def dress_staged_wound(port, lash):
+    """After 9a is graded, before 9b's window: dress the wound the staged
+    hit left on the subject (#2773).
+
+    Without it 9b raced the subject's bleed-out against probabilistic
+    strikes. A traced failure had every strike admitted at reach but
+    missed or dodged, and the subject collapsed 'bleeding from r_bicep' 9 s
+    after the staged hit, before one landed — so 9b graded whether the
+    subject outlived a bleed, not whether lash-out produces a landed
+    attack.
+
+    The dressing must not touch what lash-out reads: the subject's real
+    attacker record — who, and when — is read before and after, and any
+    change is a fixture failure. Answers True when the record is
+    unchanged.
+    """
+    record = (f"local a=unit.getLastAttacker({lash}); "
+              f"return a and string.format('%s@%.6f', tostring(a.uid), a.at or -1) "
+              f"or 'nil'")
+    before = send(port, record)
+    dressed = stanch(port, lash)
+    after = send(port, record)
+    if before != after:
+        print(f"  [FAIL] setup: dressing {lash}'s staged wound changed its "
+              f"attacker record ({before} -> {after})")
+        return False
+    print(f"  [setup] dressed {lash}'s staged wound before 9b: {dressed}; "
+          f"attacker record unchanged ({after})")
+    return True
+
+
+def lashout_attacker_preference(port, case=None):
+    """Phase 9a (#717, #2773): lash-out prefers a recent eligible attacker
+    over a closer decoy — graded ONLY on a selection whose preconditions
+    held when it was made (see lashout_setup_problems).
+
+    A setup that misses them is not a policy result: it is discarded,
+    named, and RESTAGED on a fresh cluster, at most len(LASHOUT_CLUSTERS)
+    times. The first gradable selection decides — a wrong target there is
+    a policy failure, and no later attempt runs to erase it. Running out
+    of attempts is a SETUP failure, and fails the probe all the same.
+
+    Answers (ok, lash, attacker, decoy) for the attempt that was graded
+    (or the last one staged), which 9b keeps using.
+    """
+    reasons = []
+    lash = attacker = decoy = None
+    for attempt, (x, y) in enumerate(LASHOUT_CLUSTERS, 1):
+        if attempt > 1:
+            # The discarded cluster's units go away entirely, so nothing
+            # of that setup can take part in this one.
+            send(port, "if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end; "
+                       "return 'ok'")
+            for u in (lash, attacker, decoy):
+                if u is not None:
+                    send(port, f"unit.destroy({u}); return 'ok'")
+        lash, attacker, decoy, problem = stage_lashout_cluster(port, x, y)
+        problems = [problem] if problem else []
+        sel = None
+        if not problems:
+            if case:
+                perturb_lashout_case(port, case, attempt, lash, attacker)
+            sel = observe_first_lashout_selection(port, lash, attacker, decoy)
+            if sel is None:
+                problems = ["no lash-out target selection within 10s of the break"]
+            else:
+                problems = lashout_setup_problems(sel, attacker, decoy)
+        if problems:
+            reasons.append(f"attempt {attempt}: " + "; ".join(problems))
+            print(f"  [setup] lash-out attempt {attempt} at ({x},{y}) "
+                  f"discarded before grading: {'; '.join(problems)}")
+            continue
+        # Graded below on the recorded selection, so nothing that moves
+        # from here on can change it. Put the attacker back next to the
+        # subject for 9b, the arrangement that check was written against:
+        # a three-tile walk across the arena's uneven terrain could end
+        # in a fall, and a fallen unit is Collapsed, which 9b cannot
+        # survive.
+        lx, ly = unit_pos(port, lash)
+        send(port, f"unit.setPos({attacker}, {lx + 1}, {ly}); return 'ok'")
+        poll_until(5, lambda: (lambda ax, ay:
+                (ax - (lx + 1)) ** 2 + (ay - ly) ** 2 < 0.05)(
+                    *unit_pos(port, attacker)))
+        detail = (f"hit age at selection {sel['age']:.2f}s "
+                  f"(window {sel['window']:g}s), attacker at "
+                  f"{sel['attacker']['dist']:.2f}, decoy at "
+                  f"{sel['decoy']['dist']:.2f}")
+        if sel["target"] == attacker:
+            print(f"  [pass] lash-out prefers the recent attacker {attacker} "
+                  f"over the closer decoy {decoy} — {detail}")
+            return True, lash, attacker, decoy
+        print(f"  [FAIL] lash-out target={sel['target']}, expected attacker="
+              f"{attacker} (decoy={decoy}) — preconditions held: {detail}")
+        return False, lash, attacker, decoy
+    send(port, "if _G.__probe_lash_unmask then _G.__probe_lash_unmask() end; "
+               "return 'ok'")
+    print(f"  [FAIL] setup: lash-out attacker preference could not be graded "
+          f"— no attempt established its preconditions ({' | '.join(reasons)})")
+    return False, lash, attacker, decoy
+
+
+def install_swap_observer(port, lashB, victimB, attackerB, then_lua=""):
+    """Wrap unit_ai_combat_attack.attackTargetExecute — the shared execute
+    lash-out drives and the retaliation swap lives in — to record, for
+    every call on `lashB`, the facts 9c2's check depends on (#2773):
+    target before and after the call, lashB's recorded last attacker (uid,
+    at) and its age in GAME seconds, the Chebyshev distance to that
+    attacker against getAttackRange(lashB) + 0.5 (the swap's own reach
+    test), the attacker's pose as wrapped and as it really is, whether
+    the victim is lash-out eligible, and whether lashB is alive. Pure
+    observation: the original runs unchanged. collect_swap_calls removes
+    the wrap. `then_lua` runs in the SAME console chunk, after the wrap is
+    in place — the Lua thread runs a chunk whole, so nothing it triggers
+    can reach the execute unobserved."""
+    send(port, " ".join((
+        f"local L, V, A = {lashB}, {victimB}, {attackerB};",
+        "local atk = require('scripts.unit_ai_combat_attack');",
+        "local pol = require('scripts.unit_ai_mental').lashoutPolicy;",
+        "local orig = atk.attackTargetExecute;",
+        "local calls = {};",
+        "_G.__probe_swap_calls = calls;",
+        "_G.__probe_swap_restore = function() atk.attackTargetExecute = orig;",
+        " _G.__probe_swap_restore = nil end;",
+        "atk.attackTargetExecute = function(u, s, params)",
+        " if u ~= L or not s then return orig(u, s, params) end;",
+        " local rp = _G.__probe_orig_getPose or unit.getPose;",
+        " local me = unit.getInfo(L); local la = unit.getLastAttacker(L);",
+        " local now = engine.gameTime(); local d = -1;",
+        " local ai = la and unit.getInfo(la.uid);",
+        " if me and ai then d = math.max(math.abs(me.gridX-ai.gridX), math.abs(me.gridY-ai.gridY)) end;",
+        " local rec = { g = now, pre = s.attackTargetUid or -1,",
+        "  la = la and la.uid or -1, at = la and la.at or -1,",
+        "  age = la and (now - (la.at or 0)) or -1, d = d,",
+        "  reach = (unit.getAttackRange(L) or 1.0) + 0.5,",
+        "  seen = tostring(la and unit.getPose(la.uid)),",
+        "  real = tostring(la and rp(la.uid)),",
+        "  victimElig = (me ~= nil) and pol.eligible(L, me, V) or false,",
+        "  alive = rp(L) ~= 'dead' };",
+        " local r = orig(u, s, params);",
+        " rec.post = s.attackTargetUid or -1;",
+        " if #calls < 200 then calls[#calls+1] = rec end;",
+        " return r end;",
+        then_lua,
+        "return 'ok'")))
+
+
+def collect_swap_calls(port):
+    """Remove the attackTargetExecute wrap and answer the recorded calls."""
+    raw = send(port, "local c = _G.__probe_swap_calls or {}; "
+                     "if _G.__probe_swap_restore then _G.__probe_swap_restore() end; "
+                     "_G.__probe_swap_calls = nil; "
+                     "return #c == 0 and 'none' or c")
+    try:
+        calls = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return calls if isinstance(calls, list) else []
+
+
+def swap_exercised(calls, victimB, attackerB):
+    """9c2's gate on the recorded lash-out attack executes (#2773).
+
+    INPUT validity and POLICY outcome are kept apart. A VALID-INPUT call
+    is one whose inputs make the retaliation swap reachable: target
+    before the call is the victim, the victim is lash-out eligible,
+    lashB's recorded last attacker is attackerB, hit no older than the
+    swap's 3.0 game-second window, within the swap's reach
+    (getAttackRange + 0.5), reading 'collapsed' while really not dead,
+    with lashB alive. What the call then did (the target after it) is the
+    policy outcome and is not part of that test.
+
+    Answers (verdict, detail):
+      * ('setup', closest misses) — no valid-input call, so the swap was
+        never reachable and the check proves nothing;
+      * ('policy', the offending call) — some valid-input call left a
+        target other than the victim (attackerB, none, or anyone else);
+        no other call can excuse it;
+      * ('pass', a summary) — at least one valid-input call, and every
+        one kept the victim.
+    """
+    if not calls:
+        return "setup", "no lash-out attackTargetExecute call on the subject during the window"
+    valid, best = [], None
+    for c in calls:
+        misses = []
+        if c.get("pre") != victimB:
+            misses.append(f"target {c.get('pre')} not victim {victimB}")
+        if not c.get("victimElig"):
+            misses.append("victim not lash-out eligible")
+        if c.get("la") != attackerB:
+            misses.append(f"last attacker {c.get('la')} not {attackerB}")
+        if not (0 <= c.get("age", -1) <= 3.0):
+            misses.append(f"hit age {c.get('age', -1):.2f} game-s outside 3.0")
+        if not (0 <= c.get("d", -1) <= c.get("reach", 0)):
+            misses.append(f"attacker at {c.get('d', -1):.2f} beyond reach {c.get('reach', 0):.2f}")
+        if c.get("seen") != "collapsed":
+            misses.append(f"attacker reads {c.get('seen')}, not collapsed")
+        if c.get("real") == "dead":
+            misses.append("attacker really dead")
+        if not c.get("alive"):
+            misses.append("subject dead")
+        if misses:
+            if best is None or len(misses) < len(best):
+                best = misses
+        else:
+            valid.append(c)
+    if not valid:
+        return "setup", f"{len(calls)} call(s); closest missed: " + "; ".join(best)
+    for c in valid:
+        if c.get("post") != victimB:
+            return "policy", (f"g={c['g']:.2f} target {c['pre']} -> {c.get('post')} "
+                              f"with attacker {c['la']} at age {c['age']:.2f} "
+                              f"d={c['d']:.2f}/{c['reach']:.2f} seen={c['seen']}")
+    first = valid[0]
+    return "pass", (f"{len(valid)} valid-input call(s), all kept {victimB}; "
+                    f"first g={first['g']:.2f} attacker={first['la']} "
+                    f"age={first['age']:.2f} d={first['d']:.2f}/{first['reach']:.2f} "
+                    f"seen={first['seen']} real={first['real']}")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9352)
+    ap.add_argument("--lashout-case", choices=("stale", "ineligible"),
+                    help="#2773 demonstration: run ONLY phase 9a, with its "
+                         "setup pushed off the fair-test preconditions "
+                         "(see perturb_lashout_case)")
     args = ap.parse_args()
     P = args.port
 
@@ -267,6 +861,14 @@ def main():
     ok = True
     try:
         bootstrap(P)
+
+        if args.lashout_case:
+            tune(P, EPISODE_MIN=LASHOUT_9AB_EPISODE, EPISODE_MAX=LASHOUT_9AB_EPISODE)
+            graded_ok, _, _, _ = lashout_attacker_preference(
+                P, case=args.lashout_case)
+            print(f"\n{'PASS' if graded_ok else 'FAIL'} — phase 9a only "
+                  f"(--lashout-case {args.lashout_case})")
+            return 0 if graded_ok else 1
 
         # ---- 1. Fresh unit is mentally stable. ----
         uid = spawn_acolyte(P, 0, 0)
@@ -641,138 +1243,55 @@ def main():
         # cluster (>8 tiles from every other cluster) so LASHOUT_RANGE
         # never bridges them.
 
-        # 9a. Prefers a recent eligible attacker over a closer decoy.
-        # There's no Lua setter for the last-attacker memory (only
-        # unit.getLastAttacker), so stage a REAL landed hit —
-        # combat_anim_probe.py's spawn-adjacent + commandAttack +
-        # wait-for-a-swing-to-land pattern.
-        lash = spawn_acolyte(P, -30, -25)
-        set_wellbeing(P, lash, 1.0, 0.0)
-        poll_until(5, lambda: mstate(P, lash) == "stable")
-        attacker = spawn_acolyte(P, -29, -25)
-        # Neuter BOTH units' damage output before staging the hit — a
-        # full-strength acolyte swing landed on an unarmored target can
-        # be lethal in one blow (Combat.Resolution's E_swing scales with
-        # strength), and a dead unit stops ticking mental_state entirely
-        # (unit_resources skips dead/collapsed units), which would wedge
-        # every check below forever. This includes lash's own retaliation
-        # once it's hit (ordinary combat AI fights back before lash-out
-        # takes over below) — either direction landing a full-strength
-        # hit risks killing the other side. We only need landed hits to
-        # register, not a realistic fight. toughness=100 caps
-        # Combat.Resolution's energy-transfer reduction at its 50% max
-        # (clamp(toughness*0.05, 0, 0.5)) regardless of roll variance —
-        # a second, independent line of defense on top of the strength
-        # nerf (strength alone left a small residual death chance).
-        send(P, f"unit.setStat({attacker},'strength',0.05); "
-                f"unit.setStat({attacker},'toughness',100); "
-                f"unit.setStat({lash},'strength',0.05); "
-                f"unit.setStat({lash},'toughness',100); return 'ok'")
-        send(P, f"require('scripts.unit_ai').commandAttack({attacker},{lash}); "
-                f"return 'ok'")
-        hit = poll_until(35, lambda: send(
-            P, f"local a=unit.getLastAttacker({lash}); return a and a.uid or 'nil'"
-        ) == str(attacker))
-        if hit:
-            print(f"  [pass] staged a real hit: attacker {attacker} landed on "
-                  f"lash-out subject {lash}")
-        else:
-            ok = False
-            print(f"  [FAIL] attacker {attacker} never landed a hit on {lash} "
-                  f"— can't test attacker preference")
+        # 9a/9b run under their own, longer episode (LASHOUT_9AB_EPISODE),
+        # restored to phase 9's 6 s on EVERY path before 9c.
+        tune(P, EPISODE_MIN=LASHOUT_9AB_EPISODE, EPISODE_MAX=LASHOUT_9AB_EPISODE)
+        try:
+            # 9a. Prefers a recent eligible attacker over a closer decoy —
+            # graded only on a selection whose preconditions held at the
+            # moment it was made (#2773). See lashout_attacker_preference.
+            graded_ok, lash, attacker, decoy = lashout_attacker_preference(
+                P, case=args.lashout_case)
+            if not graded_ok:
+                ok = False
+            if lash is not None and not dress_staged_wound(P, lash):
+                ok = False
 
-        # Stop BOTH sides' ordinary combat AI immediately. Lash's own AI
-        # retaliates against attacker via the normal incoming_hit/engage
-        # mechanism the instant it's hit — left running for the several
-        # seconds the rest of this setup takes, sustained mutual combat
-        # can collapse either side from accumulated blood loss even with
-        # toughness/strength reduced (those shrink per-hit severity, not
-        # how long the fight runs), and a collapsed attacker is exactly
-        # what lash-out's own eligibility correctly excludes — silently
-        # invalidating this "prefers a live attacker" scenario. Draining
-        # attacker's stamina below the acolyte config's
-        # wander_min_stamina_fraction (0.2 — never to 0, the engine's
-        # universal death rule) also disables its ambient wander, so it
-        # stays a stationary target once its goal is cleared.
-        send(P, f"local ai=require('scripts.unit_ai') "
-                f"local ids={{{attacker},{lash}}} "
-                f"for _,u in ipairs(ids) do "
-                f"local s=ai.getState(u); "
-                f"if s then ai.markGoalAccomplished(s,'attack'); "
-                f"s.attackTargetUid=nil end; unit.stop(u) end "
-                f"local st=require('scripts.unit_stats') "
-                f"unit.setStat({attacker},'stamina', "
-                f"st.get({attacker},'max_stamina')*0.1); return 'ok'")
+            # 9b. Produces real attack behavior through the short-circuit —
+            # confirm lash actually lands a swing on its chosen target.
+            landed = poll_until(20, lambda: send(
+                P, f"local a=unit.getLastAttacker({attacker}); "
+                   f"return a and a.uid or 'nil'"
+            ) == str(lash))
+            if landed:
+                print(f"  [pass] lash-out produced a real landed attack on {attacker}")
+            else:
+                ok = False
+                print(f"  [FAIL] lash-out never landed an attack on {attacker}")
 
-        # Unconditionally revive both — whatever the brief exchange above
-        # left them at, this scenario needs attacker standing to test
-        # "prefers a live recent attacker" at all (a collapsed one is
-        # correctly excluded by lash-out's own eligibility, invalidating
-        # the check for an unrelated reason), and needs lash conscious
-        # since a collapsed unit's AI doesn't tick at all.
-        send(P, f"unit.revive({attacker}); unit.revive({lash}); return 'ok'")
+            # Narration distinguishable from wander/flee (#717 requirement 7).
+            evs = send(P, "return engine.getEventLog()")
+            if "violent mental break" in evs:
+                print("  [pass] lash-out narrates distinctly in the event log")
+            else:
+                ok = False
+                print(f"  [FAIL] no lash-out-specific narration in the log: {evs[-400:]}")
 
-        # Snap attacker back to a fixed, known distance from lash — the
-        # swing that landed above can knock either side back by an
-        # unpredictable amount, and the stop command above only takes
-        # effect on the next tick, leaving a brief window where it could
-        # still drift. teleporting removes that uncertainty entirely
-        # rather than trusting wherever combat physics left it.
-        lx, ly = unit_pos(P, lash)
-        send(P, f"unit.setPos({attacker}, {lx + 1}, {ly}); return 'ok'")
-        # unit.setPos just enqueues a UnitTeleport — confirm it actually
-        # landed before trusting the new distance (it's processed on the
-        # unit thread, asynchronously from this console command).
-        if not poll_until(5, lambda: (lambda x, y:
-                (x - (lx + 1)) ** 2 + (y - ly) ** 2 < 0.05)(*unit_pos(P, attacker))):
-            ok = False
-            print(f"  [FAIL] setup: teleporting {attacker} back next to "
-                  f"{lash} never took effect")
-        d_att = 1.0
-        # Place the decoy at HALF that distance — always strictly closer.
-        decoy_dist = d_att / 2
-        decoy = spawn_acolyte(P, lx + decoy_dist, ly)
-
-        send(P, f"require('scripts.mental_state').forceBreak({lash},'lash_out'); "
-                f"return 'ok'")
-
-        def first_target():
-            t = lash_target(P, lash)
-            return t if t != "nil" else None
-        target = poll_until(10, first_target)
-        if target == str(attacker):
-            print(f"  [pass] lash-out prefers the recent attacker {attacker} "
-                  f"over the closer decoy {decoy}")
-        else:
-            ok = False
-            print(f"  [FAIL] lash-out target={target}, expected attacker="
-                  f"{attacker} (decoy={decoy})")
-
-        # 9b. Produces real attack behavior through the short-circuit —
-        # confirm lash actually lands a swing on its chosen target.
-        landed = poll_until(20, lambda: send(
-            P, f"local a=unit.getLastAttacker({attacker}); "
-               f"return a and a.uid or 'nil'"
-        ) == str(lash))
-        if landed:
-            print(f"  [pass] lash-out produced a real landed attack on {attacker}")
-        else:
-            ok = False
-            print(f"  [FAIL] lash-out never landed an attack on {attacker}")
-
-        # Narration distinguishable from wander/flee (#717 requirement 7).
-        evs = send(P, "return engine.getEventLog()")
-        if "violent mental break" in evs:
-            print("  [pass] lash-out narrates distinctly in the event log")
-        else:
-            ok = False
-            print(f"  [FAIL] no lash-out-specific narration in the log: {evs[-400:]}")
-
-        # Done with lash/attacker/decoy — end lash's episode; no further
-        # assertions need them (the dedicated cleanup test below uses its
-        # own isolated pair, see the note there for why).
-        send(P, f"unit.setStat({lash},'mental_until',0); return 'ok'")
-        poll_until(5, lambda: mstate(P, lash) != "break")
+            # Done with lash/attacker/decoy — end lash's episode; no further
+            # assertions need them (the dedicated cleanup test below uses its
+            # own isolated pair, see the note there for why).
+            send(P, f"unit.setStat({lash},'mental_until',0); return 'ok'")
+            poll_until(5, lambda: mstate(P, lash) != "break")
+            # …and remove all three (#2773). Nothing pins them in place any
+            # more — the attacker's stamina is no longer drained, and the
+            # decoy never was — so left alive they wander into the isolated
+            # clusters the later scenarios stage, and turn up there as
+            # unplanned lash-out candidates.
+            for u in (lash, attacker, decoy):
+                if u is not None:
+                    send(P, f"unit.destroy({u}); return 'ok'")
+        finally:
+            tune(P, EPISODE_MIN=6.0, EPISODE_MAX=6.0)
 
         # 9c. Episode end clears every lash-out-owned goal/target.
         # Isolated from ordinary re-engagement: attacker's original staged
@@ -844,11 +1363,16 @@ def main():
         attackerB = spawn_acolyte(P, -1, 20)  # becomes the disqualified
                                                # "recent attacker"
         # See the neutered-strength note in the 9a setup above — same
-        # one-shot-kill risk applies here, in both directions.
-        send(P, f"unit.setStat({attackerB},'strength',0.05); "
+        # one-shot-kill risk applies here, in both directions, and the
+        # same fix (#2773): strength_base + unit.recomputeBody, because a
+        # 'strength' write is re-derived away before the hit (a traced run
+        # had this staged hit bleed lashB out before the break).
+        send(P, f"unit.setStat({attackerB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
                 f"unit.setStat({attackerB},'toughness',100); "
-                f"unit.setStat({lashB},'strength',0.05); "
-                f"unit.setStat({lashB},'toughness',100); return 'ok'")
+                f"unit.recomputeBody({attackerB}); "
+                f"unit.setStat({lashB},'strength_base',{NEUTERED_STRENGTH_BASE}); "
+                f"unit.setStat({lashB},'toughness',100); "
+                f"unit.recomputeBody({lashB}); return 'ok'")
         send(P, f"require('scripts.unit_ai').commandAttack({attackerB},{lashB}); "
                 f"return 'ok'")
         hitB = poll_until(35, lambda: send(
@@ -886,14 +1410,26 @@ def main():
         # the identical note in the 9a setup above (knockback can drift
         # them beyond LASHOUT_RANGE, which would invalidate this check
         # for the wrong reason).
+        # victimB too, one tile on the OTHER side, in the same command
+        # (#2773): the subject can wander or run during the hit staging, so
+        # the victim's spawn spot says nothing about whether it is still in
+        # lash-out range when the break is forced (a traced run had it 19
+        # tiles away). Whether the hit is still inside the swap's
+        # retaliation window when the check runs is OBSERVED there
+        # (swap_exercised), not assumed from here.
         lbx, lby = unit_pos(P, lashB)
-        send(P, f"unit.setPos({attackerB}, {lbx + 1}, {lby}); return 'ok'")
-        # Confirm the (async) teleport actually landed — see the 9a note.
-        if not poll_until(5, lambda: (lambda x, y:
-                (x - (lbx + 1)) ** 2 + (y - lby) ** 2 < 0.05)(*unit_pos(P, attackerB))):
+        send(P, f"unit.setPos({attackerB}, {lbx + 1}, {lby}); "
+                f"unit.setPos({victimB}, {lbx - 1}, {lby}); return 'ok'")
+        # Confirm the (async) teleports actually landed — see the 9a note.
+        def landedB():
+            ax, ay = unit_pos(P, attackerB)
+            vx, vy = unit_pos(P, victimB)
+            return ((ax - (lbx + 1)) ** 2 + (ay - lby) ** 2 < 0.05
+                    and (vx - (lbx - 1)) ** 2 + (vy - lby) ** 2 < 0.05)
+        if not poll_until(5, landedB):
             ok = False
-            print(f"  [FAIL] setup: teleporting {attackerB} back next to "
-                  f"{lashB} never took effect")
+            print(f"  [FAIL] setup: teleporting {attackerB} and {victimB} "
+                  f"next to {lashB} never took effect")
 
         # Pin attackerB's reported pose to 'collapsed' — unit.collapse()
         # alone only holds while every gating resource sits below its
@@ -906,18 +1442,25 @@ def main():
                 f"if u == {attackerB} then return 'collapsed' end "
                 f"return _G.__probe_orig_getPose(u) end; return 'ok'")
 
-        send(P, f"require('scripts.mental_state').forceBreak({lashB},'lash_out'); "
-                f"return 'ok'")
+        # Observe every lash-out attack execute of lashB through the
+        # window (#2773), installed in the same chunk that forces the
+        # break so the first one is seen; see observe_swap_calls.
+        install_swap_observer(
+            P, lashB, victimB, attackerB,
+            then_lua=f"require('scripts.mental_state').forceBreak({lashB},'lash_out');")
 
         # Sample rapidly through the retaliation-swap's own 3s window
         # (RETALIATE_WINDOW_SEC, timed from the hit staged above) —
         # lash-out must land on the eligible victimB and never once show
         # the collapsed attackerB sneaking in via the shared swap.
         samplesB = []
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            samplesB.append(lash_target(P, lashB))
-            time.sleep(0.15)
+        try:
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                samplesB.append(lash_target(P, lashB))
+                time.sleep(0.15)
+        finally:
+            callsB = collect_swap_calls(P)
         send(P, "if _G.__probe_orig_getPose then "
                 "unit.getPose = _G.__probe_orig_getPose; "
                 "_G.__probe_orig_getPose = nil end; return 'ok'")
@@ -929,6 +1472,18 @@ def main():
         else:
             ok = False
             print(f"  [FAIL] expected only {victimB}, saw: {samplesB}")
+        # The check above only means something if the swap it guards was
+        # actually reachable during the window (#2773).
+        verdictB, whyB = swap_exercised(callsB, victimB, attackerB)
+        if verdictB == "pass":
+            print(f"  [setup] 9c2 swap precondition exercised: {whyB}")
+        elif verdictB == "policy":
+            ok = False
+            print(f"  [FAIL] 9c2 retaliation swap moved lash-out off the "
+                  f"eligible victim {victimB}: {whyB}")
+        else:
+            ok = False
+            print(f"  [FAIL] setup: 9c2 swap precondition not exercised ({whyB})")
 
         send(P, f"unit.setStat({lashB},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, lashB) != "break")
