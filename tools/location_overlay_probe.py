@@ -59,13 +59,13 @@ import stat
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from probelib import (FixtureNotRegistered, capture_request_id, quit_engine,
                       boot, load_fixture_yaml, send, wait_load_published,
                       wait_save_complete)
 from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 
-LOG = "/tmp/location_overlay_engine.log"
 #: #1982 — this run's durable failure records, built at import so the
 #: offset each carries is measured from the probe's own start.
 FAILURE = FailureEmitter("location_overlay_probe")
@@ -176,8 +176,78 @@ def remove_isolated_root(base: str) -> str | None:
     return None
 
 
-def boot_isolated(port: int, root: str):
-    return boot(port, log=LOG, args=["--resource-root", root])
+@dataclass
+class BootLog:
+    ordinal: int
+    phase: str
+    port: int
+    path: Path
+    failed: bool = False
+
+    @property
+    def label(self) -> str:
+        return f"engine log {self.ordinal:02d} ({self.phase}, port {self.port})"
+
+
+class BootLogs:
+    """Invocation-owned captures, retained independently of the mutable root.
+
+    No filesystem allocation at import or construction: the first actual
+    boot attempt creates a unique directory, and each attempt gets its own
+    ordinal. The shared launcher still owns opening the engine log.
+    """
+
+    def __init__(self) -> None:
+        self.directory: Path | None = None
+        self.attempts: list[BootLog] = []
+        self.current: BootLog | None = None
+
+    def allocate(self, port: int, phase: str) -> BootLog:
+        if self.directory is None:
+            self.directory = Path(tempfile.mkdtemp(prefix="location_overlay_logs_"))
+        ordinal = len(self.attempts) + 1
+        capture = BootLog(ordinal, phase, port,
+                          self.directory / f"engine_{ordinal:02d}.log")
+        self.attempts.append(capture)
+        self.current = capture
+        return capture
+
+    def failure_reference(self) -> str:
+        if self.current is None:
+            return ""
+        self.current.failed = True
+        return f"; {self.current.label}: {self.current.path}"
+
+    def report(self) -> None:
+        """Report even on SystemExit; unopened preparation attempts aren't logs."""
+        created = [capture for capture in self.attempts if capture.path.is_file()]
+        print(f"\nretained engine logs ({len(created)} captures, "
+              f"{len(self.attempts)} boot attempts):", flush=True)
+        for capture in self.attempts:
+            if not capture.path.is_file():
+                print(f"  {capture.label}: no engine log created", flush=True)
+                continue
+            print(f"  {capture.label}: {capture.path}", flush=True)
+            if capture.failed:
+                FAILURE.context_log(capture.path, label=capture.label)
+
+
+class BootFailures(list[str]):
+    """Freeze each failure's source boot and emit it before later phases run."""
+
+    def __init__(self, logs: BootLogs) -> None:
+        super().__init__()
+        self.logs = logs
+
+    def append(self, failure: str) -> None:
+        detail = failure + self.logs.failure_reference()
+        super().append(detail)
+        FAILURE.check(detail)
+
+
+def boot_isolated(port: int, root: str, logs: BootLogs, phase: str):
+    capture = logs.allocate(port, phase)
+    return boot(port, log=str(capture.path), args=["--resource-root", root])
 
 
 def save_and_wait(port: int, page: str, slot: str,
@@ -195,7 +265,7 @@ def save_and_wait(port: int, page: str, slot: str,
     if accepted != "true":
         failures.append(
             f"engine.saveWorld(page '{page}', slot '{slot}') was not accepted "
-            f"(returned {accepted!r}); the validation reason is logged in {LOG}")
+            f"(returned {accepted!r}); see this boot's engine log for the validation reason")
         return False
     request_id = capture_request_id(port, "return engine.getSaveStatus()")
     if request_id is None:
@@ -226,7 +296,7 @@ def load_and_wait(port: int, slot: str, failures: list[str],
     if accepted != "true":
         failures.append(
             f"engine.loadSave('{slot}') was not accepted (returned "
-            f"{accepted!r}); the reason is logged in {LOG}")
+            f"{accepted!r}); see this boot's engine log for the reason")
         return False
     request_id = capture_request_id(port, "return engine.getLoadStatus()")
     if request_id is None:
@@ -468,21 +538,28 @@ def main() -> int:
     # that root's own random token, so two concurrent runs cannot collide
     # and no developer-visible save slot is created, mutated or rotated
     # (#1620 requirement 5).
+    logs = BootLogs()
     base = tempfile.mkdtemp(prefix=ROOT_PREFIX)
     # The WHOLE random suffix, not the text after the last underscore:
     # mkdtemp's alphabet includes '_', so splitting on it can throw most
     # of the entropy away (and can leave nothing at all).
     token = os.path.basename(base)[len(ROOT_PREFIX):]
     try:
-        rc = run(args, make_isolated_root(base), token)
+        rc = run(args, make_isolated_root(base), token, logs)
+    except BaseException:
+        logs.failure_reference()
+        raise
     finally:
         # Reported, never swallowed, and reported even when `run` is
         # leaving by an exception (boot() exits the process on a dead
         # engine) — a root that survived is exactly the artifact #1620
         # requirement 6 forbids.
-        leftover = remove_isolated_root(base)
-        if leftover:
-            FAILURE.check(leftover)
+        try:
+            leftover = remove_isolated_root(base)
+            if leftover:
+                FAILURE.check(leftover)
+        finally:
+            logs.report()
     return 1 if leftover else rc
 
 
@@ -502,18 +579,19 @@ def load_items(port: int) -> None:
          timeout=30.0)
 
 
-def run(args, root: str, token: str) -> int:
+def run(args, root: str, token: str, logs: BootLogs) -> int:
     slot_overlay = f"loc_overlay_probe_{token}"
     slot_centre = f"loc_centre_probe_{token}"
 
-    failures: list[str] = []
+    failures = BootFailures(logs)
     saved_overlay = False
 
     # ---- Phase 1: placement, determinism, lazy stamping; then save the
     #      world with its locations still UN-STAMPED (saved right after gen,
     #      before any far ruin chunk has loaded) so phase 2 can prove they
     #      are not lost. ----
-    proc = boot_isolated(args.port, root)
+    proc = boot_isolated(args.port, root, logs,
+                         "phase 1: placement, determinism, lazy stamping and save")
     try:
         load_items(args.port)
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
@@ -585,7 +663,8 @@ def run(args, root: str, token: str) -> int:
     with open(THIN_YAML, "w") as fh:
         fh.write(THIN_BODY)
 
-    proc = boot_isolated(args.port, root) if saved_overlay else None
+    proc = (boot_isolated(args.port, root, logs, "phase 2: overlay restart/load")
+            if saved_overlay else None)
     try:
         if proc is None:
             # Phase 1's save never reached its own terminal successful
@@ -653,7 +732,7 @@ def run(args, root: str, token: str) -> int:
 
     # ---- Phase 3: the SYNCHRONOUS centre chunk (0,0) stamps on fresh gen
     #      (Init hook). ----
-    proc = boot_isolated(args.port, root)
+    proc = boot_isolated(args.port, root, logs, "phase 3: centre chunk generation")
     try:
         load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         gen_world(args.port, "wc", args.seed, args.size, args.plates)
@@ -672,7 +751,7 @@ def run(args, root: str, token: str) -> int:
     #      WITHOUT force-loading (0,0) — Save regenerates that chunk
     #      synchronously and excludes it from the queue, so its presence
     #      exercises the Save centre hook. ----
-    proc = boot_isolated(args.port, root)
+    proc = boot_isolated(args.port, root, logs, "phase 4: centre chunk save")
     saved_centre = False
     try:
         load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
@@ -688,7 +767,7 @@ def run(args, root: str, token: str) -> int:
         quit_engine(args.port, proc)
 
     if saved_centre:
-        proc = boot_isolated(args.port, root)
+        proc = boot_isolated(args.port, root, logs, "phase 4: centre chunk restart/load")
         try:
             load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
             # Issue #763: the saved page ("wd", its own id verbatim -- no
@@ -714,7 +793,7 @@ def run(args, root: str, token: str) -> int:
     #      let the arena's floor suppress the hidden page's stamp, and the
     #      write must land on the hidden page at ITS terrain z, not the
     #      arena's. ----
-    proc = boot_isolated(args.port, root)
+    proc = boot_isolated(args.port, root, logs, "phase 5: hidden-page stamping")
     try:
         load_fixture_yaml(args.port, "engine.loadLocationYaml", DENSE_YAML)
         send(args.port, "world.initArena('arena'); world.initArenaDone('arena'); world.show('arena'); return 'ok'")
@@ -785,7 +864,8 @@ def run(args, root: str, token: str) -> int:
         # per process the query cannot refer to anything else. The extra
         # boots are seconds against these generations, and each entry is
         # then independently reproducible from its own command line.
-        proc = boot_isolated(args.port, root)
+        proc = boot_isolated(args.port, root, logs,
+                             f"phase 9: placement matrix {label}")
         try:
             load_items(args.port)
             send(args.port,
@@ -820,8 +900,8 @@ def run(args, root: str, token: str) -> int:
         # block-buffered stdout pipe and prints only its last 25 lines, so
         # a printed `FAIL:` overtook the buffered checks and landed above
         # the retained tail. These are read back from the COMPLETE capture.
-        FAILURE.report(failures)
-        FAILURE.context_log(LOG)
+        # Each failure was emitted with its source boot as it occurred.
+        # main's finally reports bounded context for every failed boot.
         return 1
     print("ALL CHECKS PASSED")
     return 0
