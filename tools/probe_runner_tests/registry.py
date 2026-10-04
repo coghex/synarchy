@@ -42,11 +42,17 @@ def test_timeout_overrides_are_validated_registry_data() -> None:
            "the shipped timeout declarations are valid")
     expect(probe_runner_registry.effective_timeout("save_compat_migration") == 3600.0,
            "save_compat_migration receives its declared 3600s default")
+    expect(probe_runner_registry.effective_timeout("expedition_loop") == 3600.0,
+           "expedition_loop receives its declared 3600s default")
+    expect(probe_runner_registry.DEFAULT_TIMEOUT == 900.0,
+           "the shared default remains 900s")
     expect(probe_runner_registry.effective_timeout("movement")
            == probe_runner_registry.DEFAULT_TIMEOUT,
            "an ordinary registered probe keeps the shared default")
     expect(probe_runner_registry.effective_timeout("save_compat_migration", 17.0) == 17.0,
            "an explicit CLI value wins over the key-specific default")
+    expect(probe_runner_registry.effective_timeout("expedition_loop", 17.0) == 17.0,
+           "an explicit CLI value wins over the expedition_loop default")
 
     unknown = probe_runner_registry.timeout_override_problems(
         overrides={"not_registered": 1.0})

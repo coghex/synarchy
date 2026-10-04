@@ -23,7 +23,8 @@ from offscreen_probe import (arm_portal_placement, building_count,
                              can_place_at, center_on, click_at_seed,
                              click_widget, find_buildable, find_widget,
                              goto_and_resolve, placement_mode, png_differs,
-                             png_stats, screenshot, set_zoom, zoom_fade_end)
+                             png_stats, report_candidates, screenshot, set_zoom,
+                             zoom_fade_end)
 from portal_ghost_probe import center_on_tile, in_world_view
 from .constants import PORTAL, SAVE_BASE
 from .invocation import SessionContext, check
@@ -85,8 +86,10 @@ def session_ghost_and_remote(ctx: SessionContext) -> None:
     # -- step 5: an ordinary valid (non-overlapping) position renders a
     # neutral ghost — proven via canPlaceAt, the oracle that drives the
     # tint (portal_ghost_probe already proves the exact RGB direction). --
-    ordinary_hit = find_buildable(port, PORTAL, nearby_seeds(t["gx"], t["gy"]),
-                                   want_remote=False, screen_x=cx0, screen_y=cy0)
+    ordinary_hit, records = find_buildable(
+        port, PORTAL, nearby_seeds(t["gx"], t["gy"]),
+        want_remote=False, screen_x=cx0, screen_y=cy0)
+    report_candidates("ordinary buildable search", records, want_remote=False)
     shot_valid = None
     if check("found an ordinary valid buildable position", bool(ordinary_hit)):
         oseed_gx, oseed_gy, ogx, ogy, _odist, _othr = ordinary_hit
@@ -133,8 +136,10 @@ def session_ghost_and_remote(ctx: SessionContext) -> None:
     # and confirming Establish Here places exactly one portal remotely. --
     cx_avg = sum(e["gx"] for e in locs) / len(locs)
     cy_avg = sum(e["gy"] for e in locs) / len(locs)
-    remote_hit = find_buildable(port, PORTAL, remote_seeds(cx_avg, cy_avg),
-                                 want_remote=True, screen_x=cx0, screen_y=cy0)
+    remote_hit, records = find_buildable(
+        port, PORTAL, remote_seeds(cx_avg, cy_avg),
+        want_remote=True, screen_x=cx0, screen_y=cy0)
+    report_candidates("remote buildable search", records, want_remote=True)
     if not check("found a valid remote buildable position", bool(remote_hit)):
         return
     rseed_gx, rseed_gy, rgx, rgy, rdist, rthr = remote_hit
