@@ -497,6 +497,9 @@ DEFAULT_TIMEOUT = 900.0
 # 900 s hang bound for the rest of the registry.
 PROBE_TIMEOUT_OVERRIDES: dict[str, float] = {
     "save_compat_migration": 3600.0,
+    # The documented ~30-minute, two-boot scenario (docs/engine_contracts.md,
+    # "The expedition loop") gets a 3600s budget with margin, not a measured runtime.
+    "expedition_loop": 3600.0,
 }
 
 
