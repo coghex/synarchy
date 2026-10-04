@@ -153,6 +153,7 @@ class Synarchy:
             suites.append(ctx.Suite(
                 id=_suite_id(key), kind="ci" if ci else "probe", framework=framework,
                 description=description, area=key.split("_")[0],
+                desktop=key == "preview",  # Hidden GLFW windows still need the desktop claim.
                 identity=ctx.digest(dict(base, key=key)),
                 checks=checks, trial_seconds=trial, batch_seconds=86400,
                 data=dict(key=key, script=script, port=ports[key], span=int(registry.port_span(key)))))

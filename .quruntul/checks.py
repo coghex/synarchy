@@ -124,6 +124,12 @@ class AdapterChecks(unittest.TestCase):
         self.assertEqual((headless.kind, headless.desktop, headless.batch_tests), ("ci", False, 400))
         self.assertEqual((graphical.kind, graphical.desktop), ("probe", True))
 
+    def test_preview_is_the_only_desktop_probe_even_with_hidden_windows(self):
+        # Hidden GLFW preview windows still require the lab's desktop claim.
+        for key, suite in self.probes().items():
+            self.assertEqual(suite.desktop, key == "preview", key)
+        self.assertTrue(self.probes()["preview"].desktop)
+
     def test_launches_go_through_synarchys_runners(self):
         for key, suite in self.probes().items():
             prepared = self.adapter.prepare(Context(), suite)
