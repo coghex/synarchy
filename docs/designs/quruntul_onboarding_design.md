@@ -25,10 +25,10 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Onboard Synarchy onto quruntul (local tracking epic linking coghex/quruntul#5; D-2) — [#2777]
-- [ ] QS-6. Read Synarchy's `codex-test` registry through the adapter's legacy-history hook
-- [ ] QS-3. Shake down every Synarchy suite and repair its adapter
-- [ ] QS-4. Size `synarchy-test-headless`'s flake slices from a measured trial
-- [ ] QS-5. Seed Synarchy's flake ledger
+- [x] QS-6. Read Synarchy's `codex-test` registry through the adapter's legacy-history hook — [#2785]
+- [x] QS-3. Shake down every Synarchy suite and repair its adapter — [#2786]
+- [x] QS-4. Size `synarchy-test-headless`'s flake slices from a measured trial — [#2787]
+- [x] QS-5. Seed Synarchy's flake ledger — [#2788]
 
 ## Identifiers and authorities
 
@@ -515,6 +515,8 @@ itself.
 
 ### QS-6. Read Synarchy's `codex-test` registry through the adapter's legacy-history hook
 
+> Tracked by #2785.
+
 - **Outcome:** Synarchy's ledger holds the legacy registry's closed history,
   imported once through quruntul's command with the adapter's hook.
 - **Scope:**
@@ -561,6 +563,8 @@ itself.
 
 ### QS-3. Shake down every Synarchy suite and repair its adapter
 
+> Tracked by #2786.
+
 - **Outcome:** a shakedown of every applicable Synarchy suite at the upstream
   head is clean, or each non-clean suite has a recorded disposition, with
   every declared suite reconciled.
@@ -590,6 +594,8 @@ itself.
 - **Open questions:** None.
 
 ### QS-4. Size `synarchy-test-headless`'s flake slices from a measured trial
+
+> Tracked by #2787.
 
 - **Outcome:**
   - `batch_tests` for `synarchy-test-headless` is set from one measured
@@ -623,6 +629,8 @@ itself.
   the stop point above.
 
 ### QS-5. Seed Synarchy's flake ledger
+
+> Tracked by #2788.
 
 - **Outcome:** `$flake` reports `no-candidate` for Synarchy on this platform.
   The coverage reconciliation shows every declared suite either measured,
