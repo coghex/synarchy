@@ -27,8 +27,9 @@ import time
 from typing import NamedTuple
 
 from probelib import poll_until, send, send_json
-from offscreen_probe import (arm_portal_placement, find_buildable,
-                             goto_and_resolve, placement_mode)
+from offscreen_probe import (arm_portal_placement, describe_candidate,
+                             find_buildable, goto_and_resolve, placement_mode,
+                             report_candidates)
 from portal_ghost_probe import center_on_tile, in_world_view
 from .constants import FIXTURE_PAGE, PORTAL, RUIN_LABEL
 from .invocation import check
@@ -260,14 +261,31 @@ def find_safe_local_start(port: int, seeds, screen_x: int, screen_y: int,
     around on foot; the ghost/remote checks in session (a) never spawn
     a unit."""
     for seed in seeds:
-        hit = find_buildable(port, PORTAL, [seed], want_remote=False,
-                              screen_x=screen_x, screen_y=screen_y)
+        hit, records = find_buildable(port, PORTAL, [seed], want_remote=False,
+                                      screen_x=screen_x, screen_y=screen_y)
         if not hit:
+            report_candidates("local-start buildable search", records,
+                              want_remote=False)
             continue
         _, _, gx, gy, _, _ = hit
         delta = terrain_delta_around(port, gx, gy, radius)
         if delta is not None and delta <= max_delta:
+            report_candidates("local-start buildable search", records,
+                              want_remote=False)
             return hit
+        # The placement oracle accepted this hit, but local-start's
+        # terrain policy rejected it. Report the cached classification
+        # with the delta we just measured, never as an accepted start.
+        print(f"  local-start buildable search: {len(records)} candidate"
+              f"{'' if len(records) == 1 else 's'} classified")
+        terrain_reason = (f"terrain delta={delta if delta is not None else 'unavailable'}, "
+                          f"max_delta={max_delta}")
+        for record in records:
+            description = describe_candidate(record, want_remote=False)
+            if record["seed"] == hit[:2] and record["resolved"] == hit[2:4]:
+                description = description.replace(
+                    "ACCEPT:", f"REJECT: {terrain_reason}; placement oracle accepted:", 1)
+            print(f"    {description}")
     return None
 
 
