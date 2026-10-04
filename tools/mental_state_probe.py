@@ -2056,6 +2056,73 @@ def collect_swap_calls(port):
     return status, calls, raw
 
 
+#: How long phase 4b waits for the technomule's queued spawn to register.
+FLEE_MULE_REGISTER_WAIT_S = 10.0
+
+#: One read proving a spawned unit is REGISTERED: it is listed by
+#: unit.getAllIds (what the flee's nearest-unit search iterates,
+#: scripts/unit_ai_mental.lua nearestOtherUnit) AND its position reads
+#: back. unit.spawn only queues the spawn (Units/Spawn.hs UnitSpawn), so a
+#: fresh uid can be missing from both for a while.
+_REGISTERED_LUA = " ".join((
+    "local U = %d; local listed = false;",
+    "for _, i in ipairs(unit.getAllIds() or {}) do if i == U then listed = true end end;",
+    "local inf = unit.getInfo(U);",
+    "return { listed = listed, x = type(inf) == 'table' and inf.gridX or 'nil',",
+    " y = type(inf) == 'table' and inf.gridY or 'nil' }"))
+
+
+def registered_position(r):
+    """(x, y) when a _REGISTERED_LUA reply proves the unit registered (listed,
+    with a finite position); otherwise None."""
+    if not isinstance(r, dict) or r.get("listed") is not True:
+        return None
+    x, y = r.get("x"), r.get("y")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+               for v in (x, y)):
+        return None
+    return float(x), float(y)
+
+
+def unit_registered(port, uid):
+    """(x, y) once `uid` is registered, else None (one console read)."""
+    return registered_position(send_json(port, _REGISTERED_LUA % uid))
+
+
+def flee_break_check(port, uid):
+    """Phase 4b: a forced flee break runs from the nearest unit, a
+    technomule (it stands still: no stamina stat, so wander self-disables).
+    Answers (ok, line).
+
+    The technomule's spawn is queued, and the flee only runs from units
+    unit.getAllIds lists (with nobody in range it wanders instead), so the
+    break is forced only once the mule is PROVEN registered; if it never
+    registers, 4b is a named setup failure and no break is forced. The
+    baseline distance d0 is read BEFORE the break. The pass condition is
+    unchanged: farther than d0 + 2 tiles within the poll (#2773)."""
+    mule = spawn_acolyte(port, 6, 0, unit="technomule", clear_water=False)
+    mpos = poll_until(FLEE_MULE_REGISTER_WAIT_S, lambda: unit_registered(port, mule))
+    if not mpos:
+        return False, (f"  [FAIL] setup: the technomule {mule} never registered within "
+                       f"{FLEE_MULE_REGISTER_WAIT_S:.0f} s; flee break not tested")
+    mx, my = mpos
+    x0, y0 = unit_pos(port, uid)
+    d0 = ((x0 - mx) ** 2 + (y0 - my) ** 2) ** 0.5
+    send(port, f"require('scripts.mental_state').forceBreak({uid},'flee'); "
+               f"return 'ok'")
+    s = msummary(port, uid)
+
+    def fled():
+        x, y = unit_pos(port, uid)
+        return ((x - mx) ** 2 + (y - my) ** 2) ** 0.5 > d0 + 2.0
+    away = poll_until(25, fled)
+    if s.get("state") == "break" and s.get("behavior") == "flee" and away:
+        return True, (f"  [pass] forced flee break runs from the technomule "
+                      f"(d0={d0:.1f} from ({x0:.1f},{y0:.1f}))")
+    return False, (f"  [FAIL] flee break didn't flee: state={s} d0={d0:.1f} "
+                   f"from=({x0:.1f},{y0:.1f}) now={unit_pos(port, uid)}")
+
+
 #: The activities unit_ai.lua's tick returns on before shortCircuit
 #: (scripts/unit_ai.lua:281-283), with the poses 'collapsed' and 'dead'.
 TICK_BLOCKING_ACTIVITIES = ("drinking", "eating", "pickup", "transitioning")
@@ -4134,6 +4201,93 @@ def self_test():
                   fh["installOk"] is True and fh["fbCalls"] == 0 and fh["wrapped"] is False
                   and fh["tgtAfterInstall"] == 10 and nine_c2_precondition(ins)[0] is False)
 
+    # Phase 4b (#2773 scope amendment): the technomule must be PROVEN
+    # registered before the flee break, d0 is read before the break, and
+    # the pass condition (> d0 + 2 within the poll) is unchanged.
+    for name, r, want in (
+            ("listed with a position", {"listed": True, "x": 6.0, "y": 0.0}, (6.0, 0.0)),
+            ("integer position", {"listed": True, "x": 6, "y": 0}, (6.0, 0.0)),
+            ("not listed yet (queued spawn)", {"listed": False, "x": 6.0, "y": 0.0}, None),
+            ("listed but no info yet", {"listed": True, "x": "nil", "y": "nil"}, None),
+            ("a non-finite position", {"listed": True, "x": float("nan"), "y": 0.0}, None),
+            ("a bool position", {"listed": True, "x": True, "y": 0.0}, None),
+            ("a truthy-but-not-true listed", {"listed": 1, "x": 6.0, "y": 0.0}, None),
+            ("an error reply", "error: x", None)):
+        check(f"4b registration: {name} -> {want}", registered_position(r) == want)
+
+    def fake_flee(register_after, end_dist, state=None):
+        """Drive flee_break_check with fakes: the mule (uid 50) at (6, 0)
+        registers on read number `register_after` (None = never); the
+        subject (uid 1) stands at (2, 0) (d0 = 4) until the break, then at
+        `end_dist` from the mule. Answers (ok, line, log)."""
+        g = globals()
+        saved = {k: g[k] for k in ("spawn_acolyte", "send", "send_json", "unit_pos",
+                                   "msummary", "poll_until")}
+        log, reads, broke = [], [0], [False]
+
+        def f_send_json(port, lua, **kw):
+            reads[0] += 1
+            log.append("registration-read")
+            if register_after is not None and reads[0] >= register_after:
+                return {"listed": True, "x": 6.0, "y": 0.0}
+            return {"listed": False, "x": "nil", "y": "nil"}
+
+        def f_send(port, lua, **kw):
+            if "forceBreak" in lua:
+                broke[0] = True
+                log.append("forceBreak")
+            return "ok"
+
+        def f_unit_pos(port, u):
+            log.append(f"pos-{u}")
+            return (2.0, 0.0) if not broke[0] else (6.0 - end_dist, 0.0)
+
+        def f_poll(seconds, fn, interval=0.3):
+            for _ in range(int(seconds)):
+                v = fn()
+                if v:
+                    return v
+            return None
+        g.update(spawn_acolyte=lambda *a, **k: (log.append("spawn-mule"), 50)[1],
+                 send=f_send, send_json=f_send_json, unit_pos=f_unit_pos,
+                 msummary=lambda port, u: state or {"state": "break", "behavior": "flee"},
+                 poll_until=f_poll)
+        try:
+            ok_, line = flee_break_check(7, 1)
+        finally:
+            g.update(saved)
+        return ok_, line, log
+    ok4, line4, log4 = fake_flee(3, 6.5)
+    check("4b: a mule that registers on the 3rd read -> 4b WAITS for it, then forces the break",
+          log4[:4] == ["spawn-mule", "registration-read", "registration-read", "registration-read"]
+          and "forceBreak" in log4)
+    check("4b: ... the baseline d0 is read BEFORE the break (subject position read precedes "
+          "forceBreak)", log4.index("pos-1") < log4.index("forceBreak") and "d0=4.0" in line4)
+    check("4b: ... a subject ending 6.5 from the mule (> d0 + 2 = 6) passes", ok4 is True)
+    ok4, line4, log4 = fake_flee(1, 5.9)
+    check("4b: the pass condition is unchanged: 5.9 from the mule (<= d0 + 2) FAILS",
+          ok4 is False and "flee break didn't flee" in line4 and "from=(2.0,0.0)" in line4)
+    ok4, line4, log4 = fake_flee(1, 6.5, state={"state": "stable"})
+    check("4b: no flee break in the summary still FAILS", ok4 is False)
+    ok4, line4, log4 = fake_flee(None, 9.0)
+    check("4b: a mule that NEVER registers -> a named setup FAIL, and NO break is forced",
+          ok4 is False and "[FAIL] setup: the technomule 50 never registered" in line4
+          and "forceBreak" not in log4 and "pos-1" not in log4)
+    import shutil as _sh, subprocess as _sp
+    if _sh.which("lua"):
+        harness = ("unit = { getAllIds = function() return LISTED and {1, 50} or {1} end, "
+                   "getInfo = function(u) if INFO then return { gridX = 6.0, gridY = 0.0 } end end } "
+                   "LISTED, INFO = arg[1] == 'listed', arg[2] == 'info' "
+                   "local r = assert(load(arg[3]))() "
+                   "io.write(tostring(r.listed) .. ',' .. tostring(r.x) .. ',' .. tostring(r.y))")
+        for listed, info, want in (("listed", "info", "true,6.0,0.0"), ("no", "info", "false,6.0,0.0"),
+                                   ("listed", "none", "true,nil,nil"), ("no", "none", "false,nil,nil")):
+            out = _sp.run(["lua", "-e", harness.replace("arg[1]", repr(listed)).replace(
+                "arg[2]", repr(info)).replace("arg[3]", repr(_REGISTERED_LUA % 50))],
+                capture_output=True, text=True)
+            check(f"4b registration read (exact Lua): getAllIds {listed}, info {info} -> {want}",
+                  out.returncode == 0 and out.stdout == want)
+
     print(f"mental_state_probe self-test: "
           f"{'all pass' if not fails else str(len(fails)) + ' FAIL'}")
     return 1 if fails else 0
@@ -4309,24 +4463,10 @@ def main():
         send(P, f"local st=require('scripts.unit_stats') "
                 f"unit.setStat({uid},'stamina', st.get({uid},'max_stamina')*0.9); "
                 f"return 'ok'")
-        mule = spawn_acolyte(P, 6, 0, unit="technomule", clear_water=False)
-        send(P, f"require('scripts.mental_state').forceBreak({uid},'flee'); "
-                f"return 'ok'")
-        s = msummary(P, uid)
-        mx, my = unit_pos(P, mule)
-        x0, y0 = unit_pos(P, uid)
-        d0 = ((x0 - mx) ** 2 + (y0 - my) ** 2) ** 0.5
-
-        def fled():
-            x, y = unit_pos(P, uid)
-            return ((x - mx) ** 2 + (y - my) ** 2) ** 0.5 > d0 + 2.0
-        away = poll_until(25, fled)
-        if s.get("state") == "break" and s.get("behavior") == "flee" and away:
-            print(f"  [pass] forced flee break runs from the technomule (d0={d0:.1f})")
-        else:
+        fleeOk, fleeLine = flee_break_check(P, uid)
+        print(fleeLine)
+        if not fleeOk:
             ok = False
-            print(f"  [FAIL] flee break didn't flee: state={s} d0={d0:.1f} "
-                  f"now={unit_pos(P, uid)}")
         send(P, f"unit.setStat({uid},'mental_until',0); return 'ok'")
         poll_until(5, lambda: mstate(P, uid) != "break")
 
