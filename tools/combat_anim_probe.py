@@ -65,11 +65,13 @@ import glob
 import io
 import json
 import math
+import re
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import patch as mock_patch
 
 import yaml
 
@@ -220,18 +222,105 @@ def read_declaration(unit: str) -> dict:
     raise SystemExit(f"{unit}: no `units:` entry named {unit!r}")
 
 
-def handles(port: int, names: list[str]) -> dict[str, int]:
-    """Resolve many texture names in ONE console round trip.
+# Keep a one-byte margin below the production cap, including all syntax.
+HANDLE_LINE_CAP = 65536
+HANDLE_PREFIX = "local ns={"
+HANDLE_SUFFIX = ("} local out={} "
+                 "for i,n in ipairs(ns) do out[i]=engine.getTextureHandle(n) end "
+                 "return out")
 
-    The debug console is single-line, so the names ride in as a table
-    literal. Doing this per name would be ~4,600 round trips.
+
+class HandleResolutionFailure(RuntimeError):
+    """A texture query cannot safely return a complete integer mapping."""
+
+
+def lua_name_literal(name: str) -> str:
+    """Encode one exact UTF-8 name in a single-line Lua string literal."""
+    escaped = []
+    for char in name:
+        if char in ('"', "\\"):
+            escaped.append("\\" + char)
+        elif ord(char) < 32 or 127 <= ord(char) <= 159:
+            # Three digits prevent a following digit from extending the escape.
+            escaped.extend(f"\\{byte:03d}" for byte in char.encode("utf-8"))
+        else:
+            escaped.append(char)
+    return '"' + "".join(escaped) + '"'
+
+
+def handle_requests(names: list[str]) -> list[tuple[list[str], str]]:
+    """Plan every request before sending, rejecting any individually unfit name."""
+    overhead = len((HANDLE_PREFIX + HANDLE_SUFFIX).encode("utf-8"))
+    requests = []
+    batch, literals = [], []
+    size = overhead
+    for name in names:
+        literal = lua_name_literal(name)
+        try:
+            width = len(literal.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise HandleResolutionFailure("texture name is not valid UTF-8") from exc
+        if overhead + width >= HANDLE_LINE_CAP:
+            raise HandleResolutionFailure(
+                f"texture name cannot fit below {HANDLE_LINE_CAP} bytes "
+                f"({overhead + width} bytes with command overhead)")
+        if size + bool(batch) + width >= HANDLE_LINE_CAP:
+            requests.append((batch, HANDLE_PREFIX + ",".join(literals) + HANDLE_SUFFIX))
+            batch, literals = [], []
+            size = overhead
+        size += bool(batch) + width
+        batch.append(name)
+        literals.append(literal)
+    if batch:
+        requests.append((batch, HANDLE_PREFIX + ",".join(literals) + HANDLE_SUFFIX))
+    return requests
+
+
+def handles(port: int, names: list[str]) -> dict[str, int]:
+    """Resolve all texture names in byte-bounded, single-line console batches.
+
+    Batch table literals keep round trips low without exceeding the engine
+    cap. Only a complete, strictly integer response to every batch succeeds.
     """
-    lua_names = ",".join(f'"{n}"' for n in names)
-    lua = (f"local ns={{{lua_names}}} local out={{}} "
-           "for i,n in ipairs(ns) do out[i]=engine.getTextureHandle(n) end "
-           "return out")
-    got = json.loads(send(port, lua, timeout=30))
-    return {n: int(got[i]) for i, n in enumerate(names)}
+    resolved = {}
+    for number, (batch, lua) in enumerate(handle_requests(names), 1):
+        try:
+            raw = send(port, lua, timeout=30)
+        except Exception as exc:
+            raise HandleResolutionFailure(
+                f"texture handle batch {number}: transport error: {exc}") from exc
+        try:
+            got = json.loads(raw)
+        except (ValueError, TypeError) as exc:
+            raise HandleResolutionFailure(
+                f"texture handle batch {number}: response is not JSON") from exc
+        if not isinstance(got, list):
+            raise HandleResolutionFailure(
+                f"texture handle batch {number}: response is not a JSON array")
+        if len(got) != len(batch):
+            raise HandleResolutionFailure(
+                f"texture handle batch {number}: response length {len(got)} "
+                f"!= requested {len(batch)}")
+        if any(type(value) is not int for value in got):
+            raise HandleResolutionFailure(
+                f"texture handle batch {number}: response contains a non-integer")
+        resolved.update(zip(batch, got))
+    return resolved
+
+
+def roster_texture_names(unit: str, index: dict, decl: dict
+                         ) -> tuple[list[str], list[str], list[str]]:
+    """Build the live roster query's direct, atlas and legacy frame coverage."""
+    direct = [f"unit_{unit}"]
+    if decl.get("portrait"):
+        direct.append(f"unit_{unit}_portrait")
+    direct += [f"unit_{unit}_{d}"
+               for d in (decl.get("directional_sprites") or {})]
+    atlases = [f"unit_{unit}_{a['name']}_atlas" for a in index["animations"]]
+    per_frame = [f"unit_{unit}_{a['name']}_{d['direction']}_{i}"
+                 for a in index["animations"] for d in a["directions"]
+                 for i in range(d["frame_count"])]
+    return direct, atlases, per_frame
 
 
 def check_roster(port: int, units: list[str]) -> bool:
@@ -242,15 +331,7 @@ def check_roster(port: int, units: list[str]) -> bool:
         decl = read_declaration(unit)
         anims = index["animations"]
 
-        direct = [f"unit_{unit}"]
-        if decl.get("portrait"):
-            direct.append(f"unit_{unit}_portrait")
-        direct += [f"unit_{unit}_{d}"
-                   for d in (decl.get("directional_sprites") or {})]
-        atlases = [f"unit_{unit}_{a['name']}_atlas" for a in anims]
-        per_frame = [f"unit_{unit}_{a['name']}_{d['direction']}_{i}"
-                     for a in anims for d in a["directions"]
-                     for i in range(d["frame_count"])]
+        direct, atlases, per_frame = roster_texture_names(unit, index, decl)
 
         resolved = handles(port, direct + atlases + per_frame)
         missing_direct = [n for n in direct if resolved[n] < 0]
@@ -869,6 +950,151 @@ def self_test() -> int:
            ]),
            ["real", "second"])
 
+    # --- actual texture request/resolution boundary (#2792) -----------
+    def query_names(lua: str) -> list[str]:
+        # Independent decoder for the Lua literals actually handed to send.
+        # No engine, socket, Lua interpreter or request-planner internals.
+        expect("every emitted line is strictly below the byte cap",
+               len(lua.encode("utf-8")) < 65536, True)
+        expect("every emitted command is single-line", "\n" in lua, False)
+        table = lua.removeprefix("local ns={").removesuffix(
+            "} local out={} for i,n in ipairs(ns) do "
+            "out[i]=engine.getTextureHandle(n) end return out")
+        literals = re.findall(r'"(?:\\[0-9]{3}|\\.|[^"\\])*"', table)
+        expect("no name syntax lost", ",".join(literals), table)
+        decoded = []
+        for literal in literals:
+            payload = bytearray()
+            inner = literal[1:-1]
+            i = 0
+            while i < len(inner):
+                if inner[i] != "\\":
+                    payload.extend(inner[i].encode("utf-8"))
+                    i += 1
+                elif inner[i + 1:i + 4].isdigit():
+                    payload.append(int(inner[i + 1:i + 4]))
+                    i += 4
+                else:
+                    expect("only exact quote/backslash escapes",
+                           inner[i + 1] in ('"', "\\"), True)
+                    payload.extend(inner[i + 1].encode("utf-8"))
+                    i += 2
+            decoded.append(payload.decode("utf-8"))
+        return decoded
+
+    def resolve_case(label: str, names: list[str], minimum_batches: int) -> list[str]:
+        lines, observed = [], []
+        wanted = {name: (-i - 1 if i % 2 else i + 100)
+                  for i, name in enumerate(names)}
+
+        def reply(port, lua, **kwargs):
+            expect("handle query timeout retained", kwargs, {"timeout": 30})
+            batch = query_names(lua)
+            lines.append(lua)
+            observed.extend(batch)
+            return json.dumps([wanted[name] for name in batch])
+
+        with mock_patch(__name__ + ".send", side_effect=reply):
+            expect(label + " complete mapping", handles(9123, names), wanted)
+        expect(label + " exact names and order", observed, names)
+        expect(label + " required batch count", len(lines) >= minimum_batches, True)
+        return lines
+
+    # This is the SAME builder and shipped index/declaration check_roster uses.
+    acolyte = sum(roster_texture_names("acolyte", read_index("acolyte"),
+                                      read_declaration("acolyte")), [])
+    resolve_case("shipped acolyte", acolyte, 2)
+    expect("empty inputs send nothing", resolve_case("empty", [], 0), [])
+
+    overhead = len((HANDLE_PREFIX + HANDLE_SUFFIX).encode("utf-8")) + 2
+    largest = "a" * (65535 - overhead)
+    boundary_lines = resolve_case("full-overhead boundary",
+                                  [largest, "second"], 2)
+    expect("largest legal line uses the strict margin",
+           len(boundary_lines[0].encode("utf-8")), 65535)
+    multibyte = "é" * 22000
+    resolve_case("UTF-8 byte sizing", [multibyte, multibyte + "2"], 2)
+    special = 'quote"slash\\newline\ncarriage\rtab\tNUL\x0019DEL\x7fC1\x85'
+    resolve_case("exact escaped names", [special, "雪", "", "} local out={} delimiter"], 1)
+    resolve_case("escaped byte sizing", ['"\\\n' * 6000, '"\\\n' * 6000 + "2"], 2)
+
+    for label, unfit in (("exactly at cap", "a" * (65536 - overhead)),
+                         ("over cap", "é" * 65536)):
+        with mock_patch(__name__ + ".send") as mocked_send:
+            try:
+                handles(9123, [largest, unfit])
+                failures.append(label + ": unfit name accepted")
+            except HandleResolutionFailure as exc:
+                expect_named(label + " names the cause", str(exc), "cannot fit")
+            expect(label + " sends no partial/oversized request", mocked_send.called, False)
+
+    out, err = io.StringIO(), io.StringIO()
+    with (mock_patch.object(sys, "argv", ["combat_anim_probe.py", "--roster-only"]),
+          mock_patch(__name__ + ".shipped_gameplay_roster", return_value=["acolyte"]),
+          mock_patch(__name__ + ".roster_texture_names",
+                     return_value=([largest, unfit], [], [])),
+          mock_patch(__name__ + ".boot", return_value=object()),
+          mock_patch(__name__ + ".bootstrap_defs"),
+          mock_patch(__name__ + ".quit_engine") as mocked_quit,
+          mock_patch(__name__ + ".send", return_value='["acolyte"]') as mocked_send,
+          contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)):
+        code = main()
+    expect("unfit name fails the run", code, FAIL_EXIT)
+    expect_named("unfit name stderr names cause", err.getvalue(), "cannot fit")
+    expect("unfit name sends only listDefs, no handle query", mocked_send.call_count, 1)
+    expect("unfit name never prints OK", "OK" in out.getvalue(), False)
+    expect("unfit name tears down", mocked_quit.call_count, 1)
+
+    # Fail the second real roster batch after a valid first one. Drive main
+    # itself to prove no successful partial roster, no OK unit, FAIL exit and
+    # a stderr cause, while mocking every engine lifecycle operation.
+    for label, bad_reply, cause in (
+            ("transport", ConnectionResetError("synthetic reset"), "transport error"),
+            ("not JSON", "not-json", "not JSON"),
+            ("not array", '{}', "not a JSON array"),
+            ("null", 'null', "not a JSON array"),
+            ("short", "short", "response length"),
+            ("long", "long", "response length"),
+            ("bool", True, "non-integer"),
+            ("string", "123", "non-integer"),
+            ("float", 1.5, "non-integer")):
+        calls = []
+
+        def failed_reply(port, lua, **kwargs):
+            if lua == "return unit.listDefs()":
+                return '["acolyte"]'
+            batch = query_names(lua)
+            calls.append(batch)
+            if len(calls) == 1:
+                return json.dumps([-1] * len(batch))
+            if isinstance(bad_reply, Exception):
+                raise bad_reply
+            if label in ("not JSON", "not array", "null"):
+                return bad_reply
+            if label == "short":
+                return json.dumps([-1] * (len(batch) - 1))
+            if label == "long":
+                return json.dumps([-1] * (len(batch) + 1))
+            return json.dumps([bad_reply] + [-1] * (len(batch) - 1))
+
+        out, err = io.StringIO(), io.StringIO()
+        with (mock_patch.object(sys, "argv", ["combat_anim_probe.py", "--roster-only"]),
+              mock_patch(__name__ + ".shipped_gameplay_roster", return_value=["acolyte"]),
+              mock_patch(__name__ + ".boot", return_value=object()),
+              mock_patch(__name__ + ".bootstrap_defs"),
+              mock_patch(__name__ + ".quit_engine") as mocked_quit,
+              mock_patch(__name__ + ".run_fight") as mocked_fight,
+              mock_patch(__name__ + ".send", side_effect=failed_reply),
+              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)):
+            code = main()
+        expect(label + " fails the run", code, FAIL_EXIT)
+        expect_named(label + " stderr names cause", err.getvalue(), cause)
+        expect_named(label + " stderr names failed batch", err.getvalue(), "batch 2")
+        expect(label + " no false-green roster unit", "OK" in out.getvalue(), False)
+        expect(label + " stops after failed batch", len(calls), 2)
+        expect(label + " tears down", mocked_quit.call_count, 1)
+        expect(label + " does not run fight", mocked_fight.called, False)
+
     # --- terrain: a clean scan passes, each hazard is named ------------
     expect("flat dry footprint", terrain_cause({"cause": "ok", "tiles": 6400}, 0),
            None)
@@ -1090,7 +1316,7 @@ def self_test() -> int:
 
     for line in failures:
         print(f"FAIL: {line}", file=sys.stderr)
-    print(f"\n--- self-test ---\n  precondition + verdict cases: "
+    print(f"\n--- self-test ---\n  batching + precondition + verdict cases: "
           f"{'OK' if not failures else f'{len(failures)} FAILED'}")
     return 0 if not failures else FAIL_EXIT
 
@@ -1261,6 +1487,9 @@ def main() -> int:
         print(f"  live samples + durations   : {live_ok}")
         print(f"  death contract             : {death_summary}")
         return verdict
+    except HandleResolutionFailure as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return FAIL_EXIT
     finally:
         quit_engine(args.port, proc)
 
