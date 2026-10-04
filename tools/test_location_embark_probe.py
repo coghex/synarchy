@@ -46,6 +46,12 @@ console responses (no engine, no port) and pin:
     rather than letting the missing file resurface as a load timeout in
     a later session.
 
+The third contract (#2791) is the three actual buildable-search callers:
+ordinary/remote ghost searches consume `(hit, records)`, and local-start
+returns only the safe six-field hit or None. Stubbed engine boundaries
+pin miss control flow, every candidate report and terrain rejections
+without querying or classifying candidates again.
+
 Since #2164 the probe is a facade over `tools/location_embark/`, so a
 name this file stubs may be resolved in one of those owner modules
 rather than in the facade. Every stub therefore goes through `patched`
@@ -70,10 +76,14 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import location_embark_probe as probe  # type: ignore  # noqa: E402
+from location_embark import session_ghost, support
+import offscreen_probe
+from offscreen_probe import describe_candidate
 from location_embark import invocation  # type: ignore  # noqa: E402
 
 import selftestlib  # noqa: E402
@@ -826,6 +836,218 @@ def test_a_failed_session_b_save_suppresses_only_session_c() -> None:
            f"(got {ran})")
 
 
+# ---------------------------------------------------------------------
+# The actual buildable-search consumers (#2791): no engine or port
+# ---------------------------------------------------------------------
+def _candidate(seed, resolved=None, valid=False, remote=False, reason="water"):
+    return {"seed": seed, "resolved": resolved, "valid": valid,
+            "reason": reason, "remote": remote, "distance": 37,
+            "threshold": 128}
+
+
+def _search_result(hit, remote=False):
+    rejected = _candidate((7, 8), (9, 10))
+    if hit is None:
+        return None, [rejected, _candidate((11, 12))]
+    accepted = _candidate(hit[:2], hit[2:4], True, remote, None)
+    accepted["distance"], accepted["threshold"] = hit[4:]
+    return hit, [rejected, accepted]
+
+
+def _drive_ghost(ordinary, remote):
+    """Run the real session through its searches and remote modal.
+
+    All console/UI boundaries are stubs; the session's check/failure
+    ledger and candidate formatter stay real. Coordinate reads and UI
+    work are recorded so a miss cannot silently use absent coordinates.
+    """
+    target = {"gx": 100, "gy": 200, "lifecycle": "unknown"}
+    control = {"gx": 300, "gy": 400, "lifecycle": "unknown"}
+    ctx = invocation.SessionContext(9420, 1280, 720, "/unused/shots",
+                                    target, control, 42, 2)
+    state = {"modal": False, "count": 0, "mode": "placement"}
+
+    def click_seed(*args):
+        state["modal"] = True
+        return True
+
+    def click_widget(port, label):
+        state["modal"] = False
+        if label == "Establish Here":
+            state.update(count=1, mode="off")
+        return True
+
+    search = Mock(side_effect=[ordinary, remote])
+    hover = Mock(side_effect=lambda port, sx, sy, *xy:
+                 next(hit[2:4] for hit, _ in (ordinary, remote)
+                      if hit is not None and hit[:2] == (sx, sy)))
+    placement = Mock(side_effect=lambda port, name, gx, gy:
+                     ((gx, gy) != (target["gx"], target["gy"]), "overlap"))
+    click = Mock(side_effect=click_seed)
+    widgets = Mock(side_effect=click_widget)
+    overlap = Mock(return_value=(target["gx"], target["gy"]))
+    screenshots = Mock(return_value=True)
+    messages = Mock(return_value="ok")
+    replacements = dict(
+        find_buildable=search, goto_and_resolve=hover, can_place_at=placement,
+        click_at_seed=click, click_widget=widgets, center_on_tile=overlap,
+        screenshot=screenshots, send=messages, load_defs=Mock(),
+        poll_until=lambda timeout, predicate: predicate(),
+        in_world_view=lambda port: True, wait_for_hud_settle=Mock(),
+        list_locations_sorted=lambda port: [target, control],
+        zoom_fade_end=lambda port: 1, center_on=Mock(), set_zoom=Mock(),
+        png_stats=lambda path: (1280, 720, 10), png_differs=lambda *a, **kw: True,
+        arm_portal_placement=Mock(), ensure_armed=Mock(),
+        placement_mode=lambda port: state["mode"],
+        building_count=lambda port, name: state["count"],
+        find_widget=lambda port, label: state["modal"])
+    probe.failures.clear()
+    try:
+        with patched(session_ghost, **replacements), \
+                patched(session_ghost.time, sleep=lambda seconds: None), captured() as out:
+            session_ghost.session_ghost_and_remote(ctx)
+        recorded = list(probe.failures)
+    finally:
+        probe.failures.clear()
+    expect(search.call_count == 2,
+           "the real ghost session reached both substituted searches")
+    expect([call.kwargs["want_remote"] for call in search.call_args_list]
+           == [False, True], "ordinary then remote search keeps its oracle policy")
+    expect(search.call_args_list[0].args[2] == support.nearby_seeds(100, 200)
+           and search.call_args_list[1].args[2] == support.remote_seeds(200, 300),
+           "the session keeps both original seed lists")
+    expect(overlap.call_count == 1,
+           "ordinary miss still continues into the overlap checks")
+    text = out.getvalue()
+    for result, label, want_remote in (
+            (ordinary, "ordinary", False), (remote, "remote", True)):
+        expect(f"{label} buildable search: {len(result[1])} candidates classified" in text,
+               f"{label} diagnostic report names its search and all records")
+        for record in result[1]:
+            expect(describe_candidate(record, want_remote) in text,
+                   f"{label} retains every candidate diagnostic field")
+    return text, recorded, hover, placement, click, widgets, screenshots
+
+
+def test_ghost_search_hits_and_misses() -> None:
+    print("\ntest_ghost_search_hits_and_misses")
+    ordinary_hit = (20, 21, 22, 23, 37, 128)
+    remote_hit = (250, 251, 252, 253, 300, 128)
+    for ordinary_found in (False, True):
+        for remote_found in (False, True):
+            ordinary = _search_result(ordinary_hit if ordinary_found else None)
+            remote = _search_result(remote_hit if remote_found else None, True)
+            text, failed, hover, placement, click, widgets, shots = _drive_ghost(
+                ordinary, remote)
+            expected_failures = []
+            if not ordinary_found:
+                expected_failures.append("found an ordinary valid buildable position")
+            if not remote_found:
+                expected_failures.append("found a valid remote buildable position")
+            expect(failed == expected_failures,
+                   f"only genuine misses fail the existing checks: {failed}")
+            expected_hits = ([ordinary_hit] if ordinary_found else []) + (
+                [remote_hit] if remote_found else [])
+            expect([call.args[1:3] for call in hover.call_args_list]
+                   == [hit[:2] for hit in expected_hits],
+                   "hover work uses only the found six-field hits")
+            expect([call.args[2:4] for call in placement.call_args_list]
+                   == ([ordinary_hit[2:4]] if ordinary_found else [])
+                   + [(100, 200)] + ([remote_hit[2:4]] if remote_found else []),
+                   "placement checks never use absent ordinary/remote coordinates")
+            expect(click.call_count == (2 if remote_found else 0)
+                   and widgets.call_count == (2 if remote_found else 0),
+                   "a remote miss returns before all remote click/modal work")
+            expected_shots = ["icon_unknown_target.png", "icon_unknown_control.png"]
+            if ordinary_found:
+                expected_shots.append("ghost_valid.png")
+            expected_shots.append("ghost_invalid.png")
+            if remote_found:
+                expected_shots.extend(["ghost_remote.png", "remote_modal.png"])
+            expect([Path(call.args[1]).name for call in shots.call_args_list]
+                   == expected_shots, "hit/miss paths retain their original screenshots")
+            expect(("[PASS] found an ordinary valid buildable position" in text)
+                   == ordinary_found and
+                   ("[PASS] found a valid remote buildable position" in text)
+                   == remote_found, "a two-field miss is never reported as success")
+
+    text, failed, hover, placement, click, widgets, shots = _drive_ghost(
+        (None, []), (None, []))
+    expect(len(failed) == 2 and not hover.called and not click.called
+           and not widgets.called,
+           "empty-record misses also skip all ordinary/remote hit-dependent work")
+
+
+def _drive_local(results, deltas, max_delta=15.0):
+    seeds = [(20 + i, 30 + i) for i in range(len(results))]
+    search = Mock(side_effect=results)
+    terrain = Mock(side_effect=deltas)
+    classify = Mock(side_effect=AssertionError("candidate classified again"))
+    with patched(support, find_buildable=search, terrain_delta_around=terrain), \
+            patched(offscreen_probe, classify_candidate=classify), captured() as out:
+        hit = support.find_safe_local_start(9420, seeds, 640, 360,
+                                           max_delta=max_delta, radius=4)
+    expect(search.call_count > 0, "the real local-start helper reached its search stub")
+    expect(classify.call_count == 0, "candidate reporting never repeats classification")
+    expect([call.args[2] for call in search.call_args_list]
+           == [[seed] for seed in seeds[:search.call_count]],
+           "local-start search keeps its seed order and single-seed searches")
+    expect(all(call.kwargs == {"want_remote": False, "screen_x": 640,
+                               "screen_y": 360}
+               for call in search.call_args_list),
+           "local-start search retains remoteness and screen-centre inputs")
+    queried_hits = [result[0] for result in results[:search.call_count]
+                    if result[0] is not None]
+    expect([call.args for call in terrain.call_args_list]
+           == [(9420, hit[2], hit[3], 4) for hit in queried_hits],
+           "terrain is reached exactly once per real hit and never for a miss")
+    text = out.getvalue()
+    expect(text.count("local-start buildable search:") == search.call_count,
+           "each local seed search gets its own contextual candidate report")
+    for result in results[:search.call_count]:
+        for record in result[1]:
+            description = describe_candidate(record, False)
+            if "ACCEPT:" in description:
+                # Terrain may override the oracle's verdict; preserve its
+                # seed, resolved tile and all remoteness fields regardless.
+                prefix, suffix = description.split("ACCEPT:")
+                expect(prefix in text and suffix.split(";", 1)[1] in text,
+                       "local hit diagnostics preserve coordinates and oracle fields")
+            else:
+                expect(description in text, "local miss retains every rejection record")
+    return hit, text, search, terrain
+
+
+def test_local_search_misses_terrain_rejections_and_hits() -> None:
+    print("\ntest_local_search_misses_terrain_rejections_and_hits")
+    hit1 = (20, 30, 22, 32, 37, 128)
+    hit2 = (21, 31, 23, 33, 37, 128)
+    safe1, safe2 = _search_result(hit1), _search_result(hit2)
+    miss = _search_result(None)
+    for records in ([], miss[1]):
+        hit, text, search, terrain = _drive_local([(None, records), safe2], [15.0])
+        expect(hit == hit2 and search.call_count == 2 and terrain.call_count == 1,
+               "local miss continues to a safe hit, including at the exact threshold")
+    for delta, diagnostic in ((16.5, "terrain delta=16.5, max_delta=15.0"),
+                              (None, "terrain delta=unavailable, max_delta=15.0")):
+        hit, text, search, terrain = _drive_local([safe1, safe2], [delta, 4.0])
+        expect(hit == hit2 and search.call_count == 2 and terrain.call_count == 2,
+               "too-steep/unavailable terrain is rejected before the next safe hit")
+        first_line = next(line for line in text.splitlines() if "tile (22,32)" in line)
+        expect("REJECT:" in first_line and "ACCEPT:" not in first_line
+               and diagnostic in first_line,
+               "terrain rejection uses the already computed delta and threshold")
+    hit, text, search, terrain = _drive_local([miss, (None, [])], [])
+    expect(hit is None and search.call_count == 2 and terrain.call_count == 0,
+           "exhausted misses return None and query no terrain")
+    hit, text, search, terrain = _drive_local([safe1, safe2], [99.0, None])
+    expect(hit is None and search.call_count == 2 and terrain.call_count == 2,
+           "exhausted terrain rejections preserve the outward None contract")
+    hit, text, search, terrain = _drive_local([safe1, safe2], [3.5])
+    expect(hit == hit1 and search.call_count == 1 and terrain.call_count == 1,
+           "a safe first hit returns the six fields without later searches")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_root_symlinks_content_and_copies_config()
@@ -851,14 +1073,16 @@ def main() -> int:
     test_a_completed_save_reports_its_request_and_phase()
     test_a_failed_fixture_save_suppresses_every_dependent_session()
     test_a_failed_session_b_save_suppresses_only_session_c()
+    test_ghost_search_hits_and_misses()
+    test_local_search_misses_terrain_rejections_and_hits()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
         return selftestlib.concluded(1)
     return selftestlib.concluded(
-        0, "\nAll location_embark_probe artifact-ownership and durable-save "
-        "tests passed")
+        0, "\nAll location_embark_probe artifact-ownership, durable-save and "
+        "buildable-search tests passed")
 
 
 if __name__ == "__main__":
