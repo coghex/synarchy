@@ -88,8 +88,10 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -584,7 +586,7 @@ def assert_reset_policy(chk: Checks, port: int, when: str) -> None:
 
 
 def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int,
-                                progress: ProgressEmitter) -> None:
+                                progress: ProgressEmitter, retries: int = 1) -> None:
     """Actually RUN the domain-specific and assembled-failure-contract
     probes this sweep cross-references (requirement 11/13), via the
     existing aggregate runner -- round-1 review: a file-existence check
@@ -596,7 +598,7 @@ def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int,
     announce_phase(progress, SWEEP_PHASE_CROSS_PROBES,
                    f"running {len(keys)} cross-referenced probe(s) via "
                    f"run_probes.py --only ... --exact --jobs {jobs} "
-                   f"--retries 1 (this is slow)")
+                   f"--retries {retries} (this is slow)")
     # --retries 1 matches CI's own convention for a parallel --jobs run
     # (see CLAUDE.md's CI probe-gate section): running probes pairwise
     # risks the SAME parallel-engine-contention flake CI's own gate
@@ -608,11 +610,86 @@ def run_cross_referenced_probes(chk: Checks, keys: list[str], jobs: int,
     proc = subprocess.run(
         [sys.executable, str(REPO / "tools" / "run_probes.py"),
          "--only", ",".join(keys), "--exact", "--jobs", str(jobs),
-         "--retries", "1"],
+         "--retries", str(retries)],
         cwd=REPO)
     chk.ok(proc.returncode == 0,
            f"cross-referenced probes ({', '.join(keys)}) all passed via "
            f"run_probes.py (exit code {proc.returncode})")
+
+
+def nonnegative_int(value: str) -> int:
+    """Reject invalid retry counts while parsing, before any preparation."""
+    try:
+        result = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer") from None
+    if result < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative integer")
+    return result
+
+
+def prepare_generation_destination(value: str) -> Path:
+    """Reserve an empty, writable capture destination before engine boot.
+
+    An incomplete marker is visible from the start. Only the final export
+    step replaces it, so an interrupted copy/write cannot claim completion.
+    """
+    destination = Path(value).expanduser().absolute()
+    if destination.is_symlink():
+        raise ValueError("destination must not be a symlink")
+    destination.mkdir(parents=True, exist_ok=True)
+    if any(destination.iterdir()):
+        raise ValueError("destination must be an empty directory")
+    (destination / "capture.json").write_text(
+        json.dumps({"complete": False, "compared": False,
+                    "status": "incomplete, not compared"}) + "\n", encoding="utf-8")
+    return destination
+
+
+def export_generations(root: str, destination: Path, comparison: dict) -> None:
+    """Copy only published regular slot files, then publish evidence status.
+
+    The raw comparison report keeps its original path identities; `files`
+    maps those identities to surviving copies, including any .prev files.
+    No linked resource tree or publication temporary file is traversed.
+    """
+    files: dict[str, str] = {}
+    missing = []
+    saves = Path(root) / "saves"
+    for generation in ("gen1", "gen2", "gen3", "gen4"):
+        slot = saves / generation
+        copied_primary = False
+        if not saves.is_symlink() and not slot.is_symlink():
+            for name in ("world.synworld", "world.synworld.prev"):
+                source = slot / name
+                try:
+                    regular = stat.S_ISREG(source.lstat().st_mode)
+                except FileNotFoundError:
+                    regular = False
+                if not regular:
+                    continue
+                target = destination / generation / name
+                target.parent.mkdir(exist_ok=True)
+                shutil.copy2(source, target)
+                files[str(source)] = str(target)
+                copied_primary |= name == "world.synworld"
+        if not copied_primary:
+            missing.append(generation)
+    # Preserve the complete returned result, not the bounded console tail.
+    (destination / "comparison.json").write_text(
+        json.dumps({"result": comparison or None, "files": files}, indent=2) + "\n",
+        encoding="utf-8")
+    compared = all(key in comparison for key in
+                   ("paths", "outcome", "report", "diagnostic", "ok", "detail"))
+    complete = not missing and compared
+    status = "complete, compared" if complete else "incomplete, not compared"
+    # This marker is the final step, after every copy AND the result write.
+    marker = destination / ".capture.json.tmp"
+    marker.write_text(json.dumps({"complete": complete, "compared": complete,
+                                 "status": status, "missing_generations": missing,
+                                 "files": files}, indent=2) + "\n", encoding="utf-8")
+    marker.replace(destination / "capture.json")
+    print(f"  generation evidence exported to {destination} ({status})", flush=True)
 
 
 def main() -> int:
@@ -633,10 +710,22 @@ def main() -> int:
                           "must be listed explicitly to opt in")
     ap.add_argument("--cross-probe-jobs", type=int, default=2,
                      help="run_probes.py --jobs for the cross-referenced probes")
+    ap.add_argument("--cross-probe-retries", type=nonnegative_int, default=1,
+                    help="run_probes.py --retries for cross-referenced probes "
+                         "(nonnegative; default: 1; use 0 to disable retries)")
+    ap.add_argument("--keep-generations", metavar="DIR",
+                    help="copy published gen1-gen4 session files and full comparison "
+                         "evidence to an empty DIR before cleanup (default: no export)")
     ap.add_argument("--skip-cross-probes", action="store_true",
                      help="skip the cross-referenced probes entirely (loudly reported "
                           "as reduced coverage, never the default)")
     args = ap.parse_args()
+    destination = None
+    if args.keep_generations is not None:
+        try:
+            destination = prepare_generation_destination(args.keep_generations)
+        except (OSError, ValueError) as error:
+            ap.error(f"--keep-generations {args.keep_generations!r}: {error}")
     port = args.port
     # #1768: every phase offset below is measured from here -- argument
     # parsing onward is this run's whole occupancy of the runner's budget.
@@ -673,6 +762,8 @@ def main() -> int:
 
     tmpdir = tempfile.mkdtemp(prefix="persistence_contract_sweep_")
     proc = None
+    root = os.path.join(tmpdir, "root")
+    comparison: dict = {}
     try:
         root = make_isolated_root(tmpdir)
 
@@ -807,16 +898,32 @@ def main() -> int:
         announce_phase(progress, SWEEP_PHASE_COMPARISON,
                        f"comparing {len(gen_paths)} generations through the "
                        f"real production codec")
-        ok, detail = compare_session_files([Path(p) for p in gen_paths])
+        comparison_args = {"capture": comparison} if destination is not None else {}
+        ok, detail = compare_session_files([Path(p) for p in gen_paths], **comparison_args)
         chk.ok(ok, f"all {len(gen_paths)} generations are structurally IDENTICAL "
                    f"across three real fresh-process save->load->save cycles of "
                    f"the representative scenario"
                + (f" -- {detail}" if not ok else ""))
 
     finally:
-        if proc is not None:
-            quit_engine(port, proc)
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        if destination is None:
+            # Preserve the uninstrumented lifecycle exactly.
+            if proc is not None:
+                quit_engine(port, proc)
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        else:
+            try:
+                if proc is not None:
+                    quit_engine(port, proc)
+            finally:
+                try:
+                    try:
+                        export_generations(root, destination, comparison)
+                    except Exception as error:  # capture must never prevent cleanup
+                        chk.ok(False, f"generation evidence capture failed at "
+                                      f"{destination}: {error}")
+                finally:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
 
     if args.skip_cross_probes:
         keys: list[str] = []
@@ -829,7 +936,8 @@ def main() -> int:
             print(f"  (not run: {', '.join(skipped_flaky)} -- isolated but "
                   f"independently flaky per `tools/ci_probes.py --status`; "
                   f"list it explicitly in --cross-probe-keys to also run it)")
-    run_cross_referenced_probes(chk, keys, args.cross_probe_jobs, progress)
+    run_cross_referenced_probes(chk, keys, args.cross_probe_jobs, progress,
+                                retries=args.cross_probe_retries)
 
     print(f"\n{'PASS' if chk.failed == 0 else 'FAIL'}: {chk.failed} check(s) failed")
     return 0 if chk.failed == 0 else 1
