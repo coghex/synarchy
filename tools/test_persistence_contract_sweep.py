@@ -38,6 +38,10 @@ of them back -- the same reader the runner applies to the complete
 capture in both its sequential and its `--jobs N` mode, so neither mode
 needs a real 900 s sweep run to be covered.
 
+The #2805 cases drive the real CLI, comparison adapter and capture/cleanup
+boundary with engine, codec and child execution stubbed. They pin opt-in
+retry forwarding and evidence retention without changing the default run.
+
 Usage:
   python3 tools/test_persistence_contract_sweep.py
 Exit codes: 0 = all tests passed, 1 = one or more failed.
@@ -46,6 +50,10 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import shutil
+import tempfile
+from unittest.mock import Mock, patch
 import sys
 from pathlib import Path
 
@@ -63,6 +71,9 @@ from persistence_contract_sweep import (  # type: ignore
     engine_cycle_phase,
     unregistered_selectable_probe_keys,
 )
+import persistence_contract_sweep as sweep
+import persistence_snapshot as snapshot
+import save_compat_audit_codec as codec
 import probe_runner_diagnostics  # type: ignore
 from probe_runner_registry import PROBES  # type: ignore
 
@@ -464,6 +475,350 @@ def test_the_failure_records_are_removed_from_the_ordinary_tail() -> None:
            f"always had (got {ordinary.splitlines()!r})")
 
 
+# --------------------------------------------------------------------------
+# Opt-in capture and retry plumbing through the REAL main lifecycle (#2805)
+# --------------------------------------------------------------------------
+def _drive_sweep(argv, *, outcome=codec.COMPARE_OK, fail_slot=None,
+                 copy_error=False, result_error=False, marker_error=False,
+                 child_exit=0, destination=None, destination_error=False,
+                 preparation_error=False, comparison_error=False, save_exit=False,
+                 no_report=False, symlink_recovery=False):
+    """Fake only engine/codec/child boundaries; preserve main and cleanup.
+
+    The cleanup spy snapshots the export BEFORE deleting the real temporary
+    root. Codec comparison is mocked below the real compare_session_files,
+    so flag plumbing also proves exactly one report/verdict-producing call.
+    """
+    with tempfile.TemporaryDirectory(prefix="sweep_test_") as td:
+        base = Path(td)
+        run = base / "run"
+        run.mkdir()
+        destination = destination or base / "evidence"
+        args = [str(destination) if item == "CAPTURE" else item for item in argv]
+        events = []
+        generated = {}
+        loaded = False
+        before_cleanup = {}
+        comparison_report = {}
+        diagnostic = "" if outcome == codec.COMPARE_OK else (
+            "mismatch first line\n" + "many details é\n" * 200 + "last mismatch line\n")
+
+        def boot(root, port, log):
+            events.append(("boot", Path(log).name))
+            return object()
+
+        def quit(port, proc):
+            events.append(("quit",))
+
+        def save(chk, port, page, slot):
+            path = run / "root" / "saves" / slot
+            path.mkdir()
+            for name in ("world.synworld", "world.synworld.prev"):
+                payload = b"\x00\xff" + f"{slot}/{name}".encode() + b"\n"
+                (path / name).write_bytes(payload)
+                generated[f"{slot}/{name}"] = payload
+            if symlink_recovery and slot == "gen2":
+                recovery = path / "world.synworld.prev"
+                recovery.unlink()
+                recovery.symlink_to(path / "world.synworld")
+                del generated[f"{slot}/world.synworld.prev"]
+            (path / "world-synworld-tmp-poison").write_bytes(b"not evidence")
+            (path / "world-synworld-stale-poison").write_bytes(b"not evidence")
+            (path / "unrelated").symlink_to(Path(sweep.REPO) / "assets")
+            events.append(("save", slot))
+            if slot == fail_slot:
+                if save_exit:
+                    raise SystemExit(9)
+                raise RuntimeError("stubbed save interruption")
+
+        def send(port, command, **kwargs):
+            nonlocal loaded
+            if "engine.loadSave" in command:
+                loaded = True
+                return "true"
+            if "world.getActiveWorldId" in command:
+                return sweep.PAGE
+            if "unit.exists" in command:
+                return "true"
+            if "world.getTimeScale" in command:
+                return "1"
+            return "ok"
+
+        def compare(paths):
+            events.append(("compare",))
+            if comparison_error:
+                raise RuntimeError("stubbed comparison interruption")
+            comparison_report.update(reference=str(paths[0]),
+                                     snapshotDiffers=[] if outcome == codec.COMPARE_OK
+                                     else [str(paths[2])], luaComponentDiffers=[],
+                                     decodeErrors=[], fullNested={"detail": "full data"})
+            return outcome, None if no_report else comparison_report, diagnostic
+
+        real_copy = shutil.copy2
+        copied = []
+
+        def copy(source, target):
+            events.append(("copy", Path(source).parent.name, Path(source).name))
+            if copy_error and copied:
+                raise OSError("stubbed second copy failure")
+            copied.append(str(source))
+            return real_copy(source, target)
+
+        real_write = Path.write_text
+
+        def write(path, text, **kwargs):
+            if ((destination_error and path.name == "capture.json") or
+                    (result_error and path.name == "comparison.json") or
+                    (marker_error and path.name == ".capture.json.tmp")):
+                raise OSError("stubbed result/marker write failure")
+            return real_write(path, text, **kwargs)
+
+        real_remove = shutil.rmtree
+
+        def remove(path, **kwargs):
+            if Path(path) == run:
+                events.append(("cleanup",))
+                expect(run.exists(), "real run root still exists at cleanup boundary")
+                if destination.exists():
+                    before_cleanup.update({str(p.relative_to(destination)): p.read_bytes()
+                                           for p in destination.rglob("*") if p.is_file()})
+                real_remove(path, **kwargs)
+                expect(not run.exists(), "normal cleanup removes the isolated run root")
+            else:
+                real_remove(path, **kwargs)
+
+        child = Mock(return_value=type("Result", (), {"returncode": child_exit})())
+        preparation = Mock(side_effect=RuntimeError("stubbed preparation failure")
+                           if preparation_error else None)
+        boot_mock = Mock(side_effect=boot)
+        compare_mock = Mock(side_effect=compare)
+        replacements = dict(
+            prepare_decoder=preparation, boot_probe=boot_mock,
+            build_rich_scenario=lambda *a: (1, 2, 3, 4), save_and_wait=save,
+            assert_nondefault_map_mode=lambda *a: None, quit_engine=quit,
+            bootstrap_defs=lambda *a: None, load_ai_stack=lambda *a: None,
+            send=send, capture_request_id=lambda *a: 123,
+            wait_load_published=lambda *a, **kw: (True, "published"),
+            page_exists=lambda port, page: page != sweep.GHOST_PAGE or not loaded,
+            send_json=lambda *a: {"name": "Sweep Beta World"},
+            assert_reset_policy=lambda *a: None, get_attack_target=lambda *a: 3,
+            sample_live_state=lambda *a: {"paused": True})
+        buffer = io.StringIO()
+        error = None
+        code = None
+        with contextlib.ExitStack() as stack:
+            for name, value in replacements.items():
+                stack.enter_context(patch.object(sweep, name, value))
+            stack.enter_context(patch.object(sweep.tempfile, "mkdtemp", return_value=str(run)))
+            stack.enter_context(patch.object(sweep.time, "sleep", return_value=None))
+            stack.enter_context(patch.object(snapshot, "compare_session_snapshots", compare_mock))
+            stack.enter_context(patch.object(snapshot, "_summary_diff", return_value="summary diff"))
+            stack.enter_context(patch.object(sweep.subprocess, "run", child))
+            stack.enter_context(patch.object(sweep.shutil, "copy2", side_effect=copy))
+            stack.enter_context(patch.object(sweep.shutil, "rmtree", side_effect=remove))
+            stack.enter_context(patch.object(Path, "write_text", new=write))
+            stack.enter_context(patch.object(sys, "argv", ["persistence_contract_sweep.py", *args]))
+            stack.enter_context(contextlib.redirect_stdout(buffer))
+            stack.enter_context(contextlib.redirect_stderr(buffer))
+            try:
+                code = sweep.main()
+            except (SystemExit, RuntimeError) as caught:
+                error = caught
+        after_cleanup = {str(p.relative_to(destination)): p.read_bytes()
+                         for p in destination.rglob("*") if p.is_file()}
+        return dict(code=code, error=error, text=buffer.getvalue(), events=events,
+                    generated=generated, before=before_cleanup, after=after_cleanup,
+                    child=child, preparation=preparation, boot=boot_mock,
+                    compare=compare_mock, report=comparison_report, diagnostic=diagnostic,
+                    destination=destination)
+
+
+def test_retry_cli_and_default_capture_behavior() -> None:
+    print("\n-- default and opt-in retries reach the real child unchanged")
+    for flags, retries in (([], 1), (["--cross-probe-retries", "0"], 0),
+                           (["--cross-probe-retries", "3"], 3)):
+        result = _drive_sweep(flags)
+        expect(result["code"] == 0 and result["error"] is None,
+               "stubbed main retains successful check/child outcome")
+        expect(result["preparation"].call_count == 1 and result["boot"].call_count == 4
+               and result["compare"].call_count == 1 and result["child"].call_count == 1,
+               "real main reaches every stubbed boundary in the original lifecycle")
+        argv = result["child"].call_args.args[0]
+        expect(argv == [sys.executable, str(sweep.REPO / "tools" / "run_probes.py"),
+                        "--only", ",".join(sweep.DEFAULT_CROSS_REFERENCED_PROBE_KEYS),
+                        "--exact", "--jobs", "2", "--retries", str(retries)]
+               and result["child"].call_args.kwargs == {"cwd": sweep.REPO},
+               "only the requested retry count varies; jobs/keys/exact/cwd are intact")
+        expect(f"--retries {retries} (this is slow)" in result["text"],
+               "phase diagnostic states the actual retry count")
+        expect(result["before"] == result["after"] == {}
+               and "generation evidence" not in result["text"]
+               and not [e for e in result["events"] if e[0] == "copy"],
+               "no capture flag means normal cleanup, no export and no extra output")
+        expect(result["events"][-1] == ("cleanup",), "default cleanup remains active")
+    for value in ("-1", "nope", "1.5"):
+        result = _drive_sweep(["--cross-probe-retries", value])
+        expect(isinstance(result["error"], SystemExit) and result["error"].code == 2,
+               "invalid retries are CLI errors")
+        expect(not result["boot"].called and not result["preparation"].called
+               and not result["child"].called, "invalid retries fail before all launches")
+    result = _drive_sweep(["--cross-probe-keys", "chop,till", "--cross-probe-jobs", "4",
+                           "--cross-probe-retries", "0"], child_exit=7)
+    argv = result["child"].call_args.args[0]
+    expect(argv[-7:] == ["--only", "chop,till", "--exact", "--jobs", "4", "--retries", "0"]
+           and result["code"] == 1 and "exit code 7" in result["text"],
+           "selected keys/jobs and nonzero child outcome accounting are unchanged")
+    result = _drive_sweep(["--skip-cross-probes", "--cross-probe-retries", "0"])
+    expect(result["code"] == 1 and not result["child"].called
+           and "coverage is NOT exercised" in result["text"],
+           "skipping remains reduced coverage and launches no child")
+
+
+def test_full_capture_and_same_comparison_verdict() -> None:
+    print("\n-- success/mismatch/error capture preserves all bytes and the full single-call result")
+    for outcome in (codec.COMPARE_OK, codec.COMPARE_MISMATCH,
+                    codec.COMPARE_DECODE_FAILED, codec.COMPARE_ERROR):
+        result = _drive_sweep(["--keep-generations", "CAPTURE"], outcome=outcome)
+        expect(result["code"] == (0 if outcome == codec.COMPARE_OK else 1),
+               "capture never changes the comparison's check outcome")
+        expect(result["compare"].call_count == 1, "export never repeats comparison")
+        expect(result["before"] == result["after"],
+               "all exported evidence already exists before cleanup and survives it")
+        for name, payload in result["generated"].items():
+            expect(result["after"].get(name) == payload,
+                   f"{name} primary/recovery bytes survive exactly")
+        expect(set(result["after"]) == set(result["generated"]) | {
+            "capture.json", "comparison.json"},
+               "only session files and result markers exported; no links/temp/resource trees")
+        marker = json.loads(result["after"]["capture.json"])
+        expect(marker["complete"] and marker["compared"]
+               and marker["missing_generations"] == [], "completed captures are honestly marked")
+        exported = json.loads(result["after"]["comparison.json"])
+        evidence = exported["result"]
+        expect(evidence["outcome"] == outcome and evidence["report"] == result["report"]
+               and evidence["diagnostic"] == result["diagnostic"]
+               and evidence["ok"] == (outcome == codec.COMPARE_OK),
+               "actual outcome, full structured report and raw diagnostic are retained")
+        final_detail = result["diagnostic"]
+        if outcome == codec.COMPARE_MISMATCH:
+            final_detail += "\nfirst structural difference (via canonical summary): summary diff"
+        expect(evidence["detail"] == final_detail, "the entire returned mismatch detail is retained")
+        for source, target in exported["files"].items():
+            relative = str(Path(target).relative_to(result["destination"]))
+            expect(result["after"][relative] == result["generated"][relative],
+                   "original generation identities map to surviving exported files")
+        expect(exported["files"][evidence["report"]["reference"]].endswith("gen1/world.synworld"),
+               "reference generation maps to the retained gen1")
+        if outcome != codec.COMPARE_OK:
+            expect(exported["files"][evidence["report"]["snapshotDiffers"][0]].endswith(
+                "gen3/world.synworld"), "divergent generation maps to the retained gen3")
+        events = result["events"]
+        expect(max(i for i, e in enumerate(events) if e[0] == "quit")
+               < min(i for i, e in enumerate(events) if e[0] == "copy")
+               < next(i for i, e in enumerate(events) if e[0] == "cleanup"),
+               "export follows engine teardown and precedes temporary-root deletion")
+        expect(str(result["destination"]) in result["text"], "export location is reported")
+
+
+def test_partial_interrupted_and_failed_capture_cleanup() -> None:
+    print("\n-- partial/interrupted exports never claim complete or compared, and cleanup still runs")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], fail_slot="gen3")
+    expect(isinstance(result["error"], RuntimeError) and not result["compare"].called,
+           "exception before comparison keeps the original exception and never compares")
+    expect(result["before"] == result["after"], "partial export also precedes cleanup")
+    marker = json.loads(result["after"]["capture.json"])
+    expect(not marker["complete"] and not marker["compared"]
+           and marker["missing_generations"] == ["gen4"], "partial capture names missing generation")
+    expect(json.loads(result["after"]["comparison.json"])["result"] is None,
+           "an unperformed comparison gets no manufactured outcome")
+    events = result["events"]
+    expect(events[-1] == ("cleanup",)
+           and events[events.index(("save", "gen3")) + 1] == ("quit",),
+           "live engine is asked to quit before partial capture/cleanup")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], fail_slot="gen2", save_exit=True)
+    marker = json.loads(result["after"]["capture.json"])
+    expect(isinstance(result["error"], SystemExit) and result["error"].code == 9
+           and not marker["complete"] and not marker["compared"]
+           and marker["missing_generations"] == ["gen3", "gen4"]
+           and result["events"][-1] == ("cleanup",),
+           "SystemExit retains only produced generations, preserves exit status and cleans up")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], comparison_error=True)
+    marker = json.loads(result["after"]["capture.json"])
+    expect(isinstance(result["error"], RuntimeError) and result["compare"].call_count == 1
+           and not marker["complete"] and not marker["compared"]
+           and marker["missing_generations"] == []
+           and json.loads(result["after"]["comparison.json"])["result"] is None,
+           "all files without a completed comparison remain incomplete/not compared")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], preparation_error=True)
+    marker = json.loads(result["after"]["capture.json"])
+    expect(isinstance(result["error"], RuntimeError) and not result["boot"].called
+           and result["preparation"].called and result["events"][-1] == ("cleanup",),
+           "preparation exception still captures available evidence and cleans up before any boot")
+    expect(not marker["complete"] and not marker["compared"]
+           and marker["missing_generations"] == ["gen1", "gen2", "gen3", "gen4"],
+           "preparation failure honestly labels an empty export")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], fail_slot="gen3", copy_error=True)
+    expect(isinstance(result["error"], RuntimeError) and "capture failed" in result["text"]
+           and result["events"][result["events"].index(("save", "gen3")) + 1] == ("quit",)
+           and result["events"][-1] == ("cleanup",),
+           "capture failure on an interrupted live-engine path preserves teardown and cleanup")
+    for failure in ("copy_error", "result_error", "marker_error"):
+        result = _drive_sweep(["--keep-generations", "CAPTURE"], **{failure: True})
+        marker = json.loads(result["after"]["capture.json"])
+        expect(result["code"] == 1 and "capture failed" in result["text"]
+               and "exported to" not in result["text"], "capture failure is visible, never a retention claim")
+        expect(not marker["complete"] and not marker["compared"],
+               "an interrupted copy/result/final-marker write retains the initial incomplete marker")
+        expect(result["events"][-1] == ("cleanup",) and result["before"] == result["after"],
+               "capture failure cannot prevent teardown or cleanup")
+
+    result = _drive_sweep(["--keep-generations", "CAPTURE"],
+                          outcome=codec.COMPARE_ERROR, no_report=True)
+    evidence = json.loads(result["after"]["comparison.json"])["result"]
+    expect(result["code"] == 1 and evidence["report"] is None
+           and evidence["outcome"] == codec.COMPARE_ERROR
+           and evidence["diagnostic"] == result["diagnostic"],
+           "comparison error without a report preserves the real error and absent report")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], symlink_recovery=True)
+    expect(result["code"] == 0 and "gen2/world.synworld.prev" not in result["after"]
+           and json.loads(result["after"]["capture.json"])["complete"],
+           "a symlinked recovery file is never followed or copied")
+
+
+def test_destination_hygiene_and_help() -> None:
+    print("\n-- invalid/reused destinations fail before boot; help describes both defaults")
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        file = base / "file"
+        file.write_bytes(b"occupied")
+        occupied = base / "occupied"
+        occupied.mkdir()
+        (occupied / "gen4").write_bytes(b"old run")
+        link = base / "link"
+        link.symlink_to(occupied, target_is_directory=True)
+        for path in (file, occupied, link):
+            result = _drive_sweep(["--keep-generations", "CAPTURE"], destination=path)
+            expect(isinstance(result["error"], SystemExit) and result["error"].code == 2,
+                   "invalid/reused destination is a CLI error")
+            expect(not result["boot"].called and not result["preparation"].called
+                   and not result["child"].called, "unusable destination refused before any launches")
+        expect(file.read_bytes() == b"occupied" and (occupied / "gen4").read_bytes() == b"old run",
+               "rejection preserves existing destination contents")
+        empty = base / "empty"
+        empty.mkdir()
+        result = _drive_sweep(["--keep-generations", "CAPTURE"], destination=empty)
+        expect(result["code"] == 0, "an existing empty directory is usable")
+    result = _drive_sweep(["--keep-generations", "CAPTURE"], destination_error=True)
+    expect(isinstance(result["error"], SystemExit) and result["error"].code == 2
+           and not result["boot"].called and not result["preparation"].called
+           and not result["child"].called, "destination write failure is rejected before launches")
+    result = _drive_sweep(["--help"])
+    expect(isinstance(result["error"], SystemExit) and result["error"].code == 0
+           and "--cross-probe-retries" in result["text"] and "default: 1" in result["text"]
+           and "--keep-generations" in result["text"] and "default: no export" in result["text"],
+           "CLI help states both opt-in controls and defaults")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_todays_selectable_keys_are_all_registered()
@@ -481,14 +836,18 @@ def main() -> int:
     test_every_failed_check_survives_outside_the_retained_tail()
     test_sweep_failure_records_are_not_consumed_by_phase_attribution()
     test_the_failure_records_are_removed_from_the_ordinary_tail()
+    test_retry_cli_and_default_capture_behavior()
+    test_full_capture_and_same_comparison_verdict()
+    test_partial_interrupted_and_failed_capture_cleanup()
+    test_destination_hygiene_and_help()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
         return selftestlib.concluded(1)
     return selftestlib.concluded(
-        0, "\nAll persistence_contract_sweep registry-drift, phase-record "
-        "and failed-check-record tests passed")
+        0, "\nAll persistence_contract_sweep registry-drift, phase-record, "
+        "failed-check-record and opt-in capture/retry tests passed")
 
 
 if __name__ == "__main__":
