@@ -648,6 +648,11 @@ python3 tools/world_check.py --quick
 # those paths are reached only over synthetic timings; this companion
 # boots nothing and runs in under a second.
 #
+# test_transfer_context_menu_probe is #2806's engine-free companion:
+# opt-in dry-site diagnostics observe the real allocator, cap candidate
+# output at 128, and preserve default queries, selections and failures.
+# Stubbed seed/terrain readings also pin the early failure report.
+#
 # test_mental_efficiency_probe is #2772's: the mental-efficiency
 # probe's combat sample placed its unarmed attacker outside live
 # reach, so every strike was refused at commit as out_of_reach and
@@ -695,6 +700,7 @@ python3 tools/test_item_list_widget_probe.py
 python3 tools/test_construction_probe.py
 python3 tools/test_expedition_loop_day_budget.py
 python3 tools/test_mental_efficiency_probe.py
+python3 tools/test_transfer_context_menu_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the
