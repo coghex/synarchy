@@ -223,17 +223,25 @@ def _summary_diff(paths: list[Path]) -> str:
         return _first_diff(a, b)
 
 
-def compare_session_files(paths: list[Path]) -> tuple[bool, str]:
+def compare_session_files(paths: list[Path], *,
+                          capture: dict | None = None) -> tuple[bool, str]:
     """Decode every file in `paths` (at least 2) through the real save
     codec and assert every decoded `SessionSnapshot` plus every
     `lua.<module>` payload is pairwise structurally equal. Returns
     (all_equal, diagnostic) -- diagnostic is empty on success, or a
     human-readable explanation (including a per-file canonical-summary
-    diff where available) on failure/decode error."""
+    diff where available) on failure/decode error. Opt-in `capture` receives
+    the outcome, full report and diagnostics from this SAME comparison;
+    the two-value return and comparison semantics stay unchanged."""
     if len(paths) < 2:
         return True, ""
     outcome, report, detail = compare_session_snapshots(paths)
+    if capture is not None:
+        capture.update(paths=[str(p) for p in paths], outcome=outcome,
+                       report=report, diagnostic=detail)
     if outcome == COMPARE_OK:
+        if capture is not None:
+            capture.update(ok=True, detail="")
         return True, ""
     if outcome == COMPARE_MISMATCH:
         try:
@@ -243,4 +251,6 @@ def compare_session_files(paths: list[Path]) -> tuple[bool, str]:
         if diff:
             detail += (f"\nfirst structural difference (via canonical "
                        f"summary): {diff}")
+    if capture is not None:
+        capture.update(ok=False, detail=detail)
     return False, detail
