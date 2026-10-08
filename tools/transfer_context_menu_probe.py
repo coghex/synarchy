@@ -84,11 +84,13 @@ per CLAUDE.md; the CI-blocking gate for this feature is
 context menu"'` (`test-headless/Test/Headless/UI/TransferContextMenu.hs`).
 
 Usage: python3 tools/transfer_context_menu_probe.py
-       [--port 9425] [--size 1024x768]
+       [--port 9425] [--size 1024x768] [--diagnose-sites]
 """
 from __future__ import annotations
 
 import argparse
+import json
+from collections import Counter
 import os
 import re
 import sys
@@ -212,8 +214,91 @@ def _search_centres(rings: int = 2, spacing: int = 2 * SEARCH_RADIUS):
     return pts
 
 
+SITE_DETAIL_LIMIT = 128
+SITE_REASONS = ("bulk-fluid-exclusion", "insufficient-separation",
+                "surface-unavailable-or-unparseable", "non-dry-surface",
+                "accepted-dry-site")
+SITE_ROLES = ("building", "mule", "acolyte", "acolyte2", "wildlife")
+
+
+class SiteDiagnostics:
+    """Observe the allocator's existing decisions; cap output, never search."""
+
+    def __init__(self) -> None:
+        self.counts: Counter = Counter()
+        self.detail_count = 0
+        self.center_count = 0
+
+    @staticmethod
+    def emit(kind: str, **fields) -> None:
+        print("  [diagnose-sites] " + json.dumps({"kind": kind, **fields}),
+              flush=True)
+
+    def seed(self, port: int) -> None:
+        # This optional read must never change the probe's exit path, even
+        # when its short-lived console connection fails or supplies nil.
+        try:
+            raw = send(port, "return world.getSeed()")
+            if not re.fullmatch(r"[+-]?[0-9]+", raw.strip()):
+                self.emit("seed", evidence="missing",
+                          reason="non-integer seed response", response=raw[:160])
+                return
+            seed = int(raw.strip())
+        except Exception as exc:
+            self.emit("seed", evidence="missing",
+                      reason=f"{type(exc).__name__}: {str(exc)[:160]}")
+            return
+        self.emit("seed", evidence="available", generated_seed=seed)
+
+    def begin_search(self, n: int, radius: int, min_sep: int) -> None:
+        self.emit("search", requested_sites=n, radius=radius, min_separation=min_sep,
+                  candidate_detail_limit=SITE_DETAIL_LIMIT)
+
+    def begin_center(self, center: tuple[int, int]) -> None:
+        self.center_count += 1
+        self.center = center
+        self.center_counts = Counter()
+        self.center_details = 0
+        self.emit("center", ordinal=self.center_count, center=center)
+
+    def candidate(self, x: int, y: int, reason: str) -> None:
+        self.counts[reason] += 1
+        self.center_counts[reason] += 1
+        if self.detail_count < SITE_DETAIL_LIMIT:
+            self.detail_count += 1
+            self.center_details += 1
+            self.emit("candidate", center_ordinal=self.center_count,
+                      center=self.center, candidate=(x, y), reason=reason)
+
+    @staticmethod
+    def all_counts(counts: Counter) -> dict[str, int]:
+        return {reason: counts[reason] for reason in SITE_REASONS}
+
+    def end_center(self, picked: list, complete: bool) -> None:
+        examined = sum(self.center_counts.values())
+        self.emit("center-summary", ordinal=self.center_count, center=self.center,
+                  examined=examined, counts=self.all_counts(self.center_counts),
+                  omitted_candidate_details=examined - self.center_details,
+                  complete=complete, selected_at_this_center=picked)
+
+    def finish(self, sites) -> None:
+        examined = sum(self.counts.values())
+        self.emit("summary", visited_centers=self.center_count,
+                  examined=examined, counts=self.all_counts(self.counts),
+                  candidate_details=self.detail_count,
+                  omitted_candidate_details=examined - self.detail_count)
+        if sites is None:
+            self.emit("selection", complete=False,
+                      detail="no complete five-site selection obtained; "
+                             "partial selections are in their own center summaries")
+        else:
+            self.emit("selection", complete=True,
+                      fixture_sites=dict(zip(SITE_ROLES, sites)))
+
+
 def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
-                          radius: int = SEARCH_RADIUS):
+                          radius: int = SEARCH_RADIUS,
+                          diagnostics: SiteDiagnostics | None = None):
     """Take `n` DISTINCT dry tiles, each at least `min_sep` tiles from
     every tile already taken, out of ONE shared candidate list.
 
@@ -233,7 +318,11 @@ def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
     many candidates would be thousands of round trips."""
     span = radius // CHUNK_TILES + 1
     offsets = _candidate_grid(4, radius)
+    if diagnostics is not None:
+        diagnostics.begin_search(n, radius, min_sep)
     for ox, oy in _search_centres():
+        if diagnostics is not None:
+            diagnostics.begin_center((ox, oy))
         ccx, ccy = ox // CHUNK_TILES, oy // CHUNK_TILES
         send(port, f"return world.loadChunksInRegion({ccx - span}, "
                    f"{ccy - span}, {ccx + span}, {ccy + span})")
@@ -250,18 +339,32 @@ def allocate_dry_anchors(port: int, n: int, min_sep: int = 12,
         for dx, dy in offsets:
             gx, gy = ox + dx, oy + dy
             if (gx, gy) in wet:
+                if diagnostics is not None:
+                    diagnostics.candidate(gx, gy, "bulk-fluid-exclusion")
                 continue
             if any(max(abs(gx - tx), abs(gy - ty)) < min_sep
                    for tx, ty in picked):
+                if diagnostics is not None:
+                    diagnostics.candidate(gx, gy, "insufficient-separation")
                 continue
             # Confirm against the tile itself: getAreaFluid says nothing
             # about a tile whose chunk never loaded.
             info = tile_surface(port, gx, gy)
             if info is None or not info[1]:
+                if diagnostics is not None:
+                    diagnostics.candidate(
+                        gx, gy, "surface-unavailable-or-unparseable"
+                        if info is None else "non-dry-surface")
                 continue
             picked.append((gx, gy))
+            if diagnostics is not None:
+                diagnostics.candidate(gx, gy, "accepted-dry-site")
             if len(picked) == n:
+                if diagnostics is not None:
+                    diagnostics.end_center(picked, complete=True)
                 return picked
+        if diagnostics is not None:
+            diagnostics.end_center(picked, complete=False)
         print(f"  (no usable land around {(ox, oy)}: {len(wet)} of "
               f"{len(offsets)} candidate tiles are fluid, "
               f"{len(picked)} dry site(s) found)")
@@ -419,6 +522,9 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=9425)
     ap.add_argument("--size", default="1024x768")
+    ap.add_argument("--diagnose-sites", action="store_true",
+                    help="print generated seed, search centers, at most 128 "
+                         "candidate detail records, counts and selected sites")
     args = ap.parse_args()
     port = args.port
 
@@ -477,7 +583,12 @@ def _run(port: int, args) -> int:
     check("probe building def loaded", float(n) == 1.0, f"got {n!r}")
 
     print("  (scanning terrain outward from the origin for dry anchor sites)")
-    sites = allocate_dry_anchors(port, 5)
+    diagnostics = SiteDiagnostics() if args.diagnose_sites else None
+    if diagnostics is not None:
+        diagnostics.seed(port)
+    sites = allocate_dry_anchors(port, 5, diagnostics=diagnostics)
+    if diagnostics is not None:
+        diagnostics.finish(sites)
     if not check("found five separated dry sites for the fixtures",
                  sites is not None):
         return 1
