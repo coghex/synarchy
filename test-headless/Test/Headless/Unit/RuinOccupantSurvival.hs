@@ -47,8 +47,18 @@
 --   by these steps, so "world age" in the late case means elapsed
 --   engine seconds ('engine.gameTime'), the clock the issue measures.
 --
---   Run just this gate: @cabal test synarchy-test-headless
---   --test-options='--match "ruin occupant survival (#2754)"'@.
+--   __Local opt-in only (#2809).__ The two scenarios are actual game
+--   simulations (10,800 engine seconds per occupant on a generated
+--   world), and owner decision z3hd4feg (2026-10-08) makes those
+--   optional, local only and never CI. They register no examples unless
+--   @SYNARCHY_RUIN_SURVIVAL=1@ is set; any other value, or none,
+--   registers nothing, and @SYNARCHY_FULL_TESTS@ does not enable them.
+--   Neither CI nor @tools/ci-local.sh@ sets the variable. The nested
+--   "survival exemption" group is finite and stays unconditional, so it
+--   runs wherever this parent group runs. Run the two scenarios locally:
+--
+--   > SYNARCHY_RUIN_SURVIVAL=1 cabal-3.16.1.0 test synarchy-test-headless \
+--   >   --test-options='--match "ruin occupant survival (#2754)"'
 module Test.Headless.Unit.RuinOccupantSurvival (spec) where
 
 import UPrelude
@@ -58,6 +68,7 @@ import Control.Concurrent (threadDelay)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Data.List (sort)
 import System.Directory (listDirectory)
+import System.Environment (lookupEnv)
 import System.FilePath ((</>), takeExtension)
 import Engine.Core.State (EngineEnv(..))
 import Engine.PlayerEvent (PlayerEvent(..), StoredEvent(..))
@@ -431,10 +442,14 @@ scenario spawnAge env = do
 
 spec ∷ Spec
 spec = describe "ruin occupant survival (#2754)" $ do
-    it "keeps an early-spawned ruin roster alive, lucid and on post for \
-       \10,800 engine seconds each" $
-        withHeadlessEngine (scenario 0)
-    it "keeps a roster spawned into a 1,200-second-old world alive, lucid \
-       \and on post for 10,800 engine seconds each" $
-        withHeadlessEngine (scenario lateSpawnAgeSec)
+    -- The two long simulations need the exact local opt-in (#2809); the
+    -- finite nested group below is unconditional.
+    optIn ← runIO (lookupEnv "SYNARCHY_RUIN_SURVIVAL")
+    when (optIn ≡ Just "1") $ do
+        it "keeps an early-spawned ruin roster alive, lucid and on post for \
+           \10,800 engine seconds each" $
+            withHeadlessEngine (scenario 0)
+        it "keeps a roster spawned into a 1,200-second-old world alive, lucid \
+           \and on post for 10,800 engine seconds each" $
+            withHeadlessEngine (scenario lateSpawnAgeSec)
     SurvivalExemption.spec

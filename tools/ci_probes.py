@@ -103,40 +103,30 @@ CI_ELIGIBLE = {
     # and cost ~2 s together — the probe stays in the seconds range that
     # makes it CI-eligible.
     "debug_console_boot",
-    # #2535: the only end-to-end gate on the EXACT fluid level. A partial
-    # cell made by the real simulation must keep its exact units and level
-    # through writeback, save, a process exit and a fresh-process load.
-    # Deterministic by construction: one player edit on a generated
-    # worldSize-8 page, the expectation captured only once the PAUSED
-    # neighbourhood has held still, and the reload compared while paused
-    # -- no AI, no GPU. It needs no feature rule: the fluid simulation
-    # (src/Sim/*), fluid render (src/World/Render/*) and fluid state
-    # (src/World/Fluid/*) paths are unclassified and so select the whole
-    # eligible set, and fluid persistence (src/World/Save/*) is CORE; the
-    # self-test pins all four. A narrowing rule for them would drop every
-    # other probe they select today.
-    "fluid_exact_restart",
-    # #1577: re-promoted. #600 promoted this probe on the strength of #593
-    # making it self-contained, and direct commit b09c1518 removed it an
-    # hour later with no recorded evidence. The #593 property still holds:
-    # it sets SYNARCHY_INFECTION_TEST_MODE=1 on its OWN engine subprocess,
-    # so growth and sepsis are observable over fixed seconds instead of the
-    # production rate's real minutes, `unit_ai.update` is neutralised, and
-    # every assertion is a direct wound/stat read over a monotone engine
-    # tick with a wide margin — no AI arbitration, no skip path. One
-    # flat-arena boot, no worldgen, no GPU: 6/6 measured attempts passed —
-    # 57.8/58.0/58.0 s solo and 57.5/57.5/56.8 s inside a --jobs 2 batch
-    # (macOS/aarch64, 6e12c9c3), a 1.2 s total spread across a machine whose
-    # load average moved between 14 and 46. Broad: all four halves of the loop
-    # (growth, antiseptic prevention, antibiotic cure, sepsis meter) have no
-    # other automated end-to-end coverage.
-    "infection",
-    "medic_coord",
+    # #2809: fluid_exact_restart, infection and medic_coord left this set for
+    # owner decision z3hd4feg (2026-10-08): actual game simulations are
+    # optional, local only and never CI. Their grounds are recorded in
+    # MANUAL_ONLY_REASONS (scenario-heavy), and SIMULATION_ONLY_KEYS below
+    # records the end-to-end coverage this deliberately leaves out of CI.
     "persistence_contract",
     "preview_cli",
     "repair",
     "repair_item",
 }
+
+# #2809: probes that are actual game SIMULATIONS (owner decision z3hd4feg,
+# 2026-10-08: optional, local only, never CI). Keeping them out of
+# CI_ELIGIBLE is an intentional END-TO-END coverage exclusion, recorded
+# here so it reads as one, not as an oversight: no blocking check now
+# proves, by a live run,
+#   * fluid_exact_restart: a partial fluid cell made by the real simulation
+#     keeps its exact units and level through save and a fresh-process load;
+#   * infection: the infection catalogue drives a real wound through growth,
+#     prevention, cure and sepsis;
+#   * medic_coord: autonomous medics are chosen and treat the wounded.
+# Their FINITE correctness coverage (the headless hspec suite, and
+# content_registry for the infection catalogue) stays mandatory.
+SIMULATION_ONLY_KEYS = frozenset({"fluid_exact_restart", "infection", "medic_coord"})
 
 # Manual-only reason categories (#540). Kept short + greppable; `--status`
 # and `_self_test` below both read this dict, so it is the single source of
@@ -309,6 +299,30 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                         "on racing the post-capture storage-write window -- neither is "
                         "cheap or stable enough for a blocking per-PR gate"),),
     "save_pause": (Reason(SCENARIO_HEAVY, "real worldgen plus save/load pause race checks"),),
+    # #2809: owner decision z3hd4feg (2026-10-08) -- long actual game
+    # simulations are optional, local only and never CI, whatever wraps
+    # them and however deterministic or accelerated they are. These three
+    # were CI-eligible until then; their assertions and evidence stand, and
+    # they stay available through run_probes.py --only KEY --exact.
+    "fluid_exact_restart": (Reason(SCENARIO_HEAVY, "#2809 owner simulation policy (z3hd4feg, "
+                                                   "2026-10-08): live simulation -- real "
+                                                   "generated-world fluid flow creates the "
+                                                   "partial-cell fixture whose exact units and "
+                                                   "level it then carries through writeback, "
+                                                   "save, a process exit and a fresh-process "
+                                                   "load (#2535); optional local evidence, "
+                                                   "never CI"),),
+    "infection": (Reason(SCENARIO_HEAVY, "#2809 owner simulation policy (z3hd4feg, 2026-10-08): "
+                                         "live simulation -- a real wound evolves through "
+                                         "infection growth, antiseptic prevention, antibiotic "
+                                         "cure and sepsis over real-time waits on a running "
+                                         "engine (accelerated by SYNARCHY_INFECTION_TEST_MODE, "
+                                         "#593); optional local evidence, never CI"),),
+    "medic_coord": (Reason(SCENARIO_HEAVY, "#2809 owner simulation policy (z3hd4feg, "
+                                           "2026-10-08): live simulation -- autonomous medics "
+                                           "move to and treat the wounded while the probe "
+                                           "repeatedly unpauses and polls a running engine; "
+                                           "optional local evidence, never CI"),),
     "pause_speed": (Reason(SCENARIO_HEAVY, "#1599: real worldgen plus four pause sources driven end to end -- a notification, a whole manual engine.saveWorld waited to its terminal outcome, a second save taken from an already-paused session, and a published load -- each with its own poll-until-settled window"),),
     "save_barrier": (Reason(SCENARIO_HEAVY, "two real engine boots plus worldgen/save/load boundary smoke"),),
     "save_storage": (Reason(SCENARIO_HEAVY, "worldgen plus ~10 real engine boots exercising the "
@@ -668,21 +682,23 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
       "scripts/settings/audio_tab.lua"], {"audio_null"}),
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua"],
-     # medic_coord gates the bestMedicFor/medicAvailable distance-discounted
-     # selection. #1577 added infection here because the mechanism that probe
-     # grades lives under THIS glob, not under src/Infection/*: the wound
-     # infection/necrosis tuning is src/Combat/Wounds/Infection.hs, the tick
-     # that accrues it is src/Combat/Wounds/Tick.hs, and src/Infection/ holds
-     # only the catalogue types.
-     {"medic_coord", "infection"}),
+     # Deliberately selects NOTHING since #2809. Its two probes, medic_coord
+     # (the bestMedicFor/medicAvailable distance-discounted selection) and
+     # infection (the wound infection/necrosis tick under src/Combat/Wounds/),
+     # are live simulations and manual-only under the 2026-10-08 owner policy;
+     # see MANUAL_ONLY_REASONS. The rule stays, EMPTY, so a combat change is
+     # still bounded: deleting it would send src/Combat/* to the unclassified
+     # fail-safe and select the whole eligible set. The finite correctness
+     # coverage of this area is the always-blocking headless hspec suite.
+     set()),
     (["src/Infection/*", "data/infections/*"],
      # content_registry is the #890 smoke over this catalogue's load+query
-     # path. #1577 restored the scenario probe direct commit b09c1518
-     # removed: it loads data/infections/*.yaml and then drives a real wound
-     # through growth -> antiseptic prevention -> antibiotic cure -> sepsis,
-     # which is the only automated proof the catalogue a change here edits is
-     # actually consumed by the wound tick.
-     {"content_registry", "infection"}),
+     # path. The infection scenario probe (#1577) that drove a real wound
+     # through this catalogue is a live simulation and manual-only since
+     # #2809 (owner policy, 2026-10-08), so no blocking check now proves the
+     # catalogue is consumed by the wound tick end to end; run
+     # `run_probes.py --only infection --exact` locally for that.
+     {"content_registry"}),
     (["src/Craft/*", "data/recipes/*", "scripts/crafting_panel.lua",
       "scripts/craft*.lua", "scripts/cooking*.lua"],
      # data/recipes/* also covers repair.yaml (repair-tagged recipes) and
@@ -699,8 +715,9 @@ FEATURE_RULES: list[tuple[list[str], set[str]]] = [
      {"craft", "consumable_effects", "repair", "content_registry", "cooking"}),
     (["src/Power/*", "scripts/wire.lua", "scripts/power*.lua",
       "data/structure_packs/*"],
-     # The one rule that deliberately selects NOTHING, and #1577 re-measured
-     # that rather than restating the value direct commit b09c1518 left here.
+     # A rule that deliberately selects NOTHING (the Combat rule is the other,
+     # since #2809), and #1577 re-measured that rather than restating the
+     # value direct commit b09c1518 left here.
      # All three power probes stay manual-only for grounds recorded in
      # MANUAL_ONLY_REASONS above: `power` and `power_workshop` are
      # scenario-heavy, `machine_shop` is targeted. `power_workshop` is the
@@ -1189,20 +1206,20 @@ def _self_test() -> int:
         (["src/Power/Network.hs"], [],
          "power selects nothing: all three power probes stay manual-only on "
          "#1577's measured grounds"),
-        # #1577: bacteria.yaml is the tracked infection catalogue file.
-        (["data/infections/bacteria.yaml"],
-         sorted({"content_registry", "infection"}),
-         "infections -> the #890 registry smoke PLUS the scenario probe "
-         "b09c1518 removed and #1577 re-promoted"),
-        # #1577: the infection tick itself lives under src/Combat/Wounds/, so
-        # the Combat rule selects the probe that grades it.
-        (["src/Combat/Wounds/Tick.hs"],
-         sorted({"medic_coord", "infection"}),
-         "combat -> medic_coord + infection (the wound-infection tick lives "
-         "here, #1577)"),
-        (["src/Infection/Types.hs"],
-         sorted({"content_registry", "infection"}),
-         "the infection catalogue types -> the same pair as its data glob"),
+        # #2809: bacteria.yaml is the tracked infection catalogue file. The
+        # infection scenario probe is a manual-only simulation now, so only
+        # the #890 registry smoke remains.
+        (["data/infections/bacteria.yaml"], ["content_registry"],
+         "infections -> the #890 registry smoke alone (#2809)"),
+        # #2809: the Combat rule stays and is EMPTY: medic_coord and infection
+        # are manual-only simulations, and a combat change must not fall
+        # through to the full set either.
+        (["src/Combat/Wounds/Tick.hs"], [],
+         "combat selects nothing: its two probes are manual-only simulations "
+         "(#2809)"),
+        (["src/Infection/Types.hs"], ["content_registry"],
+         "the infection catalogue types -> the same registry smoke as its "
+         "data glob (#2809)"),
         (["scripts/unit_ai.lua"], sorted(CI_ELIGIBLE), "core -> full"),
         (["scripts/unit_ai_combat.lua"], sorted(CI_ELIGIBLE),
          "unit_ai_*.lua submodule (#538) -> full"),
@@ -1266,10 +1283,10 @@ def _self_test() -> int:
         (["scripts/hud.lua"], sorted(CI_ELIGIBLE),
          "hud is not a widget module -> full"),
     ]
-    # #2535: the exact-level restart gate is selected by every fluid
-    # simulation, persistence and render path, while its GPU extension
-    # never is. Asserted as membership rather than an exact set: these
-    # paths select the whole eligible set, which grows over time.
+    # #2809: the fluid simulation, persistence and render paths that once
+    # selected the exact-level restart gate (#2535) still select every
+    # remaining eligible probe, and neither fluid_exact_restart (a manual-
+    # only simulation now) nor its manual-only GPU extension.
     for path in ("src/Sim/Fluid/Active.hs", "src/Sim/Thread.hs",
                  "src/World/Fluid/Exact.hs",
                  "src/World/Save/Component/PageEdits.hs",
@@ -1278,12 +1295,32 @@ def _self_test() -> int:
                  "app/App/Dump.hs",
                  "src/Engine/Scripting/Lua/API/WorldQuery/Fluid.hs"):
         got, reason = select([path])
-        if "fluid_exact_restart" not in got:
-            problems.append(f"#2535: {path} does not select fluid_exact_restart "
-                            f"({reason})")
+        if got != sorted(CI_ELIGIBLE):
+            problems.append(f"#2809: {path} selects {got}, not the full "
+                            f"eligible set ({reason})")
+        if "fluid_exact_restart" in got:
+            problems.append(f"#2809: {path} selects the manual-only simulation "
+                            f"fluid_exact_restart ({reason})")
         if "fluid_exact_restart_render" in got:
             problems.append(f"#2535: {path} selects the manual-only GPU "
                             f"extension fluid_exact_restart_render ({reason})")
+    # #2809: the three simulation probes are manual-only, each on a recorded
+    # owner-policy ground, and no selection can reach them.
+    for key in sorted(SIMULATION_ONLY_KEYS):
+        if key in CI_ELIGIBLE:
+            problems.append(f"#2809: simulation probe {key} is CI-eligible")
+        reasons = MANUAL_ONLY_REASONS.get(key, ())
+        if not any(r.category == SCENARIO_HEAVY and "#2809 owner simulation policy"
+                   in r.explanation and "z3hd4feg" in r.explanation for r in reasons):
+            problems.append(f"#2809: {key} has no scenario-heavy owner-policy "
+                            f"manual-only reason")
+    for files in (["scripts/unit_ai.lua"], ["src/Sim/Fluid/Active.hs"],
+                  ["src/Combat/Wounds/Tick.hs"], ["data/infections/bacteria.yaml"],
+                  ["src/Infection/Types.hs"], ["README.md"], ["tools/ci_probes.py"]):
+        got, _ = select(files)
+        if set(got) & SIMULATION_ONLY_KEYS:
+            problems.append(f"#2809: {files} selects a simulation probe: "
+                            f"{sorted(set(got) & SIMULATION_ONLY_KEYS)}")
     for files, expect, name in cases:
         got, reason = select(files)
         if got != expect:

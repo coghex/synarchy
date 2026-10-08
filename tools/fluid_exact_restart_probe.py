@@ -39,7 +39,8 @@ the diagnostics promise: ``surface`` (``fluidSurf`` in the dump) is the
 mathematical ceiling of ``surfaceUnits / 8``, and ``level`` is
 ``1 + ((surfaceUnits - 1) mod 8)``.
 
-Registered CI-eligible in ``tools/ci_probes.py``. Its GPU counterpart,
+Registered manual-only in ``tools/ci_probes.py`` (#2809: a live simulation,
+optional local evidence, never CI). Its GPU counterpart,
 ``tools/fluid_exact_restart_render_probe.py``, reuses steps 1-4 and grades
 the reloaded cell's PIXELS; it is manual-only.
 

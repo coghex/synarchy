@@ -1058,7 +1058,7 @@
         "history": [],
         "outcomes": []
       },
-      "classification": "ci-eligible",
+      "classification": "manual-only",
       "key": "infection",
       "protocol": "legacy",
       "script": "infection_probe.py"
@@ -1379,7 +1379,7 @@
         "history": [],
         "outcomes": []
       },
-      "classification": "ci-eligible",
+      "classification": "manual-only",
       "key": "medic_coord",
       "protocol": "legacy",
       "script": "medic_coord_probe.py"
