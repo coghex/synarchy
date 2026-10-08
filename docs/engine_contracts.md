@@ -2279,11 +2279,17 @@ blood-loss gates (it has no resource thresholds to add). A load
 neutralizes exempt survivors in
 `unitResources.onSaveLoaded`, before the first paused frame reads them,
 because a save made before the exemption can carry an occupant whose
-temperature or salt had already drifted. Gate: hspec
-`--match "ruin occupant survival (#2754)"`, which runs the reported
-seed-14 world's ruin 4 for 10,800 engine seconds per occupant (spawned
-early and into an older world), plus the nested "survival exemption"
-cases.
+temperature or salt had already drifted. Mandatory gate: the nested
+hspec "survival exemption" cases (eight finite examples), which run in
+the CI lane that owns their parent group, `--match "ruin occupant
+survival (#2754)"`. Optional local evidence (#2809): the parent group's
+two long simulations, which run the reported seed-14 world's ruin 4 for
+10,800 engine seconds per occupant (spawned early and into an older
+world), register only with the explicit local opt-in
+`SYNARCHY_RUIN_SURVIVAL=1`. Owner decision z3hd4feg (2026-10-08) makes
+actual game simulations optional, local only and never CI, so CI and
+`tools/ci-local.sh` never set it, and `SYNARCHY_FULL_TESTS` does not
+enable them.
 
 Queries: `world.listPlacedLocations([pageId])` (extended, not
 repurposed — `id` is still the DEFINITION id), `getLocationInstance`,
@@ -6903,16 +6909,19 @@ waterfall — all routed through `Sim.Fluid.Reaction.applyTransfer`. A
 future reaction change keeps that shared applier and that unit; it may
 not compare ceilings or re-scale a difference of two exact surfaces.
 
-**The end-to-end gate.** `tools/fluid_exact_restart_probe.py`
-(`fluid_exact_restart`, CI-eligible) drives one chain on a real
+**The end-to-end evidence.** `tools/fluid_exact_restart_probe.py`
+(`fluid_exact_restart`, manual-only since #2809) drives one chain on a real
 generated worldSize-8 page with an isolated resource root: a
 `world.setFluidTile` edit, the simulation flowing that full cell to a
 PARTIAL level (only a writeback can), a paused and settled expectation
 read through `getAreaFluid`'s exact fields, a completed save, a real
 process exit, and a fresh-process load compared while paused — the
 edited cell and its whole neighbourhood, with nothing missing, extra or
-changed. `tools/ci_probes.py` selects it for every fluid simulation,
-persistence and render path; its self-test pins that.
+changed. It is a live simulation, so under owner decision z3hd4feg
+(2026-10-08) it is optional local evidence and never CI:
+`tools/ci_probes.py` records it as manual-only, and its self-test pins
+that no fluid simulation, persistence or render path selects it. Run it
+before trusting a change to the exact-level path end to end.
 `tools/fluid_exact_restart_render_probe.py`
 (`fluid_exact_restart_render`) is its manual-only `needs-gpu`
 extension: it consumes the same saved scenario offscreen and grades the
@@ -6920,13 +6929,14 @@ reloaded cell's own screen box against the same cell freshly authored at
 levels 1..8, retaining the frames, crops and a manifest as evidence. It
 is never a headless gate, and no scheduled GPU run exists for it.
 
-Gates: hspec `--match "Fluid exact diagnostics"` (production dump
-serialization, cursor text and `getAreaFluid` over every exact surface
-from -40 to 40, dry nulls, and the disabled layer),
-`python3 tools/run_probes.py --only fluid_exact_restart --exact`,
+Mandatory finite gates: hspec `--match "Fluid exact diagnostics"`
+(production dump serialization, cursor text and `getAreaFluid` over
+every exact surface from -40 to 40, dry nulls, and the disabled layer),
 `python3 tools/ci_probes.py --self-test`, `python3 tools/test_determinism.py`
 and `python3 tools/world_check.py` (the dump's content hash now covers the
-exact fields; baselines were re-captured by #2535).
+exact fields; baselines were re-captured by #2535). Optional local
+simulation evidence: `python3 tools/run_probes.py --only
+fluid_exact_restart --exact`.
 
 ---
 
