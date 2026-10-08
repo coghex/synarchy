@@ -111,6 +111,29 @@ class AdapterChecks(unittest.TestCase):
         for key, suite in self.probes().items():
             self.assertEqual(suite.kind, "ci" if key in ci_probes.CI_ELIGIBLE else "probe", key)
 
+    def test_tracked_census_classification_follows_the_ci_classifier(self):
+        # The TRACKED census (not the docs-wip copy the adapter prefers) must
+        # agree with ci_probes, since no other gate compares the two (#2809).
+        tracked = json.loads((ROOT / "docs" / "probe_census.json").read_text())
+        for row in tracked["probes"]:
+            want = "ci-eligible" if row["key"] in ci_probes.CI_ELIGIBLE else "manual-only"
+            self.assertEqual(row["classification"], want, row["key"])
+
+    def test_simulation_probes_are_local_probe_suites(self):
+        # #2809: the three owner-policy simulations are manual-only, so the
+        # lab offers each as a local `probe` suite run through run_probes.py
+        # (unless the census defers it), never as a `ci` suite.
+        self.assertEqual(ci_probes.SIMULATION_ONLY_KEYS, {"fluid_exact_restart", "infection", "medic_coord"})
+        for key in sorted(ci_probes.SIMULATION_ONLY_KEYS):
+            self.assertNotIn(key, ci_probes.CI_ELIGIBLE, key)
+            suite = self.probes().get(key)
+            if suite is None:
+                self.assertTrue((self.census.get(key, {}).get("census") or {}).get("deferred"), key)
+                continue
+            self.assertEqual((suite.kind, suite.framework), ("probe", "exit"), key)
+            prepared = self.adapter.prepare(Context(), suite)
+            self.assertEqual(prepared.argv[1:5], ["tools/run_probes.py", "--only", key, "--exact"], key)
+
     def test_protocol_probes_measure_their_declared_checks(self):
         for key, suite in self.probes().items():
             if key in probe_flake.PROTOCOL_PROBES and key not in ci_probes.CI_ELIGIBLE:
