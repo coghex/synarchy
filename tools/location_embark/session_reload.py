@@ -4,9 +4,12 @@
 A genuinely new engine, reading only `SAVE_LOCAL` — the half of
 save -> quit -> restart -> load no single-process check can stand in
 for. It re-derives both ruins by anchor, pins the location count and
-each ruin's discovery state, and compares the restored icons against
-the SAME per-ruin baselines session (a) photographed before any portal
-existed.
+each ruin's discovery state — that state is the gate — and photographs
+the restored icons beside the SAME per-ruin baselines session (a)
+photographed before any portal existed. Those screenshots are evidence
+for an agent or the owner to read as images, listed at the end of the
+run; the probe does not grade them (#2812): a whole-frame pixel diff
+tracks scene lighting, not which icon is showing.
 
 It runs the three-state icon sweep last, and only here: promoting the
 control ruin through discovered/cleared/depleted is one-way, so it must
@@ -23,7 +26,7 @@ from offscreen_probe import (center_on, png_differs, png_stats, screenshot,
                              set_zoom, zoom_fade_end)
 from portal_ghost_probe import in_world_view
 from .constants import SAVE_LOCAL
-from .invocation import SessionContext, check
+from .invocation import SessionContext, check, review_image
 from .support import centre_luma, list_locations_sorted, match_by_anchor
 
 
@@ -54,10 +57,12 @@ def session_reload_check(ctx: SessionContext) -> None:
         check("control ruin remains undiscovered after save -> quit -> "
               "restart -> load", not c.get("discovered"))
 
-    # -- step 21 checkpoint: restored icons after save/load, checked
-    # against the SAME terrain-stable per-ruin baselines session (a)
-    # captured pre-portal (identical camera centre/zoom, same tempdir) —
-    # not just against each other. --
+    # -- step 21 checkpoint: the restored icons, photographed at the SAME
+    # camera centre/zoom as the pre-portal per-ruin baselines session (a)
+    # captured (same tempdir). Whether the discovered/undiscovered state
+    # survived is gated by the explicit state checks above, not by these
+    # frames: they are recorded for image review (#2812), because a
+    # whole-frame pixel diff graded scene lighting rather than the icon. --
     fade_end = zoom_fade_end(port)
     full_zoom = fade_end * 1.5
     shot_hidden_target = os.path.join(shots, "icon_unknown_target.png")
@@ -70,21 +75,24 @@ def session_reload_check(ctx: SessionContext) -> None:
         st = png_stats(shot_t)
         check("reloaded target-icon frame is not blank",
               bool(st) and st[2] >= 3, f"distinct colors: {st and st[2]}")
-        check("reloaded target ruin's icon still differs from its own "
-              "pre-portal unknown-marker baseline (discovered state survived "
-              "save -> quit -> restart -> load)",
-              png_differs(shot_hidden_target, shot_t, min_fraction=0.0002))
+        if os.path.isfile(shot_hidden_target):
+            review_image(shot_hidden_target,
+                         "target ruin, before the portal: the '?' unknown marker")
+        review_image(shot_t,
+                     "target ruin after save -> quit -> restart -> load: the "
+                     "ruin TYPE icon (discovered), not the '?' marker")
     center_on(port, control["gx"], control["gy"])
     set_zoom(port, full_zoom)
     time.sleep(0.3)
     shot_c = os.path.join(shots, "icon_reloaded_control.png")
     if check("reloaded control-icon screenshot answers", screenshot(port, shot_c)):
-        check("the reloaded type icon and unknown marker render differently",
-              png_differs(shot_t, shot_c, min_fraction=0.0002))
-        check("reloaded control ruin's icon still matches its own pre-portal "
-              "unknown-marker baseline (unknown state survived "
-              "save -> quit -> restart -> load)",
-              not png_differs(shot_hidden_control, shot_c, min_fraction=0.0002))
+        if os.path.isfile(shot_hidden_control):
+            review_image(shot_hidden_control,
+                         "control ruin, before the portal: the '?' unknown marker")
+        review_image(shot_c,
+                     "control ruin after reload: the '?' unknown marker, the "
+                     "same icon as icon_unknown_control.png (judge the icon "
+                     "only; the scene lighting may differ between the two frames)")
 
     # -- steps 22a-22d (#1230): the three icon appearances, on the GPU,
     # at ONE camera centre and ONE zoom, so the only thing varying
@@ -128,8 +136,7 @@ def session_reload_check(ctx: SessionContext) -> None:
 
     # `shot_c` above is this same camera centre and zoom, taken while
     # the control was still unknown — reuse it rather than re-shooting,
-    # so the unknown frame is provably the one the persistence check
-    # just validated.
+    # so the unknown frame is the very one listed for image review.
     shot_unknown = shot_c
     lit_path = None
     if check("control ruin promotes to discovered", force_lifecycle("discovered")):

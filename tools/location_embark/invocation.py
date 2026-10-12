@@ -69,6 +69,39 @@ def _tail(path: str, n: int = 15) -> str:
         return "(log unavailable)"
 
 
+#: Screenshots a session captured for an agent or the owner to LOOK at
+#: (#2812), as `(path, what it should show)`. Evidence, never a verdict:
+#: nothing here is graded, and `report` only lists them.
+review_images: list[tuple[str, str]] = []
+
+
+def review_image(path: str, expectation: str) -> None:
+    """Record a captured screenshot and what it should show, for the
+    end-of-run listing. Recording is not a check: a pixel comparison
+    cannot say which icon a frame shows, so these are read as images."""
+    review_images.append((path, expectation))
+
+
+def print_review_images(keep: bool) -> None:
+    """List the recorded screenshots, each with what it should show.
+
+    Without `--keep-artifacts` the screenshots were deleted with the
+    rest of the tree, so a path would point at nothing: say how to keep
+    them instead, as the failure summary does for the engine logs.
+    """
+    if not review_images:
+        return
+    if not keep:
+        print(f"  {len(review_images)} screenshot(s) were captured for image "
+              "review; re-run with --keep-artifacts to retain them")
+        return
+    print("screenshots to review by reading the images (not graded by the probe):")
+    for path, expectation in review_images:
+        held = os.path.isfile(path)
+        print(f"  {path}" + ("" if held else " (missing)"))
+        print(f"      should show: {expectation}")
+
+
 def check(name: str, ok: bool, detail: str = "") -> bool:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
           + (f" — {detail}" if detail and not ok else ""))

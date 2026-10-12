@@ -52,6 +52,15 @@ returns only the safe six-field hit or None. Stubbed engine boundaries
 pin miss control flow, every candidate report and terrain rejections
 without querying or classifying candidates again.
 
+The fourth contract (#2812) is the reload stage's gate. State survival
+is gated by the explicit discovered/undiscovered checks; the restored
+icons are captured and listed for an agent or the owner to read as
+images, never graded by a whole-frame pixel diff (which tracked scene
+lighting). The tests drive the real reload session against stubbed
+engine boundaries and pin that the three removed comparisons cannot
+decide the outcome, that wrong state still fails, and that the end of
+the run lists each retained screenshot with what it should show.
+
 Since #2164 the probe is a facade over `tools/location_embark/`, so a
 name this file stubs may be resolved in one of those owner modules
 rather than in the facade. Every stub therefore goes through `patched`
@@ -81,7 +90,7 @@ from unittest.mock import Mock
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import location_embark_probe as probe  # type: ignore  # noqa: E402
-from location_embark import session_ghost, support
+from location_embark import session_ghost, session_reload, support
 import offscreen_probe
 from offscreen_probe import describe_candidate
 from location_embark import invocation  # type: ignore  # noqa: E402
@@ -1048,6 +1057,168 @@ def test_local_search_misses_terrain_rejections_and_hits() -> None:
            "a safe first hit returns the six fields without later searches")
 
 
+# ---------------------------------------------------------------------
+# The reload stage gates on state, not on pixels (#2812)
+# ---------------------------------------------------------------------
+#: In the order the session records them: each ruin's pre-portal baseline,
+#: then its reloaded frame.
+_RELOAD_SHOTS = ("icon_unknown_target.png", "icon_reloaded_target.png",
+                 "icon_unknown_control.png", "icon_reloaded_control.png")
+_BASELINES = ("icon_unknown_target.png", "icon_unknown_control.png")
+
+
+def _drive_reload(differs, target_discovered=True, control_discovered=False,
+                  answers=True, baselines=_BASELINES):
+    """Run the real session (c) against stubbed engine boundaries.
+
+    `differs(a, b)` is the whole-frame comparison's answer for two
+    screenshot BASENAMES, so a test can model lighting that changed the
+    whole scene. `baselines` names the session-(a) screenshots present on
+    disk. Returns `(failures, png_differs calls, listed images)`.
+    """
+    shots = tempfile.mkdtemp(prefix="test_embark_reload_")
+    for name in baselines:
+        open(os.path.join(shots, name), "w").close()
+    target = {"gx": 100, "gy": 200, "cx": 1, "cy": 2}
+    control = {"gx": 300, "gy": 400, "cx": 3, "cy": 4}
+    placed = [dict(target, discovered=target_discovered, instance_id=1),
+              dict(control, discovered=control_discovered, instance_id=2)]
+    ctx = invocation.SessionContext(9420, 1280, 720, shots,
+                                    target, control, 42, 2)
+    compared: list[tuple[str, str]] = []
+
+    def png_differs(a, b, **_kw):
+        pair = (os.path.basename(a), os.path.basename(b))
+        compared.append(pair)
+        return differs(*pair)
+
+    replacements = dict(
+        load_defs=Mock(), send=Mock(return_value="true"),
+        poll_until=lambda timeout, predicate: predicate(),
+        in_world_view=lambda port: True,
+        list_locations_sorted=lambda port: placed,
+        zoom_fade_end=lambda port: 1, center_on=Mock(), set_zoom=Mock(),
+        screenshot=Mock(return_value=answers),
+        png_stats=lambda path: (1280, 720, 10), png_differs=png_differs,
+        centre_luma=lambda path, w, h: 0.9 if "discovered" in path else 0.4)
+    probe.failures.clear()
+    invocation.review_images.clear()
+    try:
+        with patched(session_reload, **replacements), \
+                patched(session_reload.time, sleep=lambda seconds: None), \
+                captured():
+            session_reload.session_reload_check(ctx)
+        recorded = list(probe.failures)
+        listed = list(invocation.review_images)
+    finally:
+        probe.failures.clear()
+        invocation.review_images.clear()
+        shutil.rmtree(shots, ignore_errors=True)
+    expect(replacements["screenshot"].call_count > 0,
+           "the real reload session reached its substituted screenshot")
+    return recorded, compared, listed
+
+
+def _lighting_changed(a, b):
+    # Every whole-frame comparison reports a difference EXCEPT the two
+    # spent-state frames, which the lifecycle sweep requires to match.
+    return {a, b} != {"icon_state_cleared.png", "icon_state_depleted.png"}
+
+
+def _lighting_unchanged(a, b):
+    return {a, b} != {"icon_state_cleared.png", "icon_state_depleted.png"} \
+        and not (a.startswith("icon_unknown_") and b.startswith("icon_reloaded_"))
+
+
+def test_reload_survival_ignores_whole_frame_pixel_diffs() -> None:
+    print("\ntest_reload_survival_ignores_whole_frame_pixel_diffs")
+    for label, differs in (("changed scene lighting", _lighting_changed),
+                           ("unchanged scene lighting", _lighting_unchanged)):
+        failed, compared, _listed = _drive_reload(differs)
+        expect(failed == [],
+               f"correct discovery state passes under {label} (got {failed})")
+        survival = [pair for pair in compared
+                    if any(name.startswith(("icon_unknown_", "icon_reloaded_"))
+                           and name != "icon_reloaded_control.png"
+                           for name in pair)]
+        expect(survival == [],
+               f"no restored icon is compared with a pre-portal baseline "
+               f"or with its sibling under {label} (got {survival})")
+    # The lifecycle sweep keeps its own comparisons (#2812 changes nothing
+    # else): unknown vs discovered and cleared vs depleted.
+    expect(("icon_reloaded_control.png", "icon_state_discovered.png") in compared
+           and ("icon_state_cleared.png", "icon_state_depleted.png") in compared,
+           "the lifecycle sweep still grades its own comparisons")
+
+
+def test_reload_survival_still_fails_on_wrong_state() -> None:
+    print("\ntest_reload_survival_still_fails_on_wrong_state")
+    failed, _c, _l = _drive_reload(_lighting_changed, target_discovered=False)
+    expect(any("target ruin remains discovered" in f for f in failed),
+           f"a target that lost its discovery fails (got {failed})")
+    failed, _c, _l = _drive_reload(_lighting_changed, control_discovered=True)
+    expect(any("control ruin remains undiscovered" in f for f in failed),
+           f"a control that became discovered fails (got {failed})")
+
+
+def test_reload_lists_each_screenshot_with_what_it_should_show() -> None:
+    print("\ntest_reload_lists_each_screenshot_with_what_it_should_show")
+    _failed, _compared, listed = _drive_reload(_lighting_changed)
+    expect([os.path.basename(path) for path, _ in listed] == list(_RELOAD_SHOTS),
+           f"all four screenshots are listed, in order (got {listed})")
+    notes = {os.path.basename(path): note for path, note in listed}
+    expect("'?'" in notes["icon_unknown_target.png"]
+           and "'?'" in notes["icon_unknown_control.png"]
+           and "'?'" in notes["icon_reloaded_control.png"]
+           and "icon_unknown_control.png" in notes["icon_reloaded_control.png"],
+           "the unknown markers and the control's match are described")
+    expect("TYPE icon" in notes["icon_reloaded_target.png"],
+           "the reloaded target is described as the ruin type icon")
+
+    _failed, _compared, listed = _drive_reload(_lighting_changed, answers=False)
+    expect(listed == [],
+           "a screenshot that never answered is not listed as evidence")
+    _failed, _compared, listed = _drive_reload(_lighting_changed, baselines=())
+    expect([os.path.basename(path) for path, _ in listed]
+           == ["icon_reloaded_target.png", "icon_reloaded_control.png"],
+           "a pre-portal baseline absent from disk is not listed as evidence")
+
+
+def test_summary_lists_retained_screenshots_and_never_deleted_ones() -> None:
+    print("\ntest_summary_lists_retained_screenshots_and_never_deleted_ones")
+    def listing(keep, present):
+        def body(art):
+            art.build()
+            for name in _RELOAD_SHOTS:
+                path = os.path.join(art.shots, name)
+                if name in present:
+                    open(path, "w").close()
+                invocation.review_image(path, f"expect {name}")
+        invocation.review_images.clear()
+        try:
+            return run_main(["--keep-artifacts"] if keep else [], body)
+        finally:
+            invocation.review_images.clear()
+
+    # `--keep-artifacts` leaves the tree behind on purpose; each is
+    # removed below once its summary has been read.
+    code, text, base = listing(True, set(_RELOAD_SHOTS))
+    for name in _RELOAD_SHOTS:
+        expect(os.path.join(base, "screenshots", name) in text
+               and f"expect {name}" in text,
+               f"a retained run lists {name} with its expectation")
+    shutil.rmtree(base, ignore_errors=True)
+    expect("(missing)" not in text, "...and flags nothing as missing")
+    code, text, base = listing(True, {"icon_reloaded_control.png"})
+    shutil.rmtree(base, ignore_errors=True)
+    expect(text.count("(missing)") == 3,
+           "a capture that is not on disk is flagged, not offered as evidence")
+    code, text, base = listing(False, set(_RELOAD_SHOTS))
+    expect(code == 0 and base not in text and "--keep-artifacts" in text
+           and "expect icon_" not in text,
+           "a cleaned-up run points at --keep-artifacts and names no deleted path")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_root_symlinks_content_and_copies_config()
@@ -1075,6 +1246,10 @@ def main() -> int:
     test_a_failed_session_b_save_suppresses_only_session_c()
     test_ghost_search_hits_and_misses()
     test_local_search_misses_terrain_rejections_and_hits()
+    test_reload_survival_ignores_whole_frame_pixel_diffs()
+    test_reload_survival_still_fails_on_wrong_state()
+    test_reload_lists_each_screenshot_with_what_it_should_show()
+    test_summary_lists_retained_screenshots_and_never_deleted_ones()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
