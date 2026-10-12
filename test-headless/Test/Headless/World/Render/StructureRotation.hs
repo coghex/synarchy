@@ -734,7 +734,7 @@ spec = do
                             (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
                             `shouldBe` Nothing
 
-                it ("leaves a pair only one family carries rotating, " <> order) $
+                it ("leaves a pair only one family carries rotating, " <> half <> " contested, " <> order) $
                     forM_ allFacings $ \facing →
                         forM_ [WallNW, WallSE, WallSW] $ \e →
                             rotatedWallArt cat facing e
