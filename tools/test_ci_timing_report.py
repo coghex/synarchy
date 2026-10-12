@@ -563,6 +563,68 @@ def check_headless_options_wiring() -> None:
                "compact formatter")
 
 
+def check_headless_active_context_wiring() -> None:
+    """The active-context recorder is wired into every headless lane and
+    stays silent and timer-free (#2747).
+
+    `check_headless_options_wiring` pins the presentation flags; this pins
+    the recorder that must not disturb them. Static for the same reason:
+    only a cancelled or timed-out run exercises the step that prints the
+    record, and a PR's own passing run cannot show that it printed nothing
+    it should not have.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    env_name = "SYNARCHY_HEADLESS_PROGRESS_FILE"
+
+    lane_step = re.search(
+        r"\n      - name: Headless lane\n(.*?)(?=\n      - name: |\n\S|\Z)",
+        workflow, re.S)
+    if expect(lane_step is not None, "the `Headless lane` step exists"):
+        expect(env_name in lane_step.group(1),
+               f"the `Headless lane` step sets {env_name}, so every "
+               "headless lane records its active example")
+
+    post = re.search(
+        r"\n      - name: Headless active context\n(.*?)(?=\n      - name: |\n\S|\Z)",
+        workflow, re.S)
+    if expect(post is not None,
+              "a `Headless active context` step follows the lane step"):
+        body = post.group(1)
+        expect("if: always()" in body,
+               "the `Headless active context` step runs after a cancelled "
+               "or timed-out lane step (`always()`)")
+        expect("headless-active-context-${{ matrix.lane }}.txt" in body,
+               "the step reads the same per-lane file the lane step writes")
+        expect("state: running" in body,
+               "the step prints the record only for a run that did not "
+               "finish, so a passing run's log gains nothing")
+    expect(len(re.findall(r"\n      - name: Headless lane\n", workflow))
+           == len(re.findall(r"\n      - name: Headless active context\n",
+                             workflow)),
+           "every job that runs the headless suite prints its record")
+
+    progress = (REPO_ROOT / "test-headless" / "Test" / "Headless"
+                / "Progress.hs").read_text(encoding="utf-8")
+    lanes = (REPO_ROOT / "test-headless" / "Test" / "Headless"
+             / "Lanes.hs").read_text(encoding="utf-8")
+    for name, text in (("Progress.hs", progress), ("Lanes.hs", lanes)):
+        for banned in ("threadDelay", "System.Timeout", "timeout ",
+                       "registerDelay"):
+            expect(banned not in text,
+                   f"{name} adds no timer ({banned!r}): the diagnostic "
+                   "must not change scheduling or add a deadline")
+    code = "\n".join(line for line in progress.splitlines()
+                     if not line.lstrip().startswith("--"))
+    expect(re.search(r"(?<![A-Za-z])putStr(Ln)?\b|(?<![A-Za-z])print\b"
+                     r"|hPutStr(Ln)?\s+stdout", code) is None,
+           "Progress.hs writes nothing to stdout, so a passing run's output "
+           "is the formatter's alone")
+    expect("lookupEnv progressFileEnv" in progress
+           and "Nothing → body id" in progress,
+           "the recorder is off unless the environment names a file, so a "
+           "developer's targeted run is unchanged")
+
+
 def check_selection_markers() -> None:
     """The workflow still prints the two lines this report greps for."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -742,6 +804,7 @@ CHECKS = (
     ("log framing", check_log_framing),
     ("attempt identity round trip", check_identity_round_trip),
     ("headless test-options wiring", check_headless_options_wiring),
+    ("headless active-context wiring", check_headless_active_context_wiring),
     ("selection markers", check_selection_markers),
     ("not a gate", check_not_a_gate),
     ("report rendering", check_report_renders),

@@ -347,6 +347,7 @@ import qualified Test.Headless.Core.ConfigWrite as ConfigWrite
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
+import qualified Test.Headless.Core.HeadlessProgress as HeadlessProgress
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
@@ -1279,6 +1280,7 @@ restLane = do
     describe "Core.ConfigState" ConfigState.spec
     describe "Core.ConfigWrite" ConfigWrite.spec
     FixtureLogging.spec
+    describe "CI.HeadlessProgress" HeadlessProgress.spec
     LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec
