@@ -898,23 +898,37 @@ def _names_show(text: str, pos: int, qualifiers: dict[str, frozenset[str]],
     """True if the lexeme at `pos` is the `Show` method `show` -- bare,
     or qualified by a module that exports it.
 
-    Read character by character rather than by a regex class: a module
-    alias may carry a combining mark (`Ṕ́.show`), which no `\\w` class
-    matches. Splitting on `.` after the fact is what separates the
-    qualified `P.show` from the record selector `t.show`, whose prefix
-    is not a module path. A qualifier that IS a module path but names
-    none of `SHOW_MODULES` is refused rather than guessed."""
-    i, n = pos, len(text)
-    while i < n and (is_haskell_ident_char(text[i]) or text[i] == "."):
-        i += 1
-    qualifier, _, head = text[pos:i].rpartition(".")
+    Read the way Haskell lexes it: a run of conid-led segments each
+    followed by `.` and an identifier is the module qualifier, and the
+    identifier after it is the name. Whatever follows the name is not
+    part of it, so `show.id` is `show` composed with `id`, exactly as
+    the spaced `show . id` is, and `P.show.id` is `P.show` composed the
+    same way. A segment is read by `is_haskell_ident_char` rather than a
+    regex class: a module alias may carry a combining mark (`Ṕ́.show`),
+    which no `\\w` class matches. A lowercase first segment is a record
+    selector (`t.show`, `t.show.id`), not a qualifier. A qualifier that
+    IS a module path but names none of `SHOW_MODULES` is refused rather
+    than guessed."""
+    n = len(text)
+    segments: list[str] = []
+    cursor = pos
+    while True:
+        read = _read_ident(text, cursor)
+        if read is None:
+            return False
+        lexeme, end = read
+        if (_is_conid_head(lexeme[0]) and end + 1 < n and text[end] == "."
+                and is_haskell_ident_char(text[end + 1])):
+            segments.append(lexeme)
+            cursor = end + 1
+            continue
+        head = lexeme
+        break
     if head != SHOW:
         return False
-    if not qualifier:
+    if not segments:
         return True
-    if not _is_module_path(qualifier):
-        # A lowercase prefix is a record selector, not a qualifier.
-        return False
+    qualifier = ".".join(segments)
     named = qualifiers.get(qualifier, frozenset())
     if named & SHOW_MODULES:
         return True
@@ -1985,6 +1999,53 @@ PREMISE_FIXTURES: list[tuple[str, str, bool]] = [
         "import Data.Text\n",
         False,
     ),
+]
+
+
+# The three forms #2177 covers, each with the `show` position left open
+# so the spaced and the unspaced composition (#2774) are the same fixture
+# apart from one character: `show.id` is `show . id`, and an unspaced
+# dot must neither hide the wrapper nor certify an unresolved qualifier.
+_COMPOSED_FORMS: list[tuple[str, str]] = [
+    ("`T.pack . …`", "f = T.pack . {show}\n"),
+    ("`T.pack (… $ x)`", "f x = T.pack ({show} $ x)\n"),
+    ("`T.pack $ … $ x`", "f x = T.pack $ {show} $ x\n"),
+]
+_PRELUDE = "import qualified Prelude as P\n"
+_CUSTOM = "import qualified Custom as C\n"
+
+DETECTED_FIXTURES += [
+    (f"{label} before {spelling}, {qualified} `show`",
+     "module M where\n" + _T + imports + template.format(show=spelling),
+     [4 if imports else 3])
+    for label, template in _COMPOSED_FORMS
+    for qualified, imports, name in (
+        ("bare", "", "show"), ("a Prelude-qualified", _PRELUDE, "P.show"))
+    for spelling in (f"{name} . id", f"{name}.id")
+]
+
+CLEAN_FIXTURES += [
+    (f"{label} before `{spelling}`: a compact dotted run whose head is "
+     f"not the `Show` method",
+     "module M where\n" + _T + template.format(show=spelling))
+    for label, template in _COMPOSED_FORMS
+    for spelling in ("t.show.id", "shows.id", "shoẃ.id", "show\u0301.id")
+] + [
+    (f"{label} on `BC.pack`, a different conversion, before `show.id`",
+     "module M where\n"
+     "import qualified Data.ByteString.Char8 as BC\n"
+     + template.format(show="show.id").replace("T.pack", "BC.pack"))
+    for label, template in _COMPOSED_FORMS
+]
+
+UNSCANNABLE_FIXTURES += [
+    (f"{label} before `C.show.id`, {why}",
+     "module M where\n" + _T + imports + template.format(show="C.show.id"),
+     _UnresolvedShowError)
+    for label, template in _COMPOSED_FORMS
+    for why, imports in (
+        ("`C` imported from a module this cannot read", _CUSTOM),
+        ("`C` imported by no declaration at all", ""))
 ]
 
 
