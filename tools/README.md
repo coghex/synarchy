@@ -3942,10 +3942,17 @@ Hspec the spec untouched, so a developer's targeted run is unchanged.
 **Where it reaches the CI record.** The `Headless active context` step of
 each `headless-lanes` leg runs `if: always()` and prints the file when it
 still says `state: running`, so a cancelled run and a job-timeout run both
-leave the record in the job log. The test process also prints it to stderr
-on SIGINT/SIGTERM, which is what a cancelling runner delivers.
-`test_ci_timing_report.py`'s `headless active-context wiring` check pins
-the env var, the step and the absence of timers and stdout output.
+leave the record in the job log. The file, not a signal, is the mechanism:
+a cancelling runner does not signal the test process (the first
+demonstration printed nothing from the process itself), so the process also
+printing the record to stderr on SIGINT/SIGTERM serves a local Ctrl-C only.
+The variable is set on the `cabal test` command from the shell's
+`$RUNNER_TEMP`, not as a step `env:` (its listing would add a line to a
+passing log) and not as `${{ runner.temp }}` (in a container job that is
+the host path, which the container cannot write; the first demonstration
+found exactly that). `test_ci_timing_report.py`'s `headless active-context
+wiring` check pins the variable, the step and the absence of timers and
+stdout output.
 
 **Procedure for a hung or suspect run.**
 
@@ -3973,6 +3980,11 @@ the env var, the step and the absence of timers and stdout output.
    container (Linux) is not evidence the hang is fixed; say which platform
    each attempt ran on. A location that cannot be established is reported as
    `location unknown`, not guessed.
+
+The first use of this procedure, on the ten recorded `UI.ResponsiveMenus`-area
+hangs of 2026-08 to 2026-09, ended in `location unknown / not reproduced`;
+its runs, commands and excerpts are in
+`docs/ci_headless_hang_investigation_2747.md`.
 
 ### `headless_lane_measurement.py` — per-group headless timing on CI (#2743)
 

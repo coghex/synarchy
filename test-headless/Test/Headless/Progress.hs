@@ -50,7 +50,6 @@ module Test.Headless.Progress
     ) where
 
 import UPrelude
-import Control.Concurrent.MVar (MVar, newMVar, readMVar)
 import Control.Exception (SomeException, finally, try)
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.List (intercalate, delete)
@@ -83,13 +82,13 @@ data Progress = Progress
 -- | The recorder's state and the sink each change is mirrored to.
 data ProgressRef = ProgressRef
     { refState ∷ IORef Progress
-    , refSink  ∷ MVar (Progress → IO ())
+    , refSink  ∷ Progress → IO ()
     }
 
 newProgressRef ∷ (Progress → IO ()) → IO ProgressRef
 newProgressRef sink = ProgressRef
     <$> newIORef (Progress [] [] Nothing 0 False)
-    <*> newMVar sink
+    <*> pure sink
 
 readProgress ∷ ProgressRef → IO Progress
 readProgress = readIORef ∘ refState
@@ -99,8 +98,7 @@ readProgress = readIORef ∘ refState
 update ∷ ProgressRef → (Progress → Progress) → IO ()
 update ref f = do
     new ← atomicModifyIORef' (refState ref) (\p → let p' = f p in (p', p'))
-    sink ← readMVar (refSink ref)
-    r ← try (sink new) ∷ IO (Either SomeException ())
+    r ← try (refSink ref new) ∷ IO (Either SomeException ())
     either (const (pure ())) pure r
 
 -- | Wrap every example and every fixture cleanup in the spec so each is
@@ -168,11 +166,14 @@ progressFileEnv = "SYNARCHY_HEADLESS_PROGRESS_FILE"
 -- | Run an action with the spec wrapper for this process, if the
 --   environment asks for one. While it runs: every change is mirrored to
 --   the file (written beside it and renamed, so a kill never leaves half
---   a record), and SIGINT / SIGTERM -- what a cancelled or timed-out job
---   delivers -- print the record to stderr before the signal takes its
---   default effect. The record is marked finished when the action ends,
---   by return or by exception, so only a run that never got there reads
---   as running.
+--   a record), and SIGINT / SIGTERM print the record to stderr before the
+--   signal takes its default effect. That print serves a local interrupt:
+--   a CI runner that cancels a job, or whose job timeout expires, does not
+--   signal the test process at all (the demonstrations in #2747 show the
+--   process simply stopped), so CI reads the FILE, from a step that runs
+--   after cancellation. The record is marked finished when the action
+--   ends, by return or by exception, so only a run that never got there
+--   reads as running.
 withProgressFromEnv ∷ String → ((Spec → Spec) → IO a) → IO a
 withProgressFromEnv lane body = do
     target ← lookupEnv progressFileEnv
