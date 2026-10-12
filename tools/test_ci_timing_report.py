@@ -618,14 +618,19 @@ def check_headless_active_context_wiring() -> None:
                 / "Progress.hs").read_text(encoding="utf-8")
     lanes = (REPO_ROOT / "test-headless" / "Test" / "Headless"
              / "Lanes.hs").read_text(encoding="utf-8")
-    for name, text in (("Progress.hs", progress), ("Lanes.hs", lanes)):
+    def haskell_code(text: str) -> str:
+        """The source without its comments, which may discuss timeouts."""
+        text = re.sub(r"\{-.*?-\}", "", text, flags=re.S)
+        return "\n".join(line.split("--", 1)[0] for line in text.splitlines())
+
+    for name, text in (("Progress.hs", haskell_code(progress)),
+                       ("Lanes.hs", haskell_code(lanes))):
         for banned in ("threadDelay", "System.Timeout", "timeout ",
                        "registerDelay"):
             expect(banned not in text,
                    f"{name} adds no timer ({banned!r}): the diagnostic "
                    "must not change scheduling or add a deadline")
-    code = "\n".join(line for line in progress.splitlines()
-                     if not line.lstrip().startswith("--"))
+    code = haskell_code(progress)
     expect(re.search(r"(?<![A-Za-z])putStr(Ln)?\b|(?<![A-Za-z])print\b"
                      r"|hPutStr(Ln)?\s+stdout", code) is None,
            "Progress.hs writes nothing to stdout, so a passing run's output "
