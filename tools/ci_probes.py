@@ -145,7 +145,7 @@ class Reason:
     """One independent ground for keeping a probe out of the blocking gate.
 
     A probe is often excluded on more than one count that would each hold
-    on its own -- `expedition_retrieval` needs a real generated world AND
+    on its own -- `expedition_loop` needs a real generated world AND
     walks its legs in real time -- and #1440 exists because a single
     `(category, explanation)` tuple could only ever record one of them.
     """
@@ -558,21 +558,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                "(drink_from_canteen and eat_from_inventory "
                                "outranking a move order, pickup_ground, "
                                "follow_command, a nomad's retreat and "
-                               "re-engagement) — the same grounds as "
-                               "expedition_retrieval below; #923's own scenario "
+                               "re-engagement); #923's own scenario "
                                "contract also classifies this as recorded manual "
                                "verification rather than a CI gate"),),
-    # #1440: the "manual-only on both counts" #920 already recorded in
-    # prose, now one reason record each.
-    "expedition_retrieval": (Reason(SLOW_WORLDGEN, "needs a real generated world for "
-                                    "a placed ruin_small and a walkable colony site "
-                                    "tens of tiles from it, across two engine boots "
-                                    "with a real save/restart/load in the middle "
-                                    "(#920)"),
-                             Reason(SCENARIO_HEAVY, "it walks both legs in real time "
-                                    "and leans on AI arbitration timing "
-                                    "(pickup_ground, drink_from_canteen, "
-                                    "notify_allies) (#920)"),),
     "plant": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover + "
                                     "real climate/slope suitability data"),),
     "till": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover to "
@@ -1043,7 +1031,7 @@ def _status_rendering_cases() -> list[str]:
         problems.append("no manual-only probe declares multiple reasons")
     # #1440's named minimum: these two recorded independent causes in prose
     # and must now record them as separate reasons.
-    for key in ("transfer_order", "expedition_retrieval"):
+    for key in ("transfer_order", "expedition_loop"):
         if len(MANUAL_ONLY_REASONS.get(key, ())) < 2:
             problems.append(f"{key} must declare more than one manual-only reason (#1440)")
     return problems
