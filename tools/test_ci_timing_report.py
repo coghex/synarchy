@@ -563,6 +563,84 @@ def check_headless_options_wiring() -> None:
                "compact formatter")
 
 
+def check_headless_active_context_wiring() -> None:
+    """The active-context recorder is wired into every headless lane and
+    stays silent and timer-free (#2747).
+
+    `check_headless_options_wiring` pins the presentation flags; this pins
+    the recorder that must not disturb them. Static for the same reason:
+    only a cancelled or timed-out run exercises the step that prints the
+    record, and a PR's own passing run cannot show that it printed nothing
+    it should not have.
+    """
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    env_name = "SYNARCHY_HEADLESS_PROGRESS_FILE"
+
+    lane_step = re.search(
+        r"\n      - name: Headless lane\n(.*?)(?=\n      - name: |\n\S|\Z)",
+        workflow, re.S)
+    if expect(lane_step is not None, "the `Headless lane` step exists"):
+        code = re.sub(r"(?m)^\s*#[^\n]*$", "", lane_step.group(1))
+        sites = [line for line in code.splitlines()
+                 if HEADLESS_INVOCATION in line]
+        expect(sites and all(
+            f'{env_name}="$RUNNER_TEMP/headless-active-context-'
+            '${{ matrix.lane }}.txt"' in line for line in sites),
+            f"every headless invocation sets {env_name} under $RUNNER_TEMP "
+            "on its own command, so every lane records its active example")
+        expect("env:" not in code and "${{ runner.temp }}" not in code,
+               "the `Headless lane` step sets no step `env:` (its listing "
+               "would add a line to a passing log) and does not use "
+               "`${{ runner.temp }}` (the HOST path in a container job, "
+               "which the recorder cannot write)")
+
+    post = re.search(
+        r"\n      - name: Headless active context\n(.*?)(?=\n      - name: |\n\S|\Z)",
+        workflow, re.S)
+    if expect(post is not None,
+              "a `Headless active context` step follows the lane step"):
+        body = post.group(1)
+        expect("if: always()" in body,
+               "the `Headless active context` step runs after a cancelled "
+               "or timed-out lane step (`always()`)")
+        expect('"$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt"'
+               in body,
+               "the step reads the file the lane step writes")
+        expect("state: running" in body,
+               "the step prints the record only for a run that did not "
+               "finish, so a passing run's log gains nothing")
+    expect(len(re.findall(r"\n      - name: Headless lane\n", workflow))
+           == len(re.findall(r"\n      - name: Headless active context\n",
+                             workflow)),
+           "every job that runs the headless suite prints its record")
+
+    progress = (REPO_ROOT / "test-headless" / "Test" / "Headless"
+                / "Progress.hs").read_text(encoding="utf-8")
+    lanes = (REPO_ROOT / "test-headless" / "Test" / "Headless"
+             / "Lanes.hs").read_text(encoding="utf-8")
+    def haskell_code(text: str) -> str:
+        """The source without its comments, which may discuss timeouts."""
+        text = re.sub(r"\{-.*?-\}", "", text, flags=re.S)
+        return "\n".join(line.split("--", 1)[0] for line in text.splitlines())
+
+    for name, text in (("Progress.hs", haskell_code(progress)),
+                       ("Lanes.hs", haskell_code(lanes))):
+        for banned in ("threadDelay", "System.Timeout", "timeout ",
+                       "registerDelay"):
+            expect(banned not in text,
+                   f"{name} adds no timer ({banned!r}): the diagnostic "
+                   "must not change scheduling or add a deadline")
+    code = haskell_code(progress)
+    expect(re.search(r"(?<![A-Za-z])putStr(Ln)?\b|(?<![A-Za-z])print\b"
+                     r"|hPutStr(Ln)?\s+stdout", code) is None,
+           "Progress.hs writes nothing to stdout, so a passing run's output "
+           "is the formatter's alone")
+    expect("lookupEnv progressFileEnv" in progress
+           and "Nothing → body id" in progress,
+           "the recorder is off unless the environment names a file, so a "
+           "developer's targeted run is unchanged")
+
+
 def check_selection_markers() -> None:
     """The workflow still prints the two lines this report greps for."""
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
@@ -742,6 +820,7 @@ CHECKS = (
     ("log framing", check_log_framing),
     ("attempt identity round trip", check_identity_round_trip),
     ("headless test-options wiring", check_headless_options_wiring),
+    ("headless active-context wiring", check_headless_active_context_wiring),
     ("selection markers", check_selection_markers),
     ("not a gate", check_not_a_gate),
     ("report rendering", check_report_renders),

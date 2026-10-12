@@ -25,6 +25,10 @@
 --   examples, in the same order, with the same descriptions as the single
 --   @hspec $ do@ block it replaced.
 --
+--   When @SYNARCHY_HEADLESS_PROGRESS_FILE@ names a file, the suite's
+--   examples and fixture cleanups are also recorded there while they run
+--   (@Test.Headless.Progress@, #2747); it prints nothing itself.
+--
 --   It also offers Hspec one extra formatter, @--format=inventory@, for
 --   @tools/headless_lanes.py@: one line per example it would run (its
 --   full path as a JSON list of strings), then one total line.
@@ -51,6 +55,7 @@ import Test.Hspec (Spec)
 import Test.Hspec.Core.Runner (Config(..), defaultConfig, hspecWith)
 import Test.Hspec.Core.Formatters.V2
     (Formatter(..), formatterToFormat, writeLine, getTotalCount)
+import Test.Headless.Progress (withProgressFromEnv)
 
 -- | The suite's lanes, in suite order, and the name of the default lane.
 data Lanes = Lanes
@@ -118,12 +123,22 @@ runLanes lanes selfTest = do
         SelfTest → withArgs rest (hspecWith config selfTest)
         _ → do
             spec ← either die pure (lanesSpec lanes req)
-            withArgs rest (hspecWith config spec)
+            -- #2747: with SYNARCHY_HEADLESS_PROGRESS_FILE set (CI does),
+            -- the run's active example and its predecessor are mirrored
+            -- to that file. Unset, the spec is handed over untouched.
+            withProgressFromEnv (laneLabel req) $ \instrument →
+                withArgs rest (hspecWith config (instrument spec))
   where
     config = defaultConfig
         { configAvailableFormatters =
             configAvailableFormatters defaultConfig
             ⧺ [("inventory", formatterToFormat inventoryFormatter)] }
+
+-- | The lane a request runs, as the active-context record names it.
+laneLabel ∷ LaneRequest → String
+laneLabel req = case req of
+    OneLane name → name
+    _            → "all"
 
 -- * Inventory output
 
