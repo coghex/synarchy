@@ -1491,6 +1491,7 @@ test-suite synarchy-test-headless
                    Test.Headless.LaneSelection
                    Test.Headless.Progress
                    Test.Headless.Core.HeadlessProgress
+                   Test.Headless.Core.DiagHang
                    Test.Headless.Audio.Native
                    Test.Headless.Audio.Upload
                    Test.Headless.Audio.Transport
