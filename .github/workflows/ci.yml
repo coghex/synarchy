@@ -589,6 +589,8 @@ jobs:
       # stays on both branches so the footer still reaches this log.
       - name: Headless test suite
         if: steps.docs-fast-path.outputs.docs_only != 'true'
+        env:
+          SYNARCHY_HEADLESS_PROGRESS_FILE: ${{ runner.temp }}/headless-active-context-all.txt
         run: |
           if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
             echo "worldgen gate fired: running the full tier (SYNARCHY_FULL_TESTS=1)."
@@ -596,6 +598,15 @@ jobs:
           else
             echo "worldgen gate did not fire: full-tier examples stay pending."
             cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
+          fi
+
+      - name: Headless active context
+        if: always() && steps.docs-fast-path.outputs.docs_only != 'true'
+        run: |
+          f="${{ runner.temp }}/headless-active-context-all.txt"
+          if [ -f "$f" ] && grep -q '^state: running$' "$f"; then
+            echo "::error title=Headless suite did not finish::see the active-context record below"
+            cat "$f"
           fi
 
       # Guard (issue #766, save-overhaul C4 requirement 14): fails if a

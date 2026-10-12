@@ -1393,6 +1393,7 @@ test-suite synarchy-test-headless
                    App.Preview.Config
                    App.ResourceRoot
                    Test.Headless.UPrelude
+                   Test.Headless.Progress
                    Test.Headless.Audio.Native
                    Test.Headless.Audio.Upload
                    Test.Headless.Audio.Transport
@@ -1910,6 +1911,7 @@ test-suite synarchy-test-headless
                 , GLFW-b
                 , hslua
                 , hspec
+                , hspec-core
                 , JuicyPixels
                 -- #2693's oversized-inflate fixture builds a real zlib stream.
                 , zlib

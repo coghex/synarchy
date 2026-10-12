@@ -2,6 +2,7 @@ module Main where
 
 import UPrelude
 import Test.Hspec
+import Test.Headless.Progress (withProgressFromEnv)
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
 import qualified Test.Headless.UPrelude as UPreludeSpec
@@ -444,7 +445,7 @@ import qualified Test.Headless.Capability.UnitCombat as CapabilityUnitCombat
 import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
 main ∷ IO ()
-main = hspec $ do
+main = withProgressFromEnv "all" $ \instrument -> hspec $ instrument $ do
     describe "World.ZoomMap.Artifact" ZoomArtifact.spec
     ZoomOceanFill.spec
     -- ONE engine for all worldgen specs. Worlds are memoized by
