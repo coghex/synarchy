@@ -974,23 +974,6 @@
         "outcomes": []
       },
       "classification": "manual-only",
-      "key": "expedition_retrieval",
-      "protocol": "legacy",
-      "script": "expedition_retrieval_probe.py"
-    },
-    {
-      "census": {
-        "acceptable_failures": 0,
-        "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
-        "deferred": null,
-        "estimated_worst_case_seconds": null,
-        "history": [],
-        "outcomes": []
-      },
-      "classification": "manual-only",
       "key": "farm_ai",
       "protocol": "legacy",
       "script": "farm_ai_probe.py"

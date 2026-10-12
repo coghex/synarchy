@@ -29,9 +29,10 @@ part in it.
 Every component of that chain already had its own gate. What had never
 been run is the chain AS ONE SESSION, from an empty world to a reloaded
 save: `tools/location_embark_probe.py` stops at discovery,
-`tools/expedition_retrieval_probe.py` starts from a staged item and its
-own hand-built storage, `tools/tutorial_probe.py` covers tutorial state without the whole trip, and `tools/gameplay_scenarios.py` is an observation log with no
-verdict at all.
+the retired full-expedition retrieval probe (#920; retired in #2813) started
+from a staged item and its own hand-built storage, `tools/tutorial_probe.py`
+covers tutorial state without the whole trip, and
+`tools/gameplay_scenarios.py` is an observation log with no verdict at all.
 
 STAGES
 ------

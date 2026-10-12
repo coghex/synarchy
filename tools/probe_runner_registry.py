@@ -118,10 +118,6 @@ PROBES = [
      "the player's pickup, return and deposit, and a fresh-process reload "
      "verifying every durable identity and restored tutorial latch "
      "(#923, #2640)"),
-    ("expedition_retrieval", "expedition_retrieval_probe.py",
-     "player-driven remote retrieval end to end: command-time capacity refusal, "
-     "travel/pickup/carrier identity, survival interruption, save-restart-load "
-     "mid-journey, deposit into colony storage, reuse by another colonist (#920)"),
     ("farm_ai", "farm_ai_probe.py",
      "farm AI: world.plantRowCropAt + CropPlot auto-harvest scan + rot/occupancy gating (#336)"),
     ("flora_growth", "flora_growth_probe.py",

@@ -126,11 +126,11 @@ report names the boundary that produced it. These are the non-blocking
 dangling-reference warnings the save deliberately tolerates and
 therefore only LOGS; nothing else in this file would notice one.
 
-Known-flaky neighbours: `tools/expedition_retrieval_probe.py` and
-`tools/repair_ai_probe.py` are the arc-adjacent AI probes with recorded
-intermittent failures; this one is deliberately built to avoid their
-failure mode by keeping the simulation PAUSED except across the walks it
-actually measures.
+Known-flaky neighbour: `tools/repair_ai_probe.py` is an arc-adjacent AI
+probe with recorded intermittent failures (the full-expedition retrieval
+probe that was another is retired, #2813); this one is deliberately built
+to avoid that failure mode by keeping the simulation PAUSED except across
+the walks it actually measures.
 
 Manual-only (needs-gpu) per `tools/ci_probes.py`; the CI-blocking gates
 for this feature are the hspec groups `--match "Unit transfer"`,
