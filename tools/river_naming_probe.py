@@ -30,6 +30,13 @@ after a real load in a FRESH process.
      ids, names, and glosses — determinism from stable inputs, not from
      anything carried in the save.
 
+Every page this probe generates is set up through `wait_page_setup`
+(#2653): `world.waitForInit` polls only the ACTIVE world, so on the
+second page it would be satisfied by the already-finished first one and
+the river queries could answer from the wrong page. The wait is tied to
+the requested page itself, and a stall is an apparatus failure that
+names the page and the boundary, not a river-check failure.
+
 Rivers need a world with enough land to grow several; the default
 seed/size pair below produces nine, which is what makes check 2's
 head-recurrence assertion meaningful (a one-river world could never show
@@ -49,7 +56,7 @@ import json
 import sys
 import probe_protocol
 from probelib import (boot, quit_engine, send, send_json, capture_request_id,
-                      wait_save_complete, wait_load_published)
+                      poll_until, wait_save_complete, wait_load_published)
 
 LOG = "/tmp/river_naming_engine.log"
 
@@ -78,11 +85,8 @@ return out
 """
 
 
-def rivers(port: int) -> list[dict]:
-    """`world.getRivers()` as a list of comparable dicts, in the order
-    the engine returned them."""
-    data = send_json(port, GEOMETRY_LUA.strip().replace("\n", " "),
-                     timeout=30.0)
+def _river_list(data) -> list[dict]:
+    """A `world.getRivers()` payload as a list of comparable dicts."""
     if not isinstance(data, (list, dict)):
         return []
     if isinstance(data, dict):
@@ -90,6 +94,131 @@ def rivers(port: int) -> list[dict]:
         # is here, but ordering by numeric key keeps that safe.
         return [data[k] for k in sorted(data, key=lambda k: int(k))]
     return data
+
+
+def rivers(port: int) -> list[dict]:
+    """`world.getRivers()` as a list of comparable dicts, in the order
+    the engine returned them."""
+    data = send_json(port, GEOMETRY_LUA.strip().replace("\n", " "),
+                     timeout=30.0)
+    return _river_list(data)
+
+
+#: The same rows, with the active page id read in the same console
+#: chunk, so the id names the page `world.getRivers()` answered from.
+OBSERVED_LUA = """
+local active = world.getActiveWorldId()
+local rs = world.getRivers()
+local out = {}
+if rs ~= nil then
+  for i, r in ipairs(rs) do
+    out[i] = { id = r.id, name = r.name, gloss = r.gloss,
+               sx = r.source.x, sy = r.source.y,
+               mx = r.mouth.x, my = r.mouth.y,
+               flow = r.flowRate, segs = r.segmentCount }
+  end
+end
+return { active = active, rivers = out }
+"""
+
+
+def observe_rivers(port: int) -> tuple[str | None, list[dict]]:
+    """`(active page id, rivers)` from ONE console chunk (#2653)."""
+    data = send_json(port, OBSERVED_LUA.strip().replace("\n", " "),
+                     timeout=30.0)
+    if not isinstance(data, dict):
+        return None, []
+    active = data.get("active")
+    return (active if isinstance(active, str) else None,
+            _river_list(data.get("rivers")))
+
+
+#: Setup budgets, in seconds. A page is REGISTERED as soon as the world
+#: thread runs its init command; ACTIVE once the `show` queued behind its
+#: generation lands; DONE once the load phase reaches `LoadDone`. The
+#: last two are the generation budget, which `waitForInit(240)` used to
+#: be.
+PAGE_READY_SECS = 30.0
+PAGE_ACTIVE_SECS = 240.0
+PAGE_DONE_SECS = 240.0
+
+#: `world.getInitProgress()`'s first value once the ACTIVE page is done.
+LOAD_DONE_PHASE = 3
+
+
+class SetupStalled(Exception):
+    """A page-setup wait ran out: an apparatus failure, not a result.
+
+    `boundary` is the one that stalled -- `registered`, `active` or
+    `done` -- so the report says whether the world thread never ran the
+    init, the generation queued ahead of the show never finished, or the
+    page became active but never reached `LoadDone`."""
+
+    def __init__(self, page: str, boundary: str, message: str) -> None:
+        super().__init__(message)
+        self.page = page
+        self.boundary = boundary
+
+
+def page_registered(port: int, page: str) -> bool:
+    """True once `page` is registered in the world manager.
+
+    `world.getDate(pageId)` returns nil until then, which makes it the
+    one per-page observable that exists BEFORE the page is active (the
+    same one tools/multiworld_save_probe.py uses, #1447)."""
+    return send(port, f"return world.getDate('{page}')").strip() not in (
+        "nil", "null", "")
+
+
+def active_page(port: int) -> str:
+    return send(port, "return world.getActiveWorldId()").strip().strip('"')
+
+
+def load_phase(port: int) -> int | None:
+    """The ACTIVE page's load phase (0 idle .. 3 done), or None if the
+    console did not answer with one."""
+    raw = send(port, "local p = world.getInitProgress(); return p").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def wait_page_setup(port: int, page: str,
+                    ready_secs: float = PAGE_READY_SECS,
+                    active_secs: float = PAGE_ACTIVE_SECS,
+                    done_secs: float = PAGE_DONE_SECS) -> None:
+    """Block until the REQUESTED page is registered, active and done.
+
+    Every wait is tied to `page` itself. `world.waitForInit` is not: it
+    polls the ACTIVE world's load phase, so an already-finished other
+    page satisfies it at once -- and it also returns when its own
+    timeout expires, so its return proves nothing. The load phase is
+    therefore read directly, and only after `page` is the active world,
+    which is what makes `LoadDone` a statement about `page`.
+
+    Raises `SetupStalled` naming the page and the boundary."""
+    if not poll_until(ready_secs, lambda: page_registered(port, page)):
+        raise SetupStalled(
+            page, "registered",
+            f"setup for page '{page}' stalled at REGISTERED: "
+            f"world.getDate('{page}') stayed nil within {ready_secs:.0f}s "
+            f"of world.init -- the world thread never ran the init "
+            f"command for this page")
+    if not poll_until(active_secs, lambda: active_page(port) == page):
+        raise SetupStalled(
+            page, "active",
+            f"setup for page '{page}' stalled at ACTIVE: it registered "
+            f"but never became the active world within {active_secs:.0f}s "
+            f"of world.show (active is {active_page(port)!r}) -- the "
+            f"generation queued ahead of that show did not finish")
+    if not poll_until(done_secs,
+                      lambda: load_phase(port) == LOAD_DONE_PHASE):
+        raise SetupStalled(
+            page, "done",
+            f"setup for page '{page}' stalled at DONE: it is the active "
+            f"world but its load phase is {load_phase(port)!r}, not "
+            f"{LOAD_DONE_PHASE} (LoadDone), after {done_secs:.0f}s")
 
 
 def gen_world(port: int, page: str, seed: int, size: int,
@@ -102,8 +231,8 @@ def gen_world(port: int, page: str, seed: int, size: int,
         # (#1092 requirement 2), which is what leaves rivers unnamed.
         init = f"world.init('{page}', {seed}, {size}, 3, \"Player's Own Name\")"
     send(port, f"{init}; return 'ok'")
-    send(port, "return world.waitForInit(240)", timeout=250)
     send(port, f"world.show('{page}'); return 'ok'")
+    wait_page_setup(port, page)
 
 
 def check_identity(rs: list[dict], failures: list[str], where: str) -> None:
@@ -171,6 +300,12 @@ def main() -> int:
     rep = probe_protocol.reporter_from_env(DESCRIPTOR)
     try:
         return _run(args, rep)
+    except SetupStalled as exc:
+        # An apparatus failure: the checks it prevented stay MISSING
+        # (Reporter.abort emits no check event), and `_run`'s finally
+        # blocks have already quit the engine.
+        rep.abort(str(exc), {"page": exc.page, "boundary": exc.boundary})
+        return 1
     except Exception as exc:
         rep.abort(str(exc))
         raise
@@ -213,29 +348,7 @@ def _run(args, rep):
                   {"failures": failures[before_errors:]})
 
         gen_world(port, "unnamed", args.seed, args.size, named=False)
-        plain = rivers(port)
-        before_errors = len(failures)
-        check_identity(plain, failures, "phase 3")
-        rep.check('unnamed_identity', len(failures) == before_errors, DESCRIPTOR.label('unnamed_identity'),
-                  {"failures": failures[before_errors:]})
-        if not rep.check(
-            'unnamed_same_ids',
-            [r['id'] for r in plain] == [r['id'] for r in first],
-            DESCRIPTOR.label('unnamed_same_ids')
-        ):
-            failures.append(
-                "phase 3: the same terrain seed produced different river "
-                "ids with and without a language -- naming must not touch "
-                "worldgen")
-        if not rep.check(
-            'unnamed_absent_names',
-            not (any(('name' in r or 'gloss' in r for r in plain))),
-            DESCRIPTOR.label('unnamed_absent_names')
-        ):
-            failures.append(
-                "phase 3: a world with NO language provenance must leave "
-                "the name/gloss keys ABSENT, got "
-                f"{json.dumps([{k: v for k, v in r.items() if k in ('name', 'gloss')} for r in plain])}")
+        grade_unnamed_page(rep, port, "unnamed", first, failures)
 
         send(port, "world.show('named'); return 'ok'")
         send(port, f"engine.saveWorld('named', '{SLOT}'); return 'ok'",
@@ -306,6 +419,42 @@ def _run(args, rep):
         return fail_out(failures)
     rep.note('river naming probe: PASS')
     return 0
+
+
+def grade_unnamed_page(rep, port: int, page: str, first: list[dict],
+                       failures: list[str]) -> None:
+    """Phase 3: query the no-language page and grade it.
+
+    The active page id is read in the same console chunk as the rivers
+    and recorded with the payload in every check's detail and failure
+    text (#2653), so a failure says WHICH page answered rather than
+    leaving that to be reconstructed afterwards."""
+    observed, plain = observe_rivers(port)
+    where = f"phase 3 (active page {observed!r}, graded page {page!r})"
+    seen = {"active_page": observed, "graded_page": page, "rivers": plain}
+    before_errors = len(failures)
+    check_identity(plain, failures, where)
+    rep.check('unnamed_identity', len(failures) == before_errors,
+              DESCRIPTOR.label('unnamed_identity'),
+              {"failures": failures[before_errors:], **seen})
+    if not rep.check(
+        'unnamed_same_ids',
+        [r['id'] for r in plain] == [r['id'] for r in first],
+        DESCRIPTOR.label('unnamed_same_ids'), seen
+    ):
+        failures.append(
+            f"{where}: the same terrain seed produced different river "
+            f"ids with and without a language -- naming must not touch "
+            f"worldgen")
+    if not rep.check(
+        'unnamed_absent_names',
+        not (any(('name' in r or 'gloss' in r for r in plain))),
+        DESCRIPTOR.label('unnamed_absent_names'), seen
+    ):
+        failures.append(
+            f"{where}: a world with NO language provenance must leave "
+            "the name/gloss keys ABSENT, got "
+            f"{json.dumps([{k: v for k, v in r.items() if k in ('name', 'gloss')} for r in plain])}")
 
 
 def fail_out(failures: list[str]) -> int:
