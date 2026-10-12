@@ -332,7 +332,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
     # they didn't exist before this invocation) -- never leaving a
     # half-written or stale-but-mismatched pair behind.
     orig_fixture = fixture_path.read_bytes() if fixture_path.exists() else None
-    orig_summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else None
+    # Bytes for the summary too: a text round trip normalizes line
+    # endings, so a CRLF summary would not be restored exactly (#2649).
+    orig_summary = summary_path.read_bytes() if summary_path.exists() else None
 
     def restore_files() -> None:
         if orig_fixture is None:
@@ -342,7 +344,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         if orig_summary is None:
             summary_path.unlink(missing_ok=True)
         else:
-            summary_path.write_text(orig_summary, encoding="utf-8")
+            summary_path.write_bytes(orig_summary)
 
     try:
         generate_current_format_session(

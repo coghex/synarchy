@@ -2,11 +2,12 @@
 """Registration and generation cases of the save-compat self-test
 (issue #2073).
 
-The eleven members that drive `--add-baseline` and `--generate-session`
-as transactions: the atomic write of a whole new baseline, the field and
+The members that drive `--add-baseline` and `--generate-session` as
+transactions: the atomic write of a whole new baseline, the field and
 overwrite refusals, `--force`, and every rollback path -- a failed real
 codec validation, a generation error after the fixture was written, a
-canonical-summary dump failure, and a validation failure at the end.
+canonical-summary dump failure, a validation failure at the end, and (issue
+#2649) a validation subprocess that raises instead of returning.
 
 Requirement 14, and the reason this owner is the one that would fail
 expensively if it were wrong: each case patches the module that OWNS the
@@ -24,6 +25,11 @@ call time by its owner, so the rebinding is actually seen.
   `codec.dump_canonical_summary`
       `save_compat_audit_codec` -- unpatched, it re-decodes through the
       real toolchain.
+  `register.subprocess.run`
+      The ONE call under `_run_real_codec_validation` (issue #2649).
+      Its cases keep the real validation wrapper, the real manifest
+      finalizer and, for generation, the real delegation to
+      registration, and make only the `cabal test` launch itself raise.
 
 Each faked seam additionally asserts the fake was REACHED, and every
 case that touches the manifest asserts the real one's bytes are
@@ -33,8 +39,11 @@ assertions.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -501,6 +510,181 @@ def test_dump_canonical_summary_reports_an_unusable_destination_as_failure() -> 
                f"expected the diagnostic to name both the destination and "
                f"the fixture, got {tail!r}")
 
+#: The ways launching or waiting on `cabal test` can raise, each with
+#: the words its diagnostic must carry. The timeout cases carry output
+#: the way `subprocess` really does -- BYTES, or nothing at all.
+_VALIDATION_LAUNCH_FAILURES = [
+    ("a timeout with partial output",
+     lambda: subprocess.TimeoutExpired(
+         ["cabal", "test"], 1800, output=b"building\nhspec was mid-run\n"),
+     ["timed out after 1800s", "hspec was mid-run"]),
+    ("a timeout with no output",
+     lambda: subprocess.TimeoutExpired(["cabal", "test"], 1800),
+     ["timed out after 1800s"]),
+    ("a permission error",
+     lambda: PermissionError(13, "Permission denied: 'cabal'"),
+     ["PermissionError", "Permission denied"]),
+    ("an unrelated OS error",
+     lambda: OSError(24, "Too many open files"),
+     ["OSError", "Too many open files"]),
+]
+
+
+@contextlib.contextmanager
+def _cabal_launch_raises(make_exc, reached: list):
+    """Make the `subprocess.run` that `_run_real_codec_validation` calls
+    raise `make_exc()`, recording each time it is reached. Everything
+    above that call stays real."""
+    old_run = subprocess.run
+
+    def run(*args, **kwargs):
+        reached.append(args[0] if args else kwargs.get("args"))
+        raise make_exc()
+
+    subprocess.run = run
+    try:
+        yield
+    finally:
+        subprocess.run = old_run
+
+
+def test_validation_launch_failure_is_a_failed_validation_not_an_exception() -> None:
+    print("a cabal launch/wait failure is reported as a failed validation, "
+          "with its diagnostic")
+    for label, make_exc, words in _VALIDATION_LAUNCH_FAILURES:
+        reached: list = []
+        with _cabal_launch_raises(make_exc, reached):
+            ok, tail = register._run_real_codec_validation()
+        expect(len(reached) == 1 and reached[0][:2] == ["cabal", "test"],
+               f"{label}: expected the patched `cabal test` launch to be "
+               f"reached once, got {reached}")
+        expect(ok is False, f"{label}: expected a failed validation, got {ok}")
+        for word in words:
+            expect(word in tail,
+                   f"{label}: expected the diagnostic to name {word!r}, "
+                   f"got {tail!r}")
+        if "no output" in label:
+            expect("output so far" not in tail,
+                   f"{label}: expected no output section, got {tail!r}")
+
+
+def test_add_baseline_restores_the_manifest_when_validation_launch_raises() -> None:
+    print("_finalize_manifest_write restores the manifest exactly if cabal "
+          "cannot be run to completion")
+    for label, make_exc, words in _VALIDATION_LAUNCH_FAILURES:
+        # An existing manifest with CRLF line endings, and an absent one.
+        for prior in (b'{\r\n  "old": true\r\n}\r\n', None):
+            with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+                manifest_path = Path(d) / "manifest.json"
+                if prior is not None:
+                    manifest_path.write_bytes(prior)
+                real_before = real_manifest_bytes()
+                reached: list = []
+                err = io.StringIO()
+                with _cabal_launch_raises(make_exc, reached), \
+                        contextlib.redirect_stderr(err):
+                    rc = register._finalize_manifest_write(
+                        {"new": True}, manifest_path, "complete-session",
+                        False, "registered")
+                where = f"{label}, {'existing' if prior else 'absent'} manifest"
+                expect(len(reached) == 1,
+                       f"{where}: expected the patched `cabal test` launch "
+                       f"to be reached once, got {reached}")
+                expect(rc != 0, f"{where}: expected a nonzero result, got {rc}")
+                if prior is None:
+                    expect(not manifest_path.exists(),
+                           f"{where}: expected the newly written manifest "
+                           f"to be removed")
+                else:
+                    expect(manifest_path.read_bytes() == prior,
+                           f"{where}: expected the manifest back byte for "
+                           f"byte, got {manifest_path.read_bytes()!r}")
+                for word in words:
+                    expect(word in err.getvalue(),
+                           f"{where}: expected the diagnostic to name "
+                           f"{word!r}, got {err.getvalue()!r}")
+                expect_real_manifest_untouched(
+                    real_before, "--add-baseline launch failure")
+
+
+def test_generate_session_restores_files_when_validation_launch_raises() -> None:
+    print("--generate-session restores fixture+summary+manifest exactly if "
+          "cabal cannot be run to completion")
+    for label, make_exc, words in _VALIDATION_LAUNCH_FAILURES:
+        # A fresh pair, and a --force overwrite of a preexisting one
+        # whose summary has CRLF line endings.
+        for overwrite in (False, True):
+            with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+                tmp = Path(d)
+                fixture_path = tmp / "gen.bin"
+                summary_path = tmp / "gen.expected.json"
+                manifest_path = tmp / "manifest.json"
+                manifest_before = b'{\r\n  "baselines": []\r\n}\r\n'
+                manifest_path.write_bytes(manifest_before)
+                old_fixture = b"tracked fixture bytes"
+                old_summary = b'{\r\n  "tracked": true\r\n}\r\n'
+                if overwrite:
+                    fixture_path.write_bytes(old_fixture)
+                    summary_path.write_bytes(old_summary)
+                old_gen = generate.generate_current_format_session
+                old_dump = codec.dump_canonical_summary
+                old_manifest_path = common.MANIFEST_PATH
+                real_before = real_manifest_bytes()
+                common.MANIFEST_PATH = manifest_path
+                called: list = []
+                generate.generate_current_format_session = (
+                    lambda **kw: (called.append("gen"),
+                                  kw["out_path"].write_bytes(b"new bytes"))[1])
+                codec.dump_canonical_summary = (
+                    lambda fp, sp: (called.append("dump"),
+                                    sp.write_text('{"ok": true}'),
+                                    (True, ""))[2])
+                reached: list = []
+                err = io.StringIO()
+                try:
+                    with _cabal_launch_raises(make_exc, reached), \
+                            contextlib.redirect_stderr(err):
+                        rc = generate.cmd_generate(_Args(
+                            baseline_id="new-baseline",
+                            fixture_id="new-fixture",
+                            path=str(fixture_path.relative_to(common.REPO_ROOT)),
+                            summary=str(summary_path.relative_to(common.REPO_ROOT)),
+                            description="a test baseline",
+                            migration_target="current", migrated_by="test",
+                            components='[{"id":"metadata","version":1,"required":true}]',
+                            skip_validation=False, force=overwrite))
+                    where = f"{label}, {'--force overwrite' if overwrite else 'fresh paths'}"
+                    expect(called == ["gen", "dump"] and len(reached) == 1,
+                           f"{where}: expected generation, the dump and the "
+                           f"`cabal test` launch each reached (an unpatched "
+                           f"one would have booted an engine or run cabal), "
+                           f"got {called} / {reached}")
+                    expect(rc != 0, f"{where}: expected a nonzero result, got {rc}")
+                    if overwrite:
+                        expect(fixture_path.read_bytes() == old_fixture,
+                               f"{where}: expected the tracked fixture back")
+                        expect(summary_path.read_bytes() == old_summary,
+                               f"{where}: expected the tracked summary back "
+                               f"byte for byte, got {summary_path.read_bytes()!r}")
+                    else:
+                        expect(not fixture_path.exists()
+                               and not summary_path.exists(),
+                               f"{where}: expected the newly created "
+                               f"fixture and summary to be removed")
+                    expect(manifest_path.read_bytes() == manifest_before,
+                           f"{where}: expected the manifest back byte for byte")
+                    for word in words:
+                        expect(word in err.getvalue(),
+                               f"{where}: expected the diagnostic to name "
+                               f"{word!r}, got {err.getvalue()!r}")
+                    expect_real_manifest_untouched(
+                        real_before, "--generate-session launch failure")
+                finally:
+                    generate.generate_current_format_session = old_gen
+                    codec.dump_canonical_summary = old_dump
+                    common.MANIFEST_PATH = old_manifest_path
+
+
 #: This owner's members, in the run order the façade concatenates
 #: (issue #2073 requirement 12).
 TESTS = [
@@ -517,4 +701,7 @@ TESTS = [
     test_generate_session_rolls_back_fixture_and_summary_on_validation_failure,
     test_generate_session_rolls_back_when_the_summary_destination_is_unusable,
     test_dump_canonical_summary_reports_an_unusable_destination_as_failure,
+    test_validation_launch_failure_is_a_failed_validation_not_an_exception,
+    test_add_baseline_restores_the_manifest_when_validation_launch_raises,
+    test_generate_session_restores_files_when_validation_launch_raises,
 ]

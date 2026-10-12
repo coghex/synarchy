@@ -93,6 +93,18 @@ def _build_fixture_entry(args: argparse.Namespace) -> dict:
     return entry
 
 
+def _output_tail(*chunks: str | bytes | None) -> str:
+    """The last 40 lines of the given process output. A
+    `TimeoutExpired` carries whatever the child had written as BYTES
+    (or nothing at all) even under `text=True`, so each chunk is
+    decoded here rather than assumed to be a string."""
+    output = "".join(
+        chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes)
+        else (chunk or "")
+        for chunk in chunks)
+    return "\n".join(output.splitlines()[-40:])
+
+
 def _run_real_codec_validation() -> tuple[bool, str]:
     """Run the SAME "save migrations" hspec gate CI already runs
     (test-headless's manifest-driven "manifest-declared fixtures decode
@@ -103,7 +115,12 @@ def _run_real_codec_validation() -> tuple[bool, str]:
     registry and matches its own expectedCanonicalSummary -- not merely
     that its bytes are present and checksummed (which is all the rest of
     this module's audit() can ever prove, since only Haskell can run the
-    cereal codec). Returns (passed, last-40-lines-of-output)."""
+    cereal codec). Returns (passed, last-40-lines-of-output).
+
+    Any failure to LAUNCH or WAIT for the subprocess is a failed
+    validation, not an exception (issue #2649): the caller rolls the
+    registration back only on a returned `False`, so an exception
+    escaping from here would leave the replacement manifest on disk."""
     try:
         proc = subprocess.run(
             ["cabal", "test", "synarchy-test-headless",
@@ -116,9 +133,18 @@ def _run_real_codec_validation() -> tuple[bool, str]:
                         "--skip-validation if that is expected here (the "
                         "checked-in CI gate will still catch a bad fixture "
                         "on the next push)")
-    output = (proc.stdout or "") + (proc.stderr or "")
-    tail = "\n".join(output.splitlines()[-40:])
-    return proc.returncode == 0, tail
+    except subprocess.TimeoutExpired as e:
+        partial = _output_tail(e.stdout, e.stderr)
+        return False, (f"'cabal test' timed out after {e.timeout:g}s and "
+                        f"was killed -- the real-codec validation did not "
+                        f"finish" + (f"; its output so far:\n{partial}"
+                                      if partial else ""))
+    except Exception as e:
+        # OSError (PermissionError, a failed fork) and anything else
+        # `subprocess.run` can raise while launching or waiting.
+        return False, (f"'cabal test' could not be run: "
+                        f"{type(e).__name__}: {e}")
+    return proc.returncode == 0, _output_tail(proc.stdout, proc.stderr)
 
 
 def _finalize_manifest_write(
@@ -135,7 +161,9 @@ def _finalize_manifest_write(
     kind: write a hand-authored hspec test exercising it directly
     instead (see Test.Headless.Lua.SaveModules's "tracked v1 fixtures
     from disk" for the pattern this repo already follows)."""
-    previous_text = (manifest_path.read_text(encoding="utf-8")
+    # BYTES, not text: a text round trip normalizes line endings, so a
+    # CRLF manifest would not come back exactly as it was.
+    previous_bytes = (manifest_path.read_bytes()
                       if manifest_path.exists() else None)
     _write_manifest_atomically(manifest, manifest_path)
 
@@ -159,15 +187,15 @@ def _finalize_manifest_write(
               f"'--match \"save migrations\"' PASSED")
         return 0
 
-    if previous_text is None:
+    if previous_bytes is None:
         manifest_path.unlink()
     else:
-        manifest_path.write_text(previous_text, encoding="utf-8")
+        manifest_path.write_bytes(previous_bytes)
     print(f"REAL-CODEC VALIDATION FAILED -- rolled '{manifest_path}' back "
           f"to its previous content (the fixture bytes/summary files "
           f"already on disk were left untouched; only this registration "
           f"was undone). Fix the fixture and re-run --add-baseline. Last "
-          f"lines of `cabal test`'s output:\n{tail}", file=sys.stderr)
+          f"lines of `cabal test`'s output, or why it could not run:\n{tail}", file=sys.stderr)
     return 1
 
 
