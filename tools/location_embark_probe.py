@@ -115,6 +115,7 @@ from location_embark.constants import SAVE_BASE, SAVE_LOCAL
 from location_embark.fixture import prepare_fixture
 from location_embark.invocation import (RunArtifacts, SessionContext, check,
                                         current_log, failures,
+                                        print_review_images,
                                         release_artifacts, set_log)
 from location_embark.session_discovery import session_local_and_discovery
 from location_embark.session_ghost import session_ghost_and_remote
@@ -280,6 +281,7 @@ def report(art: RunArtifacts, keep: bool) -> int:
         # tree, so requirement 5's unconditional cleanup is untouched.
         FAILURE.context_log(current_log())
     release_artifacts(art, keep)
+    print_review_images(keep)
     print("-" * 56)
     if failures:
         # Durable records rather than an unflushed stderr print (#1982):
