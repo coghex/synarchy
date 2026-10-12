@@ -545,7 +545,9 @@ currently visible.
 
 - **Step 6 (retrieval and return) — #920.** Direct RTS retrieval only: order
   pickup, see whether the item fits, identify its carrier, walk home, deposit.
-  No caravan interface was added. Gate: `tools/expedition_retrieval_probe.py`.
+  No caravan interface was added. Gate: `tools/expedition_retrieval_probe.py`,
+  retired on 2026-10-12 at the owner's decision (#2813): a full expedition is
+  too sandbox-dependent to gate anything, and there is no replacement gate.
 - **Step 7 (survival tuning) — #925 and #919, epic #918.** Recorded in
   `docs/history/expedition_survival_calibration_2026-07.md` as an observation
   log, since processed into `docs/expedition_survival_calibration.md` as the
@@ -1373,8 +1375,9 @@ state the model cannot yet answer from. A recovered item carries no record of
 where it came from — `ItemInstance` has a stable identity but no source
 location, and `GroundItem` stores only the item and its coordinates — so
 "recover ITS key resource" has nothing to bind to. "Return it to the colony"
-has no canonical runtime destination either; `tools/expedition_retrieval_probe.py`
-chooses its own home coordinates and cargo building. An objective whose
+has no canonical runtime destination either; the retrieval probe that was
+step 6's gate (retired, see above) chose its own home coordinates and cargo
+building. An objective whose
 predicate cannot be answered from durable state is a row that never ticks, so
 those rows wait on the encounter (step 4), reward (step 5) and retrieval
 (step 6) work that would define them.

@@ -3815,9 +3815,12 @@ and fixture. The window's own use of it is gated by
 
 ## Commanded-order stall budget (#920/#1291)
 
-Enforced by hspec `--match "commanded order stall budget"` and
-`tools/expedition_retrieval_probe.py` (manual-only). CLAUDE.md keeps
-the stall-not-trip-budget rule; this is the accounting.
+Enforced by hspec `--match "commanded order stall budget"` alone: the
+manual-only full-expedition probe that also covered it was retired on
+2026-10-12 at the owner's decision (#2813), so nothing deterministic now
+covers a still-pending return order, or the carried item's identity,
+across a real save/load. CLAUDE.md keeps the stall-not-trip-budget rule;
+this is the accounting.
 
 `pickup_timeout`/`TASK_TIMEOUT_SEC` reset on a new closest approach.
 Don't restore the from-`issuedAt`/`startedAt` shape — it capped ordered
