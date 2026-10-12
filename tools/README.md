@@ -3896,6 +3896,84 @@ than quietly emitting five thousand success lines on half the runs. The
 same check asserts that no `.hspec` file and no `Spec.hs` formatter
 selection has appeared to leak the compact presentation into local runs.
 
+### Investigating a hung headless run (#2747)
+
+A headless lane that hangs until the 90-minute job timeout, or is
+cancelled, used to leave a log that ends at the last line the formatter
+printed. Under `--format=failed-examples` a passing example prints nothing,
+so that line named neither the example that stalled nor the one before it.
+
+**What a run now records.** `Test.Headless.Progress` wraps the spec tree's
+own examples and fixture cleanups. For a run whose environment sets
+`SYNARCHY_HEADLESS_PROGRESS_FILE` (CI sets it per lane), it keeps that file
+current with:
+
+```text
+headless-active-context v1
+lane: rest
+state: running
+completed examples: 2
+active example: Diag.Hang.Example / hangs here
+preceding completed example: Diag.Hang.Example / completes before the hang
+fixture boundary: none
+```
+
+* **Active example** is the full `describe`/`it` path, from before the
+  example's per-example setup (`around`, `before`) until after its
+  per-example teardown. An example is *complete*, and becomes the preceding
+  one, only when that teardown has finished. `none` before the first
+  completion.
+* **A shared fixture's one-time setup** (`aroundAll`) runs inside the first
+  example that needs it, so a hang there names that example, which is where
+  Hspec runs it.
+* **A shared fixture's teardown** is not any example's work: Hspec queues it
+  as its own job after the group's last example, and has already announced
+  the next example by then. It is recorded as a `fixture boundary` naming
+  the hook, the group(s) it closes and the group it sits in, with
+  `active example: none`, so the next example is not blamed.
+* `state: finished` is written when the run ends, by return or by failure,
+  so only a run that never got there reads `running`.
+
+It adds nothing to a passing run: no output, no timer, no change to
+scheduling, and `--print-slow-items=20 --format=failed-examples` and
+`--test-show-details=direct` are untouched. Unset, the suite's runner hands
+Hspec the spec untouched, so a developer's targeted run is unchanged.
+
+**Where it reaches the CI record.** The `Headless active context` step of
+each `headless-lanes` leg runs `if: always()` and prints the file when it
+still says `state: running`, so a cancelled run and a job-timeout run both
+leave the record in the job log. The test process also prints it to stderr
+on SIGINT/SIGTERM, which is what a cancelling runner delivers.
+`test_ci_timing_report.py`'s `headless active-context wiring` check pins
+the env var, the step and the absence of timers and stdout output.
+
+**Procedure for a hung or suspect run.**
+
+1. *Rerun the same commit* (`gh run rerun <run-id> -R coghex/synarchy`, or
+   `--failed`) and record whether it completes or hangs again. This is an
+   unchanged rerun: it is the only thing that may be reported as one.
+2. *Retrieve the diagnostic context* when that revision supports it: read
+   the `Headless active context` step (or the `headless-active-context`
+   lines in the lane's log). A revision before this recorder has no such
+   step, and its log still ends at the formatter's last line; an unchanged
+   rerun cannot acquire instrumentation introduced later.
+3. *An instrumented historical replay* is a different experiment and is
+   labelled as one. Push the unmodified historical commit as a branch,
+   open a draft PR whose base is that branch and whose head adds only the
+   instrumentation (`pull_request` workflows run for any base branch, so
+   the run tests the historical tree plus the instrumentation, and no push
+   to `master` is involved). Retain the base SHA, the instrumentation diff,
+   the commands, the environment and the outcome, and never describe it as
+   an unchanged rerun.
+4. *Narrow locally* with Hspec's `--match`, repeated:
+   `cabal test synarchy-test-headless --test-options='--match "UI.ResponsiveMenus"'`
+   (add `--lane <lane>` for the lane that holds it, and set
+   `SYNARCHY_HEADLESS_PROGRESS_FILE=/tmp/progress.txt` to get the record for
+   a local hang). A local `not reproduced` on a different OS than the CI
+   container (Linux) is not evidence the hang is fixed; say which platform
+   each attempt ran on. A location that cannot be established is reported as
+   `location unknown`, not guessed.
+
 ### `headless_lane_measurement.py` — per-group headless timing on CI (#2743)
 
 The collection and aggregation behind

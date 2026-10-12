@@ -576,13 +576,24 @@ def check_headless_active_context_wiring() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     env_name = "SYNARCHY_HEADLESS_PROGRESS_FILE"
 
-    lane_step = re.search(
-        r"\n      - name: Headless lane\n(.*?)(?=\n      - name: |\n\S|\Z)",
+    file_step = re.search(
+        r"\n      - name: Headless active-context file\n(.*?)(?=\n      - name: |\n\S|\Z)",
         workflow, re.S)
-    if expect(lane_step is not None, "the `Headless lane` step exists"):
-        expect(env_name in lane_step.group(1),
-               f"the `Headless lane` step sets {env_name}, so every "
-               "headless lane records its active example")
+    if expect(file_step is not None,
+              "a `Headless active-context file` step precedes the lane step"):
+        body = file_step.group(1)
+        expect(f'{env_name}=$RUNNER_TEMP/headless-active-context-'
+               '${{ matrix.lane }}.txt" >> "$GITHUB_ENV"' in body,
+               f"the step exports {env_name} under $RUNNER_TEMP through "
+               "$GITHUB_ENV, so every headless lane records its active "
+               "example")
+        expect("${{ runner.temp }}" not in body,
+               "the step does not use `${{ runner.temp }}` in its command: "
+               "in a container job that is the HOST path, which the "
+               "recorder cannot write")
+    lane_pos = workflow.find("\n      - name: Headless lane\n")
+    expect(file_step is not None and 0 <= file_step.start() < lane_pos,
+           "the file step runs before the `Headless lane` step")
 
     post = re.search(
         r"\n      - name: Headless active context\n(.*?)(?=\n      - name: |\n\S|\Z)",
@@ -593,8 +604,8 @@ def check_headless_active_context_wiring() -> None:
         expect("if: always()" in body,
                "the `Headless active context` step runs after a cancelled "
                "or timed-out lane step (`always()`)")
-        expect("headless-active-context-${{ matrix.lane }}.txt" in body,
-               "the step reads the same per-lane file the lane step writes")
+        expect('"$SYNARCHY_HEADLESS_PROGRESS_FILE"' in body,
+               "the step reads the file the lane step writes")
         expect("state: running" in body,
                "the step prints the record only for a run that did not "
                "finish, so a passing run's log gains nothing")
