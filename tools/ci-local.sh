@@ -589,6 +589,16 @@ python3 tools/world_check.py --quick
 # failure keeps its own phase/log reference through later boots and cleanup.
 # It also covers SystemExit before READY and preparation without an opened log.
 #
+# test_river_naming_probe is #2653's engine-free companion: the
+# probe's second page used to be "set up" by `world.waitForInit`,
+# which polls only the ACTIVE page, so an already-finished first
+# page satisfied it and the river queries could answer from the wrong
+# page. It drives the real setup wait against a scripted console
+# (finished other page, activation before LoadDone, each timeout
+# boundary) and pins the phase-3 detail that names the answering
+# page. The probe itself is manual-only and boots three engines;
+# this boots none.
+#
 # test_probe_boot_logs is #1763's: tools/preview_probe.py and
 # tools/offscreen_probe.py each launch several engines in one run, and
 # probelib.boot opens its log truncating, so launches sharing a path
@@ -694,6 +704,7 @@ python3 tools/test_probe_root_cleanup.py
 python3 tools/test_flora_growth_probe.py
 python3 tools/test_location_content_probe.py
 python3 tools/test_movement_probe.py
+python3 tools/test_river_naming_probe.py
 python3 tools/test_farm_ai_probe.py
 python3 tools/test_probe_boot_logs.py
 python3 tools/test_item_list_widget_probe.py
