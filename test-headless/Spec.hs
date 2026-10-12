@@ -348,6 +348,7 @@ import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
 import qualified Test.Headless.Core.HeadlessProgress as HeadlessProgress
+import qualified Test.Headless.Core.DiagHang as DiagHang
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
@@ -630,6 +631,7 @@ worldLane = do
 --   top-level group belongs here unless it consumes a shared world.
 restLane ∷ Spec
 restLane = do
+    DiagHang.spec
     -- #2693 (WML-7). Format and storage only: scratch library roots,
     -- no engine and no generated world.
     describe "paged map artifact" PagedMapArtifact.spec
