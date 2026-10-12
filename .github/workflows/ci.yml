@@ -802,15 +802,6 @@ jobs:
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: cabal build synarchy-test-headless -v0
 
-      # Where the headless suite records its active context (#2747). Set
-      # through $GITHUB_ENV from the shell's $RUNNER_TEMP, not as a step
-      # `env:` of `${{ runner.temp }}`: this is a container job, where that
-      # expression is the HOST path (/home/runner/work/_temp), which does
-      # not exist in the container, so the recorder could not write there.
-      - name: Headless active-context file
-        if: steps.docs-fast-path.outputs.docs_only != 'true'
-        run: echo "SYNARCHY_HEADLESS_PROGRESS_FILE=$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" >> "$GITHUB_ENV"
-
       # Exactly this leg's lane, with the CI flags the single-process step
       # used: --print-slow-items=20 (#2277) and --format=failed-examples
       # (#1916) inside --test-options, --test-show-details=direct so the
@@ -841,19 +832,23 @@ jobs:
       # is running, the one that completed before it, and any shared-fixture
       # teardown in flight, mirrored to that file (and printed to stderr if
       # the test process itself is signalled). It adds no output to a
-      # passing run, no timer
-      # and no scheduling change -- it wraps the spec tree's own items. The
-      # `Headless active context` step below prints the file when this one
-      # did not finish.
+      # passing run, no timer and no scheduling change -- it wraps the spec
+      # tree's own items. It is set on the command, like SYNARCHY_FULL_TESTS,
+      # from the shell's $RUNNER_TEMP: not as a step `env:` (the step's
+      # environment listing would add a line to a passing log) and not as
+      # `${{ runner.temp }}` (in a container job that is the HOST path,
+      # which does not exist in the container, so nothing could be written).
+      # The `Headless active context` step below prints the file when this
+      # one did not finish.
       - name: Headless lane
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
           if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
             echo "worldgen gate fired: lane ${{ matrix.lane }} runs with the full tier (SYNARCHY_FULL_TESTS=1)."
-            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+            SYNARCHY_FULL_TESTS=1 SYNARCHY_HEADLESS_PROGRESS_FILE="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
           else
             echo "worldgen gate did not fire: full-tier examples stay pending."
-            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+            SYNARCHY_HEADLESS_PROGRESS_FILE="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
           fi
 
       # A cancelled run (manual, or the job timeout above expiring) never
@@ -865,8 +860,8 @@ jobs:
       - name: Headless active context
         if: always() && steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
-          f="$SYNARCHY_HEADLESS_PROGRESS_FILE"
-          if [ -n "$f" ] && [ -f "$f" ] && grep -q '^state: running$' "$f"; then
+          f="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt"
+          if [ -f "$f" ] && grep -q '^state: running$' "$f"; then
             echo "::error title=Headless lane ${{ matrix.lane }} did not finish::see the active-context record below"
             cat "$f"
           fi
