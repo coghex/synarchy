@@ -28,7 +28,11 @@ def test_river_naming_failure():
                                 "send": None, "capture_request_id": 1,
                                 "wait_save_complete": (True, {}), "quit_engine": None}.items():
                 stack.enter_context(patch.object(probe, name, return_value=value))
-            stack.enter_context(patch.object(probe, "rivers", side_effect=[named, named, plain]))
+            stack.enter_context(patch.object(probe, "rivers", side_effect=[named, named]))
+            # Phase 3 reads the active page id with its rivers (#2653),
+            # through its own seam rather than `rivers`.
+            stack.enter_context(patch.object(
+                probe, "observe_rivers", return_value=("unnamed", plain)))
             support.expect(probe._run(argparse.Namespace(port=8911, seed=42, size=16), rep) == 1,
                            "duplicate river ids still stop before loading")
     outcomes = support.captured_outcomes(probe, exercise)
