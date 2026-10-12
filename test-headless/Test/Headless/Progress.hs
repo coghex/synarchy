@@ -180,7 +180,17 @@ withProgressFromEnv lane body = do
         Nothing → body id
         Just path | null path → body id
         Just path → do
-            ref ← newProgressRef (writeRecord path lane)
+            warned ← newIORef False
+            let sink p = do
+                    r ← try (writeRecord path lane p) ∷ IO (Either SomeException ())
+                    case r of
+                        Right () → pure ()
+                        Left e → do
+                            first ← atomicModifyIORef' warned (\w → (True, not w))
+                            when first $ hPutStrLn stderr
+                                ("headless-active-context: cannot write "
+                                 ⧺ path ⧺ ": " ⧺ show e)
+            ref ← newProgressRef sink
             update ref id
             olds ← mapM (installPrinter ref lane) [sigINT, sigTERM]
             body (recordProgress ref)
