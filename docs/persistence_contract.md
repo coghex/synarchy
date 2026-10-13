@@ -136,6 +136,17 @@ exactly one of five classifications:
 | **Reset to a documented default** | Never serialized (or serialized-but-ignored, see below). Always takes a fixed default value after load, regardless of what it held pre-save. |
 | **Exclude (transient runtime state)** | Never serialized, never restored, never given special load-time treatment. Purely a property of the running process. |
 
+**Per-unit stats (#2761).** A unit's Float-valued stats ride the
+`uiStats` map, which the units component serializes wholesale, so a stat
+added to a script needs no codec change and is classified **Persist
+exactly** like the rest of the map (stored zero and partial values come
+back verbatim). A save written before the stat existed simply lacks the
+key, and the load does not invent it: its owner defaults an ABSENT value on
+first read and never overwrites a present one. The salt reserve
+`salt_store` (`scripts/salts.lua`) is the worked case: absent means a full
+reserve, as a fresh spawn starts, and a stored value, including 0, is kept.
+The cases are `--match "salt reserve (#2761)"`'s `persistence` group.
+
 For every inventoried item, the inventory records: its **owner**
 (file:line of the record/module that holds it), its **scope** (global —
 one instance for the whole engine — or per-page), its **restoration
