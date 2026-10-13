@@ -54,16 +54,30 @@ preconditions are merged, and the merged reserve constants were checked
 - [x] S4. Activation (revision 6: T-13 fixture pinned): tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (tissue recovery per SD-18) — [#2831]
 - [x] S6. UI display of Nominal — [#2832]
 - [x] S7. Species profile table (SD-10), probe update — [#2833]
-- [ ] S8. Stamina, exhaustion, sleep pressure (design addendum first) — [deferred]: an owner-approved S8 design addendum must be recorded in this document, defining its interface, healthy rules, Nominal substitutes and effects, and addressing #2470's concurrent combat spending
-- [ ] S9. Cardio and circulation (design addendum first)
-- [ ] S10. Blood volume and recovery (design addendum first)
-- [ ] S11. Brain and mental state (design addendum first)
+- [ ] S8a. Stamina: mode-aware combat cost and damage, effective-unit stamina commit, max resolution, SD-20 nomad engagement (addendum S8; depends on S4 #2831; independent)
+- [ ] S8b. Exhaustion and sleep pressure modes (addendum S8; depends on S4 #2831; independent)
+- [ ] S9. Cardio and circulation (addendum S9; depends on S4 #2831; independent)
+- [ ] S10. Blood volume and recovery (addendum S10; depends on S4 #2831; independent)
+- [ ] S11a. Brain and mental state: atomic writes and on-demand derived values, both systems registered all-Simulated (addendum S11; depends on S4 #2831; independent)
+- [ ] S11b. Mind and consciousness modes with the SD-23 profiles (addendum S11; depends on S11a)
 - [ ] S12. Owner survey of the remaining unit-specific data. Any further systems or stats it finds become slices here; the epic does not close before this survey
 
-No slice has been selected or filed. Revision 2 redrew the slices (R8).
-Revision 4 moves gameplay consumer migration (S5) ahead of activation (S4),
-following R2-8. Slice IDs are kept stable, so the list above is in delivery
-order, not numeric order. Persistence still lands before any setter.
+S1 to S7 are filed as #2825 and #2827 to #2833. Revision 2 redrew the
+slices (R8). Revision 4 moved gameplay consumer migration (S5) ahead of
+activation (S4), following R2-8. Slice IDs are stable, so the list above is
+in delivery order, not numeric order. Persistence still lands before any
+setter.
+
+The S8 to S11 addenda are owner-approved (2026-10-13; Codex A1 to A4
+READY), so S8's former deferral is lifted. S8 and S11 are split into S8a,
+S8b, S11a and S11b, following the approved slice plans. S9 and S10 stay
+single.
+
+- S8a, S8b, S9, S10 and S11a each depend only on S4 (#2831). They are
+  **independent** of one another, so a block in one does not stall the
+  others.
+- S11b depends on S11a.
+- S12, the owner survey, still gates epic closure.
 
 ## Review round 1 disposition
 
@@ -1197,9 +1211,15 @@ or enumerated, with no entropy-seeded rolls.
 
 ## Open decisions for the owner
 
-None. Every decision is settled: SD-1 to SD-17 in revision 3, and SD-18 (the
-revision-4 decision O-18) on 2026-10-13. IDs are stable, and each settled
-entry below names the decision it replaced.
+None. Every decision is settled, all on 2026-10-13:
+
+- SD-1 to SD-17 in revision 3;
+- SD-18, the revision-4 decision O-18;
+- SD-19 during S2 processing;
+- SD-20 to SD-23 for the S8 to S11 addenda.
+
+IDs are stable, and each settled entry below names the decision it
+replaced.
 
 **Settled:**
 
@@ -1290,6 +1310,34 @@ entry below names the decision it replaced.
     mutating verbs is unchanged (D-1, D-2, D-7).
   - Source: `~/.local/state/syn-process-physio-20261013-1/S2-read-contract-question.md`.
     Epic #2827's contract bullet is amended to match.
+- **SD-20 (S8-D1), owner 2026-10-13. Nomad stamina: Nominal until first
+  combat engagement, then Simulated like an acolyte's.**
+  - The switch includes exhaustion death (`kill_on_zero`).
+  - It is the standard S4 transition: a full seed and a pinned, one-way
+    override, which survives save/load.
+  - The trigger is an admitted attack attempt, as attacker or target, hit or
+    miss. It is detected in the combat commit, which sets the durable
+    `combat_engaged` marker to pending, and applied by the Lua facade's
+    `unit.applyCombatEngagement` on the next eligible pass, which seeds, pins
+    and latches it as applied (S8.3, revised for A1-1).
+  - Nomad stamina parameters are generous: +50 % `max_stamina` and 2.25×
+    regen, calibrated by T-S8-5. Exhaustion death in an ordinary encounter
+    is a tuning defect.
+  - Out of scope, tracked separately: nomads' wider physical effectiveness
+    (strength, damage).
+  - The regen multiplier was revised from 1.5× to 2.25× in A1, because
+    strike costs are a fraction of the maximum (S8.3). That serves the same
+    owner intent.
+- **SD-21 (S9-D1), owner 2026-10-13.** Option (a). Under Nominal cardio,
+  circulation keeps its injury factors; only heart rate reads healthy.
+- **SD-22 (S10-D1), owner 2026-10-13.** Option (a). No shipped profile uses
+  Nominal blood, and Nominal is available by override. Performance gives
+  no reason for it: an unwounded Simulated unit costs only per-unit
+  arithmetic in the wound fold that runs anyway (`Tick.hs:185,540-553`).
+- **SD-23 (S11-D1), owner 2026-10-13.** Option (b). Only acolytes keep a
+  Simulated mind. Wildlife, the technomule and nomads are Nominal.
+  Consciousness stays Simulated everywhere. Bears and squirrels stop having
+  mental breaks.
 - **SD-18 (was O-18), owner 2026-10-13. Recover only after depletion.** This
   is option (b). Nominal tissue recovery acts only on a unit flagged
   `tissue_recovering`. The flag is set when a tissue falls below its spawn
@@ -1361,21 +1409,1175 @@ and round-trip contract.
    Acceptance includes the access audit passing with the exception removed.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
    assertions where squirrel modes change.
-The remaining systems (SD-12) follow, one slice each, after S4. Each starts
-with a design addendum to this doc covering its interface, healthy rules,
-substitutes and effects.
+The remaining systems (SD-12) follow, with the owner-approved addenda as
+their design (section "Addenda: remaining systems (S8 to S11)"). **S8a, S8b,
+S9, S10 and S11a each depend only on S4 (#2831), and are independent of one
+another**, so a block in one does not stall the others. S11b depends on
+S11a.
 
-7. **S8.** Stamina, exhaustion and sleep pressure. Stamina's addendum must
-   handle the combat thread's concurrent spend (#2470).
-
-   > **Deferred:** an owner-approved S8 design addendum must be recorded in this document, defining its interface, healthy rules, Nominal substitutes and effects, and addressing #2470's concurrent combat spending. No issue filed.
-
-8. **S9.** Cardio and circulation.
-9. **S10.** Blood volume and recovery.
-10. **S11.** Brain and mental state.
-11. **S12. Owner survey** of the remaining unit-specific data, which may add
+7. **S8a. Stamina.** Addendum S8, slice plan S8.7 (S8a): mode-aware `Wear`
+   and `Damage`, `staminaCommit`, the maximum resolution with
+   `unit.getMaxStamina`, the shiver debit through `commitStamina`, and the
+   SD-20 nomad engagement in full. Tests T-S8-1 to T-S8-8. Depends on S4;
+   independent.
+8. **S8b. Exhaustion and sleep pressure.** Addendum S8, slice plan S8.7
+   (S8b). Lua-only. Depends on S4; independent of S8a.
+9. **S9. Cardio and circulation.** Addendum S9 (S9.1 to S9.8), with SD-21.
+   Depends on S4; independent.
+10. **S10. Blood volume and recovery.** Addendum S10 (S10.1 to S10.8), with
+    SD-22. Introduces `bloodView` if it lands before S9. Depends on S4;
+    independent.
+11. **S11a. Brain and mental state: rules and atomic writes.** Addendum S11,
+    slice plan S11.7 (S11a). Both systems are registered all-Simulated,
+    with the derived rules and `unit.commitPhysio`. Depends on S4;
+    independent.
+12. **S11b. Mind and consciousness modes.** Addendum S11, slice plan S11.7
+    (S11b): the SD-23 profiles and their behavior change. Depends on S11a.
+13. **S12. Owner survey** of the remaining unit-specific data, which may add
    systems or stats. The epic closes only after the survey, with every
    system it lists given a mode.
+
+## Addenda: remaining systems (S8 to S11)
+
+**Owner-approved 2026-10-13**, with Codex review A1 to A4 READY at SHA-256
+`a9ed0915` (`~/.local/state/syn-physiology-addenda-review-1.md` to `-4.md`)
+and decisions SD-20 to SD-23.
+
+Status: **owner decisions settled** (SD-20 to SD-23, 2026-10-13). Revised
+after Codex review A1, and awaiting re-review (request
+`owner-syn-physio-addenda-20261013-1`).
+
+#### Addenda review A1 disposition
+
+Review: `~/.local/state/syn-physiology-addenda-review-1.md` (syn-solver-21),
+of the uncommitted copy with SHA-256 `63db6242`. Verdict NOT READY: 0
+blocking, 7 major, 2 minor. I checked every claim against `efe796837`. All
+are applied, and none is disputed.
+
+| Finding | Disposition | Where |
+|---|---|---|
+| A1-1: the resolver went Simulated before the facade seeded | **Applied.** Verified that the admitted commit does no physiology (`Admission.hs:198-205`), that Wear inserts 0 on an absent pool (`Wear.hs:166`), and that combat can drain admitted attacks while Lua is paused (`Combat/Thread.hs:117-131`, `unit_resources.lua:112-113`). There are now separate **pending** (1) and **applied** (2) marker states. The engagement default applies only when the marker is applied. A facade-only verb, `unit.applyCombatEngagement`, seeds, pins and latches in one commit, respects explicit overrides, and is refused on a corpse. Pending-save and paused-load handling are defined. The free-swing bound is now "until the next successful application", not a time | S8.3, S8.5, T-S8-4 |
+| A1-2: the `max_stamina` modifier misses the derived maximum | **Applied.** Verified that `maxStaminaFor`'s fallback applies only `endurance` modifiers (`Common.hs:88-95`), and Lua's derivation does the same (`unit_stats.lua:75-88`). The shared rule now applies `max_stamina` modifiers to the derived base as well. Lua reads Haskell's single resolution, so no mirror remains. No shipped content modifies `max_stamina` (grep of `data/`), so the change preserves behavior. A direct case: an endurance-1 nomad reads 15 before engagement, after it and after load | S8.2, T-S8-6 |
+| A1-3: `commitStamina` arithmetic vs modifier-aware seeding | **Applied.** Verified the base-value add, clamp and reports (`Stamina.hs:135-170`) and the effective formula (`Unit/Stats.hs:68-77`). There is now one effective-unit stamina commit function for ticks, combat cost, shivering and seeding, with defined base bounds, effective reports for consequences, and a defined behavior for a −100 % modifier. It is identical to today's arithmetic when no modifier applies | S8.2, T-S8-7 |
+| A1-4: T-S8-5 not reproducible; trigger-row oracles | **Applied.** T-S8-5 is split into a fixed-cadence budget case (B) and a deterministic bounded encounter (E), with pinned inputs, timing, RNG, stop condition, samples and a comparison unit (stamina fraction). T-S8-4 has separate positive and negative counts, plus the A1-1 cases. T-S11-3 pins the roll path through `mental.TUNE` (`mental_state.lua:68-78`). **My own finding while fixing A1-2:** heavy strikes cost 25 % of the maximum (`Wear.hs:142-169`), so +50 % max with 1.5× regen gave the acolyte's *fractional* dynamics exactly, which misses SD-20's intent. Regen is now 2.25×, so fractional recovery is 1.5× the acolyte's | S8.3, S8.6, S11.6 |
+| A1-5: S10's blood accessor boundary | **Applied.** Verified the structured `getBlood` (`Units/Combat.hs:389-420`), the unit-thread movement multiplier (`Body.hs:51-75`, applied at `Motion.hs:51,110`) and the base-mass maxima (`Tick.hs:456-458,542-553`). There is now a named `bloodView` read interface and storage adapter. The maximum keeps **base** `body_mass` everywhere, as today. Movement, the wound tick, `getBlood`, the UI and S9's rule are all migrated, and the unmoded fallback is defined for either landing order | S9.2, S10.2, S10.3, S10.6 |
+| A1-6: decals depend on the actual drain | **Applied.** Verified the conserved-loss accumulator (`Tick.hs:413-455`, `Blood/Trail.hs:138-161`). Under Nominal, the wound-derived external flow feeds the trail accumulator as a visual-only contribution, with no `uiBlood` debit. That is an explicit exception to the conserved accounting. Clot, bandage and heal cleanup are unchanged | S10.2, T-S10-1 |
+| A1-7: S11 registry incomplete | **Applied.** Verified the timer sentinels and lazy initialization (`mental_state.lua:105-115,168-198,216-221,253-291`, `thoughts.lua:142-152`), the consumable writes (`consumable.lua:178-191`), caffeine's stamina regen (`unit_resource_tick.lua:283-289`) and the shared mental effectiveness (`Common.hs:97-128`, `Units/Combat.hs:498-512`, `Craft/Execute.hs:259`). Every owned key now has a Nominal read and a seed. Legacy episodes are handled. Incoming credits and caffeine's substitute are listed. S11a registers both systems with all-Simulated profiles, so its derived rules are live before S11b. The writer inventory is complete | S11.2, S11.3, S11.5, S11.6, S11.7 |
+| A1-8 (minor): wrong nutrition pool | **Applied.** Now reads calories and hydration (`Healing.hs:148-151`) | S10.1 |
+| A1-9 (minor): S8 sub-slices called ordered | **Applied.** S8a and S8b are independent; only S11b depends on S11a | Dependency order |
+
+No new owner decision was needed. Every fix implements SD-20 to SD-23 as
+the owner settled them.
+
+#### Addenda review A2 disposition
+
+Review: `~/.local/state/syn-physiology-addenda-review-2.md` (syn-solver-21),
+of SHA-256 `1292c4c5`. Verdict NOT READY: 0 blocking, 4 major, 2 minor. I
+checked every claim against `efe796837`. All are applied, and none is
+disputed.
+
+| Finding | Disposition | Where |
+|---|---|---|
+| A2-1: pending engagement, live refusal and explicit-Simulated save | **Applied.** Verified that modifiers are unrestricted (`Units/Stats.hs:393-449`) and that the save window is real (`Combat/Thread.hs:117-131`). A live unit with an unattainable seed returns `seedUnrepresentable`: it stays pending and Nominal, retries each pass with one diagnostic per reason, and never bypasses the modifier. The pending-Nominal, free-strike and load claims are qualified by "no explicit override". An explicit-Simulated pending save keeps its pool and latches without reseeding. The stale "single writer" claim is fixed. New T-S8-4 cases (n) and (o) | S8.3, T-S8-4 |
+| A2-2: false effective reports from the commit | **Applied.** Verified that `effectiveStat` clamps the product (`Unit/Stats.hs:68-77`). Reports are now always the effective read of what is stored. The `m > 0`, `m = 0` and `m < 0` cases are defined, as are the honest above-maximum floor (`floored`) and D-5 refusal at seeding. New T-S8-8 | S8.2, T-S8-8 |
+| A2-3: T-S8-5 could pass without a strike | **Applied.** Verified the reaches (`nomad_primitive.yaml:29`, `acolyte.yaml:44,400-404`, `steel_dagger.yaml:25`) and that the cooldown lives in the AI (`unit_ai_combat_attack.lua:261-273`). E now places the units 0.5 tiles apart, keeps the shipped cooldown rule, and has a reproducible seeded spawn. A validity gate (admitted strikes, engagement applied) makes cap expiry a fixture failure. B uses thermo Nominal for no shiver, a stated charge and sample order, and non-asserted approximate budgets | T-S8-5 |
+| A2-4: T-S11-3 stochastic and vacuous | **Applied.** Verified severity weighting and the delirium skip (`mental_state.lua:71-77,276,281-292`). The acolyte is lucid with severity exactly 1 and chance 1, so BREAK is certain. The bear is lucid too, and is suppressed by the mode: the write gate refuses its stress inputs. Hypoxia collapse is a separate case | T-S11-3 |
+| A2-5 (minor): the bear's hydration in the consumable test | **Applied.** The bear's hydration is overridden to Simulated at 50 %, and the acolyte's is pinned at 50 % | T-S11-6 |
+| A2-6 (minor): bandage vs zero bleed | **Applied.** Marks stop only at exactly zero external bleed (a sealed bandage or full clotting). A competent dressing at seep 0.05 keeps reduced marks (`Units/Medical.hs:48-50`, `Wounds/Bleed.hs:51-59`) | T-S10-1 |
+
+No new owner decision was needed.
+
+#### Addenda review A3 disposition
+
+Review: `~/.local/state/syn-physiology-addenda-review-3.md` (syn-solver-21).
+Verdict NOT READY: 1 major. I checked the claim against D-5 (`design:534-540`,
+the guards `1 + Σp ≤ 0`, `b < 0`, non-finite `b`).
+
+| Finding | Disposition | Where |
+|---|---|---|
+| A3-1: commit success used as transition eligibility | **Applied.** Confirmed that revision A2 let the ordinary solver's `ok` admit an `m < 0` seed, against D-5. Commit status and transition eligibility are now separate. D-5's explicit guards run before any seed, override or applied marker is published, in both the facade transition and `applyCombatEngagement`. Ordinary negative-multiplier arithmetic is kept for already-Simulated commits. The reviewer's concrete case is a new T-S8-8 row | S8.2, S8.3, T-S8-8 |
+
+Evidence is from
+reading the source at `efe796837`. No engine, probe or build was run.
+
+Each addendum reuses the v1 machinery unchanged: the registry and resolver
+(D-1, D-3), the three-valued read contract with SD-19 purity (D-2), the
+modifier-aware seeding and transitions (D-5), on-demand derived keys and
+observation boundaries (D-5a), the overrides field and load policy (D-6),
+the facade and access audit (D-7), Nominal display (D-8), and the profiles
+(D-10). An addendum states only what is new.
+
+**Dependency order.** S8, S9, S10 and S11 each depend on S4 (#2831), which
+activates the machinery, and on nothing else in this list. All four are
+**independent** of one another:
+
+- S9's cardio reads blood. S10's blood recovery reads nutrition and
+  hydration. S11's rules read stamina, blood oxygen, core and salt.
+- Every one of those cross-reads goes through the accessor. A not-yet-moded
+  system reads as an unowned pass-through key with today's semantics
+  (D-1). The same read returns the Nominal substitute once that system
+  lands.
+- So no addendum's correctness depends on another landing first, and
+  processing can proceed past a deferral of any of them.
+- Within the sub-slices, S8a and S8b each depend only on S4 and may land
+  in either order. **S11b depends on S11a.**
+- Where a system's state is not an ordinary `uiStats` key (blood's
+  `uiBlood` field), or where its rules are introduced (S11a), the
+  *introducing* slice also migrates the existing consumers it touches. The
+  accessor alone does not carry those. S10.2 and S11.7 spell this out.
+
+### S8. Stamina, exhaustion and sleep pressure
+
+#### S8.1 Current state
+
+| Key | Writers (thread) | Readers (thread) |
+|---|---|---|
+| `stamina` | Lua tick, through `unit.commitStamina`, which adds a relative delta in one `atomicModifyIORef'` and reports `before/after/maximum` (`src/Engine/Scripting/Lua/API/Units/Stamina.hs:1-99`; caller `scripts/unit_resource_tick.lua:302-324`) (Lua worker). Combat strike cost `staminaDrainStats` (`src/Combat/Resolution/Wear.hs:164-174`), committed in `commitIfAdmitted` (combat worker). **Thermo shiver debit, as a raw read-modify-write** (`scripts/thermo.lua:218-222`) (Lua worker) | Combat work scaling `staminaFrac` (`src/Combat/Resolution/Damage.hs:251-254`) (combat worker); `maxStaminaFor` (`Combat/Resolution/Common.hs:89-90`); brain mood and concentration (`scripts/brain.lua:251`); AI wander gate (`unit_ai_needs.lua:36-42`), pacing (`unit_ai_pace.lua:27-28`), lunge (`unit_ai_combat_lunge.lua:147-149`), attack (`unit_ai_combat_attack.lua:327-328`); UI row and "Collapsed (exhausted)" (`unit_info_v2_status.lua:128-129,329-330`) |
+| `exhaustion` | Lua pool tick (`unit_resource_config.lua` `exhaustion` entries) | speed multiplier (`scripts/exhaustion.lua:37-55`, applied in `movement_speed.lua:95`); sleep utility term (`unit_ai_sleep.lua:201-205`). No UI row |
+| `sleep_pressure` | Lua pool tick (drain while awake, regen while `sleeping`) | `go_to_sleep` utility and wake (`unit_ai_sleep.lua:165-205`), registered for acolytes (`unit_ai.lua:196`) and bears (`bear_ai.lua:315`), **not** squirrels; circadian shape (`circadian.lua`); UI row (`unit_info_v2_status.lua:292,337`) |
+| `stance` | Combat spend (`Wear.hs:172-174`); Lua recovery through `unit.recoverStance`, relative and atomic (#2468, `Units/Stance.hs`; `unit_resource_injury.lua:39-52`) | combat |
+
+Effects and deaths:
+
+- Stamina collapses below 0.1 and revives at 0.5, and **`kill_on_zero`**
+  applies to acolyte, bear and squirrel (`unit_resource_config.lua:40-49`,
+  `:235-237`, `:282-284`).
+- The fat-floor organ-failure drain inside the stamina tick belongs to
+  nutrition (SD-5, D-9).
+- Exhaustion and sleep pressure never kill or collapse.
+- A sleeping pose speeds healing (`src/Combat/Wounds/Tick.hs:223`).
+
+Defects and gaps found (source reading, not runs):
+
+- **S8-F1. Species without a stamina pool are permanently winded after
+  their first swing.** `nomad_primitive` and `technomule` have no stamina
+  config. The strike cost reads an absent pool as **0**
+  (`Wear.hs:166`, `HM.lookupDefault 0.0`), so the first swing inserts
+  `stamina = 0`. Nothing regenerates it. Every later swing then works at
+  the 0.3 floor (`Damage.hs:251-254`), while the first swing read the
+  absent pool as full.
+- **S8-F2. The thermo shiver debit is the #2470 race.**
+  `thermo.lua:218-222` reads stamina and writes back an absolute value on
+  the Lua worker while combat commits strikes on the combat worker, so a
+  strike landing in between is refunded. S5's migration list (#2830) names
+  thermo's *sweat* debits but not this one. S8 routes it through
+  `commitStamina` (S8.3).
+
+#### S8.2 Proposed registry entries
+
+The three pools have disjoint consumers, so they are **three systems**:
+`stamina`, `exhaustion` and `sleep`. `stance` stays unowned and always-on:
+it is combat readiness, not survival, the same footing #2754 gave combat
+physiology.
+
+| System | Owns (Nominal read; seed target) | Meters | Requires | Provides → Nominal substitute | Contributes → substitute | Effects (none while Nominal) |
+|---|---|---|---|---|---|---|
+| stamina | `stamina` (= effective `max_stamina`) | — | body | stamina fraction → 1.0, to combat work, brain, AI gates and pacing | — | collapse below 0.1, `kill_on_zero`, combat strike cost |
+| exhaustion | `exhaustion` (= effective `max_exhaustion`) | — | body | restedness fraction → 1.0, so speed multiplier 1.0 and sleep-utility term 0 | — | speed penalty |
+| sleep | `sleep_pressure` (= effective `max_sleep_pressure`) | — | body | sleep deficit → 0, so `go_to_sleep` utility −∞ and no pressure wake | — | sleep need |
+
+Incoming contributions:
+
+- The **combat strike cost** into a Nominal stamina is **discarded**.
+  `staminaDrainStats` consults the pure resolver for the attacker's stamina
+  mode and writes no `stamina` key when Nominal. This keeps the storage
+  invariant: no absent-as-0 insert.
+- `Damage.hs` reads Nominal stamina as 1.0, through Haskell `physioRead`.
+- Thermo's shiver debit into Nominal stamina is discarded.
+
+Every stamina write keeps going through a relative, atomic engine verb:
+
+- `physiology.debit` / `credit` on `stamina` call `unit.commitStamina` with
+  the delta, never `setStat`.
+- The Simulated → Nominal and Nominal → Simulated transitions for stamina
+  run inside the same unit-manager `atomicModifyIORef'` that combat commits
+  against (D-5 already requires one atomic update). A concurrent strike is
+  therefore ordered entirely before or entirely after the transition. A
+  strike before the switch to Nominal is scrubbed with the pool. A strike
+  after the switch to Simulated spends from the freshly seeded pool.
+- Under Nominal, `unit.commitStamina` returns its documented refusal with
+  the reason "nominal", and mutates nothing (the "refusal mutates nothing"
+  property, `Stamina.hs`). The tick never calls it then, because the pool
+  entry ticks only when Simulated.
+- `recoverStance` is unaffected.
+
+**Maximum resolution (A1-2).** `maxStaminaFor` (`Common.hs:88-95`) has two
+branches:
+
+- An explicit `max_stamina` attribute: the effective value, as today.
+- **No explicit attribute:** `effectiveStat(now, effective(endurance) × 10,
+  mods on max_stamina)`. Today's fallback ignores `max_stamina` modifiers;
+  the new one applies them to the derived base.
+
+Lua's `stats.get(uid, "max_stamina")` calls a new pure read verb,
+`unit.getMaxStamina(uid)`, which returns exactly `maxStaminaFor`. That
+replaces the hand-kept Lua mirror (`unit_stats.lua:75-88`, "change in
+lockstep"), so Lua reads, combat cost, commit bounds and seed targets share
+one resolution. No shipped content targets `max_stamina` (grep of `data/`),
+so nothing changes for existing units.
+
+**Stamina write contract (A1-3).** One pure Haskell function,
+`staminaCommit now inst Δ`, is used by:
+
+- `unit.commitStamina` (pool ticks, and the facade's `debit` / `credit` on
+  `stamina`, including the shiver debit);
+- the combat strike cost in `Wear.hs`, as Δ = −cost;
+- transition seeding.
+
+It runs inside the caller's single `atomicModifyIORef'`, so strikes are
+never refunded. The contract:
+
+- **Units.** Δ, the reports and every consequence (collapse, `kill_on_zero`,
+  alerts) are **effective** stamina, against the effective maximum
+  `maxStaminaFor`.
+- **Arithmetic (revised for A2-2).** It keeps the effective formula exactly
+  (`src/Unit/Stats.hs:68-77`):
+  - `eff(b) = max 0 ((b + Σδ)·m)`, where `m = 1 + Σp` and `Σδ`, `Σp` are
+    stamina's active modifiers at `now`.
+  - Modifiers carry no sign or range restriction
+    (`Units/Stats.hs:393-449`), so `m` may be positive, zero or negative.
+- **Every report is a true read.** `before = eff(b)`, and `after =
+  eff(b')`, where `b'` is what is actually stored. Collapse, `kill_on_zero`
+  and alerts (`unit_resource_tick.lua:302-324,357-394`) use exactly these.
+  The commit never reports a value that differs from what an effective
+  read of the stored state returns.
+- **Target.** `e' = clamp (before + Δ) 0 max`. The commit then stores the
+  admissible base whose effective value is nearest to `e'`:
+
+  | Case | Behavior | Status |
+  |---|---|---|
+  | `m > 0` | `eff` is non-decreasing in `b`, so `b' = e'/m − Σδ`. If that is < 0, `b' = 0`. That happens when a positive flat floor `eff(0) = max 0 (Σδ·m)` exceeds `e'`. | `ok`, or `floored` |
+  | `m = 0` | `eff ≡ 0`, so `b` is unchanged and the reports are 0 (true). | `zeroMultiplier` |
+  | `m < 0` | `eff` is non-increasing in `b`. `b' = e'/m − Σδ` is valid when ≥ 0; otherwise `b' = 0`, the base nearest an attainable value. | `ok`, or `floored` |
+
+  Every row stores a finite `b' ≥ 0` and reports `eff(b')`.
+- **Above-maximum floors are reported honestly.** If a flat modifier floors
+  the pool above `max` (for example `Σδ = 15` against a maximum of 10, with
+  `m = 1`), the commit stores `b' = 0` and reports `after = 15`, status
+  `floored`. Effective reads show 15 too. No collapse or death fires,
+  because the true pool is high. This can arise after activation, from a
+  modifier added to an already Simulated unit, and is handled per commit.
+- **Refusals** are reserved for invalid calls: an unknown or dead unit, a
+  non-finite Δ, or a Nominal stamina receiver. They mutate nothing and are
+  named, as `Stamina.hs` does today.
+- **Transition eligibility is separate from commit status (A3-1).** An
+  ordinary commit's status (`ok`, `floored`, `zeroMultiplier`) only
+  describes how an *already Simulated* pool was updated. It never decides
+  whether a transition may seed. Before publishing **any** seed, override
+  or applied engagement marker, both the facade transition
+  (`setPhysioMode`, `clearPhysioMode`) and `unit.applyCombatEngagement`
+  apply D-5's explicit guards to the seed target `t`:
+  - `m = 1 + Σp ≤ 0` → refuse;
+  - otherwise compute `b = t/m − Σδ`, and refuse if `b < 0` or `b` is not
+    finite.
+
+  A refusal is atomic: no key, mode, override or marker changes. Only when
+  the guards pass is `b` stored as the seed. So a negative multiplier is
+  **always** refused at a transition, even where the ordinary solver would
+  reach the target (for example `t = 10`, `Σδ = −10`, `Σp = −2`, where `b'
+  = 0` reads 10 and an ordinary commit would report `ok`). A flat floor
+  above the target is refused by the `b < 0` guard. The ordinary
+  negative-multiplier arithmetic above still applies, unchanged, to commits
+  on a pool that is **already** Simulated.
+- **No modifier** (`Σδ = Σp = 0`, which covers all shipped content): this is
+  exactly today's base arithmetic, always status `ok`.
+
+#### S8.3 Interactions
+
+- **Nutrition (v1):** the organ-failure drain is already nutrition-owned
+  and gated (D-9). With stamina Nominal and nutrition Simulated, a unit at
+  its fat floor has no stamina pool to drain. Nutrition's lean-floor kill
+  still applies, so starvation death survives.
+- **Thermo (v1):** shiver costs stamina through `commitStamina` (fixes
+  S8-F2). With thermo Nominal there is no shiver.
+- **S11:** brain reads the stamina fraction (1.0 when Nominal), and the
+  sleep utility reads exhaustion.
+- **Tick order:** unchanged. Pools tick after injuries and failure meters
+  (`unit_resources.lua:165-198`), and stance recovery first (`:130`).
+- **Threads:** the only cross-thread key is `stamina`, and every writer uses
+  an atomic relative commit. `exhaustion` and `sleep_pressure` are Lua-only.
+
+**Combat engagement trigger (SD-20, revised for A1-1).** Nomads spawn with
+stamina Nominal and switch to Simulated, one way, at their first combat
+engagement.
+
+- **Declaration.** The nomad's `physiology:` block declares
+  `stamina: nominal` and `on_combat_engagement: { stamina: simulated }`.
+  Definition loading checks that the named system exists and is Nominal by
+  default. Only `nomad_primitive` declares it.
+- **What counts as engagement.** An attack attempt **admitted** by
+  `Combat.Resolution.Admission.commitIfAdmitted`
+  (`src/Combat/Resolution/Admission.hs:183-205`), hit or miss. It counts
+  for both units in that commit: the attacker and the target.
+  - It does **not** count: an attack refused at admission, being in range,
+    being chosen as an AI target, or an ally's strike on someone else.
+  - A hit is a subset of an admitted attempt, so it needs no separate rule.
+- **The marker has two states:** `combat_engaged = 1`, **pending**, and
+  `= 2`, **applied**. It is an unowned, durable `uiStats` key, absent until
+  engagement.
+- **Detection, on the combat thread.** Inside that same atomic commit, for
+  each unit whose species declares the trigger, the commit sets the marker
+  to 1 if it is absent.
+  - It never touches a marker that is already 1 or 2, so a burst of
+    attempts is idempotent.
+  - It creates no stamina and changes no mode.
+  - Absent an explicit override, the effective mode is still Nominal, so
+    the strike's stamina cost is discarded (S8.2) and no absent-as-0 insert
+    happens.
+  - With an **explicit Simulated override**, the strike is charged
+    normally, because the effective mode is Simulated.
+  - The marker's writers are this commit (absent → 1) and
+    `applyCombatEngagement` (1 → 2). Both are atomic on the same reference,
+    so no write is a cross-thread raw write.
+- **The resolver** uses the engagement default only once the marker is
+  applied:
+
+  > effective = override, else (`combat_engaged == 2` ? engagement default
+  > : species default)
+
+  Absent an explicit override, a **pending** unit therefore stays Nominal.
+  With an explicit override, the override decides, pending or not. The
+  storage invariant holds throughout: no Simulated mode exists without its
+  seeded pool.
+- **Application, by the Lua facade.** At the start of each physiology pass
+  (it runs only while unpaused and not torn down,
+  `unit_resources.lua:112-113`), the facade calls a new facade-only
+  mutating verb, `unit.applyCombatEngagement(uid)`, for each unit with
+  `combat_engaged == 1`. In **one** `atomicModifyIORef'`, the verb:
+  - **refuses** a dead unit (D-5) and leaves the marker pending. A corpse is
+    never revisited, because the corpse branch of `unit_resources.update`
+    skips it (`:129`). A target killed by the triggering strike therefore
+    never transitions.
+  - for an explicit stamina override, of either mode: sets the marker to
+    applied **without** a transition. Explicit intent wins (SD-7).
+  - otherwise performs the stamina transition from Nominal to Simulated:
+    it seeds the full effective maximum through `staminaCommit`, records
+    the **pinned** override, and sets the marker to applied, all together.
+  - **a live unit whose seed fails D-5's guards**: `m ≤ 0`, as with a
+    retained −100 % or more negative stamina modifier, or a computed base
+    that is negative or non-finite (A3-1). The verb **refuses** atomically
+    with `seedUnrepresentable`, before any seed, override or marker is
+    written. The marker stays pending and the unit stays Nominal.
+    - SD-8 ignores the modifier under Nominal, so the unit keeps fighting at
+      full work. The refusal is retried on every eligible pass, because it
+      is cheap and side-effect free. It succeeds on the first pass after the
+      modifier no longer blocks the seed.
+    - A diagnostic is logged **once per unit per refusal reason**, not every
+      pass.
+    - The facade never bypasses the modifier and never forces a partial
+      seed.
+
+  The verb returns `transitioned`, `latched`, `refusedDead` or
+  `seedUnrepresentable`. On `transitioned`, the facade runs the hooks and
+  refresh (D-5a).
+- **The free-swing guarantee, scoped.** Without an explicit override, a
+  strike admitted while the marker is pending is free: its cost is
+  discarded, and `Damage.hs` reads full work. Pending ends at the next
+  **successful** application. That is normally the next eligible pass. It
+  is later only while a live unit's seed is unattainable, as above, which
+  may be indefinitely if the blocking modifier is permanent. That is the
+  intended consequence of SD-8 and D-5, not a leak. A dead unit's pending
+  marker never resolves, and needs nothing further. With an explicit
+  Simulated override, no strike is free.
+- **One-way.** Once applied, `clearPhysioMode` returns to the engagement
+  default, Simulated. If the effective mode does not change, it neither
+  seeds nor runs hooks (D-5). An explicit scripted Nominal override still
+  wins. Clearing that override later goes to Simulated, with a seed.
+- **Save/load and paused load.**
+  - A pending marker persists. On load, normalization (D-6 (b)) runs
+    against the unit's **effective** mode:
+    - with no explicit override, that is Nominal, so no stamina key is
+      expected;
+    - with an **explicit Simulated** override, it is Simulated, and the
+      existing partial pool is **preserved** exactly.
+
+    The first eligible pass after load then applies the marker. Without an
+    override it transitions; with one it **latches** without reseeding.
+  - Combat may admit attacks at a save boundary while Lua is paused
+    (`Combat/Thread.hs:117-131`). That only creates pending markers, which
+    is safe.
+  - An applied marker and its pinned override both persist exactly.
+- **Rejected alternative:** a new combat-to-Lua notice queue. It would add
+  EngineEnv or capability state (§2.1, §6.4), it would be transient, so a
+  save in between would lose it, and it would need ordering rules against
+  the drained combat-log streams.
+
+**Nomad stamina tuning (SD-20 owner intent, retuned for A1-4).** Nomads
+should have a lot of stamina and never die of exhaustion in an ordinary
+encounter. They get a `nomad_primitive` entry in `unit_resource_config.lua`,
+with **acolyte semantics including `kill_on_zero`**, and these parameters:
+
+- an innate `max_stamina` modifier of **+50 %** through the definition's
+  `modifiers:` block, effective through the A1-2 resolution, so an
+  endurance-1 nomad's maximum is 15;
+- **every regen-side factor at 2.25× the acolyte's**: `regen_factor_idle`,
+  `regen_factor_walking`, `regen_factor_collapsed`,
+  `regen_factor_crouching` and `move_regen_factor`;
+- the acolyte's collapse and revive thresholds.
+
+The 2.25× follows from how strikes cost. Combat cost is a **fraction of the
+maximum** (Quick 5 %, Heavy 25 %, `Wear.hs:142-169`), so a larger maximum
+alone buys no fight endurance. Recovery must grow faster than the maximum.
+2.25 = 1.5 × 1.5 gives 1.5× the acolyte's recovery *as a fraction of the
+pool*, on top of the larger absolute pool. Under flat drains, such as
+shivering, the larger pool also helps.
+
+These are starting values, calibrated in S8a against T-S8-5. A nomad dying
+of exhaustion in an ordinary encounter is a tuning defect.
+
+Out of scope for S8, recorded as owner intent and to be tracked
+separately: nomads should fight **physically more effectively than an
+average human**. Strength, damage and the like are not stamina.
+
+#### S8.4 Profile columns
+
+| Species | stamina | exhaustion | sleep | Change from today |
+|---|---|---|---|---|
+| acolyte | Sim | Sim | Sim | none |
+| bear_brown | Sim | Sim | Sim | none |
+| red_squirrel | Sim | Sim | **Nominal** | none in play: its pool drains, but nothing reads it (no `go_to_sleep`); the status row shows Nominal |
+| technomule | **Nominal** | Nominal | Nominal | fixes S8-F1 (never winded); it has no pools today |
+| nomad_primitive | **Nominal → Sim on first engagement** (SD-20) | Nominal | Nominal | fixes S8-F1 before the first fight; afterwards an acolyte-like pool with generous parameters, including exhaustion death |
+| bodyless | Unsupported | Unsupported | Unsupported | as SD-13 |
+
+#### S8.5 Persistence
+
+No wire change and no units v5. The owned keys already ride `uiStats`, and
+the new system ids are override keys in the v4 `uiPhysioOverrides` map.
+`PhysioMode` is unchanged.
+
+- **`combat_engaged`** (SD-20) is an unowned, durable `uiStats` key, *Persist
+  exactly*, with the values 1 (pending) and 2 (applied). Absent means never
+  engaged. Its writers are the combat commit (absent → 1) and
+  `applyCombatEngagement` (1 → 2). It needs an inventory row.
+  - A legacy save lacks it.
+  - A non-finite or out-of-set value is malformed, and rejects the load
+    under D-6 (h).
+- A legacy nomad whose stray `stamina = 0` came from S8-F1 has no marker.
+  Its effective mode is Nominal, so normalization (b) scrubs the key. Its
+  first engagement after load seeds a full pool.
+- Other profile changes normalize as D-6 (b): a squirrel's
+  `sleep_pressure` and a technomule's stray `stamina = 0` are scrubbed.
+- The registry, profile and engagement declarations are content (*Rebuild
+  deterministically*).
+
+#### S8.6 Tests (linear)
+
+- I1, I2 and I3 per new system: three neutrality cases, plus edges stamina →
+  brain, exhaustion → sleep and nutrition → stamina.
+- **T-S8-1 concurrency:** combat strikes interleaved with a stamina
+  transition and with ordinary ticks.
+  - The pool equals a serial order of spends and recoveries.
+  - No strike is refunded, including the shiver debit (the S8-F2
+    regression).
+  - Under Nominal, no `stamina` key ever appears.
+- **T-S8-2:** S8-F1. A Nominal technomule, or a nomad before engagement,
+  swings repeatedly at full work, and no `stamina` key is created.
+- **T-S8-3:** stance recovery unchanged across stamina modes.
+- **T-S8-4, SD-20 trigger matrix** (A1-1, A1-4).
+
+  **Positive rows**, each expecting marker 1 after the commit, then exactly
+  one `transitioned` result at the next pass: a pinned Simulated override, a
+  full effective seed, and marker 2.
+
+  | Event | Unit |
+  |---|---|
+  | (a) a nomad's admitted attack hits | the attacker |
+  | (a′) a nomad's admitted attack misses | the attacker |
+  | (b) an admitted attack hits a nomad | the target |
+  | (b′) an admitted attack misses a nomad | the target |
+
+  **Negative rows**, each expecting **zero** markers and zero transitions:
+
+  - (c) an attack refused at admission;
+  - (d) being in range, or chosen as an AI target, with no admitted attempt;
+  - (e) an admitted attempt between acolytes, or another non-declaring
+    species.
+
+  **State cases:**
+
+  | Case | Expected |
+  |---|---|
+  | (f) five admitted attempts within one pass | one marker write, one transition |
+  | (g) strikes admitted after the marker and before the next successful application | cost-free, with no `stamina` key; the first strike after application is charged |
+  | (h) a pending save | after load: still pending, effective Nominal, no stamina key; normalization makes no stamina change; the first eligible pass transitions it |
+  | (i) an explicit Nominal override before engagement | marker 1 → 2 with `latched` and no transition; the unit stays Nominal; clearing that override transitions to Simulated with a seed |
+  | (j) an explicit Nominal override after engagement | wins |
+  | (k) `clearPhysioMode` after engagement | stays Simulated, with no reseed and no hooks |
+  | (l) the target is killed by the triggering strike | marker 1 on the corpse; application refused as dead; no transition and no repeated attempts |
+  | (m) a second engagement after the marker is applied | no change |
+  | (n) a **living** nomad with a retained −100 % stamina modifier is engaged (A2-1) | marker 1; each pass returns `seedUnrepresentable`, with one diagnostic, not one per pass; it stays Nominal at full work; once the modifier is removed, the next pass transitions with a full seed |
+  | (o) an explicit Simulated override with a partial pool (stamina 4 of 10), marked pending, then saved and loaded before application (A2-1) | the pool is preserved at 4 through normalization; the first pass after load latches the marker to 2 without reseeding; the triggering strike was charged |
+- **T-S8-5, SD-20 tuning acceptance** (A1-4, revised for A2-3). Two
+  deterministic cases. The comparison unit is the **stamina fraction**
+  (effective stamina ÷ effective maximum). Both cases run with **thermo
+  Nominal by override** for both units, so there is no shiver at all
+  (`thermo.lua:146-154,175-199` derive shivering from core, fever and
+  heat balance, not from ambient alone).
+  - **B, fixed-cadence budget.**
+    - Fixture: an acolyte and an engaged nomad, both at endurance 1 with no
+      other modifiers. Their maxima are 10 and 15.
+    - Inputs: no wounds or pain; activity held `idle`; dt = 0.1 s.
+    - At t = 1, 2, 3, … s, each unit is charged by the real
+      `spendStrikeCost`: Heavy when t is a multiple of 4, Quick otherwise.
+      That is 40 % of the maximum per 4 s.
+    - **Ordering:** each charge is applied after that tick's physiology
+      pass, and each sample is taken after the charge, at every whole
+      second. Both pools start full, so regen is clipped until the first
+      charge.
+    - The window is 30 s.
+    - Approximate steady-state budgets: the acolyte −0.20 per 4 s (idle
+      regen 0.05/s), the nomad −0.10 per 4 s (0.075/s). The acolyte
+      therefore crosses 0.1 at about 18 s, and the nomad stays near 0.25
+      at 30 s. These figures are a guide, **not asserted**: start-up
+      clipping and the Heavy phase shift the transient.
+    - **Asserts:** the nomad's fraction stays ≥ 0.1 at every sample, and is
+      at or above the acolyte's at every sample.
+  - **E, bounded encounter.**
+    - **Reproducible spawn:** before spawning, the fixture writes a fixed
+      `StdGen` into the stat RNG and every other RNG ref combat or spawn
+      draws from (`gotcha_headless_entropy_seeded_engine_rng`).
+    - **Units:** one nomad from its definition with its default loadout
+      (unarmed reach 0.75 tiles at base height, `nomad_primitive.yaml:29`),
+      and one acolyte from the standard spawn profile with its dagger
+      (reach about 0.97 tiles, `acolyte.yaml:44,400-404`,
+      `steel_dagger.yaml:25`).
+    - **Placement:** on a flat arena, both units face each other **0.5
+      tiles apart**, inside both reaches, and are held there. There is no
+      approach phase, and AI closing movement is disabled.
+    - **Attack schedule:** both units' AI is replaced by a scripted
+      schedule that keeps the shipped **attack cooldown rule**
+      (`computeAttackCooldown`, and the `stance ≥ 0.25` gate,
+      `unit_ai_combat_attack.lua:261-273`). Whenever that rule permits, a
+      unit issues an attack, every fourth one Heavy and the rest Quick.
+    - **Stop:** at the first collapse or death of either unit, or at 60 s.
+    - **Validity gate, before the stamina oracle is read:**
+      - each unit has at least one **admitted** strike;
+      - the nomad's marker reached 2 by `transitioned`.
+
+      Reaching 60 s with either unmet is a **fixture failure**, not a pass.
+    - **Asserts**, given validity: the nomad's fraction never falls below
+      0.1 at any 0.5 s sample, and the nomad never dies of exhaustion.
+
+  Failing B or E (given a valid E) means the parameters are retuned. The
+  acceptance is not relaxed.
+- **T-S8-6, maximum resolution** (A1-2). An endurance-1, otherwise
+  unmodified nomad reads `max_stamina = 15`:
+  - from `stats.get`, from `maxStaminaFor` and from the commit bound;
+  - before engagement, after engagement and after a save and load.
+- **T-S8-8, commit boundary arithmetic** (A2-2):
+  - **Negative multiplier and negative flat:** `b = 0`, `Σδ = −10`,
+    `Σp = −2`, so `m = −1`. Reads give effective 10. A Heavy-sized
+    `Δ = −2.5` stores `b' = 2.5` and reports 10 → 7.5, matching the
+    effective read afterwards.
+  - **Flat floor above the maximum:** maximum 10, `Σδ = 15`, `m = 1`. Any
+    commit stores `b' = 0` and reports `after = 15`, status `floored`, with
+    no collapse or death. A transition seed under it is refused.
+  - **Zero multiplier:** `m = 0` reports 0, matching the read, status
+    `zeroMultiplier`.
+  - **Transition refused although the solver would succeed** (A3-1): target
+    10, `Σδ = −10`, `Σp = −2` (`m = −1`).
+    - Already Simulated at `b = 0`, which reads 10 (the highest value
+      reachable with these modifiers), an ordinary commit targeting 10
+      stores `b' = 0`, reads 10 and returns `ok`, which is correct.
+    - A **Nominal → Simulated** `setPhysioMode` with the same modifiers is
+      **refused** atomically: no seed, override or mode change.
+    - So is an engagement application. `applyCombatEngagement` returns
+      `seedUnrepresentable`, and the marker stays 1 with no pinned
+      override.
+- **T-S8-7, the effective stamina contract** (A1-3). With a retained −50 %
+  stamina modifier:
+  - the transition seeds base 20 for effective 10;
+  - a zero commit leaves effective stamina at 10;
+  - full-pool regen stays at effective 10;
+  - a Heavy strike reports effective 10 → 7.5;
+  - a shiver debit of 0.1 reports effective −0.1.
+
+  With +50 %, regen never pushes effective stamina above the maximum. With
+  −100 %, the transition is refused, and an existing Simulated pool reports
+  0.
+
+#### S8.7 Slice plan
+
+- **S8a: stamina.**
+  - Haskell `Wear` and `Damage` become mode-aware.
+  - `staminaCommit` (A1-3) and the A1-2 maximum resolution, with
+    `unit.getMaxStamina`.
+  - The facade debit goes through `commitStamina`, and the shiver debit is
+    migrated.
+  - SD-20 in full: the declaration, the two-state marker in the combat
+    commit, `unit.applyCombatEngagement`, the nomad config and the innate
+    modifier.
+  - The stamina profiles.
+  - Tests T-S8-1 to T-S8-8.
+- **S8b: exhaustion and sleep.** Lua-only.
+- S8a and S8b are **independent** of each other. Both need S4.
+
+#### S8.8 Decisions (settled)
+
+- **SD-20 (S8-D1, nomad stamina): the owner's own design.**
+  - Nomads spawn with stamina Nominal and switch to Simulated, like an
+    acolyte's including exhaustion death, at their first combat engagement.
+  - The switch is a standard, pinned, one-way S4 transition.
+  - Parameters are generous, and the trigger and application are as in
+    S8.3. None of the drafted options (a) to (c) was taken.
+
+### S9. Cardio and circulation
+
+#### S9.1 Current state
+
+All of it is Lua and the Lua worker. No Haskell code reads `heart_rate`,
+`blood_oxygen` or `circulation` (grep of `src/`).
+
+- **`heart_rate` and `blood_oxygen`** are integrated by `cardio.tick`
+  (`scripts/cardio.lua:44-76`). Its inputs are core temperature, blood
+  fraction (`unit.getBlood`), activity, lung damage
+  (`injuries.pulmonaryFailure`) and last tick's `circulation`. It ticks
+  first in the pass (`unit_resources.lua:135`).
+- **`circulation`** is computed by `circulation.compute`
+  (`scripts/circulation.lua:31-62`) from blood fraction, constitution, fat,
+  `sepsis`, core and heart rate. Thermo writes it (`thermo.lua:130-131`),
+  and #2754 writes it for nomads (`unit_survival_exempt.lua:54`). v1 makes it
+  an unowned always-on step (D-1) and a tick-lagged cache (D-5a).
+- **Readers:**
+  - thermo heat loss and frostbite (`thermo.lua`);
+  - cardio's oxygen delivery;
+  - brain consciousness via `blood_oxygen` (`brain.lua:176`);
+  - the `hypoxia` failure meter driver, `max(o2 path, lung path)`
+    (`cardio.lua:85-90`, `unit_resource_failure.lua:33`);
+  - UI rows and the "Suffocating" condition
+    (`unit_info_v2_status.lua:49-82,159,324-327`).
+- **Death:** only through the `hypoxia` meter (suffocation).
+
+#### S9.2 Proposed registry entry
+
+One system, `cardio`.
+
+| Owns (Nominal read; seed) | Derived (on demand) | Meters | Provides → Nominal substitute | Effects (none while Nominal) |
+|---|---|---|---|---|
+| `heart_rate` (70, `cardio.RESTING_HR`), `blood_oxygen` (1.0) | `circulation` (SD-21: injury factors always live) | — | heart rate → 70; blood oxygen → 1.0, to brain and to the meter's o2 path; circulation → computed with heart-rate factor 1.0 and every other factor live (SD-21) | o2 hypoxia |
+
+- **Requires:** body.
+- **Contributes:** none.
+
+The **`hypoxia` meter is not owned by cardio.** Its lung-damage path is
+injury physiology and must keep killing (#2754). Under Nominal cardio its
+driver becomes `pulmonaryFailure` alone, because the o2 path reads the
+substitute 1.0.
+
+`circulation` becomes an **on-demand derived key**, `circulationRule`. It
+is a pure Haskell port of `circulation.compute`, reading blood through
+`bloodView` (S10.2). That removes the last stored v1-era cache this design inherited
+(D-5a's tick-lagged list) and makes thermo's read coherent. A legacy stored
+`circulation` is scrubbed at load, in the manner of D-6 (i). The raw writers
+(`thermo.lua:130-131`, `unit_survival_exempt.lua:54`) are removed.
+
+#### S9.3 Interactions
+
+- **Thermo (v1):** reads circulation on demand. Under thermo Nominal,
+  circulation still uses the core substitute 37.0.
+- **S10:** circulation and heart rate read the blood fraction through the
+  accessor (Nominal blood → 1.0).
+- **S11:** consciousness reads `blood_oxygen`.
+- **Tick order:** cardio stays first. With circulation on demand, the
+  one-tick oxygen-delivery lag noted in `cardio.lua:41-43` disappears.
+  That is a small, intended numeric change, listed in the slice PR.
+- **Threads:** Lua-only today. The Haskell port of `circulationRule` is pure
+  of the instance, so the combat thread may read it safely if it ever needs
+  to.
+
+#### S9.4 Proposed profile columns
+
+`cardio` is Simulated for acolyte, bear_brown, technomule, red_squirrel
+and nomad_primitive, and Unsupported for bodyless definitions. That is
+today's behavior: #2754 kept cardio live for nomads. Nominal is available
+per unit by override.
+
+#### S9.5 Persistence
+
+No v5. `heart_rate` and `blood_oxygen` are durable owned keys, already in
+`uiStats`. `circulation` moves from a serialized-but-ignored cache (D-6) to
+not stored: legacy values are scrubbed, logged and idempotent. The D-6
+classification table and the planned §2 amendment drop `circulation` from
+the cache row.
+
+#### S9.6 Tests
+
+- I1 and I3 for cardio; I2 edges cardio → brain and blood → cardio.
+- **T-S9-1:** Nominal cardio with a punctured lung still suffocates through
+  the meter's lung path.
+- **T-S9-2:** on-demand circulation equals `circulation.compute` for a
+  pinned grid of inputs. It is coherent immediately after a blood change
+  or a modifier expiry on `constitution`.
+- **T-S9-3:** frostbite drive under heavy blood loss still rises under
+  Nominal cardio (SD-21).
+
+#### S9.7 Slice plan
+
+One issue, S9, **independent**; it needs S4.
+
+#### S9.8 Decisions (settled)
+
+- **SD-21 (S9-D1): option (a).** Under Nominal cardio, circulation keeps its
+  injury factors (blood loss, sepsis, constitution, fat, cold
+  vasoconstriction), and only heart rate reads healthy (factor 1.0). The
+  `circulationRule` (S9.2) implements exactly that, and T-S9-3 asserts that
+  frostbite drive still responds to heavy blood loss under Nominal cardio.
+
+### S10. Blood volume and recovery
+
+#### S10.1 Current state
+
+- **Storage:** `uiBlood ∷ Float`, a dedicated `UnitInstance` field, not a
+  `uiStats` key (`src/Unit/Types/Instance.hs:133-139`). It persists through
+  `uisBlood` (`src/World/Save/Types.hs:841,1002`). The maximum is
+  `body_mass × bloodMassRatio` (0.075, `src/Unit/Types/Wound.hs:134`),
+  recomputed at each read.
+- **Writers:** the wound tick, `tickAllWounds`, on the **combat thread**
+  (`src/Combat/Thread.hs:137`), folding inside one `atomicModifyIORef'`
+  (`src/Combat/Wounds/Tick.hs:105-135`).
+  - It drains `bleedRate · dt` (`:373-422`).
+  - It enqueues `UnconsciousNow` below `unconsciousFraction = 0.30`
+    (`Combat/Wounds/Constants.hs:38`; `Tick.hs:458-479`).
+  - It enqueues `DiedNow "exsanguination"` at 0 (`Tick.hs:475`), which the
+    unit thread applies as collapse or kill (`:139-145`).
+  - Recovery (#2639, `recoveredBloodVolume`, `Tick.hs:185,540-553`) runs at
+    an aggregate bleed of zero and is scaled by
+    `bloodRecoveryNutritionMultiplier` (`Healing.hs:148-161`), which reads
+    calories and hydration (`:148-151`). S5 moves that read to `physioRead`.
+- **Readers:**
+  - Lua through `unit.getBlood`: cardio (`cardio.lua:46`), circulation
+    (`circulation.lua:33`), AI (`unit_ai_core.lua:391`), the revive gate
+    at 50 % (`unit_resource_tick.lua:472-475`), and the UI blood row,
+    bleeding condition and "Unconscious (blood loss)"
+    (`unit_info_v2_status.lua:26,121,273,297`);
+  - **the unit thread's movement speed**: `injurySpeedMult` computes a
+    blood multiplier, `0.5 + 0.5 × fraction`, from the raw `uiBlood` and
+    base `body_mass` (`src/Unit/Thread/Command/Body.hs:51-75`), applied at
+    `src/Unit/Thread/Command/Motion.hs:51,110`;
+  - the Lua `unit.getBlood` record `{current, max, bleedRate}`, built from
+    raw `uiBlood` and base `body_mass`
+    (`src/Engine/Scripting/Lua/API/Units/Combat.hs:389-420`);
+  - **bleed decals**, fed from the conserved actual drain: the external
+    share of the volume really removed goes into `uiTrailState`
+    (`Tick.hs:413-455`), and `Blood/Trail.hs:138-161` marks only from
+    pending volume (`docs/blood_decals.md`). Movement-side decal code reads
+    wounds (`Unit/Thread/Movement.hs:62`).
+  - Every maximum today uses **base** `body_mass` (`Tick.hs:456-458,542-553`,
+    `Body.hs:51-75`, `Units/Combat.hs:389-420`).
+- **Death:** exsanguination at 0. **Collapse:** below 30 %, with recovery
+  gated at 50 %.
+
+#### S10.2 Proposed registry entry
+
+One system, `blood`.
+
+| Owns (Nominal read; seed) | Meters | Provides → Nominal substitute | Contributes → Nominal substitute | Effects (none while Nominal) |
+|---|---|---|---|---|
+| `blood` volume, stored in the `uiBlood` field (= `blood_max`) | — | volume → `blood_max`; fraction → 1.0, to cardio, circulation, the revive gate, AI, UI and **movement**; `bleedRate` → **live** from wounds | visual blood loss into the trail accumulator → **wound-derived flow, with no volume debit** (A1-6) | volume drain, collapse below 30 %, exsanguination death, recovery |
+
+- **Derived:** `blood_max = base body_mass × bloodMassRatio`, and
+  `blood_fraction`. They are on demand and never stored. **Base**, not
+  effective, `body_mass` is kept deliberately: it is what every consumer
+  uses today (S10.1), so no reader changes meaning. That retires the
+  revision's earlier "effective max" wording.
+- **Requires:** body.
+
+Under Nominal, wounds are untouched: severity, infection, clotting,
+bandages, decals, pain, gangrene and the wound-driven injury meters all
+continue (`Tick.hs:474-480`). Only the volume and its own consequences are
+skipped. Nominal blood is not injury immunity.
+
+**`bloodView`, the read interface and storage adapter (A1-5).** One pure
+Haskell function:
+
+```
+bloodView ∷ UnitDef → UnitInstance → BloodView
+```
+
+`BloodView` holds `{volume, max, fraction, bleedRate}`.
+
+- **Simulated:** `volume = uiBlood`, `max = blood_max`, `fraction` clamped
+  to 0..1, and `bleedRate` from the wounds, as today.
+- **Nominal:** `volume = max = blood_max`, `fraction = 1.0`, and
+  `bleedRate` still live from the wounds. The stored `uiBlood` is
+  **ignored**, so a later body-mass change cannot turn a stale stored value
+  into a partial fraction.
+- **Unmoded, before S10 lands:** exactly today's raw values. That is the
+  fallback S9 relies on.
+
+Every consumer goes through it:
+
+| Consumer | Thread |
+|---|---|
+| the wound tick's drain, thresholds and recovery | combat |
+| `injurySpeedMult` (movement) | unit |
+| `unit.getBlood`, which now builds its record from `bloodView` and keeps the same shape and `bleedRate`, so every Lua caller is mode-aware without per-call edits | Lua |
+| S9's `circulationRule` and cardio's blood input | Lua |
+| `physioRead` for `blood`, `blood_max` and `blood_fraction` | any |
+
+**Landing order.** `bloodView` is introduced by whichever of S9 or S10
+lands first, in its behavior-preserving unmoded form. S10 adds the mode
+branch and migrates the remaining consumers: wound tick, movement and
+`getBlood`. So S9 works before S10, and S10 works while cardio and
+circulation are still Lua.
+
+**Storage.** `uiBlood` is a Float field and cannot be absent. While
+Nominal, it is **serialized-but-ignored** (D-6 taxonomy). The transition to
+Nominal writes the current `blood_max` into it, so the stored value is
+canonical. Nominal → Simulated seeds it at `blood_max`. The field carries no
+modifiers, so modifier-aware seeding reduces to `base = target`.
+
+**Visual bleeding under Nominal (A1-6).** The wound tick still computes the
+wound-derived external flow, the sum of external `bleedRate · dt` with
+clot and bandage applied, exactly as it does for drain.
+
+- Under **Simulated**, the conserved rule is unchanged: the trail receives
+  the external share of the volume actually removed (`Tick.hs:413-425`).
+- Under **Nominal**, the trail accumulator receives that external flow
+  **directly**, and `uiBlood` is not debited. This is an **intentional
+  exception** to #882's conserved-loss accounting, recorded as blood's
+  Nominal substitute for the visual-loss contribution.
+- The zero-bleed clear (`Tick.hs:435-455`) and the clot, bandage and heal
+  cleanup are unchanged, so marks stop as soon as external bleeding stops.
+
+**Concurrency.** The wound tick on the combat thread consults the pure
+resolver per unit, inside its atomic fold. A transition is its own atomic
+update on the same `IORef`, so a tick sees the unit entirely before or
+entirely after it. Movement, on the unit thread, reads `bloodView` from its
+own snapshot, which is always a coherent instance.
+
+#### S10.3 Interactions
+
+- **Nutrition and hydration (v1):** recovery reads calories and hydration
+  through `physioRead`, which gives 1.0 under Nominal, as S5 provides.
+- **S9:** `circulationRule` and cardio read `bloodView`.
+- **v1 death gating:** `checkRevive`'s blood gate reads `getBlood`, which is
+  mode-aware.
+- **Threads:** the volume is written only by the combat thread's fold and by
+  transitions. Both are atomic on the same reference. Every other thread
+  reads `bloodView` of a snapshot.
+
+#### S10.4 Proposed profile columns
+
+`blood` is Simulated for acolyte, bear_brown, technomule, red_squirrel
+and nomad_primitive, and Unsupported for bodyless definitions. That is
+today's behavior (SD-22).
+
+#### S10.5 Persistence
+
+No v5. `uisBlood` stays.
+
+- Classification: *Persist exactly* when Simulated, *serialized-but-ignored*
+  when Nominal. It is recorded in the `umInstances` row and the D-6 table.
+- Normalization (b) rewrites the field to the canonical `blood_max` when a
+  unit's effective blood mode is Nominal.
+- `uiTrailState` keeps its existing classification.
+
+#### S10.6 Tests
+
+- I1 and I3 for blood; I2 edges blood → cardio and nutrition → blood.
+- **T-S10-1, Nominal blood under a severe slash** (A1-6):
+  - full volume, with no collapse and no exsanguination;
+  - the wound, its pain and gangrene still progress;
+  - the trail accumulator **grows**, and marks are produced, while the slash
+    bleeds externally;
+  - once a **fully sealing** bandage (seep 0) or complete clotting makes
+    external bleeding exactly zero (`Units/Medical.hs:48-50`,
+    `Wounds/Bleed.hs:51-59`), the accumulator clears and marks stop
+    (`Tick.hs:435-455`);
+  - a **competent dressing** (seep 0.05) keeps a reduced, non-zero flow,
+    and marks continue at that reduced rate.
+- **T-S10-2:** a transition interleaved with the combat thread's wound tick
+  yields a serial order: no lost drain, and no drain under Nominal.
+- **T-S10-3, Nominal → Simulated seed** (replaces the effective-max case):
+  `uiBlood = blood_max` from **base** `body_mass`, matching `getBlood.max`,
+  the movement maximum and the wound-tick maximum.
+- **T-S10-4, movement** (A1-5): a Nominal-blood unit with a stored partial
+  `uiBlood`, after a body-mass gain, moves at blood multiplier 1.0, and
+  `getBlood` reports `current == max`.
+- **T-S10-5, landing order:** with blood unmoded, `bloodView` equals today's
+  raw values for a pinned grid of inputs, which is S9's fallback.
+
+#### S10.7 Slice plan
+
+One issue, S10, **independent**; it needs S4. If it lands before S9, it
+introduces `bloodView` (S10.2).
+
+#### S10.8 Decisions (settled)
+
+- **SD-22 (S10-D1): option (a).** No shipped profile uses Nominal blood, and
+  Nominal is available by override.
+  - **Owner's reasoning:** they would have spawned wildlife and nomads
+    Nominal for performance. But Simulated blood for an unwounded unit
+    costs only per-unit arithmetic inside the wound fold, which runs for
+    every unit anyway (`src/Combat/Wounds/Tick.hs:185`, recovery
+    `:540-553`). Nominal would save nothing material.
+  - Bleeding also stays combat physiology for nomads, as #2754 intended.
+
+### S11. Brain and mental state
+
+#### S11.1 Current state
+
+`brain.tick` (`scripts/brain.lua:245-269`) makes **six separate**
+`unit.setStat` writes per pass on the Lua worker:
+
+- `consciousness`, the instantaneous minimum of temperature, oxygen and
+  salt factors (`:172-196`);
+- `mood` (drift);
+- `emotional_pain` (drift);
+- `caffeine` (decay);
+- `concentration`, from consciousness, pain, stamina and caffeine;
+- `state_of_mind`.
+
+The rest of the mental state:
+
+- **Thoughts:** `thoughts.tick` nudges `mood` and writes `thought_next_at`
+  (`thoughts.lua:143-159`), drawing from the gameplay `math.random` stream.
+- **Mental-state machine:** `mental.tick` (`mental_state.lua:216-280`)
+  writes `mental_state`, `mental_since`, `mental_until`,
+  `mental_next_roll_at`, `mental_cooldown_until`, `mental_high_since` and
+  `mental_break_behavior`. Each state change is **three separate writes**
+  (`:110-115`). While euphoric, it bumps the stored `concentration` on top
+  of brain's value (`:240-246`).
+- **Readers:**
+  - **combat thread:** `mentalEffectiveness` reads `concentration` and
+    `mental_state` from the instance (`src/Combat/Resolution/Common.hs:116-128`);
+  - the collapse machine and revive gate (`unit_resource_injury.lua:141-154`,
+    `unit_resource_tick.lua` `brain.canRise`);
+  - the AI short-circuit for delirium and mental breaks, which applies to
+    every species (`unit_ai_mental.lua`, `unit_ai.lua:299`). Lash-out
+    excludes only the technomule as a target (`unit_ai_mental.lua:85`);
+  - UI consciousness row and the Delirious, Confused and mental-state
+    conditions (`unit_info_v2_status.lua`), and the thought log.
+- **Effects:** unconscious collapse below 0.15, rise at 0.40; delirium and
+  confusion; breaks (wander, flee, catatonia, lash-out, #717); euphoria's
+  combat bonus. No death path.
+
+Defect found:
+
+- **S11-F1. Torn reads across threads.** Combat reads `concentration` and
+  `mental_state` while the Lua worker is between brain's separate writes,
+  or between `setState`'s three writes. It can also catch brain's
+  concentration before or after the euphoria bump in the same pass. D-5a
+  deferred this to S11.
+
+#### S11.2 Proposed registry entries
+
+**Two systems**, because the physiological and psychological halves have
+different consumers and different natural profiles. Both require a body.
+
+**`consciousness`** has no owned keys, no meters and no contributions.
+
+- **Derived (on demand), as pure Haskell rules exposed through
+  `physioRead` / `readPhysio`:**
+  - `consciousness` (healthy 1.0): rule `consciousnessRule`, from effective
+    core, `blood_oxygen` and `salt_conc`, read through the accessor;
+  - `concentration` (healthy 1.0): rule `concentrationRule`, from
+    consciousness, pain (`painFor`), the stamina fraction, `caffeine`, and
+    the +0.10 euphoria lift when `mental_state` is EUPHORIC. The lift moves
+    from `mental_state.lua:240-246` into the rule. Combat's separate ×1.10
+    euphoric multiplier in `mentalEffectiveness` (`Common.hs:126-127`) is a
+    distinct effect and stays.
+- **Provides → Nominal substitute:**
+  - consciousness → 1.0: never delirious, confused or unconscious *from
+    physiology*. Concussion (`injuries.isUnconscious`) still knocks a unit
+    out.
+  - concentration → 1.0, to every consumer of `mentalEffectiveness`: combat
+    hit and active-dodge rolls (`Common.hs:97-128`), the Lua
+    `unit.getMentalEffectiveness` (`Units/Combat.hs:498-512`), and craft
+    progress and quality (`Craft/Execute.hs:259`).
+- **Effects:** physiological collapse, delirium, confusion.
+
+**`mind`** owns the following keys. Each has its Nominal read and the seed
+written at Nominal → Simulated and at spawn (A1-7). `now` is the
+transition's game-time sample.
+
+| Key | Nominal read | Seed |
+|---|---|---|
+| `mood` | 1.0 | the current drift target (as `driftMood`'s first tick does, `brain.lua:205`) |
+| `emotional_pain` | 0 | 0 |
+| `caffeine` | 0 | 0 |
+| `mental_state` | STABLE (0) | STABLE |
+| `mental_since` | 0 | `now` |
+| `mental_until` | 0 | 0 (no episode) |
+| `mental_next_roll_at` | 0 | `now + TUNE.CHECK_INTERVAL` (as `setState`, `mental_state.lua:115`) |
+| `mental_cooldown_until` | 0 | 0 |
+| `mental_high_since` | 0 | 0 |
+| `mental_break_behavior` | WANDER (today's read default, `:106`) | WANDER |
+| `thought_next_at` | 0 | `now`; `mind`'s `onModeChanged` hook then re-rolls it to `now + random · THOUGHT_INTERVAL_MIN` on the gameplay stream, as `thoughts.lua:143-147` does today |
+
+- **Derived (on demand):** `state_of_mind` (Nominal = consciousness), rule
+  `stateOfMindRule`.
+- **Meters:** none.
+- **Contributes → Nominal substitute:** caffeine's stamina regen bonus
+  (`unit_resource_tick.lua:283-289`) → 0. It reads caffeine through the
+  accessor, whether or not S8 has landed.
+- **Incoming credits**, discarded when `mind` is Nominal: `consumable.drink`'s
+  caffeine and mood (`consumable.lua:178-191`) move to `credit`. The rest of
+  the drink still succeeds: fluid draw, hydration credit, and the result
+  record. Thoughts' mood nudge (`thoughts.lua:159`) is `mind`'s own writer.
+- **Provides → Nominal substitute:** no breaks, no euphoria, no thoughts.
+- **Effects:** mental breaks, euphoria, thought mood nudges.
+
+**Legacy and partial episodes.** Normalization (b) for a Simulated `mind`
+seeds **only absent** keys and never overwrites a present durable key,
+following the per-unit stats paragraph of persistence contract §2. A
+partially populated episode is made consistent:
+
+- `mental_state` BREAK or EUPHORIC with `mental_until` absent → seed
+  `mental_until = now`, so the episode ends on its next tick through the
+  normal `endEpisode`;
+- a BREAK with `mental_break_behavior` absent → WANDER;
+- every other absent key → its seed above.
+
+Present values are kept, including stale deadlines, which the machine
+already handles as expired.
+
+**Atomic writes (the D-5a deferral).**
+
+- `consciousness`, `concentration` and `state_of_mind` become on demand,
+  and legacy stored values are scrubbed at load (as D-6 (i)).
+- Every remaining multi-key write goes through a new engine verb,
+  `unit.commitPhysio(uid, {key = value, …})`. It validates every key with the
+  write gate and stores them in **one** `atomicModifyIORef'`, or none.
+- The writers covered:
+
+  | Writer | Batch |
+  |---|---|
+  | `brain.tick` | `mood`, `emotional_pain`, `caffeine` |
+  | `thoughts.tick` | `mood`, `thought_next_at` |
+  | `mental.tick` / `setState` / `enterBreak` / `enterEuphoria` / `endEpisode` / the high-since tracker (`mental_state.lua:105-198,253-291`) | each event's full key set |
+  | `consumable.drink`'s mind credits | `caffeine`, `mood` |
+
+- Combat's `mentalEffectiveness` reads `concentration` through the derived
+  rule and `mental_state` from the same instance snapshot, which fixes
+  S11-F1.
+
+#### S11.3 Interactions
+
+- **Reads:**
+  - v1 thermo and salt through the accessor;
+  - S9 `blood_oxygen` (unowned pass-through until S9 lands);
+  - S8's stamina fraction (pass-through until S8; a pre-engagement nomad
+    reads 1.0, SD-20);
+  - pain, which is injury and always-on.
+- **Incoming:** consumable credits, discarded under Nominal `mind`.
+- **Outgoing:** caffeine → stamina regen bonus.
+- **Tick order:** `brain → thoughts → mental` stays
+  (`unit_resources.lua:150-162`). Each writes one atomic batch.
+- **Threads:** combat and craft read the on-demand derived values and a
+  batch-committed `mental_state`. Lua writes only atomic batches.
+- **Persistence boundary:** D-5a's paused-load refresh no longer needs
+  `brain.tick(uid, 0)` for the derived keys, because they are on demand. It
+  still runs for the drift keys' canonical form.
+
+#### S11.4 Profile columns (SD-23)
+
+| Species | consciousness | mind | Change from today |
+|---|---|---|---|
+| acolyte | Sim | Sim | none |
+| nomad_primitive | Sim | **Nominal** | no thoughts, breaks or euphoria |
+| bear_brown | Sim | **Nominal** | **bears stop having mental breaks** |
+| red_squirrel | Sim | **Nominal** | **squirrels stop having mental breaks** |
+| technomule | Sim | **Nominal** | no mood, thoughts or breaks |
+| bodyless | Unsupported | Unsupported | SD-13 |
+
+`consciousness` stays Simulated everywhere. For nomads, its survival inputs
+are already Nominal, so only combat-driven hypoxia can lower it, as #2754
+intends. S11b lists the behavior change in its PR: wildlife, the technomule
+and nomads stop having thoughts and mental breaks, so lash-out (#717) can
+only come from acolytes.
+
+#### S11.5 Persistence
+
+No v5.
+
+- The `mind` keys are durable (*Persist exactly*), with absent-only
+  defaulting and the episode consistency rules above.
+- `consciousness`, `concentration` and `state_of_mind` move from the D-6
+  cache row to *not stored*, with legacy values scrubbed.
+- The D-6 table, the §2 amendment and the inventory rows are updated. After
+  S9 and S11, the cache row holds only the body-derived `strength` and
+  maxima.
+
+#### S11.6 Tests
+
+- I1 and I3 for both systems; I2 edges thermo, salt and cardio →
+  consciousness, stamina → concentration, and caffeine → stamina regen.
+- **T-S11-1, torn-read regression:** with the combat thread sampling
+  `mentalEffectiveness` while Lua runs brain, thoughts and a mental
+  transition, every sample equals a serial state.
+- **T-S11-2:** euphoria's +0.10 lift appears exactly once, in the derived
+  concentration, and combat's ×1.10 is applied separately.
+- **T-S11-3, Nominal mind, deterministic** (A1-4, revised for A2-4). The
+  roll is `math.random() < BREAK_CHANCE_MAX · severity`, with severity =
+  `(STRESSED_BELOW − state_of_mind) / STRESSED_BELOW`
+  (`mental_state.lua:71-77,281-292`). Rolls are skipped for a delirious or
+  unconscious unit (`:276`). The fixture therefore drives stress through
+  the **psychological** inputs, keeping both units **lucid**.
+  - **Shared setup:** temperate climate, full blood oxygen, no salt or
+    thermal stress, so consciousness is 1.0 and the unit is not delirious.
+    The fixture sets `mental.TUNE.BREAK_CHANCE_MAX = 1.0`.
+  - **Acolyte, the positive control, with Simulated mind:**
+    - Every pass, the fixture commits `mood = 0` and `emotional_pain = 1`
+      through `unit.commitPhysio`. Wellbeing is then `clamp(0 − 0.5, 0, 1)
+      = 0`, so state_of_mind is 0 and **severity is exactly 1**.
+    - It starts at `mental_state` STRESSED, with `mental_since = now −
+      SUSTAIN` and `mental_next_roll_at = now`.
+    - The roll probability is exactly 1, since `math.random()` is in
+      [0, 1), so the acolyte **must** enter BREAK on the next
+      `mental.tick`.
+    - No derived key is forced; only the owned inputs.
+  - **Bear, with Nominal mind under SD-23**, in the same lucid setup:
+    - the same `commitPhysio` of `mood` and `emotional_pain` is **refused**
+      by the write gate;
+    - `mental_state` reads STABLE throughout;
+    - `mental.tick` makes no episode writes, and `mental.forceBreak` is a
+      no-op;
+    - no thoughts are recorded.
+
+    Suppression here comes from the mode, not from delirium.
+  - **Hypoxia collapse, a separate case:** a bear with blood oxygen driven
+    below the consciousness floor, with its own inputs, collapses through
+    `consciousnessRule`. Its oracle is the collapse, not episodes.
+- **T-S11-4:** `commitPhysio` refuses the whole batch if any key fails the
+  write gate.
+- **T-S11-5, initialization and legacy episodes** (A1-7):
+  - a fresh Simulated `mind` holds every seed in S11.2;
+  - a legacy BREAK without `mental_until` ends on its next tick;
+  - a legacy episode with every key present is preserved exactly.
+- **T-S11-6, Nominal-mind consumable** (A1-7, revised for A2-5). The bear's
+  default profile has Nominal hydration (D-10), so the fixture **overrides
+  the bear's hydration to Simulated** with a pool at 50 % before drinking.
+  Its mind stays Nominal. The acolyte's hydration is likewise pinned at
+  50 %.
+  - The bear gains hydration from the drink. Its caffeine and mood credits
+    are discarded, and the keys stay absent.
+  - The acolyte gains all three.
+
+#### S11.7 Slice plan
+
+- **S11a: the rules and atomic writes.**
+  - Registers `consciousness` and `mind` with **all-Simulated** profiles,
+    so the derived rules are live through `physioRead` before any mode
+    changes.
+  - Adds `consciousnessRule`, `concentrationRule` and `stateOfMindRule`,
+    `unit.commitPhysio`, the seeds, legacy normalization and the writer
+    migrations in S11.2. That includes consumable credits and caffeine's
+    stamina read, whatever S8's state.
+  - Fixes S11-F1, and is otherwise behavior-preserving.
+- **S11b: the SD-23 profiles.** `mind` becomes Nominal for wildlife, the
+  technomule and nomads, with the behavior change listed.
+- S11b depends on S11a, and both need S4. S11a is **independent** of S8 to
+  S10.
+
+#### S11.8 Decisions (settled)
+
+- **SD-23 (S11-D1): option (b).** Only acolytes keep a Simulated mind.
+  Wildlife, the technomule and nomads are Nominal, with no thoughts or
+  breaks. Consciousness stays Simulated everywhere. Behavior change: bears
+  and squirrels stop having mental breaks.
 
 ## Source notes
 
