@@ -46,7 +46,7 @@ Design review: **READY** (round 4, `bbed40dcd`; R4-1 applied). Both
 preconditions are merged, and the merged reserve constants were checked
 (header). Ready for issue processing.
 
-- [ ] EPIC. Explicit physiology stat modes
+- [x] EPIC. Explicit physiology stat modes — [#2827]
 - [x] S1. Mass-proportional sweat costs (precondition, outside this epic) — [#2825]
 - [ ] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it)
 - [ ] S3. Override storage and wire format (units v4, frozen v3 graph, decode policy); overrides always empty
