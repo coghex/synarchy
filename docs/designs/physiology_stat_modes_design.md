@@ -58,7 +58,7 @@ preconditions are merged, and the merged reserve constants were checked
 - [x] S8b. Exhaustion and sleep pressure modes (addendum S8; depends on S4 #2831; independent) — [#2835]
 - [x] S9. Cardio and circulation (addendum S9; depends on S4 #2831; independent) — [#2836]
 - [x] S10. Blood volume and recovery (addendum S10; depends on S4 #2831; independent) — [#2837]
-- [ ] S11a. Brain and mental state: atomic writes and on-demand derived values, both systems registered all-Simulated (addendum S11; depends on S4 #2831; independent)
+- [x] S11a. Brain and mental state: atomic writes and on-demand derived values, both systems registered all-Simulated (addendum S11; depends on S4 #2831; independent) — [#2838]
 - [ ] S11b. Mind and consciousness modes with the SD-23 profiles (addendum S11; depends on S11a)
 - [ ] S12. Owner survey of the remaining unit-specific data. Any further systems or stats it finds become slices here; the epic does not close before this survey
 
