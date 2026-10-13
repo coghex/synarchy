@@ -8,7 +8,10 @@
 --
 --   * Sweat drains salt (in thermo.tick) → depletion.
 --   * Drinking plain water raises hydration, not salt → DILUTION (hyponatremia).
---   * Eating food adds salt (unit_ai_needs.lua eatExecute) → the player-controllable input.
+--   * Eating food adds salt (unit_ai_needs.lua eatExecute) → the player-controllable
+--     input. The meal's salt goes into a RESERVE (salt_store, #2761), the way a
+--     meal's calories go into the stomach (#93), and the reserve tops the blood
+--     pool back up toward its ideal level at a bounded rate between meals.
 --   * The kidneys EXCRETE excess salt (so hypernatremia self-corrects) but can't
 --     CREATE it — so a sweated-out unit must EAT to recover. That asymmetry is
 --     what makes food matter in the heat.
@@ -29,7 +32,41 @@ local SALT_PER_KG     = 1.0
 -- absolute 0.004 salt/s at the human max_salt of ~70 (0.004/70).
 local BASELINE_DRAIN_FRAC = 0.004 / 70
 local KIDNEY_EXCRETE  = 0.05    -- excrete excess salt when concentration > 1.05
-local MEAL_SALT_FRAC  = 0.30    -- a meal restores this fraction of max_salt
+local MEAL_SALT_FRAC  = 0.30    -- a meal deposits this fraction of max_salt
+
+-- Salt reserve (#2761). A meal's salt is deposited here, not straight into the
+-- pool (which cannot hold more than max_salt, so a meal could only top it up
+-- and the gap to the next meal drained it by half). While the pool is below its
+-- IDEAL level (concentration 1.0) the reserve refills it at a bounded rate.
+-- Both constants are fractions of max_salt, so a mouse and a dragon behave
+-- alike (as for BASELINE_DRAIN_FRAC).
+--
+-- Calibration, against the reference heat (39.6 C, humidity 0.26; the acolyte
+-- in Test.Headless.Unit.SaltReserve, which is what the figures below were
+-- measured on). Its core settles at 38.3-38.4 C, where thermo.lua sweats
+-- 1.5 x (core - 37.5) x (1 - humidity) = 0.89-0.99 and drains SWEAT_SALT_K
+-- (0.10) of salt per unit of sweat per second: 0.0013-0.0014 of a 70 kg
+-- body's max_salt per second, 0.0014-0.0015 with the baseline drain.
+-- Eating starts when the stomach falls below eat_max_fraction (0.25) of
+-- max_hunger, which in that heat is every 500 engine seconds, and the
+-- acolyte's two rations then deposit 2 x MEAL_SALT_FRAC = 0.60. A 500 s gap
+-- costs 0.70-0.75, so one meal covers 80-85 % of the gap that follows it
+-- and the reserve carries the remainder.
+--   * STORE_CAP_FRAC must hold one gap's loss (0.75) PLUS a full meal's
+--     deposit (0.60) without discarding any of it, i.e. at least 1.35, or
+--     the first meals, which arrive while the reserve is still mostly full,
+--     overflow and the salt is lost. 2.0 leaves a margin for hotter cores.
+--     Over the 4320 engine seconds (3 game days) the acceptance run uses,
+--     the reserve then bottoms out at ~0.67 of max_salt and the pool never
+--     leaves its ideal level. A fresh unit starts with the reserve full.
+--   * STORE_RELEASE_FRAC is a bounded rate, above the loss rate it must
+--     keep up with (0.0015) so the pool tracks its ideal level while the
+--     reserve lasts: 0.002 of max_salt per second.
+-- Without food the full reserve lasts ~2000 s in that heat, against ~525 s
+-- with no reserve, so a unit with water and no food still reaches
+-- hyponatremia, only later.
+local STORE_CAP_FRAC     = 2.0     -- reserve capacity, fraction of max_salt
+local STORE_RELEASE_FRAC = 0.002   -- max release into the pool, max_salt / s
 
 -- Concentration bands (1.0 = ideal). conc = saltFrac ÷ hydrationFrac.
 local HYPO_START  = 0.75 ; local HYPO_FATAL  = 0.45   -- diluted / depleted
@@ -58,13 +95,35 @@ local function concOf(uid, salt, mx)
     return saltFrac / hydrationFrac(uid)
 end
 
--- Advance salt one tick: baseline excretion + kidney excretion of excess.
--- Stores the salt pool ("salt") and the derived concentration ("salt_conc").
+function salts.storeCap(uid)
+    return salts.maxSalt(uid) * STORE_CAP_FRAC
+end
+
+-- The reserve of a unit that has none stored yet (a fresh spawn, or a save
+-- written before #2761) starts FULL, as the salt pool does.
+local function storeOf(uid)
+    return unit.getStat(uid, "salt_store") or salts.storeCap(uid)
+end
+
+-- Advance salt one tick: baseline excretion, release from the reserve, and
+-- kidney excretion of excess. Stores the salt pool ("salt"), the reserve
+-- ("salt_store") and the derived concentration ("salt_conc").
 function salts.tick(uid, dt)
     local mx = salts.maxSalt(uid)
     local s  = unit.getStat(uid, "salt")
     if not s then s = mx end   -- first tick: spawn full
+    local store = storeOf(uid)
     s = s - BASELINE_DRAIN_FRAC * mx * dt
+    -- The reserve refills the pool toward ideal concentration (1.0), never
+    -- past it: no more than the reserve holds, the rate limit, or the deficit.
+    -- A dehydrated unit's ideal pool is smaller (concentration is salt over
+    -- water), so it releases nothing and cannot be pushed hypernatremic.
+    local deficit = hydrationFrac(uid) * mx - s
+    if deficit > 0 and store > 0 then
+        local give = math.min(store, STORE_RELEASE_FRAC * mx * dt, deficit)
+        s     = s + give
+        store = store - give
+    end
     -- Kidneys dump excess salt (hypernatremia self-corrects); they can't add
     -- salt, so hyponatremia only recovers by EATING.
     local conc = concOf(uid, s, mx)
@@ -73,6 +132,7 @@ function salts.tick(uid, dt)
     end
     s = clamp(s, 0, mx)
     unit.setStat(uid, "salt", s)
+    unit.setStat(uid, "salt_store", clamp(store, 0, salts.storeCap(uid)))
     unit.setStat(uid, "salt_conc", concOf(uid, s, mx))
 end
 
@@ -80,14 +140,17 @@ function salts.concentration(uid)
     return unit.getStat(uid, "salt_conc") or 1.0
 end
 
--- Add a fraction of max_salt to the pool (the eat action calls this).
-function salts.addSalt(uid, frac)
+-- Deposit a fraction of max_salt into the reserve (the eat action calls this
+-- once per item eaten). Capped at the reserve's capacity; the overflow is
+-- discarded.
+function salts.deposit(uid, frac)
     local mx = salts.maxSalt(uid)
-    local s  = unit.getStat(uid, "salt") or mx
-    unit.setStat(uid, "salt", clamp(s + frac * mx, 0, mx))
+    local store = storeOf(uid)
+    unit.setStat(uid, "salt_store",
+                 clamp(store + frac * mx, 0, salts.storeCap(uid)))
 end
 
-function salts.mealSalt(uid) salts.addSalt(uid, MEAL_SALT_FRAC) end
+function salts.mealSalt(uid) salts.deposit(uid, MEAL_SALT_FRAC) end
 
 -- Cramp movement multiplier (hyponatremia → muscle cramps slow the unit).
 function salts.speedMultiplier(uid)

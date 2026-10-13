@@ -3915,7 +3915,7 @@ derives blood salt concentration as saltFrac/hydrationFrac and
 dehydrated far enough to prefer drinking over its orders is knocked
 unconscious by the electrolyte imbalance — and scaling the `salt` pool
 down to compensate just moves the blackout to the first meal's salt bolus
-(`salts.mealSalt` restores 0.30 of max_salt per feed). Both were observed
+(`salts.mealSalt` deposits 0.30 of max_salt per feed into the salt reserve, which tops the pool up toward ideal; before #2761 it went straight into the pool). Both were observed
 live while building the gate.
 
 **Two instrument gotchas.** A completed PLAYER move order now holds
