@@ -65,8 +65,8 @@ local HYPER_START = 39.0  ; local HYPER_FATAL = 42.0
 
 -- Minimal physiological costs of fighting temperature.
 local SHIVER_STAMINA_K  = 0.04   -- stamina/s drained per unit of shivering
-local SWEAT_HYDRATION_K = 0.05   -- hydration/s drained per unit of sweating
-local SWEAT_SALT_K      = 0.10   -- salt drained per unit of sweating
+local SWEAT_HYDRATION_K = 0.05   -- hydration/s drained per unit of sweating (at 70 kg)
+local SWEAT_SALT_K      = 0.10   -- salt/s drained per unit of sweating (at 70 kg)
 
 -- Poor circulation conserves core heat (vasoconstriction keeps warm blood off
 -- the cold skin) — so heat LOSS scales with circulation, down to this floor.
@@ -95,6 +95,24 @@ local FEVER_MAX_OFFSET = 3.5   -- ceiling (fever core ≈ 40.5°C)
 local MOVING = { walking = true, running = true, sprinting = true }
 
 local clamp = require("scripts.lib.numeric").clamp
+
+-- Sweat debit mass relationship (#2825). The two SWEAT_*_K constants are the
+-- absolute debits at the HUMAN_MASS reference; every other body pays them
+-- scaled by body_mass / HUMAN_MASS. That is the same proportional rule as the
+-- baseline salt excretion (salts.lua) and baseline hydration drain
+-- (unit_resource_config.lua): the pools are sized by mass (max_salt = mass,
+-- max_hydration = 0.6 × mass), so the FRACTION of each pool a unit of sweat
+-- removes per second — and so the depletion TIME — is the same for a 0.3 kg
+-- squirrel, a 70 kg human and a 170 kg bear. Exactly 1 at 70 kg, so 70 kg
+-- calibrations keep their meaning. A missing body_mass reads as 70 kg (as
+-- everywhere in this file); zero, negative or non-finite mass scales to 0,
+-- i.e. no sweat debit, rather than a negative or infinite one.
+function thermo.sweatMassScale(bodyM)
+    if not bodyM or bodyM ~= bodyM or bodyM <= 0 or bodyM == math.huge then
+        return 0
+    end
+    return bodyM / HUMAN_MASS
+end
 
 -- Advance a unit's core temperature one tick. `info` is unit.getInfo(uid)
 -- (for gridX/gridY). No-op if there's no world climate to sample.
@@ -204,14 +222,17 @@ function thermo.tick(uid, info, dt)
             math.max(0, st - SHIVER_STAMINA_K * shiver * dt)) end
     end
     if sweat > 0 then
+        -- Debits scale with body mass (thermo.sweatMassScale): the same
+        -- sweat removes the same FRACTION of any body's pools.
+        local massScale = thermo.sweatMassScale(bodyM)
         local hy = unit.getStat(uid, "hydration")
         if hy then unit.setStat(uid, "hydration",
-            math.max(0, hy - SWEAT_HYDRATION_K * sweat * dt)) end
+            math.max(0, hy - SWEAT_HYDRATION_K * massScale * sweat * dt)) end
         -- Sweat loses salt too. With water replaced by drinking but salt only
         -- by eating, heavy sweating + plain water → hyponatremia.
         local s = unit.getStat(uid, "salt")
         if s then unit.setStat(uid, "salt",
-            math.max(0, s - SWEAT_SALT_K * sweat * dt)) end
+            math.max(0, s - SWEAT_SALT_K * massScale * sweat * dt)) end
     end
 
     -- Frostbite: freeze the extremities when it's cold and circulation is poor.
