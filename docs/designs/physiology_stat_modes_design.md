@@ -111,7 +111,7 @@ settled. I checked each claim against the source at `718369741` and the
 | R2-6: pre-frame saves | **Applied.** Verified the legacy fallbacks (`unit_resource_energy.lua:99-104,232-241`) and that `recomputeBodyDerivedStats` never creates `frame_mass`. New case (j): reconstruct `frame_mass = 22·h²`, the bulk-1.0 spawn frame, which keeps the legacy floors exactly. Case (g) is now limited to malformed input. A historical fixture is in T-11 | D-6, T-11 |
 | R2-7: I3 demands an unreachable meal | **Applied.** Verified baseline loss is 0.004/70 per second, and that a full 2·`maxSalt` reserve keeps the pool full. I3 is steady-state only. T-12 uses explicit near-threshold initial values with an above-threshold control. New T-13 is the coupled thermo + salt sustained-exertion case. Thresholds and bands are unchanged | I3, T-12, T-13 |
 | R2-8: API activated before consumers | **Applied.** Verified the raw Haskell readers (`Healing.hs:148-160`, `Wounds/Tick.hs:214`), the raw Lua writers, and the UI `?` fallback. Gameplay consumer migration and the access audit (S5) now land **before** S4 as behavior-preserving preparation. S4's tests run through the activated consumers. The temporary `?` display is documented until S6. Both preconditions are in step 0 | Delivery plan, Testing |
-| R2-9 (minor): facade-only rule vs probe | **Applied.** Pure read verbs are exempt from the facade-only rule; mutating verbs stay facade-only. Unowned keys pass through with today's semantics in `get`, `getBase`, `getAll` and `fraction`. `getAllStats` is described as a storage enumeration of effective values (`Stats.hs:645-660`) | D-1, D-2, D-3, D-7 |
+| R2-9 (minor): facade-only rule vs probe | **Applied.** Read verbs are exempt from the facade-only rule (their purity covers owned keys only, SD-19); mutating verbs stay facade-only. Unowned keys pass through with today's semantics in `get`, `getBase`, `getAll` and `fraction`. `getAllStats` is described as a storage enumeration of effective values (`Stats.hs:645-660`) | D-1, D-2, D-3, D-7 |
 
 None is disputed. Revision 3's opening line read as if both prerequisites
 were merged; the reviewer was right that they are a condition. The header now
@@ -348,8 +348,14 @@ the registry, and the Lua modules read them from there.
 Unowned keys pass through (R2-9). `stamina`, `circulation`, `heart_rate`,
 `consciousness`, `strength` and every other key no v1 system owns are never
 Unsupported. The read API returns them with mode `nil` and today's
-`getStat` / `stats.get` semantics: effective value, derived formulas from
-`scripts/unit_stats.lua`, and `nil` only when undefined.
+`getStat` / `stats.get` semantics, **unchanged**: effective value, derived
+formulas from `scripts/unit_stats.lua`, and `nil` only when undefined.
+
+That includes today's **lazy roll** (SD-19). An authored but unrolled stat is
+rolled on first read, which advances the stat RNG and caches the value in
+`uiStats` (`src/Engine/Scripting/Lua/API/Units/Stats.hs:570-603`). An
+unowned read is therefore *not* side-effect free, exactly as `getStat` is not
+today. Only reads of **owned** keys are pure (D-2).
 
 ### D-2. The read contract
 
@@ -368,9 +374,20 @@ Unsupported. The read API returns them with mode `nil` and today's
 - Derived keys under Simulated are computed on read from the effective owned
   and dependency values (D-5a), so they cannot be stale. Meters of a Nominal
   system read 0.
-- An unowned key: mode `nil`, with today's semantics (D-1).
+- An unowned key: mode `nil`, with today's semantics (D-1), including the
+  lazy roll.
 
-Haskell gets one pure `physioRead` with the same semantics. `Healing.hs` and
+**Read purity (SD-19).** Reads of physiology-**owned** keys (owned, derived
+and meter keys of a registry system) are pure. `readPhysio`,
+`readPhysioBase` and Haskell `physioRead` never initialize, roll or write for
+them. Owned keys are never stat templates (D-3), so they have nothing to
+roll. A missing Simulated value is an invariant violation (above), not a
+cue to fill it. Unowned keys pass through to today's `getStat` semantics,
+lazy roll included. The purity promise does not extend to them.
+
+Haskell gets one `physioRead` with the same semantics. Its owned-key branch
+is a pure function of the unit instance. Its unowned branch delegates to
+today's `getEffectiveStat` (IO, which may roll). `Healing.hs` and
 `Wounds/Tick.hs` move to it (S5). Their switch from base to effective reads
 is a behavior change only when a modifier targets these keys, and none does
 today.
@@ -734,10 +751,15 @@ registration also clear any hook caches.
 
 Engine verbs. **The mutating verbs** (`setPhysioMode`, `clearPhysioMode`)
 **may be called only by the facade**, which runs hooks and the refresh. The
-**pure read verbs** (`getPhysioMode`, `getPhysioOverride`,
-`getPhysioDefault`, `readPhysio`, `readPhysioBase`) are an explicit exception
-(R2-9). Any code may call them, including the console Lua that
-`tools/physiology_probe.py` sends, because they mutate nothing:
+**read verbs** (`getPhysioMode`, `getPhysioOverride`, `getPhysioDefault`,
+`readPhysio`, `readPhysioBase`) are an explicit exception (R2-9). Any code may
+call them, including the console Lua that `tools/physiology_probe.py` sends.
+They never change physiology state:
+
+- modes, overrides and owned, derived and meter keys are untouched (SD-19);
+- for an **unowned** key, `readPhysio` / `readPhysioBase` behave exactly as
+  `getStat` / `getStatBase` do today, including the lazy roll of an authored
+  but unrolled stat.
 
 | Verb | Returns |
 |---|---|
@@ -1150,8 +1172,9 @@ or enumerated, with no entropy-seeded rolls.
 ### Static and probe
 
 - The access audit with its self-test (D-7).
-- `tools/physiology_probe.py` reads through `unit.readPhysio`, a pure read
-  verb allowed outside the facade (D-7, R2-9). It reads `circulation` as an
+- `tools/physiology_probe.py` reads through `unit.readPhysio`, a read verb
+  allowed outside the facade (D-7, R2-9). Its owned-key reads are pure
+  (SD-19). It reads `circulation` as an
   unowned pass-through key and `salt_conc` on demand (F-9). Its bounds are
   unchanged. F-2's primary gate is #2825's; T-1 covers it under
   the modes.
@@ -1240,6 +1263,19 @@ entry below names the decision it replaced.
   `physiology:` block in `data/units/*.yaml`. Profiles and systems live in
   `data/physiology/systems.yaml`. Haskell reads both at spawn and load, and
   definition loading validates them.
+- **SD-19 (raised during S2 processing), owner 2026-10-13. Owned-key read
+  purity.** Only reads of physiology-**owned** keys are pure. `readPhysio`,
+  `readPhysioBase` and Haskell `physioRead` never initialize, roll or write
+  for owned keys.
+  - Unowned keys pass through to today's `getStat` semantics unchanged. That
+    includes the lazy roll of an authored but unrolled stat
+    (`src/Engine/Scripting/Lua/API/Units/Stats.hs:570-603`), which advances
+    the stat RNG and caches the value. Derived formulas from
+    `scripts/unit_stats.lua` also keep today's behavior.
+  - The read verbs stay callable by any code, and the facade-only rule for
+    mutating verbs is unchanged (D-1, D-2, D-7).
+  - Source: `~/.local/state/syn-process-physio-20261013-1/S2-read-contract-question.md`.
+    Epic #2827's contract bullet is amended to match.
 - **SD-18 (was O-18), owner 2026-10-13. Recover only after depletion.** This
   is option (b). Nominal tissue recovery acts only on a unit flagged
   `tissue_recovering`. The flag is set when a tissue falls below its spawn
