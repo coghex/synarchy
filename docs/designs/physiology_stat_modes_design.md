@@ -46,6 +46,10 @@ a concrete precondition.
 
 ## Processing status
 
+Design review: **READY** (round 4, `bbed40dcd`; R4-1 applied). Processing
+waits for the #2761 code merge, then the check of its merged constants
+against `0bf4bbfd5`.
+
 - [ ] EPIC. Explicit physiology stat modes
 - [#2825] S1. Mass-proportional sweat costs. Owned by #2825, outside this epic, and a precondition for it
 - [ ] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it)
@@ -116,6 +120,13 @@ settled. I checked each claim against the source at `718369741` and the
 None is disputed. Revision 3's opening line read as if both prerequisites
 were merged; the reviewer was right that they are a condition. The header now
 says so, and step 0 lists both.
+
+## Review round 4 disposition
+
+Round 4 (`~/.local/state/syn-physiology-design-review-4.md`, of `bbed40dcd`)
+returned **READY**: 0 blocking, 0 major, 1 minor. R4-1 is **applied**: S4's
+§2 amendment now also qualifies #2761's per-unit stats paragraph and
+cross-references the cache exceptions (D-6).
 
 ## Review round 3 disposition
 
@@ -635,7 +646,24 @@ compatibility treatment**, which the current taxonomy does not yet name.
 The S4 slice therefore amends `docs/persistence_contract.md` §2 so the
 *Rebuild deterministically* row also admits "(or serialized-but-ignored)",
 mirroring the Reset row, and records these keys in the inventory with that
-treatment. Omitting the keys from new payloads was considered and rejected:
+treatment.
+
+The same amendment qualifies §2's **Per-unit stats (#2761)** paragraph from
+`37dc3ebae` (`docs/persistence_contract.md:139-147`) (R4-1). That paragraph
+gives two guarantees: exact preservation, with stored zero and partial
+values returned verbatim, and absent-only defaulting by the owner. Both apply
+to **durable** stats such as `salt_store`, unless an explicit per-key
+classification says otherwise. The paragraph then names the exceptions and
+cross-references this D-6 table:
+
+- the serialized-but-ignored caches;
+- on-demand `salt_conc`, which is never stored;
+- the legacy normalizations (i) and (j).
+
+#2761's exact treatment of a present zero or partial `salt_store` is
+preserved.
+
+Omitting the keys from new payloads was considered and rejected:
 it would filter the stat map, a wire change in the `units` DTO, for no
 behavioral gain.
 
