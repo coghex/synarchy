@@ -4,33 +4,29 @@ Give each survival-physiology system an explicit mode, **Nominal** or
 **Simulated**, so that "not simulated, healthy" stops being inferred from a
 missing `uiStats` key.
 
-Design state: `draft` (revision 6: review round 3 applied; all decisions settled, SD-1 to SD-18)
+Design state: ready for issue processing
 
-**Preconditions: [#2825](https://github.com/coghex/synarchy/issues/2825)
-(mass-proportional sweat costs) and
-[#2761](https://github.com/coghex/synarchy/issues/2761) (salt reserve, PR 2824)
-are both merged.** This is a required condition, not a status report.
-Status at `37dc3ebae`:
+**Preconditions: both met.**
 
-- **#2825 is merged** (`8130d5e16`, PR 2826). `scripts/thermo.lua:99-115`
+- **[#2825](https://github.com/coghex/synarchy/issues/2825)** (mass-proportional
+  sweat costs) is merged as `8130d5e16` (PR 2826). `scripts/thermo.lua:99-115`
   defines `sweatMassScale = body_mass/70`, and `:224-235` applies it to both
   sweat debits. The 233× factor in F-2 is therefore historical.
-- **#2761's code is not merged yet.** Master's `scripts/salts.lua` has no
-  `salt_store`. Only its documentation landed, in `37dc3ebae`.
+- **[#2761](https://github.com/coghex/synarchy/issues/2761)** (salt reserve)
+  is merged as `66e1a99cd` (PR 2824, final head `93b9dd1fa`) and closed.
+  Master's `scripts/salts.lua` at `66e1a99cd` is **byte-identical** to the
+  `0bf4bbfd5` reference this design was reviewed against
+  (`git diff 0bf4bbfd5 66e1a99cd -- scripts/salts.lua` is empty), so every
+  reserve citation below holds on master, line numbers included:
+  - `salt_store` capacity `storeCap = maxSalt · STORE_CAP_FRAC`, with
+    `STORE_CAP_FRAC = 2.0` (`scripts/salts.lua:68,98`);
+  - release into the pool at no more than `STORE_RELEASE_FRAC = 0.002` of
+    `maxSalt` per second (`:69`);
+  - meals deposit into the reserve: `salts.mealSalt` → `salts.deposit`
+    (`:146,153`), `MEAL_SALT_FRAC = 0.30` (`:35`).
 
-The doc is not processed until #2761 lands too.
-
-Revision 4 reads the unmerged #2761 reference branch
-`issue-2761-salt-reserve` at `0bf4bbfd5` (read-only) for the reserve's
-semantics:
-
-- `salt_store` capacity `storeCap = 2·maxSalt`;
-- release into the pool at no more than `STORE_RELEASE_FRAC = 0.002` of
-  `maxSalt` per second;
-- meals deposit into the reserve (`salts.deposit`).
-
-At processing time, recheck those names and values against SD-4, D-1 and D-4
-in the merged source.
+  These match SD-4, D-1 and D-4, which closes the processing-time check of
+  the merged constants.
 
 Request `user-syn-physiology-design-20261013-1` (owner via laz), 2026-10-13.
 This is a design draft for owner review. It is not an approval and not an
@@ -46,9 +42,9 @@ a concrete precondition.
 
 ## Processing status
 
-Design review: **READY** (round 4, `bbed40dcd`; R4-1 applied). Processing
-waits for the #2761 code merge, then the check of its merged constants
-against `0bf4bbfd5`.
+Design review: **READY** (round 4, `bbed40dcd`; R4-1 applied). Both
+preconditions are merged, and the merged reserve constants were checked
+(header). Ready for issue processing.
 
 - [ ] EPIC. Explicit physiology stat modes
 - [#2825] S1. Mass-proportional sweat costs. Owned by #2825, outside this epic, and a precondition for it
@@ -1270,9 +1266,10 @@ No open decisions remain. Implementation-time checks:
 Each activated intermediate state must satisfy its own advertised invariants
 and round-trip contract.
 
-0. **Preconditions: #2825** (mass-proportional sweat debits) **and #2761**
-   (salt reserve, PR 2824) are both merged (SD-3, SD-15). Neither is a slice
-   of this epic.
+0. **S1 and preconditions.** S1 is **#2825** (mass-proportional sweat
+   debits), merged as `8130d5e16`. With **#2761** (salt reserve, PR 2824,
+   merged as `66e1a99cd`), it is a precondition of this epic, not a slice to
+   file (SD-3, SD-15).
 1. **S2.** Registry, `udPhysiology`, profiles, the pure resolver, read verbs,
    and template rejection. **Inactive:** no tick, consumer or save path uses
    it. Advertised invariants: resolver specs only.
@@ -1310,13 +1307,16 @@ and round-trip contract.
    `docs/pr-proofs/`.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
    assertions where squirrel modes change.
-7. **S8 to S11. The remaining systems** (SD-12), one slice each, after S4:
-   stamina, exhaustion and sleep pressure; cardio and circulation; blood
-   volume and recovery; brain and mental state. Each starts with a design
-   addendum to this doc covering its interface, healthy rules, substitutes
-   and effects. Stamina's addendum must handle the combat thread's
-   concurrent spend (#2470).
-8. **S12. Owner survey** of the remaining unit-specific data, which may add
+The remaining systems (SD-12) follow, one slice each, after S4. Each starts
+with a design addendum to this doc covering its interface, healthy rules,
+substitutes and effects.
+
+7. **S8.** Stamina, exhaustion and sleep pressure. Stamina's addendum must
+   handle the combat thread's concurrent spend (#2470).
+8. **S9.** Cardio and circulation.
+9. **S10.** Blood volume and recovery.
+10. **S11.** Brain and mental state.
+11. **S12. Owner survey** of the remaining unit-specific data, which may add
    systems or stats. The epic closes only after the survey, with every
    system it lists given a mode.
 
