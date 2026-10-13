@@ -55,7 +55,7 @@ preconditions are merged, and the merged reserve constants were checked
 - [x] S6. UI display of Nominal — [#2832]
 - [x] S7. Species profile table (SD-10), probe update — [#2833]
 - [x] S8a. Stamina: mode-aware combat cost and damage, effective-unit stamina commit, max resolution, SD-20 nomad engagement (addendum S8; depends on S4 #2831; independent) — [#2834]
-- [ ] S8b. Exhaustion and sleep pressure modes (addendum S8; depends on S4 #2831; independent)
+- [x] S8b. Exhaustion and sleep pressure modes (addendum S8; depends on S4 #2831; independent) — [#2835]
 - [ ] S9. Cardio and circulation (addendum S9; depends on S4 #2831; independent)
 - [ ] S10. Blood volume and recovery (addendum S10; depends on S4 #2831; independent)
 - [ ] S11a. Brain and mental state: atomic writes and on-demand derived values, both systems registered all-Simulated (addendum S11; depends on S4 #2831; independent)
