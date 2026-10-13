@@ -345,6 +345,28 @@ loaderSpec = describe "engine.loadPhysiologyYaml (requirement 1)" $ do
                 systemsNow `shouldReturn`
                     ["thermo", "salt", "hydration", "nutrition"]
 
+    it "refuses a registry carrying a non-finite literal, naming it, and \
+       \leaves the previously registered registry untouched" $
+        withPhysioEngine False $ \eng →
+            withUnitFile "non-finite"
+                "systems:\n  - id: only\n    owns:\n      - \
+                \{ key: k, healthy: { const: 1.0e999 } }\n" $ \path → do
+                let load p = luaText eng
+                        ("local n, _, d, r = engine.loadPhysiologyYaml(\
+                         \" <> quoted p <> ", true); \
+                         \return string.format('%d|%s|%s', n, tostring(d), \
+                         \tostring(r))")
+                load shippedPhysiologyPath `shouldReturn` "4|nil|nil"
+                -- the content decides: validation runs before the
+                -- one-registry check
+                load path `shouldReturn`
+                    "0|only.k: Infinity|non-finite physiology value"
+                reg ← readIORef (crPhysiologyRegistryRef
+                          (toContentRegistriesCapability (peEnv eng)))
+                map psId (prSystems reg)
+                    `shouldBe` ["thermo", "salt", "hydration", "nutrition"]
+                prSource reg `shouldBe` Just shippedPhysiologyPath
+
 -----------------------------------------------------------------------
 -- Requirements 2, 3 and 5: the registration boundary
 -----------------------------------------------------------------------
@@ -759,6 +781,31 @@ readVerbSpec = describe "readPhysio / readPhysioBase" $ do
             -- unit 3 (Nominal salt) reads 1.0 whatever its pools hold
             readsAs eng "unit.readPhysio(3, 'salt_conc')"
                 `shouldReturn` "1.0000|nominal"
+
+    it "raises, through the registered verb, for a Simulated hydration pool \
+       \that is zero, negative, NaN or infinite, and for its modifiers \
+       \driving it to zero" $
+        withPhysioEngine True $ \eng → do
+            let withPool v = standardScene eng
+                    (("hydration", v) : filter ((≢ "hydration") ∘ fst)
+                                              standardStats)
+                raises = luaText eng
+                    "local ok, err = pcall(unit.readPhysio, 1, 'salt_conc'); \
+                    \return tostring(ok) .. '|' .. tostring(err)"
+            forM_ [0, -3, 0 / 0, 1 / 0] $ \bad → do
+                withPool bad
+                out ← raises
+                out `shouldSatisfy` T.isPrefixOf "false|physiology read of \
+                    \'salt_conc' (system 'salt'): input 'hydration' is not "
+            -- the owned key itself still reads, as stored: only the
+            -- DEPENDENT value judges the pool
+            withPool 0
+            readsAs eng "unit.readPhysio(1, 'hydration')"
+                `shouldReturn` "0.0000|simulated"
+            -- and a valid pool reads normally again
+            withPool 31.5
+            readsAs eng "unit.readPhysio(1, 'salt_conc')"
+                `shouldReturn` "0.6667|simulated"
 
     it "leaves stats, modifiers, definitions and the stat generator \
        \untouched across owned, derived and meter reads, including ones \

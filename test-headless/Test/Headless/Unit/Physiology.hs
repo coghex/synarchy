@@ -298,6 +298,26 @@ registryRefusalSpec = describe "registry validation (requirement 1)" $ do
         refusedWith "non-finite physiology constant" "K"
             (registryText ["  K: 1.0e999"] alpha [])
 
+    it "refuses a non-finite literal anywhere it can be written: a healthy \
+       \constant, a scale factor, a literal substitute, a derived healthy \
+       \value" $ do
+        let one extra = registryText okConsts
+                (["  - id: alpha", "    owns:"] ⧺ extra) []
+        refusedWith "non-finite physiology value" "alpha.a_pool: Infinity"
+            (one ["      - { key: a_pool, healthy: { const: 1.0e999 } }"])
+        refusedWith "non-finite physiology value" "alpha.a_pool: Infinity"
+            (one [ "      - { key: a_pool, healthy: { from: x, scale: 1.0e999 } }" ])
+        refusedWith "non-finite physiology value" "alpha.a_pool: Infinity"
+            (one [ "      - { key: a_pool, healthy: { from: x, scale: [K, 1.0e999] } }" ])
+        refusedWith "non-finite physiology value" "alpha.provides.v: Infinity"
+            (one [ "      - { key: a_pool, healthy: { const: 1.0 } }"
+                 , "    provides:"
+                 , "      - { name: v, substitute: { value: 1.0e999 } }" ])
+        refusedWith "non-finite physiology value" "alpha.d: Infinity"
+            (one [ "      - { key: a_pool, healthy: { const: 1.0 } }"
+                 , "    derived:"
+                 , "      - { key: d, rule: salt_concentration, healthy: 1.0e999 }" ])
+
     it "refuses an interface entry with no substitute" $
         refusedWith "physiology interface entry without a substitute"
             "alpha.provides.a_value"
@@ -574,7 +594,19 @@ saltConcentrationSpec = describe "on-demand salt concentration (D-5a)" $ do
                                HM.empty 0)
                       "salt_conc")
 
-    it "treats a dry pool as a very dilute reading, not an error" $ \reg →
-        near 10 (eff (mkCtx reg (up PhysioSimulated PhysioSimulated)
-                           (HM.insert "hydration" 0 stats) HM.empty 0)
-                     "salt_conc")
+    it "raises an invariant error, not a clamped reading, for a Simulated \
+       \hydration pool that is zero, negative, NaN or infinite — the clamp \
+       \and effectiveStat must not hide an invalid dependency" $ \reg → do
+        let sim = up PhysioSimulated PhysioSimulated
+            at s mods = eff (mkCtx reg sim s mods 0) "salt_conc"
+        forM_ [0, -3, 0 / 0, 1 / 0, -1 / 0] $ \bad →
+            at (HM.insert "hydration" bad stats) HM.empty
+                `shouldSatisfy` isInvariant
+        -- a modifier that drives the EFFECTIVE pool to zero is judged too
+        at stats (HM.fromList [("hydration", [mkMod (-100) Nothing])])
+            `shouldSatisfy` isInvariant
+        -- the lowest valid pool still reads, through the 0.05 clamp
+        near 10 (at (HM.insert "hydration" 0.001 stats) HM.empty)
+        -- and the base read of the derived key judges it the same way
+        base (mkCtx reg sim (HM.insert "hydration" (1 / 0) stats) HM.empty 0)
+            "salt_conc" `shouldSatisfy` isInvariant

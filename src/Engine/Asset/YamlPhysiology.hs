@@ -236,7 +236,9 @@ refuse reason detail = Left (PhysiologyRefusal reason detail)
 --       rule and a healthy value, every interface entry a recognized
 --       substitute;
 --     * every constant a rule or substitute names is declared, every
---       constant is finite, and a rule's @from:@ input is not itself a
+--       number written anywhere (constants, literal healthy values and
+--       scale factors, literal substitutes, derived healthy values) is
+--       finite, and a rule's @from:@ input is not itself a
 --       registry key (a healthy rule reads UNOWNED inputs);
 --     * the @salt_concentration@ rule has the @salt@ and @hydration@
 --       keys it reads;
@@ -306,14 +308,16 @@ admitSystem constants s = do
   where
     sid = pysId s
 
+    ownedLabel o = sid <> "." <> pyoKey o
+
     admitOwned o = case pyoHealthy o of
         Nothing → refuse "owned physiology key without a healthy rule"
                          (sid <> "." <> pyoKey o)
         Just h  → do
             rule ← case h of
-                YamlHealthyConst q → HealthyConst <$> declared (pyoKey o) q
+                YamlHealthyConst q → HealthyConst <$> declared (ownedLabel o) q
                 YamlHealthyFrom k qs →
-                    HealthyFrom k <$> traverse (declared (pyoKey o)) qs
+                    HealthyFrom k <$> traverse (declared (ownedLabel o)) qs
             pure (OwnedKey (pyoKey o) rule)
 
     admitDerived d = do
@@ -323,6 +327,9 @@ admitSystem constants s = do
         healthy ← maybe (refuse "derived physiology key without a healthy value"
                                 (sid <> "." <> pydKey d))
                         Right (pydHealthy d)
+        when (isNaN healthy ∨ isInfinite healthy) $
+            refuse "non-finite physiology value"
+                   (sid <> "." <> pydKey d <> ": " <> tshow healthy)
         pure (DerivedKey (pydKey d) rule healthy)
 
     admitEntry section e = do
@@ -340,11 +347,15 @@ admitSystem constants s = do
         pure (InterfaceEntry (pyeName e) substitute)
 
     declared who q = case q of
-        QLit _ → Right q
+        QLit f
+            | isNaN f ∨ isInfinite f →
+                refuse "non-finite physiology value"
+                       (who <> ": " <> tshow f)
+            | otherwise → Right q
         QConst n
             | Map.member n constants → Right q
             | otherwise → refuse "unknown physiology constant"
-                                 (sid <> "." <> who <> ": " <> n)
+                                 (who <> ": " <> n)
 
 admitProfile ∷ [PhysiologySystem] → (Text, Map.Map Text Text)
              → Either PhysiologyRefusal PhysiologyProfile

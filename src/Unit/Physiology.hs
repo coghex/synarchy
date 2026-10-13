@@ -272,6 +272,28 @@ capacity ctx k = case storedValue ReadEffective ctx k of
             Left ("input '" <> k <> "' is not positive (" <> tshow v <> ")")
         | otherwise → Right v
 
+-- | A Simulated pool a DERIVED rule divides by (the body-water pool
+--   behind @salt_conc@): present, and finite and positive both as
+--   stored and as effective. 'effectiveStat' clamps at zero with
+--   @max 0@, which turns a stored NaN into 0 and a negative into 0, so
+--   the stored value is judged first or an invalid pool would read as a
+--   merely dry one. Unlike a plain Simulated owned read, which returns
+--   whatever is stored, a derived value built on a nonsensical pool
+--   would be a wrong answer with no way to tell.
+dependencyPool ∷ PhysioContext → Text → Either Text Float
+dependencyPool ctx k = do
+    stored ← maybe (Left ("Simulated owned key '" <> k
+                          <> "' has no stored value"))
+                   Right (HM.lookup k (pcStats ctx))
+    when (isNaN stored ∨ isInfinite stored) $
+        Left ("input '" <> k <> "' is not finite (" <> tshow stored <> ")")
+    v ← simulatedOwned ReadEffective ctx k
+    when (isNaN v ∨ isInfinite v) $
+        Left ("input '" <> k <> "' is not finite (" <> tshow v <> ")")
+    when (v ≤ 0) $
+        Left ("input '" <> k <> "' is not positive (" <> tshow v <> ")")
+    pure v
+
 quantity ∷ PhysioContext → Quantity → Either Text Float
 quantity ctx q = case resolveQuantity (pcRegistry ctx) q of
     Just f  → Right f
@@ -303,6 +325,6 @@ saltConcentrationFor ctx = do
     hydrationFraction = case classifyKey reg "hydration" of
         Just (hsys, RoleOwned h) | modeOf ctx hsys ≡ ModeSimulated → do
             maxH ← evalHealthy ctx (okHealthy h)
-            cur  ← simulatedOwned ReadEffective ctx "hydration"
+            cur  ← dependencyPool ctx "hydration"
             pure (cur / maxH)
         _ → Right 1.0
