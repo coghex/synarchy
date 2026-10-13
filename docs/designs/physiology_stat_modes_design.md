@@ -4,7 +4,7 @@ Give each survival-physiology system an explicit mode, **Nominal** or
 **Simulated**, so that "not simulated, healthy" stops being inferred from a
 missing `uiStats` key.
 
-Design state: `draft` (revision 4: review round 2 applied; one open decision, O-18)
+Design state: `draft` (revision 4: review round 2 applied; all decisions settled, O-18 as SD-18 on 2026-10-13)
 
 **Preconditions: [#2825](https://github.com/coghex/synarchy/issues/2825)
 (mass-proportional sweat costs) and
@@ -45,7 +45,7 @@ a concrete precondition.
 - [ ] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it)
 - [ ] S3. Override storage and wire format (units v4, frozen v3 graph, decode policy); overrides always empty
 - [ ] S5. Gameplay consumer migration to the accessor and facade, plus the access audit (inactive preparation; lands **before** S4)
-- [ ] S4. Activation: tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (O-18 shapes its tissue-recovery behavior change)
+- [ ] S4. Activation: tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (tissue recovery per SD-18)
 - [ ] S6. UI display of Nominal
 - [ ] S7. Species profile table (SD-10), probe update
 - [ ] S8. Stamina, exhaustion, sleep pressure (design addendum first)
@@ -99,7 +99,7 @@ settled. I checked each claim against the source at `718369741` and the
 |---|---|---|
 | R2-1: two virtual-meal predicates | **Applied.** Verified that revision 3 states both pool fraction and pool plus reserve. One predicate now: pool fraction < 0.85 (SD-4), with a reserve clause that only suppresses repeat deposits. Tick phase and capacity cap (`storeCap = 2·maxSalt` at `0bf4bbfd5`) stated. T-12 covers a low pool with a nonempty reserve and a crossing with an empty reserve | D-4, T-12 |
 | R2-2: seeding ignores retained modifiers | **Applied.** Verified `effectiveStat` = `max 0 ((b+Σδ)(1+Σp))` (`src/Unit/Stats.hs:61-77`). The Nominal read value is now separate from the transition's base seed; inversion `b = t/(1+Σp) − Σδ`; atomic refusal when unrepresentable; per-key seed targets; caller values are effective targets. D-1's salt row reconciled with SD-9 | D-1, D-5, T-6 |
-| R2-3: Nominal upkeep not separated from Simulated paths | **Applied, plus a new open decision.** Verified the strength discount (`scripts/starvation.lua:89-109`), the walking fat burn and calorie spend (`unit_resource_energy.lua:142-169`), the unbounded regrowth residue (`unit_resource_regrowth.lua:126-173`) and config-gated scheduling (`unit_resources.lua:167-190`). Added the `nominalUpkeep` step for every supported species: positive allocation only, a per-tissue clamp before residue, and synchronous strength restore. Tissue recovery is listed as S4 change 3. Applying it exposed that SD-5 also grows *healthy* below-mean individuals. That is **O-18**, not guessed | D-7, D-9, D-10, T-9, O-18 |
+| R2-3: Nominal upkeep not separated from Simulated paths | **Applied, plus a new decision (O-18, since settled as SD-18).** Verified the strength discount (`scripts/starvation.lua:89-109`), the walking fat burn and calorie spend (`unit_resource_energy.lua:142-169`), the unbounded regrowth residue (`unit_resource_regrowth.lua:126-173`) and config-gated scheduling (`unit_resources.lua:167-190`). Added the `nominalUpkeep` step for every supported species: positive allocation only, a per-tissue clamp before residue, and synchronous strength restore. Tissue recovery is listed as S4 change 3. Applying it exposed that SD-5 also grows *healthy* below-mean individuals. That was raised as **O-18** rather than guessed, and the owner settled it as SD-18 | D-7, D-9, D-10, T-9, O-18 |
 | R2-4: cache freshness over-promised | **Applied.** Verified direct publication (`Stats.hs:353-360`), separate brain writes (`brain.lua:254-269`), the combat `concentration` read (`Combat/Resolution/Common.hs:116-128`) and modifier expiry. v1 derived `salt_conc` is now computed on demand and never stored (no Haskell reader; grep of `src/`). Non-v1 caches keep a named one-pass steady-state lag, separate from the facade-transition and paused-load boundaries | D-1, D-2, D-3, D-5a, T-8 |
 | R2-5: load recompute vs exact bytes | **Applied.** Verified the tick order (`unit_resources.lua:135-173`) leaves stored caches stale at a save. Caches are classified *Rebuild deterministically* and compared canonically. Durable values and overrides stay exact. Zero normalization is qualified by unchanged content. I6 gains a save-boundary case | D-6, I6 |
 | R2-6: pre-frame saves | **Applied.** Verified the legacy fallbacks (`unit_resource_energy.lua:99-104,232-241`) and that `recomputeBodyDerivedStats` never creates `frame_mass`. New case (j): reconstruct `frame_mass = 22·h²`, the bulk-1.0 spawn frame, which keeps the legacy floors exactly. Case (g) is now limited to malformed input. A historical fixture is in T-11 | D-6, T-11 |
@@ -585,6 +585,7 @@ Classification of the `uiStats` values this design touches (R2-5):
 |---|---|---|---|
 | Durable physiology state | owned keys of Simulated systems (`hydration`, `salt`, `salt_store`, `hunger`, `calories`, `core_temp`) and their meters | *Persist exactly* | exact value equality |
 | Durable intent | `uiPhysioOverrides` | *Persist exactly* | exact equality |
+| Durable body state | `tissue_recovering` (SD-18; unowned), alongside the existing `fat_mass` / `lean_mass` / `frame_mass` | *Persist exactly* | exact equality |
 | v1 derived | `salt_conc` | **not stored** (computed on demand, D-5a) | absent from the payload; the on-demand value is compared after load |
 | Tick-lagged caches | `circulation`, `consciousness`, `concentration`, `state_of_mind`, and the body-derived `strength` / `strength_body` / maxima | stored as today, but **Rebuild deterministically** at load (D-5a refresh; `recomputeBody`, `scripts/unit_resources.lua:223-225`) | compared as the **canonical recomputation** from the loaded durable state, not by stored bytes |
 
@@ -789,10 +790,29 @@ rebuild signature (`panelShapeSig`) includes modes.
     Simulated-only discount gate. On the Nominal → Simulated transition, the
     next `refreshStrength` reapplies the band for the seeded (full) calorie
     store, which leaves strength undiscounted.
-  - **Which units recover:** O-18. As written, SD-5's target also applies to
-    a *healthy* individual whose spawn roll sat below the species mean. Such
-    a unit would slowly gain fat toward the mean while keeping any surplus
-    muscle. O-18 asks whether that drift is intended.
+  - **Which units recover: only depleted tissue (SD-18).** Upkeep regrows
+    only while the unit's **`tissue_recovering`** flag is set. Healthy
+    individuals keep their rolled shape, including those that rolled below
+    the species mean.
+    - **Set** the flag, under either nutrition mode, when fat falls below its
+      spawn viability margin `minFat·1.7` or lean below `minLean·1.07`
+      (`Body.hs:85-89,113-114`). Also set it when Simulated catabolism
+      removes tissue (`tickStarvation`'s deficit branch,
+      `unit_resource_energy.lua:255` onward). A healthy spawn starts at or
+      above both margins, because spawn seeding clamps to them, so it never
+      starts flagged.
+    - **While set and nutrition is Nominal**, upkeep regrows each tissue
+      toward its species-mean target, as above.
+    - **Clear** the flag when both tissues reach or exceed their targets,
+      under either mode. Under Simulated, surplus regrowth can clear it the
+      same way.
+    - **Storage:** `tissue_recovering` is a 0/1 body-composition stat in
+      `uiStats`, beside `fat_mass` and `lean_mass`. It is **not owned by the
+      nutrition system**, because the storage invariant removes owned keys
+      under Nominal, which is exactly when the flag is needed. It is an
+      unowned pass-through key (D-1) and *Persist exactly*. A legacy save
+      without it reads 0. A legacy wasted unit below a margin is flagged on
+      its first upkeep pass, so no migration is needed.
   - In the expected use, nutrition goes Nominal together with salt, and the
     switch normally happens on a healthy unit. Recovering a wasted unit is a
     handled edge case.
@@ -823,8 +843,9 @@ changes, listed in its PR:
 1. Bodyless definitions become Unsupported (SD-13).
 2. `reduced` species gain virtual meals (SD-4), which fixes F-4.
 3. Nominal-nutrition units (bear, squirrel, technomule, nomad) gain Nominal
-   upkeep (SD-5, D-9). Strength is undiscounted, and tissue below the
-   species-mean target regrows. The scope of the latter depends on O-18.
+   upkeep (SD-5, D-9). Strength is undiscounted, and **depleted** tissue
+   regrows to the species-mean target (SD-18). Healthy individuals do not
+   change shape.
 
 (Mass-proportional sweat costs arrive earlier, through #2825.)
 
@@ -967,7 +988,15 @@ or enumerated, with no entropy-seeded rolls.
   - A `nomad_primitive`, which has no config entry, receives upkeep.
   - A wound-driven `organ` meter and a stamina drain from exertion still kill
     when driven.
-  - The O-18 answer adds one case: a healthy below-mean individual.
+  - **SD-18 cases:**
+    - A healthy individual that is above its margins but below the mean is
+      unflagged and does not grow.
+    - A unit pushed below a margin is flagged, recovers to the target, and
+      is then unflagged.
+    - A unit that lost tissue to Simulated catabolism, while staying above
+      its margins, is flagged at catabolism and recovers once Nominal.
+    - A legacy save without the flag reads 0, and a below-margin legacy unit
+      is flagged on its first pass.
 - **T-12 Virtual meal trigger** (R2-1, R2-7). Salt Simulated, nutrition and
   hydration Nominal, thermo Nominal (so no sweat), squirrel mass, with
   **explicit initial values** set via `setPhysioMode` values:
@@ -1017,32 +1046,9 @@ or enumerated, with no entropy-seeded rolls.
 
 ## Open decisions for the owner
 
-One, new in revision 4. Revision 3 settled every other decision with the
-owner (2026-10-13). IDs are stable, and each settled entry below names the
-decision it replaced.
-
-1. **O-18. Which units does Nominal tissue recovery act on?** SD-5 settled
-   the target: the species-mean body fat on the unit's own `frame_mass`.
-   Applying R2-3 exposed a consequence the settled answer did not discuss.
-   Under SD-5 as written, a **healthy** individual whose spawn roll was below
-   the species mean also "recovers": a lean-rolled bear or squirrel slowly
-   gains fat to the species mean and keeps any surplus muscle. Across a
-   session, individual body variation for every Nominal-nutrition species
-   drifts upward toward the mean, starting at S4 activation. Options:
-   - **(a) As written:** all below-target tissue regrows. Simple and
-     stateless. Diversity converges toward the mean from below.
-   - **(b) Recovery only after depletion (recommended):** upkeep starts
-     regrowing only once a tissue has been depleted. A depleted tissue is one
-     below its spawn viability margin (`minFat·1.7`, `minLean·1.07`), or one
-     lost under Simulated nutrition. Once started, recovery continues to the
-     species-mean target and then stops. Healthy individuals keep their
-     rolled shape. This costs one persisted per-unit flag
-     (`nutrition_recovering`, an owned nutrition key, *Persist exactly*),
-     and one more T-9 case.
-   - **(c) Freeze healthy, recover to the margin only:** no new state, but
-     wasted units stop at the viability margin rather than the species mean.
-     That contradicts SD-5's target.
-   Blocks S4.
+None. Every decision is settled: SD-1 to SD-17 in revision 3, and SD-18 (the
+revision-4 decision O-18) on 2026-10-13. IDs are stable, and each settled
+entry below names the decision it replaced.
 
 **Settled:**
 
@@ -1120,8 +1126,21 @@ decision it replaced.
   `physiology:` block in `data/units/*.yaml`. Profiles and systems live in
   `data/physiology/systems.yaml`. Haskell reads both at spawn and load, and
   definition loading validates them.
+- **SD-18 (was O-18), owner 2026-10-13. Recover only after depletion.** This
+  is option (b). Nominal tissue recovery acts only on a unit flagged
+  `tissue_recovering`. The flag is set when a tissue falls below its spawn
+  viability margin, or when Simulated catabolism removes tissue. Recovery then
+  runs to SD-5's species-mean target and clears the flag. Healthy
+  individuals, including below-mean rolls, keep their shape.
+  - The flag is an unowned, persisted body-composition stat (D-9).
+    Revision 4's O-18 text called it "an owned nutrition key". That was
+    wrong, because the storage invariant removes owned keys under Nominal,
+    and it is corrected here.
+  - Rejected: (a) all below-target tissue regrows, so body diversity
+    converges to the mean; (c) recovery only to the margin, which
+    contradicts SD-5.
 
-One open decision remains (O-18). Implementation-time checks:
+No open decisions remain. Implementation-time checks:
 
 - #2761's merged constants (`storeCap`, `STORE_RELEASE_FRAC`,
   `salts.deposit`) against SD-4, D-1 and D-4;
@@ -1163,7 +1182,7 @@ and round-trip contract.
    - Advertised: I1 to I3, I5, I6, T-1 to T-4 and T-6 to T-13. Each runs
      through the real activated Haskell and Lua consumers migrated in S5,
      not only the accessor.
-   - Needs S2, S3, S5, SD-7 to SD-9 and O-18.
+   - Needs S2, S3, S5, SD-7 to SD-9 and SD-18.
    - **Temporary display, honestly documented in the S4 PR:** until S6, the
      status and debug panels show `?` for a Nominal pool, which is absent
      from storage (`scripts/unit_info_v2_stat_defs.lua:23-28`,
