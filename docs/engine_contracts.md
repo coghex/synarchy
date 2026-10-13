@@ -2054,6 +2054,91 @@ spawn ingress), `--match "Startup readiness"` / `"Startup asset logging"`, and
 
 ---
 
+## The physiology system registry and read contract (#2828)
+
+S2 of the physiology stat-modes epic #2827 (design:
+`docs/designs/physiology_stat_modes_design.md`, D-1, D-2, D-3, D-5a, D-7,
+D-10 and SD-8/13/17/19). It supplies the registry, the species-default
+machinery and five READ verbs. **It is inactive**: no production tick,
+gameplay consumer or save path calls any of it, and no mode setter or
+override field exists yet (S3 adds the field, S4 the setters and
+activation, S5 migrates the consumers).
+
+**The registry** is `data/physiology/systems.yaml`, decoded by
+`Engine.Asset.YamlPhysiology` and registered by
+`engine.loadPhysiologyYaml` into `physiologyRegistryRef` (a
+`content-registries` field written only by
+`Engine.Scripting.Lua.API.Physiology`, classified `Rebuild` from data in
+`docs/persistence_state_inventory.md`). It queues in BOTH startup
+profiles before `data/units`, beside the faction catalogue. Each system
+declares its id, `requires` capabilities, owned keys with a healthy rule,
+derived keys with a healthy value and a named pure rule, failure meters,
+and every `provides` / `contributes` / `effects` entry with its Nominal
+substitute. The four v1 systems are, in tick order, `thermo`, `salt`,
+`hydration`, `nutrition`, all requiring `body`. Constants a healthy rule
+needs (`SALT_PER_KG`, `SALT_STORE_CAP_FRAC`, `THERMO_BASELINE`) live in
+the registry's `constants:` table; the Lua copies remain until S4/S5 and
+`--match "Unit.Physiology"` fails if the two drift. `profiles:` define
+`rich`, `reduced`, `simple` and `exempt` as a mode for every system.
+
+**Whole-file refusal.** A decoded but unusable registry (duplicate
+system or key, unknown capability, constant, derived rule or substitute,
+a missing healthy rule or substitute, an incomplete or unresolvable
+profile, a rule reading a registry key) answers
+`(0, true, detail, reason)` and registers nothing; a refused reload
+leaves the registered registry intact. The registry is ONE document:
+re-reading the same path replaces it, a different path is refused
+(`duplicate physiology registry`).
+
+**Unit definitions.** A unit file may carry a `physiology:` block: an
+optional `profile:` plus per-system entries, each overriding the profile
+for that system. `Unit.Physiology.resolveUnitPhysiology` folds it into
+`UnitDef.udPhysiology` (`UnitPhysiology`: whether `body:` was authored,
+the profile, and the authored defaults after expansion). An unknown
+profile, system id or mode refuses the WHOLE file, decided for every
+definition before any is registered, and so does a registry-owned,
+derived or meter name in a `stats:` or `skills:` template. Unit
+registration also refuses outright when no registry is loaded, so the
+template rule can never pass against an empty one. The `body` capability
+is what the YAML authored (`body:` present and non-null), never
+`udBodyTemplates` (always filled) and never a stored stat key.
+
+**The resolver** (`Unit.Physiology.resolveMode`) is pure: capability
+failure gives Unsupported whatever else is supplied, otherwise the
+explicit override, then the species default, then Nominal. An absent
+override and an override equal to the default are different inputs.
+
+**Reads.** `unit.getPhysioMode`, `getPhysioOverride` (always `nil` in
+S2), `getPhysioDefault`, `readPhysio` and `readPhysioBase`, and Haskell
+`physioRead` / `physioReadBase`, may be called by anyone; they never
+change state. A registry-owned, derived or meter key is read purely and
+never initializes, rolls or writes. Nominal reads evaluate the healthy
+rule against EFFECTIVE inputs, ignore modifiers on the key itself, and
+read meters as 0. Simulated reads are stored base plus active modifiers;
+the base verb returns the stored base; an absent Simulated meter reads
+0. A missing Simulated owned value, and a healthy-rule input that is
+absent, non-finite or non-positive, raise an invariant error and never a
+fallback. A derived key is computed on demand by the shared
+`saltConcentration` rule and never stored; a stored legacy `salt_conc`
+is ignored. An UNOWNED key reads exactly as `unit.getStat` /
+`getStatBase` do (mode `nil`), lazy roll and cache included; the
+`scripts/unit_stats.lua` formulas are the S5 facade's, not these verbs'.
+`engine.getPhysiologyRegistry()` returns a read-only copy of the loaded
+registry for Lua.
+
+**No serialized enum.** `PhysioMode` derives no `Generic Serialize`; its
+append-only baseline entry is S3's (#2829).
+
+Gates: hspec `--match "Unit.Physiology"` (the shipped registry and
+profiles, every registry refusal, the resolver, the owned-read contract,
+salt concentration, the loader, the registration boundary, the shipped
+roster and the registered Lua bindings), `"Startup readiness"` /
+`"Startup asset logging"`, `"the real unit registration boundary"`,
+`tools/persistence_inventory_audit.py`,
+`tools/engine_env_capability_audit.py` and `tools/startup_asset_logging_probe.py`.
+
+---
+
 ## World identity and language provenance (#707/#1092/#1101)
 
 `world.init(pageId, seed, worldSize, plateCount [, displayName[, gloss[,
