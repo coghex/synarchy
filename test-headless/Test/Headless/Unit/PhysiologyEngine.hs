@@ -797,6 +797,15 @@ readVerbSpec = describe "readPhysio / readPhysioBase" $ do
                 out ← raises
                 out `shouldSatisfy` T.isPrefixOf "false|physiology read of \
                     \'salt_conc' (system 'salt'): input 'hydration' is not "
+            -- a positive modifier must not mask a zero or negative STORED
+            -- pool (the reviewer's masking case)
+            forM_ [0, -3] $ \stored → do
+                withPool stored
+                _ ← luaText eng "return unit.addModifier(1, 'hydration', 30, \
+                                \'spec')"
+                raises >>= (`shouldSatisfy` T.isPrefixOf "false|physiology \
+                    \read of 'salt_conc' (system 'salt'): input 'hydration' \
+                    \is not positive (stored")
             -- the owned key itself still reads, as stored: only the
             -- DEPENDENT value judges the pool
             withPool 0

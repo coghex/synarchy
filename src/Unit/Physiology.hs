@@ -258,41 +258,44 @@ simulatedOwned kind ctx k = case storedValue kind ctx k of
     Nothing → Left $
         "Simulated owned key '" <> k <> "' has no stored value"
 
--- | A healthy rule's input: an EFFECTIVE stat that must be present,
---   finite and positive. Never lazily rolled, and never defaulted: the
---   Lua this replaces falls back to @body_mass or 70.0@, and a fallback
---   is exactly how a bodyless unit passed for a 70 kg one.
+-- | A stored input that a rule divides by or scales with: present, and
+--   finite and positive BOTH as stored and as effective. The stored value
+--   is judged first because 'effectiveStat' clamps with @max 0@, which
+--   turns a stored NaN or negative into 0, and an active positive
+--   modifier can lift a stored zero or negative into a plausible
+--   effective value; either would let an invalid input read as a valid
+--   one. Never lazily rolled, never defaulted: the Lua this replaces
+--   falls back to @body_mass or 70.0@, and a fallback is exactly how a
+--   bodyless unit passed for a 70 kg one.
+checkedInput ∷ Text → PhysioContext → Text → Either Text Float
+checkedInput missing ctx k = do
+    stored ← maybe (Left missing) Right (HM.lookup k (pcStats ctx))
+    judge "stored" stored
+    v ← maybe (Left missing) Right (storedValue ReadEffective ctx k)
+    judge "effective" v
+    pure v
+  where
+    judge which x
+        | isNaN x ∨ isInfinite x = Left $
+            "input '" <> k <> "' is not finite (" <> which <> " "
+            <> tshow x <> ")"
+        | x ≤ 0 = Left $
+            "input '" <> k <> "' is not positive (" <> which <> " "
+            <> tshow x <> ")"
+        | otherwise = Right ()
+
+-- | A healthy rule's input.
 capacity ∷ PhysioContext → Text → Either Text Float
-capacity ctx k = case storedValue ReadEffective ctx k of
-    Nothing → Left ("input '" <> k <> "' is absent")
-    Just v
-        | isNaN v ∨ isInfinite v →
-            Left ("input '" <> k <> "' is not finite (" <> tshow v <> ")")
-        | v ≤ 0 →
-            Left ("input '" <> k <> "' is not positive (" <> tshow v <> ")")
-        | otherwise → Right v
+capacity ctx k = checkedInput ("input '" <> k <> "' is absent") ctx k
 
 -- | A Simulated pool a DERIVED rule divides by (the body-water pool
---   behind @salt_conc@): present, and finite and positive both as
---   stored and as effective. 'effectiveStat' clamps at zero with
---   @max 0@, which turns a stored NaN into 0 and a negative into 0, so
---   the stored value is judged first or an invalid pool would read as a
---   merely dry one. Unlike a plain Simulated owned read, which returns
---   whatever is stored, a derived value built on a nonsensical pool
---   would be a wrong answer with no way to tell.
+--   behind @salt_conc@). Unlike a plain Simulated owned read, which
+--   returns whatever is stored, a derived value built on a nonsensical
+--   pool would be a wrong answer with no way to tell.
 dependencyPool ∷ PhysioContext → Text → Either Text Float
-dependencyPool ctx k = do
-    stored ← maybe (Left ("Simulated owned key '" <> k
-                          <> "' has no stored value"))
-                   Right (HM.lookup k (pcStats ctx))
-    when (isNaN stored ∨ isInfinite stored) $
-        Left ("input '" <> k <> "' is not finite (" <> tshow stored <> ")")
-    v ← simulatedOwned ReadEffective ctx k
-    when (isNaN v ∨ isInfinite v) $
-        Left ("input '" <> k <> "' is not finite (" <> tshow v <> ")")
-    when (v ≤ 0) $
-        Left ("input '" <> k <> "' is not positive (" <> tshow v <> ")")
-    pure v
+dependencyPool ctx k =
+    checkedInput ("Simulated owned key '" <> k <> "' has no stored value")
+                 ctx k
 
 quantity ∷ PhysioContext → Quantity → Either Text Float
 quantity ctx q = case resolveQuantity (pcRegistry ctx) q of

@@ -523,6 +523,17 @@ ownedReadSpec = describe "owned-key reads (requirement 4)" $ do
                 `shouldSatisfy` isInvariant
             eff (nom (HM.insert input (1 / 0) inputs)) key
                 `shouldSatisfy` isInvariant
+        -- the same for a stored input a positive modifier would rescue
+        let lifted input stored = mkCtx reg allNominal
+                (HM.insert input stored inputs)
+                (HM.fromList [(input, [mkMod 50 Nothing])]) 0
+        forM_ [ ("hydration", "max_hydration"), ("salt", "body_mass")
+              , ("hunger", "max_hunger"), ("calories", "max_calories") ] $
+            \(key, input) → do
+                eff (lifted input 0) key `shouldSatisfy` isInvariant
+                eff (lifted input (-3)) key `shouldSatisfy` isInvariant
+        eff (lifted "max_hydration" 42) "hydration"
+            `shouldBe` value ModeNominal 92
         -- the constant-rule key needs no input at all
         eff (nom HM.empty) "core_temp" `shouldBe` value ModeNominal 37
 
@@ -601,6 +612,12 @@ saltConcentrationSpec = describe "on-demand salt concentration (D-5a)" $ do
             at s mods = eff (mkCtx reg sim s mods 0) "salt_conc"
         forM_ [0, -3, 0 / 0, 1 / 0, -1 / 0] $ \bad →
             at (HM.insert "hydration" bad stats) HM.empty
+                `shouldSatisfy` isInvariant
+        -- a positive modifier must not lift a zero or negative STORED
+        -- pool into a plausible effective one
+        forM_ [(0, 21), (-3, 24)] $ \(stored, lift) →
+            at (HM.insert "hydration" stored stats)
+               (HM.fromList [("hydration", [mkMod lift Nothing])])
                 `shouldSatisfy` isInvariant
         -- a modifier that drives the EFFECTIVE pool to zero is judged too
         at stats (HM.fromList [("hydration", [mkMod (-100) Nothing])])
