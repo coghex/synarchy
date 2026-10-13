@@ -54,7 +54,7 @@ preconditions are merged, and the merged reserve constants were checked
 - [x] S4. Activation (revision 6: T-13 fixture pinned): tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (tissue recovery per SD-18) — [#2831]
 - [x] S6. UI display of Nominal — [#2832]
 - [x] S7. Species profile table (SD-10), probe update — [#2833]
-- [ ] S8. Stamina, exhaustion, sleep pressure (design addendum first)
+- [ ] S8. Stamina, exhaustion, sleep pressure (design addendum first) — [deferred]: an owner-approved S8 design addendum must be recorded in this document, defining its interface, healthy rules, Nominal substitutes and effects, and addressing #2470's concurrent combat spending
 - [ ] S9. Cardio and circulation (design addendum first)
 - [ ] S10. Blood volume and recovery (design addendum first)
 - [ ] S11. Brain and mental state (design addendum first)
@@ -1367,6 +1367,9 @@ substitutes and effects.
 
 7. **S8.** Stamina, exhaustion and sleep pressure. Stamina's addendum must
    handle the combat thread's concurrent spend (#2470).
+
+   > **Deferred:** an owner-approved S8 design addendum must be recorded in this document, defining its interface, healthy rules, Nominal substitutes and effects, and addressing #2470's concurrent combat spending. No issue filed.
+
 8. **S9.** Cardio and circulation.
 9. **S10.** Blood volume and recovery.
 10. **S11.** Brain and mental state.
