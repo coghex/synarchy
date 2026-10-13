@@ -2084,7 +2084,8 @@ the registry's `constants:` table; the Lua copies remain until S4/S5 and
 **Whole-file refusal.** A decoded but unusable registry (duplicate
 system or key, unknown capability, constant, derived rule or substitute,
 a missing healthy rule or substitute, an incomplete or unresolvable
-profile, a rule reading a registry key) answers
+profile, a non-finite number written anywhere, a rule reading a registry key)
+answers
 `(0, true, detail, reason)` and registers nothing; a refused reload
 leaves the registered registry intact. The registry is ONE document:
 re-reading the same path replaces it, a different path is refused
@@ -2118,7 +2119,9 @@ read meters as 0. Simulated reads are stored base plus active modifiers;
 the base verb returns the stored base; an absent Simulated meter reads
 0. A missing Simulated owned value, and a healthy-rule input that is
 absent, non-finite or non-positive, raise an invariant error and never a
-fallback. A derived key is computed on demand by the shared
+fallback. The same holds for the Simulated `hydration` pool `salt_conc`
+divides by (zero, negative, NaN and infinity included), judged as
+stored and as effective so the zero clamp cannot hide an invalid pool. A derived key is computed on demand by the shared
 `saltConcentration` rule and never stored; a stored legacy `salt_conc`
 is ignored. An UNOWNED key reads exactly as `unit.getStat` /
 `getStatBase` do (mode `nil`), lazy roll and cache included; the
