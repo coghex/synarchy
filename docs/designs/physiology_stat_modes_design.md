@@ -4,14 +4,27 @@ Give each survival-physiology system an explicit mode, **Nominal** or
 **Simulated**, so that "not simulated, healthy" stops being inferred from a
 missing `uiStats` key.
 
-Design state: `draft` (revision 3: all owner decisions settled 2026-10-13)
+Design state: `draft` (revision 4: review round 2 applied; one open decision, O-18)
 
 **Preconditions: [#2825](https://github.com/coghex/synarchy/issues/2825)
 (mass-proportional sweat costs) and
 [#2761](https://github.com/coghex/synarchy/issues/2761) (salt reserve, PR 2824)
-are both merged.** This doc assumes both are implemented and is not processed
-until both have landed. At processing time, check the reserve's merged
-constant names and semantics against SD-4 and D-1.
+are both merged.** This is a required condition, not a status report: at
+`718369741`, neither is on master. `scripts/thermo.lua:206-214` still has the
+absolute sweat costs, and `scripts/salts.lua:63-90` has no reserve. The doc
+is not processed until both have landed.
+
+Revision 4 reads the unmerged #2761 reference branch
+`issue-2761-salt-reserve` at `0bf4bbfd5` (read-only) for the reserve's
+semantics:
+
+- `salt_store` capacity `storeCap = 2·maxSalt`;
+- release into the pool at no more than `STORE_RELEASE_FRAC = 0.002` of
+  `maxSalt` per second;
+- meals deposit into the reserve (`salts.deposit`).
+
+At processing time, recheck those names and values against SD-4, D-1 and D-4
+in the merged source.
 
 Request `user-syn-physiology-design-20261013-1` (owner via laz), 2026-10-13.
 This is a design draft for owner review. It is not an approval and not an
@@ -31,8 +44,8 @@ a concrete precondition.
 - [#2825] S1. Mass-proportional sweat costs. Owned by #2825, outside this epic, and a precondition for it
 - [ ] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it)
 - [ ] S3. Override storage and wire format (units v4, frozen v3 graph, decode policy); overrides always empty
-- [ ] S4. Activation: tick gating, write gate, transitions, derived refresh, nutrition effect gating, dependency contributions, load normalization
-- [ ] S5. Consumer migration to the accessor, access audit, probe read
+- [ ] S5. Gameplay consumer migration to the accessor and facade, plus the access audit (inactive preparation; lands **before** S4)
+- [ ] S4. Activation: tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (O-18 shapes its tissue-recovery behavior change)
 - [ ] S6. UI display of Nominal
 - [ ] S7. Species profile table (SD-10), probe update
 - [ ] S8. Stamina, exhaustion, sleep pressure (design addendum first)
@@ -41,9 +54,10 @@ a concrete precondition.
 - [ ] S11. Brain and mental state (design addendum first)
 - [ ] S12. Owner survey of the remaining unit-specific data. Any further systems or stats it finds become slices here; the epic does not close before this survey
 
-No slice has been selected or filed. Revision 2 redrew the slices (R8). The
-earlier "behavior-preserving S2" claim was withdrawn, and persistence now
-lands before any setter.
+No slice has been selected or filed. Revision 2 redrew the slices (R8).
+Revision 4 moves gameplay consumer migration (S5) ahead of activation (S4),
+following R2-8. Slice IDs are kept stable, so the list above is in delivery
+order, not numeric order. Persistence still lands before any setter.
 
 ## Review round 1 disposition
 
@@ -74,6 +88,29 @@ The reviewer's "Open decisions to add or change" items 1–6 are reflected in
 O-1, O-4, O-6, O-8 and O-14 to O-17. Several of these were settled with
 the owner in revision 3 (see the settled list).
 
+## Review round 2 disposition
+
+Codex review: `~/.local/state/syn-physiology-design-review-2.md`
+(syn-solver-21), of revision 3 at `718369741`, treating SD-1 to SD-17 as
+settled. I checked each claim against the source at `718369741` and the
+#2761 reference branch at `0bf4bbfd5` before applying it.
+
+| Finding | Disposition | Where |
+|---|---|---|
+| R2-1: two virtual-meal predicates | **Applied.** Verified that revision 3 states both pool fraction and pool plus reserve. One predicate now: pool fraction < 0.85 (SD-4), with a reserve clause that only suppresses repeat deposits. Tick phase and capacity cap (`storeCap = 2·maxSalt` at `0bf4bbfd5`) stated. T-12 covers a low pool with a nonempty reserve and a crossing with an empty reserve | D-4, T-12 |
+| R2-2: seeding ignores retained modifiers | **Applied.** Verified `effectiveStat` = `max 0 ((b+Σδ)(1+Σp))` (`src/Unit/Stats.hs:61-77`). The Nominal read value is now separate from the transition's base seed; inversion `b = t/(1+Σp) − Σδ`; atomic refusal when unrepresentable; per-key seed targets; caller values are effective targets. D-1's salt row reconciled with SD-9 | D-1, D-5, T-6 |
+| R2-3: Nominal upkeep not separated from Simulated paths | **Applied, plus a new open decision.** Verified the strength discount (`scripts/starvation.lua:89-109`), the walking fat burn and calorie spend (`unit_resource_energy.lua:142-169`), the unbounded regrowth residue (`unit_resource_regrowth.lua:126-173`) and config-gated scheduling (`unit_resources.lua:167-190`). Added the `nominalUpkeep` step for every supported species: positive allocation only, a per-tissue clamp before residue, and synchronous strength restore. Tissue recovery is listed as S4 change 3. Applying it exposed that SD-5 also grows *healthy* below-mean individuals. That is **O-18**, not guessed | D-7, D-9, D-10, T-9, O-18 |
+| R2-4: cache freshness over-promised | **Applied.** Verified direct publication (`Stats.hs:353-360`), separate brain writes (`brain.lua:254-269`), the combat `concentration` read (`Combat/Resolution/Common.hs:116-128`) and modifier expiry. v1 derived `salt_conc` is now computed on demand and never stored (no Haskell reader; grep of `src/`). Non-v1 caches keep a named one-pass steady-state lag, separate from the facade-transition and paused-load boundaries | D-1, D-2, D-3, D-5a, T-8 |
+| R2-5: load recompute vs exact bytes | **Applied.** Verified the tick order (`unit_resources.lua:135-173`) leaves stored caches stale at a save. Caches are classified *Rebuild deterministically* and compared canonically. Durable values and overrides stay exact. Zero normalization is qualified by unchanged content. I6 gains a save-boundary case | D-6, I6 |
+| R2-6: pre-frame saves | **Applied.** Verified the legacy fallbacks (`unit_resource_energy.lua:99-104,232-241`) and that `recomputeBodyDerivedStats` never creates `frame_mass`. New case (j): reconstruct `frame_mass = 22·h²`, the bulk-1.0 spawn frame, which keeps the legacy floors exactly. Case (g) is now limited to malformed input. A historical fixture is in T-11 | D-6, T-11 |
+| R2-7: I3 demands an unreachable meal | **Applied.** Verified baseline loss is 0.004/70 per second, and that a full 2·`maxSalt` reserve keeps the pool full. I3 is steady-state only. T-12 uses explicit near-threshold initial values with an above-threshold control. New T-13 is the coupled thermo + salt sustained-exertion case. Thresholds and bands are unchanged | I3, T-12, T-13 |
+| R2-8: API activated before consumers | **Applied.** Verified the raw Haskell readers (`Healing.hs:148-160`, `Wounds/Tick.hs:214`), the raw Lua writers, and the UI `?` fallback. Gameplay consumer migration and the access audit (S5) now land **before** S4 as behavior-preserving preparation. S4's tests run through the activated consumers. The temporary `?` display is documented until S6. Both preconditions are in step 0 | Delivery plan, Testing |
+| R2-9 (minor): facade-only rule vs probe | **Applied.** Pure read verbs are exempt from the facade-only rule; mutating verbs stay facade-only. Unowned keys pass through with today's semantics in `get`, `getBase`, `getAll` and `fraction`. `getAllStats` is described as a storage enumeration of effective values (`Stats.hs:645-660`) | D-1, D-2, D-3, D-7 |
+
+None is disputed. Revision 3's opening line read as if both prerequisites
+were merged; the reviewer was right that they are a condition. The header now
+says so, and step 0 lists both.
+
 ## Summary
 
 - A **system** is one simulated survival subsystem: `hydration`, `salt`,
@@ -89,8 +126,9 @@ the owner in revision 3 (see the settled list).
 - The effective mode is the unit's override if present, otherwise its species
   default, otherwise Nominal. An override records explicit intent, and only
   overrides are persisted. Values stay in `uiStats`. The storage invariant:
-  under Nominal, owned keys, derived keys and meters are absent; under
-  Simulated, owned keys are present.
+  under Nominal, owned keys and meters are absent; under Simulated, owned
+  keys are present. Derived keys are never stored; they are computed on
+  demand.
 - v1 covers four systems only. Stamina, exhaustion, sleep pressure, cardio,
   circulation, blood and the injury meters stay always-on, so this is not yet
   a mode for every physiology subsystem. The epic stays open until every
@@ -238,9 +276,14 @@ Haskell and exposed to Lua. Each system declares:
 - `id`.
 - `owns`: stored state keys, each with a **healthy rule**
   (`{ const: 37.0 }`, `{ from: max_hydration }`,
-  `{ from: body_mass, scale: 1.0 }`).
-- `derived`: cached keys the system computes, each with a healthy value
-  (`salt_conc: 1.0`).
+  `{ from: body_mass, scale: 1.0 }`). The healthy rule is what a **Nominal
+  read** returns. It is not by itself the base value a transition stores:
+  seeding is a separate, modifier-aware rule (D-5, R2-2).
+- `derived`: keys the system computes **on demand** from its owned state and
+  its dependencies' reads, each with a healthy value (`salt_conc: 1.0`).
+  Derived keys are never stored (D-5a, R2-4). Each derived rule is a named
+  pure Haskell function, `saltConcentration` for v1, shared by `physioRead`
+  and the Lua facade.
 - `meters`: failure meters it owns.
 - `requires`: species capabilities (`body` for all four in v1).
 - `provides`: values other systems read.
@@ -252,7 +295,7 @@ Haskell and exposed to Lua. Each system declares:
 | System | Owns (healthy) | Derived | Meters | Provides → Nominal substitute | Contributes → Nominal substitute | Effects (none while Nominal) |
 |---|---|---|---|---|---|---|
 | hydration | `hydration` (= effective `max_hydration`) | — | — | body-water fraction → 1.0 | — | collapse, `death_threshold` kill, thirst need |
-| salt | `salt` (= `body_mass·SALT_PER_KG`), `salt_store` (#2761, assumed merged; = full) | `salt_conc` (1.0) | `salt_imbalance` | `salt_conc` → 1.0; `sweatFactor` → 1.0 | — | cramps, consciousness factor, meter kill |
+| salt | `salt` (Nominal read = `body_mass·SALT_PER_KG`; seed target per SD-9 = that × the effective body-water fraction), `salt_store` (#2761; Nominal read and seed target = full, `storeCap`) | `salt_conc` (1.0; on demand) | `salt_imbalance` | `salt_conc` → 1.0; `sweatFactor` → 1.0 | — | cramps, consciousness factor, meter kill |
 | thermo | `core_temp` (37.0) | — | `hypothermia`, `hyperthermia` | `core_temp` → 37.0 | sweat debit to hydration and salt → none; shiver debit to stamina → none | frostbite, meter kills |
 | nutrition | `hunger` (= `max_hunger`), `calories` (= `max_calories`) | — | — | `calFactor` → 1.0; strength discount → none | meal salt credit → **virtual meals** (settled SD-4); tissue maintenance → **recovery toward the healthy target** (settled SD-5) | digestion, catabolism, regrowth, lean-floor kill, fat-floor organ-failure drain in stamina, eat need |
 
@@ -269,6 +312,12 @@ nomads.
 Constants that a healthy rule needs (`SALT_PER_KG`, `thermo.BASELINE`) live in
 the registry, and the Lua modules read them from there.
 
+Unowned keys pass through (R2-9). `stamina`, `circulation`, `heart_rate`,
+`consciousness`, `strength` and every other key no v1 system owns are never
+Unsupported. The read API returns them with mode `nil` and today's
+`getStat` / `stats.get` semantics: effective value, derived formulas from
+`scripts/unit_stats.lua`, and `nil` only when undefined.
+
 ### D-2. The read contract
 
 `readPhysio(unit, key)` returns:
@@ -283,8 +332,10 @@ the registry, and the Lua modules read them from there.
   This preserves current gameplay. `readPhysioBase` returns the base. A
   missing owned value under Simulated is an invariant violation and raises an
   error.
-- Derived keys under Simulated return the cache, which D-5a guarantees is
-  fresh before any observation. Meters of a Nominal system read 0.
+- Derived keys under Simulated are computed on read from the effective owned
+  and dependency values (D-5a), so they cannot be stale. Meters of a Nominal
+  system read 0.
+- An unowned key: mode `nil`, with today's semantics (D-1).
 
 Haskell gets one pure `physioRead` with the same semantics. `Healing.hs` and
 `Wounds/Tick.hs` move to it (S5). Their switch from base to effective reads
@@ -305,15 +356,19 @@ whole dependency interface.
   with optional `profile:` (D-10).
 - Effective mode: Unsupported if `requires` fails; else the override if one
   is present; else the species default; else Nominal.
-- Storage invariant: under Nominal, the system's owned keys, derived keys and
-  meters are absent from `uiStats`. Under Simulated, its owned keys are
-  present. One pure Haskell transition function maintains this; spawn,
+- Storage invariant: under Nominal, the system's owned keys and meters are
+  absent from `uiStats`. Under Simulated, its owned keys are present.
+  Derived keys are absent in **both** modes, because they are computed on
+  demand (D-5a). One pure Haskell transition function maintains this; spawn,
   setters and load normalization all call it.
 - Definition loading **rejects** any registry-owned, derived or meter name in
   a definition's `stats:` or `skills:` templates. `getOrRollStat` and
   `getAllStats` therefore cannot recreate a Nominal key. No shipped definition
-  uses these names (checked by grep). `getAllStats` keeps its raw meaning.
-  The facade `physiology.getAll` adds the mode-aware entries for display.
+  uses these names (checked by grep). `getAllStats` keeps its current meaning:
+  a storage-oriented enumeration of the stored keys, returned as **effective**
+  values (`src/Engine/Scripting/Lua/API/Units/Stats.hs:645-660` applies
+  modifiers). The facade `physiology.getAll` adds the mode-aware and derived
+  entries for display.
 
 Alternatives considered and rejected: a single cell holding mode and value
 per key (it can represent incoherent per-key modes and breaks every stat
@@ -326,21 +381,40 @@ loses pinning, see D-5). Defaults are live (SD-14).
 A Nominal system supplies exactly its declared substitutes (D-1) and nothing
 else. The salt input gap (F-4): with nutrition Nominal there are no meals.
 **Virtual meals** substitute for them (settled SD-4). The salt tick reads
-nutrition's mode. When nutrition is Nominal and the salt pool fraction
-(`salt / maxSalt`) drops below `VIRTUAL_MEAL_THRESHOLD = 0.85`, the tick
-credits one real meal's worth, `MEAL_SALT_FRAC` (0.30 of `maxSalt`), capped
-at full, by the same path a real meal uses (`salts.mealSalt`).
+nutrition's mode. There is **one predicate**, used verbatim in D-4, SD-4,
+I3 and T-12 (R2-1):
 
-- The threshold sits just above the 0.80 cramp onset (`CRAMP_START`), so
-  a healthy unit never cramps.
+> A virtual meal fires when nutrition is Nominal, **and** the circulating
+> pool fraction `salt / maxSalt < VIRTUAL_MEAL_THRESHOLD = 0.85`, **and**
+> the reserve holds less than one meal's deposit
+> (`salt_store < MEAL_SALT_FRAC · maxSalt`).
+
+- **The predicate is the settled SD-4 pool-fraction threshold.** The reserve
+  clause only *suppresses* repeat deposits. It never triggers on its own and
+  never replaces the pool fraction with a pool-plus-reserve total. A full
+  reserve is not a full pool (`scripts/salts.lua` at `0bf4bbfd5`: the
+  reserve releases into the pool at no more than `STORE_RELEASE_FRAC` per
+  second).
+- With a low pool and a reserve holding at least one meal, no meal fires:
+  the reserve is already refilling the pool. With a low pool and a reserve
+  below one meal, exactly one meal fires, after which the reserve holds at
+  least one meal and suppression applies.
+- **Deposit:** `MEAL_SALT_FRAC · maxSalt` (0.30) into the reserve, by the
+  real meal path (`salts.mealSalt` → `salts.deposit`), capped at the
+  reserve's capacity `storeCap` (SD-15).
+- **Tick phase:** the predicate is evaluated once per salt tick, *after*
+  baseline excretion, kidney excretion and reserve release, and before the
+  tick stores its values. A deposit made in tick *n* releases from tick
+  *n+1*. Sweat debits arrive from thermo, which ticks before salt, so a tick
+  sees that tick's sweat.
+- The threshold sits just above the 0.80 cramp onset (`CRAMP_START`), so a
+  healthy unit never cramps.
 - Baseline excretion, kidney excretion and sweat debits continue unchanged.
   The unit behaves as if it ate regularly, and its salt can sit anywhere in
   the normal band, not pinned at full.
-- A virtual meal deposits into the #2761 salt reserve exactly as a real
-  meal does. The trigger counts salt plus reserve against `maxSalt`, so a
-  full reserve is not topped up every tick.
-- Salt fraction differs from `salt_conc` only when hydration is Simulated.
-  The trigger reads the pool fraction because a meal is a pool input.
+- The pool fraction differs from `salt_conc` only when hydration is
+  Simulated. The predicate reads the pool fraction because a meal is a pool
+  input.
 
 In the expected use, salt and nutrition are switched Nominal together and
 Simulated together (SD-4). The salt-Simulated, nutrition-Nominal combination is
@@ -385,67 +459,142 @@ Override semantics:
 
 Effective transitions:
 
-- **Nominal → Simulated:** seed the owned keys from `values` or the healthy
-  rules (danger-neutral seeding, SD-9). Meters start at 0.
-- **Simulated → Nominal:** remove the owned keys, derived keys and meters. Any
+- **Nominal → Simulated:** seed each owned key so that its **effective**
+  value equals its seed target, using modifier-aware seeding (below). Meters
+  start at 0.
+- **Simulated → Nominal:** remove the owned keys and meters. Derived keys are
+  never stored, so there is nothing to remove for them. Any
   collapse this system caused clears through ordinary `checkRevive`.
 - **Values without a mode change:** the system must be Simulated. Each key
-  must be an owned key of that system; the value must be finite and ≥ 0, and
-  ≤ its effective max where one exists. Otherwise the whole call is refused.
+  must be an owned key of that system. The value is an **effective target**
+  (the same convention as caller `values` at a transition). It must be
+  finite and ≥ 0, and ≤ its effective max where one exists, and it is
+  stored through the same modifier-aware seeding. Otherwise the whole call is
+  refused.
   A successful value write resets the `unit_resource_carry` remainder and the
   alert debounce for those keys. No `onModeChanged` hook runs.
 - **Refused:** dead units (a corpse ticks nothing, `unit_resources.lua:129`),
   Unsupported systems, unknown ids, and Simulated without resource parameters
   (D-9).
 
+**Modifier-aware seeding (R2-2).** A transition stores a base value, but
+retained modifiers (SD-8) apply again as soon as the system is Simulated
+(`src/Unit/Stats.hs:61-77`: effective = `max 0 ((base + Σδ)·(1 + Σp))`). For
+each owned key with effective target `t` and that key's active modifiers
+(`Σδ`, `Σp` at the current game time):
+
+- the base is `b = t / (1 + Σp) − Σδ`;
+- if `1 + Σp ≤ 0`, `b < 0` or `b` is not finite, then `t` cannot be
+  represented. **The whole transition is refused atomically** (`nil,
+  "seed target unrepresentable: <key>"`), and no key, mode or override
+  changes.
+
+Seed targets, all computed from **effective** reads:
+
+| Key | Seed target |
+|---|---|
+| `hydration` | effective `max_hydration` |
+| `salt` | SD-9: `maxSalt ·` effective body-water fraction (1.0 when hydration is Nominal), so `salt_conc` starts at exactly 1.0 |
+| `salt_store` | `storeCap` (full) |
+| `hunger`, `calories` | effective `max_hunger`, `max_calories` |
+| `core_temp` | 37.0 |
+
+Caller-supplied `values` are effective targets too. They deliberately
+override the automatic target for debugging and scripted fixtures, and go
+through the same inversion and refusal. A modifier that later expires or
+changes alters the effective value as any modifier does; seeding guarantees
+the target only at the transition. Nominal reads are unaffected: they use the
+healthy rule and ignore the owned key's modifiers (SD-8).
+
 `onModeChanged(uid, old, new)` hooks: clear carry remainders and alert
 debounce. For nutrition, clear regrowth authorship. Cancel an in-progress
 need sequence: `drink_from_source` returns `math.huge` while its latch is
 active, before it checks thirst (`unit_ai_water.lua:224-225`).
 
-Spawn: resolve the modes after the body-derived maxima are written, seed the
-owned keys and derived values of Simulated systems from the healthy rules
-(coherent: full salt with full hydration gives conc 1.0), and leave Nominal
-keys absent. This replaces the nil-on-first-tick fill for mode-governed
+Spawn: resolve the modes after the body-derived maxima are written, seed
+the owned keys of Simulated systems through modifier-aware seeding (no
+modifiers exist at spawn, so base = target; full salt with full hydration
+gives conc 1.0), and leave Nominal keys absent. This replaces the nil-on-first-tick fill for mode-governed
 pools. Stamina's commit-time init (#2470) is unaffected.
 
-### D-5a. Derived state
+### D-5a. Derived state and observation boundaries
 
-Derived keys are a cache. `physiology.refresh(uid)` recomputes, from one
-coherent read of the unit:
+Revision 3 promised a derived cache that was fresh "before any observation".
+The facade cannot keep that promise (R2-4). The engine publishes each stat
+write to the unit manager directly
+(`src/Engine/Scripting/Lua/API/Units/Stats.hs:353-360`), other threads read
+unit snapshots (`src/Combat/Resolution/Common.hs:116-128` reads stored
+`concentration`), and modifiers expire with game time, with no setter. So
+there are two kinds of derived value, each with a named boundary.
 
-1. circulation, at the effective core;
-2. each Simulated system's derived keys, in registry order (`salt_conc`
-   from effective `salt`, `maxSalt` and the body-water fraction);
-3. brain at `dt = 0`, the #2754 precedent (`unit_survival_exempt.lua:68-75`).
-   It recomputes consciousness, concentration and state of mind without
-   drifting mood or caffeine.
+**1. v1 derived keys are computed on demand, never cached.** `salt_conc` is
+computed at every read from the effective `salt`, `maxSalt` and the effective
+body-water fraction, by the registry's `saltConcentration` rule:
 
-It runs synchronously:
+- inputs `(salt/maxSalt) / clamp(hydrationFrac, 0.05, 1)`, the formula of
+  `scripts/salts.lua:49-58`;
+- a Nominal hydration supplies 1.0;
+- a Nominal salt makes it 1.0.
 
-- at the end of every facade transition or value write, before the call
-  returns;
-- in `unit_resources.onSaveLoaded` after `recomputeBody` and normalization,
-  before the first paused frame (`unit_resources.lua:223-230`), replacing
-  `neutralizeLoaded`;
-- after spawn seeding, at the first observation.
+The salt tick's own kidney-excretion step calls the same function. No stored
+copy exists, so nothing can be stale: not after a transition, a
+`debit`/`credit`, a raw debugging `setStat` of a Simulated pool, a modifier
+added or expiring, or a `recomputeBody` that moves `maxSalt`. A legacy stored
+`salt_conc` is scrubbed at load (D-6 case (i)). Every reader of `salt_conc`
+moves to the accessor in S5: brain, cramps, `sweatFactor`, the status row
+and the probe. No Haskell code reads `salt_conc` (grep of `src/`).
 
-**Invalidation.** A transition of system D refreshes every dependent of D in
-the registry graph, so hydration changing while salt stays Simulated
-recomputes `salt_conc`. `recomputeBody` during play can change `maxSalt`, and
-the conc then lags by at most one resource tick. That is today's behavior and
-is not observable while paused, because the load path refreshes. Only the
-Lua facade calls the raw engine verbs. The access audit enforces this, so no
-transition skips the refresh.
+**2. Non-v1 caches stay tick-lagged, as today.** These are `circulation` and
+brain's outputs (`consciousness`, `concentration`, `state_of_mind`, `mood`).
+No v1 system owns them, and they keep their current tick-lagged semantics.
+
+- **Steady-state boundary:** at most one physiology pass of lag (the
+  `unit_resources` tick interval). Other threads, including the combat
+  resolver's `concentration` read, may observe a value up to one pass old.
+  That is unchanged from today.
+- **Transition boundary:** the facade's `physiology.refresh(uid)` runs
+  synchronously after the engine commits a transition or value write, before
+  the facade call returns. It recomputes circulation at the effective core,
+  then brain at `dt = 0`, the #2754 precedent
+  (`unit_survival_exempt.lua:68-75`). Lua code that sequences after the
+  facade call therefore observes coherent values. A concurrent reader on
+  another thread may observe, for at most one pass, the new pools beside
+  pre-transition brain outputs. That is the steady-state boundary above.
+  Brain's own writes are separate stat writes (`scripts/brain.lua:254-269`),
+  as today. Making them atomic is S11's addendum.
+- **Paused-load boundary:** `unit_resources.onSaveLoaded` runs the refresh
+  for every surviving unit after `recomputeBody` and normalization, before
+  the first paused frame (`unit_resources.lua:223-230`). It replaces
+  `neutralizeLoaded`. Nothing observes the session between staging and that
+  refresh except the paused UI, which the refresh precedes.
+
+Only the facade calls the mutating engine verbs (D-7), and the access audit
+enforces it, so no Lua transition skips the refresh.
 
 ### D-6. Persistence and migration
 
 Classification follows `docs/persistence_contract.md` §2.
 `uiPhysioOverrides` is *Persist exactly*. `udPhysiology`, the registry and
-the profiles are *Rebuild deterministically*. Simulated values stay in
-`uiStats` (*Persist exactly*). Rows go into
+the profiles are *Rebuild deterministically*. Rows go into
 `docs/persistence_state_inventory.md`, and the `umInstances` / `UnitsDTO`
 narratives gain sentences.
+
+Classification of the `uiStats` values this design touches (R2-5):
+
+| Class | Keys | Classification | Round-trip oracle |
+|---|---|---|---|
+| Durable physiology state | owned keys of Simulated systems (`hydration`, `salt`, `salt_store`, `hunger`, `calories`, `core_temp`) and their meters | *Persist exactly* | exact value equality |
+| Durable intent | `uiPhysioOverrides` | *Persist exactly* | exact equality |
+| v1 derived | `salt_conc` | **not stored** (computed on demand, D-5a) | absent from the payload; the on-demand value is compared after load |
+| Tick-lagged caches | `circulation`, `consciousness`, `concentration`, `state_of_mind`, and the body-derived `strength` / `strength_body` / maxima | stored as today, but **Rebuild deterministically** at load (D-5a refresh; `recomputeBody`, `scripts/unit_resources.lua:223-225`) | compared as the **canonical recomputation** from the loaded durable state, not by stored bytes |
+
+The tick order makes the stored cache legitimately stale at a save boundary.
+Salts and brain tick before the resource pools
+(`scripts/unit_resources.lua:135-173`), so a hydration drain later in the
+same pass leaves the stored values from earlier in that pass behind. The
+load-time rebuild then changes them. That is why caches are compared
+canonically and never by bytes. `docs/persistence_contract.md:76-79,128-136`
+already separates exact durable fields from rebuilt state.
 
 **Wire format.** `units` goes from v3 to v4.
 
@@ -487,21 +636,33 @@ which applies to memories, not active intent (contract §4,
 | (d) Override naming an undeclared unknown system | **Reject the load**: an active gameplay reference to a missing definition, contract §4 |
 | (e) Unknown `PhysioMode` tag | Decode failure: malformed |
 | (f) Override Simulated for a system the unit's species no longer supports | **Reject** by default (active intent would be dropped). Settled SD-6 |
-| (g) Seeding needs a healthy-rule input that is missing, zero or non-finite | **Reject**, naming the unit, key and input. Content-load validation ensures every rule's inputs are guaranteed for species meeting `requires`, so this arises only from corrupt saves |
+| (g) Seeding or a Nominal-upkeep target needs an input that is present but zero or non-finite, or missing when no legacy rule (j) covers it | **Reject**, naming the unit, key and input. Content-load validation guarantees the inputs for current spawns of species meeting `requires`, so this arises only from malformed saves. It is kept distinct from legitimate legacy absence, (j) |
 | (h) A stored Simulated value that is non-finite | Reject: malformed. Finite out-of-range values are retained exactly, adding no validation beyond today's |
+| (i) A stored `salt_conc` (legacy; any mode) | Scrub, logged. It is now computed on demand (D-5a) |
+| (j) A bodied unit with `height` but no `frame_mass` (pre-frame save; the existing fallbacks support this, `scripts/unit_resource_energy.lua:99-104,232-241`) | **Legacy reconstruction**: `frame_mass = 22·height²`, logged. That is the spawn formula `22·h²·bulk` at bulk 1.0 (`Body.hs:96`). It is exactly the frame the legacy floors already assume: `0.44·h² = 0.02·22·h²` (`LEGACY_MIN_FAT_PER_H2`, `MIN_FAT_FRAC`, `unit_resource_energy.lua:83-84`) and `4.4·h² = 0.20·22·h²` (`:241`). The fat and lean floors therefore do not move for such a unit. Reconstruction is required because `recomputeBodyDerivedStats` never creates `frame_mass` (`Body.hs:158-181`), and load calls `recomputeBody`, not spawn seeding |
 
-Exact round trip versus normalization: a session written by current code
-loads with **zero** normalization actions and re-saves to identical
-component bytes. A legacy session normalizes once. Saving it and loading
-again performs **zero** further actions (idempotence). Normalization is
-deterministic because the healthy rules are pure functions of stored stats.
+Exact round trip versus normalization, qualified by unchanged content and
+canonical input. A session written by current code, loaded under **the same
+content** (no profile, registry or definition change since it was saved),
+loads with **zero** normalization actions. On re-save, every durable value
+and override is bit-identical, and every cache equals its canonical
+recomputation. A content change (SD-14) or a legacy payload normalizes once,
+logged. Saving that session and loading it again performs **zero** further
+actions (idempotence). The legacy frame reconstruction (j) is persisted, so it
+is not repeated. Normalization and reconstruction are deterministic because
+their rules are pure functions of stored stats.
 
 No Lua save module is added. The `unit_resources` reset hook and teardown
 registration also clear any hook caches.
 
 ### D-7. Script API
 
-Engine verbs, which only the facade may call:
+Engine verbs. **The mutating verbs** (`setPhysioMode`, `clearPhysioMode`)
+**may be called only by the facade**, which runs hooks and the refresh. The
+**pure read verbs** (`getPhysioMode`, `getPhysioOverride`,
+`getPhysioDefault`, `readPhysio`, `readPhysioBase`) are an explicit exception
+(R2-9). Any code may call them, including the console Lua that
+`tools/physiology_probe.py` sends, because they mutate nothing:
 
 | Verb | Returns |
 |---|---|
@@ -514,17 +675,23 @@ Engine verbs, which only the facade may call:
 
 The write gate: `unit.setStat` on an owned, derived or **meter** key of a
 **Nominal** system is refused (`false`). This closes F-6 and forces probes to
-enable a system before forcing its pool (SD-16). Under Simulated, raw
-`setStat` is still allowed for debugging. `unit.addModifier` on a Nominal
+enable a system before forcing its pool (SD-16). A **derived** key
+(`salt_conc`) is refused in **both** modes, since a stored copy would break the
+on-demand rule (D-5a). Under Simulated, raw `setStat` of owned keys and
+meters is still allowed for debugging. `unit.addModifier` on a Nominal
 owned key is accepted and stored, but has no effect until the system is
 Simulated (SD-8).
 
 Facade `scripts/physiology.lua`:
 
-- `get(uid, key)` → `value, mode` (effective)
-- `getBase(uid, key)`
-- `fraction(uid, key, maxKey)` → 1.0 under Nominal
-- `getAll(uid)`
+- `get(uid, key)` → `value, mode` (effective). For an unowned key: `value,
+  nil`, by today's `stats.get` semantics (D-1).
+- `getBase(uid, key)`. For an unowned key: today's `getStatBase`.
+- `fraction(uid, key, maxKey)` → 1.0 under Nominal. For unowned keys:
+  `get(key) / get(maxKey)` by today's semantics, `nil` when either is
+  undefined.
+- `getAll(uid)` → today's `stats.getAll` enumeration of effective values,
+  plus mode-aware and on-demand derived entries for owned systems.
 - `isSimulated(uid, system)`
 - `debit(uid, key, amount)` / `credit(uid, key, amount)` → amount applied, 0
   under Nominal
@@ -534,13 +701,16 @@ Facade `scripts/physiology.lua`:
 
 Orchestration: `unit_resources.update` runs cardio → circulation → each
 Simulated system's `tick` in registry order (thermo before salt, as today) →
-brain → … Pool entries, digestion, starvation, regrowth and strength refresh
-run only when their owning system is Simulated (D-9). The
+brain → … Pool entries, digestion, starvation, regrowth and the strength
+*discount* run only when nutrition is Simulated. **Nominal upkeep** (D-9)
+runs when nutrition is Nominal, for every supported species, including
+species with no `unit_resource_config.lua` entry (R2-3). The
 `survivalExempt` branch goes away.
 
 Access audit (new, or extending an existing audit; it has a self-test): it
 flags raw `getStat` / `setStat` / `or <default>` reads on registry keys
-outside their owner, raw verb calls outside the facade, registry coverage
+outside their owner, **mutating** verb calls outside the facade (read verbs
+are exempt), registry coverage
 (every system has a Lua owner, every owned key a healthy rule, every
 `contributes` entry a substitute), and templated physiology names.
 
@@ -567,8 +737,8 @@ rebuild signature (`panelShapeSig`) includes modes.
   Simulated mode: `tickDigestion`; the whole of `tickStarvation`, including
   catabolism and the lean-floor respiratory kill
   (`unit_resource_energy.lua:248-252`); `applyRegrowth`;
-  `starvation.refreshStrength`'s discount (Nominal uses undiscounted
-  strength); and the **organ-failure contribution inside the stamina tick**
+  `starvation.refreshStrength`'s discount; and the **organ-failure
+  contribution inside the stamina tick**
   (`unit_resource_tick.lua:187-200,259`). With nutrition Nominal,
   `inOrganFailure` is false. What stays live under Nominal nutrition: ordinary
   stamina regen and drain, stamina's `kill_on_zero` from any other cause, and
@@ -576,12 +746,26 @@ rebuild signature (`panelShapeSig`) includes modes.
   wound-driven and a different mechanism.
 - **Tissue under Nominal nutrition recovers toward healthy** (settled SD-5).
   Body-composition upkeep reads nutrition's mode, and Nominal means
-  "sufficient nutrition":
+  "sufficient nutrition". The mechanism (R2-3):
+  - **Scheduling.** A new `nutrition.nominalUpkeep(uid, dt)` step runs in
+    `unit_resources.update` for every living unit whose nutrition is Nominal
+    and supported. It is scheduled **outside** the per-def config branch
+    that gates digestion and starvation today
+    (`scripts/unit_resources.lua:167-190`), so nomads and technomules, which
+    have no config entry, are covered.
   - There is no catabolism, so no tissue is lost.
-  - Each tissue below its **healthy target** regrows at the ordinary surplus
-    regrowth rate, with the same activity split as `applyRegrowth`. It stops
-    at the target, so a Nominal unit never fattens without bound the way an
-    always-surplus Simulated unit can.
+  - **Allocation.** It reuses only the *positive* allocation of
+    `applyRegrowth` (`scripts/unit_resource_energy.lua:142-169`), at the
+    same tissue rate and activity split (idle 90 % fat / 10 % muscle,
+    walking 30 % / 70 %). It **excludes** the calorie spend, since there is
+    no live store, and the walking fat burn (`0.5·rate`), which makes
+    walking fat delta negative today. A Nominal walker therefore never loses
+    fat, so recovery is monotonic.
+  - **Clamp and residue.** Each tissue's increment is clamped so the tissue
+    never exceeds its target, *before* the sub-binary32 residue is retained
+    through `unit_resource_regrowth` (`:126-173`). Residue never carries a
+    tissue past its target. A tissue already at target receives nothing,
+    and its share is not redistributed.
   - Tissue above its target is kept as-is. Sufficient nutrition does not
     slim a unit.
   - The target is the **species-mean body fat applied to the unit's own
@@ -593,9 +777,22 @@ rebuild signature (`panelShapeSig`) includes modes.
     rolled `bodyfat` is dropped at spawn (`Body.hs:123-124`), so an unusually
     lean or fat individual recovers to the species norm, not to its own spawn
     shape. That is accepted.
-  - Mass changes call `recomputeBody` as regrowth does today. Strength and
-    carrying capacity therefore recover with the tissue, and fat insulation
-    in thermo follows.
+  - Mass changes call `recomputeBody` as regrowth does today. Carrying
+    capacity and the maxima therefore recover with the tissue, and fat
+    insulation in thermo follows.
+  - **Strength.** On the Simulated → Nominal transition, nutrition's
+    `onModeChanged` hook **synchronously** writes `strength =
+    strength_body`, so a previous calorie discount is cleared even for a unit
+    already at target, which has no mass change to force a recompute
+    (`scripts/starvation.lua:89-109`). While Nominal, `nominalUpkeep`
+    maintains `strength = strength_body` every pass, independently of the
+    Simulated-only discount gate. On the Nominal → Simulated transition, the
+    next `refreshStrength` reapplies the band for the seeded (full) calorie
+    store, which leaves strength undiscounted.
+  - **Which units recover:** O-18. As written, SD-5's target also applies to
+    a *healthy* individual whose spawn roll sat below the species mean. Such
+    a unit would slowly gain fat toward the mean while keeping any surplus
+    muscle. O-18 asks whether that drift is intended.
   - In the expected use, nutrition goes Nominal together with salt, and the
     switch normally happens on a healthy unit. Recovering a wasted unit is a
     handled edge case.
@@ -625,6 +822,9 @@ changes, listed in its PR:
 
 1. Bodyless definitions become Unsupported (SD-13).
 2. `reduced` species gain virtual meals (SD-4), which fixes F-4.
+3. Nominal-nutrition units (bear, squirrel, technomule, nomad) gain Nominal
+   upkeep (SD-5, D-9). Strength is undiscounted, and tissue below the
+   species-mean target regrows. The scope of the latter depends on O-18.
 
 (Mass-proportional sweat costs arrive earlier, through #2825.)
 
@@ -680,11 +880,15 @@ or enumerated, with no entropy-seeded rolls.
   checked against one scenario. Feedback loops are covered only by T-4.
   Interface completeness depends on the coverage audit.
 - **I3 Healthy steady state** (per system, alone Simulated, everything else
-  Nominal). Temperate climate, idle and sustained exertion, over 2 game-hours.
-  Each Simulated system stays within its healthy band. For salt with
-  nutrition Nominal, virtual meals must keep `salt_conc` inside
-  [`CRAMP_START`, `HYPER_START`] = [0.80, 1.35] throughout, with at least one
-  virtual meal firing in the window under exertion.
+  Nominal). Temperate climate, idle and sustained exertion, over 600
+  tick-seconds (10 game-hours at `DAY_SECONDS` 1440). Starting healthy, each
+  Simulated system stays within its healthy band; for salt that is
+  `salt_conc` in [`CRAMP_START`, `HYPER_START`] = [0.80, 1.35]. **No virtual
+  meal is required here** (R2-7). With thermo Nominal there is no sweat, so a
+  full pool loses only baseline excretion (`0.004/70` of capacity per second,
+  `scripts/salts.lua:30,67`), about 3.4 % over the window, and the full
+  reserve refills it. The trigger is exercised by T-12 and the sustained
+  coupled case by T-13.
 - **I4 Mass invariance of salt and hydration debits** is owned by #2825's
   own acceptance, not by this epic. This epic only requires that the mode
   gating does not reintroduce absolute debits: `debit` is applied as a
@@ -692,9 +896,18 @@ or enumerated, with no entropy-seeded rolls.
 - **I5 Transition contract**, with an Haskell pure part: seed, scrub,
   refusals, override set/clear semantics (D-5 table), values validation,
   revive after Simulated → Nominal, and cancellation of a need latch.
-- **I6 Persistence**: exact canonical round trip with zero normalization;
-  legacy normalization is idempotent; and the D-6 table, as a pure
-  table-driven spec over (a) to (h).
+- **I6 Persistence**, on the D-6 classification boundary (R2-5):
+  - Under unchanged content, a round trip performs zero normalizations.
+    Durable values and overrides are bit-identical, and caches equal their
+    canonical recomputation.
+  - **Save-boundary case:** save immediately after a pass in which hydration
+    drained after salts and brain ticked, and after a `recomputeBody` mass
+    change. The stored caches are then legitimately stale. The durable
+    oracle still holds exactly, and the caches still hold canonically.
+  - A content-change case (SD-14) normalizes once, logged, and a second load
+    makes no changes.
+  - Legacy normalization is idempotent.
+  - The D-6 table, as a pure table-driven spec over (a) to (j).
 
 ### Representative contract cases
 
@@ -719,45 +932,117 @@ or enumerated, with no entropy-seeded rolls.
   it recovers. Autonomous drinking is not asserted (F-10).
 - **T-6 Modifiers.** A modifier on `hydration` changes the Simulated read and
   has no effect under Nominal. A modifier on `max_hydration` moves the Nominal
-  healthy value.
+  healthy value. **Retained modifier across Nominal → Simulated (R2-2):**
+  - With a +50 % percent modifier on `salt` and hydration at 0.5, the
+    transition seeds base `b = 0.5·maxSalt / 1.5`, so effective salt is
+    `0.5·maxSalt` and `salt_conc` reads exactly 1.0.
+  - With a −100 % percent modifier on `salt`, the transition is refused
+    atomically: mode, override and keys are unchanged.
+  - A caller `values` target goes through the same inversion.
 - **T-7 No write-through.** With hydration and salt Nominal, `getAllStats`,
   `getStat`, `getStatBase` and a failed `setStat` leave the owned, derived and
   meter keys absent. A definition templating an owned name fails to load.
-- **T-8 Derived freshness.** Immediately after salt Nominal → Simulated, after
-  hydration Nominal → Simulated with salt Simulated, and after a paused load,
-  `salt_conc`, circulation and consciousness read coherent values before any
-  tick.
-- **T-9 Nutrition floors.** An acolyte at the fat floor, and one at the lean
-  floor, are switched to nutrition Nominal.
+- **T-8 Derived freshness** (R2-4):
+  - `salt_conc` is coherent, read with no tick in between, after each of:
+    salt Nominal → Simulated; hydration Nominal → Simulated with salt
+    Simulated; a raw debugging `setStat` of Simulated `salt`; a `debit`; a
+    `recomputeBody` that moves `maxSalt`; and the **expiry** of a modifier on
+    `salt` (advance game time only, with no setter).
+  - After a facade transition returns, its caller reads refreshed
+    circulation and consciousness.
+  - After a paused load, the same holds before the first frame.
+  - Non-v1 caches observed from outside the facade are asserted only to
+    within one pass (the D-5a steady-state boundary).
+- **T-9 Nutrition floors and Nominal upkeep** (R2-3). An acolyte at the fat
+  floor, and one at the lean floor, are switched to nutrition Nominal.
   - Neither suffers organ-failure drain nor a starvation death over 1
     game-day.
-  - Both tissues rise monotonically toward the species-mean target and stop
-    at it.
+  - Both tissues rise monotonically toward the species-mean target, idle
+    **and** walking (no walking fat burn), and stop exactly at it, with no
+    residue overshoot.
   - A unit above target keeps its mass.
+  - A unit **already at target with a stale calorie discount** on `strength`
+    reads `strength = strength_body` immediately after the transition, with
+    no mass change and no tick.
+  - A `nomad_primitive`, which has no config entry, receives upkeep.
   - A wound-driven `organ` meter and a stamina drain from exertion still kill
     when driven.
-- **T-12 Virtual meals.** Salt Simulated with nutrition Nominal at squirrel
-  mass, idle and under exertion heat. A virtual meal fires each time the
-  salt fraction crosses below 0.85 and never above it. `salt_conc` stays
-  within [0.80, 1.35]. With nutrition Simulated, no virtual meal ever fires.
+  - The O-18 answer adds one case: a healthy below-mean individual.
+- **T-12 Virtual meal trigger** (R2-1, R2-7). Salt Simulated, nutrition and
+  hydration Nominal, thermo Nominal (so no sweat), squirrel mass, with
+  **explicit initial values** set via `setPhysioMode` values:
+  - (a) pool 0.8505·`maxSalt`, reserve 0. Baseline excretion crosses 0.85
+    within about 9 s, and exactly one meal fires, depositing
+    0.30·`maxSalt` into the reserve.
+  - (b) pool 0.80, reserve 0.5·`maxSalt` (at least one meal). No meal fires,
+    because the reserve is already releasing.
+  - (c) pool 0.90, reserve 0, over 60 s. No meal fires: the above-threshold
+    control.
+  - (d) case (a) with nutrition Simulated. No virtual meal fires.
+
+  The capacity cap cannot bind while suppression holds, because
+  `storeCap = 2·maxSalt` exceeds two meals. A unit spec covers the cap.
+- **T-13 Sustained coupled exertion** (R2-7). Salt and thermo Simulated,
+  hydration and nutrition Nominal, squirrel mass, forced moving at 22 °C /
+  humidity 0.5, over 1,440 tick-seconds (1 game day).
+  - Sweat is post-#2825, so it is mass-proportional.
+  - Virtual meals fire at least once.
+  - `salt_conc` stays in [0.80, 1.35] throughout.
+  - Recheck the expected sweat rate against #2825's merged constants.
 - **T-10 Override semantics.** Set-equal-default, clear-equal-default,
   changed-default with and without a pin, each across save and load (D-5
   table).
-- **T-11 Load policy.** One case each for (b), (c), (d), (f) and (g).
+- **T-11 Load policy.** One case each for (b), (c), (d), (f), (g), (i) and
+  (j). (j) uses a historical pre-frame fixture: its fat and lean floors are
+  unchanged after reconstruction, and a second load reconstructs nothing.
+- **Activated paths, not the accessor alone** (R2-8). S4's run of I1, T-6
+  and T-9 must go through the real activated consumers:
+  - the Haskell `Healing.hs` nutrition multiplier with a negative `hydration`
+    modifier;
+  - `Wounds/Tick.hs` fever with thermo Nominal;
+  - `unit_ai_needs` drink and eat;
+  - `consumable.drink`;
+  - brain consciousness.
 
 ### Static and probe
 
 - The access audit with its self-test (D-7).
-- `tools/physiology_probe.py` reads through `unit.readPhysio` (F-9). Its
-  bounds are unchanged. F-2's primary gate is #2825's; T-1 covers it under
+- `tools/physiology_probe.py` reads through `unit.readPhysio`, a pure read
+  verb allowed outside the facade (D-7, R2-9). It reads `circulation` as an
+  unowned pass-through key and `salt_conc` on demand (F-9). Its bounds are
+  unchanged. F-2's primary gate is #2825's; T-1 covers it under
   the modes.
 - Validation follows the root CLAUDE.md tiers: targeted `--match` groups,
   the D-6 persistence gates, and the matching self-tests. No full suites.
 
 ## Open decisions for the owner
 
-None. Revision 3 settled every decision with the owner (2026-10-13). IDs
-are stable, and each settled entry below names the decision it replaced.
+One, new in revision 4. Revision 3 settled every other decision with the
+owner (2026-10-13). IDs are stable, and each settled entry below names the
+decision it replaced.
+
+1. **O-18. Which units does Nominal tissue recovery act on?** SD-5 settled
+   the target: the species-mean body fat on the unit's own `frame_mass`.
+   Applying R2-3 exposed a consequence the settled answer did not discuss.
+   Under SD-5 as written, a **healthy** individual whose spawn roll was below
+   the species mean also "recovers": a lean-rolled bear or squirrel slowly
+   gains fat to the species mean and keeps any surplus muscle. Across a
+   session, individual body variation for every Nominal-nutrition species
+   drifts upward toward the mean, starting at S4 activation. Options:
+   - **(a) As written:** all below-target tissue regrows. Simple and
+     stateless. Diversity converges toward the mean from below.
+   - **(b) Recovery only after depletion (recommended):** upkeep starts
+     regrowing only once a tissue has been depleted. A depleted tissue is one
+     below its spawn viability margin (`minFat·1.7`, `minLean·1.07`), or one
+     lost under Simulated nutrition. Once started, recovery continues to the
+     species-mean target and then stops. Healthy individuals keep their
+     rolled shape. This costs one persisted per-unit flag
+     (`nutrition_recovering`, an owned nutrition key, *Persist exactly*),
+     and one more T-9 case.
+   - **(c) Freeze healthy, recover to the margin only:** no new state, but
+     wasted units stop at the viability margin rather than the species mean.
+     That contradicts SD-5's target.
+   Blocks S4.
 
 **Settled:**
 
@@ -836,16 +1121,21 @@ are stable, and each settled entry below names the decision it replaced.
   `data/physiology/systems.yaml`. Haskell reads both at spawn and load, and
   definition loading validates them.
 
-No open decisions remain. Implementation-time checks: #2761's merged
-constants against SD-4 and D-1, and the S8 to S11 design addenda.
+One open decision remains (O-18). Implementation-time checks:
+
+- #2761's merged constants (`storeCap`, `STORE_RELEASE_FRAC`,
+  `salts.deposit`) against SD-4, D-1 and D-4;
+- #2825's merged sweat constants against T-13;
+- the S8 to S11 design addenda.
 
 ## Delivery plan (dependency-ordered)
 
 Each activated intermediate state must satisfy its own advertised invariants
 and round-trip contract.
 
-0. **Precondition: #2825** (mass-proportional sweat debits) is merged. It is
-   not a slice of this epic.
+0. **Preconditions: #2825** (mass-proportional sweat debits) **and #2761**
+   (salt reserve, PR 2824) are both merged (SD-3, SD-15). Neither is a slice
+   of this epic.
 1. **S2.** Registry, `udPhysiology`, profiles, the pure resolver, read verbs,
    and template rejection. **Inactive:** no tick, consumer or save path uses
    it. Advertised invariants: resolver specs only.
@@ -854,18 +1144,31 @@ and round-trip contract.
    fixtures; decode-time rejections (d), (e) and (h). No setter exists, so
    overrides are always empty. Advertised: I6's exact round trip and the
    migrations. Load policy settled (SD-6).
-3. **S4. Activation.** Tick gating; the write gate; transitions and setters;
-   `refresh`; nutrition effect gating; the dependency contributions,
-   including virtual meals (SD-4) and tissue recovery (SD-5); load
-   normalization (b), (c), (f) and (g); and the activation profile set with
-   its two intentional changes (D-10). Advertised: I1 to I3, I5, T-1 to T-4
-   and T-6 to T-12. Needs S2, S3, SD-7 to SD-9.
-4. **S5.** Consumers migrate to the accessor (status, debug, AI, brain,
-   Haskell `physioRead`), plus the access audit and the probe read (F-9).
-   S4's state stays coherent before S5 because unmigrated readers' fallbacks
-   are healthy and Haskell reads absent as healthy. The exception is the
-   probe's `or 0`, which reads no Nominal keys under the activation profile
-   set.
+3. **S5. Gameplay consumer migration, inactive preparation** (R2-8; lands
+   before S4). Every gameplay reader and writer of a registry key moves to
+   the facade or to Haskell `physioRead`:
+   - readers: AI needs, brain, cramps, `sweatFactor`, `Healing.hs`,
+     `Wounds/Tick.hs`, and the probe aggregate;
+   - writers: `unit_ai_needs.lua:174`, `consumable.lua:171-176`, thermo's
+     sweat debits and `salts.mealSalt` move to `debit` / `credit`.
+
+   The access audit lands with them. While inactive, the facade reports
+   today's semantics for every key, so S5 is behavior-preserving. Advertised:
+   the audit and its self-test, plus existing gates unchanged.
+4. **S4. Activation.** Tick gating; the write gate; transitions and setters;
+   modifier-aware seeding; on-demand `salt_conc`; `refresh`; nutrition
+   effect gating and Nominal upkeep; the dependency contributions, including
+   virtual meals (SD-4); load normalization (b), (c), (f), (g), (i) and (j);
+   and the activation profile set with its three intentional changes (D-10).
+   - Advertised: I1 to I3, I5, I6, T-1 to T-4 and T-6 to T-13. Each runs
+     through the real activated Haskell and Lua consumers migrated in S5,
+     not only the accessor.
+   - Needs S2, S3, S5, SD-7 to SD-9 and O-18.
+   - **Temporary display, honestly documented in the S4 PR:** until S6, the
+     status and debug panels show `?` for a Nominal pool, which is absent
+     from storage (`scripts/unit_info_v2_stat_defs.lua:23-28`,
+     `scripts/unit_info_panel.lua:84-88`). This is presentation only.
+     Gameplay readers already use the facade from S5.
 5. **S6.** UI display of Nominal, with `--offscreen` evidence in
    `docs/pr-proofs/`.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
