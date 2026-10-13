@@ -2120,8 +2120,9 @@ the base verb returns the stored base; an absent Simulated meter reads
 0. A missing Simulated owned value, and a healthy-rule input that is
 absent, non-finite or non-positive, raise an invariant error and never a
 fallback. The same holds for the Simulated `hydration` pool `salt_conc`
-divides by (zero, negative, NaN and infinity included), judged as
-stored and as effective so the zero clamp cannot hide an invalid pool. A derived key is computed on demand by the shared
+divides by (zero, negative, NaN and infinity included). Every such input
+is judged both as stored and as effective, so neither the zero clamp nor
+a positive modifier can make an invalid stored value read as valid. A derived key is computed on demand by the shared
 `saltConcentration` rule and never stored; a stored legacy `salt_conc`
 is ignored. An UNOWNED key reads exactly as `unit.getStat` /
 `getStatBase` do (mode `nil`), lazy roll and cache included; the
