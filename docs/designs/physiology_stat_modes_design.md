@@ -52,7 +52,7 @@ preconditions are merged, and the merged reserve constants were checked
 - [x] S3. Override storage and wire format (units v4, frozen v3 graph, decode policy); overrides always empty — [#2829]
 - [x] S5. Gameplay consumer migration to the accessor and facade, plus the access audit (inactive preparation; lands **before** S4) — [#2830]
 - [x] S4. Activation (revision 6: T-13 fixture pinned): tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (tissue recovery per SD-18) — [#2831]
-- [ ] S6. UI display of Nominal
+- [x] S6. UI display of Nominal — [#2832]
 - [ ] S7. Species profile table (SD-10), probe update
 - [ ] S8. Stamina, exhaustion, sleep pressure (design addendum first)
 - [ ] S9. Cardio and circulation (design addendum first)
