@@ -54,7 +54,7 @@ preconditions are merged, and the merged reserve constants were checked
 - [x] S4. Activation (revision 6: T-13 fixture pinned): tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (tissue recovery per SD-18) — [#2831]
 - [x] S6. UI display of Nominal — [#2832]
 - [x] S7. Species profile table (SD-10), probe update — [#2833]
-- [ ] S8a. Stamina: mode-aware combat cost and damage, effective-unit stamina commit, max resolution, SD-20 nomad engagement (addendum S8; depends on S4 #2831; independent)
+- [x] S8a. Stamina: mode-aware combat cost and damage, effective-unit stamina commit, max resolution, SD-20 nomad engagement (addendum S8; depends on S4 #2831; independent) — [#2834]
 - [ ] S8b. Exhaustion and sleep pressure modes (addendum S8; depends on S4 #2831; independent)
 - [ ] S9. Cardio and circulation (addendum S9; depends on S4 #2831; independent)
 - [ ] S10. Blood volume and recovery (addendum S10; depends on S4 #2831; independent)
