@@ -47,7 +47,7 @@ preconditions are merged, and the merged reserve constants were checked
 (header). Ready for issue processing.
 
 - [ ] EPIC. Explicit physiology stat modes
-- [#2825] S1. Mass-proportional sweat costs. Owned by #2825, outside this epic, and a precondition for it
+- [x] S1. Mass-proportional sweat costs (precondition, outside this epic) — [#2825]
 - [ ] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it)
 - [ ] S3. Override storage and wire format (units v4, frozen v3 graph, decode policy); overrides always empty
 - [ ] S5. Gameplay consumer migration to the accessor and facade, plus the access audit (inactive preparation; lands **before** S4)
