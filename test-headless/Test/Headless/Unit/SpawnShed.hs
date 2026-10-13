@@ -45,6 +45,7 @@ mkUnitDef mods = UnitDef
     , udNaturalWeapon      = Nothing
     , udModifiers          = mods
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 -- | Minimal ItemDef — only idBuffs (and the name key) matter here.

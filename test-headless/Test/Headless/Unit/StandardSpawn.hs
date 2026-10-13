@@ -190,6 +190,7 @@ loadShippedContent ls = do
     forM_ items $ loadWith ls "loadItemYaml" ∘ ("data/items" </>)
     loadWith ls "loadEquipmentYaml" "data/equipment/humanoid.yaml"
     loadWith ls "loadFactionYaml" "data/factions/base.yaml"
+    loadWith ls "loadPhysiologyYaml" "data/physiology/systems.yaml"
     loadWith ls "loadUnitYaml" "data/units/acolyte.yaml"
 
 -- | The AI stub (only its walk-out verb is reached) and a Lua RNG spy:

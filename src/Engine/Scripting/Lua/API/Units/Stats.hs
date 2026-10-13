@@ -16,6 +16,7 @@ module Engine.Scripting.Lua.API.Units.Stats
   , unitGetModifiersFn
   , unitClearModifiersFn
   , getEffectiveStat
+  , getOrRollStat
   )
     where
 

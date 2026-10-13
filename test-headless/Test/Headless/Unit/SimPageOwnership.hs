@@ -56,7 +56,7 @@ import Unit.Thread.Movement (tickAllMovement)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
     , UnitManager(..), Wound(..), defaultNaturalResistance
-    , emptyUnitManager )
+    , emptyUnitManager , noUnitPhysiology)
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
 import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
@@ -200,7 +200,7 @@ minimalDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 mkUnit ∷ WorldPageId → [Wound] → UnitInstance
 mkUnit page wounds = UnitInstance

@@ -123,6 +123,7 @@ luaPrelude enumeration = T.unlines
     -- fixture drains the WHOLE queue, so an absent stub is a call to a
     -- nil value rather than a missing assertion.
     , "  loadFactionYaml = healthyYaml,"
+    , "  loadPhysiologyYaml = healthyYaml,"
     , "  loadUnitYaml = healthyYaml,"
     , "  loadLootTableYaml = healthyYaml,"
     , "  loadLootProfileYaml = healthyYaml,"

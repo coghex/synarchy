@@ -70,7 +70,7 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
     ( UnitDef(..), UnitManager(..), emptyUnitManager
-    , defaultNaturalResistance )
+    , defaultNaturalResistance , noUnitPhysiology)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..))
 import World.Flora.Types (emptyFloraChunkData)
@@ -224,6 +224,7 @@ acolyteDef = UnitDef
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 -- * Scene

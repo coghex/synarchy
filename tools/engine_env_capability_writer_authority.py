@@ -507,6 +507,8 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         frozenset({"Engine.Scripting.Lua.API.LootProfiles"}),
     "factionCatalogueRef":
         frozenset({"Engine.Scripting.Lua.API.Factions"}),
+    "physiologyRegistryRef":
+        frozenset({"Engine.Scripting.Lua.API.Physiology"}),
     "tutorialRegistryRef": frozenset({"Engine.Scripting.Lua.API.Tutorial"}),
     "eventStoreRef": frozenset(),
     "notificationCfgRef": frozenset({"Engine.Scripting.Lua.API.PlayerEvent"}),

@@ -449,6 +449,7 @@ import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
 import qualified Test.Headless.Unit.FactionCatalogue as UnitFactionCatalogue
+import qualified Test.Headless.Unit.Physiology as UnitPhysiology
 import qualified Test.Headless.Unit.FactionProfile as UnitFactionProfile
 import qualified Test.Headless.Unit.FactionProfileWire as UnitFactionProfileWire
 import qualified Test.Headless.Gameplay.Tags as GameplayTags
@@ -1341,6 +1342,8 @@ restLane = do
     UnitFactionProfile.spec
     UnitFactionProfileWire.spec
     UnitFactionCatalogue.spec
+    -- #2828: the physiology system registry, resolver and read verbs.
+    UnitPhysiology.spec
     -- #2700: the pure gameplay tag registry and query evaluator. No
     -- engine. The memory group registers nothing unless
     -- SYNARCHY_TAG_MEMORY=1 (see its module header).

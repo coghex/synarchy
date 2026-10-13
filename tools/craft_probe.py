@@ -97,6 +97,7 @@ def bootstrap(port):
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/vegetation/*.yaml", "engine.loadVegetationYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),
         ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),

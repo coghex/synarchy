@@ -42,7 +42,7 @@ import Item.Types
 import Structure.Palette (emptyTexPalette)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance )
+    , UnitManager(..), defaultNaturalResistance , noUnitPhysiology)
 import qualified Data.Map.Strict as Map
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Load.Stage (stageSession, renderStageError)
@@ -161,7 +161,7 @@ unitDefWithClass cls = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | The equipment map every drift example starts from: one entry that
 --   is still correct, one under a slot id the class retired, and one

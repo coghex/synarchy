@@ -56,7 +56,7 @@ import Unit.Faction.Profile
     , tagAcolyte, tagLegacyHostile, tagWildlife )
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Entities
     ( PageUnitsDTO(..), PageUnitsDTOv1(..), PageUnitsDTOv2(..)
@@ -112,7 +112,7 @@ defWith n tags = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [], udFactionTags = tags }
+    , udNaturalWeapon = Nothing, udModifiers = [], udFactionTags = tags, udPhysiology = noUnitPhysiology }
 
 defs ∷ HM.HashMap Text UnitDef
 defs = HM.fromList
@@ -466,6 +466,7 @@ loadShippedContent ls = do
     forM_ items $ loadWith ls "loadItemYaml" ∘ ("data/items" </>)
     loadWith ls "loadEquipmentYaml" "data/equipment/humanoid.yaml"
     loadWith ls "loadFactionYaml" "data/factions/base.yaml"
+    loadWith ls "loadPhysiologyYaml" "data/physiology/systems.yaml"
     forM_ ["acolyte", "bear_brown", "tiller"] $ \u →
         loadWith ls "loadUnitYaml" ("data/units/" <> u <> ".yaml")
 

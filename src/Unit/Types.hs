@@ -29,6 +29,8 @@ module Unit.Types
     , defaultNaturalResistance
     , NamePool(..)
     , UnitDef(..)
+    , UnitPhysiology(..)
+    , noUnitPhysiology
     , UnitInstance(..)
     , UnitManager(..)
     , UnitId(..)

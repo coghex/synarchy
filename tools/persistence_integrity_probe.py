@@ -125,6 +125,7 @@ def bootstrap_defs(port: int) -> None:
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         # Just the one def the #1484 scenario stakes -- a shipped
         # `build_work: 240.0` building, so a `building.spawn`ed instance

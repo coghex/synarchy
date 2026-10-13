@@ -42,7 +42,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , defaultNaturalResistance, emptyUnitManager )
+    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Page.Types (WorldPageId(..))
 
 helmetItemPath ∷ FilePath
@@ -109,6 +109,7 @@ minimalAcolyteDef = UnitDef
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 helmetInstance ∷ Float → ItemInstance

@@ -67,7 +67,7 @@ import Unit.Thread.Command.Motion
     (handleUnitMoveToCommand, handleUnitSetMoveSpeedCommand)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Page.Types (WorldPageId(..))
 
 -----------------------------------------------------------------------
@@ -131,7 +131,7 @@ motionDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | An uninjured instance at a FULL blood pool, so 'injurySpeedMult'
 --   is exactly 1.0 and an accepted speed reaches the sim state

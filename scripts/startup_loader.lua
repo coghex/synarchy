@@ -60,6 +60,7 @@ local yamlFamilies = {
     ["data/equipment"]   = "equipment",
     ["data/buildings"]   = "building",
     ["data/factions"]    = "faction",
+    ["data/physiology"]  = "physiology",
     ["data/units"]       = "unit",
     ["data/loot_tables"] = "loot_table",
     ["data/loot_profiles"] = "loot_profile",
@@ -435,6 +436,13 @@ local function queueNormalProfile()
     -- declared yet is refused entire. Both profiles load it, and both
     -- load it here, because both load data/units.
     addYamlDir("data/factions",   "Loading factions...",   engine.loadFactionYaml)
+    -- The physiology system registry MUST come before data/units too
+    -- (#2828): unit registration validates a definition's `physiology:`
+    -- block and its stat/skill templates against it, and REFUSES to
+    -- register with no registry loaded, so a unit file queued first
+    -- would be refused entire rather than checked. A registry that fails
+    -- its own validation is a terminal startup failure like any family's.
+    addYamlDir("data/physiology", "Loading physiology...", engine.loadPhysiologyYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
     -- Loot PROFILES (#2499) after loot tables and before locations. The
@@ -494,6 +502,13 @@ local function queueArenaProfile()
     -- declared yet is refused entire. Both profiles load it, and both
     -- load it here, because both load data/units.
     addYamlDir("data/factions",   "Loading factions...",   engine.loadFactionYaml)
+    -- The physiology system registry MUST come before data/units too
+    -- (#2828): unit registration validates a definition's `physiology:`
+    -- block and its stat/skill templates against it, and REFUSES to
+    -- register with no registry loaded, so a unit file queued first
+    -- would be refused entire rather than checked. A registry that fails
+    -- its own validation is a terminal startup failure like any family's.
+    addYamlDir("data/physiology", "Loading physiology...", engine.loadPhysiologyYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
     addYamlDir("data/loot_profiles", "Loading loot profiles...",

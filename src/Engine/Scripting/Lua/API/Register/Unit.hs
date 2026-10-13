@@ -28,6 +28,13 @@ import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
 -- committed so the physiology tick's exhaustion rules read storage
 -- rather than a script-side estimate.
 import Engine.Scripting.Lua.API.Units.Stamina (unitCommitStaminaFn)
+-- #2828's five physiology READ verbs, imported directly for the same
+-- reason. Their own module because the mutating pair (S4's
+-- setPhysioMode / clearPhysioMode) is deliberately not installed here
+-- and must never share a registration site with them.
+import Engine.Scripting.Lua.API.Units.Physiology
+    ( unitGetPhysioModeFn, unitGetPhysioOverrideFn, unitGetPhysioDefaultFn
+    , unitReadPhysioFn, unitReadPhysioBaseFn )
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -70,6 +77,11 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "getStatBase" (unitGetStatBaseFn env)
   registerLuaFunction callStats "unit" "setStat"     (unitSetStatFn env)
   registerLuaFunction callStats "unit" "getAllStats" (unitGetAllStatsFn env)
+  registerLuaFunction callStats "unit" "getPhysioMode"     (unitGetPhysioModeFn env)
+  registerLuaFunction callStats "unit" "getPhysioOverride" unitGetPhysioOverrideFn
+  registerLuaFunction callStats "unit" "getPhysioDefault"  (unitGetPhysioDefaultFn env)
+  registerLuaFunction callStats "unit" "readPhysio"        (unitReadPhysioFn env)
+  registerLuaFunction callStats "unit" "readPhysioBase"    (unitReadPhysioBaseFn env)
   registerLuaFunction callStats "unit" "recoverStance" (unitRecoverStanceFn env)
   registerLuaFunction callStats "unit" "commitStamina" (unitCommitStaminaFn env)
   registerLuaFunction callStats "unit" "getInventory" (unitGetInventoryFn env)

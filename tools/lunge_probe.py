@@ -377,6 +377,7 @@ def bootstrap(port: int) -> None:
         ("data/equipment/*.yaml", "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml", "engine.loadMaterialYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml", "engine.loadUnitYaml"),
     ):
         for path in sorted(glob.glob(pattern)):

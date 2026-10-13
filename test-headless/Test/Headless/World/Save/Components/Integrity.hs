@@ -66,7 +66,7 @@ import Infection.Types
 import qualified Data.Map.Strict as Map
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), Wound(..), defaultNaturalResistance )
+    , UnitManager(..), Wound(..), defaultNaturalResistance , noUnitPhysiology)
 import Building.Knowledge (emptyContainerKnowledge)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
@@ -645,7 +645,7 @@ immunityUnitDefs = HM.singleton "test_unit" UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | A wound whose infection type is @iid@ — the reference
 --   'missingInfectionReferences' does inventory.

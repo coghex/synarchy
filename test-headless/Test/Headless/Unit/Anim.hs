@@ -37,6 +37,7 @@ mkDef stateAnims = UnitDef
     , udNaturalWeapon      = Nothing
     , udModifiers          = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 spec ∷ Spec

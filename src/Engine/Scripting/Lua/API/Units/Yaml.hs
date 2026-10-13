@@ -4,6 +4,7 @@ module Engine.Scripting.Lua.API.Units.Yaml
   , AtlasResolver
   , registerUnitDefs
   , resolveUnitFactionTags
+  , resolveUnitPhysiologies
   , resolveUnitAtlases
   , surfaceZInWorld
   )
@@ -21,6 +22,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map.Strict as Map
 import qualified HsLua as Lua
 import Control.Monad (foldM)
+import Data.Bifunctor (first)
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logDebug, logWarn, logError)
@@ -36,7 +38,7 @@ import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool
 import Unit.Atlas.Index (AtlasLoadError(..), atlasTextureRequests
                         , renderAtlasLoadError)
 import Unit.Atlas.Yaml (resolveUnitAtlases)
-import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim, UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYamlOutcome, unitYamlBodyPartToBodyPart)
+import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlPhysiology(..), UnitYamlAnim, UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYamlOutcome, unitYamlBodyPartToBodyPart)
 import Engine.Asset.YamlNames (loadNamePool)
 import System.FilePath (takeDirectory, (</>), (<.>))
 import Unit.Types
@@ -48,6 +50,8 @@ import Unit.Faction.Catalogue
     ( FactionCatalogue, FactionTagRejection, rejectionDetail
     , rejectionReason, resolveDeclaredTags )
 import Unit.Faction.Profile (FactionTag)
+import Unit.Physiology (rejectPhysiologyTemplates, resolveUnitPhysiology)
+import Unit.Physiology.Types (PhysiologyRegistry, physiologyRegistryLoaded)
 
 -- * YAML loading
 
@@ -106,23 +110,23 @@ registerUnitDefs
 registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
     logger ← readIORef (loggerRef env)
     catalogue ← readIORef (crFactionCatalogueRef (toContentRegistriesCapability env))
-    -- FACTION-TAG PREFLIGHT (#2506, requirement 4). Resolved for the
-    -- WHOLE file before a single definition is registered, because the
-    -- loop below publishes incrementally: a refusal decided partway
+    physiologyRegistry ← readIORef
+        (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+    -- FACTION-TAG (#2506) AND PHYSIOLOGY (#2828) PREFLIGHT. Resolved for
+    -- the WHOLE file before a single definition is registered, because
+    -- the loop below publishes incrementally: a refusal decided partway
     -- through would already have allocated handles, queued uploads and
     -- inserted the definitions ahead of the offending one, and the
     -- "registers nothing" half of whole-file rejection would be a
     -- claim rather than a fact.
-    case resolveUnitFactionTags catalogue defs of
-      Left (unitName, rejection) → do
+    case preflightUnitFile catalogue physiologyRegistry defs of
+      Left (unitName, reason, detail) → do
         logError logger CatAsset $
             "loadUnitYaml: refused " <> T.pack filePath
-            <> " entirely: " <> rejectionReason rejection <> " '"
-            <> rejectionDetail rejection <> "' on unit definition '"
-            <> unitName <> "'"
-        return (Left (YamlRefusal (Just (rejectionReason rejection))
-                                  (rejectionDetail rejection)))
-      Right tagsByDef → Right <$> foldM (\acc (def, factionTags) → do
+            <> " entirely: " <> reason <> " '" <> detail
+            <> "' on unit definition '" <> unitName <> "'"
+        return (Left (YamlRefusal (Just reason) detail))
+      Right (tagsByDef, physiologyByDef) → Right <$> foldM (\acc (def, factionTags, physiology) → do
 
         let name      = uydName def
             spritePath = T.unpack (uydSprite def)
@@ -326,6 +330,7 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                     , udNaturalWeapon    = natWeapon
                     , udModifiers        = defMods
                     , udFactionTags      = factionTags
+                    , udPhysiology       = physiology
                     }
             atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 (um { umDefs = HM.insert name unitDef (umDefs um) }, ())
@@ -339,7 +344,21 @@ registerUnitDefs env poolRef lteq resolveAtlases filePath defs = do
                 <> " animations)"
 
             return (acc + 1)
-        ) (0 ∷ Int) (zip defs tagsByDef)
+        ) (0 ∷ Int) (zip3 defs tagsByDef physiologyByDef)
+
+-- | Both whole-file preflights, faction tags first and physiology second,
+--   as @(definition, reason, detail)@ for the FIRST refusal. Faction
+--   tags keep their precedence so a file refused for an undeclared tag
+--   is refused for that tag whether or not a physiology registry is
+--   loaded. 'Right' carries each definition's resolved tags and its
+--   resolved physiology, in definition order.
+preflightUnitFile ∷ FactionCatalogue → PhysiologyRegistry → [UnitYamlDef]
+                  → Either (Text, Text, Text) ([[FactionTag]], [UnitPhysiology])
+preflightUnitFile catalogue registry defs = do
+    tags ← first (\(unitName, r) → (unitName, rejectionReason r, rejectionDetail r))
+                 (resolveUnitFactionTags catalogue defs)
+    physiology ← resolveUnitPhysiologies registry defs
+    pure (tags, physiology)
 
 -- | Resolve every definition's authored @faction_tags:@ against the
 --   loaded catalogue, in the file's own order.
@@ -360,6 +379,40 @@ resolveUnitFactionTags catalogue = traverse one
     one def = case resolveDeclaredTags catalogue (uydFactionTags def) of
         Left rejection → Left (uydName def, rejection)
         Right tags     → Right tags
+
+-- | Validate and resolve every definition's physiology (#2828) against
+--   the loaded registry, in the file's own order.
+--
+--   'Left' is @(definition, reason, detail)@ for the FIRST failure, which
+--   is one of: no registry loaded at all (refused rather than skipped, so
+--   the template rule below can never pass vacuously against an empty
+--   registry); a registry-owned, derived or meter name templated in
+--   @stats:@ or @skills:@; or a @physiology:@ block naming an unknown
+--   profile, system or mode. 'Right' preserves definition order, so
+--   @zip@ against the same list is each one's resolved 'UnitPhysiology'.
+--
+--   Pure and exported for the reason 'resolveUnitFactionTags' is: the
+--   registration path needs an engine, an asset pool and a Lua state,
+--   and this needs none of them.
+resolveUnitPhysiologies ∷ PhysiologyRegistry → [UnitYamlDef]
+                        → Either (Text, Text, Text) [UnitPhysiology]
+resolveUnitPhysiologies registry defs
+    | not (null defs) ∧ not (physiologyRegistryLoaded registry) =
+        Left ( uydName (head' defs), "physiology registry not loaded"
+             , "data/physiology/systems.yaml" )
+    | otherwise = traverse one defs
+  where
+    head' (d : _) = d
+    head' []      = error "resolveUnitPhysiologies: guarded by null defs"
+    one def = do
+        let name = uydName def
+        case rejectPhysiologyTemplates registry name
+                 (Map.keys (uydStats def)) (Map.keys (uydSkills def)) of
+            Just (reason, detail) → Left (name, reason, detail)
+            Nothing → either (\(reason, detail) → Left (name, reason, detail)) Right $
+                resolveUnitPhysiology registry name (uydBodyAuthored def)
+                    (uydPhysiology def ⌦ uypProfile)
+                    (maybe [] (Map.toList ∘ uypSystems) (uydPhysiology def))
 
 -- | Surface Z at a tile in ONE specific world. The unit's height must
 --   come from the same page the unit is stamped into — walking wmVisible
