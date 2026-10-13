@@ -811,6 +811,20 @@ are exempt), registry coverage
 (every system has a Lua owner, every owned key a healthy rule, every
 `contributes` entry a substitute), and templated physiology names.
 
+**Temporary UI exception (S5 to S6).** The audit carries one named,
+enumerated, *temporary* exception, for the legacy UI pool reads that stay
+raw until S6's Nominal-aware display. It lists exactly these sites, and any
+other raw UI read is still flagged:
+
+- `scripts/unit_info_panel.lua`: the `hydration`, `hunger` and `calories`
+  reads (about lines 85, 93 and 101);
+- `scripts/unit_info_v2_stat_defs.lua`: the generic `stats.get` pool reads
+  in `fmtCurMax` (about lines 25-26).
+
+The `salt_conc` status row (`scripts/unit_info_v2_status.lua`, about lines
+60 and 63) is **not** excepted. It moves to the accessor in S5, as D-5a
+requires. S6 deletes the exception.
+
 ### D-8. UI display
 
 Settled by the request (SD-2): a Nominal row shows `Nominal` in the neutral
@@ -1325,6 +1339,8 @@ and round-trip contract.
    The access audit lands with them. While inactive, the facade reports
    today's semantics for every key, so S5 is behavior-preserving. Advertised:
    the audit and its self-test, plus existing gates unchanged.
+   The audit ships with the temporary UI exception (D-7) for exactly the
+   enumerated legacy pool reads. The `salt_conc` status row is migrated here.
 4. **S4. Activation.** Tick gating; the write gate; transitions and setters;
    modifier-aware seeding; on-demand `salt_conc`; `refresh`; nutrition
    effect gating and Nominal upkeep; the dependency contributions, including
@@ -1340,7 +1356,9 @@ and round-trip contract.
      `scripts/unit_info_panel.lua:84-88`). This is presentation only.
      Gameplay readers already use the facade from S5.
 5. **S6.** UI display of Nominal, with `--offscreen` evidence in
-   `docs/pr-proofs/`.
+   `docs/pr-proofs/`. S6 migrates the excepted legacy UI pool reads (D-7) to
+   the Nominal-aware display and **deletes the temporary audit exception**.
+   Acceptance includes the access audit passing with the exception removed.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
    assertions where squirrel modes change.
 The remaining systems (SD-12) follow, one slice each, after S4. Each starts
