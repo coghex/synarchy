@@ -48,7 +48,7 @@ preconditions are merged, and the merged reserve constants were checked
 
 - [x] EPIC. Explicit physiology stat modes — [#2827]
 - [x] S1. Mass-proportional sweat costs (precondition, outside this epic) — [#2825]
-- [ ] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it)
+- [x] S2. System registry, species defaults, resolver and read API (inactive: nothing consumes it) — [#2828]
 - [ ] S3. Override storage and wire format (units v4, frozen v3 graph, decode policy); overrides always empty
 - [ ] S5. Gameplay consumer migration to the accessor and facade, plus the access audit (inactive preparation; lands **before** S4)
 - [ ] S4. Activation (revision 6: T-13 fixture pinned): tick gating, write gate, transitions, modifier-aware seeding, on-demand derived reads, nutrition effect gating and Nominal upkeep, dependency contributions, load normalization (tissue recovery per SD-18)
