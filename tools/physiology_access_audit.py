@@ -42,7 +42,10 @@ Allowances, each tied to real ownership and named, never a directory:
     Removed by S4 when #2754 becomes the ``exempt`` profile (design F-7).
   * ``PROBE_FIXTURE_WRITES``: tools/physiology_probe.py may ``setStat`` the
     keys it forces as scenario fixtures (D-7 allows raw setStat debugging
-    under Simulated). Reads in the probe are NOT allowed.
+    under Simulated) -- only from a STRAIGHT-LINE embedded chunk (no
+    function, loop or branch, so never an aggregate or a helper) inside the
+    named scenario functions ``hunger_section`` and
+    ``starvation_bands_section``. Reads in the probe are NOT allowed.
   * ``UI_EXCEPTIONS`` / ``UI_HELPER_EXCEPTIONS``: the TEMPORARY, enumerated
     legacy pool reads that stay raw until S6 (Nominal-aware display): the
     hydration, hunger and calories reads in ``formatStatus`` of
@@ -166,9 +169,23 @@ SURVIVAL_EXEMPTION = SiteException(
                "hypothermia", "hyperthermia", "salt_imbalance"}),
     "the #2754 thermo/salt substitute tick; S4 removes it (design F-7)")
 
-PROBE_FIXTURE_WRITES = SiteException(
-    PROBE_PATH, "<chunk>", "unit.setStat",
+@dataclass(frozen=True)
+class FixtureWrites:
+    """The probe's scenario setup writes: a STRAIGHT-LINE embedded chunk
+    (no function, loop or branch -- so never an aggregate or a helper)
+    inside one of the named Python scenario functions, writing one of the
+    named keys."""
+    file: str
+    verb: str
+    keys: frozenset[str]
+    scopes: frozenset[str]
+    why: str
+
+
+PROBE_FIXTURE_WRITES = FixtureWrites(
+    PROBE_PATH, "unit.setStat",
     frozenset({"calories", "hunger", "core_temp"}),
+    frozenset({"hunger_section", "starvation_bands_section"}),
     "scenario fixtures (D-7: raw setStat is allowed for debugging)")
 
 # TEMPORARY (S5 -> S6). Each key is admitted once per function.
@@ -190,7 +207,7 @@ class Policy:
     facade: str = FACADE
     generic_accessors: frozenset[str] = GENERIC_ACCESSORS
     survival: SiteException = SURVIVAL_EXEMPTION
-    probe_fixture: SiteException = PROBE_FIXTURE_WRITES
+    probe_fixture: FixtureWrites = PROBE_FIXTURE_WRITES
     ui_exceptions: tuple[SiteException, ...] = UI_EXCEPTIONS
     ui_helpers: tuple[HelperException, ...] = UI_HELPER_EXCEPTIONS
 
@@ -302,10 +319,12 @@ def _string_text(node) -> Optional[str]:
     return None
 
 
-def embedded_lua(py_text: str) -> list[tuple[int, str]]:
-    """(line, Lua text) for every Python string literal that looks like Lua.
-    An f-string's replacement fields become ``0``; implicitly concatenated
-    literals arrive already joined, reported at their first line."""
+def embedded_lua(py_text: str) -> list[tuple[int, str, str]]:
+    """(line, Lua text, scope) for every Python string literal that looks
+    like Lua. `scope` is the OUTERMOST Python function holding it, or
+    ``<module>``. An f-string's replacement fields become ``0``; implicitly
+    concatenated literals arrive already joined, reported at their first
+    line."""
     try:
         tree = ast.parse(py_text)
     except SyntaxError:
@@ -313,12 +332,19 @@ def embedded_lua(py_text: str) -> list[tuple[int, str]]:
     parts = {id(v) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)
              for v in n.values}
     out = []
-    for node in ast.walk(tree):
-        if id(node) in parts:
-            continue
-        text = _string_text(node)
-        if text and ("unit." in text or "stats." in text or "require(" in text):
-            out.append((node.lineno, text))
+
+    def visit(node, scope):
+        if isinstance(node, ast.FunctionDef) and scope == "<module>":
+            scope = node.name
+        if id(node) not in parts:
+            text = _string_text(node)
+            if text and ("unit." in text or "stats." in text
+                         or "require(" in text):
+                out.append((node.lineno, text, scope))
+        for child in ast.iter_child_nodes(node):
+            visit(child, scope)
+
+    visit(tree, "<module>")
     return sorted(out)
 
 
@@ -352,8 +378,9 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
         chunks.append(lua.scan_chunk(path, files[path], reg.keys))
     if probe is not None:
         ppath, ptext = probe
-        for ln, src in embedded_lua(ptext):
-            chunks.append(lua.scan_chunk(ppath, src, reg.keys, line_base=ln - 1))
+        for ln, src, scope in embedded_lua(ptext):
+            chunks.append(lua.scan_chunk(ppath, src, reg.keys,
+                                         line_base=ln - 1, scope=scope))
 
     findings: list[Finding] = []
 
@@ -400,8 +427,9 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
         if a.path == ex.file and a.function == ex.function \
                 and a.verb == ex.verb and a.key in ex.keys:
             continue
-        ex = policy.probe_fixture
-        if a.path == ex.file and a.verb == ex.verb and a.key in ex.keys:
+        fx = policy.probe_fixture
+        if a.path == fx.file and a.verb == fx.verb and a.key in fx.keys \
+                and a.straight and a.scope in fx.scopes:
             continue
         if a.via == "helper-call":
             name = a.verb.split(":", 1)[1]

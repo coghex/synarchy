@@ -426,6 +426,8 @@ class Access:
     function: str        # nearest named enclosing function, or "<chunk>"
     via: str = "literal"       # literal | loop | helper-call
     fallback: bool = False     # the read is followed by `or <default>`
+    scope: str = ""            # embedded chunks: the Python function holding it
+    straight: bool = False     # the chunk has no block structure at all
 
 
 @dataclass
@@ -464,6 +466,8 @@ class ChunkScan:
     helpers: list[HelperDef] = field(default_factory=list)
     toks: list[Tok] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
+    scope: str = ""
+    straight: bool = False
 
 
 def _enclosing_name(frames: tuple[Frame, ...]) -> str:
@@ -473,12 +477,17 @@ def _enclosing_name(frames: tuple[Frame, ...]) -> str:
     return "<chunk>"
 
 
+BLOCK_WORDS = {"function", "for", "while", "repeat", "if", "do"}
+
+
 def scan_chunk(path: str, src: str, registry_keys: frozenset[str],
-               line_base: int = 0) -> ChunkScan:
+               line_base: int = 0, scope: str = "") -> ChunkScan:
     """Scan one Lua text. `line_base` is added to token lines (embedded
-    chunks report the line of the Python string that holds them)."""
+    chunks report the line of the Python string that holds them, and the
+    Python function `scope` that holds it)."""
     toks = tokenize(src)
-    scan = ChunkScan(path, toks=toks)
+    straight = not any(t.kind == "name" and t.text in BLOCK_WORDS for t in toks)
+    scan = ChunkScan(path, toks=toks, scope=scope, straight=straight)
     aliases = stats_aliases(toks)
     events = block_events(toks, aliases)
     scan.events = events
@@ -503,7 +512,8 @@ def scan_chunk(path: str, src: str, registry_keys: frozenset[str],
                     else "loop"
                 for k in res.keys:
                     scan.accesses.append(Access(path, line, ev.verb, ev.access,
-                                                k, fn, via, fallback))
+                                                k, fn, via, fallback,
+                                                scope, straight))
             elif res.kind == "helper" and res.helper is not None:
                 scan.helpers.append(HelperDef(
                     path, res.helper.line + line_base, res.helper.name or "?",
@@ -535,4 +545,5 @@ def helper_call_sites(scan: ChunkScan, helpers: dict[str, list[HelperDef]],
                 if len(a) == 1 and a[0].kind == "str":
                     yield Access(scan.path, toks[ev.idx].line + line_base,
                                  f"helper:{ev.callee}", h.access, a[0].text,
-                                 _enclosing_name(ev.frames), "helper-call")
+                                 _enclosing_name(ev.frames), "helper-call",
+                                 False, scan.scope, scan.straight)

@@ -108,7 +108,7 @@ PROBE_PY = (
     '    "local function agg(s) local v=unit.readPhysio(u,s) or 0 return v end "\n'
     '    "return {core=agg(\'core_temp\')}"\n'
     ")\n"
-    "def fixture(port, u):\n"
+    "def hunger_section(port, u):\n"
     '    send(port, f"unit.setStat({u},\'calories\',1); unit.setStat({u},\'hunger\',0); "\n'
     '               f"unit.setStat({u},\'core_temp\',34.0); return \'ok\'")\n'
     "def stomach(port, u):\n"
@@ -375,6 +375,27 @@ def case_probe_embedded_lua():
     # Reads of the fixture keys are still flagged (the rule is writes only).
     expect("probe read of fixture key", "raw read of owned key 'calories'",
            probe=PROBE_PY + 'def g(p,u):\n    send(p, f"return unit.getStat({u},\'calories\')")\n')
+    # The fixture exception is the probe's straight-line SETUP chunks in its
+    # named scenario functions, not the key set: a write inside the
+    # aggregate (a function and loops) is flagged ...
+    expect("probe write in aggregate", "raw write of owned key 'core_temp'",
+           probe=PROBE_PY.replace("return v end ",
+                                  "unit.setStat(u,'core_temp',0) return v end "))
+    # ... as is a write inside a Lua helper function ...
+    expect("probe write in helper", "raw write of owned key 'calories'",
+           probe=PROBE_PY + 'def hunger_helper(p):\n'
+                 '    send(p, "local function reset(u) unit.setStat(u,\'calories\',0) end")\n')
+    # ... a loop in a scenario chunk ...
+    expect("probe write in loop", "raw write of owned key 'hunger'",
+           probe=PROBE_PY + 'def starvation_bands_section(p):\n'
+                 '    send(p, "for _,u in ipairs(U) do unit.setStat(u,\'hunger\',0) end")\n')
+    # ... and a straight-line write in any other Python function.
+    expect("probe write elsewhere", "raw write of owned key 'core_temp'",
+           probe=PROBE_PY + 'def unrelated(p):\n'
+                 '    send(p, "unit.setStat(1,\'core_temp\',0); return \'ok\'")\n')
+    # The authorized shape in the authorized function stays accepted.
+    expect_clean("probe fixture shape", probe=PROBE_PY + 'def starvation_bands_section(p):\n'
+                 '    send(p, "local u=1; unit.setStat(u,\'calories\',1); return \'ok\'")\n')
     # A NaN-style loop over a literal list.
     expect("probe loop", "raw read of owned key 'core_temp'",
            probe=PROBE_PY + 'NAN = ("for _,s in ipairs({\'core_temp\',\'circulation\'}) do "\n'
