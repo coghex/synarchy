@@ -145,16 +145,19 @@ Two further allowances, each named and bounded:
   (design F-7, D-7 "the `survivalExempt` branch goes away").
 * **Probe fixture writes.** `tools/physiology_probe.py` may `setStat`
   `calories`, `hunger` and `core_temp` as scenario fixtures (D-7 allows raw
-  `setStat` for debugging under Simulated), only from a straight-line
-  embedded chunk (no function, loop or branch, so never an aggregate or a
-  Lua helper) in one of three named Python scopes, each with its own keys:
-  `hunger_section` (`calories`, `hunger`, `core_temp`),
-  `starvation_bands_section` (`hunger`) and its nested `set_frac`
-  (`calories`). A measurement helper nested in a scenario (`avg_hyd`) is a
-  different scope and is not allowed to write. Reads in the
-  probe are not allowed; the numeric calorie observer reads through
-  `unit.readPhysio`. Storage-absence guards (`unit.getCalories`, `unit.feed` refusal)
-  keep their calls. S4 and S7 own their Nominal reinterpretation.
+  `setStat` for debugging under Simulated), but only from the eight setup
+  chunks pinned **site by site** in the audit's `PROBE_FIXTURE_WRITES`: each
+  is identified by its dotted Python scope (`hunger_section`,
+  `starvation_bands_section`, `starvation_bands_section.set_frac`) and its
+  whole normalized Lua text. Editing a pinned chunk, or putting a write into
+  any other chunk (an observation, the aggregate, a Lua helper, a nested
+  measurement function such as `avg_hyd`), is flagged, and a pin the probe no
+  longer contains is itself a finding, so the pins cannot go stale silently.
+  Changing a setup chunk therefore means updating its pin, deliberately.
+  Reads in the probe are not allowed; the numeric calorie observer reads
+  through `unit.readPhysio`. If this pinning proves a recurring burden, the
+  owner's fallback is to remove the exception by moving the probe's setup
+  writes onto the facade or a test setter.
 
 ## 5. The temporary UI exception (S5 → S6)
 
