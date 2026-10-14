@@ -2059,10 +2059,33 @@ spawn ingress), `--match "Startup readiness"` / `"Startup asset logging"`, and
 S2 of the physiology stat-modes epic #2827 (design:
 `docs/designs/physiology_stat_modes_design.md`, D-1, D-2, D-3, D-5a, D-7,
 D-10 and SD-8/13/17/19). It supplies the registry, the species-default
-machinery and five READ verbs. **It is inactive**: no production tick,
-gameplay consumer or save path calls any of it, and no mode setter or
-override field exists yet (S3 adds the field, S4 the setters and
-activation, S5 migrates the consumers).
+machinery and five READ verbs. **Its mode-aware answer is inactive in
+production**: S5 (#2830) routed every gameplay consumer through it, but
+behind the `prModesActive` boundary (below), so each still reads today's
+stored values. No mode setter exists yet (S3 added the override field, S4
+adds the setters and flips the boundary).
+
+**The inactive boundary and the consumer facade (#2830, S5).**
+`PhysiologyRegistry.prModesActive` is `False` for every loaded registry
+until S4 (Rebuild content, never serialized; `engine.getPhysiologyRegistry()`
+publishes it as `modesActive`). While it is clear, `unit.readPhysio`,
+`unit.readPhysioBase` and Haskell `physioRead` answer exactly as
+`unit.getStat` / `getStatBase` do, mode `nil`, for EVERY key, whatever the
+resolver would yield; `Unit.Physiology.physioConsumerView` returns the
+stored stats map unchanged; and `scripts/physiology.lua` (`get`, `getBase`,
+`fraction`, `credit`, `debit`) reproduces the old semantics. The wound tick
+(`Healing.hs`, `Wounds/Tick.hs`) reads `calories`, `hydration` and
+`core_temp` (and their maxima, resolved effectively once active) through
+`physioConsumerView` via `tickOneUnitWith`; an activated invariant violation
+returns the unit untouched as `PhysioInvariant` instead of a guessed pool. Gameplay
+code reads a registry-owned key ONLY through that accessor and writes one
+across systems ONLY through `debit` / `credit`; `tools/physiology_access_audit.py`
+(with `--self-test`, in `static-audits`) enforces it, with the survival
+exemption and the enumerated TEMPORARY UI exception (deleted by S6) as the
+only allowances. Reference: `docs/physiology_consumer_facade.md`. Gates:
+hspec `--match "physiology consumer migration"`, the access audit and its
+self-test, and the `physiology`, `consumable_effects` and `state_of_mind`
+probes.
 
 **The registry** is `data/physiology/systems.yaml`, decoded by
 `Engine.Asset.YamlPhysiology` and registered by
@@ -2117,7 +2140,8 @@ never initializes, rolls or writes. Nominal reads evaluate the healthy
 rule against EFFECTIVE inputs, ignore modifiers on the key itself, and
 read meters as 0. Simulated reads are stored base plus active modifiers;
 the base verb returns the stored base; an absent Simulated meter reads
-0. A missing Simulated owned value, and a healthy-rule input that is
+0. (All of this is the ACTIVATED behavior; see the inactive boundary
+above.) A missing Simulated owned value, and a healthy-rule input that is
 absent, non-finite or non-positive, raise an invariant error and never a
 fallback. The same holds for the Simulated `hydration` pool `salt_conc`
 divides by (zero, negative, NaN and infinity included). Every such input
@@ -2126,7 +2150,8 @@ a positive modifier can make an invalid stored value read as valid. A derived ke
 `saltConcentration` rule and never stored; a stored legacy `salt_conc`
 is ignored. An UNOWNED key reads exactly as `unit.getStat` /
 `getStatBase` do (mode `nil`), lazy roll and cache included; the
-`scripts/unit_stats.lua` formulas are the S5 facade's, not these verbs'.
+`scripts/unit_stats.lua` formulas are the S5 facade's
+(`scripts/physiology.lua`), not these verbs'.
 `engine.getPhysiologyRegistry()` returns a read-only copy of the loaded
 registry for Lua.
 

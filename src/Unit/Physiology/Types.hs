@@ -233,12 +233,22 @@ data PhysiologyRegistry = PhysiologyRegistry
       -- ^ system ids that no longer exist (#2829). A stored override
       --   naming one is RECOGNIZED at load, not rejected as undeclared;
       --   dropping it and any orphaned keys is S4's.
+    , prModesActive ∷ !Bool
+      -- ^ whether the mode-aware read contract is in force (#2830, S5).
+      --   'False' is the INACTIVE compatibility boundary: every gameplay
+      --   consumer read ('Unit.Physiology.physioConsumerView', the
+      --   @unit.readPhysio@ \/ @unit.readPhysioBase@ verbs, Haskell
+      --   @physioRead@) answers today's stored-stat semantics whatever
+      --   the resolver would yield. The loader always builds 'False'; S4
+      --   activates it, and until then only a controlled test sets it.
+      --   Never serialized: the registry is rebuilt from data on boot.
     } deriving (Show, Eq)
 
 emptyPhysiologyRegistry ∷ PhysiologyRegistry
 emptyPhysiologyRegistry = PhysiologyRegistry
     { prSource = Nothing, prConstants = Map.empty
-    , prSystems = [], prProfiles = [], prRetired = [] }
+    , prSystems = [], prProfiles = [], prRetired = []
+    , prModesActive = False }
 
 -- | Is there a usable registry? A definition cannot be validated
 --   against an empty one, so registration refuses rather than skipping

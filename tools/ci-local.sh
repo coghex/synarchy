@@ -213,6 +213,10 @@ step "lua duplicate function audit"
 python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
+step "physiology access audit"
+python3 tools/physiology_access_audit.py --self-test
+python3 tools/physiology_access_audit.py
+
 step "lua registration audit"
 python3 tools/test_lua_registration_audit.py
 python3 tools/lua_registration_audit.py

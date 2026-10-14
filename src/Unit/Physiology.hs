@@ -4,11 +4,15 @@
 --   the physiology stat-modes epic #2827; design
 --   @docs\/designs\/physiology_stat_modes_design.md@ D-1, D-2, D-3, D-5a).
 --
---   __This slice is inactive.__ Nothing in the production tick, a
---   gameplay consumer or a save path calls anything here. The functions
---   are the foundation S3 (the live override field), S5 (the consumer
---   facade) and S4 (activation) build on, and they are reachable today
---   only through the five @unit.*@ read verbs and the loader.
+--   __This module is inactive in production.__ S5 (#2830) routed the
+--   gameplay consumers through it, and 'prModesActive' is the inactive
+--   compatibility boundary they all share: while it is 'False' (every
+--   loaded registry, until S4) the mode-aware answer below is reachable
+--   only from controlled tests, and every consumer read —
+--   'physioConsumerView', @unit.readPhysio@ \/ @unit.readPhysioBase@, the
+--   Lua facade — answers today's stored-stat semantics. 'physioReadPure'
+--   itself stays mode-aware whatever the flag says: it is the pure
+--   resolver, and the boundary is applied by its callers.
 --
 --   __The read contract in one place__ (D-2, SD-19). A key is /owned/ when
 --   a registry system lists it as an owned key, a derived key or a
@@ -50,11 +54,15 @@ module Unit.Physiology
     , PhysioOutcome(..)
     , modeOf
     , physioReadPure
+      -- * Consumer boundary
+    , physioModesActive
+    , physioConsumerView
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import Control.Monad (foldM)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Unit.Physiology.Types
@@ -331,3 +339,51 @@ saltConcentrationFor ctx = do
             cur  ← dependencyPool ctx "hydration"
             pure (cur / maxH)
         _ → Right 1.0
+
+-- * Consumer boundary (S5, #2830)
+
+-- | Is the mode-aware read contract in force? 'False' until S4, whatever
+--   the resolver would yield: the one switch every migrated consumer
+--   shares, so S4 flips a flag instead of migrating callers again.
+physioModesActive ∷ PhysiologyRegistry → Bool
+physioModesActive = prModesActive
+
+-- | A unit's stats AS A PURE GAMEPLAY CONSUMER SEES THEM, for the named
+--   registry keys: the Haskell face of @physiology.get@, used by code that
+--   already holds the unit instance inside a single atomic fold (the wound
+--   tick) and so cannot run the IO 'physioRead'.
+--
+--   Inactive, this is the stored map UNCHANGED — the identical baseline
+--   read the consumer made before it was migrated. Active, each named key
+--   is replaced by its mode-aware EFFECTIVE value (a Nominal pool reads
+--   its healthy rule), and a key whose system is Unsupported is removed so
+--   the consumer's absent-pool branch applies. @capacities@ are the
+--   unowned maxima those pools are read against: active, each present
+--   one is replaced by its EFFECTIVE value so a pool and its capacity
+--   agree on modifiers.
+--
+--   A violated invariant (a Simulated pool with no stored value, a
+--   healthy-rule input that is absent or not positive) is a 'Left' with
+--   the description, never a stored fallback: D-2 forbids reading it as
+--   healthy or absent, and the caller decides what an invariant violation
+--   means (the wound tick leaves the unit untouched and logs it).
+physioConsumerView ∷ [Text] → [Text] → PhysioContext
+                   → Either Text (HM.HashMap Text Float)
+physioConsumerView keys capacities ctx
+    | not (physioModesActive (pcRegistry ctx)) = Right (pcStats ctx)
+    | otherwise = do
+        owned ← foldM step (pcStats ctx) keys
+        pure (foldl' capacity owned capacities)
+  where
+    step acc k = case physioReadPure ReadEffective ctx k of
+        OutcomeValue _ v     → Right (HM.insert k v acc)
+        OutcomeUnsupported   → Right (HM.delete k acc)
+        OutcomeUnowned       → Right acc
+        OutcomeInvariant why → Left why
+    -- A capacity (@max_calories@, @max_hydration@) is an UNOWNED input,
+    -- but a pool's effective value is read against ITS effective
+    -- capacity: the Lua facade divides by @get(maxKey)@, which applies
+    -- the key's modifiers, so the view must too.
+    capacity acc k = case storedValue ReadEffective ctx k of
+        Just v  → HM.insert k v acc
+        Nothing → acc

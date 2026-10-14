@@ -10,6 +10,7 @@
 
 local injuries   = require("scripts.injuries")
 local stats      = require("scripts.unit_stats")
+local physiology = require("scripts.physiology")
 local thermo     = require("scripts.thermo")
 local statDefs   = require("scripts.unit_info_v2_stat_defs")
 local panelEngine = require("scripts.unit_info_v2_panel_engine")
@@ -57,10 +58,10 @@ end
 
 -- Salt concentration as % of ideal (100% = balanced); both directions bad.
 local function fmtSalt(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "salt_conc") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "salt_conc") or 1.0) * 100 + 0.5))
 end
 local function saltColor(uid)
-    local c = unit.getStat(uid, "salt_conc") or 1.0
+    local c = physiology.get(uid, "salt_conc") or 1.0
     if c <= 0.55 or c >= 1.6 then return { 1.0, 0.30, 0.30, 1.0 } end
     if c <= 0.8  or c >= 1.35 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
@@ -187,7 +188,7 @@ local function unitConditions(uid)
     }
     local meterInfo = require("scripts.unit_resources").meterInfo(uid)
     for _, mc in ipairs(METER_CONDITIONS) do
-        local v = stats.get(uid, mc.stat)
+        local v = physiology.get(uid, mc.stat)
         if v and v > 0.02 then
             local mi   = meterInfo[mc.stat] or {}
             local rate = mi.rate or 0
@@ -282,10 +283,9 @@ local function painColorFn(uid)
 end
 local function fracColorFn(cur, maxName, crit, warn)
     return function(uid)
-        local c = stats.get(uid, cur)
-        local m = stats.get(uid, maxName)
-        if not (c and m and m > 0) then return L.CONTENT_VAL_COLOR end
-        return dangerColor(c / m, crit, warn)
+        local f = physiology.fraction(uid, cur, maxName)
+        if not f then return L.CONTENT_VAL_COLOR end
+        return dangerColor(f, crit, warn)
     end
 end
 local function sleepPressureColorFn(uid)

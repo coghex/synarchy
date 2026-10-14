@@ -1009,6 +1009,23 @@ jobs:
           python3 tools/test_lua_duplicate_function_audit.py
           python3 tools/lua_duplicate_function_audit.py
 
+      # Cheap, no-engine guard (#2830, S5 of epic #2827): the physiology
+      # stat-modes design (D-7) lets a registry-owned key (hydration,
+      # hunger, calories, core_temp, salt*, the failure meters) be read
+      # only through scripts/physiology.lua and written across systems only
+      # through its debit/credit, so a Nominal system can substitute its
+      # healthy value without every caller re-deriving "absent means
+      # Nominal". This fails on a raw getStat/getStatBase/setStat of such a
+      # key outside its system owner, a mutating mode verb outside the
+      # facade, an incomplete registry (owner, healthy rule, Nominal
+      # substitute) or a unit definition templating a registry key. The
+      # self-test pins both directions of every rule, including the
+      # enumerated temporary UI exception S6 deletes.
+      - name: Physiology access audit
+        run: |
+          python3 tools/physiology_access_audit.py --self-test
+          python3 tools/physiology_access_audit.py
+
       # Cheap, no-engine guard (#1996): fails if a scripts/**/*.lua call
       # site names a verb the engine does not register on that namespace.
       # The Haskell/Lua boundary is a runtime ABI, so an unregistered verb

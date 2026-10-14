@@ -327,6 +327,7 @@ stepOutcome dt i =
     label NoChange            = "none"
     label (UnconsciousNow p)  = "collapsed:" <> p
     label (DiedNow p cause)   = "died:" <> p <> ":" <> cause
+    label (PhysioInvariant w) = "invariant:" <> w
 
 -- | @n@ ticks of 'recoveryDt' seconds each.
 steps ∷ Int → UnitInstance → UnitInstance

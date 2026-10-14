@@ -11,6 +11,13 @@
 --   @clearPhysioMode@) is S4's and is NOT installed here, and nothing in
 --   this module can write a mode, an override or a stat.
 --
+--   __Inactive until S4 (#2830).__ While the registry's 'prModesActive'
+--   flag is clear — every loaded registry — @readPhysio@, @readPhysioBase@
+--   and 'physioRead' treat EVERY key as unowned: the answer is
+--   @getStat@'s \/ @getStatBase@'s, with a @nil@ mode. The owned-key
+--   behavior below is what an activated registry (S4, or a controlled
+--   test) yields.
+--
 --   __Owned versus unowned.__ A key a registry system owns, derives or
 --   meters is read purely by "Unit.Physiology": it never initializes,
 --   rolls, writes, advances a generator or changes mode state. Any other
@@ -80,13 +87,23 @@ physioReadWith kind env uid key = do
     snapshot ← unitSnapshot env uid
     case snapshot of
         Nothing → pure ReadNoUnit
-        Just ctx → case physioReadPure kind ctx key of
+        Just ctx → case boundary ctx of
             OutcomeUnsupported       → pure ReadUnsupported
             OutcomeValue mode v      → pure (ReadOwned mode v)
             OutcomeInvariant why     → pure (ReadInvariant why)
             OutcomeUnowned           → ReadUnowned <$> case kind of
                 ReadEffective → getEffectiveStat env uid key
                 ReadBase      → getOrRollStat env uid key
+  where
+    -- The inactive compatibility boundary (#2830, S5): until S4 flips
+    -- 'prModesActive', every key reads as UNOWNED — today's stored-stat
+    -- semantics — whatever the resolver would yield, so the probe that
+    -- calls this verb directly sees the numbers @unit.getStat@ gives. The
+    -- mode-aware answer is reachable only with the flag set, which only a
+    -- controlled test does.
+    boundary ctx
+        | physioModesActive (pcRegistry ctx) = physioReadPure kind ctx key
+        | otherwise                          = OutcomeUnowned
 
 -- | The unit's read context, or 'Nothing' for a unit that does not
 --   exist. The override map is the unit's STORED intent

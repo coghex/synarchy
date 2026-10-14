@@ -78,15 +78,15 @@ local CRAMP_FULL    = 0.50
 local CRAMP_MIN_MULT = 0.40    -- worst-case movement speed ×
 
 local clamp = require("scripts.lib.numeric").clamp
+local physiology = require("scripts.physiology")
 
 function salts.maxSalt(uid)
     return (unit.getStat(uid, "body_mass") or 70.0) * SALT_PER_KG
 end
 
 local function hydrationFrac(uid)
-    local h  = unit.getStat(uid, "hydration")
-    local hm = unit.getStat(uid, "max_hydration")
-    if h and hm and hm > 0 then return clamp(h / hm, 0.05, 1.0) end
+    local f = physiology.fraction(uid, "hydration", "max_hydration")
+    if f then return clamp(f, 0.05, 1.0) end
     return 1.0
 end
 
@@ -137,17 +137,14 @@ function salts.tick(uid, dt)
 end
 
 function salts.concentration(uid)
-    return unit.getStat(uid, "salt_conc") or 1.0
+    return physiology.get(uid, "salt_conc") or 1.0
 end
 
 -- Deposit a fraction of max_salt into the reserve (the eat action calls this
 -- once per item eaten). Capped at the reserve's capacity; the overflow is
 -- discarded.
 function salts.deposit(uid, frac)
-    local mx = salts.maxSalt(uid)
-    local store = storeOf(uid)
-    unit.setStat(uid, "salt_store",
-                 clamp(store + frac * mx, 0, salts.storeCap(uid)))
+    physiology.credit(uid, "salt_store", frac * salts.maxSalt(uid))
 end
 
 function salts.mealSalt(uid) salts.deposit(uid, MEAL_SALT_FRAC) end

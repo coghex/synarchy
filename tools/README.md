@@ -470,6 +470,27 @@ any budgeted file grows back past its limit.
 python3 tools/lua_module_budget.py
 ```
 
+### `physiology_access_audit.py`
+Cheap, no-engine guard (#2830, S5 of the physiology stat-modes epic #2827)
+for the registry-owned keys of `data/physiology/systems.yaml`. Fails on a
+raw `unit.getStat` / `getStatBase` / `setStat` (or `scripts.unit_stats`
+`.get`) of such a key outside its named system owner, a mutating mode verb
+(`unit.setPhysioMode` / `clearPhysioMode`) outside `scripts/physiology.lua`,
+an incomplete registry (a system without a Lua owner, an owned key without a
+healthy rule, a `contributes` entry without a Nominal substitute) and a unit
+definition templating a registry key. Scans all `scripts/**/*.lua` and the
+Lua embedded in `tools/physiology_probe.py`. The scanner is
+`physiology_access_lua.py`; the supported forms, limits and the named
+allowances (system owners, the survival exemption, the probe's fixture
+writes and the temporary UI exception S6 deletes) are in the audit's header
+and in `docs/physiology_consumer_facade.md`. `--self-test` runs
+`physiology_access_audit_selftest.py`.
+
+```bash
+python3 tools/physiology_access_audit.py --self-test
+python3 tools/physiology_access_audit.py
+```
+
 ### `pack_atlas.py`
 The authoritative unit-animation asset inventory (#1257). `--validate-only`
 walks every PNG under
@@ -4495,6 +4516,9 @@ tools/
 ├── ci_timing_model.py          (its pure timings, log framing, diagnostics, estimator)
 ├── test_ci_timing_report.py    (its fixture checks, reached through --self-test)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
+├── physiology_access_audit.py  (registry-key access + registry coverage audit, #2830)
+├── physiology_access_lua.py    (its Lua scanner)
+├── physiology_access_audit_selftest.py  (its fixture checks, reached through --self-test)
 ├── haddock_link_audit.py   (qualified haddock link resolution gate, #2292)
 ├── haddock_link_baseline.json  (its generated, shrink-only ratchet — deleted by HLR-5)
 ├── test_haddock_link_audit.py  (its fixture suite)

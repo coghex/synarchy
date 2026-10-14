@@ -5,6 +5,7 @@
 module Combat.Wounds.Tick
     ( tickAllWounds
     , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
+    , tickOneUnitWith     -- the same tick under an explicit physiology registry
     , WoundTickOutcome(..) -- exposed for unit testing (the tick's verdict)
     ) where
 
@@ -22,8 +23,12 @@ import Combat.Types (CombatEvent(..))
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
-import Engine.Core.Log (logDebug, LogCategory(..))
+import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
+import Unit.Physiology
+    (PhysioContext(..), physioConsumerView)
+import Unit.Physiology.Types
+    (PhysiologyRegistry, emptyPhysiologyRegistry)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
                   , UnitManager(..), BodyPart(..), Wound(..)
                   , Scar(..), bloodMassRatio, TrailState(..)
@@ -71,6 +76,9 @@ data WoundTickOutcome
     = NoChange
     | UnconsciousNow Text   -- worst-bleeding part id
     | DiedNow Text Text     -- (part id, cause): exsanguination | gangrene
+    | PhysioInvariant Text  -- an ACTIVE physiology read violated its invariant
+                            -- (#2830): the unit is returned UNTOUCHED, never
+                            -- ticked on a guessed healthy or absent pool
 
 -- | Tick all units' wounds by `dt` seconds. Designed for the combat
 --   thread to call on its 10 Hz cadence (every 6th 60-Hz iteration).
@@ -84,6 +92,11 @@ tickAllWounds env dt = do
     infMgr ← readIORef
         (crInfectionManagerRef (toContentRegistriesCapability env))
     testMode ← isJust ⊚ lookupEnv infectionTestModeVar
+    -- The physiology registry, read once per tick: the wound tick's
+    -- nutrition, hydration and fever reads go through the consumer view
+    -- (#2830), which needs it to apply the inactive boundary.
+    physioReg ← readIORef
+        (crPhysiologyRegistryRef (toContentRegistriesCapability env))
     -- Every LOADED page's climate, keyed by page, for per-unit infection
     -- selection + onset speed. Each page's generation parameters are read
     -- exactly once per tick (#1593 requirement 8), through @wmWorlds@ —
@@ -124,7 +137,8 @@ tickAllWounds env dt = do
                                             (floor (uiGridY inst)))
                                         (HM.lookup (uiPage inst) pageClimates)
                                     (inst', outcome, gen') =
-                                        tickOneUnit gt def dt infMgr unitClim gen inst testMode
+                                        tickOneUnitWith physioReg gt def dt infMgr
+                                            unitClim gen inst testMode
                                 in case outcome of
                                     NoChange →
                                         (HM.insert uid inst' acc, xs, gen')
@@ -158,6 +172,10 @@ tickAllWounds env dt = do
             logDebug logger CatThread $
                 "bled out: " <> tshow uidRaw
                     <> " from " <> part
+        PhysioInvariant why →
+            logWarn logger CatThread $
+                "wound tick skipped unit " <> tshow uidRaw
+                    <> ": physiology invariant violated: " <> why
         NoChange → pure ()
         ) outcomes
 
@@ -171,8 +189,29 @@ tickOneUnit
     ∷ Double → UnitDef → Float → InfectionManager → Maybe LocalClimate
     → Random.StdGen → UnitInstance → Bool
     → (UnitInstance, WoundTickOutcome, Random.StdGen)
-tickOneUnit gt def dt infMgr mClim gen0 inst testMode
+tickOneUnit = tickOneUnitWith emptyPhysiologyRegistry
+
+-- | 'tickOneUnit' under an explicit physiology registry (#2830, S5). The
+--   three registry-owned keys the wound tick reads — the calorie store
+--   (healing, blood recovery), hydration (blood recovery) and core
+--   temperature (fever suppression) — come from 'physioConsumerView',
+--   the pure owned branch of @physioRead@ (the tick runs inside one
+--   atomic fold over the instance map, so the IO read cannot be used).
+--   While the registry is inactive the view IS @uiStats inst@, so the
+--   tick is byte-for-byte the one it was; an empty registry (what
+--   'tickOneUnit' passes) owns nothing and is inactive by construction.
+--   Every other stat — body mass, constitution — is read from @uiStats@ as
+--   before; once active, the two maxima the pools are read against are
+--   resolved effectively too (see 'physioConsumerView'). A violated
+--   physiology invariant returns the unit untouched as 'PhysioInvariant'.
+tickOneUnitWith
+    ∷ PhysiologyRegistry
+    → Double → UnitDef → Float → InfectionManager → Maybe LocalClimate
+    → Random.StdGen → UnitInstance → Bool
+    → (UnitInstance, WoundTickOutcome, Random.StdGen)
+tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
     | uiPose inst ≡ "dead" = (inst, NoChange, gen0)
+    | Left why ← physioView = (inst, PhysioInvariant why, gen0)
     | null (uiWounds inst)  =
         -- No wounds → no infection, but the immune response must still wind
         -- down and acquired immunity fade (else a recovered unit would keep a
@@ -182,7 +221,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
         -- so recovery carries on uninterrupted across the moment the wound
         -- list empties. Skip the allocation when blood is already settled
         -- AND both are at rest (the common case for a healthy unit).
-        let blood' = recoveredBloodVolume (uiStats inst) dt 0 (uiBlood inst)
+        let blood' = recoveredBloodVolume physioStats dt 0 (uiBlood inst)
             atRest = uiImmuneResponse inst ≤ 0 ∧ HM.null (uiImmunities inst)
         in if atRest ∧ blood' ≡ uiBlood inst
              then (inst, NoChange, gen0)
@@ -211,7 +250,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
             -- thermo system raises in response to infection) slows infection
             -- growth — the body cooking the pathogens. core_temp is the stat
             -- the Lua thermo tick maintains; default 37 if it hasn't ticked yet.
-            coreTemp = HM.lookupDefault 37.0 "core_temp" (uiStats inst)
+            coreTemp = HM.lookupDefault 37.0 "core_temp" physioStats
             feverSuppress = max feverSuppressFloor
                               (1 - feverSuppressK * max 0 (coreTemp - 38))
             -- A unit at rest heals faster: sleeping pose applies
@@ -223,7 +262,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
             restMult = if uiPose inst ≡ "sleeping" then sleepHealMult else 1.0
             -- A starving unit heals slower (calorie gating). Wildlife
             -- without a calorie store reads 1.0.
-            calHealMlt = calorieHealMultiplier (uiStats inst)
+            calHealMlt = calorieHealMultiplier physioStats
             -- SYSTEMIC immune response (Ticker B), advanced once per unit.
             -- Ramps up (accelerating, × constitution) while anything is
             -- infected; decays back toward 0 once nothing is. The per-wound
@@ -499,7 +538,7 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                 DiedNow _ _      → postDrain
                 _ | totalDrain > 0 → postDrain
                   | otherwise      →
-                      recoveredBloodVolume (uiStats inst) dt bleedAfter postDrain
+                      recoveredBloodVolume physioStats dt bleedAfter postDrain
             inst' = inst
                 { uiWounds = newWoundsR
                 , uiScars  = newScars <> uiScars inst
@@ -514,6 +553,23 @@ tickOneUnit gt def dt infMgr mClim gen0 inst testMode
                     _           → newTrailState
                 }
         in (propagateSevering def inst', outcome, genFinal)
+  where
+    -- The unit's stats as the wound tick's physiology reads see them
+    -- (#2830): @uiStats@ itself while the registry is inactive.
+    physioView = physioConsumerView
+        ["calories", "hydration", "core_temp"]
+        ["max_calories", "max_hydration"]
+        PhysioContext
+            { pcRegistry   = physioReg
+            , pcPhysiology = udPhysiology def
+            , pcOverrides  = uiPhysioOverrides inst
+            , pcNow        = gt
+            , pcStats      = uiStats inst
+            , pcModifiers  = uiModifiers inst
+            }
+    -- Only reached when 'physioView' is a Right (the guard above returns
+    -- the untouched unit otherwise).
+    physioStats = either (const (uiStats inst)) id physioView
 
 -- | Blood volume after #2639 recovery, given the unit's stats, the tick
 --   step, the AGGREGATE post-tick bleed rate over every wound kind, and

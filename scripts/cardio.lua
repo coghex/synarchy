@@ -17,6 +17,7 @@
 -- circulatory collapse, not just a punctured lung. All Lua; stats only.
 
 local injuries = require("scripts.injuries")
+local physiology = require("scripts.physiology")
 
 local cardio = {}
 
@@ -42,7 +43,7 @@ local clamp = require("scripts.lib.numeric").clamp
 -- circulation reads this tick's heart rate; O2 uses last tick's circulation
 -- (a one-tick lag, invisible at these drift rates).
 function cardio.tick(uid, dt)
-    local core = unit.getStat(uid, "core_temp") or 37.0
+    local core = physiology.get(uid, "core_temp") or 37.0
     local b    = unit.getBlood(uid)
     local bloodFrac = (b and b.max and b.max > 0) and clamp(b.current / b.max, 0, 1) or 1.0
     local o2   = unit.getStat(uid, "blood_oxygen") or 1.0

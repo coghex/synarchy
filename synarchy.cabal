@@ -1651,6 +1651,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.RuinOccupantSurvival
                    Test.Headless.Unit.SurvivalExemption
                    Test.Headless.Unit.SaltReserve
+                   Test.Headless.Unit.PhysiologyConsumerMigration
                    Test.Headless.Unit.SweatMassScaling
                    Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.GenConfigDomain
