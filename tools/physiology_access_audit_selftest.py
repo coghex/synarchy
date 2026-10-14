@@ -38,6 +38,16 @@ REGISTRY = {
     ]
 }
 
+# The #2754 survival-exemption writer, as it stood until S4 (#2831): kept as
+# a fixture so the audit is shown to REJECT it now that no exemption names it.
+LEGACY_NEUTRALIZE = (
+        'local M = {}\nlocal SURVIVAL_METERS = { "hypothermia", "hyperthermia",\n'
+        '  "salt_imbalance" }\nfunction M.neutralize(uid)\n'
+        '  unit.setStat(uid, "core_temp", 37)\n  unit.setStat(uid, "salt", 70)\n'
+        '  unit.setStat(uid, "salt_conc", 1.0)\n'
+        '  for _, stat in ipairs(SURVIVAL_METERS) do\n    unit.setStat(uid, stat, 0)\n'
+        '  end\nend\nreturn M\n')
+
 # A corpus in which every owner file exists and names its keys and nothing
 # violates a rule: the baseline every case perturbs.
 BASE: dict[str, str] = {
@@ -52,7 +62,7 @@ BASE: dict[str, str] = {
         '  unit.setStat(uid, "core_temp", c)\nend\nreturn t\n',
     "scripts/salts.lua": 'local s = {}\nfunction s.tick(uid)\n'
         '  unit.setStat(uid, "salt", unit.getStat(uid, "salt"))\n'
-        '  unit.setStat(uid, "salt_store", 1)\n  unit.setStat(uid, "salt_conc", 1)\nend\n'
+        '  unit.setStat(uid, "salt_store", 1)\nend\n'
         'return s\n',
     "scripts/unit_resource_tick.lua":
         'local M = {}\nfunction M.tickResource(uid, resourceName)\n'
@@ -75,13 +85,6 @@ BASE: dict[str, str] = {
         '  for _, m in ipairs(METERS) do\n'
         '    unit.setStat(uid, m.stat, unit.getStat(uid, m.stat) or 0)\n  end\nend\n'
         'return M\n',
-    "scripts/unit_survival_exempt.lua":
-        'local M = {}\nlocal SURVIVAL_METERS = { "hypothermia", "hyperthermia",\n'
-        '  "salt_imbalance" }\nfunction M.neutralize(uid)\n'
-        '  unit.setStat(uid, "core_temp", 37)\n  unit.setStat(uid, "salt", 70)\n'
-        '  unit.setStat(uid, "salt_conc", 1.0)\n'
-        '  for _, stat in ipairs(SURVIVAL_METERS) do\n    unit.setStat(uid, stat, 0)\n'
-        '  end\nend\nreturn M\n',
     "scripts/unit_info_panel.lua":
         'local M = {}\nfunction M.formatStatus(uid)\n'
         '  local h = unit.getStat(uid, "hydration")\n'
@@ -365,27 +368,16 @@ def case_strings_and_comments_are_not_code():
         'local t = [[ unit.setPhysioMode(1) ]]\n'})
 
 
-def case_survival_exemption_is_exactly_neutralize():
-    expect_clean("neutralize six keys")
-    expect("seventh key", "raw write of owned key 'hydration'",
+def case_no_survival_exemption_remains():
+    # #2754's neutralize() was a named exemption until S4 (#2831) made it the
+    # `exempt` profile. The same code is now an ordinary non-owner writer of
+    # owned keys, and every one of its writes is flagged.
+    expect("neutralize is no longer exempt", "raw write of owned key 'core_temp'",
            files={"scripts/unit_survival_exempt.lua":
-                  BASE["scripts/unit_survival_exempt.lua"].replace(
-                      '  unit.setStat(uid, "salt", 70)',
-                      '  unit.setStat(uid, "salt", 70)\n  unit.setStat(uid, "hydration", 1)')})
-    expect("other function", "raw write of owned key 'core_temp'",
+                  LEGACY_NEUTRALIZE})
+    expect("each of its keys", "raw write of derived key 'salt_conc'",
            files={"scripts/unit_survival_exempt.lua":
-                  BASE["scripts/unit_survival_exempt.lua"].replace(
-                      'return M', 'function M.other(uid)\n'
-                      '  unit.setStat(uid, "core_temp", 37)\nend\nreturn M')})
-    expect("reads are not covered", "raw read of owned key 'core_temp'",
-           files={"scripts/unit_survival_exempt.lua":
-                  BASE["scripts/unit_survival_exempt.lua"].replace(
-                      '  unit.setStat(uid, "salt", 70)',
-                      '  local c = unit.getStat(uid, "core_temp")\n'
-                      '  unit.setStat(uid, "salt", 70)')})
-    expect("another file", "raw write of owned key 'salt'",
-           files={"scripts/unit_survival_other.lua":
-                  BASE["scripts/unit_survival_exempt.lua"]})
+                  LEGACY_NEUTRALIZE})
 
 
 def case_probe_embedded_lua():

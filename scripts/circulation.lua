@@ -61,8 +61,23 @@ function circulation.compute(uid, coreTemp)
     return clamp(bloodFactor * fitness * sickness * vaso * hrFactor, CIRC_MIN, 1.0)
 end
 
+-- Recompute and store the unit's circulation stat from its EFFECTIVE core
+-- temperature (#2831, D-5a): a Simulated thermo's stored core, a Nominal
+-- one's healthy 37.0, 37.0 for an Unsupported one. Always on, whatever the
+-- thermo mode: blood volume, fitness and sepsis are injury physiology, and
+-- only the cold-vasoconstriction factor reads the core. Runs after cardio
+-- and before the Simulated systems in every tick, and again at dt 0 after
+-- any physiology transition (scripts/physiology.lua refresh).
+function circulation.update(uid)
+    local physiology = require("scripts.physiology")
+    local core = physiology.get(uid, "core_temp") or 37.0
+    local circ = circulation.compute(uid, core)
+    unit.setStat(uid, "circulation", circ)
+    return circ
+end
+
 -- Last-computed circulation for a unit (set as the stat "circulation" by
--- thermo.tick each cycle). Defaults to 1.0 if never computed.
+-- circulation.update each cycle). Defaults to 1.0 if never computed.
 function circulation.get(uid)
     return unit.getStat(uid, "circulation") or 1.0
 end

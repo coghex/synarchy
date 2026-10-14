@@ -15,8 +15,10 @@
 --   randomizes body and metabolism): 70 kg, 14 kg fat, 56 kg lean, 1.8 m,
 --   endurance \/ constitution \/ metabolism 1.0, a 42 L water pool, a 700
 --   kcal stomach and 1400 kcal calorie store (both full at the start), core
---   37 °C, standing, wearing the habit every shipped acolyte starts in, @salt@ and @salt_store@ left ABSENT so
---   the first tick seeds them as a fresh spawn does. Simulation cadence is
+--   37 °C, standing, wearing the habit every shipped acolyte starts in, @salt@
+--   and @salt_store@ seeded full, as spawn seeds a Simulated unit (#2831). The
+--   fixture definition carries the @rich@ profile, so every system is
+--   Simulated. Simulation cadence is
 --   the shipped one: @unit_resources@ ticks every 0.1 s, and the eat
 --   decision runs once per engine second (the AI's decision cadence).
 --
@@ -43,8 +45,13 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Item.Types (ItemDef(..), ItemFood(..), ItemInstance, ItemManager(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
+import Test.Headless.Unit.PhysiologyFixture
+    (ensurePhysiologyRegistry, withProfile)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, mkItem, newBareLuaBackend)
+import World.Save.Physiology (normalizeSavedPhysiology)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -64,11 +71,12 @@ uid1 = UnitId 1
 fixturePage ∷ WorldPageId
 fixturePage = WorldPageId "salt_reserve_page"
 
--- | The reference acolyte's stored stats. @salt@ and @salt_store@ are
---   deliberately absent: the first tick seeds both full.
+-- | The reference acolyte's stored stats: its Simulated systems' keys as
+--   spawn seeds them (the pool and the reserve full), nothing else absent.
 referenceStats ∷ HM.HashMap Text Float
 referenceStats = HM.fromList
-    [ ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56), ("height", 1.8)
+    [ ("salt", 70), ("salt_store", 140)
+    , ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56), ("height", 1.8)
     , ("endurance", 1), ("constitution", 1), ("metabolism", 1)
     , ("hydration", 42), ("max_hydration", 42)
     , ("hunger", 700), ("max_hunger", 700)
@@ -126,6 +134,8 @@ rations n = [ mkItem "rations" (fromIntegral (100 + i)) 0.1 | i ← [1 .. n] ]
 -- | One acolyte on one ACTIVE page, carrying @n@ rations.
 scene ∷ EngineEnv → HM.HashMap Text Float → Int → IO ()
 scene env stats n = do
+    ensurePhysiologyRegistry env
+    acolyteDef ← withProfile "rich" (minimalDef "acolyte" "Acolyte")
     page ← emptyWorldState
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, page)], wmVisible = [fixturePage] }
@@ -133,7 +143,7 @@ scene env stats n = do
     writeIORef (itemManagerRef env)
         (ItemManager (HM.fromList [("rations", rationDef), ("acolyte_habit", habitDef)]))
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton "acolyte" (minimalDef "acolyte" "Acolyte")
+        { umDefs = HM.singleton "acolyte" acolyteDef
         , umInstances = HM.singleton uid1 (mkAcolyte stats (rations n)) }
 
 -- | The shipped modules, the controlled climate, and the runners.
@@ -191,7 +201,7 @@ setupLua env = do
         , "        end"
         , "      end"
         , "    end"
-        , "    local c = unit.getStat(1, 'salt_conc')"
+        , "    local c = unit.readPhysio(1, 'salt_conc')"
         , "    local st = (unit.getStat(1, 'salt_store') or 0) / mx"
         , "    r.minConc = math.min(r.minConc, c); r.maxConc = math.max(r.maxConc, c)"
         , "    r.minStore = math.min(r.minStore, st); r.maxStore = math.max(r.maxStore, st)"
@@ -240,7 +250,7 @@ sim ls opts = do
 
 stat ∷ LuaBackendState → Text → IO Double
 stat ls name = read ∘ T.unpack <$> luaText ls
-    ("return string.format('%.6f', unit.getStat(1, '" <> name <> "') or -1)")
+    ("return string.format('%.6f', unit.readPhysio(1, '" <> name <> "') or -1)")
 
 setStat ∷ LuaBackendState → Text → Double → IO ()
 setStat ls name v = void $ luaText ls
@@ -265,7 +275,7 @@ spec ∷ Spec
 spec = describe "salt reserve (#2761)" $ do
 
     describe "reserve accounting" $ do
-        it "starts a fresh spawn full, and an older save with no reserve the same" $
+        it "starts a fresh spawn full; a ticked reserve keeps what is present" $
             withScene referenceStats 0 $ \_ ls → do
                 _ ← luaText ls "__salts.tick(1, 0); return true"
                 cap ← stat ls "salt_store"
@@ -406,11 +416,15 @@ spec = describe "salt reserve (#2761)" $ do
                 _ ← luaText ls "__salts.tick(1, 0.1); return true"
                 stat ls "salt_store" >>= near 1e-6 0
 
-        it "gives an older payload with no reserve a full one on its first tick, not at load" $
-            persisted referenceStats $ \ls → do
-                stat ls "salt_store" >>= near 1e-6 (-1)   -- absent after load (-1 = nil)
+        it "gives an older payload with no reserve a full one AT LOAD (D-6 (b)), keeping the pool it did store" $
+            persisted (HM.delete "salt_store" (HM.insert "salt" 33 referenceStats)) $ \ls → do
+                -- #2831: the load boundary seeds only the MISSING key, so the
+                -- reserve is full before the first tick (it used to be the
+                -- first tick that filled it) and the stored pool is exact.
+                stat ls "salt_store" >>= near 1e-6 140
+                stat ls "salt" >>= near 1e-6 33
                 _ ← luaText ls "__salts.tick(1, 0.1); return true"
-                stat ls "salt_store" >>= near 1e-3 140
+                stat ls "salt_store" >>= near 0.2 140   -- released a little, not refilled
 
 -- | Take a unit with the given stats through the REAL units-component path
 --   a save takes (snapshot adapter, the DTO and its cereal bytes, the
@@ -419,6 +433,7 @@ spec = describe "salt reserve (#2761)" $ do
 persisted ∷ HM.HashMap Text Float → (LuaBackendState → IO ()) → IO ()
 persisted stats act = withScene stats 0 $ \env ls → do
     um0 ← readIORef (unitManagerRef env)
+    reg ← readIORef (crPhysiologyRegistryRef (toContentRegistriesCapability env))
     let snap0 = toUnitSnapshot fixturePage um0
         wire s = case S.decode (S.encode (toUnitInstanceDTO s)) of
             Right dto → Right (fromUnitInstanceDTO dto)
@@ -426,10 +441,18 @@ persisted stats act = withScene stats 0 $ \env ls → do
     case traverse wire (usnInstances snap0) of
         Left err → expectationFailure ("DTO round trip failed: " <> err)
         Right insts → do
-            let (um1, _, _, _, _) = fromUnitSnapshot fixturePage
+            let decoded = snap0 { usnInstances = insts }
+                -- the load gate's deterministic normalization (#2831, D-6),
+                -- applied to what the decode produced
+                normalized = case normalizeSavedPhysiology reg
+                                (HM.map udPhysiology (umDefs um0)) 0
+                                [(fixturePage, decoded)] of
+                    Right ([(_, us)], _) → us
+                    _ → decoded
+                (um1, _, _, _, _) = fromUnitSnapshot fixturePage
                     (umDefs um0) emptyInfectionManager
                     emptyEquipmentClassManager
                     (ItemManager (HM.fromList [("acolyte_habit", habitDef)]))
-                    snap0 { usnInstances = insts }
+                    normalized
             writeIORef (unitManagerRef env) um1
             act ls

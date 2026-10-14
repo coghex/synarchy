@@ -255,6 +255,15 @@ unitGetInfoFn env = do
                     forM_ moveHazard $ \tok → do
                         Lua.pushstring (TE.encodeUtf8 tok)
                         Lua.setfield (-2) "moveHazard"
+                    -- The species' mean body-fat fraction (the def's
+                    -- @body: bodyfat@ centre), per-def. The Nominal
+                    -- nutrition upkeep (#2831, SD-18) recovers a
+                    -- depleted unit toward it; absent for a def with no
+                    -- bodyfat template.
+                    forM_ (mDef ⌦ (HM.lookup "bodyfat" . udBodyTemplates)) $
+                        \(mean, _) → do
+                            Lua.pushnumber (Lua.Number (realToFrac mean))
+                            Lua.setfield (-2) "bodyfatMean"
                     -- equipmentClass is per-def, not per-instance. Only
                     -- present in the table when the def declares one.
                     case mDef ⌦ udEquipmentClass of

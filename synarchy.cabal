@@ -624,6 +624,7 @@ library
                      Unit.Faction.Membership
                      Unit.Faction.Profile
                      Unit.Physiology
+                     Unit.Physiology.Transition
                      Unit.Physiology.Types
                      World.Save.Physiology
                      Gameplay.Tags.Types
@@ -1914,6 +1915,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.FactionCatalogue
                    Test.Headless.Unit.Physiology
                    Test.Headless.Unit.PhysiologyEngine
+                   Test.Headless.Unit.PhysiologyModes
+                   Test.Headless.Unit.PhysiologyModes.Climates
+                   Test.Headless.Unit.PhysiologyModes.Harness
+                   Test.Headless.Unit.PhysiologyModes.Neutrality
+                   Test.Headless.Unit.PhysiologyModes.Persistence
+                   Test.Headless.Unit.PhysiologyModes.Tissue
+                   Test.Headless.Unit.PhysiologyModes.Transitions
                    Test.Headless.Unit.PhysiologyFixture
                    Test.Headless.Unit.FactionProfile
                    Test.Headless.Unit.FactionProfileWire

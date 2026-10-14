@@ -91,6 +91,7 @@ import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..), fnv1
 import World.Save.Component (componentKnownIds)
 import World.Save.Compat.SessionV90 (sessionComponentId)
 import World.Save.Snapshot
+import World.Save.Physiology (withoutRebuiltCaches)
 import World.Save.Types
 import World.Page.Types (WorldPageId(..))
 import World.Edit.Types (WorldEdit(..))
@@ -637,6 +638,13 @@ componentIdText (ComponentId t) = t
 --   different defect from the reverse, and collapsing them into one
 --   \"differs\" answer would hide which.
 --
+--   The ONE thing it does not compare is the rebuilt caches
+--   ('World.Save.Physiology.rebuiltCacheStats', #2831): stats a load
+--   recomputes rather than reads back, which a save taken a tick before
+--   the recompute legitimately holds stale. They are classified
+--   serialized-but-ignored, not durable, and compared canonically by the
+--   hspec group @physiology stat modes@ instead.
+--
 --   Every path is compared against the FIRST, which is what makes the
 --   report able to name the generation that first diverged. Pairwise
 --   equality against one reference is transitive equality across the
@@ -711,7 +719,8 @@ decodeOne path = do
         Right bytes → case decodeSessionEnvelope luaComponentNames
                                                  luaComponentNames bytes of
             Left err → (path, Left (T.unpack err))
-            Right (_, snap, comps, _) → (path, Right (ComparedSave snap
+            Right (_, snap, comps, _) → (path, Right (ComparedSave
+                (withoutRebuiltCaches snap)
                 (HM.fromList [ (lcsId c, lcsPayload c) | c ← comps ])))
 
 -- | Write the machine-readable comparison report.

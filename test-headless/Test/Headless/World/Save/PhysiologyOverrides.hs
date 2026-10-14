@@ -12,11 +12,11 @@
 --   builds a registry by hand except where a test says so: the shipped
 --   registry is read through the production decoder.
 --
---   __S3 carries intent, it does not act on it.__ No setter, hook or
---   consumer exists, so a nonempty map arrives here only from a test or a
---   future save. The slice proves exact transport and the wire
---   migrations; the activated storage invariants (D-6 (b), (c), (f),
---   (g), (i), (j)) are S4's and are deliberately NOT asserted.
+--   __S3 carries intent, S4 acts on it.__ This gate proves exact transport
+--   and the wire migrations, and the rejections (d), (e) and (h). The
+--   activated storage invariants and the deterministic load normalization
+--   ((b), (c), (f), (g), (i), (j)) are S4's (#2831), asserted by
+--   "Test.Headless.Unit.PhysiologyModes.Persistence".
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "physiology override persistence"'@.

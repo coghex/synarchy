@@ -1,22 +1,21 @@
 {-# LANGUAGE Strict #-}
--- | The physiology READ verbs (#2828, S2 of epic #2827; design D-2, D-7,
---   SD-19) and the Haskell 'physioRead' they share.
+-- | The physiology verbs (#2828 S2 reads, #2831 S4 transitions; design
+--   D-2, D-5, D-7, SD-19) and the Haskell 'physioRead' they share.
 --
---   __Five read verbs, no mutating one.__ @unit.getPhysioMode@,
---   @getPhysioOverride@, @getPhysioDefault@, @readPhysio@ and
---   @readPhysioBase@ are an explicit exception to the facade-only rule
---   the design (D-7) puts on physiology access: any code may call them,
---   including the console Lua the probes send, because they never change
---   physiology state. The mutating pair (@setPhysioMode@,
---   @clearPhysioMode@) is S4's and is NOT installed here, and nothing in
---   this module can write a mode, an override or a stat.
+--   __Five read verbs.__ @unit.getPhysioMode@, @getPhysioOverride@,
+--   @getPhysioDefault@, @readPhysio@ and @readPhysioBase@ are an explicit
+--   exception to the facade-only rule the design (D-7) puts on
+--   physiology access: any code may call them, including the console Lua
+--   the probes send, because they never change physiology state.
 --
---   __Inactive until S4 (#2830).__ While the registry's 'prModesActive'
---   flag is clear — every loaded registry — @readPhysio@, @readPhysioBase@
---   and 'physioRead' treat EVERY key as unowned: the answer is
---   @getStat@'s \/ @getStatBase@'s, with a @nil@ mode. The owned-key
---   behavior below is what an activated registry (S4, or a controlled
---   test) yields.
+--   __Two mutating verbs, facade-only.__ @unit.setPhysioMode@ and
+--   @unit.clearPhysioMode@ are the engine half of
+--   @scripts\/physiology.lua@'s @setMode@ \/ @clearMode@, and
+--   @tools\/physiology_access_audit.py@ refuses any other caller. Each is
+--   ONE unit-manager update ('applyTransition'): the override, the seeded
+--   or scrubbed keys and the changed values are published together or not
+--   at all, and a refusal leaves the unit exactly as it was. Planning is
+--   "Unit.Physiology.Transition"'s; this module only applies it.
 --
 --   __Owned versus unowned.__ A key a registry system owns, derives or
 --   meters is read purely by "Unit.Physiology": it never initializes,
@@ -37,6 +36,9 @@ module Engine.Scripting.Lua.API.Units.Physiology
     , unitGetPhysioDefaultFn
     , unitReadPhysioFn
     , unitReadPhysioBaseFn
+    , unitSetPhysioModeFn
+    , unitClearPhysioModeFn
+    , applyTransition
     ) where
 
 import UPrelude
@@ -49,10 +51,11 @@ import Engine.Core.Capability.WorldSim
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import Data.IORef (readIORef)
+import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Units.Stats (getEffectiveStat, getOrRollStat)
 import Unit.Physiology
+import Unit.Physiology.Transition
 import Unit.Physiology.Types
 import Unit.Types
 
@@ -87,28 +90,17 @@ physioReadWith kind env uid key = do
     snapshot ← unitSnapshot env uid
     case snapshot of
         Nothing → pure ReadNoUnit
-        Just ctx → case boundary ctx of
+        Just ctx → case physioReadPure kind ctx key of
             OutcomeUnsupported       → pure ReadUnsupported
             OutcomeValue mode v      → pure (ReadOwned mode v)
             OutcomeInvariant why     → pure (ReadInvariant why)
             OutcomeUnowned           → ReadUnowned <$> case kind of
                 ReadEffective → getEffectiveStat env uid key
                 ReadBase      → getOrRollStat env uid key
-  where
-    -- The inactive compatibility boundary (#2830, S5): until S4 flips
-    -- 'prModesActive', every key reads as UNOWNED — today's stored-stat
-    -- semantics — whatever the resolver would yield, so the probe that
-    -- calls this verb directly sees the numbers @unit.getStat@ gives. The
-    -- mode-aware answer is reachable only with the flag set, which only a
-    -- controlled test does.
-    boundary ctx
-        | physioModesActive (pcRegistry ctx) = physioReadPure kind ctx key
-        | otherwise                          = OutcomeUnowned
 
 -- | The unit's read context, or 'Nothing' for a unit that does not
 --   exist. The override map is the unit's STORED intent
---   ('uiPhysioOverrides', S3, #2829): empty for every unit this build
---   creates, nonempty only when a save (or a test) carried one.
+--   ('uiPhysioOverrides', S3, #2829).
 unitSnapshot ∷ EngineEnv → UnitId → IO (Maybe PhysioContext)
 unitSnapshot env uid = do
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
@@ -208,7 +200,7 @@ unitGetPhysioModeFn env = do
 --   (S3, #2829) — including one equal to the species default, which is
 --   still explicit intent. @nil@ when the unit has none, for an unknown
 --   system id, or for a missing unit. Always @nil@ for a unit this
---   build created: no setter exists until S4.
+--   unit nothing has set an override on.
 unitGetPhysioOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPhysioOverrideFn env = do
     idArg  ← Lua.tointeger 1
@@ -242,3 +234,138 @@ unitGetPhysioDefaultFn env = do
         _ → pure Nothing
     maybe Lua.pushnil (Lua.pushstring ∘ TE.encodeUtf8) mText
     return 1
+
+-- * Transitions (S4, #2831)
+
+-- | Plan a transition against the unit's CURRENT state and publish the
+--   result, all inside ONE 'atomicModifyIORef'' on the unit manager: the
+--   plan reads the state it replaces, so nothing can land between the
+--   read and the write. 'Left' (an unknown unit or system, a dead unit,
+--   an unplannable seed) writes nothing.
+--
+--   The registry and the game clock are read BEFORE the update: the
+--   registry is immutable content and the clock only decides which
+--   modifiers are active, so neither is part of the unit's own state.
+applyTransition ∷ EngineEnv → UnitId → (PhysioContext → Either Text Transition)
+                → IO (Either Text Transition)
+applyTransition env uid plan = do
+    reg ← readIORef (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+        case HM.lookup uid (umInstances um) of
+            Nothing → (um, Left "no such unit")
+            Just inst
+                | uiPose inst ≡ "dead" → (um, Left "the unit is dead")
+                | otherwise →
+                    let ctx = PhysioContext
+                            { pcRegistry   = reg
+                            , pcPhysiology = definitionPhysiology um inst
+                            , pcOverrides  = uiPhysioOverrides inst
+                            , pcNow        = now
+                            , pcStats      = uiStats inst
+                            , pcModifiers  = uiModifiers inst }
+                    in case plan ctx of
+                        Left why → (um, Left why)
+                        Right t →
+                            let inst' = inst { uiStats = trStats t
+                                             , uiPhysioOverrides = trOverrides t }
+                            in ( um { umInstances =
+                                          HM.insert uid inst' (umInstances um) }
+                               , Right t )
+
+-- | Marshal a transition's outcome: @true, changed, from, to@ or
+--   @nil, reason@. @from@ \/ @to@ are the resolved mode spellings.
+pushOutcome ∷ Either Text Transition → Lua.LuaE Lua.Exception Lua.NumResults
+pushOutcome (Left why) = do
+    Lua.pushnil
+    Lua.pushstring (TE.encodeUtf8 why)
+    return 2
+pushOutcome (Right t) = do
+    Lua.pushboolean True
+    Lua.pushboolean (transitionChangesMode t)
+    mode (trFrom t)
+    mode (trTo t)
+    return 4
+  where
+    mode = maybe Lua.pushnil (Lua.pushstring ∘ TE.encodeUtf8) ∘ resolvedModeText
+
+-- | A @{ key = number }@ table of EFFECTIVE target values. Every key must
+--   be a string and every value a real number: a numeric string is NOT a
+--   number here (@Lua.tointeger@ and @tonumber@ coerce one), so a
+--   mistyped caller is refused rather than quietly converted.
+readValuesTable ∷ Lua.StackIndex
+                → Lua.LuaE Lua.Exception (Either Text [(Text, Float)])
+readValuesTable idx = do
+    Lua.pushvalue idx
+    Lua.pushnil
+    loop []
+  where
+    loop acc = do
+        more ← Lua.next (-2)
+        if not more
+            then Lua.pop 1 ≫ pure (Right (reverse acc))
+            else do
+                kTy ← Lua.ltype (-2)
+                vTy ← Lua.ltype (-1)
+                case (kTy, vTy) of
+                    (Lua.TypeString, Lua.TypeNumber) → do
+                        mk ← Lua.tostring (-2)
+                        mv ← Lua.tonumber (-1)
+                        Lua.pop 1
+                        case (mk, mv) of
+                            (Just k, Just (Lua.Number v)) →
+                                loop ((TE.decodeUtf8Lenient k, realToFrac v) : acc)
+                            _ → bail
+                    _ → bail
+    bail = do
+        -- Leave the stack as found: the key and the table copy.
+        Lua.pop 2
+        pure (Left "values must be a table of string keys to numbers")
+
+-- | @unit.setPhysioMode(uid, system, mode [, values])@ →
+--   @true, changed, from, to@ | @nil, reason@. FACADE-ONLY (the audit
+--   enforces it): scripts call @physiology.setMode@, which also runs the
+--   cache refresh and the change hooks. See 'applyTransition' for the
+--   atomicity, and "Unit.Physiology.Transition" for what is seeded.
+unitSetPhysioModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitSetPhysioModeFn env = do
+    idTy   ← Lua.ltype 1
+    sysTy  ← Lua.ltype 2
+    modeTy ← Lua.ltype 3
+    valTy  ← Lua.ltype 4
+    idArg  ← Lua.tointeger 1
+    sysArg ← Lua.tostring 2
+    modeArg ← Lua.tostring 3
+    let wellTyped = idTy ≡ Lua.TypeNumber ∧ sysTy ≡ Lua.TypeString
+                  ∧ modeTy ≡ Lua.TypeString
+    case (wellTyped, idArg, sysArg, modeArg ⌦ parsePhysioMode ∘ TE.decodeUtf8Lenient) of
+        (True, Just n, Just sysBS, Just mode)
+            | valTy ≡ Lua.TypeNil ∨ valTy ≡ Lua.TypeNone →
+                run n sysBS mode Nothing
+            | valTy ≡ Lua.TypeTable → do
+                parsed ← readValuesTable 4
+                case parsed of
+                    Left why → pushOutcome (Left why)
+                    Right vs → run n sysBS mode (Just vs)
+            | otherwise → pushOutcome (Left "values must be a table")
+        _ → pushOutcome (Left "usage: setPhysioMode(uid, system, \"nominal\"|\"simulated\"[, values])")
+  where
+    run n sysBS mode mValues = do
+        outcome ← Lua.liftIO $ applyTransition env (UnitId (fromIntegral n)) $
+            \ctx → planSetMode ctx (TE.decodeUtf8Lenient sysBS) mode mValues
+        pushOutcome outcome
+
+-- | @unit.clearPhysioMode(uid, system)@ → @true, changed, from, to@ |
+--   @nil, reason@. Facade-only; removes the override.
+unitClearPhysioModeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitClearPhysioModeFn env = do
+    idTy   ← Lua.ltype 1
+    sysTy  ← Lua.ltype 2
+    idArg  ← Lua.tointeger 1
+    sysArg ← Lua.tostring 2
+    case (idTy ≡ Lua.TypeNumber ∧ sysTy ≡ Lua.TypeString, idArg, sysArg) of
+        (True, Just n, Just sysBS) → do
+            outcome ← Lua.liftIO $ applyTransition env (UnitId (fromIntegral n)) $
+                \ctx → planClearMode ctx (TE.decodeUtf8Lenient sysBS)
+            pushOutcome outcome
+        _ → pushOutcome (Left "usage: clearPhysioMode(uid, system)")

@@ -146,6 +146,14 @@ function M.deathCauseFor(resourceName)
     return "exhaustion"
 end
 
+-- Drop one unit's debounce flags (#2831): a physiology mode change or a
+-- value write replaces the pool the "already warned" state was about, so
+-- the next crossing must warn afresh instead of being suppressed (or the
+-- rearm clearing against a value that no longer exists).
+function M.forget(uid)
+    if uid ~= nil then unitAlertState[uid] = nil end
+end
+
 -- Save hook (called from unit_resources.init's deserializer): clears the
 -- transient per-uid alert-debounce cache on load without writing a
 -- persistent blob. Cleared IN-PLACE because the table is an upvalue

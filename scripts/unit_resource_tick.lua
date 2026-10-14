@@ -10,6 +10,7 @@ local alerts          = require("scripts.unit_resource_alerts")
 local energy          = require("scripts.unit_resource_energy")
 local carry           = require("scripts.unit_resource_carry")
 local regrowth        = require("scripts.unit_resource_regrowth")
+local physiology      = require("scripts.physiology")
 
 local M = {}
 
@@ -184,8 +185,10 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     -- or regenerated normally with its reserves gone (bulky). The
     -- helper also decides which input applies, so a frame-carrying
     -- unit with no height stat is now evaluated rather than skipped.
+    -- The fat-floor drain is NUTRITION's effect (#2831, D-9): Simulated only.
     local inOrganFailure = false
-    if params.organ_failure_check then
+    if params.organ_failure_check
+       and physiology.isSimulated(uid, "nutrition") then
         local fat = unit.getStat(uid, "fat_mass")
         if fat then
             inOrganFailure = energy.atFatFloor(uid, fat)

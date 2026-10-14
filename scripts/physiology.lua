@@ -1,49 +1,96 @@
--- Physiology consumer facade (#2830, S5 of epic #2827; design D-2, D-7).
+-- Physiology facade (#2830 S5 migration, #2831 S4 activation; epic #2827,
+-- design D-2, D-4, D-5, D-7).
 --
 -- Every GAMEPLAY reader of a registry-owned key (the owned, derived and
 -- meter keys of data/physiology/systems.yaml) goes through get / getBase /
--- fraction, and every cross-system CONTRIBUTION to such a key goes through
--- debit / credit. tools/physiology_access_audit.py enforces both.
+-- fraction, every cross-system CONTRIBUTION to such a key goes through
+-- debit / credit, and every MODE transition goes through setMode /
+-- clearMode. tools/physiology_access_audit.py enforces all three.
 --
--- INACTIVE: production modes are not active yet (the registry's
--- modesActive flag is false until S4), so every operation here reports
--- TODAY's semantics and produces today's applied writes. The seam exists so
--- S4 can activate the intended behavior in this file and in the engine
--- verbs without migrating another caller:
---   * reads go through unit.readPhysio / unit.readPhysioBase, which answer
---     getStat / getStatBase while inactive and the mode-aware value once
---     active (D-2);
---   * contributions are applied by contributionApplies() below, which is
---     the one place a Nominal system will discard them (D-4, S4).
+-- ACTIVE (S4): the answers are mode-aware.
+--   * reads go through unit.readPhysio / unit.readPhysioBase: a Nominal
+--     system reads its healthy values, an Unsupported one reads nil, a
+--     Simulated one reads its stored state (D-2);
+--   * a contribution to a pool whose system is not Simulated is
+--     DISCARDED (D-4): debit and credit apply 0, the receiver's mode
+--     being the only thing that decides it (contributionApplies below);
+--   * setMode / clearMode run the engine's atomic transition, then the
+--     transient-cache resets, the change hooks (only on an EFFECTIVE
+--     change) and the dt-0 refresh of the caches that read physiology
+--     (circulation, then brain) before returning (D-5, D-5a).
 --
 -- Owner-local state updates (a system writing its OWN keys, e.g.
--- salts.tick) stay with the owner; this facade governs reads from, and
--- contributions between, systems.
+-- salts.tick) stay with the owner; this facade governs reads from,
+-- contributions between, and mode changes of, systems.
 
 local stats = require("scripts.unit_stats")
 
 local physiology = {}
 
--- The owned/derived/meter names of the loaded registry, cached on first use
--- (the registry is loaded once at boot and a different one is refused).
-local ownedKeys = nil
+-- The owned/derived/meter names of the loaded registry and the system each
+-- belongs to, cached on first use (the registry is loaded once at boot and a
+-- different one is refused).
+local keySystem = nil
+local systemOrder = nil
+
+local function loadRegistry()
+    if keySystem ~= nil then return keySystem end
+    local reg = engine.getPhysiologyRegistry and engine.getPhysiologyRegistry()
+    if not reg or not reg.systems then return nil end
+    keySystem = {}
+    systemOrder = {}
+    for _, sid in ipairs(reg.systemOrder or {}) do
+        systemOrder[#systemOrder + 1] = sid
+    end
+    for sid, sys in pairs(reg.systems) do
+        for _, o in ipairs(sys.owns) do keySystem[o.key] = sid end
+        for _, d in ipairs(sys.derived) do keySystem[d.key] = sid end
+        for _, m in ipairs(sys.meters) do keySystem[m] = sid end
+    end
+    return keySystem
+end
 
 local function isOwned(key)
-    if ownedKeys == nil then
-        local reg = engine.getPhysiologyRegistry and engine.getPhysiologyRegistry()
-        if not reg then return false end
-        ownedKeys = {}
-        for _, sys in pairs(reg.systems) do
-            for _, o in ipairs(sys.owns) do ownedKeys[o.key] = true end
-            for _, d in ipairs(sys.derived) do ownedKeys[d.key] = true end
-            for _, m in ipairs(sys.meters) do ownedKeys[m] = true end
-        end
-    end
-    return ownedKeys[key] == true
+    local ks = loadRegistry()
+    return ks ~= nil and ks[key] ~= nil
 end
 
 -- True when `key` belongs to a registry system.
 function physiology.isOwned(key) return isOwned(key) end
+
+-- The system id that owns `key`, or nil.
+function physiology.systemOf(key)
+    local ks = loadRegistry()
+    return ks and ks[key] or nil
+end
+
+-- The registry's system ids in TICK ORDER (data/physiology/systems.yaml:
+-- thermo before salt, then the pool systems).
+function physiology.systemOrder()
+    loadRegistry()
+    return systemOrder or {}
+end
+
+-- The unit's resolved mode for one system: "nominal" | "simulated", or nil
+-- when the system is Unsupported for it (or unknown, or the unit is gone).
+function physiology.mode(uid, system)
+    return unit.getPhysioMode(uid, system)
+end
+
+-- Every system's resolved mode for one unit, `{ [system] = mode }`, read
+-- once so a tick decides all of its gates from one consistent answer.
+function physiology.modes(uid)
+    local out = {}
+    for _, sid in ipairs(physiology.systemOrder()) do
+        out[sid] = unit.getPhysioMode(uid, sid)
+    end
+    return out
+end
+
+-- True while the system is Simulated for this unit.
+function physiology.isSimulated(uid, system)
+    return unit.getPhysioMode(uid, system) == "simulated"
+end
 
 -- The EFFECTIVE value of `key` and the owning system's mode: `value, mode`.
 -- An unowned key reads exactly as stats.get does (the attribute, then the
@@ -76,9 +123,14 @@ end
 
 -- ---- Contributions ----
 
--- The one place a contribution may be discarded because the receiving
--- system is Nominal (D-4, S4). Inactive, every contribution applies.
-local function contributionApplies(uid, key) return true end
+-- The one place a contribution is discarded because the RECEIVING system
+-- is not Simulated (D-4): Nominal state is not stored, so there is
+-- nothing to add to or remove from, and an Unsupported system has none.
+local function contributionApplies(uid, key)
+    local sid = physiology.systemOf(key)
+    if sid == nil then return true end
+    return unit.getPhysioMode(uid, sid) == "simulated"
+end
 
 -- Per-key rules for the contributions the migrated callers make. `cap`
 -- is the upper bound a credit clamps to (nil = unbounded); `needsCap` makes
@@ -137,6 +189,96 @@ function physiology.debit(uid, key, amount)
     if new < floor then new = floor end
     unit.setStat(uid, key, new)
     return old - new
+end
+
+-- ---- Refresh ----
+
+-- Recompute the caches that READ physiology, in dependency order: the
+-- circulation stat from the effective core temperature, then the brain's
+-- derived values at dt 0 (a dt-driven drift stays where it was). Run after
+-- a transition or a value write so a reader never sees a cache that
+-- disagrees with the state that was just published (D-5a). Other threads
+-- that read these caches may see the previous values for up to one pass:
+-- this refreshes the Lua-owned caches before returning, it is not a
+-- cross-thread atomic publication.
+function physiology.refresh(uid)
+    require("scripts.circulation").update(uid)
+    require("scripts.brain").tick(uid, 0)
+end
+
+-- ---- Transitions ----
+
+-- fn(uid, system, fromMode, toMode) per registered hook, run only on an
+-- EFFECTIVE mode change (never for a value write or a set equal to the
+-- effective mode). Hooks cancel or rebuild whatever a mode change makes
+-- stale outside this facade (an AI latch, a debounce, a regrowth author).
+local hooks = {}
+
+-- Register a change hook for one system (`nil` = every system). Idempotent
+-- per `id`, so a reloaded script replaces its hook instead of stacking.
+function physiology.onModeChanged(id, system, fn)
+    hooks[id] = { system = system, fn = fn }
+end
+
+-- The pools each system's tick carries a sub-binary32 remainder for, and
+-- the resources it keeps an alert debounce for: dropped on ANY transition
+-- or value write, because the value they are remainders of just changed
+-- under them (#2633).
+local function resetTransientState(uid, system)
+    require("scripts.unit_resource_carry").forget(uid)
+    require("scripts.unit_resource_regrowth").forget(uid)
+    require("scripts.unit_resource_alerts").forget(uid)
+end
+
+-- The resource parameters a Simulated system needs exist (species entry
+-- first, then the registry default), or why not.
+local function parametersAvailable(uid, system)
+    local info = unit.getInfo(uid)
+    if not info then return false, "no such unit" end
+    return require("scripts.unit_resource_params")
+        .available(info.defName, system)
+end
+
+local function finish(uid, system, outcomeChanged, from, to)
+    resetTransientState(uid, system)
+    if outcomeChanged then
+        for _, h in pairs(hooks) do
+            if h.system == nil or h.system == system then
+                h.fn(uid, system, from, to)
+            end
+        end
+    end
+    physiology.refresh(uid)
+end
+
+-- Set a system's mode, recording the override (even one equal to the
+-- species default) and seeding or scrubbing its state when the EFFECTIVE
+-- mode changes. `values` optionally gives EFFECTIVE targets for the
+-- Simulated system's owned keys ({ hydration = 20 }). Returns
+-- `true, changed` or `nil, reason`; a refusal changes nothing.
+function physiology.setMode(uid, system, mode, values)
+    if mode == "simulated" then
+        local ok, why = parametersAvailable(uid, system)
+        if not ok then return nil, why end
+    end
+    local ok, changed, from, to = unit.setPhysioMode(uid, system, mode, values)
+    if not ok then return nil, changed end
+    finish(uid, system, changed, from, to)
+    return true, changed
+end
+
+-- Remove the system's override, so the unit follows its species default
+-- again. Same return shape and refusal behavior as setMode.
+function physiology.clearMode(uid, system)
+    local info = unit.getInfo(uid)
+    if info and unit.getPhysioDefault(uid, system) == "simulated" then
+        local ok, why = parametersAvailable(uid, system)
+        if not ok then return nil, why end
+    end
+    local ok, changed, from, to = unit.clearPhysioMode(uid, system)
+    if not ok then return nil, changed end
+    finish(uid, system, changed, from, to)
+    return true, changed
 end
 
 return physiology

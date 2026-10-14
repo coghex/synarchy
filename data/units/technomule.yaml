@@ -41,6 +41,9 @@ units:
       bulk:    { mean: 4.0, range: 0.6 }
       bodyfat: { mean: 0.12, range: 0.08 }
 
+    # Physiology profile (#2831, design D-10): hydration and nutrition Nominal; salt and thermo Simulated.
+    physiology: { profile: reduced }
+
     # Innate, permanent, tooltip-visible: the percentage modifier on
     # top of the body-derived base capacity.
     modifiers:

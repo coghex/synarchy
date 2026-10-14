@@ -596,8 +596,8 @@ toUnitInstanceDTOv3 u = UnitInstanceDTOv3
 
 -- | v3 → v4 (#2829): every field crosses unchanged and the override map
 --   is EMPTY — a v3 payload predates explicit mode intent, so there is
---   none to carry. Content-dependent normalization is S4's, never the
---   component migration's.
+--   none to carry. Content-dependent normalization is the load gate's
+--   (S4, "World.Save.Physiology"), never the component migration's.
 migrateUnitInstanceDTOv3 ∷ UnitInstanceDTOv3 → UnitInstanceDTO
 migrateUnitInstanceDTOv3 d = UnitInstanceDTO
     { uidDefName           = uid3DefName d

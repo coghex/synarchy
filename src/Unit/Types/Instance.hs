@@ -147,10 +147,9 @@ data UnitInstance = UnitInstance
       --   'Unit.Physiology.resolveMode'. Persist exactly: the @units@
       --   component v4 carries it (older versions yield an empty map).
       --
-      --   EMPTY for every unit this build creates: no setter, transition
-      --   hook or gameplay consumer exists until S4, so only a test (or a
-      --   future save) holds a nonempty one. The read-only
-      --   @unit.getPhysioOverride@ reflects it.
+      --   EMPTY until @physiology.setMode@ (S4, #2831) records an
+      --   override, so only a script, a test or a save holds a nonempty
+      --   one. @unit.getPhysioOverride@ reflects it.
     , uiLastAttackerUid ∷ !(Maybe Word32)
       -- ^ Runtime-only (NOT in SaveData). Written by Combat.Resolution
       --   on each hit landed against this unit. Read by the AI's

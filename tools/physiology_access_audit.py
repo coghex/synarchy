@@ -37,9 +37,8 @@ Allowances, each tied to real ownership and named, never a directory:
   * ``OWNERS``: (file, system[, scope]) -- a file may touch the keys of the
     systems it actually owns. ``scope="meters"`` restricts the failure-meter
     engine to the meters of that system.
-  * ``SURVIVAL_EXEMPTION``: ``neutralize`` in scripts/unit_survival_exempt.lua
-    may ``setStat`` exactly six keys (the #2754 thermo/salt substitute tick).
-    Removed by S4 when #2754 becomes the ``exempt`` profile (design F-7).
+  * (There is no survival exemption any more: #2754's ``neutralize`` was
+    removed by S4 (#2831) when it became the ``exempt`` profile, design F-7.)
   * ``PROBE_FIXTURE_WRITES``: tools/physiology_probe.py may ``setStat`` the
     keys it forces as scenario fixtures (D-7 allows raw setStat debugging
     under Simulated) -- only from the eight setup chunks pinned SITE BY SITE
@@ -165,12 +164,6 @@ class HelperException:
     why: str
 
 
-SURVIVAL_EXEMPTION = SiteException(
-    "scripts/unit_survival_exempt.lua", "neutralize", "unit.setStat",
-    frozenset({"core_temp", "salt", "salt_conc",
-               "hypothermia", "hyperthermia", "salt_imbalance"}),
-    "the #2754 thermo/salt substitute tick; S4 removes it (design F-7)")
-
 @dataclass(frozen=True)
 class FixtureWrites:
     """The probe's scenario setup writes, pinned SITE BY SITE: a write is
@@ -242,7 +235,6 @@ class Policy:
     owners: tuple[Owner, ...] = OWNERS
     facade: str = FACADE
     generic_accessors: frozenset[str] = GENERIC_ACCESSORS
-    survival: SiteException = SURVIVAL_EXEMPTION
     probe_fixture: FixtureWrites = PROBE_FIXTURE_WRITES
     ui_exceptions: tuple[SiteException, ...] = UI_EXCEPTIONS
     ui_helpers: tuple[HelperException, ...] = UI_HELPER_EXCEPTIONS
@@ -460,10 +452,6 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
     for sk in sorted(sites, key=lambda k: (k[0], k[1], k[2], k[3])):
         a, kinds, fb = sites[sk]["acc"], sites[sk]["kinds"], sites[sk]["fallback"]
         if a.path == policy.facade or _owner_allows(policy, a.path, reg, a.key):
-            continue
-        ex = policy.survival
-        if a.path == ex.file and a.function == ex.function \
-                and a.verb == ex.verb and a.key in ex.keys:
             continue
         fx = policy.probe_fixture
         if a.path == fx.file and a.verb == fx.verb and a.straight \

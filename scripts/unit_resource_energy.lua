@@ -200,7 +200,9 @@ function M.tickDigestion(uid, dt)
 end
 
 -----------------------------------------------------------
--- Starvation tick (Phase 4). Runs once per unit per update, AFTER
+-- Starvation tick (Phase 4). Runs once per unit per update -- only for a
+-- SIMULATED nutrition (#2831): a Nominal one neither digests nor catabolizes
+-- and has no lean-floor death -- AFTER
 -- the calorie store has been drained AND digestion has refilled it,
 -- so it sees the post-transfer store value — a unit with food still
 -- digesting never catabolizes.
@@ -284,6 +286,9 @@ function M.tickStarvation(uid, dt)
     unit.setStat(uid, "lean_mass", newLean)
     unit.setStat(uid, "body_mass", newBody)
     unit.recomputeBody(uid)
+    -- True when this pass removed tissue: the caller records it (#2831,
+    -- SD-18's tissue_recovering) so a later Nominal nutrition can rebuild it.
+    return actualFatDelta > 0 or actualLeanDelta > 0
 end
 
 return M

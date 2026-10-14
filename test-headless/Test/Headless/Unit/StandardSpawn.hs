@@ -25,7 +25,7 @@ import UPrelude
 import Unit.Faction.Membership (legacyFactionOf, resolveLegacyFaction)
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
-import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -54,6 +54,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..))
 import Structure.Types (emptyChunkStructures)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
+import Test.Headless.Unit.PhysiologyFixture (exemptPhysiology)
 import Unit.Command.Types (UnitCommand(..), SpawnProfile(..))
 import Unit.Faction (Faction(..))
 import Unit.Thread.Command (processAllUnitCommands)
@@ -61,8 +62,8 @@ import Unit.Thread.Command.Body (bloodSeedFromStats, seedBodyComposition)
 import Unit.Thread.Command.Spawn
     (handleUnitSpawnCommand, rollTemplates, standardTemplates)
 import Unit.Types
-    ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , bloodMassRatio )
+    ( StatModifier(..), UnitDef(..), UnitId(..), UnitInstance(..)
+    , UnitManager(..), bloodMassRatio )
 import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..))
 import World.Flora.Types (emptyFloraChunkData)
@@ -74,6 +75,12 @@ import World.State.Types
 import World.Tile.Types (WorldTileData(..))
 
 -- * Fixture
+
+-- | A spawned unit's stats without the keys its Simulated physiology
+--   systems were seeded with (#2831), which are not the body authority's.
+withoutPhysiology ∷ HM.HashMap Text Float → HM.HashMap Text Float
+withoutPhysiology = HM.filterWithKey (\k _ → k `notElem`
+    [ "hydration", "hunger", "calories", "core_temp", "salt", "salt_store" ])
 
 page ∷ WorldPageId
 page = WorldPageId "standard_spawn"
@@ -264,6 +271,7 @@ fingerprint u =
 spec ∷ Spec
 spec = describe "Standard spawn profile (#2756)" $ aroundAll setup $ do
     directSpec
+    physiologySpec
     rolledSpec
     portalSpec
     luaApiSpec
@@ -274,6 +282,40 @@ spec = describe "Standard spawn profile (#2756)" $ aroundAll setup $ do
         loadShippedContent ls
         _ ← installLuaStubs ls
         act (env, ls)
+
+-- | Spawn-time physiology seeding (#2831): Simulated systems get their keys
+--   AFTER the body-derived maxima and the completed modifier map, so a
+--   retained innate modifier is inverted into the stored base; a Nominal
+--   system's keys stay absent.
+physiologySpec ∷ SpecWith (EngineEnv, LuaBackendState)
+physiologySpec = describe "physiology seeding at spawn (#2831)" $ do
+
+    it "seeds a Simulated pool so its EFFECTIVE value is the healthy one under an innate modifier" $ \(env, _) → do
+        ws ← resetScene env
+        def ← acolyteDef env
+        let modded = def { udModifiers = [("hydration", StatModifier 0 "innate" Nothing 0.5)] }
+        u ← withDef env modded $ spawnWith env ws 301 SpawnStandard
+        -- effective (base x 1.5) is max_hydration, so the stored base is 2/3 of it
+        stat u "hydration" `shouldSatisfy` approx (stat u "max_hydration" / 1.5)
+
+    it "leaves every key of a Nominal system absent" $ \(env, _) → do
+        ws ← resetScene env
+        def ← acolyteDef env
+        u ← withDef env (def { udPhysiology = exemptPhysiology }) $
+                spawnWith env ws 302 SpawnStandard
+        forM_ ["hydration", "hunger", "calories", "core_temp", "salt", "salt_store"] $ \k →
+            HM.member k (uiStats u) `shouldBe` False
+
+-- | Run an action with the acolyte's definition replaced, restoring it.
+withDef ∷ EngineEnv → UnitDef → IO a → IO a
+withDef env def act = do
+    original ← acolyteDef env
+    let set d = modifyIORef' (unitManagerRef env) $ \um →
+            um { umDefs = HM.insert acolyteName d (umDefs um) }
+    set def
+    r ← act
+    set original
+    pure r
 
 directSpec ∷ SpecWith (EngineEnv, LuaBackendState)
 directSpec = describe "a standard acolyte, spawned directly" $ do
@@ -313,10 +355,18 @@ directSpec = describe "a standard acolyte, spawned directly" $ do
         ws ← resetScene env
         def ← acolyteDef env
         u ← spawnWith env ws 102 SpawnStandard
-        uiStats u `shouldBe` seedBodyComposition
+        -- the body authority's stats, and on top of them only the keys a
+        -- @rich@ acolyte's Simulated systems are seeded with (#2831)
+        withoutPhysiology (uiStats u) `shouldBe` seedBodyComposition
             (HM.union (standardTemplates (udStatTemplates def))
                       (standardTemplates (udBodyTemplates def)))
         let bm = stat u "body_mass"
+        stat u "hydration" `shouldSatisfy` approx (bm * 0.6)
+        stat u "hunger" `shouldSatisfy` approx (bm * 10)
+        stat u "calories" `shouldSatisfy` approx (bm * 20)
+        stat u "salt" `shouldSatisfy` approx bm
+        stat u "salt_store" `shouldSatisfy` approx (2 * bm)
+        stat u "core_temp" `shouldSatisfy` approx 37
         stat u "strength" `shouldSatisfy` approx 1.0
         stat u "max_hydration" `shouldSatisfy` approx (bm * 0.6)
         stat u "max_hunger" `shouldSatisfy` approx (bm * 10)
@@ -390,7 +440,8 @@ rolledSpec = describe "an ordinary spawn" $ do
             (knowledge, _) = rollTemplates (udKnowledgeTemplates def) g3
         writeIORef (statRNGRef env) g0
         u ← spawnWith env ws 201 SpawnRolled
-        uiStats u `shouldBe` seedBodyComposition (HM.union rolled rolledB)
+        withoutPhysiology (uiStats u)
+            `shouldBe` seedBodyComposition (HM.union rolled rolledB)
         uiSkills u `shouldBe` skills
         uiKnowledge u `shouldBe` knowledge
         -- and that roll is not the standard unit: under this seed the

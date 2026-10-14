@@ -30,6 +30,9 @@ units:
       bulk:    { mean: 1.0, range: 1.0 }
       bodyfat: { mean: 0.2, range: 0.36 }
 
+    # Physiology profile (#2831, design D-10): every system Nominal: ignores survival physiology (#2754).
+    physiology: { profile: exempt }
+
     skills:
       unarmed: { base: 30.0, range: 20.0 }
       balance: { base: 50.0, range: 40.0 }

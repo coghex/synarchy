@@ -61,8 +61,7 @@ import Test.Headless.Harness.Isolation
     (withExclusiveTempDirectory, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Unit.PhysiologyFixture
-    ( activatePhysiologyModes, ensurePhysiologyRegistry
-    , shippedPhysiologyPath )
+    ( ensurePhysiologyRegistry, shippedPhysiologyPath )
 import Test.Headless.Unit.TransferApi (minimalDef)
 import Test.Headless.World.Save.Components.Fixture
     ( minimalGlobals, minimalPage, minimalSimState, minimalUnitInstance
@@ -103,10 +102,7 @@ withPhysioEngine loadRegistry action = withIsolatedResourceRoot $ do
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
-    -- The S2 examples below assert the MODE-AWARE read contract, which a
-    -- production registry does not answer until S4 (#2830): activate it,
-    -- as the controlled test it is.
-    when loadRegistry (activatePhysiologyModes env)
+    when loadRegistry (ensurePhysiologyRegistry env)
     let eng = PhysioEngine env ls
     _ ← luaText eng
         "function _G.__p(v, m) return (v == nil and 'nil' or \
@@ -548,6 +544,17 @@ registrationSpec = describe "unit registration (requirements 2 and 5)" $ do
 -- The shipped roster
 -----------------------------------------------------------------------
 
+-- | The per-system defaults a shipped definition's profile expands to.
+shippedDefaults ∷ Text → HM.HashMap Text PhysioMode
+shippedDefaults name = HM.fromList $ case name of
+    "acolyte"         → [ (s, PhysioSimulated) | s ← allSystems ]
+    "nomad_primitive" → [ (s, PhysioNominal)   | s ← allSystems ]
+    _ | name `elem` ["bear_brown", "red_squirrel", "technomule"] →
+        [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
+        , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal) ]
+    _                 → []
+  where allSystems = ["hydration", "salt", "thermo", "nutrition"]
+
 bodiedRoster, bodylessRoster ∷ [Text]
 bodiedRoster = [ "acolyte", "bear_brown", "nomad_primitive", "red_squirrel"
                , "technomule" ]
@@ -577,8 +584,9 @@ shippedRosterSpec = describe "the shipped roster (requirements 2 and 6)" $ do
                 Just d → do
                     upBodyAuthored (udPhysiology d)
                         `shouldBe` (name `elem` bodiedRoster)
-                    -- no shipped definition authors defaults in S2
-                    upDefaults (udPhysiology d) `shouldBe` HM.empty
+                    -- the profile each bodied definition authors (#2831,
+                    -- design D-10); a bodyless one authors none
+                    upDefaults (udPhysiology d) `shouldBe` shippedDefaults name
             -- and through the registered Lua read bindings
             let defList = [ d | (_, Just d) ← defs ]
             installScene eng defList
@@ -589,7 +597,9 @@ shippedRosterSpec = describe "the shipped roster (requirements 2 and 6)" $ do
                                        <> tshow i <> ", '" <> sys <> "'))")
                     got `shouldBe`
                         (if udName d `elem` bodylessRoster
-                            then "nil" else "nominal")
+                            then "nil"
+                            else maybe "nominal" physioModeText
+                                    (HM.lookup sys (shippedDefaults (udName d))))
 
 -----------------------------------------------------------------------
 -- Requirement 4: the installed surface
@@ -598,18 +608,15 @@ shippedRosterSpec = describe "the shipped roster (requirements 2 and 6)" $ do
 surfaceSpec ∷ Spec
 surfaceSpec = describe "the installed read surface (requirements 4 and 6)" $ do
 
-    it "installs exactly the five read verbs and neither mutating verb" $
-        withPhysioEngine True $ \eng → do
+    it "installs the five read verbs and the two mutating verbs (#2831)" $
+        withPhysioEngine True $ \eng →
             luaText eng
                 "local names = {}; for k, v in pairs(unit) do \
                 \if k:find('Physio') then names[#names + 1] = k end end; \
                 \table.sort(names); return table.concat(names, ',')"
                 `shouldReturn`
-                "getPhysioDefault,getPhysioMode,getPhysioOverride,\
-                \readPhysio,readPhysioBase"
-            luaText eng "return tostring(unit.setPhysioMode) .. '|' .. \
-                        \tostring(unit.clearPhysioMode)"
-                `shouldReturn` "nil|nil"
+                "clearPhysioMode,getPhysioDefault,getPhysioMode,\
+                \getPhysioOverride,readPhysio,readPhysioBase,setPhysioMode"
 
     it "reaches the verbs from scripts/ only through the S5 facade (#2830), \
        \and the wound tick reads through the pure consumer view" $ do
@@ -854,8 +861,9 @@ readVerbSpec = describe "readPhysio / readPhysioBase" $ do
                 `shouldReturn` "1.0000|nominal"
 
     it "raises, through the registered verb, for a Simulated hydration pool \
-       \that is zero, negative, NaN or infinite, and for its modifiers \
-       \driving it to zero" $
+       \that is negative, NaN or infinite, reads a present ZERO pool through \
+       \the 0.05 clamp, and still raises when a modifier masks a negative \
+       \stored pool" $
         withPhysioEngine True $ \eng → do
             let withPool v = standardScene eng
                     (("hydration", v) : filter ((≢ "hydration") ∘ fst)
@@ -863,20 +871,23 @@ readVerbSpec = describe "readPhysio / readPhysioBase" $ do
                 raises = luaText eng
                     "local ok, err = pcall(unit.readPhysio, 1, 'salt_conc'); \
                     \return tostring(ok) .. '|' .. tostring(err)"
-            forM_ [0, -3, 0 / 0, 1 / 0] $ \bad → do
+            forM_ [-3, 0 / 0, 1 / 0] $ \bad → do
                 withPool bad
                 out ← raises
                 out `shouldSatisfy` T.isPrefixOf "false|physiology read of \
                     \'salt_conc' (system 'salt'): input 'hydration' is not "
-            -- a positive modifier must not mask a zero or negative STORED
-            -- pool (the reviewer's masking case)
-            forM_ [0, -3] $ \stored → do
-                withPool stored
-                _ ← luaText eng "return unit.addModifier(1, 'hydration', 30, \
-                                \'spec')"
-                raises >>= (`shouldSatisfy` T.isPrefixOf "false|physiology \
-                    \read of 'salt_conc' (system 'salt'): input 'hydration' \
-                    \is not positive (stored")
+            -- an EMPTY pool is a valid reading (#2831): the concentration
+            -- is the salt fraction over the clamped 0.05 floor
+            withPool 0
+            raises >>= (`shouldSatisfy` T.isPrefixOf "true|")
+            -- a positive modifier must not mask a NEGATIVE stored pool
+            -- (the reviewer's masking case)
+            withPool (-3)
+            _ ← luaText eng "return unit.addModifier(1, 'hydration', 30, \
+                            \'spec')"
+            raises >>= (`shouldSatisfy` T.isPrefixOf "false|physiology \
+                \read of 'salt_conc' (system 'salt'): input 'hydration' \
+                \is not non-negative (stored")
             -- the owned key itself still reads, as stored: only the
             -- DEPENDENT value judges the pool
             withPool 0

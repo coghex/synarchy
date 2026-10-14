@@ -44,6 +44,7 @@ import Item.Types (ItemInstance(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, mkItem, newBareLuaBackend)
+import Test.Headless.Unit.PhysiologyFixture (ensurePhysiologyRegistry, nutritionOnlyPhysiology)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -123,6 +124,7 @@ statsWithoutStamina = HM.fromList [("endurance", 1.0)]
 resetSceneFull ∷ EngineEnv → Text → UnitDef → HM.HashMap Text Float
                → HM.HashMap Text [StatModifier] → Text → IO ()
 resetSceneFull env defName def stats mods pose = do
+    ensurePhysiologyRegistry env
     writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.singleton defName def
@@ -130,8 +132,11 @@ resetSceneFull env defName def stats mods pose = do
             ((mkUnitWith defName stats) { uiModifiers = mods
                                         , uiPose = pose }) }
 
+-- | The acolyte's NUTRITION is Simulated (#2831), which is what lets the
+--   fat-floor organ failure exist; the other systems are Nominal.
 acolyteDef ∷ UnitDef
-acolyteDef = minimalDef "acolyte" "Acolyte"
+acolyteDef = (minimalDef "acolyte" "Acolyte")
+    { udPhysiology = nutritionOnlyPhysiology }
 
 bearDef ∷ UnitDef
 bearDef = minimalDef "bear_brown" "Brown Bear"
