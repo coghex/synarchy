@@ -147,7 +147,11 @@ Two further allowances, each named and bounded:
   `calories`, `hunger` and `core_temp` as scenario fixtures (D-7 allows raw
   `setStat` for debugging under Simulated), only from a straight-line
   embedded chunk (no function, loop or branch, so never an aggregate or a
-  helper) inside `hunger_section` or `starvation_bands_section`. Reads in the
+  Lua helper) in one of three named Python scopes, each with its own keys:
+  `hunger_section` (`calories`, `hunger`, `core_temp`),
+  `starvation_bands_section` (`hunger`) and its nested `set_frac`
+  (`calories`). A measurement helper nested in a scenario (`avg_hyd`) is a
+  different scope and is not allowed to write. Reads in the
   probe are not allowed; the numeric calorie observer reads through
   `unit.readPhysio`. Storage-absence guards (`unit.getCalories`, `unit.feed` refusal)
   keep their calls. S4 and S7 own their Nominal reinterpretation.
