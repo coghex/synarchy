@@ -342,7 +342,7 @@ def exhaustion_section(port, seconds):
 
 
 def _calories(port, uid):
-    r = send(port, f"return unit.getCalories({uid}) or -1")
+    r = send(port, f"return unit.readPhysio({uid},'calories') or -1")
     try:
         return float(r)
     except ValueError:

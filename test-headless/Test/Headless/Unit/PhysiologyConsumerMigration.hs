@@ -265,6 +265,7 @@ setupLua env = do
         , "  return f(v) .. '|' .. tostring(m)"
         , "end"
         , "function S.getStat(uid, key) return f(unit.getStat(uid, key)) .. '|nil' end"
+        , "function S.getCalories(uid) return f(unit.getCalories(uid)) .. '|nil' end"
         , "function S.getStatBase(uid, key) return f(unit.getStatBase(uid, key)) .. '|nil' end"
         , "function S.fraction(uid, key, maxKey)"
         , "  return f(physiology.fraction(uid, key, maxKey))"
@@ -575,6 +576,15 @@ boundarySpec = describe "the inactive compatibility boundary" $ do
                 (label, k, nominalBase) `shouldBe` (label, k, plainBase)
                 viaFacade ← luaText ls ("return S.facadeRead(3, '" <> k <> "')")
                 (label, k, viaFacade) `shouldBe` (label, k, plain)
+            -- the probe's numeric calorie observer reads the store through
+            -- unit.readPhysio and must see what unit.getCalories reports
+            forM_ poolStates $ \(label, st) → do
+                resetScene env st
+                viaVerb ← luaText ls "return S.verb(3, 'calories')"
+                viaVerb' ← luaText ls "return S.verb(1, 'calories')"
+                legacy ← luaText ls "return S.getCalories(3)"
+                (label, viaVerb) `shouldBe` (label, legacy)
+                (label, viaVerb') `shouldBe` (label, legacy)
 
     it "answers the mode-aware healthy values only once the registry is \
        \ACTIVATED — the single switch S4 flips" $
