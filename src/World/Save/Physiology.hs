@@ -150,12 +150,20 @@ physiologyLoadRejections registry defs pages = concatMap pageRejections pages
     unitRejections pid uid u = case HM.lookup (uisDefName u) defs of
         Nothing → []
         Just up →
+          -- the override map AS THE LOAD WILL SEE IT: a renamed system's
+          -- override is remapped to its successor (and a retired one
+          -- dropped) before the mode that decides whether a stored value is
+          -- examined is resolved, so a recognized alias neither hides a
+          -- non-finite value of what is Simulated after the remap nor
+          -- rejects a value the remapped Nominal override would scrub
+          let resolved = fst (remapOverrides registry (uisPhysioOverrides u))
+          in
             [ UndeclaredOverrideSystem pid uid (uisDefName u) sid
             | sid ← sortOn id (HM.keys (uisPhysioOverrides u))
             , sid `notElem` declared ]
             ⧺ [ NonFiniteSimulatedValue pid uid (uisDefName u) (psId sys) key v
               | sys ← prSystems registry
-              , resolveMode sys up (HM.lookup (psId sys) (uisPhysioOverrides u))
+              , resolveMode sys up (HM.lookup (psId sys) resolved)
                     ≡ ModeSimulated
               , key ← map okKey (psOwns sys) ⧺ psMeters sys
               , Just v ← [HM.lookup key (uisStats u)]

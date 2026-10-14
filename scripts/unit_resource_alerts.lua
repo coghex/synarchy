@@ -146,12 +146,22 @@ function M.deathCauseFor(resourceName)
     return "exhaustion"
 end
 
--- Drop one unit's debounce flags (#2831): a physiology mode change or a
--- value write replaces the pool the "already warned" state was about, so
--- the next crossing must warn afresh instead of being suppressed (or the
--- rearm clearing against a value that no longer exists).
-function M.forget(uid)
-    if uid ~= nil then unitAlertState[uid] = nil end
+-- Drop one unit's debounce flag for one resource, or all of them (#2831): a
+-- physiology mode change or a value write replaces the pool the "already
+-- warned" state was about, so the next crossing must warn afresh instead of
+-- being suppressed (or the rearm clearing against a value that no longer
+-- exists). `resourceName` selects the flag its tick keeps: "calories" the
+-- starvation one, "hydration" the dehydration one; any other name has none.
+function M.forget(uid, resourceName)
+    local state = unitAlertState[uid]
+    if not state then return end
+    if resourceName == nil then
+        unitAlertState[uid] = nil
+    elseif resourceName == "calories" then
+        state.starvation = nil
+    elseif resourceName == "hydration" then
+        state.dehydration = nil
+    end
 end
 
 -- Save hook (called from unit_resources.init's deserializer): clears the

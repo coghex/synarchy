@@ -210,6 +210,27 @@ normalizationSpec = describe "D-6 normalization" $ do
             shouldNormalize (gate1 reg [("acolyte", richPhysiology)] u) $ \(u', _) →
                 HM.toList (uisPhysioOverrides u') `shouldBe` [("hydration", PhysioSimulated)]
 
+    describe "recognized aliases are resolved before any mode-sensitive validation" $ do
+        let renamed reg = reg
+                { prSystems = [ if psId sys ≡ "thermo"
+                                  then sys { psRenamedFrom = ["temperature"] } else sys
+                              | sys ← prSystems reg ] }
+        it "rejects a non-finite value the REMAPPED override makes Simulated" $ \reg0 → do
+            -- thermo defaults Nominal (exempt); the saved override names the old id
+            let reg = renamed reg0
+                u = saved "nomad_primitive" (body70 ⧺ [("core_temp", 1 / 0)])
+                    [("temperature", PhysioSimulated)]
+            gate1 reg [("nomad_primitive", exemptPhysiology)] u `shouldReject` ["core_temp"]
+
+        it "does not reject a value the REMAPPED Nominal override scrubs" $ \reg0 → do
+            -- thermo defaults Simulated (rich); the old id's override pins it Nominal
+            let reg = renamed reg0
+                u = saved "acolyte" (body70 ⧺ filter ((≢ "core_temp") ∘ fst) seeds70 ⧺ [("core_temp", 1 / 0)])
+                    [("temperature", PhysioNominal)]
+            shouldNormalize (gate1 reg [("acolyte", richPhysiology)] u) $ \(u', _) → do
+                statOf' u' "core_temp" `shouldBe` Nothing
+                HM.toList (uisPhysioOverrides u') `shouldBe` [("thermo", PhysioNominal)]
+
     describe "(d) an undeclared system" $
         it "still rejects the whole load" $ \reg → do
             let u = saved "acolyte" (body70 ⧺ seeds70) [("plumbing", PhysioSimulated)]

@@ -424,6 +424,58 @@ hooks = describe "change hooks and transient state" $ do
             runSeconds ls 1 0.1
             collapsedOrRevived env >>= (`shouldContain` ["revive"])
 
+    it "leaves the durable brain integrators alone when it refreshes the caches, whatever modifiers they carry" $
+        withScene [acolyte { usStats = [ ("mood", 0.5), ("emotional_pain", 0.2), ("caffeine", 0.1) ]
+                           , usModifiers = [ ("mood", [StatModifier 0.1 "t" Nothing 0])
+                                           , ("emotional_pain", [StatModifier 0.05 "t" Nothing 0])
+                                           , ("caffeine", [StatModifier 0.2 "t" Nothing 0]) ] }] $
+            \(_, ls) → do
+                let bases = luaText ls
+                        "return string.format('%.6f %.6f %.6f', unit.getStatBase(1, 'mood'), \
+                        \unit.getStatBase(1, 'emotional_pain'), unit.getStatBase(1, 'caffeine'))"
+                before ← bases
+                _ ← setMode ls 1 "thermo" "nominal"         -- a transition refreshes the caches
+                _ ← setModeWith ls 1 "hydration" "simulated" "{ hydration = 30 }"  -- so does a value write
+                _ ← luaText ls "__resources.onSaveLoaded({ 1 }, {}); return true"   -- and a load
+                bases `shouldReturn` before
+                -- the cache itself still reads the EFFECTIVE mood
+                luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v →
+                    v `shouldSatisfy` (< 0.7)
+
+    it "leaves another system's carry remainder alone, and an unchanged pin resets nothing" $ do
+        let finalHydration pins = withScene [acolyte { usModes = [("salt", PhysioNominal)] }] $
+                \(_, ls) → do
+                    _ ← luaText ls $
+                        "for _ = 1, 600 do __resources.update(0.1); " <> pins <> " end; return true"
+                    luaNum ls "unit.getStatBase(1, 'hydration')"
+        control ← finalHydration ""
+        -- pinning salt Nominal while it already is Nominal changes nothing
+        pinned ← finalHydration "__physiology.setMode(1, 'salt', 'nominal')"
+        -- clearing an override that is not there changes nothing either
+        cleared ← finalHydration "__physiology.clearMode(1, 'salt')"
+        pinned `shouldBe` control
+        cleared `shouldBe` control
+        -- an effective change of ANOTHER system leaves hydration's remainder alone
+        saltFlip ← finalHydration
+            "if _ % 100 == 0 then __physiology.setMode(1, 'salt', 'simulated'); \
+            \__physiology.setMode(1, 'salt', 'nominal') end"
+        saltFlip `shouldBe` control
+
+    it "does not re-arm an alert on an unchanged pin" $
+        withScene [acolyte { usStats = [("hydration", 4)]
+                           , usModes = [("salt", PhysioNominal)] }] $ \(_, ls) → do
+            _ ← luaText ls
+                "_G.__warnings = 0; local emit = engine.emitEventForUnit; \
+                \engine.emitEventForUnit = function(kind, msg, ...) \
+                \if kind == 'survival_warning' then __warnings = __warnings + 1 end \
+                \return emit(kind, msg, ...) end; return true"
+            runSeconds ls 1 0.1
+            luaText ls "return __warnings" `shouldReturn` "1"
+            _ ← setMode ls 1 "salt" "nominal"               -- unchanged
+            _ ← setMode ls 1 "hydration" "simulated"        -- unchanged
+            runSeconds ls 1 0.1
+            luaText ls "return __warnings" `shouldReturn` "1"
+
     it "re-arms the dehydration alert after a value write, because the debounce state is cleared" $
         withScene [acolyte { usStats = [("hydration", 4)]
                            , usModes = [("salt", PhysioNominal)] }] $ \(_, ls) → do

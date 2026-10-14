@@ -234,19 +234,20 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
             -- a loaded unit's missing keys (Unit.Physiology.Transition).
             physioReg ← readIORef
                 (crPhysiologyRegistryRef (toContentRegistriesCapability env))
-            seededStats ← case reconcileStoredKeys PhysioContext
+            let seedResult = reconcileStoredKeys PhysioContext
                     { pcRegistry   = physioReg
                     , pcPhysiology = udPhysiology def
                     , pcOverrides  = emptyPhysioOverrides
                     , pcNow        = now
                     , pcStats      = initialStats
-                    , pcModifiers  = spawnMods } of
-                Right (st, _) → pure st
-                Left (sid, key, why) → do
-                    logWarn logger CatWorld $
-                        "unit '" <> defName <> "' spawned without its "
-                        <> sid <> " physiology keys (" <> key <> "): " <> why
-                    pure initialStats
+                    , pcModifiers  = spawnMods }
+                -- A unit whose Simulated systems cannot be seeded (an innate
+                -- or starting-accessory modifier that leaves no representable
+                -- base, a missing body input) is NOT published: it would hold
+                -- Simulated systems with no stored keys, which every later
+                -- read and tick treats as a broken invariant. The spawn is
+                -- refused whole, and the reason is logged.
+                seededStats = either (const initialStats) fst seedResult
             let itemW = itemTotalWeight itemMgr
                 fixedW = sum (map itemW (HM.elems initialEquipment))
                        + sum (map itemW initialAccessories)
@@ -347,7 +348,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                 stillOurs ← case lookup pageId (wmWorlds mgr) of
                     Nothing → pure False
                     Just ws → (≡ epoch) ⊚ pageIncarnation ws
-                when stillOurs $ do
+                when (stillOurs ∧ either (const False) (const True) seedResult) $ do
                     atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um' →
                         (um' { umInstances =
                                    HM.insert uid inst (umInstances um') }, ())
@@ -355,6 +356,15 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                         (uts { utsSimStates =
                                    HM.insert uid ss (utsSimStates uts) }, ())
                 pure stillOurs
+            case seedResult of
+                Left (sid, key, why) → do
+                    logger ← readIORef (loggerRef env)
+                    logWarn logger CatThread $
+                        "UnitSpawn: refused unit " <> tshow (unUnitId uid)
+                        <> " of '" <> defName <> "': its " <> sid
+                        <> " physiology could not be seeded (" <> key <> "): "
+                        <> why
+                Right _ → pure ()
             unless committed $ do
                 logger ← readIORef (loggerRef env)
                 logDebug logger CatThread $

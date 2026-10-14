@@ -32,6 +32,7 @@ local physiology = {}
 -- different one is refused).
 local keySystem = nil
 local systemOrder = nil
+local systemOwned = nil     -- system id -> its owned (stored) keys
 
 local function loadRegistry()
     if keySystem ~= nil then return keySystem end
@@ -39,11 +40,16 @@ local function loadRegistry()
     if not reg or not reg.systems then return nil end
     keySystem = {}
     systemOrder = {}
+    systemOwned = {}
     for _, sid in ipairs(reg.systemOrder or {}) do
         systemOrder[#systemOrder + 1] = sid
     end
     for sid, sys in pairs(reg.systems) do
-        for _, o in ipairs(sys.owns) do keySystem[o.key] = sid end
+        systemOwned[sid] = {}
+        for _, o in ipairs(sys.owns) do
+            keySystem[o.key] = sid
+            systemOwned[sid][#systemOwned[sid] + 1] = o.key
+        end
         for _, d in ipairs(sys.derived) do keySystem[d.key] = sid end
         for _, m in ipairs(sys.meters) do keySystem[m] = sid end
     end
@@ -62,6 +68,12 @@ function physiology.isOwned(key) return isOwned(key) end
 function physiology.systemOf(key)
     local ks = loadRegistry()
     return ks and ks[key] or nil
+end
+
+-- The stored keys a system owns (its pools): what a transition rewrites.
+function physiology.ownedKeys(system)
+    loadRegistry()
+    return systemOwned and systemOwned[system] or {}
 end
 
 -- The registry's system ids in TICK ORDER (data/physiology/systems.yaml:
@@ -195,15 +207,15 @@ end
 
 -- Recompute the caches that READ physiology, in dependency order: the
 -- circulation stat from the effective core temperature, then the brain's
--- derived values at dt 0 (a dt-driven drift stays where it was). Run after
--- a transition or a value write so a reader never sees a cache that
--- disagrees with the state that was just published (D-5a). Other threads
--- that read these caches may see the previous values for up to one pass:
--- this refreshes the Lua-owned caches before returning, it is not a
--- cross-thread atomic publication.
+-- cache values (consciousness, concentration, state of mind) WITHOUT touching
+-- its durable integrators (brain.refresh). Run after a transition or a value
+-- write so a reader never sees a cache that disagrees with the state that was
+-- just published (D-5a). Other threads that read these caches may see the
+-- previous values for up to one pass: this refreshes the Lua-owned caches
+-- before returning, it is not a cross-thread atomic publication.
 function physiology.refresh(uid)
     require("scripts.circulation").update(uid)
-    require("scripts.brain").tick(uid, 0)
+    require("scripts.brain").refresh(uid)
 end
 
 -- ---- Transitions ----
@@ -220,14 +232,22 @@ function physiology.onModeChanged(id, system, fn)
     hooks[id] = { system = system, fn = fn }
 end
 
--- The pools each system's tick carries a sub-binary32 remainder for, and
--- the resources it keeps an alert debounce for: dropped on ANY transition
--- or value write, because the value they are remainders of just changed
--- under them (#2633).
-local function resetTransientState(uid, system)
-    require("scripts.unit_resource_carry").forget(uid)
-    require("scripts.unit_resource_regrowth").forget(uid)
-    require("scripts.unit_resource_alerts").forget(uid)
+-- Drop the transient state that is a remainder or a debounce OF the stored
+-- values `keys` of one system (#2633): the carry remainder and the alert
+-- flag of each key, and, for nutrition, the regrowth authorship of the body
+-- composition. Scoped to what actually changed: another system's remainders
+-- and debounce are not touched, and a call that changed nothing never gets
+-- here.
+local function resetTransientState(uid, system, keys)
+    local carry  = require("scripts.unit_resource_carry")
+    local alerts = require("scripts.unit_resource_alerts")
+    for _, key in ipairs(keys) do
+        carry.forget(uid, key)
+        alerts.forget(uid, key)
+    end
+    if system == "nutrition" then
+        require("scripts.unit_resource_regrowth").forget(uid)
+    end
 end
 
 -- The resource parameters a Simulated system needs exist (species entry
@@ -239,9 +259,20 @@ local function parametersAvailable(uid, system)
         .available(info.defName, system)
 end
 
-local function finish(uid, system, outcomeChanged, from, to)
-    resetTransientState(uid, system)
-    if outcomeChanged then
+-- After the engine accepted a transition: reset what the change invalidated,
+-- run the change hooks (only for an EFFECTIVE change), and refresh the
+-- caches. `values` is the caller's table, or nil. A set that changed no mode
+-- and wrote no value (an unchanged pin, a clear with nothing to clear) is
+-- not an event: it resets nothing, runs no hook and refreshes nothing.
+local function finish(uid, system, changed, from, to, values)
+    local written = nil
+    if values ~= nil then
+        written = {}
+        for key in pairs(values) do written[#written + 1] = key end
+    end
+    if not changed and written == nil then return end
+    resetTransientState(uid, system, changed and physiology.ownedKeys(system) or written)
+    if changed then
         for _, h in pairs(hooks) do
             if h.system == nil or h.system == system then
                 h.fn(uid, system, from, to)
@@ -263,7 +294,7 @@ function physiology.setMode(uid, system, mode, values)
     end
     local ok, changed, from, to = unit.setPhysioMode(uid, system, mode, values)
     if not ok then return nil, changed end
-    finish(uid, system, changed, from, to)
+    finish(uid, system, changed, from, to, values)
     return true, changed
 end
 
@@ -277,7 +308,7 @@ function physiology.clearMode(uid, system)
     end
     local ok, changed, from, to = unit.clearPhysioMode(uid, system)
     if not ok then return nil, changed end
-    finish(uid, system, changed, from, to)
+    finish(uid, system, changed, from, to, nil)
     return true, changed
 end
 

@@ -272,6 +272,7 @@ spec ∷ Spec
 spec = describe "Standard spawn profile (#2756)" $ aroundAll setup $ do
     directSpec
     physiologySpec
+    refusedSeedSpec
     rolledSpec
     portalSpec
     luaApiSpec
@@ -305,6 +306,26 @@ physiologySpec = describe "physiology seeding at spawn (#2831)" $ do
                 spawnWith env ws 302 SpawnStandard
         forM_ ["hydration", "hunger", "calories", "core_temp", "salt", "salt_store"] $ \k →
             HM.member k (uiStats u) `shouldBe` False
+
+-- | A unit whose Simulated seed cannot be computed is REFUSED, not published
+--   with Simulated systems and no stored keys (review of #2844): a
+--   hydration modifier of -100 % leaves no representable base.
+refusedSeedSpec ∷ SpecWith (EngineEnv, LuaBackendState)
+refusedSeedSpec = describe "a spawn whose physiology cannot be seeded" $
+    it "is refused whole, publishing no instance" $ \(env, _) → do
+        ws ← resetScene env
+        def ← acolyteDef env
+        let broken = def { udModifiers = [("hydration", StatModifier 0 "innate" Nothing (-1))] }
+        withDef env broken $ do
+            epoch ← pageIncarnation ws
+            handleUnitSpawnCommand env (ucUtsRef (toUnitCombatCapability env))
+                (UnitId 303) acolyteName 2.5 3.5 terrainZ
+                (resolveLegacyFaction [] FactionPlayer) page epoch SpawnStandard
+        um ← readIORef (unitManagerRef env)
+        HM.member (UnitId 303) (umInstances um) `shouldBe` False
+        -- and the next, valid spawn is unaffected
+        ok ← spawnWith env ws 304 SpawnStandard
+        HM.member "hydration" (uiStats ok) `shouldBe` True
 
 -- | Run an action with the acolyte's definition replaced, restoring it.
 withDef ∷ EngineEnv → UnitDef → IO a → IO a
