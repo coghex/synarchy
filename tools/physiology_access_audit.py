@@ -42,12 +42,12 @@ Allowances, each tied to real ownership and named, never a directory:
     Removed by S4 when #2754 becomes the ``exempt`` profile (design F-7).
   * ``PROBE_FIXTURE_WRITES``: tools/physiology_probe.py may ``setStat`` the
     keys it forces as scenario fixtures (D-7 allows raw setStat debugging
-    under Simulated) -- only from a STRAIGHT-LINE embedded chunk (no
-    function, loop or branch, so never an aggregate or a helper) inside the
-    named scenario scopes (``hunger_section``: calories, hunger, core_temp;
-    ``starvation_bands_section``: hunger; its nested ``set_frac``: calories;
-    a helper nested in a scenario, such as a measurement function, is a
-    different scope). Reads in the probe are NOT allowed.
+    under Simulated) -- only from the eight setup chunks pinned SITE BY SITE
+    by (dotted Python scope, whole normalized Lua text): editing a pinned
+    chunk, or putting a write into any other chunk (an observation, an
+    aggregate, a helper, a nested measurement function), is flagged, and a
+    pin the probe no longer contains is itself a finding. Reads in the probe
+    are NOT allowed.
   * ``UI_EXCEPTIONS`` / ``UI_HELPER_EXCEPTIONS``: the TEMPORARY, enumerated
     legacy pool reads that stay raw until S6 (Nominal-aware display): the
     hydration, hunger and calories reads in ``formatStatus`` of
@@ -173,23 +173,55 @@ SURVIVAL_EXEMPTION = SiteException(
 
 @dataclass(frozen=True)
 class FixtureWrites:
-    """The probe's scenario setup writes: a STRAIGHT-LINE embedded chunk
-    (no function, loop or branch -- so never an aggregate or a Lua helper)
-    in exactly one of the named Python setup scopes, writing one of THAT
-    scope's keys. A scope is the dotted chain of enclosing Python
-    functions, so a measurement helper nested in a scenario function
-    (``hunger_section.avg_hyd``) is a different scope from the scenario."""
+    """The probe's scenario setup writes, pinned SITE BY SITE: a write is
+    allowed only from an embedded chunk whose (Python scope, normalized Lua
+    text) is in `sites`. The scope is the dotted chain of enclosing Python
+    functions (a nested measurement helper is a different scope), and the
+    text is the whole chunk, so editing a pinned chunk (another write, a
+    different key, an extra statement) or putting a write into any other
+    chunk -- an observation, an aggregate, a helper -- voids it. An
+    f-string field reads as ``0``. A pinned site the probe no longer
+    contains is itself a finding, so the pins cannot go stale silently."""
     file: str
     verb: str
-    scopes: dict[str, frozenset[str]]
+    sites: frozenset[tuple[str, str]]
     why: str
 
 
 PROBE_FIXTURE_WRITES = FixtureWrites(
     PROBE_PATH, "unit.setStat",
-    {"hunger_section": frozenset({"calories", "hunger", "core_temp"}),
-     "starvation_bands_section": frozenset({"hunger"}),
-     "starvation_bands_section.set_frac": frozenset({"calories"})},
+    frozenset({
+        ("hunger_section",
+         "local u=0; local mc=unit.getStat(u,'max_calories'); "
+         "unit.setStat(u,'calories',mc*0.5); unit.setStat(u,'hunger',0); "
+         "unit.removeItem(u,'rations'); unit.removeItem(u,'rations'); "
+         "return 'ok'"),
+        ("hunger_section",
+         "local u=0; unit.setStat(u,'hunger',0); "
+         "unit.setStat(u,'calories',unit.getStat(u,'max_calories')*0.5); "
+         "return 'ok'"),
+        ("hunger_section",
+         "local u=0; unit.removeItem(u,'rations'); "
+         "unit.removeItem(u,'rations'); unit.setStat(u,'hunger',0); "
+         "return 'ok'"),
+        ("hunger_section",
+         "local u=0; unit.removeItem(u,'quinoa_sack'); "
+         "unit.addItem(u,'quinoa_sack',0.02); unit.setStat(u,'hunger',0); "
+         "return 'ok'"),
+        ("hunger_section",
+         "local u=0; unit.setStat(u,'calories',1); "
+         "unit.setStat(u,'hunger',0); unit.setStat(u,'core_temp',34.0); "
+         "return 'ok'"),
+        ("hunger_section",
+         "local u=0; unit.setStat(u,'calories',"
+         "unit.getStat(u,'max_calories')); "
+         "unit.setStat(u,'core_temp',34.0); return 'ok'"),
+        ("starvation_bands_section",
+         "local u=0; unit.setStat(u,'hunger',0); return 'ok'"),
+        ("starvation_bands_section.set_frac",
+         "local u=0; unit.setStat(u,'calories',"
+         "unit.getStat(u,'max_calories')*0); return 'ok'"),
+    }),
     "scenario fixtures (D-7: raw setStat is allowed for debugging)")
 
 # TEMPORARY (S5 -> S6). Each key is admitted once per function.
@@ -433,7 +465,7 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
             continue
         fx = policy.probe_fixture
         if a.path == fx.file and a.verb == fx.verb and a.straight \
-                and a.key in fx.scopes.get(a.scope, frozenset()):
+                and (a.scope, a.sig) in fx.sites:
             continue
         if a.via == "helper-call":
             name = a.verb.split(":", 1)[1]
@@ -468,6 +500,15 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
             f"raw {what} of {reg.key_role[a.key]} key '{a.key}' (system "
             f"'{system}') {via} in {a.function}() outside its owner"
             f"{' with a caller-local `or` fallback' if fb else ''}; use {advice}"))
+
+    # A pinned fixture site the probe no longer contains is stale.
+    if probe is not None:
+        fx = policy.probe_fixture
+        present = {(ch.scope, ch.sig) for ch in chunks if ch.path == fx.file}
+        for scope, sig in sorted(fx.sites - present):
+            findings.append(Finding(fx.file, 1,
+                f"pinned fixture site in {scope}() is no longer in the probe "
+                f"(update PROBE_FIXTURE_WRITES): {sig[:80]}..."))
 
     # Unresolvable dynamic keys outside an owner or generic accessor.
     owner_files = {o.file for o in policy.owners}

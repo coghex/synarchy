@@ -103,18 +103,40 @@ BASE: dict[str, str] = {
         '  fmtCurMax(u, "hydration", "max_hydration") end\nreturn M\n',
 }
 
+# The three pinned setup chunks (scope, text) the test policy names, spelled
+# the way the Python source holds them (an f-string field reads as 0).
+SITE_HUNGER = ("unit.setStat({u},'calories',1); unit.setStat({u},'hunger',0); "
+               "unit.setStat({u},'core_temp',34.0); return 'ok'")
+SITE_BANDS = "local u={u}; unit.setStat(u,'hunger',0); return 'ok'"
+SITE_FRAC = "local u={u}; unit.setStat(u,'calories',1); return 'ok'"
+
+
+def _sig(text):
+    return " ".join(text.replace("{u}", "0").split())
+
+
+TEST_POLICY = audit.Policy(probe_fixture=audit.FixtureWrites(
+    audit.PROBE_PATH, "unit.setStat",
+    frozenset({("hunger_section", _sig(SITE_HUNGER)),
+               ("starvation_bands_section", _sig(SITE_BANDS)),
+               ("starvation_bands_section.set_frac", _sig(SITE_FRAC))}),
+    "test pins"))
+
 PROBE_PY = (
     "AGG = (\n"
     '    "local function agg(s) local v=unit.readPhysio(u,s) or 0 return v end "\n'
     '    "return {core=agg(\'core_temp\')}"\n'
     ")\n"
     "def hunger_section(port, u):\n"
-    '    send(port, f"unit.setStat({u},\'calories\',1); unit.setStat({u},\'hunger\',0); "\n'
-    '               f"unit.setStat({u},\'core_temp\',34.0); return \'ok\'")\n'
+    f'    send(port, f"{SITE_HUNGER}")\n'
     "def stomach(port, u):\n"
     '    return send(port, f"return unit.readPhysio({u},\'hunger\') or -1")\n'
     "def guard(port, b):\n"
     '    return send(port, f"return unit.getCalories({b}) and \'num\' or \'nil\'")\n'
+    "def starvation_bands_section(port, u):\n"
+    f'    send(port, f"{SITE_BANDS}")\n'
+    "    def set_frac(f):\n"
+    f'        send(port, f"{SITE_FRAC}")\n'
 )
 
 UNITS = {"data/units/acolyte.yaml":
@@ -129,7 +151,7 @@ def run_audit(files=None, probe=PROBE_PY, doc=REGISTRY, units=UNITS, **over):
     for k in [k for k, v in corpus.items() if v is None]:
         del corpus[k]
     return audit.run_audit(corpus, ("tools/physiology_probe.py", probe),
-                           doc, units)
+                           doc, units, TEST_POLICY)
 
 
 def expect_clean(name, **kw):
@@ -361,53 +383,65 @@ def case_survival_exemption_is_exactly_neutralize():
 
 
 def case_probe_embedded_lua():
-    # The baseline probe (fixture writes + readPhysio + getCalories guard)
-    # is clean; the guard's `unit.getCalories` is not a stat read.
+    # The baseline probe (pinned setup chunks + readPhysio + getCalories
+    # guard) is clean; the guard's `unit.getCalories` is not a stat read.
     expect_clean("probe baseline")
     expect("probe raw read", "tools/physiology_probe.py",
            probe=PROBE_PY.replace("unit.readPhysio({u},'hunger')",
                                   "unit.getStat({u},'hunger')"))
     expect("probe dynamic helper", "through agg()",
            probe=PROBE_PY.replace("unit.readPhysio(u,s)", "unit.getStat(u,s)"))
-    # A fixture write of a key outside the enumerated three is flagged.
+    # A write of a key outside the registry's fixtures, anywhere, is flagged.
     expect("probe other write", "raw write of owned key 'hydration'",
            probe=PROBE_PY + 'def f(p,u):\n    send(p, f"unit.setStat({u},\'hydration\',1)")\n')
     # Reads of the fixture keys are still flagged (the rule is writes only).
     expect("probe read of fixture key", "raw read of owned key 'calories'",
            probe=PROBE_PY + 'def g(p,u):\n    send(p, f"return unit.getStat({u},\'calories\')")\n')
-    # The fixture exception is the probe's straight-line SETUP chunks in its
-    # named scenario functions, not the key set: a write inside the
-    # aggregate (a function and loops) is flagged ...
+    # The exception is the PINNED setup chunks, site by site, not a key set
+    # or a scope. A write inserted into an OBSERVATION inside an authorized
+    # scenario function is flagged ...
+    expect("write in observation", "raw write of owned key 'hunger'",
+           probe=PROBE_PY.replace(
+               "def stomach(port, u):\n",
+               "def stomach_obs(port, u):\n"
+               "    return send(port, f\"unit.setStat({u},'hunger',0); "
+               "return unit.getStat({u},'max_hunger') or -1\")\n"
+               "def hunger_section(port, u):\n"
+               "    return send(port, f\"unit.setStat({u},'hunger',0); "
+               "return unit.getStat({u},'max_hunger') or -1\")\n"
+               "def stomach(port, u):\n"))
+    # ... as is an extra write inserted into the fixture chunk itself ...
+    expect("edited pinned chunk", "raw write of owned key 'hunger'",
+           probe=PROBE_PY.replace("unit.setStat({u},'hunger',0); ",
+                                  "unit.setStat({u},'hunger',0); "
+                                  "unit.setStat({u},'hunger',1); ", 1))
+    # ... and a NEW straight-line chunk of an approved key in an authorized
+    # scope that is not one of the pins.
+    expect("unpinned chunk in scope", "raw write of owned key 'core_temp'",
+           probe=PROBE_PY + 'def hunger_section(p):\n'
+                 '    send(p, "unit.setStat(1,\'core_temp\',0); return \'ok\'")\n')
+    # The aggregate (a function and loops), a Lua helper, a loop, a nested
+    # measurement helper, and an unrelated function are all flagged.
     expect("probe write in aggregate", "raw write of owned key 'core_temp'",
            probe=PROBE_PY.replace("return v end ",
                                   "unit.setStat(u,'core_temp',0) return v end "))
-    # ... as is a write inside a Lua helper function ...
     expect("probe write in helper", "raw write of owned key 'calories'",
            probe=PROBE_PY + 'def hunger_helper(p):\n'
                  '    send(p, "local function reset(u) unit.setStat(u,\'calories\',0) end")\n')
-    # ... a loop in a scenario chunk ...
     expect("probe write in loop", "raw write of owned key 'hunger'",
            probe=PROBE_PY + 'def starvation_bands_section(p):\n'
                  '    send(p, "for _,u in ipairs(U) do unit.setStat(u,\'hunger\',0) end")\n')
-    # ... a write in a measurement helper NESTED in an authorized scenario ...
     expect("probe write in nested helper", "raw write of owned key 'core_temp'",
            probe=PROBE_PY + 'def hunger_section(p):\n'
                  '    def avg_hyd(g):\n'
                  '        return send(p, "unit.setStat(1,\'core_temp\',0); '
                  'return unit.readPhysio(1,\'hydration\')")\n')
-    # ... a key outside the scope's own key set ...
-    expect("probe key outside scope", "raw write of owned key 'core_temp'",
-           probe=PROBE_PY + 'def starvation_bands_section(p):\n'
-                 '    send(p, "unit.setStat(1,\'core_temp\',0); return 1")\n')
-    # ... and a straight-line write in any other Python function.
     expect("probe write elsewhere", "raw write of owned key 'core_temp'",
            probe=PROBE_PY + 'def unrelated(p):\n'
                  '    send(p, "unit.setStat(1,\'core_temp\',0); return \'ok\'")\n')
-    # The authorized shape in the authorized function stays accepted.
-    expect_clean("probe fixture shape", probe=PROBE_PY + 'def starvation_bands_section(p):\n'
-                 '    send(p, "local u=1; unit.setStat(u,\'hunger\',0); return \'ok\'")\n'
-                 '    def set_frac(f):\n'
-                 '        send(p, "unit.setStat(1,\'calories\',2)")\n')
+    # A pin the probe no longer contains is itself a finding.
+    expect("stale pin", "pinned fixture site in starvation_bands_section.set_frac()",
+           probe=PROBE_PY.replace(SITE_FRAC, "return 1"))
     # A NaN-style loop over a literal list.
     expect("probe loop", "raw read of owned key 'core_temp'",
            probe=PROBE_PY + 'NAN = ("for _,s in ipairs({\'core_temp\',\'circulation\'}) do "\n'

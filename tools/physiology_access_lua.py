@@ -428,6 +428,7 @@ class Access:
     fallback: bool = False     # the read is followed by `or <default>`
     scope: str = ""            # embedded chunks: the Python function holding it
     straight: bool = False     # the chunk has no block structure at all
+    sig: str = ""              # the chunk's text, whitespace-normalized
 
 
 @dataclass
@@ -468,6 +469,7 @@ class ChunkScan:
     events: list[Event] = field(default_factory=list)
     scope: str = ""
     straight: bool = False
+    sig: str = ""
 
 
 def _enclosing_name(frames: tuple[Frame, ...]) -> str:
@@ -487,7 +489,8 @@ def scan_chunk(path: str, src: str, registry_keys: frozenset[str],
     Python function `scope` that holds it)."""
     toks = tokenize(src)
     straight = not any(t.kind == "name" and t.text in BLOCK_WORDS for t in toks)
-    scan = ChunkScan(path, toks=toks, scope=scope, straight=straight)
+    sig = " ".join(src.split())
+    scan = ChunkScan(path, toks=toks, scope=scope, straight=straight, sig=sig)
     aliases = stats_aliases(toks)
     events = block_events(toks, aliases)
     scan.events = events
@@ -513,7 +516,7 @@ def scan_chunk(path: str, src: str, registry_keys: frozenset[str],
                 for k in res.keys:
                     scan.accesses.append(Access(path, line, ev.verb, ev.access,
                                                 k, fn, via, fallback,
-                                                scope, straight))
+                                                scope, straight, sig))
             elif res.kind == "helper" and res.helper is not None:
                 scan.helpers.append(HelperDef(
                     path, res.helper.line + line_base, res.helper.name or "?",
@@ -546,4 +549,4 @@ def helper_call_sites(scan: ChunkScan, helpers: dict[str, list[HelperDef]],
                     yield Access(scan.path, toks[ev.idx].line + line_base,
                                  f"helper:{ev.callee}", h.access, a[0].text,
                                  _enclosing_name(ev.frames), "helper-call",
-                                 False, scan.scope, scan.straight)
+                                 False, scan.scope, scan.straight, scan.sig)
