@@ -1035,6 +1035,12 @@ jobs:
           python3 tools/test_haskell_module_budget.py
           python3 tools/haskell_module_budget.py
 
+      # HLint style rules are advisory; only parse failures block this gate.
+      - name: HLint parseability
+        run: |
+          python3 tools/test_hlint.py
+          python3 tools/hlint_parse.py
+
       # Cheap, no-engine guard (#1005, #1494): fails if any of the five
       # ASCII operators normalised to Unicode (.&., .|., >>=, ==, /=)
       # reappears in src/+app/ Haskell source, or if inequality is

@@ -1,0 +1,29 @@
+# Optional candidate rules, not loaded by CI or the default runner.
+# Load alongside .hlint.yaml using two --hint arguments.
+# Strict Text only: do not rewrite ByteString/Lazy Text pack or arbitrary pack.
+- warn: {name: Use tshow, lhs: Data.Text.pack (show x), rhs: tshow x}
+- warn: {name: Use tshow, lhs: Data.Text.pack ∘ show, rhs: tshow}
+# Preserve the implementation and the independent reference in its tests.
+- ignore: {name: Use tshow, within: [UPrelude.tshow, Test.Headless.UPrelude.spec]}
+
+# Preserve existing named uses, not whole modules. This records the pilot's
+# starting exceptions; it does not certify their resource/concurrency safety.
+- functions:
+  - name: unsafePerformIO
+    within:
+      - World.GeneratedLibrary.sharedPinStores
+      - World.Chunk.Residency.chunkGenerationCounter
+      - World.Page.GeneratedId.allocationCounter
+      - World.GeneratedLibrary.Publish.transientCounter
+      - World.GeneratedLibrary.Lock.processLibraryLock
+      - Test.Headless.Harness.Isolation.activeIsolatedRootRef
+      - Test.Headless.World.Save.Components.Assembly.countedDecode
+    message: Keep IO explicit; new unsafePerformIO bindings require a reviewed exception.
+  - name: [unsafeDupablePerformIO, unsafeInterleaveIO]
+    within: []
+    message: Keep IO explicit; no existing exceptions for these escape hatches.
+
+- modules:
+  - name: Debug.Trace
+    within: []
+    message: Use the engine logger for diagnostics; remove temporary traces.

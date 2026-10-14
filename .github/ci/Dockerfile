@@ -106,3 +106,15 @@ RUN curl --proto '=https' --tlsv1.2 -sSf \
  && cabal update \
  && ghc --version && cabal --version \
  && rm -rf /usr/local/.ghcup/cache /usr/local/.ghcup/tmp
+
+# Standalone lint tool, independent of the game's Cabal dependency plan.
+# Keep the version in sync with .hlint-version (tools/test_hlint.py checks it).
+ARG HLINT_VERSION=3.10
+RUN curl --proto '=https' --tlsv1.2 -fsSL \
+      "https://github.com/ndmitchell/hlint/releases/download/v${HLINT_VERSION}/hlint-${HLINT_VERSION}-x86_64-linux.tar.gz" \
+      -o /tmp/hlint.tar.gz \
+ && echo "ccabc8802a58154699a3583b8dddc5ea2e6d65753a62c45c0e80088ebb16b42b  /tmp/hlint.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/hlint.tar.gz -C /opt \
+ && ln -s "/opt/hlint-${HLINT_VERSION}/hlint" /usr/local/bin/hlint \
+ && test "$(hlint --numeric-version)" = "${HLINT_VERSION}" \
+ && rm /tmp/hlint.tar.gz

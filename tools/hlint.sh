@@ -16,6 +16,6 @@ cpp=()
 if [[ "$(uname -s)" == Darwin ]]; then
   cpp+=(--cpp-define=DARWIN)
 fi
-# --git excludes build output and scratch files, including untracked Haskell.
+# --git selects tracked and non-ignored untracked Haskell, excluding ignored output.
 # Use --cpp-define=DEVELOPMENT for the development branch of CPP.
 exec hlint --git -j4 "${cpp[@]}" "$@"

@@ -221,6 +221,10 @@ step "haskell module line budget"
 python3 tools/test_haskell_module_budget.py
 python3 tools/haskell_module_budget.py
 
+step "HLint parseability"
+python3 tools/test_hlint.py
+python3 tools/hlint_parse.py
+
 step "unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
