@@ -245,6 +245,12 @@ def case_ui_exception_is_exact():
            files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]
                   .replace('return M', 'function M.other(uid)\n'
                            '  return unit.getStat(uid, "hunger")\nend\nreturn M')})
+    # Two calls on ONE line are two sites: the second is flagged.
+    expect("same-line second read", "raw read of owned key 'hydration'",
+           files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]
+                  .replace('local h = unit.getStat(uid, "hydration")',
+                           'local h = unit.getStat(uid, "hydration"); '
+                           'local leaked = unit.getStat(uid, "hydration")')})
     # A key outside the three enumerated is flagged even in formatStatus.
     expect("other key", "raw read of derived key 'salt_conc'",
            files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]

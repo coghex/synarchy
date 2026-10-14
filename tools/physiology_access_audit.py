@@ -449,13 +449,15 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
     for a in accesses:
         if a.key not in reg.keys:
             continue
-        sk = (a.path, a.line, a.key, a.verb, a.function)
+        # One entry per CALL: two calls on a line are two sites (the token
+        # index tells them apart), a call's read and write are one.
+        sk = (a.path, a.line, a.site, a.key, a.verb, a.function)
         s = sites.setdefault(sk, {"acc": a, "kinds": set(), "fallback": False})
         s["kinds"].add(a.access)
         s["fallback"] |= a.fallback
 
     ui_used: dict[tuple[str, str, str, str], int] = defaultdict(int)
-    for sk in sorted(sites, key=lambda k: (k[0], k[1], k[2])):
+    for sk in sorted(sites, key=lambda k: (k[0], k[1], k[2], k[3])):
         a, kinds, fb = sites[sk]["acc"], sites[sk]["kinds"], sites[sk]["fallback"]
         if a.path == policy.facade or _owner_allows(policy, a.path, reg, a.key):
             continue

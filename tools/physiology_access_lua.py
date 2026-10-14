@@ -429,6 +429,7 @@ class Access:
     scope: str = ""            # embedded chunks: the Python function holding it
     straight: bool = False     # the chunk has no block structure at all
     sig: str = ""              # the chunk's text, whitespace-normalized
+    site: int = 0              # token index of the call: unique within a chunk
 
 
 @dataclass
@@ -516,7 +517,8 @@ def scan_chunk(path: str, src: str, registry_keys: frozenset[str],
                 for k in res.keys:
                     scan.accesses.append(Access(path, line, ev.verb, ev.access,
                                                 k, fn, via, fallback,
-                                                scope, straight, sig))
+                                                scope, straight, sig,
+                                                ev.idx))
             elif res.kind == "helper" and res.helper is not None:
                 scan.helpers.append(HelperDef(
                     path, res.helper.line + line_base, res.helper.name or "?",
@@ -549,4 +551,5 @@ def helper_call_sites(scan: ChunkScan, helpers: dict[str, list[HelperDef]],
                     yield Access(scan.path, toks[ev.idx].line + line_base,
                                  f"helper:{ev.callee}", h.access, a[0].text,
                                  _enclosing_name(ev.frames), "helper-call",
-                                 False, scan.scope, scan.straight, scan.sig)
+                                 False, scan.scope, scan.straight, scan.sig,
+                                 ev.idx)
