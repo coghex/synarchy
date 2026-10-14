@@ -7,11 +7,13 @@
 # value it PROVIDES, contribution it CONTRIBUTES and effect it has, each
 # with the substitute a dependent sees while the system is Nominal.
 #
-# This slice is inactive: nothing in the production tick, a gameplay
-# consumer or a save path reads this file. The five unit.*Physio* read
-# verbs and engine.getPhysiologyRegistry are the only readers. Species
-# defaults are assigned per unit definition (a `physiology:` block) in
-# S4/S7, not here.
+# The mode-aware answer is inactive until S4 (#2830, S5): the gameplay
+# consumers read this registry through scripts/physiology.lua and the wound
+# tick's physioConsumerView, but PhysiologyRegistry.prModesActive is false
+# for every loaded registry, so they all still see stored values. The five
+# unit.*Physio* read verbs and engine.getPhysiologyRegistry read it
+# directly. Species defaults are assigned per unit definition (a
+# `physiology:` block) in S4/S7, not here.
 #
 # Healthy rules:  { const: <value|CONSTANT> }
 #                 { from: <stat>, scale: <value|CONSTANT | [..]> }
@@ -24,8 +26,8 @@
 
 # Authoritative home of the constants the healthy rules need. The Lua
 # modules still carry their own copies (scripts/salts.lua SALT_PER_KG and
-# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) until S4/S5 migrate their
-# consumers; Test.Headless.Unit.Physiology fails if the copies drift.
+# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) until S4 migrates the
+# owners; Test.Headless.Unit.Physiology fails if the copies drift.
 constants:
   SALT_PER_KG: 1.0
   # #2761's reserve capacity, as a multiple of max_salt.

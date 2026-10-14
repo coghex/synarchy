@@ -18,6 +18,7 @@
 local circulation = require("scripts.circulation")
 local salts       = require("scripts.salts")
 local injuries    = require("scripts.injuries")
+local physiology  = require("scripts.physiology")
 
 local thermo = {}
 
@@ -157,14 +158,10 @@ function thermo.tick(uid, info, dt)
     -- a unit with an empty stomach but a fed store keeps full output)
     -- throttles metabolic heat.
     local calFactor = 1.0
-    local maxCal = unit.getStat(uid, "max_calories")
-    local curCal = unit.getStat(uid, "calories")
-    if maxCal and maxCal > 0 and curCal then
-        local frac = curCal / maxCal
-        if frac < HUNGER_HEAT_FLOOR_FRAC then
-            calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
-                                          * (frac / HUNGER_HEAT_FLOOR_FRAC)
-        end
+    local frac = physiology.fraction(uid, "calories", "max_calories")
+    if frac and frac < HUNGER_HEAT_FLOOR_FRAC then
+        calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
+                                      * (frac / HUNGER_HEAT_FLOOR_FRAC)
     end
 
     -- Metabolic heat production (basal + activity + shivering). All three
@@ -225,14 +222,10 @@ function thermo.tick(uid, info, dt)
         -- Debits scale with body mass (thermo.sweatMassScale): the same
         -- sweat removes the same FRACTION of any body's pools.
         local massScale = thermo.sweatMassScale(bodyM)
-        local hy = unit.getStat(uid, "hydration")
-        if hy then unit.setStat(uid, "hydration",
-            math.max(0, hy - SWEAT_HYDRATION_K * massScale * sweat * dt)) end
+        physiology.debit(uid, "hydration", SWEAT_HYDRATION_K * massScale * sweat * dt)
         -- Sweat loses salt too. With water replaced by drinking but salt only
         -- by eating, heavy sweating + plain water → hyponatremia.
-        local s = unit.getStat(uid, "salt")
-        if s then unit.setStat(uid, "salt",
-            math.max(0, s - SWEAT_SALT_K * massScale * sweat * dt)) end
+        physiology.debit(uid, "salt", SWEAT_SALT_K * massScale * sweat * dt)
     end
 
     -- Frostbite: freeze the extremities when it's cold and circulation is poor.

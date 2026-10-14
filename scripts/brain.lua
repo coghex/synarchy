@@ -78,6 +78,7 @@
 -- system a mood substrate to read and move.
 
 local stats = require("scripts.unit_stats")
+local physiology = require("scripts.physiology")
 
 local brain = {}
 
@@ -147,11 +148,9 @@ local clamp = require("scripts.lib.numeric").clamp
 -- A unit with no such resource at all (bears have no hunger) reads as
 -- neutral (1.0) rather than penalized.
 local function fracOf(uid, curName, maxFromName)
-    local maxVal = stats.get(uid, maxFromName)
-    if not maxVal or maxVal <= 0 then return 1.0 end
-    local cur = unit.getStat(uid, curName)
-    if not cur then return 1.0 end
-    return clamp(cur / maxVal, 0, 1)
+    local f = physiology.fraction(uid, curName, maxFromName)
+    if not f then return 1.0 end
+    return clamp(f, 0, 1)
 end
 
 -- 0..1, 0 = no pain. Mirrors Combat.Resolution.painFor's normalization
@@ -172,9 +171,9 @@ end
 -- integration — the underlying stats already drift). min() = your worst
 -- problem knocks you out. UNCHANGED from the original brain.lua.
 local function computeConsciousness(uid)
-    local core = unit.getStat(uid, "core_temp")   or 37.0
+    local core = physiology.get(uid, "core_temp")  or 37.0
     local o2   = unit.getStat(uid, "blood_oxygen") or 1.0
-    local conc = unit.getStat(uid, "salt_conc")    or 1.0
+    local conc = physiology.get(uid, "salt_conc")  or 1.0
 
     -- Core temp: confusion when hypothermic (<34°C) or hyperthermic (>39.5°C).
     local tf

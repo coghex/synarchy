@@ -61,7 +61,8 @@ import Test.Headless.Harness.Isolation
     (withExclusiveTempDirectory, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Unit.PhysiologyFixture
-    (ensurePhysiologyRegistry, shippedPhysiologyPath)
+    ( activatePhysiologyModes, ensurePhysiologyRegistry
+    , shippedPhysiologyPath )
 import Test.Headless.Unit.TransferApi (minimalDef)
 import Test.Headless.World.Save.Components.Fixture
     ( minimalGlobals, minimalPage, minimalSimState, minimalUnitInstance
@@ -102,7 +103,10 @@ withPhysioEngine loadRegistry action = withIsolatedResourceRoot $ do
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
-    when loadRegistry (ensurePhysiologyRegistry env)
+    -- The S2 examples below assert the MODE-AWARE read contract, which a
+    -- production registry does not answer until S4 (#2830): activate it,
+    -- as the controlled test it is.
+    when loadRegistry (activatePhysiologyModes env)
     let eng = PhysioEngine env ls
     _ ← luaText eng
         "function _G.__p(v, m) return (v == nil and 'nil' or \
@@ -607,9 +611,8 @@ surfaceSpec = describe "the installed read surface (requirements 4 and 6)" $ do
                         \tostring(unit.clearPhysioMode)"
                 `shouldReturn` "nil|nil"
 
-    it "changes no production consumer: nothing under scripts/ and none \
-       \of the Haskell consumers the design names reads through the new \
-       \verbs" $ do
+    it "reaches the verbs from scripts/ only through the S5 facade (#2830), \
+       \and the wound tick reads through the pure consumer view" $ do
         luas ← walkFilesWithExtension "scripts" ".lua"
         -- relative to the directory walked
         users ← fmap catMaybes $ forM luas $ \p → do
@@ -618,11 +621,11 @@ surfaceSpec = describe "the installed read surface (requirements 4 and 6)" $ do
                          ["readPhysio", "getPhysioMode", "getPhysioDefault"
                          , "getPhysioOverride", "getPhysiologyRegistry"]
                        then Just p else Nothing
-        users `shouldBe` []
-        forM_ [ "src/Combat/Wounds/Healing.hs", "src/Combat/Wounds/Tick.hs" ] $
-            \p → do
-                body ← readFile p
-                ("physioRead" `isInfixOf` body) `shouldBe` False
+        users `shouldBe` ["physiology.lua"]
+        healing ← readFile "src/Combat/Wounds/Healing.hs"
+        ("physioRead" `isInfixOf` healing) `shouldBe` False
+        tick ← readFile "src/Combat/Wounds/Tick.hs"
+        ("physioConsumerView" `isInfixOf` tick) `shouldBe` True
 
 -----------------------------------------------------------------------
 -- Requirement 4: getPhysioMode / Override / Default
@@ -1067,7 +1070,7 @@ registryAccessorSpec = describe "engine.getPhysiologyRegistry (requirement 1)" $
                 `shouldReturn` "1.0|thermo"
 
     it "keeps the registry constants equal to the live Lua copies they \
-       \duplicate until S4/S5 migrate the consumers" $
+       \duplicate until S4 migrates the owners" $
         withPhysioEngine True $ \eng → do
             standardScene eng standardStats
             luaText eng

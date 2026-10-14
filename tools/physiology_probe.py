@@ -60,12 +60,12 @@ def bootstrap(port):
 AGG = (
     "local U=_U or {} local n=#U "
     "local function agg(s) local mn,mx,sm=1/0,-1/0,0 for _,u in ipairs(U) do "
-    "local v=unit.getStat(u,s) or 0 if v<mn then mn=v end if v>mx then mx=v end "
+    "local v=unit.readPhysio(u,s) or 0 if v<mn then mn=v end if v>mx then mx=v end "
     "sm=sm+v end return {min=mn,max=mx,avg=(n>0 and sm/n or 0)} end "
     "local dead=0 for _,u in ipairs(U) do if unit.getPose(u)=='dead' then "
     "dead=dead+1 end end "
     "local nan=false for _,u in ipairs(U) do for _,s in ipairs("
-    "{'core_temp','salt_conc','circulation'}) do local v=unit.getStat(u,s) "
+    "{'core_temp','salt_conc','circulation'}) do local v=unit.readPhysio(u,s) "
     "if v and v~=v then nan=true end end end "
     "return {n=n,dead=dead,core=agg('core_temp'),conc=agg('salt_conc'),"
     "circ=agg('circulation'),hypo=agg('hypothermia').max,"
@@ -350,7 +350,7 @@ def _calories(port, uid):
 
 
 def _stomach(port, uid):
-    r = send(port, f"return unit.getStat({uid},'hunger') or -1")
+    r = send(port, f"return unit.readPhysio({uid},'hunger') or -1")
     try:
         return float(r)
     except ValueError:
@@ -415,7 +415,7 @@ def hunger_section(port, seconds):
     force_combat()
     time.sleep(0.5)
     def avg_hyd(group):
-        return sum(float(send(port, f"return unit.getStat({u},'hydration') or 0"))
+        return sum(float(send(port, f"return unit.readPhysio({u},'hydration') or 0"))
                    for u in group) / len(group)
     h_idle0 = sum(_calories(port, u) for u in idle) / len(idle)
     h_actv0 = sum(_calories(port, u) for u in actv) / len(actv)

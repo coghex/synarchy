@@ -32,10 +32,8 @@ end
 -- Status panel's collapse-condition detection and its daily-need
 -- warning rows.
 function M.lowFrac(uid, cur, maxName, frac)
-    local stats = require("scripts.unit_stats")
-    local c = stats.get(uid, cur)
-    local m = stats.get(uid, maxName)
-    return c and m and m > 0 and (c / m < frac)
+    local f = require("scripts.physiology").fraction(uid, cur, maxName)
+    return f and (f < frac)
 end
 
 -----------------------------------------------------------

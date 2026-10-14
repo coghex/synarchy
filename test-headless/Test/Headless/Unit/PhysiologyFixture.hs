@@ -16,10 +16,11 @@ module Test.Headless.Unit.PhysiologyFixture
     ( shippedPhysiologyPath
     , readShippedPhysiologyRegistry
     , ensurePhysiologyRegistry
+    , activatePhysiologyModes
     ) where
 
 import UPrelude
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (modifyIORef', readIORef, writeIORef)
 import System.FilePath ((</>))
 import Engine.Asset.YamlPhysiology
     (admitPhysiologyDoc, loadPhysiologyYamlOutcome)
@@ -56,3 +57,14 @@ ensurePhysiologyRegistry env = do
     current ← readIORef ref
     unless (physiologyRegistryLoaded current) $
         readShippedPhysiologyRegistry ≫= writeIORef ref
+
+-- | Put the loaded registry's mode-aware read contract IN FORCE (#2830).
+--   Production registries are inactive until S4, so a spec that exercises
+--   the S2 mode-aware answer through the engine verbs (@unit.readPhysio@,
+--   Haskell @physioRead@) activates it explicitly, the way a controlled
+--   test is the only caller allowed to. Loads the shipped registry first.
+activatePhysiologyModes ∷ EngineEnv → IO ()
+activatePhysiologyModes env = do
+    ensurePhysiologyRegistry env
+    modifyIORef' (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+                 (\r → r { prModesActive = True })

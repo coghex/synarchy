@@ -54,6 +54,7 @@ module Combat.Wounds
     ( tickAllWounds
     , propagateSevering   -- exposed for unit testing
     , tickOneUnit         -- exposed for unit testing (pure per-unit wound tick)
+    , tickOneUnitWith     -- ... under an explicit physiology registry (#2830)
     , WoundTickOutcome(..) -- exposed for unit testing (the tick's verdict)
     , bleedRateFor        -- current L/sec blood loss (for the info panel)
     , kindBleedFactor     -- per-kind bleed multiplier (treat-action ranking)
@@ -64,7 +65,7 @@ module Combat.Wounds
     ) where
 
 import Combat.Wounds.Tick
-    (tickAllWounds, tickOneUnit, WoundTickOutcome(..))
+    (tickAllWounds, tickOneUnit, tickOneUnitWith, WoundTickOutcome(..))
 import Combat.Wounds.Sever (propagateSevering, destroyThreshold)
 import Combat.Wounds.Bleed
     ( bleedRateFor, kindBleedFactor, isExternallyBleedingKind

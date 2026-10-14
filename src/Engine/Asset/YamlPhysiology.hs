@@ -279,7 +279,8 @@ admitPhysiologyDoc path doc = do
     let partial = PhysiologyRegistry
             { prSource = Just path, prConstants = constants
             , prSystems = systems, prProfiles = []
-            , prRetired = pydRetired doc }
+            , prRetired = pydRetired doc
+            , prModesActive = False }
         keys = registryKeys partial
     forM_ systems $ \s → do
         forM_ (psOwns s) $ \o → case okHealthy o of
