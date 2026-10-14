@@ -21,7 +21,9 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.IORef (newIORef, readIORef, writeIORef)
+import qualified Data.ByteString as BS
+import System.Directory (createDirectoryIfMissing)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf, sort)
 import System.FilePath ((</>))
 import System.Random (StdGen, mkStdGen)
@@ -41,8 +43,10 @@ import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), LoggerState, defaultLogConfig
     , initLogger )
 import Engine.Core.State
-    ( EngineEnv, assetPoolRef, inputStateRef, loggerRef, luaQueue
-    , luaToEngineQueue, nextObjectIdRef )
+    ( EngineEnv, assetPoolRef, enginePausedRef, inputStateRef, loadStatusRef
+    , loggerRef, luaQueue, luaToEngineQueue, nextObjectIdRef )
+import Engine.Load.Status
+    (LoadOutcome(..), LoadPhase(..), LoadStatus(..), readLoadStatus)
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.YamlResult (YamlRefusal(..))
@@ -52,18 +56,28 @@ import Engine.Scripting.Lua.API.Units.Yaml (AtlasResolver, registerUnitDefs)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness (withHeadlessEngine)
 import Test.Headless.Harness.Isolation
     (withExclusiveTempDirectory, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Unit.PhysiologyFixture
     (ensurePhysiologyRegistry, shippedPhysiologyPath)
 import Test.Headless.Unit.TransferApi (minimalDef)
+import Test.Headless.World.Save.Components.Fixture
+    ( minimalGlobals, minimalPage, minimalSimState, minimalUnitInstance
+    , page1 )
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Physiology.Types
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
+import World.Save.Envelope (encodeSessionSnapshot)
+import World.Save.Snapshot
+    (PageSnapshot(..), captureSessionSnapshot)
+import World.Save.Snapshot.Adapter
+    (SaveRequestMeta(..), snapshotSaveMetadata)
+import World.Save.Types (UnitSnapshot(..), UnitInstanceSnapshot(..))
 
 -----------------------------------------------------------------------
 -- The engine
@@ -140,7 +154,7 @@ mkInstance defName stats = UnitInstance
     , uiImmunities = HM.empty, uiBlood = 70 * 0.075
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | A definition with the given physiology and lazy templates.
@@ -167,6 +181,7 @@ rngSeed = mkStdGen 2828
 data Snapshot = Snapshot
     { snStats ∷ Maybe (HM.HashMap Text Float)
     , snModifiers ∷ Maybe (HM.HashMap Text [StatModifier])
+    , snOverrides ∷ Maybe PhysioOverrides
     , snDefs ∷ HM.HashMap Text UnitDef
     , snRng ∷ StdGen
     } deriving (Show, Eq)
@@ -178,6 +193,7 @@ snapshot eng = do
     gen ← readIORef (ucStatRNGRef cap)
     let inst = HM.lookup (UnitId 1) (umInstances um)
     pure Snapshot { snStats = uiStats <$> inst, snModifiers = uiModifiers <$> inst
+                  , snOverrides = uiPhysioOverrides <$> inst
                   , snDefs = umDefs um, snRng = gen }
 
 -- | The standard fixture: unit 1 bodied with Simulated hydration and
@@ -258,6 +274,7 @@ engineSpec = do
     shippedRosterSpec
     surfaceSpec
     modeVerbSpec
+    loadBoundarySpec
     readVerbSpec
     unownedSpec
     registryAccessorSpec
@@ -649,8 +666,8 @@ modeVerbSpec = describe "getPhysioMode / getPhysioOverride / getPhysioDefault" $
             dflt "1" "ghost" `shouldReturn` "nil"
             dflt "99" "hydration" `shouldReturn` "nil"
 
-    it "reports no override, for every unit and system: no field or setter \
-       \exists yet" $
+    it "reports no override for a unit this build created: the map is \
+       \empty and no setter exists" $
         withPhysioEngine True $ \eng → do
             standardScene eng standardStats
             forM_ ["1", "2", "3", "99"] $ \uid →
@@ -659,6 +676,57 @@ modeVerbSpec = describe "getPhysioMode / getPhysioOverride / getPhysioDefault" $
                         ("return tostring(unit.getPhysioOverride(" <> uid
                          <> ", '" <> sys <> "'))")
                         `shouldReturn` "nil"
+
+    it "reflects a STORED override exactly (#2829): present means \
+       \explicit intent, even when it equals the species default, and an \
+       \absent entry still follows the default" $
+        withPhysioEngine True $ \eng → do
+            -- unit 1: default hydration/salt Simulated, nutrition Nominal.
+            -- Overrides: hydration Simulated (EQUAL to the default),
+            -- nutrition Simulated (against it), thermo Nominal (no
+            -- default at all).
+            standardScene eng standardStats
+            let cap = toUnitCombatCapability (peEnv eng)
+            atomicModifyIORef' (ucUnitManagerRef cap) $ \um →
+                (um { umInstances = HM.adjust
+                        (\i → i { uiPhysioOverrides = HM.fromList
+                            [ ("hydration", PhysioSimulated)
+                            , ("nutrition", PhysioSimulated)
+                            , ("thermo", PhysioNominal) ] })
+                        (UnitId 1) (umInstances um) }, ())
+            let ovr sys = luaText eng
+                    ("return tostring(unit.getPhysioOverride(1, '" <> sys
+                     <> "'))")
+                mode sys = luaText eng
+                    ("return tostring(unit.getPhysioMode(1, '" <> sys <> "'))")
+                dflt sys = luaText eng
+                    ("return tostring(unit.getPhysioDefault(1, '" <> sys
+                     <> "'))")
+            ovr "hydration" `shouldReturn` "simulated"
+            ovr "nutrition" `shouldReturn` "simulated"
+            ovr "thermo" `shouldReturn` "nominal"
+            -- absent: no override reported, and the default still rules
+            ovr "salt" `shouldReturn` "nil"
+            mode "salt" `shouldReturn` "simulated"
+            -- an override wins over the default it disagrees with …
+            mode "nutrition" `shouldReturn` "simulated"
+            dflt "nutrition" `shouldReturn` "nominal"
+            -- … and over no default at all
+            mode "thermo" `shouldReturn` "nominal"
+            -- an unknown system and a missing unit report nothing
+            ovr "ghost" `shouldReturn` "nil"
+            luaText eng "return tostring(unit.getPhysioOverride(99, 'thermo'))"
+                `shouldReturn` "nil"
+            -- the override picks the READ semantics too: nutrition is
+            -- Simulated by intent, so a stored value reads as stored
+            readsAs eng "unit.readPhysio(1, 'hunger')"
+                `shouldReturn` "300.0000|simulated"
+            -- reading it changed nothing: the stored intent is intact
+            snap ← snapshot eng
+            snOverrides snap `shouldBe` Just (HM.fromList
+                [ ("hydration", PhysioSimulated)
+                , ("nutrition", PhysioSimulated)
+                , ("thermo", PhysioNominal) ])
 
 -----------------------------------------------------------------------
 -- Requirement 4: readPhysio / readPhysioBase
@@ -1013,3 +1081,89 @@ registryAccessorSpec = describe "engine.getPhysiologyRegistry (requirement 1)" $
                 \tostring(math.abs(salts.storeCap(1) / salts.maxSalt(1) - \
                 \c.SALT_STORE_CAP_FRAC) < 1e-6)"
                 `shouldReturn` "true|true|true"
+
+-----------------------------------------------------------------------
+-- Requirement 3: the real load boundary
+-----------------------------------------------------------------------
+
+-- | A one-page save with one unit, written through the production
+--   encoder as @saves/<slot>/world.synworld@: the bytes a real save of
+--   that session would hold.
+writeSave ∷ String → UnitInstanceSnapshot → IO ()
+writeSave slot unit = do
+    let page = (minimalPage page1)
+            { pgsUnits = UnitSnapshot
+                (HM.singleton (UnitId 7) unit) 10
+            , pgsUnitSimStates = HM.singleton (UnitId 7) minimalSimState }
+    case captureSessionSnapshot minimalGlobals [page] of
+        Left errs → expectationFailure ("fixture session invalid: " ⧺ show errs)
+        Right snap → do
+            createDirectoryIfMissing True ("saves" </> slot)
+            BS.writeFile ("saves" </> slot </> "world.synworld")
+                (encodeSessionSnapshot
+                    (snapshotSaveMetadata
+                        (SaveRequestMeta (T.pack slot) "ts" False) snap)
+                    snap [])
+
+loadBoundarySpec ∷ Spec
+loadBoundarySpec = describe "the load boundary (requirement 3)" $ do
+
+    forM_ [ ( "an override naming an undeclared system"
+            , (minimalUnitInstance [])
+                { uisDefName = "acolyte"
+                , uisPhysioOverrides = HM.fromList
+                    [("ghost", PhysioSimulated)] }
+            , [ "unit #7", "acolyte", "ghost", "does not declare" ] )
+          , ( "a non-finite Simulated value"
+            , (minimalUnitInstance [])
+                { uisDefName = "acolyte"
+                , uisPhysioOverrides = HM.fromList
+                    [("hydration", PhysioSimulated)]
+                , uisStats = HM.fromList [("hydration", 1 / 0)] }
+            , [ "unit #7", "acolyte", "hydration", "malformed" ] ) ] $
+        \(what, unit, words') →
+            it ("rejects a save carrying " <> what <> " before anything is \
+                \staged, naming the unit, and leaves the live session \
+                \exactly as it was") $
+                withIsolatedResourceRoot $ withHeadlessEngine $ \env → do
+                    ensurePhysiologyRegistry env
+                    -- the live session the rejected load must not touch:
+                    -- one registered definition and one live unit
+                    let cap = toUnitCombatCapability env
+                        liveDef = mkDef "acolyte"
+                            (UnitPhysiology True Nothing HM.empty) []
+                    writeIORef (ucUnitManagerRef cap) emptyUnitManager
+                        { umDefs = HM.singleton "acolyte" liveDef
+                        , umInstances = HM.singleton (UnitId 50)
+                            (mkInstance "acolyte" standardStats) }
+                    before ← readIORef (ucUnitManagerRef cap)
+                    writeSave "badphysiology" unit
+                    ls ← newBareLuaBackend env
+                    out ← executeDebugLua (lbsLuaState ls)
+                        "return engine.loadSave('badphysiology')"
+                    out `shouldSatisfy` T.isInfixOf "false"
+                    Just st ← readLoadStatus (loadStatusRef env)
+                    lsPhase st `shouldBe` LoadFailed
+                    lsFailedAtPhase st `shouldBe` Just LoadContentValidated
+                    case lsOutcome st of
+                        Just (LoadAborted msg) → do
+                            msg `shouldSatisfy` T.isInfixOf
+                                "saved unit physiology state is invalid"
+                            forM_ words' $ \w →
+                                msg `shouldSatisfy` T.isInfixOf w
+                        other → expectationFailure
+                            ("expected a LoadAborted outcome, got "
+                             ⧺ show other)
+                    -- nothing was published: the old session is the same
+                    readIORef (ucUnitManagerRef cap) `shouldReturn` before
+                    -- and it is left paused, per the paused-failure contract
+                    readIORef (enginePausedRef env) `shouldReturn` True
+
+newBareLuaBackend ∷ EngineEnv → IO LuaBackendState
+newBareLuaBackend env = do
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                               (assetPoolRef env) (nextObjectIdRef env)
+                               (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    pure ls

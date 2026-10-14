@@ -124,7 +124,7 @@ testUnit page faction gx gy = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | A player unit at (gx, gy) facing @dir@ with an explicit perception.

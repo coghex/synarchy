@@ -127,7 +127,7 @@ mkSquirrel stats = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 1.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | The stats this tick reads: the pool, its maximum, and the endurance

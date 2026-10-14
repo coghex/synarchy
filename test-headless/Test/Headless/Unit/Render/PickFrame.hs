@@ -112,7 +112,7 @@ mkInst animName start = UnitInstance
     , uiFrozen          = False
     , uiForceLoop       = False
     , uiClimbDest       = Nothing
-    , uiTrailState      = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState      = Nothing
     }
 
 -- | A 4-frame south-only animation at fps 4, looping — the fixture the

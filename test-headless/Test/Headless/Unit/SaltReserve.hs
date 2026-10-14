@@ -94,7 +94,7 @@ mkAcolyte stats inv = UnitInstance
     , uiImmunities = HM.empty, uiBlood = 70 * 0.075
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | The shipped ration: discrete, 250 kcal (data\/items\/rations.yaml).

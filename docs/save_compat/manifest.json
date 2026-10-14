@@ -2885,7 +2885,7 @@
       "declaredByIssue": 2515,
       "supportStatus": "supported",
       "migrationTarget": "current",
-      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / migrateUnitsDTOv1, migrateUnitsDTOv2 + World.Save.UnitFaction.resolveUnitFactionSnapshot",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / migrateUnitsDTOv3 (the frozen UnitsDTOv3 graph -> v4, empty physiology overrides; v1 and v2 reach it through migrateUnitsDTOv1, migrateUnitsDTOv2) + World.Save.UnitFaction.resolveUnitFactionSnapshot",
       "components": [
         {
           "id": "metadata",
@@ -2962,6 +2962,180 @@
           "sizeBytes": 924538,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then unit.spawn('acolyte', 3, 2, 0, 'hostile'); unit.spawn('acolyte', 2, 3, 0, 'debug'); unit.spawn('acolyte', 3, 3, 0, 'neutral'); unit.spawn('bear_brown', 4, 2); unit.spawn('tiller', 2, 4); unit.spawn('acolyte', 4, 4), settled 6.0s and held until `unit.getFaction(1) == 'player' and unit.getFaction(2) == 'hostile' and unit.getFaction(3) == 'debug' and unit.getFaction(4) == 'neutral' and unit.getFaction(5) == 'wildlife' and unit.getFaction(6) == 'wildlife' and unit.getFaction(7) == 'neutral'`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z6-unit-faction-profile.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "z7-units-v3-salt-store",
+      "description": "Units v3 as written before the physiology override map (#2829): the last pre-v4 outgoing units graph, carrying the #2761 salt reserve at a PRESENT ZERO (unit 1), a PARTIAL value (unit 2) and a seeded full reserve (a bear), which z6 (2026-10-01) predates. Retained to prove the frozen UnitsDTOv3 graph decodes, yields empty overrides and re-encodes as units v4.",
+      "declaredAt": "2026-10-14",
+      "declaredByIssue": 2829,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / migrateUnitsDTOv3 (v3 \u2192 v4: empty physiology overrides)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 13,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z7-units-v3-salt-store",
+          "path": "test-headless/data/save-compat/z7-units-v3-salt-store.bin",
+          "kind": "complete-session",
+          "sha256": "387b9864357f930196ac747ccd8ea9b77700ff6943d85c79bd96d8e75170e63c",
+          "sizeBytes": 913863,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 3, 2, 0, 'player'); return unit.setStat(1, 'salt_store', 0); return unit.setStat(2, 'salt_store', 12.5); return unit.spawn('bear_brown', 4, 2), settled 3.0s and held until `unit.getStat(1, 'salt_store') == 0 and unit.getStat(2, 'salt_store') == 12.5 and unit.getStat(3, 'salt_store') ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z7-units-v3-salt-store.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "z8-units-v4-physiology-overrides",
+      "description": "Units v4 as the current build writes it (#2829): the physiology override map is carried (EMPTY for every unit this build creates, since no setter exists before S4) beside the #2761 salt reserve at a present zero, a partial value and a seeded full reserve. The current-version counterpart of z7; a NONEMPTY map is exercised by the headless group 'physiology override persistence'.",
+      "declaredAt": "2026-10-14",
+      "declaredByIssue": 2829,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec (current units v4, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 13,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z8-units-v4-physiology-overrides",
+          "path": "test-headless/data/save-compat/z8-units-v4-physiology-overrides.bin",
+          "kind": "complete-session",
+          "sha256": "f5d2ae8559aef05cc8be9b039a4c8e4a2fac88742c0a50a0228e196183c6a1fc",
+          "sizeBytes": 913971,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 3, 2, 0, 'player'); return unit.setStat(1, 'salt_store', 0); return unit.setStat(2, 'salt_store', 12.5); return unit.spawn('bear_brown', 4, 2), settled 3.0s and held until `unit.getStat(1, 'salt_store') == 0 and unit.getStat(2, 'salt_store') == 12.5 and unit.getStat(3, 'salt_store') ~= nil and unit.getPhysioOverride(1, 'hydration') == nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z8-units-v4-physiology-overrides.expected.json"
         }
       ]
     }

@@ -57,7 +57,7 @@ import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
-    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager )
+    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager , emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), WorldState(..), emptyWorldManager
@@ -270,7 +270,7 @@ liveUnit = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | The one ground item on the page. Nothing about the instance is

@@ -66,7 +66,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
@@ -189,7 +189,7 @@ mkUnit defName pg (gx, gy) capacity inv = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | Everything a case can vary, so each one reads as a scenario rather

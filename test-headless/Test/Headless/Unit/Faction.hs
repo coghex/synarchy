@@ -26,7 +26,7 @@ import Unit.Direction (Direction(..))
 import Unit.Faction
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import Infection.Types (emptyInfectionManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Equipment.Reconcile (EquipmentOrphan)
@@ -38,7 +38,8 @@ import Unit.Faction.Membership
     , resolveLegacyFaction )
 import World.Save.Component.Entities
     ( UnitInstanceDTO(..), UnitInstanceDTOv2, fromUnitInstanceDTO
-    , migrateUnitInstanceDTOv2, toUnitInstanceDTO, toUnitInstanceDTOv2 )
+    , migrateUnitInstanceDTOv2, migrateUnitInstanceDTOv3
+    , toUnitInstanceDTO, toUnitInstanceDTOv2 )
 import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import World.Save.Component.Types (RegisteredComponent(..))
 import World.Save.Envelope.Types (ComponentId(..))
@@ -94,7 +95,7 @@ instWith f = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | Take the given (unit id, raw legacy faction string) pairs all the
@@ -135,7 +136,8 @@ throughV2 ∷ UnitInstanceSnapshot → UnitInstanceSnapshot
 throughV2 s =
     case S.decode (S.encode (toUnitInstanceDTOv2 s)) of
         Right dto → fromUnitInstanceDTO
-                        (migrateUnitInstanceDTOv2 (dto ∷ UnitInstanceDTOv2))
+                        (migrateUnitInstanceDTOv3
+                            (migrateUnitInstanceDTOv2 (dto ∷ UnitInstanceDTOv2)))
         Left  err → s { uisFaction = FactionLegacyPending
                             ("<decode failed: " <> fromString err <> ">") }
 
@@ -324,10 +326,11 @@ spec = describe "Unit faction model" $ do
             map uisFaction (HM.elems (usnInstances back))
                 `shouldBe` [FactionProfileSnap inertUnitProfile]
 
-        it "the units component is at v3 and still accepts v1 and v2" $
+        it "the units component is at v4 (#2829) and still accepts v1, v2 \
+           \and v3" $
             [ rcInputVers c
               | c ← saveComponentRegistry
-              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2, 3]]
+              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2, 3, 4]]
 
         it "a live profile survives the v3 component path and restore \
            \exactly" $ do

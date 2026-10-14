@@ -60,7 +60,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Chunk.Types
 import World.Flora.CropPlot (CropPlotOf(..))
 import World.Flora.Identity
@@ -297,7 +297,7 @@ mkWorker (gx, gy) = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- * Live-state readers

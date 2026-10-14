@@ -79,7 +79,7 @@ import Structure.Types
 import Structure.Render (structureChunkQuads, structureChunkQuadsScanned)
 import Structure.WallCatalog (emptyStructureWallCatalog)
 import Unit.Types
-    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager )
+    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager , emptyPhysioOverrides)
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Direction (Direction(..))
@@ -345,7 +345,7 @@ fixtureUnit page = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | A MULTI-tile (2x3) building def, so the example below is asserting

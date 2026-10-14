@@ -144,7 +144,7 @@ testInstance = UnitInstance
     , uiImmunities = HM.empty, uiBlood = 0
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | A def whose only animation is the fixture atlas, so 'unitToQuad'

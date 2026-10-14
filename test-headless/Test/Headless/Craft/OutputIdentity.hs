@@ -60,7 +60,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), emptyWorldState, emptyWorldManager )
@@ -159,7 +159,7 @@ crafter inv = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | One visible page, the two item defs, the recipe, and a crafter

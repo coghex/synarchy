@@ -130,7 +130,7 @@ import Unit.Thread.Command.Spawn
     , buildStartingInventory )
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
@@ -246,7 +246,7 @@ holder = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | One visible page holding the item registry, the holder and a

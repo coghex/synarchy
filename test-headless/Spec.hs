@@ -136,6 +136,7 @@ import qualified Test.Headless.World.Save.Compat as SaveCompat
 import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
+import qualified Test.Headless.World.Save.PhysiologyOverrides as PhysioOverrides
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
 import qualified Test.Headless.World.GeneratedLibrary as GeneratedLibrary
@@ -1014,6 +1015,8 @@ restLane = do
     describe "atomic save storage" SaveStorage.spec
     describe "generated world library" GeneratedLibrary.spec
     describe "persistence contract" SaveContract.spec
+    -- #2829: explicit physiology mode intent through the units v4 wire.
+    PhysioOverrides.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
     describe "autosave rotation durability (#2229)" AutosaveRotation.spec
     ListingFailureBoundary.spec

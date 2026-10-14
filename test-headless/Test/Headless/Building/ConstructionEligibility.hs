@@ -62,7 +62,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..))
 import World.Flora.Types (emptyFloraChunkData)
@@ -227,7 +227,7 @@ mkUnit (gx, gy) = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- * Scene

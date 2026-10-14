@@ -98,6 +98,7 @@ import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
 import World.Fluid.Types (FluidType(..))
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
+import Unit.Physiology.Types (physioModeText)
 import Unit.Sim.Types (UnitSimState(..))
 import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
@@ -298,7 +299,17 @@ dumpUnit (uid, u) = Aeson.object
     , "gridX" .= uisGridX u, "gridY" .= uisGridY u
     , "gridZ" .= uisGridZ u, "facing" .= T.pack (show (uisFacing u))
     , "activity" .= uisActivity u, "pose" .= uisPose u
-    , "inventory" .= map dumpItem (uisInventory u) ]
+    , "inventory" .= map dumpItem (uisInventory u)
+      -- #2829: the explicit physiology mode intent, so omitting or losing
+      -- a NONEMPTY map is observable; and the one durable stat the
+      -- units-v3 fixture (z7) exists to pin, #2761's salt reserve, so a
+      -- present zero or partial value cannot silently become absent.
+    , "physioOverrides" .= Aeson.object
+        [ AK.fromText sid .= physioModeText m
+        | (sid, m) ← sortOn fst (HM.toList (uisPhysioOverrides u)) ]
+    , "durableStats" .= Aeson.object
+        [ AK.fromText k .= v
+        | k ← ["salt_store"], Just v ← [HM.lookup k (uisStats u)] ] ]
 
 dumpSim ∷ (UnitId, UnitSimState) → Aeson.Value
 dumpSim (uid, s) = Aeson.object

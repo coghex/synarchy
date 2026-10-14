@@ -67,7 +67,7 @@ import Unit.Thread.Command.Motion
     (handleUnitMoveToCommand, handleUnitSetMoveSpeedCommand)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 
 -----------------------------------------------------------------------
@@ -159,7 +159,7 @@ motionInstance = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.25, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | The page the instance names. Never loaded: every accepted teleport

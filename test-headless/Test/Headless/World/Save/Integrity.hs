@@ -100,7 +100,7 @@ import Data.Int (Int64)
 import Power.Types
     (emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..), PowerRole(..))
 import Building.Types (BuildingId(..))
-import Unit.Types (UnitId(..))
+import Unit.Types (UnitId(..), emptyPhysioOverrides)
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
@@ -235,7 +235,7 @@ minimalUnit = UnitInstanceSnapshot
     , uisModifiers = HM.empty, uisSkills = HM.empty, uisKnowledge = HM.empty
     , uisInventory = [], uisEquipped = HM.empty, uisAccessories = []
     , uisFaction = FactionProfileSnap inertUnitProfile, uisWounds = [], uisScars = [], uisImmuneResponse = 0
-    , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
+    , uisImmunities = HM.empty, uisBlood = 5, uisName = "", uisPhysioOverrides = emptyPhysioOverrides }
 
 minimalGlobals ∷ WorldPageId → SessionGlobals
 minimalGlobals active = SessionGlobals

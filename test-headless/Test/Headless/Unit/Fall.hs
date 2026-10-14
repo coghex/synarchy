@@ -86,7 +86,7 @@ mkInst mass ws = UnitInstance
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = mass * bloodMassRatio
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing }
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing }
 
 toWound ∷ FallInjury → Wound
 toWound i = Wound

@@ -56,7 +56,7 @@ import Unit.Faction.Profile
     , tagAcolyte, tagLegacyHostile, tagWildlife )
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology, emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component.Entities
     ( PageUnitsDTO(..), PageUnitsDTOv1(..), PageUnitsDTOv2(..)
@@ -133,7 +133,7 @@ instOf defName p = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | Instance snapshots for @(unit id, definition, legacy string)@,
@@ -313,15 +313,16 @@ legacyWireSpec = describe "units v1 and v2 migration" $ do
                            [(UnitId 9, bareName, "made_up")]) of
             Left err → expectationFailure (T.unpack err)
             Right (um, _) → do
-                ccVersion unitsCodec `shouldBe` 3
+                ccVersion unitsCodec `shouldBe` 4
                 let dtos = HM.elems (HM.map toUnitInstanceDTO
                               (usnInstances (toUnitSnapshot pageA um)))
                 length dtos `shouldBe` 6
                 [ () | d ← dtos, UnitFactionLegacyDTO _ ← [uidFaction d] ]
                     `shouldBe` []
-                -- and those bytes come back through the v3 decoder
+                -- and those bytes come back through the v4 decoder
+                -- (the current one; v3 is the frozen #2829 shape)
                 -- unchanged.
-                let back = decodeUnitsAt 3 $ S.put $ UnitsDTO
+                let back = decodeUnitsAt 4 $ S.put $ UnitsDTO
                         [PageUnitsDTO pageA (HM.map toUnitInstanceDTO
                             (usnInstances (toUnitSnapshot pageA um)))]
                 fmap (fst ∘ restoreSlices ∘ udPages) back
@@ -402,7 +403,7 @@ exactWireSpec = describe "units v3 exactness" $ do
             bytes = S.runPut (S.put (UnitsDTO
                         [PageUnitsDTO pageA
                             (HM.map toUnitInstanceDTO (usnInstances snap0))]))
-        case ccDecode unitsCodec 3 bytes of
+        case ccDecode unitsCodec 4 bytes of
             Left err → expectationFailure (show err)
             Right (UnitsDTO slices) → do
                 let (um, unknowns) = restoreSlices slices

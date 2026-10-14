@@ -113,7 +113,7 @@ import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
-    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager )
+    ( UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager , emptyPhysioOverrides)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
@@ -985,7 +985,7 @@ containerUnit page = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- * The YAML boundary, through the real registered verb --------------

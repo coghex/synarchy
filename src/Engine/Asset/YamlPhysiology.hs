@@ -147,12 +147,13 @@ data PhysiologyYamlSystem = PhysiologyYamlSystem
     , pysProvides    ∷ ![PhysiologyYamlEntry]
     , pysContributes ∷ ![PhysiologyYamlEntry]
     , pysEffects     ∷ ![PhysiologyYamlEntry]
+    , pysRenamedFrom ∷ ![Text]
     } deriving (Show, Eq)
 
 instance FromJSON PhysiologyYamlSystem where
     parseJSON = withObject "physiology system" $ \o → do
         onlyKeys [ "id", "requires", "owns", "derived", "meters"
-                 , "provides", "contributes", "effects" ] o
+                 , "provides", "contributes", "effects", "renamed_from" ] o
         PhysiologyYamlSystem
             ⊚ o .:  "id"
             ⊛ o .:? "requires"    .!= []
@@ -162,6 +163,7 @@ instance FromJSON PhysiologyYamlSystem where
             ⊛ o .:? "provides"    .!= []
             ⊛ o .:? "contributes" .!= []
             ⊛ o .:? "effects"     .!= []
+            ⊛ o .:? "renamed_from" .!= []
 
 -- | One registry file.
 data PhysiologyYamlDoc = PhysiologyYamlDoc
@@ -169,15 +171,18 @@ data PhysiologyYamlDoc = PhysiologyYamlDoc
     , pydSystems   ∷ ![PhysiologyYamlSystem]
     , pydProfiles  ∷ !(Map.Map Text (Map.Map Text Text))
       -- ^ profile id → system id → mode, as written.
+    , pydRetired   ∷ ![Text]
+      -- ^ ids of systems that no longer exist (#2829).
     } deriving (Show, Eq)
 
 instance FromJSON PhysiologyYamlDoc where
     parseJSON = withObject "physiology registry" $ \o → do
-        onlyKeys ["constants", "systems", "profiles"] o
+        onlyKeys ["constants", "systems", "profiles", "retired"] o
         PhysiologyYamlDoc
             ⊚ o .:? "constants" .!= Map.empty
             ⊛ o .:? "systems"   .!= []
             ⊛ o .:? "profiles"  .!= Map.empty
+            ⊛ o .:? "retired"   .!= []
 
 -- | Reject any key outside @allowed@, naming it: a typo'd key silently
 --   ignored is how a declaration ends up incomplete without a diagnostic.
@@ -257,9 +262,24 @@ admitPhysiologyDoc path doc = do
     checkUnique "duplicate physiology key" $ concat
         [ map okKey (psOwns s) ⧺ map dkKey (psDerived s) ⧺ psMeters s
         | s ← systems ]
+    -- Retired and renamed ids (#2829) are RECOGNITION only: a stored
+    -- override naming one is not an undeclared system. Each must be a
+    -- real, unambiguous id that is not also an active system, or the
+    -- distinction the load boundary draws would be meaningless.
+    let activeIds = map psId systems
+        renamedIds = concatMap psRenamedFrom systems
+    forM_ (pydRetired doc ⧺ renamedIds) $ \old →
+        when (T.null (T.strip old) ∨ T.any (≡ ' ') old) $
+            refuse "malformed retired physiology system id" old
+    checkUnique "duplicate retired physiology system"
+                (pydRetired doc ⧺ renamedIds)
+    forM_ (pydRetired doc ⧺ renamedIds) $ \old →
+        when (old `elem` activeIds) $
+            refuse "retired physiology system is still active" old
     let partial = PhysiologyRegistry
             { prSource = Just path, prConstants = constants
-            , prSystems = systems, prProfiles = [] }
+            , prSystems = systems, prProfiles = []
+            , prRetired = pydRetired doc }
         keys = registryKeys partial
     forM_ systems $ \s → do
         forM_ (psOwns s) $ \o → case okHealthy o of
@@ -304,7 +324,7 @@ admitSystem constants s = do
         { psId = sid, psRequires = pysRequires s, psOwns = owns
         , psDerived = derived, psMeters = pysMeters s
         , psProvides = provides, psContributes = contributes
-        , psEffects = effects }
+        , psEffects = effects, psRenamedFrom = pysRenamedFrom s }
   where
     sid = pysId s
 
