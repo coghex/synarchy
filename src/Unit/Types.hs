@@ -31,6 +31,9 @@ module Unit.Types
     , UnitDef(..)
     , UnitPhysiology(..)
     , noUnitPhysiology
+    , PhysioMode(..)
+    , PhysioOverrides
+    , emptyPhysioOverrides
     , UnitInstance(..)
     , UnitManager(..)
     , UnitId(..)
@@ -44,6 +47,8 @@ module Unit.Types
     ) where
 
 import Unit.Atlas.Types
+import Unit.Physiology.Types
+    (PhysioMode(..), PhysioOverrides, emptyPhysioOverrides)
 import Unit.Types.Wound
 import Unit.Types.Combat
 import Unit.Types.Def

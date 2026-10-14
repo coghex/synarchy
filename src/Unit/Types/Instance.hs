@@ -12,6 +12,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Item.Types (ItemInstance(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction.Membership (UnitFactionProfile)
+import Unit.Physiology.Types (PhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 import Unit.Types.Def (StatModifier(..))
 import Unit.Types.Wound (Wound(..), Scar(..))
@@ -137,6 +138,19 @@ data UnitInstance = UnitInstance
       --   → Collapsed pose; ≤ 0 → Dead pose + exsanguination
       --   death event. Max is recomputed from body_mass each read
       --   so wasting/regrowth carries through naturally.
+    , uiPhysioOverrides ∷ !PhysioOverrides
+      -- ^ Explicit per-system physiology mode INTENT (#2829, S3 of epic
+      --   #2827): system id → 'Unit.Physiology.Types.PhysioMode'. The
+      --   PRESENCE of an entry records intent regardless of the species
+      --   default, so an override equal to the default is kept exactly,
+      --   and an absent entry follows the current default through
+      --   'Unit.Physiology.resolveMode'. Persist exactly: the @units@
+      --   component v4 carries it (older versions yield an empty map).
+      --
+      --   EMPTY for every unit this build creates: no setter, transition
+      --   hook or gameplay consumer exists until S4, so only a test (or a
+      --   future save) holds a nonempty one. The read-only
+      --   @unit.getPhysioOverride@ reflects it.
     , uiLastAttackerUid ∷ !(Maybe Word32)
       -- ^ Runtime-only (NOT in SaveData). Written by Combat.Resolution
       --   on each hit landed against this unit. Read by the AI's

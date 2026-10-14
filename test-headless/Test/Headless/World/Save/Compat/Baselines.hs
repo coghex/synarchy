@@ -52,6 +52,7 @@ import World.Save.Types
     , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..)
     , resolveLegacyLocationParams )
 import Test.Headless.Location.Fixture (expectGeometry)
+import Unit.Physiology.Types (physioModeText)
 import Location.Types (emptyLocationRegistry)
 import Location.Instance (LocationInstance(..), instancesToList)
 import World.Save.Snapshot
@@ -169,6 +170,14 @@ data ExpectedUnit = ExpectedUnit
     { euId ∷ !Word32, euDefName ∷ !Text, euGridX ∷ !Float, euGridY ∷ !Float
     , euGridZ ∷ !Int, euFacing ∷ !Text, euActivity ∷ !Text, euPose ∷ !Text
     , euInventory ∷ ![ExpectedItemInstance]
+    , euPhysioOverrides ∷ !(HM.HashMap Text Text)
+      -- ^ #2829: system id → mode text. OPTIONAL, defaulting to no
+      --   overrides: every summary written before units v4 predates the
+      --   key, and an empty map is precisely what each historical path
+      --   yields, so the default is the pre-v4 contract and pins it.
+    , euDurableStats ∷ !(Maybe (HM.HashMap Text Float))
+      -- ^ #2829: the durable stats a summary pins EXACTLY (today only
+      --   @salt_store@, #2761). Absent means the summary pins none.
     }
 
 instance Aeson.FromJSON ExpectedUnit where
@@ -176,6 +185,8 @@ instance Aeson.FromJSON ExpectedUnit where
         <$> o .: "id" <*> o .: "defName" <*> o .: "gridX" <*> o .: "gridY"
         <*> o .: "gridZ" <*> o .: "facing" <*> o .: "activity" <*> o .: "pose"
         <*> o .:? "inventory" .!= []
+        <*> o .:? "physioOverrides" .!= HM.empty
+        <*> o .:? "durableStats"
 
 data ExpectedUnitSimState = ExpectedUnitSimState
     { eusUnitId ∷ !Word32, eusRealX ∷ !Float, eusRealY ∷ !Float
@@ -683,6 +694,16 @@ manifestFixturesSpec =
                                                 T.pack (show (uisFacing u)) `shouldBe` euFacing eu
                                                 uisActivity u `shouldBe` euActivity eu
                                                 uisPose u `shouldBe` euPose eu
+                                                -- #2829: exact map presence and
+                                                -- values, not effective modes
+                                                HM.map physioModeText
+                                                    (uisPhysioOverrides u)
+                                                    `shouldBe` euPhysioOverrides eu
+                                                forM_ (euDurableStats eu) $ \pinned →
+                                                    HM.filterWithKey
+                                                        (\k _ → k ≡ "salt_store")
+                                                        (uisStats u)
+                                                        `shouldBe` pinned
                                                 length (uisInventory u)
                                                     `shouldBe` length (euInventory eu)
                                                 forM_ (euInventory eu) $ \eii →

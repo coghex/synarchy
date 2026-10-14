@@ -134,7 +134,7 @@ import World.Save.Component.Entities
     ( BuildingInstanceDTOv1, PageBuildingsDTOv1(..), BuildingsDTOv1(..)
     , migrateBuildingsDTOv1, applyBuildings
     , UnitInstanceDTOv1, PageUnitsDTOv1(..), UnitsDTOv1(..)
-    , migrateUnitsDTOv1, applyUnits
+    , migrateUnitsDTOv1, migrateUnitsDTOv3, applyUnits
     , UnitSimStateDTOv1, PageSimDTOv1(..), UnitSimDTOv1(..)
     , migrateUnitSimDTOv1, applyUnitSim
     , BillQueueDTOv1(..), PageCraftBillsDTOv1(..)
@@ -355,7 +355,8 @@ migrateSessionV90 meta sd = do
         (migrateBuildingsDTOv1 (BuildingsDTOv1 (map toPageBuildingsV90 ps)))
         afterActivity
     afterUnits ← applyUnits 1 nextUnitId
-        (migrateUnitsDTOv1 (UnitsDTOv1 (map toPageUnitsV90 ps)))
+        (migrateUnitsDTOv3
+            (migrateUnitsDTOv1 (UnitsDTOv1 (map toPageUnitsV90 ps))))
         afterBuildings
     afterSim ← applyUnitSim 1
         (migrateUnitSimDTOv1 (UnitSimDTOv1 (map toPageSimV90 ps))) afterUnits

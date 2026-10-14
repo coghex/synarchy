@@ -122,7 +122,8 @@ import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
                       , BuildingManager(..), buildingsOnPage, bdSouthTexture)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
-                  , StatModifier(..), Wound(..), Scar(..), unitsOnPage)
+                  , StatModifier(..), Wound(..), Scar(..), unitsOnPage
+                  , PhysioOverrides)
 import Unit.Direction (Direction(..))
 import World.Save.UnitFaction
     (UnitFactionSnapshot(..), resolveUnitFactionSnapshot)
@@ -154,7 +155,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 105
+currentSaveVersion = 106
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -799,6 +800,13 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
     , uisName        ∷ !Text
       -- ^ v57: persistent per-unit display name (#264). "" for unnamed
       --   units. Appended last — Serialize roundtrip is positional.
+    , uisPhysioOverrides ∷ !PhysioOverrides
+      -- ^ Explicit per-system physiology mode intent (#2829, S3). Persist
+      --   exactly; EMPTY from every pre-units-v4 payload and for every
+      --   unit this build creates. Appended last — positional. The
+      --   @units@ wire shape is "World.Save.Component.EntitySnapshots"'s
+      --   DTO; load-time rejection of an undeclared system or a
+      --   non-finite Simulated value is "World.Save.Physiology"'s.
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Build a snapshot from a live UnitManager, restricted to the world
@@ -840,6 +848,7 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
     , uisImmunities  = uiImmunities ui
     , uisBlood       = uiBlood ui
     , uisName        = uiName ui
+    , uisPhysioOverrides = uiPhysioOverrides ui
     }
 
 -- | Restore a UnitManager from a snapshot. Like buildings: instances
@@ -1013,6 +1022,7 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiClimbDest   = Nothing   -- runtime-only; not persisted
     -- Runtime-only bleeding-trail emitter state (#882) — always a clean
     -- slate on load, same as the combat-memory fields above.
+    , uiPhysioOverrides = uisPhysioOverrides s
     , uiTrailState  = Nothing
     }
 

@@ -323,6 +323,9 @@ directSpec = describe "a standard acolyte, spawned directly" $ do
         stat u "max_calories" `shouldSatisfy` approx (bm * 20)
         uiBlood u `shouldBe` bloodSeedFromStats (uiStats u)
         uiBlood u `shouldSatisfy` approx (bm * bloodMassRatio)
+        -- #2829: a production spawn holds no physiology override, and
+        -- carrying the (empty) map seeded no pool of its own.
+        uiPhysioOverrides u `shouldBe` HM.empty
 
     it "carries the capacity the formula gives at those inputs (~23.9 kg)" $
         \(env, _) → do

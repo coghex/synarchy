@@ -382,7 +382,7 @@ minimalInst page ts = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = ts
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = ts
     }
 
 lifecycleSpec ∷ Spec

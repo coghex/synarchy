@@ -80,6 +80,12 @@ module World.Save.Component.EntitySnapshots
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , UnitInstanceDTOv3(..)
+    , PageUnitsDTOv3(..)
+    , UnitsDTOv3(..)
+    , toUnitInstanceDTOv3
+    , migrateUnitInstanceDTOv3
+    , migrateUnitsDTOv3
     , UnitInstanceDTOv2(..)
     , PageUnitsDTOv2(..)
     , UnitsDTOv2(..)
@@ -101,7 +107,7 @@ import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import World.Page.Types (WorldPageId)
 import Building.Types (BuildingId)
-import Unit.Types (UnitId, StatModifier(..), Wound(..), Scar(..))
+import Unit.Types (UnitId, StatModifier(..), Wound(..), Scar(..), PhysioMode)
 import Unit.Sim.Types (Direction)
 import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
@@ -259,9 +265,11 @@ newtype UnitsDTOv2 = UnitsDTOv2 { ud2Pages ∷ [PageUnitsDTOv2] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
-migrateUnitsDTOv2 ∷ UnitsDTOv2 → UnitsDTO
-migrateUnitsDTOv2 (UnitsDTOv2 slices) = UnitsDTO
-    [ PageUnitsDTO (pu2PageId s)
+-- | v2 → the FROZEN v3 (#2829). Re-targeted from the current DTO so a
+--   v2 payload crosses to v4 exactly once, through 'migrateUnitsDTOv3'.
+migrateUnitsDTOv2 ∷ UnitsDTOv2 → UnitsDTOv3
+migrateUnitsDTOv2 (UnitsDTOv2 slices) = UnitsDTOv3
+    [ PageUnitsDTOv3 (pu2PageId s)
           (HM.map migrateUnitInstanceDTOv2 (pu2Instances s))
     | s ← slices ]
 
@@ -451,6 +459,9 @@ data UnitInstanceDTO = UnitInstanceDTO
     , uidImmunities     ∷ !(HM.HashMap Text Float)
     , uidBlood          ∷ !Float
     , uidName           ∷ !Text
+    , uidPhysioOverrides ∷ !(HM.HashMap Text PhysioMode)
+      -- ^ v4 (#2829): explicit per-system mode intent. Persist exactly;
+      --   appended last, so every earlier field keeps its v3 position.
     } deriving (Show, Eq, Generic, Serialize)
 
 toUnitInstanceDTO ∷ UnitInstanceSnapshot → UnitInstanceDTO
@@ -481,6 +492,7 @@ toUnitInstanceDTO u = UnitInstanceDTO
     , uidImmunities     = uisImmunities u
     , uidBlood          = uisBlood u
     , uidName           = uisName u
+    , uidPhysioOverrides = uisPhysioOverrides u
     }
 
 fromUnitInstanceDTO ∷ UnitInstanceDTO → UnitInstanceSnapshot
@@ -511,7 +523,127 @@ fromUnitInstanceDTO d = UnitInstanceSnapshot
     , uisImmunities     = uidImmunities d
     , uisBlood          = uidBlood d
     , uisName           = uidName d
+    , uisPhysioOverrides = uidPhysioOverrides d
     }
+
+-- | The FROZEN v3 unit instance (#2515 → #2829), preserved verbatim for
+--   decode-only backward compatibility: the complete outgoing units v3
+--   graph, identical to the current DTO but for the physiology override
+--   map v4 appends. Never edited. Its nested shapes are the shared
+--   frozen ones ('ItemInstanceDTO', 'StatModifierDTO', 'WoundDTO',
+--   'ScarDTO', 'UnitFactionDTO') and append-only enums, none of which
+--   changed in v4, so they are reused rather than copied.
+data UnitInstanceDTOv3 = UnitInstanceDTOv3
+    { uid3DefName        ∷ !Text
+    , uid3BaseWidth      ∷ !Float
+    , uid3GridX          ∷ !Float
+    , uid3GridY          ∷ !Float
+    , uid3GridZ          ∷ !Int
+    , uid3Facing         ∷ !Direction
+    , uid3CurrentAnim    ∷ !Text
+    , uid3AnimStart      ∷ !Double
+    , uid3AnimReverse    ∷ !Bool
+    , uid3Activity       ∷ !Text
+    , uid3Pose           ∷ !Text
+    , uid3AnimStride     ∷ !Int
+    , uid3Stats          ∷ !(HM.HashMap Text Float)
+    , uid3Modifiers      ∷ !(HM.HashMap Text [StatModifierDTO])
+    , uid3Skills         ∷ !(HM.HashMap Text Float)
+    , uid3Knowledge      ∷ !(HM.HashMap Text Float)
+    , uid3Inventory      ∷ ![ItemInstanceDTO]
+    , uid3Equipped       ∷ !(HM.HashMap Text ItemInstanceDTO)
+    , uid3Accessories    ∷ ![ItemInstanceDTO]
+    , uid3Faction        ∷ !UnitFactionDTO
+    , uid3Wounds         ∷ ![WoundDTO]
+    , uid3Scars          ∷ ![ScarDTO]
+    , uid3ImmuneResponse ∷ !Float
+    , uid3Immunities     ∷ !(HM.HashMap Text Float)
+    , uid3Blood          ∷ !Float
+    , uid3Name           ∷ !Text
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | Encoder for the frozen v3 shape: the round-trip partner a v3
+--   fixture and a migration test are built with.
+toUnitInstanceDTOv3 ∷ UnitInstanceSnapshot → UnitInstanceDTOv3
+toUnitInstanceDTOv3 u = UnitInstanceDTOv3
+    { uid3DefName        = uisDefName u
+    , uid3BaseWidth      = uisBaseWidth u
+    , uid3GridX          = uisGridX u
+    , uid3GridY          = uisGridY u
+    , uid3GridZ          = uisGridZ u
+    , uid3Facing         = uisFacing u
+    , uid3CurrentAnim    = uisCurrentAnim u
+    , uid3AnimStart      = uisAnimStart u
+    , uid3AnimReverse    = uisAnimReverse u
+    , uid3Activity       = uisActivity u
+    , uid3Pose           = uisPose u
+    , uid3AnimStride     = uisAnimStride u
+    , uid3Stats          = uisStats u
+    , uid3Modifiers      = HM.map (map toStatModifierDTO) (uisModifiers u)
+    , uid3Skills         = uisSkills u
+    , uid3Knowledge      = uisKnowledge u
+    , uid3Inventory      = map toItemInstanceDTO (uisInventory u)
+    , uid3Equipped       = HM.map toItemInstanceDTO (uisEquipped u)
+    , uid3Accessories    = map toItemInstanceDTO (uisAccessories u)
+    , uid3Faction        = toUnitFactionDTO (uisFaction u)
+    , uid3Wounds         = map toWoundDTO (uisWounds u)
+    , uid3Scars          = map toScarDTO (uisScars u)
+    , uid3ImmuneResponse = uisImmuneResponse u
+    , uid3Immunities     = uisImmunities u
+    , uid3Blood          = uisBlood u
+    , uid3Name           = uisName u
+    }
+
+-- | v3 → v4 (#2829): every field crosses unchanged and the override map
+--   is EMPTY — a v3 payload predates explicit mode intent, so there is
+--   none to carry. Content-dependent normalization is S4's, never the
+--   component migration's.
+migrateUnitInstanceDTOv3 ∷ UnitInstanceDTOv3 → UnitInstanceDTO
+migrateUnitInstanceDTOv3 d = UnitInstanceDTO
+    { uidDefName           = uid3DefName d
+    , uidBaseWidth         = uid3BaseWidth d
+    , uidGridX             = uid3GridX d
+    , uidGridY             = uid3GridY d
+    , uidGridZ             = uid3GridZ d
+    , uidFacing            = uid3Facing d
+    , uidCurrentAnim       = uid3CurrentAnim d
+    , uidAnimStart         = uid3AnimStart d
+    , uidAnimReverse       = uid3AnimReverse d
+    , uidActivity          = uid3Activity d
+    , uidPose              = uid3Pose d
+    , uidAnimStride        = uid3AnimStride d
+    , uidStats             = uid3Stats d
+    , uidModifiers         = uid3Modifiers d
+    , uidSkills            = uid3Skills d
+    , uidKnowledge         = uid3Knowledge d
+    , uidInventory         = uid3Inventory d
+    , uidEquipped          = uid3Equipped d
+    , uidAccessories       = uid3Accessories d
+    , uidFaction           = uid3Faction d
+    , uidWounds            = uid3Wounds d
+    , uidScars             = uid3Scars d
+    , uidImmuneResponse    = uid3ImmuneResponse d
+    , uidImmunities        = uid3Immunities d
+    , uidBlood             = uid3Blood d
+    , uidName              = uid3Name d
+    , uidPhysioOverrides = HM.empty
+    }
+
+-- | The FROZEN v3 page slice (#2829), carrying the frozen v3 instances.
+data PageUnitsDTOv3 = PageUnitsDTOv3
+    { pu3PageId    ∷ !WorldPageId
+    , pu3Instances ∷ !(HM.HashMap UnitId UnitInstanceDTOv3)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitsDTOv3 = UnitsDTOv3 { ud3Pages ∷ [PageUnitsDTOv3] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+migrateUnitsDTOv3 ∷ UnitsDTOv3 → UnitsDTO
+migrateUnitsDTOv3 (UnitsDTOv3 slices) = UnitsDTO
+    [ PageUnitsDTO (pu3PageId s)
+          (HM.map migrateUnitInstanceDTOv3 (pu3Instances s))
+    | s ← slices ]
 
 -- | The FROZEN v2 unit instance (#1233 → #2515), preserved verbatim for
 --   decode-only backward compatibility: identical to the current DTO but
@@ -581,34 +713,34 @@ toUnitInstanceDTOv2 u = UnitInstanceDTOv2
 -- | v2 → v3 (#2515): every field crosses unchanged except the faction
 --   string, which becomes a PENDING legacy faction for the load stage to
 --   resolve by D-26 against the unit's loaded definition.
-migrateUnitInstanceDTOv2 ∷ UnitInstanceDTOv2 → UnitInstanceDTO
-migrateUnitInstanceDTOv2 d = UnitInstanceDTO
-    { uidDefName        = uid2DefName d
-    , uidBaseWidth      = uid2BaseWidth d
-    , uidGridX          = uid2GridX d
-    , uidGridY          = uid2GridY d
-    , uidGridZ          = uid2GridZ d
-    , uidFacing         = uid2Facing d
-    , uidCurrentAnim    = uid2CurrentAnim d
-    , uidAnimStart      = uid2AnimStart d
-    , uidAnimReverse    = uid2AnimReverse d
-    , uidActivity       = uid2Activity d
-    , uidPose           = uid2Pose d
-    , uidAnimStride     = uid2AnimStride d
-    , uidStats          = uid2Stats d
-    , uidModifiers      = uid2Modifiers d
-    , uidSkills         = uid2Skills d
-    , uidKnowledge      = uid2Knowledge d
-    , uidInventory      = uid2Inventory d
-    , uidEquipped       = uid2Equipped d
-    , uidAccessories    = uid2Accessories d
-    , uidFaction        = UnitFactionLegacyDTO (uid2FactionId d)
-    , uidWounds         = uid2Wounds d
-    , uidScars          = uid2Scars d
-    , uidImmuneResponse = uid2ImmuneResponse d
-    , uidImmunities     = uid2Immunities d
-    , uidBlood          = uid2Blood d
-    , uidName           = uid2Name d
+migrateUnitInstanceDTOv2 ∷ UnitInstanceDTOv2 → UnitInstanceDTOv3
+migrateUnitInstanceDTOv2 d = UnitInstanceDTOv3
+    { uid3DefName        = uid2DefName d
+    , uid3BaseWidth      = uid2BaseWidth d
+    , uid3GridX          = uid2GridX d
+    , uid3GridY          = uid2GridY d
+    , uid3GridZ          = uid2GridZ d
+    , uid3Facing         = uid2Facing d
+    , uid3CurrentAnim    = uid2CurrentAnim d
+    , uid3AnimStart      = uid2AnimStart d
+    , uid3AnimReverse    = uid2AnimReverse d
+    , uid3Activity       = uid2Activity d
+    , uid3Pose           = uid2Pose d
+    , uid3AnimStride     = uid2AnimStride d
+    , uid3Stats          = uid2Stats d
+    , uid3Modifiers      = uid2Modifiers d
+    , uid3Skills         = uid2Skills d
+    , uid3Knowledge      = uid2Knowledge d
+    , uid3Inventory      = uid2Inventory d
+    , uid3Equipped       = uid2Equipped d
+    , uid3Accessories    = uid2Accessories d
+    , uid3Faction        = UnitFactionLegacyDTO (uid2FactionId d)
+    , uid3Wounds         = uid2Wounds d
+    , uid3Scars          = uid2Scars d
+    , uid3ImmuneResponse = uid2ImmuneResponse d
+    , uid3Immunities     = uid2Immunities d
+    , uid3Blood          = uid2Blood d
+    , uid3Name           = uid2Name d
     }
 
 -- | The FROZEN pre-#1233 unit instance, preserved verbatim for
@@ -683,34 +815,34 @@ toUnitInstanceDTOv1 u = UnitInstanceDTOv1
 --   values decode absent), and the faction string becomes a PENDING
 --   legacy faction that the load stage resolves by D-26 against the
 --   unit's loaded definition ("World.Save.UnitFaction").
-migrateUnitInstanceDTOv1 ∷ UnitInstanceDTOv1 → UnitInstanceDTO
-migrateUnitInstanceDTOv1 d = UnitInstanceDTO
-    { uidDefName        = uid1DefName d
-    , uidBaseWidth      = uid1BaseWidth d
-    , uidGridX          = uid1GridX d
-    , uidGridY          = uid1GridY d
-    , uidGridZ          = uid1GridZ d
-    , uidFacing         = uid1Facing d
-    , uidCurrentAnim    = uid1CurrentAnim d
-    , uidAnimStart      = uid1AnimStart d
-    , uidAnimReverse    = uid1AnimReverse d
-    , uidActivity       = uid1Activity d
-    , uidPose           = uid1Pose d
-    , uidAnimStride     = uid1AnimStride d
-    , uidStats          = uid1Stats d
-    , uidModifiers      = uid1Modifiers d
-    , uidSkills         = uid1Skills d
-    , uidKnowledge      = uid1Knowledge d
-    , uidInventory      = map migrateItemInstanceDTOv1 (uid1Inventory d)
-    , uidEquipped       = HM.map migrateItemInstanceDTOv1 (uid1Equipped d)
-    , uidAccessories    = map migrateItemInstanceDTOv1 (uid1Accessories d)
-    , uidFaction        = UnitFactionLegacyDTO (uid1FactionId d)
-    , uidWounds         = uid1Wounds d
-    , uidScars          = uid1Scars d
-    , uidImmuneResponse = uid1ImmuneResponse d
-    , uidImmunities     = uid1Immunities d
-    , uidBlood          = uid1Blood d
-    , uidName           = uid1Name d
+migrateUnitInstanceDTOv1 ∷ UnitInstanceDTOv1 → UnitInstanceDTOv3
+migrateUnitInstanceDTOv1 d = UnitInstanceDTOv3
+    { uid3DefName        = uid1DefName d
+    , uid3BaseWidth      = uid1BaseWidth d
+    , uid3GridX          = uid1GridX d
+    , uid3GridY          = uid1GridY d
+    , uid3GridZ          = uid1GridZ d
+    , uid3Facing         = uid1Facing d
+    , uid3CurrentAnim    = uid1CurrentAnim d
+    , uid3AnimStart      = uid1AnimStart d
+    , uid3AnimReverse    = uid1AnimReverse d
+    , uid3Activity       = uid1Activity d
+    , uid3Pose           = uid1Pose d
+    , uid3AnimStride     = uid1AnimStride d
+    , uid3Stats          = uid1Stats d
+    , uid3Modifiers      = uid1Modifiers d
+    , uid3Skills         = uid1Skills d
+    , uid3Knowledge      = uid1Knowledge d
+    , uid3Inventory      = map migrateItemInstanceDTOv1 (uid1Inventory d)
+    , uid3Equipped       = HM.map migrateItemInstanceDTOv1 (uid1Equipped d)
+    , uid3Accessories    = map migrateItemInstanceDTOv1 (uid1Accessories d)
+    , uid3Faction        = UnitFactionLegacyDTO (uid1FactionId d)
+    , uid3Wounds         = uid1Wounds d
+    , uid3Scars          = uid1Scars d
+    , uid3ImmuneResponse = uid1ImmuneResponse d
+    , uid3Immunities     = uid1Immunities d
+    , uid3Blood          = uid1Blood d
+    , uid3Name           = uid1Name d
     }
 
 -- | Per-page unit slice. Carries ONLY the instance map — the unit-id
@@ -737,9 +869,10 @@ newtype UnitsDTOv1 = UnitsDTOv1 { ud1Pages ∷ [PageUnitsDTOv1] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
-migrateUnitsDTOv1 ∷ UnitsDTOv1 → UnitsDTO
-migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTO
-    [ PageUnitsDTO (pu1PageId s)
+-- | v1 → the FROZEN v3 (#2829); see 'migrateUnitsDTOv2'.
+migrateUnitsDTOv1 ∷ UnitsDTOv1 → UnitsDTOv3
+migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTOv3
+    [ PageUnitsDTOv3 (pu1PageId s)
           (HM.map migrateUnitInstanceDTOv1 (pu1Instances s))
     | s ← slices ]
 
@@ -754,11 +887,19 @@ migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTO
 -- profile with membership provenance. v1 and v2 each migrate EXPLICITLY
 -- to v3, their faction string arriving as a pending legacy faction that
 -- the load stage resolves by D-26 against the unit's loaded definition
--- ("World.Save.UnitFaction"). Re-encoding emits v3 only.
+-- ("World.Save.UnitFaction").
+--
+-- v4 (#2829): the instance gains the physiology override map (explicit
+-- per-system mode intent, S3 of epic #2827). The complete outgoing v3
+-- graph is frozen ('UnitsDTOv3'), and dispatch is explicit: v1 and v2
+-- migrate to the FROZEN v3 and every older version then crosses to v4
+-- exactly once through 'migrateUnitsDTOv3', which supplies EMPTY
+-- overrides. There is no implicit chain: 'componentCodec' selects one
+-- decoder per encoded version. Re-encoding emits v4 only.
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = componentCodec ComponentSpec
     { csComponent     = unitsComponentId
-    , csVersion       = 3
+    , csVersion       = 4
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → UnitsDTO
@@ -766,8 +907,9 @@ unitsCodec = componentCodec ComponentSpec
               (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 migrateUnitsDTOv1
-                        , atVersion 2 migrateUnitsDTOv2 ]
+    , csOlderVersions = [ atVersion 1 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv1)
+                        , atVersion 2 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv2)
+                        , atVersion 3 migrateUnitsDTOv3 ]
     , csValidate      = const []
     }
 

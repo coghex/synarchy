@@ -57,7 +57,7 @@ mkInst stats mods = UnitInstance
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 100
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing }
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing }
 
 -- A single-part target body for computeSeverity — the same fixture
 -- shape Test.Headless.Combat.MentalEffectiveness uses (bpLayers = []

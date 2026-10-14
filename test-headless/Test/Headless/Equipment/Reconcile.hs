@@ -42,7 +42,7 @@ import Item.Types
 import Structure.Palette (emptyTexPalette)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance , noUnitPhysiology)
+    , UnitManager(..), defaultNaturalResistance , noUnitPhysiology, emptyPhysioOverrides)
 import qualified Data.Map.Strict as Map
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Load.Stage (stageSession, renderStageError)
@@ -369,7 +369,7 @@ minimalUnitSnapshot equipped inventory = UnitInstanceSnapshot
     , uisInventory = inventory, uisEquipped = equipped
     , uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
-    , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
+    , uisImmunities = HM.empty, uisBlood = 5, uisName = "", uisPhysioOverrides = emptyPhysioOverrides }
 
 -- | A one-page save carrying @units@, built the way a DECODED save is:
 --   'blankPageSnapshot' is the construction every @world-pages@

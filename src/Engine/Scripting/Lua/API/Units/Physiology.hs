@@ -89,8 +89,9 @@ physioReadWith kind env uid key = do
                 ReadBase      → getOrRollStat env uid key
 
 -- | The unit's read context, or 'Nothing' for a unit that does not
---   exist. The override map is EMPTY: the live override field is S3's, so
---   in this slice no unit carries one.
+--   exist. The override map is the unit's STORED intent
+--   ('uiPhysioOverrides', S3, #2829): empty for every unit this build
+--   creates, nonempty only when a save (or a test) carried one.
 unitSnapshot ∷ EngineEnv → UnitId → IO (Maybe PhysioContext)
 unitSnapshot env uid = do
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
@@ -101,7 +102,7 @@ unitSnapshot env uid = do
         Just inst → Just PhysioContext
             { pcRegistry   = reg
             , pcPhysiology = definitionPhysiology um inst
-            , pcOverrides  = HM.empty
+            , pcOverrides  = uiPhysioOverrides inst
             , pcNow        = now
             , pcStats      = uiStats inst
             , pcModifiers  = uiModifiers inst
@@ -185,12 +186,26 @@ unitGetPhysioModeFn env = do
     maybe Lua.pushnil (Lua.pushstring ∘ TE.encodeUtf8) mText
     return 1
 
--- | @unit.getPhysioOverride(uid, system)@ → @nil@, always, in this
---   slice: the live override field and its setter are S3's and S4's, so
---   no unit carries one. Installed now so a caller can be written against
---   the final read surface.
-unitGetPhysioOverrideFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
-unitGetPhysioOverrideFn = Lua.pushnil >> return 1
+-- | @unit.getPhysioOverride(uid, system)@ → @"nominal"@ | @"simulated"@ |
+--   @nil@: the unit's STORED override for the system, exactly as held
+--   (S3, #2829) — including one equal to the species default, which is
+--   still explicit intent. @nil@ when the unit has none, for an unknown
+--   system id, or for a missing unit. Always @nil@ for a unit this
+--   build created: no setter exists until S4.
+unitGetPhysioOverrideFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetPhysioOverrideFn env = do
+    idArg  ← Lua.tointeger 1
+    sysArg ← Lua.tostring 2
+    mText ← case (idArg, sysArg) of
+        (Just n, Just sysBS) → Lua.liftIO $ do
+            snapshot ← unitSnapshot env (UnitId (fromIntegral n))
+            pure $ do
+                ctx ← snapshot
+                physioModeText <$> HM.lookup (TE.decodeUtf8Lenient sysBS)
+                                             (pcOverrides ctx)
+        _ → pure Nothing
+    maybe Lua.pushnil (Lua.pushstring ∘ TE.encodeUtf8) mText
+    return 1
 
 -- | @unit.getPhysioDefault(uid, system)@ → @"nominal"@ | @"simulated"@ |
 --   @nil@: the definition's AUTHORED default for the system after

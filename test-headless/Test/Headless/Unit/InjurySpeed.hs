@@ -53,7 +53,7 @@ inst ws = UnitInstance
     , uiImmuneResponse = 0, uiImmunities = HM.empty, uiBlood = 70 * bloodMassRatio
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing }
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing }
 
 wound ∷ Text → Float → Wound
 wound p sev = Wound

@@ -350,6 +350,22 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:3:R world-activity:6:R '
         'world-edits:4:R world-pages:13:R',
+    # #2829: z7 is the last pre-v4 units graph (v3), written by the
+    # pre-change codec; z8 is the current one (units v4).
+    "z7-units-v3-salt-store.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:10:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:3:R world-activity:6:R '
+        'world-edits:4:R world-pages:13:R',
+    "z8-units-v4-physiology-overrides.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:10:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:4:R world-activity:6:R '
+        'world-edits:4:R world-pages:13:R',
 }
 
 

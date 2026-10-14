@@ -161,7 +161,7 @@ spec = do
                     [ PageUnitsDTOv1 page1
                         (HM.singleton (UnitId 1)
                             (toUnitInstanceDTOv1 inst)) ])
-            ccInputVers unitsCodec `shouldBe` [1, 2, 3]
+            ccInputVers unitsCodec `shouldBe` [1, 2, 3, 4]
             mv ← expectDecode "units v1" (ccDecode unitsCodec 1 bytes)
             case mv of
                 Nothing → pure ()

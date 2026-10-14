@@ -34,7 +34,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Stats (applyItemBuffs)
 import Unit.Types (StatModifier(..), UnitId(..), UnitInstance(..),
-                   UnitManager(..), emptyUnitManager)
+                   UnitManager(..), emptyUnitManager, emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 
 -- | A bare accessory def. @disp@ is the MODIFIER SOURCE — deliberately
@@ -128,7 +128,7 @@ unitWearing worn inv = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | Equip-time state: the unit above with each worn accessory's buffs

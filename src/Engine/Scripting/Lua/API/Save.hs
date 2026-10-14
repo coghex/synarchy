@@ -50,6 +50,8 @@ import Engine.Core.Capability.WorldSim
 import Engine.Save.Config
     ( SaveConfig(..), loadSaveConfig, writeSaveConfig, clampSaveConfig
     , defaultSaveConfig, saveConfigDefaultPath, saveConfigLocalPath )
+import World.Save.Physiology
+    (physiologyLoadRejections, renderPhysiologyRejection)
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , AutosaveRequest(..)
                         , missingDefReferences, renderMissingDefRef
@@ -78,7 +80,7 @@ import Location.Instance (locationGeometryErrorText)
 import Location.Types (LocationRegistry(..), LocationDef(..))
 import LootProfile.Types (lootProfileIds)
 import Building.Types (BuildingManager(..))
-import Unit.Types (UnitManager(..))
+import Unit.Types (UnitManager(..), UnitDef(..))
 import Item.Types (ItemManager(..))
 import Craft.Types (RecipeManager(..))
 import World.Save.Integrity
@@ -920,6 +922,7 @@ continueLoad env logger requestId saveName descriptors = do
             locReg ← Lua.liftIO $ readIORef (locationDefsRef env)
             lpr ← Lua.liftIO $ readIORef (lootProfileRegistryRef env)
             infMgr ← Lua.liftIO $ readIORef (infectionManagerRef env)
+            physiologyRegistry ← Lua.liftIO $ readIORef (physiologyRegistryRef env)
             let buildingDefs = HM.keysSet (bmDefs bm)
                 locationDefIds = HS.fromList (map ldId (lrDefs locReg))
                 pages = [ (wpsPageId w, w) | w ← sdWorlds saveData ]
@@ -978,6 +981,17 @@ continueLoad env logger requestId saveName descriptors = do
                     missingLocationDefReferences locationDefIds pages
                 missingInfections =
                     missingInfectionReferences infMgr pages
+                -- #2829 (S3): saved physiology state that cannot be
+                -- honoured — an override naming a system the registry
+                -- does not declare, or a non-finite Simulated value —
+                -- rejects here, with the old session untouched, for the
+                -- same reason the definition checks do: the registry and
+                -- the loaded definitions are live content a component
+                -- decode must not read.
+                physioMessages = map renderPhysiologyRejection $
+                    physiologyLoadRejections physiologyRegistry
+                        (HM.map udPhysiology (umDefs um))
+                        [ (wpsPageId w, wpsUnits w) | w ← sdWorlds saveData ]
                 allMissing = length missing + length missingItems
                     + length missingPortableItems
                     + length missingSignificant
@@ -1023,6 +1037,16 @@ continueLoad env logger requestId saveName descriptors = do
                         <> " gameplay definition no longer registered — "
                         <> "aborting the entire load (nothing changed): "
                         <> T.intercalate "; " allMessages
+                Lua.liftIO $ do
+                    logWarn logger CatWorld $
+                        "loadSave rejected for '" <> saveName <> "': " <> msg
+                    failLoad (loadStatusRef env) requestId msg
+                pure False
+              else if not (null physioMessages)
+              then do
+                let msg = "saved unit physiology state is invalid — \
+                          \aborting the entire load (nothing changed): "
+                          <> T.intercalate "; " physioMessages
                 Lua.liftIO $ do
                     logWarn logger CatWorld $
                         "loadSave rejected for '" <> saveName <> "': " <> msg

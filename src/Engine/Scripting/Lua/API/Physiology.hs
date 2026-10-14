@@ -101,8 +101,8 @@ loadPhysiologyYamlFn core regs = do
 --   and no mutating entry point exists.
 --
 --   @{ source, constants = {NAME = number}, systemOrder = {id, ..},
---   systems = {id = {id, requires, owns, derived, meters, provides,
---   contributes, effects}}, profiles = {id = {system = "nominal" |
+--   retired = {id, ..}, systems = {id = {id, requires, owns, derived,
+--   meters, provides, contributes, effects, renamedFrom}}, profiles = {id = {system = "nominal" |
 --   "simulated"}} }@. Healthy rules and substitutes are described by
 --   @kind@ (@"const"@ \/ @"from"@, @"value"@ \/ @"none"@ \/
 --   @"virtual_meal"@ \/ @"tissue_recovery"@), with every constant already
@@ -127,6 +127,7 @@ pushRegistry reg = do
         forM_ (Map.toList (prConstants reg)) $ \(n, v) →
             field n (pushNum v)
     field "systemOrder" $ pushArray (map psId (prSystems reg)) pushText
+    field "retired" (pushArray (prRetired reg) pushText)
     field "systems" $ do
         Lua.newtable
         forM_ (prSystems reg) $ \s → field (psId s) (pushSystem reg s)
@@ -155,6 +156,7 @@ pushSystem reg s = do
     field "provides" (pushEntries reg (psProvides s))
     field "contributes" (pushEntries reg (psContributes s))
     field "effects" (pushEntries reg (psEffects s))
+    field "renamedFrom" (pushArray (psRenamedFrom s) pushText)
 
 pushHealthy ∷ PhysiologyRegistry → HealthyRule → Lua.LuaE Lua.Exception ()
 pushHealthy reg rule = do

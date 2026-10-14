@@ -98,6 +98,12 @@ module World.Save.Component.Entities
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , UnitInstanceDTOv3(..)
+    , PageUnitsDTOv3(..)
+    , UnitsDTOv3(..)
+    , toUnitInstanceDTOv3
+    , migrateUnitInstanceDTOv3
+    , migrateUnitsDTOv3
     , UnitInstanceDTOv2(..)
     , PageUnitsDTOv2(..)
     , UnitsDTOv2(..)

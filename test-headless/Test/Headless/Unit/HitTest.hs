@@ -89,7 +89,7 @@ unitAt gz rz = UnitInstance
     , uiImmunities = HM.empty, uiBlood = 0
     , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | The rect the hit-testers get, built exactly as 'hitTestUnitAt' and

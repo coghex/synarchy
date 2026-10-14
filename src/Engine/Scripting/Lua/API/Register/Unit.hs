@@ -78,7 +78,7 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "setStat"     (unitSetStatFn env)
   registerLuaFunction callStats "unit" "getAllStats" (unitGetAllStatsFn env)
   registerLuaFunction callStats "unit" "getPhysioMode"     (unitGetPhysioModeFn env)
-  registerLuaFunction callStats "unit" "getPhysioOverride" unitGetPhysioOverrideFn
+  registerLuaFunction callStats "unit" "getPhysioOverride" (unitGetPhysioOverrideFn env)
   registerLuaFunction callStats "unit" "getPhysioDefault"  (unitGetPhysioDefaultFn env)
   registerLuaFunction callStats "unit" "readPhysio"        (unitReadPhysioFn env)
   registerLuaFunction callStats "unit" "readPhysioBase"    (unitReadPhysioBaseFn env)

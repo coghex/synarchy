@@ -55,7 +55,7 @@ import Unit.Thread.Movement.Leap (startJump)
 import Unit.Thread.Movement.PathAdvance (tickUnit, MoveWorld(..))
 import Unit.Thread.Movement.Types (defaultMoveStats)
 import Unit.Pathing.Config (defaultPathingConfig)
-import Unit.Types (UnitId(..))
+import Unit.Types (UnitId(..), emptyPhysioOverrides)
 import World.Edit.Types (emptyWorldEdits)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Generate.Types (WorldGenParams, defaultWorldGenParams)
@@ -257,7 +257,7 @@ owningUnit = UnitInstanceSnapshot
     , uisSkills = HM.empty, uisKnowledge = HM.empty, uisInventory = []
     , uisEquipped = HM.empty, uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
-    , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
+    , uisImmunities = HM.empty, uisBlood = 5, uisName = "", uisPhysioOverrides = emptyPhysioOverrides }
 
 pageWithSim ∷ UnitSimState → PageSnapshot
 pageWithSim ss = PageSnapshot

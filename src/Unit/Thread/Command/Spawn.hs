@@ -268,6 +268,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     , uiFrozen      = False
                     , uiForceLoop   = False
                     , uiClimbDest   = Nothing
+                    , uiPhysioOverrides = emptyPhysioOverrides
                     , uiTrailState  = Nothing
                     }
             let ss = UnitSimState

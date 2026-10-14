@@ -35,7 +35,7 @@ import Structure.Wire (allWireShapes)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
-import Unit.Types (UnitInstance(..))
+import Unit.Types (UnitInstance(..), emptyPhysioOverrides)
 import World.Page.Types (WorldPageId)
 
 -- | The pack every construction fixture designates from — the shipped
@@ -170,7 +170,7 @@ payerUnit page inv = UnitInstance
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
     , uiClimbDest = Nothing
-    , uiTrailState = Nothing
+    , uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | An item instance with a recognisable identity, so an example can

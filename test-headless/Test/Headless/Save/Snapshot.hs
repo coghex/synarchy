@@ -37,7 +37,7 @@ import Craft.Bills (emptyCraftBills)
 import Unit.Transfer.Orders (emptyTransferOrders)
 import Power.Types (emptyPowerNodes)
 import Building.Types (BuildingId(..))
-import Unit.Types (UnitId(..))
+import Unit.Types (UnitId(..), emptyPhysioOverrides)
 import Unit.Sim.Types (UnitSimState(..), Pose(..), UnitActivity(..))
 import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
@@ -127,7 +127,7 @@ minimalUnitInstance inv = UnitInstanceSnapshot
     , uisSkills = HM.empty, uisKnowledge = HM.empty, uisInventory = inv
     , uisEquipped = HM.empty, uisAccessories = [], uisFaction = FactionProfileSnap inertUnitProfile
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
-    , uisImmunities = HM.empty, uisBlood = 5, uisName = ""
+    , uisImmunities = HM.empty, uisBlood = 5, uisName = "", uisPhysioOverrides = emptyPhysioOverrides
     }
 
 minimalBuildingInstance ∷ [ItemInstance] → BuildingInstanceSnapshot

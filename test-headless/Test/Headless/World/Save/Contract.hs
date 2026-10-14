@@ -120,7 +120,7 @@ import Power.Types (emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(
 import Building.Types (BuildingId(..))
 import Building.Knowledge
     (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
-import Unit.Types (UnitId(..), Wound(..), Scar(..), StatModifier(..))
+import Unit.Types (UnitId(..), Wound(..), Scar(..), StatModifier(..), emptyPhysioOverrides)
 import Unit.Sim.Types
     (UnitSimState(..), Pose(..), UnitActivity(..), MoveTarget(..)
     , MoveHazardPolicy(..))
@@ -212,6 +212,7 @@ richUnit = UnitInstanceSnapshot
     , uisImmunities = HM.singleton "staph" 0.2
     , uisBlood = 4.2
     , uisName = "Test Acolyte"
+    , uisPhysioOverrides = emptyPhysioOverrides
     }
 
 richBuilding ∷ BuildingInstanceSnapshot

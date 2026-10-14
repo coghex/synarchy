@@ -39,7 +39,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
-import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
+import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..), emptyPhysioOverrides)
 import World.Page.Types (WorldPageId(..))
 
 spec ∷ SpecWith EngineEnv
@@ -1318,7 +1318,7 @@ liveUnit f = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
 -- | Install live unit instances for the duration of one case and

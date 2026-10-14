@@ -1,17 +1,20 @@
-{-# LANGUAGE Strict #-}
+{-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 -- | The physiology system registry and the per-definition defaults it
 --   validates (#2828, S2 of the physiology stat-modes epic #2827): the
 --   value types behind @data\/physiology\/systems.yaml@ and the
 --   @physiology:@ block of a unit definition.
 --
---   __Nothing here is serialized.__ 'PhysioMode' deliberately derives no
---   @Generic Serialize@: a data type under @src\/@ with two or more
---   constructors that derives it joins
---   @tools\/enum_append_only_audit.py@'s guarded set, and the design
---   (D-3) assigns the persisted override enum, with its
---   @docs\/save_compat\/enum_baseline.json@ entry, to S3 (#2829). The
---   registry, the profiles and 'UnitPhysiology' are all /Rebuild/ content:
---   re-derived from the data files on every boot.
+--   __Only 'PhysioMode' is serialized__, because it is the one value a
+--   save carries: a unit's per-system override (S3, #2829), keyed by
+--   system id in @uiPhysioOverrides@. It is a positional @Generic
+--   Serialize@ enum, so it is append-only: @PhysioNominal@ is tag 0 and
+--   @PhysioSimulated@ tag 1, and @tools/enum_append_only_audit.py@
+--   guards it through @docs/save_compat/enum_baseline.json@ (a pure
+--   append is recorded with @--update-baseline@, never by hand).
+--   'ResolvedMode' is deliberately NOT serialized: Unsupported is a
+--   resolver verdict about a definition, never an override a unit can
+--   hold. The registry, the profiles and 'UnitPhysiology' are all
+--   /Rebuild/ content, re-derived from the data files on every boot.
 --
 --   The registry data model is in "Unit.Physiology"'s header; this
 --   module is only the shapes, so "Unit.Types.Def" can carry
@@ -19,6 +22,8 @@
 module Unit.Physiology.Types
     ( -- * Modes
       PhysioMode(..)
+    , PhysioOverrides
+    , emptyPhysioOverrides
     , physioModeText
     , parsePhysioMode
     , ResolvedMode(..)
@@ -48,16 +53,30 @@ module Unit.Physiology.Types
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import Data.Serialize (Serialize)
+import GHC.Generics (Generic)
 
 -- * Modes
 
 -- | The mode a unit's system can be CHOSEN to run in: by a species
---   default, or (from S3) by a per-unit override. 'Unsupported' is not a
---   choice but a capability verdict, so it is 'ResolvedMode''s.
+--   default, or by a per-unit override. 'Unsupported' is not a choice
+--   but a capability verdict, so it is 'ResolvedMode''s.
 --
---   Not @Generic Serialize@ — see the module header.
+--   Positional @Generic Serialize@ (S3, #2829): constructors are
+--   append-only. An unknown tag fails decoding as malformed (cereal's
+--   generic sum decoder), and is never reinterpreted as a mode.
 data PhysioMode = PhysioNominal | PhysioSimulated
-    deriving (Show, Eq, Ord, Enum, Bounded)
+    deriving (Show, Eq, Ord, Enum, Bounded, Generic, Serialize)
+
+-- | A unit's explicit per-system mode intent: system id → mode. The
+--   PRESENCE of an entry records intent, independent of the effective
+--   mode, so an override equal to the species default is kept exactly
+--   (D-3). Empty for every production-created unit until S4 installs
+--   the setters.
+type PhysioOverrides = HM.HashMap Text PhysioMode
+
+emptyPhysioOverrides ∷ PhysioOverrides
+emptyPhysioOverrides = HM.empty
 
 -- | The Lua spelling of a chosen mode.
 physioModeText ∷ PhysioMode → Text
@@ -186,6 +205,10 @@ data PhysiologySystem = PhysiologySystem
     , psProvides    ∷ ![InterfaceEntry]
     , psContributes ∷ ![InterfaceEntry]
     , psEffects     ∷ ![InterfaceEntry]
+    , psRenamedFrom ∷ ![Text]
+      -- ^ system ids this system was previously known by (#2829). A
+      --   stored override naming one is RECOGNIZED at load, not rejected
+      --   as an undeclared system; remapping it is S4's.
     } deriving (Show, Eq)
 
 -- | A named species fidelity tier: a mode for EVERY system (D-10).
@@ -206,12 +229,16 @@ data PhysiologyRegistry = PhysiologyRegistry
     , prConstants ∷ !(Map.Map Text Float)
     , prSystems   ∷ ![PhysiologySystem]
     , prProfiles  ∷ ![PhysiologyProfile]
+    , prRetired   ∷ ![Text]
+      -- ^ system ids that no longer exist (#2829). A stored override
+      --   naming one is RECOGNIZED at load, not rejected as undeclared;
+      --   dropping it and any orphaned keys is S4's.
     } deriving (Show, Eq)
 
 emptyPhysiologyRegistry ∷ PhysiologyRegistry
 emptyPhysiologyRegistry = PhysiologyRegistry
     { prSource = Nothing, prConstants = Map.empty
-    , prSystems = [], prProfiles = [] }
+    , prSystems = [], prProfiles = [], prRetired = [] }
 
 -- | Is there a usable registry? A definition cannot be validated
 --   against an empty one, so registration refuses rather than skipping
