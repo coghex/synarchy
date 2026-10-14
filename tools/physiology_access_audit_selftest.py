@@ -389,13 +389,25 @@ def case_probe_embedded_lua():
     expect("probe write in loop", "raw write of owned key 'hunger'",
            probe=PROBE_PY + 'def starvation_bands_section(p):\n'
                  '    send(p, "for _,u in ipairs(U) do unit.setStat(u,\'hunger\',0) end")\n')
+    # ... a write in a measurement helper NESTED in an authorized scenario ...
+    expect("probe write in nested helper", "raw write of owned key 'core_temp'",
+           probe=PROBE_PY + 'def hunger_section(p):\n'
+                 '    def avg_hyd(g):\n'
+                 '        return send(p, "unit.setStat(1,\'core_temp\',0); '
+                 'return unit.readPhysio(1,\'hydration\')")\n')
+    # ... a key outside the scope's own key set ...
+    expect("probe key outside scope", "raw write of owned key 'core_temp'",
+           probe=PROBE_PY + 'def starvation_bands_section(p):\n'
+                 '    send(p, "unit.setStat(1,\'core_temp\',0); return 1")\n')
     # ... and a straight-line write in any other Python function.
     expect("probe write elsewhere", "raw write of owned key 'core_temp'",
            probe=PROBE_PY + 'def unrelated(p):\n'
                  '    send(p, "unit.setStat(1,\'core_temp\',0); return \'ok\'")\n')
     # The authorized shape in the authorized function stays accepted.
     expect_clean("probe fixture shape", probe=PROBE_PY + 'def starvation_bands_section(p):\n'
-                 '    send(p, "local u=1; unit.setStat(u,\'calories\',1); return \'ok\'")\n')
+                 '    send(p, "local u=1; unit.setStat(u,\'hunger\',0); return \'ok\'")\n'
+                 '    def set_frac(f):\n'
+                 '        send(p, "unit.setStat(1,\'calories\',2)")\n')
     # A NaN-style loop over a literal list.
     expect("probe loop", "raw read of owned key 'core_temp'",
            probe=PROBE_PY + 'NAN = ("for _,s in ipairs({\'core_temp\',\'circulation\'}) do "\n'

@@ -44,8 +44,10 @@ Allowances, each tied to real ownership and named, never a directory:
     keys it forces as scenario fixtures (D-7 allows raw setStat debugging
     under Simulated) -- only from a STRAIGHT-LINE embedded chunk (no
     function, loop or branch, so never an aggregate or a helper) inside the
-    named scenario functions ``hunger_section`` and
-    ``starvation_bands_section``. Reads in the probe are NOT allowed.
+    named scenario scopes (``hunger_section``: calories, hunger, core_temp;
+    ``starvation_bands_section``: hunger; its nested ``set_frac``: calories;
+    a helper nested in a scenario, such as a measurement function, is a
+    different scope). Reads in the probe are NOT allowed.
   * ``UI_EXCEPTIONS`` / ``UI_HELPER_EXCEPTIONS``: the TEMPORARY, enumerated
     legacy pool reads that stay raw until S6 (Nominal-aware display): the
     hydration, hunger and calories reads in ``formatStatus`` of
@@ -172,20 +174,22 @@ SURVIVAL_EXEMPTION = SiteException(
 @dataclass(frozen=True)
 class FixtureWrites:
     """The probe's scenario setup writes: a STRAIGHT-LINE embedded chunk
-    (no function, loop or branch -- so never an aggregate or a helper)
-    inside one of the named Python scenario functions, writing one of the
-    named keys."""
+    (no function, loop or branch -- so never an aggregate or a Lua helper)
+    in exactly one of the named Python setup scopes, writing one of THAT
+    scope's keys. A scope is the dotted chain of enclosing Python
+    functions, so a measurement helper nested in a scenario function
+    (``hunger_section.avg_hyd``) is a different scope from the scenario."""
     file: str
     verb: str
-    keys: frozenset[str]
-    scopes: frozenset[str]
+    scopes: dict[str, frozenset[str]]
     why: str
 
 
 PROBE_FIXTURE_WRITES = FixtureWrites(
     PROBE_PATH, "unit.setStat",
-    frozenset({"calories", "hunger", "core_temp"}),
-    frozenset({"hunger_section", "starvation_bands_section"}),
+    {"hunger_section": frozenset({"calories", "hunger", "core_temp"}),
+     "starvation_bands_section": frozenset({"hunger"}),
+     "starvation_bands_section.set_frac": frozenset({"calories"})},
     "scenario fixtures (D-7: raw setStat is allowed for debugging)")
 
 # TEMPORARY (S5 -> S6). Each key is admitted once per function.
@@ -321,8 +325,8 @@ def _string_text(node) -> Optional[str]:
 
 def embedded_lua(py_text: str) -> list[tuple[int, str, str]]:
     """(line, Lua text, scope) for every Python string literal that looks
-    like Lua. `scope` is the OUTERMOST Python function holding it, or
-    ``<module>``. An f-string's replacement fields become ``0``; implicitly
+    like Lua. `scope` is the dotted chain of Python functions holding it
+    (``outer.inner``), or ``<module>``. An f-string's replacement fields become ``0``; implicitly
     concatenated literals arrive already joined, reported at their first
     line."""
     try:
@@ -334,8 +338,8 @@ def embedded_lua(py_text: str) -> list[tuple[int, str, str]]:
     out = []
 
     def visit(node, scope):
-        if isinstance(node, ast.FunctionDef) and scope == "<module>":
-            scope = node.name
+        if isinstance(node, ast.FunctionDef):
+            scope = node.name if scope == "<module>" else f"{scope}.{node.name}"
         if id(node) not in parts:
             text = _string_text(node)
             if text and ("unit." in text or "stats." in text
@@ -428,8 +432,8 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
                 and a.verb == ex.verb and a.key in ex.keys:
             continue
         fx = policy.probe_fixture
-        if a.path == fx.file and a.verb == fx.verb and a.key in fx.keys \
-                and a.straight and a.scope in fx.scopes:
+        if a.path == fx.file and a.verb == fx.verb and a.straight \
+                and a.key in fx.scopes.get(a.scope, frozenset()):
             continue
         if a.via == "helper-call":
             name = a.verb.split(":", 1)[1]
