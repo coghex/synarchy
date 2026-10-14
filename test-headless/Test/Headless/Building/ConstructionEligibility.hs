@@ -62,7 +62,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , defaultNaturalResistance, emptyUnitManager )
+    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..))
 import World.Flora.Types (emptyFloraChunkData)
@@ -209,6 +209,7 @@ acolyteDef = UnitDef
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 mkUnit ∷ (Float, Float) → UnitInstance

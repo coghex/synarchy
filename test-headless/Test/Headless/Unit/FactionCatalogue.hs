@@ -54,6 +54,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness.Isolation
     (withExclusiveTempDirectory, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
+import Test.Headless.Unit.PhysiologyFixture (ensurePhysiologyRegistry)
 import Unit.Faction (Faction(..), FactionRelation(..))
 import Unit.Faction.Catalogue
 import Unit.Faction.Profile
@@ -170,6 +171,9 @@ data FactionEngine = FactionEngine
 withFactionEngine ∷ (FactionEngine → Expectation) → Expectation
 withFactionEngine action = withIsolatedResourceRoot $ do
     EngineInitResult env ← initializeEngineHeadlessQuiet
+    -- Unit registration refuses with no physiology registry (#2828); this
+    -- spec is about faction tags, so the shipped registry is just there.
+    ensurePhysiologyRegistry env
     logger ← initLogger defaultLogConfig
         { lcBackend = LogToCallback (\_ → pure ()) }
     writeIORef (loggerRef env) logger

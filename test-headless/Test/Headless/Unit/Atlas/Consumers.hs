@@ -165,6 +165,7 @@ atlasDef = UnitDef
     , udBodyParts = [], udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 quadUVs ∷ SortableQuad → [(Float, Float)]

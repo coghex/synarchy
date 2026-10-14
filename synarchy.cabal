@@ -282,6 +282,7 @@ library
                      Engine.Asset.YamlVegetation
                      Engine.Asset.YamlFlora
                      Engine.Asset.YamlFactions
+                     Engine.Asset.YamlPhysiology
                      Engine.Asset.YamlUnits
                      Engine.Asset.YamlNames
                      Engine.Asset.YamlNotifications
@@ -457,6 +458,7 @@ library
                      Engine.Scripting.Lua.API.Units.Transfer
                       Engine.Scripting.Lua.API.Units.TransferOrder
                      Engine.Scripting.Lua.API.Units.Stats
+                     Engine.Scripting.Lua.API.Units.Physiology
                      Engine.Scripting.Lua.API.Units.Stance
                      Engine.Scripting.Lua.API.Units.Stamina
                      Engine.Scripting.Lua.API.Units.Selection
@@ -621,6 +623,8 @@ library
                      Unit.Faction.Catalogue
                      Unit.Faction.Membership
                      Unit.Faction.Profile
+                     Unit.Physiology
+                     Unit.Physiology.Types
                      Gameplay.Tags.Types
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
@@ -754,6 +758,7 @@ library
                      Engine.Asset.YamlLootProfiles
                      Engine.Scripting.Lua.API.LootProfiles
                      Engine.Scripting.Lua.API.Factions
+                     Engine.Scripting.Lua.API.Physiology
                      Engine.Scripting.Lua.API.LootSimulate
                      Tutorial.Types
                      Engine.Asset.YamlTutorials
@@ -1904,6 +1909,9 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.Fixture
                    Test.Headless.Unit.Faction
                    Test.Headless.Unit.FactionCatalogue
+                   Test.Headless.Unit.Physiology
+                   Test.Headless.Unit.PhysiologyEngine
+                   Test.Headless.Unit.PhysiologyFixture
                    Test.Headless.Unit.FactionProfile
                    Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags

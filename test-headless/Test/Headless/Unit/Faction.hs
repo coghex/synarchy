@@ -26,7 +26,7 @@ import Unit.Direction (Direction(..))
 import Unit.Faction
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import Infection.Types (emptyInfectionManager)
 import Equipment.Types (emptyEquipmentClassManager)
 import Equipment.Reconcile (EquipmentOrphan)
@@ -76,7 +76,7 @@ minimalDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | A live instance carrying @f@; every other field is inert.
 instWith ∷ Faction → UnitInstance

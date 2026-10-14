@@ -69,6 +69,8 @@ import Engine.Scripting.Lua.API.Locations (loadLocationYamlFn, locationListDefsF
 import Engine.Scripting.Lua.API.LootTables (loadLootTableYamlFn)
 import Engine.Scripting.Lua.API.LootProfiles (loadLootProfileYamlFn)
 import Engine.Scripting.Lua.API.Factions (loadFactionYamlFn)
+import Engine.Scripting.Lua.API.Physiology
+    (loadPhysiologyYamlFn, getPhysiologyRegistryFn)
 import Engine.Scripting.Lua.API.Tutorial (loadTutorialDirFn, getTutorialTreeFn)
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Core.State (EngineEnv)
@@ -167,6 +169,8 @@ registerEngineAPI callStats env backendState = do
   -- declared yet. `scripts/startup_loader.lua` queues them in that
   -- order; registration order here is alphabetical-ish and immaterial.
   registerLuaFunction callStats "engine" "loadFactionYaml" (loadFactionYamlFn core regs)
+  registerLuaFunction callStats "engine" "loadPhysiologyYaml" (loadPhysiologyYamlFn core regs)
+  registerLuaFunction callStats "engine" "getPhysiologyRegistry" (getPhysiologyRegistryFn regs)
   registerLuaFunction callStats "engine" "loadUnitYaml" (loadUnitYamlFn env backendState)
   registerLuaFunction callStats "engine" "loadBuildingYaml" (loadBuildingYamlFn env backendState)
   registerLuaFunction callStats "engine" "loadItemYaml" (loadItemYamlFn core regs env backendState)

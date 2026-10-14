@@ -62,6 +62,7 @@ def bootstrap(port):
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/vegetation/*.yaml", "engine.loadVegetationYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
     ]:
         for path in sorted(glob.glob(pattern)):

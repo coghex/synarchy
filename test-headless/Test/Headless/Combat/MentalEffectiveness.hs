@@ -77,7 +77,7 @@ targetDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- A unit with only concentration (and, optionally, an EUPHORIC
 -- mental_state = 3) set — everything mentalEffectiveness reads.

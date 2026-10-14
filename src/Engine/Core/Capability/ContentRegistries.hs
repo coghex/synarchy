@@ -85,12 +85,13 @@ import LootTable.Types (LootTableRegistry)
 import LootProfile.Types (LootProfileRegistry)
 import Tutorial.Types (TutorialRegistry)
 import Unit.Faction.Catalogue (FactionCatalogue)
+import Unit.Physiology.Types (PhysiologyRegistry)
 import Engine.Core.State
   ( EngineEnv
   , itemManagerRef, equipmentClassManagerRef, substanceManagerRef
   , infectionManagerRef, recipeManagerRef, locationDefsRef
   , lootTableRegistryRef, lootProfileRegistryRef, tutorialRegistryRef
-  , factionCatalogueRef
+  , factionCatalogueRef, physiologyRegistryRef
   )
 
 -- | The @content-registries@ capability: item defs, equipment classes,
@@ -110,6 +111,7 @@ data ContentRegistriesCapability = ContentRegistriesCapability
   , crLootProfileRegistryRef   ∷ IORef LootProfileRegistry
   , crTutorialRegistryRef      ∷ IORef TutorialRegistry
   , crFactionCatalogueRef      ∷ IORef FactionCatalogue
+  , crPhysiologyRegistryRef    ∷ IORef PhysiologyRegistry
   }
 
 -- | Total projection — every field aliases the identical live
@@ -126,4 +128,5 @@ toContentRegistriesCapability env = ContentRegistriesCapability
   , crLootProfileRegistryRef   = lootProfileRegistryRef env
   , crTutorialRegistryRef      = tutorialRegistryRef env
   , crFactionCatalogueRef      = factionCatalogueRef env
+  , crPhysiologyRegistryRef    = physiologyRegistryRef env
   }

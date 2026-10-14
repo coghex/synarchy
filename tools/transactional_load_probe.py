@@ -166,6 +166,7 @@ def bootstrap_defs(port: int, include_units: bool = True) -> None:
         # data/factions first: unit `faction_tags:` are validated against
         # the declared tags and an undeclared one refuses the file (#2506).
         loaders.append(("data/factions/*.yaml", "engine.loadFactionYaml"))
+        loaders.append(("data/physiology/*.yaml", "engine.loadPhysiologyYaml"))
         loaders.append(("data/units/*.yaml", "engine.loadUnitYaml"))
     for pattern, fn in loaders:
         for path in sorted(glob.glob(pattern)):

@@ -9,6 +9,8 @@ module Unit.Types.Def
     , NamePool(..)
     , UnitDef(..)
     , module Unit.Atlas.Types
+    , UnitPhysiology(..)
+    , noUnitPhysiology
     ) where
 
 import UPrelude
@@ -20,6 +22,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 import Unit.Faction.Profile (FactionTag)
+import Unit.Physiology.Types (UnitPhysiology(..), noUnitPhysiology)
 import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..))
 
 -- | A single UNIT animation: per-direction frame sequences, addressed
@@ -214,4 +217,16 @@ data UnitDef = UnitDef
       --   Template-only. Nothing live reads it yet: the `UnitInstance`
       --   profile that will is FTS-3 (#2515), and no spawn argument,
       --   snapshot, DTO or save byte changes for this field.
+    , udPhysiology ∷ !UnitPhysiology
+      -- ^ What the definition says about physiology (#2828): whether it
+      --   authored a @body:@ block (the @body@ capability every v1 system
+      --   requires) and its per-system DEFAULT modes after profile
+      --   expansion. Resolved and validated against the loaded registry
+      --   at registration time. A definition that authors no
+      --   @physiology:@ block has no defaults, and every system it can
+      --   have resolves to Nominal.
+      --
+      --   Template-only and inactive: no production tick, gameplay
+      --   consumer, save byte or wire type reads it. It is Rebuild
+      --   content, re-derived from the YAML on every boot.
     } deriving (Show, Eq)

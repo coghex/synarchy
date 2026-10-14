@@ -98,6 +98,7 @@ def bootstrap_defs(port: int) -> None:
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         # #1589: a planted craftJob/repairJob persists a RECIPE id, and
         # prepareLoad rejects the whole load if it no longer resolves.

@@ -123,6 +123,7 @@ contentDirs =
     , ("data/equipment",   "engine.loadEquipmentYaml")
     , ("data/materials",   "engine.loadMaterialYaml")
     , ("data/factions",    "engine.loadFactionYaml")
+    , ("data/physiology",  "engine.loadPhysiologyYaml")
     , ("data/units",       "engine.loadUnitYaml")
     , ("data/loot_tables", "engine.loadLootTableYaml") ]
 

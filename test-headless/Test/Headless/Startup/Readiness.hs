@@ -12,7 +12,7 @@
 --   Three layers own three halves of the fix, and this module pins each
 --   against the real production code:
 --
---   * the fourteen @engine.load*Yaml@ BINDINGS answer a decode failure
+--   * the fifteen @engine.load*Yaml@ BINDINGS answer a decode failure
 --     distinguishably — but only when asked, so the single numeric
 --     result every other caller reads is untouched;
 --   * @scripts\/startup_loader.lua@ turns a family that discovered no
@@ -69,7 +69,7 @@ data Fam = Fam
     , famVerb ∷ Text
     }
 
--- | @queueNormalProfile@'s fourteen, in its own order.
+-- | @queueNormalProfile@'s fifteen, in its own order.
 normalFams ∷ [Fam]
 normalFams =
     [ Fam "data/materials"   "material"   "loadMaterialYaml"
@@ -82,13 +82,14 @@ normalFams =
     , Fam "data/equipment"   "equipment"  "loadEquipmentYaml"
     , Fam "data/buildings"   "building"   "loadBuildingYaml"
     , Fam "data/factions"    "faction"    "loadFactionYaml"
+    , Fam "data/physiology"  "physiology" "loadPhysiologyYaml"
     , Fam "data/units"       "unit"       "loadUnitYaml"
     , Fam "data/loot_tables" "loot_table" "loadLootTableYaml"
     , Fam "data/loot_profiles" "loot_profile" "loadLootProfileYaml"
     , Fam "data/locations"   "location"   "loadLocationYaml"
     ]
 
--- | @queueArenaProfile@'s thirteen: the same inventory minus flora.
+-- | @queueArenaProfile@'s fourteen: the same inventory minus flora.
 arenaFams ∷ [Fam]
 arenaFams = [ f | f ← normalFams, famId f ≢ "flora" ]
 
@@ -477,7 +478,7 @@ runBootThen after sc profile = do
               | otherwise                       = -1
 
 -----------------------------------------------------------------------
--- The engine half: the fourteen real bindings
+-- The engine half: the fifteen real bindings
 -----------------------------------------------------------------------
 
 -- | A private headless engine plus a real Lua backend with the whole
@@ -563,6 +564,7 @@ shippedFile verb = case verb of
     "loadEquipmentYaml"  → "data/equipment/humanoid.yaml"
     "loadBuildingYaml"   → "data/buildings/furnace.yaml"
     "loadFactionYaml"    → "data/factions/base.yaml"
+    "loadPhysiologyYaml" → "data/physiology/systems.yaml"
     "loadUnitYaml"       → "data/units/acolyte.yaml"
     "loadLootTableYaml"  → "data/loot_tables/ruin_common.yaml"
     "loadLootProfileYaml" → "data/loot_profiles/ruin_industrial_salvage.yaml"
@@ -589,8 +591,12 @@ shippedPrereqs "loadLootProfileYaml" =
 -- catalogue at load (#2506, D-30) and an undeclared id refuses the whole
 -- file, so the shipped catalogue is registered first — production's own
 -- order (factions before units in both profiles), not a convenience.
+--
+-- Likewise the physiology registry (#2828): unit registration validates a
+-- definition against it and refuses to register with none loaded.
 shippedPrereqs "loadUnitYaml" =
-    [("loadFactionYaml", "data/factions/base.yaml")]
+    [ ("loadFactionYaml", "data/factions/base.yaml")
+    , ("loadPhysiologyYaml", "data/physiology/systems.yaml") ]
 shippedPrereqs _ = []
 
 -- | The top-level key each list family decodes, so an EMPTY one can be
@@ -610,6 +616,7 @@ emptyListFile verb = case verb of
     "loadBuildingYaml"   → Just "buildings: []\n"
     "loadUnitYaml"       → Just "units: []\n"
     "loadFactionYaml"    → Just "faction_tags: []\n"
+    "loadPhysiologyYaml" → Just "systems: []\n"
     "loadLocationYaml"   → Just "locations: []\n"
     _                    → Nothing
 
@@ -867,7 +874,7 @@ spec = describe "Startup readiness" $ do
                 \(duplicate definition name 'saguaro'; 1 of 2 file(s) \
                 \refused)"
 
-        it "keeps a refusal out of the ELEVEN other families' way: the \
+        it "keeps a refusal out of the TWELVE other families' way: the \
            \same scenario against a family that refuses nothing runs to \
            \the end" $ do
             r ← runProfile healthy "normal"
@@ -980,7 +987,7 @@ spec = describe "Startup readiness" $ do
             (rDone r, rFailed r, rFamily r) `shouldBe` (False, True, "unit")
             -- arena has no flora family, so its aggregates stop one
             -- family earlier than normal's would
-            length (aggregatesOf r) `shouldBe` 10
+            length (aggregatesOf r) `shouldBe` 11
 
     ------------------------------------------------------------------
     describe "the boot surfaces it and refuses to finish (requirement 3)"

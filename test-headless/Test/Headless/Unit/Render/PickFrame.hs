@@ -70,6 +70,7 @@ mkDef anims = UnitDef
     , udNaturalWeapon      = Nothing
     , udModifiers          = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 -- | A UnitInstance facing south with the supplied anim name and start time.

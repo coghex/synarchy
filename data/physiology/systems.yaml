@@ -1,0 +1,139 @@
+# The physiology system registry (#2828, S2 of epic #2827; design
+# docs/designs/physiology_stat_modes_design.md D-1, D-10).
+#
+# Each system declares what it OWNS (stored keys, each with the HEALTHY
+# rule a Nominal read returns), what it DERIVES (computed on demand, never
+# stored), its failure METERS, the capabilities it REQUIRES, and every
+# value it PROVIDES, contribution it CONTRIBUTES and effect it has, each
+# with the substitute a dependent sees while the system is Nominal.
+#
+# This slice is inactive: nothing in the production tick, a gameplay
+# consumer or a save path reads this file. The five unit.*Physio* read
+# verbs and engine.getPhysiologyRegistry are the only readers. Species
+# defaults are assigned per unit definition (a `physiology:` block) in
+# S4/S7, not here.
+#
+# Healthy rules:  { const: <value|CONSTANT> }
+#                 { from: <stat>, scale: <value|CONSTANT | [..]> }
+# `from:` reads the unit's EFFECTIVE value of an input stat that no
+# system owns. `scale:` factors multiply.
+#
+# Substitutes:    { value: <value|CONSTANT> } | none | virtual_meal
+#                 | tissue_recovery   (the last two are executed in S4;
+#                 here they are declarations.)
+
+# Authoritative home of the constants the healthy rules need. The Lua
+# modules still carry their own copies (scripts/salts.lua SALT_PER_KG and
+# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) until S4/S5 migrate their
+# consumers; Test.Headless.Unit.Physiology fails if the copies drift.
+constants:
+  SALT_PER_KG: 1.0
+  # #2761's reserve capacity, as a multiple of max_salt.
+  SALT_STORE_CAP_FRAC: 2.0
+  THERMO_BASELINE: 37.0
+
+systems:
+  # REGISTRY ORDER IS TICK ORDER (design D-7): thermo before salt, because
+  # sweat debits arrive before the salt tick sees them, as they do today;
+  # then the pool systems. The order is data, so S4 reads it from here.
+  - id: thermo
+    requires: [body]
+    owns:
+      - key: core_temp
+        healthy: { const: THERMO_BASELINE }
+    meters: [hypothermia, hyperthermia]
+    provides:
+      - name: core_temp
+        substitute: { value: THERMO_BASELINE }
+    contributes:
+      - { name: sweat_debit,  substitute: none }
+      - { name: shiver_debit, substitute: none }
+    effects:
+      - { name: frostbite,   substitute: none }
+      - { name: meter_kills, substitute: none }
+
+  - id: salt
+    requires: [body]
+    owns:
+      # The circulating pool: max_salt = body_mass x SALT_PER_KG.
+      - key: salt
+        healthy: { from: body_mass, scale: [SALT_PER_KG] }
+      # The reserve (#2761): full storeCap = max_salt x SALT_STORE_CAP_FRAC.
+      - key: salt_store
+        healthy: { from: body_mass, scale: [SALT_PER_KG, SALT_STORE_CAP_FRAC] }
+    derived:
+      - { key: salt_conc, rule: salt_concentration, healthy: 1.0 }
+    meters: [salt_imbalance]
+    provides:
+      - name: salt_conc
+        substitute: { value: 1.0 }
+      - name: sweat_factor
+        substitute: { value: 1.0 }
+    effects:
+      - { name: cramps,                 substitute: none }
+      - { name: consciousness_penalty,  substitute: none }
+      - { name: meter_kill,             substitute: none }
+
+  - id: hydration
+    requires: [body]
+    owns:
+      - key: hydration
+        healthy: { from: max_hydration }
+    provides:
+      - name: body_water_fraction
+        substitute: { value: 1.0 }
+    effects:
+      - { name: collapse,             substitute: none }
+      - { name: death_threshold_kill, substitute: none }
+      - { name: thirst_need,          substitute: none }
+
+  - id: nutrition
+    requires: [body]
+    owns:
+      - key: hunger
+        healthy: { from: max_hunger }
+      - key: calories
+        healthy: { from: max_calories }
+    provides:
+      - name: cal_factor
+        substitute: { value: 1.0 }
+      - name: strength_discount
+        substitute: none
+    contributes:
+      # SD-4: a Nominal nutrition feeds salt through virtual meals.
+      - { name: meal_salt_credit,   substitute: virtual_meal }
+      # SD-5: a Nominal nutrition recovers depleted tissue toward the
+      # healthy target.
+      - { name: tissue_maintenance, substitute: tissue_recovery }
+    effects:
+      - { name: digestion,            substitute: none }
+      - { name: catabolism,           substitute: none }
+      - { name: regrowth,             substitute: none }
+      - { name: lean_floor_kill,      substitute: none }
+      - { name: fat_floor_organ_drain, substitute: none }
+      - { name: eat_need,             substitute: none }
+
+# Species fidelity tiers (D-10): a mode for EVERY system. A definition
+# names one with `physiology: { profile: rich }` and may override single
+# systems beside it. Which species use which is S4/S7's.
+profiles:
+  rich:
+    hydration: simulated
+    salt: simulated
+    thermo: simulated
+    nutrition: simulated
+  reduced:
+    hydration: nominal
+    salt: simulated
+    thermo: simulated
+    nutrition: nominal
+  simple:
+    hydration: nominal
+    salt: nominal
+    thermo: simulated
+    nutrition: nominal
+  exempt:
+    hydration: nominal
+    salt: nominal
+    thermo: nominal
+    nutrition: nominal

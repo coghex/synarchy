@@ -88,6 +88,7 @@ def _bootstrap_gen_defs(send, port: int) -> None:
         ("data/equipment/*.yaml",  "engine.loadEquipmentYaml"),
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
         ("data/recipes/*.yaml",    "engine.loadRecipeYaml"),

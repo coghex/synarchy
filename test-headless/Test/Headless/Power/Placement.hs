@@ -55,7 +55,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Flora.Types (emptyFloraChunkData)
@@ -136,7 +136,7 @@ minimalDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 mkUnit ∷ WorldPageId → [ItemInstance] → UnitInstance
 mkUnit page inv = UnitInstance

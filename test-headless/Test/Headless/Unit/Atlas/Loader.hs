@@ -54,6 +54,7 @@ import Unit.Faction.Catalogue
 import Unit.Direction (Direction(..))
 import Unit.Types
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
+import Test.Headless.Unit.PhysiologyFixture (ensurePhysiologyRegistry)
 
 fixtureUnit ∷ Text
 fixtureUnit = "spec_loader_unit"
@@ -124,6 +125,8 @@ atlasFor name frames = AtlasAnimation
 --   Returns @(defs published, queued messages)@.
 runLoader ∷ EngineEnv → AtlasResolver → IO (Int, [LuaToEngineMsg])
 runLoader env resolver = withFixtureYaml $ \yamlPath → do
+    -- Registration refuses with no physiology registry loaded (#2828).
+    ensurePhysiologyRegistry env
     logger ← readIORef (loggerRef env)
     defs ← loadUnitYaml logger yamlPath
     length defs `seq` pure ()
@@ -204,6 +207,7 @@ runShipped
     → IO ([UnitYamlDef], [LuaToEngineMsg], Maybe UnitDef)
 runShipped env unitName = do
     ensureFactionCatalogue env
+    ensurePhysiologyRegistry env
     let defsRef = ucUnitManagerRef (toUnitCombatCapability env)
     um0 ← readIORef defsRef
     let restore = atomicModifyIORef' defsRef $ \um →

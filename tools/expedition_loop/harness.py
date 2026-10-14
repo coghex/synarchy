@@ -313,6 +313,7 @@ YAML_LOADERS = [
     ("data/materials/*.yaml", "engine.loadMaterialYaml"),
     ("data/flora/*.yaml", "engine.loadFloraYaml"),
     ("data/factions/*.yaml", "engine.loadFactionYaml"),
+    ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
     ("data/units/*.yaml", "engine.loadUnitYaml"),
     ("data/buildings/*.yaml", "engine.loadBuildingYaml"),
     ("data/loot_tables/*.yaml", "engine.loadLootTableYaml"),

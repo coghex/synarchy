@@ -60,7 +60,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Chunk.Types
 import World.Flora.CropPlot (CropPlotOf(..))
 import World.Flora.Identity
@@ -273,7 +273,7 @@ minimalDef name = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | Hungry, carrying nothing, ample capacity. The hunger numbers are
 --   what put the forage rung above its own @forage_max_fraction@ gate;

@@ -143,7 +143,7 @@ testDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | Starting stamina and stance every fixture unit carries. Both are
 --   read back after the drain: a refusal must leave them EXACTLY here.

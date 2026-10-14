@@ -108,7 +108,7 @@ import Building.Knowledge (knownContainerIds)
 import Building.Knowledge.Live (containerObserver, revealContainerWith)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Flora.Types (emptyFloraChunkData)
@@ -189,7 +189,7 @@ minimalUnitDef = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 hutDef ∷ BuildingDef
 hutDef = BuildingDef

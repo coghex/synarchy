@@ -13,6 +13,7 @@ module Engine.Asset.YamlUnits
     , UnitYamlNaturalWeapon(..)
     , UnitYamlStrike(..)
     , UnitYamlNaturalResistance(..)
+    , UnitYamlPhysiology(..)
     , UnitYamlFile(..)
     , UnitYamlAssetDef(..)
     , loadUnitYaml
@@ -29,7 +30,9 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as Aeson (Parser)
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import Data.List (intercalate, nub)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList, loadYamlListOutcome)
@@ -336,6 +339,41 @@ instance FromJSON UnitYamlNaturalResistance where
         ⊛ v .:? "stab"  .!= 0.0
         ⊛ v .:? "blunt" .!= 0.0
 
+-- | A unit definition's @physiology:@ block (#2828), as authored: an
+--   optional @profile:@ naming a species fidelity tier, plus per-system
+--   entries (@thermo: simulated@) that override the profile for that
+--   system.
+--
+--   Everything stays TEXT here, ids and modes alike. This module has no
+--   registry access, so it cannot say whether @rich@ is a profile or
+--   @thermo@ a system; 'Unit.Physiology.resolveUnitPhysiology' judges
+--   both against the loaded registry at registration and refuses the
+--   whole file, naming the definition and the offending word. A
+--   non-string entry (@thermo: 5@) is kept as its rendered text so it
+--   reaches that same refusal as an invalid mode instead of an
+--   index-only Aeson error.
+data UnitYamlPhysiology = UnitYamlPhysiology
+    { uypProfile ∷ !(Maybe Text)
+    , uypSystems ∷ !(Map.Map Text Text)
+    } deriving (Show, Eq, Generic)
+
+instance FromJSON UnitYamlPhysiology where
+    parseJSON = withObject "UnitYamlPhysiology" $ \o → do
+        profile ← case KM.lookup (Key.fromText "profile") o of
+            Nothing → pure Nothing
+            Just (Aeson.String t) → pure (Just t)
+            Just other → fail ("physiology `profile` must be a name, got "
+                               ⧺ show other)
+        pure UnitYamlPhysiology
+            { uypProfile = profile
+            , uypSystems = Map.fromList
+                [ (Key.toText k, valueText val)
+                | (k, val) ← KM.toList o, Key.toText k ≢ "profile" ] }
+      where
+        valueText (Aeson.String t) = t
+        valueText other            =
+            TE.decodeUtf8Lenient (BL.toStrict (Aeson.encode other))
+
 -- | Only @name@ and @sprite@ are mandatory; everything else has defaults
 data UnitYamlDef = UnitYamlDef
     { uydName              ∷ !Text       -- ^ unique identifier (e.g. "acolyte")
@@ -420,6 +458,17 @@ data UnitYamlDef = UnitYamlDef
       --   'Engine.Scripting.Lua.API.Units.Yaml.registerUnitDefs', which
       --   refuses the WHOLE file on a duplicate, a malformed id, or an
       --   id the catalogue does not declare (D-30).
+    , uydBodyAuthored       ∷ !Bool
+      -- ^ whether the YAML wrote a @body:@ block at all (#2828). The
+      --   parser fills 'uydBody' with human-average defaults when it is
+      --   absent, which erases exactly the fact the @body@ capability
+      --   needs: that a definition DECLARED a body. This keeps it. An
+      --   explicit @body: {}@ counts as authored; an absent key or a
+      --   @null@ does not.
+    , uydPhysiology         ∷ !(Maybe UnitYamlPhysiology)
+      -- ^ optional: the @physiology:@ block (#2828). @Nothing@ — the key
+      --   absent or @null@ — authors no species defaults, and every
+      --   system the definition can have resolves to Nominal.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlDef where
@@ -449,6 +498,19 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "natural_weapon"
         ⊛ v .:? "modifiers"           .!= []
         ⊛ v .:? "faction_tags"        .!= []
+        ⊛ pure (bodyAuthored v)
+        ⊛ v .:? "physiology"
+
+-- | Did the YAML write a @body:@ block? Decided by a direct 'KM.lookup'
+--   for the reason 'requireMaxSpeed' gives: @.:?@ would report an
+--   explicit @null@ as absent too, which is the right answer here (a
+--   @body:@ with nothing under it declares no body), but a lookup says
+--   so on the face of it.
+bodyAuthored ∷ Aeson.Object → Bool
+bodyAuthored v = case KM.lookup (Key.fromText "body") v of
+    Nothing         → False
+    Just Aeson.Null → False
+    Just _          → True
 
 -- | Read a unit def's optional @max_speed@ as a FINITE, STRICTLY
 --   POSITIVE number of tiles per second, diagnosing every rejection by

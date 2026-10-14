@@ -150,7 +150,7 @@ occupantDef = UnitDef
     , udStartingAccessories = []
     , udBodyParts = []
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 occupantDefName ∷ Text
 occupantDefName = "solidification_dummy"

@@ -128,6 +128,7 @@ the affected fields as unclassified.
 | `lootTableRegistryRef` | global | Rebuild | `data/*.yaml` loot content | see §9 | none yet |
 | `lootProfileRegistryRef` | global | Rebuild | `data/loot_profiles/*.yaml` | see §9 | hspec `--match "Loot profiles"` |
 | `factionCatalogueRef` | global | Rebuild | `data/factions/*.yaml` | see §9 | hspec `--match "Faction tag catalogue"` |
+| `physiologyRegistryRef` | global | Rebuild | `data/physiology/*.yaml` | see §9 | hspec `--match "Unit.Physiology"` |
 | `tutorialRegistryRef` | global | Rebuild | `data/tutorials/*.yaml` | see §9 | hspec `--match "Tutorial definitions"` |
 | `eventStoreRef` | global | Exclude | — | player-event ring buffer plus its session mutation-sequence counter (#1714), explicitly session-only | `tools/injury_log_probe.py` (stream behavior) |
 | `notificationCfgRef` | global | Exclude | — | local runtime config (`config/notifications.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
@@ -590,7 +591,8 @@ definition a persisted instance refers to fails loading per contract §4.
 
 | Registry | Owner | Scope | Classification | Restoration dependency (Loader) | Validation | Test oracle |
 |---|---|---|---|---|---|---|
-| `UnitDef` (via `UnitManager.umDefs`) | `src/Unit/Types.hs:357` | global | Rebuild | `src/Engine/Asset/YamlUnits.hs` | none beyond type-correctness | `tools/role_probe.py` and others (content behavior, not persistence) |
+| `UnitDef` (via `UnitManager.umDefs`) | `src/Unit/Types.hs:357` | global | Rebuild | `src/Engine/Asset/YamlUnits.hs` | none beyond type-correctness; since #2828 registration also validates `udPhysiology` (the authored `body:` capability and the `physiology:` block's profile and per-system defaults, resolved against `physiologyRegistryRef`) and refuses owned, derived or meter names in stat/skill templates. `udPhysiology` is Rebuild content re-derived from the YAML on every boot: `UnitDef` derives no `Serialize`, and no snapshot, DTO or save byte carries it | `tools/role_probe.py` and others (content behavior, not persistence); hspec `--match "Unit.Physiology"` |
+| `PhysiologyRegistry` (via `physiologyRegistryRef`) and its species profiles | `src/Unit/Physiology/Types.hs` | global | Rebuild | `src/Engine/Asset/YamlPhysiology.hs` | whole-file refusal (#2828): duplicate or unknown ids, keys, capabilities, constants, rules and substitutes, incomplete interface entries and profiles; a decoded but unusable registry registers nothing | hspec `--match "Unit.Physiology"` |
 | `BuildingDef` (via `BuildingManager.bmDefs`) | `src/Building/Types.hs:47` | global | Rebuild | `src/Engine/Asset/YamlBuildings.hs` | none beyond type-correctness | `tools/construction_probe.py` |
 | `ItemDef` / `ItemManager.imDefs` | `src/Item/Types.hs:136`, `:372` | global | Rebuild | `src/Engine/Asset/YamlItems.hs` | none beyond type-correctness | `tools/item_instance_probe.py` |
 | `EquipmentClassManager.ecmDefs` | `src/Equipment/Types.hs:43` | global | Rebuild | `src/Engine/Asset/YamlEquipment.hs` | none beyond type-correctness for the registry itself, but since #2307 it is the SCHEMA a saved equipment map is reconciled against at staging: `World.Load.Stage.stageSession` reads it (with `ItemManager`) exactly once per load attempt, never per page, so one save's pages cannot be reconciled against different slot schemas — see `umInstances` in §5 for what the reconciliation does. | `tools/repair_item_probe.py`; hspec `--match "saved equipment slot reconciliation"` |

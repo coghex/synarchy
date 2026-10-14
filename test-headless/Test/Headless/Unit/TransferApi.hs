@@ -62,7 +62,7 @@ import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..)
     , UnitInstance(..), UnitManager(..), defaultNaturalResistance
-    , emptyUnitManager )
+    , emptyUnitManager , noUnitPhysiology)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldManager(..), emptyWorldState, emptyWorldManager)
 
@@ -128,7 +128,7 @@ minimalDef name display = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 -- | A live unit at @(gx, gy)@ of the given faction, with a
 --   @carrying_capacity@ stat, loose @inv@ and worn @worn@.

@@ -50,7 +50,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
-    , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+    , UnitManager(..), defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Cursor.Types (CursorState(..))
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
@@ -130,7 +130,7 @@ minimalDef name = UnitDef
             , bpLayers = [], bpTargetable = True, bpDepth = 0.0
             , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
     , udNaturalResistance = defaultNaturalResistance
-    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [] }
+    , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
 mkUnit ∷ WorldPageId → (Float, Float) → [ItemInstance]
        → HM.HashMap Text ItemInstance → UnitInstance

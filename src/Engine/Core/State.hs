@@ -73,6 +73,7 @@ import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
 import LootProfile.Types (LootProfileRegistry)
 import Unit.Faction.Catalogue (FactionCatalogue)
+import Unit.Physiology.Types (PhysiologyRegistry)
 import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible
@@ -711,6 +712,19 @@ data EngineEnv = EngineEnv
     --   FTS-3 and later. Declaring a tag does NOT close the namespace:
     --   runtime systems still mint valid tags nobody declared, and
     --   those evaluate under the same precedence (D-12).
+  , physiologyRegistryRef ∷ IORef PhysiologyRegistry
+    -- ^ The physiology system registry loaded from
+    --   data/physiology/systems.yaml at boot (#2828, S2 of epic #2827):
+    --   each system's owned, derived and meter keys, healthy rules,
+    --   capability requirements, Nominal substitutes, constants and the
+    --   species profiles. Loaded BEFORE data/units, because unit
+    --   registration validates a definition's `physiology:` block and
+    --   its stat/skill templates against it and refuses to register with
+    --   no registry loaded. Populated by `engine.loadPhysiologyYaml`;
+    --   read through `engine.getPhysiologyRegistry` and the
+    --   `unit.*Physio*` read verbs. INACTIVE in S2: no production tick,
+    --   gameplay consumer or save path consults it. Rebuild content,
+    --   re-read from the data file on every boot.
   , tutorialRegistryRef ∷ IORef TutorialRegistry
     -- ^ The one active tutorial definition tree, loaded from
     --   data/tutorials/*.yaml at boot (#957). Pure authored data —

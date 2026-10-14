@@ -253,6 +253,7 @@ def bootstrap(port, fixture_path, fixture_mode=None):
         ("data/materials/*.yaml",  "engine.loadMaterialYaml"),
         ("data/flora/*.yaml",      "engine.loadFloraYaml"),
         ("data/factions/*.yaml", "engine.loadFactionYaml"),
+        ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
     ]:
         for path in sorted(glob.glob(pattern)):

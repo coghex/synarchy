@@ -75,6 +75,7 @@ import Location.Types (emptyLocationRegistry)
 import LootTable.Types (emptyLootTableRegistry)
 import LootProfile.Types (emptyLootProfileRegistry)
 import Unit.Faction.Catalogue (emptyFactionCatalogue)
+import Unit.Physiology.Types (emptyPhysiologyRegistry)
 import Tutorial.Types (emptyTutorialRegistry)
 import World.Types (emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
@@ -514,6 +515,7 @@ initializeEngineWith logBackend = do
   lootTableRegistryRef ← newIORef emptyLootTableRegistry
   lootProfileRegistryRef ← newIORef emptyLootProfileRegistry
   factionCatalogueRef ← newIORef emptyFactionCatalogue
+  physiologyRegistryRef ← newIORef emptyPhysiologyRegistry
   tutorialRegistryRef ← newIORef emptyTutorialRegistry
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/) and allocate the ring buffer.
@@ -630,6 +632,7 @@ initializeEngineWith logBackend = do
         , lootTableRegistryRef = lootTableRegistryRef
         , lootProfileRegistryRef = lootProfileRegistryRef
         , factionCatalogueRef = factionCatalogueRef
+        , physiologyRegistryRef = physiologyRegistryRef
         , tutorialRegistryRef = tutorialRegistryRef
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef

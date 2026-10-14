@@ -60,7 +60,7 @@ import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
-    , defaultNaturalResistance, emptyUnitManager )
+    , defaultNaturalResistance, emptyUnitManager , noUnitPhysiology)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), emptyWorldState, emptyWorldManager )
@@ -127,6 +127,7 @@ minimalUnitDef = UnitDef
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = []
     , udFactionTags = []
+    , udPhysiology = noUnitPhysiology
     }
 
 -- | Distinctive quality/condition so a survivor can be told apart from
