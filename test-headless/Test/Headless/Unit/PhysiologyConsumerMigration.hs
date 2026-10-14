@@ -678,6 +678,65 @@ woundSpec = describe "the wound tick (Haskell consumers)" $ do
         -- active + Nominal: healthy values, so it behaves as the fed unit
         woundHeal nominalSick `shouldSatisfy` (\h → abs (h - woundHeal fullyFed) < 1e-6)
 
+    it "never reads an activated invariant violation as healthy or absent: \
+       \a Simulated pool with no stored value, or a healthy-rule input that \
+       \is absent or not positive, returns the unit untouched with the \
+       \violation, while the same unit inactive ticks normally" $ do
+        reg ← readShippedPhysiologyRegistry
+        let active = reg { prModesActive = True }
+            simulatedNutrition = woundDef { udPhysiology =
+                UnitPhysiology True Nothing
+                    (HM.fromList [("nutrition", PhysioSimulated)]) }
+            nominalHydration = woundDef { udPhysiology =
+                UnitPhysiology True Nothing
+                    (HM.fromList [("hydration", PhysioNominal)]) }
+            run r d st =
+                let u = woundedUnit (HM.fromList st)
+                    (i, o, _) = tickOneUnitWith r 1000 d 1 emptyInfectionManager
+                                    Nothing (Random.mkStdGen 1) u False
+                in (observe i ≡ observe u, outcomeText o)
+            violation (untouched, o) =
+                untouched ∧ "invariant " `T.isPrefixOf` o
+        -- a Simulated pool with no stored value
+        violation (run active simulatedNutrition
+            (unset "calories" healthyWound)) `shouldBe` True
+        -- a healthy-rule input absent, then zero
+        violation (run active nominalHydration
+            (unset "max_hydration" healthyWound)) `shouldBe` True
+        violation (run active nominalHydration
+            (set "max_hydration" 0 healthyWound)) `shouldBe` True
+        -- the same units inactive tick as before: no violation
+        forM_ [ (simulatedNutrition, unset "calories" healthyWound)
+              , (nominalHydration, unset "max_hydration" healthyWound) ] $
+            \(d, st) → violation (run reg d st) `shouldBe` False
+        -- and a valid active unit is not a violation
+        violation (run active simulatedNutrition healthyWound) `shouldBe` False
+
+    it "reads a pool against its EFFECTIVE capacity once activated, so a \
+       \capacity modifier cannot make a healthy pool look depleted" $ do
+        reg ← readShippedPhysiologyRegistry
+        let active = reg { prModesActive = True }
+            shrink k delta = HM.singleton k [StatModifier delta "test" Nothing 0]
+            -- Nominal pools: healthy = effective capacity, so fraction 1.0
+            healthyUnder d capKey capVal delta u0 =
+                let st = HM.fromList (set capKey capVal healthyWound)
+                in tickedWith active d (u0 st) { uiModifiers = shrink capKey delta }
+            plain d capKey capVal u0 =
+                tickedWith active d (u0 (HM.fromList (set capKey capVal healthyWound)))
+            close a b = abs (a - b) < 2e-6
+        -- blood recovery: stored max_hydration 100, effective 20
+        let withMod = healthyUnder nominalWound "max_hydration" 100 (-80) unwoundedUnit
+            bare    = plain nominalWound "max_hydration" 20 unwoundedUnit
+        (close (uiBlood withMod) (uiBlood bare)) `shouldBe` True
+        -- healing: stored max_calories 2000, effective 400
+        let healMod = healthyUnder nominalWound "max_calories" 2000 (-1600) woundedUnit
+            healBare = plain nominalWound "max_calories" 400 woundedUnit
+        woundHeal (firstWound healMod) `shouldSatisfy`
+            (\h → abs (h - woundHeal (firstWound healBare)) < 1e-6)
+  where
+    nominalWound = woundDef { udPhysiology = nominalPhysiology }
+
+
 tickedWith ∷ PhysiologyRegistry → UnitDef → UnitInstance → UnitInstance
 tickedWith reg d u =
     let (i, _, _) = tickOneUnitWith reg 1000 d 1 emptyInfectionManager
@@ -693,6 +752,7 @@ outcomeText ∷ WoundTickOutcome → Text
 outcomeText NoChange = "no change"
 outcomeText (UnconsciousNow p) = "unconscious " <> p
 outcomeText (DiedNow p c) = "died " <> p <> " " <> c
+outcomeText (PhysioInvariant w) = "invariant " <> w
 
 -- | The wound tick's observable result.
 observe ∷ UnitInstance → (Float, [(Float, Float, Float)], Double)

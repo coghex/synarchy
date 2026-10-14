@@ -2075,7 +2075,9 @@ resolver would yield; `Unit.Physiology.physioConsumerView` returns the
 stored stats map unchanged; and `scripts/physiology.lua` (`get`, `getBase`,
 `fraction`, `credit`, `debit`) reproduces the old semantics. The wound tick
 (`Healing.hs`, `Wounds/Tick.hs`) reads `calories`, `hydration` and
-`core_temp` through `physioConsumerView` via `tickOneUnitWith`. Gameplay
+`core_temp` (and their maxima, resolved effectively once active) through
+`physioConsumerView` via `tickOneUnitWith`; an activated invariant violation
+returns the unit untouched as `PhysioInvariant` instead of a guessed pool. Gameplay
 code reads a registry-owned key ONLY through that accessor and writes one
 across systems ONLY through `debit` / `credit`; `tools/physiology_access_audit.py`
 (with `--self-test`, in `static-audits`) enforces it, with the survival

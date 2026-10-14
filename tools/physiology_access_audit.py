@@ -147,8 +147,16 @@ class SiteException:
 
 @dataclass(frozen=True)
 class HelperException:
+    """A generic helper whose literal-key call sites stay allowed. It
+    applies only while EVERY definition of the helper is exactly the
+    authorized one: `sites` raw accesses, all in `file`, all `verb` reads
+    -- so a mutation or another verb added to the helper, or a further
+    read, voids the exception -- and only for the pool `keys`."""
     file: str
     helper: str
+    verb: str
+    sites: int
+    keys: frozenset[str]
     why: str
 
 
@@ -171,6 +179,7 @@ UI_EXCEPTIONS: tuple[SiteException, ...] = (
 )
 UI_HELPER_EXCEPTIONS: tuple[HelperException, ...] = (
     HelperException("scripts/unit_info_v2_stat_defs.lua", "fmtCurMax",
+                    "stats.get", 2, frozenset({"hydration", "hunger", "calories"}),
                     "generic cur/max pool display; S6 migrates it"),
 )
 
@@ -383,7 +392,6 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
         s["fallback"] |= a.fallback
 
     ui_used: dict[tuple[str, str, str, str], int] = defaultdict(int)
-    helper_files = {n: {h.path for h in hs} for n, hs in helpers.items()}
     for sk in sorted(sites, key=lambda k: (k[0], k[1], k[2])):
         a, kinds, fb = sites[sk]["acc"], sites[sk]["kinds"], sites[sk]["fallback"]
         if a.path == policy.facade or _owner_allows(policy, a.path, reg, a.key):
@@ -397,7 +405,11 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
             continue
         if a.via == "helper-call":
             name = a.verb.split(":", 1)[1]
-            if any(he.helper == name and helper_files.get(name, set()) == {he.file}
+            defs = helpers.get(name, [])
+            if any(he.helper == name and a.key in he.keys
+                   and len(defs) == he.sites
+                   and all(d.path == he.file and d.verb == he.verb
+                           and d.access == "read" for d in defs)
                    for he in policy.ui_helpers):
                 continue
         else:

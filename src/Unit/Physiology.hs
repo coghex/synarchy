@@ -62,6 +62,7 @@ module Unit.Physiology
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import Control.Monad (foldM)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Unit.Physiology.Types
@@ -356,16 +357,33 @@ physioModesActive = prModesActive
 --   read the consumer made before it was migrated. Active, each named key
 --   is replaced by its mode-aware EFFECTIVE value (a Nominal pool reads
 --   its healthy rule), and a key whose system is Unsupported is removed so
---   the consumer's absent-pool branch applies. A violated invariant
---   leaves the stored value as it was: a pure tick must not raise, and
---   the Lua verbs report the violation.
-physioConsumerView ∷ [Text] → PhysioContext → HM.HashMap Text Float
-physioConsumerView keys ctx
-    | not (physioModesActive (pcRegistry ctx)) = pcStats ctx
-    | otherwise = foldl' step (pcStats ctx) keys
+--   the consumer's absent-pool branch applies. @capacities@ are the
+--   unowned maxima those pools are read against: active, each present
+--   one is replaced by its EFFECTIVE value so a pool and its capacity
+--   agree on modifiers.
+--
+--   A violated invariant (a Simulated pool with no stored value, a
+--   healthy-rule input that is absent or not positive) is a 'Left' with
+--   the description, never a stored fallback: D-2 forbids reading it as
+--   healthy or absent, and the caller decides what an invariant violation
+--   means (the wound tick leaves the unit untouched and logs it).
+physioConsumerView ∷ [Text] → [Text] → PhysioContext
+                   → Either Text (HM.HashMap Text Float)
+physioConsumerView keys capacities ctx
+    | not (physioModesActive (pcRegistry ctx)) = Right (pcStats ctx)
+    | otherwise = do
+        owned ← foldM step (pcStats ctx) keys
+        pure (foldl' capacity owned capacities)
   where
     step acc k = case physioReadPure ReadEffective ctx k of
-        OutcomeValue _ v     → HM.insert k v acc
-        OutcomeUnsupported   → HM.delete k acc
-        OutcomeUnowned       → acc
-        OutcomeInvariant _   → acc
+        OutcomeValue _ v     → Right (HM.insert k v acc)
+        OutcomeUnsupported   → Right (HM.delete k acc)
+        OutcomeUnowned       → Right acc
+        OutcomeInvariant why → Left why
+    -- A capacity (@max_calories@, @max_hydration@) is an UNOWNED input,
+    -- but a pool's effective value is read against ITS effective
+    -- capacity: the Lua facade divides by @get(maxKey)@, which applies
+    -- the key's modifiers, so the view must too.
+    capacity acc k = case storedValue ReadEffective ctx k of
+        Just v  → HM.insert k v acc
+        Nothing → acc

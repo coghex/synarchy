@@ -229,6 +229,35 @@ def case_ui_exception_is_exact():
                   .replace('return h', 'local s = unit.getStat(uid, "salt_conc")\n  return h')})
 
 
+def case_ui_helper_exception_is_exactly_the_authorized_reads():
+    base = BASE["scripts/unit_info_v2_stat_defs.lua"]
+    anchor = "  return stats.get(uid, curName), stats.get(uid, maxName)\n"
+    assert anchor in base
+    # A mutation added to the helper voids it: every call site is flagged.
+    expect("helper write", "through fmtCurMax()",
+           files={"scripts/unit_info_v2_stat_defs.lua":
+                  base.replace(anchor, "  unit.setStat(uid, curName, 0)\n" + anchor)})
+    # So does another verb ...
+    expect("helper getStatBase", "through fmtCurMax()",
+           files={"scripts/unit_info_v2_stat_defs.lua":
+                  base.replace(anchor, "  local b = unit.getStatBase(uid, curName)\n" + anchor)})
+    # ... or a further raw read.
+    expect("helper extra read", "through fmtCurMax()",
+           files={"scripts/unit_info_v2_stat_defs.lua":
+                  base.replace(anchor, "  local c = stats.get(uid, curName)\n" + anchor)})
+    # A new call reading a key outside the authorized pool keys is flagged.
+    expect("helper new key", "raw read of derived key 'salt_conc'",
+           files={"scripts/unit_info_v2_status.lua":
+                  BASE["scripts/unit_info_v2_status.lua"] +
+                  'local y = fmtCurMax(1, "salt_conc", "max_salt")\n'})
+    expect("helper meter key", "raw read of meter key 'hypothermia'",
+           files={"scripts/unit_info_v2_status.lua":
+                  BASE["scripts/unit_info_v2_status.lua"] +
+                  'local y = fmtCurMax(1, "hypothermia", "max_x")\n'})
+    # The authorized calls stay clean (the baseline).
+    expect_clean("helper authorized")
+
+
 def case_ui_exception_survives_line_shift_without_admitting_lowFrac():
     base = BASE["scripts/unit_info_v2_stat_defs.lua"]
     shifted = "-- shifted\n" * 40 + base
