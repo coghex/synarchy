@@ -275,8 +275,9 @@ end
 -- so running it on a unit whose integrator carries a modifier folds that
 -- modifier into the stored base even at dt 0. A physiology transition or a
 -- load refreshes caches; it must not change durable state without elapsed
--- time. A unit that has never ticked (no mood yet) gets the first-tick
--- seeding from brain.tick instead, so its state_of_mind is left alone.
+-- time. A unit that has never ticked has no mood yet: its state_of_mind is
+-- computed from the mood brain.tick WOULD seed (the target, with no drift),
+-- but that mood is not stored here.
 function brain.refresh(uid)
     local consciousness = computeConsciousness(uid)
     unit.setStat(uid, "consciousness", consciousness)
@@ -288,11 +289,14 @@ function brain.refresh(uid)
                  computeConcentration(consciousness, pain, staminaFrac, caffeine))
 
     local mood = unit.getStat(uid, "mood")
-    if mood ~= nil then
-        local emotionalPain = unit.getStat(uid, "emotional_pain") or 0.0
-        unit.setStat(uid, "state_of_mind",
-                     computeStateOfMind(consciousness, mood, emotionalPain))
+    if mood == nil then
+        mood = driftMood(uid, 0, consciousness, pain,
+                         fracOf(uid, "hunger", "max_hunger"), staminaFrac,
+                         awareness(uid))
     end
+    local emotionalPain = unit.getStat(uid, "emotional_pain") or 0.0
+    unit.setStat(uid, "state_of_mind",
+                 computeStateOfMind(consciousness, mood, emotionalPain))
 end
 
 function brain.consciousness(uid)

@@ -265,10 +265,13 @@ end
 -- and wrote no value (an unchanged pin, a clear with nothing to clear) is
 -- not an event: it resets nothing, runs no hook and refreshes nothing.
 local function finish(uid, system, changed, from, to, values)
+    -- The keys the caller actually wrote. An empty table writes none, so it is
+    -- no value write at all.
     local written = nil
     if values ~= nil then
         written = {}
         for key in pairs(values) do written[#written + 1] = key end
+        if #written == 0 then written = nil end
     end
     if not changed and written == nil then return end
     resetTransientState(uid, system, changed and physiology.ownedKeys(system) or written)

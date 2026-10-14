@@ -442,6 +442,30 @@ hooks = describe "change hooks and transient state" $ do
                 luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v →
                     v `shouldSatisfy` (< 0.7)
 
+    it "rebuilds state_of_mind even for a unit that has never ticked (no mood yet), without storing a mood" $ do
+        -- through a value write ...
+        withScene [acolyte] $ \(_, ls) → do
+            luaText ls "return tostring(unit.getStat(1, 'mood'))" `shouldReturn` "nil"
+            _ ← setModeWith ls 1 "thermo" "simulated" "{ core_temp = 41 }"
+            luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v → v `shouldSatisfy` (< 0.6)
+            luaText ls "return tostring(unit.getStat(1, 'mood'))" `shouldReturn` "nil"
+        -- ... and through a load of a stale cache
+        withScene [acolyte { usStats = [ ("core_temp", 41), ("state_of_mind", 1.0)
+                                       , ("consciousness", 1.0) ] }] $ \(_, ls) → do
+            _ ← luaText ls "__resources.onSaveLoaded({ 1 }, {}); return true"
+            luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v → v `shouldSatisfy` (< 0.6)
+            luaText ls "return tostring(unit.getStat(1, 'mood'))" `shouldReturn` "nil"
+
+    it "treats an EMPTY values table as no value write: nothing is reset" $ do
+        let finalLean calls = withScene [acolyte { usModes = [("salt", PhysioNominal)] }] $
+                \(_, ls) → do
+                    _ ← luaText ls $
+                        "for _ = 1, 600 do __resources.update(0.1); " <> calls <> " end; return true"
+                    luaNum ls "unit.getStatBase(1, 'lean_mass')"
+        control ← finalLean ""
+        noop ← finalLean "__physiology.setMode(1, 'nutrition', 'simulated', {})"
+        noop `shouldBe` control
+
     it "leaves another system's carry remainder alone, and an unchanged pin resets nothing" $ do
         let finalHydration pins = withScene [acolyte { usModes = [("salt", PhysioNominal)] }] $
                 \(_, ls) → do
