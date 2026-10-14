@@ -1,0 +1,83 @@
+# HLint 3.10. Default hints remain enabled; this pilot is advisory.
+# Keep these in sync with synarchy.cabal's common lang stanza.
+- arguments:
+  - -XGHC2024
+  - -XDefaultSignatures
+  - -XDuplicateRecordFields
+  - -XMagicHash
+  - -XNoMonomorphismRestriction
+  - -XNoImplicitPrelude
+  - -XNumDecimals
+  - -XOverloadedStrings
+  - -XPatternSynonyms
+  - -XQuantifiedConstraints
+  - -XRecordWildCards
+  - -XTypeFamilyDependencies
+  - -XUnicodeSyntax
+  - -XViewPatterns
+  - -XQuasiQuotes
+
+# Imported operators are invisible to HLint's per-module parser.
+# UPrelude plus its base-unicode-symbols 0.2.4.2 re-exports.
+- fixity: infixl 7 ⌃
+- fixity: infixl 5 ⌄
+- fixity: infixl 1 ⌦
+- fixity: infixl 1 ⌫
+- fixity: infixl 4 ⚟
+- fixity: infixl 4 ⚞
+- fixity: infixl 4 ⊚
+- fixity: infixr 5 ⊘
+- fixity: infixr 7 ⊙
+- fixity: infixl 7 ÷
+- fixity: infixl 7 ×, ⋅
+- fixity: infixl 6 −
+- fixity: infix 4 ∣
+- fixity: infix 4 ∤
+- fixity: infixl 1 ≫=
+- fixity: infixl 1 ≫
+- fixity: infixr 1 =≪
+- fixity: infixl 1 ↣
+- fixity: infixr 1 ↢
+- fixity: infixl 4 ⊛
+- fixity: infixr 9 ∘
+- fixity: infixr 2 ∨
+- fixity: infixr 3 ∧
+- fixity: infix  4 ≡
+- fixity: infix  4 ≢
+- fixity: infix  4 ≠
+- fixity: infix  4 ≤
+- fixity: infix  4 ≥
+- fixity: infix  4 ≮
+- fixity: infix  4 ≯
+- fixity: infix  4 ∈
+- fixity: infix  4 ∉
+- fixity: infixr 5 ⧺
+- fixity: infixl 9 ‼
+
+# Strict Text only: do not rewrite ByteString/Lazy Text pack or arbitrary pack.
+- warn: {name: Use tshow, lhs: Data.Text.pack (show x), rhs: tshow x}
+- warn: {name: Use tshow, lhs: Data.Text.pack ∘ show, rhs: tshow}
+# Preserve the implementation and the independent reference in its tests.
+- ignore: {name: Use tshow, within: [UPrelude.tshow, Test.Headless.UPrelude.spec]}
+
+# Preserve existing named uses, not whole modules. This records the pilot's
+# starting exceptions; it does not certify their resource/concurrency safety.
+- functions:
+  - name: unsafePerformIO
+    within:
+      - World.GeneratedLibrary.sharedPinStores
+      - World.Chunk.Residency.chunkGenerationCounter
+      - World.Page.GeneratedId.allocationCounter
+      - World.GeneratedLibrary.Publish.transientCounter
+      - World.GeneratedLibrary.Lock.processLibraryLock
+      - Test.Headless.Harness.Isolation.activeIsolatedRootRef
+      - Test.Headless.World.Save.Components.Assembly.countedDecode
+    message: Keep IO explicit; new unsafePerformIO bindings require a reviewed exception.
+  - name: [unsafeDupablePerformIO, unsafeInterleaveIO]
+    within: []
+    message: Keep IO explicit; no existing exceptions for these escape hatches.
+
+- modules:
+  - name: Debug.Trace
+    within: []
+    message: Use the engine logger for diagnostics; remove temporary traces.
