@@ -147,6 +147,19 @@ first read and never overwrites a present one. The salt reserve
 reserve, as a fresh spawn starts, and a stored value, including 0, is kept.
 The cases are `--match "salt reserve (#2761)"`'s `persistence` group.
 
+**Per-unit physiology intent (#2829).** A unit's explicit per-system
+physiology mode override (`uiPhysioOverrides`) is **Persist exactly**
+and rides the `units` component from v4. Its presence is the intent: an
+override equal to the species default is kept, and an absent one keeps
+following the current default. Every older `units` version, and every
+unit created before an S4 setter exists, yields an empty map. The
+species defaults, the system registry and the profiles are **Rebuild
+deterministically** from data. Saved physiology state that cannot be
+honoured rejects the load before staging (an override for a system the
+registry neither declares nor recognizes as retired or renamed; a
+non-finite stored value of a Simulated system); the cases are
+`--match "physiology override persistence"`.
+
 For every inventoried item, the inventory records: its **owner**
 (file:line of the record/module that holds it), its **scope** (global —
 one instance for the whole engine — or per-page), its **restoration
