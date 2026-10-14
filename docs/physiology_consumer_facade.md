@@ -80,17 +80,23 @@ systems.
 
 ### Haskell
 
-* `Unit.Physiology.physioConsumerView keys ctx` is the pure owned branch of
-  `physioRead` for code that already holds the unit instance inside an
-  atomic fold. Inactive it is `pcStats` unchanged; active it replaces each
-  named key with its mode-aware effective value and removes a key whose
-  system is Unsupported.
+* `Unit.Physiology.physioConsumerView keys capacities ctx` is the pure owned
+  branch of `physioRead` for code that already holds the unit instance
+  inside an atomic fold. Inactive it is `Right pcStats` unchanged; active it
+  replaces each named key with its mode-aware effective value, removes a key
+  whose system is Unsupported, and replaces each present `capacities` key
+  (`max_calories`, `max_hydration`) with its EFFECTIVE value so a pool and
+  its maximum agree on modifiers, as the Lua facade's `fraction` does. A
+  violated invariant (a Simulated pool with no stored value, a healthy-rule
+  input that is absent or not positive) is a `Left`, never a stored fallback.
 * `Combat.Wounds.Tick.tickOneUnitWith registry …` is `tickOneUnit` under an
   explicit registry (`tickOneUnit` passes the empty one). `tickAllWounds`
   reads the registry once per tick through the `content-registries`
   capability. The wound tick's three reads — `calories` (healing,
   blood-recovery nutrition), `hydration` (blood-recovery nutrition) and
-  `core_temp` (fever suppression) — go through the view. They remain
+  `core_temp` (fever suppression) — go through the view. A `Left` makes the
+  tick return the unit untouched as `PhysioInvariant` (logged by
+  `tickAllWounds`) rather than tick it on a guessed pool. They remain
   **base** reads while inactive; D-2's switch to effective reads is a
   behavior change only when a modifier targets these keys, and none does.
 
@@ -151,9 +157,11 @@ each key admitted **once**:
 
 * `scripts/unit_info_panel.lua`, `formatStatus`: the `hydration`, `hunger`
   and `calories` `unit.getStat` reads.
-* `scripts/unit_info_v2_stat_defs.lua`, `fmtCurMax`: the generic `stats.get`
-  pool reads, so its call sites with a literal registry key
-  (`unit_info_v2_status.lua`) are admitted through it.
+* `scripts/unit_info_v2_stat_defs.lua`, `fmtCurMax`: the two generic
+  `stats.get` pool reads. Its call sites are admitted only for the pool keys
+  `hydration`, `hunger` and `calories`, and only while the helper is exactly
+  those two `stats.get` reads: a mutation, another verb or a further read
+  added to it voids the exception and every call site is flagged.
 
 Migrated here and **not** excepted: both `salt_conc` reads in
 `unit_info_v2_status.lua`; `lowFrac` (hydration conditions, and stamina);
