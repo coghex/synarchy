@@ -145,8 +145,11 @@ Two further allowances, each named and bounded:
   (design F-7, D-7 "the `survivalExempt` branch goes away").
 * **Probe fixture writes.** `tools/physiology_probe.py` may `setStat`
   `calories`, `hunger` and `core_temp` as scenario fixtures (D-7 allows raw
-  `setStat` for debugging under Simulated). Reads in the probe are not
-  allowed. Storage-absence guards (`unit.getCalories`, `unit.feed` refusal)
+  `setStat` for debugging under Simulated), only from a straight-line
+  embedded chunk (no function, loop or branch, so never an aggregate or a
+  helper) inside `hunger_section` or `starvation_bands_section`. Reads in the
+  probe are not allowed; the numeric calorie observer reads through
+  `unit.readPhysio`. Storage-absence guards (`unit.getCalories`, `unit.feed` refusal)
   keep their calls. S4 and S7 own their Nominal reinterpretation.
 
 ## 5. The temporary UI exception (S5 → S6)
