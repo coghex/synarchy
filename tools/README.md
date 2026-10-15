@@ -3952,9 +3952,10 @@ count), and the tool exits 0 on every outcome and on its own runtime errors;
 * **Missing data is named.** A leg whose step never started, was cancelled
   or timed out shows an unavailable or "at least" figure, a footer-less log
   shows the count as unavailable (never zero), a missing slow-item list is
-  said to be missing, and a lane that did not return, or whose run printed no
-  Hspec footer (a crash or kill before the summary), keeps its measured
-  duration but is never judged against its budget.
+  said to be missing, and a lane that did not return, or whose Hspec output is cut
+  off (no footer, or no slow-item list under it: a crash or kill before or
+  between them), keeps its measured duration and any count it printed but
+  is never judged against its budget.
 * **When a lane goes over.** Read the summary's slowest items first. Then
   either **rebalance the lanes** (move statements between lanes in
   `test-headless/Spec.hs`, #2744's registration, and re-measure with

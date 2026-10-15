@@ -49,9 +49,11 @@ A leg whose step never started, was cancelled or timed out reports a
 partial or unavailable figure by name. It never invents a zero count, a
 zero duration or a passing budget status, and a missing slow-item list
 is reported as missing, not as an empty list. A budget verdict needs the
-step to have returned AND Hspec's footer to be in the log: a run that
-crashed or was killed before its summary keeps its measured duration but is
-never judged, favourably or not.
+step to have returned AND Hspec's footer AND a non-empty slow-item list to
+be in the log (Hspec prints the list header only with items, straight after
+the footer): a run that crashed or was killed before or between them keeps
+its measured duration and whatever count it printed but is never judged,
+favourably or not.
 
 Budgets
 -------
@@ -203,11 +205,11 @@ def assess(record: LaneRecord, budgets: dict[str, int],
     """Judge the lane's step time against its budget.
 
     A budget verdict needs complete evidence: the step returned AND Hspec
-    printed its footer. A `failure` outcome alone is not that -- the test
-    binary can crash or be killed before it prints one -- so a footer-less
-    log keeps the measured duration but is never given a favourable (or
-    any) budget status. An ordinary run with failing examples prints its
-    footer and is judged like any other.
+    printed its footer AND a non-empty slow-item list. A `failure` outcome
+    alone is not that -- the test binary can crash or be killed before it
+    prints either -- so such a log keeps the measured duration but is never
+    given a favourable (or any) budget status. An ordinary run with failing
+    examples prints both and is judged like any other.
     """
     budget = budgets.get(record.lane)
     if record.start_epoch is None:
