@@ -231,6 +231,23 @@ def _self_test() -> list[str]:
                 any("stale exemption" in p and command in p for p in problems),
                 f"a stale exemption for {command!r} should be reported, got "
                 f"{problems}")
+    # 7b. The lane job is not an audited set, but an exemption only it
+    #     runs is live (#2748); one nothing runs anywhere is still stale.
+    lane_only = "python3 tools/ci_lane_report.py"
+    lane_exempt = ((lane_only, "CI-only reporting."),)
+    _expect(failures,
+            audit_gate_sets({AUDITED_JOB: shared}, shared, lane_exempt,
+                            frozenset({lane_only})) == [],
+            "an exemption only the lane job runs is not stale")
+    _expect(failures,
+            any("stale exemption" in p for p in
+                audit_gate_sets({AUDITED_JOB: shared}, shared, lane_exempt)),
+            "an exemption nothing runs is stale without the lane job's set")
+    _expect(failures,
+            not any("run by" in p for p in audit_gate_sets(
+                {AUDITED_JOB: shared}, shared, (),
+                frozenset({lane_only}))),
+            "the lane job's commands are never compared with the local set")
     # 8. Every exemption states a reason.
     for command, reason in EXEMPT_COMMANDS:
         _expect(failures, bool(reason.strip()),

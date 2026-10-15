@@ -123,6 +123,7 @@ from ci_parity_config import (
     CABAL_QUIET_SUBCOMMANDS,
     EXEMPT_COMMANDS,
     IMAGE_JOB,
+    LANE_JOB,
     LOCAL_GATE_LABEL,
     LOCAL_GATE_PATH,
     PROBE_FORBIDDEN_PREREQUISITES,
@@ -233,7 +234,12 @@ def run_repository_audit() -> int:
         shell_text = LOCAL_GATE_PATH.read_text(encoding="utf-8")
         ci_job_commands = workflow_job_invocations(yaml_text)
         local_commands = local_gate_invocations(shell_text)
-        problems = audit_gate_sets(ci_job_commands, local_commands)
+        # The lane job is no audited gate set, but CI-only reporting
+        # lives there (#2748): its commands keep an exemption live.
+        lane_commands = workflow_invocations(
+            yaml_text, LANE_JOB, workflow_label(LANE_JOB))
+        problems = audit_gate_sets(ci_job_commands, local_commands,
+                                   lane_job_commands=lane_commands)
         # The gate SET agreeing is not enough for a check both files run
         # conditionally (#1360): they must also agree on the condition.
         problems.extend(

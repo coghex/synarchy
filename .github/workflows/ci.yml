@@ -802,6 +802,18 @@ jobs:
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: cabal build synarchy-test-headless -v0
 
+      # The lane's headless step time starts here (#2748): the clock for the
+      # advisory budget covers exactly the `Headless lane` step below --
+      # the lane's `cabal test` invocation, cabal's own wrapper included --
+      # and neither the cache restores nor the separate compile above it.
+      # It is a step of its own because that step's first line is pinned
+      # (tools/ci_parity_workflow.py). Skipped, like the lane, on the
+      # docs-only fast path and after any earlier failure, which is how
+      # the report below tells "never ran" from "ran".
+      - name: Mark headless lane start
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: date +%s > "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}.start"
+
       # Exactly this leg's lane, with the CI flags the single-process step
       # used: --print-slow-items=20 (#2277) and --format=failed-examples
       # (#1916) inside --test-options, --test-show-details=direct so the
@@ -841,15 +853,34 @@ jobs:
       # The `Headless active context` step below prints the file when this
       # one did not finish.
       - name: Headless lane
+        id: headless-lane
         if: steps.docs-fast-path.outputs.docs_only != 'true'
+        shell: bash
         run: |
           if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
             echo "worldgen gate fired: lane ${{ matrix.lane }} runs with the full tier (SYNARCHY_FULL_TESTS=1)."
-            SYNARCHY_FULL_TESTS=1 SYNARCHY_HEADLESS_PROGRESS_FILE="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+            SYNARCHY_FULL_TESTS=1 SYNARCHY_HEADLESS_PROGRESS_FILE="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples' 2>&1 | tee "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}.log"
           else
             echo "worldgen gate did not fire: full-tier examples stay pending."
-            SYNARCHY_HEADLESS_PROGRESS_FILE="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples'
+            SYNARCHY_HEADLESS_PROGRESS_FILE="$RUNNER_TEMP/headless-active-context-${{ matrix.lane }}.txt" cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--lane ${{ matrix.lane }} --print-slow-items=20 --format=failed-examples' 2>&1 | tee "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}.log"
           fi
+
+      # Each lane's headless step time, example count and twenty slowest
+      # items, against its advisory budget (#2748, CIR-18), in this job's
+      # run summary. ADVISORY ONLY: `always()` so a lane whose examples
+      # failed still reports its duration and count, `continue-on-error`
+      # so a reporting fault can never change this job's result, and the
+      # tool itself exits 0 on any runtime error. `Headless lane` above is
+      # what fails the job, exactly as before; `build-test` aggregates the
+      # same `headless-lanes` result it always did. The `tee` on the lane's
+      # command lines is the only way the log reaches this step, and
+      # `shell: bash` (pipefail) is what keeps a failing `cabal test`
+      # failing through it; the tool's --self-test runs this very step
+      # against a stub `cabal` to prove both.
+      - name: Report headless lane time
+        if: always() && steps.docs-fast-path.outputs.docs_only != 'true'
+        continue-on-error: true
+        run: python3 tools/ci_lane_report.py --lane ${{ matrix.lane }} --record "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}" --outcome "${{ steps.headless-lane.outcome }}" --github-summary "$GITHUB_STEP_SUMMARY"
 
       # A cancelled run (manual, or the job timeout above expiring) never
       # lets `Headless lane` return, and a log that ends at the last line
@@ -967,6 +998,7 @@ jobs:
           python3 tools/ci_cache_epoch.py --self-test
           python3 tools/ci_cache_cleanup.py --self-test
           python3 tools/ci_cache_report.py --self-test
+          python3 tools/ci_lane_report.py --self-test
 
       - name: Test audit
         run: python3 tools/test_audit.py
