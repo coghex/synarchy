@@ -7,13 +7,12 @@
 # value it PROVIDES, contribution it CONTRIBUTES and effect it has, each
 # with the substitute a dependent sees while the system is Nominal.
 #
-# The mode-aware answer is inactive until S4 (#2830, S5): the gameplay
-# consumers read this registry through scripts/physiology.lua and the wound
-# tick's physioConsumerView, but PhysiologyRegistry.prModesActive is false
-# for every loaded registry, so they all still see stored values. The five
-# unit.*Physio* read verbs and engine.getPhysiologyRegistry read it
-# directly. Species defaults are assigned per unit definition (a
-# `physiology:` block) in S4/S7, not here.
+# The mode-aware answer is ACTIVE since S4 (#2831): the gameplay consumers read
+# this registry through scripts/physiology.lua and the wound tick's
+# physioConsumerView, a Nominal system reads its healthy values, and a unit's
+# systems run in the mode its species profile (a `physiology:` block in
+# data/units/*.yaml, D-10) or a per-unit override chooses. The five
+# unit.*Physio* read verbs and engine.getPhysiologyRegistry read it directly.
 #
 # Healthy rules:  { const: <value|CONSTANT> }
 #                 { from: <stat>, scale: <value|CONSTANT | [..]> }
@@ -21,13 +20,15 @@
 # system owns. `scale:` factors multiply.
 #
 # Substitutes:    { value: <value|CONSTANT> } | none | virtual_meal
-#                 | tissue_recovery   (the last two are executed in S4;
-#                 here they are declarations.)
+#                 | tissue_recovery   (the last two are executed by S4:
+#                 scripts/salts.lua's virtual meal and
+#                 scripts/unit_resource_upkeep.lua.)
 
 # Authoritative home of the constants the healthy rules need. The Lua
 # modules still carry their own copies (scripts/salts.lua SALT_PER_KG and
-# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) until S4 migrates the
-# owners; Test.Headless.Unit.Physiology fails if the copies drift.
+# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) because the system owners
+# compute with them every tick; Test.Headless.Unit.Physiology fails if the
+# copies drift.
 constants:
   SALT_PER_KG: 1.0
   # #2761's reserve capacity, as a multiple of max_salt.

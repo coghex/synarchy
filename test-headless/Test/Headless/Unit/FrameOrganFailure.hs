@@ -50,6 +50,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
+import Test.Headless.Unit.PhysiologyFixture (ensurePhysiologyRegistry, nutritionOnlyPhysiology)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -190,13 +191,25 @@ mkUnit defName stats = UnitInstance
     , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
     }
 
+-- | A Simulated nutrition owns @hunger@ and @calories@ (#2831): a unit that
+--   was never ticked still holds them, FED, which is also what "fed and
+--   above its own floor" has always meant. Fixture values win over these.
+fedNutrition ∷ HM.HashMap Text Float
+fedNutrition = HM.fromList
+    [ ("hunger", 700), ("max_hunger", 700), ("calories", 1400), ("max_calories", 1400) ]
+
 -- | Install a one-unit scene under an arbitrary shipped def name.
 resetSceneAs ∷ EngineEnv → Text → HM.HashMap Text Float → IO ()
 resetSceneAs env defName stats = do
+    ensurePhysiologyRegistry env
     writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton defName (minimalDef defName defName)
-        , umInstances = HM.singleton acolyteUid (mkUnit defName stats) }
+        -- nutrition Simulated (#2831): the fat-floor organ failure is
+        -- nutrition's effect, which only a Simulated nutrition has.
+        { umDefs = HM.singleton defName
+            ((minimalDef defName defName) { udPhysiology = nutritionOnlyPhysiology })
+        , umInstances = HM.singleton acolyteUid
+            (mkUnit defName (HM.union stats fedNutrition)) }
 
 resetScene ∷ EngineEnv → HM.HashMap Text Float → IO ()
 resetScene env = resetSceneAs env "acolyte"

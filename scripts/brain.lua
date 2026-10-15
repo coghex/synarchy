@@ -268,6 +268,37 @@ function brain.tick(uid, dt)
                  computeStateOfMind(consciousness, mood, emotionalPain))
 end
 
+-- Recompute ONLY the caches that read physiology (#2831): consciousness,
+-- concentration and the unified state_of_mind. The durable integrators
+-- (mood, emotional_pain, caffeine) are read, never written: brain.tick
+-- stores what it reads through `unit.getStat`, which is the EFFECTIVE value,
+-- so running it on a unit whose integrator carries a modifier folds that
+-- modifier into the stored base even at dt 0. A physiology transition or a
+-- load refreshes caches; it must not change durable state without elapsed
+-- time. A unit that has never ticked has no mood yet: its state_of_mind is
+-- computed from the mood brain.tick WOULD seed (the target, with no drift),
+-- but that mood is not stored here.
+function brain.refresh(uid)
+    local consciousness = computeConsciousness(uid)
+    unit.setStat(uid, "consciousness", consciousness)
+
+    local pain         = painFrac(uid)
+    local staminaFrac  = fracOf(uid, "stamina", "max_stamina")
+    local caffeine     = unit.getStat(uid, "caffeine") or 0.0
+    unit.setStat(uid, "concentration",
+                 computeConcentration(consciousness, pain, staminaFrac, caffeine))
+
+    local mood = unit.getStat(uid, "mood")
+    if mood == nil then
+        mood = driftMood(uid, 0, consciousness, pain,
+                         fracOf(uid, "hunger", "max_hunger"), staminaFrac,
+                         awareness(uid))
+    end
+    local emotionalPain = unit.getStat(uid, "emotional_pain") or 0.0
+    unit.setStat(uid, "state_of_mind",
+                 computeStateOfMind(consciousness, mood, emotionalPain))
+end
+
 function brain.consciousness(uid)
     return unit.getStat(uid, "consciousness") or 1.0
 end

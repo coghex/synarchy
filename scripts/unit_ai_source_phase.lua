@@ -158,4 +158,15 @@ end
 -- Exposed so a gate can restate the bound instead of hard-coding it.
 M.BUDGET = BUDGET
 
+-- A hydration mode change ends the sequence (#2831, D-5): the thirst it
+-- served, or the pool it was filling, just stopped being the unit's. It
+-- abandons rather than clears, like the preemption exit, because the change
+-- can land between two pose steps. Registered by id, so a reloaded script
+-- replaces its hook instead of stacking another.
+require("scripts.physiology").onModeChanged("drink_from_source", "hydration",
+    function(uid, _system, _from, _to)
+        local s = require("scripts.unit_ai").getState(uid)
+        if s and M.active(s) then M.abandon(uid, s) end
+    end)
+
 return M

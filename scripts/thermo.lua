@@ -8,8 +8,10 @@
 -- functions here) kill the unit, with a survival window so it can be rescued
 -- by getting it to better conditions.
 --
--- core_temp lives as a unit STAT ("core_temp", °C), so it saves with the unit
--- and shows in the Status panel. Ticked from unit_resources.update.
+-- core_temp lives as a unit STAT ("core_temp", °C) while the thermo system is
+-- SIMULATED, so it saves with the unit and shows in the Status panel; a
+-- Nominal thermo stores nothing and reads the baseline (#2831). Ticked from
+-- unit_resources.update, only for a Simulated thermo.
 --
 -- Future layers (circulation, heart rate, blood oxygen, salts, brain effects,
 -- frostbite, fever feedback) read/extend core_temp — see the treatment-arc
@@ -123,13 +125,18 @@ function thermo.tick(uid, info, dt)
     local clim = world.getClimateAt(gx, gy)
     if not clim then return end   -- no active world → leave core_temp alone
 
-    local core = unit.getStat(uid, "core_temp")
-    if not core or core <= 0 then core = thermo.BASELINE end
+    -- Only a SIMULATED thermo ticks (scripts/unit_resources.lua gates it), so
+    -- its stored core is present by the seeding rule (#2831): a missing one
+    -- is an invariant violation that physiology.get raises, never a cue to
+    -- start from the baseline.
+    local core = physiology.get(uid, "core_temp")
+    if not core then return end
 
-    -- Circulation, recomputed each tick (vasoconstriction uses this core). Set
-    -- always — other systems (frostbite, display) read the stat.
+    -- Circulation for THIS tick's core (vasoconstriction uses it). The stat
+    -- itself is circulation.update's, run every tick before this one from the
+    -- effective core (always on, whatever the thermo mode); this is the same
+    -- pure computation, not a second writer.
     local circ = circulation.compute(uid, core)
-    unit.setStat(uid, "circulation", circ)
 
     -- Ambient is ELEVATION-CORRECTED: world.getAmbientAt applies the worldgen
     -- altitude lapse rate (the same one the ice system uses), so a unit on an

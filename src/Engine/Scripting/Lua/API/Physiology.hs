@@ -101,8 +101,7 @@ loadPhysiologyYamlFn core regs = do
 --   and no mutating entry point exists.
 --
 --   @{ source, constants = {NAME = number}, systemOrder = {id, ..},
---   retired = {id, ..}, modesActive = boolean (false until S4: the
---   consumer facade reads it), systems = {id = {id, requires, owns, derived,
+--   retired = {id, ..}, systems = {id = {id, requires, owns, derived,
 --   meters, provides, contributes, effects, renamedFrom}}, profiles = {id = {system = "nominal" |
 --   "simulated"}} }@. Healthy rules and substitutes are described by
 --   @kind@ (@"const"@ \/ @"from"@, @"value"@ \/ @"none"@ \/
@@ -129,7 +128,6 @@ pushRegistry reg = do
             field n (pushNum v)
     field "systemOrder" $ pushArray (map psId (prSystems reg)) pushText
     field "retired" (pushArray (prRetired reg) pushText)
-    field "modesActive" (Lua.pushboolean (prModesActive reg))
     field "systems" $ do
         Lua.newtable
         forM_ (prSystems reg) $ \s → field (psId s) (pushSystem reg s)

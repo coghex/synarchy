@@ -49,6 +49,9 @@ units:
       # 40%+, spring closer to 10%. Use 0.25 mean, wide range.
       bodyfat: { mean: 0.25, range: 0.30 } # 0.10..0.40
 
+    # Physiology profile (#2831, design D-10): hydration and nutrition Nominal; salt and thermo Simulated.
+    physiology: { profile: reduced }
+
     skills:
       # Weapon-class skill for natural attacks (claws/fangs).
       unarmed: { base: 60.0, range: 20.0 }

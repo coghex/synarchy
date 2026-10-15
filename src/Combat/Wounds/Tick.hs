@@ -555,7 +555,8 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
         in (propagateSevering def inst', outcome, genFinal)
   where
     -- The unit's stats as the wound tick's physiology reads see them
-    -- (#2830): @uiStats@ itself while the registry is inactive.
+    -- (#2830, #2831): a Nominal pool at its healthy value, an Unsupported
+    -- one absent, a Simulated one as stored.
     physioView = physioConsumerView
         ["calories", "hydration", "core_temp"]
         ["max_calories", "max_hydration"]

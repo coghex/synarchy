@@ -606,23 +606,27 @@ saltConcentrationSpec = describe "on-demand salt concentration (D-5a)" $ do
                       "salt_conc")
 
     it "raises an invariant error, not a clamped reading, for a Simulated \
-       \hydration pool that is zero, negative, NaN or infinite — the clamp \
-       \and effectiveStat must not hide an invalid dependency" $ \reg → do
+       \hydration pool that is negative, NaN or infinite, and reads a present \
+       \ZERO pool through the 0.05 clamp — the clamp and effectiveStat must \
+       \not hide an invalid dependency, and an empty pool is not one" $ \reg → do
         let sim = up PhysioSimulated PhysioSimulated
             at s mods = eff (mkCtx reg sim s mods 0) "salt_conc"
-        forM_ [0, -3, 0 / 0, 1 / 0, -1 / 0] $ \bad →
+        forM_ [-3, 0 / 0, 1 / 0, -1 / 0] $ \bad →
             at (HM.insert "hydration" bad stats) HM.empty
                 `shouldSatisfy` isInvariant
-        -- a positive modifier must not lift a zero or negative STORED
-        -- pool into a plausible effective one
-        forM_ [(0, 21), (-3, 24)] $ \(stored, lift) →
-            at (HM.insert "hydration" stored stats)
-               (HM.fromList [("hydration", [mkMod lift Nothing])])
-                `shouldSatisfy` isInvariant
-        -- a modifier that drives the EFFECTIVE pool to zero is judged too
-        at stats (HM.fromList [("hydration", [mkMod (-100) Nothing])])
+        -- a positive modifier must not lift a NEGATIVE stored pool into a
+        -- plausible effective one
+        at (HM.insert "hydration" (-3) stats)
+           (HM.fromList [("hydration", [mkMod 24 Nothing])])
             `shouldSatisfy` isInvariant
-        -- the lowest valid pool still reads, through the 0.05 clamp
+        -- an EMPTY pool is a valid reading (a dehydrated unit's): the
+        -- concentration is salt over the clamped 0.05 floor (#2831)
+        let empty = at (HM.insert "hydration" 0 stats) HM.empty
+        near (0.5 / 0.05) empty
+        -- a modifier that drives the EFFECTIVE pool to zero reads the same
+        near (0.5 / 0.05)
+            (at stats (HM.fromList [("hydration", [mkMod (-100) Nothing])]))
+        -- the lowest valid pools still read, through the 0.05 clamp
         near 10 (at (HM.insert "hydration" 0.001 stats) HM.empty)
         -- and the base read of the derived key judges it the same way
         base (mkCtx reg sim (HM.insert "hydration" (1 / 0) stats) HM.empty 0)

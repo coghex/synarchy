@@ -4,15 +4,11 @@
 --   the physiology stat-modes epic #2827; design
 --   @docs\/designs\/physiology_stat_modes_design.md@ D-1, D-2, D-3, D-5a).
 --
---   __This module is inactive in production.__ S5 (#2830) routed the
---   gameplay consumers through it, and 'prModesActive' is the inactive
---   compatibility boundary they all share: while it is 'False' (every
---   loaded registry, until S4) the mode-aware answer below is reachable
---   only from controlled tests, and every consumer read —
---   'physioConsumerView', @unit.readPhysio@ \/ @unit.readPhysioBase@, the
---   Lua facade — answers today's stored-stat semantics. 'physioReadPure'
---   itself stays mode-aware whatever the flag says: it is the pure
---   resolver, and the boundary is applied by its callers.
+--   __Active since S4 (#2831).__ Every gameplay consumer read — the Lua
+--   facade, @unit.readPhysio@ \/ @unit.readPhysioBase@, Haskell
+--   'physioRead', the wound tick's 'physioConsumerView' — answers the
+--   mode-aware contract below, and "Unit.Physiology.Transition" owns the
+--   transitions between modes.
 --
 --   __The read contract in one place__ (D-2, SD-19). A key is /owned/ when
 --   a registry system lists it as an owned key, a derived key or a
@@ -54,9 +50,14 @@ module Unit.Physiology
     , PhysioOutcome(..)
     , modeOf
     , physioReadPure
+    , evalHealthy
+    , storedValue
+    , checkedInput
+    , checkedPool
       -- * Consumer boundary
-    , physioModesActive
     , physioConsumerView
+      -- * Raw write gate
+    , rawWriteAllowed
     ) where
 
 import UPrelude
@@ -276,7 +277,22 @@ simulatedOwned kind ctx k = case storedValue kind ctx k of
 --   falls back to @body_mass or 70.0@, and a fallback is exactly how a
 --   bodyless unit passed for a 70 kg one.
 checkedInput ∷ Text → PhysioContext → Text → Either Text Float
-checkedInput missing ctx k = do
+checkedInput = checkedWith "positive" (≤ 0)
+
+-- | A stored POOL a rule reads as a numerator (the body-water pool behind
+--   @salt_conc@): present, finite and NON-NEGATIVE as stored and as
+--   effective. A present zero is a valid reading — a dehydrated unit's
+--   empty pool, which the concentration rule's @clamp 0.05 1@ exists to
+--   handle (S4, #2831: activation exposed it, because the pool really does
+--   reach zero) — while a negative, NaN or infinite pool, or an absent
+--   one, is still an invariant violation, and a positive modifier still
+--   cannot lift an invalid STORED pool into a plausible effective one.
+checkedPool ∷ Text → PhysioContext → Text → Either Text Float
+checkedPool = checkedWith "non-negative" (< 0)
+
+checkedWith ∷ Text → (Float → Bool) → Text → PhysioContext → Text
+            → Either Text Float
+checkedWith wanted invalid missing ctx k = do
     stored ← maybe (Left missing) Right (HM.lookup k (pcStats ctx))
     judge "stored" stored
     v ← maybe (Left missing) Right (storedValue ReadEffective ctx k)
@@ -287,8 +303,8 @@ checkedInput missing ctx k = do
         | isNaN x ∨ isInfinite x = Left $
             "input '" <> k <> "' is not finite (" <> which <> " "
             <> tshow x <> ")"
-        | x ≤ 0 = Left $
-            "input '" <> k <> "' is not positive (" <> which <> " "
+        | invalid x = Left $
+            "input '" <> k <> "' is not " <> wanted <> " (" <> which <> " "
             <> tshow x <> ")"
         | otherwise = Right ()
 
@@ -296,14 +312,15 @@ checkedInput missing ctx k = do
 capacity ∷ PhysioContext → Text → Either Text Float
 capacity ctx k = checkedInput ("input '" <> k <> "' is absent") ctx k
 
--- | A Simulated pool a DERIVED rule divides by (the body-water pool
---   behind @salt_conc@). Unlike a plain Simulated owned read, which
---   returns whatever is stored, a derived value built on a nonsensical
---   pool would be a wrong answer with no way to tell.
+-- | A Simulated pool a DERIVED rule reads (the body-water pool behind
+--   @salt_conc@). Unlike a plain Simulated owned read, which returns
+--   whatever is stored, a derived value built on a nonsensical pool would
+--   be a wrong answer with no way to tell: see 'checkedPool' for what
+--   counts as nonsensical.
 dependencyPool ∷ PhysioContext → Text → Either Text Float
 dependencyPool ctx k =
-    checkedInput ("Simulated owned key '" <> k <> "' has no stored value")
-                 ctx k
+    checkedPool ("Simulated owned key '" <> k <> "' has no stored value")
+                ctx k
 
 quantity ∷ PhysioContext → Quantity → Either Text Float
 quantity ctx q = case resolveQuantity (pcRegistry ctx) q of
@@ -342,22 +359,14 @@ saltConcentrationFor ctx = do
 
 -- * Consumer boundary (S5, #2830)
 
--- | Is the mode-aware read contract in force? 'False' until S4, whatever
---   the resolver would yield: the one switch every migrated consumer
---   shares, so S4 flips a flag instead of migrating callers again.
-physioModesActive ∷ PhysiologyRegistry → Bool
-physioModesActive = prModesActive
-
 -- | A unit's stats AS A PURE GAMEPLAY CONSUMER SEES THEM, for the named
 --   registry keys: the Haskell face of @physiology.get@, used by code that
 --   already holds the unit instance inside a single atomic fold (the wound
 --   tick) and so cannot run the IO 'physioRead'.
 --
---   Inactive, this is the stored map UNCHANGED — the identical baseline
---   read the consumer made before it was migrated. Active, each named key
---   is replaced by its mode-aware EFFECTIVE value (a Nominal pool reads
---   its healthy rule), and a key whose system is Unsupported is removed so
---   the consumer's absent-pool branch applies. @capacities@ are the
+--   Each named key is replaced by its mode-aware EFFECTIVE value (a
+--   Nominal pool reads its healthy rule), and a key whose system is
+--   Unsupported is removed so the consumer's absent-pool branch applies. @capacities@ are the
 --   unowned maxima those pools are read against: active, each present
 --   one is replaced by its EFFECTIVE value so a pool and its capacity
 --   agree on modifiers.
@@ -369,11 +378,9 @@ physioModesActive = prModesActive
 --   means (the wound tick leaves the unit untouched and logs it).
 physioConsumerView ∷ [Text] → [Text] → PhysioContext
                    → Either Text (HM.HashMap Text Float)
-physioConsumerView keys capacities ctx
-    | not (physioModesActive (pcRegistry ctx)) = Right (pcStats ctx)
-    | otherwise = do
-        owned ← foldM step (pcStats ctx) keys
-        pure (foldl' capacity owned capacities)
+physioConsumerView keys capacities ctx = do
+    owned ← foldM step (pcStats ctx) keys
+    pure (foldl' capacity owned capacities)
   where
     step acc k = case physioReadPure ReadEffective ctx k of
         OutcomeValue _ v     → Right (HM.insert k v acc)
@@ -387,3 +394,20 @@ physioConsumerView keys capacities ctx
     capacity acc k = case storedValue ReadEffective ctx k of
         Just v  → HM.insert k v acc
         Nothing → acc
+
+-- * Raw write gate (S4, #2831)
+
+-- | May the raw stat verb (@unit.setStat@) write @key@ for this unit?
+--   An unowned key always may. A DERIVED key never may, in either mode
+--   (it is computed on demand and never stored). An owned key or meter
+--   may only while its system is Simulated: under Nominal the key does
+--   not exist, and under Unsupported it never does. A Simulated system's
+--   debug writes stay allowed (D-7).
+rawWriteAllowed ∷ PhysiologyRegistry → UnitPhysiology → PhysioOverrides
+                → Text → Bool
+rawWriteAllowed reg up overrides key = case classifyKey reg key of
+    Nothing → True
+    Just (sys, role) → case role of
+        RoleDerived _ → False
+        _ → resolveMode sys up (HM.lookup (psId sys) overrides)
+                ≡ ModeSimulated

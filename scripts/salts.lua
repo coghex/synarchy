@@ -19,6 +19,12 @@
 -- Effects this phase: cramps (movement penalty), impaired sweating (heat
 -- tie-in), and a balance death meter. Confusion/fatigue is deferred to the
 -- brain-effects phase, which will read salt_conc.
+--
+-- Modes (#2831, S4). Only a SIMULATED salt system ticks and stores `salt` and
+-- `salt_store`. A Nominal one stores nothing and reads healthy (full pool, full
+-- reserve, concentration 1.0). `salt_conc` is never stored in any mode: it is
+-- computed on demand from the pool and the body-water fraction
+-- (physiology.get), by the same rule the kidneys use inside the tick below.
 
 local salts = {}
 
@@ -33,6 +39,16 @@ local SALT_PER_KG     = 1.0
 local BASELINE_DRAIN_FRAC = 0.004 / 70
 local KIDNEY_EXCRETE  = 0.05    -- excrete excess salt when concentration > 1.05
 local MEAL_SALT_FRAC  = 0.30    -- a meal deposits this fraction of max_salt
+
+-- Virtual meals (#2831, SD-4). A Nominal NUTRITION system never eats, so
+-- nothing would ever refill a Simulated salt system's reserve, and the pool
+-- would run dry in the heat. Once per salt tick, a unit in exactly that
+-- combination is credited ONE meal through the real reserve path when its pool
+-- has fallen below the fraction of max_salt it normally holds between meals
+-- AND the reserve is nearly spent. The reserve clause only suppresses repeats:
+-- baseline loss, kidney excretion and sweat continue unchanged.
+local VIRTUAL_MEAL_POOL_FRAC    = 0.85  -- pool / max_salt below this ...
+local VIRTUAL_MEAL_RESERVE_FRAC = 0.30  -- ... and reserve / max_salt below this
 
 -- Salt reserve (#2761). A meal's salt is deposited here, not straight into the
 -- pool (which cannot hold more than max_salt, so a meal could only top it up
@@ -99,20 +115,17 @@ function salts.storeCap(uid)
     return salts.maxSalt(uid) * STORE_CAP_FRAC
 end
 
--- The reserve of a unit that has none stored yet (a fresh spawn, or a save
--- written before #2761) starts FULL, as the salt pool does.
-local function storeOf(uid)
-    return unit.getStat(uid, "salt_store") or salts.storeCap(uid)
-end
-
 -- Advance salt one tick: baseline excretion, release from the reserve, and
--- kidney excretion of excess. Stores the salt pool ("salt"), the reserve
--- ("salt_store") and the derived concentration ("salt_conc").
+-- kidney excretion of excess. Stores the salt pool ("salt") and the reserve
+-- ("salt_store"); the concentration is derived, never stored. Called only for
+-- a Simulated salt system, whose keys are present by the seeding rule: a
+-- missing one is an invariant violation physiology.get raises, not a cue to
+-- start full.
 function salts.tick(uid, dt)
     local mx = salts.maxSalt(uid)
-    local s  = unit.getStat(uid, "salt")
-    if not s then s = mx end   -- first tick: spawn full
-    local store = storeOf(uid)
+    local s  = physiology.get(uid, "salt")
+    if not s then return end                    -- Unsupported: nothing to tick
+    local store = physiology.get(uid, "salt_store")
     s = s - BASELINE_DRAIN_FRAC * mx * dt
     -- The reserve refills the pool toward ideal concentration (1.0), never
     -- past it: no more than the reserve holds, the rate limit, or the deficit.
@@ -131,9 +144,17 @@ function salts.tick(uid, dt)
         s = s - KIDNEY_EXCRETE * (conc - 1.05) * dt * mx
     end
     s = clamp(s, 0, mx)
+    store = clamp(store, 0, salts.storeCap(uid))
+    -- The virtual meal is decided on the values this tick just produced,
+    -- before they are stored, and credited AFTER they are, so it lands on the
+    -- reserve exactly as a real meal does (capped at storeCap) and releases
+    -- from the NEXT tick.
+    local virtualMeal = physiology.mode(uid, "nutrition") == "nominal"
+        and s / mx < VIRTUAL_MEAL_POOL_FRAC
+        and store < VIRTUAL_MEAL_RESERVE_FRAC * mx
     unit.setStat(uid, "salt", s)
-    unit.setStat(uid, "salt_store", clamp(store, 0, salts.storeCap(uid)))
-    unit.setStat(uid, "salt_conc", concOf(uid, s, mx))
+    unit.setStat(uid, "salt_store", store)
+    if virtualMeal then salts.mealSalt(uid) end
 end
 
 function salts.concentration(uid)

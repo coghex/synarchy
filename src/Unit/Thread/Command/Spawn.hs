@@ -24,6 +24,8 @@ module Unit.Thread.Command.Spawn
     ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -42,6 +44,8 @@ import Unit.Sim.Types
 import Unit.Command.Types (SpawnProfile(..))
 import Unit.Stats (rollStat, standardStat, pickName, applyItemBuffs,
                    effectiveStat)
+import Unit.Physiology (PhysioContext(..))
+import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         lookupEquipmentClass)
@@ -221,6 +225,29 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
             -- (at the container's per-unit fill weight) + container
             -- contents, worn gear at full mass.
             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+            -- Physiology seeding (#2831, S4): AFTER the body-derived
+            -- maxima and the completed modifier map above, because the
+            -- seed is the effective value a pool starts at and the
+            -- stored base is that value inverted through the unit's
+            -- modifiers. Only SIMULATED systems get keys; a Nominal or
+            -- Unsupported one stays absent (D-1). The same rule repairs
+            -- a loaded unit's missing keys (Unit.Physiology.Transition).
+            physioReg ← readIORef
+                (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+            let seedResult = reconcileStoredKeys PhysioContext
+                    { pcRegistry   = physioReg
+                    , pcPhysiology = udPhysiology def
+                    , pcOverrides  = emptyPhysioOverrides
+                    , pcNow        = now
+                    , pcStats      = initialStats
+                    , pcModifiers  = spawnMods }
+                -- A unit whose Simulated systems cannot be seeded (an innate
+                -- or starting-accessory modifier that leaves no representable
+                -- base, a missing body input) is NOT published: it would hold
+                -- Simulated systems with no stored keys, which every later
+                -- read and tick treats as a broken invariant. The spawn is
+                -- refused whole, and the reason is logged.
+                seededStats = either (const initialStats) fst seedResult
             let itemW = itemTotalWeight itemMgr
                 fixedW = sum (map itemW (HM.elems initialEquipment))
                        + sum (map itemW initialAccessories)
@@ -247,7 +274,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     , uiActivity    = "idle"
                     , uiPose        = "standing"
                     , uiAnimStride  = 1
-                    , uiStats       = initialStats
+                    , uiStats       = seededStats
                     -- The same map the capacity decision above used —
                     -- one binding, so they agree by construction.
                     , uiModifiers   = spawnMods
@@ -321,7 +348,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                 stillOurs ← case lookup pageId (wmWorlds mgr) of
                     Nothing → pure False
                     Just ws → (≡ epoch) ⊚ pageIncarnation ws
-                when stillOurs $ do
+                when (stillOurs ∧ either (const False) (const True) seedResult) $ do
                     atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um' →
                         (um' { umInstances =
                                    HM.insert uid inst (umInstances um') }, ())
@@ -329,6 +356,15 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                         (uts { utsSimStates =
                                    HM.insert uid ss (utsSimStates uts) }, ())
                 pure stillOurs
+            case seedResult of
+                Left (sid, key, why) → do
+                    logger ← readIORef (loggerRef env)
+                    logWarn logger CatThread $
+                        "UnitSpawn: refused unit " <> tshow (unUnitId uid)
+                        <> " of '" <> defName <> "': its " <> sid
+                        <> " physiology could not be seeded (" <> key <> "): "
+                        <> why
+                Right _ → pure ()
             unless committed $ do
                 logger ← readIORef (loggerRef env)
                 logDebug logger CatThread $

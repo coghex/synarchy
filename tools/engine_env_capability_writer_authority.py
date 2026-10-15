@@ -363,6 +363,13 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Units.Equipment",
         "Engine.Scripting.Lua.API.Units.Inventory",
         "Engine.Scripting.Lua.API.Units.Medical",
+        # #2831: a physiology mode TRANSITION (setPhysioMode /
+        # clearPhysioMode) is one `atomicModifyIORef'` that reads the
+        # unit's CURRENT stats, overrides and modifiers, plans the seed or
+        # scrub, and publishes the result, so a mode change is observable
+        # whole or not at all. It cannot live in Stats: the plan reads the
+        # state it replaces inside the same transaction.
+        "Engine.Scripting.Lua.API.Units.Physiology",
         "Engine.Scripting.Lua.API.Units.Selection",
         "Engine.Scripting.Lua.API.Units.Spawn",
         # #2470: the stamina commit is the same shape as the stance

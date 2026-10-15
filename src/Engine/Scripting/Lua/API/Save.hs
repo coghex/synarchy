@@ -30,7 +30,7 @@ import Data.Time.Clock (getCurrentTime, addUTCTime)
 import Data.Time.Format (formatTime, defaultTimeLocale)
 import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), LoggerState, logError, logWarn)
+import Engine.Core.Log (LogCategory(..), LoggerState, logError, logInfo, logWarn)
 import Engine.Scripting.Lua.API.Save.Bridge
     ( describeLuaComponents, collectLuaComponents, prepareLuaLoad
     , applyLuaLoad, abortLuaLoad )
@@ -51,7 +51,7 @@ import Engine.Save.Config
     ( SaveConfig(..), loadSaveConfig, writeSaveConfig, clampSaveConfig
     , defaultSaveConfig, saveConfigDefaultPath, saveConfigLocalPath )
 import World.Save.Physiology
-    (physiologyLoadRejections, renderPhysiologyRejection)
+    ( physiologyLoadGate, PhysiologyNormalization(..) )
 import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , AutosaveRequest(..)
                         , missingDefReferences, renderMissingDefRef
@@ -988,10 +988,22 @@ continueLoad env logger requestId saveName descriptors = do
                 -- same reason the definition checks do: the registry and
                 -- the loaded definitions are live content a component
                 -- decode must not read.
-                physioMessages = map renderPhysiologyRejection $
-                    physiologyLoadRejections physiologyRegistry
-                        (HM.map udPhysiology (umDefs um))
-                        [ (wpsPageId w, wpsUnits w) | w ← sdWorlds saveData ]
+                physioGate = physiologyLoadGate physiologyRegistry
+                    (HM.map udPhysiology (umDefs um)) (sdGameTime saveData)
+                    [ (wpsPageId w, wpsUnits w) | w ← sdWorlds saveData ]
+                -- #2829 (S3) and #2831 (S4): saved physiology state that
+                -- cannot be honoured — an override naming a system the
+                -- registry does not declare, a non-finite Simulated value,
+                -- a Simulated override for a system the definition no
+                -- longer supports, an unusable seed input — rejects HERE,
+                -- with the old session untouched, for the same reason the
+                -- definition checks do: the registry and the loaded
+                -- definitions are live content a component decode must not
+                -- read. The deterministic normalization (D-6 (b), (c), (g),
+                -- (i), (j)) is part of the same gate, so a unit that cannot
+                -- be normalized rejects the whole load before anything is
+                -- staged.
+                physioMessages = either id (const []) physioGate
                 allMissing = length missing + length missingItems
                     + length missingPortableItems
                     + length missingSignificant
@@ -1086,8 +1098,25 @@ continueLoad env logger requestId saveName descriptors = do
                     -- locations at all) passes through untouched, so stored
                     -- instance state is never overwritten from a definition
                     -- edited since placement.
-                    let resolvedSaveData = saveData
-                            { sdWorlds = resolvedWorlds }
+                    -- #2831 (S4): the normalized unit tables replace the
+                    -- decoded ones (the gate above proved they exist),
+                    -- and each unit that changed is logged ONCE.
+                    let (normalizedUnits, physioNotes) =
+                            either (const ([], [])) id physioGate
+                        normalizedByPage = HM.fromList
+                            [ (p, us) | (p, us) ← normalizedUnits ]
+                        withNormalizedUnits w =
+                            w { wpsUnits = HM.lookupDefault (wpsUnits w)
+                                               (wpsPageId w) normalizedByPage }
+                        resolvedSaveData = saveData
+                            { sdWorlds = map withNormalizedUnits resolvedWorlds }
+                    Lua.liftIO $ forM_ physioNotes $ \n →
+                        logInfo logger CatWorld $
+                            "loadSave '" <> saveName
+                            <> "': normalized physiology of unit #"
+                            <> tshow (pnUnit n) <> " (" <> pnDef n
+                            <> ") on page '" <> unWorldPageId (pnPage n)
+                            <> "': " <> T.intercalate "; " (pnNotes n)
                     -- issue #761 requirement 11: decode + migrate +
                     -- component-locally-validate EVERY registered Lua
                     -- component before touching any live Lua state. Any

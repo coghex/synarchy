@@ -17,6 +17,7 @@ module Unit.Stats
     ( rollStat
     , standardStat
     , effectiveStat
+    , invertEffectiveStat
     , applySkillXP
     , applyItemBuffs
     , applyAccessoryBuffs
@@ -72,6 +73,27 @@ effectiveStat now base mods =
         percent = sum (smPercent <$> active)
     in max 0 ((base + delta) * (1 + percent))
   where
+    isActive m = case smExpiry m of
+        Nothing → True
+        Just t  → now < t
+
+-- | The BASE that 'effectiveStat' maps to the @target@ effective value at
+--   time @now@, under the same active modifiers: @t / (1 + Σp) − Σδ@
+--   (physiology transitions seed a Simulated pool so its EFFECTIVE value
+--   is the target). 'Nothing' when no representable base exists: the
+--   percent multiplier @1 + Σp@ is not positive, or the result is
+--   negative or not finite. A zero base is representable.
+invertEffectiveStat ∷ Double → Float → [StatModifier] → Maybe Float
+invertEffectiveStat now target mods
+    | isNaN target ∨ isInfinite target ∨ target < 0 = Nothing
+    | multiplier ≤ 0 ∨ isNaN multiplier ∨ isInfinite multiplier = Nothing
+    | isNaN base ∨ isInfinite base ∨ base < 0 = Nothing
+    | otherwise = Just base
+  where
+    active     = filter isActive mods
+    delta      = sum (smDelta   <$> active)
+    multiplier = 1 + sum (smPercent <$> active)
+    base       = target / multiplier - delta
     isActive m = case smExpiry m of
         Nothing → True
         Just t  → now < t

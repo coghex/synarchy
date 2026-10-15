@@ -71,8 +71,7 @@ data PhysioMode = PhysioNominal | PhysioSimulated
 -- | A unit's explicit per-system mode intent: system id → mode. The
 --   PRESENCE of an entry records intent, independent of the effective
 --   mode, so an override equal to the species default is kept exactly
---   (D-3). Empty for every production-created unit until S4 installs
---   the setters.
+--   (D-3). Empty until @physiology.setMode@ (S4, #2831) records one.
 type PhysioOverrides = HM.HashMap Text PhysioMode
 
 emptyPhysioOverrides ∷ PhysioOverrides
@@ -180,11 +179,12 @@ data Substitute
     | SubNone
       -- ^ nothing: a debit is discarded, an effect does not happen.
     | SubVirtualMeal
-      -- ^ nutrition's meal salt credit becomes a virtual meal (SD-4).
-      --   Execution is S4's; this slice only records it.
+      -- ^ nutrition's meal salt credit becomes a virtual meal (SD-4),
+      --   executed by @scripts\/salts.lua@.
     | SubTissueRecovery
       -- ^ tissue maintenance becomes depletion-only recovery toward the
-      --   healthy target (SD-5). Execution is S4's.
+      --   healthy target (SD-5), executed by
+      --   @scripts\/unit_resource_upkeep.lua@.
     deriving (Show, Eq)
 
 -- | One @provides@ \/ @contributes@ \/ @effects@ entry and its Nominal
@@ -208,7 +208,8 @@ data PhysiologySystem = PhysiologySystem
     , psRenamedFrom ∷ ![Text]
       -- ^ system ids this system was previously known by (#2829). A
       --   stored override naming one is RECOGNIZED at load, not rejected
-      --   as an undeclared system; remapping it is S4's.
+      --   as an undeclared system; the load gate REMAPS it to this
+      --   system (S4, #2831).
     } deriving (Show, Eq)
 
 -- | A named species fidelity tier: a mode for EVERY system (D-10).
@@ -232,23 +233,14 @@ data PhysiologyRegistry = PhysiologyRegistry
     , prRetired   ∷ ![Text]
       -- ^ system ids that no longer exist (#2829). A stored override
       --   naming one is RECOGNIZED at load, not rejected as undeclared;
-      --   dropping it and any orphaned keys is S4's.
-    , prModesActive ∷ !Bool
-      -- ^ whether the mode-aware read contract is in force (#2830, S5).
-      --   'False' is the INACTIVE compatibility boundary: every gameplay
-      --   consumer read ('Unit.Physiology.physioConsumerView', the
-      --   @unit.readPhysio@ \/ @unit.readPhysioBase@ verbs, Haskell
-      --   @physioRead@) answers today's stored-stat semantics whatever
-      --   the resolver would yield. The loader always builds 'False'; S4
-      --   activates it, and until then only a controlled test sets it.
-      --   Never serialized: the registry is rebuilt from data on boot.
+      --   the load gate DROPS it (S4, #2831). Only ids are listed, so a
+      --   retired system's keys are left as ordinary stats.
     } deriving (Show, Eq)
 
 emptyPhysiologyRegistry ∷ PhysiologyRegistry
 emptyPhysiologyRegistry = PhysiologyRegistry
     { prSource = Nothing, prConstants = Map.empty
-    , prSystems = [], prProfiles = [], prRetired = []
-    , prModesActive = False }
+    , prSystems = [], prProfiles = [], prRetired = [] }
 
 -- | Is there a usable registry? A definition cannot be validated
 --   against an empty one, so registration refuses rather than skipping
