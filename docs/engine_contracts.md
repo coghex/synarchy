@@ -172,8 +172,10 @@ sixteen probe-runner self-tests (`ci_probes.py --self-test`,
 `test_movement_probe.py`), `ci_cache_report.py --self-test` (#1358 — the
 cache-outcome report's own classification, plus the `ci.yml` wiring it
 reads), the project-cache epoch and cleanup policy self-tests
-(`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
-parity audit itself.
+(`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`),
+`ci_lane_report.py --self-test` (#2748 — the headless-lane time report's
+rendering, the `ci.yml` lane-step wiring, and a failing lane's propagation
+through the log capture), and the parity audit itself.
 
 **The haddock link audit (#2292)** is the newest member, and is owned
 by `ci.yml`'s `static-audits` worker — the engine-free half #2272 split
@@ -430,6 +432,13 @@ locally, and its bare `ci_cache_report.py` (#1358) classifies what the two
 classify, and the command reports rather than gates. Its `--self-test`
 form is not exempt and runs on both sides — in `static-audits`, with the
 cache-key and retention self-tests, since none of the three reads a cache.
+The `headless-lanes` job's `ci_lane_report.py` (#2748) is CI-only reporting
+as well: it writes each lane's headless step time, example count and slowest
+items to that leg's run summary and flags a lane over its advisory budget, and
+`make ci`, which runs the suite in one process with no lane legs, has nothing
+to report against. It never changes a result (`continue-on-error`, exit 0), the
+lane job is no audited gate set, so only the stale-exemption check reads its
+command, and its `--self-test` runs on both sides.
 `static-audits` also owns `ci_expensive_gates.py --stdin --gate
 unit-assets`, which moved there with the unit-asset gate it decides
 (#2272); it is exempt for the same reason its siblings are.
