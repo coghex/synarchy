@@ -230,6 +230,15 @@ def assess(record: LaneRecord, budgets: dict[str, int],
                           "Hspec printed no footer, so the run did not "
                           "complete (a crash or kill before the summary); "
                           "the duration is kept but is not judged")
+    if not facts.slow_items:
+        # Hspec prints `Slow spec items:` only when it has items, and a
+        # real lane always has some, so a header with none -- or no
+        # section after the footer -- is output cut off between the two
+        # (both come out of the same `Done` event), not an empty list.
+        return Assessment(duration, False, budget, "not-evaluated",
+                          "Hspec's slow-item list is missing or cut off "
+                          "after the footer, so the output is incomplete; "
+                          "the duration and count are kept but not judged")
     return Assessment(duration, True, budget,
                       "over" if duration > budget else "within", "")
 
@@ -285,7 +294,7 @@ def render(record: LaneRecord, assessment: Assessment,
     duration = _seconds(assessment.duration)
     if assessment.duration is not None and not assessment.complete:
         stepped = record.outcome in FINISHED_OUTCOMES
-        duration = (f"{duration} (measured; the run printed no Hspec footer)"
+        duration = (f"{duration} (measured; Hspec's output is incomplete)"
                     if stepped else
                     f"at least {duration} (partial: the step did not finish)")
     lines.append(f"| Step duration | {duration} |")
@@ -314,10 +323,14 @@ def render(record: LaneRecord, assessment: Assessment,
             lines.append(f"| {rank} | {millis / 1000:.3f} s | "
                          f"{_cell(label)} |")
     elif facts.slow_section:
-        lines.append("Slowest items: the list was printed but empty.")
+        lines.append("Slowest items: incomplete — the `Slow spec items:` "
+                     "header was printed with no items under it (Hspec "
+                     "prints the header only with items), so the output "
+                     "was cut off.")
     elif facts.examples is not None:
-        lines.append("Slowest items: none reported (Hspec prints no list "
-                     "when every item rounds to 0 ms).")
+        lines.append("Slowest items: unavailable — the footer is present "
+                     "but no `Slow spec items:` section follows it (cut "
+                     "off before it, or `--print-slow-items` is missing).")
     else:
         lines.append("Slowest items: unavailable (the run printed no "
                      "`Slow spec items:` section and no footer, so it did "
@@ -634,8 +647,8 @@ def _self_test() -> int:
     # #2845); a completed run with failing examples is still judged.
     check("within budget" not in summary and "OVER BUDGET" not in summary
           and "budget not evaluated" in summary
-          and "Step duration | 50 s (measured; the run printed no Hspec "
-              "footer)" in summary
+          and "Step duration | 50 s (measured; Hspec's output is "
+              "incomplete)" in summary
           and "status=not-evaluated" in out[0] and len(out) == 1,
           "an aborted run without a footer is not judged within budget")
     for outcome in ("failure", "success"):
@@ -647,11 +660,29 @@ def _self_test() -> int:
     summary, out = report(_record("rest", 50, "failure", FAILED_LOG), budgets)
     check("within budget" in summary and "3 failures" in summary,
           "a completed run whose examples failed is still judged")
+    # Footer but no complete slow list: cut off between the two, which one
+    # Hspec `Done` event prints back to back (review of #2845, round 2).
+    for label, log, count in (
+            ("a header with no items",
+             "Finished in 12.0 seconds\n40 examples, 0 failures\n\n"
+             "Slow spec items:\n", 40),
+            ("a footer with no slow section",
+             "Finished in 1.0 seconds\n3 examples, 0 failures\n", 3)):
+        for outcome in ("failure", "success"):
+            summary, out = report(_record("rest", 50, outcome, log), budgets)
+            check("within budget" not in summary
+                  and "OVER BUDGET" not in summary
+                  and "budget not evaluated" in summary
+                  and "status=not-evaluated" in out[0] and len(out) == 1
+                  and f"| Examples | {count} (0 failures) |" in summary,
+                  f"{label} ({outcome}) is withheld, with the count kept")
+            check("Step duration | 50 s (measured; Hspec's output is "
+                  "incomplete)" in summary,
+                  f"{label} ({outcome}) keeps its measured duration")
     summary, _ = report(_record("rest", 50, "success",
-                                "Finished in 1.0 seconds\n3 examples, "
-                                "0 failures\n"), budgets)
-    check("none reported" in summary,
-          "a complete run with no slow section says none were reported")
+                                "Slow spec items:\n"), budgets)
+    check("Slowest items: incomplete" in summary,
+          "a bare slow-items header is called incomplete, not empty")
     summary, out = report(_record("rest", 130, "cancelled", PASSING_LOG),
                           budgets)
     check("OVER BUDGET" not in summary and len(out) == 1,
