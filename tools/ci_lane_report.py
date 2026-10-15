@@ -48,7 +48,10 @@ Data that is not there is said so
 A leg whose step never started, was cancelled or timed out reports a
 partial or unavailable figure by name. It never invents a zero count, a
 zero duration or a passing budget status, and a missing slow-item list
-is reported as missing, not as an empty list.
+is reported as missing, not as an empty list. A budget verdict needs the
+step to have returned AND Hspec's footer to be in the log: a run that
+crashed or was killed before its summary keeps its measured duration but is
+never judged, favourably or not.
 
 Budgets
 -------
@@ -195,7 +198,17 @@ class Assessment:
     reason: str              # why a status is not-evaluated, else ""
 
 
-def assess(record: LaneRecord, budgets: dict[str, int]) -> Assessment:
+def assess(record: LaneRecord, budgets: dict[str, int],
+           facts: LogFacts | None = None) -> Assessment:
+    """Judge the lane's step time against its budget.
+
+    A budget verdict needs complete evidence: the step returned AND Hspec
+    printed its footer. A `failure` outcome alone is not that -- the test
+    binary can crash or be killed before it prints one -- so a footer-less
+    log keeps the measured duration but is never given a favourable (or
+    any) budget status. An ordinary run with failing examples prints its
+    footer and is judged like any other.
+    """
     budget = budgets.get(record.lane)
     if record.start_epoch is None:
         return Assessment(None, False, budget, "not-evaluated",
@@ -212,6 +225,11 @@ def assess(record: LaneRecord, budgets: dict[str, int]) -> Assessment:
                           "the step did not return (outcome "
                           f"`{record.outcome or 'unknown'}`), so the figure "
                           "is a lower bound")
+    if facts is None or facts.examples is None:
+        return Assessment(duration, False, budget, "not-evaluated",
+                          "Hspec printed no footer, so the run did not "
+                          "complete (a crash or kill before the summary); "
+                          "the duration is kept but is not judged")
     return Assessment(duration, True, budget,
                       "over" if duration > budget else "within", "")
 
@@ -266,7 +284,10 @@ def render(record: LaneRecord, assessment: Assessment,
 
     duration = _seconds(assessment.duration)
     if assessment.duration is not None and not assessment.complete:
-        duration = f"at least {duration} (partial: the step did not finish)"
+        stepped = record.outcome in FINISHED_OUTCOMES
+        duration = (f"{duration} (measured; the run printed no Hspec footer)"
+                    if stepped else
+                    f"at least {duration} (partial: the step did not finish)")
     lines.append(f"| Step duration | {duration} |")
     lines.append(f"| Advisory budget | {_seconds(assessment.budget)} |")
     lines.append(f"| Step outcome | {_cell(record.outcome or 'unavailable')} |")
@@ -323,8 +344,8 @@ def report(record: LaneRecord,
            budgets: dict[str, int] = LANE_BUDGET_SECONDS
            ) -> tuple[str, list[str]]:
     """The summary Markdown and the stdout lines (record + annotations)."""
-    assessment = assess(record, budgets)
     facts = parse_log(record.log) if record.log is not None else None
+    assessment = assess(record, budgets, facts)
     stdout = [record_line(record, assessment, facts)]
     stdout += annotations(record, assessment)
     return render(record, assessment, facts), stdout
@@ -604,10 +625,28 @@ def _self_test() -> int:
     check("never started" in summary and "Step duration | unavailable"
           in summary and "Slowest items: unavailable (no log" in summary,
           "a lane that never ran reports every figure as unavailable")
-    summary, _ = report(_record("rest", 50, "failure", "boom\n"), budgets)
+    summary, out = report(_record("rest", 50, "failure", "boom\n"), budgets)
     check("Examples | unavailable" in summary
           and "Slowest items: unavailable (the run printed no" in summary,
           "a log with no footer and no slow list is unavailable, not empty")
+    # An aborted suite (crash or kill before the footer) keeps its measured
+    # duration but earns no budget verdict, favourable or not (review of
+    # #2845); a completed run with failing examples is still judged.
+    check("within budget" not in summary and "OVER BUDGET" not in summary
+          and "budget not evaluated" in summary
+          and "Step duration | 50 s (measured; the run printed no Hspec "
+              "footer)" in summary
+          and "status=not-evaluated" in out[0] and len(out) == 1,
+          "an aborted run without a footer is not judged within budget")
+    for outcome in ("failure", "success"):
+        summary, out = report(_record("rest", 500, outcome, "boom\n"),
+                              budgets)
+        check("OVER BUDGET" not in summary and len(out) == 1
+              and "status=not-evaluated" in out[0],
+              f"a footer-less {outcome} run is not judged over budget")
+    summary, out = report(_record("rest", 50, "failure", FAILED_LOG), budgets)
+    check("within budget" in summary and "3 failures" in summary,
+          "a completed run whose examples failed is still judged")
     summary, _ = report(_record("rest", 50, "success",
                                 "Finished in 1.0 seconds\n3 examples, "
                                 "0 failures\n"), budgets)
