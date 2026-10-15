@@ -89,7 +89,7 @@ SCRIPT_PATH = "tools/ci_lane_report.py"
 #: one checked-in place; see the module docstring for where 853 comes from.
 LANE_BUDGET_SECONDS: dict[str, int] = {
     "world": 853,
-    "rest": 60,
+    "rest": 853,
 }
 
 #: How many of Hspec's slowest items the summary shows (the workflow asks

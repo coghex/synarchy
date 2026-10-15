@@ -880,7 +880,7 @@ jobs:
       - name: Report headless lane time
         if: always() && steps.docs-fast-path.outputs.docs_only != 'true'
         continue-on-error: true
-        run: python3 tools/ci_lane_report.py --lane ${{ matrix.lane }} --record "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}" --outcome "${{ steps.headless-lane.outcome }}" --github-summary "$GITHUB_STEP_SUMMARY"; cat "$GITHUB_STEP_SUMMARY"
+        run: python3 tools/ci_lane_report.py --lane ${{ matrix.lane }} --record "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}" --outcome "${{ steps.headless-lane.outcome }}" --github-summary "$GITHUB_STEP_SUMMARY"
 
       # A cancelled run (manual, or the job timeout above expiring) never
       # lets `Headless lane` return, and a log that ends at the last line
