@@ -207,11 +207,16 @@ def audit_gate_sets(
     ci_job_commands: dict[str, set[str]],
     local_commands: set[str],
     exempt_commands: tuple[tuple[str, str], ...] = EXEMPT_COMMANDS,
+    lane_job_commands: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
     """Compare the audited jobs' union with the local gate set.
 
     `ci_job_commands` maps each audited job to its OWN invocation set.
-    Returns a list of human-readable problems.
+    `lane_job_commands` is the headless-lane job's set, which is not an
+    audited gate set and is never compared with the local one; it only
+    keeps an exemption alive that nothing else runs, because CI-only
+    reporting that lives in that job (#2748's lane-time summary) has no
+    other home. Returns a list of human-readable problems.
     """
     problems: list[str] = []
 
@@ -268,7 +273,7 @@ def audit_gate_sets(
             f"run by {LOCAL_GATE_LABEL} but not by {WORKFLOW_UNION_LABEL}: "
             f"{command}")
 
-    everything = ci_commands | local_commands
+    everything = ci_commands | local_commands | set(lane_job_commands)
     for command, _reason in exempt_commands:
         if command not in everything:
             problems.append(

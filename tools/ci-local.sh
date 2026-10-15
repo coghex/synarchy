@@ -749,6 +749,7 @@ step "CI cache policy and report self-tests"
 python3 tools/ci_cache_epoch.py --self-test
 python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
+python3 tools/ci_lane_report.py --self-test
 
 # #2303: only pure fixture and arithmetic checks, never the measurement.
 step "map-page codec measurement self-test"

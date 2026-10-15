@@ -258,6 +258,24 @@ EXEMPT_COMMANDS: tuple[tuple[str, str], ...] = (
         "wiring honest from `make ci`.",
     ),
     (
+        ("python3 tools/ci_lane_report.py --lane ${{ matrix.lane }} "
+         "--record $RUNNER_TEMP/headless-lane-${{ matrix.lane }} "
+         "--outcome ${{ steps.headless-lane.outcome }} "
+         "--github-summary $GITHUB_STEP_SUMMARY"),
+        "CI headless-lane time reporting (#2748, CIR-18): writes one "
+        "lane's headless step duration, example count and twenty slowest "
+        "items into that leg's run summary and flags the lane over its "
+        "advisory budget, from the start mark and log the leg's own steps "
+        "wrote under $RUNNER_TEMP. `make ci` runs the whole suite in one "
+        "process with no lane legs, no run summary and no budget to "
+        "report against -- and this advises rather than gates, exiting 0 "
+        "on every outcome. It lives in the headless-lanes job, which is "
+        "not an audited gate set, so only the stale-exemption check "
+        "reads it there. Its --self-test form is NOT exempt and runs on "
+        "both sides: it covers the report, the ci.yml wiring and a "
+        "failing lane's propagation through the log capture.",
+    ),
+    (
         ("python3 tools/ci_cache_epoch.py --ref $CACHE_REF "
          "--github-output $GITHUB_OUTPUT "
          "--github-summary $GITHUB_STEP_SUMMARY"),

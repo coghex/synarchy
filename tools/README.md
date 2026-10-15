@@ -3874,6 +3874,10 @@ cabal test synarchy-test-headless --test-show-details=direct --test-options='--l
 cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
 ```
 
+CI's two lane lines also end in `2>&1 | tee "$RUNNER_TEMP/headless-lane-${{ matrix.lane }}.log"`
+(#2748, below): the step's `shell: bash` pipefail keeps a failing
+`cabal test` failing through it, and nothing in the options changes.
+
 Both are **Hspec's** flags, not cabal's, so `--test-options` is the only
 way either reaches the runner.
 
@@ -3916,6 +3920,58 @@ constant, so a site left on the default formatter fails the check rather
 than quietly emitting five thousand success lines on half the runs. The
 same check asserts that no `.hspec` file and no `Spec.hs` formatter
 selection has appeared to leak the compact presentation into local runs.
+
+### Headless lane time budgets (#2748)
+
+`tools/ci_lane_report.py` writes, into each `headless-lanes` leg's run
+summary, that lane's headless step duration, example count and twenty
+slowest items with their durations, so a PR that grows a lane shows it
+without reading a raw log. Each lane has an advisory budget; a lane over it
+is flagged in the summary and with a workflow `warning` annotation. **The
+result never depends on it**: the epic's twenty-minute median run is a
+target, not a gate. The report step is `continue-on-error`, runs under
+`always()` (so a lane whose examples failed still reports its duration and
+count), and the tool exits 0 on every outcome and on its own runtime errors;
+`build-test` passes or fails exactly as the `Headless lane` step decides.
+
+* **Where the budgets live.** `LANE_BUDGET_SECONDS` in
+  `tools/ci_lane_report.py`, one entry per lane of the `headless-lanes`
+  matrix. Both start from the 853 s per-lane budget of
+  `docs/headless_suite_lane_measurement.md` §6 (twenty minutes minus a lane's
+  347 s fixed cost at the median build). `--self-test` fails when a matrix
+  lane has no budget or a budget names a lane the matrix does not run.
+* **What is measured.** The wall time of the lane's `cabal test`
+  invocation: from the `Mark headless lane start` step, which sits directly
+  before it, to the end of the `Headless lane` step. Cache restoration and
+  the separate `cabal build synarchy-test-headless` happen before the mark
+  and are excluded; cabal's own wrapper (about 34 s at the #2743 median) is
+  inside, so the figure runs a little above Hspec's own `Finished in`, which
+  the summary prints beside it. It is not the summed example durations and
+  not the job's total time. The count is Hspec's footer
+  (`--test-show-details=direct` puts it in the log).
+* **Missing data is named.** A leg whose step never started, was cancelled
+  or timed out shows an unavailable or "at least" figure, a footer-less log
+  shows the count as unavailable (never zero), a missing slow-item list is
+  said to be missing, and a lane that did not return is never judged against
+  its budget.
+* **When a lane goes over.** Read the summary's slowest items first. Then
+  either **rebalance the lanes** (move statements between lanes in
+  `test-headless/Spec.hs`, #2744's registration, and re-measure with
+  `tools/headless_lane_measurement.py`), **add a lane** (a new `Spec.hs`
+  lane, a `headless-lanes` matrix entry and a `LANE_BUDGET_SECONDS` entry,
+  which `headless_lanes.py` and the report's `--self-test` each check), or
+  **make the expensive example cheaper**. Raising a budget is a decision to
+  make against the twenty-minute target in the epic, not a way to silence the
+  warning.
+
+`ci_lane_report.py` is CI-only and listed in `ci_parity_config.py`'s
+`EXEMPT_COMMANDS`; its `--self-test` runs in CI (`static-audits`) and in
+`tools/ci-local.sh`. That self-test is a blocking correctness check, not
+advice: besides the rendering cases (an in-budget lane, an over-budget lane,
+a lane whose examples failed, and incomplete data) it re-reads `ci.yml` and
+runs the `Headless lane` step's own script against a stub `cabal` to prove a
+failing run still fails the step through the log capture and still reports
+its duration and count. Run it after any edit to the lane step.
 
 ### Investigating a hung headless run (#2747)
 
