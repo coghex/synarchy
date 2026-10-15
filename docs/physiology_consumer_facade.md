@@ -1,19 +1,20 @@
-# Physiology consumer facade and access audit (#2830, S5)
+# Physiology consumer facade and access audit (#2830, S5; activated by #2831, S4)
 
 S5 of the physiology stat-modes epic (#2827; design
 `docs/designs/physiology_stat_modes_design.md`, D-1, D-2, D-5a, D-7, D-9,
-SD-19 and the S5/S6 temporary UI exception). It moves every gameplay reader
-and every cross-system writer of a registry-owned key behind one accessor,
-adds the audit that keeps it there, and does so **without changing any
-behavior**: production modes are inactive until S4, and this slice is the
-seam S4 activates.
+SD-19 and the S5/S6 temporary UI exception) moved every gameplay reader and
+every cross-system writer of a registry-owned key behind one accessor and added
+the audit that keeps it there, without changing any behavior while production
+modes were inactive. **S4 (#2831) activated that seam**: the facade now answers
+the mode-aware contract, `setMode` / `clearMode` / `refresh` exist, and the
+tick gates, the write gate and the load normalization stand on it.
 
-This page is the reference for the inactive path, the system owners, the
-migrated interface and the temporary UI exception. The contract summary
-lives in `docs/engine_contracts.md` §The physiology system registry and read
-contract; the audit's own header documents the scanner.
+This page is the reference for the facade, the system owners, the migrated
+interface and the temporary UI exception. The contract summary lives in
+`docs/engine_contracts.md` §The physiology system registry, read contract and
+modes; the audit's own header documents the scanner.
 
-## 1. What "inactive" means
+## 1. The registry-owned keys, and what activation changed
 
 The registry (`data/physiology/systems.yaml`) names the *registry-owned
 keys*: the owned pools, the derived key and the failure meters of the four
@@ -26,31 +27,18 @@ v1 systems.
 | `hydration` | `hydration` | | |
 | `nutrition` | `hunger`, `calories` | | |
 
-S2 (#2828) built the mode-aware read contract: under Nominal an owned key
-reads its healthy rule, under Simulated its stored value. Production has no
-way to choose a mode yet (the setters are S4's), so every system would
-resolve Nominal and every stored pool would be ignored. **That must not
-reach a consumer**, because today every unit simulates every pool.
+Until S4 the registry carried an inactive switch (`prModesActive`), because
+production had no way to choose a mode and every unit simulated every pool;
+the facade reproduced `stats.get` and the wound tick saw stored stats. S4
+removed the switch with the thing it guarded. Now:
 
-The single switch is `PhysiologyRegistry.prModesActive` (a field of the
-Rebuild-content registry, never serialized). The loader builds it `False`.
-While it is `False`:
-
-| Path | Inactive answer |
+| Path | Active answer |
 |---|---|
-| `unit.readPhysio` / `unit.readPhysioBase` | the answer of `unit.getStat` / `unit.getStatBase`, mode `nil`, for **every** key |
-| Haskell `physioRead` / `physioReadBase` | the same (`ReadUnowned`) |
-| `Unit.Physiology.physioConsumerView` (wound tick) | the unit's stored stats map, unchanged |
-| `scripts/physiology.lua` | today's `stats.get` / `getStatBase` / cur-over-max / pool write semantics, built on the verbs above |
-| `unit.getPhysioMode` / `getPhysioOverride` / `getPhysioDefault` | unchanged: they report configuration (the resolver), not stat values |
-
-`Unit.Physiology.physioReadPure` stays mode-aware whatever the flag says:
-it is the pure resolver, and the boundary is applied by its callers. The
-mode-aware answer is reachable in production **only** by setting the flag;
-a controlled test does that with
-`Test.Headless.Unit.PhysiologyFixture.activatePhysiologyModes`. S4 turns the
-flag on (it reads it from the registry; `engine.getPhysiologyRegistry()`
-publishes `modesActive`).
+| `unit.readPhysio` / `unit.readPhysioBase` | the mode-aware value and mode: healthy for a Nominal system, stored for a Simulated one, `nil, nil` for an Unsupported one |
+| Haskell `physioRead` / `physioReadBase` | the same (`ReadOwned` / `ReadUnsupported`) |
+| `Unit.Physiology.physioConsumerView` (wound tick) | each named key replaced by its mode-aware effective value, an Unsupported key removed |
+| `scripts/physiology.lua` | the mode-aware `get` / `getBase` / `fraction`, receiver-gated `credit` / `debit`, and the transition verbs below |
+| `unit.setStat` | refuses a Nominal or Unsupported system's owned or meter key, and a derived key in every mode |
 
 ## 2. The migrated interface
 
@@ -64,15 +52,22 @@ publishes `modesActive`).
 | `credit(uid, key, amount)` | add to a pool, clamped to its capacity; returns the amount applied; `0` when nothing was written |
 | `debit(uid, key, amount)` | remove from a pool, floored at 0; an absent pool is left absent; returns the amount applied |
 | `isOwned(key)` | is `key` registry-owned |
+| `systemOf(key)`, `systemOrder()` | the owning system id of a key; the registry's system ids in tick order |
+| `mode(uid, system)`, `modes(uid)`, `isSimulated(uid, system)` | the resolved mode (`"nominal"` / `"simulated"` / `nil` for Unsupported) of one system, of all of them read once, and the Simulated test the tick gates use |
+| `setMode(uid, system, mode [, values])` → `true, changed` or `nil, reason` | the ONLY caller of `unit.setPhysioMode`: seeds or scrubs atomically, resets the carry / regrowth / alert-debounce caches, runs the change hooks on an EFFECTIVE change, refreshes the caches, and refuses atomically (see the engine contract) |
+| `clearMode(uid, system)` | the same for `unit.clearPhysioMode` (removes the override) |
+| `refresh(uid)` | recompute circulation, then the brain at dt 0 |
+| `onModeChanged(id, system, fn)` | register a hook `fn(uid, system, from, to)`, replaced by id |
 
 `credit` / `debit` carry the per-key rules of the callers they replaced
 (`RULES` in the module): `hydration` credits clamp to `max_hydration` and
 write nothing without a positive maximum, an absent pool starting at 0;
 `salt_store` credits clamp to `salts.storeCap` and an absent reserve
 starts full (#2761); `salt` and `hydration` debits floor at 0. A key with no
-rule answers `nil, reason` and writes nothing. The one place a Nominal
-system will discard a contribution is `contributionApplies` — today it
-returns `true`; S4 replaces its body (D-4).
+rule answers `nil, reason` and writes nothing. The one place a contribution
+is discarded is `contributionApplies`: when the RECEIVING system is not
+Simulated, `credit` / `debit` apply 0 (D-4), so a Nominal system keeps no key
+and an Unsupported one has none.
 
 Local system-owner updates stay with the owner (`salts.tick` writes its own
 pools directly). The facade governs reads from, and contributions between,
@@ -82,9 +77,9 @@ systems.
 
 * `Unit.Physiology.physioConsumerView keys capacities ctx` is the pure owned
   branch of `physioRead` for code that already holds the unit instance
-  inside an atomic fold. Inactive it is `Right pcStats` unchanged; active it
-  replaces each named key with its mode-aware effective value, removes a key
-  whose system is Unsupported, and replaces each present `capacities` key
+  inside an atomic fold. It replaces each named key with its mode-aware
+  effective value, removes a key whose system is Unsupported, and replaces
+  each present `capacities` key
   (`max_calories`, `max_hydration`) with its EFFECTIVE value so a pool and
   its maximum agree on modifiers, as the Lua facade's `fraction` does. A
   violated invariant (a Simulated pool with no stored value, a healthy-rule
@@ -96,9 +91,8 @@ systems.
   blood-recovery nutrition), `hydration` (blood-recovery nutrition) and
   `core_temp` (fever suppression) — go through the view. A `Left` makes the
   tick return the unit untouched as `PhysioInvariant` (logged by
-  `tickAllWounds`) rather than tick it on a guessed pool. They remain
-  **base** reads while inactive; D-2's switch to effective reads is a
-  behavior change only when a modifier targets these keys, and none does.
+  `tickAllWounds`) rather than tick it on a guessed pool. The reads are
+  EFFECTIVE (D-2), so a modifier on a pool or its maximum is honored.
 
 ## 3. Consumers migrated
 
@@ -120,7 +114,8 @@ systems.
 
 Not migrated, by design: stamina, circulation, blood, injury and mental-state
 redesigns; the engine's own `unit.feed` / `unit.getCalories` food primitives
-(S4's virtual meals); S6's presentation.
+(`unit.feed` refuses a unit with no `hunger`, which is every Nominal one);
+S6's presentation.
 
 ## 4. System owners (the audit's `OWNERS`)
 
@@ -134,15 +129,10 @@ A file may touch the keys of the systems it actually owns, and nothing else.
 | `nutrition` | `scripts/unit_resource_tick.lua`, `unit_resource_carry.lua`, `unit_resource_energy.lua`, `unit_resource_regrowth.lua` | digestion, starvation, regrowth |
 | `thermo` and `salt` **meters only** | `scripts/unit_resource_failure.lua` | the failure-meter engine; never their pools |
 
-Two further allowances, each named and bounded:
+One further allowance, named and bounded (the survival exemption of #2754 that
+stood beside it until S4 is gone: `scripts/unit_survival_exempt.lua` was removed
+when #2754 became the `exempt` profile, design F-7):
 
-* **Survival exemption (#2754).** `neutralize` in
-  `scripts/unit_survival_exempt.lua` may `setStat` exactly `core_temp`,
-  `salt`, `salt_conc`, `hypothermia`, `hyperthermia` and `salt_imbalance`.
-  It is the substitute tick for exempt definitions (it replaces `thermo.tick`
-  and `salts.tick`). It is not a UI exception and not a module-wide
-  allowance. **S4 removes it** when #2754 becomes the `exempt` profile
-  (design F-7, D-7 "the `survivalExempt` branch goes away").
 * **Probe fixture writes.** `tools/physiology_probe.py` may `setStat`
   `calories`, `hunger` and `core_temp` as scenario fixtures (D-7 allows raw
   `setStat` for debugging under Simulated), but only from the eight setup
@@ -160,6 +150,9 @@ Two further allowances, each named and bounded:
   writes onto the facade or a test setter.
 
 ## 5. The temporary UI exception (S5 → S6)
+
+Until S6 a Nominal unit's hydration, hunger and calorie rows read `?`: the
+excepted raw reads see an absent key. That is the documented temporary display.
 
 Exactly these legacy pool reads stay raw until S6's Nominal-aware display,
 identified by file, enclosing function, verb and key (never a line number),
@@ -221,27 +214,26 @@ are debugging code outside the gameplay-consumer rule.
 ## 7. Gates
 
 ```sh
+cabal test synarchy-test-headless --test-options='--match "physiology stat modes"'
 cabal test synarchy-test-headless --test-options='--match "physiology consumer migration"'
 python3 tools/physiology_access_audit.py --self-test
 python3 tools/physiology_access_audit.py
 python3 tools/run_probes.py --only physiology,consumable_effects,state_of_mind --exact
 ```
 
-`physiology consumer migration` compares the migrated modules with the paths
-they replaced: twin runs against the verbatim pre-S5 statements for the
-facade, scenario outputs recorded from the pre-S5 modules (`0482a98ef`) for
-thermo, salts, brain, cardio, starvation, the AI needs, the consumable drink
-and the status rows, and the wound tick against the pure formulas. A
-definition that resolves every system to Nominal is registered with the
-shipped registry loaded, and the verbs, the facade and the wound tick must
-still return stored values; activating the registry is the contrast case.
+`physiology stat modes` is S4's acceptance, run through the real shipped
+consumers (see the engine contract). `physiology consumer migration` keeps the
+pure half of the S5 gate: `tickOneUnitWith` against `tickOneUnit` and the
+closed-form formulas for the wound tick. Its S5 twin runs against the
+pre-migration statements proved the seam changed nothing while inactive, and
+have no subject now that the switch is gone.
 
 ## 8. Handoff
 
-* **S4** sets the flag, replaces `contributionApplies`, adds the setters
-  and the tick gates, removes the survival-exemption allowance, and
-  re-derives each consumer's Nominal behavior through this seam, without
-  migrating a caller.
+* **S4 (done, #2831)** removed the switch, replaced `contributionApplies`,
+  added the setters and the tick gates, removed the survival-exemption
+  allowance, and re-derived each consumer's Nominal behavior through this
+  seam without migrating a caller.
 * **S6** migrates the excepted UI reads and deletes
   `UI_EXCEPTIONS` / `UI_HELPER_EXCEPTIONS` from the audit; its acceptance
   includes the audit passing without them.

@@ -132,20 +132,48 @@ exactly one of five classifications:
 |---|---|
 | **Persist exactly** | The value is serialized and restored verbatim. It is gameplay-domain data with no other source of truth. |
 | **Persist as identity/reference** | Only a stable identifier (an id, a name, a page key) is persisted; the referenced content or object is resolved against current definitions/state at load time, not embedded. |
-| **Rebuild deterministically** | Never serialized. Reconstructed from persisted domain data plus current content (YAML defs, code) at load time — always the same result for the same inputs, but not itself stored. |
+| **Rebuild deterministically** | Never serialized, or serialized-but-ignored (see below). Reconstructed from persisted domain data plus current content (YAML defs, code) at load time — always the same result for the same inputs, but not itself the authority. |
 | **Reset to a documented default** | Never serialized (or serialized-but-ignored, see below). Always takes a fixed default value after load, regardless of what it held pre-save. |
 | **Exclude (transient runtime state)** | Never serialized, never restored, never given special load-time treatment. Purely a property of the running process. |
 
-**Per-unit stats (#2761).** A unit's Float-valued stats ride the
-`uiStats` map, which the units component serializes wholesale, so a stat
-added to a script needs no codec change and is classified **Persist
-exactly** like the rest of the map (stored zero and partial values come
-back verbatim). A save written before the stat existed simply lacks the
-key, and the load does not invent it: its owner defaults an ABSENT value on
-first read and never overwrites a present one. The salt reserve
-`salt_store` (`scripts/salts.lua`) is the worked case: absent means a full
-reserve, as a fresh spawn starts, and a stored value, including 0, is kept.
-The cases are `--match "salt reserve (#2761)"`'s `persistence` group.
+**Per-unit stats (#2761, qualified by #2831).** A unit's Float-valued stats
+ride the `uiStats` map, which the units component serializes wholesale, so a
+stat added to a script needs no codec change and is classified **Persist
+exactly** like the rest of the map (stored zero and partial values come back
+verbatim). A save written before the stat existed simply lacks the key, and
+the load invents it ONLY where a declared rule says so: the physiology
+registry's seeding rule fills the MISSING owned keys of a Simulated system at
+load (never overwriting a present one, #2831, design D-6), and nothing else
+is created. The salt reserve `salt_store` (`scripts/salts.lua`) is the worked
+case: a save with no reserve gets a full one at load, as a fresh spawn
+starts, and a stored value, including 0, is kept. The cases are
+`--match "salt reserve (#2761)"`'s `persistence` group and
+`--match "persistence of the physiology modes"`.
+
+**Serialized-but-ignored caches (#2831).** A stat can ride the `uiStats`
+payload and still not be durable: it is a CACHE of other state, recomputed
+canonically before the first paused frame, and never read back as authority.
+It is classified **Rebuild deterministically**, with the qualifier
+*serialized-but-ignored* in the inventory's classification cell: the
+circulation, consciousness, concentration and state-of-mind caches, the
+strength values the body recompute re-derives, and the body-derived maxima.
+The wire is unchanged (the stat map is still serialized wholesale, so no
+filter and no codec change), and the load simply does not trust those values:
+`unitResources.onSaveLoaded` runs `unit.recomputeBody` and refreshes
+circulation and the brain at dt 0. Consequently a save taken a tick before
+that recompute may hold a stale cache and a save taken after it a canonical
+one, and the structural save comparison
+(`World.Save.Physiology.withoutRebuiltCaches`, used by the save codec's
+`compare`) does not count them. Everything else in the physiology stat set is
+durable and compared exactly: a Simulated system's pools and meters, the
+override map and the unowned `tissue_recovering` flag are **Persist
+exactly**; a Nominal or Unsupported system stores none of its keys; and the
+derived `salt_conc` is never stored at all, computed on every read, with a
+stored legacy value scrubbed in every mode at load. These are deterministic,
+logged-once, idempotent repairs (D-6 (b), (c), (f), (g), (i), (j)), applied
+at the load gate before anything is staged, so a unit that cannot be
+normalized rejects the whole load with the old session untouched. The inventory's
+`UnitInstance (physiology stats)` table names each stat.
 
 **Per-unit physiology intent (#2829).** A unit's explicit per-system
 physiology mode override (`uiPhysioOverrides`) is **Persist exactly**
@@ -157,8 +185,12 @@ species defaults, the system registry and the profiles are **Rebuild
 deterministically** from data. Saved physiology state that cannot be
 honoured rejects the load before staging (an override for a system the
 registry neither declares nor recognizes as retired or renamed; a
-non-finite stored value of a Simulated system); the cases are
-`--match "physiology override persistence"`.
+non-finite stored value of a Simulated system; since S4, a Simulated
+override for a system the definition no longer supports and a required seed
+or upkeep input that is zero, non-finite or missing with no legacy rule);
+the cases are `--match "physiology override persistence"` and
+`--match "persistence of the physiology modes"`. The setters exist since S4
+(#2831): `physiology.setMode` / `clearMode` record and remove the override.
 
 For every inventoried item, the inventory records: its **owner**
 (file:line of the record/module that holds it), its **scope** (global —
