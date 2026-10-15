@@ -49,11 +49,13 @@ A leg whose step never started, was cancelled or timed out reports a
 partial or unavailable figure by name. It never invents a zero count, a
 zero duration or a passing budget status, and a missing slow-item list
 is reported as missing, not as an empty list. A budget verdict needs the
-step to have returned AND Hspec's footer AND a non-empty slow-item list to
-be in the log (Hspec prints the list header only with items, straight after
-the footer): a run that crashed or was killed before or between them keeps
-its measured duration and whatever count it printed but is never judged,
-favourably or not.
+step to have returned AND the lane's whole Hspec output to match a strict
+grammar (`parse_log`): `Finished in`, the examples footer, a blank line and
+`Slow spec items:` once each and in that order, then exactly twenty
+well-formed rows. Every way a log can be cut short fails one of those
+conditions, so a run that crashed or was killed anywhere keeps its measured
+duration, and whatever count and rows did parse, but is never judged,
+favourably or not; the self-test truncates a log at every byte to prove it.
 
 Budgets
 -------
@@ -118,7 +120,11 @@ _SLOW_ITEM = re.compile(r"^  (.+) \((\d+)ms\)\s*$")
 
 @dataclass(frozen=True)
 class LogFacts:
-    """What the lane's Hspec output says; `None` / empty means absent."""
+    """What the lane's Hspec output says; `None` / empty means absent.
+
+    `anomalies` is empty exactly when the log matches the strict grammar
+    `parse_log` documents; a lane is judged against its budget only then.
+    """
 
     examples: int | None
     failures: int | None
@@ -126,42 +132,81 @@ class LogFacts:
     hspec_seconds: float | None
     slow_section: bool
     slow_items: tuple[tuple[str, int], ...]
+    anomalies: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        return not self.anomalies
 
 
 def parse_log(text: str) -> LogFacts:
-    """Read the footer, `Finished in` figure and slow list from a log.
+    """Parse the lane's Hspec output under a strict grammar.
 
-    Order-independent: Hspec prints the slow list to stderr and the footer
-    to stdout in the same `Done` event, and the job log interleaves the two
-    streams, so neither is assumed to come first. The LAST footer wins (a
-    lane prints one; a stray earlier match must not shadow it).
+    Hspec ends a run with, in this order and with nothing else between
+    (blank lines aside), as the CI logs show for both lanes:
+
+        Finished in S seconds
+        N examples, M failures[, K pending]
+        <blank>
+        Slow spec items:
+          <location>: <path> (Dms)        exactly SLOW_ITEM_LIMIT rows
+
+    A log is COMPLETE only when it holds exactly one of each marker, in
+    that order, followed immediately by the header and then exactly
+    `SLOW_ITEM_LIMIT` well-formed rows, with no extra row after them. Any
+    deviation -- a missing, repeated, reordered or half-written marker or
+    row, a short list, a surplus row -- is recorded in `anomalies`, and
+    the lane is then reported but never judged against its budget. This is
+    stricter than needed to read the numbers on purpose: every way a log
+    can be cut short is a way of failing one of these conditions, so no
+    truncation point can look complete (the self-test truncates a log at
+    every byte to prove it). What the lines say is still extracted for
+    display, from whatever did parse.
     """
+    lines = [_ANSI.sub("", raw).rstrip("\r") for raw in text.splitlines()]
+    finished = [i for i, line in enumerate(lines) if _FINISHED.match(line)]
+    footers = [i for i, line in enumerate(lines) if _FOOTER.match(line)]
+    headers = [i for i, line in enumerate(lines) if _SLOW_HEADER.match(line)]
+
     examples = failures = pending = None
     seconds = None
-    section = False
+    if footers:
+        footer = _FOOTER.match(lines[footers[-1]])
+        examples, failures = int(footer.group(1)), int(footer.group(2))
+        pending = int(footer.group(3)) if footer.group(3) else 0
+    if finished:
+        seconds = float(_FINISHED.match(lines[finished[-1]]).group(1))
+
     items: list[tuple[str, int]] = []
-    in_slow = False
-    for raw in text.splitlines():
-        line = _ANSI.sub("", raw).rstrip("\r")
-        if _SLOW_HEADER.match(line):
-            section = in_slow = True
-            continue
-        if in_slow:
+    if headers:
+        for line in lines[headers[-1] + 1:]:
             item = _SLOW_ITEM.match(line)
-            if item:
-                items.append((item.group(1), int(item.group(2))))
-                continue
-            in_slow = False
-        footer = _FOOTER.match(line)
-        if footer:
-            examples, failures = int(footer.group(1)), int(footer.group(2))
-            pending = int(footer.group(3)) if footer.group(3) else 0
-            continue
-        finished = _FINISHED.match(line)
-        if finished:
-            seconds = float(finished.group(1))
-    return LogFacts(examples, failures, pending, seconds, section,
-                    tuple(items))
+            if not item:
+                break
+            items.append((item.group(1), int(item.group(2))))
+
+    anomalies: list[str] = []
+    for name, found in (("`Finished in` line", finished),
+                        ("examples footer", footers),
+                        ("`Slow spec items:` header", headers)):
+        if len(found) != 1:
+            anomalies.append(f"{len(found)} {name}s, expected exactly one")
+    if not anomalies:
+        def blank_between(first: int, second: int) -> bool:
+            return all(not line.strip() for line in lines[first + 1:second])
+        if not (finished[0] < footers[0] < headers[0]):
+            anomalies.append("footer and slow-item list are out of order")
+        elif not (blank_between(finished[0], footers[0])
+                  and blank_between(footers[0], headers[0])):
+            anomalies.append("unexpected lines between the footer markers")
+        rows = lines[headers[0] + 1:]
+        if len(items) != SLOW_ITEM_LIMIT:
+            anomalies.append(f"{len(items)} slow items, expected exactly "
+                             f"{SLOW_ITEM_LIMIT}")
+        elif len(rows) > len(items) and _SLOW_ITEM.match(rows[len(items)]):
+            anomalies.append(f"more than {SLOW_ITEM_LIMIT} slow items")
+    return LogFacts(examples, failures, pending, seconds, bool(headers),
+                    tuple(items), tuple(anomalies))
 
 
 @dataclass(frozen=True)
@@ -204,12 +249,12 @@ def assess(record: LaneRecord, budgets: dict[str, int],
            facts: LogFacts | None = None) -> Assessment:
     """Judge the lane's step time against its budget.
 
-    A budget verdict needs complete evidence: the step returned AND Hspec
-    printed its footer AND a non-empty slow-item list. A `failure` outcome
-    alone is not that -- the test binary can crash or be killed before it
-    prints either -- so such a log keeps the measured duration but is never
+    A budget verdict needs complete evidence: the step returned AND the
+    whole log satisfies `parse_log`'s strict grammar. A `failure` outcome
+    alone is not that -- the test binary can crash or be killed anywhere in
+    its output -- so such a log keeps the measured duration but is never
     given a favourable (or any) budget status. An ordinary run with failing
-    examples prints both and is judged like any other.
+    examples prints everything and is judged like any other.
     """
     budget = budgets.get(record.lane)
     if record.start_epoch is None:
@@ -227,20 +272,16 @@ def assess(record: LaneRecord, budgets: dict[str, int],
                           "the step did not return (outcome "
                           f"`{record.outcome or 'unknown'}`), so the figure "
                           "is a lower bound")
-    if facts is None or facts.examples is None:
+    if facts is None:
         return Assessment(duration, False, budget, "not-evaluated",
-                          "Hspec printed no footer, so the run did not "
-                          "complete (a crash or kill before the summary); "
-                          "the duration is kept but is not judged")
-    if not facts.slow_items:
-        # Hspec prints `Slow spec items:` only when it has items, and a
-        # real lane always has some, so a header with none -- or no
-        # section after the footer -- is output cut off between the two
-        # (both come out of the same `Done` event), not an empty list.
+                          "no Hspec log was captured; the duration is kept "
+                          "but not judged")
+    if not facts.complete:
         return Assessment(duration, False, budget, "not-evaluated",
-                          "Hspec's slow-item list is missing or cut off "
-                          "after the footer, so the output is incomplete; "
-                          "the duration and count are kept but not judged")
+                          "Hspec's output does not match the complete-run "
+                          "grammar (" + "; ".join(facts.anomalies) + "), so "
+                          "it may be cut off; the duration and what did "
+                          "parse are kept but not judged")
     return Assessment(duration, True, budget,
                       "over" if duration > budget else "within", "")
 
@@ -319,7 +360,10 @@ def render(record: LaneRecord, assessment: Assessment,
         lines.append("Slowest items: unavailable (no log was captured).")
     elif facts.slow_items:
         shown = facts.slow_items[:SLOW_ITEM_LIMIT]
-        lines += [f"Slowest items ({len(shown)} shown):", "",
+        short = (f" — fewer than the {SLOW_ITEM_LIMIT} requested, so the "
+                 "list may be cut off" if len(shown) < SLOW_ITEM_LIMIT
+                 else "")
+        lines += [f"Slowest items ({len(shown)} shown{short}):", "",
                   "| # | Duration | Item |", "|--:|--:|---|"]
         for rank, (label, millis) in enumerate(shown, 1):
             lines.append(f"| {rank} | {millis / 1000:.3f} s | "
@@ -399,7 +443,7 @@ FAILED_LOG = ("\nFailures:\n\n  test-headless/Foo.hs:9:3: \n  1) Group "
               "example 4\n       expected: 1\n        but got: 2\n\n"
               "Randomized with seed 42\n\nFinished in 301.5000 seconds\n"
               "758 examples, 3 failures, 1 pending\n"
-              "\nSlow spec items:\n" + _slow_lines(5) + "\n")
+              "\nSlow spec items:\n" + _slow_lines(20) + "\n")
 PARTIAL_LOG = "\nSlow spec items:\n" + _slow_lines(2) + "\n"
 
 
@@ -621,8 +665,13 @@ def _self_test() -> int:
           "a failed lane reports its duration, count and outcome")
     check("within budget" in summary,
           "a failed lane is still judged against its budget")
-    check("Slowest items (5 shown)" in summary,
-          "fewer than twenty available slow items are shown as such")
+    check("Slowest items (20 shown):" in summary,
+          "a complete lane lists all twenty slow items")
+    short, _ = report(_record("rest", 80, "failure", FAILED_LOG.replace(
+        _slow_lines(20), _slow_lines(5))), budgets)
+    check("Slowest items (5 shown — fewer than the 20 requested" in short
+          and "budget not evaluated" in short,
+          "fewer than twenty slow items are shown as such and not judged")
 
     # 4. Incomplete data is named, never invented.
     summary, out = report(_record("rest", 40, "cancelled", PARTIAL_LOG),
@@ -631,7 +680,7 @@ def _self_test() -> int:
           "a cancelled lane's duration is a labelled lower bound")
     check("Examples | unavailable" in summary,
           "a missing footer is reported as unavailable, not zero")
-    check("Slowest items (2 shown)" in summary
+    check("Slowest items (2 shown — fewer than the 20 requested" in summary
           and "unavailable" in summary,
           "partial slow items are shown without claiming a complete list")
     check("status=not-evaluated" in out[0] and len(out) == 1,
@@ -690,9 +739,57 @@ def _self_test() -> int:
     check("OVER BUDGET" not in summary and len(out) == 1,
           "a lower bound is never reported as over budget")
 
-    # 5. Parsing is order-independent and takes the last footer.
-    check(parse_log(PASSING_LOG) == parse_log(REVERSED_LOG),
-          "stderr-before-stdout interleaving parses the same")
+    # 5. The grammar is strict and ordered, as both lanes' CI logs are.
+    check(parse_log(PASSING_LOG).complete,
+          "the sample complete log satisfies the grammar")
+    summary, out = report(_record("rest", 90, "success", REVERSED_LOG),
+                          budgets)
+    check(not parse_log(REVERSED_LOG).complete
+          and "status=not-evaluated" in out[0],
+          "a slow list printed BEFORE the footer is out of order: unjudged")
+    for label, text in (
+            ("a repeated footer", PASSING_LOG.replace(
+                "10316 examples, 0 failures\n",
+                "10316 examples, 0 failures\n10316 examples, 0 failures\n")),
+            ("a surplus 21st row", PASSING_LOG
+             + "  test-headless/Foo.hs:21:3: /Group/example 21/ (100ms)\n"),
+            ("a stray line inside the list", PASSING_LOG.replace(
+                "  test-headless/Foo.hs:7:3:", "noise\n  test-headless/Foo.hs:7:3:")),
+            ("a stray line before the header", PASSING_LOG.replace(
+                "\nSlow spec items:", "\nnoise\nSlow spec items:")),
+            ("a repeated header", PASSING_LOG + "Slow spec items:\n")):
+        check(not parse_log(text).complete,
+              f"{label} breaks the grammar")
+    # The real CI format: a coloured footer, with a pending count (both
+    # lanes' logs from CI run 38802805789 parse complete in this shape).
+    real = PASSING_LOG.replace(
+        "10316 examples, 0 failures",
+        "\x1b[33m758 examples, 0 failures, 1 pending\x1b[0m")
+    facts = parse_log(real)
+    check(facts.complete and (facts.examples, facts.pending) == (758, 1),
+          "a coloured footer with a pending count is a complete log")
+    # Every way a log can be cut short fails the grammar (review of #2845,
+    # rounds 1-3 each found one more truncation point): cut the complete
+    # log at EVERY byte, with every outcome, and assert no prefix is ever
+    # judged within or over budget. The full text minus its final newline is
+    # the complete data, so only cuts beyond it may be judged.
+    for log in (PASSING_LOG, FAILED_LOG, "noise before\n" + PASSING_LOG
+                + "noise after\n"):
+        body_end = log.rstrip("\n").rfind("ms)") + len("ms)")
+        judged_early = 0
+        for cut in range(0, body_end):
+            for outcome in ("failure", "success"):
+                _, out = report(_record("rest", 90, outcome, log[:cut]),
+                                budgets)
+                if "status=within" in out[0] or "status=over" in out[0]:
+                    judged_early += 1
+        check(judged_early == 0,
+              f"{judged_early} truncation point(s) of a {len(log)}-byte log "
+              "were judged within or over budget")
+        _, out = report(_record("rest", 90, "success", log[:body_end]),
+                        budgets)
+        check("status=within" in out[0],
+              "the log cut right after its last row is complete data")
     facts = parse_log(FAILED_LOG)
     check((facts.examples, facts.failures, facts.pending) == (758, 3, 1)
           and facts.hspec_seconds == 301.5, "footer and Finished-in parse")

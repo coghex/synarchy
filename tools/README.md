@@ -3952,10 +3952,14 @@ count), and the tool exits 0 on every outcome and on its own runtime errors;
 * **Missing data is named.** A leg whose step never started, was cancelled
   or timed out shows an unavailable or "at least" figure, a footer-less log
   shows the count as unavailable (never zero), a missing slow-item list is
-  said to be missing, and a lane that did not return, or whose Hspec output is cut
-  off (no footer, or no slow-item list under it: a crash or kill before or
-  between them), keeps its measured duration and any count it printed but
-  is never judged against its budget.
+  said to be missing, and a lane that did not return, or whose Hspec output is not
+  a complete run, keeps its measured duration and whatever count and rows
+  parsed but is never judged against its budget. "Complete" is one strict
+  grammar: `Finished in`, the examples footer, a blank line and `Slow spec
+  items:` once each and in that order, then exactly twenty well-formed rows
+  (a lane with fewer than twenty items over 1 ms therefore gets no verdict);
+  every way a log can be cut short fails it, which the self-test proves by
+  truncating a log at every byte.
 * **When a lane goes over.** Read the summary's slowest items first. Then
   either **rebalance the lanes** (move statements between lanes in
   `test-headless/Spec.hs`, #2744's registration, and re-measure with
