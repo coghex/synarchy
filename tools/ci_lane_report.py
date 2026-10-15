@@ -100,6 +100,10 @@ SLOW_ITEM_LIMIT = 20
 #: returned, so its wall time is a whole figure rather than a lower bound.
 FINISHED_OUTCOMES = ("success", "failure")
 
+#: Hspec colors the summary line (`\x1b[32m10318 examples, 0 failures\x1b[0m`)
+#: even when its output is piped, and the log carries the escapes through
+#: `tee`; the first CI run of this report found its footer unmatched.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _FOOTER = re.compile(
     r"^(\d+) examples?, (\d+) failures?(?:, (\d+) pending)?\s*$")
 _FINISHED = re.compile(r"^Finished in ([0-9]+(?:\.[0-9]+)?) seconds?\s*$")
@@ -133,7 +137,7 @@ def parse_log(text: str) -> LogFacts:
     items: list[tuple[str, int]] = []
     in_slow = False
     for raw in text.splitlines():
-        line = raw.rstrip("\r")
+        line = _ANSI.sub("", raw).rstrip("\r")
         if _SLOW_HEADER.match(line):
             section = in_slow = True
             continue
@@ -636,6 +640,17 @@ def _self_test() -> int:
                             budgets)[0], "a pipe in an item is escaped")
     check(parse_log(PASSING_LOG.replace("\n", "\r\n")).examples == 10316,
           "CRLF logs parse")
+    # Hspec colors the footer even through a pipe (found on the first CI
+    # run): green when clean, red when failing.
+    colored = parse_log("\nFinished in 716.1051 seconds\n"
+                        "\x1b[32m10318 examples, 0 failures\x1b[0m\n")
+    check((colored.examples, colored.failures, colored.hspec_seconds)
+          == (10318, 0, 716.1051), "a green footer parses")
+    colored = parse_log("\x1b[31m758 examples, 3 failures\x1b[0m\n")
+    check((colored.examples, colored.failures) == (758, 3),
+          "a red footer parses")
+    check(parse_log("\x1b[1mSlow spec items:\x1b[0m\n  a: /b/ (9ms)\n")
+          .slow_items == (("a: /b/", 9),), "a colored slow header parses")
 
     # 6. An unbudgeted lane is named by a warning, not silently skipped.
     summary, out = report(_record("new", 10, "success", PASSING_LOG), budgets)
