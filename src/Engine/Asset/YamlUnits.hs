@@ -355,6 +355,9 @@ instance FromJSON UnitYamlNaturalResistance where
 data UnitYamlPhysiology = UnitYamlPhysiology
     { uypProfile ∷ !(Maybe Text)
     , uypSystems ∷ !(Map.Map Text Text)
+    , uypEngagement ∷ !(Map.Map Text Text)
+      -- ^ the @on_combat_engagement:@ entries (SD-20, #2834): system id →
+      --   the mode it takes at the unit's first combat engagement.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON UnitYamlPhysiology where
@@ -364,11 +367,20 @@ instance FromJSON UnitYamlPhysiology where
             Just (Aeson.String t) → pure (Just t)
             Just other → fail ("physiology `profile` must be a name, got "
                                ⧺ show other)
+        engagement ← case KM.lookup (Key.fromText "on_combat_engagement") o of
+            Nothing → pure Map.empty
+            Just (Aeson.Object eo) → pure $ Map.fromList
+                [ (Key.toText k, valueText val) | (k, val) ← KM.toList eo ]
+            Just other → fail ("physiology `on_combat_engagement` must be a \
+                               \map of system to mode, got " ⧺ show other)
         pure UnitYamlPhysiology
             { uypProfile = profile
             , uypSystems = Map.fromList
                 [ (Key.toText k, valueText val)
-                | (k, val) ← KM.toList o, Key.toText k ≢ "profile" ] }
+                | (k, val) ← KM.toList o
+                , Key.toText k ≢ "profile"
+                , Key.toText k ≢ "on_combat_engagement" ]
+            , uypEngagement = engagement }
       where
         valueText (Aeson.String t) = t
         valueText other            =

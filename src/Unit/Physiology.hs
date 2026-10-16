@@ -39,10 +39,15 @@ module Unit.Physiology
     , resolveQuantity
       -- * Mode resolution
     , unitCapabilities
+    , combatEngagedKey
+    , engagementPending
+    , engagementApplied
+    , declaresEngagement
     , resolveMode
       -- * Definition validation
     , resolveUnitPhysiology
     , rejectPhysiologyTemplates
+    , engagementSystem
       -- * Reading
     , saltConcentration
     , ReadKind(..)
@@ -67,7 +72,7 @@ import Control.Monad (foldM)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Unit.Physiology.Types
-import Unit.Stats (effectiveStat)
+import Unit.Stats (effectiveStat, maxStaminaOf)
 import Unit.Types.Def (StatModifier)
 
 -- * Registry queries
@@ -116,16 +121,38 @@ unitCapabilities up
     | upBodyAuthored up = Set.singleton bodyCapability
     | otherwise         = Set.empty
 
+-- | The unowned durable marker the SD-20 engagement trigger keeps in
+--   @uiStats@ (#2834): absent = never engaged, 1 = pending, 2 = applied.
+--   It is not a registry key (no system owns it); it is an INPUT of the
+--   mode resolver, so only the combat commit (absent → 1) and
+--   @unit.applyCombatEngagement@ (1 → 2) may write it.
+combatEngagedKey ∷ Text
+combatEngagedKey = "combat_engaged"
+
+-- | The marker's two valid values, read from a stat map.
+engagementPending, engagementApplied ∷ HM.HashMap Text Float → Bool
+engagementPending stats = HM.lookup combatEngagedKey stats ≡ Just 1
+engagementApplied stats = HM.lookup combatEngagedKey stats ≡ Just 2
+
+-- | Does the definition declare an engagement trigger for any system?
+declaresEngagement ∷ UnitPhysiology → Bool
+declaresEngagement = not ∘ HM.null ∘ upEngagement
+
 -- | The one pure mode resolver (requirement 3): capability failure
 --   yields 'ModeUnsupported' whatever else is supplied; otherwise the
---   explicit unit override, then the species default, then Nominal.
+--   explicit unit override, then — only once the unit's engagement has
+--   been APPLIED (@combat_engaged == 2@, the @applied@ argument) — the
+--   engagement default the definition declared, then the species
+--   default, then Nominal. A pending marker is not yet an engagement, so
+--   a pending unit still resolves its species default and the storage
+--   invariant (no Simulated mode without its seeded pool) holds.
 --
 --   The override is a @Maybe@ so that "no override" and "an override
 --   equal to the default" are different inputs, which is what intent
---   means (D-3). The live override field is S3's; until then callers
---   pass 'Nothing'.
-resolveMode ∷ PhysiologySystem → UnitPhysiology → Maybe PhysioMode → ResolvedMode
-resolveMode sys up mOverride
+--   means (D-3).
+resolveMode ∷ PhysiologySystem → UnitPhysiology → Bool → Maybe PhysioMode
+            → ResolvedMode
+resolveMode sys up applied mOverride
     | not (all (`Set.member` unitCapabilities up) (psRequires sys)) =
         ModeUnsupported
     | otherwise = case chosen of
@@ -134,7 +161,15 @@ resolveMode sys up mOverride
   where
     chosen = case mOverride of
         Just m  → m
-        Nothing → fromMaybe PhysioNominal (HM.lookup (psId sys) (upDefaults up))
+        Nothing
+            | applied, Just m ← HM.lookup (psId sys) (upEngagement up) → m
+            | otherwise →
+                fromMaybe PhysioNominal (HM.lookup (psId sys) (upDefaults up))
+
+-- | The one system an engagement declaration may name in v1 (SD-20): the
+--   verb that applies it is stamina's.
+engagementSystem ∷ Text
+engagementSystem = "stamina"
 
 -- * Definition validation
 
@@ -149,19 +184,41 @@ resolveUnitPhysiology
     → Bool                 -- ^ whether the YAML authored a @body:@ block
     → Maybe Text           -- ^ the block's @profile:@
     → [(Text, Text)]       -- ^ the block's per-system entries, as written
+    → [(Text, Text)]       -- ^ the block's @on_combat_engagement:@ entries
     → Either (Text, Text) UnitPhysiology
-resolveUnitPhysiology reg unit bodyAuthored mProfile entries = do
+resolveUnitPhysiology reg unit bodyAuthored mProfile entries engagement = do
     profileModes ← case mProfile of
         Nothing → Right []
         Just p  → case registryProfile reg p of
             Nothing → Left ("unknown physiology profile", unit <> ": " <> p)
             Just pr → Right (Map.toList (ppModes pr))
     explicit ← traverse one entries
+    let defaults = HM.fromList (profileModes ⧺ explicit)
+    onEngage ← traverse (oneEngagement defaults) engagement
     pure UnitPhysiology
         { upBodyAuthored = bodyAuthored
         , upProfile      = mProfile
-        , upDefaults     = HM.fromList (profileModes ⧺ explicit) }
+        , upDefaults     = defaults
+        , upEngagement   = HM.fromList onEngage }
   where
+    -- An engagement entry (SD-20): the named system must exist, be one
+    -- the engagement verb can transition (stamina in v1), be Nominal by
+    -- default (the trigger moves Nominal → Simulated, one way), and take
+    -- the mode "simulated".
+    oneEngagement defaults (sid, modeText) = case registrySystem reg sid of
+        Nothing → Left ( "unknown physiology system"
+                       , unit <> ": on_combat_engagement: " <> sid )
+        Just _
+            | sid ≢ engagementSystem → Left
+                ( "unsupported physiology engagement system"
+                , unit <> ": on_combat_engagement: " <> sid )
+            | parsePhysioMode modeText ≢ Just PhysioSimulated → Left
+                ( "invalid physiology engagement mode"
+                , unit <> ": on_combat_engagement: " <> sid <> ": " <> modeText )
+            | HM.lookup sid defaults ≡ Just PhysioSimulated → Left
+                ( "physiology engagement system is not Nominal by default"
+                , unit <> ": on_combat_engagement: " <> sid )
+            | otherwise → Right (sid, PhysioSimulated)
     one (sid, modeText) = case registrySystem reg sid of
         Nothing → Left ("unknown physiology system", unit <> ": " <> sid)
         Just _  → case parsePhysioMode modeText of
@@ -173,14 +230,17 @@ resolveUnitPhysiology reg unit bodyAuthored mProfile entries = do
 --   templates in @stats:@ or @skills:@, as @(reason, detail)@, or
 --   'Nothing'. An owned key is never a template (D-3): a template would
 --   let @getOrRollStat@ recreate a key a Nominal system must not hold.
---   Unowned names, lazy templates included, are untouched.
+--   Unowned names, lazy templates included, are untouched, except the
+--   engagement marker (#2834): its two atomic writers are the only way
+--   it may come to exist, so a template could create a value 2 with no
+--   seeded pool behind it.
 rejectPhysiologyTemplates ∷ PhysiologyRegistry → Text → [Text] → [Text]
                           → Maybe (Text, Text)
 rejectPhysiologyTemplates reg unit statKeys skillKeys = listToMaybe
     [ ("physiology key in unit template", unit <> ": " <> section <> "." <> k)
     | (section, ks) ← [("stats", statKeys), ("skills", skillKeys)]
     , k ← ks
-    , k `Set.member` owned ]
+    , k `Set.member` owned ∨ k ≡ combatEngagedKey ]
   where
     owned = registryKeys reg
 
@@ -224,7 +284,8 @@ data PhysioOutcome
 -- | The mode a system resolves to for this unit.
 modeOf ∷ PhysioContext → PhysiologySystem → ResolvedMode
 modeOf ctx sys =
-    resolveMode sys (pcPhysiology ctx) (HM.lookup (psId sys) (pcOverrides ctx))
+    resolveMode sys (pcPhysiology ctx) (engagementApplied (pcStats ctx))
+                (HM.lookup (psId sys) (pcOverrides ctx))
 
 -- | Read a registry-owned key. Pure: see the module header.
 physioReadPure ∷ ReadKind → PhysioContext → Text → PhysioOutcome
@@ -333,6 +394,15 @@ evalHealthy ctx (HealthyFrom k scales) = do
     v  ← capacity ctx k
     fs ← traverse (quantity ctx) scales
     pure (v * product fs)
+evalHealthy ctx HealthyMaxStamina =
+    case maxStaminaOf Nothing (pcNow ctx) (pcStats ctx) (pcModifiers ctx) of
+        Nothing → Left "input 'max_stamina' is absent (no endurance stat)"
+        Just v
+            | isNaN v ∨ isInfinite v → Left $
+                "input 'max_stamina' is not finite (" <> tshow v <> ")"
+            | v ≤ 0 → Left $
+                "input 'max_stamina' is not positive (" <> tshow v <> ")"
+            | otherwise → Right v
 
 -- | @salt_conc@ for a Simulated salt system: the shared pure rule over
 --   the unit's effective @salt@ against its healthy maximum, and the
@@ -398,16 +468,21 @@ physioConsumerView keys capacities ctx = do
 -- * Raw write gate (S4, #2831)
 
 -- | May the raw stat verb (@unit.setStat@) write @key@ for this unit?
---   An unowned key always may. A DERIVED key never may, in either mode
---   (it is computed on demand and never stored). An owned key or meter
---   may only while its system is Simulated: under Nominal the key does
---   not exist, and under Unsupported it never does. A Simulated system's
---   debug writes stay allowed (D-7).
-rawWriteAllowed ∷ PhysiologyRegistry → UnitPhysiology → PhysioOverrides
+--   An unowned key always may, except the engagement marker (#2834): it
+--   is an input of the stamina resolver, so a raw 2 would make stamina
+--   Simulated with no seeded pool. A DERIVED key never may, in either
+--   mode (it is computed on demand and never stored). An owned key or
+--   meter may only while its system is Simulated: under Nominal the key
+--   does not exist, and under Unsupported it never does. A Simulated
+--   system's debug writes stay allowed (D-7). @applied@ is whether the
+--   unit's engagement marker is 2.
+rawWriteAllowed ∷ PhysiologyRegistry → UnitPhysiology → Bool → PhysioOverrides
                 → Text → Bool
-rawWriteAllowed reg up overrides key = case classifyKey reg key of
-    Nothing → True
-    Just (sys, role) → case role of
-        RoleDerived _ → False
-        _ → resolveMode sys up (HM.lookup (psId sys) overrides)
-                ≡ ModeSimulated
+rawWriteAllowed reg up applied overrides key
+    | key ≡ combatEngagedKey = False
+    | otherwise = case classifyKey reg key of
+        Nothing → True
+        Just (sys, role) → case role of
+            RoleDerived _ → False
+            _ → resolveMode sys up applied (HM.lookup (psId sys) overrides)
+                    ≡ ModeSimulated

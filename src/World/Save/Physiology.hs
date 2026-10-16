@@ -48,7 +48,8 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import qualified Data.Text as T
-import Unit.Physiology (PhysioContext(..), resolveMode)
+import Unit.Physiology
+    (PhysioContext(..), resolveMode, engagementApplied, combatEngagedKey)
 import Unit.Physiology.Transition (KeyRepair(..), reconcileStoredKeys)
 import Unit.Physiology.Types
 import Unit.Types (UnitId(..))
@@ -99,6 +100,18 @@ data PhysiologyLoadRejection
       --   upkeep reads is zero, non-finite or missing with no declared
       --   legacy rule. The load is refused, naming the unit, the key and
       --   the input, before anything is published.
+    | MalformedEngagementMarker
+        { plrPage   ∷ !WorldPageId
+        , plrUnit   ∷ !Word32
+        , plrDef    ∷ !Text
+        , plrValue  ∷ !Float
+        }
+      -- ^ case (h) for the SD-20 marker (#2834): a stored
+      --   @combat_engaged@ that is not finite or not 1 (pending) or 2
+      --   (applied). It is an input of the stamina resolver, so an
+      --   out-of-set value cannot be interpreted; the load is refused
+      --   before anything is published. A VALID marker on a species that
+      --   does not declare the trigger is retained and has no effect.
     deriving (Show, Eq)
 
 renderPhysiologyRejection ∷ PhysiologyLoadRejection → Text
@@ -118,6 +131,10 @@ renderPhysiologyRejection r = case r of
     InvalidSeedInput{} →
         who <> " cannot be normalized: system '" <> plrSystem r
         <> "', key '" <> plrKey r <> "': " <> plrReason r
+    MalformedEngagementMarker{} →
+        who <> " holds an invalid '" <> combatEngagedKey <> "' marker ("
+        <> tshow (plrValue r) <> "): only 1 (pending) and 2 (applied) are \
+        \values: malformed payload"
   where
     who = "unit #" <> tshow (plrUnit r) <> " (" <> plrDef r
         <> ") on page '" <> unWorldPageId (plrPage r) <> "'"
@@ -163,11 +180,15 @@ physiologyLoadRejections registry defs pages = concatMap pageRejections pages
             , sid `notElem` declared ]
             ⧺ [ NonFiniteSimulatedValue pid uid (uisDefName u) (psId sys) key v
               | sys ← prSystems registry
-              , resolveMode sys up (HM.lookup (psId sys) resolved)
+              , resolveMode sys up (engagementApplied (uisStats u))
+                    (HM.lookup (psId sys) resolved)
                     ≡ ModeSimulated
               , key ← map okKey (psOwns sys) ⧺ psMeters sys
               , Just v ← [HM.lookup key (uisStats u)]
               , isNaN v ∨ isInfinite v ]
+            ⧺ [ MalformedEngagementMarker pid uid (uisDefName u) v
+              | Just v ← [HM.lookup combatEngagedKey (uisStats u)]
+              , isNaN v ∨ isInfinite v ∨ (v ≢ 1 ∧ v ≢ 2) ]
 
 -- * Deterministic normalization (S4, #2831; design D-6)
 
@@ -249,7 +270,8 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
                 [ SimulatedOverrideUnsupported pid uid (uisDefName u) (psId sys)
                 | sys ← prSystems registry
                 , Just PhysioSimulated ← [HM.lookup (psId sys) overrides]
-                , resolveMode sys up (Just PhysioSimulated) ≡ ModeUnsupported ]
+                , resolveMode sys up (engagementApplied (uisStats u))
+                    (Just PhysioSimulated) ≡ ModeUnsupported ]
         unless' (null unsupportedSim) (Left unsupportedSim)
         let (statsJ, frameNote) = reconstructFrame up (uisStats u)
             ctx = PhysioContext
@@ -318,7 +340,7 @@ upkeepInputProblem ∷ PhysiologyRegistry → PhysioContext → Maybe (Text, Tex
 upkeepInputProblem registry ctx = listToMaybe
     [ ("nutrition", "frame_mass", why)
     | Just sys ← [registrySystemOf "nutrition"]
-    , resolveMode sys (pcPhysiology ctx)
+    , resolveMode sys (pcPhysiology ctx) (engagementApplied (pcStats ctx))
           (HM.lookup "nutrition" (pcOverrides ctx)) ≡ ModeNominal
     , HM.member "fat_mass" stats ∨ HM.member "lean_mass" stats
     , Just why ← [frameProblem] ]

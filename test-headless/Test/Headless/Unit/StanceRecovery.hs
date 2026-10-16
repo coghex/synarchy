@@ -180,8 +180,9 @@ luaNear expr v = T.concat
 applyQuickStrike ∷ EngineEnv → IO ()
 applyQuickStrike env = do
     now ← readIORef (gameTimeRef env)
+    reg ← readIORef (physiologyRegistryRef env)
     atomicModifyIORef' (unitManagerRef env) $ \um →
-        (spendStrikeCost now Quick (unUnitId acolyteUid) um, ())
+        (spendStrikeCost reg now Quick (unUnitId acolyteUid) um, ())
 
 -- | Expose 'applyQuickStrike' to Lua as @__strike(uid)@ so an example
 --   can fire it from INSIDE the script's own rate calculation.

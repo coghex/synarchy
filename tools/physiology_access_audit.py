@@ -18,11 +18,19 @@ What it checks (exit 1 on any finding, with path:line diagnostics):
      ``getBase``, ``fraction``) for reads and ``debit`` / ``credit`` for
      contributions between systems.
   2. MUTATING MODE VERBS. ``unit.setPhysioMode`` / ``unit.clearPhysioMode``
+     / ``unit.applyCombatEngagement`` (the SD-20 engagement, #2834)
      anywhere but the facade. The five READ verbs (``getPhysioMode``,
      ``getPhysioOverride``, ``getPhysioDefault``, ``readPhysio``,
-     ``readPhysioBase``) are explicitly allowed everywhere (D-7, SD-19).
+     ``readPhysioBase``) and the pure maximum read ``unit.getMaxStamina``
+     are explicitly allowed everywhere (D-7, SD-19). The ATOMIC STAMINA
+     SEAM ``unit.commitStamina`` -- the one relative write to the pool the
+     combat worker also spends -- may be called only by the facade (its
+     ``debit`` / ``credit``) and the stamina pool engine
+     (``scripts/unit_resource_tick.lua``); a script that wrote stamina any
+     other way would reopen the #2470 / S8-F2 refund race.
   3. REGISTRY COVERAGE. Every system has a Lua owner file that exists and
-     names one of its keys; every owned key has a healthy rule; every derived
+     names one of its keys; every owned key has a healthy rule (exactly one of
+     ``const:`` / ``from:`` / ``rule:``); every derived
      key a rule and a healthy value; every ``contributes`` entry (and every
      ``provides`` / ``effects`` entry) a Nominal substitute.
   4. TEMPLATING. No unit definition templates a registry key in ``stats:`` or
@@ -120,7 +128,7 @@ class Owner:
 
 
 # system owner -> files that actually own its keys. Registry order is tick
-# order (thermo, salt, hydration, nutrition).
+# order (thermo, salt, hydration, nutrition, stamina).
 OWNERS: tuple[Owner, ...] = (
     Owner("thermo", "scripts/thermo.lua"),
     Owner("salt", "scripts/salts.lua"),
@@ -131,6 +139,10 @@ OWNERS: tuple[Owner, ...] = (
     Owner("nutrition", "scripts/unit_resource_carry.lua"),
     Owner("nutrition", "scripts/unit_resource_energy.lua"),
     Owner("nutrition", "scripts/unit_resource_regrowth.lua"),
+    # Stamina (#2834): the pool engine ticks and reads it; every other caller
+    # reads through the facade, and every write goes through the atomic
+    # commit (see ATOMIC_VERB_CALLERS).
+    Owner("stamina", "scripts/unit_resource_tick.lua"),
     # The failure-meter engine: only the meters of the systems that declare
     # them, never their pools.
     Owner("thermo", "scripts/unit_resource_failure.lua", "meters"),
@@ -191,12 +203,22 @@ PROBE_FIXTURE_WRITES = FixtureWrites(
     }),
     "scenario fixtures (D-7: raw setStat is allowed for debugging)")
 
+# The mutating verbs a file other than the facade may call, by verb. A verb
+# absent here is facade-only. ``commitStamina`` is the atomic stamina commit
+# (#2470): the pool engine drives the tick's regen/drain through it.
+ATOMIC_VERB_CALLERS: dict[str, frozenset[str]] = {
+    "unit.commitStamina": frozenset({"scripts/unit_resource_tick.lua"}),
+}
+
+
 @dataclass(frozen=True)
 class Policy:
     owners: tuple[Owner, ...] = OWNERS
     facade: str = FACADE
     generic_accessors: frozenset[str] = GENERIC_ACCESSORS
     probe_fixture: FixtureWrites = PROBE_FIXTURE_WRITES
+    verb_callers: dict[str, frozenset[str]] = field(
+        default_factory=lambda: dict(ATOMIC_VERB_CALLERS))
 
 
 # ---------------------------------------------------------------- registry
@@ -238,10 +260,11 @@ def check_coverage(doc: dict, files: dict[str, str], policy: Policy) -> list[str
     for sid, s in reg.systems.items():
         for o in s.get("owns") or []:
             h = o.get("healthy")
-            if not isinstance(h, dict) or not (("const" in h) ^ ("from" in h)):
+            if not isinstance(h, dict) or sum(
+                    k in h for k in ("const", "from", "rule")) != 1:
                 out.append(f"{REGISTRY_PATH}: system '{sid}' owned key "
                            f"'{o.get('key')}' has no healthy rule "
-                           "(exactly one of const: / from:)")
+                           "(exactly one of const: / from: / rule:)")
         for d in s.get("derived") or []:
             if not d.get("rule") or not isinstance(d.get("healthy"), (int, float)):
                 out.append(f"{REGISTRY_PATH}: system '{sid}' derived key "
@@ -376,10 +399,14 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
         if ch.path == policy.facade:
             continue
         for mv in ch.mode_verbs:
+            if ch.path in policy.verb_callers.get(mv.verb, frozenset()):
+                continue
+            allowed = [policy.facade] + sorted(
+                policy.verb_callers.get(mv.verb, frozenset()))
             findings.append(Finding(mv.path, mv.line,
                 f"mutating physiology verb {mv.verb} outside the facade "
-                f"(only {policy.facade} may call it; the read verbs are "
-                "allowed everywhere)"))
+                f"(only {' and '.join(allowed)} may call it; the read "
+                "verbs are allowed everywhere)"))
 
     # Helpers: functions that pass a parameter to a raw access. The facade
     # and the stats wrapper ARE the generic accessors, so they define none.

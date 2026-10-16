@@ -36,6 +36,8 @@ import Combat.Types (AttackMode(..))
 import Combat.Resolution.Common (maxStaminaFor)
 import Combat.Resolution.Wear (staminaDrainStats)
 import Combat.Resolution.Damage (computeSeverity)
+import Combat.Resolution.Stamina (staminaWorkFraction)
+import Unit.Physiology.Types (emptyPhysiologyRegistry)
 import Substance.Types (emptySubstanceManager)
 import Item.Types (emptyItemManager)
 
@@ -116,7 +118,8 @@ severityOf ∷ UnitInstance → ( Float, Float, Float, Float, Float
                             , [(Text, Text, Float)]
                             , [(Text, Text, Text, Float)] )
 severityOf atk = computeSeverity emptySubstanceManager emptyItemManager
-    now atk targetDef Nothing Nothing
+    (staminaWorkFraction emptyPhysiologyRegistry noUnitPhysiology now atk)
+    atk targetDef Nothing Nothing
     (mkInst (HM.fromList [("body_mass", 70.0)]) HM.empty)
     "torso" "blunt" Quick 0.5 1.0 0.0
 
@@ -215,29 +218,31 @@ spec = do
     -- ---- Consumer 1: the per-swing drain ----
     describe "maxStaminaFor's drain consumer (staminaDrainStats) sizes the swing against the effective pool" $ do
         let drainedStamina inst mode =
-                HM.lookup "stamina" (staminaDrainStats now mode inst)
+                HM.lookup "stamina"
+                    (staminaDrainStats emptyPhysiologyRegistry noUnitPhysiology
+                                       now mode inst)
             withStamina stats mods =
-                mkInst (HM.insert "stamina" 40.0 (HM.fromList stats)) mods
+                mkInst (HM.insert "stamina" 15.0 (HM.fromList stats)) mods
 
         it "an endurance modifier changes what a heavy swing costs" $ do
-            -- Raw endurance 2 -> pool 20 -> heavy cost 5 -> 35 left.
+            -- Raw endurance 2 -> pool 20 -> heavy cost 5 -> 10 left.
             drainedStamina (withStamina [("endurance", 2.0)] HM.empty) Heavy
-                `shouldSatisfy` nearStamina 35.0
-            -- Effective endurance 3 -> pool 30 -> heavy cost 7.5 -> 32.5.
+                `shouldSatisfy` nearStamina 10.0
+            -- Effective endurance 3 -> pool 30 -> heavy cost 7.5 -> 7.5.
             drainedStamina
                 (withStamina [("endurance", 2.0)]
                     (HM.fromList [("endurance", [modifier 1.0 0.0 Nothing])]))
-                Heavy `shouldSatisfy` nearStamina 32.5
+                Heavy `shouldSatisfy` nearStamina 7.5
 
         it "a modifier on an explicit max_stamina attribute changes what a quick swing costs" $ do
-            -- Pool 20 -> quick cost 1 -> 39 left.
+            -- Pool 20 -> quick cost 1 -> 14 left.
             drainedStamina (withStamina [("max_stamina", 20.0)] HM.empty) Quick
-                `shouldSatisfy` nearStamina 39.0
-            -- Pool 20 + 20% = 24 -> quick cost 1.2 -> 38.8.
+                `shouldSatisfy` nearStamina 14.0
+            -- Pool 20 + 20% = 24 -> quick cost 1.2 -> 13.8.
             drainedStamina
                 (withStamina [("max_stamina", 20.0)]
                     (HM.fromList [("max_stamina", [modifier 0.0 0.2 Nothing])]))
-                Quick `shouldSatisfy` nearStamina 38.8
+                Quick `shouldSatisfy` nearStamina 13.8
 
         it "an expired modifier costs exactly what no modifier costs" $
             drainedStamina
@@ -294,6 +299,8 @@ spec = do
                         [("endurance", [modifier 1.0 0.0 (Just now)])])
                 plain   = mkInst stats HM.empty
             maxStaminaFor now atBound `shouldBe` maxStaminaFor now plain
-            HM.lookup "stamina" (staminaDrainStats now Heavy atBound)
-                `shouldBe` HM.lookup "stamina" (staminaDrainStats now Heavy plain)
+            let drained = HM.lookup "stamina"
+                    ∘ staminaDrainStats emptyPhysiologyRegistry noUnitPhysiology
+                                        now Heavy
+            drained atBound `shouldBe` drained plain
             severityOf atBound `shouldBe` severityOf plain

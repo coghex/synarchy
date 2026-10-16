@@ -12,7 +12,14 @@
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "physiology species profiles"'@.
-module Test.Headless.Unit.PhysiologySpeciesProfiles (spec) where
+module Test.Headless.Unit.PhysiologySpeciesProfiles
+    ( spec
+      -- * Shared with the stamina gate (#2834)
+    , shippedDefs
+    , pageSnapshotOf
+    , codecRoundTrip
+    , gate
+    ) where
 
 import UPrelude
 import Test.Hspec
@@ -52,8 +59,11 @@ import World.Save.Types
 -----------------------------------------------------------------------
 
 -- | A species and the mode each system resolves to, in
---   (hydration, salt, thermo, nutrition) order, with the profile it names.
-data Row = Row Text Text (ResolvedMode, ResolvedMode, ResolvedMode, ResolvedMode)
+--   (hydration, salt, thermo, nutrition, stamina) order, with the profile it
+--   names. The stamina column is the final species table's (S8a, #2834): the
+--   mule and the nomad are Nominal, the rest Simulated.
+data Row = Row Text Text
+    (ResolvedMode, ResolvedMode, ResolvedMode, ResolvedMode, ResolvedMode)
 
 rowDef ∷ Row → Text
 rowDef (Row n _ _) = n
@@ -64,18 +74,18 @@ nom = ModeNominal
 
 table ∷ [Row]
 table =
-    [ Row "acolyte"         "rich"    (sim, sim, sim, sim)
-    , Row "bear_brown"      "reduced" (nom, sim, sim, nom)
-    , Row "technomule"      "reduced" (nom, sim, sim, nom)
-    , Row "red_squirrel"    "simple"  (nom, nom, sim, nom)
-    , Row "nomad_primitive" "exempt"  (nom, nom, nom, nom) ]
+    [ Row "acolyte"         "rich"    (sim, sim, sim, sim, sim)
+    , Row "bear_brown"      "reduced" (nom, sim, sim, nom, sim)
+    , Row "technomule"      "reduced" (nom, sim, sim, nom, nom)
+    , Row "red_squirrel"    "simple"  (nom, nom, sim, nom, sim)
+    , Row "nomad_primitive" "exempt"  (nom, nom, nom, nom, nom) ]
 
--- | The four systems in the table's column order.
+-- | The systems in the table's column order.
 systems ∷ [Text]
-systems = ["hydration", "salt", "thermo", "nutrition"]
+systems = ["hydration", "salt", "thermo", "nutrition", "stamina"]
 
-modesList ∷ (a, a, a, a) → [a]
-modesList (a, b, c, d) = [a, b, c, d]
+modesList ∷ (a, a, a, a, a) → [a]
+modesList (a, b, c, d, e) = [a, b, c, d, e]
 
 -----------------------------------------------------------------------
 -- The shipped content, loaded the way the startup loader loads it
@@ -119,7 +129,7 @@ defNamed defs n = case HM.lookup n defs of
 -- | A system's resolved mode for a definition, by the real resolver.
 modeOfDef ∷ PhysiologyRegistry → UnitDef → Text → IO ResolvedMode
 modeOfDef reg def sid = case registrySystem reg sid of
-    Just sys → pure (resolveMode sys (udPhysiology def) Nothing)
+    Just sys → pure (resolveMode sys (udPhysiology def) False Nothing)
     Nothing → do
         expectationFailure ("registry has no system " <> show sid)
         pure ModeUnsupported
@@ -261,7 +271,7 @@ bodylessSpec = describe "bodyless definitions" $ do
             def ← defNamed defs n
             upProfile (udPhysiology def) `shouldBe` Nothing
             got ← mapM (modeOfDef reg def) systems
-            (n, got) `shouldBe` (n, replicate 4 ModeUnsupported)
+            (n, got) `shouldBe` (n, replicate 5 ModeUnsupported)
 
 spawnSpec ∷ SpecWith Scene
 spawnSpec = describe "spawn resolves the table before simulation" $ do

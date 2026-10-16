@@ -91,6 +91,7 @@ function unitResources.init(scriptId)
         alerts.resetOnLoad()
         resourceCarry.resetOnLoad()
         regrowth.resetOnLoad()
+        physiology.resetSessionState()
         reported = {}
     end
     local saveMods = require("scripts.lib.save_modules")
@@ -225,6 +226,14 @@ local function tickUnit(uid, info, dt)
     -- reason. (Note tickInjuries returns false for the dead, so the `and`
     -- chain below would otherwise fall straight through to the meters.)
     if pose0 == "dead" then return end
+    -- A PENDING combat engagement (SD-20, #2834) is applied at the start of
+    -- the pass, before the modes are read below, so a unit that just
+    -- transitioned ticks its new stamina pool this pass. The corpse branch
+    -- above is why a unit a strike killed is never revisited. The marker is
+    -- an unowned stat, so this read is no physiology access.
+    if unit.getStat(uid, "combat_engaged") == 1 then
+        physiology.applyEngagement(uid)
+    end
     injuryTick.tickStance(uid, dt)
     -- Physiology order: cardio (heart rate + blood oxygen) FIRST so
     -- circulation reads this tick's heart rate; circulation next, from the

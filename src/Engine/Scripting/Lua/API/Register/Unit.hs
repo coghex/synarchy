@@ -27,7 +27,8 @@ import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
 -- SAME reference combat debits, and additionally REPORTS what it
 -- committed so the physiology tick's exhaustion rules read storage
 -- rather than a script-side estimate.
-import Engine.Scripting.Lua.API.Units.Stamina (unitCommitStaminaFn)
+import Engine.Scripting.Lua.API.Units.Stamina
+    (unitCommitStaminaFn, unitGetMaxStaminaFn)
 -- #2828's five physiology READ verbs and #2831's mutating pair
 -- (setPhysioMode / clearPhysioMode, facade-only), imported directly for
 -- the same reason. Their own module: the pair applies one atomic
@@ -36,7 +37,8 @@ import Engine.Scripting.Lua.API.Units.Stamina (unitCommitStaminaFn)
 import Engine.Scripting.Lua.API.Units.Physiology
     ( unitGetPhysioModeFn, unitGetPhysioOverrideFn, unitGetPhysioDefaultFn
     , unitReadPhysioFn, unitReadPhysioBaseFn
-    , unitSetPhysioModeFn, unitClearPhysioModeFn )
+    , unitSetPhysioModeFn, unitClearPhysioModeFn
+    , unitApplyCombatEngagementFn )
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -88,6 +90,9 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "clearPhysioMode"   (unitClearPhysioModeFn env)
   registerLuaFunction callStats "unit" "recoverStance" (unitRecoverStanceFn env)
   registerLuaFunction callStats "unit" "commitStamina" (unitCommitStaminaFn env)
+  registerLuaFunction callStats "unit" "getMaxStamina" (unitGetMaxStaminaFn env)
+  registerLuaFunction callStats "unit" "applyCombatEngagement"
+                      (unitApplyCombatEngagementFn env)
   registerLuaFunction callStats "unit" "getInventory" (unitGetInventoryFn env)
   registerLuaFunction callStats "unit" "getItemContents" (unitGetItemContentsFn env)
   registerLuaFunction callStats "unit" "treatBleeding" (unitTreatBleedingFn env)

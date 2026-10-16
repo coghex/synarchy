@@ -32,7 +32,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
-import Unit.Physiology (rawWriteAllowed)
+import Unit.Physiology (rawWriteAllowed, engagementApplied)
 import Unit.Types
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 
@@ -370,6 +370,7 @@ unitSetStatFn env = do
                         | not (rawWriteAllowed reg
                                  (maybe noUnitPhysiology udPhysiology
                                      (HM.lookup (uiDefName inst) (umDefs um)))
+                                 (engagementApplied (uiStats inst))
                                  (uiPhysioOverrides inst) name) → (um, False)
                         | otherwise →
                             let inst' = inst { uiStats =

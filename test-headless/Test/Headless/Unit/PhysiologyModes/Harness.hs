@@ -134,6 +134,13 @@ data UnitSpec = UnitSpec
     , usBody      ∷ !Body
     , usStats     ∷ ![(Text, Float)]
       -- ^ extra stats, replacing a body stat of the same name.
+    , usDropStats ∷ ![Text]
+      -- ^ body stats the unit does NOT carry (the default body stores an
+      --   explicit @max_stamina@ and a @stamina@ pool, which the stamina
+      --   specs must be able to omit: a unit with no explicit attribute
+      --   resolves its maximum from @endurance@).
+    , usEngagement ∷ ![(Text, PhysioMode)]
+      -- ^ the definition's @on_combat_engagement:@ entries (SD-20).
     , usModifiers ∷ ![(Text, [StatModifier])]
     , usActivity  ∷ !Text
     , usPose      ∷ !Text
@@ -152,7 +159,8 @@ unitSpec ∷ Int → Text → Maybe Text → UnitSpec
 unitSpec uid def profile = UnitSpec
     { usId = uid, usDefName = def, usProfile = profile
     , usModes = [], usOverrides = [], usBody = acolyteBody
-    , usStats = [], usModifiers = [], usActivity = "idle"
+    , usStats = [], usDropStats = [], usEngagement = []
+    , usModifiers = [], usActivity = "idle"
     , usPose = "standing", usBlood = Nothing, usFaction = FactionPlayer
     , usWounds = [], usBodyTemplates = [] }
 
@@ -164,7 +172,8 @@ specDef sp = do
         Just p  → do
             base ← profilePhysiology p
             pure base { upDefaults = HM.union (HM.fromList (usModes sp))
-                                              (upDefaults base) }
+                                              (upDefaults base)
+                      , upEngagement = HM.fromList (usEngagement sp) }
     pure (minimalDef (usDefName sp) (usDefName sp))
         { udPhysiology = up
         , udBodyTemplates = HM.fromList (usBodyTemplates sp) }
@@ -175,8 +184,9 @@ specDef sp = do
 buildUnit ∷ UnitDef → UnitSpec → IO UnitInstance
 buildUnit def sp = do
     reg ← readShippedPhysiologyRegistry
-    let stats0 = HM.union (HM.fromList (usStats sp))
-                          (HM.fromList (bodyStats (usBody sp)))
+    let stats0 = HM.filterWithKey (\k _ → k `notElem` usDropStats sp) $
+            HM.union (HM.fromList (usStats sp))
+                     (HM.fromList (bodyStats (usBody sp)))
         mods   = HM.fromList (usModifiers sp)
         ctx    = PhysioContext
             { pcRegistry = reg, pcPhysiology = udPhysiology def

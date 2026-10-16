@@ -21,6 +21,7 @@ module Test.Headless.Unit.PhysiologyFixture
     , richPhysiology
     , exemptPhysiology
     , nutritionOnlyPhysiology
+    , staminaOnlyPhysiology
     ) where
 
 import UPrelude
@@ -72,7 +73,7 @@ ensurePhysiologyRegistry env = do
 profilePhysiology ∷ Text → IO UnitPhysiology
 profilePhysiology profile = do
     reg ← readShippedPhysiologyRegistry
-    case resolveUnitPhysiology reg "fixture" True (Just profile) [] of
+    case resolveUnitPhysiology reg "fixture" True (Just profile) [] [] of
         Left r   → error ("profilePhysiology " ⧺ show profile ⧺ ": " ⧺ show r)
         Right up → pure up
 
@@ -86,19 +87,39 @@ withProfile profile def = do
 --   fixture definition that is not built in IO. A spec in the physiology
 --   group pins it equal to the shipped profile's expansion.
 richPhysiology ∷ UnitPhysiology
-richPhysiology = UnitPhysiology True (Just "rich") $ HM.fromList
-    [ (s, PhysioSimulated) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
+richPhysiology = UnitPhysiology True (Just "rich")
+    (HM.fromList
+        [ (s, PhysioSimulated)
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"] ])
+    HM.empty
 
 -- | The @exempt@ profile as a pure value (every system Nominal).
 exemptPhysiology ∷ UnitPhysiology
-exemptPhysiology = UnitPhysiology True (Just "exempt") $ HM.fromList
-    [ (s, PhysioNominal) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
+exemptPhysiology = UnitPhysiology True (Just "exempt")
+    (HM.fromList
+        [ (s, PhysioNominal)
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"] ])
+    HM.empty
 
--- | Only nutrition Simulated, the other three Nominal: for a fixture that
---   exercises nutrition's effects (the fat-floor organ failure) on a unit
---   that carries no salt, hydration or temperature state, so no other
---   system's Simulated invariants are in play.
+-- | Nutrition and stamina Simulated, the other three Nominal: for a fixture
+--   that exercises nutrition's effects (the fat-floor organ failure, which
+--   drains the STAMINA pool and so needs it Simulated, #2834) on a unit that
+--   carries no salt, hydration or temperature state, so no other system's
+--   Simulated invariants are in play.
 nutritionOnlyPhysiology ∷ UnitPhysiology
-nutritionOnlyPhysiology = UnitPhysiology True Nothing $ HM.fromList
-    [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
-    , ("hydration", PhysioNominal), ("nutrition", PhysioSimulated) ]
+nutritionOnlyPhysiology = UnitPhysiology True Nothing
+    (HM.fromList
+        [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
+        , ("hydration", PhysioNominal), ("nutrition", PhysioSimulated)
+        , ("stamina", PhysioSimulated) ])
+    HM.empty
+
+-- | Only stamina Simulated, every other system Nominal: for a fixture that
+--   drives the stamina pool (#2834) and nothing else.
+staminaOnlyPhysiology ∷ UnitPhysiology
+staminaOnlyPhysiology = UnitPhysiology True Nothing
+    (HM.fromList
+        [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
+        , ("hydration", PhysioNominal), ("nutrition", PhysioNominal)
+        , ("stamina", PhysioSimulated) ])
+    HM.empty

@@ -26,6 +26,8 @@ import Combat.Resolution.Strike
     , defenderDodgeChance )
 import Combat.Resolution.Constants (dodgeMaxChance)
 import Combat.Resolution.Damage (computeSeverity)
+import Combat.Resolution.Stamina (staminaWorkFraction)
+import Unit.Physiology.Types (emptyPhysiologyRegistry)
 import Combat.Resolution.Wear (staminaDrainStats)
 import Substance.Types (emptySubstanceManager)
 import Item.Types (emptyItemManager)
@@ -314,7 +316,8 @@ spec = describe "Mental effectiveness" $ do
                     HM.empty
                 tgt = mkInst (HM.fromList [("body_mass", 70.0)]) HM.empty
                 severityOf atk = computeSeverity emptySubstanceManager emptyItemManager
-                    0 atk targetDef Nothing Nothing tgt "torso" "blunt" Quick 0.5 1.0 0.0
+                    (staminaWorkFraction emptyPhysiologyRegistry noUnitPhysiology 0 atk)
+                    atk targetDef Nothing Nothing tgt "torso" "blunt" Quick 0.5 1.0 0.0
             severityOf calm `shouldBe` severityOf distracted
 
         -- The Haskell-side resource-cost analogue of "recovery": the
@@ -355,8 +358,9 @@ spec = describe "Mental effectiveness" $ do
                 -- concentration/mental_state entries — project onto
                 -- the two keys the swing actually updates.
                 drained mode inst =
-                    ( HM.lookup "stamina" (staminaDrainStats 0 mode inst)
-                    , HM.lookup "stance"  (staminaDrainStats 0 mode inst) )
+                    let out = staminaDrainStats emptyPhysiologyRegistry
+                                  noUnitPhysiology 0 mode inst
+                    in (HM.lookup "stamina" out, HM.lookup "stance" out)
             drained Quick calm `shouldBe` drained Quick distracted
             drained Heavy calm `shouldBe` drained Heavy distracted
 

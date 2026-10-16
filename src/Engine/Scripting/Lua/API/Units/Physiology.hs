@@ -38,7 +38,9 @@ module Engine.Scripting.Lua.API.Units.Physiology
     , unitReadPhysioBaseFn
     , unitSetPhysioModeFn
     , unitClearPhysioModeFn
+    , unitApplyCombatEngagementFn
     , applyTransition
+    , applyEngagement
     ) where
 
 import UPrelude
@@ -53,6 +55,7 @@ import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv)
+import Combat.Resolution.Common (isAlreadyDead)
 import Engine.Scripting.Lua.API.Units.Stats (getEffectiveStat, getOrRollStat)
 import Unit.Physiology
 import Unit.Physiology.Transition
@@ -369,3 +372,71 @@ unitClearPhysioModeFn env = do
                 \ctx → planClearMode ctx (TE.decodeUtf8Lenient sysBS)
             pushOutcome outcome
         _ → pushOutcome (Left "usage: clearPhysioMode(uid, system)")
+
+-- * Combat engagement (SD-20, #2834)
+
+-- | Apply a unit's PENDING engagement in ONE unit-manager update
+--   (design S8.3): the dead check (the combat lethality rule, not the
+--   pose mirror alone), the explicit-override latch or the Nominal →
+--   Simulated seed, the pinned override and marker 2 are published
+--   together or not at all, so a strike committing on the combat worker
+--   is entirely before or entirely after. 'Left' is "no such unit" or
+--   "nothing pending to apply"; a refusal mutates nothing.
+applyEngagement ∷ EngineEnv → UnitId → IO (Either Text EngagementOutcome)
+applyEngagement env uid = do
+    reg ← readIORef (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+        case HM.lookup uid (umInstances um) of
+            Nothing → (um, Left "no such unit")
+            Just inst →
+                let mDef = HM.lookup (uiDefName inst) (umDefs um)
+                    dead = uiPose inst ≡ "dead" ∨ maybe False (isAlreadyDead inst) mDef
+                    ctx = PhysioContext
+                        { pcRegistry   = reg
+                        , pcPhysiology = definitionPhysiology um inst
+                        , pcOverrides  = uiPhysioOverrides inst
+                        , pcNow        = now
+                        , pcStats      = uiStats inst
+                        , pcModifiers  = uiModifiers inst }
+                in case planEngagement ctx of
+                    Left EngagementNotPending → (um, Left "not pending")
+                    Left (EngagementSeedRefused code) →
+                        if dead then (um, Right EngagementRefusedDead)
+                                else (um, Right (EngagementSeedUnrepresentable code))
+                    Right plan
+                        | dead → (um, Right EngagementRefusedDead)
+                        | otherwise →
+                            let inst' = inst { uiStats = epStats plan
+                                             , uiPhysioOverrides = epOverrides plan }
+                            in ( um { umInstances = HM.insert uid inst' (umInstances um) }
+                               , Right (epOutcome plan) )
+
+-- | @unit.applyCombatEngagement(uid)@ → @"transitioned"@ | @"latched"@ |
+--   @"refusedDead"@ | @"seedUnrepresentable", code@ | @nil, reason@.
+--   FACADE-ONLY (the audit enforces it): @scripts\/physiology.lua@ calls
+--   it for each pending unit at the start of an eligible pass and, on
+--   @transitioned@, runs the hooks and the refresh. See 'applyEngagement'.
+unitApplyCombatEngagementFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitApplyCombatEngagementFn env = do
+    idTy  ← Lua.ltype 1
+    idArg ← Lua.tointeger 1
+    case (idTy ≡ Lua.TypeNumber, idArg) of
+        (True, Just n) | n ≥ 0 ∧ n ≤ 4294967295 → do
+            outcome ← Lua.liftIO $ applyEngagement env (UnitId (fromIntegral n))
+            case outcome of
+                Left why → do
+                    Lua.pushnil
+                    Lua.pushstring (TE.encodeUtf8 why)
+                    return 2
+                Right o → do
+                    Lua.pushstring (TE.encodeUtf8 (engagementOutcomeText o))
+                    case o of
+                        EngagementSeedUnrepresentable code → do
+                            Lua.pushstring (TE.encodeUtf8 code)
+                            return 2
+                        _ → return 1
+        _ → do
+            Lua.pushnil
+            Lua.pushstring "invalid_unit_id"
+            return 2

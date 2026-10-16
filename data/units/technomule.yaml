@@ -42,7 +42,9 @@ units:
       bodyfat: { mean: 0.12, range: 0.08 }
 
     # Physiology profile (#2831, design D-10): hydration and nutrition Nominal; salt and thermo Simulated.
-    physiology: { profile: reduced }
+    # Stamina is Nominal (#2834, S8a): the mule has no stamina pool configuration,
+    # so a Simulated pool would leave it permanently winded (S8-F1).
+    physiology: { profile: reduced, stamina: nominal }
 
     # Innate, permanent, tooltip-visible: the percentage modifier on
     # top of the body-derived base capacity.

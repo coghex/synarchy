@@ -19,6 +19,13 @@
 --     change) and the dt-0 refresh of the caches that read physiology
 --     (circulation, then brain) before returning (D-5, D-5a).
 --
+-- STAMINA (#2834, S8a): its pool is the one a second thread spends, so a
+-- debit or credit on it is a RELATIVE, atomic commit of an EFFECTIVE delta
+-- through unit.commitStamina (never a read-modify-write), a Nominal receiver
+-- discards the contribution, and the SD-20 combat-engagement marker is
+-- applied here (physiology.applyEngagement, the only caller of the
+-- facade-only unit.applyCombatEngagement).
+--
 -- Owner-local state updates (a system writing its OWN keys, e.g.
 -- salts.tick) stay with the owner; this facade governs reads from,
 -- contributions between, and mode changes of, systems.
@@ -151,6 +158,8 @@ end
 local function salts() return require("scripts.salts") end
 
 local RULES = {
+    -- Stamina is committed engine-side (see debit/credit below).
+    stamina = { commit = true },
     hydration = {
         cap      = function(uid) return stats.get(uid, "max_hydration") end,
         needsCap = true,
@@ -167,6 +176,24 @@ local RULES = {
     },
 }
 
+-- A contribution to stamina: ONE relative commit of an EFFECTIVE delta in the
+-- unit-manager update combat's strike cost shares, so it can never refund an
+-- intervening spend (S8-F2). Returns the EFFECTIVE change (after - before).
+-- A receiver that holds no pool (Nominal, Unsupported) or a dead one takes
+-- nothing; anything else refused is a broken invariant and raises.
+local function commitStaminaContribution(uid, delta)
+    local res, reason = unit.commitStamina(uid, delta)
+    if res == nil then
+        if reason == "nominal" or reason == "unsupported" or reason == "dead"
+           or reason == "no_such_unit" then
+            return 0
+        end
+        error("stamina contribution refused for unit " .. tostring(uid)
+              .. ": " .. tostring(reason))
+    end
+    return res.after - res.before
+end
+
 -- Add `amount` to a pool, clamped to its capacity. Returns the amount
 -- applied (the change in the stored value), 0 when nothing was written, or
 -- nil, reason for a key with no contribution rule.
@@ -174,6 +201,7 @@ function physiology.credit(uid, key, amount)
     local rule = RULES[key]
     if not rule then return nil, "no contribution rule for " .. tostring(key) end
     if not contributionApplies(uid, key) then return 0 end
+    if rule.commit then return commitStaminaContribution(uid, amount) end
     local cap = rule.cap and rule.cap(uid)
     if rule.needsCap and (not cap or cap <= 0) then return 0 end
     local old = unit.getStat(uid, key)
@@ -194,6 +222,7 @@ function physiology.debit(uid, key, amount)
     local rule = RULES[key]
     if not rule then return nil, "no contribution rule for " .. tostring(key) end
     if not contributionApplies(uid, key) then return 0 end
+    if rule.commit then return -commitStaminaContribution(uid, -amount) end
     local old = unit.getStat(uid, key)
     if old == nil then return 0 end
     local new = old - amount
@@ -283,6 +312,45 @@ local function finish(uid, system, changed, from, to, values)
         end
     end
     physiology.refresh(uid)
+end
+
+-- ---- Combat engagement (SD-20, #2834) ----
+
+-- Diagnostics already logged for a refused engagement seed, once per unit per
+-- refusal reason. Session-transient: unit ids are reused after a load or an
+-- Exit to Menu, so unit_resources clears it through its reset hook and its
+-- session-teardown registration (resetSessionState).
+local reportedEngagement = {}
+
+function physiology.resetSessionState()
+    reportedEngagement = {}
+end
+
+-- Apply a unit's PENDING combat engagement (combat_engaged == 1): one atomic
+-- engine update that, for a unit with no explicit stamina override, seeds the
+-- full effective maximum, pins a Simulated override and marks the engagement
+-- applied; with an explicit override of either mode it only latches the
+-- marker. Returns the engine's outcome: "transitioned" | "latched" |
+-- "refusedDead" | "seedUnrepresentable", or nil, reason for a unit with
+-- nothing pending. On "transitioned" the change hooks and the refresh run
+-- before returning (D-5a), exactly as for setMode. A seed D-5's guards refuse
+-- (a retained modifier makes the maximum unrepresentable) leaves the unit
+-- pending and Nominal and is logged ONCE per unit and reason; it is retried
+-- on every eligible pass and succeeds once the blocker is gone.
+function physiology.applyEngagement(uid)
+    local outcome, code = unit.applyCombatEngagement(uid)
+    if outcome == "transitioned" then
+        finish(uid, "stamina", true, "nominal", "simulated", nil)
+    elseif outcome == "seedUnrepresentable" then
+        local key = tostring(uid) .. ":" .. tostring(code)
+        if not reportedEngagement[key] then
+            reportedEngagement[key] = true
+            engine.logWarn("physiology: unit " .. tostring(uid)
+                .. " cannot apply its combat engagement (" .. tostring(code)
+                .. "): stamina stays Nominal until the blocking modifier is gone")
+        end
+    end
+    return outcome, code
 end
 
 -- Set a system's mode, recording the override (even one equal to the

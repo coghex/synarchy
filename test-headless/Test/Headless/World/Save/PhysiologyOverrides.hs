@@ -232,7 +232,7 @@ liveRestoreSpec = describe "capture and restore (requirement 1)" $ do
 
     let defs species = HM.fromList
             [ ("acolyte", (minimalDef "acolyte" "Acolyte")
-                  { udPhysiology = UnitPhysiology True Nothing species })
+                  { udPhysiology = plainUnitPhysiology True Nothing species })
             , ("bear_brown", minimalDef "bear_brown" "Bear") ]
         restore page snap defMap = case fromUnitSnapshot page defMap
                 emptyInfectionManager emptyEquipmentClassManager
@@ -412,9 +412,9 @@ fixtureSpec = describe "retained fixtures (requirement 5)" $ do
 --   species that defaults hydration Simulated, and a bodyless one.
 defPhysiology ∷ HM.HashMap T.Text UnitPhysiology
 defPhysiology = HM.fromList
-    [ ("acolyte", UnitPhysiology True Nothing
+    [ ("acolyte", plainUnitPhysiology True Nothing
           (HM.fromList [("hydration", PhysioSimulated)]))
-    , ("bear_brown", UnitPhysiology True Nothing HM.empty)
+    , ("bear_brown", plainUnitPhysiology True Nothing HM.empty)
     , ("tiller", noUnitPhysiology) ]
 
 rejectionsFor ∷ PhysiologyRegistry → [(Word32, UnitInstanceSnapshot)]

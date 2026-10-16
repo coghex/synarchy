@@ -1,8 +1,8 @@
 -- Unit info v2: mode-aware physiology display (#2832, S6 of epic #2827;
 -- design D-7, D-8).
 --
--- The Status panel's rows and conditions for the registry's four systems
--- (thermo, salt, hydration, nutrition) follow the unit's RESOLVED mode:
+-- The Status panel's rows and conditions for the registry's systems
+-- (thermo, salt, hydration, nutrition, stamina) follow the unit's RESOLVED mode:
 --
 --   * Simulated  -- unchanged: today's values, units, formats, colours.
 --   * Nominal    -- the row shows its healthy reading (a pool shows the
@@ -12,7 +12,7 @@
 --                   owns never appear.
 --   * Unsupported (bodyless unit) -- the row, and everything the system
 --                   owns, is hidden.
---   * Unowned keys (stamina, blood, pain, sleep, ...) -- untouched
+--   * Unowned keys (blood, pain, sleep, ...) -- untouched
 --                   pass-through; this module never reads them.
 --
 -- Every read here goes through scripts.physiology (the mode resolver and
@@ -43,6 +43,7 @@ local ROW_KEY = {
     hydration = "hydration",
     hunger    = "hunger",
     calories  = "calories",
+    stamina   = "stamina",
 }
 M.ROW_KEY = ROW_KEY
 
@@ -92,6 +93,7 @@ local NOMINAL_TEXT_OF = {
     hydration = poolText,
     hunger    = poolText,
     calories  = poolText,
+    stamina   = poolText,
 }
 
 -- The label and its healthy reading are two words, so a Nominal scalar row
