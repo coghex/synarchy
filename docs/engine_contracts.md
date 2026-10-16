@@ -2256,9 +2256,12 @@ every consumer relies on:
   hydration and nutrition fractions 1.0). *Simulated* is today's behavior,
   with the owned keys present: a missing one is an invariant error, never a
   first-tick fill.
-* *Profiles* (D-10, in `data/units/*.yaml`): `acolyte` is `rich`; `bear_brown`,
-  `red_squirrel` and `technomule` are `reduced` (hydration and nutrition
-  Nominal, salt and thermo Simulated; S7 moves the squirrel to `simple`);
+* *Profiles* (D-10, in `data/units/*.yaml`; the final SD-10 table, S7, #2833):
+  `acolyte` is `rich` (all Simulated); `bear_brown` and `technomule` are
+  `reduced` (hydration and nutrition Nominal, salt and thermo Simulated);
+  `red_squirrel` is `simple` (hydration, salt and nutrition Nominal, thermo
+  Simulated: S7's one effective change from S4, the squirrel's salt going
+  Nominal, so it holds no salt state and has no cramps);
   `nomad_primitive` is `exempt`; a definition with no `body:` is Unsupported
   throughout. The three INTENTIONAL behavior changes of activation are the
   bodyless Unsupported units, the virtual meals of a Simulated salt over a
