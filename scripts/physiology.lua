@@ -168,6 +168,20 @@ local RULES = {
     salt = {
         floor  = 0,
     },
+    -- Exhaustion and sleep pressure (#2835). No shipped caller contributes to
+    -- either yet, but the seam exists so that one that does is discarded by a
+    -- Nominal or Unsupported receiver (D-4) and clamped to the pool's
+    -- maximum by a Simulated one, never written raw.
+    exhaustion = {
+        cap      = function(uid) return stats.get(uid, "max_exhaustion") end,
+        needsCap = true,
+        absent   = function(uid) return 0 end,
+    },
+    sleep_pressure = {
+        cap      = function(uid) return stats.get(uid, "max_sleep_pressure") end,
+        needsCap = true,
+        absent   = function(uid) return 0 end,
+    },
     -- #2761's reserve: starts full, never exceeds its capacity.
     salt_store = {
         cap    = function(uid) return salts().storeCap(uid) end,

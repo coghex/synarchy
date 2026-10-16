@@ -22,19 +22,27 @@
 -- carries the utility over a standing order — it only nudges a unit
 -- already leaning toward sleep.
 
-local stats = require("scripts.unit_stats")
+local stats      = require("scripts.unit_stats")
+local physiology = require("scripts.physiology")
 
 local M = {}
 
 local clamp = require("scripts.lib.numeric").clamp
 
--- Fraction 0..1. Defaults to 1.0 (fully rested) when the resource hasn't
--- been initialized yet (unit_resources seeds it to max on first tick) or
--- the unit type has no exhaustion config at all. max_exhaustion is a pure
--- Lua-derived stat (unit_stats.lua), never written into engine uiStats, so
--- it must be read via stats.get — raw unit.getStat would always miss it.
+-- Fraction 0..1: the unit's restedness. The exhaustion SYSTEM's mode decides
+-- (#2835, S8b): only a Simulated one has a pool to read. A Nominal system is a
+-- fully rested unit and an Unsupported one (a bodyless definition) has no
+-- fatigue at all, so both answer the CONSTANT 1.0 -- never get(owned) /
+-- get(max_exhaustion), whose binary32 healthy value over a double maximum can
+-- land a hair under 1.0 (0.99999996) and turn a healthy unit into a deficit.
+-- max_exhaustion is a pure Lua-derived stat (unit_stats.lua), never written
+-- into engine uiStats, so it is read via the facade's unowned pass-through
+-- (stats.get) -- raw unit.getStat would always miss it. A Simulated unit
+-- always holds its pool (seeded at spawn, load or transition), so a missing
+-- one is a broken invariant that the owned read raises.
 local function fraction(uid)
-    local cur = unit.getStat(uid, "exhaustion")
+    if physiology.mode(uid, "exhaustion") ~= "simulated" then return 1.0 end
+    local cur = physiology.get(uid, "exhaustion")
     local mx  = stats.get(uid, "max_exhaustion")
     if cur and mx and mx > 0 then return clamp(cur / mx, 0, 1) end
     return 1.0
@@ -49,6 +57,9 @@ local FATIGUE_START    = 0.35
 local FATIGUE_MIN_MULT = 0.55
 
 function M.speedMultiplier(uid)
+    -- Exactly 1.0 for a system that is not Simulated, without the band
+    -- arithmetic (the penalty is the system's effect, none while Nominal).
+    if physiology.mode(uid, "exhaustion") ~= "simulated" then return 1.0 end
     local f = fraction(uid)
     if f >= FATIGUE_START then return 1.0 end
     local t = clamp((FATIGUE_START - f) / FATIGUE_START, 0, 1)

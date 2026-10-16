@@ -49,7 +49,7 @@ Allowances, each tied to real ownership and named, never a directory:
     removed by S4 (#2831) when it became the ``exempt`` profile, design F-7.)
   * ``PROBE_FIXTURE_WRITES``: tools/physiology_probe.py may ``setStat`` the
     keys it forces as scenario fixtures (D-7 allows raw setStat debugging
-    under Simulated) -- only from the eight setup chunks pinned SITE BY SITE
+    under Simulated) -- only from the setup chunks pinned SITE BY SITE
     by (dotted Python scope, whole normalized Lua text): editing a pinned
     chunk, or putting a write into any other chunk (an observation, an
     aggregate, a helper, a nested measurement function), is flagged, and a
@@ -128,7 +128,7 @@ class Owner:
 
 
 # system owner -> files that actually own its keys. Registry order is tick
-# order (thermo, salt, hydration, nutrition, stamina).
+# order (thermo, salt, hydration, nutrition, stamina, exhaustion, sleep).
 OWNERS: tuple[Owner, ...] = (
     Owner("thermo", "scripts/thermo.lua"),
     Owner("salt", "scripts/salts.lua"),
@@ -143,6 +143,15 @@ OWNERS: tuple[Owner, ...] = (
     # reads through the facade, and every write goes through the atomic
     # commit (see ATOMIC_VERB_CALLERS).
     Owner("stamina", "scripts/unit_resource_tick.lua"),
+    # Exhaustion and sleep (#2835): the same pool engine ticks them while
+    # Simulated, and unit_resource_params.lua is where each pool is registered
+    # to its system (it names the keys, and touches no state). Their consumers
+    # (scripts/exhaustion.lua, unit_ai_sleep.lua, the Status row) read through
+    # the facade and are NOT owners.
+    Owner("exhaustion", "scripts/unit_resource_tick.lua"),
+    Owner("exhaustion", "scripts/unit_resource_params.lua"),
+    Owner("sleep", "scripts/unit_resource_tick.lua"),
+    Owner("sleep", "scripts/unit_resource_params.lua"),
     # The failure-meter engine: only the meters of the systems that declare
     # them, never their pools.
     Owner("thermo", "scripts/unit_resource_failure.lua", "meters"),
@@ -200,6 +209,19 @@ PROBE_FIXTURE_WRITES = FixtureWrites(
         ("starvation_bands_section.set_frac",
          "local u=0; unit.setStat(u,'calories',"
          "unit.getStat(u,'max_calories')*0); return 'ok'"),
+        # Exhaustion (#2835): the exhaustion section forces the pool to a
+        # rested, a spent and a near-empty reading. Its READS go through
+        # unit.readPhysio; these are the only raw writes, on Simulated units.
+        ("exhaustion_section",
+         "unit.setStat(0,'exhaustion',0); return 'ok'"),
+        ("exhaustion_section",
+         "local ms=require('scripts.unit_stats'); "
+         "unit.setStat(0,'exhaustion',ms.get(0,'max_exhaustion')); "
+         "return 'ok'"),
+        ("exhaustion_section",
+         "local ms=require('scripts.unit_stats'); "
+         "unit.setStat(0,'exhaustion',ms.get(0,'max_exhaustion') * 0.05); "
+         "return 'ok'"),
     }),
     "scenario fixtures (D-7: raw setStat is allowed for debugging)")
 

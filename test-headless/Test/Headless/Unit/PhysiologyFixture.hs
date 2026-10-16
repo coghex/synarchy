@@ -90,7 +90,8 @@ richPhysiology ∷ UnitPhysiology
 richPhysiology = UnitPhysiology True (Just "rich")
     (HM.fromList
         [ (s, PhysioSimulated)
-        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"] ])
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
+             , "exhaustion", "sleep"] ])
     HM.empty
 
 -- | The @exempt@ profile as a pure value (every system Nominal).
@@ -98,7 +99,8 @@ exemptPhysiology ∷ UnitPhysiology
 exemptPhysiology = UnitPhysiology True (Just "exempt")
     (HM.fromList
         [ (s, PhysioNominal)
-        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"] ])
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
+             , "exhaustion", "sleep"] ])
     HM.empty
 
 -- | Nutrition and stamina Simulated, the other three Nominal: for a fixture
@@ -111,7 +113,8 @@ nutritionOnlyPhysiology = UnitPhysiology True Nothing
     (HM.fromList
         [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
         , ("hydration", PhysioNominal), ("nutrition", PhysioSimulated)
-        , ("stamina", PhysioSimulated) ])
+        , ("stamina", PhysioSimulated), ("exhaustion", PhysioNominal)
+        , ("sleep", PhysioNominal) ])
     HM.empty
 
 -- | Only stamina Simulated, every other system Nominal: for a fixture that
@@ -121,5 +124,6 @@ staminaOnlyPhysiology = UnitPhysiology True Nothing
     (HM.fromList
         [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
         , ("hydration", PhysioNominal), ("nutrition", PhysioNominal)
-        , ("stamina", PhysioSimulated) ])
+        , ("stamina", PhysioSimulated), ("exhaustion", PhysioNominal)
+        , ("sleep", PhysioNominal) ])
     HM.empty

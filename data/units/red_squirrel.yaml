@@ -53,6 +53,8 @@ units:
       bodyfat: { mean: 0.10,  range: 0.06 }
 
     # Physiology profile (#2833, owner decision SD-10): hydration, salt and nutrition Nominal; thermo Simulated.
+    # Exhaustion is Simulated and sleep Nominal (#2835, S8b): the squirrel has no
+    # go_to_sleep behavior, so its sleep-pressure simulation was unused.
     physiology: { profile: simple }
 
     skills:

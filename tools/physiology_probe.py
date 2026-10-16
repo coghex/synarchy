@@ -291,7 +291,7 @@ def small_creature_section(port, seconds):
 
 
 def _exhaustion(port, uid):
-    r = send(port, f"return unit.getStat({uid},'exhaustion') or -1")
+    r = send(port, f"return unit.readPhysio({uid},'exhaustion') or -1")
     try:
         return float(r)
     except ValueError:

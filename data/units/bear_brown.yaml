@@ -50,6 +50,7 @@ units:
       bodyfat: { mean: 0.25, range: 0.30 } # 0.10..0.40
 
     # Physiology profile (#2831, design D-10): hydration and nutrition Nominal; salt and thermo Simulated.
+    # Exhaustion and sleep Simulated (#2835, S8b).
     physiology: { profile: reduced }
 
     skills:

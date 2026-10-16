@@ -199,6 +199,12 @@ simulatedSpec = describe "Simulated rows keep their formats and colours" $ do
             (rowText <$> rowNamed rs "Body Temp") `shouldReturn` "37.0degC"
             (rowText <$> rowNamed rs "Salt") `shouldReturn` "100%"
             (rowText <$> rowNamed rs "Stamina") `shouldReturn` "100.0 / 100.0"
+            -- the sleep-pressure row (#2835) keeps its pool format and has no
+            -- value tooltip; exhaustion has no row at all
+            sl ← rowNamed rs "Sleep"
+            rowText sl `shouldBe` "50.0 / 100.0"
+            rowTip sl `shouldBe` "-"
+            absent rs ["Exhaustion"]
 
     it "recolours a draining pool by its threshold, in place, without a rebuild" $
         withPanel [acolyte 1] $ \(_, ls) → do
@@ -216,11 +222,12 @@ nominalSpec = describe "A supported Nominal system" $ do
     it "shows the word Nominal, neutral, with the exact tooltip, and stores nothing" $
         withPanel [(acolyte 1) { usOverrides = [("hydration", PhysioNominal)
                                                , ("nutrition", PhysioNominal)
-                                               , ("stamina", PhysioNominal)] }] $
+                                               , ("stamina", PhysioNominal)
+                                               , ("sleep", PhysioNominal)] }] $
             \(_, ls) → do
                 -- a low-looking fixture elsewhere must not leak into the row
                 rs ← rowsOf ls
-                forM_ ["Hydration", "Hunger", "Calories", "Stamina"] $ \n → do
+                forM_ ["Hydration", "Hunger", "Calories", "Stamina", "Sleep"] $ \n → do
                     r ← rowNamed rs n
                     rowText r `shouldBe` "Nominal"
                     rowColour r `shouldBe` neutral
@@ -228,12 +235,12 @@ nominalSpec = describe "A supported Nominal system" $ do
                 -- the icon tooltip is the stat's own description, unchanged
                 (rowIcon <$> rowNamed rs "Hydration")
                     `shouldReturn` "Need for water. Drops fa"
-                forM_ ["hydration", "hunger", "calories", "stamina"] $ \k →
+                forM_ ["hydration", "hunger", "calories", "stamina", "sleep_pressure"] $ \k →
                     luaText ls ("return tostring(unit.getStatBase(1, '" <> k <> "'))")
                         `shouldReturn` "nil"
                 -- ... and a hundred ticks of rendering still store nothing
                 replicateM_ 100 (tick ls)
-                forM_ ["hydration", "hunger", "calories", "stamina"] $ \k →
+                forM_ ["hydration", "hunger", "calories", "stamina", "sleep_pressure"] $ \k →
                     luaText ls ("return tostring(unit.getStatBase(1, '" <> k <> "'))")
                         `shouldReturn` "nil"
 
@@ -272,7 +279,7 @@ unsupportedSpec = describe "A bodyless (Unsupported) unit" $
                       { usStats = [("sleep_pressure", 50), ("max_sleep_pressure", 100)]
                       , usWounds = [wound] } ] $ \(_, ls) → do
             rs ← rowsOf ls
-            absent rs ["Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina"]
+            absent rs ["Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina", "Sleep"]
             forM_ ["Blood", "Pain"] (void ∘ rowNamed rs)
             -- the injury row survives: it is the one row that is no fixed vital
             let vitals = ["Blood", "Pain", "Heart Rate", "Blood O\8322"
@@ -392,6 +399,25 @@ transitionSpec = describe "A selected unit changing mode rebuilds without resele
             hy' ← rowNamed rs' "Hydration"
             rowText hy' `shouldBe` "42.0 / 42.0"
             rowTip hy' `shouldBe` "-"
+            luaText ls "return tostring(__u.activeUid)" `shouldReturn` "1"
+
+    it "rebuilds the sleep row when the sleep mode changes, and shows the \
+       \reseeded healthy pool when it returns" $
+        withPanel [acolyte 1] $ \(_, ls) → do
+            ids0 ← luaText ls "return __ids()"
+            setMode ls 1 "sleep" "nominal"
+            tick ls
+            ids1 ← luaText ls "return __ids()"
+            ids1 `shouldNotBe` ids0                      -- rebuilt
+            sl ← rowsOf ls >>= \rs → rowNamed rs "Sleep"
+            rowText sl `shouldBe` "Nominal"
+            rowColour sl `shouldBe` neutral
+            rowTip sl `shouldBe` nominalHint
+            setMode ls 1 "sleep" "simulated"
+            tick ls
+            sl' ← rowsOf ls >>= \rs → rowNamed rs "Sleep"
+            rowText sl' `shouldBe` "10.0 / 100.0"        -- seeded healthy: endurance x 10
+            rowTip sl' `shouldBe` "-"
             luaText ls "return tostring(__u.activeUid)" `shouldReturn` "1"
 
     it "rebuilds when the definition's default or support changes under the selection" $

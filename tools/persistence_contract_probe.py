@@ -65,6 +65,14 @@ what each becomes across fresh processes -- the pending one transitions
 exactly once with a full seed, the applied one keeps its pool and pin
 exactly and is never reseeded.
 
+S8b (#2835) adds three FOCUSED fresh-process cycles for the exhaustion and
+sleep modes (``exhaustion_sleep_cycles`` below), because the generic cycles
+never hold a partial pool of either: an acolyte with exact partial exhaustion
+and sleep-pressure pools, a squirrel PINNED to a Simulated sleep with its own
+partial pool (its shipped default is Nominal), a plain squirrel and a mule
+(both Nominal, holding neither key), and a facade switch of one system to
+Nominal that must scrub only its own key and survive another reload.
+
 The BROADER manual sweep (all of requirement 4's representative-scenario
 checklist, the assembled failure contract, and every maintained
 migration baseline) is ``tools/persistence_contract_sweep.py``.
@@ -621,6 +629,155 @@ def engagement_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
             quit_engine(port, proc)
 
 
+# ── S8b (#2835): exhaustion and sleep across fresh processes ────────────────
+
+ES_PAGE = "exhaustion_sleep_page"
+
+
+def pool_state(port: int, uid: int) -> dict:
+    """What a unit stores and resolves for the two S8b systems."""
+    return {
+        "ex": lua_number(port, f"unit.getStatBase({uid}, 'exhaustion')"),
+        "sp": lua_number(port, f"unit.getStatBase({uid}, 'sleep_pressure')"),
+        "ex_mode": lua_text(port, f"unit.getPhysioMode({uid}, 'exhaustion')"),
+        "sp_mode": lua_text(port, f"unit.getPhysioMode({uid}, 'sleep')"),
+        "sp_pin": lua_text(port, f"unit.getPhysioOverride({uid}, 'sleep')"),
+        "max_sp": lua_number(port, f"require('scripts.unit_stats').get({uid}, "
+                                   f"'max_sleep_pressure')"),
+    }
+
+
+def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
+    """Three fresh processes: save partial pools, a pinned Simulated squirrel
+    and two Nominal units; load, switch one system through the facade, save
+    again; load again."""
+    print("=== exhaustion/sleep engine H: partial pools + pinned squirrel, save 'es1' ===")
+    proc = engagement_boot(root, tmpdir, port, "H")
+    try:
+        send(port, f"world.init('{ES_PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
+                   f"'Exhaustion Sleep World', 'the S8b modes'); return 'ok'")
+        send(port, f"world.show('{ES_PAGE}'); return 'ok'")
+        wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
+                 .strip('"') == ES_PAGE, 30.0)
+        send(port, "return world.waitForInit(30)", timeout=35)
+        # The STANDARD spawn profile (#2756): every stat at its definition's
+        # mean, so each maximum is a known number, not a roll.
+        acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+                                    "'player', nil, nil, 'standard')"))
+        pinned = as_int(send(port, "return unit.spawn('red_squirrel', 5, 5, 0, "
+                                   "'player', nil, nil, 'standard')"))
+        plain = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, 0, "
+                                  "'player', nil, nil, 'standard')"))
+        mule = as_int(send(port, "return unit.spawn('technomule', 7, 7, 0, "
+                                 "'player', nil, nil, 'standard')"))
+        uids = (acolyte, pinned, plain, mule)
+        chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
+        time.sleep(0.6)   # unit.spawn only queues; let the unit thread commit
+
+        # A unit saved MID-CLIMB (a spawn tile off the surface settles first)
+        # restores in a pose it cannot resume, so wait until every unit has
+        # stood still for a full second before anything is paused and saved.
+        def all_standing() -> bool:
+            return all(lua_text(port, f"unit.getPose({u})") == "standing" for u in uids)
+        chk.ok(wait_for(port, lambda: all_standing()
+                         and (time.sleep(1.0) or all_standing()), 30.0),
+               "every unit has settled into a standing pose")
+
+        # The shipped table, through real spawns: acolyte S/S; the squirrel
+        # exhaustion Simulated and sleep Nominal; the mule N/N.
+        want = {acolyte: ("simulated", "simulated"), pinned: ("simulated", "nominal"),
+                plain: ("simulated", "nominal"), mule: ("nominal", "nominal")}
+        for uid, (ex_mode, sp_mode) in want.items():
+            st = pool_state(port, uid)
+            chk.ok(st["ex_mode"] == ex_mode and st["sp_mode"] == sp_mode,
+                   f"unit {uid} resolves exhaustion {ex_mode} / sleep {sp_mode} (got {st})")
+        for uid in (plain, mule):
+            st = pool_state(port, uid)
+            chk.ok(st["sp"] is None and (uid != mule or st["ex"] is None),
+                   f"unit {uid} holds no sleep_pressure"
+                   f"{' and no exhaustion' if uid == mule else ''} (got {st})")
+
+        # Pin the squirrel's sleep Simulated through the facade (it seeds the
+        # full pool), then give three units EXACT partial pools no reseed keeps.
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        pinned_ok = send(port, f"local ok, why = require('scripts.physiology')"
+                               f".setMode({pinned}, 'sleep', 'simulated'); "
+                               f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
+        chk.ok(pinned_ok == "true|true",
+               f"the squirrel's sleep is pinned Simulated through the facade "
+               f"(got {pinned_ok!r})")
+        st = pool_state(port, pinned)
+        chk.ok(st["sp"] is not None and st["max_sp"] is not None
+               and abs(st["sp"] - st["max_sp"]) < 1e-4 and st["sp_pin"] == "simulated",
+               f"the pin seeded the full pool (got {st})")
+        send(port, f"unit.setStat({acolyte}, 'exhaustion', 3.5); "
+                   f"unit.setStat({acolyte}, 'sleep_pressure', 2.25); "
+                   f"unit.setStat({pinned}, 'sleep_pressure', 4.5); return 'ok'")
+        chk.ok(lua_number(port, f"unit.getStat({acolyte}, 'exhaustion')") == 3.5
+               and lua_number(port, f"unit.getStat({acolyte}, 'sleep_pressure')") == 2.25
+               and lua_number(port, f"unit.getStat({pinned}, 'sleep_pressure')") == 4.5,
+               "the partial pools are exact")
+        save_and_wait(chk, port, ES_PAGE, "es1")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== exhaustion/sleep engine I: load 'es1', switch sleep, save 'es2' ===")
+        proc = engagement_boot(root, tmpdir, port, "I")
+        engagement_load(chk, port, "es1")
+        st = pool_state(port, acolyte)
+        chk.ok(st["ex"] == 3.5 and st["sp"] == 2.25 and st["ex_mode"] == "simulated"
+               and st["sp_mode"] == "simulated",
+               f"the acolyte's partial pools reload exactly (got {st})")
+        st = pool_state(port, pinned)
+        chk.ok(st["sp"] == 4.5 and st["sp_mode"] == "simulated" and st["sp_pin"] == "simulated",
+               f"the pinned squirrel keeps its pin and exact pool (got {st})")
+        for uid in (plain, mule):
+            st = pool_state(port, uid)
+            chk.ok(st["sp"] is None and st["sp_mode"] == "nominal",
+                   f"unit {uid} reloads Nominal holding no sleep_pressure (got {st})")
+        # unpause: the pinned squirrel's pool drains (drain-only parameters)
+        send(port, "require('scripts.pause').set(false); return 'ok'")
+        chk.ok(wait_for(port, lambda: (lua_number(
+                   port, f"unit.getStat({pinned}, 'sleep_pressure')") or 99) < 4.5),
+               "the pinned squirrel's reloaded pool keeps draining")
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        chk.ok(lua_number(port, f"unit.getStat({plain}, 'sleep_pressure')") is None,
+               "the plain squirrel still holds no sleep_pressure after ticking")
+        # a facade switch scrubs only its own key
+        switched = send(port, f"local ok, why = require('scripts.physiology')"
+                              f".setMode({acolyte}, 'sleep', 'nominal'); "
+                              f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
+        chk.ok(switched == "true|true",
+               f"the acolyte's sleep is switched to Nominal through the facade "
+               f"(got {switched!r})")
+        st = pool_state(port, acolyte)
+        chk.ok(st["sp"] is None and st["ex"] is not None and st["sp_mode"] == "nominal",
+               f"only the sleep pool was scrubbed (got {st})")
+        ex_saved = st["ex"]
+        pin_pool = lua_number(port, f"unit.getStatBase({pinned}, 'sleep_pressure')")
+        save_and_wait(chk, port, ES_PAGE, "es2")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== exhaustion/sleep engine J: load 'es2' ===")
+        proc = engagement_boot(root, tmpdir, port, "J")
+        engagement_load(chk, port, "es2")
+        st = pool_state(port, acolyte)
+        chk.ok(st["sp"] is None and st["sp_mode"] == "nominal" and st["sp_pin"] == "nominal"
+               and st["ex"] is not None and ex_saved is not None
+               and abs(st["ex"] - ex_saved) < 1e-4,
+               f"the switched acolyte reloads Nominal, the pin and exhaustion exact (got {st})")
+        st = pool_state(port, pinned)
+        chk.ok(st["sp"] is not None and pin_pool is not None
+               and abs(st["sp"] - pin_pool) < 1e-4 and st["sp_pin"] == "simulated",
+               f"the pinned squirrel's pool persists exactly again (got {st})")
+        quit_engine(port, proc)
+        proc = None
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -778,6 +935,9 @@ def main() -> int:
 
         # ── S8a (#2834): the SD-20 engagement, focused ────────────────────
         engagement_cycles(chk, root, tmpdir, port)
+
+        # ── S8b (#2835): exhaustion and sleep, focused ───────────────────
+        exhaustion_sleep_cycles(chk, root, tmpdir, port)
 
     finally:
         if proc is not None:
