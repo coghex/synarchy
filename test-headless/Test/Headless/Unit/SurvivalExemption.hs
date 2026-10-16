@@ -63,6 +63,10 @@ healthy = HM.fromList
     , ("hunger", 700), ("max_hunger", 700)
     , ("calories", 1400), ("max_calories", 1400)
     , ("core_temp", 37), ("salt", 70), ("salt_store", 140)
+    -- the exertion pool (#2834): the acolyte's stamina is Simulated, so its
+    -- brain and tick read a stored pool; the nomad's is Nominal (scrubbed or
+    -- ignored) and reads the effective maximum from `endurance`
+    , ("stamina", 10)
     , ("consciousness", 1), ("blood_oxygen", 1), ("heart_rate", 70) ]
 
 mkUnit ∷ Text → HM.HashMap Text Float → Float → [Wound] → UnitInstance
