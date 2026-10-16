@@ -2146,6 +2146,58 @@ choice fills a gap the text above leaves, it is named here.
   (the pool engine), the facade-only `applyCombatEngagement` and the atomic
   `commitStamina` seam (facade and pool engine only).
 
+#### S8.10 S8b delivered (#2835)
+
+What the slice built, as the code now states it. Lua and content only: no
+Haskell source changed.
+
+- **Registry.** `exhaustion` and `sleep` are the sixth and seventh systems
+  (`data/physiology/systems.yaml`), each requiring `body` with no meters.
+  `exhaustion` owns `exhaustion` and provides `restedness_fraction` and
+  `movement_multiplier` (both the constant 1.0 under Nominal), contributes a
+  zero `sleep_exhaustion_deficit` to the sleep utility, and has the effect
+  `speed_penalty`. `sleep` owns `sleep_pressure` and provides `sleep_deficit`
+  (0.0), with the effects `sleep_need` and `pressure_wake`. The system id and
+  the key differ for sleep, so `SYSTEM_OF` maps `sleep_pressure` to `sleep`.
+- **Healthy rule.** `{ from: endurance, scale: 10 }` for both pools. The
+  maxima are Lua-only derived stats (`max_exhaustion`, `max_sleep_pressure` =
+  effective endurance x 10) and never stored, so a literal
+  `{ from: max_exhaustion }` would name an input no unit holds and refuse every
+  spawn. A hspec case pins the seed target equal to `stats.get(max_*)` at
+  binary32 for each shipped species over a spread of endurances. The one
+  numerical trap: a Nominal substitute computed as `get(owned) / get(max)`
+  reads 0.99999996 at endurance 0.3 (binary32 healthy 3.0 against a double
+  3.0000001192), so every Nominal and Unsupported substitute is a constant.
+- **Profiles.** `rich` S/S, `reduced` S/S, `simple` S/N, `exempt` N/N; the
+  technomule overrides both to Nominal. The squirrel's sleep is Nominal
+  because it has no `go_to_sleep`: its `sleep_pressure` config entry stays as
+  the drain-only parameters of a pinned squirrel and the circadian shape.
+- **Ticking.** `unit_resource_params.lua` maps `exhaustion` and
+  `sleep_pressure` to their systems (acolyte entries are the registry
+  defaults), so the pool tick runs each only while Simulated.
+- **Consumers.** `exhaustion.fraction` and `speedMultiplier` answer 1.0
+  unless exhaustion is Simulated, and compose into every gait through
+  `movement_speed.bandMultiplier` as before (0.35 start, 0.55 floor). The sleep
+  need is gated on sleep's mode before the latch, the pressure wake on
+  Simulated sleep, and `unit_ai_sleep.lua` reads the pool through the facade.
+  The Status row follows the S6 contract; exhaustion has no row.
+- **Cancelling the latch.** The `go_to_sleep` hook (sleep only) and the
+  utility's own check of a restored sequence abandon it: every sequence field
+  is cleared and the unit is unwound to a pose it can act from. This is not
+  just a -infinity utility, which would strand a Sleeping unit (Motion moves
+  only Standing or Crawling units, revive acts only on Collapsed or Crawling,
+  and the injury tick's crawling exemption keys on the phase). A hop in flight
+  is waited out, because `unit.transitionTo` is a no-op mid-transition and
+  `getPose` reports the pose being left.
+- **Persistence.** No wire change; both pools Persist exactly while
+  Simulated; the AI sequence is durable and untouched by the load and
+  teardown resets. A legacy squirrel's stored `sleep_pressure` is scrubbed by
+  D-6 (b), logged once.
+- **Facade and audit.** `credit` / `debit` gain rules for both pools (a
+  Nominal receiver discards). The access audit gains the two owners, the
+  probe's exhaustion fixture pins, and an updated self-test whose unowned
+  example is `heart_rate`.
+
 ### S9. Cardio and circulation
 
 #### S9.1 Current state

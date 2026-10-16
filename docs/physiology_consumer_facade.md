@@ -49,7 +49,7 @@ removed the switch with the thing it guarded. Now:
 | `get(uid, key)` → `value, mode` | effective value. Unowned keys read as `stats.get` (attribute, then the Lua-derived formulas such as `max_stamina`), mode `nil`. `nil` for an undefined or Unsupported key |
 | `getBase(uid, key)` → `value, mode` | the stored base (`unit.getStatBase` for an unowned key) |
 | `fraction(uid, key, maxKey)` | `get(key) / get(maxKey)`; `nil` when either is undefined **or the maximum is not positive**. The maximum is read first, so a unit with no usable maximum never has the current stat read. Unclamped |
-| `credit(uid, key, amount)` | add to a pool, clamped to its capacity; returns the amount applied; `0` when nothing was written |
+| `credit(uid, key, amount)` | add to a pool, clamped to its capacity; returns the amount applied; `0` when nothing was written. `exhaustion` and `sleep_pressure` (#2835) have a rule too (capacity: `max_exhaustion`, `max_sleep_pressure`), so a contribution to either is discarded by a Nominal or Unsupported receiver; no shipped caller contributes to them yet |
 | `debit(uid, key, amount)` | remove from a pool, floored at 0; an absent pool is left absent; returns the amount applied. On `stamina` (#2834) it is a relative, atomic EFFECTIVE commit through `unit.commitStamina` (the thermo shiver debit uses it), discarded by a Nominal or Unsupported receiver |
 | `isOwned(key)` | is `key` registry-owned |
 | `systemOf(key)`, `systemOrder()` | the owning system id of a key; the registry's system ids in tick order |
@@ -105,6 +105,9 @@ systems.
 | Consumable (coffee) hydration | `consumable.lua` `applySip` | `credit("hydration")` |
 | Thermo sweat | `thermo.lua` | `debit("hydration")`, `debit("salt")` |
 | Thermo shiver | `thermo.lua` | `debit("stamina")` |
+| Exhaustion restedness and speed multiplier | `exhaustion.lua` (reached from `movement_speed.lua`'s band) | `mode("exhaustion")` (the constant 1.0 unless Simulated), `get("exhaustion")` |
+| Sleep need: go_to_sleep utility, pressure wake, cancellation hook | `unit_ai_sleep.lua` | `isSimulated("sleep")`, `get("sleep_pressure")`, `onModeChanged` |
+| Status panel Sleep row (text, colour, Nominal tooltip, Unsupported hide) | `unit_info_v2_status.lua`, `unit_info_v2_physio.lua` | `physio.row`, `fraction("sleep_pressure", "max_sleep_pressure")` |
 | Stamina gates and pacing (brain, wander, pace, lunge, attack, unit panels) | `brain.lua`, `unit_ai_needs.lua`, `unit_ai_pace.lua`, `unit_ai_combat_lunge.lua`, `unit_ai_combat_attack.lua`, `unit_info_panel.lua`, `unit_info_v2_*.lua` | `fraction("stamina", "max_stamina")`, `get` |
 | Thermo calorie throttle | `thermo.lua` | `fraction("calories")` |
 | Salt's hydration term, concentration, cramps, sweat factor | `salts.lua` | `fraction`, `get("salt_conc")` |
@@ -116,7 +119,7 @@ systems.
 | Physiology probe aggregate, stomach and hydration observations | `tools/physiology_probe.py` | `unit.readPhysio` (circulation remains an unowned pass-through read) |
 
 Not migrated, by design: circulation, blood, injury and mental-state
-redesigns; exhaustion and sleep pressure (S8b); the engine's own `unit.feed` / `unit.getCalories` food primitives
+redesigns; the engine's own `unit.feed` / `unit.getCalories` food primitives
 (`unit.feed` refuses a unit with no `hunger`, which is every Nominal one);
 S6's presentation.
 
@@ -131,6 +134,7 @@ A file may touch the keys of the systems it actually owns, and nothing else.
 | `hydration` | `scripts/unit_resource_tick.lua`, `scripts/unit_resource_carry.lua` | the pool engine (dynamic keys) |
 | `nutrition` | `scripts/unit_resource_tick.lua`, `unit_resource_carry.lua`, `unit_resource_energy.lua`, `unit_resource_regrowth.lua` | digestion, starvation, regrowth |
 | `stamina` | `scripts/unit_resource_tick.lua` | the pool engine (#2834); its only write is the atomic `unit.commitStamina` |
+| `exhaustion`, `sleep` | `scripts/unit_resource_tick.lua`, `scripts/unit_resource_params.lua` | the pool engine ticks them (#2835); `unit_resource_params.lua` registers each pool to its system (`sleep_pressure` belongs to `sleep`) and touches no state. `exhaustion.lua` and `unit_ai_sleep.lua` are consumers, not owners |
 | `thermo` and `salt` **meters only** | `scripts/unit_resource_failure.lua` | the failure-meter engine; never their pools |
 
 One further allowance, named and bounded (the survival exemption of #2754 that
