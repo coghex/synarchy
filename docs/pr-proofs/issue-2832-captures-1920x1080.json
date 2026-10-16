@@ -12,7 +12,7 @@
    "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 0",
    "selected": "1",
    "offset": 0,
-   "rows": "4.3 / 4.3 L | 0.00 | 37.0\u00b0C"
+   "rows": "3.6 / 3.6 L | 0.00 | 37.0\u00b0C"
   },
   {
    "frame": "1920x1080_acolyte_off03",
@@ -33,21 +33,21 @@
    "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 9",
    "selected": "1",
    "offset": 9,
-   "rows": "571.9 / 571.9 | 1143.9 / 1143.9 | 34.3 / 34.3"
+   "rows": "479.9 / 479.9 | 959.8 / 959.8 | 28.8 / 28.8"
   },
   {
    "frame": "1920x1080_acolyte_off11",
    "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 11",
    "selected": "1",
    "offset": 11,
-   "rows": "34.3 / 34.3 | ? | 12.1 / 19.1 kg"
+   "rows": "28.8 / 28.8 | ? | 12.1 / 17.2 kg"
   },
   {
    "frame": "1920x1080_bear_brown_off00",
    "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 0",
    "selected": "2",
    "offset": 0,
-   "rows": "11.5 / 11.5 L | 0.00 | 37.0\u00b0C"
+   "rows": "17.9 / 17.9 L | 0.00 | 37.0\u00b0C"
   },
   {
    "frame": "1920x1080_bear_brown_off03",
@@ -75,14 +75,14 @@
    "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 11",
    "selected": "2",
    "offset": 11,
-   "rows": "Nominal | ? | 0.0 / 142.3 kg"
+   "rows": "Nominal | ? | 0.0 / 155.2 kg"
   },
   {
    "frame": "1920x1080_nomad_primitive_off00",
    "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 0",
    "selected": "3",
    "offset": 0,
-   "rows": "2.9 / 2.9 L | 0.00 | 37.0\u00b0C"
+   "rows": "2.4 / 2.4 L | 0.00 | Nominal 37.0\u00b0C"
   },
   {
    "frame": "1920x1080_nomad_primitive_off03",
@@ -96,7 +96,7 @@
    "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 6",
    "selected": "3",
    "offset": 6,
-   "rows": "100% | 100% | ?"
+   "rows": "100% | Nominal 100% | ?"
   },
   {
    "frame": "1920x1080_nomad_primitive_off09",
@@ -110,7 +110,7 @@
    "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 11",
    "selected": "3",
    "offset": 11,
-   "rows": "Nominal | ? | 0.0 / 14.0 kg"
+   "rows": "Nominal | ? | 0.0 / 13.7 kg"
   },
   {
    "frame": "1920x1080_tiller_off00",
@@ -145,7 +145,7 @@
    "note": "acolyte selected, hunger/calories/hydration, all Simulated",
    "selected": "1",
    "offset": 9,
-   "rows": "571.9 / 571.9 | 1143.9 / 1143.9 | 34.3 / 34.3"
+   "rows": "479.9 / 479.9 | 959.8 / 959.8 | 28.8 / 28.8"
   },
   {
    "frame": "1920x1080_transition_2_nominal",
@@ -166,7 +166,7 @@
    "note": "back to Simulated, values reseeded healthy",
    "selected": "1",
    "offset": 9,
-   "rows": "571.9 / 571.9 | 1143.9 / 1143.9 | 34.3 / 34.3"
+   "rows": "479.9 / 479.9 | 959.8 / 959.8 | 28.8 / 28.8"
   }
  ]
 }

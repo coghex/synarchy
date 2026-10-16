@@ -247,7 +247,7 @@ class Run:
     def hover_nominal(self, frame, note):
         """Hover the first row reading Nominal; the engine's own dwell raises the tooltip."""
         code = ("local L=package.loaded['scripts.ui.label']; for _,e in ipairs(%s.statsContentElements)"
-                " do if e.kind=='label' and L.getText(e.id)=='Nominal' then local i=UI.getElementInfo("
+                " do if e.kind=='label' and L.getText(e.id):sub(1,7)=='Nominal' then local i=UI.getElementInfo("
                 "L.getElementHandle(e.id)); return {x=i.x,y=i.y} end end return nil" % UB)
         pos = lua(self.port, code)
         assert isinstance(pos, dict), "no Nominal row visible"
@@ -287,16 +287,18 @@ class Run:
                  ("nomad_primitive", "nomad_primitive (exempt: all Nominal)"),
                  ("tiller", "tiller (bodyless: all Unsupported, one injury)")]
         if self.a.quick:
-            order = [order[1]]
+            order = [order[2]]      # the all-Nominal unit: scalar rows and pools
         for key, label in order:
             sizes[key] = self.survey(key, self.uids[key], label)
         if not self.a.quick:
             self.transition()
         else:
-            self.click_unit(self.uids["bear_brown"])
-            mx, cap = sizes["bear_brown"]
-            self.scroll_to(min(mx, max(0, 11 - (cap - 1))))   # hydration, the 12th row
-            self.hover_nominal("%s_bear_tooltip" % self.a.tag, "Nominal tooltip hover, mixed-mode unit")
+            self.click_unit(self.uids["nomad_primitive"])
+            mx, cap = sizes["nomad_primitive"]
+            for row, what in ((2, "temp"), (11, "hydration")):
+                self.scroll_to(min(mx, max(0, row - (cap - 1))))
+                self.hover_nominal("%s_nomad_%s_tooltip" % (self.a.tag, what),
+                                   "Nominal tooltip hover, %s row, all-Nominal unit" % what)
         json.dump({"size": self.a.size, "units": self.uids, "captures": self.records},
                   open(os.path.join(self.a.out, "captures-%s.json" % self.a.tag), "w"), indent=1)
 
