@@ -17,13 +17,17 @@ function M.fmtNum(x)
 end
 
 -- Format a "cur / max" pair: "0 / 10" with stat lookup. Returns "?"
--- when either value is missing. Uses the unit_stats wrapper so derived
--- stats (e.g. max_stamina = endurance * 10) resolve through the same
--- call as raw attributes.
+-- when either value is missing. Reads go through scripts.physiology
+-- (#2832): an unowned stat resolves exactly as scripts.unit_stats does
+-- (derived stats such as max_stamina = endurance * 10 included, and the
+-- same lazy roll), an owned pool reads through the mode resolver. The
+-- Status panel never asks a Nominal or Unsupported pool (its row shows
+-- the mode instead, unit_info_v2_physio.lua), so the "?" for a missing
+-- value is the rare unit/def with no such stat.
 function M.fmtCurMax(uid, curName, maxName)
-    local stats = require("scripts.unit_stats")
-    local cur = stats.get(uid, curName)
-    local mx  = stats.get(uid, maxName)
+    local physiology = require("scripts.physiology")
+    local cur = physiology.get(uid, curName)
+    local mx  = physiology.get(uid, maxName)
     if cur == nil or mx == nil then return "?" end
     return string.format("%.1f / %.1f", cur, mx)
 end

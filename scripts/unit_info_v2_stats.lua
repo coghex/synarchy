@@ -14,6 +14,7 @@ local scrollbar = require("scripts.ui.scrollbar")
 local injuries  = require("scripts.injuries")
 local L         = require("scripts.unit_info_v2_layout")
 local status    = require("scripts.unit_info_v2_status")
+local physio    = require("scripts.unit_info_v2_physio")
 local panels    = require("scripts.unit_info_v2_panels")
 
 local M = {}
@@ -194,6 +195,10 @@ local function panelShapeSig(panel, uid)
         -- Severity is bucketed (~0.1) so passive healing only rebuilds on
         -- a visible step, not every tick.
         local parts = {}
+        -- The resolved physiology modes (#2832): a mode, support or default
+        -- change swaps rows (Nominal text, hidden Unsupported rows) and
+        -- tooltips without the uid, a stored key or a condition changing.
+        parts[#parts + 1] = "p:" .. physio.signature(uid)
         for _, c in ipairs(status.unitConditions(uid)) do
             parts[#parts + 1] = "c:" .. c.name
         end

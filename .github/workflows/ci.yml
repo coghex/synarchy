@@ -1051,8 +1051,8 @@ jobs:
       # key outside its system owner, a mutating mode verb outside the
       # facade, an incomplete registry (owner, healthy rule, Nominal
       # substitute) or a unit definition templating a registry key. The
-      # self-test pins both directions of every rule, including the
-      # enumerated temporary UI exception S6 deletes.
+      # self-test pins both directions of every rule, including that the
+      # former temporary UI exception (deleted by S6, #2832) admits nothing.
       - name: Physiology access audit
         run: |
           python3 tools/physiology_access_audit.py --self-test

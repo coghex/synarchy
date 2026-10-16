@@ -1811,6 +1811,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Clipping
                    Test.Headless.UI.ListScrollSync
                    Test.Headless.UI.InteractiveBounds
+                   Test.Headless.UI.PhysiologyModes
                    Test.Headless.UI.PopupPlacement
                    Test.Headless.Event.PlayerEventProgress
                    Test.Headless.Event.PopupCoordPage

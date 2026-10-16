@@ -47,15 +47,13 @@ Allowances, each tied to real ownership and named, never a directory:
     aggregate, a helper, a nested measurement function), is flagged, and a
     pin the probe no longer contains is itself a finding. Reads in the probe
     are NOT allowed.
-  * ``UI_EXCEPTIONS`` / ``UI_HELPER_EXCEPTIONS``: the TEMPORARY, enumerated
-    legacy pool reads that stay raw until S6 (Nominal-aware display): the
-    hydration, hunger and calories reads in ``formatStatus`` of
-    scripts/unit_info_panel.lua, and the generic ``stats.get`` pool reads of
-    ``fmtCurMax`` in scripts/unit_info_v2_stat_defs.lua. They are identified
-    by file, enclosing function, verb and key (never by line number), each
-    key admitted ONCE; any other raw UI read, in particular the
-    ``salt_conc`` reads of unit_info_v2_status.lua, is flagged. S6 deletes
-    this exception; no permanent UI exemption is authorized.
+  * There is no UI exception (S6, #2832 deleted the temporary S5 allowance
+    for the legacy hydration/hunger/calories reads of scripts/unit_info_panel.lua
+    and the generic ``fmtCurMax`` pool reads of
+    scripts/unit_info_v2_stat_defs.lua once both read through the facade):
+    a raw UI read of a registry key, including the ``salt_conc`` status row
+    and any pool read through a generic helper, is flagged like any other.
+    No permanent UI exemption is authorized.
 
 Supported forms and limits (the scanner is in tools/physiology_access_lua.py):
 
@@ -141,30 +139,6 @@ OWNERS: tuple[Owner, ...] = (
 
 
 @dataclass(frozen=True)
-class SiteException:
-    file: str
-    function: str
-    verb: str
-    keys: frozenset[str]
-    why: str
-
-
-@dataclass(frozen=True)
-class HelperException:
-    """A generic helper whose literal-key call sites stay allowed. It
-    applies only while EVERY definition of the helper is exactly the
-    authorized one: `sites` raw accesses, all in `file`, all `verb` reads
-    -- so a mutation or another verb added to the helper, or a further
-    read, voids the exception -- and only for the pool `keys`."""
-    file: str
-    helper: str
-    verb: str
-    sites: int
-    keys: frozenset[str]
-    why: str
-
-
-@dataclass(frozen=True)
 class FixtureWrites:
     """The probe's scenario setup writes, pinned SITE BY SITE: a write is
     allowed only from an embedded chunk whose (Python scope, normalized Lua
@@ -217,27 +191,12 @@ PROBE_FIXTURE_WRITES = FixtureWrites(
     }),
     "scenario fixtures (D-7: raw setStat is allowed for debugging)")
 
-# TEMPORARY (S5 -> S6). Each key is admitted once per function.
-UI_EXCEPTIONS: tuple[SiteException, ...] = (
-    SiteException("scripts/unit_info_panel.lua", "formatStatus", "unit.getStat",
-                  frozenset({"hydration", "hunger", "calories"}),
-                  "legacy pool display; S6 migrates it"),
-)
-UI_HELPER_EXCEPTIONS: tuple[HelperException, ...] = (
-    HelperException("scripts/unit_info_v2_stat_defs.lua", "fmtCurMax",
-                    "stats.get", 2, frozenset({"hydration", "hunger", "calories"}),
-                    "generic cur/max pool display; S6 migrates it"),
-)
-
-
 @dataclass(frozen=True)
 class Policy:
     owners: tuple[Owner, ...] = OWNERS
     facade: str = FACADE
     generic_accessors: frozenset[str] = GENERIC_ACCESSORS
     probe_fixture: FixtureWrites = PROBE_FIXTURE_WRITES
-    ui_exceptions: tuple[SiteException, ...] = UI_EXCEPTIONS
-    ui_helpers: tuple[HelperException, ...] = UI_HELPER_EXCEPTIONS
 
 
 # ---------------------------------------------------------------- registry
@@ -448,7 +407,6 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
         s["kinds"].add(a.access)
         s["fallback"] |= a.fallback
 
-    ui_used: dict[tuple[str, str, str, str], int] = defaultdict(int)
     for sk in sorted(sites, key=lambda k: (k[0], k[1], k[2], k[3])):
         a, kinds, fb = sites[sk]["acc"], sites[sk]["kinds"], sites[sk]["fallback"]
         if a.path == policy.facade or _owner_allows(policy, a.path, reg, a.key):
@@ -457,27 +415,6 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
         if a.path == fx.file and a.verb == fx.verb and a.straight \
                 and (a.scope, a.sig) in fx.sites:
             continue
-        if a.via == "helper-call":
-            name = a.verb.split(":", 1)[1]
-            defs = helpers.get(name, [])
-            if any(he.helper == name and a.key in he.keys
-                   and len(defs) == he.sites
-                   and all(d.path == he.file and d.verb == he.verb
-                           and d.access == "read" for d in defs)
-                   for he in policy.ui_helpers):
-                continue
-        else:
-            hit = False
-            for ex in policy.ui_exceptions:
-                if a.path == ex.file and a.function == ex.function \
-                        and a.verb == ex.verb and a.key in ex.keys:
-                    k = (ex.file, ex.function, ex.verb, a.key)
-                    ui_used[k] += 1
-                    if ui_used[k] == 1:
-                        hit = True
-                    break
-            if hit:
-                continue
         system = reg.key_system[a.key]
         what = "write" if kinds == {"write"} else (
             "read/write" if len(kinds) > 1 else "read")
@@ -577,8 +514,7 @@ def main(argv: Optional[list[str]] = None) -> int:
           f"{n_chunks} probe chunk(s), "
           f"{len(load_registry(doc).systems)} systems, "
           f"{len(load_registry(doc).keys)} registry keys, "
-          f"{sum(len(e.keys) for e in UI_EXCEPTIONS) + len(UI_HELPER_EXCEPTIONS)} "
-          "temporary UI exception site(s))")
+          "no UI exception)")
     return 0
 
 

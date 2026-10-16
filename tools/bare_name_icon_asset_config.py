@@ -20,6 +20,7 @@ YAML_INFECTION = "src/Engine/Asset/YamlInfection.hs"
 INFECTION_API = "src/Engine/Scripting/Lua/API/Infection.hs"
 INJURIES = "scripts/injuries.lua"
 STATUS = "scripts/unit_info_v2_status.lua"
+PHYSIO = "scripts/unit_info_v2_physio.lua"   # METER_CONDITIONS moved here (#2832)
 STAT_DEFS = "scripts/unit_info_v2_stat_defs.lua"
 KNOWLEDGE = "scripts/knowledge.lua"
 
@@ -57,6 +58,8 @@ REPO_CONFIG = {
         {"path": STAT_DEFS, "whole_file_is_a_site": True,
          "regions": [{"kind": "file", "name": "literal `icon =` fields"}]},
         {"path": STATUS, "whole_file_is_a_site": True,
+         "regions": [{"kind": "file", "name": "literal `icon =` fields"}]},
+        {"path": PHYSIO, "whole_file_is_a_site": True,
          "regions": [{"kind": "file", "name": "literal `icon =` fields"}]},
         {
             "path": KNOWLEDGE,
@@ -119,7 +122,7 @@ REPO_CONFIG = {
                    "from data/infections/*.yaml"},
         {"file": INJURIES, "target": "icon", "rhs": "icon",
          "reason": "forwards the local `icon` chosen just above"},
-        {"file": STATUS, "target": "icon", "rhs": "mc.icon",
+        {"file": PHYSIO, "target": "icon", "rhs": "mc.icon",
          "reason": "forwards METER_CONDITIONS' literal, extracted in this file"},
         {"file": STATUS, "target": "icon", "rhs": "inj.icon",
          "reason": "forwards injuries.list's icon, extracted in injuries.lua"},
@@ -152,15 +155,15 @@ REPO_CONFIG = {
          "reason": "M.icon's last-resort gives INJURY-kind rows the "
                    "STATUS-family pain icon"},
         {"basename": "nerve_injury", "family": "injury", "row_family": "status",
-         "site": STATUS, "rows": ["neuro"],
+         "site": PHYSIO, "rows": ["neuro"],
          "reason": "the Brain-failing STATUS condition row draws an "
                    "INJURY-family icon"},
         {"basename": "festered_injury", "family": "injury",
-         "row_family": "status", "site": STATUS, "rows": ["organ", "sepsis"],
+         "row_family": "status", "site": PHYSIO, "rows": ["organ", "sepsis"],
          "reason": "the Organ-failure and Septic STATUS condition rows draw an "
                    "INJURY-family icon"},
         {"basename": "frostbite", "family": "injury", "row_family": "status",
-         "site": STATUS, "rows": ["hypothermia", "hyperthermia"],
+         "site": PHYSIO, "rows": ["hypothermia", "hyperthermia"],
          "reason": "the Hypothermic and Overheating STATUS condition rows draw "
                    "an INJURY-family icon"},
     ],
