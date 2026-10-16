@@ -716,6 +716,7 @@ python3 tools/test_construction_probe.py
 python3 tools/test_expedition_loop_day_budget.py
 python3 tools/test_mental_efficiency_probe.py
 python3 tools/test_transfer_context_menu_probe.py
+python3 tools/test_physiology_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the

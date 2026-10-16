@@ -549,7 +549,10 @@ shippedDefaults ∷ Text → HM.HashMap Text PhysioMode
 shippedDefaults name = HM.fromList $ case name of
     "acolyte"         → [ (s, PhysioSimulated) | s ← allSystems ]
     "nomad_primitive" → [ (s, PhysioNominal)   | s ← allSystems ]
-    _ | name `elem` ["bear_brown", "red_squirrel", "technomule"] →
+    -- the `simple` profile (SD-10, #2833): the squirrel's salt is Nominal
+    "red_squirrel"    → [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
+                        , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal) ]
+    _ | name `elem` ["bear_brown", "technomule"] →
         [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
         , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal) ]
     _                 → []

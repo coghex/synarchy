@@ -1694,6 +1694,13 @@ jobs:
       # run never reaches those paths, so this companion drives them over
       # a fake console and boots nothing.
       #
+      # test_physiology_probe is #2833's: the physiology probe asserts the
+      # shipped red_squirrel is SD-10's `simple` profile (salt Nominal,
+      # thermo Simulated). That is a pure predicate over one observation,
+      # so the cases that make it fail for a squirrel left `reduced`, a
+      # missing or zero salt_conc and leaked Nominal state run over a fake
+      # console and boot no engine.
+      #
       # tools/test_deflake_diagnosis.py (#1437) is deliberately absent
       # too, and from tools/ci-local.sh's mirrored list: that issue's
       # approved rereview amendment scopes the diagnosis lab's own
@@ -1735,6 +1742,7 @@ jobs:
           python3 tools/test_expedition_loop_day_budget.py
           python3 tools/test_mental_efficiency_probe.py
           python3 tools/test_transfer_context_menu_probe.py
+          python3 tools/test_physiology_probe.py
 
       # The decision `.github/workflows/review-gate.yml` makes on every
       # synchronize push: keep `reviewed:approve` only when the push left

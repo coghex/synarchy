@@ -24,6 +24,10 @@ import Unit.Types
 -- | A 0.3 kg squirrel as T-1, T-12 and T-13 pin it: constitution 0.5, fat
 --   fraction 0.10, the given metabolism, thermo and salt Simulated, hydration
 --   and nutrition Nominal (the @reduced@ profile), in the given activity.
+--   The profile is stated here, not inherited from @data\/units\/red_squirrel.yaml@
+--   (which S7, #2833, flips to @simple@: salt Nominal), so these salt-Simulated
+--   cases are the independent small-mass Simulated coverage and keep their
+--   inputs, combinations and bounds whatever the shipped default is.
 squirrelWith ∷ Float → Text → [(Text, PhysioMode)] → UnitSpec
 squirrelWith metabolism activity modes = (unitSpec 1 "red_squirrel" (Just "reduced"))
     { usBody = squirrelBody, usActivity = activity, usModes = modes

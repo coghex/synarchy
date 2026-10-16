@@ -1916,6 +1916,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.FactionCatalogue
                    Test.Headless.Unit.Physiology
                    Test.Headless.Unit.PhysiologyEngine
+                   Test.Headless.Unit.PhysiologySpeciesProfiles
                    Test.Headless.Unit.PhysiologyModes
                    Test.Headless.Unit.PhysiologyModes.Climates
                    Test.Headless.Unit.PhysiologyModes.Harness
