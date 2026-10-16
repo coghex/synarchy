@@ -73,12 +73,15 @@ function M.signature(uid)
     return table.concat(parts, ",")
 end
 
--- Healthy readings for the scalar rows, in the Simulated formatters' units.
+-- Healthy readings for the scalar rows, in the Simulated formatters' units,
+-- led by the word Nominal so the mode is stated, not only implied by the
+-- colour and the hover ("Nominal 37.0°C", "Nominal 100%").
 local function healthyTemp(uid)
-    return string.format("%.1f\194\176C", physiology.get(uid, "core_temp") or 37.0)
+    return M.NOMINAL_TEXT .. string.format(" %.1f\194\176C",
+        physiology.get(uid, "core_temp") or 37.0)
 end
 local function healthySalt(uid)
-    return string.format("%d%%",
+    return M.NOMINAL_TEXT .. string.format(" %d%%",
         math.floor((physiology.get(uid, "salt_conc") or 1.0) * 100 + 0.5))
 end
 local function poolText() return M.NOMINAL_TEXT end
@@ -91,9 +94,16 @@ local NOMINAL_TEXT_OF = {
     calories  = poolText,
 }
 
+-- The label and its healthy reading are two words, so a Nominal scalar row
+-- is set in the condition font: at the stat font the pair is wider than the
+-- panel's value column and would run over the icon. Rows are chosen at build
+-- time and a mode change rebuilds them, so the font follows the mode.
+local SCALAR_ROW = { body_temp = true, salt = true }
+
 -- Wrap one Status row definition so its value, colour and value tooltip
--- follow the mode. An unowned row is returned as is.
-function M.row(def)
+-- follow the mode. An unowned row is returned as is. `uid` is the unit the
+-- panel is being built for.
+function M.row(def, uid)
     local regKey = ROW_KEY[def.key]
     if not regKey then return def end
     local value, colorFn, tooltipFn = def.value, def.colorFn, def.valueTooltip
@@ -101,6 +111,9 @@ function M.row(def)
     local name = sd and sd.name or def.key
     local out = {}
     for k, v in pairs(def) do out[k] = v end
+    if SCALAR_ROW[def.key] and M.keyState(uid, regKey) == "nominal" then
+        out.opts = { fontSize = L.CONDITION_FONT_SIZE }
+    end
     out.value = function(uid)
         local s = M.keyState(uid, regKey)
         if s == "unsupported" then return nil end

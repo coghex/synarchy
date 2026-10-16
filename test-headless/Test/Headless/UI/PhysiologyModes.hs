@@ -242,7 +242,7 @@ nominalSpec = describe "A supported Nominal system" $ do
             \(_, ls) → do
                 rs ← rowsOf ls
                 t ← rowNamed rs "Body Temp"
-                rowText t `shouldBe` "37.0degC"
+                rowText t `shouldBe` "Nominal 37.0degC"
                 rowColour t `shouldBe` neutral
                 rowTip t `shouldBe` nominalHint
                 s ← rowNamed rs "Salt"
@@ -256,7 +256,7 @@ nominalSpec = describe "A supported Nominal system" $ do
             \(_, ls) → do
                 rs ← rowsOf ls
                 s ← rowNamed rs "Salt"
-                rowText s `shouldBe` "100%"
+                rowText s `shouldBe` "Nominal 100%"
                 rowColour s `shouldBe` neutral
                 rowTip s `shouldBe` nominalHint
                 t ← rowNamed rs "Body Temp"
@@ -406,6 +406,7 @@ transitionSpec = describe "A selected unit changing mode rebuilds without resele
                                                               (upDefaults up) })
             tick ls
             salt ← rowsOf ls >>= \rs → rowNamed rs "Salt"
+            rowText salt `shouldBe` "Nominal 100%"
             rowTip salt `shouldBe` nominalHint
             -- a changed SUPPORT: the definition loses its body entirely
             setDefaults (const noUnitPhysiology)
