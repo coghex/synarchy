@@ -481,8 +481,8 @@ healthy rule, a `contributes` entry without a Nominal substitute) and a unit
 definition templating a registry key. Scans all `scripts/**/*.lua` and the
 Lua embedded in `tools/physiology_probe.py`. The scanner is
 `physiology_access_lua.py`; the supported forms, limits and the named
-allowances (system owners, the survival exemption, the probe's fixture
-writes and the temporary UI exception S6 deletes) are in the audit's header
+allowances (system owners, the probe's fixture writes; there is no UI
+exception since S6, #2832) are in the audit's header
 and in `docs/physiology_consumer_facade.md`. `--self-test` runs
 `physiology_access_audit_selftest.py`.
 

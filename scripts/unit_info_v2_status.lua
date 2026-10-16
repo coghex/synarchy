@@ -14,6 +14,7 @@ local physiology = require("scripts.physiology")
 local thermo     = require("scripts.thermo")
 local statDefs   = require("scripts.unit_info_v2_stat_defs")
 local panelEngine = require("scripts.unit_info_v2_panel_engine")
+local physio     = require("scripts.unit_info_v2_physio")
 local L          = require("scripts.unit_info_v2_layout")
 
 local M = {}
@@ -123,7 +124,8 @@ local function unitConditions(uid)
             if blood and blood.max > 0 and blood.current / blood.max < 0.5 then
                 out[#out + 1] = { name = "Unconscious (blood loss)", icon = "blood",
                     hint = "Out cold from blood loss. Rebuilds blood once the bleeding stops; wakes at 50%." }
-            elseif lowFrac(uid, "hydration", "max_hydration", 0.5) then
+            elseif physio.active(uid, "hydration")
+                   and lowFrac(uid, "hydration", "max_hydration", 0.5) then
                 out[#out + 1] = { name = "Collapsed (dehydrated)", icon = "hydration",
                     hint = "Collapsed from thirst. Rises once hydration recovers above 50%." }
             elseif lowFrac(uid, "stamina", "max_stamina", 0.5) then
@@ -151,63 +153,10 @@ local function unitConditions(uid)
             hint = "Mentally clouded. Worsens toward delirium and collapse." }
     end
 
-    -- Failure meters (delayed-death pathways) — show the rising % so the
-    -- player sees the clock and can treat in time. The tooltip carries the
-    -- real numbers: current %, the per-second fill/recover rate, and what it
-    -- kills you with. Bucketed to 10% in the row name so the panel rebuilds
-    -- in steps, not every tick.
-    local METER_CONDITIONS = {
-        { stat = "hypoxia", label = "Suffocating",   icon = "hydration",
-          title = "Cell hypoxia", fatal = "suffocation",
-          desc  = "Lungs/airway can't oxygenate the blood." },
-        { stat = "neuro",   label = "Brain failing", icon = "nerve_injury",
-          title = "Neural shutdown", fatal = "brain death",
-          desc  = "Catastrophic brain trauma is shutting the nervous system down." },
-        { stat = "shock",   label = "In shock",      icon = "blood",
-          title = "Systemic shock", fatal = "cardiac arrest",
-          desc  = "The body's whole-system collapse under massive trauma." },
-        { stat = "organ",   label = "Organ failure", icon = "festered_injury",
-          title = "Organ failure", fatal = "sepsis",
-          desc  = "Untreated visceral trauma festering (sepsis / encephalopathy)." },
-        { stat = "sepsis",  label = "Septic",        icon = "festered_injury",
-          title = "Sepsis", fatal = "sepsis",
-          desc  = "Infection from untreated wounds has spread to the blood. "
-                  .. "Antibiotics can still cure it." },
-        { stat = "hypothermia", label = "Hypothermic", icon = "frostbite",
-          title = "Hypothermia", fatal = "hypothermia",
-          desc  = "Core body temperature is dangerously low. Get the unit "
-                  .. "somewhere warm." },
-        { stat = "hyperthermia", label = "Overheating", icon = "frostbite",
-          title = "Hyperthermia", fatal = "heat stroke",
-          desc  = "Core body temperature is dangerously high. Get the unit "
-                  .. "out of the heat and rehydrated." },
-        { stat = "salt_imbalance", label = "Electrolyte crisis", icon = "salt",
-          title = "Electrolyte imbalance", fatal = "electrolyte imbalance",
-          desc  = "Blood sodium is dangerously off balance (hypo- or "
-                  .. "hypernatremia). Food restores salt; water rebalances it." },
-    }
-    local meterInfo = require("scripts.unit_resources").meterInfo(uid)
-    for _, mc in ipairs(METER_CONDITIONS) do
-        local v = physiology.get(uid, mc.stat)
-        if v and v > 0.02 then
-            local mi   = meterInfo[mc.stat] or {}
-            local rate = mi.rate or 0
-            local rateLine
-            if rate > 0 then
-                rateLine = string.format(
-                    "Rising %.2f%%/s → fatal (%s) at 100%%.", rate * 100, mc.fatal)
-            else
-                rateLine = string.format(
-                    "Recovering %.2f%%/s (injury treated).", -rate * 100)
-            end
-            out[#out + 1] = {
-                name = string.format("%s (%d%%)", mc.label, math.floor(v * 10) * 10),
-                icon = mc.icon,
-                hint = string.format("%s: %.0f%%\n%s\n%s",
-                    mc.title, (mi.value or v) * 100, rateLine, mc.desc),
-            }
-        end
-    end
+    -- Failure meters (delayed-death pathways): the rising % so the player
+    -- sees the clock. Mode-aware (unit_info_v2_physio.lua): a meter a
+    -- Nominal or Unsupported system owns never shows.
+    for _, c in ipairs(physio.meterConditions(uid)) do out[#out + 1] = c end
 
     -- Bleeding: an open (cutting) wound that is actually seeping. Two
     -- gates, matching what bleedRateFor actually squares for live blood
@@ -234,13 +183,15 @@ local function unitConditions(uid)
 
     -- Standing daily-need warnings.
     if pose ~= "collapsed" then
-        if lowFrac(uid, "hydration", "max_hydration", 0.25) then
+        if physio.active(uid, "hydration")
+           and lowFrac(uid, "hydration", "max_hydration", 0.25) then
             out[#out + 1] = { name = "Dehydrated", icon = "hydration",
                 hint = "Water below 25%. Collapses near empty; find a water source." }
         end
         -- Hungry/Starving (#806): scripts.starvation's fraction bands
         -- (distinct from the "is starving" empty-store popup).
-        local band = require("scripts.starvation").band(uid)
+        local band = physio.active(uid, "calories")
+                     and require("scripts.starvation").band(uid) or "full"
         local hint = ({ starving = "Energy store critical — measurably weaker, and burning fat then muscle.", hungry = "Energy store low — measurably slower until it refills." })[band]
         if hint then out[#out + 1] = { name = band:sub(1, 1):upper() .. band:sub(2), icon = "hunger", hint = hint } end
     end
@@ -320,20 +271,20 @@ function M.buildStatusPanel(rect, uid)
         { key = "blood",     value = fmtBlood, colorFn = bloodColorFn,
           valueTooltip = bloodValueTooltip },
         { key = "pain",      value = fmtPain,  colorFn = painColorFn },
-        { key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor },
+        physio.row({ key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor }),
         { key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor },
         { key = "blood_oxygen", value = fmtBloodOxygen, colorFn = bloodOxygenColor },
         { key = "consciousness", value = fmtConsciousness, colorFn = consciousnessColor },
         { key = "circulation", value = fmtCirculation, colorFn = circulationColor },
-        { key = "salt",      value = fmtSalt, colorFn = saltColor },
+        physio.row({ key = "salt", value = fmtSalt, colorFn = saltColor }),
         { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
           colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) },
-        { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
-          colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) },
-        { key = "calories",  value = function(u) return fmtCurMax(u, "calories",  "max_calories")  end,
-          colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) },
-        { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
-          colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) },
+        physio.row({ key = "hunger",   value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
+          colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) }),
+        physio.row({ key = "calories", value = function(u) return fmtCurMax(u, "calories",  "max_calories")  end,
+          colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) }),
+        physio.row({ key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
+          colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) }),
         { key = "sleep_pressure", value = function(u) return fmtCurMax(u, "sleep_pressure", "max_sleep_pressure") end,
           colorFn = sleepPressureColorFn },   -- inverted: HIGH means needs sleep
         { key          = "carrying_capacity",

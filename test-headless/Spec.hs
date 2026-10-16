@@ -264,6 +264,7 @@ import qualified Test.Headless.UI.DropdownCommit as UIDropdownCommit
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.ListScrollSync as UIListScrollSync
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
+import qualified Test.Headless.UI.PhysiologyModes as UIPhysiologyModes
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PlayerEventProgress as PlayerEventProgress
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
@@ -1167,6 +1168,7 @@ restLane = do
     describe "UI.Clipping" UIClipping.spec
     describe "List scrollbar sync" UIListScrollSync.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
+    UIPhysiologyModes.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
     -- #1714: its own engine per example (the event store's sequence
     -- counter is process-lifetime, and one case drives the real

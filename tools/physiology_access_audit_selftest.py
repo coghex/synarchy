@@ -86,14 +86,15 @@ BASE: dict[str, str] = {
         '    unit.setStat(uid, m.stat, unit.getStat(uid, m.stat) or 0)\n  end\nend\n'
         'return M\n',
     "scripts/unit_info_panel.lua":
+        'local physiology = require("scripts.physiology")\n'
         'local M = {}\nfunction M.formatStatus(uid)\n'
-        '  local h = unit.getStat(uid, "hydration")\n'
-        '  local g = unit.getStat(uid, "hunger")\n'
-        '  local c = unit.getStat(uid, "calories")\n  return h, g, c\nend\nreturn M\n',
+        '  local h = physiology.get(uid, "hydration")\n'
+        '  local g = physiology.get(uid, "hunger")\n'
+        '  local c = physiology.get(uid, "calories")\n  return h, g, c\nend\nreturn M\n',
     "scripts/unit_info_v2_stat_defs.lua":
         'local M = {}\nfunction M.fmtCurMax(uid, curName, maxName)\n'
-        '  local stats = require("scripts.unit_stats")\n'
-        '  return stats.get(uid, curName), stats.get(uid, maxName)\nend\n'
+        '  local physiology = require("scripts.physiology")\n'
+        '  return physiology.get(uid, curName), physiology.get(uid, maxName)\nend\n'
         'function M.lowFrac(uid, cur, maxName, frac)\n'
         '  return require("scripts.physiology").fraction(uid, cur, maxName) < frac\n'
         'end\nreturn M\n',
@@ -227,87 +228,91 @@ def case_mutating_verb_leak_rejected():
         BASE["scripts/physiology.lua"] + 'unit.setPhysioMode(1, "salt", "nominal")\n'})
 
 
-def case_ui_exception_is_exact():
-    expect_clean("ui exception baseline")
-    # A new raw UI read in another UI file is flagged.
+# The temporary S5 allowance for the legacy pool reads was deleted by S6
+# (#2832): the migrated baseline is clean, and every FORM it used to admit
+# is flagged like any other raw read.
+RAW_PANEL = BASE["scripts/unit_info_panel.lua"].replace(
+    'physiology.get(', 'unit.getStat(')
+RAW_STAT_DEFS = BASE["scripts/unit_info_v2_stat_defs.lua"].replace(
+    '  local physiology = require("scripts.physiology")\n'
+    '  return physiology.get(uid, curName), physiology.get(uid, maxName)\n',
+    '  local stats = require("scripts.unit_stats")\n'
+    '  return stats.get(uid, curName), stats.get(uid, maxName)\n')
+
+
+def case_former_ui_exception_forms_now_fail():
+    expect_clean("migrated UI baseline")
+    assert "unit.getStat(uid, \"hydration\")" in RAW_PANEL
+    # The three raw pool reads formatStatus used to be excepted for.
+    for key in ("hydration", "hunger", "calories"):
+        expect(f"former formatStatus {key}", f"raw read of owned key '{key}'",
+               files={"scripts/unit_info_panel.lua": RAW_PANEL})
+    # The generic fmtCurMax helper's raw reads: its literal-key call sites
+    # (the Status rows) are flagged through the helper.
+    assert "stats.get(uid, curName)" in RAW_STAT_DEFS
+    for key in ("hunger", "hydration"):
+        expect(f"former fmtCurMax {key}", f"raw read of owned key '{key}'",
+               files={"scripts/unit_info_v2_stat_defs.lua": RAW_STAT_DEFS})
+    expect("former fmtCurMax names the helper", "through fmtCurMax()",
+           files={"scripts/unit_info_v2_stat_defs.lua": RAW_STAT_DEFS})
+
+
+def case_new_raw_ui_reads_are_flagged():
+    # A new raw UI registry read in another UI file.
     expect("new UI read", "raw read of owned key 'hydration'",
            files={"scripts/unit_info_v2_panels.lua":
                   'local h = unit.getStat(1, "hydration")\n'})
-    # The salt_conc status row is NOT excepted.
+    expect("new UI stats.get", "raw read of owned key 'calories'",
+           files={"scripts/unit_info_v2_panels.lua":
+                  'local stats = require("scripts.unit_stats")\n'
+                  'local c = stats.get(1, "calories")\n'})
+    # The salt_conc status row stays on the accessor path.
     expect("salt_conc status read", "raw read of derived key 'salt_conc'",
            files={"scripts/unit_info_v2_status.lua":
                   BASE["scripts/unit_info_v2_status.lua"].replace(
                       'physiology.get(uid, "salt_conc")',
                       'unit.getStat(uid, "salt_conc") or 1.0')})
-    # A SECOND read of an excepted key in the excepted function is flagged.
-    expect("second read", "raw read of owned key 'hydration'",
-           files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]
-                  .replace('return h', 'local h2 = unit.getStat(uid, "hydration")\n  return h')})
-    # An excepted key in another function of the excepted file is flagged.
+    # Nor may a raw read hide in a second function or on one line with a
+    # sanctioned one in the formerly excepted file.
     expect("other function", "raw read of owned key 'hunger'",
            files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]
                   .replace('return M', 'function M.other(uid)\n'
                            '  return unit.getStat(uid, "hunger")\nend\nreturn M')})
-    # Two calls on ONE line are two sites: the second is flagged.
-    expect("same-line second read", "raw read of owned key 'hydration'",
+    expect("same-line raw read", "raw read of owned key 'hydration'",
            files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]
-                  .replace('local h = unit.getStat(uid, "hydration")',
-                           'local h = unit.getStat(uid, "hydration"); '
+                  .replace('local h = physiology.get(uid, "hydration")',
+                           'local h = physiology.get(uid, "hydration"); '
                            'local leaked = unit.getStat(uid, "hydration")')})
-    # A key outside the three enumerated is flagged even in formatStatus.
+    # A key outside the three pools, in the formerly excepted function.
     expect("other key", "raw read of derived key 'salt_conc'",
            files={"scripts/unit_info_panel.lua": BASE["scripts/unit_info_panel.lua"]
                   .replace('return h', 'local s = unit.getStat(uid, "salt_conc")\n  return h')})
-
-
-def case_ui_helper_exception_is_exactly_the_authorized_reads():
-    base = BASE["scripts/unit_info_v2_stat_defs.lua"]
-    anchor = "  return stats.get(uid, curName), stats.get(uid, maxName)\n"
-    assert anchor in base
-    # A mutation added to the helper voids it: every call site is flagged.
-    expect("helper write", "through fmtCurMax()",
-           files={"scripts/unit_info_v2_stat_defs.lua":
-                  base.replace(anchor, "  unit.setStat(uid, curName, 0)\n" + anchor)})
-    # So does another verb ...
-    expect("helper getStatBase", "through fmtCurMax()",
-           files={"scripts/unit_info_v2_stat_defs.lua":
-                  base.replace(anchor, "  local b = unit.getStatBase(uid, curName)\n" + anchor)})
-    # ... or a further raw read.
-    expect("helper extra read", "through fmtCurMax()",
-           files={"scripts/unit_info_v2_stat_defs.lua":
-                  base.replace(anchor, "  local c = stats.get(uid, curName)\n" + anchor)})
-    # A new call reading a key outside the authorized pool keys is flagged.
-    expect("helper new key", "raw read of derived key 'salt_conc'",
-           files={"scripts/unit_info_v2_status.lua":
-                  BASE["scripts/unit_info_v2_status.lua"] +
-                  'local y = fmtCurMax(1, "salt_conc", "max_salt")\n'})
+    # A new call of a raw helper with a registry key.
     expect("helper meter key", "raw read of meter key 'hypothermia'",
-           files={"scripts/unit_info_v2_status.lua":
+           files={"scripts/unit_info_v2_stat_defs.lua": RAW_STAT_DEFS,
+                  "scripts/unit_info_v2_status.lua":
                   BASE["scripts/unit_info_v2_status.lua"] +
                   'local y = fmtCurMax(1, "hypothermia", "max_x")\n'})
-    # The authorized calls stay clean (the baseline).
-    expect_clean("helper authorized")
 
 
-def case_ui_exception_survives_line_shift_without_admitting_lowFrac():
+def case_facade_ui_helper_survives_line_shift_and_mutation_stays_clean():
     base = BASE["scripts/unit_info_v2_stat_defs.lua"]
     shifted = "-- shifted\n" * 40 + base
     expect_clean("fmtCurMax line shift", files={
         "scripts/unit_info_v2_stat_defs.lua": shifted})
-    # lowFrac in the SAME file with a raw generic read is not admitted: its
-    # call site with a literal registry key is flagged.
+    # lowFrac in the SAME file with a raw generic read is flagged through
+    # its call site.
     raw_low = shifted.replace(
         'return require("scripts.physiology").fraction(uid, cur, maxName) < frac',
         'local stats = require("scripts.unit_stats")\n'
         '  return stats.get(uid, cur) < frac')
-    f = expect("lowFrac raw helper", "through lowFrac()",
-               files={"scripts/unit_info_v2_stat_defs.lua": raw_low,
-                      "scripts/unit_info_v2_status.lua":
-                      BASE["scripts/unit_info_v2_status.lua"] +
-                      'local statDefs2 = require("scripts.unit_info_v2_stat_defs")\n'
-                      'local lowFrac = statDefs2.lowFrac\n'
-                      'local x = lowFrac(1, "hydration", "max_hydration", 0.5)\n'})
-    assert all("fmtCurMax" not in x for x in f), f
+    expect("lowFrac raw helper", "through lowFrac()",
+           files={"scripts/unit_info_v2_stat_defs.lua": raw_low,
+                  "scripts/unit_info_v2_status.lua":
+                  BASE["scripts/unit_info_v2_status.lua"] +
+                  'local statDefs2 = require("scripts.unit_info_v2_stat_defs")\n'
+                  'local lowFrac = statDefs2.lowFrac\n'
+                  'local x = lowFrac(1, "hydration", "max_hydration", 0.5)\n'})
 
 
 def case_generic_helper_literal_at_call_site():

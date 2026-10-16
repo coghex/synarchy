@@ -19,6 +19,7 @@
 local infoPanel = require("scripts.hud.info_panel")
 local hud       = require("scripts.hud")
 local stats     = require("scripts.unit_stats")
+local physiology = require("scripts.physiology")
 
 local unitInfoWatch = {}
 
@@ -81,29 +82,25 @@ local function formatStatus(uid, info)
                                     fmt2(curStam), fmt2(maxStam))
     end
 
-    local maxHydr = stats.get(uid, "max_hydration")
-    local curHydr = unit.getStat(uid, "hydration")
-    local hydrationLine = "Hydration: ?"
-    if curHydr and maxHydr then
-        hydrationLine = string.format("Hydration: %s / %s",
-                                      fmt2(curHydr), fmt2(maxHydr))
+    -- The physiology pools (#2832): read through the facade so a Nominal
+    -- pool prints "Hydration: Nominal" and a pool no system simulates for
+    -- this unit (Unsupported, e.g. a bodyless unit) prints no line at all.
+    -- A Simulated pool keeps today's "X / Y" form. Stamina is unowned and
+    -- stays as it was.
+    local function poolLine(label, cur, max)
+        local sys = physiology.systemOf(cur)
+        local mode = physiology.mode(uid, sys)
+        if mode == nil then return nil end                 -- Unsupported
+        if mode == "nominal" then return label .. ": Nominal" end
+        local c, m = physiology.get(uid, cur), physiology.get(uid, max)
+        if c and m then
+            return string.format("%s: %s / %s", label, fmt2(c), fmt2(m))
+        end
+        return label .. ": ?"
     end
-
-    local maxHun = stats.get(uid, "max_hunger")
-    local curHun = unit.getStat(uid, "hunger")
-    local hungerLine = "Hunger: ?"
-    if curHun and maxHun then
-        hungerLine = string.format("Hunger: %s / %s",
-                                   fmt2(curHun), fmt2(maxHun))
-    end
-
-    local maxCal = stats.get(uid, "max_calories")
-    local curCal = unit.getStat(uid, "calories")
-    local caloriesLine = "Calories: ?"
-    if curCal and maxCal then
-        caloriesLine = string.format("Calories: %s / %s",
-                                     fmt2(curCal), fmt2(maxCal))
-    end
+    local hydrationLine = poolLine("Hydration", "hydration", "max_hydration")
+    local hungerLine    = poolLine("Hunger",    "hunger",    "max_hunger")
+    local caloriesLine  = poolLine("Calories",  "calories",  "max_calories")
 
     return (info.defName or "(unnamed)")
         .. "\nActivity: " .. activity
@@ -114,9 +111,9 @@ local function formatStatus(uid, info)
         .. "\n" .. leanMassLine
         .. "\n" .. fatMassLine
         .. "\n" .. staminaLine
-        .. "\n" .. hydrationLine
-        .. "\n" .. hungerLine
-        .. "\n" .. caloriesLine
+        .. (hydrationLine and ("\n" .. hydrationLine) or "")
+        .. (hungerLine and ("\n" .. hungerLine) or "")
+        .. (caloriesLine and ("\n" .. caloriesLine) or "")
 end
 
 local function formatPhysical(uid)
