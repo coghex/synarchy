@@ -1,0 +1,53 @@
+{
+ "size": "800x600",
+ "units": {
+  "acolyte": 1,
+  "bear_brown": 2,
+  "nomad_primitive": 3,
+  "tiller": 4
+ },
+ "captures": [
+  {
+   "frame": "800x600_bear_brown_off02",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 2",
+   "selected": "2",
+   "offset": 2,
+   "rows": "37.0\u00b0C"
+  },
+  {
+   "frame": "800x600_bear_brown_off07",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 7",
+   "selected": "2",
+   "offset": 7,
+   "rows": "100%"
+  },
+  {
+   "frame": "800x600_bear_brown_off09",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 9",
+   "selected": "2",
+   "offset": 9,
+   "rows": "Nominal"
+  },
+  {
+   "frame": "800x600_bear_brown_off10",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 10",
+   "selected": "2",
+   "offset": 10,
+   "rows": "Nominal"
+  },
+  {
+   "frame": "800x600_bear_brown_off11",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 11",
+   "selected": "2",
+   "offset": 11,
+   "rows": "Nominal"
+  },
+  {
+   "frame": "800x600_bear_tooltip",
+   "note": "Nominal tooltip hover, mixed-mode unit",
+   "selected": "2",
+   "offset": 11,
+   "rows": "Nominal"
+  }
+ ]
+}

@@ -2077,9 +2077,9 @@ ONLY through `scripts/physiology.lua` (`get`, `getBase`, `fraction`) or
 Haskell `physioRead` / `physioConsumerView`, writes one across systems ONLY
 through `debit` / `credit`, and changes a mode ONLY through `setMode` /
 `clearMode`. `tools/physiology_access_audit.py` (with `--self-test`, in
-`static-audits`) enforces it, with the enumerated TEMPORARY UI exception
-(deleted by S6) as the only allowance: #2754's survival exemption is gone, it
-is the `exempt` profile. The wound tick (`Healing.hs`, `Wounds/Tick.hs`)
+`static-audits`) enforces it; there is no UI allowance since S6 (#2832
+deleted the enumerated temporary exception), and #2754's survival exemption is
+gone, it is the `exempt` profile. The wound tick (`Healing.hs`, `Wounds/Tick.hs`)
 reads `calories`, `hydration` and `core_temp` (and their maxima, resolved
 effectively) through `physioConsumerView` via `tickOneUnitWith`; an invariant
 violation returns the unit untouched as `PhysioInvariant` instead of a
@@ -2087,6 +2087,33 @@ guessed pool. Reference: `docs/physiology_consumer_facade.md`. Gates: hspec
 `--match "physiology stat modes"` and `"physiology consumer migration"`, the
 access audit and its self-test, and the `physiology`, `consumable_effects`
 and `state_of_mind` probes.
+
+**Unit-info display of modes (#2832, S6).** The unit-info Status panel and the
+legacy debug text show a unit's RESOLVED modes (design D-8). A supported
+Nominal row shows its healthy reading (a pool shows the word `Nominal`) in the
+neutral value colour (`L.CONTENT_VAL_COLOR`, not the in-range green) with the
+value-tooltip hint `Not simulated for this unit: always healthy.` (the icon's
+description tooltip is unchanged); `body_temp` follows thermo (`core_temp`) and
+the salt row follows salt (`salt_conc`), so a mixed-mode unit shows each from
+its OWN system. An Unsupported row is hidden; a Simulated row keeps today's
+value, units, format and threshold colour; an unowned row (stamina, blood, pain,
+sleep, ...) passes through untouched. The conditions and failure meters a
+Nominal or Unsupported system owns never appear (hydration: `Collapsed
+(dehydrated)`, `Dehydrated`; nutrition: `Hungry`/`Starving`; thermo:
+`hypothermia`/`hyperthermia`; salt: `salt_imbalance`), while the injury-driven
+and unowned ones keep their rules. `panelShapeSig` folds in
+`unit_info_v2_physio.signature(uid)`, so a mode, support or default change
+rebuilds the rows and tooltips of the SELECTED unit without reselecting it and
+the tab, scroll offset (clamped to the new row count) and scrollbar survive;
+values inside an unchanged mode refresh in place. Rendering is read-only: it
+goes through the facade, stores nothing, changes no mode or override and rolls
+nothing for an owned read. The panel logic lives in
+`scripts/unit_info_v2_physio.lua` (`unit_info_v2_status.lua` is at its line
+budget). Gates: hspec `--match "UI.PhysiologyModes"` (rows, colours, exact
+tooltip, hidden rows, suppressed conditions, the transitions, read-only
+rendering and the debug text), the access audit and its self-test. Rendered
+evidence (real `--offscreen` captures at 1920x1080, 1280x720 and 800x600) is
+`docs/pr-proofs/issue-2832-nominal-mode-ui.md`.
 
 **The registry** is `data/physiology/systems.yaml`, decoded by
 `Engine.Asset.YamlPhysiology` and registered by
