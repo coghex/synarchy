@@ -31,6 +31,7 @@ import Item.Types (emptyItemManager)
 import Test.Headless.Unit.PhysiologyFixture
     (profilePhysiology, readShippedPhysiologyRegistry)
 import Test.Headless.Unit.PhysiologyModes.Harness
+import Engine.Scripting.Lua.Types (LuaBackendState)
 import Test.Headless.Unit.TransferApi (evalDebug)
 import Test.Headless.World.Save.Components.Fixture
     ( minimalGlobals, minimalPage, minimalSimState, page1 )
@@ -151,9 +152,26 @@ placeUnits env specs = do
             sp = (unitSpec uid name Nothing)
                     { usBody = bodyOf name, usOverrides = overrides, usStats = stats }
         inst ← buildUnit def sp
-        pure (UnitId (fromIntegral uid), inst { uiPage = page1 })
+        pure (UnitId (fromIntegral uid), inst)
     modifyIORef' (unitManagerRef env) $ \um →
         um { umInstances = HM.fromList insts }
+
+-- | The fixture page units live on while they are TICKED is the scene's
+--   active page (@unit.getAllIds@ lists the active page only, so a unit on
+--   any other page is never ticked); a unit is moved onto the codec
+--   fixture's page only when it is about to be saved.
+onSavePage ∷ EngineEnv → [Int] → IO ()
+onSavePage env = mapM_ (\i → modifyInstance env i (\u → u { uiPage = page1 }))
+
+-- | The unit is enumerated for the tick, and the real physiology advances
+--   it: a run that never ticks reads its seeded values back and would pass
+--   every bound vacuously.
+ticks ∷ LuaBackendState → Int → Extremes → Expectation
+ticks ls uid core = do
+    luaBool ls ("(function() for _, id in ipairs(unit.getAllIds() or {}) do \
+                \if id == " <> tshow uid <> " then return true end end return false end)()")
+        `shouldReturn` True
+    (exMax core - exMin core) `shouldSatisfy` (> 0)
 
 -----------------------------------------------------------------------
 -- The page snapshot and the REAL codec (as the persistence group does it)
@@ -280,6 +298,7 @@ squirrelSpec = describe "the shipped squirrel (simple profile)" $ do
         climate ls 22 0.5
         ex ← track ls 1 120 0.1 ["core_temp", "salt_conc"]
         let core = ex HM.! "core_temp"
+        ticks ls 1 core
         exMin core `shouldSatisfy` (>= 33.5)
         exMax core `shouldSatisfy` (<= 39)
         exNaN core `shouldBe` 0
@@ -337,6 +356,7 @@ smallMassSpec = describe "independent small-mass Simulated coverage (0.3 kg)" $
             ex ← track ls 1 120 0.1 ["salt_conc", "core_temp"]
             let conc = ex HM.! "salt_conc"
                 core = ex HM.! "core_temp"
+            ticks ls 1 core
             exMin conc `shouldSatisfy` (>= 0.7)
             exMax conc `shouldSatisfy` (<= 1.3)
             exMin core `shouldSatisfy` (>= 33.5)
@@ -357,6 +377,7 @@ loadSpec = describe "load honours the live default and pinned intent" $ do
             defs ← shippedDefs env
             reduced ← profilePhysiology "reduced"
             placeUnits env [(1, "red_squirrel", Just reduced, [], [])]
+            onSavePage env [1]
             before ← readInstance env 1
             HM.member "salt" (uiStats before) `shouldBe` True
             HM.member "salt_store" (uiStats before) `shouldBe` True
@@ -404,6 +425,7 @@ loadSpec = describe "load honours the live default and pinned intent" $ do
             [ (1, "red_squirrel", Just reduced
               , [("salt", PhysioSimulated), ("hydration", PhysioNominal)]
               , [("salt", 0.21), ("salt_store", 0.17)]) ]
+        onSavePage env [1]
         before ← readInstance env 1
         pg ← pageSnapshotOf env ≫= codecRoundTrip
         (us, notes) ← gate reg defs (pgsUnits pg)
