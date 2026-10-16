@@ -825,19 +825,15 @@ are exempt), registry coverage
 (every system has a Lua owner, every owned key a healthy rule, every
 `contributes` entry a substitute), and templated physiology names.
 
-**Temporary UI exception (S5 to S6).** The audit carries one named,
-enumerated, *temporary* exception, for the legacy UI pool reads that stay
-raw until S6's Nominal-aware display. It lists exactly these sites, and any
-other raw UI read is still flagged:
-
-- `scripts/unit_info_panel.lua`: the `hydration`, `hunger` and `calories`
-  reads (about lines 85, 93 and 101);
-- `scripts/unit_info_v2_stat_defs.lua`: the generic `stats.get` pool reads
-  in `fmtCurMax` (about lines 25-26).
-
-The `salt_conc` status row (`scripts/unit_info_v2_status.lua`, about lines
-60 and 63) is **not** excepted. It moves to the accessor in S5, as D-5a
-requires. S6 deletes the exception.
+**Former temporary UI exception (S5 to S6; deleted by S6, #2832).** The audit
+carried one named, enumerated, *temporary* exception for the legacy UI pool
+reads that stayed raw until S6's Nominal-aware display: the `hydration`,
+`hunger` and `calories` reads in `scripts/unit_info_panel.lua` and the generic
+`stats.get` pool reads in `fmtCurMax` of `scripts/unit_info_v2_stat_defs.lua`.
+The `salt_conc` status row was never excepted (S5 moved it to the accessor, as
+D-5a requires). S6 routed those sites through the facade and **deleted the
+exception**, its types and its matching: no UI allowance remains, and the
+audit's self-test now proves each former raw form is flagged like any other.
 
 ### D-8. UI display
 
@@ -1387,8 +1383,9 @@ and round-trip contract.
    The access audit lands with them. While inactive, the facade reports
    today's semantics for every key, so S5 is behavior-preserving. Advertised:
    the audit and its self-test, plus existing gates unchanged.
-   The audit ships with the temporary UI exception (D-7) for exactly the
-   enumerated legacy pool reads. The `salt_conc` status row is migrated here.
+   The audit shipped with the temporary UI exception (D-7) for exactly the
+   enumerated legacy pool reads (deleted by S6). The `salt_conc` status row is
+   migrated here.
 4. **S4. Activation.** Tick gating; the write gate; transitions and setters;
    modifier-aware seeding; on-demand `salt_conc`; `refresh`; nutrition
    effect gating and Nominal upkeep; the dependency contributions, including
@@ -1402,11 +1399,16 @@ and round-trip contract.
      status and debug panels show `?` for a Nominal pool, which is absent
      from storage (`scripts/unit_info_v2_stat_defs.lua:23-28`,
      `scripts/unit_info_panel.lua:84-88`). This is presentation only.
-     Gameplay readers already use the facade from S5.
+     Gameplay readers already use the facade from S5. **Ended by S6 (#2832):**
+     the panels now show `Nominal` (D-8), and the `?` for a Nominal pool is
+     gone.
 5. **S6.** UI display of Nominal, with `--offscreen` evidence in
    `docs/pr-proofs/`. S6 migrates the excepted legacy UI pool reads (D-7) to
    the Nominal-aware display and **deletes the temporary audit exception**.
    Acceptance includes the access audit passing with the exception removed.
+   Delivered as #2832: the unit-info Status panel and the legacy debug text
+   follow the resolved modes; the exception is deleted; the real offscreen
+   evidence is `docs/pr-proofs/issue-2832-nominal-mode-ui.md`.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
    assertions where squirrel modes change.
 The remaining systems (SD-12) follow, with the owner-approved addenda as

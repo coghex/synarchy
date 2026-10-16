@@ -2,7 +2,7 @@
 
 S5 of the physiology stat-modes epic (#2827; design
 `docs/designs/physiology_stat_modes_design.md`, D-1, D-2, D-5a, D-7, D-9,
-SD-19 and the S5/S6 temporary UI exception) moved every gameplay reader and
+SD-19 and the former S5/S6 temporary UI exception) moved every gameplay reader and
 every cross-system writer of a registry-owned key behind one accessor and added
 the audit that keeps it there, without changing any behavior while production
 modes were inactive. **S4 (#2831) activated that seam**: the facade now answers
@@ -10,7 +10,7 @@ the mode-aware contract, `setMode` / `clearMode` / `refresh` exist, and the
 tick gates, the write gate and the load normalization stand on it.
 
 This page is the reference for the facade, the system owners, the migrated
-interface and the temporary UI exception. The contract summary lives in
+interface and the (deleted) temporary UI exception. The contract summary lives in
 `docs/engine_contracts.md` §The physiology system registry, read contract and
 modes; the audit's own header documents the scanner.
 
@@ -149,29 +149,26 @@ when #2754 became the `exempt` profile, design F-7):
   owner's fallback is to remove the exception by moving the probe's setup
   writes onto the facade or a test setter.
 
-## 5. The temporary UI exception (S5 → S6)
+## 5. The former temporary UI exception (S5 → S6, deleted by #2832)
 
-Until S6 a Nominal unit's hydration, hunger and calorie rows read `?`: the
-excepted raw reads see an absent key. That is the documented temporary display.
+S5 shipped the audit with one named, enumerated, temporary exception: the
+legacy `hydration`, `hunger` and `calories` pool reads in `formatStatus` of
+`scripts/unit_info_panel.lua`, and the two generic `stats.get` pool reads of
+`fmtCurMax` in `scripts/unit_info_v2_stat_defs.lua`. Between S4 and S6 a
+Nominal unit's pool rows read `?` because of it. **S6 (#2832) deleted it.**
 
-Exactly these legacy pool reads stay raw until S6's Nominal-aware display,
-identified by file, enclosing function, verb and key (never a line number),
-each key admitted **once**:
-
-* `scripts/unit_info_panel.lua`, `formatStatus`: the `hydration`, `hunger`
-  and `calories` `unit.getStat` reads.
-* `scripts/unit_info_v2_stat_defs.lua`, `fmtCurMax`: the two generic
-  `stats.get` pool reads. Its call sites are admitted only for the pool keys
-  `hydration`, `hunger` and `calories`, and only while the helper is exactly
-  those two `stats.get` reads: a mutation, another verb or a further read
-  added to it voids the exception and every call site is flagged.
-
-Migrated here and **not** excepted: both `salt_conc` reads in
-`unit_info_v2_status.lua`; `lowFrac` (hydration conditions, and stamina);
-`fracColorFn` (hunger, calories and hydration row colours); and the
-`METER_CONDITIONS` read of `hypothermia`, `hyperthermia` and
-`salt_imbalance`. Any other raw UI read is flagged. S6 migrates the
-excepted reads and deletes the exception; no permanent UI exemption is
+Both sites now read through `scripts/physiology.lua`: `fmtCurMax` through
+`physiology.get`, and the debug text through the mode resolver plus
+`physiology.get`, so a Nominal pool prints `Hydration: Nominal` and an
+Unsupported one prints no line. The Status panel's mode-aware rows,
+conditions and failure meters live in `scripts/unit_info_v2_physio.lua`
+(engine contracts §The physiology system registry, read contract and modes,
+"Unit-info display of modes"). The audit keeps no UI allowance: its
+`UI_EXCEPTIONS` / `UI_HELPER_EXCEPTIONS` tables, their dataclasses and their
+matching are gone, and `--self-test` pins that every former raw form (the three
+`formatStatus` reads, the raw `fmtCurMax` helper and its call sites) is flagged,
+along with a new raw UI registry read and a raw `salt_conc` status read. Any
+raw UI read of a registry key is flagged; no permanent UI exemption is
 authorized.
 
 ## 6. The access audit
