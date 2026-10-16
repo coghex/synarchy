@@ -60,6 +60,7 @@ import Engine.Scripting.Lua.Types (LuaBackendState)
 import Test.Headless.Unit.PhysiologyModes.Harness
 import Test.Headless.Unit.TransferApi (evalDebug)
 import Unit.Command.Types (SpawnProfile(..), UnitCommand(..))
+import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Unit.Physiology.Types
@@ -152,6 +153,11 @@ budgetSpec = describe "B: a fixed-cadence budget" $
                     pure (Just (second, n, a))
             let sampled = [ s | Just s ← samples ]
             length sampled `shouldBe` 30
+            -- T-S8-5 B's two bounds, at EVERY sample: the nomad's fraction
+            -- never falls below 0.1 and never below the acolyte's
+            forM_ sampled $ \(second, n, a) → do
+                (second, n, n ≥ 0.1) `shouldBe` (second, n, True)
+                (second, n, a, n ≥ a - 1e-9) `shouldBe` (second, n, a, True)
             -- neither the pool nor the death rules were skipped: the acolyte
             -- is genuinely spent by the end, the nomad is not
             case reverse sampled of
@@ -234,6 +240,11 @@ withEncounter act = withScene [] $ \sc@(env, ls) → do
             SpawnStandard
     spawn 1 "nomad_primitive" 10.0
     spawn 2 "acolyte" 10.5
+    -- facing each other: the spawn heading is south and nothing here runs an
+    -- AI or a movement to turn a unit, while the awareness the dodge save
+    -- reads is frontal only toward the way a unit faces
+    modifyInstance env 1 $ \i → i { uiFacing = DirE }
+    modifyInstance env 2 $ \i → i { uiFacing = DirW }
     act sc
 
 -- | One fighter's scheduling state.
@@ -258,6 +269,9 @@ encounterSpec = describe "E: a bounded encounter" $
             forM_ [1, 2 ∷ Int] $ \uid →
                 luaText ls ("return tostring(__physiology.setMode(" <> tshow uid
                             <> ", 'thermo', 'nominal'))") `shouldReturn` "true"
+            -- the headings the fixture asserts (the units are on one row)
+            forM_ [(1, DirE), (2, DirW)] $ \(uid, dir) →
+                uiFacing <$> readInstance env uid `shouldReturn` dir
             _ ← luaText ls $ T.unlines
                 [ "_G.__eng = {}"
                 , "local real = unit.applyCombatEngagement"
@@ -266,6 +280,18 @@ encounterSpec = describe "E: a bounded encounter" $
                 , "  __eng[#__eng + 1] = tostring(uid) .. ':' .. tostring(o)"
                 , "  return o, c"
                 , "end"
+                -- every stamina death rule: the pool tick names the resource it"
+                -- is killing for to deathCauseFor immediately before it emits
+                -- the alert, so the recorded resource is the actual cause"
+                , "_G.__deaths = {}"
+                , "local alerts = require('scripts.unit_resource_alerts')"
+                , "local realCause, realEmit = alerts.deathCauseFor, alerts.emitDeathAlert"
+                , "local lastResource"
+                , "alerts.deathCauseFor = function(name)"
+                , "  lastResource = name; return realCause(name) end"
+                , "alerts.emitDeathAlert = function(uid, cause, ...)"
+                , "  __deaths[#__deaths + 1] = tostring(uid) .. ':' .. tostring(lastResource)"
+                , "  return realEmit(uid, cause, ...) end"
                 , "return true" ]
             -- the arena: facing each other, 0.5 tiles apart, held there (no AI
             -- runs in this engine, so nothing closes the distance)
@@ -278,7 +304,6 @@ encounterSpec = describe "E: a bounded encounter" $
                 [ Fighter 1 2 (-100) "quick" 0 0, Fighter 2 1 (-100) "quick" 0 0 ]
             samples ← newIORef ([] ∷ [(Double, Double)])
             ending ← newIORef Capped
-            exhausted ← newIORef False
             let loop step
                   | step > 600 = pure ()
                   | otherwise = do
@@ -300,26 +325,23 @@ encounterSpec = describe "E: a bounded encounter" $
                                 ⧺ [ (u, "kill") | UnitKill u ← cmds ]
                       case downed of
                           [] → loop (step + 1)
-                          ((UnitId u, what) : _) → do
+                          ((UnitId u, what) : _) →
                               writeIORef ending (Stopped (what <> " of unit "
                                                           <> tshow u <> " at "
                                                           <> tshow t))
-                              fr ← fractionOf env 1
-                              -- exhaustion kills only an empty pool
-                              when (any (\(UnitId k, w) → k ≡ 1 ∧ w ≡ "kill") downed
-                                    ∧ fr ≤ 0) $
-                                  writeIORef exhausted True
             loop (1 ∷ Int)
             fsEnd ← readIORef fighters
             sampled ← reverse <$> readIORef samples
             how ← readIORef ending
             outcomes ← luaText ls "return table.concat(__eng, ',')"
+            deaths ← luaText ls "return table.concat(__deaths, ',')"
             marker ← HM.lookup "combat_engaged" ∘ uiStats <$> readInstance env 1
             let admittedBy uid = sum [ fAdmitted f | f ← fsEnd, fUid f ≡ uid ]
                 summary = "ending=" <> show how <> " admitted(nomad,acolyte)="
                     <> show (admittedBy 1, admittedBy 2) <> " marker="
                     <> show marker <> " engagement=" <> T.unpack outcomes
                     <> " samples=" <> show (length sampled)
+                    <> " deathRules=" <> T.unpack deaths
             -- VALIDITY, before the oracle is read: each unit threw at least
             -- one admitted strike, and the nomad's marker reached 2 by
             -- `transitioned`. A capped run with either missing is a FIXTURE
@@ -331,7 +353,11 @@ encounterSpec = describe "E: a bounded encounter" $
             -- the oracle, given validity
             forM_ sampled $ \(t, fr) →
                 (summary, t, fr ≥ 0.1) `shouldBe` (summary, t, True)
-            readIORef exhausted `shouldReturn` False
+            -- and the exhaustion death rule never fired for the nomad, on any
+            -- tick including the terminating one (the pool tick checks the
+            -- committed before AND after values, so a sampled fraction alone
+            -- could miss a kill)
+            (summary, "1:stamina" `T.isInfixOf` deaths) `shouldBe` (summary, False)
 
 -- | One fighter's turn: attack when the shipped cooldown rule and the
 --   stance gate allow, through the REAL resolution on the shared stream.
