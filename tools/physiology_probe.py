@@ -118,6 +118,112 @@ def unit_masses(port, uid):
         return None
 
 
+# ---- The squirrel's shipped physiology (#2833, owner decision SD-10) ----
+#
+# red_squirrel ships the `simple` profile: hydration, salt and nutrition
+# Nominal, thermo Simulated. The observation below is ONE Lua chunk, read
+# through the mode API (never `or 0`: F-9 of the design is exactly the
+# zero-substitution hazard of an absent Nominal key) and judged by a pure
+# predicate, so tools/test_physiology_probe.py can prove the predicate with
+# no engine.
+
+SYSTEMS = ("thermo", "salt", "hydration", "nutrition")
+#: What the shipped squirrel must resolve to, per system.
+SQUIRREL_MODES = {"thermo": "simulated", "salt": "nominal",
+                  "hydration": "nominal", "nutrition": "nominal"}
+#: Keys a Nominal system must not store (D-3): the salt pool, its store, the
+#: derived concentration and the imbalance meter, and the other two systems'
+#: pools. thermo is Simulated, so core_temp is stored and is NOT listed.
+SQUIRREL_ABSENT_KEYS = ("salt", "salt_store", "salt_conc", "salt_imbalance",
+                        "hydration", "hunger", "calories")
+
+
+def squirrel_observation_lua(uid):
+    """One console chunk: the unit's modes, overrides, the salt reads and which
+    of the keys a Nominal system must not hold are present in its stats
+    (`unit.getAllStats`: no raw registry-key read, which the access audit
+    refuses in the probe). A non-finite
+    number is reported as the string 'nonfinite' so JSON stays parseable."""
+    return (
+        f"local u={uid} "
+        "local function f(v) if v==nil then return nil end "
+        "if v~=v or v==math.huge or v==-math.huge then return 'nonfinite' end "
+        "return v end "
+        "local modes,pins,stored={}, {}, {} "
+        "for _,s in ipairs({'thermo','salt','hydration','nutrition'}) do "
+        "modes[s]=unit.getPhysioMode(u,s) or 'none' "
+        "pins[s]=unit.getPhysioOverride(u,s) or 'none' end "
+        "local all=unit.getAllStats(u) or {} "
+        "for _,k in ipairs({'salt','salt_store','salt_conc','salt_imbalance',"
+        "'hydration','hunger','calories'}) do stored[k]=f(all[k]) end "
+        "local conc,cm=unit.readPhysio(u,'salt_conc') "
+        "local imb=unit.readPhysio(u,'salt_imbalance') "
+        "return {modes=modes,pins=pins,stored=stored,conc=f(conc),concMode=cm,"
+        "imbalance=f(imb),speed=f(require('scripts.salts').speedMultiplier(u)),"
+        "core=f(unit.readPhysio(u,'core_temp')),"
+        "coreStored=f(all.core_temp)}")
+
+
+def _finite(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) \
+        and v == v and v not in (float("inf"), float("-inf"))
+
+
+def squirrel_nominal_problems(reading):
+    """The squirrel's Nominal-salt predicate over one observation (a dict as
+    `squirrel_observation_lua` returns). Returns the list of problems; empty
+    means the shipped `simple` squirrel is exactly as specified."""
+    if not isinstance(reading, dict):
+        return ["unreadable observation"]
+    bad = []
+    modes = reading.get("modes") or {}
+    for system in SYSTEMS:
+        want = SQUIRREL_MODES[system]
+        if modes.get(system) != want:
+            bad.append(f"{system} resolves {modes.get(system)!r}, wanted {want!r}")
+    # the species default must produce this: a probe-written pin would
+    # manufacture it
+    for system in SYSTEMS:
+        if (reading.get("pins") or {}).get(system, "none") != "none":
+            bad.append(f"{system} carries an override "
+                       f"({reading['pins'][system]!r}): not the species default")
+    conc = reading.get("conc")
+    if not _finite(conc):
+        bad.append(f"salt_conc reads {conc!r}, not a finite number")
+    elif conc == 0:
+        bad.append("salt_conc reads 0: a zero stands in for the absent healthy key")
+    elif abs(conc - 1.0) > 1e-9:
+        bad.append(f"salt_conc reads {conc!r}, not its healthy value 1.0")
+    if reading.get("concMode") != "nominal":
+        bad.append(f"salt_conc read mode {reading.get('concMode')!r}, wanted 'nominal'")
+    stored = reading.get("stored") or {}
+    leaked = [k for k in SQUIRREL_ABSENT_KEYS if stored.get(k) is not None]
+    if leaked:
+        bad.append("Nominal state is stored: " + ", ".join(leaked))
+    imb = reading.get("imbalance")
+    if not _finite(imb) or imb != 0:
+        bad.append(f"salt_imbalance reads {imb!r}, wanted 0 (no failure contribution)")
+    speed = reading.get("speed")
+    if not _finite(speed) or abs(speed - 1.0) > 1e-9:
+        bad.append(f"salt cramp multiplier {speed!r}, wanted 1.0 (no cramps)")
+    core, cstored = reading.get("core"), reading.get("coreStored")
+    if not _finite(core) or not _finite(cstored):
+        bad.append(f"thermo is not Simulated state (core {core!r}, stored {cstored!r})")
+    return bad
+
+
+def check_squirrel_nominal(port, uid, send_fn=None):
+    """Observe one live squirrel and judge it. `send_fn` is the console
+    (tools/probelib.send by default; the self-test passes a fake)."""
+    send_fn = send_fn or send
+    raw = send_fn(port, squirrel_observation_lua(uid))
+    try:
+        reading = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return [f"unreadable observation: {str(raw)[:80]!r}"]
+    return squirrel_nominal_problems(reading)
+
+
 def small_creature_section(port, seconds):
     """Coverage for the mass-scaling fix: a tiny creature must spawn coherent
     at its real mass (not force-floored), stay stable in a temperate climate,
@@ -150,6 +256,19 @@ def small_creature_section(port, seconds):
     passed &= ok
     detail = (f"coherent {masses[0]:.2f}kg, stable" if ok else "; ".join(bad))
     print(f"  [{'PASS' if ok else 'FAIL'}] small creature temperate: {detail}")
+
+    # 1b. The species default itself (#2833): every spawned squirrel resolves
+    #     hydration/salt/nutrition Nominal and thermo Simulated, reads its
+    #     healthy salt_conc, stores no Nominal state and has no cramps.
+    problems = []
+    for uid in sq:
+        for p in check_squirrel_nominal(port, uid):
+            problems.append(f"squirrel {uid}: {p}")
+    ok1b = not problems
+    passed &= ok1b
+    print(f"  [{'PASS' if ok1b else 'FAIL'}] squirrel simple profile (salt Nominal): "
+          + ("hydration/salt/nutrition nominal, thermo simulated, salt_conc 1.0, "
+             "no Nominal state stored" if ok1b else "; ".join(problems)))
 
     # 2. Cold response: in a cold climate, a squirrel (tiny heat capacity, no
     #    clothing) reaches a colder steady state — and reaches it fast — while a

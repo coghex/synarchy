@@ -52,8 +52,8 @@ units:
       bulk:    { mean: 0.28,  range: 0.06 }
       bodyfat: { mean: 0.10,  range: 0.06 }
 
-    # Physiology profile (#2831, design D-10): hydration and nutrition Nominal; salt and thermo Simulated (S7 moves it to `simple`).
-    physiology: { profile: reduced }
+    # Physiology profile (#2833, owner decision SD-10): hydration, salt and nutrition Nominal; thermo Simulated.
+    physiology: { profile: simple }
 
     skills:
       # Natural attacks (claws/incisors) ride the unarmed class.
