@@ -37,6 +37,7 @@ spec = describe "transitions and persistence" $ do
     refusalSpec
     intentSpec
     contributionSpec
+    tickSpec
     resetSpec
     persistenceSpec
 
@@ -272,6 +273,57 @@ contributionSpec = describe "contributions to a Simulated pool are EFFECTIVE del
             contribute ls "debit" "exhaustion" 1 >>= near 1e-9 0
             contribute ls "credit" "exhaustion" 1 >>= near 1e-9 0
             snapshot env 1 `shouldReturn` before
+
+-----------------------------------------------------------------------
+-- The pool tick under retained modifiers
+-----------------------------------------------------------------------
+
+-- | A walking, Simulated-pool unit (the @exempt@ profile with both systems
+--   pinned Simulated), carrying one percentage modifier on @key@ unless
+--   @pct@ is 0. Units of one scene share the definition, so the modes are
+--   the unit's pins.
+ticking ∷ Int → Text → Float → UnitSpec
+ticking uid key pct = (unitSpec uid "acolyte" (Just "exempt"))
+    { usOverrides = [("exhaustion", PhysioSimulated), ("sleep", PhysioSimulated)]
+    , usActivity = "walking"
+    , usModifiers = [ (key, [StatModifier 0 "spec" Nothing pct]) | pct ≢ 0 ] }
+
+tickSpec ∷ Spec
+tickSpec = describe "the pool tick lands its EFFECTIVE value under retained modifiers" $
+    forM_ systemKeys $ \(_, key) →
+        it ("a +50 % and a -50 % modifier on " <> T.unpack key <> " follow exactly \
+            \the trajectory of an unmodified twin through real resource updates \
+            \(sub-Float carry included), and the seed survives the first tick") $
+            withScene [ticking 1 key 0.5, ticking 2 key (-0.5), ticking 3 key 0] $
+                \(env, ls) → do
+                    -- the seed reads the healthy value, the first 0.1 s tick
+                    -- must not undo it (the stored base is 20 / 3 and 20)
+                    forM_ [1, 2, 3 ∷ Int] $ \u →
+                        luaNum ls ("unit.readPhysio(" <> tshow u <> ", '" <> key <> "')")
+                            >>= near 1e-4 10
+                    runSeconds ls 0.1 0.1
+                    -- (walking drains exhaustion by about 0.002 in 0.1 s; an
+                    -- undone seed would read 15 or 5)
+                    forM_ [1, 2, 3 ∷ Int] $ \u →
+                        luaNum ls ("unit.readPhysio(" <> tshow u <> ", '" <> key <> "')")
+                            >>= near 1e-2 10
+                    forM_ [30, 90] $ \seconds → do
+                        runSeconds ls seconds 0.1
+                        twin ← luaNum ls ("unit.readPhysio(3, '" <> key <> "')")
+                        forM_ [1, 2 ∷ Int] $ \u → do
+                            v ← luaNum ls ("unit.readPhysio(" <> tshow u <> ", '"
+                                           <> key <> "')")
+                            near 2e-3 twin v
+                            v `shouldSatisfy` (\x → x ≥ 0 ∧ x ≤ 10.001)
+                    -- the walking exhaustion actually moved, so this is not
+                    -- comparing three constants
+                    when (key ≡ "exhaustion") $
+                        luaNum ls "unit.readPhysio(3, 'exhaustion')"
+                            >>= \v → v `shouldSatisfy` (< 9.5)
+                    forM_ [1, 2 ∷ Int] $ \u → do
+                        i ← readInstance env u
+                        HM.size (uiModifiers i) `shouldBe` 1
+                    scriptErrors ls `shouldReturn` ""
 
 -----------------------------------------------------------------------
 -- Transient resets

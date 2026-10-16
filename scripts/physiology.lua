@@ -214,12 +214,11 @@ end
 -- negative one), clamped to [0, cap], and answer the EFFECTIVE change
 -- actually made (read back, so binary32 storage and the zero clamp are
 -- reported as they landed). The stored base is the one whose effective value
--- is the target under the pool's active modifiers, `t / (1 + sum p) - sum d`
--- (a modifier is active while now < its expiry, as Unit.Stats.effectiveStat
--- decides): writing `base + amount` would be wrong by the multiplier and the
--- flat part. 0, with nothing written, when no representable base exists (a
--- multiplier that is not positive, or a negative or non-finite base): the
--- same refusals a transition's seed makes.
+-- is the target under the pool's active modifiers (scripts/lib/stat_base.lua:
+-- `t / (1 + sum p) - sum d`): writing `base + amount` would be wrong by the
+-- multiplier and the flat part. 0, with nothing written, when no
+-- representable base exists (a multiplier that is not positive, or a
+-- negative or non-finite base): the same refusals a transition's seed makes.
 local function contributeEffective(uid, key, rule, amount)
     local cap = rule.cap(uid)
     if not cap or cap <= 0 then return 0 end
@@ -227,19 +226,8 @@ local function contributeEffective(uid, key, rule, amount)
     local old = unit.readPhysio(uid, key)
     if old == nil then return 0 end
     local target = math.min(cap, math.max(0, old + amount))
-    local now, delta, percent = engine.gameTime(), 0, 0
-    for _, m in ipairs(unit.getModifiers(uid, key) or {}) do
-        if m.expiry == nil or now < m.expiry then
-            delta = delta + (m.delta or 0)
-            percent = percent + (m.percent or 0)
-        end
-    end
-    local multiplier = 1 + percent
-    if not (multiplier > 0) then return 0 end
-    local base = target / multiplier - delta
-    if base ~= base or base == math.huge or base == -math.huge or base < 0 then
-        return 0
-    end
+    local base = require("scripts.lib.stat_base").baseFor(uid, key, target)
+    if base == nil then return 0 end
     unit.setStat(uid, key, base)
     local after = unit.readPhysio(uid, key)
     return after ~= nil and (after - old) or 0
