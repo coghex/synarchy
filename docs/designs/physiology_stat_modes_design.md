@@ -971,6 +971,38 @@ changes, listed in its PR:
 
 (Mass-proportional sweat costs arrive earlier, through #2825.)
 
+**Final species table, applied by S7 (#2833).** The shipped `data/units/*.yaml`
+now carry exactly the SD-10 table above. Relative to S4's activation set, the
+one **intentional effective change** is `red_squirrel`: `reduced` → `simple`,
+so its salt goes Simulated → Nominal (hydration and nutrition were already
+Nominal, thermo stays Simulated). A squirrel therefore holds no `salt` /
+`salt_store` / `salt_conc` / `salt_imbalance` state, reads `salt_conc` 1.0
+Nominal, has no cramps and no salt failure contribution, and its sweat factor
+is 1.0; its thermo, circulation and every unowned system are untouched. Bodyless
+definitions (`tiller`, `unknown_unit`, `white_tailed_deer`) stay Unsupported.
+Nothing else is retuned. Saves follow D-6 (b): an unpinned squirrel saved under
+`reduced` adopts `simple` on load (salt state scrubbed, one normalization note,
+idempotent), while a squirrel pinned to salt Simulated keeps its pin and its
+durable salt and reserve state exactly, a pin equal to the old default
+included.
+
+**Independent small-mass Simulated coverage.** The production squirrel's Nominal
+salt must not stand in for the Simulated regression at 0.3 kg. That coverage
+stays on explicit fixtures that pin their own modes: T-1's four salt x hydration
+combinations and T-12's virtual-meal controls (`physiology stat modes`, all on
+an explicit `reduced` fixture, unaffected by the shipped default), plus, in
+`physiology species profiles`, the shipped squirrel with salt pinned Simulated
+through the facade, held to the probe's 0.7 to 1.3 concentration and 33.5 to 39
+core bounds under idle and exertion. No bound was relaxed. The physiology probe
+asserts the squirrel's Nominal semantics through the mode API
+(`tools/physiology_probe.py`, predicate proved engine-free by
+`tools/test_physiology_probe.py`): thermo Simulated, salt, hydration and
+nutrition Nominal as the species default (no probe-written pin), `salt_conc`
+1.0 Nominal (never a zero standing in for an absent key), no Nominal state
+stored, no imbalance, no cramps; it keeps the temperate core range, the
+no-death check, the body-composition checks, the cold response and the
+exhaustion-amble regression.
+
 S7 applies the owner's table (SD-10).
 
 Capture is out of scope (Non-goals). When it is designed, it uses
@@ -1411,6 +1443,7 @@ and round-trip contract.
    evidence is `docs/pr-proofs/issue-2832-nominal-mode-ui.md`.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
    assertions where squirrel modes change.
+   Delivered as #2833 (see D-10, "Final species table, applied by S7").
 The remaining systems (SD-12) follow, with the owner-approved addenda as
 their design (section "Addenda: remaining systems (S8 to S11)"). **S8a, S8b,
 S9, S10 and S11a each depend only on S4 (#2831), and are independent of one
