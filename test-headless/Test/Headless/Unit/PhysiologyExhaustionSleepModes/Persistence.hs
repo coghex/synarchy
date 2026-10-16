@@ -36,6 +36,7 @@ spec = describe "transitions and persistence" $ do
     seedSpec
     refusalSpec
     intentSpec
+    contributionSpec
     resetSpec
     persistenceSpec
 
@@ -192,6 +193,85 @@ intentSpec = describe "set always pins intent; hooks run only on an effective ch
             -- the other system's change is not this hook's event
             setModeText ls "exhaustion" "nominal" "" `shouldReturn` "true|true"
             hooks `shouldReturn` "2"
+
+-----------------------------------------------------------------------
+-- Contributions are EFFECTIVE deltas
+-----------------------------------------------------------------------
+
+-- | A facade contribution (@credit@ \/ @debit@) to the unit's key, as the
+--   amount it reports applied.
+contribute ∷ LuaBackendState → Text → Text → Double → IO Double
+contribute ls fn key amount = luaNum ls $
+    "__physiology." <> fn <> "(1, '" <> key <> "', " <> tshow amount <> ")"
+
+effectiveOf ∷ LuaBackendState → Text → IO Double
+effectiveOf ls key = luaNum ls ("unit.readPhysio(1, '" <> key <> "')")
+
+contributionSpec ∷ Spec
+contributionSpec = describe "contributions to a Simulated pool are EFFECTIVE deltas under \
+                            \its retained modifiers" $ do
+    forM_ systemKeys $ \(sid, key) →
+        forM_ [("+50 %", 0.5), ("-50 %", -0.5), ("none", 0)] $ \(label, pct) →
+            it (T.unpack sid <> " with a " <> label <> " modifier on "
+                <> T.unpack key <> ": a debit and a credit move the effective \
+                \value by exactly their amount, clamped to [0, maximum], and \
+                \the modifier is kept") $
+                withScene [modded key pct] $ \(env, ls) → do
+                    setModeText ls sid "simulated" "" `shouldReturn` "true|true"
+                    effectiveOf ls key >>= near 1e-4 10
+                    contribute ls "debit" key 1 >>= near 1e-4 1
+                    effectiveOf ls key >>= near 1e-4 9
+                    contribute ls "credit" key 0.5 >>= near 1e-4 0.5
+                    effectiveOf ls key >>= near 1e-4 9.5
+                    -- more than the room left: applied is what landed
+                    contribute ls "credit" key 5 >>= near 1e-4 0.5
+                    effectiveOf ls key >>= near 1e-4 10
+                    -- more than the pool holds: floored at zero
+                    contribute ls "debit" key 50 >>= near 1e-4 10
+                    effectiveOf ls key >>= near 1e-4 0
+                    i ← readInstance env 1
+                    HM.size (uiModifiers i) `shouldBe` 1
+
+    it "credits an effective 5 under -50 % to 6, not 3" $
+        withScene [modded "exhaustion" (-0.5)] $ \(_, ls) → do
+            setModeText ls "exhaustion" "simulated" "{ exhaustion = 5 }"
+                `shouldReturn` "true|true"
+            effectiveOf ls "exhaustion" >>= near 1e-4 5
+            contribute ls "credit" "exhaustion" 1 >>= near 1e-4 1
+            effectiveOf ls "exhaustion" >>= near 1e-4 6
+
+    it "honours a flat modifier and ignores an expired one, by the engine's \
+       \activity rule" $
+        withScene [modded "sleep_pressure" 0] $ \(env, ls) → do
+            setModeText ls "sleep" "simulated" "{ sleep_pressure = 3 }"
+                `shouldReturn` "true|true"
+            -- a permanent flat +2 and a +50 % that lasts ten game seconds
+            _ ← luaText ls "unit.addModifier(1, 'sleep_pressure', 2, 'flat', nil, 0); \
+                           \unit.addModifier(1, 'sleep_pressure', 0, 'temp', 10, 0.5); \
+                           \return true"
+            effectiveOf ls "sleep_pressure" >>= near 1e-4 ((3 + 2) * 1.5)
+            -- a debit of 3 lands exactly: base = 4.5 / 1.5 - 2 = 1
+            contribute ls "debit" "sleep_pressure" 3 >>= near 1e-4 3
+            effectiveOf ls "sleep_pressure" >>= near 1e-4 4.5
+            luaNum ls "unit.getStatBase(1, 'sleep_pressure')" >>= near 1e-4 1
+            -- past the temporary modifier's expiry only the flat +2 is active:
+            -- the pool reads 1 + 2 = 3, and a debit of 1 solves base 0
+            writeGameTime env 20
+            effectiveOf ls "sleep_pressure" >>= near 1e-4 3
+            contribute ls "debit" "sleep_pressure" 1 >>= near 1e-4 1
+            effectiveOf ls "sleep_pressure" >>= near 1e-4 2
+            luaNum ls "unit.getStatBase(1, 'sleep_pressure')" >>= near 1e-4 0
+
+    it "writes nothing when no representable base exists (a multiplier that is \
+       \not positive), and reports no change" $
+        withScene [modded "exhaustion" 0] $ \(env, ls) → do
+            setModeText ls "exhaustion" "simulated" "" `shouldReturn` "true|true"
+            _ ← luaText ls "unit.addModifier(1, 'exhaustion', 0, 'void', nil, -1.0); \
+                           \return true"
+            before ← snapshot env 1
+            contribute ls "debit" "exhaustion" 1 >>= near 1e-9 0
+            contribute ls "credit" "exhaustion" 1 >>= near 1e-9 0
+            snapshot env 1 `shouldReturn` before
 
 -----------------------------------------------------------------------
 -- Transient resets
