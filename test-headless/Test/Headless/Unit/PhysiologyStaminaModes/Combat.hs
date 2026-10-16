@@ -527,6 +527,26 @@ stateSpec = describe "T-S8-4: refusals keep the marker pending" $ do
             engagementState env 1 `shouldReturn` (Just 2, Just PhysioSimulated, Just 15)
             last <$> engagementOutcomes ls 1 `shouldReturn` "transitioned"
 
+    it "(n) the refusal diagnostic's debounce is session state: it is cleared \
+       \by the session teardown and the load reset, so a reused unit id logs again" $
+        duel $ \(env, ls) → do
+            modifyInstance env 1 $ \i →
+                i { uiModifiers = HM.insert "stamina" [modOf 0 (-1)]
+                                    (uiModifiers i) }
+            admitted env True 1 2 Quick
+            forM_ [1 .. 3 ∷ Int] $ \_ → pass ls
+            luaText ls "return __engWarn" `shouldReturn` "1"
+            -- Exit to Menu: every registered clear runs (unit_resources, through
+            -- the same function its load reset hook runs), then a new session
+            _ ← luaText ls $ T.unlines
+                [ "local t = require('scripts.lib.session_teardown')"
+                , "t.runAll(); t.beginSession(); return true" ]
+            pass ls
+            luaText ls "return __engWarn" `shouldReturn` "2"
+            -- and it is debounced again within the new session
+            forM_ [1 .. 3 ∷ Int] $ \_ → pass ls
+            luaText ls "return __engWarn" `shouldReturn` "2"
+
     it "T-S8-8: an engagement seed the solver could reach but the guards refuse \
        \(target 10, flat -10, percent -2) stays pending with no pinned override" $
         combatScene [ (nomad 1) { usModifiers = [] }, fighter 2 ] $ \(env, ls) → do

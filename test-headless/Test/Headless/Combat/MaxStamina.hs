@@ -200,6 +200,42 @@ spec = do
                         (HM.fromList [("endurance", [modifier (-5.0) 0.0 Nothing])]))
                 `shouldBe` 0.0
 
+    -- ---- #2834: the derived branch applies max_stamina's own modifiers ----
+    describe "maxStaminaFor's derived branch applies modifiers on max_stamina (#2834)" $ do
+        let derived stats mods = mkInst (HM.fromList stats) (HM.fromList mods)
+
+        it "a percent modifier on max_stamina scales the endurance-derived pool \
+           \(the old branch ignored it)" $
+            maxStaminaFor now (derived [("endurance", 2.0)]
+                    [("max_stamina", [modifier 0.0 0.2 Nothing])])
+                `shouldBe` 24.0
+
+        it "a flat modifier on max_stamina adds to the derived pool" $
+            maxStaminaFor now (derived [("endurance", 2.0)]
+                    [("max_stamina", [modifier 5.0 0.0 Nothing])])
+                `shouldBe` 25.0
+
+        it "composes with an endurance modifier: effective endurance 3 -> 30, then +50% -> 45" $
+            maxStaminaFor now (derived [("endurance", 2.0)]
+                    [ ("endurance", [modifier 1.0 0.0 Nothing])
+                    , ("max_stamina", [modifier 0.0 0.5 Nothing]) ])
+                `shouldBe` 45.0
+
+        it "an expired max_stamina modifier contributes nothing, and one expiring \
+           \exactly at the sample is inactive" $ do
+            let expiring t = derived [("endurance", 2.0)]
+                    [("max_stamina", [modifier 0.0 0.5 (Just t)])]
+            maxStaminaFor now (expiring 100.5) `shouldBe` 30.0
+            maxStaminaFor now (expiring 100.0) `shouldBe` 20.0
+            maxStaminaFor now (expiring 99.5) `shouldBe` 20.0
+
+        it "an explicit max_stamina keeps its precedence: endurance modifiers do \
+           \not reach it, its own do" $
+            maxStaminaFor now (derived [("max_stamina", 40.0), ("endurance", 2.0)]
+                    [ ("endurance", [modifier 9.0 0.0 Nothing])
+                    , ("max_stamina", [modifier 0.0 0.25 Nothing]) ])
+                `shouldBe` 50.0
+
     -- ---- Expiry, on the exact Unit.Stats.effectiveStat boundary ----
     describe "maxStaminaFor honours modifier expiry at the resolution's game time" $ do
         let expiring t = mkInst (HM.fromList [("endurance", 2.0)])

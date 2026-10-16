@@ -689,6 +689,57 @@ spec = aroundAll withHeadlessEngineNoWorld $
             mods ← uiModifiers ⊚ acolyte env
             HM.lookup "stamina" mods `shouldBe` Just [permanent 0.3]
 
+    -- §6b (#2834) Every report is EFFECTIVE stamina against the effective
+    -- maximum, and the stored value is the BASE that reads as the target.
+    describe "effective reports with a retained modifier (§6b)" $ do
+        it "a flat +0.3 modifier: before/after are the effective reads and the \
+           \stored base is what makes the target" $ \env → do
+            resetSceneMods env (statsWithStamina 5.0)
+                (HM.singleton "stamina" [permanent 0.3])
+            ls ← newBareLuaBackend env
+            evalDebug ls ("local r = unit.commitStamina(1, -1); return "
+                          <> luaNear "r.before" 5.3 <> " and "
+                          <> luaNear "r.after" 4.3 <> " and r.status == 'ok'")
+                `shouldReturn` "true"
+            storedStamina env `shouldBeNear` 4.0
+            evalDebug ls ("return " <> luaNear "unit.getStat(1, 'stamina')" 4.3)
+                `shouldReturn` "true"
+
+        it "a -50% modifier on a base of 20: a heavy-sized debit reports 10 -> 7.5 \
+           \and stores 15; a refill past the maximum clamps at the effective 10" $ \env → do
+            resetSceneMods env (statsWithStamina 20.0)
+                (HM.singleton "stamina" [(permanent 0) { smPercent = -0.5 }])
+            ls ← newBareLuaBackend env
+            evalDebug ls ("local r = unit.commitStamina(1, -2.5); return "
+                          <> luaNear "r.before" 10 <> " and "
+                          <> luaNear "r.after" 7.5 <> " and "
+                          <> luaNear "r.maximum" 10)
+                `shouldReturn` "true"
+            storedStamina env `shouldBeNear` 15.0
+            evalDebug ls ("local r = unit.commitStamina(1, 100); return "
+                          <> luaNear "r.after" 10 <> " and r.status == 'ok'")
+                `shouldReturn` "true"
+            storedStamina env `shouldBeNear` 20.0
+
+        it "a Nominal receiver is refused as nominal and mutates nothing, and the \
+           \tick never calls the verb for it" $ \env → do
+            ensurePhysiologyRegistry env
+            resetSceneFull env "acolyte"
+                acolyteDef { udPhysiology = (udPhysiology acolyteDef)
+                                { upDefaults = HM.insert "stamina" PhysioNominal
+                                    (upDefaults (udPhysiology acolyteDef)) } }
+                statsWithoutStamina HM.empty "standing"
+            ls ← newBareLuaBackend env
+            installCommitCounter ls
+            expectRefusal env ls "unit.commitStamina(1, 0.05)" "nominal"
+            storedStamina env `shouldReturn` Nothing
+            -- (the refusal above was itself a call; count only the pass's)
+            _ ← evalDebug ls "_G.__commits = 0; return true"
+            -- a whole physiology pass over the unit reaches no commit
+            _ ← evalDebug ls "require('scripts.unit_resources').update(0.1); return true"
+            luaCount ls "__commits" `shouldReturn` "0"
+            storedStamina env `shouldReturn` Nothing
+
     -- §7 Arithmetic edges, the in-transaction write elision, and every
     -- refusal.
     describe "deltas, saturation and refusals (§7)" $ do
