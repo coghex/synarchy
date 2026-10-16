@@ -1005,6 +1005,17 @@ exhaustion-amble regression.
 
 S7 applies the owner's table (SD-10).
 
+**Stamina column, applied by S8a (#2834).** The table gains its fifth system.
+`acolyte`, `bear_brown` and `red_squirrel` run stamina Simulated; `technomule`
+runs it Nominal (`reduced` plus an explicit `stamina: nominal`, S8-F1: the mule
+has no pool configuration, so a Simulated one would leave it permanently
+winded); `nomad_primitive` is `exempt` with `stamina: nominal` and
+`on_combat_engagement: { stamina: simulated }` (SD-20), so it spawns with no
+pool and becomes an acolyte-like Simulated unit at its first admitted combat
+attempt. All four profiles name stamina (`rich`, `reduced` and `simple`
+Simulated, `exempt` Nominal), because the loader refuses a profile that does
+not name every system. Bodyless definitions stay Unsupported.
+
 Capture is out of scope (Non-goals). When it is designed, it uses
 `physiology.setMode` per unit. The override semantics (SD-7) and
 persistence (D-6) already cover it.
@@ -1455,6 +1466,7 @@ S11a.
    `unit.getMaxStamina`, the shiver debit through `commitStamina`, and the
    SD-20 nomad engagement in full. Tests T-S8-1 to T-S8-8. Depends on S4;
    independent.
+   Delivered as #2834 (see S8.9, "S8a delivered").
 8. **S8b. Exhaustion and sleep pressure.** Addendum S8, slice plan S8.7
    (S8b). Lua-only. Depends on S4; independent of S8a.
 9. **S9. Cardio and circulation.** Addendum S9 (S9.1 to S9.8), with SD-21.
@@ -2056,6 +2068,83 @@ the new system ids are override keys in the v4 `uiPhysioOverrides` map.
   - The switch is a standard, pinned, one-way S4 transition.
   - Parameters are generous, and the trigger and application are as in
     S8.3. None of the drafted options (a) to (c) was taken.
+
+#### S8.9 S8a delivered (#2834)
+
+What the slice built, as the code now states it. Where an implementation
+choice fills a gap the text above leaves, it is named here.
+
+- **Registry.** `stamina` is the fifth system (`data/physiology/systems.yaml`,
+  last in registry order): requires `body`, owns `stamina`, no meters,
+  provides `stamina_fraction` (1.0 under Nominal) and has the effects
+  `collapse`, `kill_on_zero` and `strike_cost`, each absent under Nominal. Its
+  healthy rule is the NAMED rule `{ rule: max_stamina }` (`HealthyMaxStamina`),
+  because `max_stamina` is derived and never stored, so a `from:` rule could not
+  read it, and the review forbade storing it (an explicit attribute would then
+  switch every unit to the explicit branch). The healthy read and the seed
+  target resolve through the same rule as `maxStaminaFor`.
+- **One maximum.** `Unit.Stats.maxStaminaOf` is the rule: an explicit
+  `max_stamina` wins (its own modifiers apply); otherwise
+  `effectiveStat now (effective(endurance) x 10) (modifiers on max_stamina)`.
+  `maxStaminaFor`, the registry's healthy value, `unit.getMaxStamina` (a pure
+  read verb, `nil` for a unit with no endurance) and `stats.get(uid,
+  "max_stamina")` all call it, so the hand-kept Lua mirror is gone.
+- **One commit rule.** `Combat.Resolution.Stamina.staminaCore` is the pure
+  arithmetic of S8.2 (the m > 0, m = 0 and m < 0 rows, floored and
+  zeroMultiplier statuses). `unit.commitStamina` (pool tick, facade debit and
+  credit, shiver) and the combat strike cost both use it; a transition's seed
+  uses the same `t / m - d` solve through `invertEffectiveStatWhy` with D-5's
+  guards. The verb now returns `{ before, after, maximum, status }` (all
+  effective) and refuses by name: `nominal` and `unsupported` (distinct),
+  `missing_pool` (a Simulated receiver without a pool is a broken invariant;
+  the old first-observation fill is gone), `dead` (the combat lethality rule),
+  `invalid_amount`, `invalid_stamina`, `invalid_maximum`, `no_such_unit`.
+- **Combat.** `Wear` charges only a Simulated pool that exists (a Nominal or
+  Unsupported attacker creates no key; stance is spent in every mode) and
+  `Damage` reads `staminaWorkFraction` (1.0 for Nominal, Unsupported or an
+  absent pool; the effective fraction with the 0.3 floor for Simulated).
+  `Combat.Resolution.runResolution` reads the registry once per strike.
+- **Engagement.** `UnitPhysiology` gains `upEngagement`; the YAML block is
+  `on_combat_engagement: { stamina: simulated }`, validated at registration
+  (the system exists, is stamina, is Nominal by default, mode `simulated`). The
+  resolver takes a fourth input, the unit's marker: override, else the
+  engagement default only when `combat_engaged == 2`, else the species default.
+  `commitIfAdmitted` stamps the absent marker to 1 for attacker and target in
+  the strike's own update; `unit.applyCombatEngagement` (facade-only) applies
+  it: dead (the combat lethality rule, not the pose mirror) refuses and stays
+  pending, an explicit override of either mode latches, otherwise it is
+  `planSetMode` Simulated (so D-5's guards are a scripted `setMode`'s) with
+  marker 2 in the same update, or `seedUnrepresentable` with a reason code
+  (`nonpositive_multiplier`, `negative_base`). The facade logs a refusal once
+  per unit and reason; the debounce is cleared with the other session caches.
+  The marker is never writable by `unit.setStat` and never a definition
+  template.
+- **Nomad parameters.** `nomad_primitive` gets the acolyte's stamina entry with
+  `regen_factor_idle`, `_walking`, `_collapsed`, `_crouching` and
+  `move_regen_factor` scaled 2.25 (derived from the acolyte's table, so the two
+  cannot drift) and an innate +50% `max_stamina` modifier. Side effect worth
+  the owner's attention: `move_regen_factor` is also the speed-drain effort
+  coefficient (`supply = move_regen_factor x endurance`, `drain = supply x
+  ratio^2`), so an engaged nomad's fractional drain above comfort speed is 1.5x
+  the acolyte's too; T-S8-5 holds both units stationary and cannot see it.
+  Calibration (T-S8-5): B passes with the starting values, the nomad holding at
+  or above both 0.1 and the acolyte's fraction at every sample (about 0.25 at
+  30 s against the acolyte spent by 20 s); E is valid and passes, ending at the
+  nomad's wound collapse (about 13.6 s) with its fraction never below 0.76. No
+  parameter was retuned.
+- **Persistence.** No wire change. `combat_engaged` is Persist exactly (absent,
+  1, 2); a value outside the set or non-finite rejects the load (D-6 (h));
+  stray stamina on a Nominal unit (a legacy nomad's `stamina = 0`, the mule's)
+  is scrubbed (D-6 (b)); modifiers are not migrated, so a nomad saved before
+  this slice keeps a maximum of 10. Combat may admit an attack at a paused save
+  boundary, which only creates a pending marker.
+- **Consumers.** Brain, AI wander, pacing, lunge and attack, `checkRevive` and
+  the unit-info panels read stamina through the facade (a Nominal system reads
+  full, an Unsupported one nothing). The Status row and the legacy debug text
+  follow the S6 contract: Nominal shows the word and the neutral tooltip, an
+  Unsupported unit hides the row. The access audit gains stamina ownership
+  (the pool engine), the facade-only `applyCombatEngagement` and the atomic
+  `commitStamina` seam (facade and pool engine only).
 
 ### S9. Cardio and circulation
 

@@ -2272,9 +2272,9 @@ every consumer relies on:
   tick themselves in registry order (thermo before salt), then brain,
   thoughts, mental state, injuries and the failure meters (an owned meter
   only while its system is Simulated; injury meters always), then the
-  per-def pools (`hydration`, `hunger`, `calories` only while their system is
-  Simulated, with the species' resource parameters or, failing those, the
-  registry defaults in `scripts/unit_resource_params.lua`; stamina,
+  per-def pools (`hydration`, `hunger`, `calories` and `stamina` only while
+  their system is Simulated, with the species' resource parameters or, failing
+  those, the registry defaults in `scripts/unit_resource_params.lua`;
   exhaustion and sleep pressure as always), then nutrition's digestion and
   catabolism (Simulated) or its upkeep (Nominal), then `checkRevive` over the
   Simulated pools only. Each unit's pass is a `pcall`: a fault in one unit is
@@ -2319,8 +2319,58 @@ every consumer relies on:
   one meal (0.30 of `maxSalt`, capped at the reserve) through the real
   reserve path once per salt tick when the pool is below 0.85 of `maxSalt`
   and the reserve below 0.30 of it.
-* *Persistence*: pools and meters of a Simulated system, overrides and
-  `tissue_recovering` are Persist exactly; `circulation`, `consciousness`,
+* *Stamina (#2834, S8a).* A fifth system, `stamina`: requires a body, owns
+  `stamina` (no meters), healthy value and seed target = the effective
+  `max_stamina` (the named registry rule `max_stamina`), `stamina_fraction`
+  1.0 under Nominal, and no collapse, `kill_on_zero` or strike cost while
+  Nominal. Species: acolyte, bear_brown and red_squirrel Simulated; technomule
+  Nominal; nomad_primitive Nominal until its first admitted combat attempt;
+  bodyless Unsupported. Stance stays unowned and always on.
+  * *One maximum.* `Unit.Stats.maxStaminaOf`: an explicit `max_stamina` wins
+    (its own modifiers apply), else `effective(endurance) x 10` with the
+    modifiers on `max_stamina` applied. `maxStaminaFor`, the healthy value,
+    `unit.getMaxStamina(uid)` (pure; `nil` with no endurance) and
+    `stats.get(uid, "max_stamina")` share it. `max_stamina` is never stored.
+  * *One commit.* `Combat.Resolution.Stamina.staminaCore`: with `d` the active
+    flat modifiers on `stamina`, `m = 1 + sum(percent)` and `eff(b) = max 0
+    ((b + d) x m)`, `before = eff(b)`, `target = clamp(before + delta) 0
+    max`, and the stored base is `target/m - d` (floored at 0, status
+    `floored`; `m = 0` leaves the base and reports 0, status
+    `zeroMultiplier`); every report is the effective read of what is stored.
+    `unit.commitStamina` returns `{ before, after, maximum, status }` (effective)
+    or refuses with a name and no mutation: `nominal`, `unsupported`,
+    `missing_pool`, `dead`, `invalid_amount`, `invalid_stamina`,
+    `invalid_maximum`, `no_such_unit`. The pool tick, `physiology.debit` /
+    `credit` on stamina (the thermo shiver included) and combat's strike cost
+    all go through it, each inside one unit-manager update, so a strike is
+    never refunded. Transition eligibility is separate: a Nominal-to-Simulated
+    seed refuses when `m <= 0` or `t/m - d` is negative or non-finite, whatever
+    an ordinary commit would have returned.
+  * *Combat.* `Wear` charges a Simulated pool that exists (`fraction x
+    effective maximum`) and creates no key for a Nominal or Unsupported
+    attacker; `Damage` reads `staminaWorkFraction` (1.0 unless Simulated, the
+    effective fraction with the 0.3 floor otherwise).
+  * *SD-20 engagement.* `on_combat_engagement: { stamina: simulated }` (nomad
+    only). `combat_engaged` (unowned, durable `uiStats`): absent / 1 pending /
+    2 applied. An admitted attempt (`commitIfAdmitted`, hit or miss) sets an
+    absent marker to 1 for a declaring attacker and target in the strike's
+    own update; refused attempts, range and AI targeting do not count. The
+    resolver reads the engagement default only at marker 2. At the start of a
+    live pass the facade calls `unit.applyCombatEngagement` for pending units
+    (facade-only, one update): `refusedDead` (the combat lethality rule; stays
+    pending), `latched` (an explicit override of either mode: marker 2 only),
+    `transitioned` (seed the full effective maximum, pin a Simulated override,
+    marker 2; hooks and refresh follow) or `seedUnrepresentable` with a
+    reason code (stays pending and Nominal; retried every pass; logged once
+    per unit and reason). Free pending strikes end at the next success.
+    `unit.setStat` refuses the marker and a definition may not template it.
+  * *Nomad parameters.* The acolyte's stamina entry with every regen-side
+    factor x 2.25 and an innate +50% `max_stamina` modifier (maximum 15 at
+    endurance 1). `move_regen_factor` is also the speed-drain effort
+    coefficient, so the engaged nomad's fractional drain above comfort speed
+    is 1.5x the acolyte's.
+* *Persistence*: pools and meters of a Simulated system, overrides,
+  `combat_engaged` and `tissue_recovering` are Persist exactly; `circulation`, `consciousness`,
   `concentration`, `state_of_mind`, the strength values and the body-derived
   maxima are Rebuild (serialized-but-ignored) and rebuilt by
   `unitResources.onSaveLoaded` before the first paused frame; the structural

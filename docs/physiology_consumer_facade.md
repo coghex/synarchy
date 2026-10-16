@@ -50,12 +50,13 @@ removed the switch with the thing it guarded. Now:
 | `getBase(uid, key)` → `value, mode` | the stored base (`unit.getStatBase` for an unowned key) |
 | `fraction(uid, key, maxKey)` | `get(key) / get(maxKey)`; `nil` when either is undefined **or the maximum is not positive**. The maximum is read first, so a unit with no usable maximum never has the current stat read. Unclamped |
 | `credit(uid, key, amount)` | add to a pool, clamped to its capacity; returns the amount applied; `0` when nothing was written |
-| `debit(uid, key, amount)` | remove from a pool, floored at 0; an absent pool is left absent; returns the amount applied |
+| `debit(uid, key, amount)` | remove from a pool, floored at 0; an absent pool is left absent; returns the amount applied. On `stamina` (#2834) it is a relative, atomic EFFECTIVE commit through `unit.commitStamina` (the thermo shiver debit uses it), discarded by a Nominal or Unsupported receiver |
 | `isOwned(key)` | is `key` registry-owned |
 | `systemOf(key)`, `systemOrder()` | the owning system id of a key; the registry's system ids in tick order |
 | `mode(uid, system)`, `modes(uid)`, `isSimulated(uid, system)` | the resolved mode (`"nominal"` / `"simulated"` / `nil` for Unsupported) of one system, of all of them read once, and the Simulated test the tick gates use |
 | `setMode(uid, system, mode [, values])` → `true, changed` or `nil, reason` | the ONLY caller of `unit.setPhysioMode`: seeds or scrubs atomically, resets the carry / regrowth / alert-debounce caches, runs the change hooks on an EFFECTIVE change, refreshes the caches, and refuses atomically (see the engine contract) |
 | `clearMode(uid, system)` | the same for `unit.clearPhysioMode` (removes the override) |
+| `applyEngagement(uid)` → outcome, code | the ONLY caller of `unit.applyCombatEngagement` (#2834, SD-20): applies a pending combat engagement in one atomic update (`transitioned`, `latched`, `refusedDead`, `seedUnrepresentable`), runs the hooks and the refresh on `transitioned`, and logs a refused seed once per unit and reason |
 | `refresh(uid)` | recompute circulation, then the brain at dt 0 |
 | `onModeChanged(id, system, fn)` | register a hook `fn(uid, system, from, to)`, replaced by id |
 
@@ -103,6 +104,8 @@ systems.
 | Meal salt | `salts.mealSalt` → `salts.deposit` (reached from `eatExecute`) | `credit("salt_store")` |
 | Consumable (coffee) hydration | `consumable.lua` `applySip` | `credit("hydration")` |
 | Thermo sweat | `thermo.lua` | `debit("hydration")`, `debit("salt")` |
+| Thermo shiver | `thermo.lua` | `debit("stamina")` |
+| Stamina gates and pacing (brain, wander, pace, lunge, attack, unit panels) | `brain.lua`, `unit_ai_needs.lua`, `unit_ai_pace.lua`, `unit_ai_combat_lunge.lua`, `unit_ai_combat_attack.lua`, `unit_info_panel.lua`, `unit_info_v2_*.lua` | `fraction("stamina", "max_stamina")`, `get` |
 | Thermo calorie throttle | `thermo.lua` | `fraction("calories")` |
 | Salt's hydration term, concentration, cramps, sweat factor | `salts.lua` | `fraction`, `get("salt_conc")` |
 | Brain consciousness inputs and hunger fraction | `brain.lua` (`fracOf` is a dynamic-key helper shared with stamina) | `get`, `fraction` |
@@ -112,8 +115,8 @@ systems.
 | Wound healing, blood-recovery nutrition, fever suppression | `Healing.hs` / `Wounds/Tick.hs` | `physioConsumerView` |
 | Physiology probe aggregate, stomach and hydration observations | `tools/physiology_probe.py` | `unit.readPhysio` (circulation remains an unowned pass-through read) |
 
-Not migrated, by design: stamina, circulation, blood, injury and mental-state
-redesigns; the engine's own `unit.feed` / `unit.getCalories` food primitives
+Not migrated, by design: circulation, blood, injury and mental-state
+redesigns; exhaustion and sleep pressure (S8b); the engine's own `unit.feed` / `unit.getCalories` food primitives
 (`unit.feed` refuses a unit with no `hunger`, which is every Nominal one);
 S6's presentation.
 
@@ -127,6 +130,7 @@ A file may touch the keys of the systems it actually owns, and nothing else.
 | `salt` | `scripts/salts.lua` | `salt`, `salt_store`, `salt_conc` |
 | `hydration` | `scripts/unit_resource_tick.lua`, `scripts/unit_resource_carry.lua` | the pool engine (dynamic keys) |
 | `nutrition` | `scripts/unit_resource_tick.lua`, `unit_resource_carry.lua`, `unit_resource_energy.lua`, `unit_resource_regrowth.lua` | digestion, starvation, regrowth |
+| `stamina` | `scripts/unit_resource_tick.lua` | the pool engine (#2834); its only write is the atomic `unit.commitStamina` |
 | `thermo` and `salt` **meters only** | `scripts/unit_resource_failure.lua` | the failure-meter engine; never their pools |
 
 One further allowance, named and bounded (the survival exemption of #2754 that
@@ -179,8 +183,11 @@ authorized.
 1. **Raw access**: `unit.getStat`, `getStatBase`, `setStat` and the `get` of
    any alias of `scripts.unit_stats` on a registry key outside its owner,
    including a caller-local `or <default>`.
-2. **Mutating verbs**: `unit.setPhysioMode` / `clearPhysioMode` anywhere but
-   `scripts/physiology.lua`. The five read verbs are allowed everywhere.
+2. **Mutating verbs**: `unit.setPhysioMode` / `clearPhysioMode` /
+   `applyCombatEngagement` anywhere but `scripts/physiology.lua`, and the atomic
+   `unit.commitStamina` anywhere but the facade and the pool engine
+   (`scripts/unit_resource_tick.lua`). The five read verbs and the pure
+   `unit.getMaxStamina` are allowed everywhere.
 3. **Registry coverage**: every system has an existing Lua owner naming one of
    its keys; every owned key a healthy rule; every derived key a rule and a
    healthy value; every `contributes` / `provides` / `effects` entry a
