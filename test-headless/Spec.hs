@@ -196,6 +196,7 @@ import qualified Test.Headless.Unit.SaltReserve as SaltReserve
 import qualified Test.Headless.Unit.PhysiologyConsumerMigration as PhysiologyConsumerMigration
 import qualified Test.Headless.Unit.PhysiologyModes as PhysiologyModes
 import qualified Test.Headless.Unit.PhysiologySpeciesProfiles as PhysiologySpeciesProfiles
+import qualified Test.Headless.Unit.PhysiologyStaminaModes as PhysiologyStaminaModes
 import qualified Test.Headless.Unit.SweatMassScaling as SweatMassScaling
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
@@ -1040,6 +1041,7 @@ restLane = do
     PhysiologyConsumerMigration.spec
     PhysiologyModes.spec
     PhysiologySpeciesProfiles.spec
+    PhysiologyStaminaModes.spec
     -- Own engine per example (#2825): one shipped thermo.tick each.
     SweatMassScaling.spec
     describe "Load.Status" LoadStatus.spec

@@ -80,7 +80,8 @@ import World.Tile.Types (WorldTileData(..))
 --   systems were seeded with (#2831), which are not the body authority's.
 withoutPhysiology ∷ HM.HashMap Text Float → HM.HashMap Text Float
 withoutPhysiology = HM.filterWithKey (\k _ → k `notElem`
-    [ "hydration", "hunger", "calories", "core_temp", "salt", "salt_store" ])
+    [ "hydration", "hunger", "calories", "core_temp", "salt", "salt_store"
+    , "stamina" ])
 
 page ∷ WorldPageId
 page = WorldPageId "standard_spawn"

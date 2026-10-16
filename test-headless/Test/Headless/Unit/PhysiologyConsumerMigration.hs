@@ -42,14 +42,14 @@ fixturePage = WorldPageId "physiology_consumer_migration"
 -- | A definition that resolves EVERY v1 system to Nominal: the resolver
 --   answers healthy values for each owned key.
 nominalPhysiology ∷ UnitPhysiology
-nominalPhysiology = UnitPhysiology True Nothing $ HM.fromList
+nominalPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
     [ (s, PhysioNominal) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
 
 -- | Thermo and salt Nominal; a pool system Simulated exactly when the
 --   unit stores its pool, so the stored hydration and calories ARE the
 --   unit's and a pool the fixture leaves out reads as the healthy pool.
 poolsSimulated ∷ [(Text, Float)] → UnitPhysiology
-poolsSimulated stats = UnitPhysiology True Nothing $ HM.fromList
+poolsSimulated stats = plainUnitPhysiology True Nothing $ HM.fromList
     [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
     , ("hydration", ifStored "hydration"), ("nutrition", ifStored "calories") ]
   where
@@ -58,7 +58,7 @@ poolsSimulated stats = UnitPhysiology True Nothing $ HM.fromList
 
 -- | The same, all Simulated: the stored values ARE the unit's physiology.
 simulatedPhysiology ∷ UnitPhysiology
-simulatedPhysiology = UnitPhysiology True Nothing $ HM.fromList
+simulatedPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
     [ (s, PhysioSimulated) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
 
 mkInst ∷ Text → HM.HashMap Text Float → UnitInstance
@@ -199,10 +199,10 @@ woundSpec = describe "the wound tick (Haskell consumers)" $ do
        \not positive, returns the unit untouched with the violation" $ do
         reg ← readShippedPhysiologyRegistry
         let simulatedNutrition = woundDef { udPhysiology =
-                UnitPhysiology True Nothing
+                plainUnitPhysiology True Nothing
                     (HM.fromList [("nutrition", PhysioSimulated)]) }
             nominalHydration = woundDef { udPhysiology =
-                UnitPhysiology True Nothing
+                plainUnitPhysiology True Nothing
                     (HM.fromList [("hydration", PhysioNominal)]) }
             run d st =
                 let u = woundedUnit (HM.fromList st)

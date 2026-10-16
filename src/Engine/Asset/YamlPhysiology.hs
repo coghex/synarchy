@@ -64,22 +64,29 @@ instance FromJSON YamlQuantity where
 data PhysiologyYamlHealthy
     = YamlHealthyConst !Quantity
     | YamlHealthyFrom !Text ![Quantity]
+    | YamlHealthyRule !Text
+      -- ^ @{ rule: max_stamina }@ (#2834): a NAMED rule
     deriving (Show, Eq)
 
 instance FromJSON PhysiologyYamlHealthy where
     parseJSON = withObject "healthy rule" $ \o → do
-        onlyKeys ["const", "from", "scale"] o
+        onlyKeys ["const", "from", "scale", "rule"] o
         mConst ← o .:? "const"
         mFrom  ← o .:? "from"
-        case (mConst, mFrom) of
-            (Just (YamlQuantity q), Nothing) → do
+        mRule  ← o .:? "rule"
+        case (mConst, mFrom, mRule) of
+            (Just (YamlQuantity q), Nothing, Nothing) → do
                 forbid "scale" o "a `const` rule"
                 pure (YamlHealthyConst q)
-            (Nothing, Just k) → do
+            (Nothing, Just k, Nothing) → do
                 scales ← scaleList o
                 pure (YamlHealthyFrom k scales)
-            _ → fail "a healthy rule is exactly one of `const: <value>` \
-                     \or `from: <stat>` (with an optional `scale:`)"
+            (Nothing, Nothing, Just r) → do
+                forbid "scale" o "a `rule` rule"
+                pure (YamlHealthyRule r)
+            _ → fail "a healthy rule is exactly one of `const: <value>`, \
+                     \`from: <stat>` (with an optional `scale:`) or \
+                     \`rule: <name>`"
 
 -- | @scale:@ is one factor or a list of factors, multiplied together.
 scaleList ∷ Aeson.Object → Aeson.Parser [Quantity]
@@ -338,6 +345,9 @@ admitSystem constants s = do
                 YamlHealthyConst q → HealthyConst <$> declared (ownedLabel o) q
                 YamlHealthyFrom k qs →
                     HealthyFrom k <$> traverse (declared (ownedLabel o)) qs
+                YamlHealthyRule "max_stamina" → Right HealthyMaxStamina
+                YamlHealthyRule r → refuse "unknown physiology healthy rule"
+                                           (ownedLabel o <> ": " <> r)
             pure (OwnedKey (pyoKey o) rule)
 
     admitDerived d = do

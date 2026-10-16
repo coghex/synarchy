@@ -116,6 +116,24 @@ systems:
       - { name: fat_floor_organ_drain, substitute: none }
       - { name: eat_need,             substitute: none }
 
+  # Stamina (#2834, S8a): the exertion pool. Its Nominal read and seed target
+  # are the unit's effective max_stamina, which is DERIVED (never stored), so
+  # the healthy rule is the named `max_stamina` rule rather than a `from:`
+  # input: it resolves through the same maximum rule combat, the commit and
+  # unit.getMaxStamina use. Stance stays unowned and always on.
+  - id: stamina
+    requires: [body]
+    owns:
+      - key: stamina
+        healthy: { rule: max_stamina }
+    provides:
+      - name: stamina_fraction
+        substitute: { value: 1.0 }
+    effects:
+      - { name: collapse,      substitute: none }
+      - { name: kill_on_zero,  substitute: none }
+      - { name: strike_cost,   substitute: none }
+
 # Species fidelity tiers (D-10): a mode for EVERY system. A definition
 # names one with `physiology: { profile: rich }` and may override single
 # systems beside it. Which species use which is S4/S7's.
@@ -125,18 +143,22 @@ profiles:
     salt: simulated
     thermo: simulated
     nutrition: simulated
+    stamina: simulated
   reduced:
     hydration: nominal
     salt: simulated
     thermo: simulated
     nutrition: nominal
+    stamina: simulated
   simple:
     hydration: nominal
     salt: nominal
     thermo: simulated
     nutrition: nominal
+    stamina: simulated
   exempt:
     hydration: nominal
     salt: nominal
     thermo: nominal
     nutrition: nominal
+    stamina: nominal

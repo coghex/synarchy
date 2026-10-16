@@ -215,11 +215,12 @@ nominalSpec ∷ Spec
 nominalSpec = describe "A supported Nominal system" $ do
     it "shows the word Nominal, neutral, with the exact tooltip, and stores nothing" $
         withPanel [(acolyte 1) { usOverrides = [("hydration", PhysioNominal)
-                                               , ("nutrition", PhysioNominal)] }] $
+                                               , ("nutrition", PhysioNominal)
+                                               , ("stamina", PhysioNominal)] }] $
             \(_, ls) → do
                 -- a low-looking fixture elsewhere must not leak into the row
                 rs ← rowsOf ls
-                forM_ ["Hydration", "Hunger", "Calories"] $ \n → do
+                forM_ ["Hydration", "Hunger", "Calories", "Stamina"] $ \n → do
                     r ← rowNamed rs n
                     rowText r `shouldBe` "Nominal"
                     rowColour r `shouldBe` neutral
@@ -227,12 +228,12 @@ nominalSpec = describe "A supported Nominal system" $ do
                 -- the icon tooltip is the stat's own description, unchanged
                 (rowIcon <$> rowNamed rs "Hydration")
                     `shouldReturn` "Need for water. Drops fa"
-                forM_ ["hydration", "hunger", "calories"] $ \k →
+                forM_ ["hydration", "hunger", "calories", "stamina"] $ \k →
                     luaText ls ("return tostring(unit.getStatBase(1, '" <> k <> "'))")
                         `shouldReturn` "nil"
                 -- ... and a hundred ticks of rendering still store nothing
                 replicateM_ 100 (tick ls)
-                forM_ ["hydration", "hunger", "calories"] $ \k →
+                forM_ ["hydration", "hunger", "calories", "stamina"] $ \k →
                     luaText ls ("return tostring(unit.getStatBase(1, '" <> k <> "'))")
                         `shouldReturn` "nil"
 
@@ -266,17 +267,16 @@ nominalSpec = describe "A supported Nominal system" $ do
 
 unsupportedSpec ∷ Spec
 unsupportedSpec = describe "A bodyless (Unsupported) unit" $
-    it "hides every physiology row and keeps the unowned stamina, blood and injury rows" $
+    it "hides every physiology row, stamina included, and keeps the unowned blood and injury rows" $
         withPanel [ (unitSpec 1 "tiller" Nothing)
                       { usStats = [("sleep_pressure", 50), ("max_sleep_pressure", 100)]
                       , usWounds = [wound] } ] $ \(_, ls) → do
             rs ← rowsOf ls
-            absent rs ["Hydration", "Hunger", "Calories", "Body Temp", "Salt"]
-            (rowText <$> rowNamed rs "Stamina") `shouldReturn` "100.0 / 100.0"
+            absent rs ["Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina"]
             forM_ ["Blood", "Pain"] (void ∘ rowNamed rs)
             -- the injury row survives: it is the one row that is no fixed vital
             let vitals = ["Blood", "Pain", "Heart Rate", "Blood O\8322"
-                         , "Consciousness", "Circulation", "Stamina", "Sleep"
+                         , "Consciousness", "Circulation", "Sleep"
                          , "Carry Load"]
             [ n | n ← HM.keys rs, n `notElem` vitals ] `shouldSatisfy` (not ∘ null)
   where
@@ -467,18 +467,18 @@ debugTextSpec = describe "The legacy debug text (unit_info_panel push path)" $ d
             ls' `shouldSatisfy` ("Calories: 1400.00 / 1400.00" `elem`)
             ls' `shouldSatisfy` ("Stamina: 100.00 / 100.00" `elem`)
         withScene [(acolyte 1) { usOverrides = [("hydration", PhysioNominal)
-                                               , ("nutrition", PhysioNominal)] }] $
+                                               , ("nutrition", PhysioNominal)
+                                               , ("stamina", PhysioNominal)] }] $
             \(_, ls) → do
                 _ ← luaText ls debugLua
                 ls' ← pushed ls
                 ls' `shouldSatisfy` ("Hydration: Nominal" `elem`)
                 ls' `shouldSatisfy` ("Hunger: Nominal" `elem`)
                 ls' `shouldSatisfy` ("Calories: Nominal" `elem`)
-                ls' `shouldSatisfy` ("Stamina: 100.00 / 100.00" `elem`)
-    it "omits the lines of an Unsupported unit and keeps the unowned stamina line" $
+                ls' `shouldSatisfy` ("Stamina: Nominal" `elem`)
+    it "omits the lines of an Unsupported unit, stamina included" $
         withScene [ (unitSpec 1 "tiller" Nothing) ] $ \(_, ls) → do
             _ ← luaText ls debugLua
             ls' ← pushed ls
             filter (\l → any (`T.isPrefixOf` l)
-                        ["Hydration", "Hunger", "Calories"]) ls' `shouldBe` []
-            ls' `shouldSatisfy` ("Stamina: 100.00 / 100.00" `elem`)
+                        ["Hydration", "Hunger", "Calories", "Stamina"]) ls' `shouldBe` []

@@ -170,6 +170,8 @@ pushHealthy reg rule = do
             field "from" (pushText k)
             field "scale" (pushNum (product (map resolved qs)))
             field "scaleRefs" (pushArray qs (pushText ∘ quantityRef))
+        HealthyMaxStamina → do
+            field "kind" (pushText "max_stamina")
   where
     resolved q = fromMaybe 0 (resolveQuantity' q)
     resolveQuantity' (QLit f)   = Just f

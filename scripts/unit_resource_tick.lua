@@ -316,15 +316,16 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
         end
         -- Everything below now reads what the TRANSACTION saw — never
         -- the pre-update snapshot, the script's own arithmetic, or a
-        -- maximum that may have moved during the rate calculation.
+        -- maximum that may have moved during the rate calculation. All
+        -- three are EFFECTIVE stamina (#2834): the effective read of what
+        -- the commit stored, against the effective maximum, so a retained
+        -- modifier on the pool never skews collapse or kill_on_zero.
+        -- (The old first-observation fill is gone: spawn, load and a
+        -- transition seed the pool, and a Simulated receiver without one
+        -- is refused as a broken invariant above.)
         maxVal  = res.maximum
         current = res.before
         next    = res.after
-        -- First observation: the pool was still absent at commit and
-        -- has just been filled to the effective maximum. Skip this
-        -- pass's consequences, exactly as the old first-tick `return`
-        -- did.
-        if res.initialized then return end
     else
         -- #2633: this used to skip the write whenever the change was at
         -- or below 1e-4 and keep no remainder for it, which made that

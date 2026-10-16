@@ -53,6 +53,7 @@ import Combat.Resolution.Constants (stanceAttackCost)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv)
+import Combat.Resolution.Stamina (markCombatEngaged)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 
 -- | Why a queued strike was refused at commit. Each maps to one stable
@@ -176,6 +177,11 @@ data StrikeCommit
 --   rather than reusing the snapshot's number, so a weapon or height
 --   change in the window is honoured too.
 --
+--   An admitted attempt is also the SD-20 engagement detection (#2834):
+--   in the same update a unit whose definition declares the trigger gets
+--   an absent @combat_engaged@ marker set to 1 (pending), for the
+--   attacker AND the target, hit or miss. A refused strike marks nothing.
+--
 --   Death is deliberately NOT re-checked here: @isAlreadyDead@ is the
 --   entry-side liveness gate #2328 leaves unchanged, and a target that
 --   died from another source while this swing resolved has been struck
@@ -202,5 +208,22 @@ commitIfAdmitted env rangeOf reachBonus mode atkRaw tgtRaw apply =
             (Just atk, Just tgt) →
                 case checkAdmission (rangeOf atk) reachBonus mode atk tgt of
                     Just refusal → (um, CommitRefused refusal)
-                    Nothing      → (apply atk tgt um, CommitApplied)
+                    Nothing      →
+                        ( markEngaged (UnitId tgtRaw)
+                              (markEngaged (UnitId atkRaw) (apply atk tgt um))
+                        , CommitApplied )
             _ → (um, CommitVanished)
+  where
+    -- SD-20 detection (#2834): an attempt ADMITTED here, hit or miss, is
+    -- an engagement for BOTH units, and the marker lands in the same
+    -- atomic update as the strike's own writes. Stamped AFTER the
+    -- strike's writes, so the commit itself resolves against the mode
+    -- the units held when it was admitted.
+    markEngaged uid um' = case HM.lookup uid (umInstances um') of
+        Nothing → um'
+        Just inst → case HM.lookup (uiDefName inst) (umDefs um') of
+            Nothing  → um'
+            Just def →
+                let inst' = markCombatEngaged def inst
+                in if uiStats inst' ≡ uiStats inst then um'
+                   else um' { umInstances = HM.insert uid inst' (umInstances um') }

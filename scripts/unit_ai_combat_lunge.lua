@@ -144,12 +144,9 @@ end
 -- foot this cycle and may roll again next time it's off cooldown.
 local function shouldLunge(uid, s)
     -- Stamina gate — a leap is a big spend.
-    local stam = unit.getStat(uid, "stamina")
-    if stam then
-        local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
-        if maxStam and maxStam > 0 and stam / maxStam < LUNGE_MIN_STAMINA_FRAC then
-            return false
-        end
+    local frac = require("scripts.physiology").fraction(uid, "stamina", "max_stamina")
+    if frac and frac < LUNGE_MIN_STAMINA_FRAC then
+        return false
     end
     local intel = unit.getStat(uid, "intelligence") or 1.0
     local p

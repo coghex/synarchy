@@ -128,7 +128,8 @@ local function unitConditions(uid)
                    and lowFrac(uid, "hydration", "max_hydration", 0.5) then
                 out[#out + 1] = { name = "Collapsed (dehydrated)", icon = "hydration",
                     hint = "Collapsed from thirst. Rises once hydration recovers above 50%." }
-            elseif lowFrac(uid, "stamina", "max_stamina", 0.5) then
+            elseif physio.active(uid, "stamina")
+                   and lowFrac(uid, "stamina", "max_stamina", 0.5) then
                 out[#out + 1] = { name = "Collapsed (exhausted)", icon = "stamina",
                     hint = "Collapsed from exhaustion. Rises once stamina recovers above 50%." }
             else
@@ -277,8 +278,8 @@ function M.buildStatusPanel(rect, uid)
         { key = "consciousness", value = fmtConsciousness, colorFn = consciousnessColor },
         { key = "circulation", value = fmtCirculation, colorFn = circulationColor },
         physio.row({ key = "salt", value = fmtSalt, colorFn = saltColor }, uid),
-        { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
-          colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) },
+        physio.row({ key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
+          colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) }, uid),
         physio.row({ key = "hunger",   value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
           colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) }, uid),
         physio.row({ key = "calories", value = function(u) return fmtCurMax(u, "calories",  "max_calories")  end,

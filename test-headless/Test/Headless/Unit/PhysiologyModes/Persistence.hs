@@ -62,6 +62,11 @@ saved def stats overrides = (minimalUnitInstance [])
 body70 ∷ [(Text, Float)]
 body70 = bodyStats acolyteBody
 
+-- | The same body for a unit whose stamina is Nominal (the exempt tier):
+--   a Nominal system holds no @stamina@ key, so a canonical save has none.
+bodyNominalStamina ∷ [(Text, Float)]
+bodyNominalStamina = filter ((≢ "stamina") ∘ fst) body70
+
 -- | The Simulated keys a rich 70 kg acolyte is saved with.
 seeds70 ∷ [(Text, Float)]
 seeds70 =
@@ -125,7 +130,7 @@ canonicalSpec = describe "unchanged content" $
                   , saved "red_squirrel" (squirrelBodyStats ⧺
                         [ ("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37) ]) [])
                 , ("nomad_primitive", exemptPhysiology
-                  , saved "nomad_primitive" body70 [])
+                  , saved "nomad_primitive" bodyNominalStamina [])
                 , ("white_tailed_deer", noUnitPhysiology
                   , saved "white_tailed_deer" [("height", 1)] []) ]
         forM_ units $ \(name, up, u) → do
@@ -285,7 +290,7 @@ normalizationSpec = describe "D-6 normalization" $ do
         it "is scrubbed in every mode and logged" $ \reg → do
             reduced ← profilePhysiology "reduced"
             forM_ [ ("rich", "acolyte", richPhysiology, body70 ⧺ seeds70)
-                  , ("exempt", "nomad_primitive", exemptPhysiology, body70)
+                  , ("exempt", "nomad_primitive", exemptPhysiology, bodyNominalStamina)
                   , ("reduced", "red_squirrel", reduced
                     , bodyStats squirrelBody ⧺ [("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37)]) ] $
                 \(label, name, up, stats) →
@@ -298,7 +303,8 @@ normalizationSpec = describe "D-6 normalization" $ do
         it "gets frame_mass = 22 x height^2 and keeps its legacy floors exactly; a second load changes nothing" $ \reg → do
             let h = 1.8 ∷ Float
                 preFrame = saved "acolyte"
-                    ( [ ("height", h), ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56) ]
+                    ( [ ("height", h), ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56)
+                      , ("endurance", 1), ("stamina", 10) ]
                       ⧺ seeds70 ) []
             shouldNormalize (gate1 reg [("acolyte", richPhysiology)] preFrame) $ \(u', notes) → do
                 let frame = fromMaybe (-1) (statOf' u' "frame_mass")
@@ -314,6 +320,7 @@ normalizationSpec = describe "D-6 normalization" $ do
             let u = saved "acolyte"
                     ( [ ("height", 1.8), ("body_mass", 70), ("fat_mass", 14), ("lean_mass", 56)
                       , ("max_hydration", 42), ("max_hunger", 700), ("max_calories", 1400)
+                      , ("endurance", 1), ("stamina", 10)
                       , ("salt", 30), ("salt_conc", 0.4), ("core_temp", 37) ] ) []
             shouldNormalize (gate1 reg [("acolyte", richPhysiology)] u) $ \(u', notes) → do
                 notes `shouldSatisfy` (not ∘ null)
@@ -347,7 +354,7 @@ policySpec = describe "T-10 overrides across save and load" $ do
                 [("hydration", PhysioNominal)]
         gate1 reg [("acolyte", richPhysiology)] pinned `shouldBe` Right (pinned, [])
         -- pinned Simulated under a Nominal default: its keys stay
-        let pinnedSim = saved "nomad_primitive" (body70 ⧺ [("hydration", 42)])
+        let pinnedSim = saved "nomad_primitive" (bodyNominalStamina ⧺ [("hydration", 42)])
                 [("hydration", PhysioSimulated)]
         gate1 reg [("nomad_primitive", exemptPhysiology)] pinnedSim `shouldBe` Right (pinnedSim, [])
 

@@ -73,20 +73,11 @@ local function formatStatus(uid, info)
     if leanMass then leanMassLine = string.format("Lean Mass: %s kg", fmt2(leanMass)) end
     if fatMass  then fatMassLine  = string.format("Fat Mass: %s kg",  fmt2(fatMass))  end
 
-    -- Resources: cur / max display.
-    local maxStam  = stats.get(uid, "max_stamina")
-    local curStam  = unit.getStat(uid, "stamina")
-    local staminaLine = "Stamina: ?"
-    if curStam and maxStam then
-        staminaLine = string.format("Stamina: %s / %s",
-                                    fmt2(curStam), fmt2(maxStam))
-    end
-
     -- The physiology pools (#2832): read through the facade so a Nominal
     -- pool prints "Hydration: Nominal" and a pool no system simulates for
     -- this unit (Unsupported, e.g. a bodyless unit) prints no line at all.
-    -- A Simulated pool keeps today's "X / Y" form. Stamina is unowned and
-    -- stays as it was.
+    -- A Simulated pool keeps today's "X / Y" form. Stamina joined the registry
+    -- in #2834 and follows the same contract.
     local function poolLine(label, cur, max)
         local sys = physiology.systemOf(cur)
         local mode = physiology.mode(uid, sys)
@@ -98,6 +89,7 @@ local function formatStatus(uid, info)
         end
         return label .. ": ?"
     end
+    local staminaLine   = poolLine("Stamina",   "stamina",   "max_stamina")
     local hydrationLine = poolLine("Hydration", "hydration", "max_hydration")
     local hungerLine    = poolLine("Hunger",    "hunger",    "max_hunger")
     local caloriesLine  = poolLine("Calories",  "calories",  "max_calories")
@@ -110,7 +102,7 @@ local function formatStatus(uid, info)
         .. "\n" .. bodyMassLine
         .. "\n" .. leanMassLine
         .. "\n" .. fatMassLine
-        .. "\n" .. staminaLine
+        .. (staminaLine and ("\n" .. staminaLine) or "")
         .. (hydrationLine and ("\n" .. hydrationLine) or "")
         .. (hungerLine and ("\n" .. hungerLine) or "")
         .. (caloriesLine and ("\n" .. caloriesLine) or "")

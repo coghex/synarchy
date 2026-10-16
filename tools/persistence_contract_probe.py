@@ -56,6 +56,15 @@ Registered CI-eligible in ``tools/ci_probes.py`` -- ``src/World/Save/*``/
 already in ``CORE_GLOBS``, so any persistence-related source change
 already selects the full CI-eligible set, this probe included.
 
+S8a (#2834) adds three FOCUSED fresh-process cycles for the SD-20 combat
+engagement (``engagement_cycles`` below), because the generic cycles above
+never create the state: a nomad whose engagement was ADMITTED at a paused
+save boundary (marker 1, still Nominal, no stamina), a nomad whose engagement
+was APPLIED (marker 2, a pinned Simulated override, a partial pool), and
+what each becomes across fresh processes -- the pending one transitions
+exactly once with a full seed, the applied one keeps its pool and pin
+exactly and is never reseeded.
+
 The BROADER manual sweep (all of requirement 4's representative-scenario
 checklist, the assembled failure contract, and every maintained
 migration baseline) is ``tools/persistence_contract_sweep.py``.
@@ -428,6 +437,190 @@ def assert_nondefault_map_mode(chk: Checks, tmpdir: str, save_path: str, page: s
            f"expected 'ZMPressure')")
 
 
+# ── S8a (#2834): the SD-20 combat engagement across fresh processes ─────────
+
+ENG_PAGE = "engagement_page"
+# The engagement scenario needs no AI: units must never act on their own,
+# so only the stat and resource scripts a physiology pass needs are loaded.
+ENG_SCRIPTS = (
+    ("scripts/unit_stats.lua", 0.1),
+    ("scripts/unit_resources.lua", 0.2),
+)
+
+
+def lua_number(port: int, expr: str):
+    """A Lua expression as a float, or None for nil / anything else."""
+    r = send(port, f"return tostring({expr})").strip().strip('"')
+    try:
+        return float(r)
+    except ValueError:
+        return None
+
+
+def lua_text(port: int, expr: str) -> str:
+    return send(port, f"return tostring({expr})").strip().strip('"')
+
+
+def engagement_state(port: int, uid: int) -> dict:
+    """What a unit stores about the engagement: the marker, the pinned stamina
+    override, the resolved mode, the stored pool and the maximum."""
+    return {
+        "marker": lua_number(port, f"unit.getStat({uid}, 'combat_engaged')"),
+        "override": lua_text(port, f"unit.getPhysioOverride({uid}, 'stamina')"),
+        "mode": lua_text(port, f"unit.getPhysioMode({uid}, 'stamina')"),
+        "pool": lua_number(port, f"unit.getStat({uid}, 'stamina')"),
+        "max": lua_number(port, f"unit.getMaxStamina({uid})"),
+    }
+
+
+def wait_for(port: int, predicate, seconds: float = 12.0) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.2)
+    return predicate()
+
+
+def engagement_boot(root: str, tmpdir: str, port: int, letter: str):
+    proc = boot_probe(root, port, os.path.join(tmpdir, f"engine{letter}.log"))
+    bootstrap_defs(port)
+    for path, delay in ENG_SCRIPTS:
+        send(port, f"engine.loadScript('{path}', {delay}); return 'ok'")
+    return proc
+
+
+def engagement_load(chk: Checks, port: int, slot: str) -> None:
+    loaded = send(port, f"return engine.loadSave('{slot}')")
+    chk.ok(loaded.strip() == "true", f"engine.loadSave('{slot}') accepted (got {loaded!r})")
+    load_id = capture_request_id(port, "return engine.getLoadStatus()")
+    published, status = wait_load_published(port, request_id=load_id)
+    chk.ok(published, f"load transaction {load_id} published (status={status})")
+    chk.ok(send(port, "return engine.isPaused()").strip() == "true",
+           f"'{slot}' loads paused")
+
+
+def engagement_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
+    """Three fresh processes: save a PENDING and an APPLIED engagement,
+    load them and let the pending one transition, save again, load again."""
+    print("=== engagement engine E: pending (paused save boundary) + applied, save 'eng1' ===")
+    proc = engagement_boot(root, tmpdir, port, "E")
+    try:
+        send(port, f"world.init('{ENG_PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
+                   f"'Engagement Test World', 'the SD-20 engagement'); return 'ok'")
+        send(port, f"world.show('{ENG_PAGE}'); return 'ok'")
+        wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
+                 .strip('"') == ENG_PAGE, 30.0)
+        send(port, "return world.waitForInit(30)", timeout=35)
+        # The STANDARD spawn profile (#2756): every stat at its definition's
+        # mean, no draw from the stat RNG, so an endurance-1 nomad's maximum is
+        # exactly 15 and its reach is the definition's, not a roll.
+        applied = as_int(send(port, "return unit.spawn('nomad_primitive', 4, 4, 0, "
+                                    "'player', nil, nil, 'standard')"))
+        pending = as_int(send(port, "return unit.spawn('nomad_primitive', 4, 4, 0, "
+                                    "'player', nil, nil, 'standard')"))
+        target = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+                                   "'hostile', nil, nil, 'standard')"))
+        chk.ok(None not in (applied, pending, target) and min(applied, pending, target) >= 0,
+               f"nomads and a target spawned (got {applied}, {pending}, {target})")
+        time.sleep(0.6)   # unit.spawn only queues; let the unit thread commit
+
+        # Before any combat: both nomads are Nominal with no stamina and no marker.
+        for uid in (applied, pending):
+            st = engagement_state(port, uid)
+            chk.ok(st["marker"] is None and st["pool"] is None
+                   and st["mode"] == "nominal" and st["override"] == "nil"
+                   and st["max"] == 15.0,
+                   f"nomad {uid} starts Nominal at maximum 15, no marker, no pool (got {st})")
+
+        # APPLIED: a real admitted attack while the engine runs; the next
+        # physiology pass seeds the full pool and pins Simulated. The units
+        # are put back on one tile first (collision pushes them apart), so
+        # the strike is inside both reaches.
+        def engaged() -> bool:
+            for _ in range(8):
+                for uid in (applied, target):
+                    send(port, f"unit.setPos({uid}, 4, 4); return 'ok'")
+                send(port, f"combat.attack({applied}, {target}, 'quick'); return 'ok'")
+                if wait_for(port, lambda: lua_number(
+                        port, f"unit.getStat({applied}, 'combat_engaged')") == 2.0, 2.0):
+                    return True
+            return False
+        chk.ok(engaged(),
+               "an admitted attack engages the nomad and the next pass applies it (marker 2)")
+        st = engagement_state(port, applied)
+        chk.ok(st["override"] == "simulated" and st["mode"] == "simulated"
+               and st["pool"] is not None and st["pool"] > 0,
+               f"the applied nomad pinned Simulated with a seeded pool (got {st})")
+
+        # Pause, then give the applied nomad a PARTIAL pool no reseed would keep.
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        send(port, f"unit.setStat({applied}, 'stamina', 4); return 'ok'")
+        chk.ok(lua_number(port, f"unit.getStat({applied}, 'stamina')") == 4.0,
+               "the applied nomad holds an exact partial pool of 4")
+
+        # PENDING: an attack queued while paused is drained ONLY at the save
+        # boundary (Combat.Thread), so the marker is set by the save itself.
+        # (Paused: nothing moves, so the units stay on one tile inside both reaches.)
+        for uid in (pending, target):
+            send(port, f"unit.setPos({uid}, 4, 4); return 'ok'")
+        time.sleep(0.3)   # let the unit thread apply the placement
+        send(port, f"combat.attack({pending}, {target}, 'quick'); return 'ok'")
+        save_and_wait(chk, port, ENG_PAGE, "eng1")
+        st = engagement_state(port, pending)
+        chk.ok(st["marker"] == 1.0 and st["pool"] is None and st["mode"] == "nominal"
+               and st["override"] == "nil",
+               f"a combat admission at a paused save boundary leaves the nomad PENDING (got {st})")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== engagement engine F: load 'eng1', pending transitions once, save 'eng2' ===")
+        proc = engagement_boot(root, tmpdir, port, "F")
+        engagement_load(chk, port, "eng1")
+        st = engagement_state(port, pending)
+        chk.ok(st["marker"] == 1.0 and st["pool"] is None and st["mode"] == "nominal"
+               and st["override"] == "nil" and st["max"] == 15.0,
+               f"a pending save reloads pending, Nominal, no stamina, maximum 15 (got {st})")
+        st = engagement_state(port, applied)
+        chk.ok(st["marker"] == 2.0 and st["override"] == "simulated"
+               and st["mode"] == "simulated" and st["pool"] == 4.0 and st["max"] == 15.0,
+               f"an applied save reloads applied, pinned Simulated, the exact partial pool (got {st})")
+        send(port, "require('scripts.pause').set(false); return 'ok'")
+        chk.ok(wait_for(port, lambda: lua_number(
+                   port, f"unit.getStat({pending}, 'combat_engaged')") == 2.0),
+               "the first eligible pass after the load applies the pending engagement")
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        st = engagement_state(port, pending)
+        chk.ok(st["override"] == "simulated" and st["mode"] == "simulated"
+               and st["pool"] is not None and 14.0 <= st["pool"] <= 15.0001,
+               f"the pending nomad transitioned once with a full seed (got {st})")
+        st = engagement_state(port, applied)
+        chk.ok(st["marker"] == 2.0 and st["pool"] is not None and 3.9 <= st["pool"] < 9.0,
+               f"the applied nomad was never reseeded: its partial pool kept ticking (got {st})")
+        save_and_wait(chk, port, ENG_PAGE, "eng2")
+        saved = {uid: engagement_state(port, uid) for uid in (pending, applied)}
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== engagement engine G: load 'eng2', both applied exactly ===")
+        proc = engagement_boot(root, tmpdir, port, "G")
+        engagement_load(chk, port, "eng2")
+        for uid in (pending, applied):
+            got = engagement_state(port, uid)
+            want = saved[uid]
+            chk.ok(got["marker"] == 2.0 and got["override"] == "simulated"
+                   and got["mode"] == "simulated" and got["max"] == 15.0
+                   and got["pool"] is not None and want["pool"] is not None
+                   and abs(got["pool"] - want["pool"]) < 1e-4,
+                   f"nomad {uid}: applied marker, pinned override and pool persist "
+                   f"exactly across a fresh process (got {got}, saved {want})")
+        quit_engine(port, proc)
+        proc = None
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -582,6 +775,9 @@ def main() -> int:
                    f"byte-equality) across three real fresh-process "
                    f"save->load->save cycles"
                + (f" -- {detail}" if not ok else ""))
+
+        # ── S8a (#2834): the SD-20 engagement, focused ────────────────────
+        engagement_cycles(chk, root, tmpdir, port)
 
     finally:
         if proc is not None:

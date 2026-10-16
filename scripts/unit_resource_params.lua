@@ -8,6 +8,9 @@
 -- pool's own mass-derived maximum, so they scale to any body. Referencing
 -- the acolyte entry keeps the two from drifting apart.
 --
+-- (Stamina is gated the same way since #2834: it ticks only while Simulated,
+-- with the species entry or, for a species with none, the acolyte's.)
+--
 -- A species with neither (and a system that needs parameters) cannot run
 -- the system Simulated: scripts/physiology.lua's setMode refuses the
 -- transition atomically (it never reaches the engine), so a unit is never
@@ -19,17 +22,19 @@ local M = {}
 
 -- The pool resources each GATED system ticks, and the system that owns
 -- each. A resource named here ticks only while its system is Simulated;
--- every other config entry (stamina, exhaustion, sleep_pressure) is
--- unowned and ticks as always.
+-- every other config entry (exhaustion, sleep_pressure) is unowned and ticks
+-- as always.
 M.POOLS = {
     hydration = { "hydration" },
     nutrition = { "hunger", "calories" },
+    stamina   = { "stamina" },
 }
 
 M.SYSTEM_OF = {
     hydration = "hydration",
     hunger    = "nutrition",
     calories  = "nutrition",
+    stamina   = "stamina",
 }
 
 -- The registry's default parameters, per pool resource.
@@ -37,6 +42,7 @@ M.DEFAULTS = {
     hydration = config.acolyte.hydration,
     hunger    = config.acolyte.hunger,
     calories  = config.acolyte.calories,
+    stamina   = config.acolyte.stamina,
 }
 
 -- The system a resource belongs to, or nil for an unowned resource.

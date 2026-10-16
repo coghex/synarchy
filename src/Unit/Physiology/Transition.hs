@@ -32,6 +32,12 @@ module Unit.Physiology.Transition
     , transitionChangesMode
     , planSetMode
     , planClearMode
+      -- * Combat engagement (SD-20)
+    , EngagementOutcome(..)
+    , EngagementRefusal(..)
+    , EngagementPlan(..)
+    , planEngagement
+    , engagementOutcomeText
       -- * Seeding and scrubbing
     , seedTarget
     , seedOrder
@@ -48,7 +54,7 @@ import Control.Monad (foldM)
 import Data.List (partition)
 import Unit.Physiology
 import Unit.Physiology.Types
-import Unit.Stats (invertEffectiveStat)
+import Unit.Stats (invertEffectiveStat, invertEffectiveStatWhy)
 
 -- | The state a transition leaves a unit in.
 data Transition = Transition
@@ -109,6 +115,7 @@ keyCap ∷ PhysioContext → OwnedKey → Either Text (Maybe Float)
 keyCap ctx o = case okHealthy o of
     HealthyConst _  → Right Nothing
     HealthyFrom _ _ → Just <$> evalHealthy ctx (okHealthy o)
+    HealthyMaxStamina → Just <$> evalHealthy ctx (okHealthy o)
 
 -- | The stored base that makes @key@'s effective value @target@.
 storeAs ∷ PhysioContext → Text → Float → Either Text Float
@@ -232,6 +239,87 @@ moveStats ctx sys before after mValues = case (before, after) of
         Just v  → do
             base ← storeAs (ctx { pcStats = stats }) (okKey o) v
             pure (HM.insert (okKey o) base stats)
+
+-- * Combat engagement (SD-20, #2834)
+
+-- | What @unit.applyCombatEngagement@ did for one unit.
+data EngagementOutcome
+    = EngagementTransitioned
+      -- ^ the system was Nominal: the full effective seed, the pinned
+      --   Simulated override and marker 2, published together
+    | EngagementLatched
+      -- ^ an explicit override of either mode already decided the mode:
+      --   marker 2 only (SD-7), no seed, no override change, no hooks
+    | EngagementRefusedDead
+      -- ^ a dead unit stays pending and is never revisited
+    | EngagementSeedUnrepresentable !Text
+      -- ^ D-5's guards refused the seed (the reason code names which):
+      --   nothing was written, the marker stays pending
+    deriving (Show, Eq)
+
+-- | The Lua spelling of an outcome.
+engagementOutcomeText ∷ EngagementOutcome → Text
+engagementOutcomeText EngagementTransitioned = "transitioned"
+engagementOutcomeText EngagementLatched = "latched"
+engagementOutcomeText EngagementRefusedDead = "refusedDead"
+engagementOutcomeText (EngagementSeedUnrepresentable _) = "seedUnrepresentable"
+
+-- | Why a plan was refused.
+data EngagementRefusal
+    = EngagementNotPending
+      -- ^ nothing to apply: the species does not declare the trigger or
+      --   the marker is not pending
+    | EngagementSeedRefused !Text
+      -- ^ D-5's guards refused the seed; the code names which
+    deriving (Show, Eq)
+
+-- | The state a successful application leaves.
+data EngagementPlan = EngagementPlan
+    { epStats     ∷ !(HM.HashMap Text Float)
+    , epOverrides ∷ !PhysioOverrides
+    , epOutcome   ∷ !EngagementOutcome
+    } deriving (Show, Eq)
+
+-- | Apply a PENDING engagement. 'Left' is either "nothing to apply" (the
+--   species does not declare the trigger, or the marker is not pending)
+--   or the seed refusal; a refusal changes nothing. Dead units are the
+--   caller's: it asks the combat lethality rule, which this pure plan
+--   cannot see.
+--
+--   With no explicit override the application IS the standard one-way
+--   Nominal → Simulated transition ('planSetMode' with no values), so the
+--   seed, the pinned override and D-5's guards (@m ≤ 0@, a negative or
+--   non-finite base) are exactly a scripted @setMode@'s; the marker goes
+--   to 2 in the same result.
+planEngagement ∷ PhysioContext → Either EngagementRefusal EngagementPlan
+planEngagement ctx
+    | not (declaresEngagement (pcPhysiology ctx))
+      ∨ not (engagementPending (pcStats ctx)) = Left EngagementNotPending
+    | HM.member engagementSystem (pcOverrides ctx) = Right EngagementPlan
+        { epStats = applied (pcStats ctx)
+        , epOverrides = pcOverrides ctx
+        , epOutcome = EngagementLatched }
+    | otherwise = case planSetMode ctx engagementSystem PhysioSimulated Nothing of
+        Left _ → Left (EngagementSeedRefused (seedRefusalCode ctx))
+        Right t → Right EngagementPlan
+            { epStats = applied (trStats t)
+            , epOverrides = trOverrides t
+            , epOutcome = EngagementTransitioned }
+  where
+    applied = HM.insert combatEngagedKey 2.0
+
+-- | Which D-5 guard refused the engagement seed, as a stable code: the
+--   diagnostic debounces on it.
+seedRefusalCode ∷ PhysioContext → Text
+seedRefusalCode ctx = case registrySystem (pcRegistry ctx) engagementSystem of
+    Nothing → "unknown_system"
+    Just sys → case psOwns sys of
+        [] → "no_owned_key"
+        (o : _) → case seedTarget ctx o of
+            Left _ → "invalid_target"
+            Right t → either id (const "seed_failed") $
+                invertEffectiveStatWhy (pcNow ctx) t
+                    (HM.lookupDefault [] (okKey o) (pcModifiers ctx))
 
 -- * Load reconciliation
 

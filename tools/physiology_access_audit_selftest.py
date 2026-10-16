@@ -35,6 +35,10 @@ REGISTRY = {
                   {"key": "calories", "healthy": {"from": "max_calories"}}],
          "contributes": [{"name": "meal_salt_credit",
                           "substitute": "virtual_meal"}]},
+        {"id": "stamina", "requires": ["body"],
+         "owns": [{"key": "stamina", "healthy": {"rule": "max_stamina"}}],
+         "provides": [{"name": "stamina_fraction",
+                       "substitute": {"value": 1.0}}]},
     ]
 }
 
@@ -68,7 +72,9 @@ BASE: dict[str, str] = {
         'local M = {}\nfunction M.tickResource(uid, resourceName)\n'
         '  local v = unit.getStat(uid, resourceName)\n'
         '  if resourceName == "hydration" then return v end\n'
-        '  if resourceName == "hunger" then return v end\nend\nreturn M\n',
+        '  if resourceName == "hunger" then return v end\n'
+        '  if resourceName == "stamina" then return unit.commitStamina(uid, 0) end\n'
+        'end\nreturn M\n',
     "scripts/unit_resource_carry.lua":
         'local M = {}\nfunction M.integrate(uid, name, d)\n'
         '  unit.setStat(uid, name, (unit.getStat(uid, name) or 0) + d)\nend\nreturn M\n',
@@ -228,6 +234,37 @@ def case_mutating_verb_leak_rejected():
         BASE["scripts/physiology.lua"] + 'unit.setPhysioMode(1, "salt", "nominal")\n'})
 
 
+def case_stamina_engagement_and_atomic_commit_seams():
+    # The SD-20 engagement application is facade-only (#2834).
+    expect("applyCombatEngagement outside the facade",
+           "mutating physiology verb unit.applyCombatEngagement",
+           files={"scripts/other.lua": 'unit.applyCombatEngagement(1)\n'})
+    expect_clean("facade applies the engagement", files={"scripts/physiology.lua":
+        BASE["scripts/physiology.lua"] + 'unit.applyCombatEngagement(1)\n'})
+    # The atomic stamina commit: the facade and the pool engine only.
+    expect("commitStamina elsewhere", "mutating physiology verb unit.commitStamina",
+           files={"scripts/thermo.lua": BASE["scripts/thermo.lua"].replace(
+               'return t', 'unit.commitStamina(1, -1)\nreturn t')})
+    expect("commitStamina names both callers", "only scripts/physiology.lua and "
+           "scripts/unit_resource_tick.lua may call it",
+           files={"scripts/other.lua": 'local r = unit.commitStamina(1, 1)\n'})
+    expect_clean("the facade's debit/credit commit", files={"scripts/physiology.lua":
+        BASE["scripts/physiology.lua"] + 'unit.commitStamina(1, -1)\n'})
+    # The pure maximum read is allowed everywhere.
+    expect_clean("getMaxStamina is a read", files={"scripts/other.lua":
+        'local m = unit.getMaxStamina(1)\n'})
+    # Stamina is owned: a raw read or write outside the pool engine is flagged,
+    # the facade's get is not (the thermo shiver was the last raw writer).
+    expect("raw stamina read", "raw read of owned key 'stamina'",
+           files={"scripts/other.lua": 'local s = unit.getStat(1, "stamina")\n'})
+    expect("raw stamina write", "raw write of owned key 'stamina'",
+           files={"scripts/thermo.lua": BASE["scripts/thermo.lua"].replace(
+               'return t', 'unit.setStat(1, "stamina", 0)\nreturn t')})
+    expect_clean("the facade reads stamina", files={"scripts/other.lua":
+        'local p = require("scripts.physiology")\n'
+        'local f = p.fraction(1, "stamina", "max_stamina")\n'})
+
+
 # The temporary S5 allowance for the legacy pool reads was deleted by S6
 # (#2832): the migrated baseline is clean, and every FORM it used to admit
 # is flagged like any other raw read.
@@ -323,11 +360,11 @@ def case_generic_helper_literal_at_call_site():
            '    local m = unit.getStat(uid, maxName)\n'
            '    return c, m\n  end\nend\n'
            'local rows = { fracColorFn("hunger", "max_hunger", 0.1),\n'
-           '               fracColorFn("stamina", "max_stamina", 0.1) }\n')
+           '               fracColorFn("exhaustion", "max_exhaustion", 0.1) }\n')
     f = expect("closure helper", "raw read of owned key 'hunger' (system "
                "'nutrition') through fracColorFn()",
                files={"scripts/other.lua": src})
-    assert not any("stamina" in x or "max_hunger" in x for x in f), f
+    assert not any("exhaustion" in x or "max_hunger" in x for x in f), f
     # A helper never called with a registry key is not a finding.
     expect_clean("helper unused", files={"scripts/other.lua": src.replace(
         'fracColorFn("hunger", "max_hunger", 0.1)', 'fracColorFn("mood", "max_mood", 0.1)')})
@@ -465,6 +502,11 @@ def case_registry_coverage():
     doc = copy.deepcopy(REGISTRY)
     doc["systems"][0]["owns"][0]["healthy"] = {"const": 1, "from": "x"}
     expect("two healthy", "has no healthy rule", doc=doc)
+    # ... exactly one of const / from / rule: a named rule is a rule.
+    doc = copy.deepcopy(REGISTRY)
+    doc["systems"][0]["owns"][0]["healthy"] = {"rule": "max_stamina", "const": 1}
+    expect("rule and const", "has no healthy rule", doc=doc)
+    expect_clean("a named healthy rule", doc=REGISTRY)
     # A contribution needs a Nominal substitute.
     doc = copy.deepcopy(REGISTRY)
     doc["systems"][3]["contributes"][0]["substitute"] = None

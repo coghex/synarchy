@@ -11,6 +11,7 @@ module Unit.Types.Def
     , module Unit.Atlas.Types
     , UnitPhysiology(..)
     , noUnitPhysiology
+    , plainUnitPhysiology
     ) where
 
 import UPrelude
@@ -22,7 +23,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
 import Unit.Faction.Profile (FactionTag)
-import Unit.Physiology.Types (UnitPhysiology(..), noUnitPhysiology)
+import Unit.Physiology.Types
+    (UnitPhysiology(..), noUnitPhysiology, plainUnitPhysiology)
 import Unit.Types.Combat (BodyPart(..), NaturalWeapon(..), NaturalResistance(..))
 
 -- | A single UNIT animation: per-direction frame sequences, addressed

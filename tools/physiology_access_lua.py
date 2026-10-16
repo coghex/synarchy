@@ -12,8 +12,9 @@ What it finds, per file or embedded chunk:
     and the ``get`` of any alias of ``scripts.unit_stats`` (including the
     inline ``require("scripts.unit_stats").get``), each with the key
     argument resolved to the literal registry names it can carry.
-  * MUTATING MODE VERBS: any mention of ``unit.setPhysioMode`` or
-    ``unit.clearPhysioMode``.
+  * MUTATING MODE VERBS: any mention of ``unit.setPhysioMode``,
+    ``unit.clearPhysioMode``, ``unit.applyCombatEngagement`` (#2834, SD-20) or
+    ``unit.commitStamina`` (#2470, the atomic stamina commit).
   * GENERIC HELPERS: a function that hands one of its own parameters (or
     an enclosing function's parameter, which is how a closure such as
     ``fracColorFn`` reaches the key) to a raw access. The call sites of
@@ -28,7 +29,8 @@ from typing import Iterator, Optional
 RAW_UNIT_VERBS = {"getStat": "read", "getStatBase": "read", "setStat": "write"}
 RAW_STATS_VERBS = {"get": "read"}
 STATS_MODULE = "scripts.unit_stats"
-MUTATING_MODE_VERBS = ("setPhysioMode", "clearPhysioMode")
+MUTATING_MODE_VERBS = ("setPhysioMode", "clearPhysioMode",
+                       "applyCombatEngagement", "commitStamina")
 
 
 # ---------------------------------------------------------------- tokens

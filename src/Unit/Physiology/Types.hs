@@ -31,6 +31,7 @@ module Unit.Physiology.Types
       -- * Per-definition defaults
     , UnitPhysiology(..)
     , noUnitPhysiology
+    , plainUnitPhysiology
       -- * Registry
     , Quantity(..)
     , HealthyRule(..)
@@ -118,6 +119,12 @@ data UnitPhysiology = UnitPhysiology
       --   the map has no authored default, which is different from a
       --   default of 'PhysioNominal': the resolver's last-resort Nominal
       --   is not reported as one.
+    , upEngagement ∷ !(HM.HashMap Text PhysioMode)
+      -- ^ system id → the mode the system takes once the unit's first
+      --   combat engagement has been APPLIED (@on_combat_engagement:@,
+      --   SD-20, #2834). Empty for every species but the one that
+      --   declares the trigger. The resolver reads it only while the
+      --   unit's @combat_engaged@ marker is 2.
     } deriving (Show, Eq)
 
 -- | A definition that authored no @body:@ and no @physiology:@ block —
@@ -125,7 +132,16 @@ data UnitPhysiology = UnitPhysiology
 --   test fixture that does not care about physiology uses.
 noUnitPhysiology ∷ UnitPhysiology
 noUnitPhysiology = UnitPhysiology
-    { upBodyAuthored = False, upProfile = Nothing, upDefaults = HM.empty }
+    { upBodyAuthored = False, upProfile = Nothing, upDefaults = HM.empty
+    , upEngagement = HM.empty }
+
+-- | A definition's physiology with NO engagement trigger: the shape every
+--   species but the one that declares @on_combat_engagement:@ has.
+plainUnitPhysiology ∷ Bool → Maybe Text → HM.HashMap Text PhysioMode
+                    → UnitPhysiology
+plainUnitPhysiology bodyAuthored profile defaults = UnitPhysiology
+    { upBodyAuthored = bodyAuthored, upProfile = profile
+    , upDefaults = defaults, upEngagement = HM.empty }
 
 -- * Registry
 
@@ -144,6 +160,11 @@ data HealthyRule
       -- ^ @{ from: body_mass, scale: [SALT_PER_KG] }@: the unit's
       --   EFFECTIVE value of the named input stat times the product of
       --   the scale factors (none = 1).
+    | HealthyMaxStamina
+      -- ^ @{ rule: max_stamina }@ (#2834): the unit's effective
+      --   @max_stamina@ through the ONE maximum rule
+      --   ('Unit.Stats.maxStaminaOf'). @max_stamina@ is derived and never
+      --   stored, so a @from:@ rule could not read it.
     deriving (Show, Eq)
 
 -- | One stored key a system owns, with its healthy rule.

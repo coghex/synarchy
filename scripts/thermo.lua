@@ -221,9 +221,10 @@ function thermo.tick(uid, info, dt)
 
     -- Minimal costs of thermoregulating.
     if shiver > 0 then
-        local st = unit.getStat(uid, "stamina")
-        if st then unit.setStat(uid, "stamina",
-            math.max(0, st - SHIVER_STAMINA_K * shiver * dt)) end
+        -- A relative, atomic debit (#2834, S8-F2): the old read-modify-write
+        -- republished an absolute value and refunded any strike combat
+        -- committed in between. A Nominal stamina receiver discards it.
+        physiology.debit(uid, "stamina", SHIVER_STAMINA_K * shiver * dt)
     end
     if sweat > 0 then
         -- Debits scale with body mass (thermo.sweatMassScale): the same

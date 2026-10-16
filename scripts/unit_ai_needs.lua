@@ -34,11 +34,10 @@ end
 -- Action: wander
 -----------------------------------------------------------
 local function wanderUtility(uid, s, params)
-    local stamina = unit.getStat(uid, "stamina")
-    local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
-    if not stamina or not maxStam or maxStam <= 0 then return -math.huge end
-
-    local fraction = stamina / maxStam
+    -- Through the facade (#2834): a Nominal stamina system reads full, an
+    -- Unsupported one (a bodyless unit) has no fraction and never wanders.
+    local fraction = physiology.fraction(uid, "stamina", "max_stamina")
+    if not fraction then return -math.huge end
     if fraction < params.wander_min_stamina_fraction then
         return -math.huge
     end

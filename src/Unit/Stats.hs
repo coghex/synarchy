@@ -17,7 +17,10 @@ module Unit.Stats
     ( rollStat
     , standardStat
     , effectiveStat
+    , modifierTotals
     , invertEffectiveStat
+    , invertEffectiveStatWhy
+    , maxStaminaOf
     , applySkillXP
     , applyItemBuffs
     , applyAccessoryBuffs
@@ -68,11 +71,18 @@ applySkillXP level xp = level + xp / max (level * level) 1e-4
 --   Pure — caller supplies @now@ so the function is testable without IO.
 effectiveStat ∷ Double → Float → [StatModifier] → Float
 effectiveStat now base mods =
-    let active  = filter isActive mods
-        delta   = sum (smDelta   <$> active)
-        percent = sum (smPercent <$> active)
+    let (delta, percent) = modifierTotals now mods
     in max 0 ((base + delta) * (1 + percent))
+
+-- | @(Σ active flat deltas, Σ active percents)@ of a stat's modifiers at
+--   game time @now@: the two sums 'effectiveStat' composes, exposed so a
+--   writer that solves for a stored base (the stamina commit) uses the
+--   very same activity rule (a modifier is active while @now < expiry@).
+modifierTotals ∷ Double → [StatModifier] → (Float, Float)
+modifierTotals now mods =
+    (sum (smDelta <$> active), sum (smPercent <$> active))
   where
+    active = filter isActive mods
     isActive m = case smExpiry m of
         Nothing → True
         Just t  → now < t
@@ -84,11 +94,22 @@ effectiveStat now base mods =
 --   percent multiplier @1 + Σp@ is not positive, or the result is
 --   negative or not finite. A zero base is representable.
 invertEffectiveStat ∷ Double → Float → [StatModifier] → Maybe Float
-invertEffectiveStat now target mods
-    | isNaN target ∨ isInfinite target ∨ target < 0 = Nothing
-    | multiplier ≤ 0 ∨ isNaN multiplier ∨ isInfinite multiplier = Nothing
-    | isNaN base ∨ isInfinite base ∨ base < 0 = Nothing
-    | otherwise = Just base
+invertEffectiveStat now target mods =
+    either (const Nothing) Just (invertEffectiveStatWhy now target mods)
+
+-- | 'invertEffectiveStat' with the reason no base exists, as a stable
+--   code: @unrepresentable_target@ (the target is negative or not finite),
+--   @nonpositive_multiplier@ (@1 + Σp ≤ 0@) or @negative_base@ (the
+--   modifiers' flat floor is above the target, or the base is not
+--   finite). The code is what the engagement diagnostic debounces on.
+invertEffectiveStatWhy ∷ Double → Float → [StatModifier] → Either Text Float
+invertEffectiveStatWhy now target mods
+    | isNaN target ∨ isInfinite target ∨ target < 0 =
+        Left "unrepresentable_target"
+    | multiplier ≤ 0 ∨ isNaN multiplier ∨ isInfinite multiplier =
+        Left "nonpositive_multiplier"
+    | isNaN base ∨ isInfinite base ∨ base < 0 = Left "negative_base"
+    | otherwise = Right base
   where
     active     = filter isActive mods
     delta      = sum (smDelta   <$> active)
@@ -97,6 +118,27 @@ invertEffectiveStat now target mods
     isActive m = case smExpiry m of
         Nothing → True
         Just t  → now < t
+
+-- | The unit's effective maximum stamina at game time @now@ — the ONE
+--   rule every consumer shares (#2834, design S8.2): an explicit
+--   @max_stamina@ stat wins and resolves through 'effectiveStat' with
+--   its own modifiers; otherwise
+--   @effectiveStat now (effective(endurance) × 10) (modifiers on
+--   max_stamina)@. @fallbackEndurance@ is the endurance a unit with no
+--   endurance stat is sized by (combat's 1.0); 'Nothing' leaves such a
+--   unit with no maximum, which is what @stats.get@ reports to Lua.
+maxStaminaOf ∷ Maybe Float → Double → HM.HashMap T.Text Float
+             → HM.HashMap T.Text [StatModifier] → Maybe Float
+maxStaminaOf fallbackEndurance now stats mods =
+    case HM.lookup "max_stamina" stats of
+        Just m  → Just (effectiveStat now m (modsOn "max_stamina"))
+        Nothing → do
+            e ← maybe fallbackEndurance Just (HM.lookup "endurance" stats)
+            pure (effectiveStat now
+                      (effectiveStat now e (modsOn "endurance") * 10.0)
+                      (modsOn "max_stamina"))
+  where
+    modsOn name = HM.lookupDefault [] name mods
 
 -- | Fold an item's buffs into a unit's modifier map — the single
 --   implementation behind spawn-time accessory buffs, equip-time buff

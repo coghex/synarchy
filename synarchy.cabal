@@ -794,6 +794,7 @@ library
                      Combat.Resolution.Strike
                      Combat.Resolution.Damage
                      Combat.Resolution.Wear
+                     Combat.Resolution.Stamina
                      Combat.Resolution.Events
                      Combat.Wounds
                      Combat.Wounds.Bleed
@@ -1917,6 +1918,10 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Physiology
                    Test.Headless.Unit.PhysiologyEngine
                    Test.Headless.Unit.PhysiologySpeciesProfiles
+                   Test.Headless.Unit.PhysiologyStaminaModes
+                   Test.Headless.Unit.PhysiologyStaminaModes.Combat
+                   Test.Headless.Unit.PhysiologyStaminaModes.Persistence
+                   Test.Headless.Unit.PhysiologyStaminaModes.Tuning
                    Test.Headless.Unit.PhysiologyModes
                    Test.Headless.Unit.PhysiologyModes.Climates
                    Test.Headless.Unit.PhysiologyModes.Harness
