@@ -2090,8 +2090,9 @@ and `state_of_mind` probes.
 
 **Unit-info display of modes (#2832, S6).** The unit-info Status panel and the
 legacy debug text show a unit's RESOLVED modes (design D-8). A supported
-Nominal row shows its healthy reading (a pool shows the word `Nominal`) in the
-neutral value colour (`L.CONTENT_VAL_COLOR`, not the in-range green) with the
+Nominal row shows the word `Nominal` (a pool shows just that; the temperature
+and salt rows add their healthy reading, `Nominal 37.0°C` / `Nominal 100%`, in
+the smaller condition font so the pair fits) in the neutral value colour (`L.CONTENT_VAL_COLOR`, not the in-range green) with the
 value-tooltip hint `Not simulated for this unit: always healthy.` (the icon's
 description tooltip is unchanged); `body_temp` follows thermo (`core_temp`) and
 the salt row follows salt (`salt_conc`), so a mixed-mode unit shows each from
