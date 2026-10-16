@@ -674,14 +674,23 @@ def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> N
         chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
         time.sleep(0.6)   # unit.spawn only queues; let the unit thread commit
 
-        # A unit saved MID-CLIMB (a spawn tile off the surface settles first)
-        # restores in a pose it cannot resume, so wait until every unit has
-        # stood still for a full second before anything is paused and saved.
+        # The arena's cliffs make a spawned unit fall and, some seconds later,
+        # die of it, and a unit saved MID-CLIMB or mid-fall restores in a pose
+        # it cannot resume. So pause the instant every unit is standing, check
+        # it still is, and do everything else with the engine paused.
         def all_standing() -> bool:
             return all(lua_text(port, f"unit.getPose({u})") == "standing" for u in uids)
-        chk.ok(wait_for(port, lambda: all_standing()
-                         and (time.sleep(1.0) or all_standing()), 30.0),
-               "every unit has settled into a standing pose")
+
+        def paused_standing() -> bool:
+            if not all_standing():
+                return False
+            send(port, "require('scripts.pause').set(true); return 'ok'")
+            if all_standing():
+                return True
+            send(port, "require('scripts.pause').set(false); return 'ok'")
+            return False
+        chk.ok(wait_for(port, paused_standing, 40.0),
+               "every unit has settled into a standing pose and the engine is paused")
 
         # The shipped table, through real spawns: acolyte S/S; the squirrel
         # exhaustion Simulated and sleep Nominal; the mule N/N.
@@ -699,7 +708,6 @@ def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> N
 
         # Pin the squirrel's sleep Simulated through the facade (it seeds the
         # full pool), then give three units EXACT partial pools no reseed keeps.
-        send(port, "require('scripts.pause').set(true); return 'ok'")
         pinned_ok = send(port, f"local ok, why = require('scripts.physiology')"
                                f".setMode({pinned}, 'sleep', 'simulated'); "
                                f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
@@ -735,10 +743,11 @@ def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> N
             st = pool_state(port, uid)
             chk.ok(st["sp"] is None and st["sp_mode"] == "nominal",
                    f"unit {uid} reloads Nominal holding no sleep_pressure (got {st})")
-        # unpause: the pinned squirrel's pool drains (drain-only parameters)
+        # unpause just long enough for the pinned squirrel's pool to drain
+        # (drain-only parameters); a longer window risks a cliff fall
         send(port, "require('scripts.pause').set(false); return 'ok'")
         chk.ok(wait_for(port, lambda: (lua_number(
-                   port, f"unit.getStat({pinned}, 'sleep_pressure')") or 99) < 4.5),
+                   port, f"unit.getStat({pinned}, 'sleep_pressure')") or 99) < 4.5, 6.0),
                "the pinned squirrel's reloaded pool keeps draining")
         send(port, "require('scripts.pause').set(true); return 'ok'")
         chk.ok(lua_number(port, f"unit.getStat({plain}, 'sleep_pressure')") is None,
