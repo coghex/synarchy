@@ -2400,6 +2400,17 @@ every consumer relies on:
     out. The durable sequence is NOT reset by load or teardown: a Simulated
     sleeper resumes; one restored under a non-Simulated sleep mode is
     abandoned on its first think.
+  * *Retained modifiers.* A pool's stat reads `(base + sum d) x (1 + sum p)`
+    over its active modifiers, and `unit.setStat` stores a BASE, so every
+    writer that works in effective values solves the base
+    (`scripts/lib/stat_base.lua`, `t / (1 + sum p) - sum d`; a modifier is
+    active while `now < expiry`): the transition seed (as before), the facade's
+    `credit` / `debit` for these pools (an effective delta, clamped to
+    [0, maximum], answering the effective change read back) and the resource
+    tick's carry integrator (so the sub-Float remainder stays in the effective
+    domain). No base representable (a multiplier that is not positive, or a
+    negative base) writes nothing. With no active modifier the target is
+    written unchanged, so every unmodified pool is bit-identical to before.
   * *Persistence.* No wire change. Both pools are Persist exactly while
     Simulated; a squirrel saved by an earlier build has its stored
     `sleep_pressure` scrubbed on load (logged once, idempotent), a pinned

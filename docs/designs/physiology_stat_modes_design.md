@@ -2193,6 +2193,14 @@ Haskell source changed.
   Simulated; the AI sequence is durable and untouched by the load and
   teardown resets. A legacy squirrel's stored `sleep_pressure` is scrubbed by
   D-6 (b), logged once.
+- **Retained modifiers.** Seeds were already modifier-aware (D-5); S8b makes
+  the other writers of the two pools so. `scripts/lib/stat_base.lua` solves
+  the stored base for an effective target (`t / (1 + sum p) - sum d`, a
+  modifier active while `now < expiry`); `credit` / `debit` for both pools and
+  the resource tick's carry integrator use it, so a +50% or -50% modifier no
+  longer turns an effective 10 into 13.5 on a debit or into 15 on the next
+  tick. The integrator is shared, so a modified hydration or hunger pool gets
+  the same correction; with no active modifier nothing changes bit for bit.
 - **Facade and audit.** `credit` / `debit` gain rules for both pools (a
   Nominal receiver discards). The access audit gains the two owners, the
   probe's exhaustion fixture pins, and an updated self-test whose unowned
