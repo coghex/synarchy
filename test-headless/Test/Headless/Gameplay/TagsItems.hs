@@ -75,7 +75,9 @@ import Unit.Types
     ( UnitId(..), UnitInstance(..), UnitManager(..), Wound(..), emptyUnitManager )
 import Test.Headless.World.PageIncarnation (drainEntities)
 import World.Construct.Types
-    (ConstructDesignation(..), ConstructTarget(..), StructurePiece(..))
+    ( ConstructDesignation(..), ConstructTarget(..), StructurePiece(..)
+    , newConstructDesignation )
+import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
 import World.Construct.Attempt (ConstructAttemptId(..))
 import World.Construct.Revalidate (constructRefundDeps, refundConstructDesignation)
 import World.Thread.Command.Cursor
@@ -146,6 +148,11 @@ satchel = 10; pouch = 11; rationA = 12; rationB = 13; rationRoot = 14
 barA = 15; barB = 16; grain = 17; kit = 18; bandageA = 19; bandageB = 20
 dagger = 21; habit = 22; crate = 30; crateBar = 31; siteBar = 32
 groundSack = 40; groundRation = 41; muleBar = 50; strangerBar = 60
+
+-- | Everything the acolyte carries, equips and wears.
+acolyteTree ∷ [Word64]
+acolyteTree = [ satchel, pouch, rationA, rationB, rationRoot, barA, barB
+              , grain, kit, bandageA, bandageB, dagger, habit ]
 
 -- | Every live item in the scene, at every owner and depth.
 sceneIds ∷ [Word64]
@@ -542,9 +549,58 @@ moveSpec = describe "moves and in-place changes keep every tag" $ do
         nestedMove env rationRoot pouch
         survivorsKeep env []
 
+-- | Detach the acolyte's satchel tree (nothing destroyed, the instance
+--   kept in hand), as a transfer does between its pop and its push.
+detachSatchel ∷ EngineEnv → IO ItemInstance
+detachSatchel env = atomicModifyIORef' (unitManagerRef env) $ \um →
+    case HM.lookup acolyteUid (umInstances um) of
+        Nothing → error "no acolyte"
+        Just u → case break ((≡ satchel) . iiInstanceId) (uiInventory u) of
+            (pre, it0 : post) →
+                (um { umInstances = HM.insert acolyteUid u { uiInventory = pre ⧺ post }
+                                              (umInstances um) }, it0)
+            _ → error "no satchel"
+
+reattach ∷ EngineEnv → ItemInstance → IO ()
+reattach env it0 = atomicModifyIORef' (unitManagerRef env) $ \um →
+    (um { umInstances = HM.adjust (\u → u { uiInventory = it0 : uiInventory u })
+                                  acolyteUid (umInstances um) }, ())
+
 -- | Requirement 4: refused and rolled-back operations keep everything.
 refusalSpec ∷ SpecWith (EngineEnv, LuaBackendState)
 refusalSpec = describe "refused, rolled-back and partial operations keep tags" $ do
+
+    it "an edit while a tagged tree is momentarily detached is refused and \
+       \strips nothing the tree already carries" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        held ← detachSatchel env
+        editItem env satchel (AddTagsEdit (tags ["late"])) `shouldReturn` TagEditNoTarget
+        editItem env pouch ClearTagsEdit `shouldReturn` TagEditNoTarget
+        reattach env held
+        survivorsKeep env []
+
+    it "an edit whose commit lands while the tree is detached keeps the \
+       \tree's earlier tags and the new one" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        heldRef ← newIORef Nothing
+        r ← mutateItemTagsWith (detachSatchel env ⌦ writeIORef heldRef . Just)
+                (unitManagerRef env) (buildingManagerRef env) (worldManagerRef env)
+                Nothing (it' satchel) (AddTagsEdit (tags ["late"]))
+        r `shouldBe` TagEditApplied
+        readIORef heldRef ⌦ maybe (fail "never detached") (reattach env)
+        coherent env [(satchel, sceneTags satchel ⧺ ["late"]), (pouch, sceneTags pouch)]
+
+    it "an edit racing a destruction between check and commit installs \
+       \nothing" $ \(env, _) → do
+        resetScene env
+        let destroy = Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid) >> drainEntities env
+        r ← mutateItemTagsWith destroy (unitManagerRef env) (buildingManagerRef env)
+                (worldManagerRef env) Nothing (it' satchel) (AddTagsEdit (tags ["late"]))
+        r `shouldBe` TagEditNoTarget
+        queryItems env (tagged (tg "late")) `shouldReturn` []
+        coherent env []
 
     it "a refused transfer to a non-commandable unit moves and forgets \
        \nothing" $ \(env, ls) → do
@@ -576,6 +632,23 @@ refusalSpec = describe "refused, rolled-back and partial operations keep tags" $
         either (const True) (const False) r `shouldBe` True
         unitHolds env acolyteUid `shouldReturn` before
         survivorsKeep env []
+
+    it "a failed push whose source was destroyed in between forgets the \
+       \discarded tree, root and descendants" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        -- #1274's sequence: popped, then the source unit is destroyed
+        -- by the real handler, then the push fails and the restore
+        -- answers source-missing.
+        let destroySourceThenFail _ _ _ = do
+                Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid)
+                drainEntities env
+                pure (Left ReasonReceiverFull)
+        _ ← commitCross env (EndpointUnit acolyteUid) (EndpointUnit muleUid)
+                (popUnit acolyteUid) destroySourceThenFail
+                (TransferItemRef (fromIntegral satchel) "satchel")
+        goneEverywhere env acolyteTree
+        survivorsKeep env acolyteTree
 
     it "a nested insert refused by the ownership boundary changes nothing" $
         \(env, _) → do
@@ -667,8 +740,6 @@ destructionSpec = describe "destruction forgets the destroyed trees" $ do
         tagScene env
         Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid)
         drainEntities env
-        let acolyteTree = [ satchel, pouch, rationA, rationB, rationRoot, barA, barB
-                          , grain, kit, bandageA, bandageB, dagger, habit ]
         goneEverywhere env acolyteTree
         survivorsKeep env acolyteTree
 
@@ -731,6 +802,26 @@ attachmentSpec = describe "the item-tree attachment boundary" $ do
             sort ⊚ queryItems env (tagged (tg "looted")) `shouldReturn` [satchel, pouch]
             coherent env [(satchel, ["looted"]), (pouch, ["looted"])]
 
+    it "a tree destroyed between the check and the install leaves no \
+       \assignment, and the attach fails" $ \(env, _) → do
+        resetScene env
+        let destroy = Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid) >> drainEntities env
+        r ← commitItemTreeTagsWith destroy (unitManagerRef env) (buildingManagerRef env)
+                (worldManagerRef env) [(it' satchel, tags ["looted"]), (it' pouch, tags ["looted"])]
+        r `shouldSatisfy` isLeftE
+        queryItems env (tagged (tg "looted")) `shouldReturn` []
+        coherent env []
+
+    it "a session replacement between the check and the install installs \
+       \nothing and reports every target" $ \(env, _) → do
+        resetScene env
+        let replace = atomicModifyIORef' (worldManagerRef env) $ \m →
+                (m { wmSessionEpoch = wmSessionEpoch m + 1 }, ())
+        r ← commitItemTreeTagsWith replace (unitManagerRef env) (buildingManagerRef env)
+                (worldManagerRef env) [(it' satchel, tags ["looted"]), (it' pouch, tags ["looted"])]
+        r `shouldBe` Left [it' satchel, it' pouch]
+        queryItems env (tagged (tg "looted")) `shouldReturn` []
+
     it "a newly added item carries no tags of its own" $ \(env, ls) → do
         resetScene env
         tagScene env
@@ -777,6 +868,33 @@ sessionSpec = describe "whole-session save and load" $ do
             `shouldBe` ["4242"]
         (logger, entries) ← capturingLogger
         loadSession env logger snap
+        queryItems env (tagged (tg "ghost")) `shouldReturn` []
+        msgs ← map leMessage ⊚ entries
+        msgs `shouldSatisfy` any ("dropped gameplay tags on 1 item id" `T.isInfixOf`)
+        survivorsKeep env []
+
+    it "a dangling assignment at the saved allocator cursor never reaches \
+       \the item a staging refund mints with that id" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        snap0 ← capturedSession env
+        let cursor = snapNextItemId snap0
+            ghost = (newConstructDesignation 0
+                        (CtStructure (StructurePiece "no_such_pack" "floor" Nothing))
+                        (ConstructAttemptId 7))
+                        { cdPayment = CpPaid (mkMaterialReceipt [("steel_bar", 1)]) }
+            snap = snap0
+                { snapItemTags = Map.insert (it' cursor) (tags ["ghost"]) (snapItemTags snap0)
+                , snapPages = HM.adjust
+                    (\page → page { pgsConstructDesignations = HM.singleton (5, 5) ghost
+                                  , pgsConstructNextAttempt = ConstructAttemptId 8 })
+                    pageP (snapPages snap0) }
+        (logger, entries) ← capturingLogger
+        loadSession env logger snap
+        -- The refund really took the cursor id …
+        Just _ ← groundGidOf env cursor
+        -- … and carries no tag of the dead item that id once named.
+        tagsOf env cursor `shouldReturn` Just Set.empty
         queryItems env (tagged (tg "ghost")) `shouldReturn` []
         msgs ← map leMessage ⊚ entries
         msgs `shouldSatisfy` any ("dropped gameplay tags on 1 item id" `T.isInfixOf`)

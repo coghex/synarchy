@@ -75,6 +75,7 @@ module Gameplay.Tags.Live
     , mutateBuildingTags
     , mutateLocationTags
     , mutateItemTags
+    , mutateItemTagsWith
       -- * Live reads and queries
     , LiveTagView(..)
     , captureLiveTagView
@@ -86,6 +87,7 @@ module Gameplay.Tags.Live
     , liveTagAssignments
       -- * Committing a new item tree's assignments
     , commitItemTreeTags
+    , commitItemTreeTagsWith
     ) where
 
 import UPrelude
@@ -218,40 +220,67 @@ mutateLocationTags wmRef (LocationTarget page lid) edit = do
 -- | An item edit (#2703). The target must be a LIVE item, as the
 --   canonical enumeration ("World.Item.Locate") sees it — ground,
 --   carried, equipped, worn, stored, delivered, or nested at any depth —
---   and, with @Just page@, one on that page. The item's owners live
---   behind several refs, so the existence check cannot share one atomic
---   step with the write the way a unit or building edit does. Instead
---   the write is one 'atomicModifyIORef'' of the session owner and the
---   item is located AGAIN afterwards: if a destruction removed it in
---   between, the assignment is withdrawn and the answer is
---   'TagEditNoTarget', so no edit leaves a tag on a dead item whichever
---   way the race falls (the destruction's own forget covers the other
---   order). A session replacement between the check and the write
---   refuses the write.
+--   and, with @Just page@, one on that page.
+--
+--   The item's owners sit behind several refs, so the existence check
+--   cannot share one atomic step with the write the way a unit or
+--   building edit does. What makes it safe instead is
+--   'World.State.Types.wmItemDestroyGen': every destruction's forget
+--   bumps it in the same atomic step that removes the destroyed ids'
+--   tags ("Gameplay.Tags.ItemLifecycle"), and this edit reads it BEFORE
+--   it locates the item and writes only if it is unchanged. So either
+--   no destruction finished in between — any removal of the target
+--   after the check is followed by its own forget, which removes this
+--   write — or one did and the edit retries against a fresh view. A
+--   missing item is never treated as destroyed: an item a transfer has
+--   momentarily detached is simply not editable at that instant, and
+--   nothing it already carries is touched. A session replacement in
+--   between refuses the edit.
 mutateItemTags ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
                → Maybe WorldPageId → ItemTarget → TagEdit → IO TagEditResult
-mutateItemTags umRef bmRef wmRef scope t edit = do
-    before ← captureLiveTagView umRef bmRef wmRef
-    if not (live before)
-        then pure TagEditNoTarget
-        else do
-            let epoch = wmSessionEpoch (ltvManager before)
-            wrote ← atomicModifyIORef' wmRef $ \mgr →
-                if wmSessionEpoch mgr ≢ epoch then (mgr, False)
-                else ( mgr { wmItemTags =
-                               modifyCategoryTags (applyTagEdit edit) t (wmItemTags mgr) }
-                     , True )
-            if not wrote then pure TagEditNoTarget else do
-                after ← captureLiveTagView umRef bmRef wmRef
-                if live after then pure TagEditApplied else do
-                    atomicModifyIORef' wmRef $ \mgr →
-                        ( if wmSessionEpoch mgr ≢ epoch then mgr
-                          else mgr { wmItemTags = deleteCategoryTarget t (wmItemTags mgr) }
-                        , () )
-                    pure TagEditNoTarget
+mutateItemTags = mutateItemTagsWith (pure ())
+
+-- | 'mutateItemTags' with an action run between the decision and the
+--   commit — the window a racing destruction or detach lands in. The
+--   test seam for that interleaving; production passes @pure ()@.
+mutateItemTagsWith ∷ IO () → IORef UnitManager → IORef BuildingManager → IORef WorldManager
+                   → Maybe WorldPageId → ItemTarget → TagEdit → IO TagEditResult
+mutateItemTagsWith between umRef bmRef wmRef scope t edit =
+    fromMaybe TagEditNoTarget ⊚ guardedItemWrite between umRef bmRef wmRef (\v →
+        if not (Set.member t (maybe id (\p → (`Set.intersection` liveItemTargetsOn v p)) scope
+                                       (liveItemTargets v)))
+            then Left TagEditNoTarget
+            else Right (modifyCategoryTags (applyTagEdit edit) t, TagEditApplied))
+
+-- | The shared discipline of every item-index WRITE: read the session
+--   epoch and the destruction generation, capture a view, decide, and
+--   commit only if neither moved — retrying a bounded number of times
+--   when a destruction raced the decision. 'Nothing' when the session
+--   was replaced or the retries ran out; the decision's own refusal
+--   otherwise.
+guardedItemWrite ∷ IO () → IORef UnitManager → IORef BuildingManager → IORef WorldManager
+                 → (LiveTagView → Either α (CategoryIndex ItemTarget → CategoryIndex ItemTarget, α))
+                 → IO (Maybe α)
+guardedItemWrite between umRef bmRef wmRef decide = go (16 ∷ Int)
   where
-    live v = Set.member t (maybe id (\p → (`Set.intersection` liveItemTargetsOn v p)) scope
-                                      (liveItemTargets v))
+    go 0 = pure Nothing
+    go n = do
+        m0 ← readIORef wmRef
+        v  ← captureLiveTagView umRef bmRef wmRef
+        case decide v of
+            Left refusal → pure (Just refusal)
+            Right (change, answer) → do
+                between
+                outcome ← atomicModifyIORef' wmRef $ \mgr →
+                    if wmSessionEpoch mgr ≢ wmSessionEpoch m0 then (mgr, WriteReplaced)
+                    else if wmItemDestroyGen mgr ≢ wmItemDestroyGen m0 then (mgr, WriteRaced)
+                    else (mgr { wmItemTags = change (wmItemTags mgr) }, WriteDone)
+                case outcome of
+                    WriteDone     → pure (Just answer)
+                    WriteReplaced → pure Nothing
+                    WriteRaced    → go (n - 1)
+
+data WriteOutcome = WriteDone | WriteRaced | WriteReplaced
 
 -- * Live reads and queries
 
@@ -353,22 +382,26 @@ liveTagAssignments = assignments . liveTagRegistry
 
 -- | Install explicit assignments for a newly materialized item tree
 --   (#2703) — the attachment boundary later scenario construction
---   needs. ALL OR NOTHING: every target must be LIVE when this runs
---   (the tree committed to an owner first), or nothing is installed
---   and the uncommitted ids come back, so a rejected or never-committed
---   tree leaves no assignment behind. New items carry no tags of their
---   own; this is the only way one gets any at birth.
+--   needs. ALL OR NOTHING: every target must be LIVE (the tree committed
+--   to an owner first), or nothing is installed and the uncommitted ids
+--   come back. The write takes 'mutateItemTags'' guard, so a tree
+--   destroyed after the check either has its forget run after this
+--   write (removing it) or forces a retry against a fresh view; a
+--   session replacement, or a destruction race that never settles,
+--   installs nothing and answers every target. New items carry no tags
+--   of their own; this is the only way one gets any at birth.
 commitItemTreeTags ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
                    → [(ItemTarget, Set.Set GameplayTag)] → IO (Either [ItemTarget] ())
-commitItemTreeTags umRef bmRef wmRef assigned = do
-    v ← captureLiveTagView umRef bmRef wmRef
-    let liveSet = liveItemTargets v
-        missing = [ t | (t, _) ← assigned, not (Set.member t liveSet) ]
-        epoch   = wmSessionEpoch (ltvManager v)
-    if not (null missing) then pure (Left missing) else do
-        atomicModifyIORef' wmRef $ \mgr →
-            ( if wmSessionEpoch mgr ≢ epoch then mgr
-              else mgr { wmItemTags = foldl' (\ix (t, ts) → modifyCategoryTags (Set.union ts) t ix)
-                                             (wmItemTags mgr) assigned }
-            , () )
-        pure (Right ())
+commitItemTreeTags = commitItemTreeTagsWith (pure ())
+
+-- | 'commitItemTreeTags' with the same test seam as 'mutateItemTagsWith'.
+commitItemTreeTagsWith ∷ IO () → IORef UnitManager → IORef BuildingManager → IORef WorldManager
+                       → [(ItemTarget, Set.Set GameplayTag)] → IO (Either [ItemTarget] ())
+commitItemTreeTagsWith between umRef bmRef wmRef assigned =
+    fromMaybe (Left (map fst assigned)) ⊚ guardedItemWrite between umRef bmRef wmRef (\v →
+        let liveSet = liveItemTargets v
+            missing = [ t | (t, _) ← assigned, not (Set.member t liveSet) ]
+        in if not (null missing) then Left (Left missing)
+           else Right ( \ix → foldl' (\acc (t, ts) → modifyCategoryTags (Set.union ts) t acc)
+                                      ix assigned
+                      , Right () ))

@@ -931,6 +931,17 @@ data WorldManager = WorldManager
       --   destruction. PERSISTED by @core-session@ v2 and installed by
       --   "World.Load.Publish" as part of the replacement manager; Exit-
       --   to-Menu empties it with the page set.
+    , wmItemDestroyGen ∷ !Word64
+      -- ^ How many item-destruction forgets this manager has applied
+      --   (#2703): "Gameplay.Tags.ItemLifecycle.forgetItemTags" bumps it
+      --   in the SAME atomic step that removes the destroyed ids' tags.
+      --   An item-tag write reads it before it locates its target and
+      --   commits only if it is unchanged ("Gameplay.Tags.Live"), which
+      --   is what keeps a write from landing on an item destroyed in
+      --   between without ever mistaking a momentarily detached item for
+      --   a destroyed one. Transient: never saved, and a replacement
+      --   manager starts again at 0 — the session epoch already fences
+      --   everything across a load.
     }
 
 emptyWorldManager ∷ WorldManager
@@ -946,6 +957,7 @@ emptyWorldManager = WorldManager
     , wmSessionEpoch = 0
     , wmPortableKnowledge = emptyPortableKnowledge
     , wmItemTags = emptyCategoryIndex
+    , wmItemDestroyGen = 0
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME

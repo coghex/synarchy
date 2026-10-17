@@ -48,6 +48,7 @@ module Gameplay.Tags.ItemLifecycle
     , groundItemIds
       -- * Forgetting
     , withDestroyedItems
+    , itemTagEpoch
     , forgetItemTags
     , forgetAllItemTags
       -- * One-owner consumption steps
@@ -128,6 +129,11 @@ withDestroyedItems wmRef step = do
     forgetItemTags wmRef epoch destroyed
     pure result
 
+-- | The session epoch a destroying step reads BEFORE its removal, to
+--   guard the forget that follows it.
+itemTagEpoch ∷ IORef WorldManager → IO Word64
+itemTagEpoch wmRef = wmSessionEpoch ⊚ readIORef wmRef
+
 -- | Remove every assignment naming one of these ids, from both
 --   indexes, in one atomic step; a no-op for an empty set, an untagged
 --   id or a replaced session.
@@ -139,7 +145,11 @@ forgetItemTags wmRef epoch ids
             then (mgr, ())
             else ( mgr { wmItemTags = restrictCategoryIndex
                            (\t → not (HS.member (itemTargetId t) ids))
-                           (wmItemTags mgr) }
+                           (wmItemTags mgr)
+                         -- Bumped even when none of the ids was tagged:
+                         -- an edit that located one of them before this
+                         -- removal must not commit after it.
+                       , wmItemDestroyGen = wmItemDestroyGen mgr + 1 }
                  , () )
 
 -- | Session teardown: no item survives it, so no assignment does.

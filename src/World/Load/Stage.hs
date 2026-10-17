@@ -397,8 +397,25 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                   -- (consumed, or carried by an owner the save no
                   -- longer has) is dropped, with one diagnostic, and
                   -- the index is rebuilt from what remains.
+                  --
+                  -- Two tests, not one: the item must have been in the
+                  -- SAVED session's ownership AND survive staging. The
+                  -- second alone is not enough, because staging can
+                  -- mint items -- a refunded designation's materials --
+                  -- and a fresh refund can take an id a dangling
+                  -- assignment names (the saved allocator cursor), which
+                  -- would hand a new item the dead one's tags. Refunds
+                  -- are new and untagged (owner decision, 2026-10-17).
                   savedItemTags = sdItemTags saveData
-                  liveTag t = HS.member (itemTargetId t) stagedLiveItemIds
+                  savedItemIds = HS.fromList
+                      [ iiInstanceId i
+                      | wps ← sdWorlds saveData
+                      , (_, insts) ← pageItemContainers ItemsGroundFirst
+                                         wpsGroundItems wpsUnits wpsBuildings wps
+                      , inst ← insts
+                      , i ← flattenItemInstances inst ]
+                  liveTag t = HS.member (itemTargetId t) savedItemIds
+                            ∧ HS.member (itemTargetId t) stagedLiveItemIds
                   staleItemTags = filter (not . liveTag) (Map.keys savedItemTags)
                   stagedItemTags = categoryFromAssignments
                       [ (t, ts) | (t, ts) ← Map.toList savedItemTags, liveTag t ]
