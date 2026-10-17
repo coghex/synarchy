@@ -51,7 +51,8 @@ import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.API.Units.Transfer (commitCross, popUnit)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Gameplay.Tags.Index
-import Gameplay.Tags.ItemLifecycle (forgetItemTags)
+import Gameplay.Tags.ItemLifecycle (forgetItemTags, itemTagEpoch, placeOnGround)
+import World.Thread.Command.Init (registerPageIncarnationWith)
 import Gameplay.Tags.Live
 import Gameplay.Tags.Query
 import Gameplay.Tags.Registry (registryInvariantViolations)
@@ -585,18 +586,35 @@ refusalSpec = describe "refused, rolled-back and partial operations keep tags" $
         resetScene env
         tagScene env
         heldRef ← newIORef Nothing
-        r ← mutateItemTagsWith (detachSatchel env ⌦ writeIORef heldRef . Just)
+        r ← mutateItemTagsWith (onCommit (detachSatchel env ⌦ writeIORef heldRef . Just))
                 (unitManagerRef env) (buildingManagerRef env) (worldManagerRef env)
                 Nothing (it' satchel) (AddTagsEdit (tags ["late"]))
         r `shouldBe` TagEditApplied
         readIORef heldRef ⌦ maybe (fail "never detached") (reattach env)
         coherent env [(satchel, sceneTags satchel ⧺ ["late"]), (pouch, sceneTags pouch)]
 
+    it "a retry that crosses a session replacement fails instead of \
+       \adopting the new session" $ \(env, _) → do
+        resetScene env
+        -- Attempt 1 is raced by an unrelated destruction (a generation
+        -- bump); the session is replaced before attempt 2 starts.
+        let seam = ItemWriteSeam
+                { iwsBeforeCommit = \n → when (n ≡ 1) $ do
+                    e ← itemTagEpoch (worldManagerRef env)
+                    forgetItemTags (worldManagerRef env) e (HS.singleton 4242)
+                , iwsAtAttempt = \n → when (n ≡ 2) $
+                    atomicModifyIORef' (worldManagerRef env) $ \m →
+                        (m { wmSessionEpoch = wmSessionEpoch m + 1 }, ()) }
+        r ← mutateItemTagsWith seam (unitManagerRef env) (buildingManagerRef env)
+                (worldManagerRef env) Nothing (it' satchel) (AddTagsEdit (tags ["late"]))
+        r `shouldBe` TagEditNoTarget
+        queryItems env (tagged (tg "late")) `shouldReturn` []
+
     it "an edit racing a destruction between check and commit installs \
        \nothing" $ \(env, _) → do
         resetScene env
         let destroy = Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid) >> drainEntities env
-        r ← mutateItemTagsWith destroy (unitManagerRef env) (buildingManagerRef env)
+        r ← mutateItemTagsWith (onCommit destroy) (unitManagerRef env) (buildingManagerRef env)
                 (worldManagerRef env) Nothing (it' satchel) (AddTagsEdit (tags ["late"]))
         r `shouldBe` TagEditNoTarget
         queryItems env (tagged (tg "late")) `shouldReturn` []
@@ -764,6 +782,47 @@ destructionSpec = describe "destruction forgets the destroyed trees" $ do
         goneEverywhere env onP
         coherent env [(strangerBar, sceneTags strangerBar)]
 
+    it "a page replacement forgets the old ground only once it is \
+       \unreachable, so an edit validated against it cannot outlive it" $
+        \(env, _) → do
+            resetScene env
+            tagScene env
+            fresh ← emptyWorldState
+            let replacePage m = m { wmWorlds = [ if p ≡ pageP then (p, fresh) else (p, w)
+                                               | (p, w) ← wmWorlds m ] }
+                -- Runs inside the replacement, just before the new page is
+                -- registered: the old ground is still what the page shows.
+                lateEdit = editItem env groundRation (AddTagsEdit (tags ["late"]))
+                               ⌦ (`shouldBe` TagEditApplied)
+            registerPageIncarnationWith lateEdit env pageP replacePage
+            goneEverywhere env [groundSack, groundRation]
+            queryItems env (tagged (tg "late")) `shouldReturn` []
+            coherent env []
+
+    it "a drop onto a page torn down after the pop forgets the dropped \
+       \tree; onto a live page it keeps every tag" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        wm0 ← readIORef (worldManagerRef env)
+        oldWs ← maybe (fail "no page") pure (lookup pageP (wmWorlds wm0))
+        epoch ← itemTagEpoch (worldManagerRef env)
+        held ← detachSatchel env
+        logger ← readIORef (loggerRef env)
+        handleWorldDestroyCommand env logger pageP
+        drainEntities env
+        _ ← placeOnGround (worldManagerRef env) epoch oldWs held 10 10
+        goneEverywhere env [satchel, pouch, rationA, rationB]
+        coherent env []
+        -- Control: the same placement on a live page forgets nothing.
+        resetScene env
+        tagScene env
+        wm1 ← readIORef (worldManagerRef env)
+        liveWs ← maybe (fail "no page") pure (lookup pageP (wmWorlds wm1))
+        epoch1 ← itemTagEpoch (worldManagerRef env)
+        held1 ← detachSatchel env
+        _ ← placeOnGround (worldManagerRef env) epoch1 liveWs held1 10 10
+        survivorsKeep env []
+
     it "Exit to Menu clears every item tag with the session" $ \(env, _) → do
         resetScene env
         tagScene env
@@ -806,7 +865,7 @@ attachmentSpec = describe "the item-tree attachment boundary" $ do
        \assignment, and the attach fails" $ \(env, _) → do
         resetScene env
         let destroy = Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid) >> drainEntities env
-        r ← commitItemTreeTagsWith destroy (unitManagerRef env) (buildingManagerRef env)
+        r ← commitItemTreeTagsWith (onCommit destroy) (unitManagerRef env) (buildingManagerRef env)
                 (worldManagerRef env) [(it' satchel, tags ["looted"]), (it' pouch, tags ["looted"])]
         r `shouldSatisfy` isLeftE
         queryItems env (tagged (tg "looted")) `shouldReturn` []
@@ -817,7 +876,7 @@ attachmentSpec = describe "the item-tree attachment boundary" $ do
         resetScene env
         let replace = atomicModifyIORef' (worldManagerRef env) $ \m →
                 (m { wmSessionEpoch = wmSessionEpoch m + 1 }, ())
-        r ← commitItemTreeTagsWith replace (unitManagerRef env) (buildingManagerRef env)
+        r ← commitItemTreeTagsWith (onCommit replace) (unitManagerRef env) (buildingManagerRef env)
                 (worldManagerRef env) [(it' satchel, tags ["looted"]), (it' pouch, tags ["looted"])]
         r `shouldBe` Left [it' satchel, it' pouch]
         queryItems env (tagged (tg "looted")) `shouldReturn` []
@@ -1010,6 +1069,10 @@ nestedMove env moved target = atomicModifyIORef' (unitManagerRef env) $ \um →
             Left r → error ("refused: " <> show r)
             Right m → (um { umInstances = HM.insert acolyteUid
                                u { uiInventory = omItems m } (umInstances um) }, ())
+
+-- | A seam that runs @act@ once, in the first attempt's commit window.
+onCommit ∷ IO () → ItemWriteSeam
+onCommit act = noItemWriteSeam { iwsBeforeCommit = \n → when (n ≡ 1) act }
 
 isLeftE ∷ Either a b → Bool
 isLeftE = either (const True) (const False)

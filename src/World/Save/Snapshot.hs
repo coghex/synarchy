@@ -58,8 +58,9 @@ import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge)
 import Item.Knowledge (PortableKnowledge(..))
 import qualified Data.Map.Strict as Map
+import qualified Data.HashSet as HS
 import qualified Data.Set as Set
-import Gameplay.Tags.Tag (GameplayTag, ItemTarget)
+import Gameplay.Tags.Tag (GameplayTag, ItemTarget, itemTargetId)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -523,6 +524,15 @@ duplicatePageIdErrors pages =
 captureSessionSnapshot ∷ SessionGlobals → [PageSnapshot]
                        → Either [SnapshotError] SessionSnapshot
 captureSessionSnapshot globals pages =
-    let snap = buildSessionSnapshot globals pages
+    let built = buildSessionSnapshot globals pages
+        -- #2703: the item assignments are captured with the SAME item
+        -- trees they name, and only for items those trees contain. The
+        -- live owner never holds a tag on a dead item by design; this
+        -- makes it structural that a save can never carry one either,
+        -- whatever a teardown race left behind for a moment.
+        captured = HS.fromList (allItemInstanceIds built)
+        snap = built { snapItemTags = Map.filterWithKey
+                          (\t _ → HS.member (itemTargetId t) captured)
+                          (snapItemTags built) }
         errs = duplicatePageIdErrors pages ⧺ validateSessionSnapshot snap
     in if null errs then Right snap else Left errs

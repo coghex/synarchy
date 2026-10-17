@@ -1,5 +1,7 @@
 module World.Thread.Command.Init
     ( handleWorldInitCommand
+    , registerPageIncarnation
+    , registerPageIncarnationWith
     , handleWorldInitArenaCommand
     , handleWorldInitArenaDoneCommand
     ) where
@@ -819,7 +821,14 @@ handleWorldInitArenaDoneCommand env logger pageId = do
 --   ending.
 registerPageIncarnation
     ∷ EngineEnv → WorldPageId → (WorldManager → WorldManager) → IO ()
-registerPageIncarnation env pageId register = do
+registerPageIncarnation = registerPageIncarnationWith (pure ())
+
+-- | 'registerPageIncarnation' with an action run just before the
+--   replacement is registered: the window a racing item-tag write
+--   lands in (#2703). The test seam; production passes @pure ()@.
+registerPageIncarnationWith
+    ∷ IO () → EngineEnv → WorldPageId → (WorldManager → WorldManager) → IO ()
+registerPageIncarnationWith beforeRegister env pageId register = do
     let worldSim   = toWorldSimCapability env
         handoff    = toRenderHandoffCapability env
         unitCombat = toUnitCombatCapability env
@@ -877,25 +886,35 @@ registerPageIncarnation env pageId register = do
         -- would pair an old entity with the new page and write durable
         -- state that outlives the row. Retiring first closes it: at no
         -- instant is an old row visible beside the replacement.
-        when replaced $ do
-            -- #2703: the departed incarnation's ground items and the
-            -- items its retired units and buildings held are destroyed
-            -- with it; the replacement's items are new identities, so
-            -- nothing here can strip a tag from one of them.
-            groundIds ← maybe (pure HS.empty)
-                (fmap groundItemIds . readIORef . wsGroundItemsRef)
-                (lookup pageId (wmWorlds preMgr))
+        retiredItemIds ← if not replaced then pure HS.empty else do
             unitItemIds ← atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
                 let um' = fst (retirePageUnits pageId unitCutoff um)
                 in (um', retiredUnitItemIds um um')
             bldItemIds ← atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
                 let bm' = retirePageBuildings pageId bldCutoff bm
                 in (bm', retiredBuildingItemIds bm bm')
-            forgetItemTags (wsWorldManagerRef worldSim) (wmSessionEpoch preMgr)
-                (HS.unions [groundIds, unitItemIds, bldItemIds])
+            pure (HS.union unitItemIds bldItemIds)
 
+        beforeRegister
         atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
             (register mgr, ())
+
+        -- #2703: the departed incarnation's ground items and the items
+        -- its retired units and buildings held are destroyed with it.
+        -- Forgotten only NOW, once the old page is unreachable: its
+        -- ground is read after the replacement is registered, so a tag
+        -- write that validated against the old ground before this point
+        -- either sees this forget's generation bump and retries, or is
+        -- removed by it; and a late drop onto the departed ground
+        -- re-checks its page after inserting ("Gameplay.Tags.ItemLifecycle").
+        -- The replacement's items are new identities, so nothing here
+        -- can strip a tag from one of them.
+        when replaced $ do
+            groundIds ← maybe (pure HS.empty)
+                (fmap groundItemIds . readIORef . wsGroundItemsRef)
+                (lookup pageId (wmWorlds preMgr))
+            forgetItemTags (wsWorldManagerRef worldSim) (wmSessionEpoch preMgr)
+                (HS.union groundIds retiredItemIds)
 
         -- The queued halves stay: the immediate retirement above cannot
         -- see a spawn that is still on its queue, and the sim states

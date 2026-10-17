@@ -27,7 +27,8 @@ module Engine.Scripting.Lua.API.Items.Ground
 
 import UPrelude
 import qualified Data.HashSet as HS
-import Gameplay.Tags.ItemLifecycle (withDestroyedItems, itemTreeIds)
+import Gameplay.Tags.ItemLifecycle
+    (withDestroyedItems, itemTreeIds, itemTagEpoch, placeOnGround)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.ContentRegistriesView
@@ -1331,6 +1332,8 @@ destroyGroundItem env ws gid =
 --   pickup finds it already realized rather than drawing again.
 pickupUnguarded ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
 pickupUnguarded env ws uid gid = do
+    -- #2703: read before the take, to guard a rollback's forget.
+    tagEpoch ← itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
     mGi ← takeGroundItemOnPage ws gid
     case mGi of
         -- Nothing was removed, so there is nothing to deselect either:
@@ -1350,9 +1353,11 @@ pickupUnguarded env ws uid gid = do
                                        HM.insert uid inst' (umInstances um) }
                                , True)
             unless inserted $ do
-                -- Unit gone: put it back, on the page we took it from.
-                _ ← atomicModifyIORef' (wsGroundItemsRef ws) $
-                        spawnGroundItem (giInst gi) (giX gi) (giY gi)
+                -- Unit gone: put it back, on the page we took it from —
+                -- which re-checks that page (#2703): if it was torn down
+                -- meanwhile, the item is gone and so are its tags.
+                _ ← placeOnGround (wsWorldManagerRef (toWorldSimCapability env))
+                        tagEpoch ws (giInst gi) (giX gi) (giY gi)
                 pure ()
             -- Deselect if the picked item was selected. A rollback
             -- clears it too: spawnGroundItem hands the restored

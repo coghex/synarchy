@@ -51,6 +51,8 @@ module Gameplay.Tags.ItemLifecycle
     , itemTagEpoch
     , forgetItemTags
     , forgetAllItemTags
+      -- * Late ground placement
+    , placeOnGround
       -- * One-owner consumption steps
     , unitConsumption
     , buildingConsumption
@@ -58,16 +60,17 @@ module Gameplay.Tags.ItemLifecycle
 
 import UPrelude
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Item.Types (ItemInstance)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Building.Types (BuildingInstance(..), BuildingManager(..), BuildingId)
-import Item.Ground (GroundItem(..), GroundItems(..))
+import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Unit.Types.Manager (UnitManager(..), UnitId)
 import Gameplay.Tags.Index (emptyCategoryIndex, restrictCategoryIndex)
 import Gameplay.Tags.Tag (itemTargetId)
 import Item.Types (ItemInstance(..))
 import Unit.Types.Instance (UnitInstance(..))
-import World.State.Types (WorldManager(..))
+import World.State.Types (WorldManager(..), WorldState(..))
 
 -- * Item trees
 
@@ -185,3 +188,28 @@ buildingConsumption bid step bm =
     let (bm', r) = step bm
         held m = maybe [] buildingItems (HM.lookup bid (bmInstances m))
     in (bm', (r, destroyedItemIds (held bm) (held bm')))
+
+-- * Late ground placement
+
+-- | Lay an item a caller already took from its owner onto a page's
+--   ground — a drop, or a pickup's rollback — and forget the tree's tags
+--   if that page is no longer live (#2703).
+--
+--   The caller resolved @ws@ before it popped the item, and a page
+--   teardown can land in between: the departed 'WorldState' still takes
+--   the insert, but nothing will ever reach it again, so the item is
+--   destroyed. The check runs AFTER the insert and compares the ground
+--   ref itself (a replacement reuses the page NAME, never the ref).
+--   Teardown removes the page from 'wmWorlds' BEFORE it reads the
+--   ground it forgets, so every interleaving is covered: a check that
+--   still sees the page live ran before that removal, so the insert is
+--   in teardown's read; one that sees it gone forgets here. @epoch@ is
+--   the session epoch read before the pop.
+placeOnGround ∷ IORef WorldManager → Word64 → WorldState → ItemInstance
+              → Float → Float → IO Int
+placeOnGround wmRef epoch ws it x y = do
+    gid ← atomicModifyIORef' (wsGroundItemsRef ws) (spawnGroundItem it x y)
+    live ← any ((≡ wsGroundItemsRef ws) . wsGroundItemsRef . snd) . wmWorlds
+               ⊚ readIORef wmRef
+    unless live $ forgetItemTags wmRef epoch (itemTreeIds it)
+    pure gid

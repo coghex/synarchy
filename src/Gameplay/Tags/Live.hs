@@ -76,6 +76,8 @@ module Gameplay.Tags.Live
     , mutateLocationTags
     , mutateItemTags
     , mutateItemTagsWith
+    , ItemWriteSeam(..)
+    , noItemWriteSeam
       -- * Live reads and queries
     , LiveTagView(..)
     , captureLiveTagView
@@ -238,15 +240,25 @@ mutateLocationTags wmRef (LocationTarget page lid) edit = do
 --   between refuses the edit.
 mutateItemTags ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
                → Maybe WorldPageId → ItemTarget → TagEdit → IO TagEditResult
-mutateItemTags = mutateItemTagsWith (pure ())
+mutateItemTags = mutateItemTagsWith noItemWriteSeam
 
--- | 'mutateItemTags' with an action run between the decision and the
---   commit — the window a racing destruction or detach lands in. The
---   test seam for that interleaving; production passes @pure ()@.
-mutateItemTagsWith ∷ IO () → IORef UnitManager → IORef BuildingManager → IORef WorldManager
+-- | The two windows an item-tag write can be raced in, as test seams:
+--   the start of each attempt (before the session and generation are
+--   read; attempt 1 is the first) and the gap between an attempt's
+--   decision and its commit. Production passes 'noItemWriteSeam'.
+data ItemWriteSeam = ItemWriteSeam
+    { iwsAtAttempt     ∷ Int → IO ()
+    , iwsBeforeCommit  ∷ Int → IO ()
+    }
+
+noItemWriteSeam ∷ ItemWriteSeam
+noItemWriteSeam = ItemWriteSeam (const (pure ())) (const (pure ()))
+
+-- | 'mutateItemTags' with its race windows exposed ('ItemWriteSeam').
+mutateItemTagsWith ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager → IORef WorldManager
                    → Maybe WorldPageId → ItemTarget → TagEdit → IO TagEditResult
-mutateItemTagsWith between umRef bmRef wmRef scope t edit =
-    fromMaybe TagEditNoTarget ⊚ guardedItemWrite between umRef bmRef wmRef (\v →
+mutateItemTagsWith seam umRef bmRef wmRef scope t edit =
+    fromMaybe TagEditNoTarget ⊚ guardedItemWrite seam umRef bmRef wmRef (\v →
         if not (Set.member t (maybe id (\p → (`Set.intersection` liveItemTargetsOn v p)) scope
                                        (liveItemTargets v)))
             then Left TagEditNoTarget
@@ -258,27 +270,34 @@ mutateItemTagsWith between umRef bmRef wmRef scope t edit =
 --   when a destruction raced the decision. 'Nothing' when the session
 --   was replaced or the retries ran out; the decision's own refusal
 --   otherwise.
-guardedItemWrite ∷ IO () → IORef UnitManager → IORef BuildingManager → IORef WorldManager
+guardedItemWrite ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager → IORef WorldManager
                  → (LiveTagView → Either α (CategoryIndex ItemTarget → CategoryIndex ItemTarget, α))
                  → IO (Maybe α)
-guardedItemWrite between umRef bmRef wmRef decide = go (16 ∷ Int)
-  where
-    go 0 = pure Nothing
-    go n = do
-        m0 ← readIORef wmRef
-        v  ← captureLiveTagView umRef bmRef wmRef
-        case decide v of
+guardedItemWrite seam umRef bmRef wmRef decide = do
+    -- The session is pinned ONCE for the whole operation: a retry that
+    -- crosses a session replacement fails rather than adopting the
+    -- replacement's epoch, where the same ids can name other items.
+    epoch0 ← wmSessionEpoch ⊚ readIORef wmRef
+    let go (0 ∷ Int) = pure Nothing
+        go n = do
+          iwsAtAttempt seam (17 - n)
+          m0 ← readIORef wmRef
+          if wmSessionEpoch m0 ≢ epoch0 then pure Nothing else attempt m0 n
+        attempt m0 n = do
+          v ← captureLiveTagView umRef bmRef wmRef
+          case decide v of
             Left refusal → pure (Just refusal)
             Right (change, answer) → do
-                between
+                iwsBeforeCommit seam (17 - n)
                 outcome ← atomicModifyIORef' wmRef $ \mgr →
-                    if wmSessionEpoch mgr ≢ wmSessionEpoch m0 then (mgr, WriteReplaced)
+                    if wmSessionEpoch mgr ≢ epoch0 then (mgr, WriteReplaced)
                     else if wmItemDestroyGen mgr ≢ wmItemDestroyGen m0 then (mgr, WriteRaced)
                     else (mgr { wmItemTags = change (wmItemTags mgr) }, WriteDone)
                 case outcome of
                     WriteDone     → pure (Just answer)
                     WriteReplaced → pure Nothing
                     WriteRaced    → go (n - 1)
+    go 16
 
 data WriteOutcome = WriteDone | WriteRaced | WriteReplaced
 
@@ -392,13 +411,13 @@ liveTagAssignments = assignments . liveTagRegistry
 --   of their own; this is the only way one gets any at birth.
 commitItemTreeTags ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
                    → [(ItemTarget, Set.Set GameplayTag)] → IO (Either [ItemTarget] ())
-commitItemTreeTags = commitItemTreeTagsWith (pure ())
+commitItemTreeTags = commitItemTreeTagsWith noItemWriteSeam
 
 -- | 'commitItemTreeTags' with the same test seam as 'mutateItemTagsWith'.
-commitItemTreeTagsWith ∷ IO () → IORef UnitManager → IORef BuildingManager → IORef WorldManager
+commitItemTreeTagsWith ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager → IORef WorldManager
                        → [(ItemTarget, Set.Set GameplayTag)] → IO (Either [ItemTarget] ())
-commitItemTreeTagsWith between umRef bmRef wmRef assigned =
-    fromMaybe (Left (map fst assigned)) ⊚ guardedItemWrite between umRef bmRef wmRef (\v →
+commitItemTreeTagsWith seam umRef bmRef wmRef assigned =
+    fromMaybe (Left (map fst assigned)) ⊚ guardedItemWrite seam umRef bmRef wmRef (\v →
         let liveSet = liveItemTargets v
             missing = [ t | (t, _) ← assigned, not (Set.member t liveSet) ]
         in if not (null missing) then Left (Left missing)

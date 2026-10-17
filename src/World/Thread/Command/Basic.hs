@@ -94,12 +94,6 @@ handleWorldDestroyCommand env logger pageId = do
       -- wmWorlds and becomes unreachable to uploadBloodTextures.
       mgr ← readIORef (wsWorldManagerRef worldSim)
       enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
-      -- #2703: the page's ground items are discarded with it. Read
-      -- under the lifecycle lock, before the page leaves 'wmWorlds',
-      -- with the epoch the forget below is guarded by.
-      groundIds ← maybe (pure HS.empty)
-          (fmap groundItemIds . readIORef . wsGroundItemsRef)
-          (lookup pageId (wmWorlds mgr))
 
       -- Remove from visible list
       atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
@@ -177,8 +171,15 @@ handleWorldDestroyCommand env logger pageId = do
           in (bm', retiredBuildingItemIds bm bm')
       -- #2703: every item the incarnation held — on its ground and on
       -- its retired units and buildings — is destroyed with it, so its
-      -- gameplay tags go AFTER the owners are gone. Items never cross
-      -- pages, so nothing here can name an item that lives on.
+      -- gameplay tags go AFTER the owners are gone. The ground is read
+      -- only now, after the page left 'wmWorlds' above, so a drop that
+      -- landed on it after this read re-checks its page and forgets its
+      -- own tree ("Gameplay.Tags.ItemLifecycle.placeOnGround"), and one
+      -- that landed before is in this read. Items never cross pages, so
+      -- nothing here can name an item that lives on.
+      groundIds ← maybe (pure HS.empty)
+          (fmap groundItemIds . readIORef . wsGroundItemsRef)
+          (lookup pageId (wmWorlds mgr))
       forgetItemTags (wsWorldManagerRef worldSim) (wmSessionEpoch mgr)
           (HS.unions [groundIds, unitItemIds, bldItemIds])
 
