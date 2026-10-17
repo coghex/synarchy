@@ -661,6 +661,7 @@ poisonedSaveWith units = snapshotToSaveData
                 { pgsGroundItems    = savedGroundItems
                 , pgsTransferOrders = savedOrders
                 , pgsUnits          = units })
+        , snapItemTags = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

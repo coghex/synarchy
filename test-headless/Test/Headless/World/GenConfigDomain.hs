@@ -633,6 +633,7 @@ saveWith params = snapshotToSaveData
             , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceSouth }
         , snapPages          = HM.singleton stagedPageId
             (blankPageSnapshot stagedPageId params { wgpSeed = 0 })
+        , snapItemTags = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

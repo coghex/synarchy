@@ -12,6 +12,7 @@ module Engine.Scripting.Lua.API.Craft.Execute
     ) where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, unitConsumption)
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistries
@@ -27,7 +28,7 @@ import Engine.Core.Capability.WorldSim
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, freshItemInstanceId)
 import Craft.Bills (BillId(..), lookupBill)
@@ -231,7 +232,11 @@ executeCraft env uid rid = do
                     physReg ← readIORef
                         (crPhysiologyRegistryRef (toContentRegistriesCapability env))
                     now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
-                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                    -- #2703: consumed inputs cease to exist and lose
+                    -- their tags; the fresh outputs were never tagged.
+                    withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+                        unitConsumption [uid] $ \um →
                         applyCraft physReg now recipe instances uid um
   where
     resolve im ing = case lookupItemDef (riItem ing) im of

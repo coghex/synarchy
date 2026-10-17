@@ -359,7 +359,8 @@ publishCommit env logger pageId ws results touched victims = do
     -- dispatched here, so nothing between the two can have changed it —
     -- see "World.Reaction.Occupants".
     epoch0 ← pageIncarnation ws
-    destroySolidificationOccupants (toUnitCombatCapability env) logger
+    destroySolidificationOccupants (toUnitCombatCapability env)
+                                   (wsWorldManagerRef (toWorldSimCapability env)) logger
                                    pageId epoch0 ws victims
     let tiles = [ reactionEventTile ev | rr ← results, ev ← rrEvents rr ]
     -- One bump per EDITED chunk, however many of its events landed. A

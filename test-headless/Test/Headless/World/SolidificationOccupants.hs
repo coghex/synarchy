@@ -21,7 +21,7 @@
 --
 --   Run:
 --   @cabal test synarchy-test-headless --test-options='--match "solidification occupants"'@
-module Test.Headless.World.SolidificationOccupants (spec, pureSpec) where
+module Test.Headless.World.SolidificationOccupants (spec, pureSpec, itemTagSpec) where
 
 import UPrelude
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -43,7 +43,14 @@ import qualified Engine.Core.Queue as Q
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability, withPlayerIntentHeld)
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import qualified Data.Set as Set
+import Gameplay.Tags.Index (categoryTagsOf, indexMembers)
+import Gameplay.Tags.Live
+    ( TagEdit(..), TagEditResult(..), LiveTagView(..), captureLiveTagView
+    , itemTagsIn, liveTagRegistry, mutateItemTags )
+import Gameplay.Tags.Registry (registryInvariantViolations)
+import Gameplay.Tags.Tag (GameplayTag, ItemTarget, mkGameplayTag, mkItemTarget)
 import Engine.PlayerEvent
     (CategoryCfg(..), PlayerEvent(..), StoredEvent(..), emptyEventStore)
 import Engine.PlayerEvent.Emit (readEventLog)
@@ -121,6 +128,10 @@ climbingPageId  = WorldPageId "occupants_climbing_w8"
 pausedPageId    = WorldPageId "occupants_paused_w8"
 coherentPageId  = WorldPageId "occupants_coherent_w8"
 lateItemPageId  = WorldPageId "occupants_lateitem_w8"
+
+-- | #2703: the page 'itemTagSpec' reacts on.
+tagLavaPageId ∷ WorldPageId
+tagLavaPageId = WorldPageId "occupants_itemtags_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -1293,3 +1304,72 @@ pureSpec = describe "solidification occupants (#2490) — occupancy" $ do
         occupiesTile w (3 + step, 4 - step) 3.5 4.5 `shouldBe` True
     it "does not match a genuinely different tile" $
         occupiesTile w (3, 4) 5.5 4.5 `shouldBe` False
+
+-- * Physical-item tags (#2703)
+
+-- | "Gameplay.Tags.Items" over the REAL reaction path: a tagged ground
+--   tree on the solidified tile is destroyed by
+--   'World.Reaction.Occupants.destroySolidificationOccupants', which
+--   must forget every tag in it, in both index directions, while an
+--   item one tile over keeps the tag it shares with the tree.
+itemTagSpec ∷ SpecWith EngineEnv
+itemTagSpec = describe "Gameplay.Tags.Items: lava-water solidification (#2490 path)" $
+
+    it "forgets the destroyed ground tree's tags, root and descendants, \
+       \and keeps a surviving item's shared tag" $ \env → do
+        prepare env
+        lp ← livePage env tagLavaPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+            beside = tileOf lp nextCell
+        root ← freshItemInstanceId env
+        kid ← freshItemInstanceId env
+        grandkid ← freshItemInstanceId env
+        survivor ← freshItemInstanceId env
+        let withId i name = (fixtureItem name) { iiInstanceId = i }
+            tree = (withId root "doomed_crate")
+                { iiContents = [ (withId kid "pouch")
+                                   { iiContents = [withId grandkid "gem"] } ] }
+            at (gx, gy) = (fromIntegral gx + 0.5, fromIntegral gy + 0.5)
+        doomedGid ← atomicModifyIORef' (wsGroundItemsRef ws) $
+            uncurry (spawnGroundItem tree) (at doomed)
+        keptGid ← atomicModifyIORef' (wsGroundItemsRef ws) $
+            uncurry (spawnGroundItem (withId survivor "kept_item")) (at beside)
+        let tag i ts = do
+                t ← require "item target" (mkItemTarget i)
+                mutateItemTags (unitManagerRef env) (buildingManagerRef env)
+                    (worldManagerRef env) Nothing t (AddTagsEdit (tagSet ts))
+                    `shouldReturn` TagEditApplied
+        tag root ["crate", "shared"]
+        tag kid ["nested"]
+        tag grandkid ["nested", "shared"]
+        tag survivor ["shared"]
+
+        react env lp tagLavaPageId reactCell
+        drainUnits env
+
+        holdsItem ws doomedGid `shouldReturn` False
+        holdsItem ws keptGid `shouldReturn` True
+        v ← captureLiveTagView (unitManagerRef env) (buildingManagerRef env)
+                               (worldManagerRef env)
+        let ix = wmItemTags (ltvManager v)
+        let target i = require "item target" (mkItemTarget i)
+        tRoot ← target root
+        tKid ← target kid
+        tGrand ← target grandkid
+        tSurvivor ← target survivor
+        -- Forward direction: the destroyed tree has no entry at all.
+        forM_ [tRoot, tKid, tGrand] $ \t → do
+            itemTagsIn v t `shouldBe` Nothing
+            categoryTagsOf t ix `shouldBe` Set.empty
+        itemTagsIn v tSurvivor `shouldBe` Just (tagSet ["shared"])
+        -- Reverse direction: the shared tag now names only the survivor,
+        -- and the tree-only tags name nothing.
+        indexMembers (tg "shared") ix `shouldBe` Set.singleton tSurvivor
+        indexMembers (tg "nested") ix `shouldBe` (Set.empty ∷ Set.Set ItemTarget)
+        indexMembers (tg "crate") ix `shouldBe` (Set.empty ∷ Set.Set ItemTarget)
+        registryInvariantViolations (liveTagRegistry v) `shouldBe` []
+  where
+    tg ∷ Text → GameplayTag
+    tg t = fromMaybe (error "empty fixture tag") (mkGameplayTag t)
+    tagSet = Set.fromList . map tg

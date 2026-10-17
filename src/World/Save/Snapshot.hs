@@ -57,6 +57,10 @@ import Craft.Bills (CraftBills)
 import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge)
 import Item.Knowledge (PortableKnowledge(..))
+import qualified Data.Map.Strict as Map
+import qualified Data.HashSet as HS
+import qualified Data.Set as Set
+import Gameplay.Tags.Tag (GameplayTag, ItemTarget, itemTargetId)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -97,6 +101,10 @@ data SessionGlobals = SessionGlobals
       --   never copied into every page merely because the old
       --   'WorldPageSave' schema had nowhere else to put a global
       --   zoom/facing pair (contract requirement 5).
+    , sgItemTags ∷ !(Map.Map ItemTarget (Set.Set GameplayTag))
+      -- ^ #2703: the session's physical-item gameplay tag assignments,
+      --   forward only, read off the SAME manager snapshot as the pages
+      --   ('World.State.Types.wmItemTags').
     , sgPortableKnowledge ∷ !PortableKnowledge
       -- ^ #2512: what the player remembers about each PORTABLE
       --   container, read once from 'World.State.Types.wmPortableKnowledge'.
@@ -237,6 +245,12 @@ data SessionSnapshot = SessionSnapshot
     , snapVisiblePages   ∷ ![WorldPageId]
     , snapLiveCamera     ∷ !LiveCameraSnapshot
     , snapPages          ∷ !(HM.HashMap WorldPageId PageSnapshot)
+    , snapItemTags ∷ !(Map.Map ItemTarget (Set.Set GameplayTag))
+      -- ^ #2703: the session-wide physical-item gameplay tag
+      --   assignments, keyed by 'Item.Types.iiInstanceId', forward only
+      --   (the reverse index is rebuilt). Persisted by @core-session@
+      --   v2. An assignment naming no live item is a dangling-reference
+      --   diagnostic and is dropped by load staging.
     , snapPortableKnowledge ∷ !PortableKnowledge
       -- ^ #2512: the session-wide portable-container memory, keyed by
       --   'Item.Types.iiInstanceId'. Like 'snapPages' it is a whole-
@@ -292,6 +306,7 @@ buildSessionSnapshot globals pages = SessionSnapshot
     , snapVisiblePages   = sgVisiblePages globals
     , snapLiveCamera     = sgLiveCamera globals
     , snapPages          = HM.fromList [ (pgsPageId p, p) | p ← pages ]
+    , snapItemTags = sgItemTags globals
     , snapPortableKnowledge = sgPortableKnowledge globals
     }
 
@@ -509,6 +524,15 @@ duplicatePageIdErrors pages =
 captureSessionSnapshot ∷ SessionGlobals → [PageSnapshot]
                        → Either [SnapshotError] SessionSnapshot
 captureSessionSnapshot globals pages =
-    let snap = buildSessionSnapshot globals pages
+    let built = buildSessionSnapshot globals pages
+        -- #2703: the item assignments are captured with the SAME item
+        -- trees they name, and only for items those trees contain. The
+        -- live owner never holds a tag on a dead item by design; this
+        -- makes it structural that a save can never carry one either,
+        -- whatever a teardown race left behind for a moment.
+        captured = HS.fromList (allItemInstanceIds built)
+        snap = built { snapItemTags = Map.filterWithKey
+                          (\t _ → HS.member (itemTargetId t) captured)
+                          (snapItemTags built) }
         errs = duplicatePageIdErrors pages ⧺ validateSessionSnapshot snap
     in if null errs then Right snap else Left errs

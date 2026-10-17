@@ -635,6 +635,7 @@ library
                      Gameplay.Tags.Index
                      Gameplay.Tags.Types
                      Gameplay.Tags.Live
+                     Gameplay.Tags.ItemLifecycle
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
                      Scenario.Types
@@ -1960,6 +1961,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
                    Test.Headless.Gameplay.TagsPersistence
+                   Test.Headless.Gameplay.TagsItems
                    Test.Headless.Scenario.Schema
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance

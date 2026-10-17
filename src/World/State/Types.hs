@@ -63,6 +63,8 @@ import Unit.Transfer.Orders (TransferOrders, emptyTransferOrders)
 import Building.Types (BuildingId)
 import Building.Knowledge (ContainerKnowledge, emptyContainerKnowledge)
 import Power.Types (PowerNodes, emptyPowerNodes)
+import Gameplay.Tags.Index (CategoryIndex, emptyCategoryIndex)
+import Gameplay.Tags.Tag (ItemTarget)
 import Blood.Types (BloodStore, BloodTextureId, emptyBloodStore, defaultBloodTextureCap)
 import Engine.Asset.Handle (TextureHandle)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
@@ -906,6 +908,40 @@ data WorldManager = WorldManager
       --   clears it) and never merges the outgoing session's memories
       --   into the restored one. Exit-to-Menu empties it with the page
       --   set, since the next session's crates are different crates.
+    , wmItemTags ∷ !(CategoryIndex ItemTarget)
+      -- ^ The AUTHORITATIVE general gameplay tag assignments of physical
+      --   items (#2703), keyed by 'Item.Types.iiInstanceId' — never a
+      --   ground-row id, a definition or a display group — with the
+      --   reverse index derived ("Gameplay.Tags.Index"). Sparse: an
+      --   untagged item has no entry, and no 'Item.Types.ItemInstance'
+      --   carries a tag field.
+      --
+      --   SESSION-scoped for #2512's reason: an item moves between
+      --   ground, inventories, equipment, storage, nested contents and
+      --   pages without changing identity, so its tags follow it by
+      --   simply not moving. Every key names an item the canonical
+      --   live enumeration ("World.Item.Locate") finds; remembered
+      --   copies in container or portable knowledge are never keys.
+      --
+      --   Written only through "Gameplay.Tags.Live" (an edit, resolved
+      --   against the live enumeration and re-checked after the write)
+      --   and "Gameplay.Tags.ItemLifecycle" (the destruction sites'
+      --   epoch-guarded forget), always by 'atomicModifyIORef''. A move
+      --   never touches it: a transfer's temporary detach is not
+      --   destruction. PERSISTED by @core-session@ v2 and installed by
+      --   "World.Load.Publish" as part of the replacement manager; Exit-
+      --   to-Menu empties it with the page set.
+    , wmItemDestroyGen ∷ !Word64
+      -- ^ How many item-destruction forgets this manager has applied
+      --   (#2703): "Gameplay.Tags.ItemLifecycle.forgetItemTags" bumps it
+      --   in the SAME atomic step that removes the destroyed ids' tags.
+      --   An item-tag write reads it before it locates its target and
+      --   commits only if it is unchanged ("Gameplay.Tags.Live"), which
+      --   is what keeps a write from landing on an item destroyed in
+      --   between without ever mistaking a momentarily detached item for
+      --   a destroyed one. Transient: never saved, and a replacement
+      --   manager starts again at 0 — the session epoch already fences
+      --   everything across a load.
     }
 
 emptyWorldManager ∷ WorldManager
@@ -920,6 +956,8 @@ emptyWorldManager = WorldManager
     , wmTeardownsPending = 0
     , wmSessionEpoch = 0
     , wmPortableKnowledge = emptyPortableKnowledge
+    , wmItemTags = emptyCategoryIndex
+    , wmItemDestroyGen = 0
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME

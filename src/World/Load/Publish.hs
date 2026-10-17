@@ -245,6 +245,10 @@ publishStagedSession env logger requestId staged = do
         -- staging, so nothing installed here names a crate that is not
         -- present.
         , wmPortableKnowledge = ssPortableKnowledge staged
+        -- #2703: the restored item tags, scrubbed and re-indexed by
+        -- staging, REPLACE the outgoing session's; nothing merges.
+        , wmItemTags = ssItemTags staged
+        , wmItemDestroyGen = 0
         -- #2512: a load replaces the session as completely as a
         -- teardown does, so the epoch moves here too. Not because a
         -- stale observation could otherwise survive into the restored

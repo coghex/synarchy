@@ -16,6 +16,7 @@ module World.Thread.Command.Save.WriteWorld
     ) where
 
 import UPrelude
+import Gameplay.Tags.Index (categoryForward)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.List as L
@@ -304,6 +305,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- another's crate memories.
                                 , sgPortableKnowledge =
                                     wmPortableKnowledge mgr
+                                -- #2703: the item tags, off the same
+                                -- manager read as the pages, so the
+                                -- assignments and the item trees they
+                                -- name are one capture.
+                                , sgItemTags =
+                                    categoryForward (wmItemTags mgr)
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do

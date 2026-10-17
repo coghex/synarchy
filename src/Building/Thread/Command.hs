@@ -15,6 +15,9 @@ module Building.Thread.Command
     ) where
 
 import UPrelude
+import qualified Data.HashSet as HS
+import Gameplay.Tags.ItemLifecycle
+    (withDestroyedItems, itemForestIds, buildingItems, retiredBuildingItemIds)
 import Engine.Core.Capability.Building (BuildingCapability(..))
 import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim
@@ -110,7 +113,11 @@ handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
     -- biSpawnedAt, read BEFORE the transaction so the capture below is
     -- pure and the whole removal is one manager transition.
     now ← readIORef (wsGameTimeRef sim)
-    invalidClip ← atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+    -- #2703: the demolished building's stored and delivered items are
+    -- destroyed with it (nothing spills), so their gameplay tags are
+    -- forgotten AFTER the instance is gone, epoch-guarded.
+    invalidClip ← withDestroyedItems (wsWorldManagerRef sim) $
+      atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         let cleared = if bmSelected bm ≡ Just bid
                       then Nothing
                       else bmSelected bm
@@ -133,7 +140,9 @@ handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
                 , bmDestructions = effects
                   -- #2701: its gameplay tags leave with the instance.
                 , bmTags         = deleteCategoryTarget bid (bmTags bm) }
-           , either Just (const Nothing) captured )
+           , ( either Just (const Nothing) captured
+             , maybe HS.empty (itemForestIds . buildingItems)
+                     (HM.lookup bid (bmInstances bm)) ) )
     -- An invalid destruction declaration degrades to "no visual" and
     -- is reported with its building/animation context; it never
     -- blocks, skips or crashes the removal above or the cleanup below.
@@ -161,15 +170,17 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
     -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
     -- Bulk removal is immediate and SILENT (#2091): every outstanding
     -- destruction effect goes with the instances, and none is spawned.
-    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+    -- #2703: every building's items go with it, so their tags do.
+    withDestroyedItems (wsWorldManagerRef sim) $
+      atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         -- #2326: outstanding footprint reservations go with the
         -- instances. This clear is enqueued BEHIND every pending spawn
         -- (#58), so anything still holding tiles here was admitted for a
         -- session that is being torn down and can never commit.
-        ( clearReservations bm
-            { bmInstances = HM.empty, bmSelected = Nothing
-            , bmDestructions = HM.empty, bmTags = emptyCategoryIndex }
-        , () )
+        let bm' = clearReservations bm
+                { bmInstances = HM.empty, bmSelected = Nothing
+                , bmDestructions = HM.empty, bmTags = emptyCategoryIndex }
+        in (bm', ((), retiredBuildingItemIds bm bm'))
     forgetAllContainers (wsWorldManagerRef sim)
 
 -- | #2476: retire ONE page incarnation's buildings — the page-scoped,
@@ -196,15 +207,18 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
 -- and any power-node retirement. Both are @WorldState@ rows, so they
 -- leave with the page this clear is retiring rather than being orphaned
 -- by it.
-handleBuildingCommand _ _ _ bld (BuildingClearPage pageId cutoff) =
+handleBuildingCommand _ sim _ bld (BuildingClearPage pageId cutoff) =
     -- 'retirePageBuildings' is the SAME pure body the lifecycle
     -- transition already applied directly, so the immediate removal and
     -- this queued mop-up cannot disagree about what belonged to the
     -- departed incarnation. Almost always a no-op by the time it runs:
     -- what is left for it is whatever a spawn queued ahead of it
     -- re-inserted afterwards (#58).
-    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
-        (retirePageBuildings pageId cutoff bm, ())
+    -- #2703: a retired row's items are destroyed with it.
+    withDestroyedItems (wsWorldManagerRef sim) $
+      atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+        let bm' = retirePageBuildings pageId cutoff bm
+        in (bm', ((), retiredBuildingItemIds bm bm'))
 
 -- The session boundary (#2291) is a queue POSITION, not work: 'drain'
 -- takes it off the queue and stops there, so it never reaches this
