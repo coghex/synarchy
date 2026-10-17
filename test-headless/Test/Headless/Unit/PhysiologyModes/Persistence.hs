@@ -62,10 +62,13 @@ saved def stats overrides = (minimalUnitInstance [])
 body70 ∷ [(Text, Float)]
 body70 = bodyStats acolyteBody
 
--- | The same body for a unit whose stamina is Nominal (the exempt tier):
---   a Nominal system holds no @stamina@ key, so a canonical save has none.
+-- | The same body for a unit of the exempt tier: a Nominal stamina holds no
+--   @stamina@ key, so a canonical save has none, while cardio stays
+--   Simulated there (#2754's outcome, S9 #2836) and saves its two
+--   integrators at the healthy reading.
 bodyNominalStamina ∷ [(Text, Float)]
 bodyNominalStamina = filter ((≢ "stamina") ∘ fst) body70
+    ⧺ [("heart_rate", 70), ("blood_oxygen", 1)]
 
 -- | The Simulated keys a rich 70 kg acolyte is saved with.
 seeds70 ∷ [(Text, Float)]
