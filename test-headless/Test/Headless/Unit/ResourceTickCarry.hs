@@ -45,6 +45,7 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness
     (installHudWorldPage, withHeadlessEngineNoWorld)
+import Test.Headless.Unit.PhysiologyFixture (ensurePhysiologyRegistry)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Command.Types (UnitCommand(..))
@@ -112,6 +113,26 @@ uncarriedDivergence = 1.3569e-3
 ulpAt15 ∷ Float
 ulpAt15 = 2 ** (-23)
 
+-- | The squirrel's definition. @minimalDef@ authors no body, so every system
+--   would resolve Unsupported and the engine would refuse every write to a
+--   physiology key (#2835); this one authors a body and leaves every system
+--   Nominal, and each scene PINS the one system whose pool it measures
+--   Simulated (below), as the production facade would.
+squirrelDef ∷ UnitDef
+squirrelDef = (minimalDef "red_squirrel" "Red Squirrel")
+    { udPhysiology = UnitPhysiology True Nothing HM.empty HM.empty }
+
+-- | The overrides that make the measured pool's system Simulated: the
+--   squirrel's shipped default for sleep is Nominal (it has no go_to_sleep
+--   behavior), so #2633's sub-threshold coverage pins it explicitly rather
+--   than relying on the old unconditional tick. The hydration scenes pin
+--   hydration the same way.
+pinsFor ∷ HM.HashMap Text Float → PhysioOverrides
+pinsFor stats = HM.fromList
+    [ (system, PhysioSimulated)
+    | (key, system) ← [("sleep_pressure", "sleep"), ("hydration", "hydration")]
+    , HM.member key stats ]
+
 mkSquirrel ∷ HM.HashMap Text Float → UnitInstance
 mkSquirrel stats = UnitInstance
     { uiDefName = "red_squirrel", uiName = "", uiPage = fixturePage
@@ -127,7 +148,7 @@ mkSquirrel stats = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 1.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
+    , uiClimbDest = Nothing, uiPhysioOverrides = pinsFor stats, uiTrailState = Nothing
     }
 
 -- | The stats this tick reads: the pool, its maximum, and the endurance
@@ -153,10 +174,10 @@ hydrationStats = HM.fromList
 --   left on the command queue.
 resetSceneWith ∷ EngineEnv → HM.HashMap Text Float → IO ()
 resetSceneWith env stats = do
+    ensurePhysiologyRegistry env
     writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton "red_squirrel"
-                       (minimalDef "red_squirrel" "Red Squirrel")
+        { umDefs = HM.singleton "red_squirrel" squirrelDef
         , umInstances = HM.singleton squirrelUid (mkSquirrel stats) }
     _ ← Q.flushQueue (unitQueue env)
     pure ()
@@ -177,13 +198,13 @@ activePageId = WorldPageId "main_world"
 resetSceneOnActivePage ∷ EngineEnv → IO ()
 resetSceneOnActivePage env = do
     installHudWorldPage env
+    ensurePhysiologyRegistry env
     -- The shipped update loop early-returns on scripts.pause, which
     -- defers to this flag; a headless engine boots paused.
     writeIORef (enginePausedRef env) False
     writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton "red_squirrel"
-                       (minimalDef "red_squirrel" "Red Squirrel")
+        { umDefs = HM.singleton "red_squirrel" squirrelDef
         , umInstances = HM.singleton squirrelUid
             (mkSquirrel (statsWith maxPool)) { uiPage = activePageId } }
     _ ← Q.flushQueue (unitQueue env)

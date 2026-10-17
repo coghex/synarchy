@@ -45,7 +45,8 @@ allSimulated = withDefaults [ (s, PhysioSimulated) | s ← systemIds ]
 allNominal   = withDefaults [ (s, PhysioNominal)   | s ← systemIds ]
 
 systemIds ∷ [Text]
-systemIds = ["hydration", "salt", "thermo", "nutrition", "stamina"]
+systemIds = ["hydration", "salt", "thermo", "nutrition", "stamina"
+            , "exhaustion", "sleep"]
 
 -- | The reference 70 kg unit's INPUTS: the stats a healthy rule reads.
 inputs ∷ HM.HashMap Text Float
@@ -57,7 +58,8 @@ inputs = HM.fromList
 owned ∷ HM.HashMap Text Float
 owned = HM.fromList
     [ ("hydration", 21), ("salt", 35), ("salt_store", 100)
-    , ("core_temp", 38), ("hunger", 300), ("calories", 900), ("stamina", 6) ]
+    , ("core_temp", 38), ("hunger", 300), ("calories", 900), ("stamina", 6)
+    , ("exhaustion", 4), ("sleep_pressure", 7) ]
 
 mkCtx ∷ PhysiologyRegistry → UnitPhysiology → HM.HashMap Text Float
       → HM.HashMap Text [StatModifier] → Double → PhysioContext
@@ -151,10 +153,11 @@ spec = describe "Unit.Physiology" $ do
 shippedRegistrySpec ∷ SpecWith PhysiologyRegistry
 shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
 
-    it "declares exactly the five systems, in tick order (thermo \
+    it "declares exactly the seven systems, in tick order (thermo \
        \before salt, design D-7), each requiring a body" $ \reg → do
         map psId (prSystems reg)
-            `shouldBe` ["thermo", "salt", "hydration", "nutrition", "stamina"]
+            `shouldBe` [ "thermo", "salt", "hydration", "nutrition", "stamina"
+                       , "exhaustion", "sleep" ]
         forM_ (prSystems reg) $ \s → psRequires s `shouldBe` ["body"]
 
     it "owns, derives and meters exactly the v1 keys" $ \reg → do
@@ -167,7 +170,9 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
                        , ["salt_imbalance"]))
             , ("thermo", (["core_temp"], [], ["hypothermia", "hyperthermia"]))
             , ("nutrition", (["hunger", "calories"], [], []))
-            , ("stamina", (["stamina"], [], [])) ]
+            , ("stamina", (["stamina"], [], []))
+            , ("exhaustion", (["exhaustion"], [], []))
+            , ("sleep", (["sleep_pressure"], [], [])) ]
 
     it "keeps the constants the healthy rules need as authoritative data" $
         \reg → prConstants reg `shouldBe` Map.fromList
@@ -190,6 +195,14 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         -- stamina's seed target is the EFFECTIVE max_stamina, which is
         -- derived and never stored, so its rule is the named one (#2834)
         rule "stamina" `shouldBe` Just HealthyMaxStamina
+        -- exhaustion and sleep (#2835): their maxima are Lua-only derived
+        -- stats, never stored, so the rule restates the derivation
+        -- (effective endurance x 10) in the existing grammar -- a `from:` of
+        -- the max_* key would be an input that is never stored and would
+        -- refuse every spawn.
+        rule "exhaustion" `shouldBe` Just (HealthyFrom "endurance" [QLit 10])
+        rule "sleep_pressure" `shouldBe`
+            Just (HealthyFrom "endurance" [QLit 10])
         case classifyKey reg "salt_conc" of
             Just (_, RoleDerived d) → do
                 dkRule d `shouldBe` DerivedSaltConcentration
@@ -202,7 +215,8 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         let c = nomCtx reg
         forM_ [ ("hydration", 42), ("salt", 70), ("salt_store", 140)
               , ("core_temp", 37), ("hunger", 700), ("calories", 1400)
-              , ("stamina", 10), ("salt_conc", 1) ] $ \(k, want) →
+              , ("stamina", 10), ("exhaustion", 10), ("sleep_pressure", 10)
+              , ("salt_conc", 1) ] $ \(k, want) →
             near want (eff c k)
 
     it "records every Nominal substitute (D-1), including the two S4 \
@@ -224,6 +238,14 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             [("cal_factor", SubValue (QLit 1.0)), ("strength_discount", SubNone)]
         entries psProvides (sys "stamina") `shouldBe`
             [("stamina_fraction", SubValue (QLit 1.0))]
+        -- S8b (#2835): constants, never ratios
+        entries psProvides (sys "exhaustion") `shouldBe`
+            [("restedness_fraction", SubValue (QLit 1.0))
+            ,("movement_multiplier", SubValue (QLit 1.0))]
+        entries psContributes (sys "exhaustion") `shouldBe`
+            [("sleep_exhaustion_deficit", SubValue (QLit 0.0))]
+        entries psProvides (sys "sleep") `shouldBe`
+            [("sleep_deficit", SubValue (QLit 0.0))]
         entries psContributes (sys "nutrition") `shouldBe`
             [("meal_salt_credit", SubVirtualMeal)
             ,("tissue_maintenance", SubTissueRecovery)]
@@ -239,11 +261,13 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         modes "reduced" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
-            , ("stamina", PhysioSimulated) ])
+            , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
+            , ("sleep", PhysioSimulated) ])
         modes "simple" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
-            , ("stamina", PhysioSimulated) ])
+            , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
+            , ("sleep", PhysioNominal) ])
         modes "exempt" `shouldBe` Just (m
             [(s, PhysioNominal) | s ← systemIds])
         map ppId (prProfiles reg) `shouldMatchList`
@@ -501,18 +525,20 @@ ownedReadSpec = describe "owned-key reads (requirement 4)" $ do
                 [ (k, ()) | k ← ["hydration", "salt", "salt_store", "core_temp"
                                , "hunger", "calories", "salt_conc"
                                , "salt_imbalance", "hypothermia"
-                               , "hyperthermia", "stamina"] ])) $ \k → do
+                               , "hyperthermia", "stamina", "exhaustion"
+                               , "sleep_pressure"] ])) $ \k → do
             eff c k `shouldBe` OutcomeUnsupported
             base c k `shouldBe` OutcomeUnsupported
 
     it "hands an unowned key back for the caller to read as getStat does" $
-        \reg → forM_ ["sleep_pressure", "max_stamina", "strength", "nonesuch"] $ \k →
+        \reg → forM_ ["heart_rate", "max_stamina", "max_sleep_pressure", "strength"
+              , "nonesuch"] $ \k →
             eff (simCtx reg) k `shouldBe` OutcomeUnowned
 
     it "raises an invariant error, never a fallback, for a Simulated \
        \owned key with no stored value" $ \reg →
         forM_ ["hydration", "salt", "salt_store", "core_temp", "hunger"
-              , "calories", "stamina"] $ \k → do
+              , "calories", "stamina", "exhaustion", "sleep_pressure"] $ \k → do
             let c = mkCtx reg allSimulated
                         (HM.delete k (HM.union owned inputs)) HM.empty 0
             eff c k `shouldSatisfy` isInvariant

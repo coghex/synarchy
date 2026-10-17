@@ -14,11 +14,16 @@
 --   --test-options='--match "physiology species profiles"'@.
 module Test.Headless.Unit.PhysiologySpeciesProfiles
     ( spec
-      -- * Shared with the stamina gate (#2834)
+      -- * Shared with the stamina gate (#2834) and the exhaustion and sleep
+      --   gate (#2835)
     , shippedDefs
     , pageSnapshotOf
     , codecRoundTrip
     , gate
+    , withShipped
+    , placeUnits
+    , onSavePage
+    , nonStoredKeys
     ) where
 
 import UPrelude
@@ -59,11 +64,13 @@ import World.Save.Types
 -----------------------------------------------------------------------
 
 -- | A species and the mode each system resolves to, in
---   (hydration, salt, thermo, nutrition, stamina) order, with the profile it
---   names. The stamina column is the final species table's (S8a, #2834): the
---   mule and the nomad are Nominal, the rest Simulated.
-data Row = Row Text Text
-    (ResolvedMode, ResolvedMode, ResolvedMode, ResolvedMode, ResolvedMode)
+--   (hydration, salt, thermo, nutrition, stamina, exhaustion, sleep) order,
+--   with the profile it names. The stamina column is the final species
+--   table's (S8a, #2834): the mule and the nomad are Nominal, the rest
+--   Simulated. The last two are S8b's (#2835): the squirrel's sleep is
+--   Nominal (it has no go_to_sleep behavior) and the mule's exhaustion and
+--   sleep are Nominal overrides of its reduced profile.
+data Row = Row Text Text [ResolvedMode]
 
 rowDef ∷ Row → Text
 rowDef (Row n _ _) = n
@@ -74,18 +81,19 @@ nom = ModeNominal
 
 table ∷ [Row]
 table =
-    [ Row "acolyte"         "rich"    (sim, sim, sim, sim, sim)
-    , Row "bear_brown"      "reduced" (nom, sim, sim, nom, sim)
-    , Row "technomule"      "reduced" (nom, sim, sim, nom, nom)
-    , Row "red_squirrel"    "simple"  (nom, nom, sim, nom, sim)
-    , Row "nomad_primitive" "exempt"  (nom, nom, nom, nom, nom) ]
+    [ Row "acolyte"         "rich"    [sim, sim, sim, sim, sim, sim, sim]
+    , Row "bear_brown"      "reduced" [nom, sim, sim, nom, sim, sim, sim]
+    , Row "technomule"      "reduced" [nom, sim, sim, nom, nom, nom, nom]
+    , Row "red_squirrel"    "simple"  [nom, nom, sim, nom, sim, sim, nom]
+    , Row "nomad_primitive" "exempt"  [nom, nom, nom, nom, nom, nom, nom] ]
 
 -- | The systems in the table's column order.
 systems ∷ [Text]
-systems = ["hydration", "salt", "thermo", "nutrition", "stamina"]
+systems = [ "hydration", "salt", "thermo", "nutrition", "stamina"
+          , "exhaustion", "sleep" ]
 
-modesList ∷ (a, a, a, a, a) → [a]
-modesList (a, b, c, d, e) = [a, b, c, d, e]
+modesList ∷ [a] → [a]
+modesList = id
 
 -----------------------------------------------------------------------
 -- The shipped content, loaded the way the startup loader loads it
@@ -271,7 +279,7 @@ bodylessSpec = describe "bodyless definitions" $ do
             def ← defNamed defs n
             upProfile (udPhysiology def) `shouldBe` Nothing
             got ← mapM (modeOfDef reg def) systems
-            (n, got) `shouldBe` (n, replicate 5 ModeUnsupported)
+            (n, got) `shouldBe` (n, replicate (length systems) ModeUnsupported)
 
 spawnSpec ∷ SpecWith Scene
 spawnSpec = describe "spawn resolves the table before simulation" $ do
@@ -391,6 +399,9 @@ loadSpec = describe "load honours the live default and pinned intent" $ do
             before ← readInstance env 1
             HM.member "salt" (uiStats before) `shouldBe` True
             HM.member "salt_store" (uiStats before) `shouldBe` True
+            -- `reduced` simulates sleep, `simple` does not (#2835): the legacy
+            -- squirrel carries a sleep_pressure pool the new default scrubs
+            HM.member "sleep_pressure" (uiStats before) `shouldBe` True
             -- saved, through the production codec
             pg ← pageSnapshotOf env ≫= codecRoundTrip
             (us1, notes1) ← gate reg defs (pgsUnits pg)
@@ -399,10 +410,12 @@ loadSpec = describe "load honours the live default and pinned intent" $ do
             case uOf us1 of
                 Nothing → expectationFailure "the unit vanished"
                 Just u → do
-                    forM_ (nonStoredKeys reg "salt") $ \k →
+                    forM_ (nonStoredKeys reg "salt" ⧺ nonStoredKeys reg "sleep") $ \k →
                         HM.member k (uisStats u) `shouldBe` False
-                    -- thermo stays Simulated and every unowned stat is untouched
+                    -- thermo and exhaustion stay Simulated and every unowned
+                    -- stat is untouched
                     HM.member "core_temp" (uisStats u) `shouldBe` True
+                    HM.member "exhaustion" (uisStats u) `shouldBe` True
                     forM_ ["body_mass", "frame_mass", "fat_mass", "lean_mass", "height"] $ \k →
                         HM.lookup k (uisStats u) `shouldBe` HM.lookup k (uiStats before)
                     uisPhysioOverrides u `shouldBe` HM.empty
@@ -428,7 +441,12 @@ loadSpec = describe "load honours the live default and pinned intent" $ do
        \and so does a pin equal to the old default" $ \(env, _) → do
         reg ← readShippedPhysiologyRegistry
         defs ← shippedDefs env
-        reduced ← profilePhysiology "reduced"
+        reduced0 ← profilePhysiology "reduced"
+        -- this case is about the salt and hydration pins, so sleep is Nominal
+        -- here (the squirrel's shipped default, #2835): the unit holds no
+        -- sleep_pressure for the load to scrub
+        let reduced = reduced0 { upDefaults = HM.insert "sleep" PhysioNominal
+                                                        (upDefaults reduced0) }
         -- salt pinned Simulated (the old default, and the intent) and hydration
         -- pinned Nominal (also equal to the old default): both are intent
         placeUnits env

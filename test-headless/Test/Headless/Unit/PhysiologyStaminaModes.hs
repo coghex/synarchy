@@ -155,8 +155,8 @@ declarationSpec = describe "the stamina system and its declarations" $ do
                 (Map.lookup "stamina" ∘ ppModes <$> registryProfile reg p)
                     `shouldBe` Just (Just m)
         classifyKey reg "stance" `shouldBe` Nothing
-        classifyKey reg "exhaustion" `shouldBe` Nothing
-        classifyKey reg "sleep_pressure" `shouldBe` Nothing
+        classifyKey reg "heart_rate" `shouldBe` Nothing
+        classifyKey reg "blood_oxygen" `shouldBe` Nothing
         classifyKey reg "max_stamina" `shouldBe` Nothing
 
     it "validates an engagement declaration: the system exists, is stamina \

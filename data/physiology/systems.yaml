@@ -134,6 +134,47 @@ systems:
       - { name: kill_on_zero,  substitute: none }
       - { name: strike_cost,   substitute: none }
 
+  # Exhaustion (#2835, S8b): the short-horizon fatigue pool. Its Nominal read
+  # and seed target are the unit's effective max_exhaustion, which is a
+  # Lua-only derived stat (scripts/unit_stats.lua: effective endurance x 10)
+  # and never stored, so the rule restates that derivation in the existing
+  # grammar; a test pins it equal to stats.get(max_exhaustion) for every
+  # shipped species. A Nominal system provides a fully rested unit: the
+  # restedness fraction and the movement multiplier are CONSTANTS here, never
+  # a ratio (binary32 healthy value versus a double maximum).
+  - id: exhaustion
+    requires: [body]
+    owns:
+      - key: exhaustion
+        healthy: { from: endurance, scale: 10 }
+    provides:
+      - name: restedness_fraction
+        substitute: { value: 1.0 }
+      - name: movement_multiplier
+        substitute: { value: 1.0 }
+    contributes:
+      # go_to_sleep's exhaustion term: zero while exhaustion is Nominal.
+      - { name: sleep_exhaustion_deficit, substitute: { value: 0.0 } }
+    effects:
+      - { name: speed_penalty, substitute: none }
+
+  # Sleep (#2835, S8b): the long multi-day sleep-debt pool. Same healthy rule
+  # reasoning as exhaustion (max_sleep_pressure = effective endurance x 10).
+  # Its effect is the sleep NEED: go_to_sleep and the pressure wake, which a
+  # Nominal (or Unsupported) system never has. The circadian urge stays the
+  # live, unowned sun-angle signal.
+  - id: sleep
+    requires: [body]
+    owns:
+      - key: sleep_pressure
+        healthy: { from: endurance, scale: 10 }
+    provides:
+      - name: sleep_deficit
+        substitute: { value: 0.0 }
+    effects:
+      - { name: sleep_need,    substitute: none }
+      - { name: pressure_wake, substitute: none }
+
 # Species fidelity tiers (D-10): a mode for EVERY system. A definition
 # names one with `physiology: { profile: rich }` and may override single
 # systems beside it. Which species use which is S4/S7's.
@@ -144,21 +185,29 @@ profiles:
     thermo: simulated
     nutrition: simulated
     stamina: simulated
+    exhaustion: simulated
+    sleep: simulated
   reduced:
     hydration: nominal
     salt: simulated
     thermo: simulated
     nutrition: nominal
     stamina: simulated
+    exhaustion: simulated
+    sleep: simulated
   simple:
     hydration: nominal
     salt: nominal
     thermo: simulated
     nutrition: nominal
     stamina: simulated
+    exhaustion: simulated
+    sleep: nominal
   exempt:
     hydration: nominal
     salt: nominal
     thermo: nominal
     nutrition: nominal
     stamina: nominal
+    exhaustion: nominal
+    sleep: nominal

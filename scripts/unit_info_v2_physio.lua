@@ -2,7 +2,8 @@
 -- design D-7, D-8).
 --
 -- The Status panel's rows and conditions for the registry's systems
--- (thermo, salt, hydration, nutrition, stamina) follow the unit's RESOLVED mode:
+-- (thermo, salt, hydration, nutrition, stamina, sleep; exhaustion has no row)
+-- follow the unit's RESOLVED mode:
 --
 --   * Simulated  -- unchanged: today's values, units, formats, colours.
 --   * Nominal    -- the row shows its healthy reading (a pool shows the
@@ -44,6 +45,9 @@ local ROW_KEY = {
     hunger    = "hunger",
     calories  = "calories",
     stamina   = "stamina",
+    -- The sleep system's pool (#2835): the system id is `sleep`, the row and
+    -- the registry key are `sleep_pressure`.
+    sleep_pressure = "sleep_pressure",
 }
 M.ROW_KEY = ROW_KEY
 
@@ -94,6 +98,7 @@ local NOMINAL_TEXT_OF = {
     hunger    = poolText,
     calories  = poolText,
     stamina   = poolText,
+    sleep_pressure = poolText,
 }
 
 -- The label and its healthy reading are two words, so a Nominal scalar row

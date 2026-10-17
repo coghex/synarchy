@@ -39,6 +39,17 @@ REGISTRY = {
          "owns": [{"key": "stamina", "healthy": {"rule": "max_stamina"}}],
          "provides": [{"name": "stamina_fraction",
                        "substitute": {"value": 1.0}}]},
+        # S8b (#2835): exhaustion and sleep. The sleep system owns
+        # sleep_pressure, so a system id is not always a key.
+        {"id": "exhaustion", "requires": ["body"],
+         "owns": [{"key": "exhaustion",
+                   "healthy": {"from": "endurance", "scale": 10}}],
+         "provides": [{"name": "restedness_fraction",
+                       "substitute": {"value": 1.0}}]},
+        {"id": "sleep", "requires": ["body"],
+         "owns": [{"key": "sleep_pressure",
+                   "healthy": {"from": "endurance", "scale": 10}}],
+         "effects": [{"name": "sleep_need", "substitute": "none"}]},
     ]
 }
 
@@ -74,7 +85,14 @@ BASE: dict[str, str] = {
         '  if resourceName == "hydration" then return v end\n'
         '  if resourceName == "hunger" then return v end\n'
         '  if resourceName == "stamina" then return unit.commitStamina(uid, 0) end\n'
+        '  if resourceName == "exhaustion" then return v end\n'
+        '  if resourceName == "sleep_pressure" then return v end\n'
         'end\nreturn M\n',
+    # Where each pool is registered to its system: it names the keys and
+    # touches no state (#2835).
+    "scripts/unit_resource_params.lua":
+        'local M = {}\nM.SYSTEM_OF = { exhaustion = "exhaustion",\n'
+        '  sleep_pressure = "sleep" }\nreturn M\n',
     "scripts/unit_resource_carry.lua":
         'local M = {}\nfunction M.integrate(uid, name, d)\n'
         '  unit.setStat(uid, name, (unit.getStat(uid, name) or 0) + d)\nend\nreturn M\n',
@@ -265,6 +283,35 @@ def case_stamina_engagement_and_atomic_commit_seams():
         'local f = p.fraction(1, "stamina", "max_stamina")\n'})
 
 
+def case_exhaustion_and_sleep_ownership():
+    # Both pools are owned (#2835): a raw read or write outside the pool engine
+    # is flagged against the OWNING system (the sleep pool belongs to `sleep`),
+    # the facade's get is not.
+    expect("raw exhaustion read", "raw read of owned key 'exhaustion' (system "
+           "'exhaustion')",
+           files={"scripts/other.lua": 'local e = unit.getStat(1, "exhaustion")\n'})
+    expect("raw sleep read", "raw read of owned key 'sleep_pressure' (system "
+           "'sleep')",
+           files={"scripts/other.lua":
+                  'local s = unit.getStat(1, "sleep_pressure")\n'})
+    expect("raw sleep write", "raw write of owned key 'sleep_pressure'",
+           files={"scripts/thermo.lua": BASE["scripts/thermo.lua"].replace(
+               'return t', 'unit.setStat(1, "sleep_pressure", 0)\nreturn t')})
+    expect_clean("the facade reads both", files={"scripts/other.lua":
+        'local p = require("scripts.physiology")\n'
+        'local a = p.get(1, "exhaustion")\n'
+        'local b = p.fraction(1, "sleep_pressure", "max_sleep_pressure")\n'})
+    # The derived maxima are unowned Lua stats: reading them is no access.
+    expect_clean("the maxima are unowned", files={"scripts/other.lua":
+        'local stats = require("scripts.unit_stats")\n'
+        'local m = stats.get(1, "max_exhaustion")\n'
+        'local n = stats.get(1, "max_sleep_pressure")\n'})
+    # A system with no owner file naming its key is a coverage finding.
+    expect("sleep owners name nothing", "no Lua owner of system 'sleep' names any",
+           files={"scripts/unit_resource_tick.lua": 'local M = {}\nreturn M\n',
+                  "scripts/unit_resource_params.lua": 'local M = {}\nreturn M\n'})
+
+
 # The temporary S5 allowance for the legacy pool reads was deleted by S6
 # (#2832): the migrated baseline is clean, and every FORM it used to admit
 # is flagged like any other raw read.
@@ -360,11 +407,11 @@ def case_generic_helper_literal_at_call_site():
            '    local m = unit.getStat(uid, maxName)\n'
            '    return c, m\n  end\nend\n'
            'local rows = { fracColorFn("hunger", "max_hunger", 0.1),\n'
-           '               fracColorFn("exhaustion", "max_exhaustion", 0.1) }\n')
+           '               fracColorFn("heart_rate", "max_heart_rate", 0.1) }\n')
     f = expect("closure helper", "raw read of owned key 'hunger' (system "
                "'nutrition') through fracColorFn()",
                files={"scripts/other.lua": src})
-    assert not any("exhaustion" in x or "max_hunger" in x for x in f), f
+    assert not any("heart_rate" in x or "max_hunger" in x for x in f), f
     # A helper never called with a registry key is not a finding.
     expect_clean("helper unused", files={"scripts/other.lua": src.replace(
         'fracColorFn("hunger", "max_hunger", 0.1)', 'fracColorFn("mood", "max_mood", 0.1)')})

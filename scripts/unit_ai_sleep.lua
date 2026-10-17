@@ -26,11 +26,21 @@
 -- anything else (sound, an attack, another acolyte) is explicitly
 -- deferred; the only additional hook is the public wake API below, so
 -- other systems can force a wake.
+--
+-- Mode contract (#2835, S8b). The sleep NEED is the sleep system's effect: a
+-- unit whose sleep system is not Simulated (Nominal -- always healthy -- or
+-- Unsupported) has no sleep need, no go_to_sleep utility and no pressure
+-- wake. The math.huge latch of a started sequence does not bypass that: a
+-- mode change, or a restored sequence found under a non-Simulated mode,
+-- ABANDONS it (M.abandon below), which also puts the unit in a pose it can act
+-- from. Circadian urge stays the live, unowned sun-angle signal.
 
 local core       = require("scripts.unit_ai_core")
 local mv         = require("scripts.movement_speed")
 local circadian  = require("scripts.circadian")
 local exhaustion = require("scripts.exhaustion")
+local physiology = require("scripts.physiology")
+local stats      = require("scripts.unit_stats")
 
 local unitAi = package.loaded["scripts.unit_ai"]
 
@@ -163,15 +173,79 @@ local function pickSleepSpot(originX, originY, radius, spacing)
     return nil
 end
 
+-----------------------------------------------------------
+-- Abandoning the sequence (#2835)
+--
+-- Everything the lie-down / sleep / wake sequence keeps on the AI state. The
+-- fields are durable (they ride the unit_ai component), so a saved sleeper
+-- resumes; only an abandonment clears them.
+-----------------------------------------------------------
+local SEQUENCE_FIELDS = {
+    "sleepPhase", "sleepSpot", "sleepSession", "sleepSpotPickedAt",
+    "sleepLastSunAngle", "sleepWakeRequested",
+}
+
+local function sequenceActive(s)
+    for _, f in ipairs(SEQUENCE_FIELDS) do
+        if s[f] ~= nil then return true end
+    end
+    return false
+end
+
+-- The stride of the sequence's own pose steps, so an unwind looks like the
+-- wake it is replacing rather than a snap.
+local UNWIND_STRIDE = STRIDE_WAKE
+
+-- One step of the pose unwind. true when there is nothing more to do.
+--
+--   * Sleeping goes to Crawling, then unit_resource_injury's healthy-crawler
+--     revive stands it up (the sequence's phase is nil now, so its crawling
+--     exemption no longer applies);
+--   * Crouching goes to Standing;
+--   * Crawling is left to the injury tick, Standing/Collapsed/Dead need
+--     nothing.
+--
+-- unit.transitionTo is a no-op mid-transition and getPose still reports the
+-- pose being LEFT, so a hop in flight is waited out (a Crawling unit on its
+-- way to Sleeping must not be mistaken for a finished unwind). The step is
+-- idempotent and re-issued from the utility on every think until it is done.
+local function unwindStep(uid)
+    if unit.getActivity(uid) == "transitioning" then return false end
+    local pose = unit.getPose(uid) or "standing"
+    if pose == "sleeping" then
+        unit.transitionTo(uid, "crawling", UNWIND_STRIDE)
+        return false
+    elseif pose == "crouching" then
+        unit.transitionTo(uid, "standing", UNWIND_STRIDE)
+        return false
+    end
+    return true
+end
+
+-- Give up on the sequence: clear every sequence field and wake-request state,
+-- and leave the unit in (or on its way to) a pose it can act from. A unit
+-- that held no sequence is left exactly as it was (it may be crouching to
+-- drink). Every abandonment goes through here: the sleep-mode hook below and
+-- the utility's own check of a restored sequence.
+function M.abandon(uid, s)
+    if not sequenceActive(s) then return false end
+    for _, f in ipairs(SEQUENCE_FIELDS) do s[f] = nil end
+    s.sleepUnwind = not unwindStep(uid) or nil
+    return true
+end
+
 local function shouldWake(uid, s)
     if s.sleepWakeRequested then
         s.sleepWakeRequested = nil
         return true
     end
-    local sp    = unit.getStat(uid, "sleep_pressure")
-    local maxSp = require("scripts.unit_stats").get(uid, "max_sleep_pressure")
-    if sp and maxSp and maxSp > 0 and sp / maxSp >= WAKE_PRESSURE_FRAC then
-        return true
+    -- Pressure wake is the sleep system's effect: Simulated only.
+    if physiology.isSimulated(uid, "sleep") then
+        local sp    = physiology.get(uid, "sleep_pressure")
+        local maxSp = stats.get(uid, "max_sleep_pressure")
+        if sp and maxSp and maxSp > 0 and sp / maxSp >= WAKE_PRESSURE_FRAC then
+            return true
+        end
     end
     return wakeBoundaryCrossed(uid, s)
 end
@@ -180,12 +254,23 @@ end
 -- Action: go_to_sleep
 -----------------------------------------------------------
 local function sleepUtility(uid, s, params)
+    -- Finish a pose unwind an earlier abandonment could not complete.
+    if s.sleepUnwind and unwindStep(uid) then s.sleepUnwind = nil end
+
+    -- No sleep need without a Simulated sleep system (#2835), BEFORE the
+    -- latch: a sequence found under another mode (a restored save, a mode
+    -- change whose hook has not run) is abandoned, never executed.
+    if not physiology.isSimulated(uid, "sleep") then
+        M.abandon(uid, s)
+        return -math.huge
+    end
+
     -- Locked in once the lie-down/sleep/wake sequence has started —
     -- nothing may preempt it (matches drinkFromSourceUtility).
     if s.sleepPhase then return math.huge end
 
-    local sp    = unit.getStat(uid, "sleep_pressure")
-    local maxSp = require("scripts.unit_stats").get(uid, "max_sleep_pressure")
+    local sp    = physiology.get(uid, "sleep_pressure")
+    local maxSp = stats.get(uid, "max_sleep_pressure")
     if not sp or not maxSp or maxSp <= 0 then return -math.huge end
 
     local deficit = 1 - sp / maxSp
@@ -198,6 +283,8 @@ local function sleepUtility(uid, s, params)
     -- so it carries the smallest of the three weights: a minor nudge on
     -- top of the sleep_pressure/urge baseline rather than an independent
     -- trigger, since a hard day's labour is not sleep debt.
+    -- (exhaustion.fraction answers the constant 1.0 unless exhaustion is
+    -- Simulated, so a Nominal exhaustion contributes a zero term, #2835.)
     local exhaustionDeficit = 1 - (exhaustion.fraction(uid) or 1.0)
     return params.sleep_base_weight
          + params.sleep_deficit_weight * deficit
@@ -304,5 +391,15 @@ function unitAi.wakeUnit(uid)
         s.sleepWakeRequested = true
     end
 end
+
+-- A sleep mode change ends the sequence (#2835): the need it served just
+-- stopped being the unit's. Registered for the sleep system ONLY (an
+-- exhaustion change resets exhaustion's own carry and alert state and must
+-- not interrupt a Simulated sleep), by id so a reloaded script replaces its
+-- hook instead of stacking another.
+physiology.onModeChanged("go_to_sleep", "sleep", function(uid, _system, _from, _to)
+    local s = unitAi.getState(uid)
+    if s then M.abandon(uid, s) end
+end)
 
 return M

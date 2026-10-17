@@ -168,6 +168,22 @@ local RULES = {
     salt = {
         floor  = 0,
     },
+    -- Exhaustion and sleep pressure (#2835). No shipped caller contributes to
+    -- either yet, but the seam exists so that one that does is discarded by a
+    -- Nominal or Unsupported receiver (D-4) and clamped to the pool's
+    -- maximum by a Simulated one. A contribution is an EFFECTIVE delta: the
+    -- stored base is solved so the effective value lands on the target under
+    -- the pool's retained modifiers (`invert`), never `base + delta`.
+    exhaustion = {
+        cap      = function(uid) return stats.get(uid, "max_exhaustion") end,
+        needsCap = true,
+        invert   = true,
+    },
+    sleep_pressure = {
+        cap      = function(uid) return stats.get(uid, "max_sleep_pressure") end,
+        needsCap = true,
+        invert   = true,
+    },
     -- #2761's reserve: starts full, never exceeds its capacity.
     salt_store = {
         cap    = function(uid) return salts().storeCap(uid) end,
@@ -194,14 +210,39 @@ local function commitStaminaContribution(uid, delta)
     return res.after - res.before
 end
 
+-- Move a Simulated pool's EFFECTIVE value by `amount` (a debit passes a
+-- negative one), clamped to [0, cap], and answer the EFFECTIVE change
+-- actually made (read back, so binary32 storage and the zero clamp are
+-- reported as they landed). The stored base is the one whose effective value
+-- is the target under the pool's active modifiers (scripts/lib/stat_base.lua:
+-- `t / (1 + sum p) - sum d`): writing `base + amount` would be wrong by the
+-- multiplier and the flat part. 0, with nothing written, when no
+-- representable base exists (a multiplier that is not positive, or a
+-- negative or non-finite base): the same refusals a transition's seed makes.
+local function contributeEffective(uid, key, rule, amount)
+    local cap = rule.cap(uid)
+    if not cap or cap <= 0 then return 0 end
+    -- A Simulated pool is always stored; the owned read raises when it is not.
+    local old = unit.readPhysio(uid, key)
+    if old == nil then return 0 end
+    local target = math.min(cap, math.max(0, old + amount))
+    local base = require("scripts.lib.stat_base").baseFor(uid, key, target)
+    if base == nil then return 0 end
+    unit.setStat(uid, key, base)
+    local after = unit.readPhysio(uid, key)
+    return after ~= nil and (after - old) or 0
+end
+
 -- Add `amount` to a pool, clamped to its capacity. Returns the amount
--- applied (the change in the stored value), 0 when nothing was written, or
+-- applied (the change in the stored value; for the pools a modifier can
+-- scale, the change in the EFFECTIVE value), 0 when nothing was written, or
 -- nil, reason for a key with no contribution rule.
 function physiology.credit(uid, key, amount)
     local rule = RULES[key]
     if not rule then return nil, "no contribution rule for " .. tostring(key) end
     if not contributionApplies(uid, key) then return 0 end
     if rule.commit then return commitStaminaContribution(uid, amount) end
+    if rule.invert then return contributeEffective(uid, key, rule, amount) end
     local cap = rule.cap and rule.cap(uid)
     if rule.needsCap and (not cap or cap <= 0) then return 0 end
     local old = unit.getStat(uid, key)
@@ -223,6 +264,7 @@ function physiology.debit(uid, key, amount)
     if not rule then return nil, "no contribution rule for " .. tostring(key) end
     if not contributionApplies(uid, key) then return 0 end
     if rule.commit then return -commitStaminaContribution(uid, -amount) end
+    if rule.invert then return -contributeEffective(uid, key, rule, -amount) end
     local old = unit.getStat(uid, key)
     if old == nil then return 0 end
     local new = old - amount

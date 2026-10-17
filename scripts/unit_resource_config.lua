@@ -13,6 +13,13 @@
 --      in scripts/unit_stats.lua or as an attribute in the YAML.
 --   3. Add a branch in unit_resource_tick.lua's tickResource if the
 --      trigger differs from stamina's "collapse when below threshold".
+--
+-- Which entries tick (#2831, #2834, #2835): a pool owned by a physiology
+-- system -- hydration, hunger, calories, stamina, exhaustion and
+-- sleep_pressure (the `sleep` system) -- ticks only while its system is
+-- Simulated for the unit (scripts/unit_resource_params.lua). An entry for a
+-- Nominal or Unsupported system stays as the PARAMETERS a pinned-Simulated
+-- unit would tick with, and the acolyte's entries are the registry defaults.
 local config = {
     acolyte = {
         stamina = {
@@ -296,7 +303,11 @@ local config = {
         },
         -- Same drain-only sleep-pressure model as acolyte (circadian epic
         -- #479 / #611) — see the acolyte entry above for the full
-        -- calibration rationale.
+        -- calibration rationale. The squirrel's sleep system is Nominal by
+        -- default (#2835, S8b): it has no go_to_sleep behavior, so this pool
+        -- no longer ticks. The entry stays as the drain-only parameters of a
+        -- squirrel pinned Simulated, and circadian.shapeFor still reads its
+        -- phase and width.
         sleep_pressure = {
             max_from            = "max_sleep_pressure",
             drain_constant_frac = 1 / 3600,

@@ -8,8 +8,9 @@
 -- pool's own mass-derived maximum, so they scale to any body. Referencing
 -- the acolyte entry keeps the two from drifting apart.
 --
--- (Stamina is gated the same way since #2834: it ticks only while Simulated,
--- with the species entry or, for a species with none, the acolyte's.)
+-- (Stamina is gated the same way since #2834, and exhaustion and sleep
+-- pressure since #2835: each ticks only while its system is Simulated, with
+-- the species entry or, for a species with none, the acolyte's.)
 --
 -- A species with neither (and a system that needs parameters) cannot run
 -- the system Simulated: scripts/physiology.lua's setMode refuses the
@@ -22,27 +23,33 @@ local M = {}
 
 -- The pool resources each GATED system ticks, and the system that owns
 -- each. A resource named here ticks only while its system is Simulated;
--- every other config entry (exhaustion, sleep_pressure) is unowned and ticks
--- as always.
+-- every other config entry is unowned and ticks as always. The system id
+-- need not match the pool key: the sleep system owns sleep_pressure.
 M.POOLS = {
-    hydration = { "hydration" },
-    nutrition = { "hunger", "calories" },
-    stamina   = { "stamina" },
+    hydration  = { "hydration" },
+    nutrition  = { "hunger", "calories" },
+    stamina    = { "stamina" },
+    exhaustion = { "exhaustion" },
+    sleep      = { "sleep_pressure" },
 }
 
 M.SYSTEM_OF = {
-    hydration = "hydration",
-    hunger    = "nutrition",
-    calories  = "nutrition",
-    stamina   = "stamina",
+    hydration      = "hydration",
+    hunger         = "nutrition",
+    calories       = "nutrition",
+    stamina        = "stamina",
+    exhaustion     = "exhaustion",
+    sleep_pressure = "sleep",
 }
 
 -- The registry's default parameters, per pool resource.
 M.DEFAULTS = {
-    hydration = config.acolyte.hydration,
-    hunger    = config.acolyte.hunger,
-    calories  = config.acolyte.calories,
-    stamina   = config.acolyte.stamina,
+    hydration      = config.acolyte.hydration,
+    hunger         = config.acolyte.hunger,
+    calories       = config.acolyte.calories,
+    stamina        = config.acolyte.stamina,
+    exhaustion     = config.acolyte.exhaustion,
+    sleep_pressure = config.acolyte.sleep_pressure,
 }
 
 -- The system a resource belongs to, or nil for an unowned resource.

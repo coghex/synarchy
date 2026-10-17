@@ -120,8 +120,8 @@ end
 --   -> the Simulated systems that tick themselves, in REGISTRY order (thermo
 --   before salt, so sweat debits arrive before the salt tick sees them) ->
 --   brain / thoughts / mental -> injuries and the failure meters -> the per-def
---   pools (hydration, hunger and calories only while their system is
---   Simulated; stamina, exhaustion and sleep pressure as always) -> nutrition's
+--   pools (each only while its system is Simulated: hydration, hunger and
+--   calories, stamina, exhaustion and sleep pressure) -> nutrition's
 --   digestion and catabolism, or its Nominal upkeep.
 --
 -- The pool systems (hydration, nutrition) keep their pre-activation position

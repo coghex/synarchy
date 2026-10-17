@@ -71,7 +71,12 @@ bodyNominalStamina = filter ((≢ "stamina") ∘ fst) body70
 seeds70 ∷ [(Text, Float)]
 seeds70 =
     [ ("hydration", 42), ("hunger", 700), ("calories", 1400), ("salt", 70)
-    , ("salt_store", 140), ("core_temp", 37) ]
+    , ("salt_store", 140), ("core_temp", 37) ] ⧺ poolSeeds
+
+-- | The exhaustion and sleep pools (#2835) of an endurance-1 unit, whose
+--   Simulated systems save them at the full healthy value (endurance x 10).
+poolSeeds ∷ [(Text, Float)]
+poolSeeds = [("exhaustion", 10), ("sleep_pressure", 10)]
 
 defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text UnitPhysiology
 defsOf = HM.fromList
@@ -128,7 +133,8 @@ canonicalSpec = describe "unchanged content" $
                 [ ("acolyte", richPhysiology, saved "acolyte" (body70 ⧺ seeds70) [])
                 , ("red_squirrel", reduced
                   , saved "red_squirrel" (squirrelBodyStats ⧺
-                        [ ("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37) ]) [])
+                        [ ("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37) ]
+                        ⧺ poolSeeds) [])
                 , ("nomad_primitive", exemptPhysiology
                   , saved "nomad_primitive" bodyNominalStamina [])
                 , ("white_tailed_deer", noUnitPhysiology
@@ -150,7 +156,7 @@ normalizationSpec = describe "D-6 normalization" $ do
                     (bodyStats squirrelBody ⧺
                         [ ("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37)
                         , ("hydration", 0.1), ("hunger", 2), ("calories", 4)
-                        , ("hypothermia", 0.2) ]) []
+                        , ("hypothermia", 0.2) ] ⧺ poolSeeds) []
             shouldNormalize (gate1 reg [("red_squirrel", reduced)] u) $ \(u', notes) → do
                 forM_ ["hydration", "hunger", "calories"] $ \k →
                     statOf' u' k `shouldBe` Nothing
@@ -292,7 +298,8 @@ normalizationSpec = describe "D-6 normalization" $ do
             forM_ [ ("rich", "acolyte", richPhysiology, body70 ⧺ seeds70)
                   , ("exempt", "nomad_primitive", exemptPhysiology, bodyNominalStamina)
                   , ("reduced", "red_squirrel", reduced
-                    , bodyStats squirrelBody ⧺ [("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37)]) ] $
+                    , bodyStats squirrelBody ⧺ [("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37)]
+                        ⧺ poolSeeds) ] $
                 \(label, name, up, stats) →
                     shouldNormalize (gate1 reg [(name, up)] (saved name (("salt_conc", 0.123) : stats) [])) $
                         \(u', notes) → do
@@ -336,7 +343,8 @@ policySpec = describe "T-10 overrides across save and load" $ do
     it "makes an UNPINNED unit follow a changed species default: reduced -> rich seeds, rich -> exempt scrubs" $ \reg → do
         reduced ← profilePhysiology "reduced"
         let wasReduced = saved "red_squirrel"
-                (bodyStats squirrelBody ⧺ [("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37)]) []
+                (bodyStats squirrelBody ⧺ [("salt", 0.3), ("salt_store", 0.6), ("core_temp", 37)]
+                    ⧺ poolSeeds) []
         shouldNormalize (gate1 reg [("red_squirrel", richPhysiology)] wasReduced) $ \(u', _) → do
             statOf' u' "hydration" `shouldSatisfy` isJust
             statOf' u' "calories" `shouldSatisfy` isJust

@@ -82,6 +82,7 @@ referenceStats = HM.fromList
     , ("hunger", 700), ("max_hunger", 700)
     , ("calories", 1400), ("max_calories", 1400)
     , ("stamina", 100), ("max_stamina", 100)
+    , ("exhaustion", 10), ("sleep_pressure", 10)   -- endurance x 10 (#2835)
     , ("core_temp", 37), ("consciousness", 1), ("blood_oxygen", 1)
     , ("heart_rate", 70) ]
 

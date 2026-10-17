@@ -44,7 +44,9 @@ units:
     # Physiology profile (#2831, design D-10): hydration and nutrition Nominal; salt and thermo Simulated.
     # Stamina is Nominal (#2834, S8a): the mule has no stamina pool configuration,
     # so a Simulated pool would leave it permanently winded (S8-F1).
-    physiology: { profile: reduced, stamina: nominal }
+    # Exhaustion and sleep are Nominal (#2835, S8b): the mule has no fatigue or
+    # sleep-debt pool configuration and no need behavior for either.
+    physiology: { profile: reduced, stamina: nominal, exhaustion: nominal, sleep: nominal }
 
     # Innate, permanent, tooltip-visible: the percentage modifier on
     # top of the body-derived base capacity.
