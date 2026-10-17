@@ -113,6 +113,7 @@ systems.
 | Salt's hydration term, concentration, cramps, sweat factor | `salts.lua` | `fraction`, `get("salt_conc")` |
 | Brain consciousness inputs and hunger fraction | `brain.lua` (`fracOf` is a dynamic-key helper shared with stamina) | `get`, `fraction` |
 | Cardio temperature input, its own integrators and blood fraction (#2836) | `cardio.lua` | `get("core_temp")`, `get("heart_rate")` / `get("blood_oxygen")`, `get("circulation")`, and the pure `unit.readBloodView` for the blood fraction |
+| Blood volume readers (#2837): the wound fold, the movement multiplier, `unit.getBlood` consumers (revive gate, AI, Status rows), cardio's and circulation's blood input | `Combat/Wounds/Tick.hs`, `Unit/Thread/Command/Motion.hs`, `unit_resource_tick.lua`, `unit_ai_core.lua`, `unit_info_v2_status.lua`, `cardio.lua` | the ONE mode-aware adapter (`unit.getBlood`, `unit.readBloodView`, `unitBloodView` in Haskell); the volume is the dedicated `uiBlood` field, so the owner is Haskell (`HASKELL_OWNERS` in the access audit) and no script reads or writes a `blood` stat |
 | Circulation reads: thermo's heat loss and frostbite, the Status row | `thermo.lua`, `circulation.lua`, `unit_info_v2_status.lua` | `get("circulation")`: derived on demand; live under a Nominal cardio (SD-21); `nil` only when cardio is Unsupported |
 | Brain's oxygen input and the hypoxia driver | `brain.lua`, `cardio.lua` | `get("blood_oxygen") or 1.0` (a Nominal or Unsupported cardio reads 1.0) |
 | Starvation calorie fraction | `starvation.lua` | `fraction` |

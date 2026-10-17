@@ -55,7 +55,8 @@ Visible blood from injuries, without hand-authored blood texture assets:
 | `Engine.Scripting.Lua.API.Blood` | #604, #606, #882, #883 | The full debug/headless Lua surface — see "Debug/introspection surface" below. |
 
 `Combat.Wounds.Tick` is the integration owner that feeds `TrailState`
-(conserved external blood-loss accounting); `Unit.Thread.Movement` is
+(conserved external blood-loss accounting under Simulated blood, the wound
+flow directly under Nominal blood, #2837); `Unit.Thread.Movement` is
 the integration owner that consumes it every movement tick and decides,
 via `Blood.Pool.classifyOngoing`, whether that tick's emission goes
 through `Blood.Trail` or `Blood.Pool`.
@@ -216,6 +217,21 @@ tick):
   reopen an exhausted budget. Layers are gated on BOTH cadence and a
   volume floor, so a trickle pools slowly and an arterial bleed pools
   fast.
+
+**Conserved volume, and the one Nominal exception (#2837).** Under a Simulated
+blood the accumulator is credited only the EXTERNAL share of the volume
+actually removed this tick (#882's conserved accounting, including fatal and
+clamped ticks). A unit whose blood is Nominal (an explicit per-unit override;
+no shipped profile uses it) debits no volume at all, so there is nothing to
+conserve: the accumulator is credited the wound-derived external flow, the sum
+of the external `bleedRate x dt` with the same effective-severity, kind, part,
+constitution, clot and bandage terms, DIRECTLY. That is an intentional
+exception to conserved-volume accounting and applies only to Nominal blood's
+visual-loss contribution. Everything else is shared: internal-only wounds
+credit nothing, and the instant external bleeding reaches exactly zero (a fully
+sealing dressing, seep 0; complete clotting; a wound healed out) the
+accumulator is cleared and marks stop, in both modes, while a competent
+dressing (seep 0.05) keeps a reduced positive flow and continued marks.
 
 Both halves share the ONE accumulator (`TrailState`), so a
 walk-then-stop-then-walk sequence hands conserved blood seamlessly

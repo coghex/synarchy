@@ -2587,6 +2587,70 @@ introduces `bloodView` (S10.2).
     `:540-553`). Nominal would save nothing material.
   - Bleeding also stays combat physiology for nomads, as #2754 intended.
 
+#### S10.9 Implementation record (#2837)
+
+What shipped, where it differs from the S10.2 sketch, and why. The four
+corrections and the spec additions of the approved issue review
+(issuecomment-6231193340) are applied literally.
+
+- **Registry.** `blood` is the ninth system, appended after `cardio` in
+  `data/physiology/systems.yaml`. It requires `body`, owns the key `blood` with
+  `field: uiBlood` (healthy: the new named rule `blood_max`), derives
+  `blood_max` and `blood_fraction` (both `live`), owns no meter and contributes
+  `visual_loss` with the new substitute `wound_flow`. Its effects (volume
+  drain, blood-loss collapse, exsanguination, volume recovery) are absent
+  while Nominal. `blood: simulated` is added to all four profiles (correction
+  3); no `data/units/*.yaml` physiology block changes, so the five bodied
+  species resolve Simulated (SD-22) and bodyless definitions Unsupported.
+- **Healthy rule (correction 4).** `from:` reads the EFFECTIVE input, so a
+  `body_mass` modifier would move the maximum. The `blood_max` rule is BASE
+  `body_mass` x `bloodMassRatio` (0.075, the single source; no registry copy
+  to drift) with the 70 kg fallback every blood reader has. The Nominal read,
+  the transition seed and the caller-value cap all use it.
+- **One adapter (correction 1).** `Unit.Blood` is extended, not duplicated:
+  `bloodView` stays the RAW view (what a Simulated, Unsupported or undeclared
+  blood reads, exactly the pre-S10 values), `nominalBlood` is the Nominal
+  branch (volume = maximum, the stored `uiBlood` ignored, fraction 1.0, live
+  bleed rate). `Unit.Physiology.instanceBloodView` / `unitBloodView` choose
+  between them through the one pure resolver against the registry's own
+  `blood` declaration; a registry with no `blood` system (the wound tick's
+  `emptyPhysiologyRegistry`, hand-built fixtures) and an unregistered
+  definition read raw. Every consumer reads through it: the wound fold, the
+  unit-thread movement multiplier (`injurySpeedMult` now takes the view),
+  `unit.getBlood` (record shape `{current, max, bleedRate}` unchanged),
+  `unit.readBloodView`, circulation and cardio (consumed Nominal fraction 1.0
+  without any change to their code).
+- **Storage adapter (correction: no shadow pool).** The volume is never a
+  `uiStats` key. A simulated owned read of a field-backed key returns the
+  context's raw volume; the transition plans run over the stats with the field
+  key materialized and split it back out (`Transition.trBlood`), so seeding,
+  scrubbing, caller values and their caps are the generic code; the
+  reconciliation used by spawn and the load gate skips field keys and scrubs a
+  stored legacy `blood` stat in every mode; a raw `unit.setStat` of the
+  volume or either derived key is refused. The access audit expresses the
+  owner through `HASKELL_OWNERS` and inventories every Haskell file that
+  touches the field or the view (`BLOOD_FIELD_INVENTORY`), with no Lua owner
+  fabricated and no exemption.
+- **Wound fold.** Inside the existing atomic update the resolver is consulted
+  per unit. Under Nominal: no volume debit, no recovery (including the
+  unwounded-unit branch), no blood-loss collapse and no exsanguination outcome;
+  gangrene death, wound progression, infection, necrosis, pain, clotting,
+  bandages and the bleed rate are unchanged. The trail accumulator is credited
+  the wound-derived external flow directly; under Simulated it is credited the
+  conserved external share of the volume actually removed, exactly as #882.
+  Zero-external-bleed cleanup is identical in both modes.
+- **Persistence (correction: D-6 zero normalization).** `uisBlood` and the
+  units-v4 override map are unchanged. A Nominal unit's stored volume is
+  serialized but ignored: the load gate rewrites it silently to the current
+  canonical maximum, as the other rebuilt caches are, so a unit saved by
+  current code whose body mass moved afterwards logs zero repairs and a second
+  load finds it canonical. A stored legacy `blood` stat is logged once.
+- **Presentation (correction).** The blood row follows the S6 contract: a
+  Nominal blood reads `Nominal` in the neutral colour, its tooltip keeps the
+  LIVE bleed rate, the wound-driven Bleeding condition stays with text that no
+  longer claims exsanguination, the volume-derived blood-loss collapse
+  condition is suppressed, and an Unsupported unit's row is hidden.
+
 ### S11. Brain and mental state
 
 #### S11.1 Current state

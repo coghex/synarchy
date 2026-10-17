@@ -2269,7 +2269,9 @@ every consumer relies on:
   INTENTIONAL behavior changes of activation are the
   bodyless Unsupported units, the virtual meals of a Simulated salt over a
   Nominal nutrition (below), and the depletion-only recovery of a wasted unit
-  under a Nominal nutrition (below). S9 adds a fourth: a bodyless unit's
+  under a Nominal nutrition (below). Blood (S10, #2837) is Simulated in every
+  profile, the `exempt` one included (#2754 kept bleeding as combat
+  physiology). S9 adds a fourth: a bodyless unit's
   cardio is Unsupported (it used to integrate tachycardia and depressed
   oxygen from a 0 L blood seed), and cardio's oxygen delivery no longer lags
   circulation by a tick.
@@ -2313,6 +2315,33 @@ every consumer relies on:
   mode inside the same update that stores the value. A Simulated system's
   debug writes stay allowed. Owned modifiers are retained but ignored under
   Nominal; modifiers on a maximum still move the Nominal healthy value.
+* *Blood (S10, #2837).* Blood is the ninth system and the one whose owned key
+  is stored in a dedicated unit FIELD: the volume is `uiBlood` (serialized as
+  `uisBlood`), never a `uiStats` key, and it has no modifiers. Its Nominal read
+  and seed target are `blood_max`, BASE `body_mass` x `bloodMassRatio` (0.075,
+  70 kg fallback; never the effective body mass), and `blood_max` /
+  `blood_fraction` are derived and never stored. `Unit.Blood` is the ONE pure
+  adapter: the raw view for a Simulated, Unsupported or undeclared blood (the
+  pre-S10 values), its Nominal branch (volume = maximum, stored volume ignored,
+  fraction 1.0, live bleed rate) otherwise, chosen by the pure mode resolver
+  (`instanceBloodView`). The wound fold, the unit-thread movement multiplier,
+  `unit.getBlood` (still `{current, max, bleedRate}`), `unit.readBloodView`,
+  circulation and cardio all read through it. Under Nominal the combat wound
+  fold, inside its one atomic update, debits no volume, recovers none and
+  raises no blood-loss collapse or exsanguination, while wounds, healing,
+  infection, necrosis, gangrene death, pain, clotting, bandages and the bleed
+  rate are unchanged (Nominal blood is not injury immunity); the visual
+  bleeding trail is credited the wound-derived external flow directly, the one
+  intentional exception to #882's conserved accounting, and zero external
+  bleeding (a sealing dressing, full clotting, a healed-out wound) clears the
+  accumulator at once in both modes. A transition writes the dedicated field
+  atomically (Nominal -> Simulated seeds the maximum, Simulated -> Nominal
+  writes it); a raw `unit.setStat` of the volume or a derived key is refused;
+  an Unsupported (bodyless) unit keeps today's raw blood behavior and reads
+  `nil` through the physiology verbs. A Nominal stored volume is serialized but
+  ignored and rebuilt silently at load. Gates: hspec `--match "physiology
+  blood modes"`, `tools/bleeding_trail_probe.py`,
+  `tools/persistence_contract_probe.py` and the access audit.
 * *`salt_conc`* is computed on every read (and inside salt's excretion) by one
   shared pure rule and never stored.
 * *Cardio and circulation (S9, #2836).* Cardio owns `heart_rate` (healthy

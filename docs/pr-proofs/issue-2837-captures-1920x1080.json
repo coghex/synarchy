@@ -1,0 +1,54 @@
+{
+ "size": "1920x1080",
+ "units": {
+  "moving": 1,
+  "pooling": 2,
+  "sealed": 3,
+  "simulated": 4
+ },
+ "captures": [
+  {
+   "state": {
+    "moving": "3.685/3.685 L bleed 0.8462 mode=nominal",
+    "pooling": "3.293/3.293 L bleed 0.7916 mode=nominal",
+    "sealed": "4.956/4.956 L bleed 0.0000 mode=nominal",
+    "simulated": "2.819/3.528 L bleed 0.0260 mode=simulated"
+   }
+  },
+  {
+   "frame": "1920x1080_world_marks",
+   "note": "moving Nominal bleeder's trail, the stationary one's pool, the sealed unit's clean path: {'moving': '3.685/3.685 L bleed 0.8355 mode=nominal', 'pooling': '3.293/3.293 L bleed 0.7816 mode=nominal', 'sealed': '4.956/4.956 L bleed 0.0000 mode=nominal', 'simulated': '2.738/3.528 L bleed 0.0149 mode=simulated'}",
+   "selected": "",
+   "offset": 0,
+   "rows": ""
+  },
+  {
+   "frame": "1920x1080_nominal_blood_row",
+   "note": "Nominal bleeder, Blood row (3.685/3.685 L bleed 0.7622 mode=nominal)",
+   "selected": "1",
+   "offset": 0,
+   "rows": "Nominal | 0.59 | 37.0\u00b0C"
+  },
+  {
+   "frame": "1920x1080_nominal_blood_tooltip",
+   "note": "Nominal tooltip on the Blood row: the live bleed rate is kept",
+   "selected": "1",
+   "offset": 0,
+   "rows": "Nominal | 0.59 | 37.0\u00b0C"
+  },
+  {
+   "frame": "1920x1080_nominal_blood_conditions",
+   "note": "Nominal bleeder, the wound-driven conditions (3.685/3.685 L bleed 0.1967 mode=nominal)",
+   "selected": "1",
+   "offset": 13,
+   "rows": "12.1 / 16.3 kg | Bleeding | Deep lacerati\u2026"
+  },
+  {
+   "frame": "1920x1080_simulated_blood_row",
+   "note": "Simulated bleeder, Blood row (2.765/3.528 L bleed 0.0000 mode=simulated)",
+   "selected": "4",
+   "offset": 0,
+   "rows": "2.8 / 3.5 L | 0.12 | 37.0\u00b0C"
+  }
+ ]
+}
