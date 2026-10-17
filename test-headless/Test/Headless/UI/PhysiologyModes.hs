@@ -341,16 +341,17 @@ cardioNominalSpec = describe "A Nominal cardio" $ do
 
 unsupportedSpec ∷ Spec
 unsupportedSpec = describe "A bodyless (Unsupported) unit" $
-    it "hides every physiology row, stamina and the cardio rows included, and keeps the unowned blood and injury rows" $
+    it "hides every physiology row, stamina, cardio and blood included, and keeps the unowned pain and injury rows" $
         withPanel [ (unitSpec 1 "tiller" Nothing)
                       { usStats = [("sleep_pressure", 50), ("max_sleep_pressure", 100)]
                       , usWounds = [wound] } ] $ \(_, ls) → do
             rs ← rowsOf ls
             absent rs [ "Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina"
-                      , "Sleep", "Heart Rate", "Blood O\8322", "Circulation" ]
-            forM_ ["Blood", "Pain"] (void ∘ rowNamed rs)
+                      , "Sleep", "Heart Rate", "Blood O\8322", "Circulation", "Blood" ]
+            -- the Blood row follows the D-8 hiding too (#2837); pain is unowned
+            void (rowNamed rs "Pain")
             -- the injury row survives: it is the one row that is no fixed vital
-            let vitals = ["Blood", "Pain", "Consciousness", "Carry Load"]
+            let vitals = ["Pain", "Consciousness", "Carry Load"]
             [ n | n ← HM.keys rs, n `notElem` vitals ] `shouldSatisfy` (not ∘ null)
   where
     wound = Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.5

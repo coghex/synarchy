@@ -51,7 +51,7 @@ import qualified Data.Text as T
 import Unit.Blood (bloodViewOf)
 import Unit.Physiology
     (PhysioContext(..), resolveMode, engagementApplied, combatEngagedKey)
-import Unit.Physiology.Transition (KeyRepair(..), reconcileStoredKeys)
+import Unit.Physiology.Transition (KeyRepair(..), canonicalBlood, reconcileStoredKeys)
 import Unit.Physiology.Types
 import Unit.Types (UnitId(..))
 import World.Page.Types (WorldPageId(..))
@@ -290,9 +290,20 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
         (statsB, repairs) ← either (\(sid, key, why) → reject sid key why) Right
                                    (reconcileStoredKeys ctx)
         let notes = overrideNotes ⧺ frameNote ⧺ map renderRepair repairs
-        if null notes
+            -- A Nominal blood's stored uiBlood is SERIALIZED BUT IGNORED
+            -- (#2837): reads never trust it, and the load rewrites it to the
+            -- current canonical maximum (base body mass x 0.075) silently,
+            -- the way the other rebuilt caches are rebuilt. It is not a
+            -- logged repair: a unit saved by current code under unchanged
+            -- content whose body mass moved afterwards must normalize ZERO
+            -- times, and a second load finds the field already canonical.
+            canonical = case canonicalBlood ctx of
+                Just c | c ≢ uisBlood u → Just c
+                _ → Nothing
+        if null notes ∧ isNothing canonical
             then Right (u, [])
-            else Right ( u { uisStats = statsB, uisPhysioOverrides = overrides }
+            else Right ( u { uisStats = statsB, uisPhysioOverrides = overrides
+                           , uisBlood = fromMaybe (uisBlood u) canonical }
                        , notes )
   where
     unless' c e = if c then Right () else e

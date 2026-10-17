@@ -91,17 +91,17 @@ richPhysiology = UnitPhysiology True (Just "rich")
     (HM.fromList
         [ (s, PhysioSimulated)
         | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
-             , "exhaustion", "sleep", "cardio"] ])
+             , "exhaustion", "sleep", "cardio", "blood"] ])
     HM.empty
 
 -- | The @exempt@ profile as a pure value: every system Nominal except
---   cardio, which #2754 kept live and S9 (#2836) keeps Simulated.
+--   cardio and blood, which #2754 kept live (S9 #2836, S10 #2837).
 exemptPhysiology ∷ UnitPhysiology
 exemptPhysiology = UnitPhysiology True (Just "exempt")
     (HM.fromList
-        [ (s, if s ≡ "cardio" then PhysioSimulated else PhysioNominal)
+        [ (s, if s `elem` ["cardio", "blood"] then PhysioSimulated else PhysioNominal)
         | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
-             , "exhaustion", "sleep", "cardio"] ])
+             , "exhaustion", "sleep", "cardio", "blood"] ])
     HM.empty
 
 -- | Nutrition and stamina Simulated, the other three Nominal: for a fixture
@@ -115,7 +115,9 @@ nutritionOnlyPhysiology = UnitPhysiology True Nothing
         [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
         , ("hydration", PhysioNominal), ("nutrition", PhysioSimulated)
         , ("stamina", PhysioSimulated), ("exhaustion", PhysioNominal)
-        , ("sleep", PhysioNominal), ("cardio", PhysioNominal) ])
+        , ("sleep", PhysioNominal), ("cardio", PhysioNominal)
+        -- blood keeps its wound-fold behavior in these isolation fixtures
+        , ("blood", PhysioSimulated) ])
     HM.empty
 
 -- | Only stamina Simulated, every other system Nominal: for a fixture that
@@ -126,5 +128,7 @@ staminaOnlyPhysiology = UnitPhysiology True Nothing
         [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
         , ("hydration", PhysioNominal), ("nutrition", PhysioNominal)
         , ("stamina", PhysioSimulated), ("exhaustion", PhysioNominal)
-        , ("sleep", PhysioNominal), ("cardio", PhysioNominal) ])
+        , ("sleep", PhysioNominal), ("cardio", PhysioNominal)
+        -- blood keeps its wound-fold behavior in these isolation fixtures
+        , ("blood", PhysioSimulated) ])
     HM.empty

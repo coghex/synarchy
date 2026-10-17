@@ -61,6 +61,17 @@ REGISTRY = {
                        "substitute": {"value": "RESTING_HR"}},
                       {"name": "circulation", "substitute": "live"}],
          "effects": [{"name": "oxygen_path_hypoxia", "substitute": "none"}]},
+        # S10 (#2837): blood stores its volume in the dedicated field uiBlood, so
+        # it has a HASKELL owner (HASKELL_OWNERS) and no Lua one.
+        {"id": "blood", "requires": ["body"],
+         "owns": [{"key": "blood", "field": "uiBlood",
+                   "healthy": {"rule": "blood_max"}}],
+         "derived": [{"key": "blood_max", "rule": "blood_max", "healthy": "live"},
+                     {"key": "blood_fraction", "rule": "blood_fraction",
+                      "healthy": "live"}],
+         "provides": [{"name": "blood_max", "substitute": "live"}],
+         "contributes": [{"name": "visual_loss", "substitute": "wound_flow"}],
+         "effects": [{"name": "volume_drain", "substitute": "none"}]},
     ]
 }
 
@@ -189,13 +200,26 @@ UNITS = {"data/units/acolyte.yaml":
                      "skills": {"balance": {"base": 40}}}]}}
 
 
-def run_audit(files=None, probe=PROBE_PY, doc=REGISTRY, units=UNITS, **over):
+# A Haskell corpus in which every inventoried file mentions the blood field and
+# nothing else does: the baseline the blood cases perturb.
+BASE_HS: dict[str, str] = {
+    path: "-- " + reason + "\nuiBlood\n"
+    for path, reason in audit.BLOOD_FIELD_INVENTORY.items()}
+BASE_HS["src/Other/Unrelated.hs"] = "module Other.Unrelated where\n"
+
+
+def run_audit(files=None, probe=PROBE_PY, doc=REGISTRY, units=UNITS,
+              hs=None, policy=None, **over):
     corpus = dict(BASE)
     corpus.update(files or {})
     for k in [k for k, v in corpus.items() if v is None]:
         del corpus[k]
+    hs_corpus = dict(BASE_HS)
+    hs_corpus.update(hs or {})
+    for k in [k for k, v in hs_corpus.items() if v is None]:
+        del hs_corpus[k]
     return audit.run_audit(corpus, ("tools/physiology_probe.py", probe),
-                           doc, units, TEST_POLICY)
+                           doc, units, policy or TEST_POLICY, hs_files=hs_corpus)
 
 
 def expect_clean(name, **kw):
@@ -209,6 +233,46 @@ def expect(name, needle, **kw):
         f"{name}: expected a finding containing {needle!r}, got:\n  " + \
         ("\n  ".join(f) if f else "(nothing)")
     return f
+
+
+def _sys(doc, sid):
+    return next(x for x in doc["systems"] if x["id"] == sid)
+
+
+def case_blood_field_owner_and_inventory():
+    # blood stores its volume in uiBlood: a HASKELL owner, no Lua one (#2837)
+    expect_clean("blood baseline")
+    import copy
+    # a field-backed system with no Haskell owner is a coverage finding
+    pol = audit.Policy(probe_fixture=TEST_POLICY.probe_fixture, haskell_owners={})
+    r = run_audit(policy=pol)
+    assert any("has no Haskell owner" in x for x in r), r
+    # an owner file that is gone, or never mentions the field
+    expect("owner missing", "named as the Haskell owner of system 'blood' but "
+           "does not exist", hs={"src/Unit/Blood.hs": None})
+    expect("owner silent", "never mentions uiBlood",
+           hs={"src/Unit/Blood.hs": "module Unit.Blood where\n"})
+    # a new reader of the field that is not inventoried is flagged
+    expect("untracked reader", "touches the blood field or bloodView but is not "
+           "in BLOOD_FIELD_INVENTORY",
+           hs={"src/Sneaky/Reader.hs": "x = uiBlood inst\n"})
+    expect("untracked view", "src/Sneaky/View.hs: touches the blood field",
+           hs={"src/Sneaky/View.hs": "v = bloodViewOf s 1 0\n"})
+    # an inventory entry that stopped touching the field is stale
+    expect("stale entry", "no longer touches the blood field",
+           hs={"src/Unit/Thread/Command/Motion.hs": "module M where\n"})
+    # an unknown storage field
+    doc = copy.deepcopy(REGISTRY)
+    _sys(doc, "blood")["owns"][0]["field"] = "uiMystery"
+    expect("unknown field", "unknown storage field 'uiMystery'", doc=doc)
+    # a derived blood key must still be numeric or live
+    doc = copy.deepcopy(REGISTRY)
+    _sys(doc, "blood")["derived"][0]["healthy"] = "always"
+    expect("blood derived word", "derived key 'blood_max' needs a rule", doc=doc)
+    # the wound_flow substitute is a recognized word, never None
+    doc = copy.deepcopy(REGISTRY)
+    _sys(doc, "blood")["contributes"][0]["substitute"] = None
+    expect("no wound flow", "entry 'visual_loss' has no Nominal substitute", doc=doc)
 
 
 def case_baseline_is_clean():
@@ -609,21 +673,21 @@ def case_registry_coverage():
     # A derived key's healthy value is a number or `live` (#2836); anything
     # else, or none, is refused.
     doc = copy.deepcopy(REGISTRY)
-    doc["systems"][-1]["derived"][0]["healthy"] = "always"
+    _sys(doc, "cardio")["derived"][0]["healthy"] = "always"
     expect("derived word", "derived key 'circulation' needs a rule and a healthy "
            "value", doc=doc)
     doc = copy.deepcopy(REGISTRY)
-    del doc["systems"][-1]["derived"][0]["healthy"]
+    del _sys(doc, "cardio")["derived"][0]["healthy"]
     expect("derived none", "derived key 'circulation' needs a rule and a healthy "
            "value", doc=doc)
     expect_clean("a live derived key", doc=REGISTRY)
     # A `live` substitute names a provided live derived key of its own system.
     doc = copy.deepcopy(REGISTRY)
-    doc["systems"][-1]["provides"][1]["name"] = "oxygen_map"
+    _sys(doc, "cardio")["provides"][1]["name"] = "oxygen_map"
     expect("live names no derived key", "entry 'oxygen_map' has a `live` "
            "substitute", doc=doc)
     doc = copy.deepcopy(REGISTRY)
-    doc["systems"][-1]["derived"][0]["healthy"] = 1.0
+    _sys(doc, "cardio")["derived"][0]["healthy"] = 1.0
     expect("live on a constant derived key", "entry 'circulation' has a `live` "
            "substitute", doc=doc)
     # An owner file must exist and must name a key.

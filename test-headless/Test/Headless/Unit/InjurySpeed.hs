@@ -17,6 +17,7 @@ import World.Page.Types (WorldPageId(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
+import Unit.Blood (BloodView, bloodViewOf)
 import Unit.Thread.Command (injurySpeedMult)
 
 -- A body part builder: id plus the two locomotion-relevant flags.
@@ -63,7 +64,11 @@ wound p sev = Wound
     , woundInfectionType = "", woundNecrosis = 0.0 }
 
 speedMult ∷ [Wound] → Float
-speedMult ws = injurySpeedMult bodyParts (inst ws)
+speedMult ws = injurySpeedMult (rawBlood (inst ws)) bodyParts (inst ws)
+
+-- | The raw (unmoded) blood view of an instance, as a Simulated blood reads.
+rawBlood ∷ UnitInstance → BloodView
+rawBlood i = bloodViewOf (uiStats i) (uiBlood i) 0
 
 spec ∷ Spec
 spec = describe "injurySpeedMult (data-driven leg/torso classification, #393)" $ do

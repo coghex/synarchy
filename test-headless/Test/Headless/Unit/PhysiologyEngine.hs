@@ -295,14 +295,14 @@ loaderSpec = describe "engine.loadPhysiologyYaml (requirement 1)" $ do
             luaText eng ("local n, p = engine.loadPhysiologyYaml(\
                          \" <> quoted shippedPhysiologyPath <> ", true); \
                          \return string.format('%d|%s', n, tostring(p))")
-                `shouldReturn` "8|true"
+                `shouldReturn` "9|true"
             luaText eng ("return tostring(select('#', engine.loadPhysiologyYaml(\
                          \" <> quoted shippedPhysiologyPath <> ")))")
                 `shouldReturn` "1"
             reg ← readIORef (crPhysiologyRegistryRef
                       (toContentRegistriesCapability (peEnv eng)))
             map psId (prSystems reg)
-                `shouldBe` ["thermo", "salt", "hydration", "nutrition", "stamina", "exhaustion", "sleep", "cardio"]
+                `shouldBe` ["thermo", "salt", "hydration", "nutrition", "stamina", "exhaustion", "sleep", "cardio", "blood"]
             prSource reg `shouldBe` Just shippedPhysiologyPath
 
     it "reports a malformed file as NOT parsed, at zero, and registers \
@@ -352,15 +352,15 @@ loaderSpec = describe "engine.loadPhysiologyYaml (requirement 1)" $ do
                         reg ← readIORef (crPhysiologyRegistryRef
                                   (toContentRegistriesCapability (peEnv eng)))
                         pure (map psId (prSystems reg))
-                load shippedPhysiologyPath `shouldReturn` "8|nil|nil"
+                load shippedPhysiologyPath `shouldReturn` "9|nil|nil"
                 -- the same path again is a reload, not a collision
-                load shippedPhysiologyPath `shouldReturn` "8|nil|nil"
+                load shippedPhysiologyPath `shouldReturn` "9|nil|nil"
                 -- a different file is never merged into the first
                 load path `shouldReturn`
                     "0|" <> T.pack shippedPhysiologyPath
                         <> "|duplicate physiology registry"
                 systemsNow `shouldReturn`
-                    ["thermo", "salt", "hydration", "nutrition", "stamina", "exhaustion", "sleep", "cardio"]
+                    ["thermo", "salt", "hydration", "nutrition", "stamina", "exhaustion", "sleep", "cardio", "blood"]
 
     it "refuses a registry carrying a non-finite literal, naming it, and \
        \leaves the previously registered registry untouched" $
@@ -373,7 +373,7 @@ loaderSpec = describe "engine.loadPhysiologyYaml (requirement 1)" $ do
                          \" <> quoted p <> ", true); \
                          \return string.format('%d|%s|%s', n, tostring(d), \
                          \tostring(r))")
-                load shippedPhysiologyPath `shouldReturn` "8|nil|nil"
+                load shippedPhysiologyPath `shouldReturn` "9|nil|nil"
                 -- the content decides: validation runs before the
                 -- one-registry check
                 load path `shouldReturn`
@@ -381,7 +381,7 @@ loaderSpec = describe "engine.loadPhysiologyYaml (requirement 1)" $ do
                 reg ← readIORef (crPhysiologyRegistryRef
                           (toContentRegistriesCapability (peEnv eng)))
                 map psId (prSystems reg)
-                    `shouldBe` ["thermo", "salt", "hydration", "nutrition", "stamina", "exhaustion", "sleep", "cardio"]
+                    `shouldBe` ["thermo", "salt", "hydration", "nutrition", "stamina", "exhaustion", "sleep", "cardio", "blood"]
                 prSource reg `shouldBe` Just shippedPhysiologyPath
 
 -----------------------------------------------------------------------
@@ -491,7 +491,8 @@ registrationSpec = describe "unit registration (requirements 2 and 5)" $ do
                             , ("stamina", PhysioSimulated)
                             , ("exhaustion", PhysioSimulated)
                             , ("sleep", PhysioSimulated)
-                            , ("cardio", PhysioSimulated) ]
+                            , ("cardio", PhysioSimulated)
+                            , ("blood", PhysioSimulated) ]
                         , upEngagement = HM.empty }
 
         it "accepts entries without a profile, and a profile without \
@@ -509,7 +510,7 @@ registrationSpec = describe "unit registration (requirements 2 and 5)" $ do
                     `shouldReturn` Just (HM.fromList [("salt", PhysioSimulated)])
                 fmap (HM.size ∘ upDefaults ∘ udPhysiology)
                     <$> registeredDef eng "spec_2828_b"
-                    `shouldReturn` Just 8
+                    `shouldReturn` Just 9
 
         it "leaves a definition with no block with NO authored defaults, \
            \and a bodyless one without the body capability" $
@@ -559,7 +560,7 @@ shippedDefaults name = HM.fromList $ case name of
     "acolyte"         → [ (s, PhysioSimulated) | s ← allSystems ]
     -- the `exempt` profile: every system Nominal but cardio, which #2754
     -- kept live (S9, #2836)
-    "nomad_primitive" → [ (s, if s ≡ "cardio" then PhysioSimulated else PhysioNominal)
+    "nomad_primitive" → [ (s, if s `elem` ["cardio", "blood"] then PhysioSimulated else PhysioNominal)
                         | s ← allSystems ]
     -- the `simple` profile (SD-10, #2833): the squirrel's salt is Nominal
     "red_squirrel"    → [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
@@ -567,12 +568,13 @@ shippedDefaults name = HM.fromList $ case name of
                         , ("stamina", PhysioSimulated)
                         -- S8b (#2835): no go_to_sleep behavior, no sleep need
                         , ("exhaustion", PhysioSimulated), ("sleep", PhysioNominal)
-                        , ("cardio", PhysioSimulated) ]
+                        , ("cardio", PhysioSimulated), ("blood", PhysioSimulated) ]
     "bear_brown" →
         [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
         , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
         , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
-        , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated) ]
+        , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated)
+        , ("blood", PhysioSimulated) ]
     -- the mule has no stamina pool configuration: Nominal (S8-F1, #2834)
     "technomule" →
         [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
@@ -580,10 +582,10 @@ shippedDefaults name = HM.fromList $ case name of
         , ("stamina", PhysioNominal)
         -- no fatigue or sleep-debt pool configuration either (#2835)
         , ("exhaustion", PhysioNominal), ("sleep", PhysioNominal)
-        , ("cardio", PhysioSimulated) ]
+        , ("cardio", PhysioSimulated), ("blood", PhysioSimulated) ]
     _                 → []
   where allSystems = [ "hydration", "salt", "thermo", "nutrition", "stamina"
-                     , "exhaustion", "sleep", "cardio" ]
+                     , "exhaustion", "sleep", "cardio", "blood" ]
 
 bodiedRoster, bodylessRoster ∷ [Text]
 bodiedRoster = [ "acolyte", "bear_brown", "nomad_primitive", "red_squirrel"
@@ -622,7 +624,7 @@ shippedRosterSpec = describe "the shipped roster (requirements 2 and 6)" $ do
             installScene eng defList
                 [ mkInstance (udName d) inputs | d ← defList ] 0 rngSeed
             forM_ (zip [1 ∷ Int ..] defList) $ \(i, d) →
-                forM_ ["hydration", "salt", "thermo", "nutrition", "stamina", "cardio"] $ \sys → do
+                forM_ ["hydration", "salt", "thermo", "nutrition", "stamina", "cardio", "blood"] $ \sys → do
                     got ← luaText eng ("return tostring(unit.getPhysioMode("
                                        <> tshow i <> ", '" <> sys <> "'))")
                     got `shouldBe`
@@ -1062,7 +1064,7 @@ registryAccessorSpec = describe "engine.getPhysiologyRegistry (requirement 1)" $
             luaText eng
                 "local r = engine.getPhysiologyRegistry(); \
                 \return table.concat(r.systemOrder, ',')"
-                `shouldReturn` "thermo,salt,hydration,nutrition,stamina,exhaustion,sleep,cardio"
+                `shouldReturn` "thermo,salt,hydration,nutrition,stamina,exhaustion,sleep,cardio,blood"
             luaText eng
                 "local s = engine.getPhysiologyRegistry().systems.salt; \
                 \return s.owns[1].key .. ',' .. s.owns[2].key .. '|' .. \

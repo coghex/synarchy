@@ -174,9 +174,16 @@ local function unitConditions(uid)
             local seep = (1 - (w.clot or 0)) * (w.bandage or 1)
             if (w.kind == "slash" or w.kind == "stab")
                and effSev >= 0.2 and seep > 0.02 then
-                out[#out + 1] = { name = "Bleeding", icon = "blood",
-                    hint = "Losing blood from open wounds.\n"
-                        .. "Bleeds out at 0 blood; revives once it recovers." }
+                -- Under a Nominal blood the volume is never lost: the wound-driven
+                -- condition stays, but it must not claim exsanguination or a
+                -- volume-based revival (#2837).
+                local hint = "Losing blood from open wounds.\n"
+                    .. "Bleeds out at 0 blood; revives once it recovers."
+                if physio.keyState(uid, "blood") == "nominal" then
+                    hint = "Open wounds are bleeding (and marking the ground).\n"
+                        .. "Blood volume is not simulated for this unit, so it is not lost."
+                end
+                out[#out + 1] = { name = "Bleeding", icon = "blood", hint = hint }
                 break
             end
         end
@@ -270,8 +277,8 @@ end
 -- can or can't act.
 function M.buildStatusPanel(rect, uid)
     local rows = {
-        { key = "blood",     value = fmtBlood, colorFn = bloodColorFn,
-          valueTooltip = bloodValueTooltip },
+        physio.row({ key = "blood", value = fmtBlood, colorFn = bloodColorFn,
+          valueTooltip = bloodValueTooltip }, uid),
         { key = "pain",      value = fmtPain,  colorFn = painColorFn },
         physio.row({ key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor }, uid),
         physio.row({ key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor }, uid),

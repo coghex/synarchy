@@ -101,12 +101,14 @@ scaleList o = case KM.lookup (Key.fromText "scale") o of
 data PhysiologyYamlOwned = PhysiologyYamlOwned
     { pyoKey     ∷ !Text
     , pyoHealthy ∷ !(Maybe PhysiologyYamlHealthy)
+    , pyoField   ∷ !(Maybe Text)
+      -- ^ @field: uiBlood@ (#2837): the dedicated unit field storing the key
     } deriving (Show, Eq)
 
 instance FromJSON PhysiologyYamlOwned where
     parseJSON = withObject "owned key" $ \o → do
-        onlyKeys ["key", "healthy"] o
-        PhysiologyYamlOwned ⊚ o .: "key" ⊛ o .:? "healthy"
+        onlyKeys ["key", "healthy", "field"] o
+        PhysiologyYamlOwned ⊚ o .: "key" ⊛ o .:? "healthy" ⊛ o .:? "field"
 
 -- | How a derived key's Nominal answer was written: a number, or the word
 --   @live@ (#2836, S9: the rule itself, evaluated with the system's inputs
@@ -319,6 +321,8 @@ admitPhysiologyDoc path doc = do
                 when (dkHealthy d ≡ DerivedLive) $
                     refuse "physiology derived rule cannot be live"
                            (psId s <> "." <> dkKey d)
+            DerivedBloodMax      → bloodDerived s d
+            DerivedBloodFraction → bloodDerived s d
             DerivedCirculation → do
                 requireOwned partial (psId s <> "." <> dkKey d) "core_temp"
                 unless (any ((≡ "heart_rate") ∘ okKey) (psOwns s)) $
@@ -348,6 +352,18 @@ admitPhysiologyDoc path doc = do
     checkUnique reason names = case names \\ nub names of
         (n : _) → refuse reason n
         []      → pure ()
+
+    -- #2837: the blood derived keys read the dedicated field of an owned key
+    -- of their OWN system, and are live (a Nominal read is the mode-aware
+    -- view, never a constant).
+    bloodDerived s d = do
+        unless (any (isJust ∘ okField) (psOwns s)) $
+            refuse "unresolved physiology derived rule input"
+                   (psId s <> "." <> dkKey d
+                    <> " needs a field-backed owned key in its own system")
+        when (dkHealthy d ≢ DerivedLive) $
+            refuse "physiology blood derived key must be live"
+                   (psId s <> "." <> dkKey d)
 
     requireOwned reg who k = case classifyKey reg k of
         Just (_, RoleOwned _) → pure ()
@@ -388,9 +404,15 @@ admitSystem constants s = do
                 YamlHealthyFrom k qs →
                     HealthyFrom k <$> traverse (declared (ownedLabel o)) qs
                 YamlHealthyRule "max_stamina" → Right HealthyMaxStamina
+                YamlHealthyRule "blood_max" → Right HealthyBloodMax
                 YamlHealthyRule r → refuse "unknown physiology healthy rule"
                                            (ownedLabel o <> ": " <> r)
-            pure (OwnedKey (pyoKey o) rule)
+            field ← case pyoField o of
+                Nothing → Right Nothing
+                Just "uiBlood" → Right (Just "uiBlood")
+                Just f → refuse "unknown physiology storage field"
+                                (ownedLabel o <> ": " <> f)
+            pure (OwnedKey (pyoKey o) rule field)
 
     admitDerived d = do
         rule ← maybe (refuse "unknown physiology derived rule"
@@ -422,6 +444,7 @@ admitSystem constants s = do
                 "virtual_meal"    → Right SubVirtualMeal
                 "tissue_recovery" → Right SubTissueRecovery
                 "live"            → Right SubLive
+                "wound_flow"      → Right SubWoundFlow
                 _ → refuse "unknown physiology substitute" (who <> ": " <> w)
         pure (InterfaceEntry (pyeName e) substitute)
 

@@ -29,7 +29,10 @@ import qualified Data.List as L
 import Engine.Core.State (EngineEnv)
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Unit.Types
-import Combat.Wounds (bleedRateFor)
+import Engine.Core.Capability.ContentRegistries
+    (crPhysiologyRegistryRef, toContentRegistriesCapability)
+import Unit.Blood (BloodView(..))
+import Unit.Physiology (unitBloodView)
 import Combat.Types (pushInjuryEvent)
 import Combat.Resolution.Common (mentalEffectiveness)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
@@ -402,12 +405,14 @@ unitGetBloodFn env = do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
-                    Just inst →
-                        let bm = HM.lookupDefault 70.0 "body_mass"
-                                                 (uiStats inst)
-                            rate = maybe 0.0 (\d → bleedRateFor d inst)
-                                     (HM.lookup (uiDefName inst) (umDefs um))
-                        in return $ Just (uiBlood inst, bm * bloodMassRatio, rate)
+                    Just inst → do
+                        -- The one mode-aware adapter (#2837): a Nominal blood
+                        -- reads current = max, every other mode today's raw
+                        -- volume, with the live wound bleed rate either way.
+                        reg ← readIORef (crPhysiologyRegistryRef
+                                  (toContentRegistriesCapability env))
+                        let v = unitBloodView reg um inst
+                        return $ Just (bvVolume v, bvMax v, bvBleedRate v)
             case mPair of
                 Nothing → Lua.pushnil >> return 1
                 Just (cur, mx, rate) → do

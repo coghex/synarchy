@@ -2,8 +2,8 @@
 -- design D-7, D-8).
 --
 -- The Status panel's rows and conditions for the registry's systems
--- (thermo, salt, hydration, nutrition, stamina, sleep, cardio; exhaustion has
--- no row) follow the unit's RESOLVED mode:
+-- (thermo, salt, hydration, nutrition, stamina, sleep, cardio, blood;
+-- exhaustion has no row) follow the unit's RESOLVED mode:
 --
 --   * Simulated  -- unchanged: today's values, units, formats, colours.
 --   * Nominal    -- the row shows its healthy reading (a pool shows the
@@ -58,6 +58,10 @@ local ROW_KEY = {
     heart_rate     = "heart_rate",
     blood_oxygen   = "blood_oxygen",
     circulation    = "circulation",
+    -- The blood system's volume (#2837, S10): the row key and the registry key
+    -- are both `blood`. Its value lives in the dedicated uiBlood field, read
+    -- through physiology.get, never a stats key.
+    blood          = "blood",
 }
 M.ROW_KEY = ROW_KEY
 
@@ -124,6 +128,21 @@ local NOMINAL_TEXT_OF = {
     sleep_pressure = poolText,
     heart_rate   = healthyHeartRate,
     blood_oxygen = healthyBloodOxygen,
+    blood        = poolText,
+}
+
+-- A Nominal row whose tooltip carries more than the Nominal hint: the blood
+-- row keeps the LIVE wound bleed rate, because Nominal blood supplies a full
+-- volume but never stops a wound bleeding (#2837). Returns extra hint text.
+local NOMINAL_EXTRA = {
+    blood = function(uid)
+        local b = unit.getBlood(uid)
+        local rate = b and b.bleedRate or 0
+        if rate <= 0 then return "Not bleeding." end
+        local pct = (b.max and b.max > 0) and (rate / b.max * 100) or 0
+        return string.format("Bleeding: %.0f ml/s (%.2f%%/s), but the volume is not lost.",
+            rate * 1000, pct)
+    end,
 }
 
 -- The label and its healthy reading are two words, so a Nominal scalar row
@@ -167,7 +186,9 @@ function M.row(def, uid)
     end
     out.valueTooltip = function(uid)
         if M.keyState(uid, regKey) == "nominal" then
-            return { text = name, hint = M.NOMINAL_HINT }
+            local extra = NOMINAL_EXTRA[def.key]
+            return { text = name,
+                     hint = extra and (M.NOMINAL_HINT .. "\n" .. extra(uid)) or M.NOMINAL_HINT }
         end
         return tooltipFn and tooltipFn(uid) or nil
     end

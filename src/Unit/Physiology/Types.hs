@@ -161,6 +161,12 @@ data HealthyRule
       -- ^ @{ from: body_mass, scale: [SALT_PER_KG] }@: the unit's
       --   EFFECTIVE value of the named input stat times the product of
       --   the scale factors (none = 1).
+    | HealthyBloodMax
+      -- ^ @{ rule: blood_max }@ (#2837): BASE @body_mass@ times
+      --   'Unit.Types.Wound.bloodMassRatio' (the 70 kg fallback every blood
+      --   reader has), deliberately NOT the effective body mass, so a
+      --   @body_mass@ modifier never moves it. The rule cannot be a @from:@
+      --   because @from:@ reads the EFFECTIVE input.
     | HealthyMaxStamina
       -- ^ @{ rule: max_stamina }@ (#2834): the unit's effective
       --   @max_stamina@ through the ONE maximum rule
@@ -172,11 +178,20 @@ data HealthyRule
 data OwnedKey = OwnedKey
     { okKey     ∷ !Text
     , okHealthy ∷ !HealthyRule
+    , okField   ∷ !(Maybe Text)
+      -- ^ the dedicated unit FIELD that really stores the key (#2837:
+      --   @uiBlood@), or 'Nothing' for the usual @uiStats@ entry. A
+      --   field-backed key never gets a @uiStats@ entry: every generic path
+      --   that seeds, scrubs, reads or writes stats routes it to the field.
     } deriving (Show, Eq)
 
 -- | The named pure function that computes a derived key.
 data DerivedRule
     = DerivedSaltConcentration
+    | DerivedBloodMax
+      -- ^ blood's @blood_max@ (#2837), the mode-aware maximum of "Unit.Blood".
+    | DerivedBloodFraction
+      -- ^ blood's @blood_fraction@ (#2837), the mode-aware clamped fraction.
     | DerivedCirculation
       -- ^ cardio's @circulation@ (#2836, S9), computed by
       --   @circulationRule@ in "Unit.Physiology.Circulation".
@@ -185,10 +200,14 @@ data DerivedRule
 derivedRuleText ∷ DerivedRule → Text
 derivedRuleText DerivedSaltConcentration = "salt_concentration"
 derivedRuleText DerivedCirculation       = "circulation"
+derivedRuleText DerivedBloodMax          = "blood_max"
+derivedRuleText DerivedBloodFraction     = "blood_fraction"
 
 parseDerivedRule ∷ Text → Maybe DerivedRule
 parseDerivedRule "salt_concentration" = Just DerivedSaltConcentration
 parseDerivedRule "circulation"        = Just DerivedCirculation
+parseDerivedRule "blood_max"          = Just DerivedBloodMax
+parseDerivedRule "blood_fraction"     = Just DerivedBloodFraction
 parseDerivedRule _                    = Nothing
 
 -- | What a derived key reads while its system is not Simulated.
@@ -224,6 +243,11 @@ data Substitute
       -- ^ tissue maintenance becomes depletion-only recovery toward the
       --   healthy target (SD-5), executed by
       --   @scripts\/unit_resource_upkeep.lua@.
+    | SubWoundFlow
+      -- ^ blood's visual-loss contribution (#2837): under Nominal the
+      --   wound-derived external flow credits the bleeding trail directly,
+      --   with no volume debit (the one exception to #882's conserved-volume
+      --   accounting), executed by "Combat.Wounds.Tick".
     | SubLive
       -- ^ a provided DERIVED value whose Nominal answer is its rule
       --   evaluated live, not a constant (#2836, S9: circulation keeps its
