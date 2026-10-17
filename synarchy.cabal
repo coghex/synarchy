@@ -623,7 +623,9 @@ library
                      Unit.Faction.Catalogue
                      Unit.Faction.Membership
                      Unit.Faction.Profile
+                     Unit.Blood
                      Unit.Physiology
+                     Unit.Physiology.Circulation
                      Unit.Physiology.Transition
                      Unit.Physiology.Types
                      World.Save.Physiology

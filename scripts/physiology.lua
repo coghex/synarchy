@@ -16,8 +16,9 @@
 --     being the only thing that decides it (contributionApplies below);
 --   * setMode / clearMode run the engine's atomic transition, then the
 --     transient-cache resets, the change hooks (only on an EFFECTIVE
---     change) and the dt-0 refresh of the caches that read physiology
---     (circulation, then brain) before returning (D-5, D-5a).
+--     change) and the dt-0 refresh of the cache that reads physiology
+--     (the brain's) before returning (D-5, D-5a). Circulation needs no
+--     refresh: since #2836 (S9) it is derived on demand, never cached.
 --
 -- STAMINA (#2834, S8a): its pool is the one a second thread spends, so a
 -- debit or credit on it is a RELATIVE, atomic commit of an EFFECTIVE delta
@@ -276,16 +277,16 @@ end
 
 -- ---- Refresh ----
 
--- Recompute the caches that READ physiology, in dependency order: the
--- circulation stat from the effective core temperature, then the brain's
--- cache values (consciousness, concentration, state of mind) WITHOUT touching
--- its durable integrators (brain.refresh). Run after a transition or a value
--- write so a reader never sees a cache that disagrees with the state that was
--- just published (D-5a). Other threads that read these caches may see the
--- previous values for up to one pass: this refreshes the Lua-owned caches
--- before returning, it is not a cross-thread atomic publication.
+-- Recompute the cache that READS physiology: the brain's cache values
+-- (consciousness, concentration, state of mind) WITHOUT touching its durable
+-- integrators (brain.refresh). Run after a transition or a value write so a
+-- reader never sees a cache that disagrees with the state that was just
+-- published (D-5a). Circulation is not refreshed because it is not cached
+-- (#2836): the read computes it from the current state. Other threads that
+-- read the brain's values may see the previous ones for up to one pass: this
+-- refreshes the Lua-owned cache before returning, it is not a cross-thread
+-- atomic publication.
 function physiology.refresh(uid)
-    require("scripts.circulation").update(uid)
     require("scripts.brain").refresh(uid)
 end
 

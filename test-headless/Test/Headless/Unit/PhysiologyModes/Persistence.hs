@@ -74,9 +74,11 @@ seeds70 =
     , ("salt_store", 140), ("core_temp", 37) ] ⧺ poolSeeds
 
 -- | The exhaustion and sleep pools (#2835) of an endurance-1 unit, whose
---   Simulated systems save them at the full healthy value (endurance x 10).
+--   Simulated systems save them at the full healthy value (endurance x 10),
+--   and cardio's two integrators (#2836) at their healthy readings.
 poolSeeds ∷ [(Text, Float)]
-poolSeeds = [("exhaustion", 10), ("sleep_pressure", 10)]
+poolSeeds = [ ("exhaustion", 10), ("sleep_pressure", 10)
+            , ("heart_rate", 70), ("blood_oxygen", 1) ]
 
 defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text UnitPhysiology
 defsOf = HM.fromList

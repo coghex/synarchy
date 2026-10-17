@@ -151,7 +151,9 @@ pushSystem reg s = do
         Lua.newtable
         field "key" (pushText (dkKey d))
         field "rule" (pushText (derivedRuleText (dkRule d)))
-        field "healthy" (pushNum (dkHealthy d))
+        field "healthy" $ case dkHealthy d of
+            DerivedFixed v → pushNum v
+            DerivedLive    → pushText "live"
     field "meters" (pushArray (psMeters s) pushText)
     field "provides" (pushEntries reg (psProvides s))
     field "contributes" (pushEntries reg (psContributes s))
@@ -199,6 +201,7 @@ pushEntries reg es = pushArray es $ \e → do
             SubNone           → field "kind" (pushText "none")
             SubVirtualMeal    → field "kind" (pushText "virtual_meal")
             SubTissueRecovery → field "kind" (pushText "tissue_recovery")
+            SubLive           → field "kind" (pushText "live")
   where
     resolve (QLit f)   = Just f
     resolve (QConst n) = Map.lookup n (prConstants reg)

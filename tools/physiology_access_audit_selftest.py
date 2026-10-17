@@ -50,6 +50,17 @@ REGISTRY = {
          "owns": [{"key": "sleep_pressure",
                    "healthy": {"from": "endurance", "scale": 10}}],
          "effects": [{"name": "sleep_need", "substitute": "none"}]},
+        # S9 (#2836): cardio owns two integrators and derives circulation,
+        # whose Nominal answer is the live rule, not a constant (`live`).
+        {"id": "cardio", "requires": ["body"],
+         "owns": [{"key": "heart_rate", "healthy": {"const": "RESTING_HR"}},
+                  {"key": "blood_oxygen", "healthy": {"const": 1.0}}],
+         "derived": [{"key": "circulation", "rule": "circulation",
+                      "healthy": "live"}],
+         "provides": [{"name": "heart_rate",
+                       "substitute": {"value": "RESTING_HR"}},
+                      {"name": "circulation", "substitute": "live"}],
+         "effects": [{"name": "oxygen_path_hypoxia", "substitute": "none"}]},
     ]
 }
 
@@ -88,6 +99,11 @@ BASE: dict[str, str] = {
         '  if resourceName == "exhaustion" then return v end\n'
         '  if resourceName == "sleep_pressure" then return v end\n'
         'end\nreturn M\n',
+    # The cardio integrator (#2836): the owner of heart_rate / blood_oxygen.
+    "scripts/cardio.lua": 'local c = {}\nfunction c.tick(uid)\n'
+        '  local hr = unit.getStat(uid, "heart_rate") or 70\n'
+        '  unit.setStat(uid, "heart_rate", hr)\n'
+        '  unit.setStat(uid, "blood_oxygen", 1)\nend\nreturn c\n',
     # Where each pool is registered to its system: it names the keys and
     # touches no state (#2835).
     "scripts/unit_resource_params.lua":
@@ -312,6 +328,32 @@ def case_exhaustion_and_sleep_ownership():
                   "scripts/unit_resource_params.lua": 'local M = {}\nreturn M\n'})
 
 
+def case_cardio_ownership_and_derived_circulation():
+    # heart_rate / blood_oxygen are owned (#2836): a raw read or write outside
+    # cardio.lua is flagged against the cardio system; circulation is DERIVED,
+    # so a raw read of it is flagged too (nothing stores it any more).
+    expect("raw heart rate read", "raw read of owned key 'heart_rate' (system "
+           "'cardio')",
+           files={"scripts/other.lua": 'local h = unit.getStat(1, "heart_rate")\n'})
+    expect("raw oxygen write", "raw write of owned key 'blood_oxygen'",
+           files={"scripts/thermo.lua": BASE["scripts/thermo.lua"].replace(
+               'return t', 'unit.setStat(1, "blood_oxygen", 0)\nreturn t')})
+    expect("raw circulation read", "raw read of derived key 'circulation' (system "
+           "'cardio')",
+           files={"scripts/other.lua":
+                  'local c = unit.getStat(1, "circulation") or 1.0\n'})
+    expect_clean("the facade reads all three", files={"scripts/other.lua":
+        'local p = require("scripts.physiology")\n'
+        'local a = p.get(1, "heart_rate")\n'
+        'local b = p.get(1, "blood_oxygen")\n'
+        'local c = p.get(1, "circulation")\n'})
+    # The cardio integrator writes its own keys; it is the only file that may.
+    expect_clean("cardio.lua owns its integrators")
+    # A cardio owner that names none of its keys is a coverage finding.
+    expect("cardio owner names nothing", "no Lua owner of system 'cardio' names any",
+           files={"scripts/cardio.lua": 'local c = {}\nreturn c\n'})
+
+
 # The temporary S5 allowance for the legacy pool reads was deleted by S6
 # (#2832): the migrated baseline is clean, and every FORM it used to admit
 # is flagged like any other raw read.
@@ -407,11 +449,11 @@ def case_generic_helper_literal_at_call_site():
            '    local m = unit.getStat(uid, maxName)\n'
            '    return c, m\n  end\nend\n'
            'local rows = { fracColorFn("hunger", "max_hunger", 0.1),\n'
-           '               fracColorFn("heart_rate", "max_heart_rate", 0.1) }\n')
+           '               fracColorFn("mood", "max_mood", 0.1) }\n')
     f = expect("closure helper", "raw read of owned key 'hunger' (system "
                "'nutrition') through fracColorFn()",
                files={"scripts/other.lua": src})
-    assert not any("heart_rate" in x or "max_hunger" in x for x in f), f
+    assert not any("mood" in x or "max_hunger" in x for x in f), f
     # A helper never called with a registry key is not a finding.
     expect_clean("helper unused", files={"scripts/other.lua": src.replace(
         'fracColorFn("hunger", "max_hunger", 0.1)', 'fracColorFn("mood", "max_mood", 0.1)')})
@@ -564,6 +606,26 @@ def case_registry_coverage():
     doc = copy.deepcopy(REGISTRY)
     del doc["systems"][1]["derived"][0]["rule"]
     expect("derived no rule", "derived key 'salt_conc' needs a rule", doc=doc)
+    # A derived key's healthy value is a number or `live` (#2836); anything
+    # else, or none, is refused.
+    doc = copy.deepcopy(REGISTRY)
+    doc["systems"][-1]["derived"][0]["healthy"] = "always"
+    expect("derived word", "derived key 'circulation' needs a rule and a healthy "
+           "value", doc=doc)
+    doc = copy.deepcopy(REGISTRY)
+    del doc["systems"][-1]["derived"][0]["healthy"]
+    expect("derived none", "derived key 'circulation' needs a rule and a healthy "
+           "value", doc=doc)
+    expect_clean("a live derived key", doc=REGISTRY)
+    # A `live` substitute names a provided live derived key of its own system.
+    doc = copy.deepcopy(REGISTRY)
+    doc["systems"][-1]["provides"][1]["name"] = "oxygen_map"
+    expect("live names no derived key", "entry 'oxygen_map' has a `live` "
+           "substitute", doc=doc)
+    doc = copy.deepcopy(REGISTRY)
+    doc["systems"][-1]["derived"][0]["healthy"] = 1.0
+    expect("live on a constant derived key", "entry 'circulation' has a `live` "
+           "substitute", doc=doc)
     # An owner file must exist and must name a key.
     expect("owner missing", "scripts/thermo.lua: named as the Lua owner of "
            "system 'thermo' but does not exist", files={"scripts/thermo.lua": None})

@@ -44,6 +44,7 @@ import Combat.Resolution.Stamina (staminaModeFor)
 import Combat.Resolution.Wear (spendStrikeCost)
 import Combat.Types (AttackMode(..))
 import Unit.Command.Types (UnitCommand(..))
+import Unit.Blood (fullBloodView)
 import Unit.Physiology
 import Unit.Physiology.Types
 import Unit.Stats (effectiveStat)
@@ -155,8 +156,10 @@ declarationSpec = describe "the stamina system and its declarations" $ do
                 (Map.lookup "stamina" ∘ ppModes <$> registryProfile reg p)
                     `shouldBe` Just (Just m)
         classifyKey reg "stance" `shouldBe` Nothing
-        classifyKey reg "heart_rate" `shouldBe` Nothing
-        classifyKey reg "blood_oxygen" `shouldBe` Nothing
+        -- heart rate and blood oxygen stopped being unowned when cardio
+        -- joined the registry (S9, #2836): they are cardio's
+        fmap (psId ∘ fst) (classifyKey reg "heart_rate") `shouldBe` Just "cardio"
+        fmap (psId ∘ fst) (classifyKey reg "blood_oxygen") `shouldBe` Just "cardio"
         classifyKey reg "max_stamina" `shouldBe` Nothing
 
     it "validates an engagement declaration: the system exists, is stamina \
@@ -226,7 +229,8 @@ resolverSpec = describe "the mode resolver and the engagement marker" $ do
                 { pcRegistry = reg, pcPhysiology = up
                 , pcOverrides = HM.fromList ovr, pcNow = 0
                 , pcStats = HM.fromList (("endurance", 1) : marker)
-                , pcModifiers = HM.empty }
+                , pcModifiers = HM.empty
+                , pcBlood = fullBloodView HM.empty }
             mode up marker ovr = modeOf (ctxOf up marker ovr) sys
         -- absent and pending are not an engagement: the species default
         mode declares [] [] `shouldBe` ModeNominal

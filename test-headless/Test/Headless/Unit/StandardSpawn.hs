@@ -81,7 +81,8 @@ import World.Tile.Types (WorldTileData(..))
 withoutPhysiology ∷ HM.HashMap Text Float → HM.HashMap Text Float
 withoutPhysiology = HM.filterWithKey (\k _ → k `notElem`
     [ "hydration", "hunger", "calories", "core_temp", "salt", "salt_store"
-    , "stamina", "exhaustion", "sleep_pressure" ])
+    , "stamina", "exhaustion", "sleep_pressure"
+    , "heart_rate", "blood_oxygen" ])
 
 page ∷ WorldPageId
 page = WorldPageId "standard_spawn"

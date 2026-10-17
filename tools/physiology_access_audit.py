@@ -31,8 +31,11 @@ What it checks (exit 1 on any finding, with path:line diagnostics):
   3. REGISTRY COVERAGE. Every system has a Lua owner file that exists and
      names one of its keys; every owned key has a healthy rule (exactly one of
      ``const:`` / ``from:`` / ``rule:``); every derived
-     key a rule and a healthy value; every ``contributes`` entry (and every
-     ``provides`` / ``effects`` entry) a Nominal substitute.
+     key a rule and a healthy value that is a number or ``live`` (#2836: a
+     ``live`` key's Nominal answer is its rule, so it has no constant); every
+     ``contributes`` entry (and every ``provides`` / ``effects`` entry) a
+     Nominal substitute, where ``live`` is only valid on a ``provides`` entry
+     naming a ``live`` derived key of its own system.
   4. TEMPLATING. No unit definition templates a registry key in ``stats:`` or
      ``skills:`` (the loader refuses it at run time; this is the static
      twin).
@@ -128,9 +131,14 @@ class Owner:
 
 
 # system owner -> files that actually own its keys. Registry order is tick
-# order (thermo, salt, hydration, nutrition, stamina, exhaustion, sleep).
+# order (thermo, salt, hydration, nutrition, stamina, exhaustion, sleep) except
+# cardio (#2836), which is listed last but ticked FIRST by the orchestration.
 OWNERS: tuple[Owner, ...] = (
     Owner("thermo", "scripts/thermo.lua"),
+    # Cardio (#2836): the integrator of heart_rate and blood_oxygen. Circulation
+    # is derived by the engine's pure rule, so scripts/circulation.lua is a
+    # thin reader and an owner of nothing.
+    Owner("cardio", "scripts/cardio.lua"),
     Owner("salt", "scripts/salts.lua"),
     # The pool engine: per-resource tick, carry/integrate and revive gate.
     Owner("hydration", "scripts/unit_resource_tick.lua"),
@@ -287,15 +295,27 @@ def check_coverage(doc: dict, files: dict[str, str], policy: Policy) -> list[str
                 out.append(f"{REGISTRY_PATH}: system '{sid}' owned key "
                            f"'{o.get('key')}' has no healthy rule "
                            "(exactly one of const: / from: / rule:)")
+        live_derived = set()
         for d in s.get("derived") or []:
-            if not d.get("rule") or not isinstance(d.get("healthy"), (int, float)):
+            h = d.get("healthy")
+            numeric = isinstance(h, (int, float)) and not isinstance(h, bool)
+            if not d.get("rule") or not (numeric or h == "live"):
                 out.append(f"{REGISTRY_PATH}: system '{sid}' derived key "
-                           f"'{d.get('key')}' needs a rule and a numeric healthy value")
+                           f"'{d.get('key')}' needs a rule and a healthy value "
+                           "(a number, or `live`)")
+            if h == "live":
+                live_derived.add(d.get("key"))
         for section in ("contributes", "provides", "effects"):
             for e in s.get(section) or []:
                 if e.get("substitute") is None:
                     out.append(f"{REGISTRY_PATH}: system '{sid}' {section} "
                                f"entry '{e.get('name')}' has no Nominal substitute")
+                elif e.get("substitute") == "live" and not (
+                        section == "provides" and e.get("name") in live_derived):
+                    out.append(f"{REGISTRY_PATH}: system '{sid}' {section} "
+                               f"entry '{e.get('name')}' has a `live` substitute "
+                               "but is not a provided live derived key of its "
+                               "own system")
         owners = [ow for ow in policy.owners if ow.system == sid]
         if not owners:
             out.append(f"{REGISTRY_PATH}: system '{sid}' has no Lua owner in "

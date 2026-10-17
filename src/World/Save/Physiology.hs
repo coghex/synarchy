@@ -48,6 +48,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import qualified Data.Text as T
+import Unit.Blood (bloodViewOf)
 import Unit.Physiology
     (PhysioContext(..), resolveMode, engagementApplied, combatEngagedKey)
 import Unit.Physiology.Transition (KeyRepair(..), reconcileStoredKeys)
@@ -277,7 +278,11 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
             ctx = PhysioContext
                 { pcRegistry = registry, pcPhysiology = up
                 , pcOverrides = overrides, pcNow = now
-                , pcStats = statsJ, pcModifiers = uisModifiers u }
+                , pcStats = statsJ, pcModifiers = uisModifiers u
+                -- The load gate seeds and scrubs stored keys; nothing it
+                -- does reads blood, and the wounds that price a bleed rate
+                -- are not needed to repair a stat map.
+                , pcBlood = bloodViewOf statsJ (uisBlood u) 0 }
         -- (g): the Nominal-nutrition upkeep's input.
         case upkeepInputProblem registry ctx of
             Just (sid, key, why) → reject sid key why
@@ -388,8 +393,10 @@ physiologyLoadGate registry defs now pages
 --   ride in the stat-map payload ("serialized-but-ignored",
 --   @docs\/persistence_state_inventory.md@'s @UnitInstance (physiology
 --   stats)@ table) and are recomputed canonically before the first paused
---   frame by @unitResources.onSaveLoaded@ (@unit.recomputeBody@, then
---   circulation and the brain at dt 0).
+--   frame by @unitResources.onSaveLoaded@ (@unit.recomputeBody@, then the
+--   brain at dt 0). @circulation@ is not one of them since #2836 (S9): it is
+--   derived on demand and never stored, and a legacy stored copy is scrubbed
+--   by the load gate.
 --
 --   They can legitimately differ between a save and the load of that save:
 --   a pass drains hydration after the brain ticked, so the saved
@@ -401,7 +408,7 @@ physiologyLoadGate registry defs now pages
 --   @mood@, @emotional_pain@, @caffeine@) — is durable and compared exactly.
 rebuiltCacheStats ∷ [Text]
 rebuiltCacheStats =
-    [ "circulation", "consciousness", "concentration", "state_of_mind"
+    [ "consciousness", "concentration", "state_of_mind"
     , "strength", "strength_body"
     , "max_hydration", "max_hunger", "max_calories", "carrying_capacity" ]
 

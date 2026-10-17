@@ -73,6 +73,7 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
+import Unit.Blood (fullBloodView)
 import Unit.Physiology (PhysioContext(..))
 import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Physiology.Types
@@ -191,7 +192,8 @@ buildUnit def sp = do
         ctx    = PhysioContext
             { pcRegistry = reg, pcPhysiology = udPhysiology def
             , pcOverrides = HM.fromList (usOverrides sp), pcNow = 0
-            , pcStats = stats0, pcModifiers = mods }
+            , pcStats = stats0, pcModifiers = mods
+            , pcBlood = fullBloodView stats0 }
     stats ← case reconcileStoredKeys ctx of
         Right (s, _) → pure s
         Left why → do

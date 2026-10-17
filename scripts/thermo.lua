@@ -132,11 +132,12 @@ function thermo.tick(uid, info, dt)
     local core = physiology.get(uid, "core_temp")
     if not core then return end
 
-    -- Circulation for THIS tick's core (vasoconstriction uses it). The stat
-    -- itself is circulation.update's, run every tick before this one from the
-    -- effective core (always on, whatever the thermo mode); this is the same
-    -- pure computation, not a second writer.
-    local circ = circulation.compute(uid, core)
+    -- Circulation, derived on demand (#2836, S9) from the unit's current
+    -- inputs, so it is coherent with this tick's blood, stats and heart rate.
+    -- A Nominal cardio still computes it with every injury factor live (SD-21)
+    -- and a unit this runs for always has a body, so the nil case is only a
+    -- guard.
+    local circ = circulation.get(uid) or 1.0
 
     -- Ambient is ELEVATION-CORRECTED: world.getAmbientAt applies the worldgen
     -- altitude lapse rate (the same one the ice system uses), so a unit on an

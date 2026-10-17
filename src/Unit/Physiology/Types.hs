@@ -37,6 +37,7 @@ module Unit.Physiology.Types
     , HealthyRule(..)
     , OwnedKey(..)
     , DerivedRule(..)
+    , DerivedHealthy(..)
     , derivedRuleText
     , parseDerivedRule
     , DerivedKey(..)
@@ -174,21 +175,38 @@ data OwnedKey = OwnedKey
     } deriving (Show, Eq)
 
 -- | The named pure function that computes a derived key.
-data DerivedRule = DerivedSaltConcentration
+data DerivedRule
+    = DerivedSaltConcentration
+    | DerivedCirculation
+      -- ^ cardio's @circulation@ (#2836, S9), computed by
+      --   @circulationRule@ in "Unit.Physiology.Circulation".
     deriving (Show, Eq)
 
 derivedRuleText ∷ DerivedRule → Text
 derivedRuleText DerivedSaltConcentration = "salt_concentration"
+derivedRuleText DerivedCirculation       = "circulation"
 
 parseDerivedRule ∷ Text → Maybe DerivedRule
 parseDerivedRule "salt_concentration" = Just DerivedSaltConcentration
+parseDerivedRule "circulation"        = Just DerivedCirculation
 parseDerivedRule _                    = Nothing
+
+-- | What a derived key reads while its system is not Simulated.
+data DerivedHealthy
+    = DerivedFixed !Float
+      -- ^ a constant (@salt_conc@ reads 1.0).
+    | DerivedLive
+      -- ^ the rule itself, evaluated with the system's own inputs at their
+      --   healthy readings and every other input live (@circulation@
+      --   under a Nominal cardio, SD-21): the key is not erased by the
+      --   mode, so it has no constant.
+    deriving (Show, Eq)
 
 -- | A key a system computes on demand and never stores.
 data DerivedKey = DerivedKey
     { dkKey     ∷ !Text
     , dkRule    ∷ !DerivedRule
-    , dkHealthy ∷ !Float
+    , dkHealthy ∷ !DerivedHealthy
       -- ^ what the key reads while its system is Nominal.
     } deriving (Show, Eq)
 
@@ -206,6 +224,10 @@ data Substitute
       -- ^ tissue maintenance becomes depletion-only recovery toward the
       --   healthy target (SD-5), executed by
       --   @scripts\/unit_resource_upkeep.lua@.
+    | SubLive
+      -- ^ a provided DERIVED value whose Nominal answer is its rule
+      --   evaluated live, not a constant (#2836, S9: circulation keeps its
+      --   injury factors under a Nominal cardio, SD-21).
     deriving (Show, Eq)
 
 -- | One @provides@ \/ @contributes@ \/ @effects@ entry and its Nominal
