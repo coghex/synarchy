@@ -87,10 +87,10 @@ local function bloodOxygenColor(uid)
     return { 0.75, 0.85, 0.70, 1.0 }
 end
 local function fmtConsciousness(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "consciousness") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "consciousness") or 1.0) * 100 + 0.5))
 end
 local function consciousnessColor(uid)
-    local c = unit.getStat(uid, "consciousness") or 1.0
+    local c = physiology.get(uid, "consciousness") or 1.0
     if c < 0.4 then return { 1.0, 0.30, 0.30, 1.0 } end   -- delirious/out
     if c < 0.7 then return { 1.0, 0.62, 0.25, 1.0 } end   -- confused
     return { 0.75, 0.85, 0.70, 1.0 }
@@ -142,7 +142,7 @@ local function unitConditions(uid)
     -- Mental state from consciousness (brain.lua): confused / delirious. Out-
     -- cold shows as the collapse condition above. Driven by temp extremes, low
     -- blood oxygen, or salt imbalance.
-    local cns = stats.get(uid, "consciousness") or 1.0
+    local cns = physiology.get(uid, "consciousness") or 1.0
     if cns < 0.15 then
         -- unconscious — already shown via the collapsed condition.
     elseif cns < 0.40 then

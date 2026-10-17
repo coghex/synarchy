@@ -22,6 +22,10 @@ module Test.Headless.Unit.PhysiologyFixture
     , exemptPhysiology
     , nutritionOnlyPhysiology
     , staminaOnlyPhysiology
+    , mindSeedStats
+    , hydrationBrainPhysiology
+    , hydrationBrainStats
+    , oxygenForConsciousness
     ) where
 
 import UPrelude
@@ -83,6 +87,45 @@ withProfile profile def = do
     up ← profilePhysiology profile
     pure def { udPhysiology = up }
 
+-- | The mind keys (#2838, S11a) a Simulated mind is stored with when the unit
+--   was seeded at game time 0 and is healthy: mood at its drift target (1.0),
+--   the roll cadence one @MENTAL_CHECK_INTERVAL@ ahead, the thought clock at
+--   the seeding sample, everything else at rest. Consciousness,
+--   concentration and state_of_mind are DERIVED: a fixture stores none.
+mindSeedStats ∷ [(Text, Float)]
+mindSeedStats =
+    [ ("mood", 1), ("emotional_pain", 0), ("caffeine", 0), ("mental_state", 0)
+    , ("mental_since", 0), ("mental_until", 0), ("mental_next_roll_at", 8)
+    , ("mental_cooldown_until", 0), ("mental_high_since", 0)
+    , ("mental_break_behavior", 0), ("thought_next_at", 0) ]
+
+-- | Hydration, cardio, consciousness and mind Simulated, every other system
+--   Nominal: for a fixture that drives the hydration pool and the brain's
+--   derived consciousness (#2838) and nothing else (the source-drinking
+--   gates). Cardio is Simulated because it owns the blood oxygen a fixture
+--   moves to reach a consciousness band.
+hydrationBrainPhysiology ∷ UnitPhysiology
+hydrationBrainPhysiology = UnitPhysiology True Nothing
+    (HM.fromList
+        [ (s, if s `elem` ["hydration", "cardio", "consciousness", "mind"]
+                 then PhysioSimulated else PhysioNominal)
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
+             , "exhaustion", "sleep", "cardio", "blood", "consciousness"
+             , "mind"] ])
+    HM.empty
+
+-- | The stored keys 'hydrationBrainPhysiology' needs besides the pool: the
+--   cardio integrators at their healthy reading and the seeded mind.
+hydrationBrainStats ∷ [(Text, Float)]
+hydrationBrainStats = [("heart_rate", 70), ("blood_oxygen", 1)] ⧺ mindSeedStats
+
+-- | The blood oxygen that drives a unit's derived consciousness to @c@ when
+--   the temperature and salt factors are 1 ((oxygen − 0.5) / 0.3): how a
+--   fixture reaches the delirious, confused or unconscious band now that
+--   consciousness cannot be stored.
+oxygenForConsciousness ∷ Float → Float
+oxygenForConsciousness c = 0.5 + 0.3 * c
+
 -- | The @rich@ profile as a pure value (every system Simulated), for a
 --   fixture definition that is not built in IO. A spec in the physiology
 --   group pins it equal to the shipped profile's expansion.
@@ -91,17 +134,21 @@ richPhysiology = UnitPhysiology True (Just "rich")
     (HM.fromList
         [ (s, PhysioSimulated)
         | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
-             , "exhaustion", "sleep", "cardio", "blood"] ])
+             , "exhaustion", "sleep", "cardio", "blood", "consciousness"
+             , "mind"] ])
     HM.empty
 
 -- | The @exempt@ profile as a pure value: every system Nominal except
---   cardio and blood, which #2754 kept live (S9 #2836, S10 #2837).
+--   cardio and blood, which #2754 kept live (S9 #2836, S10 #2837), and, in
+--   S11a (#2838), consciousness and mind: SD-23's Nominal mind is S11b's.
 exemptPhysiology ∷ UnitPhysiology
 exemptPhysiology = UnitPhysiology True (Just "exempt")
     (HM.fromList
-        [ (s, if s `elem` ["cardio", "blood"] then PhysioSimulated else PhysioNominal)
+        [ (s, if s `elem` ["cardio", "blood", "consciousness", "mind"]
+                 then PhysioSimulated else PhysioNominal)
         | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
-             , "exhaustion", "sleep", "cardio", "blood"] ])
+             , "exhaustion", "sleep", "cardio", "blood", "consciousness"
+             , "mind"] ])
     HM.empty
 
 -- | Nutrition and stamina Simulated, the other three Nominal: for a fixture

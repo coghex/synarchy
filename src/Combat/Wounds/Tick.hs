@@ -9,6 +9,7 @@ module Combat.Wounds.Tick
     , WoundTickOutcome(..) -- exposed for unit testing (the tick's verdict)
     ) where
 
+import Combat.Resolution.Common (painFor)
 import UPrelude
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
@@ -587,6 +588,7 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
             , pcStats      = uiStats inst
             , pcModifiers  = uiModifiers inst
             , pcBlood      = bloodView def inst
+            , pcPain       = painFor inst
             }
     -- Only reached when 'physioView' is a Right (the guard above returns
     -- the untouched unit otherwise).

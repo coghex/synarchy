@@ -56,7 +56,12 @@ Allowances, each tied to real ownership and named, never a directory:
 
   * ``OWNERS``: (file, system[, scope]) -- a file may touch the keys of the
     systems it actually owns. ``scope="meters"`` restricts the failure-meter
-    engine to the meters of that system.
+    engine to the meters of that system. ``scope="facade"`` (#2838) names the
+    file as an owner for COVERAGE only -- it must name its system's keys --
+    but grants NO raw access: the brain's and the mental machine's writers
+    read through ``physiology.get`` and write only through ``physiology.commit``,
+    so a raw ``unit.getStat`` / ``unit.setStat`` of a mind key inside them is a
+    finding like any other.
   * (There is no survival exemption any more: #2754's ``neutralize`` was
     removed by S4 (#2831) when it became the ``exempt`` profile, design F-7.)
   * ``PROBE_FIXTURE_WRITES``: tools/physiology_probe.py may ``setStat`` the
@@ -136,7 +141,7 @@ GENERIC_ACCESSORS = frozenset({FACADE, "scripts/unit_stats.lua"})
 class Owner:
     system: str
     file: str
-    scope: str = "all"          # "all" | "meters"
+    scope: str = "all"          # "all" | "meters" | "facade"
 
 
 # system owner -> files that actually own its keys. Registry order is tick
@@ -169,6 +174,17 @@ OWNERS: tuple[Owner, ...] = (
     Owner("exhaustion", "scripts/unit_resource_params.lua"),
     Owner("sleep", "scripts/unit_resource_tick.lua"),
     Owner("sleep", "scripts/unit_resource_params.lua"),
+    # Consciousness and mind (#2838, S11a): the brain's file names both
+    # systems' keys (consciousness, concentration, state_of_mind are DERIVED
+    # and read through the facade; mood, emotional_pain and caffeine are
+    # drifted there), and the mental-state machine and the thought clock own
+    # the episode and thought keys. None of them touches a key raw: every read
+    # is physiology.get and every write one physiology.commit batch.
+    # ``scope="facade"``: they own the keys for coverage but get NO raw access.
+    Owner("consciousness", "scripts/brain.lua", "facade"),
+    Owner("mind", "scripts/brain.lua", "facade"),
+    Owner("mind", "scripts/mental_state.lua", "facade"),
+    Owner("mind", "scripts/thoughts.lua", "facade"),
     # The failure-meter engine: only the meters of the systems that declare
     # them, never their pools.
     Owner("thermo", "scripts/unit_resource_failure.lua", "meters"),
@@ -247,6 +263,13 @@ PROBE_FIXTURE_WRITES = FixtureWrites(
 # (#2470): the pool engine drives the tick's regen/drain through it.
 ATOMIC_VERB_CALLERS: dict[str, frozenset[str]] = {
     "unit.commitStamina": frozenset({"scripts/unit_resource_tick.lua"}),
+    # The atomic batch seam (#2838, S11a): ``unit.commitPhysio`` is called by
+    # the facade alone (its ``commit``), and ``physiology.commit`` only by the
+    # three writers of the mind's durable keys. A script that wrote a mind key
+    # any other way would reopen the torn-read race (S11-F1).
+    "physiology.commit": frozenset({"scripts/brain.lua",
+                                    "scripts/mental_state.lua",
+                                    "scripts/thoughts.lua"}),
 }
 
 
@@ -274,6 +297,9 @@ BLOOD_FIELD_INVENTORY: dict[str, str] = {
     "src/Engine/Asset/YamlPhysiology.hs":
         "the registry loader validates the `field:` name (no access)",
     "src/Combat/Wounds.hs": "documentation of the wound tick (no access)",
+    "src/Combat/Resolution/Common.hs":
+        "mentalEffectiveness builds a derived-read context; neither derived "
+        "value reads blood (it passes the raw view, never a volume)",
     "src/Combat/Wounds/Tick.hs":
         "the wound fold: the only drain/recovery writer, gated by "
         "bloodIsNominal; the raw view builds its physiology context",
@@ -518,7 +544,9 @@ def _owner_allows(policy: Policy, path: str, reg: Registry, key: str) -> bool:
     sid = reg.key_system.get(key)
     for ow in policy.owners:
         if ow.file == path and ow.system == sid:
-            if ow.scope == "all" or reg.key_role.get(key) == "meter":
+            if ow.scope == "all":
+                return True
+            if ow.scope == "meters" and reg.key_role.get(key) == "meter":
                 return True
     return False
 

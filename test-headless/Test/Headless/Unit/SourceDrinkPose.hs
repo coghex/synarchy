@@ -55,6 +55,9 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Structure.Types (emptyChunkStructures)
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Test.Headless.Unit.PhysiologyFixture
+    ( ensurePhysiologyRegistry, hydrationBrainPhysiology, hydrationBrainStats
+    , oxygenForConsciousness )
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Anim (poseTag)
@@ -132,13 +135,14 @@ ticksPerSecond ∷ Int
 ticksPerSecond = 10
 
 -- | Stats the hydration tick, the injury tick and the AI all read.
---   @consciousness@ is pinned at 1.0 so the collapse\/crawl machine
---   never depends on a defaulted brain reading, and @endurance@ at 1.0
---   so the regen factor is exactly the configured 5 L\/s.
+--   The brain's inputs (healthy cardio integrators and a seeded mind) are
+--   stored so the DERIVED consciousness (#2838) reads 1.0 and the
+--   collapse\/crawl machine never depends on a defaulted brain reading, and
+--   @endurance@ is 1.0 so the regen factor is exactly the configured 5 L\/s.
 baseStats ∷ HM.HashMap Text Float
 baseStats = HM.fromList
-    [ ("hydration", startHydration), ("max_hydration", maxHydration)
-    , ("endurance", 1.0), ("consciousness", 1.0) ]
+    ([ ("hydration", startHydration), ("max_hydration", maxHydration)
+     , ("endurance", 1.0) ] ⧺ hydrationBrainStats)
 
 -- | Consciousness inside @brain.lua@'s delirium band
 --   @[UNCONSCIOUS_BELOW, DELIRIOUS_BELOW) = [0.15, 0.40)@ — enough for
@@ -242,10 +246,13 @@ bankSimState pose = UnitSimState
 --   queue drained so nothing leaks in from the previous example.
 resetScene ∷ EngineEnv → HM.HashMap Text Float → [Wound] → IO ()
 resetScene env stats ws = do
+    ensurePhysiologyRegistry env
     writeIORef (gameTimeRef env) 0
     setLake env True
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton "acolyte" (minimalDef "acolyte" "Acolyte")
+        { umDefs = HM.singleton "acolyte"
+            ((minimalDef "acolyte" "Acolyte")
+                { udPhysiology = hydrationBrainPhysiology })
         , umInstances = HM.singleton acolyteUid (mkAcolyte stats ws) }
     writeIORef (utsRef env) emptyUnitThreadState
         { utsSimStates = HM.singleton acolyteUid (bankSimState Standing) }
@@ -984,8 +991,10 @@ setStat env name v = do
     writeIORef (unitManagerRef env) um
         { umInstances = HM.adjust bump acolyteUid (umInstances um) }
 
+-- | Put the DERIVED consciousness at @c@ by moving its blood-oxygen input
+--   (#2838): consciousness cannot be stored.
 setConsciousness ∷ EngineEnv → Float → IO ()
-setConsciousness env = setStat env "consciousness"
+setConsciousness env c = setStat env "blood_oxygen" (oxygenForConsciousness c)
 
 -- | Add a wound to the live instance mid-example.
 woundNow ∷ EngineEnv → Wound → IO ()

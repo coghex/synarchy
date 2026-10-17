@@ -281,8 +281,12 @@ runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed
         -- both saves. Sampled once per side, straight off the same
         -- atk/tgt UnitInstance snapshots the rest of this resolution
         -- already uses.
-        atkEff = mentalEffectiveness atk
-        defEff = mentalEffectiveness tgt
+        --
+        -- #2838: concentration is DERIVED, so each side's value is computed
+        -- from that same snapshot, the registry and the strike's captured
+        -- game-time sample, never from a stored cache.
+        atkEff = mentalEffectiveness physReg adef gt atk
+        defEff = mentalEffectiveness physReg tdef gt tgt
         -- Baseline 0.7 (most melee swings connect somehow); stat gap
         -- shifts ±0.30. Same RNG budget — one roll — but combat
         -- resolves in reasonable time even when defender stats are

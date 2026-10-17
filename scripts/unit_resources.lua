@@ -250,22 +250,23 @@ local function tickUnit(uid, info, dt)
             tickSystem(uid, info, dt)
         end
     end
-    -- Brain consciousness reads the above (core_temp, blood_oxygen,
-    -- salt_conc), so it ticks last. Low consciousness → collapse (in
-    -- tickInjuries); checkRevive keeps the unit down until lucid. Same call
-    -- also drifts the psychological mental values (mood / emotional_pain /
-    -- concentration / the unified state_of_mind) — dt-driven, unlike
-    -- consciousness.
+    -- The brain's values are DERIVED on demand (#2838, S11a): consciousness
+    -- reads core_temp, blood_oxygen and salt_conc at the moment it is asked,
+    -- so nothing here needs to run "after" the systems above for a reader to
+    -- see them. Low consciousness → collapse (in tickInjuries); checkRevive
+    -- keeps the unit down until lucid. brain.tick drifts the durable
+    -- psychological values (mood / emotional_pain / caffeine) as ONE atomic
+    -- batch, and only for a unit whose mind is Simulated.
     brain.tick(uid, dt)
-    -- Thoughts read this tick's freshly-computed mood/pain and may nudge mood
+    -- Thoughts read this tick's freshly-drifted mood/pain and may nudge mood
     -- back (#351) — after brain.tick so next tick's drift treats any nudge as
-    -- "prev", fading it naturally toward the physiological target.
+    -- "prev", fading it naturally toward the physiological target. One atomic
+    -- batch per thought.
     thoughts.tick(uid, info, dt)
-    -- Mental states (#352): the threshold machine over the state_of_mind
-    -- brain.tick just computed — the stressed label plus break/euphoria
-    -- episodes. (A thought's mood nudge reaches state_of_mind on the NEXT
-    -- brain.tick, per the drift contract above — fine for a machine whose
-    -- bands are minutes-scale.)
+    -- Mental states (#352): the threshold machine over the DERIVED
+    -- state_of_mind, read when it runs, so the mood nudge a thought just made
+    -- is already in it (there is no next-pass lag) — the stressed label plus
+    -- break/euphoria episodes, each event one atomic batch.
     mental.tick(uid, dt)
     -- Injuries first: a lethal injury kills the unit (skip the rest of its
     -- tick); a disabling one collapses it.
@@ -331,15 +332,12 @@ function unitResources.onSaveLoaded(survUnitIds, _survBuildingIds)
     for _, uid in ipairs(survUnitIds or {}) do
         unit.recomputeBody(uid)
         -- The load boundary (#2831, D-6): the engine has already normalized
-        -- every unit's stored physiology before publishing it (a legacy
-        -- stored circulation is scrubbed there), so what is left is the cache
-        -- that READS it. Rebuild the brain's derived values (dt 0: nothing
-        -- drifts) NOW, so a paused session reads what its first physiology
-        -- tick would produce. Circulation is derived on demand, so it is
-        -- already canonical. A Nominal unit reads healthy at once; an
-        -- occupant saved with a drifted core temperature or salt no longer
-        -- carries either.
-        if unit.getPose(uid) ~= "dead" then physiology.refresh(uid) end
+        -- every unit's stored physiology before publishing it (legacy stored
+        -- circulation, consciousness, concentration and state_of_mind are
+        -- scrubbed there, and absent mind keys seeded), so a paused session
+        -- reads canonical values at once: every value that READS physiology
+        -- is derived on demand (#2836, #2838), and the load writes no
+        -- durable integrator of its own (no dt-0 brain pass).
     end
 end
 

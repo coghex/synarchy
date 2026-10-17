@@ -35,6 +35,7 @@ module Unit.Physiology.Types
       -- * Registry
     , Quantity(..)
     , HealthyRule(..)
+    , SeedRule(..)
     , OwnedKey(..)
     , DerivedRule(..)
     , DerivedHealthy(..)
@@ -174,10 +175,33 @@ data HealthyRule
       --   stored, so a @from:@ rule could not read it.
     deriving (Show, Eq)
 
+-- | What a key is SEEDED to when its system turns Simulated, when the healthy
+--   rule is not the answer (#2838: the mind keys' seeds differ from their
+--   Nominal reads). An owned key without a seed rule seeds to its healthy
+--   value.
+data SeedRule
+    = SeedConst !Quantity
+      -- ^ @{ const: <q> }@: a fixed starting value.
+    | SeedNow
+      -- ^ @{ now: true }@: the seeding game-time sample.
+    | SeedNowPlus !Quantity
+      -- ^ @{ now_plus: <q> }@: the sample plus a constant (a deadline).
+    | SeedEpisodeEnd
+      -- ^ @{ rule: episode_end }@: 0 (no episode), except for a unit whose
+      --   stored @mental_state@ is a BREAK or EUPHORIC episode, whose missing
+      --   end is the sample itself so the normal end-of-episode path ends it
+      --   on the next tick (#2838, legacy episodes).
+    | SeedMoodTarget
+      -- ^ @{ rule: mood_target }@: the current mood-drift target, what the
+      --   first brain tick used to seed ("Unit.Physiology.Mind").
+    deriving (Show, Eq)
+
 -- | One stored key a system owns, with its healthy rule.
 data OwnedKey = OwnedKey
     { okKey     ∷ !Text
     , okHealthy ∷ !HealthyRule
+    , okSeed    ∷ !(Maybe SeedRule)
+      -- ^ the seed when it is not the healthy value (#2838).
     , okField   ∷ !(Maybe Text)
       -- ^ the dedicated unit FIELD that really stores the key (#2837:
       --   @uiBlood@), or 'Nothing' for the usual @uiStats@ entry. A
@@ -195,6 +219,14 @@ data DerivedRule
     | DerivedCirculation
       -- ^ cardio's @circulation@ (#2836, S9), computed by
       --   @circulationRule@ in "Unit.Physiology.Circulation".
+    | DerivedConsciousness
+      -- ^ @consciousness@ (#2838, S11a): the worst of the temperature,
+      --   oxygen and salt factors ("Unit.Physiology.Mind").
+    | DerivedConcentration
+      -- ^ @concentration@ (#2838): consciousness eroded by pain and
+      --   exhaustion, lifted by caffeine and euphoria.
+    | DerivedStateOfMind
+      -- ^ @state_of_mind@ (#2838): the worse of consciousness and wellbeing.
     deriving (Show, Eq)
 
 derivedRuleText ∷ DerivedRule → Text
@@ -202,12 +234,18 @@ derivedRuleText DerivedSaltConcentration = "salt_concentration"
 derivedRuleText DerivedCirculation       = "circulation"
 derivedRuleText DerivedBloodMax          = "blood_max"
 derivedRuleText DerivedBloodFraction     = "blood_fraction"
+derivedRuleText DerivedConsciousness     = "consciousness"
+derivedRuleText DerivedConcentration     = "concentration"
+derivedRuleText DerivedStateOfMind       = "state_of_mind"
 
 parseDerivedRule ∷ Text → Maybe DerivedRule
 parseDerivedRule "salt_concentration" = Just DerivedSaltConcentration
 parseDerivedRule "circulation"        = Just DerivedCirculation
 parseDerivedRule "blood_max"          = Just DerivedBloodMax
 parseDerivedRule "blood_fraction"     = Just DerivedBloodFraction
+parseDerivedRule "consciousness"      = Just DerivedConsciousness
+parseDerivedRule "concentration"      = Just DerivedConcentration
+parseDerivedRule "state_of_mind"      = Just DerivedStateOfMind
 parseDerivedRule _                    = Nothing
 
 -- | What a derived key reads while its system is not Simulated.

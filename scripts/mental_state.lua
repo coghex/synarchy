@@ -27,9 +27,15 @@
 -- are fixed-duration + cooldown (temporal hysteresis) — a noisy
 -- state_of_mind can't toggle an episode on/off tick-to-tick.
 --
--- All machine state lives in unit stats (persists in saves for free,
--- same pattern as mood / thought_next_at; deadlines are absolute
--- engine.gameTime() values, which also persist):
+-- All machine state lives in the MIND system's owned keys (persists in saves
+-- for free, same pattern as mood / thought_next_at; deadlines are absolute
+-- engine.gameTime() values, which also persist). Since #2838 (S11a) each
+-- event commits its WHOLE key set as one atomic batch (physiology.commit), so
+-- the combat and craft threads, which read mental_state while this worker
+-- runs, only ever see a complete state: never a new state with the old timers
+-- or behavior. A unit whose mind is not Simulated has no such state (Nominal
+-- reads a stable, episode-free unit, Unsupported nothing): this machine makes
+-- no attempt, no random draw, no thought record and no event for it.
 --   mental_state           — 0 stable / 1 stressed / 2 break / 3 euphoric
 --   mental_since           — when the current state was entered
 --   mental_until           — episode end deadline (break/euphoria)
@@ -40,20 +46,25 @@
 --   mental_break_behavior  — 0 wander / 1 flee / 2 catatonia /
 --                            3 lash-out, rolled at break entry
 --
--- Ticked from unit_resources.update right after thoughts.tick, so it
--- reads the tick's freshly-computed state_of_mind. Catatonia and
+-- Ticked from unit_resources.update right after thoughts.tick. It reads the
+-- DERIVED state_of_mind when it runs, so a thought's mood nudge from this same
+-- pass is already in it, and an euphoric episode's concentration lift (a rule
+-- of the derived concentration, not a stored bump) exists exactly while the
+-- episode does. Catatonia and
 -- lash-out shipped in #717; still deferred to a follow-up (per the
 -- #352 design session): mania/psychosis states, environmental
 -- one-shot triggers.
 
-local brain = require("scripts.brain")
+local brain      = require("scripts.brain")
+local physiology = require("scripts.physiology")
 
 local mental = package.loaded["scripts.mental_state"] or {}
 package.loaded["scripts.mental_state"] = mental
 
 -- State codes (the "mental_state" stat's values). EUPHORIC's value (3)
--- is hardcoded in Haskell's Combat.Resolution.Common.mentalEffectiveness
--- (#353, the euphoria bonus gate) — change both in lockstep.
+-- is Unit.Physiology.Mind.euphoricState, which the derived concentration rule
+-- and Combat.Resolution.Common.mentalEffectiveness (#353, the euphoria bonus
+-- gate) both read — change all three in lockstep.
 mental.STABLE, mental.STRESSED, mental.BREAK, mental.EUPHORIC = 0, 1, 2, 3
 local STATE_NAMES = { [0] = "stable", [1] = "stressed",
                       [2] = "break",  [3] = "euphoric" }
@@ -79,7 +90,6 @@ mental.TUNE = {
     EPISODE_MIN       = 60.0,  -- episode duration draw
     EPISODE_MAX       = 120.0,
     COOLDOWN          = 240.0, -- after an episode ends
-    EUPHORIA_CONCENTRATION_BONUS = 0.10,
     -- Break-behaviour roll weights (#717). Sum to 1.0; wander/flee stay
     -- dominant so existing saved units' expectations hold.
     WANDER_WEIGHT     = 0.35,
@@ -91,7 +101,7 @@ mental.TUNE = {
 local clamp = require("scripts.lib.numeric").clamp
 
 local function stateCode(uid)
-    return unit.getStat(uid, "mental_state") or mental.STABLE
+    return physiology.get(uid, "mental_state") or mental.STABLE
 end
 
 function mental.state(uid)
@@ -103,16 +113,19 @@ function mental.isEuphoric(uid) return stateCode(uid) == mental.EUPHORIC end
 function mental.isStressed(uid) return stateCode(uid) == mental.STRESSED end
 
 function mental.breakBehavior(uid)
-    local b = unit.getStat(uid, "mental_break_behavior") or mental.WANDER
+    local b = physiology.get(uid, "mental_break_behavior") or mental.WANDER
     return BEHAVIOR_NAMES[b] or "wander"
 end
 
-local function setState(uid, st, now)
-    unit.setStat(uid, "mental_state", st)
-    unit.setStat(uid, "mental_since", now)
-    -- Fresh roll cadence per state; SUSTAIN dominates the first roll
-    -- anyway, this just keeps the deadline from leaking across states.
-    unit.setStat(uid, "mental_next_roll_at", now + mental.TUNE.CHECK_INTERVAL)
+-- The keys a state change writes: the state, when it was entered and a fresh
+-- roll cadence (SUSTAIN dominates the first roll anyway, this just keeps the
+-- deadline from leaking across states). Every event adds its own keys to the
+-- SAME table and commits once.
+local function stateKeys(batch, st, now)
+    batch.mental_state        = st
+    batch.mental_since        = now
+    batch.mental_next_roll_at = now + mental.TUNE.CHECK_INTERVAL
+    return batch
 end
 
 local function unitLabel(uid)
@@ -169,9 +182,12 @@ local function enterBreak(uid, now, behavior)
     if behavior == nil then
         behavior = mental.rollBehavior()
     end
-    unit.setStat(uid, "mental_break_behavior", behavior)
-    unit.setStat(uid, "mental_until", now + rollDuration())
-    setState(uid, mental.BREAK, now)
+    -- ONE batch: behavior, episode deadline, state, since and next-roll
+    -- deadline together.
+    local batch = stateKeys({ mental_break_behavior = behavior,
+                              mental_until = now + rollDuration() },
+                            mental.BREAK, now)
+    if not physiology.commit(uid, batch) then return end
     -- Drop whatever walk is in flight so the break behaviour takes
     -- over immediately rather than after the current leg.
     unit.stop(uid)
@@ -184,18 +200,21 @@ local function enterBreak(uid, now, behavior)
 end
 
 local function enterEuphoria(uid, now)
-    unit.setStat(uid, "mental_until", now + rollDuration())
-    setState(uid, mental.EUPHORIC, now)
+    local batch = stateKeys({ mental_until = now + rollDuration() },
+                            mental.EUPHORIC, now)
+    if not physiology.commit(uid, batch) then return end
     local who, info = unitLabel(uid)
     thought.emit(uid, "A sudden lightness — everything feels possible.", "state")
     emitFor(uid, "unit_event", who .. " is overcome with euphoria.", info)
 end
 
+-- Returns whether the episode ended (the batch committed): the cooldown and the
+-- next state with its timing, together.
 local function endEpisode(uid, now, som)
-    unit.setStat(uid, "mental_cooldown_until", now + mental.TUNE.COOLDOWN)
     local next_ = som < mental.TUNE.STRESSED_BELOW and mental.STRESSED
                                                     or mental.STABLE
-    setState(uid, next_, now)
+    return physiology.commit(uid, stateKeys(
+        { mental_cooldown_until = now + mental.TUNE.COOLDOWN }, next_, now))
 end
 
 -- Probe / debug-console hook: start a break episode right now,
@@ -203,6 +222,7 @@ end
 -- ("wander" | "flee" | "catatonia" | "lash_out"; absent = random,
 -- like a rolled break).
 function mental.forceBreak(uid, behavior)
+    if not physiology.isSimulated(uid, "mind") then return end
     local b = nil
     if behavior == "flee" then b = mental.FLEE
     elseif behavior == "wander" then b = mental.WANDER
@@ -212,75 +232,74 @@ function mental.forceBreak(uid, behavior)
 end
 
 -- Advance one unit's mental-state machine (called each physiology
--- tick, after brain.tick + thoughts.tick).
+-- tick, after brain.tick + thoughts.tick). Every event is ONE atomic batch;
+-- an event whose batch is refused publishes none of its consequences.
 function mental.tick(uid, dt)
+    -- Mode first: a Nominal or Unsupported mind has no machine to advance.
+    if not physiology.isSimulated(uid, "mind") then return end
     local now = engine.gameTime()
-    local st  = unit.getStat(uid, "mental_state")
-    if st == nil then
-        setState(uid, mental.STABLE, now)
-        return
-    end
+    local st  = physiology.get(uid, "mental_state")
     local som = brain.stateOfMind(uid)
 
     -- Ongoing episodes run their clock; nothing else fires meanwhile.
     if st == mental.BREAK then
-        if now >= (unit.getStat(uid, "mental_until") or 0) then
-            endEpisode(uid, now, som)
-            local who, info = unitLabel(uid)
-            emitFor(uid, "unit_event",
-                    who .. " has come back to their senses.", info)
+        if now >= physiology.get(uid, "mental_until") then
+            if endEpisode(uid, now, som) then
+                local who, info = unitLabel(uid)
+                emitFor(uid, "unit_event",
+                        who .. " has come back to their senses.", info)
+            end
         end
         return
     end
     if st == mental.EUPHORIC then
-        if now >= (unit.getStat(uid, "mental_until") or 0)
+        if now >= physiology.get(uid, "mental_until")
            or som < mental.TUNE.EUPHORIC_EXIT then
             endEpisode(uid, now, som)
-        else
-            -- Mild effect: a small focus lift on top of what brain.tick
-            -- just recomputed (concentration is instantaneous — no
-            -- integration — so bumping the stored stat each tick is
-            -- exactly how caffeine's bonus behaves too).
-            local c = unit.getStat(uid, "concentration") or 1.0
-            unit.setStat(uid, "concentration",
-                clamp(c + mental.TUNE.EUPHORIA_CONCENTRATION_BONUS, 0, 1))
         end
+        -- The mild focus lift euphoria gives is a rule of the DERIVED
+        -- concentration (Unit.Physiology.Mind.concentrationRule): it exists
+        -- exactly while mental_state is EUPHORIC, applied once, with no
+        -- stored bump to leak.
         return
     end
 
     -- Track how long the state of mind has held the euphoria band —
     -- entry needs SUSTAIN in-band, not one lucky tick.
-    local highSince = unit.getStat(uid, "mental_high_since") or 0
+    local highSince = physiology.get(uid, "mental_high_since")
     if som >= mental.TUNE.EUPHORIC_ABOVE then
         if highSince == 0 then
             highSince = now
-            unit.setStat(uid, "mental_high_since", now)
+            physiology.commit(uid, { mental_high_since = now })
         end
     elseif highSince ~= 0 then
         highSince = 0
-        unit.setStat(uid, "mental_high_since", 0)
+        physiology.commit(uid, { mental_high_since = 0 })
     end
 
     -- The stressed label, with its hysteresis band.
     if st == mental.STABLE and som < mental.TUNE.STRESSED_BELOW then
-        setState(uid, mental.STRESSED, now)
-        st = mental.STRESSED
+        if physiology.commit(uid, stateKeys({}, mental.STRESSED, now)) then
+            st = mental.STRESSED
+        end
     elseif st == mental.STRESSED and som >= mental.TUNE.STRESS_RECOVER_AT then
-        setState(uid, mental.STABLE, now)
-        st = mental.STABLE
+        if physiology.commit(uid, stateKeys({}, mental.STABLE, now)) then
+            st = mental.STABLE
+        end
     end
 
     -- Episode rolls: cooled down, physiologically lucid (below the
     -- delirious band the collapse/delirium machinery owns behaviour —
     -- no double-driving), sustained in-state, and on the roll cadence.
-    if now < (unit.getStat(uid, "mental_cooldown_until") or 0) then return end
+    if now < physiology.get(uid, "mental_cooldown_until") then return end
     if brain.isDelirious(uid) or brain.isUnconscious(uid) then return end
-    if now < (unit.getStat(uid, "mental_next_roll_at") or 0) then return end
-    unit.setStat(uid, "mental_next_roll_at", now + mental.TUNE.CHECK_INTERVAL)
+    if now < physiology.get(uid, "mental_next_roll_at") then return end
+    physiology.commit(uid, { mental_next_roll_at = now + mental.TUNE.CHECK_INTERVAL })
 
     if st == mental.STRESSED then
-        if now - (unit.getStat(uid, "mental_since") or now)
-           < mental.TUNE.SUSTAIN then return end
+        if now - physiology.get(uid, "mental_since") < mental.TUNE.SUSTAIN then
+            return
+        end
         local severity = clamp((mental.TUNE.STRESSED_BELOW - som)
                                / mental.TUNE.STRESSED_BELOW, 0, 1)
         if math.random() < mental.TUNE.BREAK_CHANCE_MAX * severity then
@@ -298,9 +317,9 @@ end
 function mental.summary(uid)
     local s = {
         state         = mental.state(uid),
-        since         = unit.getStat(uid, "mental_since"),
-        endsAt        = unit.getStat(uid, "mental_until"),
-        cooldownUntil = unit.getStat(uid, "mental_cooldown_until"),
+        since         = physiology.get(uid, "mental_since"),
+        endsAt        = physiology.get(uid, "mental_until"),
+        cooldownUntil = physiology.get(uid, "mental_cooldown_until"),
         stateOfMind   = brain.stateOfMind(uid),
     }
     if mental.isBreaking(uid) then s.behavior = mental.breakBehavior(uid) end

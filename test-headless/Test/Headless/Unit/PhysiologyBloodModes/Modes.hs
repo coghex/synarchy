@@ -197,7 +197,8 @@ applyOp reg def inst op = case op of
                 { pcRegistry = reg, pcPhysiology = udPhysiology def
                 , pcOverrides = uiPhysioOverrides inst, pcNow = 0
                 , pcStats = uiStats inst, pcModifiers = uiModifiers inst
-                , pcBlood = bloodView def inst }
+                , pcBlood = bloodView def inst
+                , pcPain = 0 }
         in case planSetMode ctx "blood" m Nothing of
             Left _ → inst
             Right t → inst { uiStats = trStats t

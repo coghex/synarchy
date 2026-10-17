@@ -35,6 +35,7 @@ import Unit.Blood (BloodView(..))
 import Unit.Physiology (unitBloodView)
 import Combat.Types (pushInjuryEvent)
 import Combat.Resolution.Common (mentalEffectiveness)
+import Combat.Resolution.Constants (kindPainFactor)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
 import Item.Types (ItemInstance(..), ItemDef(..), lookupItemDef)
 
@@ -467,10 +468,13 @@ unitGetLastAttackerFn env = do
 --     pain = sum(effective_severity × kind_pain_factor)
 --   (effective severity eases as the wound heals, floored by necrosis).
 --   Used by the AI (future retreat candidate), the unit-info UI,
---   and the combat hit-roll's pain penalty (computed Haskell-side
---   in Combat.Resolution; this getter mirrors the same formula
---   for Lua reads). Unclamped (the resolution code clamps via
---   painCeiling internally).
+--   the brain's mood drift and the combat hit-roll's pain penalty.
+--   The kind factor is the ONE 'Combat.Resolution.Constants.kindPainFactor'
+--   (#2838: a stale local copy knew only slash, stab and blunt, so a
+--   fracture, concussion, internal, arterial or severed wound read 1.0 here
+--   while 'Combat.Resolution.Common.painFor' priced it higher, and the mood
+--   a unit was seeded to disagreed with the mood it then drifted toward).
+--   Unclamped (the resolution code clamps via painCeiling internally).
 unitGetPainFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetPainFn env = do
     idArg ← Lua.tointeger 1
@@ -492,14 +496,6 @@ unitGetPainFn env = do
                 Just p  → Lua.pushnumber (Lua.Number (realToFrac p))
                                 >> return 1
                 Nothing → Lua.pushnil >> return 1
-  where
-    -- Mirror Combat.Resolution.kindPainFactor. Kept in lockstep
-    -- manually; if either changes, update both.
-    kindPainFactor ∷ Text → Float
-    kindPainFactor "slash" = 1.0
-    kindPainFactor "stab"  = 1.2
-    kindPainFactor "blunt" = 1.5
-    kindPainFactor _       = 1.0
 
 -- | unit.getMentalEffectiveness(uid) → number | nil
 --
@@ -517,8 +513,16 @@ unitGetMentalEffectivenessFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mEff ← Lua.liftIO $ do
-                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                return $ mentalEffectiveness ⊚ HM.lookup uid (umInstances um)
+                um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                -- #2838: concentration is derived; one registry read and one
+                -- game-time sample feed the same rule combat and craft use.
+                reg ← readIORef (crPhysiologyRegistryRef
+                          (toContentRegistriesCapability env))
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+                return $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    def  ← HM.lookup (uiDefName inst) (umDefs um)
+                    pure (mentalEffectiveness reg def now inst)
             case mEff of
                 Just e  → Lua.pushnumber (Lua.Number (realToFrac e))
                                 >> return 1

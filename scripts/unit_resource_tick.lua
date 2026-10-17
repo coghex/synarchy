@@ -288,7 +288,9 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     -- resource already resolved to above. Skipped during organ failure
     -- — the body has nothing left for a stimulant to help with.
     if params.caffeine_regen_bonus and not inOrganFailure then
-        local caffeine = unit.getStat(uid, "caffeine") or 0
+        -- Through the accessor (#2838): a Nominal mind supplies 0 (no
+        -- stimulant, no bonus) and an Unsupported one nothing.
+        local caffeine = physiology.get(uid, "caffeine") or 0
         regen = regen + caffeine * params.caffeine_regen_bonus
     end
 
