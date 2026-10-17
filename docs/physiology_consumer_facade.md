@@ -6,7 +6,8 @@ SD-19 and the former S5/S6 temporary UI exception) moved every gameplay reader a
 every cross-system writer of a registry-owned key behind one accessor and added
 the audit that keeps it there, without changing any behavior while production
 modes were inactive. **S4 (#2831) activated that seam**: the facade now answers
-the mode-aware contract, `setMode` / `clearMode` / `refresh` exist, and the
+the mode-aware contract, `setMode` / `clearMode` exist (S11a, #2838, removed
+`refresh` because nothing is cached), and the
 tick gates, the write gate and the load normalization stand on it.
 
 This page is the reference for the facade, the system owners, the migrated
@@ -57,7 +58,8 @@ removed the switch with the thing it guarded. Now:
 | `setMode(uid, system, mode [, values])` → `true, changed` or `nil, reason` | the ONLY caller of `unit.setPhysioMode`: seeds or scrubs atomically, resets the carry / regrowth / alert-debounce caches, runs the change hooks on an EFFECTIVE change, refreshes the caches, and refuses atomically (see the engine contract) |
 | `clearMode(uid, system)` | the same for `unit.clearPhysioMode` (removes the override) |
 | `applyEngagement(uid)` → outcome, code | the ONLY caller of `unit.applyCombatEngagement` (#2834, SD-20): applies a pending combat engagement in one atomic update (`transitioned`, `latched`, `refusedDead`, `seedUnrepresentable`), runs the hooks and the refresh on `transitioned`, and logs a refused seed once per unit and reason |
-| `refresh(uid)` | recompute the brain's cache at dt 0 (circulation is derived on demand since #2836, so there is nothing to refresh) |
+| `commit(uid, batch)` → `true` or `nil, reason` | ONE validated atomic batch of the mind's durable keys through `unit.commitPhysio` (#2838): every key passes the write gate inside the same unit-manager update that stores the batch, or none is stored. It never raises (a refusal inside the per-unit pcall would skip that unit's injuries, meters and pools for the pass) and is logged once per unit and reason; only `brain.lua`, `mental_state.lua` and `thoughts.lua` may call it |
+| `creditBatch(uid, items)` → `{ [key] = applied }` | credit one Simulated system's keys together as one atomic batch; a receiver that is not Simulated discards the whole credit (D-4). `consumable.drink` credits the mind's caffeine and mood through it |
 | `onModeChanged(id, system, fn)` | register a hook `fn(uid, system, from, to)`, replaced by id |
 
 `credit` / `debit` carry the per-key rules of the callers they replaced
@@ -111,7 +113,10 @@ systems.
 | Stamina gates and pacing (brain, wander, pace, lunge, attack, unit panels) | `brain.lua`, `unit_ai_needs.lua`, `unit_ai_pace.lua`, `unit_ai_combat_lunge.lua`, `unit_ai_combat_attack.lua`, `unit_info_panel.lua`, `unit_info_v2_*.lua` | `fraction("stamina", "max_stamina")`, `get` |
 | Thermo calorie throttle | `thermo.lua` | `fraction("calories")` |
 | Salt's hydration term, concentration, cramps, sweat factor | `salts.lua` | `fraction`, `get("salt_conc")` |
-| Brain consciousness inputs and hunger fraction | `brain.lua` (`fracOf` is a dynamic-key helper shared with stamina) | `get`, `fraction` |
+| Brain: the drift inputs (hunger and stamina fractions, pain, awareness) and its three DERIVED values (#2838) | `brain.lua` (`fracOf` is a dynamic-key helper shared with stamina) | `get`, `fraction`; `consciousness`, `concentration` and `state_of_mind` are `get` of derived keys (the shared Haskell rules), never computed or stored in Lua |
+| The mental-state machine, the thought clock, the drift | `mental_state.lua`, `thoughts.lua`, `brain.lua` | `get` of the mind keys; writes only through `physiology.commit` (one atomic batch per event); `mind` Nominal or Unsupported means no attempt at all |
+| Consumable caffeine and mood credits (#2838) | `consumable.lua` `applySip` | `creditBatch` (discarded whole by a non-Simulated mind) |
+| Caffeine's stamina regen bonus | `unit_resource_tick.lua` | `get("caffeine")` (a Nominal mind supplies 0) |
 | Cardio temperature input, its own integrators and blood fraction (#2836) | `cardio.lua` | `get("core_temp")`, `get("heart_rate")` / `get("blood_oxygen")`, `get("circulation")`, and the pure `unit.readBloodView` for the blood fraction |
 | Blood volume readers (#2837): the wound fold, the movement multiplier, `unit.getBlood` consumers (revive gate, AI, Status rows), cardio's and circulation's blood input | `Combat/Wounds/Tick.hs`, `Unit/Thread/Command/Motion.hs`, `unit_resource_tick.lua`, `unit_ai_core.lua`, `unit_info_v2_status.lua`, `cardio.lua` | the ONE mode-aware adapter (`unit.getBlood`, `unit.readBloodView`, `unitBloodView` in Haskell); the volume is the dedicated `uiBlood` field, so the owner is Haskell (`HASKELL_OWNERS` in the access audit) and no script reads or writes a `blood` stat |
 | Circulation reads: thermo's heat loss and frostbite, the Status row | `thermo.lua`, `circulation.lua`, `unit_info_v2_status.lua` | `get("circulation")`: derived on demand; live under a Nominal cardio (SD-21); `nil` only when cardio is Unsupported |
@@ -138,6 +143,7 @@ A file may touch the keys of the systems it actually owns, and nothing else.
 | `nutrition` | `scripts/unit_resource_tick.lua`, `unit_resource_carry.lua`, `unit_resource_energy.lua`, `unit_resource_regrowth.lua` | digestion, starvation, regrowth |
 | `stamina` | `scripts/unit_resource_tick.lua` | the pool engine (#2834); its only write is the atomic `unit.commitStamina` |
 | `exhaustion`, `sleep` | `scripts/unit_resource_tick.lua`, `scripts/unit_resource_params.lua` | the pool engine ticks them (#2835); `unit_resource_params.lua` registers each pool to its system (`sleep_pressure` belongs to `sleep`) and touches no state. `exhaustion.lua` and `unit_ai_sleep.lua` are consumers, not owners |
+| `consciousness`, `mind` | `scripts/brain.lua`, `scripts/mental_state.lua`, `scripts/thoughts.lua` | S11a (#2838): consciousness owns nothing stored (two derived values), mind owns eleven durable keys and derives `state_of_mind`. None of the three touches a key raw: every read is `get`, every write one `physiology.commit` batch (the audit lists exactly these three as the callers of `commit`) |
 | `thermo` and `salt` **meters only** | `scripts/unit_resource_failure.lua` | the failure-meter engine; never their pools |
 
 One further allowance, named and bounded (the survival exemption of #2754 that

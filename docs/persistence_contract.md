@@ -155,18 +155,26 @@ payload and still not be durable: it is a CACHE of other state, recomputed
 canonically before the first paused frame, and never read back as authority.
 It is classified **Rebuild deterministically**, with the qualifier
 *serialized-but-ignored* in the inventory's classification cell: the
-consciousness, concentration and state-of-mind caches, the
-strength values the body recompute re-derives, and the body-derived maxima.
-(Circulation was one until S9, #2836: it is now derived on demand and never
+strength values the body recompute re-derives and the body-derived maxima.
+(Circulation was one until S9, #2836, and consciousness, concentration and
+state of mind were until S11a, #2838: they are now derived on demand and never
 stored, like `salt_conc`, so a legacy stored copy is scrubbed at load in every
-mode rather than ignored. The blood volume (S10, #2837) is the dedicated
+mode rather than ignored, logged once per unit and system. The mind's own keys
+are durable: **Persist exactly** while the mind system is Simulated, with
+absent-only seeding at load, a BREAK or EUPHORIC episode that lost its end given
+`now` so the normal end-of-episode path closes it on the next tick, a BREAK
+without a behavior given WANDER, and every present value kept exactly, stale
+deadlines included. The blood volume (S10, #2837) is the dedicated
 `uiBlood` field: Persist exactly while blood is Simulated, serialized-but-ignored
 while Nominal, where the load rewrites it silently to the current canonical
 maximum so a Nominal-blood unit saved by current code normalizes zero times.)
 The wire is unchanged (the stat map is still serialized wholesale, so no
 filter and no codec change), and the load simply does not trust those values:
-`unitResources.onSaveLoaded` runs `unit.recomputeBody` and refreshes
-the brain at dt 0. Consequently a save taken a tick before
+`unitResources.onSaveLoaded` runs `unit.recomputeBody` (it no longer runs
+any brain pass: every value that reads physiology is derived on demand, so a
+load publishes no stored value of its own and writes no durable integrator,
+which would fold an active modifier into a stored base even at dt 0).
+Consequently a save taken a tick before
 that recompute may hold a stale cache and a save taken after it a canonical
 one, and the structural save comparison
 (`World.Save.Physiology.withoutRebuiltCaches`, used by the save codec's
