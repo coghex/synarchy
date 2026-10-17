@@ -1,0 +1,56 @@
+# HLint 3.10 parser settings. CI enforces parseability only.
+# Default hints are available locally; no style rules are required.
+# Keep these in sync with synarchy.cabal's common lang stanza.
+- arguments:
+  - -XGHC2024
+  - -XDefaultSignatures
+  - -XDuplicateRecordFields
+  - -XMagicHash
+  - -XNoMonomorphismRestriction
+  - -XNoImplicitPrelude
+  - -XNumDecimals
+  - -XOverloadedStrings
+  - -XPatternSynonyms
+  - -XQuantifiedConstraints
+  - -XRecordWildCards
+  - -XTypeFamilyDependencies
+  - -XUnicodeSyntax
+  - -XViewPatterns
+  - -XQuasiQuotes
+
+# Imported operators are invisible to HLint's per-module parser.
+# UPrelude plus its base-unicode-symbols 0.2.4.2 re-exports.
+- fixity: infixl 7 ⌃
+- fixity: infixl 5 ⌄
+- fixity: infixl 1 ⌦
+- fixity: infixl 1 ⌫
+- fixity: infixl 4 ⚟
+- fixity: infixl 4 ⚞
+- fixity: infixl 4 ⊚
+- fixity: infixr 5 ⊘
+- fixity: infixr 7 ⊙
+- fixity: infixl 7 ÷
+- fixity: infixl 7 ×, ⋅
+- fixity: infixl 6 −
+- fixity: infix 4 ∣
+- fixity: infix 4 ∤
+- fixity: infixl 1 ≫=
+- fixity: infixl 1 ≫
+- fixity: infixr 1 =≪
+- fixity: infixl 1 ↣
+- fixity: infixr 1 ↢
+- fixity: infixl 4 ⊛
+- fixity: infixr 9 ∘
+- fixity: infixr 2 ∨
+- fixity: infixr 3 ∧
+- fixity: infix  4 ≡
+- fixity: infix  4 ≢
+- fixity: infix  4 ≠
+- fixity: infix  4 ≤
+- fixity: infix  4 ≥
+- fixity: infix  4 ≮
+- fixity: infix  4 ≯
+- fixity: infix  4 ∈
+- fixity: infix  4 ∉
+- fixity: infixr 5 ⧺
+- fixity: infixl 9 ‼
