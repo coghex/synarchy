@@ -105,11 +105,15 @@ def test_normalize_fixture_timestamp_makes_generation_reproducible() -> None:
 #: and its nonempty, current-version counterpart.
 _PRE_TAG_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z8-units-v4-physiology-overrides.bin"
 _TAGGED_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z9-gameplay-tags.bin"
+#: #2703: the tracked fixture carrying nonempty physical-item tags
+#: (core-session v2).
+_ITEM_TAGGED_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z10-item-tags.bin"
 
 #: One assignment per owned category, on z8's own page and ids.
 _TAG_SEED = ('{"units":[{"page":"generated_page","id":1,"tags":["defender"]}],'
              '"buildings":[],'
-             '"locations":[{"page":"generated_page","id":1,"tags":["landmark"]}]}')
+             '"locations":[{"page":"generated_page","id":1,"tags":["landmark"]}],'
+             '"items":[{"id":2,"tags":["food"]},{"id":3,"tags":["food","spare"]}]}')
 
 
 def _summary_tags(fixture: Path, out: Path) -> dict | None:
@@ -118,19 +122,22 @@ def _summary_tags(fixture: Path, out: Path) -> dict | None:
         expect(False, f"expected a canonical summary of {fixture.name}, got: {tail}")
         return None
     import json
-    return {p["pageId"]: p.get("gameplayTags", {})
-            for p in json.loads(out.read_text())["pages"]}
+    summary = json.loads(out.read_text())
+    tags = {p["pageId"]: p.get("gameplayTags", {}) for p in summary["pages"]}
+    # #2703: the session-scoped item assignments, under their own key.
+    tags["<items>"] = summary.get("itemTags", [])
+    return tags
 
 
 def test_seeded_tag_fixture_generation_is_reproducible() -> None:
-    print("#2701: tag seeding (synarchy-save-codec seed-tags, the one way a "
+    print("#2701/#2703: tag seeding (synarchy-save-codec seed-tags, the one way a "
           "generated fixture carries general gameplay tags) is as reproducible "
           "as generation itself -- two timestamp variants seeded with the same "
           "spec converge to byte-identical files after normalization -- and the "
           "canonical summary reads NO assignments off the pre-tag fixture and "
           "nonempty ones, with their target ids, off the seeded and tracked "
           "tagged fixtures")
-    for path in (_PRE_TAG_FIXTURE_PATH, _TAGGED_FIXTURE_PATH):
+    for path in (_PRE_TAG_FIXTURE_PATH, _TAGGED_FIXTURE_PATH, _ITEM_TAGGED_FIXTURE_PATH):
         if not path.exists():
             expect(False, f"expected the tracked fixture to exist at {path}")
             return
@@ -157,9 +164,20 @@ def test_seeded_tag_fixture_generation_is_reproducible() -> None:
         before = _summary_tags(_PRE_TAG_FIXTURE_PATH, tmp / "before.json")
         after = _summary_tags(variants[0], tmp / "after.json")
         tracked = _summary_tags(_TAGGED_FIXTURE_PATH, tmp / "tracked.json")
-        if before is None or after is None or tracked is None:
+        tracked_items = _summary_tags(_ITEM_TAGGED_FIXTURE_PATH, tmp / "tracked_items.json")
+        if before is None or after is None or tracked is None or tracked_items is None:
             return
         empty = {"units": [], "buildings": [], "locations": []}
+        expect(before.pop("<items>") == [] and tracked.pop("<items>") == [],
+               "expected the pre-tag and the core-session v1 tagged fixtures to "
+               "read no item assignments")
+        expect(after.pop("<items>") == [{"id": 2, "tags": ["food"]},
+                                        {"id": 3, "tags": ["food", "spare"]}],
+               "expected the seeded variant to carry exactly the seeded item "
+               "assignments, by instance id")
+        expect(bool(tracked_items.pop("<items>")),
+               "expected the tracked item-tag fixture to carry nonempty item "
+               "assignments")
         expect(all(tags == empty for tags in before.values()),
                f"expected the pre-tag fixture to read no assignments, got {before}")
         expect(after.get("generated_page") ==

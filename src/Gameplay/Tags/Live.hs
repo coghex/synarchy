@@ -43,6 +43,18 @@
 --   per-owner consistent, not one global instant, which is the same
 --   guarantee every other cross-manager read in the engine has.
 --
+--   === Physical items (#2703)
+--
+--   Item assignments live with the SESSION owner,
+--   'World.State.Types.wmItemTags', keyed by 'Item.Types.iiInstanceId',
+--   because an item moves between owners and pages without changing
+--   identity. Edits and the query universe resolve through the
+--   canonical live enumeration ("World.Item.Locate"): ground, carried,
+--   equipped, worn, stored, delivered and recursively nested items, and
+--   never a remembered copy, a definition or the id-zero sentinel.
+--   Moves never touch the index; destruction is
+--   "Gameplay.Tags.ItemLifecycle"'s.
+--
 --   Nothing here is reachable from Lua; the public verbs are SCN-06.
 module Gameplay.Tags.Live
     ( -- * Edits
@@ -57,23 +69,34 @@ module Gameplay.Tags.Live
     , unitTagsIn
     , buildingTagsIn
     , locationTagsIn
+    , itemTagsIn
       -- * Live edits
     , mutateUnitTags
     , mutateBuildingTags
     , mutateLocationTags
+    , mutateItemTags
       -- * Live reads and queries
     , LiveTagView(..)
     , captureLiveTagView
     , liveTagRegistry
     , liveTagUniverse
+    , liveItemTargets
+    , onPage
     , runLiveTagQuery
     , liveTagAssignments
+      -- * Committing a new item tree's assignments
+    , commitItemTreeTags
     ) where
 
 import UPrelude
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
+import Building.Types (BuildingInstance(..))
+import Item.Ground (GroundItems)
+import Item.Types (ItemInstance(..))
+import Unit.Types.Instance (UnitInstance(..))
+import World.Item.Locate (sessionGroundItems, sessionItemInstances)
 import Building.Types (BuildingManager(..), BuildingId)
 import Gameplay.Tags.Index
 import Gameplay.Tags.Query (QueryUniverse, QueryResult, TagQuery, TargetSets(..), evaluateQuery)
@@ -157,6 +180,14 @@ locationTagsIn lis lid
     | HM.member lid (lisById lis) = Just (categoryTagsOf lid (lisTags lis))
     | otherwise = Nothing
 
+-- | A live item's tags; 'Nothing' when the canonical live enumeration
+--   finds no such item (#2703) — a remembered copy, a destroyed item
+--   and the id-zero sentinel included.
+itemTagsIn ∷ LiveTagView → ItemTarget → Maybe (Set.Set GameplayTag)
+itemTagsIn v t
+    | Set.member t (liveItemTargets v) = Just (categoryTagsOf t (ltvItems v))
+    | otherwise = Nothing
+
 -- * Live edits
 
 -- | One atomic modify of the unit manager.
@@ -184,6 +215,44 @@ mutateLocationTags wmRef (LocationTarget page lid) edit = do
                     Nothing   → (Just params, TagEditNoTarget)
                     Just lis' → (Just params { wgpLocationInstances = lis' }, TagEditApplied)
 
+-- | An item edit (#2703). The target must be a LIVE item, as the
+--   canonical enumeration ("World.Item.Locate") sees it — ground,
+--   carried, equipped, worn, stored, delivered, or nested at any depth —
+--   and, with @Just page@, one on that page. The item's owners live
+--   behind several refs, so the existence check cannot share one atomic
+--   step with the write the way a unit or building edit does. Instead
+--   the write is one 'atomicModifyIORef'' of the session owner and the
+--   item is located AGAIN afterwards: if a destruction removed it in
+--   between, the assignment is withdrawn and the answer is
+--   'TagEditNoTarget', so no edit leaves a tag on a dead item whichever
+--   way the race falls (the destruction's own forget covers the other
+--   order). A session replacement between the check and the write
+--   refuses the write.
+mutateItemTags ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
+               → Maybe WorldPageId → ItemTarget → TagEdit → IO TagEditResult
+mutateItemTags umRef bmRef wmRef scope t edit = do
+    before ← captureLiveTagView umRef bmRef wmRef
+    if not (live before)
+        then pure TagEditNoTarget
+        else do
+            let epoch = wmSessionEpoch (ltvManager before)
+            wrote ← atomicModifyIORef' wmRef $ \mgr →
+                if wmSessionEpoch mgr ≢ epoch then (mgr, False)
+                else ( mgr { wmItemTags =
+                               modifyCategoryTags (applyTagEdit edit) t (wmItemTags mgr) }
+                     , True )
+            if not wrote then pure TagEditNoTarget else do
+                after ← captureLiveTagView umRef bmRef wmRef
+                if live after then pure TagEditApplied else do
+                    atomicModifyIORef' wmRef $ \mgr →
+                        ( if wmSessionEpoch mgr ≢ epoch then mgr
+                          else mgr { wmItemTags = deleteCategoryTarget t (wmItemTags mgr) }
+                        , () )
+                    pure TagEditNoTarget
+  where
+    live v = Set.member t (maybe id (\p → (`Set.intersection` liveItemTargetsOn v p)) scope
+                                      (liveItemTargets v))
+
 -- * Live reads and queries
 
 -- | One read of every owner (see the module haddock for what that
@@ -193,7 +262,15 @@ data LiveTagView = LiveTagView
     , ltvBuildings ∷ !BuildingManager
     , ltvLocations ∷ ![(WorldPageId, LocationInstances)]
       -- ^ In 'wmWorlds' order.
+    , ltvManager   ∷ !WorldManager
+      -- ^ The session owner as read, for its item index (#2703).
+    , ltvGround    ∷ ![(WorldPageId, GroundItems)]
+      -- ^ Every live page's ground items, in 'wmWorlds' order.
     }
+
+-- | The view's item index.
+ltvItems ∷ LiveTagView → CategoryIndex ItemTarget
+ltvItems = wmItemTags . ltvManager
 
 captureLiveTagView ∷ IORef UnitManager → IORef BuildingManager
                    → IORef WorldManager → IO LiveTagView
@@ -203,8 +280,10 @@ captureLiveTagView umRef bmRef wmRef = do
     wm ← readIORef wmRef
     locs ← forM (wmWorlds wm) $ \(pid, ws) →
         fmap (\p → (pid, wgpLocationInstances p)) <$> readIORef (wsGenParamsRef ws)
+    ground ← sessionGroundItems wm
     pure LiveTagView
-        { ltvUnits = um, ltvBuildings = bm, ltvLocations = catMaybes locs }
+        { ltvUnits = um, ltvBuildings = bm, ltvLocations = catMaybes locs
+        , ltvManager = wm, ltvGround = ground }
 
 -- | The view's assignments as one queryable registry. O(1) for units
 --   and buildings; locations are lifted to page-qualified targets.
@@ -215,6 +294,7 @@ liveTagRegistry v = registryFromCategories
     (unionDisjointCategories
         [ mapCategoryKeysMonotonic (LocationTarget pid) (lisTags lis)
         | (pid, lis) ← ltvLocations v ])
+    (ltvItems v)
 
 -- | Every EXISTING target, tagged or not: the universe a query ranges
 --   over, so untagged objects appear in negative results.
@@ -225,6 +305,35 @@ liveTagUniverse v = mempty
     , tsLocations = Set.fromList
         [ LocationTarget pid lid
         | (pid, lis) ← ltvLocations v, lid ← HM.keys (lisById lis) ]
+    , tsItems     = liveItemTargets v
+    }
+
+-- | Every live physical item in the session, by identity: what the
+--   canonical enumeration walks, never a remembered copy, a definition
+--   or a display group. Same-definition items are distinct targets.
+liveItemTargets ∷ LiveTagView → Set.Set ItemTarget
+liveItemTargets v = Set.fromList
+    [ t | (_, i) ← liveItems v, Just t ← [mkItemTarget (iiInstanceId i)] ]
+
+-- | The live items on one page.
+liveItemTargetsOn ∷ LiveTagView → WorldPageId → Set.Set ItemTarget
+liveItemTargetsOn v page = Set.fromList
+    [ t | (p, i) ← liveItems v, p ≡ page, Just t ← [mkItemTarget (iiInstanceId i)] ]
+
+liveItems ∷ LiveTagView → [(WorldPageId, ItemInstance)]
+liveItems v = sessionItemInstances (ltvGround v) (ltvBuildings v) (ltvUnits v)
+
+-- | Narrow a universe to one page — the caller's selected live
+--   context. Units and buildings by their page, locations by the page
+--   that owns them, items by the page holding them now.
+onPage ∷ LiveTagView → WorldPageId → QueryUniverse → QueryUniverse
+onPage v page u = u
+    { tsUnits = Set.filter (\k → (uiPage ⊚ HM.lookup k (umInstances (ltvUnits v))) ≡ Just page)
+                           (tsUnits u)
+    , tsBuildings = Set.filter (\k → (biPage ⊚ HM.lookup k (bmInstances (ltvBuildings v))) ≡ Just page)
+                               (tsBuildings u)
+    , tsLocations = Set.filter ((≡ page) . ltPage) (tsLocations u)
+    , tsItems = Set.intersection (tsItems u) (liveItemTargetsOn v page)
     }
 
 -- | Evaluate against one captured view. The caller narrows the
@@ -239,3 +348,27 @@ runLiveTagQuery v narrow =
 liveTagAssignments ∷ LiveTagView → [(TagTarget, Set.Set GameplayTag)]
 liveTagAssignments = assignments . liveTagRegistry
 
+
+-- * Committing a new item tree's assignments
+
+-- | Install explicit assignments for a newly materialized item tree
+--   (#2703) — the attachment boundary later scenario construction
+--   needs. ALL OR NOTHING: every target must be LIVE when this runs
+--   (the tree committed to an owner first), or nothing is installed
+--   and the uncommitted ids come back, so a rejected or never-committed
+--   tree leaves no assignment behind. New items carry no tags of their
+--   own; this is the only way one gets any at birth.
+commitItemTreeTags ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
+                   → [(ItemTarget, Set.Set GameplayTag)] → IO (Either [ItemTarget] ())
+commitItemTreeTags umRef bmRef wmRef assigned = do
+    v ← captureLiveTagView umRef bmRef wmRef
+    let liveSet = liveItemTargets v
+        missing = [ t | (t, _) ← assigned, not (Set.member t liveSet) ]
+        epoch   = wmSessionEpoch (ltvManager v)
+    if not (null missing) then pure (Left missing) else do
+        atomicModifyIORef' wmRef $ \mgr →
+            ( if wmSessionEpoch mgr ≢ epoch then mgr
+              else mgr { wmItemTags = foldl' (\ix (t, ts) → modifyCategoryTags (Set.union ts) t ix)
+                                             (wmItemTags mgr) assigned }
+            , () )
+        pure (Right ())

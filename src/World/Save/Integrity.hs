@@ -89,12 +89,15 @@ import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
-    , transferOrdersComponentId, worldPagesComponentId, ccVersion )
+    , transferOrdersComponentId, worldPagesComponentId, ccVersion
+    , coreSessionComponentId )
 import World.Save.Component.Page (worldPagesCodec)
 import World.Save.Component.EntitySnapshots (unitsCodec, buildingsCodec)
+import World.Save.Component.Session (coreSessionCodec)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryTargets)
+import Gameplay.Tags.Tag (itemTargetId)
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
@@ -1346,7 +1349,24 @@ tagDanglingWarnings snap =
       , lid ← Set.toList (categoryTargets (lisTags lis))
       , not (HM.member lid (lisById lis))
       , let v = tshow (unLocationInstanceId lid) ]
+    -- #2703: a session-scoped item tag naming no item any page holds,
+    -- in any owner and at any nesting depth.
+    ⧺ [ IntegrityError
+          { ieComponent = coreSessionComponentId
+          , ieVersion = ccVersion coreSessionCodec
+          , iePath = "core-session.item-tags[item=" <> v <> "]"
+          , ieRefKind = RefItemInstance, ieRefValue = v
+          , ieExpectedScope = "session (any page, any owner)"
+          , ieActual = "absent from the session"
+          , ieCode = "dangling-reference"
+          , ieMessage = "gameplay tags on item '" <> v
+              <> "' name no existing item (dropped: a tag on nothing is not restored)"
+          }
+      | t ← Map.keys (snapItemTags snap)
+      , not (HS.member (itemTargetId t) liveItems)
+      , let v = tshow (itemTargetId t) ]
   where
+    liveItems = HS.fromList (allItemInstanceIds snap)
     entitiesByPage = snapshotPageEntities snap
     dangling cid ver kind pid path what v = IntegrityError
         { ieComponent = cid, ieVersion = ver, iePath = path

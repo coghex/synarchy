@@ -80,7 +80,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Hashable (Hashable)
 import Gameplay.Tags.Index (CategoryIndex, categoryForward, categoryFromAssignments)
-import Gameplay.Tags.Tag (GameplayTag)
+import Gameplay.Tags.Tag (GameplayTag, ItemTarget)
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
@@ -580,6 +580,12 @@ data SaveData = SaveData
     , sdWorlds       ∷ ![WorldPageSave]
         -- ^ Every saved world page, one entry per live page in
         --   wmWorlds at save time.
+    , sdItemTags ∷ !(Map.Map ItemTarget (Set.Set GameplayTag))
+        -- ^ #2703: the session's physical-item gameplay tag
+        --   assignments ('World.Save.Snapshot.snapItemTags'), scrubbed
+        --   against the restored session's live items by
+        --   "World.Load.Stage" and installed on
+        --   'World.State.Types.wmItemTags' by "World.Load.Publish".
     , sdPortableKnowledge ∷ !PortableKnowledge
         -- ^ #2512: what the player remembers about each PORTABLE
         --   container, keyed by 'Item.Types.iiInstanceId'. A GLOBAL

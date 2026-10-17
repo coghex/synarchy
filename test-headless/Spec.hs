@@ -464,6 +464,7 @@ import qualified Test.Headless.Unit.FactionProfileWire as UnitFactionProfileWire
 import qualified Test.Headless.Gameplay.Tags as GameplayTags
 import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
 import qualified Test.Headless.Gameplay.TagsPersistence as GameplayTagsPersistence
+import qualified Test.Headless.Gameplay.TagsItems as GameplayTagsItems
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -1372,6 +1373,7 @@ restLane = do
     -- Own engine for the group (#2701): the real unit, building and
     -- world handlers plus a real stage and publish.
     GameplayTagsPersistence.spec
+    GameplayTagsItems.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec

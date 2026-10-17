@@ -130,9 +130,10 @@ spec = do
             check transferOrdersCodec
             check portableKnowledgeCodec
 
-        it "declares a stable id and current version of 1" $ do
+        it "declares a stable id and its current version" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
-            ccVersion coreSessionCodec `shouldBe` 1
+            -- #2703: v2 appends the session's item gameplay tags.
+            ccVersion coreSessionCodec `shouldBe` 2
             ccVersion worldPagesCodec `shouldBe` 14
 
         it "rejects a NEWER unsupported version, naming the phase" $
@@ -580,9 +581,11 @@ spec = do
 
         it "reports an unsupported version identically for a SINGLETON \
            \reader (component, version, phase, and the full message)" $
-            decodeErrorOf coreSessionCodec 2
-                    (ccEncode coreSessionCodec richSnapshot)
-                `shouldBe` Just (ComponentError coreSessionComponentId 2
+            -- texture-palette, since #2703 took core-session (the
+            -- previous singleton here) to two versions.
+            decodeErrorOf texPaletteCodec 2
+                    (ccEncode texPaletteCodec richSnapshot)
+                `shouldBe` Just (ComponentError texPaletteComponentId 2
                     DecodePhase
                     "unsupported schema version (reader supports v1)")
 
@@ -877,7 +880,9 @@ payloadDigest bytes = (BS.length bytes, hex16 (BS.foldl' step 0xcbf29ce484222325
 --   encoded bytes changed by accident.
 goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
-    [ ("core-session",        (85,   "74d3010096cbbe2b"))
+      -- #2703 re-pinned: @core-session@ v2 appends the session's item
+      -- gameplay-tag list (8 bytes for an empty one).
+    [ ("core-session",        (93,   "70e926d18d60f18b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
       -- #2021 re-pinned: @world-pages@ v9 appended each page's optional
       -- generated-world id (17 bytes per page here — a present tag plus
@@ -938,7 +943,8 @@ goldenRichPayloads =
 
 goldenFullPayloads ∷ [(Text, (Int, Text))]
 goldenFullPayloads =
-    [ ("core-session",        (85,  "0641eeed95100f9a"))
+      -- #2703 re-pinned: core-session v2's empty item-tag list.
+    [ ("core-session",        (93,  "374686bb705a86da"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
       -- #2021 re-pinned, same reason as goldenRichPayloads (one page
       -- here, so 17 bytes rather than 34). #917 left it unmoved for the

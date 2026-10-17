@@ -9,6 +9,7 @@ module Engine.Scripting.Lua.API.Construct.Payment
     ) where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (forgetItemTags, itemForestIds)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -125,6 +126,12 @@ payFrom ∷ EngineEnv → WorldState → (Int, Int) → ConstructAttemptId
         → [(Text, Int)] → UnitId → IO Bool
 payFrom env ws key attempt materials uid = do
     let wanted = [ name | (name, n) ← materials, _ ← [1 .. n] ]
+        wmRef  = wsWorldManagerRef (toWorldSimCapability env)
+    -- #2703 (owner decision 2026-10-17): payment CONSUMES the paid
+    -- items — the receipt records counts, and a refund mints new,
+    -- untagged items — so their gameplay tags go once the receipt
+    -- commits. Read before the pop, to guard that forget.
+    tagEpoch ← wmSessionEpoch ⊚ readIORef wmRef
     -- All or nothing, inside ONE update of the unit manager: a partial
     -- shortfall must leave the inventory byte-for-byte unchanged, so the
     -- whole removal is computed purely and only then committed.
@@ -149,7 +156,11 @@ payFrom env ws key attempt materials uid = do
                         (HM.insert key (cd { cdPayment = CpPaid receipt }) m
                         , True)
                     _ → (m, False)
-            unless ok $ restore taken
+            -- A restored payment keeps every item, and so every tag.
+            if ok
+                then forgetItemTags wmRef tagEpoch
+                         (itemForestIds (map fst taken))
+                else restore taken wmRef tagEpoch
             pure ok
   where
     -- The attempt went away under us. Put every instance back where it
@@ -163,17 +174,22 @@ payFrom env ws key attempt materials uid = do
     -- against. (Sorting by index instead is the right undo only when
     -- every index shares one original list, which is the shape the
     -- cross-owner transfer rollback has and this one does not.)
-    restore taken =
-        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+    --
+    -- A payer that vanished in between has nowhere to take them back:
+    -- the items are gone with it, so their tags go too (#2703).
+    restore taken wmRef tagEpoch = do
+        restored ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
             \um → case HM.lookup uid (umInstances um) of
-                Nothing → (um, ())
+                Nothing → (um, False)
                 Just u  →
                     let inv = foldl' (\acc (inst, i) → insertAt i inst acc)
                                      (uiInventory u) (reverse taken)
                     in ( um { umInstances =
                                 HM.insert uid (u { uiInventory = inv })
                                           (umInstances um) }
-                       , () )
+                       , True )
+        unless restored $
+            forgetItemTags wmRef tagEpoch (itemForestIds (map fst taken))
 
     -- Pop every wanted def name, remembering each instance's original
     -- index. 'Nothing' the moment one is missing — the caller commits

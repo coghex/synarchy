@@ -7,6 +7,10 @@ module World.Thread.Command.Basic
     ) where
 
 import UPrelude
+import qualified Data.HashSet as HS
+import Gameplay.Tags.ItemLifecycle
+    (forgetItemTags, groundItemIds, retiredUnitItemIds, retiredBuildingItemIds)
+import Gameplay.Tags.Index (emptyCategoryIndex)
 import Control.Concurrent.STM (atomically)
 import Engine.Audio.Transport (resetAudioSession)
 import Engine.Core.Capability.Audio (AudioCapability(..), toAudioCapability)
@@ -90,6 +94,12 @@ handleWorldDestroyCommand env logger pageId = do
       -- wmWorlds and becomes unreachable to uploadBloodTextures.
       mgr ← readIORef (wsWorldManagerRef worldSim)
       enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
+      -- #2703: the page's ground items are discarded with it. Read
+      -- under the lifecycle lock, before the page leaves 'wmWorlds',
+      -- with the epoch the forget below is guarded by.
+      groundIds ← maybe (pure HS.empty)
+          (fmap groundItemIds . readIORef . wsGroundItemsRef)
+          (lookup pageId (wmWorlds mgr))
 
       -- Remove from visible list
       atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
@@ -159,10 +169,18 @@ handleWorldDestroyCommand env logger pageId = do
       -- thread, which mutates it with a read-modify-write across a
       -- tick, so a write from here could be lost. Its removal stays in
       -- the queued handler, which runs ahead of that tick's movement.
-      atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
-          (fst (retirePageUnits pageId unitCutoff um), ())
-      atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
-          (retirePageBuildings pageId bldCutoff bm, ())
+      unitItemIds ← atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
+          let um' = fst (retirePageUnits pageId unitCutoff um)
+          in (um', retiredUnitItemIds um um')
+      bldItemIds ← atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
+          let bm' = retirePageBuildings pageId bldCutoff bm
+          in (bm', retiredBuildingItemIds bm bm')
+      -- #2703: every item the incarnation held — on its ground and on
+      -- its retired units and buildings — is destroyed with it, so its
+      -- gameplay tags go AFTER the owners are gone. Items never cross
+      -- pages, so nothing here can name an item that lives on.
+      forgetItemTags (wsWorldManagerRef worldSim) (wmSessionEpoch mgr)
+          (HS.unions [groundIds, unitItemIds, bldItemIds])
 
       Q.writeQueue (ucUnitQueue unitCombat) (UnitClearPage pageId unitCutoff)
       Q.writeQueue (bcBuildingQueue building)
@@ -222,6 +240,8 @@ handleWorldDestroyAllCommand env logger = do
             -- same reason every other session-scoped value here is.
             m' { wmWorlds = [], wmVisible = []
                , wmPortableKnowledge = emptyPortableKnowledge
+               -- #2703: no item survives the teardown, so no item tag.
+               , wmItemTags = emptyCategoryIndex
                -- …and in the SAME update, so no reader can see the
                -- cleared map under the departed session's epoch and
                -- conclude a queued observation for it is still current

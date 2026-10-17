@@ -5,6 +5,8 @@ module World.Thread.Command.Init
     ) where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle
+    (forgetItemTags, groundItemIds, retiredUnitItemIds, retiredBuildingItemIds)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
@@ -876,10 +878,21 @@ registerPageIncarnation env pageId register = do
         -- state that outlives the row. Retiring first closes it: at no
         -- instant is an old row visible beside the replacement.
         when replaced $ do
-            atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
-                (fst (retirePageUnits pageId unitCutoff um), ())
-            atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
-                (retirePageBuildings pageId bldCutoff bm, ())
+            -- #2703: the departed incarnation's ground items and the
+            -- items its retired units and buildings held are destroyed
+            -- with it; the replacement's items are new identities, so
+            -- nothing here can strip a tag from one of them.
+            groundIds ← maybe (pure HS.empty)
+                (fmap groundItemIds . readIORef . wsGroundItemsRef)
+                (lookup pageId (wmWorlds preMgr))
+            unitItemIds ← atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
+                let um' = fst (retirePageUnits pageId unitCutoff um)
+                in (um', retiredUnitItemIds um um')
+            bldItemIds ← atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
+                let bm' = retirePageBuildings pageId bldCutoff bm
+                in (bm', retiredBuildingItemIds bm bm')
+            forgetItemTags (wsWorldManagerRef worldSim) (wmSessionEpoch preMgr)
+                (HS.unions [groundIds, unitItemIds, bldItemIds])
 
         atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
             (register mgr, ())

@@ -50,10 +50,13 @@ module Engine.Scripting.Lua.API.Repair
     ) where
 
 import UPrelude
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, unitConsumption)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (IORef, atomicModifyIORef')
+import Data.IORef (atomicModifyIORef', IORef)
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.ContentRegistriesView
@@ -168,7 +171,10 @@ runRepairAt regs umRef env uid rid iid bid = do
                     Left err → return (Left err)
                     Right () → do
                         itemMgr ← readReadOnlyRef (crvItemManagerRef regs)
-                        atomicModifyIORef' umRef $ \um →
+                        -- #2703: consumed demands lose their tags; the
+                        -- repaired instance keeps its id, and so its tags.
+                        withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+                            atomicModifyIORef' umRef $ unitConsumption [uid] $ \um →
                             applyRepairAt axis recipe iid itemMgr uid um
 
 -- | The pure atomic step: find the targeted instance, refuse if

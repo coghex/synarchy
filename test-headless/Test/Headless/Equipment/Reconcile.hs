@@ -398,6 +398,7 @@ saveWith units = snapshotToSaveData
             ((blankPageSnapshot pageId
                   defaultWorldGenParams { wgpSeed = 0 })
                  { pgsUnits = units })
+        , snapItemTags = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

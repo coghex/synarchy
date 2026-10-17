@@ -138,6 +138,7 @@ snapshotToSaveData req snap = SaveData
       -- #2512: crosses unchanged and UNDUPLICATED. It is genuinely
       -- global, so unlike the camera and the two id allocators below it
       -- there is no legacy per-page slot to fabricate a copy into.
+    , sdItemTags           = snapItemTags snap
     , sdPortableKnowledge  = snapPortableKnowledge snap
     }
 

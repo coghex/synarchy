@@ -28,6 +28,8 @@ module World.Save.Component.Session
     ( coreSessionCodec
     , texPaletteCodec
     , CoreSessionDTO(..)
+    , CoreSessionDTOv1(..)
+    , migrateCoreSessionDTOv1
     , LiveCameraDTO(..)
     , TexPaletteDTO(..)
     , applyCoreSession
@@ -47,6 +49,10 @@ import Engine.Graphics.Camera (CameraFacing)
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..) )
 import World.Save.Component.Types
+import World.Save.Component.GameplayTags
+    (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
+import qualified Data.Map.Strict as Map
+import Gameplay.Tags.Tag (itemTargetId, mkItemTarget)
 
 -- core-session ------------------------------------------------------
 
@@ -59,7 +65,7 @@ data LiveCameraDTO = LiveCameraDTO
     , lcdFacing ∷ !CameraFacing
     } deriving (Show, Eq, Generic, Serialize)
 
--- | Frozen v1 DTO for the @"core-session"@ component.
+-- | The current (v2) DTO for the @"core-session"@ component.
 data CoreSessionDTO = CoreSessionDTO
     { csGameTime       ∷ !Double
     , csNextItemId     ∷ !Word64
@@ -68,18 +74,58 @@ data CoreSessionDTO = CoreSessionDTO
     , csActivePage     ∷ !WorldPageId
     , csVisiblePages   ∷ ![WorldPageId]
     , csLiveCamera     ∷ !LiveCameraDTO
+    , csItemTags       ∷ !(TagAssignmentsDTO Word64)
+      -- ^ #2703 (v2): the session's physical-item gameplay tag
+      --   assignments, forward only, keyed by 'Item.Types.iiInstanceId'
+      --   in the shared wire shape ("World.Save.Component.GameplayTags").
+      --   Session-scoped like the item allocator above it, because an
+      --   item's identity is: it moves between pages and owners without
+      --   changing. APPENDED, which is what makes v2 a distinct shape.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN v1 @"core-session"@ DTO: the current one without its
+--   item tags. Never edited. Its camera is the unchanged 'LiveCameraDTO'
+--   both versions share.
+data CoreSessionDTOv1 = CoreSessionDTOv1
+    { cs1GameTime       ∷ !Double
+    , cs1NextItemId     ∷ !Word64
+    , cs1NextBuildingId ∷ !Word32
+    , cs1NextUnitId     ∷ !Word32
+    , cs1ActivePage     ∷ !WorldPageId
+    , cs1VisiblePages   ∷ ![WorldPageId]
+    , cs1LiveCamera     ∷ !LiveCameraDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | v1 → v2: every global crosses unchanged and the session carries NO
+--   item tags — a v1 save predates them, and nothing else (a faction
+--   tag, a remembered copy) may stand in for them.
+migrateCoreSessionDTOv1 ∷ CoreSessionDTOv1 → CoreSessionDTO
+migrateCoreSessionDTOv1 d = CoreSessionDTO
+    { csGameTime       = cs1GameTime d
+    , csNextItemId     = cs1NextItemId d
+    , csNextBuildingId = cs1NextBuildingId d
+    , csNextUnitId     = cs1NextUnitId d
+    , csActivePage     = cs1ActivePage d
+    , csVisiblePages   = cs1VisiblePages d
+    , csLiveCamera     = cs1LiveCamera d
+    , csItemTags       = []
+    }
 
 coreSessionCodec ∷ ComponentCodec CoreSessionDTO
 coreSessionCodec = componentCodec ComponentSpec
     { csComponent     = coreSessionComponentId
-    , csVersion       = 1
+      -- v2 (#2703): the session's item tag assignments.
+    , csVersion       = 2
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = encodeCore
     , csDecode        = id
-    , csOlderVersions = []
-    , csValidate      = const []
+    , csOlderVersions = [ atVersion 1 migrateCoreSessionDTOv1 ]
+    , csValidate      = \d →
+        [ ComponentError coreSessionComponentId 2 ValidatePhase msg
+        | msg ← tagAssignmentErrors (\i → "item " <> tshow i) (csItemTags d)
+              ⧺ [ "gameplay tags name item instance id 0, which names no item"
+                | any ((≡ 0) . fst) (csItemTags d) ] ]
     }
   where
     encodeCore snap = CoreSessionDTO
@@ -90,6 +136,8 @@ coreSessionCodec = componentCodec ComponentSpec
         , csActivePage     = snapActivePage snap
         , csVisiblePages   = snapVisiblePages snap
         , csLiveCamera     = toCameraDTO (snapLiveCamera snap)
+        , csItemTags       = encodeTagAssignments
+            (Map.mapKeysMonotonic itemTargetId (snapItemTags snap))
         }
     toCameraDTO c = LiveCameraDTO
         { lcdOwner  = lcsOwnerPage c
@@ -117,6 +165,10 @@ applyCoreSession d snap = snap
         , lcsZoom      = lcdZoom (csLiveCamera d)
         , lcsFacing    = lcdFacing (csLiveCamera d)
         }
+    , snapItemTags = Map.fromList
+        [ (t, ts)
+        | (i, ts) ← Map.toList (decodeTagAssignments (csItemTags d))
+        , Just t ← [mkItemTarget i] ]
     }
 
 -- texture-palette ---------------------------------------------------

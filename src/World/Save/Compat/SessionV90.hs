@@ -89,6 +89,7 @@ module World.Save.Compat.SessionV90
     ) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -379,6 +380,7 @@ migrateSessionV90 meta sd = do
               -- looked inside it. Exactly the absent-payload default
               -- 'World.Save.Component.assembleSnapshot' installs.
             , snapPortableKnowledge = emptyPortableKnowledge
+            , snapItemTags = Map.empty
             }
         crossErrs = capComponentErrors $
             map snapErr (validateSessionSnapshot snap)

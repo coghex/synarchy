@@ -142,10 +142,11 @@ module World.Reaction.Occupants
     ) where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, itemForestIds)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.List (sort)
-import Data.IORef (readIORef)
+import Data.IORef (IORef, readIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..))
 import Engine.Core.Capability.WorldSim
@@ -162,7 +163,7 @@ import World.Tile.Types (lookupChunk)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.GroundItems (takeGroundItemsOnPage)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldState(..), pageWrapWorldSize)
+import World.State.Types (WorldState(..), WorldManager, pageWrapWorldSize)
 
 -- | Who was standing where, at the instant the commit began.
 --
@@ -271,9 +272,9 @@ snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
 --   (#2476/#2477) — the same fence @UnitSpawn@ carries, for the same
 --   reason.
 destroySolidificationOccupants
-    ∷ UnitCombatCapability → LoggerState → WorldPageId → ChunkGeneration
-    → WorldState → SolidificationVictims → IO ()
-destroySolidificationOccupants uc logger pageId epoch ws victims
+    ∷ UnitCombatCapability → IORef WorldManager → LoggerState → WorldPageId
+    → ChunkGeneration → WorldState → SolidificationVictims → IO ()
+destroySolidificationOccupants uc wmRef logger pageId epoch ws victims
     | null plan = pure ()
     | otherwise = do
         worldSize ← pageWrapWorldSize ws
@@ -283,7 +284,13 @@ destroySolidificationOccupants uc logger pageId epoch ws victims
         -- here would also catch an item dropped onto the cell in
         -- between — one that never occupied the cell the reaction
         -- caught, and that the unit half would never have selected.
-        removed ← takeGroundItemsOnPage ws (svItems victims)
+        --
+        -- #2703: these items cease to exist, so their gameplay tags (and
+        -- every nested descendant's) are forgotten after the removal,
+        -- epoch-guarded.
+        removed ← withDestroyedItems wmRef $ do
+            taken ← takeGroundItemsOnPage ws (svItems victims)
+            pure (taken, itemForestIds (map (giInst . snd) taken))
         -- The tiles as this commit LEFT them. Read here, on the world
         -- thread that owns them and while the chunk is certainly still
         -- loaded, because the handler's own lookup may not be able to:

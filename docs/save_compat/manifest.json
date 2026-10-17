@@ -3225,6 +3225,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z9-gameplay-tags.expected.json"
         }
       ]
+    },
+    {
+      "id": "z10-item-tags",
+      "description": "Physical-item gameplay tags (#2703) as the current build writes them: nonempty session-scoped item assignments in core-session v2, keyed by item instance id, on carried, equipped and worn items of two units, with same-definition rations tagged independently and a tag shared across units. Seeded through synarchy-save-codec seed-tags because no public tag verb exists yet (SCN-06). z9 and every older fixture are the empty-default (core-session v1) counterparts.",
+      "declaredAt": "2026-10-17",
+      "declaredByIssue": 2703,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Session.coreSessionCodec (current core-session v2, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 14,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z10-item-tags",
+          "path": "test-headless/data/save-compat/z10-item-tags.bin",
+          "kind": "complete-session",
+          "sha256": "c4902f0d5c53324552c33d55d1b9014625c298155d4eaf1597512ddbbc53c618",
+          "sizeBytes": 912335,
+          "provenance": "Derived from the tracked z9-gameplay-tags fixture (itself generated through the real headless engine and engine.saveWorld; see its own provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the physical-item gameplay-tag assignments {\"items\":[{\"id\":2,\"tags\":[\"food\",\"ration_a\"]},{\"id\":3,\"tags\":[\"food\"]},{\"id\":7,\"tags\":[\"comms\"]},{\"id\":8,\"tags\":[\"kit\"]},{\"id\":13,\"tags\":[\"kit\"]},{\"id\":15,\"tags\":[\"food\",\"second_unit\"]},{\"id\":21,\"tags\":[\"kit\",\"second_unit\"]}]} on the session (item instance ids 2, 3 and 7 are the first unit's two rations and radio, 8 and 13 among its equipped and worn items, 15 and 21 the second unit's first ration and an equipped item) and re-encoded it through the same encoder an ordinary save uses, writing core-session v2; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed (#2703: no public tag verb exists yet).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z10-item-tags.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

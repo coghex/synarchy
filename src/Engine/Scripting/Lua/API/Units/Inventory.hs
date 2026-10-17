@@ -37,6 +37,7 @@ import Engine.Scripting.Lua.API.Items.Contents
     (pushGroupedContents, readInstanceIdPath, resolveContainedItem)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Unit.Types
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, unitConsumption)
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Materialize (filledItem, materializeItem)
 import Item.Ground (spawnGroundItem)
@@ -231,7 +232,12 @@ unitRemoveItemFn env = do
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8Lenient nameBS
-            removed ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+            -- #2703: consumption — the removed item (and anything
+            -- nested in it) ceases to exist, so its tags go too.
+            removed ← Lua.liftIO $ withDestroyedItems
+                (wsWorldManagerRef (toWorldSimCapability env)) $
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+                unitConsumption [uid] $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just u  →

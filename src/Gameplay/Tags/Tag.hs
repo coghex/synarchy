@@ -22,6 +22,10 @@ module Gameplay.Tags.Tag
     , insertNonEmptySet
     , deleteNonEmptySet
     , mapNonEmptySetMonotonic
+      -- * Physical items (#2703: the session owner's key)
+    , ItemTarget
+    , mkItemTarget
+    , itemTargetId
     ) where
 
 import UPrelude hiding (get)
@@ -102,3 +106,33 @@ deleteNonEmptySet x (NonEmptySet s) = nonEmptySet (Set.delete x s)
 --   nonempty set stays nonempty.
 mapNonEmptySetMonotonic ∷ (a → b) → NonEmptySet a → NonEmptySet b
 mapNonEmptySetMonotonic f (NonEmptySet s) = NonEmptySet (Set.mapMonotonic f s)
+
+-- * Physical items
+
+-- | One physical item, by its process-unique
+--   'Item.Types.iiInstanceId'. That counter starts at 1 and id 0 means
+--   "no identity" ('Item.Types.itemMatches' treats only @iid > 0@ as an
+--   identity), so 0 is refused.
+newtype ItemTarget = ItemTarget Word64
+    deriving (Show, Eq, Ord)
+
+-- | Defined here, not in "Gameplay.Tags.Types", so the session owner
+--   ('World.State.Types.WorldManager') can key its item index by it
+--   without importing any object identity (#2703). The snapshot
+--   encoding only, like 'GameplayTag''s: decoding 0 fails, since 0
+--   names no physical item.
+instance Serialize ItemTarget where
+    put (ItemTarget i) = put i
+    get = get ≫= maybe (fail "item instance id 0 names no item") pure . mkItemTarget
+
+instance NFData ItemTarget where
+    rnf (ItemTarget i) = rnf i
+
+-- | 'Nothing' for the non-identity 0.
+mkItemTarget ∷ Word64 → Maybe ItemTarget
+mkItemTarget 0 = Nothing
+mkItemTarget i = Just (ItemTarget i)
+
+itemTargetId ∷ ItemTarget → Word64
+itemTargetId (ItemTarget i) = i
+

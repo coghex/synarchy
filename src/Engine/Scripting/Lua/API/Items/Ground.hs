@@ -26,6 +26,8 @@ module Engine.Scripting.Lua.API.Items.Ground
     ) where
 
 import UPrelude
+import qualified Data.HashSet as HS
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, itemTreeIds)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.ContentRegistriesView
@@ -368,7 +370,7 @@ worldSpawnLocationSignificantItemFn env = do
                                         -- ground rather than leaving an
                                         -- unowned duplicate reward.
                                         unless bound $ void $
-                                            takeGroundItemOnPage ws gid
+                                            destroyGroundItem env ws gid
                                         pure bound
         _ → pure False
     Lua.pushboolean filled
@@ -474,7 +476,7 @@ worldSpawnLocationContainerFn env = do
                                         -- unowned crate nothing can
                                         -- realize.
                                         unless bound $ void $
-                                            takeGroundItemOnPage ws gid
+                                            destroyGroundItem env ws gid
                                         pure bound
         _ → pure False
     Lua.pushboolean spawned
@@ -713,8 +715,12 @@ itemRemoveGroundFn env = do
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
+                    -- #2703: explicit destruction. The removed tree's
+                    -- gameplay tags are forgotten afterwards; a pickup
+                    -- reaches 'takeGroundItemOnPage' through
+                    -- 'pickupUnguarded' instead and forgets nothing.
                     mGi ← Lua.liftIO $
-                        takeGroundItemOnPage ws (fromIntegral n)
+                        destroyGroundItem env ws (fromIntegral n)
                     Lua.pushboolean (isJust mGi)
                     return 1
         _ → Lua.pushboolean False >> return 1
@@ -1304,6 +1310,15 @@ pushItemTree inst = do
     num key v = do
         Lua.pushnumber (Lua.Number (realToFrac v))
         Lua.setfield (Lua.nth 2) key
+
+-- | Remove a ground row as DESTRUCTION (#2703): the tree ceases to
+--   exist, so its gameplay tags and every nested descendant's are
+--   forgotten after the removal, epoch-guarded. Never a pickup's path.
+destroyGroundItem ∷ EngineEnv → WorldState → Int → IO (Maybe GroundItem)
+destroyGroundItem env ws gid =
+    withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $ do
+        mGi ← takeGroundItemOnPage ws gid
+        pure (mGi, maybe HS.empty (itemTreeIds . giInst) mGi)
 
 -- | The original remove → insert → rollback core, with no realization in
 --   front of it. Split out so the realization step above reads as one
