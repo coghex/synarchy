@@ -180,6 +180,7 @@ spec = describe "UI.PhysiologyModes" $ do
     simulatedSpec
     nominalSpec
     cardioNominalSpec
+    bloodNominalSpec
     unsupportedSpec
     conditionsSpec
     transitionSpec
@@ -339,18 +340,61 @@ cardioNominalSpec = describe "A Nominal cardio" $ do
                 rowsOf ls >>= \rs → (rowText <$> rowNamed rs "Heart Rate")
                     >>= (`shouldBe` "70 bpm")
 
+-- | The blood row (#2837, S10): a Nominal blood shows the word Nominal, but
+--   the live wound bleed rate stays in its tooltip, the wound-driven Bleeding
+--   condition stays without claiming a volume loss, and the volume-derived
+--   low-blood condition is suppressed.
+bloodNominalSpec ∷ Spec
+bloodNominalSpec = describe "A Nominal blood" $ do
+    let bleeder = Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.6
+                        , woundAt = 0, woundBandage = 1.0, woundClot = 0.0
+                        , woundHeal = 0.0, woundDressing = "", woundInfection = 0.0
+                        , woundClean = False, woundInfectionType = ""
+                        , woundNecrosis = 0.0 }
+    it "shows Nominal with the live bleeding line, and keeps the Bleeding \
+       \condition without claiming the blood is lost" $
+        withPanel [ (acolyte 1) { usOverrides = [("blood", PhysioNominal)]
+                                , usBlood = Just 1.0, usWounds = [bleeder] } ] $
+            \(_, ls) → do
+                rs ← rowsOf ls
+                b ← rowNamed rs "Blood"
+                rowText b `shouldBe` "Nominal"
+                rowColour b `shouldBe` neutral
+                rowTip b `shouldBe` nominalHint
+                -- the tooltip's second line is the LIVE bleed, not "Not bleeding"
+                hint ← luaText ls
+                    "local p = require('scripts.unit_info_v2_physio'); \
+                    \local r = p.row({ key = 'blood', value = function() return 'x' end }, 1); \
+                    \return r.valueTooltip(1).hint"
+                T.isInfixOf "Bleeding:" hint `shouldBe` True
+                T.isInfixOf "not lost" hint `shouldBe` True
+                has' rs "Bleeding" `shouldBe` True
+                luaText ls "local c = require('scripts.unit_info_v2_status').unitConditions(1); \
+                           \for _, x in ipairs(c) do if x.name == 'Bleeding' then return x.hint end end; \
+                           \return 'none'"
+                    >>= (`shouldSatisfy` T.isInfixOf "not simulated")
+    it "never names the blood-loss collapse for a collapsed Nominal unit \
+       \with a stale low stored volume, where the Simulated one does" $ do
+        withPanel [ (acolyte 1) { usOverrides = [("blood", PhysioNominal)]
+                                , usBlood = Just 0.5, usPose = "collapsed" } ] $
+            \(_, ls) → rowsOf ls >>= \rs → has' rs "Unconscious (blood loss)" `shouldBe` False
+        withPanel [ (acolyte 1) { usBlood = Just 0.5, usPose = "collapsed" } ] $
+            \(_, ls) → rowsOf ls >>= \rs → has' rs "Unconscious (blood loss)" `shouldBe` True
+  where has' rs frag = any (frag `T.isInfixOf`) (HM.keys rs)
+
 unsupportedSpec ∷ Spec
 unsupportedSpec = describe "A bodyless (Unsupported) unit" $
-    it "hides every physiology row, stamina and the cardio rows included, and keeps the unowned blood and injury rows" $
+    it "hides every physiology row, stamina, cardio and blood included, and keeps the unowned pain and injury rows" $
         withPanel [ (unitSpec 1 "tiller" Nothing)
                       { usStats = [("sleep_pressure", 50), ("max_sleep_pressure", 100)]
                       , usWounds = [wound] } ] $ \(_, ls) → do
             rs ← rowsOf ls
             absent rs [ "Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina"
-                      , "Sleep", "Heart Rate", "Blood O\8322", "Circulation" ]
-            forM_ ["Blood", "Pain"] (void ∘ rowNamed rs)
+                      , "Sleep", "Heart Rate", "Blood O\8322", "Circulation", "Blood" ]
+            -- the Blood row follows the D-8 hiding too (#2837); pain is unowned
+            void (rowNamed rs "Pain")
             -- the injury row survives: it is the one row that is no fixed vital
-            let vitals = ["Blood", "Pain", "Consciousness", "Carry Load"]
+            let vitals = ["Pain", "Consciousness", "Carry Load"]
             [ n | n ← HM.keys rs, n `notElem` vitals ] `shouldSatisfy` (not ∘ null)
   where
     wound = Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.5

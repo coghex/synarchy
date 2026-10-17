@@ -27,7 +27,7 @@ import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Unit.Blood (bloodView)
 import Unit.Physiology
-    (PhysioContext(..), physioConsumerView)
+    (PhysioContext(..), physioConsumerView, bloodIsNominal)
 import Unit.Physiology.Types
     (PhysiologyRegistry, emptyPhysiologyRegistry)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..)
@@ -222,7 +222,8 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
         -- so recovery carries on uninterrupted across the moment the wound
         -- list empties. Skip the allocation when blood is already settled
         -- AND both are at rest (the common case for a healthy unit).
-        let blood' = recoveredBloodVolume physioStats dt 0 (uiBlood inst)
+        let blood' | nominalBlood = uiBlood inst   -- no volume recovery (#2837)
+                   | otherwise    = recoveredBloodVolume physioStats dt 0 (uiBlood inst)
             atRest = uiImmuneResponse inst ≤ 0 ∧ HM.null (uiImmunities inst)
         in if atRest ∧ blood' ≡ uiBlood inst
              then (inst, NoChange, gen0)
@@ -450,7 +451,11 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
             newImm     = HM.filter (> immunityFloor)
                        $ HM.map (\v → max 0 (min 1 (v - immunityDecayRate * dt)))
                                 mergedImm
-            newBlood   = uiBlood inst - totalDrain
+            -- A NOMINAL blood (#2837) debits no volume: the wound fold still
+            -- computes the bleed rate (visual flow, pain, infection and every
+            -- other wound effect read it), but nothing leaves the body.
+            newBlood   | nominalBlood = uiBlood inst
+                       | otherwise    = uiBlood inst - totalDrain
             -- Conserved external-loss accounting (#882): the trail
             -- accumulator gets the EXTERNAL share of blood actually
             -- removed this tick, not the raw external drain — a fatal/
@@ -461,6 +466,10 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
             -- correctly zero when nothing bled at all this tick).
             actualDrain = uiBlood inst - max 0 newBlood
             externalPortion
+                -- The explicit Nominal exception to #882's conserved
+                -- accounting (#2837): no volume is removed, so the trail is
+                -- credited the wound-derived external flow DIRECTLY.
+                | nominalBlood   = extDrainTotal
                 | totalDrain > 0 = actualDrain * (extDrainTotal / totalDrain)
                 | otherwise      = 0
             -- Whether the unit's wounds AFTER this tick's heal/clot
@@ -512,10 +521,12 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
             -- UnconsciousNow gating, which already checks uiPose ≠
             -- "collapsed" for the same reason.
             outcome
-                | uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart "exsanguination"
+                | not nominalBlood
+                , uiBlood inst > 0, newBlood ≤ 0 = DiedNow worstPart "exsanguination"
                 | uiPose inst ≢ "dead"
                 , (g:_) ← gangrenousVital        = DiedNow g "gangrene"
-                | newBlood < unconsCut, uiPose inst ≢ "collapsed"
+                | not nominalBlood
+                , newBlood < unconsCut, uiPose inst ≢ "collapsed"
                                      = UnconsciousNow worstPart
                 | otherwise          = NoChange
             -- #2639 blood recovery. The eligibility rate is the
@@ -537,7 +548,8 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
             postDrain = max 0 newBlood
             newBloodR = case outcome of
                 DiedNow _ _      → postDrain
-                _ | totalDrain > 0 → postDrain
+                _ | nominalBlood   → uiBlood inst
+                  | totalDrain > 0 → postDrain
                   | otherwise      →
                       recoveredBloodVolume physioStats dt bleedAfter postDrain
             inst' = inst
@@ -555,6 +567,12 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
                 }
         in (propagateSevering def inst', outcome, genFinal)
   where
+    -- Is this unit's blood Nominal? Decided by the one pure resolver against
+    -- the registry in hand, INSIDE the atomic fold (#2837): an empty registry
+    -- (what 'tickOneUnit' passes) and an Unsupported blood are not Nominal, so
+    -- they keep today's raw volume behavior.
+    nominalBlood = bloodIsNominal physioReg (udPhysiology def)
+                       (uiPhysioOverrides inst) (uiStats inst)
     -- The unit's stats as the wound tick's physiology reads see them
     -- (#2830, #2831): a Nominal pool at its healthy value, an Unsupported
     -- one absent, a Simulated one as stored.

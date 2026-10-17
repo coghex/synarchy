@@ -46,7 +46,7 @@ import Unit.Stats (rollStat, standardStat, pickName, applyItemBuffs,
                    effectiveStat)
 import Unit.Blood (bloodViewOf)
 import Unit.Physiology (PhysioContext(..))
-import Unit.Physiology.Transition (reconcileStoredKeys)
+import Unit.Physiology.Transition (canonicalBlood, reconcileStoredKeys)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..),
                         lookupEquipmentClass)
@@ -235,7 +235,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
             -- a loaded unit's missing keys (Unit.Physiology.Transition).
             physioReg ← readIORef
                 (crPhysiologyRegistryRef (toContentRegistriesCapability env))
-            let seedResult = reconcileStoredKeys PhysioContext
+            let spawnCtx = PhysioContext
                     { pcRegistry   = physioReg
                     , pcPhysiology = udPhysiology def
                     , pcOverrides  = emptyPhysioOverrides
@@ -246,6 +246,12 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     -- is the seed it will be published with.
                     , pcBlood      = bloodViewOf initialStats
                                          (bloodSeedFromStats initialStats) 0 }
+                seedResult = reconcileStoredKeys spawnCtx
+                -- A Nominal blood stores its canonical maximum (#2837); the
+                -- other modes keep the spawn seed (base body mass x 0.075,
+                -- 0 L for a bodyless definition).
+                spawnBlood = fromMaybe (bloodSeedFromStats initialStats)
+                                       (canonicalBlood spawnCtx)
                 -- A unit whose Simulated systems cannot be seeded (an innate
                 -- or starting-accessory modifier that leaves no representable
                 -- base, a missing body input) is NOT published: it would hold
@@ -293,7 +299,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     , uiScars       = []
                     , uiImmuneResponse = 0
                     , uiImmunities  = HM.empty
-                    , uiBlood       = bloodSeedFromStats initialStats
+                    , uiBlood       = spawnBlood
                     , uiLastAttackerUid = Nothing
                     , uiLastAttackerAt  = 0
                     , uiAnimOverride = ""

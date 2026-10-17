@@ -123,7 +123,8 @@ unitSnapshot env uid = do
             , pcBlood      = bloodOf um inst
             }
 
--- | The unit's blood through "Unit.Blood"; a unit whose definition is no
+-- | The unit's RAW blood through "Unit.Blood" (the context applies the
+--   Nominal branch itself, 'contextBlood'); a unit whose definition is no
 --   longer registered has no wounds that can be priced, so no bleed.
 bloodOf ∷ UnitManager → UnitInstance → BloodView
 bloodOf um inst = case HM.lookup (uiDefName inst) (umDefs um) of
@@ -190,13 +191,13 @@ unitReadPhysioBaseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitReadPhysioBaseFn = readVerb ReadBase
 
 -- | @unit.readBloodView(uid)@ → @{ volume, max, fraction, bleedRate }@ |
---   @nil@ for a missing unit (#2836, S9). The pure Lua face of
---   "Unit.Blood".'Unit.Blood.bloodView': the unit's stored blood volume, its
---   maximum from BASE @body_mass@, the fraction clamped to @0..1@ and the
---   live wound bleed in litres per second. It is how cardio reaches its
---   blood input without changing @unit.getBlood@, whose record and current
---   behaviour stay as they are until S10 migrates it. Like the five read
---   verbs it changes nothing, so any code may call it.
+--   @nil@ for a missing unit (#2836, S9). The pure Lua face of the one
+--   mode-aware adapter ('unitBloodView', #2837): the volume, the maximum from
+--   BASE @body_mass@, the fraction clamped to @0..1@ and the live wound bleed
+--   in litres per second, in the Nominal branch (volume = maximum, fraction
+--   1.0) when the unit's blood is Nominal. It is how cardio reaches its
+--   blood input. Like the five read verbs it changes nothing, so any code
+--   may call it.
 unitReadBloodViewFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitReadBloodViewFn env = do
     idTy  ← Lua.ltype 1
@@ -204,8 +205,9 @@ unitReadBloodViewFn env = do
     mView ← case (idTy ≡ Lua.TypeNumber, idArg) of
         (True, Just n) → Lua.liftIO $ do
             um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-            pure (bloodOf um <$> HM.lookup (UnitId (fromIntegral n))
-                                           (umInstances um))
+            reg ← readIORef (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+            pure (unitBloodView reg um <$> HM.lookup (UnitId (fromIntegral n))
+                                                     (umInstances um))
         _ → pure Nothing
     case mView of
         Nothing → Lua.pushnil
@@ -311,6 +313,8 @@ applyTransition env uid plan = do
                         Left why → (um, Left why)
                         Right t →
                             let inst' = inst { uiStats = trStats t
+                                             , uiBlood = fromMaybe (uiBlood inst)
+                                                                   (trBlood t)
                                              , uiPhysioOverrides = trOverrides t }
                             in ( um { umInstances =
                                           HM.insert uid inst' (umInstances um) }

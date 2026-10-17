@@ -135,6 +135,10 @@ CHECKS = [
     ('collapsed_pool_and_death', 'collapsed pool and death'),
     ('independent_pools', 'independent pools'),
     ('pool_time_scale', 'pool time scale'),
+    ('nominal_moving_trail', 'nominal blood moving trail'),
+    ('nominal_stationary_pool', 'nominal blood stationary pool'),
+    ('nominal_dressing', 'nominal blood dressing'),
+    ('nominal_internal_dry', 'nominal blood internal dry'),
     ('loaded_spawn_surfaces', 'loaded spawn surfaces'),
 ]
 DESCRIPTOR = probe_protocol.build_descriptor('bleeding_trail', CHECKS)
@@ -1081,6 +1085,112 @@ def _run(args, rep):
         _check(rep, 'pool_time_scale', True, f"PASS: pool density is time-scale invariant "
               f"({counts[1.0]} layers at 1x vs {counts[5.0]} at 5x over "
               f"{dwell_secs}s real, expected {expected}+/-1)")
+
+        # ===================================================================
+        # #2837 (S10): NOMINAL blood. The volume is full and never drains, the
+        # wounds, pain and visual bleeding are untouched, and the trail and
+        # pool take the wound-derived flow directly. The Simulated cases above
+        # keep their conserved-volume regressions.
+        # ===================================================================
+
+        def make_nominal(uid_: int) -> None:
+            r = send(PORT, f"local ok, ch = require('scripts.physiology')"
+                           f".setMode({uid_}, 'blood', 'nominal'); "
+                           f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+            if r != "true|true":
+                print(f"FAIL (setup): physiology.setMode({uid_}, 'blood', 'nominal') -> {r!r}")
+                sys.exit(2)
+
+        def blood_full(uid_: int) -> bool:
+            b = send_json(PORT, f"return unit.getBlood({uid_})")
+            return (isinstance(b, dict) and b.get("max", 0) > 0
+                    and abs(b["current"] - b["max"]) < 1e-4)
+
+        # --- 13. a severe slash under Nominal blood: full volume, alive, marks ---
+        reset_blood()
+        uid = spawn_fresh(10, 10)
+        make_nominal(uid)
+        injure(uid, "slash", 0.6)   # severe: a Simulated unit exsanguinates in seconds
+        impact_ids = impact_decal_ids()
+        move_to(uid, 10 + route, 10)
+        if not wait_arrival(uid, 10 + route, timeout=90.0):
+            print(f"FAIL (setup): the Nominal unit never completed the {route}-tile route")
+            return 2
+        ds = route_marks(uid, impact_ids)
+        alive = send(PORT, f"return tostring(unit.getPose({uid}) ~= 'dead')").strip('"')
+        full = blood_full(uid)
+        rate = bleed_rate_of(uid)
+        ok = bool(ds) and alive == "true" and full and rate > 0.0
+        _check(rep, 'nominal_moving_trail', ok,
+               f"{'PASS' if ok else 'FAIL'}: severe slash under Nominal blood: {len(ds)} trail marks, "
+               f"alive={alive}, volume full={full}, live bleedRate={rate:.4f}")
+        if not ok:
+            return 1
+        destroy(uid)
+
+        # --- 14. stationary Nominal bleeder pools, volume still full ---
+        reset_blood()
+        uid = spawn_fresh(30, 30)
+        make_nominal(uid)
+        injure(uid, "slash", 0.6)
+        impact_ids = impact_decal_ids()
+        grew = poll_until(25.0, lambda: cluster_layers(uid) >= 2, interval=0.5) is not None
+        full = blood_full(uid)
+        ok = grew and full
+        _check(rep, 'nominal_stationary_pool', ok,
+               f"{'PASS' if ok else 'FAIL'}: stationary Nominal bleeder grew a pool "
+               f"(layers={cluster_layers(uid)}), volume full={full}")
+        if not ok:
+            return 1
+        destroy(uid)
+
+        # --- 15. a sealing dressing stops the flow; a competent one does not ---
+        reset_blood()
+        uid = spawn_fresh(10, 20)
+        make_nominal(uid)
+        injure(uid, "slash", 0.6, bandage=0.0)   # seep 0: sealed at once
+        impact_ids = impact_decal_ids()
+        move_to(uid, 10 + route, 20)
+        time.sleep(6)
+        sealed_cleared = trail_state(uid) is None
+        sealed_marks = len(route_marks(uid, impact_ids))
+        destroy(uid)
+        reset_blood()
+        uid = spawn_fresh(10, 20)
+        make_nominal(uid)
+        injure(uid, "slash", 0.6, bandage=0.05)   # seep 0.05: reduced, not zero
+        impact_ids = impact_decal_ids()
+        move_to(uid, 10 + route, 20)
+        wait_arrival(uid, 10 + route, timeout=90.0)
+        competent_marks = len(route_marks(uid, impact_ids))
+        competent_rate = bleed_rate_of(uid)
+        ok = sealed_cleared and sealed_marks == 0 and competent_marks > 0 and competent_rate > 0
+        _check(rep, 'nominal_dressing', ok,
+               f"{'PASS' if ok else 'FAIL'}: seep-0 dressing under Nominal blood cleared the "
+               f"accumulator (cleared={sealed_cleared}, marks={sealed_marks}); a seep-0.05 dressing "
+               f"kept reduced flow (marks={competent_marks}, bleedRate={competent_rate:.5f})")
+        if not ok:
+            return 1
+        destroy(uid)
+
+        # --- 16. an internal-only wound under Nominal: no marks, volume full, still bleeding ---
+        reset_blood()
+        uid = spawn_fresh(10, 10)
+        make_nominal(uid)
+        injure(uid, "internal", 0.6)
+        impact_ids = impact_decal_ids()
+        move_to(uid, 10 + route, 10)
+        time.sleep(route + 4)
+        ds = trail_decals(impact_ids)
+        full = blood_full(uid)
+        rate = bleed_rate_of(uid)
+        ok = (not ds) and full and rate > 0
+        _check(rep, 'nominal_internal_dry', ok,
+               f"{'PASS' if ok else 'FAIL'}: internal-only wound under Nominal blood: {len(ds)} marks, "
+               f"volume full={full}, live bleedRate={rate:.4f}")
+        if not ok:
+            return 1
+        destroy(uid)
 
         # Nothing above can report success until the engine's own log
         # agrees every spawn landed on loaded arena terrain (#1395).

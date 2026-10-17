@@ -51,7 +51,7 @@ import qualified Data.Text as T
 import Unit.Blood (bloodViewOf)
 import Unit.Physiology
     (PhysioContext(..), resolveMode, engagementApplied, combatEngagedKey)
-import Unit.Physiology.Transition (KeyRepair(..), reconcileStoredKeys)
+import Unit.Physiology.Transition (KeyRepair(..), canonicalBlood, reconcileStoredKeys)
 import Unit.Physiology.Types
 import Unit.Types (UnitId(..))
 import World.Page.Types (WorldPageId(..))
@@ -184,12 +184,24 @@ physiologyLoadRejections registry defs pages = concatMap pageRejections pages
               , resolveMode sys up (engagementApplied (uisStats u))
                     (HM.lookup (psId sys) resolved)
                     ≡ ModeSimulated
-              , key ← map okKey (psOwns sys) ⧺ psMeters sys
-              , Just v ← [HM.lookup key (uisStats u)]
+              , (key, v) ← storedValues sys u
               , isNaN v ∨ isInfinite v ]
             ⧺ [ MalformedEngagementMarker pid uid (uisDefName u) v
               | Just v ← [HM.lookup combatEngagedKey (uisStats u)]
               , isNaN v ∨ isInfinite v ∨ (v ≢ 1 ∧ v ≢ 2) ]
+
+-- | A system's stored values AS THE LOAD READS THEM, storage-aware (#2837): a
+--   field-backed owned key (blood) is the dedicated field @uisBlood@, never a
+--   @uiStats@ entry, so a malformed field is examined and rejected, and a
+--   stale non-finite legacy shadow entry (which the load scrubs) is not.
+storedValues ∷ PhysiologySystem → UnitInstanceSnapshot → [(Text, Float)]
+storedValues sys u =
+    [ (okKey o, v)
+    | o ← psOwns sys
+    , v ← case okField o of
+        Just _  → [uisBlood u]
+        Nothing → maybeToList (HM.lookup (okKey o) (uisStats u)) ]
+    ⧺ [ (m, v) | m ← psMeters sys, Just v ← [HM.lookup m (uisStats u)] ]
 
 -- * Deterministic normalization (S4, #2831; design D-6)
 
@@ -290,9 +302,20 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
         (statsB, repairs) ← either (\(sid, key, why) → reject sid key why) Right
                                    (reconcileStoredKeys ctx)
         let notes = overrideNotes ⧺ frameNote ⧺ map renderRepair repairs
-        if null notes
+            -- A Nominal blood's stored uiBlood is SERIALIZED BUT IGNORED
+            -- (#2837): reads never trust it, and the load rewrites it to the
+            -- current canonical maximum (base body mass x 0.075) silently,
+            -- the way the other rebuilt caches are rebuilt. It is not a
+            -- logged repair: a unit saved by current code under unchanged
+            -- content whose body mass moved afterwards must normalize ZERO
+            -- times, and a second load finds the field already canonical.
+            canonical = case canonicalBlood ctx of
+                Just c | c ≢ uisBlood u → Just c
+                _ → Nothing
+        if null notes ∧ isNothing canonical
             then Right (u, [])
-            else Right ( u { uisStats = statsB, uisPhysioOverrides = overrides }
+            else Right ( u { uisStats = statsB, uisPhysioOverrides = overrides
+                           , uisBlood = fromMaybe (uisBlood u) canonical }
                        , notes )
   where
     unless' c e = if c then Right () else e
@@ -412,11 +435,19 @@ rebuiltCacheStats =
     , "strength", "strength_body"
     , "max_hydration", "max_hunger", "max_calories", "carrying_capacity" ]
 
--- | A session snapshot without those caches in any unit's stat map: the
---   durable half, for comparing saves taken across a load.
+-- | A session snapshot without those caches in any unit's stat map, and
+--   without the stored blood volume of a unit whose blood is pinned Nominal:
+--   that dedicated field is serialized but IGNORED while Nominal and the load
+--   rewrites it to the current canonical maximum (#2837), so a stale saved
+--   copy and its rebuilt successor are the same durable state. A Simulated
+--   unit's volume (and every other unit's, whose mode this registry-free
+--   comparison cannot see) stays compared exactly. The durable half, for
+--   comparing saves taken across a load.
 withoutRebuiltCaches ∷ SessionSnapshot → SessionSnapshot
 withoutRebuiltCaches snap = snap { snapPages = HM.map onPage (snapPages snap) }
   where
     onPage pg = pg { pgsUnits = onUnits (pgsUnits pg) }
     onUnits us = us { usnInstances = HM.map onUnit (usnInstances us) }
-    onUnit u = u { uisStats = foldl' (flip HM.delete) (uisStats u) rebuiltCacheStats }
+    onUnit u = u { uisStats = foldl' (flip HM.delete) (uisStats u) rebuiltCacheStats
+                 , uisBlood = if blood u ≡ Just PhysioNominal then 0 else uisBlood u }
+    blood = HM.lookup "blood" ∘ uisPhysioOverrides

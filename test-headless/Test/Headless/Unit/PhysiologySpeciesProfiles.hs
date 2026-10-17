@@ -64,14 +64,16 @@ import World.Save.Types
 -----------------------------------------------------------------------
 
 -- | A species and the mode each system resolves to, in
---   (hydration, salt, thermo, nutrition, stamina, exhaustion, sleep, cardio)
+--   (hydration, salt, thermo, nutrition, stamina, exhaustion, sleep, cardio,
+--   blood)
 --   order, with the profile it names. The stamina column is the final species
 --   table's (S8a, #2834): the mule and the nomad are Nominal, the rest
 --   Simulated. The last two are S8b's (#2835): the squirrel's sleep is
 --   Nominal (it has no go_to_sleep behavior) and the mule's exhaustion and
 --   sleep are Nominal overrides of its reduced profile. The last column is
 --   S9's (#2836): cardio is Simulated for all five bodied species (the nomad
---   included, whose cardio #2754 kept live).
+--   included, whose cardio #2754 kept live). The one after it is S10's
+--   (#2837, SD-22): blood is Simulated for all five.
 data Row = Row Text Text [ResolvedMode]
 
 rowDef ∷ Row → Text
@@ -83,16 +85,16 @@ nom = ModeNominal
 
 table ∷ [Row]
 table =
-    [ Row "acolyte"         "rich"    [sim, sim, sim, sim, sim, sim, sim, sim]
-    , Row "bear_brown"      "reduced" [nom, sim, sim, nom, sim, sim, sim, sim]
-    , Row "technomule"      "reduced" [nom, sim, sim, nom, nom, nom, nom, sim]
-    , Row "red_squirrel"    "simple"  [nom, nom, sim, nom, sim, sim, nom, sim]
-    , Row "nomad_primitive" "exempt"  [nom, nom, nom, nom, nom, nom, nom, sim] ]
+    [ Row "acolyte"         "rich"    [sim, sim, sim, sim, sim, sim, sim, sim, sim]
+    , Row "bear_brown"      "reduced" [nom, sim, sim, nom, sim, sim, sim, sim, sim]
+    , Row "technomule"      "reduced" [nom, sim, sim, nom, nom, nom, nom, sim, sim]
+    , Row "red_squirrel"    "simple"  [nom, nom, sim, nom, sim, sim, nom, sim, sim]
+    , Row "nomad_primitive" "exempt"  [nom, nom, nom, nom, nom, nom, nom, sim, sim] ]
 
 -- | The systems in the table's column order.
 systems ∷ [Text]
 systems = [ "hydration", "salt", "thermo", "nutrition", "stamina"
-          , "exhaustion", "sleep", "cardio" ]
+          , "exhaustion", "sleep", "cardio", "blood" ]
 
 modesList ∷ [a] → [a]
 modesList = id
@@ -149,9 +151,12 @@ bodyOf ∷ Text → Body
 bodyOf "red_squirrel" = squirrelBody
 bodyOf _              = acolyteBody
 
--- | The stored keys a system owns, from the REGISTRY.
+-- | The keys a system owns that live in @uiStats@, from the REGISTRY. A
+--   field-backed key (blood, stored in @uiBlood@, #2837) is never one: it is
+--   checked against its field, and a @uiStats@ entry for it is a shadow pool.
 ownedKeysOf ∷ PhysiologyRegistry → Text → [Text]
-ownedKeysOf reg sid = maybe [] (map okKey ∘ psOwns) (registrySystem reg sid)
+ownedKeysOf reg sid = maybe [] (map okKey ∘ filter (isNothing ∘ okField) ∘ psOwns)
+                            (registrySystem reg sid)
 
 -- | Every key a Nominal or Unsupported system must not store, owned,
 --   derived or meter, across all four systems.

@@ -16,17 +16,23 @@
 #
 # Healthy rules:  { const: <value|CONSTANT> }
 #                 { from: <stat>, scale: <value|CONSTANT | [..]> }
+#                 { rule: <max_stamina | blood_max> }
+# An owned key may also name the dedicated unit FIELD that really stores it,
+# `field: uiBlood` (#2837): the value is not a uiStats key and no uiStats entry
+# is ever made for it.
 # `from:` reads the unit's EFFECTIVE value of an input stat that no
 # system owns. `scale:` factors multiply.
 #
 # Substitutes:    { value: <value|CONSTANT> } | none | virtual_meal
-#                 | tissue_recovery | live   (virtual_meal and
+#                 | tissue_recovery | live | wound_flow   (virtual_meal and
 #                 tissue_recovery are executed by S4: scripts/salts.lua's
 #                 virtual meal and scripts/unit_resource_upkeep.lua. `live`
 #                 (#2836, S9) is a provided DERIVED value whose Nominal answer
 #                 is the same rule evaluated with the system's own inputs at
 #                 their healthy readings and every other input live: cardio's
-#                 circulation.)
+#                 circulation.) `wound_flow` (#2837, S10) is blood's visual-loss
+#                 contribution under Nominal: the wound-derived external flow
+#                 credits the bleeding trail directly, with no volume debit.
 #
 # Derived keys:   { key, rule, healthy: <number> | live }. A number is the
 #                 constant a Nominal read returns (salt_conc); `live` makes a
@@ -218,6 +224,42 @@ systems:
     effects:
       - { name: oxygen_path_hypoxia, substitute: none }
 
+  # Blood (#2837, S10): the blood volume, stored in the dedicated unit field
+  # `uiBlood` (a Float field, not a uiStats key, so it has no modifiers and its
+  # seed is the target itself). Its Nominal read and seed target are the unit's
+  # blood_max: BASE body_mass x 0.075 (`bloodMassRatio`, the single source),
+  # never the effective body mass. blood_max and blood_fraction are derived and
+  # never stored; both are `live`, so a Nominal read evaluates them through the
+  # mode-aware Unit.Blood view (volume = maximum, fraction 1.0) while the wound
+  # bleed rate stays live. Blood owns no failure meter. Its owned effects are
+  # the wound fold's volume drain, the blood-loss collapse (< 30 %),
+  # exsanguination and the #2639 recovery: all absent while Nominal, with the
+  # wounds, pain, infection, necrosis and visual bleeding untouched. Under
+  # Nominal the visual-loss contribution is the wound-derived external flow
+  # credited to the trail directly (the one intentional exception to #882's
+  # conserved-volume accounting).
+  - id: blood
+    requires: [body]
+    owns:
+      - key: blood
+        field: uiBlood
+        healthy: { rule: blood_max }
+    derived:
+      - { key: blood_max,      rule: blood_max,      healthy: live }
+      - { key: blood_fraction, rule: blood_fraction, healthy: live }
+    provides:
+      - name: blood_max
+        substitute: live
+      - name: blood_fraction
+        substitute: live
+    contributes:
+      - { name: visual_loss, substitute: wound_flow }
+    effects:
+      - { name: volume_drain,         substitute: none }
+      - { name: blood_loss_collapse,  substitute: none }
+      - { name: exsanguination,       substitute: none }
+      - { name: volume_recovery,      substitute: none }
+
 # Species fidelity tiers (D-10): a mode for EVERY system. A definition
 # names one with `physiology: { profile: rich }` and may override single
 # systems beside it. Which species use which is S4/S7's.
@@ -231,6 +273,7 @@ profiles:
     exhaustion: simulated
     sleep: simulated
     cardio: simulated
+    blood: simulated
   reduced:
     hydration: nominal
     salt: simulated
@@ -240,6 +283,7 @@ profiles:
     exhaustion: simulated
     sleep: simulated
     cardio: simulated
+    blood: simulated
   simple:
     hydration: nominal
     salt: nominal
@@ -249,6 +293,7 @@ profiles:
     exhaustion: simulated
     sleep: nominal
     cardio: simulated
+    blood: simulated
   exempt:
     hydration: nominal
     salt: nominal
@@ -258,3 +303,4 @@ profiles:
     exhaustion: nominal
     sleep: nominal
     cardio: simulated
+    blood: simulated

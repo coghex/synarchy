@@ -32,6 +32,9 @@ module Unit.Physiology.Transition
     , transitionChangesMode
     , planSetMode
     , planClearMode
+      -- * Field-backed keys (blood, #2837)
+    , canonicalBlood
+    , canonicalBloodChecked
       -- * Combat engagement (SD-20)
     , EngagementOutcome(..)
     , EngagementRefusal(..)
@@ -52,6 +55,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Control.Monad (foldM)
 import Data.List (partition)
+import Unit.Blood (BloodView(..))
 import Unit.Physiology
 import Unit.Physiology.Types
 import Unit.Stats (invertEffectiveStat, invertEffectiveStatWhy)
@@ -59,6 +63,10 @@ import Unit.Stats (invertEffectiveStat, invertEffectiveStatWhy)
 -- | The state a transition leaves a unit in.
 data Transition = Transition
     { trStats     ∷ !(HM.HashMap Text Float)
+    , trBlood     ∷ !(Maybe Float)
+      -- ^ the new value of the dedicated @uiBlood@ field when the transition
+      --   writes it (blood, #2837), 'Nothing' when it leaves it alone. Never a
+      --   uiStats entry: 'trStats' holds no field-backed key.
     , trOverrides ∷ !PhysioOverrides
     , trFrom      ∷ !ResolvedMode
     , trTo        ∷ !ResolvedMode
@@ -69,6 +77,44 @@ data Transition = Transition
 --   intent, not a transition.
 transitionChangesMode ∷ Transition → Bool
 transitionChangesMode t = trFrom t ≢ trTo t
+
+-- | The owned keys stored in a dedicated unit field instead of @uiStats@.
+fieldKeys ∷ PhysiologySystem → [Text]
+fieldKeys sys = [ okKey o | o ← psOwns sys, isJust (okField o) ]
+
+-- | Every field-backed key of the registry.
+registryFieldKeys ∷ PhysiologyRegistry → [Text]
+registryFieldKeys = concatMap fieldKeys ∘ prSystems
+
+-- | The stats a plan works on: the unit's stats with every field-backed key
+--   MATERIALIZED from its field, so the generic seed, scrub and value paths
+--   run unchanged. The overlay never leaves this module: 'splitFields'
+--   removes it from every result, so no uiStats entry for a field-backed key
+--   can come out of a plan.
+overlayFields ∷ PhysioContext → HM.HashMap Text Float → HM.HashMap Text Float
+overlayFields ctx stats = foldl' (\m k → HM.insert k (bvVolume (pcBlood ctx)) m)
+    stats (registryFieldKeys (pcRegistry ctx))
+
+splitFields ∷ PhysiologyRegistry → HM.HashMap Text Float → HM.HashMap Text Float
+splitFields reg stats = foldl' (flip HM.delete) stats (registryFieldKeys reg)
+
+-- | The canonical stored blood of a Nominal blood: the current maximum (base
+--   body mass x 0.075). 'Nothing' for any other mode. Spawn and the load gate
+--   write it, because a Nominal @uiBlood@ is serialized but ignored (#2837).
+canonicalBlood ∷ PhysioContext → Maybe Float
+canonicalBlood = either (const Nothing) id ∘ canonicalBloodChecked
+
+-- | 'canonicalBlood' that says WHY a Nominal blood has no canonical maximum
+--   (a non-finite or negative base body mass): system, key and reason, the
+--   shape 'reconcileStoredKeys' rejects with, so spawn and the load gate
+--   refuse the unit rather than write a non-finite volume (#2837).
+canonicalBloodChecked ∷ PhysioContext → Either (Text, Text, Text) (Maybe Float)
+canonicalBloodChecked ctx = case bloodSystem (pcRegistry ctx) of
+    Just sys | modeOf ctx sys ≡ ModeNominal
+             , (o : _) ← [ o | o ← psOwns sys, isJust (okField o) ] →
+        either (\why → Left (psId sys, okKey o, why)) (Right ∘ Just)
+               (evalHealthy ctx (okHealthy o))
+    _ → Right Nothing
 
 -- | Every stored name a system owns: owned keys, derived keys, meters.
 systemKeyNames ∷ PhysiologySystem → [Text]
@@ -114,6 +160,7 @@ seedTarget ctx o = do
 keyCap ∷ PhysioContext → OwnedKey → Either Text (Maybe Float)
 keyCap ctx o = case okHealthy o of
     HealthyConst _  → Right Nothing
+    HealthyBloodMax → Just <$> evalHealthy ctx (okHealthy o)
     HealthyFrom _ _ → Just <$> evalHealthy ctx (okHealthy o)
     HealthyMaxStamina → Just <$> evalHealthy ctx (okHealthy o)
 
@@ -129,6 +176,18 @@ storeAs ctx key target =
             \multiplier is not positive, or the base would be negative \
             \or not finite)"
 
+-- | The value to STORE for an owned key whose EFFECTIVE target is @target@. A
+--   stat-backed key stores the base that 'effectiveStat' maps to the target
+--   under the key's active modifiers ('storeAs'). A field-backed key (blood,
+--   #2837) lives in a dedicated unit field that carries NO modifiers and whose
+--   reads ignore every modifier a stat key of that name might hold, so its
+--   target is stored directly: a stray modifier must neither change the seed
+--   nor refuse the transition.
+storeFor ∷ PhysioContext → OwnedKey → Float → Either Text Float
+storeFor ctx o target
+    | isJust (okField o) = Right target
+    | otherwise          = storeAs ctx (okKey o) target
+
 -- | Seed @sys@'s owned keys into @stats@. @explicit@ names the keys the
 --   caller chose a value for; the rest take 'seedTarget'. With
 --   @missingOnly@ a key already stored is left EXACTLY as it is (load
@@ -138,13 +197,13 @@ seedSystem ∷ PhysioContext → PhysiologySystem → [(Text, Float)] → Bool
 seedSystem ctx sys explicit missingOnly = flip (foldM step) (psOwns sys)
   where
     step stats o
-        | missingOnly ∧ HM.member (okKey o) stats = Right stats
+        | missingOnly ∧ (isJust (okField o) ∨ HM.member (okKey o) stats) = Right stats
         | otherwise = do
             let ctx' = ctx { pcStats = stats }
             target ← case lookup (okKey o) explicit of
                 Just v  → Right v
                 Nothing → seedTarget ctx' o
-            base ← storeAs ctx' (okKey o) target
+            base ← storeFor ctx' o target
             pure (HM.insert (okKey o) base stats)
 
 -- | Remove every key the system holds.
@@ -188,8 +247,9 @@ planSetMode ctx sid mode mValues = do
     let overrides' = HM.insert sid mode (pcOverrides ctx)
         ctx'       = ctx { pcOverrides = overrides' }
         after      = modeOf ctx' sys
-    stats' ← moveStats ctx' sys before after mValues
-    pure Transition { trStats = stats', trOverrides = overrides'
+    (stats', blood) ← moveWithFields ctx' sys before after mValues
+    pure Transition { trStats = stats', trBlood = blood
+                    , trOverrides = overrides'
                     , trFrom = before, trTo = after }
 
 -- | @clearPhysioMode@: drop the override (the unit follows its
@@ -205,9 +265,32 @@ planClearMode ctx sid = do
     let overrides' = HM.delete sid (pcOverrides ctx)
         ctx'       = ctx { pcOverrides = overrides' }
         after      = modeOf ctx' sys
-    stats' ← moveStats ctx' sys before after Nothing
-    pure Transition { trStats = stats', trOverrides = overrides'
+    (stats', blood) ← moveWithFields ctx' sys before after Nothing
+    pure Transition { trStats = stats', trBlood = blood
+                    , trOverrides = overrides'
                     , trFrom = before, trTo = after }
+
+-- | 'moveStats' over the OVERLAID stats, split back into the unit's stats and
+--   the new value of the system's dedicated field (blood, #2837): seeded on
+--   entering Simulated, the canonical maximum on leaving it, a caller value on
+--   a Simulated write, and untouched otherwise.
+moveWithFields ∷ PhysioContext → PhysiologySystem → ResolvedMode → ResolvedMode
+               → Maybe [(Text, Float)]
+               → Either Text (HM.HashMap Text Float, Maybe Float)
+moveWithFields ctx sys before after mValues = do
+    moved ← moveStats ctx { pcStats = overlayFields ctx (pcStats ctx) }
+                      sys before after mValues
+    let stats' = splitFields (pcRegistry ctx) moved
+    blood ← case (fieldKeys sys, before, after) of
+        ([], _, _) → Right Nothing
+        (k : _, ModeNominal, ModeSimulated) → Right (HM.lookup k moved)
+        (k : _, ModeSimulated, ModeSimulated)
+            | Just v ← mValues ⌦ lookup k → Right (Just v)
+        (k : _, ModeSimulated, ModeNominal) →
+            Just <$> maybe (Left ("no healthy rule for '" <> k <> "'")) (evalHealthy ctx ∘ okHealthy)
+                           (listToMaybe [ o | o ← psOwns sys, okKey o ≡ k ])
+        _ → Right Nothing
+    pure (stats', blood)
 
 -- | The stats after moving @sys@ from @before@ to @after@ (the context
 --   already carries the NEW overrides).
@@ -237,7 +320,7 @@ moveStats ctx sys before after mValues = case (before, after) of
     writeOne vs stats o = case lookup (okKey o) vs of
         Nothing → Right stats
         Just v  → do
-            base ← storeAs (ctx { pcStats = stats }) (okKey o) v
+            base ← storeFor (ctx { pcStats = stats }) o v
             pure (HM.insert (okKey o) base stats)
 
 -- * Combat engagement (SD-20, #2834)
@@ -345,7 +428,9 @@ data KeyRepair
 reconcileStoredKeys ∷ PhysioContext
                     → Either (Text, Text, Text)
                              (HM.HashMap Text Float, [KeyRepair])
-reconcileStoredKeys ctx0 = foldM step (pcStats ctx0, []) (seedOrder reg)
+reconcileStoredKeys ctx0 =
+    canonicalBloodChecked ctx0 ≫= \_ →
+        foldM step (pcStats ctx0, []) (seedOrder reg)
   where
     reg = pcRegistry ctx0
     step (stats, repairs) sys = do
@@ -353,8 +438,10 @@ reconcileStoredKeys ctx0 = foldM step (pcStats ctx0, []) (seedOrder reg)
             mode = modeOf ctx sys
             present ks = [ k | k ← ks, HM.member k stats ]
             derivedKeys = map dkKey (psDerived sys)
+            -- a field-backed key never has a uiStats entry, in any mode: a
+            -- stored one would be the shadow pool the adapter forbids
             stale = case mode of
-                ModeSimulated → present derivedKeys
+                ModeSimulated → present (derivedKeys ⧺ fieldKeys sys)
                 _             → present (systemKeyNames sys)
             derivedStale = [ k | k ← stale, k `elem` derivedKeys ]
             ownedStale   = [ k | k ← stale, k `notElem` derivedKeys ]
@@ -366,6 +453,7 @@ reconcileStoredKeys ctx0 = foldM step (pcStats ctx0, []) (seedOrder reg)
         case mode of
             ModeSimulated → do
                 let missing = [ okKey o | o ← psOwns sys
+                                        , isNothing (okField o)
                                         , not (HM.member (okKey o) scrubbed) ]
                 if null missing
                     then pure (scrubbed, repairs ⧺ note)

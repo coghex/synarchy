@@ -43,7 +43,9 @@ fixturePage = WorldPageId "physiology_consumer_migration"
 --   answers healthy values for each owned key.
 nominalPhysiology ∷ UnitPhysiology
 nominalPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
-    [ (s, PhysioNominal) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
+    ([ (s, PhysioNominal) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
+     -- the wound tick's blood recovery is under test, so blood stays Simulated
+     ⧺ [("blood", PhysioSimulated)])
 
 -- | Thermo and salt Nominal; a pool system Simulated exactly when the
 --   unit stores its pool, so the stored hydration and calories ARE the
@@ -51,7 +53,8 @@ nominalPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
 poolsSimulated ∷ [(Text, Float)] → UnitPhysiology
 poolsSimulated stats = plainUnitPhysiology True Nothing $ HM.fromList
     [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
-    , ("hydration", ifStored "hydration"), ("nutrition", ifStored "calories") ]
+    , ("hydration", ifStored "hydration"), ("nutrition", ifStored "calories")
+    , ("blood", PhysioSimulated) ]
   where
     ifStored k | k `elem` map fst stats = PhysioSimulated
                | otherwise              = PhysioNominal
@@ -59,7 +62,8 @@ poolsSimulated stats = plainUnitPhysiology True Nothing $ HM.fromList
 -- | The same, all Simulated: the stored values ARE the unit's physiology.
 simulatedPhysiology ∷ UnitPhysiology
 simulatedPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
-    [ (s, PhysioSimulated) | s ← ["thermo", "salt", "hydration", "nutrition"] ]
+    [ (s, PhysioSimulated)
+    | s ← ["thermo", "salt", "hydration", "nutrition", "blood"] ]
 
 mkInst ∷ Text → HM.HashMap Text Float → UnitInstance
 mkInst defName stats = UnitInstance
@@ -200,10 +204,12 @@ woundSpec = describe "the wound tick (Haskell consumers)" $ do
         reg ← readShippedPhysiologyRegistry
         let simulatedNutrition = woundDef { udPhysiology =
                 plainUnitPhysiology True Nothing
-                    (HM.fromList [("nutrition", PhysioSimulated)]) }
+                    (HM.fromList [("nutrition", PhysioSimulated)
+                                 , ("blood", PhysioSimulated)]) }
             nominalHydration = woundDef { udPhysiology =
                 plainUnitPhysiology True Nothing
-                    (HM.fromList [("hydration", PhysioNominal)]) }
+                    (HM.fromList [("hydration", PhysioNominal)
+                                 , ("blood", PhysioSimulated)]) }
             run d st =
                 let u = woundedUnit (HM.fromList st)
                     (i, o, _) = tickOneUnitWith reg 1000 d 1 emptyInfectionManager

@@ -86,7 +86,7 @@ contextOf ∷ PhysiologyRegistry → Maybe Double → Point → PhysioContext
 contextOf reg mhr pt = PhysioContext
     { pcRegistry = reg
     , pcPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
-        [ ("thermo", PhysioSimulated)
+        [ ("thermo", PhysioSimulated), ("blood", PhysioSimulated)
         , ("cardio", maybe PhysioNominal (const PhysioSimulated) mhr) ]
     , pcOverrides = HM.empty, pcNow = 0
     , pcStats = stats, pcModifiers = HM.empty
@@ -152,7 +152,8 @@ referenceSpec = beforeAll readShippedPhysiologyRegistry $
         let base = contextOf reg (Just 70) (Point 1 1 0.2 0 37 70)
             nominalThermo = base
                 { pcPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
-                    [("thermo", PhysioNominal), ("cardio", PhysioSimulated)]
+                    [ ("thermo", PhysioNominal), ("cardio", PhysioSimulated)
+                    , ("blood", PhysioSimulated) ]
                 , pcStats = HM.delete "core_temp" (pcStats base) }
         -- a cold stored core is ignored (there is none): 37 degrees
         circulationOf nominalThermo `shouldBe` circulationOf base

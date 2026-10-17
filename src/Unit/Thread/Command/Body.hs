@@ -8,6 +8,7 @@ module Unit.Thread.Command.Body
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import Unit.Blood (BloodView(..))
 import Unit.Types
 
 -- | Spawn-time body composition. Reads rolled height/bulk/bodyfat,
@@ -48,8 +49,14 @@ bloodSeedFromStats s = case HM.lookup "body_mass" s of
 --   DATA-DRIVEN via the unit's own body-part list rather than
 --   hardcoded ids, so differently-named skeletons (a robot's
 --   "hindquarter", say) work as long as their YAML sets the flags.
-injurySpeedMult ∷ [BodyPart] → UnitInstance → Float
-injurySpeedMult bodyParts inst =
+--
+--   The blood fraction comes from the ONE mode-aware adapter (#2837): the
+--   caller passes the unit's 'BloodView' (built from the same coherent
+--   instance snapshot the wounds are read from), so a Nominal blood reads
+--   1.0 whatever stale volume the field holds, and every other mode reads
+--   exactly the raw fraction the multiplier always did.
+injurySpeedMult ∷ BloodView → [BodyPart] → UnitInstance → Float
+injurySpeedMult blood bodyParts inst =
     let partIdx = HM.fromList [ (bpId p, p) | p ← bodyParts ]
         hasFlag f pid = maybe False f (HM.lookup pid partIdx)
         -- EFFECTIVE severity (heal eases it, necrosis floors it) so a
@@ -59,11 +66,7 @@ injurySpeedMult bodyParts inst =
                      | w ← uiWounds inst, hasFlag bpAffectsLocomotion (woundPart w) ]
         torsoSev = sum [ woundEffSeverity w
                        | w ← uiWounds inst, hasFlag bpAffectsBalance (woundPart w) ]
-        bodyMass = HM.lookupDefault 70.0 "body_mass" (uiStats inst)
-        maxBlood = bodyMass * bloodMassRatio
-        bloodFrac = if maxBlood > 0
-                    then max 0 (min 1 (uiBlood inst / maxBlood))
-                    else 1
+        bloodFrac = bvFraction blood
         -- legCut multiplier 1.2 (was 0.6): a severity-0.5 leg wound
         -- cuts speed 60%, sev-0.8 cuts ~96%, sev-1.0 hits the floor.
         -- Limps are decisively visible — wounded acolytes shuffle.

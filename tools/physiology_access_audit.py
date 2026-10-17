@@ -36,6 +36,15 @@ What it checks (exit 1 on any finding, with path:line diagnostics):
      ``contributes`` entry (and every ``provides`` / ``effects`` entry) a
      Nominal substitute, where ``live`` is only valid on a ``provides`` entry
      naming a ``live`` derived key of its own system.
+  3b. HASKELL OWNER AND FIELD INVENTORY (#2837). A system may own a key that
+     is stored in a dedicated unit FIELD rather than ``uiStats`` (blood:
+     ``field: uiBlood``). Such a system has no Lua owner to fabricate: it
+     names its Haskell owner files in ``HASKELL_OWNERS``, each of which must
+     exist and mention the field. Every Haskell source file that reads or
+     writes the field (the word ``uiBlood``, ``bloodView`` or
+     ``bloodViewOf``) must be listed, with its reason, in
+     ``BLOOD_FIELD_INVENTORY``: a new reader that bypasses the mode-aware
+     adapter, or a stale entry, is a finding.
   4. TEMPLATING. No unit definition templates a registry key in ``stats:`` or
      ``skills:`` (the loader refuses it at run time; this is the static
      twin).
@@ -241,9 +250,57 @@ ATOMIC_VERB_CALLERS: dict[str, frozenset[str]] = {
 }
 
 
+# Systems whose owned key lives in a dedicated unit field (``field:`` in the
+# registry) and so have a HASKELL owner instead of a Lua one (#2837). Each file
+# must exist and mention the field name.
+HASKELL_OWNERS: dict[str, tuple[str, ...]] = {
+    "blood": ("src/Unit/Blood.hs", "src/Unit/Physiology.hs",
+              "src/Unit/Physiology/Transition.hs", "src/Combat/Wounds/Tick.hs"),
+}
+
+# Every Haskell file that reads or writes the blood field or builds a view
+# (word match on uiBlood / bloodView / bloodViewOf), with the reason. A reader
+# is only allowed through the mode-aware adapter or as a listed non-reader.
+BLOOD_FIELD_INVENTORY: dict[str, str] = {
+    "src/Unit/Types/Instance.hs": "the field's definition",
+    "src/World/Save/Types.hs": "the uisBlood save mapping (serialization only)",
+    "src/Unit/Blood.hs": "the one adapter: raw view and the Nominal branch",
+    "src/Unit/Physiology.hs":
+        "owner reads: instanceBloodView / unitBloodView / contextBlood choose "
+        "the branch through resolveMode",
+    "src/Unit/Physiology/Transition.hs":
+        "transition seed/scrub of the field (trBlood); canonicalBlood",
+    "src/Unit/Physiology/Types.hs": "okField documentation (no access)",
+    "src/Engine/Asset/YamlPhysiology.hs":
+        "the registry loader validates the `field:` name (no access)",
+    "src/Combat/Wounds.hs": "documentation of the wound tick (no access)",
+    "src/Combat/Wounds/Tick.hs":
+        "the wound fold: the only drain/recovery writer, gated by "
+        "bloodIsNominal; the raw view builds its physiology context",
+    "src/Engine/Scripting/Lua/API/Units/Combat.hs":
+        "unit.getBlood: reads through unitBloodView",
+    "src/Engine/Scripting/Lua/API/Units/Physiology.hs":
+        "unit.readBloodView through unitBloodView; the transition's atomic "
+        "uiBlood write; the raw view for the read context",
+    "src/Unit/Thread/Command/Motion.hs":
+        "the movement multiplier reads unitBloodView of one coherent snapshot",
+    "src/Unit/Thread/Command/Spawn.hs":
+        "the spawn seed (a writer) and the spawn context's raw view",
+    "src/World/Save/Physiology.hs":
+        "the load gate: canonical rewrite of a Nominal field; the raw view "
+        "for its context (reads nothing else)",
+}
+BLOOD_FIELD_TOKENS = ("uiBlood", "bloodView", "bloodViewOf", "unitBloodView",
+                      "instanceBloodView")
+
+
 @dataclass(frozen=True)
 class Policy:
     owners: tuple[Owner, ...] = OWNERS
+    haskell_owners: dict[str, tuple[str, ...]] = field(
+        default_factory=lambda: dict(HASKELL_OWNERS))
+    blood_inventory: dict[str, str] = field(
+        default_factory=lambda: dict(BLOOD_FIELD_INVENTORY))
     facade: str = FACADE
     generic_accessors: frozenset[str] = GENERIC_ACCESSORS
     probe_fixture: FixtureWrites = PROBE_FIXTURE_WRITES
@@ -284,9 +341,11 @@ def load_registry(doc: dict) -> Registry:
 
 # ---------------------------------------------------------------- coverage
 
-def check_coverage(doc: dict, files: dict[str, str], policy: Policy) -> list[str]:
+def check_coverage(doc: dict, files: dict[str, str], policy: Policy,
+                   hs_files: Optional[dict[str, str]] = None) -> list[str]:
     out: list[str] = []
     reg = load_registry(doc)
+    hs_files = hs_files if hs_files is not None else {}
     for sid, s in reg.systems.items():
         for o in s.get("owns") or []:
             h = o.get("healthy")
@@ -316,6 +375,28 @@ def check_coverage(doc: dict, files: dict[str, str], policy: Policy) -> list[str
                                f"entry '{e.get('name')}' has a `live` substitute "
                                "but is not a provided live derived key of its "
                                "own system")
+        fields = [o.get("field") for o in s.get("owns") or [] if o.get("field")]
+        for f in fields:
+            if f not in ("uiBlood",):
+                out.append(f"{REGISTRY_PATH}: system '{sid}' names the unknown "
+                           f"storage field '{f}'")
+        if fields:
+            # A field-backed system has a HASKELL owner, never a fabricated
+            # Lua one or an exemption (#2837).
+            hs_owners = policy.haskell_owners.get(sid, ())
+            if not hs_owners:
+                out.append(f"{REGISTRY_PATH}: system '{sid}' stores a key in "
+                           f"the field {fields[0]} but has no Haskell owner in "
+                           "tools/physiology_access_audit.py HASKELL_OWNERS")
+            for path in hs_owners:
+                text = hs_files.get(path)
+                if text is None:
+                    out.append(f"{path}: named as the Haskell owner of system "
+                               f"'{sid}' but does not exist")
+                elif not any(f in text for f in fields):
+                    out.append(f"{path}: named as the Haskell owner of system "
+                               f"'{sid}' but never mentions {fields[0]}")
+            continue
         owners = [ow for ow in policy.owners if ow.system == sid]
         if not owners:
             out.append(f"{REGISTRY_PATH}: system '{sid}' has no Lua owner in "
@@ -342,6 +423,27 @@ def check_coverage(doc: dict, files: dict[str, str], policy: Policy) -> list[str
         if ow.system not in reg.systems:
             out.append(f"tools/physiology_access_audit.py OWNERS: '{ow.file}' "
                        f"owns unknown system '{ow.system}'")
+    for sid in policy.haskell_owners:
+        if sid not in reg.systems:
+            out.append(f"tools/physiology_access_audit.py HASKELL_OWNERS: "
+                       f"unknown system '{sid}'")
+    return out
+
+
+def check_blood_inventory(hs_files: dict[str, str], policy: Policy) -> list[str]:
+    """Every Haskell file touching the blood field or the view is inventoried,
+    and every inventory entry still does (no stale reason)."""
+    import re
+    out: list[str] = []
+    pat = re.compile(r"\b(" + "|".join(BLOOD_FIELD_TOKENS) + r")\b")
+    touching = {p for p, t in hs_files.items() if pat.search(t)}
+    for p in sorted(touching - set(policy.blood_inventory)):
+        out.append(f"{p}: touches the blood field or bloodView but is not in "
+                   "BLOOD_FIELD_INVENTORY (route it through the mode-aware "
+                   "adapter, or list it with its reason)")
+    for p in sorted(set(policy.blood_inventory) - touching):
+        out.append(f"{p}: listed in BLOOD_FIELD_INVENTORY but no longer touches "
+                   "the blood field (stale entry)")
     return out
 
 
@@ -522,6 +624,11 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
 
 # ------------------------------------------------------------------- main
 
+def collect_haskell(root: Path) -> dict[str, str]:
+    return {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
+            for p in sorted((root / "src").glob("**/*.hs"))}
+
+
 def collect(root: Path) -> tuple[dict[str, str], Optional[tuple[str, str]],
                                   dict, dict[str, dict]]:
     import yaml
@@ -539,10 +646,13 @@ def collect(root: Path) -> tuple[dict[str, str], Optional[tuple[str, str]],
 
 def run_audit(files: dict[str, str], probe: Optional[tuple[str, str]],
               doc: dict, unit_docs: dict[str, dict],
-              policy: Policy = Policy()) -> list[str]:
+              policy: Policy = Policy(),
+              hs_files: Optional[dict[str, str]] = None) -> list[str]:
     reg = load_registry(doc)
     findings = [f.render() for f in scan_corpus(files, probe, reg, policy)]
-    findings += check_coverage(doc, files, policy)
+    findings += check_coverage(doc, files, policy, hs_files)
+    if hs_files is not None:
+        findings += check_blood_inventory(hs_files, policy)
     findings += check_templating(doc, unit_docs)
     return sorted(findings)
 
@@ -569,7 +679,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"physiology access audit: {PROBE_PATH} is missing (its embedded "
               "Lua is in scope)")
         return 1
-    findings = run_audit(files, probe, doc, unit_docs)
+    hs_files = collect_haskell(args.root)
+    if not hs_files:
+        print("physiology access audit: no src/**/*.hs files (an empty Haskell "
+              "corpus must not pass)")
+        return 1
+    findings = run_audit(files, probe, doc, unit_docs, hs_files=hs_files)
     if findings:
         print("physiology access audit: FAILED")
         for f in findings:

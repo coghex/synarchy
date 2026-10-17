@@ -14,7 +14,10 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Engine.Core.Capability.ContentRegistries
+    (crPhysiologyRegistryRef, toContentRegistriesCapability)
 import Engine.Core.State (EngineEnv)
+import Unit.Physiology (unitBloodView)
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.Body (injurySpeedMult)
@@ -42,13 +45,15 @@ handleUnitMoveToCommand env utsRef uid tx ty speed hazard = do
     -- two refs to close — kept here so the next reader doesn't
     -- mistake the separation for an oversight.
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    physioReg ← readIORef (crPhysiologyRegistryRef (toContentRegistriesCapability env))
     let (effSpeed, isRunning) = case HM.lookup uid (umInstances um) of
             Nothing   → (speed, False)
             Just inst →
                 let (bodyParts, maxSp, runFrac) = case HM.lookup (uiDefName inst) (umDefs um) of
                         Just d  → (udBodyParts d, udMaxSpeed d, udRunThreshold d)
                         Nothing → ([], 3.0, 0.6)
-                    sp     = speed * injurySpeedMult bodyParts inst
+                    sp     = speed * injurySpeedMult (unitBloodView physioReg um inst)
+                                                     bodyParts inst
                     runCut = maxSp * runFrac   -- per-unit run-anim threshold
                 in (sp, sp > runCut)
     atomicModifyIORef' utsRef $ \uts →
@@ -101,13 +106,15 @@ handleUnitSetMoveSpeedCommand env utsRef uid speed = do
   ok ← motionPayloadOk env "UnitSetMoveSpeed" [] [("speed", speed)]
   when ok $ do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    physioReg ← readIORef (crPhysiologyRegistryRef (toContentRegistriesCapability env))
     let effSpeed = case HM.lookup uid (umInstances um) of
             Nothing   → speed
             Just inst →
                 let bodyParts = case HM.lookup (uiDefName inst) (umDefs um) of
                         Just d  → udBodyParts d
                         Nothing → []
-                in speed * injurySpeedMult bodyParts inst
+                in speed * injurySpeedMult (unitBloodView physioReg um inst)
+                                           bodyParts inst
     atomicModifyIORef' utsRef $ \uts →
         let simStates = utsSimStates uts
         in case HM.lookup uid simStates of

@@ -61,6 +61,12 @@ module Unit.Physiology
     , checkedPool
       -- * Consumer boundary
     , physioConsumerView
+      -- * Blood (S10, #2837)
+    , bloodIsNominal
+    , instanceBloodView
+    , unitBloodView
+    , contextBlood
+    , bloodSystem
       -- * Raw write gate
     , rawWriteAllowed
     ) where
@@ -71,10 +77,11 @@ import qualified Data.Map.Strict as Map
 import Control.Monad (foldM)
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Unit.Blood (BloodView(..))
+import Unit.Blood (BloodView(..), bloodView, bloodViewOf, nominalBlood)
 import Unit.Physiology.Circulation (CirculationInputs(..), circulationRule)
 import Unit.Physiology.Types
 import Unit.Stats (effectiveStat, maxStaminaOf)
+import Unit.Types (UnitDef(..), UnitInstance(..), UnitManager(..), bloodMassRatio)
 import Unit.Types.Def (StatModifier)
 
 -- * Registry queries
@@ -308,7 +315,12 @@ readRole ∷ ReadKind → PhysioContext → PhysiologySystem → ResolvedMode
          → KeyRole → Either Text Float
 readRole kind ctx _ mode role = case role of
     RoleOwned o → case mode of
-        ModeSimulated → simulatedOwned kind ctx (okKey o)
+        -- A field-backed key (blood, #2837) is stored in its dedicated unit
+        -- field, never in uiStats: its Simulated value is the RAW volume the
+        -- context carries, and it has no modifiers, so base = effective.
+        ModeSimulated
+            | isJust (okField o) → Right (bvVolume (pcBlood ctx))
+            | otherwise          → simulatedOwned kind ctx (okKey o)
         _             → evalHealthy ctx (okHealthy o)
     RoleMeter m → case mode of
         ModeSimulated → Right (fromMaybe 0 (storedValue kind ctx m))
@@ -326,6 +338,8 @@ derivedRule ∷ PhysioContext → DerivedKey → Either Text Float
 derivedRule ctx d = case dkRule d of
     DerivedSaltConcentration → saltConcentrationFor ctx
     DerivedCirculation       → circulationFor ctx
+    DerivedBloodMax          → Right (bvMax (contextBlood ctx))
+    DerivedBloodFraction     → Right (bvFraction (contextBlood ctx))
 
 -- | A stored key's base, or its effective value.
 storedValue ∷ ReadKind → PhysioContext → Text → Maybe Float
@@ -408,6 +422,15 @@ evalHealthy ctx (HealthyFrom k scales) = do
     v  ← capacity ctx k
     fs ← traverse (quantity ctx) scales
     pure (v * product fs)
+evalHealthy ctx HealthyBloodMax
+    -- the BASE body mass (70 kg when absent, modifiers never applied) times the
+    -- ratio; a non-finite or negative result is no target to seed or rewrite
+    -- to (#2837), so it is refused like any other invalid seed input
+    | isNaN v ∨ isInfinite v = Left ("input 'blood_max' is not finite (" <> tshow v <> ")")
+    | v < 0                  = Left ("input 'blood_max' is negative (" <> tshow v <> ")")
+    | otherwise              = Right v
+  where
+    v = HM.lookupDefault 70.0 "body_mass" (pcStats ctx) * bloodMassRatio
 evalHealthy ctx HealthyMaxStamina =
     case maxStaminaOf Nothing (pcNow ctx) (pcStats ctx) (pcModifiers ctx) of
         Nothing → Left "input 'max_stamina' is absent (no endurance stat)"
@@ -465,7 +488,7 @@ circulationFor ctx = do
         Just _  → Right Nothing
         Nothing → Left "the registry does not own 'heart_rate'"
     pure $ circulationRule resting CirculationInputs
-        { ciBloodFraction = bvFraction (pcBlood ctx)
+        { ciBloodFraction = bvFraction (contextBlood ctx)
         , ciConstitution  = stat "constitution" 1.0
         , ciFatMass       = stat "fat_mass" 0.0
         , ciBodyMass      = stat "body_mass" 70.0
@@ -482,6 +505,52 @@ circulationFor ctx = do
         OutcomeUnsupported   → constant "THERMO_BASELINE"
         OutcomeInvariant why → Left why
         OutcomeUnowned       → Left "the registry does not own 'core_temp'"
+
+-- * Blood (S10, #2837)
+
+-- | The registry's @blood@ system, if it declares one.
+bloodSystem ∷ PhysiologyRegistry → Maybe PhysiologySystem
+bloodSystem reg = registrySystem reg "blood"
+
+-- | Is this unit's blood Nominal? Only through the one pure resolver, against
+--   the registry's own @blood@ declaration. A registry that declares no
+--   @blood@ system (the wound tick's @emptyPhysiologyRegistry@, a hand-built
+--   fixture) and a blood that is Unsupported (a bodyless definition) are NOT
+--   Nominal: they read the raw pre-S10 values.
+bloodIsNominal ∷ PhysiologyRegistry → UnitPhysiology → PhysioOverrides
+               → HM.HashMap Text Float → Bool
+bloodIsNominal reg up overrides stats = case bloodSystem reg of
+    Nothing  → False
+    Just sys → resolveMode sys up (engagementApplied stats)
+                   (HM.lookup (psId sys) overrides) ≡ ModeNominal
+
+-- | The ONE mode-aware blood view of a unit instance: the raw view of
+--   "Unit.Blood" for a Simulated, Unsupported or undeclared blood, and its
+--   Nominal branch for a Nominal one. Every consumer (the wound fold, the
+--   movement multiplier, @unit.getBlood@, circulation and cardio's blood
+--   input) reads through it.
+instanceBloodView ∷ PhysiologyRegistry → UnitDef → UnitInstance → BloodView
+instanceBloodView reg def inst
+    | bloodIsNominal reg (udPhysiology def) (uiPhysioOverrides inst) (uiStats inst)
+        = nominalBlood raw
+    | otherwise = raw
+  where raw = bloodView def inst
+
+-- | 'instanceBloodView' for a unit looked up in a unit manager: a unit whose
+--   definition is no longer registered has no wounds that can be priced and no
+--   mode, so it reads the raw view with no bleed.
+unitBloodView ∷ PhysiologyRegistry → UnitManager → UnitInstance → BloodView
+unitBloodView reg um inst = case HM.lookup (uiDefName inst) (umDefs um) of
+    Just def → instanceBloodView reg def inst
+    Nothing  → bloodViewOf (uiStats inst) (uiBlood inst) 0
+
+-- | The blood a pure context reads: its raw view, in the Nominal branch when
+--   the context's blood is Nominal.
+contextBlood ∷ PhysioContext → BloodView
+contextBlood ctx
+    | bloodIsNominal (pcRegistry ctx) (pcPhysiology ctx) (pcOverrides ctx)
+                     (pcStats ctx) = nominalBlood (pcBlood ctx)
+    | otherwise = pcBlood ctx
 
 -- * Consumer boundary (S5, #2830)
 
@@ -540,5 +609,9 @@ rawWriteAllowed reg up applied overrides key
         Nothing → True
         Just (sys, role) → case role of
             RoleDerived _ → False
+            -- A field-backed key (blood, #2837) is stored in its dedicated
+            -- unit field: a raw stat write would create the shadow pool the
+            -- storage adapter forbids, so it is refused in every mode.
+            RoleOwned o | isJust (okField o) → False
             _ → resolveMode sys up applied (HM.lookup (psId sys) overrides)
                     ≡ ModeSimulated

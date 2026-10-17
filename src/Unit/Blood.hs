@@ -3,9 +3,14 @@
 --   unit's blood volume reads through (#2836, S9; design
 --   @docs\/designs\/physiology_stat_modes_design.md@ S10.2, A1-5).
 --
---   __Unmoded form.__ S10 will add a Nominal branch (volume = maximum,
---   fraction 1.0, the stored 'uiBlood' ignored). Until it lands, 'bloodView'
---   is exactly what the code it replaces computed:
+--   __Two forms (#2837, S10).__ 'bloodView' is the RAW view, and it is what a
+--   Simulated blood, an Unsupported one, a registry that declares no @blood@
+--   system and a definition that is not registered all read: exactly what the
+--   code it replaced computed. 'nominalBlood' is the Nominal branch (volume =
+--   maximum, fraction 1.0, the stored 'uiBlood' ignored, the bleed rate still
+--   live); "Unit.Physiology".@instanceBloodView@ chooses between them through
+--   the one pure mode resolver, so this module stays free of the registry.
+--   The raw view is exactly:
 --
 --     * @volume@ is the stored 'uiBlood', untouched;
 --     * @max@ is the unit's BASE @body_mass@ times 'bloodMassRatio', with the
@@ -24,6 +29,7 @@ module Unit.Blood
     ( BloodView(..)
     , bloodView
     , bloodViewOf
+    , nominalBlood
     , fullBloodView
     ) where
 
@@ -67,7 +73,15 @@ fullBloodView ∷ HM.HashMap Text Float → BloodView
 fullBloodView stats =
     bloodViewOf stats (HM.lookupDefault 70.0 "body_mass" stats * bloodMassRatio) 0
 
--- | A unit's blood, read through the one interface.
+-- | The Nominal branch of the one interface (#2837): the stored volume is
+--   IGNORED, so a body-mass change after it was written can never turn it
+--   into a partial reading. Volume and maximum are the (base-body-mass)
+--   maximum, the fraction is exactly 1.0 and the bleed rate stays the live
+--   wound rate (Nominal blood is not injury immunity).
+nominalBlood ∷ BloodView → BloodView
+nominalBlood v = v { bvVolume = bvMax v, bvFraction = 1.0 }
+
+-- | A unit's RAW blood: the stored volume (see the module header).
 bloodView ∷ UnitDef → UnitInstance → BloodView
 bloodView def inst =
     bloodViewOf (uiStats inst) (uiBlood inst) (bleedRateFor def inst)
