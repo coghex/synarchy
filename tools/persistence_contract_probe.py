@@ -1092,9 +1092,11 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         # A severe cut on the Nominal unit: it must survive with a full volume
         # while the Simulated unit keeps bleeding.
         send(port, f"unit.injure({nomad}, 'torso', 'slash', 0.6, 1.0); return 'ok'")
+        # a fresh cut on the Simulated unit too: its saved wound may have clotted
+        send(port, f"unit.injure({bled}, 'torso', 'slash', 0.3, 1.0); return 'ok'")
         send(port, "require('scripts.pause').set(false); return 'ok'")
         chk.ok(wait_for(port, lambda: (blood_state(port, bled)["cur"] or 99) < partial["cur"] - 0.02, 12.0),
-               "the Simulated unit keeps draining after the reload")
+               "the Simulated unit drains after the reload and a fresh cut")
         st = blood_state(port, nomad)
         chk.ok(st["cur"] == st["max"] and st["pose"] != "dead"
                and (lua_number(port, f"unit.getBlood({nomad}).bleedRate") or 0) > 0,
