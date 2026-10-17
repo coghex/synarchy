@@ -81,6 +81,15 @@ cardio key Unsupported), the facade switch of one unit to Nominal that must scru
 only its own two keys, and circulation DERIVED on demand and stored in no
 process: a raw write of it is refused and no engine ever holds the key.
 
+S10 (#2837) adds three FOCUSED fresh-process cycles for blood
+(``blood_cycles`` below): a Simulated acolyte bled to an exact partial volume, a
+nomad pinned Nominal (a full volume and a pin that survive), a bodyless deer
+(Unsupported, reading nothing), a severe cut on the reloaded Nominal unit (it
+survives with a full volume and a live bleed rate while the Simulated one keeps
+draining), and the facade switch back to Simulated that seeds the maximum into
+the dedicated uiBlood field. No shadow ``blood`` stat exists in any process, and
+a raw write of the volume is refused.
+
 The BROADER manual sweep (all of requirement 4's representative-scenario
 checklist, the assembled failure contract, and every maintained
 migration baseline) is ``tools/persistence_contract_sweep.py``.
@@ -968,6 +977,157 @@ def cardio_circulation_cycles(chk: Checks, root: str, tmpdir: str, port: int) ->
             quit_engine(port, proc)
 
 
+# ── S10 (#2837): blood across fresh processes ───────────────────────────────
+
+BL_PAGE = "blood_modes_page"
+
+
+def blood_state(port: int, uid: int) -> dict:
+    """What a unit stores, resolves and reads for the S10 blood system."""
+    cur = lua_number(port, f"unit.getBlood({uid}).current")
+    mx = lua_number(port, f"unit.getBlood({uid}).max")
+    return {
+        "cur": cur, "max": mx,
+        "mode": lua_text(port, f"unit.getPhysioMode({uid}, 'blood')"),
+        "pin": lua_text(port, f"unit.getPhysioOverride({uid}, 'blood')"),
+        "read": lua_number(port, f"unit.readPhysio({uid}, 'blood')"),
+        "frac": lua_number(port, f"unit.readPhysio({uid}, 'blood_fraction')"),
+        "shadow": lua_number(port, f"unit.getStatBase({uid}, 'blood')"),
+        "pose": lua_text(port, f"unit.getPose({uid})"),
+    }
+
+
+def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
+    """Three fresh processes: a bled Simulated unit (a partial volume), a unit
+    pinned Nominal, a bodyless unit; load, bleed a Nominal unit severely and
+    switch it back, save again; load again. The volume lives in the dedicated
+    uiBlood field in every process: a shadow `blood` stat never appears."""
+    print("=== blood engine N: partial volume + Nominal pin, save 'bl1' ===")
+    proc = engagement_boot(root, tmpdir, port, "N")
+    try:
+        send(port, f"world.init('{BL_PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
+                   f"'Blood Modes World', 'the S10 modes'); return 'ok'")
+        send(port, f"world.show('{BL_PAGE}'); return 'ok'")
+        wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
+                 .strip('"') == BL_PAGE, 30.0)
+        send(port, "return world.waitForInit(30)", timeout=35)
+        bled = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+                                 "'player', nil, nil, 'standard')"))
+        nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, 0, "
+                                  "'player', nil, nil, 'standard')"))
+        squirrel = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, 0, "
+                                     "'player', nil, nil, 'standard')"))
+        deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, 0, "
+                                 "'player', nil, nil, 'standard')"))
+        uids = (bled, nomad, squirrel, deer)
+        chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
+        time.sleep(0.6)
+
+        def all_standing() -> bool:
+            return all(lua_text(port, f"unit.getPose({u})") == "standing" for u in uids)
+
+        def paused_standing() -> bool:
+            if not all_standing():
+                return False
+            send(port, "require('scripts.pause').set(true); return 'ok'")
+            if all_standing():
+                return True
+            send(port, "require('scripts.pause').set(false); return 'ok'")
+            return False
+        chk.ok(wait_for(port, paused_standing, 40.0),
+               "every unit has settled into a standing pose and the engine is paused")
+
+        # The shipped default through real spawns: blood is Simulated for every
+        # bodied species and Unsupported for the bodyless one; the volume is
+        # full and no shadow stat exists.
+        for uid, mode in ((bled, "simulated"), (nomad, "simulated"),
+                          (squirrel, "simulated"), (deer, "nil")):
+            st = blood_state(port, uid)
+            chk.ok(st["mode"] == mode and st["shadow"] is None,
+                   f"unit {uid} resolves blood {mode} with no shadow stat (got {st})")
+        # A raw write of the volume is refused in every mode.
+        refused = send(port, f"return tostring(unit.setStat({bled}, 'blood', 1.0))").strip('"')
+        chk.ok(refused == "false" and blood_state(port, bled)["shadow"] is None,
+               f"a raw blood write is refused and stores nothing (got {refused!r})")
+
+        # Bleed one Simulated unit to a genuine partial volume, then pause.
+        send(port, f"unit.injure({bled}, 'torso', 'slash', 0.3, 1.0); return 'ok'")
+        send(port, "require('scripts.pause').set(false); return 'ok'")
+        chk.ok(wait_for(port, lambda: (blood_state(port, bled)["cur"] or 99)
+                        < (blood_state(port, bled)["max"] or 0) - 0.05, 12.0),
+               "the Simulated unit bled to a partial volume")
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        partial = blood_state(port, bled)
+        chk.ok(partial["cur"] is not None and partial["cur"] < partial["max"],
+               f"the bled unit holds a partial volume (got {partial})")
+        # Pin the nomad Nominal through the facade: the field is written canonical.
+        pinned = send(port, f"local ok, ch = require('scripts.physiology')"
+                            f".setMode({nomad}, 'blood', 'nominal'); "
+                            f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+        chk.ok(pinned == "true|true",
+               f"the nomad's blood is pinned Nominal through the facade (got {pinned!r})")
+        st = blood_state(port, nomad)
+        chk.ok(st["mode"] == "nominal" and st["cur"] == st["max"] and st["frac"] == 1.0
+               and st["shadow"] is None,
+               f"the Nominal nomad reads a full volume, fraction 1.0, no shadow (got {st})")
+        save_and_wait(chk, port, BL_PAGE, "bl1")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== blood engine O: load 'bl1', bleed the Nominal unit, switch, save 'bl2' ===")
+        proc = engagement_boot(root, tmpdir, port, "O")
+        engagement_load(chk, port, "bl1")
+        st = blood_state(port, bled)
+        chk.ok(partial["cur"] is not None and st["cur"] is not None
+               and abs(st["cur"] - partial["cur"]) < 1e-3 and st["mode"] == "simulated"
+               and st["shadow"] is None,
+               f"the bled unit's partial volume reloads exactly, Simulated (got {st}, saved {partial})")
+        st = blood_state(port, nomad)
+        chk.ok(st["mode"] == "nominal" and st["pin"] == "nominal" and st["cur"] == st["max"]
+               and st["frac"] == 1.0,
+               f"the Nominal nomad reloads Nominal and full with its pin (got {st})")
+        st = blood_state(port, deer)
+        chk.ok(st["mode"] == "nil" and st["read"] is None and st["shadow"] is None,
+               f"the bodyless unit reloads Unsupported, reading nothing (got {st})")
+        # A severe cut on the Nominal unit: it must survive with a full volume
+        # while the Simulated unit keeps bleeding.
+        send(port, f"unit.injure({nomad}, 'torso', 'slash', 0.6, 1.0); return 'ok'")
+        send(port, "require('scripts.pause').set(false); return 'ok'")
+        chk.ok(wait_for(port, lambda: (blood_state(port, bled)["cur"] or 99) < partial["cur"] - 0.02, 12.0),
+               "the Simulated unit keeps draining after the reload")
+        st = blood_state(port, nomad)
+        chk.ok(st["cur"] == st["max"] and st["pose"] != "dead"
+               and (lua_number(port, f"unit.getBlood({nomad}).bleedRate") or 0) > 0,
+               f"the severely cut Nominal unit holds a full volume, alive, with a live bleed rate (got {st})")
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        switched = send(port, f"local ok, ch = require('scripts.physiology')"
+                              f".setMode({nomad}, 'blood', 'simulated'); "
+                              f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+        chk.ok(switched == "true|true",
+               f"the Nominal unit is switched back to Simulated (got {switched!r})")
+        st = blood_state(port, nomad)
+        chk.ok(st["mode"] == "simulated" and st["cur"] == st["max"] and st["shadow"] is None,
+               f"the switch seeded the full maximum into the field (got {st})")
+        saved = blood_state(port, nomad)
+        save_and_wait(chk, port, BL_PAGE, "bl2")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== blood engine P: load 'bl2' ===")
+        proc = engagement_boot(root, tmpdir, port, "P")
+        engagement_load(chk, port, "bl2")
+        st = blood_state(port, nomad)
+        chk.ok(st["mode"] == "simulated" and st["pin"] == "simulated" and st["shadow"] is None
+               and saved["cur"] is not None and st["cur"] is not None
+               and abs(st["cur"] - saved["cur"]) < 1e-3,
+               f"the switched unit reloads Simulated, pinned, volume exact (got {st})")
+        quit_engine(port, proc)
+        proc = None
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1131,6 +1291,9 @@ def main() -> int:
 
         # ── S9 (#2836): cardio and the derived circulation, focused ──────
         cardio_circulation_cycles(chk, root, tmpdir, port)
+
+        # ── S10 (#2837): blood in the dedicated field, focused ───────────
+        blood_cycles(chk, root, tmpdir, port)
 
     finally:
         if proc is not None:

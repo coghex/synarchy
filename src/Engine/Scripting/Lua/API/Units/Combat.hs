@@ -389,11 +389,15 @@ unitGetInsulationFn env = do
             Lua.pushnumber (Lua.Number (realToFrac (total ∷ Float)))
             return 1
 
--- | unit.getBlood(uid) → { current, max } | nil
+-- | unit.getBlood(uid) → { current, max, bleedRate } | nil
 --
---   max is body_mass × 'bloodMassRatio'. current is the
---   spawn-time-seeded value minus per-tick bleed loss. Both in
---   litres.
+--   Reads the ONE mode-aware blood adapter ('unitBloodView', #2837, S10):
+--   max is BASE body_mass × 'bloodMassRatio' (70 kg fallback) and current the
+--   stored uiBlood (spawn-seeded, drained by bleeding, recovered by #2639) for
+--   a Simulated, Unsupported or undeclared blood, whose values are exactly
+--   what every reader saw before S10; a NOMINAL blood reads current = max
+--   whatever is stored. bleedRate is the live wound rate in either mode. Both
+--   in litres. nil only for a missing unit id.
 unitGetBloodFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetBloodFn env = do
     idArg ← Lua.tointeger 1
