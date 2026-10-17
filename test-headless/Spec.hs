@@ -695,6 +695,8 @@ restLane = do
     -- spawns units and drains the unit queue BY HAND against the live
     -- world thread, which the shared-worlds engine must not see either.
     aroundAll withHeadlessEngine SolidificationOccupants.spec
+    -- #2703: the item-tag cleanup on the same real reaction path.
+    aroundAll withHeadlessEngine SolidificationOccupants.itemTagSpec
     -- Own engine (#2477): DESTROYS and re-creates a page under the same
     -- id, and drives the sim's own command handler and emit step by
     -- hand against the live world thread -- none of which the
