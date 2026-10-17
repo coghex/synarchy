@@ -12,6 +12,7 @@
 module Test.Headless.Unit.PhysiologyCardioCirculationModes.Rule (spec) where
 
 import UPrelude
+import Control.Exception (evaluate)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
@@ -343,7 +344,22 @@ bloodSpec = describe "the unmoded bloodView (S10.2 before S10)" $ do
         bvFraction (at [("body_mass", 0)] 3) `shouldBe` 1
         bvFraction (at [("body_mass", -5)] 3) `shouldBe` 1
 
-    it "carries the live wound bleed rate, lazily, and a full-blood unit's \
+    it "never evaluates the bleed rate to build a view or read its volume, \
+       \maximum or fraction (it sums every wound), but does when asked" $ do
+        let stats = HM.fromList [("body_mass", 70)]
+            poisoned = bloodViewOf stats 2.1 (error "the bleed rate was forced")
+        -- the strict physiology context holds the view, and every read of
+        -- the circulation inputs goes through it
+        evaluate poisoned >>= \v → do
+            bvVolume v `shouldBe` 2.1
+            bvMax v `shouldBe` 70 * 0.075
+            bvFraction v `shouldSatisfy` (\f → abs (f - 0.4) < 1e-6)
+        evaluate (bvBleedRate poisoned) `shouldThrow` anyErrorCall
+        -- and through a unit instance with wounds, whose rate IS computable:
+        -- building the view is free, reading it prices the wounds
+        bvBleedRate (bloodViewOf stats 2.1 0.5) `shouldBe` 0.5
+
+    it "carries the live wound bleed rate, and a full-blood unit's \
        \view is the future Nominal one (fraction 1.0)" $ do
         let stats = HM.fromList [("body_mass", 70), ("constitution", 1)]
             full = fullBloodView stats

@@ -40,16 +40,19 @@ data BloodView = BloodView
     , bvFraction  ∷ !Float
       -- ^ @volume \/ max@ clamped to @0..1@; @1.0@ when @max@ is not
       --   positive.
-    , bvBleedRate ∷ Float
-      -- ^ litres per second lost to wounds. LAZY: it sums every wound, and
-      --   the circulation rule (the hot reader) never asks for it.
+    , bvBleedRate ∷ ~Float
+      -- ^ litres per second lost to wounds. LAZY (the @~@ is what makes it
+      --   so under @Strict@): it sums every wound, and the circulation rule
+      --   (the hot reader) never asks for it, so building a view must not
+      --   evaluate it.
     } deriving (Show, Eq)
 
 -- | The view from its raw parts: the unit's stored stats, its stored blood
 --   volume and its bleed rate. For a caller that holds those but no
---   'UnitDef' (the save-load gate, a spawn that has no instance yet).
+--   'UnitDef' (the save-load gate, a spawn that has no instance yet). The
+--   rate is taken lazily: it is only computed if somebody reads it.
 bloodViewOf ∷ HM.HashMap Text Float → Float → Float → BloodView
-bloodViewOf stats volume rate = BloodView
+bloodViewOf stats volume ~rate = BloodView
     { bvVolume = volume, bvMax = maxBlood
     , bvFraction = fraction, bvBleedRate = rate }
   where
