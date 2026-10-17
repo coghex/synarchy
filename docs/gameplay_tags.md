@@ -28,13 +28,15 @@ does not depend on that document.
 | `Gameplay.Tags.Types` | the typed targets and `TagCategory` |
 | `Gameplay.Tags.Registry` | `TagRegistry`, the mutations, inspection, rebuild, invariant check |
 | `Gameplay.Tags.Query` | `TagQuery`, `TagFilter`, universes/results (`TargetSets`), evaluation |
-| `Gameplay.Tags.Live` | the internal edit, inspect and query operations over the live owners (#2701) |
+| `Gameplay.Tags.Live` | the internal edit, inspect and query operations over the live owners (#2701), physical items included (#2703) |
+| `Gameplay.Tags.ItemLifecycle` | forgetting physical-item tags when items actually cease to exist (#2703) |
 
 The first five are pure. `Gameplay.Tags.Tag` and `Gameplay.Tags.Index`
 import no object identity, which is what lets the unit and building
 managers and the location table hold an index without an import cycle.
-`Gameplay.Tags.Live` is the only module that reads or writes live
-assignments.
+`Gameplay.Tags.Live` is the only module that reads or edits live
+assignments; `Gameplay.Tags.ItemLifecycle` only removes item
+assignments, at the production sites that destroy items.
 
 ## Tags are not faction tags
 
@@ -355,14 +357,129 @@ clearance.
   world, autosave and arena fresh-process cycles over codec-seeded tags.
 - `tools/persistence_inventory_audit.py` for the inventory rows.
 
+## Live tags: physical items
+
+Since #2703 (SCN-04) physical-item assignments have a live owner. Items
+move between owners and pages without changing identity, so their
+assignments are held by the SESSION owner rather than by whichever
+container holds the item today.
+
+| Category | Owner field | Key |
+|---|---|---|
+| Items | `WorldManager.wmItemTags` | `ItemTarget`, the item's `iiInstanceId` (process-global within a session; 0 refused) |
+
+The key is never a ground-row id (ground ids are page-local and
+zero-based), a definition name or a display-group key. No
+`ItemInstance` carries a tag field and `EngineEnv` gained no field
+(capability inventory §6.4(a)). `ItemTarget` lives in
+`Gameplay.Tags.Tag` so the session owner can hold it without importing
+any object identity.
+
+### The live item universe
+
+Edits and queries resolve through the canonical live enumeration,
+`World.Item.Locate`: ground items, unit inventory, equipment and
+accessories, building storage and delivered materials, and every item
+nested in any of those at any depth. Remembered copies (container and
+portable knowledge), definitions, display groups and id 0 are not in it.
+Same-definition items are separate targets, and a query result names the
+physical item.
+
+- `mutateItemTags` applies a `TagEdit` to one live item. With a page
+  scope it also requires the item to be on that page. The item's owners
+  sit behind several refs, so the existence check cannot share one
+  atomic step with the write. Instead the write is one
+  `atomicModifyIORef'` of the session owner, and the item is located
+  again afterwards. If a destruction removed it in between, the edit is
+  withdrawn and answers `TagEditNoTarget`, so no edit leaves a tag on a
+  dead item whichever way the race falls. A session replacement between
+  the check and the write refuses the write.
+- `itemTagsIn` inspects one item (`Nothing` when no live item has the
+  id), `liveItemTargets` is the item universe, and `onPage` narrows a
+  universe (every category) to the caller's selected page.
+- `commitItemTreeTags` is the attachment boundary later scenario
+  construction needs: it installs assignments for a newly materialized
+  tree only if every target is already committed and live, and otherwise
+  installs nothing and returns the uncommitted ids.
+
+### Item lifecycle
+
+A move never touches the index: the id is unchanged, so the tags follow.
+That makes every move tag-neutral by construction, including a
+transfer's temporary detach, a refused move and a rolled-back batch.
+
+| Event | Effect on item tags |
+|---|---|
+| Pickup, drop, ground relocation, equip/unequip, accessory changes, unit-to-unit and unit/building transfers (strict player and lax AI), construction delivery into delivered materials, nested ownership moves (`Item.Ownership`) | kept, for the item and every descendant |
+| Fill, temperature, quality, condition and sharpness changes; a bulk sack eaten from; a container emptied of its last item | kept: identity survives |
+| A refused or rolled-back operation, a partial batch | kept on moved and unmoved items alike |
+| Consumption: a discrete meal, a bulk sack eaten dry (`unit.feed`), `unit.removeItem`, craft and repair inputs, a bandage drawn from a kit, a power item placed as a node | the consumed items' assignments go; the kit, the surviving siblings and their shared tag names stay |
+| Construction-designation payment | the paid items are consumed and their assignments go. A refund mints new, untagged items (owner decision, 2026-10-17) |
+| `item.removeGround`; lava solidifying over ground items | the destroyed tree's assignments go. A pickup reaches the same ground removal but forgets nothing |
+| `UnitDestroy`, `BuildingDestroy`, both clear-alls, page retirement (immediate and queued), page destroy or replace | everything the removed owner held goes, and on a page teardown its ground too. These paths spill nothing |
+| A unit dies | kept: the corpse keeps its items |
+| Destroy-all (exit to menu) | the index is emptied with the page set |
+| A load publishes | the restored index replaces the outgoing one |
+
+Each destruction site works out which item ids its own atomic step
+removed (`destroyedItemIds`), so it forgets exactly those, and only
+after the removal. That is the same order the transfer-order and
+container-knowledge cleanups use. It reads `wmSessionEpoch` before the
+removal and skips the forget if a session replacement has bumped it
+since. Item ids are never reused within a session, but a restored
+session reuses them, so a cleanup computed in the outgoing session can
+never strip a tag in the incoming one.
+
+New items inherit nothing: not from their definition, their inputs,
+their container or a previous holder of the id. Crafted outputs and
+refunds are new identities.
+
+### Item persistence
+
+| Component | Version | Carries |
+|---|---|---|
+| `core-session` | v2 | `csItemTags`, the session's forward item assignments in the shared wire shape |
+
+- **Capture.** `World.Thread.Command.Save.WriteWorld` captures
+  `sgItemTags` from the same manager read as the pages, so the
+  assignments and the item trees they name are one capture.
+- **Migration.** `core-session` v1 is frozen as `CoreSessionDTOv1` and
+  migrates explicitly to no assignments. `currentSaveVersion` is
+  unchanged.
+- **Integrity.** An assignment naming no item that any page holds, in
+  any owner and at any depth, is a `dangling-reference` warning
+  attributed to `core-session`. Staging drops it with a log line and
+  rebuilds the reverse index from the forward assignments that remain,
+  so a remembered copy can neither duplicate a membership nor keep a
+  destroyed target live. A failure before publication leaves the
+  outgoing session and its item tags intact.
+- **Tooling.** The codec summary lists `itemTags` at session level, and
+  `seed-tags` accepts an `items` list (`{"id": N, "tags": [...]}`, no
+  page).
+
+### Item gates
+
+- Hspec `--match "Gameplay.Tags.Items"`: every owner category and depth,
+  a three-level tree, same-definition siblings, every move and in-place
+  change above, refused, rolled-back and partial operations, every
+  consumption and destruction site, the payment and refund decision, the
+  epoch guard, the attachment boundary, and save, load, dangling,
+  pre-publication failure and v1 migration. Both index directions are
+  checked after each transition.
+- `--match "save migrations"`: the tracked `z10-item-tags` fixture
+  (nonempty, `core-session` v2) and every older fixture's empty default.
+- `tools/gameplay_tag_persistence_probe.py` (manual-only): item
+  assignments across owner categories and nested contents, through
+  ownership changes, consumption and ground destruction, fresh-process
+  load and save, an autosave and an arena.
+
 ## Not yet integrated
 
 Later slices of epic #2698 still owe:
 
-- **Plants, items and tiles.** Their categories exist in the registry
-  but have no live owner yet (SCN-04/05). Their universes come from the
-  flora tables, the item containers and loaded tile storage. Chunk
-  eviction must not look like deletion.
+- **Plants and tiles.** Their categories exist in the registry but have
+  no live owner yet (SCN-05). Their universes come from the flora tables
+  and loaded tile storage. Chunk eviction must not look like deletion.
 - **Lua access.** This includes argument decoding and result
   marshalling. `count` and `exists` must return scalars, not lists.
 
