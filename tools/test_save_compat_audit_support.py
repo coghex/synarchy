@@ -168,6 +168,9 @@ class _Args:
             # generated fixture's placed locations carry real generated
             # names/glosses rather than definition labels.
             world_name=None, world_gloss=None, language_seed=None,
-            language_version=None, name_expr=None)
+            language_version=None, name_expr=None,
+            # #2701: general gameplay tags written into the saved bytes
+            # through the real codec (no public tag verb exists yet).
+            seed_tags=None)
         defaults.update(kwargs)
         self.__dict__.update(defaults)

@@ -177,7 +177,7 @@ restoreSlices slices =
     let snap = UnitSnapshot
             { usnInstances = HM.unions
                 [ HM.map fromUnitInstanceDTO (puInstances s) | s ← slices ]
-            , usnNextId = 100 }
+            , usnNextId = 100, usnTags = mempty }
         (um, _, unknowns, _, _) =
             fromUnitSnapshot pageA defs emptyInfectionManager
                 emptyEquipmentClassManager emptyItemManager snap
@@ -313,18 +313,18 @@ legacyWireSpec = describe "units v1 and v2 migration" $ do
                            [(UnitId 9, bareName, "made_up")]) of
             Left err → expectationFailure (T.unpack err)
             Right (um, _) → do
-                ccVersion unitsCodec `shouldBe` 4
+                ccVersion unitsCodec `shouldBe` 5
                 let dtos = HM.elems (HM.map toUnitInstanceDTO
                               (usnInstances (toUnitSnapshot pageA um)))
                 length dtos `shouldBe` 6
                 [ () | d ← dtos, UnitFactionLegacyDTO _ ← [uidFaction d] ]
                     `shouldBe` []
-                -- and those bytes come back through the v4 decoder
-                -- (the current one; v3 is the frozen #2829 shape)
-                -- unchanged.
-                let back = decodeUnitsAt 4 $ S.put $ UnitsDTO
+                -- and those bytes come back through the v5 decoder
+                -- (the current one since #2701; v3 is the frozen #2829
+                -- shape) unchanged.
+                let back = decodeUnitsAt 5 $ S.put $ UnitsDTO
                         [PageUnitsDTO pageA (HM.map toUnitInstanceDTO
-                            (usnInstances (toUnitSnapshot pageA um)))]
+                            (usnInstances (toUnitSnapshot pageA um))) []]
                 fmap (fst ∘ restoreSlices ∘ udPages) back
                     `shouldSatisfy` either (const False)
                         (\um' → HM.map uiFaction (umInstances um')
@@ -342,7 +342,7 @@ legacyWireSpec = describe "units v1 and v2 migration" $ do
                  minimalSaveDataV90 { sd90Worlds = [oldPage] } of
             Left err → expectationFailure (show err)
             Right snap → do
-                let us = maybe (UnitSnapshot HM.empty 0) pgsUnits
+                let us = maybe (UnitSnapshot HM.empty 0 mempty) pgsUnits
                                (HM.lookup mainPage (snapPages snap))
                     (um, _, unknowns, _, _) =
                         fromUnitSnapshot mainPage defs emptyInfectionManager
@@ -402,8 +402,8 @@ exactWireSpec = describe "units v3 exactness" $ do
             snap0 = toUnitSnapshot pageA um0
             bytes = S.runPut (S.put (UnitsDTO
                         [PageUnitsDTO pageA
-                            (HM.map toUnitInstanceDTO (usnInstances snap0))]))
-        case ccDecode unitsCodec 4 bytes of
+                            (HM.map toUnitInstanceDTO (usnInstances snap0)) []]))
+        case ccDecode unitsCodec 5 bytes of
             Left err → expectationFailure (show err)
             Right (UnitsDTO slices) → do
                 let (um, unknowns) = restoreSlices slices

@@ -19,6 +19,8 @@ import Data.Serialize (Serialize)
 import Control.DeepSeq (NFData)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import Gameplay.Tags.Index
+    (CategoryIndex, emptyCategoryIndex, restrictCategoryIndex)
 import World.Page.Types (WorldPageId(..))
 import Unit.Types.Def (UnitDef(..))
 import Unit.Types.Instance (UnitInstance(..))
@@ -41,6 +43,17 @@ data UnitManager = UnitManager
     , umInstances ∷ !(HM.HashMap UnitId UnitInstance)
     , umSelected  ∷ !(HS.HashSet UnitId)
     , umNextId    ∷ !Word32
+    , umTags      ∷ !(CategoryIndex UnitId)
+      -- ^ The AUTHORITATIVE general gameplay tag assignments of these
+      --   units (#2701), both indexes, sparse: an untagged unit has no
+      --   entry. Kept here, beside 'umInstances', rather than on the
+      --   instance or on 'Engine.Core.State.EngineEnv' (capability
+      --   inventory §6.4(a)), so every transition that removes an
+      --   instance removes its tags in the SAME atomic modify and no
+      --   observer can see a tag on a unit that no longer exists.
+      --   Every key names an instance in 'umInstances'. Persisted per
+      --   page by the @units@ component; the reverse index is rebuilt.
+      --   Mutated only through "Gameplay.Tags.Live".
     } deriving (Show, Eq)
 
 emptyUnitManager ∷ UnitManager
@@ -49,6 +62,7 @@ emptyUnitManager = UnitManager
     , umInstances = HM.empty
     , umSelected  = HS.empty
     , umNextId    = 1
+    , umTags      = emptyCategoryIndex
     }
 
 nextUnitId ∷ UnitManager → (UnitId, UnitManager)
@@ -77,6 +91,10 @@ nextUnitId um =
 --
 --   The allocator is untouched on purpose: rewinding it would let the
 --   replacement reissue an id this very transition is retiring.
+--
+--   The retired units' gameplay tags go in the same step (#2701), and
+--   only theirs: a replacement unit admitted at or above the cutoff
+--   keeps its own.
 retirePageUnits ∷ WorldPageId → UnitId → UnitManager
                 → (UnitManager, HS.HashSet UnitId)
 retirePageUnits pageId cutoff um = (um', doomed)
@@ -87,6 +105,8 @@ retirePageUnits pageId cutoff um = (um', doomed)
                                  (\uid _ → not (HS.member uid doomed))
                                  (umInstances um)
              , umSelected  = HS.difference (umSelected um) doomed
+             , umTags      = restrictCategoryIndex
+                                 (\uid → not (HS.member uid doomed)) (umTags um)
              }
 
 -- | Instances belonging to any of the given world pages — the

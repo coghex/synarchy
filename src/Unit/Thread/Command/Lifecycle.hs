@@ -19,6 +19,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
+import Gameplay.Tags.Index (deleteCategoryTarget, emptyCategoryIndex)
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.MotionGuard (motionPayloadOk)
@@ -32,11 +33,13 @@ import World.State.Types (pageWrapWorldSize)
 handleUnitDestroyCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
 handleUnitDestroyCommand env utsRef uid = do
     -- Single atomic modify removes the unit from instances AND clears
-    -- it from the selection set, so no observer ever sees a "selected
-    -- but dead" state.
+    -- it from the selection set and its gameplay tags (#2701), so no
+    -- observer ever sees a "selected but dead" state or a tag on a unit
+    -- that no longer exists. Shared tag names stay on every survivor.
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         (um { umInstances = HM.delete uid (umInstances um)
             , umSelected  = HS.delete uid (umSelected um)
+            , umTags      = deleteCategoryTarget uid (umTags um)
             }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
@@ -56,7 +59,8 @@ handleUnitClearAllCommand env utsRef = do
     -- it runs AFTER any UnitSpawns queued before Exit to Menu — those
     -- insert first, then this clears, leaving no orphans (#58).
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        (um { umInstances = HM.empty, umSelected = HS.empty }, ())
+        (um { umInstances = HM.empty, umSelected = HS.empty
+            , umTags = emptyCategoryIndex }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())
 

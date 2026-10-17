@@ -3138,6 +3138,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z8-units-v4-physiology-overrides.expected.json"
         }
       ]
+    },
+    {
+      "id": "z9-gameplay-tags",
+      "description": "General gameplay tags (#2701) as the current build writes them: nonempty unit (two units sharing 'defender'), building and location assignments on one generated page, in units v5, buildings v3 and world-pages v14. Seeded through synarchy-save-codec seed-tags because no public tag verb exists yet (SCN-06). Older fixtures (z8 and earlier) are the empty-default counterparts.",
+      "declaredAt": "2026-10-17",
+      "declaredByIssue": 2701,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec / buildingsCodec and World.Save.Component.PageCore.worldPagesCodec (current units v5, buildings v3, world-pages v14, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 14,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z9-gameplay-tags",
+          "path": "test-headless/data/save-compat/z9-gameplay-tags.bin",
+          "kind": "complete-session",
+          "sha256": "37d759d32fcd11bee8c0534a8cb77498bc79f6a733f234105a302194540e065a",
+          "sizeBytes": 912079,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return unit.spawn('acolyte', 3, 2, 0, 'player'), settled 3.0s and held until `unit.exists(1) and unit.exists(2) and world.getLocationInstance(1, 'generated_page') ~= nil`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Before that, synarchy-save-codec seed-tags wrote the general gameplay-tag assignments {\"units\":[{\"page\":\"generated_page\",\"id\":{uid},\"tags\":[\"defender\",\"meeting_point\"]},{\"page\":\"generated_page\",\"id\":2,\"tags\":[\"defender\"]}],\"buildings\":[{\"page\":\"generated_page\",\"id\":{bid},\"tags\":[\"depot\"]}],\"locations\":[{\"page\":\"generated_page\",\"id\":1,\"tags\":[\"landmark\"]}]} into the saved bytes through the real session decoder and encoder (#2701: no public tag verb exists yet).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z9-gameplay-tags.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

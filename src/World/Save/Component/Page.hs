@@ -110,6 +110,9 @@ module World.Save.Component.Page
     , PageCoreDTOv12(..)
     , WorldPagesDTOv12(..)
     , migrateWorldPagesV12
+    , PageCoreDTOv13(..)
+    , WorldPagesDTOv13(..)
+    , migrateWorldPagesV13
     , PageCoreDTOv11(..)
     , WorldPagesDTOv11(..)
     , PageEditsDTOv1(..)

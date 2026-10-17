@@ -279,10 +279,10 @@ pageWithSim ss = PageSnapshot
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty
-                                         , bsnNextId = 10 }
+                                         , bsnNextId = 10, bsnTags = mempty }
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton testUnit owningUnit
-        , usnNextId = 10 }
+        , usnNextId = 10, usnTags = mempty }
     , pgsUnitSimStates = HM.singleton testUnit ss
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty

@@ -91,6 +91,10 @@ import World.Save.Component.Types
     , buildingsComponentId, unitsComponentId
     , transferOrdersComponentId, worldPagesComponentId, ccVersion )
 import World.Save.Component.Page (worldPagesCodec)
+import World.Save.Component.EntitySnapshots (unitsCodec, buildingsCodec)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Gameplay.Tags.Index (categoryTargets)
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
@@ -104,7 +108,8 @@ import Item.Ground (GroundItems(..), GroundItem(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationSignificantItem(..), LocationContainerSlot(..)
-    , LocationInstance(..), LocationInstanceId(..), instancesToList )
+    , LocationInstance(..), LocationInstanceId(..), LocationInstances(..)
+    , instancesToList )
 import World.Generate.Types (WorldGenParams(..))
 
 -- | One structured integrity finding (requirement 10): which component
@@ -236,9 +241,39 @@ sessionIntegrityErrors snap = concat
     , significantProvenanceErrors snap
     , containerProvenanceErrors snap
     , orderRefErrors snap
+    , unitTagErrors, buildingTagErrors
     ]
   where
     pages = snapPages snap
+
+    -- #2701: a page's unit and building tag assignments are captured by
+    -- the same page filter as its instances, so an assignment whose
+    -- target resolves only on ANOTHER page is the genuine wrong-page
+    -- violation — the save would publish a tag the restore can never
+    -- attach. One resolving nowhere is the dangling case
+    -- 'sessionIntegrityWarnings' reports and the restore drops.
+    unitTagErrors =
+        [ err
+        | (pid, page) ← HM.toList pages
+        , uid ← Map.keys (usnTags (pgsUnits page))
+        , let path = "units[page=" <> unWorldPageId pid <> "].tags[unit="
+                     <> tshow (unUnitId uid) <> "]"
+        , Just err ← [ refEdgeError unitsComponentId (ccVersion unitsCodec)
+                         path RefUnit ScopeSamePage pid (unitPages uid)
+                         (tshow (unUnitId uid)) ]
+        ]
+
+    buildingTagErrors =
+        [ err
+        | (pid, page) ← HM.toList pages
+        , bid ← Map.keys (bsnTags (pgsBuildings page))
+        , let path = "buildings[page=" <> unWorldPageId pid
+                     <> "].tags[building=" <> tshow (unBuildingId bid) <> "]"
+        , Just err ← [ refEdgeError buildingsComponentId
+                         (ccVersion buildingsCodec) path RefBuilding
+                         ScopeSamePage pid (buildingPages bid)
+                         (tshow (unBuildingId bid)) ]
+        ]
 
     -- Every page a building/unit id resolves on, sorted for determinism
     -- — more than one entry means a duplicate global identity, which
@@ -964,7 +999,7 @@ containerDanglingWarnings snap =
 sessionIntegrityWarnings ∷ SessionSnapshot → [IntegrityError]
 sessionIntegrityWarnings snap =
     orderWarnings ⧺ locationWarnings ⧺ significantDanglingWarnings snap
-        ⧺ containerDanglingWarnings snap
+        ⧺ containerDanglingWarnings snap ⧺ tagDanglingWarnings snap
   where entitiesByPage = snapshotPageEntities snap
         orderWarnings =
             [ e
@@ -1276,3 +1311,49 @@ luaReferenceErrors componentVersions ke edges =
 --   nothing tied to the codec, and the second one missed them.
 worldPagesVersion ∷ Word32
 worldPagesVersion = ccVersion worldPagesCodec
+
+-- | Every gameplay tag assignment (#2701) whose target does not exist:
+--   a unit or building tag naming an id no page holds, or a location tag
+--   naming an id its own page's table does not hold (location ids are
+--   page-local, so the page's table is the only place one can resolve).
+--   Non-blocking like every other dangling reference here — and, unlike
+--   a dangling order, the assignment is NOT kept: a tag on nothing is
+--   not a state the live owners can hold, so the restore drops it
+--   ('World.Save.Types.restoredTags', 'World.Load.Stage') and these are
+--   the diagnostics for what it dropped.
+tagDanglingWarnings ∷ SessionSnapshot → [IntegrityError]
+tagDanglingWarnings snap =
+    [ dangling unitsComponentId (ccVersion unitsCodec) RefUnit pid
+          ("units[page=" <> unWorldPageId pid <> "].tags[unit=" <> v <> "]")
+          ("unit '" <> v <> "'") v
+    | (pid, page) ← HM.toList (snapPages snap)
+    , uid ← Map.keys (usnTags (pgsUnits page))
+    , null (sessionPagesOf entitiesByPage (OrderRefUnit uid))
+    , let v = tshow (unUnitId uid) ]
+    ⧺ [ dangling buildingsComponentId (ccVersion buildingsCodec) RefBuilding pid
+          ("buildings[page=" <> unWorldPageId pid <> "].tags[building=" <> v <> "]")
+          ("building '" <> v <> "'") v
+      | (pid, page) ← HM.toList (snapPages snap)
+      , bid ← Map.keys (bsnTags (pgsBuildings page))
+      , null (sessionPagesOf entitiesByPage (OrderRefBuilding bid))
+      , let v = tshow (unBuildingId bid) ]
+    ⧺ [ dangling worldPagesComponentId worldPagesVersion RefLocationInstance pid
+          ("world-pages[page=" <> unWorldPageId pid <> "].location-tags[location="
+           <> v <> "]")
+          ("location '" <> v <> "'") v
+      | (pid, page) ← HM.toList (snapPages snap)
+      , let lis = wgpLocationInstances (pgsGenParams page)
+      , lid ← Set.toList (categoryTargets (lisTags lis))
+      , not (HM.member lid (lisById lis))
+      , let v = tshow (unLocationInstanceId lid) ]
+  where
+    entitiesByPage = snapshotPageEntities snap
+    dangling cid ver kind pid path what v = IntegrityError
+        { ieComponent = cid, ieVersion = ver, iePath = path
+        , ieRefKind = kind, ieRefValue = v
+        , ieExpectedScope = "same page ('" <> unWorldPageId pid <> "')"
+        , ieActual = "absent from the session"
+        , ieCode = "dangling-reference"
+        , ieMessage = "gameplay tags on " <> what
+            <> " name no existing target (dropped: a tag on nothing is not restored)"
+        }

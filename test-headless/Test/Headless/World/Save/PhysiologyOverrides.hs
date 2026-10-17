@@ -87,7 +87,7 @@ pageWith ∷ WorldPageId → [(Word32, UnitInstanceSnapshot)] → PageSnapshot
 pageWith pid us = (minimalPage pid)
     { pgsUnits = UnitSnapshot
         { usnInstances = HM.fromList [ (UnitId n, u) | (n, u) ← us ]
-        , usnNextId = 10 }
+        , usnNextId = 10, usnTags = mempty }
     , pgsUnitSimStates = HM.fromList [ (UnitId n, minimalSimState)
                                      | (n, _) ← us ] }
 
@@ -181,14 +181,17 @@ spec = describe "physiology override persistence" $ do
 v4WireSpec ∷ Spec
 v4WireSpec = describe "the units v4 wire (requirements 1 and 2)" $ do
 
+    -- #2701 took units to v5 (each page slice carries its gameplay tag
+    -- assignments); the v4 instance shape these examples pin is unchanged
+    -- and is what the frozen v4 slice carries.
     it "declares units v4 and accepts every earlier version through its \
        \own decoder" $ do
-        ccVersion unitsCodec `shouldBe` 4
-        ccInputVers unitsCodec `shouldBe` [1, 2, 3, 4]
+        ccVersion unitsCodec `shouldBe` 5
+        ccInputVers unitsCodec `shouldBe` [1, 2, 3, 4, 5]
 
     it "emits units v4 in an envelope" $
         unitsVersion [] (encodeSessionSnapshot (meta session) session [])
-            `shouldBe` Right 4
+            `shouldBe` Right 5
 
     it "round-trips empty and nonempty maps, both modes, several units \
        \and pages, exactly — not merely the effective modes" $
@@ -246,7 +249,7 @@ liveRestoreSpec = describe "capture and restore (requirement 1)" $ do
         -- default restated: still explicit intent, kept exactly.
         let species = HM.fromList [("hydration", PhysioSimulated)]
             snap = UnitSnapshot
-                (HM.fromList [(UnitId 1, u1), (UnitId 2, u2)]) 10
+                (HM.fromList [(UnitId 1, u1), (UnitId 2, u2)]) 10 mempty
             (um, orphans) = restore page1 snap (defs species)
         orphans `shouldBe` []
         fmap uiPhysioOverrides (HM.lookup (UnitId 1) (umInstances um))
@@ -264,7 +267,7 @@ liveRestoreSpec = describe "capture and restore (requirement 1)" $ do
        \codec" $ do
         let species = HM.fromList [("salt", PhysioSimulated)]
             snapOf _ us = UnitSnapshot
-                (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10
+                (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10 mempty
             (umA, _) = restore page1 (snapOf page1 [(1, u1), (2, u2)])
                            (defs species)
             (umB, _) = restore page2 (snapOf page2 [(3, u3)]) (defs species)
@@ -325,8 +328,8 @@ legacyWireSpec = describe "historical units shapes (requirement 2)" $ do
 
     it "dispatches on the declared version: current bytes are not a \
        \valid v3 payload, nor v3 bytes a valid v4 one" $ do
-        let current = S.encode (UnitsDTO
-                [ PageUnitsDTO page1
+        let current = S.encode (UnitsDTOv4
+                [ PageUnitsDTOv4 page1
                     (HM.singleton (UnitId 1) (toUnitInstanceDTO u1)) ])
             frozen = S.encode (UnitsDTOv3
                 [ PageUnitsDTOv3 page1
@@ -347,7 +350,7 @@ legacyWireSpec = describe "historical units shapes (requirement 2)" $ do
                     (HM.singleton (UnitId 1) (toUnitInstanceDTOv3 inst)) ])
         case decodeUnits 3 bytes of
             Left err → expectationFailure (show err)
-            Right _ → ccVersion unitsCodec `shouldBe` 4
+            Right _ → ccVersion unitsCodec `shouldBe` 5
 
     it "the B1 SessionV90 adapter yields EMPTY overrides" $ do
         let mainPage = WorldPageId "main_world"
@@ -371,7 +374,7 @@ fixtureSpec = describe "retained fixtures (requirement 5)" $ do
           , ("z7-units-v3-salt-store", 3, True) ] $ \(name, ver, reserve) →
         it (T.unpack name ⧺ " is a real units-v" ⧺ show ver
             ⧺ " session: it decodes through the frozen v3 graph, yields \
-              \empty overrides and re-encodes as v4") $ do
+              \empty overrides and re-encodes as the current version") $ do
             bytes ← BS.readFile ("test-headless/data/save-compat/"
                                  ⧺ T.unpack name ⧺ ".bin")
             -- the envelope really declares units at the old version, so
@@ -394,9 +397,11 @@ fixtureSpec = describe "retained fixtures (requirement 5)" $ do
                                            HM.toList (usnInstances (pgsUnits p))
                                        , n ≤ 2 ]
                         reserves `shouldMatchList` [Just 0, Just 12.5]
+                    -- v5 since #2701 (page gameplay tags), which leaves
+                    -- the v4 instance shape this group pins untouched.
                     let again = encodeSessionSnapshot md snap lua
                     unitsVersion ["unit_ai", "building_spawn"] again
-                        `shouldBe` Right 4
+                        `shouldBe` Right (ccVersion unitsCodec)
                     -- re-encoding is reproducible, and the v4 bytes decode
                     -- to the same session
                     again `shouldBe` encodeSessionSnapshot md snap lua
@@ -421,7 +426,7 @@ rejectionsFor ∷ PhysiologyRegistry → [(Word32, UnitInstanceSnapshot)]
               → [PhysiologyLoadRejection]
 rejectionsFor reg us = physiologyLoadRejections reg defPhysiology
     [ (page1, UnitSnapshot
-          (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10) ]
+          (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10 mempty) ]
 
 rejectionSpec ∷ SpecWith PhysiologyRegistry
 rejectionSpec = describe "decoded-payload rejection (requirement 3)" $ do
@@ -523,10 +528,10 @@ rejectionSpec = describe "decoded-payload rejection (requirement 3)" $ do
     it "fails an unknown PhysioMode tag as a malformed payload, never \
        \reinterpreting it as an existing mode" $ \_ → do
         let dto = toUnitInstanceDTO u3
-            bytes = S.encode (UnitsDTO
-                [PageUnitsDTO page1 (HM.singleton (UnitId 3) dto)])
+            bytes = S.encode (UnitsDTOv4
+                [PageUnitsDTOv4 page1 (HM.singleton (UnitId 3) dto)])
             -- the override map is the instance's LAST field, so the
-            -- payload ends with the one entry's one-byte mode tag
+            -- v4 payload ends with the one entry's one-byte mode tag
             forged tag = BS.snoc (BS.init bytes) tag
         BS.last bytes `shouldBe` 1               -- PhysioSimulated
         fmap dtoOverrides (decodeUnits 4 bytes)

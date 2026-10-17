@@ -419,7 +419,7 @@ stageWith env cls equipped inventory = do
     let units = UnitSnapshot
             { usnInstances =
                 HM.singleton uid1 (minimalUnitSnapshot equipped inventory)
-            , usnNextId = 2 }
+            , usnNextId = 2, usnTags = mempty }
     staged ← stageSession env logger (saveWith units) matReg ⌦ either
         (\e → expectationFailure (T.unpack (renderStageError e))
                 ≫ error "unreachable")
