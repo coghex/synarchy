@@ -435,11 +435,19 @@ rebuiltCacheStats =
     , "strength", "strength_body"
     , "max_hydration", "max_hunger", "max_calories", "carrying_capacity" ]
 
--- | A session snapshot without those caches in any unit's stat map: the
---   durable half, for comparing saves taken across a load.
+-- | A session snapshot without those caches in any unit's stat map, and
+--   without the stored blood volume of a unit whose blood is pinned Nominal:
+--   that dedicated field is serialized but IGNORED while Nominal and the load
+--   rewrites it to the current canonical maximum (#2837), so a stale saved
+--   copy and its rebuilt successor are the same durable state. A Simulated
+--   unit's volume (and every other unit's, whose mode this registry-free
+--   comparison cannot see) stays compared exactly. The durable half, for
+--   comparing saves taken across a load.
 withoutRebuiltCaches ∷ SessionSnapshot → SessionSnapshot
 withoutRebuiltCaches snap = snap { snapPages = HM.map onPage (snapPages snap) }
   where
     onPage pg = pg { pgsUnits = onUnits (pgsUnits pg) }
     onUnits us = us { usnInstances = HM.map onUnit (usnInstances us) }
-    onUnit u = u { uisStats = foldl' (flip HM.delete) (uisStats u) rebuiltCacheStats }
+    onUnit u = u { uisStats = foldl' (flip HM.delete) (uisStats u) rebuiltCacheStats
+                 , uisBlood = if blood u ≡ Just PhysioNominal then 0 else uisBlood u }
+    blood = HM.lookup "blood" ∘ uisPhysioOverrides

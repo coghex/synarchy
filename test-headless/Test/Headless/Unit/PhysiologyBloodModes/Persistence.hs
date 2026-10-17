@@ -24,14 +24,15 @@ import Test.Headless.Unit.PhysiologyModes.Harness
 import Test.Headless.Unit.PhysiologySpeciesProfiles
     ( codecRoundTrip, gate, onSavePage, pageSnapshotOf, placeUnits
     , shippedDefs, withShipped )
+import Unit.Physiology (bloodSystem, resolveMode)
 import Unit.Physiology.Types
 import Unit.Types
 import Equipment.Types (emptyEquipmentClassManager)
 import Infection.Types (emptyInfectionManager)
 import Item.Types (emptyItemManager)
-import Test.Headless.World.Save.Components.Fixture (page1)
-import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate)
-import World.Save.Snapshot (PageSnapshot(..))
+import Test.Headless.World.Save.Components.Fixture (minimalGlobals, page1)
+import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate, withoutRebuiltCaches)
+import World.Save.Snapshot (PageSnapshot(..), captureSessionSnapshot)
 import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..), fromUnitSnapshot)
 
 spec ∷ Spec
@@ -109,6 +110,47 @@ nominalSpec = describe "a Nominal stored volume (serialized but ignored)" $ do
                 `shouldBe` Just (140 * 0.075)
             (us2, notes2) ← gate reg defs us1
             (us2, notes2) `shouldBe` (us1, [])
+
+    it "compares equal across a load that rebuilds it (the real save comparator), \
+       \while a Simulated twin's changed volume still differs" $
+        withShipped $ \(env, _) → do
+            reg ← readShippedPhysiologyRegistry
+            defs ← shippedDefs env
+            placeUnits env
+                [ (1, "acolyte", Nothing, [("blood", PhysioNominal)], [])
+                , (2, "acolyte", Nothing, [], []) ]
+            forM_ [1, 2] $ \u → modifyInstance env u (\i →
+                i { uiStats = HM.insert "body_mass" 140 (uiStats i) })
+            setBlood env 2 0.7
+            onSavePage env [1, 2]
+            pg ← pageSnapshotOf env ≫= codecRoundTrip
+            (us1, _) ← gate reg defs (pgsUnits pg)
+            let durable p = fmap withoutRebuiltCaches
+                                 (captureSessionSnapshot minimalGlobals [p])
+                loaded = pg { pgsUnits = us1 }
+                drifted = pg { pgsUnits = (pgsUnits pg)
+                                 { usnInstances = HM.adjust (\i → i { uisBlood = 0.8 })
+                                       (UnitId 2) (usnInstances (pgsUnits pg)) } }
+            -- stored 5.25 (pinned at 70 kg), rebuilt 10.5 after the mass doubled
+            fmap uisBlood (HM.lookup (UnitId 1) (usnInstances (pgsUnits pg))) `shouldBe` Just 5.25
+            fmap uisBlood (HM.lookup (UnitId 1) (usnInstances us1)) `shouldBe` Just 10.5
+            fmap uisBlood (HM.lookup (UnitId 2) (usnInstances us1)) `shouldBe` Just 0.7
+            durable pg `shouldBe` durable loaded
+            -- a Simulated unit's volume is durable: the same comparison tells
+            -- a changed one apart
+            durable pg `shouldNotBe` durable drifted
+
+    it "is pinned only: no shipped definition defaults blood to Nominal, so the \
+       \registry-free save comparator (which sees only a pin) covers every shipped \
+       \Nominal blood" $
+        withShipped $ \(env, _) → do
+            reg ← readShippedPhysiologyRegistry
+            defs ← shippedDefs env
+            let sys = bloodSystem reg
+            isJust sys `shouldBe` True
+            [ name | (name, d) ← HM.toList defs, Just s ← [sys]
+                   , resolveMode s (udPhysiology d) False Nothing ≡ ModeNominal ]
+                `shouldBe` []
 
     it "never leaks the stale stored value into a read, before or after a load" $
         withScene [ (unitSpec 1 "acolyte" (Just "exempt"))
