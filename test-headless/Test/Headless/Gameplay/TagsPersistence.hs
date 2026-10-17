@@ -424,11 +424,18 @@ replacementSpec = describe "page replacement" $ do
             pathRun p env
             -- The transition retired the old rows and their tags at once.
             map fst ⊚ assignedNow env `shouldReturn` [uKeep]
-            -- Admitted while the queued clears are still outstanding:
-            -- at or above their cutoffs, so the delayed clear spares it.
+            -- HOLD the delayed clears the transition queued, so the
+            -- replacement below is committed and tagged while they are
+            -- still outstanding — the window their cutoff exists for.
+            heldUnits ← Q.flushQueue (unitQueue env)
+            heldBuildings ← Q.flushQueue (buildingQueue env)
+            [ () | UnitClearPage _ _ ← heldUnits ] `shouldBe` [()]
+            [ () | BuildingClearPage _ _ ← heldBuildings ] `shouldBe` [()]
+            -- Admitted after the transition, so at or above the cutoffs.
             uNew ← TargetUnit . UnitId ⊚ spawnUnitOn ls incPage lateTile
             bNew ← TargetBuilding . BuildingId ⊚
                        spawnBuildingOn ls buildingDefName lateTile incPage Nothing
+            -- Commits the two spawns only: the held clears are not queued.
             drainEntities env
             -- The replacement's location table restarts its ids, so this
             -- is location 1 AGAIN — and inherits nothing.
@@ -437,7 +444,17 @@ replacementSpec = describe "page replacement" $ do
             tagsNow env lNew `shouldReturn` Just Set.empty
             forM_ [uNew, bNew, lNew] $ \t →
                 edit env t (AddTagsEdit (tags ["new"])) `shouldReturn` TagEditApplied
+            -- Now the delayed clears run, through the production
+            -- handlers, over the tagged replacement.
+            mapM_ (Q.writeQueue (unitQueue env)) heldUnits
+            mapM_ (Q.writeQueue (buildingQueue env)) heldBuildings
             drainEntities env
+            tagsNow env uNew `shouldReturn` Just (tags ["new"])
+            tagsNow env bNew `shouldReturn` Just (tags ["new"])
+            -- ...in both directions: the reverse index still names them.
+            sort ⊚ (concat ⊚ mapM (\c → queryNow env c (tagged (tg "new")))
+                                   [UnitCategory, BuildingCategory, LocationCategory])
+                `shouldReturn` sort [uNew, bNew, lNew]
             -- Old work against the departed incarnation's state lands
             -- there and nowhere else.
             atomicModifyIORef' (wsGenParamsRef oldWs) $ \mp →
