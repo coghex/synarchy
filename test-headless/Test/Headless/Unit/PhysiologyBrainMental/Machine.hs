@@ -206,7 +206,7 @@ gateInputs env = do
 
 gate ∷ PhysiologyRegistry → HM.HashMap Text UnitPhysiology → Double → UnitInstanceSnapshot
      → Either [Text] (UnitInstanceSnapshot, [Text])
-gate reg defs now u = case physiologyLoadGate reg defs now [(WorldPageId "p", UnitSnapshot (HM.singleton (UnitId 1) u) 10)] of
+gate reg defs now u = case physiologyLoadGate reg defs now [(WorldPageId "p", UnitSnapshot (HM.singleton (UnitId 1) u) 10 mempty)] of
     Left msgs → Left msgs
     Right ([(_, us)], notes) → case HM.lookup (UnitId 1) (usnInstances us) of
         Just u' → Right (u', concatMap pnNotes notes)
