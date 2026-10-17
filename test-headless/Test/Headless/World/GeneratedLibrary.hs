@@ -293,6 +293,7 @@ sessionWith gids =
             , sgLiveCamera     = LiveCameraSnapshot
                 { lcsOwnerPage = Just active
                 , lcsX = 10, lcsY = 20, lcsZoom = 2, lcsFacing = FaceSouth }
+            , sgItemTags = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
             }
     in case captureSessionSnapshot globals pages of

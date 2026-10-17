@@ -316,6 +316,7 @@ globalsAt now = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just testPage
         , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceEast }
+    , sgItemTags = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
     }
 

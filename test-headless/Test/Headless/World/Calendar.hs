@@ -522,6 +522,7 @@ saveWith cc (WorldDate y mo d) = snapshotToSaveData
                 , pgsDateMonth = mo
                 , pgsDateDay   = d
                 }
+        , snapItemTags = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

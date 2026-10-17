@@ -112,7 +112,10 @@ import Equipment.Reconcile (renderEquipmentOrphan)
 import Item.Types (ItemManager)
 import Unit.Types (UnitManager(..), UnitId(..), UnitDef)
 import Gameplay.Tags.Index
-    (unionDisjointCategories, categoryTargets, restrictCategoryIndex)
+    ( unionDisjointCategories, categoryTargets, restrictCategoryIndex
+    , categoryFromAssignments )
+import Gameplay.Tags.Tag (itemTargetId)
+import qualified Data.Map.Strict as Map
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
 import qualified Data.Set as Set
 import Unit.Faction (fallbackFaction, factionTag)
@@ -389,6 +392,40 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       prunedPortableIds stagedLiveItemIds savedPortable
                   stagedPortableKnowledge =
                       retainPortables stagedLiveItemIds savedPortable
+                  -- #2703: item tags on the same footing. An
+                  -- assignment whose item this session does not hold
+                  -- (consumed, or carried by an owner the save no
+                  -- longer has) is dropped, with one diagnostic, and
+                  -- the index is rebuilt from what remains.
+                  --
+                  -- Two tests, not one: the item must have been in the
+                  -- SAVED session's ownership AND survive staging. The
+                  -- second alone is not enough, because staging can
+                  -- mint items -- a refunded designation's materials --
+                  -- and a fresh refund can take an id a dangling
+                  -- assignment names (the saved allocator cursor), which
+                  -- would hand a new item the dead one's tags. Refunds
+                  -- are new and untagged (owner decision, 2026-10-17).
+                  savedItemTags = sdItemTags saveData
+                  savedItemIds = HS.fromList
+                      [ iiInstanceId i
+                      | wps ← sdWorlds saveData
+                      , (_, insts) ← pageItemContainers ItemsGroundFirst
+                                         wpsGroundItems wpsUnits wpsBuildings wps
+                      , inst ← insts
+                      , i ← flattenItemInstances inst ]
+                  liveTag t = HS.member (itemTargetId t) savedItemIds
+                            ∧ HS.member (itemTargetId t) stagedLiveItemIds
+                  staleItemTags = filter (not . liveTag) (Map.keys savedItemTags)
+                  stagedItemTags = categoryFromAssignments
+                      [ (t, ts) | (t, ts) ← Map.toList savedItemTags, liveTag t ]
+              unless (null staleItemTags) $
+                  logInfo logger CatWorld $
+                      "Save load: dropped gameplay tags on "
+                      <> tshow (length staleItemTags)
+                      <> " item id(s) that name no existing item ("
+                      <> T.intercalate ", " (map (tshow . itemTargetId) staleItemTags)
+                      <> ")"
               unless (null stalePortable) $
                   logInfo logger CatWorld $
                       "Save load: dropping " <> tshow (length stalePortable)
@@ -422,6 +459,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssPreview       = mPreview
                       , ssReconcile     = loadReconcileContextFrom
                                             (knownEntitiesFromSaveData saveData)
+                      , ssItemTags = stagedItemTags
                       , ssPortableKnowledge = stagedPortableKnowledge
                       , ssMaterialRegistry = registry
                       }

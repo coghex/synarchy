@@ -317,6 +317,7 @@ knowledgeSnapshot = buildSessionSnapshot globals [knowledgePage pageA]
         , sgLiveCamera = LiveCameraSnapshot
             { lcsOwnerPage = Just pageA, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
+        , sgItemTags = mempty
         , sgPortableKnowledge = emptyPortableKnowledge
         }
 

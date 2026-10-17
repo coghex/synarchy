@@ -499,6 +499,7 @@ capturedSession env = do
             , sgNextUnitId = umNextId um, sgActivePage = incPage
             , sgVisiblePages = [incPage]
             , sgLiveCamera = LiveCameraSnapshot (Just incPage) 0 0 1 FaceSouth
+            , sgItemTags = mempty
             , sgPortableKnowledge = emptyPortableKnowledge }
             pages
 

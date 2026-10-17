@@ -9,6 +9,10 @@ module Engine.Scripting.Lua.API.Units.Survival
     where
 
 import UPrelude
+import Data.IORef (atomicModifyIORef')
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, unitConsumption)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
@@ -16,7 +20,6 @@ import Engine.Core.Capability.UnitCombat
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (atomicModifyIORef')
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import qualified Engine.Core.Queue as Q
@@ -92,7 +95,11 @@ unitFeedFn env = do
                     (crvItemManagerRef (toContentRegistriesViewCapability env))
                 case lookupItemDef defName itemMgr ⌦ idFood of
                     Nothing   → pure Nothing   -- no food data → can't feed
-                    Just food → atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                    -- #2703: a meal eaten (or a sack eaten dry) ceases
+                    -- to exist; its tags go with it.
+                    Just food → withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+                        atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+                        unitConsumption [uid] $ \um →
                         case HM.lookup uid (umInstances um) of
                             Nothing → (um, Nothing)
                             -- Require a LIVE hunger pool: max_hunger is seeded
