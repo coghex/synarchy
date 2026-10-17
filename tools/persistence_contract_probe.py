@@ -256,6 +256,7 @@ def build_scenario(chk: Checks, port: int) -> tuple[int, int, int]:
     else:
         chk.ok(False, f"'{PAGE}' never became the active world")
     send(port, "return world.waitForInit(30)", timeout=35)
+    ensure_chunks(port)
 
     # A real, non-vacuous lua.building_spawn state: acolyte_portal is the
     # ONE building_spawn.lua-configured def (an ordinary building like
@@ -507,6 +508,16 @@ def wait_for(port: int, predicate, seconds: float = 12.0) -> bool:
     return predicate()
 
 
+def ensure_chunks(port: int) -> None:
+    """Load the chunks around the origin before anything is spawned (a second
+    or less): a spawn with no explicit height looks the surface up in the
+    LOADED chunks and falls back to z = 0 when its chunk is not there yet, which
+    drops the unit off the terrain on a slow runner (#2837's CI evidence)."""
+    send(port, "return world.loadChunksInRegion(-1, -1, 1, 1)")
+    send(port, "return world.waitForChunks(60)", timeout=65)
+
+
+
 def engagement_boot(root: str, tmpdir: str, port: int, letter: str):
     proc = boot_probe(root, port, os.path.join(tmpdir, f"engine{letter}.log"))
     bootstrap_defs(port)
@@ -537,6 +548,7 @@ def engagement_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
                  .strip('"') == ENG_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
+        ensure_chunks(port)
         # The STANDARD spawn profile (#2756): every stat at its definition's
         # mean, no draw from the stat RNG, so an endurance-1 nomad's maximum is
         # exactly 15 and its reach is the definition's, not a roll.
@@ -677,6 +689,7 @@ def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> N
         wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
                  .strip('"') == ES_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
+        ensure_chunks(port)
         # The STANDARD spawn profile (#2756): every stat at its definition's
         # mean, so each maximum is a known number, not a roll. The height is
         # OMITTED (nil), so each unit spawns ON the resolved surface: an
@@ -841,6 +854,7 @@ def cardio_circulation_cycles(chk: Checks, root: str, tmpdir: str, port: int) ->
         wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
                  .strip('"') == CC_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
+        ensure_chunks(port)
         acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, nil, "
                                     "'player', nil, nil, 'standard')"))
         nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, nil, "
@@ -1015,6 +1029,7 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
                  .strip('"') == BL_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
+        ensure_chunks(port)
         bled = as_int(send(port, "return unit.spawn('acolyte', 4, 4, nil, "
                                  "'player', nil, nil, 'standard')"))
         nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, nil, "
@@ -1023,8 +1038,12 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
                                      "'player', nil, nil, 'standard')"))
         deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, nil, "
                                  "'player', nil, nil, 'standard')"))
-        uids = (bled, nomad, squirrel, deer)
-        chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
+        # the S11a brain/mind rides the same fresh processes (no extra boots):
+        # a second acolyte whose consciousness is pinned Nominal
+        cons = as_int(send(port, "return unit.spawn('acolyte', 8, 8, nil, "
+                                 "'player', nil, nil, 'standard')"))
+        uids = (bled, nomad, squirrel, deer, cons)
+        chk.ok(None not in uids and min(uids) >= 0, f"the five units spawned (got {uids})")
         time.sleep(0.6)
 
         def all_standing() -> bool:
@@ -1083,6 +1102,7 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         chk.ok(st["mode"] == "nominal" and st["cur"] == st["max"] and st["frac"] == 1.0
                and st["shadow"] is None,
                f"the Nominal nomad reads a full volume, fraction 1.0, no shadow (got {st})")
+        mind_saved = mind_setup(chk, port, bled, nomad, cons, deer)
         save_and_wait(chk, port, BL_PAGE, "bl1")
         quit_engine(port, proc)
         proc = None
@@ -1090,6 +1110,7 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         print("=== blood engine O: load 'bl1', bleed the Nominal unit, switch, save 'bl2' ===")
         proc = engagement_boot(root, tmpdir, port, "O")
         engagement_load(chk, port, "bl1")
+        mind_loaded(chk, port, bled, nomad, cons, deer, mind_saved)
         st = blood_state(port, bled)
         chk.ok(partial["cur"] is not None and st["cur"] is not None
                and abs(st["cur"] - partial["cur"]) < 1e-3 and st["mode"] == "simulated"
@@ -1124,6 +1145,7 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         chk.ok(st["mode"] == "simulated" and st["cur"] == st["max"] and st["shadow"] is None,
                f"the switch seeded the full maximum into the field (got {st})")
         saved = blood_state(port, nomad)
+        mind_switched = mind_switch(chk, port, nomad)
         save_and_wait(chk, port, BL_PAGE, "bl2")
         quit_engine(port, proc)
         proc = None
@@ -1136,11 +1158,161 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
                and saved["cur"] is not None and st["cur"] is not None
                and abs(st["cur"] - saved["cur"]) < 1e-3,
                f"the switched unit reloads Simulated, pinned, volume exact (got {st})")
+        mind_second(chk, port, bled, nomad, mind_switched)
         quit_engine(port, proc)
         proc = None
     finally:
         if proc is not None:
             quit_engine(port, proc)
+
+
+MIND_KEYS = ("mood", "emotional_pain", "caffeine", "mental_state", "mental_since",
+             "mental_until", "mental_next_roll_at", "mental_cooldown_until",
+             "mental_high_since", "mental_break_behavior", "thought_next_at")
+DERIVED_BRAIN_KEYS = ("consciousness", "concentration", "state_of_mind")
+
+
+def mind_state(port: int, uid: int) -> dict:
+    """What a unit stores, resolves and reads for the S11a brain and mind, in
+    ONE console round trip (a nil value is a missing key, read back as None)."""
+    keys = ", ".join(f"'{k}'" for k in MIND_KEYS)
+    derived = ", ".join(f"'{k}'" for k in DERIVED_BRAIN_KEYS)
+    raw = send_json(port,
+        f"local u = {uid}; local o = {{ stored = {{}}, derived_stored = {{}}, read = {{}} }}; "
+        f"o.mind = tostring(unit.getPhysioMode(u, 'mind')); "
+        f"o.mind_pin = tostring(unit.getPhysioOverride(u, 'mind')); "
+        f"o.cons_mode = tostring(unit.getPhysioMode(u, 'consciousness')); "
+        f"o.cons_pin = tostring(unit.getPhysioOverride(u, 'consciousness')); "
+        f"for _, k in ipairs({{ {keys} }}) do o.stored[k] = unit.getStatBase(u, k) end; "
+        f"for _, k in ipairs({{ {derived} }}) do o.derived_stored[k] = unit.getStatBase(u, k) end; "
+        f"for _, k in ipairs({{ 'mood', 'mental_state', {derived} }}) do "
+        f"o.read[k] = unit.readPhysio(u, k) end; return o")
+    out = {"mind": raw.get("mind"), "mind_pin": raw.get("mind_pin"),
+           "cons_mode": raw.get("cons_mode"), "cons_pin": raw.get("cons_pin")}
+    out["stored"] = {k: (raw.get("stored") or {}).get(k) for k in MIND_KEYS}
+    out["derived_stored"] = {k: (raw.get("derived_stored") or {}).get(k)
+                             for k in DERIVED_BRAIN_KEYS}
+    out["read"] = {k: (raw.get("read") or {}).get(k)
+                   for k in ("mood", "mental_state") + DERIVED_BRAIN_KEYS}
+    return out
+
+
+def mind_setup(chk: Checks, port: int, episode: int, mindpin: int, conspin: int,
+               deer: int) -> dict:
+    """Engine N (paused, every unit standing): the S11a defaults through real
+    spawns, a Simulated mind put MID-EPISODE with one atomic batch, a mind and
+    a consciousness pinned Nominal. Returns the mid-episode unit's state."""
+    # The shipped default is all-Simulated (S11b applies SD-23): both systems
+    # Simulated for every bodied species, Unsupported for the bodyless one;
+    # the mind keys are seeded, no derived key is stored.
+    for uid, want in ((episode, "simulated"), (mindpin, "simulated"),
+                      (conspin, "simulated"), (deer, "nil")):
+        st = mind_state(port, uid)
+        chk.ok(st["mind"] == want and st["cons_mode"] == want,
+               f"unit {uid} resolves mind and consciousness {want} (got {st['mind']}, "
+               f"{st['cons_mode']})")
+        chk.ok(all(v is None for v in st["derived_stored"].values()),
+               f"unit {uid} stores none of the derived brain values (got {st['derived_stored']})")
+        seeded = all(v is not None for v in st["stored"].values())
+        chk.ok(seeded == (want == "simulated"),
+               f"unit {uid} holds every mind key exactly when its mind is Simulated "
+               f"(got {st['stored']})")
+    refused = send(port, f"return tostring(unit.setStat({episode}, 'concentration', 0.5))").strip('"')
+    chk.ok(refused == "false" and mind_state(port, episode)["derived_stored"]["concentration"] is None,
+           f"a raw concentration write is refused and stores nothing (got {refused!r})")
+    committed = send(port, f"local now = engine.gameTime(); "
+                           f"local ok, why = unit.commitPhysio({episode}, {{ "
+                           f"mood = 0.31, emotional_pain = 0.2, caffeine = 0.4, "
+                           f"mental_state = 2, mental_since = now - 10, "
+                           f"mental_until = now + 1000, mental_next_roll_at = now - 2, "
+                           f"mental_break_behavior = 3, thought_next_at = now + 40 }}); "
+                           f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
+    chk.ok(committed == "true|nil", f"the break episode commits as one batch (got {committed!r})")
+    episode_saved = mind_state(port, episode)
+    for uid, system in ((mindpin, "mind"), (conspin, "consciousness")):
+        pinned = send(port, f"local ok, ch = require('scripts.physiology')"
+                            f".setMode({uid}, '{system}', 'nominal'); "
+                            f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+        chk.ok(pinned == "true|true", f"unit {uid}'s {system} is pinned Nominal (got {pinned!r})")
+    st = mind_state(port, mindpin)
+    chk.ok(st["mind"] == "nominal" and all(v is None for v in st["stored"].values())
+           and st["read"]["mood"] == 1.0 and st["read"]["mental_state"] == 0.0,
+           f"the Nominal mind holds none of its keys and reads mood 1, STABLE (got {st})")
+    st = mind_state(port, conspin)
+    chk.ok(st["cons_mode"] == "nominal" and st["read"]["consciousness"] == 1.0
+           and st["read"]["concentration"] == 1.0,
+           f"the Nominal consciousness reads 1.0 and concentration 1.0 (got {st['read']})")
+    return episode_saved
+
+
+def mind_loaded(chk: Checks, port: int, episode: int, mindpin: int, conspin: int,
+                deer: int, episode_saved: dict) -> None:
+    """Engine O, right after the load (paused, NO tick has run): every mind key
+    exact, the derived values already canonical for the loaded inputs, nothing
+    cached, the pins and the bodyless unit as saved."""
+    st = mind_state(port, episode)
+    same = all(st["stored"][k] is not None and episode_saved["stored"][k] is not None
+               and abs(st["stored"][k] - episode_saved["stored"][k]) < 1e-3
+               for k in MIND_KEYS)
+    chk.ok(same and st["mind"] == "simulated",
+           f"the mid-episode unit reloads every mind key exactly, Simulated "
+           f"(got {st['stored']}, saved {episode_saved['stored']})")
+    wellbeing = 0.31 - 0.5 * 0.2
+    chk.ok(st["read"]["state_of_mind"] is not None
+           and abs(st["read"]["state_of_mind"] - min(st["read"]["consciousness"] or 1.0, wellbeing)) < 1e-3,
+           f"the paused unit reads the canonical derived state of mind from its loaded inputs "
+           f"(got {st['read']})")
+    chk.ok(all(v is None for v in st["derived_stored"].values()),
+           f"no derived value is stored after the load (got {st['derived_stored']})")
+    st = mind_state(port, mindpin)
+    chk.ok(st["mind"] == "nominal" and st["mind_pin"] == "nominal"
+           and all(v is None for v in st["stored"].values()),
+           f"the Nominal mind reloads Nominal with its pin and none of its keys (got {st})")
+    st = mind_state(port, conspin)
+    chk.ok(st["cons_mode"] == "nominal" and st["cons_pin"] == "nominal"
+           and st["read"]["consciousness"] == 1.0,
+           f"the Nominal consciousness reloads Nominal, pinned, reading 1.0 (got {st})")
+    st = mind_state(port, deer)
+    chk.ok(st["mind"] == "nil" and st["read"]["consciousness"] is None
+           and all(v is None for v in st["stored"].values()),
+           f"the bodyless unit reloads Unsupported, reading nothing (got {st})")
+
+
+def mind_switch(chk: Checks, port: int, mindpin: int) -> dict:
+    """Engine O, paused, before the second save: the Nominal mind switched to
+    Simulated seeds every key in one transition (the thought clock re-rolled
+    within 30 s)."""
+    switched = send(port, f"local ok, ch = require('scripts.physiology')"
+                          f".setMode({mindpin}, 'mind', 'simulated'); "
+                          f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+    chk.ok(switched == "true|true", f"the Nominal mind is switched to Simulated (got {switched!r})")
+    st = mind_state(port, mindpin)
+    now = lua_number(port, "engine.gameTime()")
+    chk.ok(st["mind"] == "simulated" and st["mind_pin"] == "simulated"
+           and st["stored"]["mental_state"] == 0.0 and st["stored"]["mental_since"] is not None
+           and now is not None and abs(st["stored"]["mental_since"] - now) < 1e-2
+           and st["stored"]["mental_break_behavior"] == 0.0
+           and st["stored"]["thought_next_at"] is not None
+           and now <= st["stored"]["thought_next_at"] <= now + 30.001,
+           f"the switch seeded every key (got {st['stored']}, now={now})")
+    return mind_state(port, mindpin)
+
+
+def mind_second(chk: Checks, port: int, episode: int, mindpin: int,
+                switched_saved: dict) -> None:
+    """Engine P: the switched unit's seeds and the episode survive a second
+    generation exactly."""
+    st = mind_state(port, mindpin)
+    same = all(st["stored"][k] is not None and switched_saved["stored"][k] is not None
+               and abs(st["stored"][k] - switched_saved["stored"][k]) < 1e-3
+               for k in MIND_KEYS)
+    chk.ok(same and st["mind"] == "simulated" and st["mind_pin"] == "simulated",
+           f"the switched unit reloads Simulated, pinned, every seeded key exact "
+           f"(got {st['stored']}, saved {switched_saved['stored']})")
+    st = mind_state(port, episode)
+    chk.ok(st["stored"]["mental_state"] == 2.0 and st["stored"]["mental_break_behavior"] == 3.0
+           and st["mind"] == "simulated",
+           f"the episode survives a second generation (got {st['stored']})")
 
 
 def main() -> int:

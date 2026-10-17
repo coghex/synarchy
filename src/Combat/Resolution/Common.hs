@@ -7,17 +7,24 @@
 --   resolution flow.
 module Combat.Resolution.Common
     ( painFor
+    , woundsPain
     , isAlreadyDead
     , statOr
     , skillOr
     , maxStaminaFor
     , mentalEffectiveness
+    , mentalMultiplier
     , weightedReachFactor
     , bodyPartIndex
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import Unit.Blood (bloodViewOf)
+import Unit.Physiology
+    (PhysioContext(..), PhysioOutcome(..), ReadKind(..), physioReadPure)
+import Unit.Physiology.Mind (euphoricState)
+import Unit.Physiology.Types (PhysiologyRegistry)
 import Unit.Types (UnitInstance(..), UnitDef(..), BodyPart(..), Wound(..)
                   , woundEffSeverity)
 import Unit.Stats (maxStaminaOf)
@@ -29,11 +36,16 @@ import Combat.Resolution.Constants (kindPainFactor, painCeiling)
 -- inflicted level until the wound vanishes. The Lua `unit.getPain`
 -- getter mirrors this formula and must change in lockstep.
 painFor ∷ UnitInstance → Float
-painFor inst =
+painFor = woundsPain ∘ uiWounds
+
+-- | 'painFor' over a bare wound list: a saved unit's wounds price its pain
+--   the same way (the physiology load gate's mood seed, #2838).
+woundsPain ∷ [Wound] → Float
+woundsPain ws =
     let raw = foldl'
               (\acc w → acc + woundEffSeverity w
                               * kindPainFactor (woundKind w))
-              0 (uiWounds inst)
+              0 ws
     in clamp 0.0 1.0 (raw / painCeiling)
 
 -- | True if the unit is already dead by combat rules: either the
@@ -101,8 +113,17 @@ maxStaminaFor now inst =
 --   that calls straight into this function), and craft-quality
 --   consumer reads, so none of the three can drift from the others.
 --
---   @concentration@ is clamped to 0..1 (missing ⇒ 1.0, neutral); a
---   missing or non-euphoric @mental_state@ confers no bonus (0 =
+--   @concentration@ is the DERIVED value (#2838, S11a): the shared pure rule
+--   ("Unit.Physiology.Mind") evaluated against the SAME unit snapshot, the
+--   registry, the definition's physiology and ONE captured game-time sample
+--   the caller supplies, so it can never observe a cache that lags, or a
+--   mix of two writer batches. It is clamped to 0..1, and reads 1.0 (neutral)
+--   when the unit has none (Unsupported or an undeclared registry) or when
+--   the read cannot be answered (a violated precondition, such as a
+--   Simulated mind with no stored caffeine, is CONTAINED here: this runs on
+--   the combat thread and inside craft's atomic update and must never
+--   raise). A missing or non-euphoric @mental_state@ (read through the mind
+--   system's mode: a Nominal mind reads STABLE) confers no bonus (0 =
 --   STABLE in @scripts/mental_state.lua@; only 3 = EUPHORIC qualifies).
 --   Normal concentration without euphoria is neutral at 1.00; zero
 --   concentration bottoms out at a 25% penalty; euphoria is the sole
@@ -114,19 +135,40 @@ maxStaminaFor now inst =
 --   'clamp' lets a NaN through untouched, and combat then reads
 --   @roll > pHit@ and @dodgeRoll < pDodge@ as 'False', landing every
 --   strike and disabling the active dodge. Finite inputs are unchanged.
-mentalEffectiveness ∷ UnitInstance → Float
-mentalEffectiveness inst =
-    let concentration = clampFinite 0.0 1.0 (statOr "concentration" 1.0 inst)
-        -- 3.0 = EUPHORIC. Mirrors the mental.STABLE/STRESSED/BREAK/
-        -- EUPHORIC = 0,1,2,3 ordering in scripts/mental_state.lua —
-        -- change both in lockstep; the Lua side carries the matching
-        -- cross-reference on its own definition. An equality TEST needs
-        -- no finiteness guard of its own: a non-finite mental_state is
-        -- unequal to 3.0 and reads as non-euphoric, which is already
-        -- the conservative answer.
-        euphoric       = statOr "mental_state" 0.0 inst ≡ 3.0
-        base           = 0.75 + 0.25 * concentration
-        withEuphoria   = if euphoric then base * 1.10 else base
+mentalEffectiveness ∷ PhysiologyRegistry → UnitDef → Double → UnitInstance
+                    → Float
+mentalEffectiveness reg def now inst =
+    let ctx = PhysioContext
+            { pcRegistry   = reg
+            , pcPhysiology = udPhysiology def
+            , pcOverrides  = uiPhysioOverrides inst
+            , pcNow        = now
+            , pcStats      = uiStats inst
+            , pcModifiers  = uiModifiers inst
+            -- neither derived value reads blood
+            , pcBlood      = bloodViewOf (uiStats inst) (uiBlood inst) 0
+            , pcPain       = painFor inst }
+        neutral k fallback = case physioReadPure ReadEffective ctx k of
+            OutcomeValue _ v → v
+            _                → fallback
+        -- EUPHORIC = 3 mirrors the mental.STABLE/STRESSED/BREAK/EUPHORIC =
+        -- 0,1,2,3 ordering in scripts/mental_state.lua ('euphoricState') —
+        -- change both in lockstep. An equality TEST needs no finiteness
+        -- guard of its own: a non-finite mental_state is unequal to 3.0 and
+        -- reads as non-euphoric, which is already the conservative answer.
+    in mentalMultiplier (neutral "concentration" 1.0)
+                        (neutral "mental_state" 0.0 ≡ euphoricState)
+
+-- | The multiplier itself, from the derived concentration and whether the
+--   unit is euphoric: @0.75 + 0.25 × concentration@ (concentration clamped to
+--   0..1 by 'clampFinite', so a NaN takes the FLOOR rather than the neutral
+--   default), times the separate ×1.10 euphoric bonus, inside the finite
+--   0.75..1.10 guard (#1733). Pure and total: the one place the band lives.
+mentalMultiplier ∷ Float → Bool → Float
+mentalMultiplier concentrationValue euphoric =
+    let concentration = clampFinite 0.0 1.0 concentrationValue
+        base          = 0.75 + 0.25 * concentration
+        withEuphoria  = if euphoric then base * 1.10 else base
     in clampFinite 0.75 1.10 withEuphoria
 
 weightedReachFactor ∷ Float → Float

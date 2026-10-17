@@ -72,6 +72,27 @@ REGISTRY = {
          "provides": [{"name": "blood_max", "substitute": "live"}],
          "contributes": [{"name": "visual_loss", "substitute": "wound_flow"}],
          "effects": [{"name": "volume_drain", "substitute": "none"}]},
+        # S11a (#2838): consciousness owns nothing stored (two DERIVED values
+        # whose Nominal answer is a constant); mind owns the durable keys and
+        # derives state_of_mind live. Both have Lua owners (brain.lua,
+        # mental_state.lua, thoughts.lua) that write only through the facade.
+        {"id": "consciousness", "requires": ["body"],
+         "derived": [{"key": "consciousness", "rule": "consciousness",
+                      "healthy": 1.0},
+                     {"key": "concentration", "rule": "concentration",
+                      "healthy": 1.0}],
+         "provides": [{"name": "consciousness", "substitute": {"value": 1.0}}],
+         "effects": [{"name": "delirium", "substitute": "none"}]},
+        {"id": "mind", "requires": ["body"],
+         "owns": [{"key": "mood", "healthy": {"const": 1.0},
+                   "seed": {"rule": "mood_target"}},
+                  {"key": "caffeine", "healthy": {"const": 0.0}},
+                  {"key": "mental_state", "healthy": {"const": 0.0}}],
+         "derived": [{"key": "state_of_mind", "rule": "state_of_mind",
+                      "healthy": "live"}],
+         "provides": [{"name": "state_of_mind", "substitute": "live"}],
+         "contributes": [{"name": "caffeine_credit", "substitute": "none"}],
+         "effects": [{"name": "mental_breaks", "substitute": "none"}]},
     ]
 }
 
@@ -117,6 +138,23 @@ BASE: dict[str, str] = {
         '  unit.setStat(uid, "blood_oxygen", 1)\nend\nreturn c\n',
     # Where each pool is registered to its system: it names the keys and
     # touches no state (#2835).
+    # The brain and the mental machine (#2838): they name their keys and touch
+    # none raw; every read is the facade's and every write one batch.
+    "scripts/brain.lua":
+        'local physiology = require("scripts.physiology")\nlocal b = {}\n'
+        'function b.consciousness(uid) return physiology.get(uid, "consciousness") end\n'
+        'function b.tick(uid)\n'
+        '  physiology.commit(uid, { mood = physiology.get(uid, "mood") })\nend\nreturn b\n',
+    "scripts/mental_state.lua":
+        'local physiology = require("scripts.physiology")\nlocal m = {}\n'
+        'function m.tick(uid)\n'
+        '  if physiology.get(uid, "mental_state") == 0 then\n'
+        '    physiology.commit(uid, { mental_state = 1 })\n  end\nend\nreturn m\n',
+    "scripts/thoughts.lua":
+        'local physiology = require("scripts.physiology")\nlocal t = {}\n'
+        'function t.tick(uid)\n'
+        '  physiology.commit(uid, { caffeine = 0, mood = physiology.get(uid, "mood") })\nend\n'
+        'return t\n',
     "scripts/unit_resource_params.lua":
         'local M = {}\nM.SYSTEM_OF = { exhaustion = "exhaustion",\n'
         '  sleep_pressure = "sleep" }\nreturn M\n',
@@ -363,6 +401,66 @@ def case_stamina_engagement_and_atomic_commit_seams():
         'local f = p.fraction(1, "stamina", "max_stamina")\n'})
 
 
+def case_brain_and_mind_ownership_and_atomic_batches():
+    # The registry's brain keys are owned: a raw read or write outside the
+    # facade is flagged against the right system, derived keys included.
+    expect("raw mood read", "raw read of owned key 'mood' (system 'mind')",
+           files={"scripts/other.lua": 'local m = unit.getStat(1, "mood")\n'})
+    expect("raw mental_state write", "raw write of owned key 'mental_state'",
+           files={"scripts/thermo.lua": BASE["scripts/thermo.lua"].replace(
+               'return t', 'unit.setStat(1, "mental_state", 2)\nreturn t')})
+    expect("raw concentration read", "raw read of derived key 'concentration' "
+           "(system 'consciousness')",
+           files={"scripts/other.lua": 'local c = unit.getStat(1, "concentration") or 1\n'})
+    expect("raw state_of_mind read", "raw read of derived key 'state_of_mind'",
+           files={"scripts/other.lua": 'local c = unit.getStat(1, "state_of_mind")\n'})
+    expect_clean("the facade reads all of them", files={"scripts/other.lua":
+        'local p = require("scripts.physiology")\n'
+        'local a = p.get(1, "mood")\nlocal b = p.get(1, "concentration")\n'
+        'local c = p.get(1, "state_of_mind")\nlocal d = p.get(1, "consciousness")\n'})
+    # The atomic batch seam: unit.commitPhysio is the facade's alone, and
+    # physiology.commit belongs to the three writers of the mind's keys.
+    expect("commitPhysio outside the facade",
+           "mutating physiology verb unit.commitPhysio",
+           files={"scripts/other.lua": 'unit.commitPhysio(1, { mood = 1 })\n'})
+    expect("commitPhysio in a writer", "mutating physiology verb unit.commitPhysio",
+           files={"scripts/brain.lua": BASE["scripts/brain.lua"].replace(
+               'physiology.commit(', 'unit.commitPhysio(')})
+    expect_clean("the facade commits the batch", files={"scripts/physiology.lua":
+        BASE["scripts/physiology.lua"] + 'unit.commitPhysio(1, { mood = 1 })\n'})
+    expect("another script commits a mind batch",
+           "mutating physiology verb physiology.commit",
+           files={"scripts/other.lua": 'require("scripts.physiology").commit(1, { mood = 1 })\n'})
+    expect("the commit callers are named", "only scripts/physiology.lua and "
+           "scripts/brain.lua and scripts/mental_state.lua and scripts/thoughts.lua "
+           "may call it",
+           files={"scripts/other.lua": 'local physiology = require("scripts.physiology")\n'
+                                       'physiology.commit(1, { mood = 1 })\n'})
+    expect_clean("a contribution batch is allowed anywhere", files={"scripts/other.lua":
+        'local physiology = require("scripts.physiology")\n'
+        'physiology.creditBatch(1, { { key = "mood", amount = 0.1 } })\n'})
+    # The three writer files are owners for COVERAGE only (scope "facade"): a
+    # raw read or write of a mind key inside any of them is a finding, so the
+    # atomic-batch contract cannot be bypassed from within an owner (#2838).
+    for path, key in (("scripts/brain.lua", "mood"),
+                      ("scripts/mental_state.lua", "mental_state"),
+                      ("scripts/thoughts.lua", "mood")):
+        base = BASE[path]
+        expect(f"raw {key} write in {path}", f"raw write of owned key '{key}'",
+               files={path: base + f'unit.setStat(1, "{key}", 0.5)\n'})
+        expect(f"raw {key} read in {path}", f"raw read of owned key '{key}'",
+               files={path: base + f'local v = unit.getStat(1, "{key}")\n'})
+    expect_clean("the writers still read and batch through the facade")
+    # The three writer files each name their system's keys (coverage).
+    expect("brain.lua names nothing", "no Lua owner of system 'consciousness' names any",
+           files={"scripts/brain.lua": 'local b = {}\nreturn b\n'})
+    expect("the mind owners name nothing", "no Lua owner of system 'mind' names any",
+           files={"scripts/brain.lua": BASE["scripts/brain.lua"].replace(
+                      '"mood"', '"x"').replace('physiology.get(uid, "consciousness")', '1'),
+                  "scripts/mental_state.lua": 'local m = {}\nreturn m\n',
+                  "scripts/thoughts.lua": 'local t = {}\nreturn t\n'})
+
+
 def case_exhaustion_and_sleep_ownership():
     # Both pools are owned (#2835): a raw read or write outside the pool engine
     # is flagged against the OWNING system (the sleep pool belongs to `sleep`),
@@ -513,14 +611,14 @@ def case_generic_helper_literal_at_call_site():
            '    local m = unit.getStat(uid, maxName)\n'
            '    return c, m\n  end\nend\n'
            'local rows = { fracColorFn("hunger", "max_hunger", 0.1),\n'
-           '               fracColorFn("mood", "max_mood", 0.1) }\n')
+           '               fracColorFn("morale", "max_morale", 0.1) }\n')
     f = expect("closure helper", "raw read of owned key 'hunger' (system "
                "'nutrition') through fracColorFn()",
                files={"scripts/other.lua": src})
-    assert not any("mood" in x or "max_hunger" in x for x in f), f
+    assert not any("morale" in x or "max_hunger" in x for x in f), f
     # A helper never called with a registry key is not a finding.
     expect_clean("helper unused", files={"scripts/other.lua": src.replace(
-        'fracColorFn("hunger", "max_hunger", 0.1)', 'fracColorFn("mood", "max_mood", 0.1)')})
+        'fracColorFn("hunger", "max_hunger", 0.1)', 'fracColorFn("morale", "max_morale", 0.1)')})
     # The sanctioned facade call is not a raw read.
     expect_clean("facade call", files={"scripts/other.lua":
         'local physiology = require("scripts.physiology")\n'
@@ -645,9 +743,9 @@ def case_registry_coverage():
     import copy
     # Every system needs a Lua owner.
     doc = copy.deepcopy(REGISTRY)
-    doc["systems"].append({"id": "mind", "requires": ["body"],
-                           "owns": [{"key": "mood", "healthy": {"const": 1.0}}]})
-    expect("no owner", "system 'mind' has no Lua owner", doc=doc)
+    doc["systems"].append({"id": "psyche", "requires": ["body"],
+                           "owns": [{"key": "morale", "healthy": {"const": 1.0}}]})
+    expect("no owner", "system 'psyche' has no Lua owner", doc=doc)
     # An owned key needs a healthy rule.
     doc = copy.deepcopy(REGISTRY)
     del doc["systems"][0]["owns"][0]["healthy"]

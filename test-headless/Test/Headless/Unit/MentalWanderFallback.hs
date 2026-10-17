@@ -13,9 +13,12 @@
 --   @scripts\/unit_ai.lua@ (so the nomad config is the one
 --   @unit_ai_encounter.register@ installs), the real @shortCircuit@ and
 --   wander executor, and the real registered @unit.*@ verbs over real
---   manager refs. Delirium and a break are entered through the stats
---   @brain.lua@ and @mental_state.lua@ read, not by stubbing either. The
---   wander leg is observed as the 'UnitMoveTo' it enqueues.
+--   manager refs. Delirium and a break are entered through the inputs
+--   @brain.lua@ and @mental_state.lua@ read, not by stubbing either: since
+--   #2838 (S11a) consciousness is DERIVED, so delirium is reached by driving
+--   a real input (blood oxygen) below the consciousness floor, and a break
+--   by the mind's own stored state. The wander leg is observed as the
+--   'UnitMoveTo' it enqueues.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "mental wander config fallback"'@.
@@ -32,6 +35,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Test.Headless.Unit.PhysiologyFixture
+    (ensurePhysiologyRegistry, mindSeedStats, oxygenForConsciousness, withProfile)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Command.Types (UnitCommand(..))
@@ -67,12 +72,24 @@ fallbackRadius = 5.0
 deliriousConsciousness ∷ Float
 deliriousConsciousness = 0.25
 
+-- | The blood oxygen that puts a nomad's DERIVED consciousness there
+--   (#2838): the oxygen factor is the minimum with everything else healthy.
+deliriousOxygen ∷ Float
+deliriousOxygen = oxygenForConsciousness deliriousConsciousness
+
 -- | @mental_state.lua@'s state and break-behaviour codes.
 breakState, behaviorWander, behaviorFlee, behaviorLashout ∷ Float
 breakState      = 2
 behaviorWander  = 0
 behaviorFlee    = 1
 behaviorLashout = 3
+
+-- | What a spawned nomad stores in this slice: its cardio integrators at the
+--   healthy reading and its Simulated mind seeded as a spawn would (the
+--   `exempt` profile keeps cardio and, in S11a, the mind Simulated).
+healthyNomad ∷ HM.HashMap Text Float
+healthyNomad = HM.fromList
+    ([("heart_rate", 70), ("blood_oxygen", 1)] ⧺ mindSeedStats)
 
 mkNomad ∷ UnitId → HM.HashMap Text Float → UnitInstance
 mkNomad uid stats = UnitInstance
@@ -82,7 +99,7 @@ mkNomad uid stats = UnitInstance
     , uiGridZ = 0, uiRealZ = 0, uiFacing = DirS
     , uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
     , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
-    , uiStats = HM.union stats (HM.singleton "consciousness" 1.0)
+    , uiStats = HM.union stats healthyNomad
     , uiModifiers = HM.empty, uiSkills = HM.empty
     , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
     , uiAccessories = [], uiFaction = resolveLegacyFaction [] FactionWildlife, uiWounds = []
@@ -96,12 +113,14 @@ mkNomad uid stats = UnitInstance
 --   zero, with every queue drained.
 resetScene ∷ EngineEnv → [(UnitId, HM.HashMap Text Float)] → IO ()
 resetScene env units = do
+    ensurePhysiologyRegistry env
+    def ← withProfile "exempt" (minimalDef nomadDef "Nomad")
     writeIORef (gameTimeRef env) 0
     ws ← emptyWorldState
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton nomadDef (minimalDef nomadDef "Nomad")
+        { umDefs = HM.singleton nomadDef def
         , umInstances = HM.fromList
             [ (uid, mkNomad uid stats) | (uid, stats) ← units ] }
     writeIORef (utsRef env) emptyUnitThreadState
@@ -189,7 +208,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
             let u = UnitId 1
             resetScene env [(u, HM.empty)]
             ls ← setupLua env
-            setStat env u "consciousness" deliriousConsciousness
+            setStat env u "blood_oxygen" deliriousOxygen
             shortCircuitOnce env ls u ⌦ expectWanderLeg u
 
         it "a break's wander" $ \env → do
@@ -227,7 +246,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
             let (first, second) = if firstId ≡ "1"
                     then (UnitId 1, UnitId 2) else (UnitId 2, UnitId 1)
                 UnitId secondN = second
-            setStat env first "consciousness" deliriousConsciousness
+            setStat env first "blood_oxygen" deliriousOxygen
             evalDebug ls "_G.__ai.update(1.0); return true"
                 `shouldReturn` "true"
             -- The next unit got as far as scoring: only that stamps a

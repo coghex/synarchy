@@ -42,25 +42,31 @@
 --   consciousness formula used, extended one level up. It does NOT drive
 --   the collapse/delirious/confused machinery (that stays physiological-
 --   only, on purpose — a heartbroken-but-healthy unit shouldn't pass
---   out) — but it is not inert either. It is DERIVED HERE: brain.tick
---   below computes and stores it (this file holds its only production
---   writer and its brain.stateOfMind accessor), and #352's mental-state
---   threshold machine (scripts/mental_state.lua) reads that stored
---   value as a live behavioural input — the stressed label and its
---   hysteresis band, euphoria entry/exit, and the break roll's severity
---   are all thresholds on it.
+--   out) — but it is not inert either: #352's mental-state threshold
+--   machine (scripts/mental_state.lua) reads it as a live behavioural
+--   input — the stressed label and its hysteresis band, euphoria entry/
+--   exit, and the break roll's severity are all thresholds on it.
 --
---   A break episode therefore has AI consequences: it preempts ordinary
---   AI scoring through the same short-circuit delirium uses
---   (scripts/unit_ai_mental.lua), then runs its own break behaviour —
---   wander, flee, catatonia, or lash-out — so the two branches
---   short-circuit alike without acting alike.
+--   DERIVED, NEVER STORED (#2838, S11a): consciousness, concentration and
+--   state_of_mind are computed on demand by the shared pure Haskell rules
+--   (Unit.Physiology.Mind), exposed through physiology.get, so this file
+--   no longer holds an equation for them and no longer writes them. The
+--   combat and craft threads evaluate the SAME rules against the same unit
+--   snapshot, so a reader can never observe a value that lags the state it
+--   was derived from. What this file still owns is the durable DRIFT: mood,
+--   emotional_pain and caffeine, committed as ONE batch per pass.
+--
+--   A break episode has AI consequences: it preempts ordinary AI scoring
+--   through the same short-circuit delirium uses (scripts/unit_ai_mental.lua),
+--   then runs its own break behaviour — wander, flee, catatonia, or
+--   lash-out — so the two branches short-circuit alike without acting alike.
 --
 --   Ordering (scripts/unit_resources.lua): brain.tick → thoughts.tick →
---   mental.tick. mental.tick thresholds the state_of_mind brain.tick
---   computed on that same tick; a thought's mood nudge in between only
---   reaches state_of_mind on the NEXT brain.tick, per the drift
---   contract.
+--   mental.tick. Each commits one atomic batch, and every read is on
+--   demand: a thought's mood nudge reaches the state_of_mind mental.tick
+--   reads in the SAME pass (there is no next-pass lag any more), and a
+--   euphoric episode's concentration lift appears from the moment it begins
+--   to the moment it ends.
 --
 --   brain.summary / mental.summary also expose the value, but only for
 --   the debug console and the probes — nothing about logs or UI gates
@@ -69,8 +75,9 @@
 --   plus the normalized pain / hunger / stamina fractions, the ambient
 --   environment, and the mental state, and may write mood back;
 --   #353's canonical multiplier
---   (Combat.Resolution.Common.mentalEffectiveness) reads concentration
---   plus mental_state == 3 (EUPHORIC). Neither one reads state_of_mind.
+--   (Combat.Resolution.Common.mentalEffectiveness) reads the derived
+--   concentration plus mental_state == 3 (EUPHORIC). Neither one reads
+--   state_of_mind.
 --
 -- This is what makes a unit PASS OUT before a temperature/hypoxia/salt
 -- death meter finishes — the "cooks in the desert, passes out, then
@@ -127,13 +134,10 @@ local AWARENESS_BASELINE = 1.0
 local EMOTIONAL_PAIN_RISE  = 0.5    -- per second, toward current pain
 local EMOTIONAL_PAIN_DECAY = 0.02   -- per second, absent fresh pain
 
--- ---- Concentration ----
--- Fully derived, no integration (same "no memory" philosophy as
--- consciousness) — consciousness gates it hard, pain and exhaustion
--- erode it but never zero it out on their own.
-local CONCENTRATION_PAIN_WEIGHT  = 0.6
-local CONCENTRATION_STAMINA_FLOOR = 0.4  -- factor at zero stamina
-local CAFFEINE_CONCENTRATION_BONUS = 0.15  -- added on top, at caffeine = 1.0
+-- ---- Consciousness, concentration, state of mind ----
+-- Derived on demand by the shared Haskell rules (Unit.Physiology.Mind:
+-- consciousnessRule, concentrationRule, stateOfMindRule) and read through
+-- physiology.get. Their constants live there, with the equations.
 
 -- ---- Caffeine ----
 -- Simple decay, no target/drift — coffee (scripts/consumable.lua) is
@@ -167,47 +171,24 @@ local function awareness(uid)
     return clamp(perception / AWARENESS_BASELINE, 0, 1)
 end
 
--- Instantaneous consciousness from the physiological drivers (no
--- integration — the underlying stats already drift). min() = your worst
--- problem knocks you out. UNCHANGED from the original brain.lua.
-local function computeConsciousness(uid)
-    local core = physiology.get(uid, "core_temp")  or 37.0
-    -- A Nominal or Unsupported cardio reads blood oxygen 1.0 (#2836): the
-    -- oxygen input is healthy and the rest of the rule is unchanged.
-    local o2   = physiology.get(uid, "blood_oxygen") or 1.0
-    local conc = physiology.get(uid, "salt_conc")  or 1.0
-
-    -- Core temp: confusion when hypothermic (<34°C) or hyperthermic (>39.5°C).
-    local tf
-    if core < 34.0 then tf = clamp((core - 30.0) / 4.0, 0, 1)        -- 34→1, 30→0
-    elseif core > 39.5 then tf = clamp((42.0 - core) / 2.5, 0, 1)    -- 39.5→1, 42→0
-    else tf = 1.0 end
-
-    -- Blood oxygen: <0.8 impairs, <0.5 unconscious.
-    local of = clamp((o2 - 0.5) / 0.3, 0, 1)                         -- 0.8→1, 0.5→0
-
-    -- Salt: deviation from ideal in either direction.
-    local dev = math.abs(conc - 1.0)
-    local sf  = clamp(1.0 - (dev - 0.25) / 0.35, 0, 1)               -- dev≤0.25→1, 0.6→0
-
-    return math.min(tf, of, sf)
+-- The mood the drift moves toward right now. A pure function of the
+-- already-read inputs; the Haskell seed (Unit.Physiology.Mind.moodTargetRule)
+-- uses the same weights, and a test pins the two equal.
+local function moodTarget(consciousness, pain, hungerFrac, staminaFrac,
+                          awarenessFrac)
+    return clamp(1.0 - (MOOD_W_PAIN * pain
+                       + MOOD_W_HUNGER * (1.0 - hungerFrac)
+                       + MOOD_W_EXHAUSTION * (1.0 - staminaFrac)
+                       + MOOD_W_CONSCIOUS * (1.0 - consciousness)
+                       + MOOD_W_AWARENESS * (1.0 - awarenessFrac)),
+                 0, 1)
 end
 
-local function driftMood(uid, dt, consciousness, pain, hungerFrac, staminaFrac,
-                          awarenessFrac)
-    local target = clamp(1.0 - (MOOD_W_PAIN * pain
-                               + MOOD_W_HUNGER * (1.0 - hungerFrac)
-                               + MOOD_W_EXHAUSTION * (1.0 - staminaFrac)
-                               + MOOD_W_CONSCIOUS * (1.0 - consciousness)
-                               + MOOD_W_AWARENESS * (1.0 - awarenessFrac)),
-                          0, 1)
-    local prev = unit.getStat(uid, "mood")
-    if prev == nil then return target end   -- first tick: seed at target, no fake drift-in
+local function driftMood(prev, dt, target)
     return prev + (target - prev) * clamp(MOOD_DRIFT * dt, 0, 1)
 end
 
-local function driftEmotionalPain(uid, dt, pain)
-    local prev = unit.getStat(uid, "emotional_pain") or 0.0
+local function driftEmotionalPain(prev, dt, pain)
     if pain > prev then
         return prev + (pain - prev) * clamp(EMOTIONAL_PAIN_RISE * dt, 0, 1)
     else
@@ -215,101 +196,56 @@ local function driftEmotionalPain(uid, dt, pain)
     end
 end
 
-local function computeConcentration(consciousness, pain, staminaFrac, caffeine)
-    local staminaFactor = CONCENTRATION_STAMINA_FLOOR
-                        + (1.0 - CONCENTRATION_STAMINA_FLOOR) * staminaFrac
-    local base = consciousness * (1.0 - CONCENTRATION_PAIN_WEIGHT * pain)
-                               * staminaFactor
-    return clamp(base + CAFFEINE_CONCENTRATION_BONUS * caffeine, 0, 1)
-end
-
 -- 0..1, only decaying — set by consumable.drink on a caffeinated sip.
-local function driftCaffeine(uid, dt)
-    local prev = unit.getStat(uid, "caffeine") or 0.0
+local function driftCaffeine(prev, dt)
     return math.max(0.0, prev - CAFFEINE_DECAY * dt)
 end
 
--- Unified aggregate: the worst of the physiological floor (consciousness)
--- and the psychological one (mood, dragged down by lingering emotional
--- pain). Derived here and stored by brain.tick below; #352's threshold
--- machine (scripts/mental_state.lua) then gates the stressed label, the
--- euphoria band, and the break roll on that stored value. It still does
--- not drive collapse/delirious/confused — see the file header for the
--- full ownership chain.
-local function computeStateOfMind(consciousness, mood, emotionalPain)
-    local wellbeing = clamp(mood - 0.5 * emotionalPain, 0, 1)
-    return math.min(consciousness, wellbeing)
-end
-
--- Recompute + store consciousness and the mental values (called each
--- physiology tick).
+-- Drift the durable mental values one pass: mood, emotional_pain and caffeine,
+-- committed as ONE atomic batch (#2838, S11a). A unit whose mind is not
+-- Simulated has no such values (Nominal reads the healthy ones, Unsupported
+-- nothing): it makes no write attempt and draws nothing. A refused batch is
+-- reported by the facade and never raises, so it cannot skip the rest of the
+-- unit's pass.
 function brain.tick(uid, dt)
-    local consciousness = computeConsciousness(uid)
-    unit.setStat(uid, "consciousness", consciousness)
+    if not physiology.isSimulated(uid, "mind") then return end
 
-    local pain        = painFrac(uid)
-    local hungerFrac   = fracOf(uid, "hunger", "max_hunger")
-    local staminaFrac  = fracOf(uid, "stamina", "max_stamina")
+    local consciousness = brain.consciousness(uid)
+    local pain          = painFrac(uid)
+    local hungerFrac    = fracOf(uid, "hunger", "max_hunger")
+    local staminaFrac   = fracOf(uid, "stamina", "max_stamina")
     local awarenessFrac = awareness(uid)
 
-    local mood = driftMood(uid, dt, consciousness, pain, hungerFrac, staminaFrac,
-                            awarenessFrac)
-    unit.setStat(uid, "mood", mood)
-
-    local emotionalPain = driftEmotionalPain(uid, dt, pain)
-    unit.setStat(uid, "emotional_pain", emotionalPain)
-
-    local caffeine = driftCaffeine(uid, dt)
-    unit.setStat(uid, "caffeine", caffeine)
-
-    local concentration = computeConcentration(consciousness, pain, staminaFrac,
-                                                caffeine)
-    unit.setStat(uid, "concentration", concentration)
-
-    unit.setStat(uid, "state_of_mind",
-                 computeStateOfMind(consciousness, mood, emotionalPain))
+    local target = moodTarget(consciousness, pain, hungerFrac, staminaFrac,
+                              awarenessFrac)
+    physiology.commit(uid, {
+        mood           = driftMood(physiology.get(uid, "mood"), dt, target),
+        emotional_pain = driftEmotionalPain(physiology.get(uid, "emotional_pain"),
+                                            dt, pain),
+        caffeine       = driftCaffeine(physiology.get(uid, "caffeine"), dt),
+    })
 end
 
--- Recompute ONLY the caches that read physiology (#2831): consciousness,
--- concentration and the unified state_of_mind. The durable integrators
--- (mood, emotional_pain, caffeine) are read, never written: brain.tick
--- stores what it reads through `unit.getStat`, which is the EFFECTIVE value,
--- so running it on a unit whose integrator carries a modifier folds that
--- modifier into the stored base even at dt 0. A physiology transition or a
--- load refreshes caches; it must not change durable state without elapsed
--- time. A unit that has never ticked has no mood yet: its state_of_mind is
--- computed from the mood brain.tick WOULD seed (the target, with no drift),
--- but that mood is not stored here.
-function brain.refresh(uid)
-    local consciousness = computeConsciousness(uid)
-    unit.setStat(uid, "consciousness", consciousness)
-
-    local pain         = painFrac(uid)
-    local staminaFrac  = fracOf(uid, "stamina", "max_stamina")
-    local caffeine     = unit.getStat(uid, "caffeine") or 0.0
-    unit.setStat(uid, "concentration",
-                 computeConcentration(consciousness, pain, staminaFrac, caffeine))
-
-    local mood = unit.getStat(uid, "mood")
-    if mood == nil then
-        mood = driftMood(uid, 0, consciousness, pain,
-                         fracOf(uid, "hunger", "max_hunger"), staminaFrac,
-                         awareness(uid))
-    end
-    local emotionalPain = unit.getStat(uid, "emotional_pain") or 0.0
-    unit.setStat(uid, "state_of_mind",
-                 computeStateOfMind(consciousness, mood, emotionalPain))
+-- The mood-drift target for one unit right now, from the same live reads
+-- brain.tick feeds the drift. Exposed for the probes and the Haskell/Lua
+-- equality test; nothing stored.
+function brain.moodTarget(uid)
+    return moodTarget(brain.consciousness(uid), painFrac(uid),
+                      fracOf(uid, "hunger", "max_hunger"),
+                      fracOf(uid, "stamina", "max_stamina"), awareness(uid))
 end
 
-function brain.consciousness(uid)
-    return unit.getStat(uid, "consciousness") or 1.0
-end
+-- The three derived values, on demand (#2838): the mode-aware physiology read,
+-- 1.0 for a unit whose system is Unsupported (a bodyless unit — the absent-key
+-- neutral every consumer had). A violated precondition raises through the
+-- read, like every other owned read.
+function brain.consciousness(uid)  return physiology.get(uid, "consciousness") or 1.0 end
+function brain.concentration(uid)  return physiology.get(uid, "concentration") or 1.0 end
+function brain.stateOfMind(uid)    return physiology.get(uid, "state_of_mind") or 1.0 end
 
-function brain.mood(uid)           return unit.getStat(uid, "mood") or 1.0 end
-function brain.emotionalPain(uid)  return unit.getStat(uid, "emotional_pain") or 0.0 end
-function brain.concentration(uid)  return unit.getStat(uid, "concentration") or 1.0 end
-function brain.stateOfMind(uid)    return unit.getStat(uid, "state_of_mind") or 1.0 end
-function brain.caffeine(uid)       return unit.getStat(uid, "caffeine") or 0.0 end
+function brain.mood(uid)           return physiology.get(uid, "mood") or 1.0 end
+function brain.emotionalPain(uid)  return physiology.get(uid, "emotional_pain") or 0.0 end
+function brain.caffeine(uid)       return physiology.get(uid, "caffeine") or 0.0 end
 
 -- Live reads of the same normalized inputs the mood target is built
 -- from (0 = none/empty .. 1 = full/none, see painFrac/fracOf above) —

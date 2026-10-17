@@ -47,7 +47,7 @@ allNominal   = withDefaults [ (s, PhysioNominal)   | s ← systemIds ]
 
 systemIds ∷ [Text]
 systemIds = ["hydration", "salt", "thermo", "nutrition", "stamina"
-            , "exhaustion", "sleep", "cardio", "blood"]
+            , "exhaustion", "sleep", "cardio", "blood", "consciousness", "mind"]
 
 -- | The reference 70 kg unit's INPUTS: the stats a healthy rule reads.
 inputs ∷ HM.HashMap Text Float
@@ -68,7 +68,8 @@ mkCtx ∷ PhysiologyRegistry → UnitPhysiology → HM.HashMap Text Float
 mkCtx reg up stats mods now = PhysioContext
     { pcRegistry = reg, pcPhysiology = up, pcOverrides = HM.empty
     , pcNow = now, pcStats = stats, pcModifiers = mods
-    , pcBlood = fullBloodView stats }
+    , pcBlood = fullBloodView stats
+    , pcPain = 0 }
 
 simCtx ∷ PhysiologyRegistry → PhysioContext
 simCtx reg = mkCtx reg allSimulated (HM.union owned inputs) HM.empty 0
@@ -156,12 +157,14 @@ spec = describe "Unit.Physiology" $ do
 shippedRegistrySpec ∷ SpecWith PhysiologyRegistry
 shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
 
-    it "declares exactly the nine systems, in registry order (thermo \
-       \before salt, design D-7; cardio and blood last in the file; cardio is \
-       \ticked first by the orchestration), each requiring a body" $ \reg → do
+    it "declares exactly the eleven systems, in registry order (thermo \
+       \before salt, design D-7; cardio, blood, consciousness and mind last in \
+       \the file; cardio is ticked first by the orchestration; mind last so \
+       \its seeds read every system it depends on), each requiring a body" $ \reg → do
         map psId (prSystems reg)
             `shouldBe` [ "thermo", "salt", "hydration", "nutrition", "stamina"
-                       , "exhaustion", "sleep", "cardio", "blood" ]
+                       , "exhaustion", "sleep", "cardio", "blood"
+                       , "consciousness", "mind" ]
         forM_ (prSystems reg) $ \s → psRequires s `shouldBe` ["body"]
 
     it "owns, derives and meters exactly the v1 keys" $ \reg → do
@@ -179,12 +182,19 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             , ("sleep", (["sleep_pressure"], [], []))
             , ("cardio", (["heart_rate", "blood_oxygen"], ["circulation"], []))
             , ("blood", (["blood"], ["blood_max", "blood_fraction"], []))
+            , ("consciousness", ([], ["consciousness", "concentration"], []))
+            , ("mind", ( [ "mood", "emotional_pain", "caffeine", "mental_state"
+                         , "mental_since", "mental_until", "mental_next_roll_at"
+                         , "mental_cooldown_until", "mental_high_since"
+                         , "mental_break_behavior", "thought_next_at" ]
+                       , ["state_of_mind"], []))
             ]
 
     it "keeps the constants the healthy rules need as authoritative data" $
         \reg → prConstants reg `shouldBe` Map.fromList
             [ ("SALT_PER_KG", 1.0), ("SALT_STORE_CAP_FRAC", 2.0)
-            , ("THERMO_BASELINE", 37.0), ("RESTING_HR", 70.0) ]
+            , ("THERMO_BASELINE", 37.0), ("RESTING_HR", 70.0)
+            , ("MENTAL_CHECK_INTERVAL", 8.0) ]
 
     it "declares each healthy rule as the design states it" $ \reg → do
         let rule k = case classifyKey reg k of
@@ -312,17 +322,22 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
             , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
             , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated)
-            , ("blood", PhysioSimulated) ])
+            , ("blood", PhysioSimulated), ("consciousness", PhysioSimulated)
+            , ("mind", PhysioSimulated) ])
         modes "simple" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
             , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
             , ("sleep", PhysioNominal), ("cardio", PhysioSimulated)
-            , ("blood", PhysioSimulated) ])
+            , ("blood", PhysioSimulated), ("consciousness", PhysioSimulated)
+            , ("mind", PhysioSimulated) ])
         -- exempt keeps #2754's outcome: everything Nominal but a LIVE cardio
         -- and live blood (S10 #2837, SD-22: the nomad's blood stays Simulated)
+        -- and, in S11a (#2838), consciousness and mind: the SD-23 Nominal mind
+        -- is S11b's, so every profile is all-Simulated for both new systems
         modes "exempt" `shouldBe` Just (m
-            [ (s, if s `elem` ["cardio", "blood"] then PhysioSimulated else PhysioNominal)
+            [ (s, if s `elem` ["cardio", "blood", "consciousness", "mind"]
+                     then PhysioSimulated else PhysioNominal)
             | s ← systemIds ])
         map ppId (prProfiles reg) `shouldMatchList`
             ["rich", "reduced", "simple", "exempt"]
@@ -585,7 +600,7 @@ ownedReadSpec = describe "owned-key reads (requirement 4)" $ do
             base c k `shouldBe` OutcomeUnsupported
 
     it "hands an unowned key back for the caller to read as getStat does" $
-        \reg → forM_ ["mood", "max_stamina", "max_sleep_pressure", "strength"
+        \reg → forM_ ["perception", "max_stamina", "max_sleep_pressure", "strength"
               , "nonesuch"] $ \k →
             eff (simCtx reg) k `shouldBe` OutcomeUnowned
 

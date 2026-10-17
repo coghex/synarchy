@@ -230,7 +230,8 @@ resolverSpec = describe "the mode resolver and the engagement marker" $ do
                 , pcOverrides = HM.fromList ovr, pcNow = 0
                 , pcStats = HM.fromList (("endurance", 1) : marker)
                 , pcModifiers = HM.empty
-                , pcBlood = fullBloodView HM.empty }
+                , pcBlood = fullBloodView HM.empty
+                , pcPain = 0 }
             mode up marker ovr = modeOf (ctxOf up marker ovr) sys
         -- absent and pending are not an engagement: the species default
         mode declares [] [] `shouldBe` ModeNominal

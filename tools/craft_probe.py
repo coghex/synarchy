@@ -154,8 +154,10 @@ def mental_diag(port, uid):
     so a failed neutrality precondition is distinguishable in probe
     output from a genuine #343 base-quality regression."""
     eff = float(send(port, f"return unit.getMentalEffectiveness({uid})"))
-    conc = float(send(port, f"return unit.getStat({uid}, 'concentration') or -1"))
-    ms = float(send(port, f"return unit.getStat({uid}, 'mental_state') or -1"))
+    # concentration is DERIVED since #2838 (S11a): read it through the
+    # mode-aware read, the same rule mentalEffectiveness evaluates
+    conc = float(send(port, f"return unit.readPhysio({uid}, 'concentration') or -1"))
+    ms = float(send(port, f"return unit.readPhysio({uid}, 'mental_state') or -1"))
     return eff, conc, ms
 
 
@@ -163,13 +165,17 @@ def pin_neutral_mental(port, uid):
     """Force #353 mental effectiveness to its neutral 1.00 baseline:
     full concentration, STABLE mental_state (0 in
     scripts/mental_state.lua — only 3/EUPHORIC confers a bonus).
-    Overwrites the stats directly rather than only suppressing future
-    rolls, so an episode already in progress when this runs (a euphoria
-    episode holds for a fixed 60-120 game-second duration regardless of
-    future roll chances, scripts/mental_state.lua EPISODE_MIN/MAX) is
-    cleared too, not merely prevented from recurring."""
+    Concentration is DERIVED (#2838, S11a) and cannot be written, so its
+    inputs are set: fully oxygenated blood (consciousness 1), the mental
+    state STABLE, and no caffeine. Writes the stored inputs directly
+    rather than only suppressing future rolls, so an episode already in
+    progress when this runs (a euphoria episode holds for a fixed 60-120
+    game-second duration regardless of future roll chances,
+    scripts/mental_state.lua EPISODE_MIN/MAX) is cleared too, not merely
+    prevented from recurring."""
     send(port,
-         f"unit.setStat({uid}, 'concentration', 1.0); "
+         f"unit.setStat({uid}, 'blood_oxygen', 1.0); "
+         f"unit.setStat({uid}, 'caffeine', 0); "
          f"unit.setStat({uid}, 'mental_state', 0); return 'ok'")
 
 

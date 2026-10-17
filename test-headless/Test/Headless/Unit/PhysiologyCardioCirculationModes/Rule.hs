@@ -90,7 +90,8 @@ contextOf reg mhr pt = PhysioContext
         , ("cardio", maybe PhysioNominal (const PhysioSimulated) mhr) ]
     , pcOverrides = HM.empty, pcNow = 0
     , pcStats = stats, pcModifiers = HM.empty
-    , pcBlood = bloodViewOf stats volume 0 }
+    , pcBlood = bloodViewOf stats volume 0
+    , pcPain = 0 }
   where
     stats = HM.fromList $
         [ ("body_mass", realToFrac bodyMassKg)

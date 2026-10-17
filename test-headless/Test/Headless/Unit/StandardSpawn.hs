@@ -82,7 +82,11 @@ withoutPhysiology ∷ HM.HashMap Text Float → HM.HashMap Text Float
 withoutPhysiology = HM.filterWithKey (\k _ → k `notElem`
     [ "hydration", "hunger", "calories", "core_temp", "salt", "salt_store"
     , "stamina", "exhaustion", "sleep_pressure"
-    , "heart_rate", "blood_oxygen" ])
+    , "heart_rate", "blood_oxygen"
+    -- the mind's durable keys (#2838, S11a): a rich acolyte's mind is Simulated
+    , "mood", "emotional_pain", "caffeine", "mental_state", "mental_since"
+    , "mental_until", "mental_next_roll_at", "mental_cooldown_until"
+    , "mental_high_since", "mental_break_behavior", "thought_next_at" ])
 
 page ∷ WorldPageId
 page = WorldPageId "standard_spawn"
