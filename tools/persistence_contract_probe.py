@@ -73,6 +73,14 @@ partial pool (its shipped default is Nominal), a plain squirrel and a mule
 (both Nominal, holding neither key), and a facade switch of one system to
 Nominal that must scrub only its own key and survive another reload.
 
+S9 (#2836) adds three FOCUSED fresh-process cycles for cardio
+(``cardio_circulation_cycles`` below): an acolyte with exact partial heart rate
+and blood oxygen, a nomad whose pin equals its species default, a squirrel
+pinned Nominal (neither key stored, 70 bpm / 1.0 read), a bodyless deer (every
+cardio key Unsupported), the facade switch of one unit to Nominal that must scrub
+only its own two keys, and circulation DERIVED on demand and stored in no
+process: a raw write of it is refused and no engine ever holds the key.
+
 The BROADER manual sweep (all of requirement 4's representative-scenario
 checklist, the assembled failure contract, and every maintained
 migration baseline) is ``tools/persistence_contract_sweep.py``.
@@ -787,6 +795,179 @@ def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> N
             quit_engine(port, proc)
 
 
+# ── S9 (#2836): cardio and the derived circulation across fresh processes ───
+
+CC_PAGE = "cardio_circulation_page"
+
+
+def cardio_state(port: int, uid: int) -> dict:
+    """What a unit stores, resolves and derives for the S9 cardio system."""
+    return {
+        "hr": lua_number(port, f"unit.getStatBase({uid}, 'heart_rate')"),
+        "o2": lua_number(port, f"unit.getStatBase({uid}, 'blood_oxygen')"),
+        "stored_circ": lua_number(port, f"unit.getStatBase({uid}, 'circulation')"),
+        "mode": lua_text(port, f"unit.getPhysioMode({uid}, 'cardio')"),
+        "pin": lua_text(port, f"unit.getPhysioOverride({uid}, 'cardio')"),
+        "read_hr": lua_number(port, f"unit.readPhysio({uid}, 'heart_rate')"),
+        "read_o2": lua_number(port, f"unit.readPhysio({uid}, 'blood_oxygen')"),
+        "circ": lua_number(port, f"unit.readPhysio({uid}, 'circulation')"),
+    }
+
+
+def cardio_circulation_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
+    """Three fresh processes: save partial heart rate / oxygen, a pin equal to
+    the species default, a Nominal pin and a bodyless unit; load, switch one
+    unit through the facade, save again; load again. Circulation is derived on
+    demand and never stored, in any process."""
+    print("=== cardio engine K: partial integrators + pins, save 'cc1' ===")
+    proc = engagement_boot(root, tmpdir, port, "K")
+    try:
+        send(port, f"world.init('{CC_PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
+                   f"'Cardio Circulation World', 'the S9 modes'); return 'ok'")
+        send(port, f"world.show('{CC_PAGE}'); return 'ok'")
+        wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
+                 .strip('"') == CC_PAGE, 30.0)
+        send(port, "return world.waitForInit(30)", timeout=35)
+        acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+                                    "'player', nil, nil, 'standard')"))
+        nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, 0, "
+                                  "'player', nil, nil, 'standard')"))
+        squirrel = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, 0, "
+                                     "'player', nil, nil, 'standard')"))
+        deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, 0, "
+                                 "'player', nil, nil, 'standard')"))
+        uids = (acolyte, nomad, squirrel, deer)
+        chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
+        time.sleep(0.6)   # unit.spawn only queues; let the unit thread commit
+
+        # The arena's cliffs: pause the instant every unit is standing (see
+        # exhaustion_sleep_cycles), and do everything else paused.
+        def all_standing() -> bool:
+            return all(lua_text(port, f"unit.getPose({u})") == "standing" for u in uids)
+
+        def paused_standing() -> bool:
+            if not all_standing():
+                return False
+            send(port, "require('scripts.pause').set(true); return 'ok'")
+            if all_standing():
+                return True
+            send(port, "require('scripts.pause').set(false); return 'ok'")
+            return False
+        chk.ok(wait_for(port, paused_standing, 40.0),
+               "every unit has settled into a standing pose and the engine is paused")
+
+        # The shipped default through real spawns: cardio is Simulated for every
+        # bodied species (the nomad included) and Unsupported for the bodyless.
+        for uid, mode in ((acolyte, "simulated"), (nomad, "simulated"),
+                          (squirrel, "simulated"), (deer, "nil")):
+            st = cardio_state(port, uid)
+            chk.ok(st["mode"] == mode,
+                   f"unit {uid} resolves cardio {mode} (got {st})")
+            chk.ok(st["stored_circ"] is None,
+                   f"unit {uid} stores no circulation (got {st})")
+        for uid in (acolyte, nomad, squirrel):
+            st = cardio_state(port, uid)
+            chk.ok(st["hr"] is not None and st["o2"] is not None
+                   and st["circ"] is not None and 0.05 <= st["circ"] <= 1.0,
+                   f"unit {uid} holds heart rate and oxygen and derives circulation "
+                   f"(got {st})")
+        st = cardio_state(port, deer)
+        chk.ok(st["hr"] is None and st["o2"] is None and st["circ"] is None
+               and st["read_hr"] is None and st["read_o2"] is None,
+               f"the bodyless unit holds and reads none of the three (got {st})")
+
+        # A raw circulation write is refused in every mode and creates nothing.
+        refused = send(port, f"return tostring(unit.setStat({acolyte}, "
+                             f"'circulation', 0.3))").strip('"')
+        chk.ok(refused == "false" and cardio_state(port, acolyte)["stored_circ"] is None,
+               f"a raw circulation write is refused and stores nothing (got {refused!r})")
+
+        # Exact partial integrators no reseed keeps; a pin EQUAL to the default;
+        # a Nominal pin through the facade (scrubs both keys).
+        send(port, f"unit.setStat({acolyte}, 'heart_rate', 88.5); "
+                   f"unit.setStat({acolyte}, 'blood_oxygen', 0.42); "
+                   f"unit.setStat({nomad}, 'heart_rate', 61); return 'ok'")
+        pinned = send(port, f"local ok, ch = require('scripts.physiology')"
+                            f".setMode({nomad}, 'cardio', 'simulated'); "
+                            f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+        chk.ok(pinned == "true|false",
+               f"the nomad's pin equal to the default is recorded (got {pinned!r})")
+        nominal = send(port, f"local ok, ch = require('scripts.physiology')"
+                             f".setMode({squirrel}, 'cardio', 'nominal'); "
+                             f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+        chk.ok(nominal == "true|true",
+               f"the squirrel's cardio is pinned Nominal through the facade (got {nominal!r})")
+        st = cardio_state(port, squirrel)
+        chk.ok(st["hr"] is None and st["o2"] is None and st["read_hr"] == 70.0
+               and st["read_o2"] == 1.0 and st["mode"] == "nominal",
+               f"the Nominal squirrel holds neither key and reads 70 / 1.0 (got {st})")
+        save_and_wait(chk, port, CC_PAGE, "cc1")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== cardio engine L: load 'cc1', switch cardio, save 'cc2' ===")
+        proc = engagement_boot(root, tmpdir, port, "L")
+        engagement_load(chk, port, "cc1")
+        st = cardio_state(port, acolyte)
+        chk.ok(st["hr"] == 88.5 and st["o2"] is not None and abs(st["o2"] - 0.42) < 1e-6
+               and st["mode"] == "simulated" and st["stored_circ"] is None
+               and st["circ"] is not None,
+               f"the acolyte's partial integrators reload exactly, circulation derived "
+               f"before the first tick (got {st})")
+        st = cardio_state(port, nomad)
+        chk.ok(st["hr"] == 61.0 and st["pin"] == "simulated" and st["mode"] == "simulated",
+               f"the nomad keeps its exact heart rate and its pin equal to the default (got {st})")
+        st = cardio_state(port, squirrel)
+        chk.ok(st["hr"] is None and st["o2"] is None and st["pin"] == "nominal"
+               and st["mode"] == "nominal" and st["read_hr"] == 70.0,
+               f"the Nominal squirrel reloads Nominal holding neither key (got {st})")
+        st = cardio_state(port, deer)
+        chk.ok(st["hr"] is None and st["o2"] is None and st["mode"] == "nil"
+               and st["stored_circ"] is None,
+               f"the bodyless unit reloads holding nothing (got {st})")
+        # unpause just long enough for the acolyte's reloaded integrators to move:
+        # its saved oxygen of 0.42 is far under the 0.9 compensation threshold, so
+        # the heart rate is pulled UP from 88.5 toward 70 + 80 * (0.9 - 0.42); a
+        # longer window risks a cliff fall
+        send(port, "require('scripts.pause').set(false); return 'ok'")
+        chk.ok(wait_for(port, lambda: abs((lua_number(
+                   port, f"unit.getStat({acolyte}, 'heart_rate')") or 88.5) - 88.5) > 0.05, 6.0),
+               "the acolyte's reloaded heart rate keeps integrating")
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        switched = send(port, f"local ok, why = require('scripts.physiology')"
+                              f".setMode({acolyte}, 'cardio', 'nominal'); "
+                              f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
+        chk.ok(switched == "true|true",
+               f"the acolyte's cardio is switched to Nominal through the facade "
+               f"(got {switched!r})")
+        st = cardio_state(port, acolyte)
+        chk.ok(st["hr"] is None and st["o2"] is None and st["read_hr"] == 70.0
+               and st["circ"] is not None and st["stored_circ"] is None,
+               f"both integrators were scrubbed and circulation is still derived (got {st})")
+        nomad_hr = lua_number(port, f"unit.getStatBase({nomad}, 'heart_rate')")
+        save_and_wait(chk, port, CC_PAGE, "cc2")
+        quit_engine(port, proc)
+        proc = None
+
+        print("=== cardio engine M: load 'cc2' ===")
+        proc = engagement_boot(root, tmpdir, port, "M")
+        engagement_load(chk, port, "cc2")
+        st = cardio_state(port, acolyte)
+        chk.ok(st["hr"] is None and st["o2"] is None and st["pin"] == "nominal"
+               and st["mode"] == "nominal" and st["read_hr"] == 70.0
+               and st["stored_circ"] is None and st["circ"] is not None,
+               f"the switched acolyte reloads Nominal with the pin (got {st})")
+        st = cardio_state(port, nomad)
+        chk.ok(st["hr"] is not None and nomad_hr is not None
+               and abs(st["hr"] - nomad_hr) < 1e-4 and st["pin"] == "simulated",
+               f"the nomad's integrator and pin persist exactly again (got {st})")
+        quit_engine(port, proc)
+        proc = None
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -947,6 +1128,9 @@ def main() -> int:
 
         # ── S8b (#2835): exhaustion and sleep, focused ───────────────────
         exhaustion_sleep_cycles(chk, root, tmpdir, port)
+
+        # ── S9 (#2836): cardio and the derived circulation, focused ──────
+        cardio_circulation_cycles(chk, root, tmpdir, port)
 
     finally:
         if proc is not None:

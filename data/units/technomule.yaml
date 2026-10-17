@@ -46,6 +46,7 @@ units:
     # so a Simulated pool would leave it permanently winded (S8-F1).
     # Exhaustion and sleep are Nominal (#2835, S8b): the mule has no fatigue or
     # sleep-debt pool configuration and no need behavior for either.
+    # Cardio is Simulated (the profile's column, S9 #2836): the mule bleeds and suffocates like any body.
     physiology: { profile: reduced, stamina: nominal, exhaustion: nominal, sleep: nominal }
 
     # Innate, permanent, tooltip-visible: the percentage modifier on
