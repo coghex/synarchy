@@ -149,10 +149,29 @@ bodyWaterFraction ctx = case classifyKey (pcRegistry ctx) "hydration" of
 
 -- | The EFFECTIVE value a key is seeded to (see the module header).
 seedTarget ∷ PhysioContext → OwnedKey → Either Text Float
-seedTarget ctx o = do
-    healthy ← evalHealthy ctx (okHealthy o)
-    if okKey o ≡ "salt" then (healthy *) <$> bodyWaterFraction ctx
-                        else pure healthy
+seedTarget ctx o = case okSeed o of
+    Just rule → seedValue ctx rule
+    Nothing → do
+        healthy ← evalHealthy ctx (okHealthy o)
+        if okKey o ≡ "salt" then (healthy *) <$> bodyWaterFraction ctx
+                            else pure healthy
+
+-- | A declared seed (#2838), against the context's game-time sample.
+seedValue ∷ PhysioContext → SeedRule → Either Text Float
+seedValue ctx rule = case rule of
+    SeedConst q     → quantityOf q
+    SeedNow         → Right now
+    SeedNowPlus q   → (now +) <$> quantityOf q
+    SeedMoodTarget  → moodTargetFor ctx
+    SeedEpisodeEnd
+        -- a legacy BREAK or EUPHORIC episode that lost its end: the sample,
+        -- so the ordinary end-of-episode path closes it on the next tick
+        | HM.lookup "mental_state" (pcStats ctx) `elem` [Just 2, Just 3] → Right now
+        | otherwise → Right 0
+  where
+    now = realToFrac (pcNow ctx)
+    quantityOf q = maybe (Left ("unknown constant " <> tshow q)) Right
+                         (resolveQuantity (pcRegistry ctx) q)
 
 -- | The largest value an owned key may be given: its healthy value for
 --   a key sized by an input (@hydration@ ≤ @max_hydration@), none for a

@@ -517,8 +517,16 @@ unitGetMentalEffectivenessFn env = do
         Just n → do
             let uid = UnitId (fromIntegral n)
             mEff ← Lua.liftIO $ do
-                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-                return $ mentalEffectiveness ⊚ HM.lookup uid (umInstances um)
+                um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                -- #2838: concentration is derived; one registry read and one
+                -- game-time sample feed the same rule combat and craft use.
+                reg ← readIORef (crPhysiologyRegistryRef
+                          (toContentRegistriesCapability env))
+                now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+                return $ do
+                    inst ← HM.lookup uid (umInstances um)
+                    def  ← HM.lookup (uiDefName inst) (umDefs um)
+                    pure (mentalEffectiveness reg def now inst)
             case mEff of
                 Just e  → Lua.pushnumber (Lua.Number (realToFrac e))
                                 >> return 1

@@ -15,10 +15,15 @@
 --     DISCARDED (D-4): debit and credit apply 0, the receiver's mode
 --     being the only thing that decides it (contributionApplies below);
 --   * setMode / clearMode run the engine's atomic transition, then the
---     transient-cache resets, the change hooks (only on an EFFECTIVE
---     change) and the dt-0 refresh of the cache that reads physiology
---     (the brain's) before returning (D-5, D-5a). Circulation needs no
---     refresh: since #2836 (S9) it is derived on demand, never cached.
+--     transient-cache resets and the change hooks (only on an EFFECTIVE
+--     change) before returning (D-5, D-5a). Nothing is refreshed: the values
+--     that read physiology (circulation since #2836, consciousness,
+--     concentration and state_of_mind since #2838) are derived on demand,
+--     never cached, so there is no cache to bring up to date and a
+--     transition or a load publishes no stored value of its own.
+--   * writes of the mind's OWN durable keys are atomic batches
+--     (physiology.commit, #2838): one validated unit.commitPhysio per
+--     writer event, so a reader on another thread sees a complete state.
 --
 -- STAMINA (#2834, S8a): its pool is the one a second thread spends, so a
 -- debit or credit on it is a RELATIVE, atomic commit of an EFFECTIVE delta
@@ -34,6 +39,10 @@
 local stats = require("scripts.unit_stats")
 
 local physiology = {}
+
+-- Refused batches already logged, once per unit per reason (session-transient,
+-- cleared with the engagement diagnostics in resetSessionState).
+local reportedRefusal = {}
 
 -- The owned/derived/meter names of the loaded registry and the system each
 -- belongs to, cached on first use (the registry is loaded once at boot and a
@@ -150,6 +159,14 @@ local function contributionApplies(uid, key)
     local sid = physiology.systemOf(key)
     if sid == nil then return true end
     return unit.getPhysioMode(uid, sid) == "simulated"
+end
+
+-- Would a contribution to `key` be applied for this unit (its receiving system
+-- is Simulated, or no registry system owns the key)? The same answer credit,
+-- debit and creditBatch act on, exposed for a caller that reports what its
+-- credit did (consumable.drink's summary).
+function physiology.contributionApplies(uid, key)
+    return contributionApplies(uid, key)
 end
 
 -- Per-key rules for the contributions the migrated callers make. `cap`
@@ -275,19 +292,55 @@ function physiology.debit(uid, key, amount)
     return old - new
 end
 
--- ---- Refresh ----
+-- ---- Atomic batches ----
 
--- Recompute the cache that READS physiology: the brain's cache values
--- (consciousness, concentration, state of mind) WITHOUT touching its durable
--- integrators (brain.refresh). Run after a transition or a value write so a
--- reader never sees a cache that disagrees with the state that was just
--- published (D-5a). Circulation is not refreshed because it is not cached
--- (#2836): the read computes it from the current state. Other threads that
--- read the brain's values may see the previous ones for up to one pass: this
--- refreshes the Lua-owned cache before returning, it is not a cross-thread
--- atomic publication.
-function physiology.refresh(uid)
-    require("scripts.brain").refresh(uid)
+-- Commit ONE validated batch of stored keys (`{ key = value, ... }`, stored
+-- bases with unit.setStat's semantics) in a single unit-manager update, or
+-- none (#2838, D-5a's deferral). Returns `true`, or `nil, reason` for a
+-- refused batch (a missing unit, an empty or malformed batch, a non-finite
+-- value, a key the write gate refuses). It NEVER raises: a refusal inside
+-- the pcall'd per-unit pass would skip that unit's injuries, failure meters
+-- and pools for the pass, so the caller reads the result and publishes no
+-- consequence of an event that did not commit.
+function physiology.commit(uid, batch)
+    local ok, reason = unit.commitPhysio(uid, batch)
+    if ok == nil then
+        local key = tostring(uid) .. ":" .. tostring(reason)
+        if not reportedRefusal[key] then
+            reportedRefusal[key] = true
+            engine.logWarn("physiology: unit " .. tostring(uid)
+                .. " batch refused (" .. tostring(reason) .. ")")
+        end
+        return nil, reason
+    end
+    return true
+end
+
+-- Credit one SIMULATED system's stored keys together: each item moves its key
+-- by `amount` (the EFFECTIVE read plus the amount, clamped to [lo, hi]), and
+-- the lot is one atomic batch. A receiver that is not Simulated (Nominal
+-- holds no state, Unsupported has none) DISCARDS the whole credit (D-4) and
+-- applies nothing. Returns the table `{ [key] = applied change }` (all
+-- zero when discarded or refused). `items` is a list of
+-- `{ key =, amount =, lo =, hi = }`, all keys of one system.
+function physiology.creditBatch(uid, items)
+    local applied = {}
+    for _, it in ipairs(items) do applied[it.key] = 0 end
+    if #items == 0 then return applied end
+    if not contributionApplies(uid, items[1].key) then return applied end
+    local batch, olds = {}, {}
+    for _, it in ipairs(items) do
+        local old = physiology.get(uid, it.key)
+        if old == nil then return applied end
+        local new = old + it.amount
+        if it.hi and new > it.hi then new = it.hi end
+        if it.lo and new < it.lo then new = it.lo end
+        olds[it.key] = old
+        batch[it.key] = new
+    end
+    if not physiology.commit(uid, batch) then return applied end
+    for key, new in pairs(batch) do applied[key] = new - olds[key] end
+    return applied
 end
 
 -- ---- Transitions ----
@@ -331,11 +384,11 @@ local function parametersAvailable(uid, system)
         .available(info.defName, system)
 end
 
--- After the engine accepted a transition: reset what the change invalidated,
--- run the change hooks (only for an EFFECTIVE change), and refresh the
--- caches. `values` is the caller's table, or nil. A set that changed no mode
--- and wrote no value (an unchanged pin, a clear with nothing to clear) is
--- not an event: it resets nothing, runs no hook and refreshes nothing.
+-- After the engine accepted a transition: reset what the change invalidated
+-- and run the change hooks (only for an EFFECTIVE change). `values` is the
+-- caller's table, or nil. A set that changed no mode and wrote no value (an
+-- unchanged pin, a clear with nothing to clear) is not an event: it resets
+-- nothing and runs no hook.
 local function finish(uid, system, changed, from, to, values)
     -- The keys the caller actually wrote. An empty table writes none, so it is
     -- no value write at all.
@@ -354,7 +407,6 @@ local function finish(uid, system, changed, from, to, values)
             end
         end
     end
-    physiology.refresh(uid)
 end
 
 -- ---- Combat engagement (SD-20, #2834) ----
@@ -367,6 +419,7 @@ local reportedEngagement = {}
 
 function physiology.resetSessionState()
     reportedEngagement = {}
+    reportedRefusal = {}
 end
 
 -- Apply a unit's PENDING combat engagement (combat_engaged == 1): one atomic

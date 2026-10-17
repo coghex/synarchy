@@ -245,7 +245,9 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     -- A unit that has not spawned yet has no wounds: its blood
                     -- is the seed it will be published with.
                     , pcBlood      = bloodViewOf initialStats
-                                         (bloodSeedFromStats initialStats) 0 }
+                                         (bloodSeedFromStats initialStats) 0
+                    -- ... and no pain either (#2838).
+                    , pcPain       = 0 }
                 seedResult = reconcileStoredKeys spawnCtx
                 -- A Nominal blood stores its canonical maximum (#2837); the
                 -- other modes keep the spawn seed (base body mass x 0.075,

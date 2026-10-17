@@ -17,13 +17,25 @@
 -- combat_log's battle-quiescence check, not a decrementing countdown).
 --
 -- Ticked from unit_resources.update, right after brain.tick (so a thought
--- reads this tick's freshly-computed mood/pain, and its mood_delta lands
+-- reads this tick's freshly-drifted mood/pain, and its mood_delta lands
 -- in time for next tick's brain.tick to treat it as "prev" and drift it
 -- back toward the physiological target — the fade-over-time a moodlet
 -- wants, for free, with no separate stacking/decay system).
+--
+-- A thought is ONE atomic event (#2838, S11a): the new deadline and the mood
+-- nudge are committed as a single batch (a thought with no nudge commits the
+-- deadline alone), and its log entry is emitted only after the batch
+-- committed. Only a unit whose MIND is Simulated thinks: a Nominal or
+-- Unsupported mind makes no attempt, draws no random number and records no
+-- thought. The thought clock is seeded to `now` at spawn, at the Nominal to
+-- Simulated transition and by absent-only load repair (so a freshly seeded
+-- unit's first thought is eligible on its first pass), and the mind
+-- mode-change hook below re-rolls it to `now + random * THOUGHT_INTERVAL_MIN`
+-- on the gameplay stream, which keeps the population desynchronized.
 
-local brain  = require("scripts.brain")
-local mental = require("scripts.mental_state")
+local brain      = require("scripts.brain")
+local mental     = require("scripts.mental_state")
+local physiology = require("scripts.physiology")
 
 local thoughts = package.loaded["scripts.thoughts"] or {}
 package.loaded["scripts.thoughts"] = thoughts
@@ -136,29 +148,41 @@ end
 -- Advance one unit's thought clock; fires + applies a thought when due.
 -- No-op (cheaply) for species/units with nothing eligible.
 function thoughts.tick(uid, info, dt)
+    -- Mode first: no catalogue load, read or random draw for a unit with no
+    -- Simulated mind.
+    if not physiology.isSimulated(uid, "mind") then return end
     if not thoughts.catalogue then thoughts.loadCatalogue() end
     if not thoughts.catalogue or #thoughts.catalogue == 0 then return end
 
     local now = engine.gameTime()
-    local nextAt = unit.getStat(uid, "thought_next_at")
-    if nextAt == nil then
-        -- First observation: desync the population so units don't all
-        -- fire in lockstep.
-        unit.setStat(uid, "thought_next_at", now + math.random() * THOUGHT_INTERVAL_MIN)
-        return
-    end
-    if now < nextAt then return end
-    unit.setStat(uid, "thought_next_at",
-        now + THOUGHT_INTERVAL_MIN + math.random() * (THOUGHT_INTERVAL_MAX - THOUGHT_INTERVAL_MIN))
+    if now < physiology.get(uid, "thought_next_at") then return end
+    local nextAt = now + THOUGHT_INTERVAL_MIN
+                 + math.random() * (THOUGHT_INTERVAL_MAX - THOUGHT_INTERVAL_MIN)
 
     local ctx = buildContext(uid, info)
     local entry = pickWeighted(eligibleEntries(ctx), ctx.mood)
-    if not entry then return end
 
-    if entry.mood_delta and entry.mood_delta ~= 0 then
-        unit.setStat(uid, "mood", clamp(brain.mood(uid) + entry.mood_delta, 0, 1))
+    -- ONE event: the deadline, with the mood nudge when the thought has one.
+    local batch = { thought_next_at = nextAt }
+    if entry and entry.mood_delta and entry.mood_delta ~= 0 then
+        batch.mood = clamp(ctx.mood + entry.mood_delta, 0, 1)
     end
-    thought.emit(uid, entry.text, entry.category or "random")
+    if not physiology.commit(uid, batch) then return end
+    if entry then
+        thought.emit(uid, entry.text, entry.category or "random")
+    end
 end
+
+-- A mind that BECOMES Simulated has its thought clock seeded to `now`; this
+-- re-rolls it to `now + random * THOUGHT_INTERVAL_MIN` on the gameplay stream
+-- so a population switched together does not think in lockstep. Only an
+-- EFFECTIVE change runs it (the facade's hook contract); a unit that turns
+-- Nominal or Unsupported holds no clock to re-roll.
+physiology.onModeChanged("thought_clock", "mind", function(uid, _system, _from, to)
+    if to ~= "simulated" then return end
+    physiology.commit(uid, {
+        thought_next_at = engine.gameTime() + math.random() * THOUGHT_INTERVAL_MIN,
+    })
+end)
 
 return thoughts
