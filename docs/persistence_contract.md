@@ -170,7 +170,13 @@ the brain at dt 0. Consequently a save taken a tick before
 that recompute may hold a stale cache and a save taken after it a canonical
 one, and the structural save comparison
 (`World.Save.Physiology.withoutRebuiltCaches`, used by the save codec's
-`compare`) does not count them. Everything else in the physiology stat set is
+`compare`) does not count them. The same comparison does not count the stored
+blood volume (`uisBlood`) of a unit whose `blood` override is Nominal (#2837):
+the load rewrites it to the current canonical maximum, so a stale saved copy
+(a body-mass change after the pin) and its rebuilt successor are one durable
+state. A Simulated unit's volume stays compared exactly. The comparison is
+registry-free, so it sees a pin and nothing else; the Persistence spec
+guards that no shipped definition defaults blood to Nominal. Everything else in the physiology stat set is
 durable and compared exactly: a Simulated system's pools and meters, the
 override map and the unowned `tissue_recovering` flag are **Persist
 exactly**; a Nominal or Unsupported system stores none of its keys; and the
