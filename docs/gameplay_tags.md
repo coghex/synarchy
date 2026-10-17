@@ -388,19 +388,27 @@ physical item.
 - `mutateItemTags` applies a `TagEdit` to one live item. With a page
   scope it also requires the item to be on that page. The item's owners
   sit behind several refs, so the existence check cannot share one
-  atomic step with the write. Instead the write is one
-  `atomicModifyIORef'` of the session owner, and the item is located
-  again afterwards. If a destruction removed it in between, the edit is
-  withdrawn and answers `TagEditNoTarget`, so no edit leaves a tag on a
-  dead item whichever way the race falls. A session replacement between
-  the check and the write refuses the write.
+  atomic step with the write. The guard is
+  `WorldManager.wmItemDestroyGen` instead. Every destruction's forget
+  bumps it in the same atomic step that removes the destroyed ids'
+  tags. An edit reads it before it locates the item, and commits only
+  if it has not moved; if it has, the edit retries against a fresh view.
+  So a target destroyed after the check has its own forget run after
+  the write, which removes the write, and one destroyed before the
+  commit forces the retry, which then finds it gone. A missing item is
+  never treated as destroyed. An item a transfer has momentarily
+  detached between its pop and its push is simply not editable at that
+  instant (`TagEditNoTarget`), and the tags it already carries are
+  untouched. A session replacement between the check and the write
+  refuses the write.
 - `itemTagsIn` inspects one item (`Nothing` when no live item has the
   id), `liveItemTargets` is the item universe, and `onPage` narrows a
   universe (every category) to the caller's selected page.
 - `commitItemTreeTags` is the attachment boundary later scenario
-  construction needs: it installs assignments for a newly materialized
-  tree only if every target is already committed and live, and otherwise
-  installs nothing and returns the uncommitted ids.
+  construction needs. It installs assignments for a newly materialized
+  tree only if every target is already committed and live, under the
+  same guard as an edit. Otherwise it installs nothing and returns the
+  uncommitted ids; a session replacement returns every target.
 
 ### Item lifecycle
 
@@ -413,6 +421,7 @@ transfer's temporary detach, a refused move and a rolled-back batch.
 | Pickup, drop, ground relocation, equip/unequip, accessory changes, unit-to-unit and unit/building transfers (strict player and lax AI), construction delivery into delivered materials, nested ownership moves (`Item.Ownership`) | kept, for the item and every descendant |
 | Fill, temperature, quality, condition and sharpness changes; a bulk sack eaten from; a container emptied of its last item | kept: identity survives |
 | A refused or rolled-back operation, a partial batch | kept on moved and unmoved items alike |
+| A failed transfer whose source vanished too, so the restore has nowhere to put the item (`commitCross`, and the lax cargo verbs' lost branches) | the discarded tree is gone, so its assignments go |
 | Consumption: a discrete meal, a bulk sack eaten dry (`unit.feed`), `unit.removeItem`, craft and repair inputs, a bandage drawn from a kit, a power item placed as a node | the consumed items' assignments go; the kit, the surviving siblings and their shared tag names stay |
 | Construction-designation payment | the paid items are consumed and their assignments go. A refund mints new, untagged items (owner decision, 2026-10-17) |
 | `item.removeGround`; lava solidifying over ground items | the destroyed tree's assignments go. A pickup reaches the same ground removal but forgets nothing |
@@ -448,7 +457,11 @@ refunds are new identities.
   unchanged.
 - **Integrity.** An assignment naming no item that any page holds, in
   any owner and at any depth, is a `dangling-reference` warning
-  attributed to `core-session`. Staging drops it with a log line and
+  attributed to `core-session`. Staging keeps an assignment only if its
+  item was in the SAVED session's ownership AND survives staging. Both
+  tests are needed: staging can mint items (a self-cleared designation's
+  refund), and a refund can take the id a dangling assignment names, the
+  saved allocator cursor. Staging drops the rest with a log line and
   rebuilds the reverse index from the forward assignments that remain,
   so a remembered copy can neither duplicate a membership nor keep a
   destroyed target live. A failure before publication leaves the
