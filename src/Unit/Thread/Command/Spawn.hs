@@ -44,6 +44,7 @@ import Unit.Sim.Types
 import Unit.Command.Types (SpawnProfile(..))
 import Unit.Stats (rollStat, standardStat, pickName, applyItemBuffs,
                    effectiveStat)
+import Unit.Blood (bloodViewOf)
 import Unit.Physiology (PhysioContext(..))
 import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Thread.Command.Body (seedBodyComposition, bloodSeedFromStats)
@@ -240,7 +241,11 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     , pcOverrides  = emptyPhysioOverrides
                     , pcNow        = now
                     , pcStats      = initialStats
-                    , pcModifiers  = spawnMods }
+                    , pcModifiers  = spawnMods
+                    -- A unit that has not spawned yet has no wounds: its blood
+                    -- is the seed it will be published with.
+                    , pcBlood      = bloodViewOf initialStats
+                                         (bloodSeedFromStats initialStats) 0 }
                 -- A unit whose Simulated systems cannot be seeded (an innate
                 -- or starting-accessory modifier that leaves no representable
                 -- base, a missing body input) is NOT published: it would hold

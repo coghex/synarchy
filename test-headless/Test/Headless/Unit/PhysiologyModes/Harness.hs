@@ -73,6 +73,7 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
+import Unit.Blood (fullBloodView)
 import Unit.Physiology (PhysioContext(..))
 import Unit.Physiology.Transition (reconcileStoredKeys)
 import Unit.Physiology.Types
@@ -101,7 +102,9 @@ squirrelBody = Body 0.3 0.22
 --   scales them: 0.6 L of water, 10 kcal of stomach and 20 kcal of
 --   calorie store per kg, a 20 % fat share, and a @frame_mass@ equal to
 --   the mass (bulk 1.0). The unowned inputs every physiology reader needs
---   are present; the OWNED keys are not here, they are seeded.
+--   are present; the OWNED keys are not here, they are seeded (cardio's
+--   @heart_rate@ and @blood_oxygen@ among them since S9, #2836: a stored base
+--   here would defeat the modifier-aware seed).
 bodyStats ∷ Body → [(Text, Float)]
 bodyStats (Body m h) =
     [ ("body_mass", m), ("frame_mass", m)
@@ -111,7 +114,7 @@ bodyStats (Body m h) =
     , ("max_hydration", 0.6 * m), ("max_hunger", 10 * m)
     , ("max_calories", 20 * m)
     , ("stamina", 100), ("max_stamina", 100)
-    , ("consciousness", 1), ("blood_oxygen", 1), ("heart_rate", 70) ]
+    , ("consciousness", 1) ]
 
 -----------------------------------------------------------------------
 -- Units
@@ -191,7 +194,8 @@ buildUnit def sp = do
         ctx    = PhysioContext
             { pcRegistry = reg, pcPhysiology = udPhysiology def
             , pcOverrides = HM.fromList (usOverrides sp), pcNow = 0
-            , pcStats = stats0, pcModifiers = mods }
+            , pcStats = stats0, pcModifiers = mods
+            , pcBlood = fullBloodView stats0 }
     stats ← case reconcileStoredKeys ctx of
         Right (s, _) → pure s
         Left why → do
@@ -436,9 +440,12 @@ near ∷ Double → Double → Double → Expectation
 near tol want got = abs (got - want) `shouldSatisfy` (< tol)
 
 -- | Every key a unit holds that a Nominal or Unsupported system must not:
---   the owned keys, the derived key and the meters of the whole registry.
+--   the owned keys, the derived key and the meters of the whole registry
+--   (cardio's own @heart_rate@ and @blood_oxygen@ are left out because the
+--   shipped @exempt@ tier keeps cardio Simulated; its derived @circulation@
+--   is stored in NO mode, S9 #2836).
 nominalKeys ∷ [Text]
 nominalKeys =
-    [ "core_temp", "salt", "salt_store", "salt_conc"
+    [ "core_temp", "salt", "salt_store", "salt_conc", "circulation"
     , "hydration", "hunger", "calories"
     , "hypothermia", "hyperthermia", "salt_imbalance" ]

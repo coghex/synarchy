@@ -31,7 +31,6 @@
 -- current value up or down.
 
 local cardio   = require("scripts.cardio")
-local circulation = require("scripts.circulation")
 local thermo   = require("scripts.thermo")
 local salts    = require("scripts.salts")
 local physiology = require("scripts.physiology")
@@ -116,9 +115,10 @@ end
 -- is Simulated (scripts/physiology.lua). The orchestration below reads every
 -- system's mode once per unit per pass and gates each owner on it:
 --
---   cardio -> circulation (always on, from the EFFECTIVE core temperature)
---   -> the Simulated systems that tick themselves, in REGISTRY order (thermo
---   before salt, so sweat debits arrive before the salt tick sees them) ->
+--   cardio (Simulated only; it integrates heart rate and blood oxygen from the
+--   derived, never stored circulation) -> the Simulated systems that tick
+--   themselves, in REGISTRY order (thermo before salt, so sweat debits arrive
+--   before the salt tick sees them) ->
 --   brain / thoughts / mental -> injuries and the failure meters -> the per-def
 --   pools (each only while its system is Simulated: hydration, hunger and
 --   calories, stamina, exhaustion and sleep pressure) -> nutrition's
@@ -235,14 +235,15 @@ local function tickUnit(uid, info, dt)
         physiology.applyEngagement(uid)
     end
     injuryTick.tickStance(uid, dt)
-    -- Physiology order: cardio (heart rate + blood oxygen) FIRST so
-    -- circulation reads this tick's heart rate; circulation next, from the
-    -- EFFECTIVE core (whatever the thermo mode); then every Simulated system
-    -- that ticks itself, in registry order. The failure meters read all of
-    -- these afterward.
-    cardio.tick(uid, dt)
-    circulation.update(uid)
+    -- Physiology order: cardio (heart rate + blood oxygen) FIRST, so thermo and
+    -- the oxygen delivery read circulation derived from this tick's heart rate;
+    -- then every Simulated system that ticks itself, in registry order. Cardio's
+    -- registry position is not its tick position: it is ticked here, ahead of
+    -- the loop, and only while Simulated (a bodyless unit's cardio is
+    -- Unsupported and never ticks). The failure meters read all of these
+    -- afterward.
     local modes = physiology.modes(uid)
+    if modes.cardio == "simulated" then cardio.tick(uid, dt) end
     for _, sid in ipairs(physiology.systemOrder()) do
         local tickSystem = SYSTEM_TICKS[sid]
         if tickSystem and modes[sid] == "simulated" then
@@ -330,12 +331,14 @@ function unitResources.onSaveLoaded(survUnitIds, _survBuildingIds)
     for _, uid in ipairs(survUnitIds or {}) do
         unit.recomputeBody(uid)
         -- The load boundary (#2831, D-6): the engine has already normalized
-        -- every unit's stored physiology before publishing it, so what is
-        -- left is the caches that READ it. Rebuild circulation and the
-        -- brain's derived values (dt 0: nothing drifts) NOW, so a paused
-        -- session reads what its first physiology tick would produce. A
-        -- Nominal unit reads healthy at once; an occupant saved with a
-        -- drifted core temperature or salt no longer carries either.
+        -- every unit's stored physiology before publishing it (a legacy
+        -- stored circulation is scrubbed there), so what is left is the cache
+        -- that READS it. Rebuild the brain's derived values (dt 0: nothing
+        -- drifts) NOW, so a paused session reads what its first physiology
+        -- tick would produce. Circulation is derived on demand, so it is
+        -- already canonical. A Nominal unit reads healthy at once; an
+        -- occupant saved with a drifted core temperature or salt no longer
+        -- carries either.
         if unit.getPose(uid) ~= "dead" then physiology.refresh(uid) end
     end
 end

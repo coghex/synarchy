@@ -179,6 +179,7 @@ spec ∷ Spec
 spec = describe "UI.PhysiologyModes" $ do
     simulatedSpec
     nominalSpec
+    cardioNominalSpec
     unsupportedSpec
     conditionsSpec
     transitionSpec
@@ -205,6 +206,15 @@ simulatedSpec = describe "Simulated rows keep their formats and colours" $ do
             rowText sl `shouldBe` "50.0 / 100.0"
             rowTip sl `shouldBe` "-"
             absent rs ["Exhaustion"]
+            -- the cardio rows (#2836) keep their formats: the stored heart
+            -- rate and oxygen, and the derived circulation, with no tooltip
+            hr ← rowNamed rs "Heart Rate"
+            rowText hr `shouldBe` "70 bpm"
+            rowTip hr `shouldBe` "-"
+            (rowText <$> rowNamed rs "Blood O\8322") `shouldReturn` "100%"
+            ci ← rowNamed rs "Circulation"
+            rowText ci `shouldBe` "100%"
+            rowTip ci `shouldBe` "-"
 
     it "recolours a draining pool by its threshold, in place, without a rebuild" $
         withPanel [acolyte 1] $ \(_, ls) → do
@@ -272,19 +282,75 @@ nominalSpec = describe "A supported Nominal system" $ do
                 rowColour t `shouldBe` "1.00,0.62,0.25"
                 rowTip t `shouldBe` "-"
 
+-- | The cardio rows (#2836, SD-21): heart rate and oxygen follow the Nominal
+--   presentation, while circulation shows its LIVE derived value with its
+--   usual colour bands, because blood loss, sepsis, fitness and cold still
+--   act on it.
+cardioNominalSpec ∷ Spec
+cardioNominalSpec = describe "A Nominal cardio" $ do
+    it "shows Nominal heart rate and oxygen, and a LIVE circulation under \
+       \blood loss in its own colour band with no Nominal tooltip" $
+        withPanel [ (acolyte 1) { usOverrides = [("cardio", PhysioNominal)]
+                                , usBlood = Just (0.5 * 5.25) } ] $ \(_, ls) → do
+            rs ← rowsOf ls
+            hr ← rowNamed rs "Heart Rate"
+            rowText hr `shouldBe` "Nominal 70 bpm"
+            rowColour hr `shouldBe` neutral
+            rowTip hr `shouldBe` nominalHint
+            ox ← rowNamed rs "Blood O\8322"
+            rowText ox `shouldBe` "Nominal 100%"
+            rowColour ox `shouldBe` neutral
+            rowTip ox `shouldBe` nominalHint
+            -- 1.1 x 0.5 blood: 55 %, in the amber band, NOT the word Nominal
+            ci ← rowNamed rs "Circulation"
+            rowText ci `shouldBe` "55%"
+            rowColour ci `shouldBe` "1.00,0.62,0.25"
+            rowTip ci `shouldBe` "-"
+            forM_ ["heart_rate", "blood_oxygen", "circulation"] $ \k →
+                luaText ls ("return tostring(unit.getStatBase(1, '" <> k <> "'))")
+                    `shouldReturn` "nil"
+
+    it "keeps the injury-driven Suffocating condition under a Nominal cardio" $
+        withPanel [ (acolyte 1) { usOverrides = [("cardio", PhysioNominal)]
+                                , usStats = [ ("sleep_pressure", 50)
+                                            , ("max_sleep_pressure", 100)
+                                            , ("hypoxia", 0.5) ] } ] $
+            \(_, ls) → do
+                rs ← rowsOf ls
+                any ("Suffocating" `T.isInfixOf`) (HM.keys rs) `shouldBe` True
+
+    it "swaps the rows when cardio changes mode and shows the reseeded healthy \
+       \heart when it returns" $
+        withPanel [ (acolyte 1) { usStats = [ ("sleep_pressure", 50)
+                                            , ("max_sleep_pressure", 100)
+                                            , ("heart_rate", 140) ] } ] $
+            \(_, ls) → do
+                rowsOf ls >>= \rs → (rowText <$> rowNamed rs "Heart Rate")
+                    >>= (`shouldBe` "140 bpm")
+                ids0 ← luaText ls "return __ids()"
+                setMode ls 1 "cardio" "nominal"
+                tick ls
+                ids1 ← luaText ls "return __ids()"
+                ids1 `shouldNotBe` ids0                      -- rebuilt
+                rowsOf ls >>= \rs → (rowText <$> rowNamed rs "Heart Rate")
+                    >>= (`shouldBe` "Nominal 70 bpm")
+                setMode ls 1 "cardio" "simulated"
+                tick ls
+                rowsOf ls >>= \rs → (rowText <$> rowNamed rs "Heart Rate")
+                    >>= (`shouldBe` "70 bpm")
+
 unsupportedSpec ∷ Spec
 unsupportedSpec = describe "A bodyless (Unsupported) unit" $
-    it "hides every physiology row, stamina included, and keeps the unowned blood and injury rows" $
+    it "hides every physiology row, stamina and the cardio rows included, and keeps the unowned blood and injury rows" $
         withPanel [ (unitSpec 1 "tiller" Nothing)
                       { usStats = [("sleep_pressure", 50), ("max_sleep_pressure", 100)]
                       , usWounds = [wound] } ] $ \(_, ls) → do
             rs ← rowsOf ls
-            absent rs ["Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina", "Sleep"]
+            absent rs [ "Hydration", "Hunger", "Calories", "Body Temp", "Salt", "Stamina"
+                      , "Sleep", "Heart Rate", "Blood O\8322", "Circulation" ]
             forM_ ["Blood", "Pain"] (void ∘ rowNamed rs)
             -- the injury row survives: it is the one row that is no fixed vital
-            let vitals = ["Blood", "Pain", "Heart Rate", "Blood O\8322"
-                         , "Consciousness", "Circulation", "Sleep"
-                         , "Carry Load"]
+            let vitals = ["Blood", "Pain", "Consciousness", "Carry Load"]
             [ n | n ← HM.keys rs, n `notElem` vitals ] `shouldSatisfy` (not ∘ null)
   where
     wound = Wound { woundPart = "torso", woundKind = "slash", woundSeverity = 0.5

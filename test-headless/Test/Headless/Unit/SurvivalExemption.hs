@@ -324,14 +324,17 @@ spec = describe "survival exemption" $ do
         scene env healthy (fullBlood * 0.25) []
         ls ← setupLua env
         _ ← run ls 60
-        nomadReads ls "unit.getStat(uid, 'circulation') < 0.5" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'heart_rate') > 100" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'blood_oxygen') < 0.95" `shouldReturn` "true"
+        -- circulation is DERIVED since S9 (#2836): read through the physiology
+        -- read verb (a stat read would answer nil), and the nomad's cardio is
+        -- Simulated, so its heart rate and oxygen are stored integrators.
+        nomadReads ls "unit.readPhysio(uid, 'circulation') < 0.5" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'heart_rate') > 100" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'blood_oxygen') < 0.95" `shouldReturn` "true"
         -- The acolyte beside it is impaired alike: blood loss is not
         -- survival physiology. (Its own core drifts a few hundredths of a
         -- degree at 20 °C, which is the only difference between them.)
         luaText ls (T.concat
-            [ "local a, b = unit.getStat(1, 'circulation'), unit.getStat(2, 'circulation'); "
+            [ "local a, b = unit.readPhysio(1, 'circulation'), unit.readPhysio(2, 'circulation'); "
             , "return math.abs(a - b) < 0.01" ]) `shouldReturn` "true"
 
     it "still lets a punctured lung suffocate an exempt nomad" $

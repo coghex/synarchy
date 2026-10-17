@@ -2,8 +2,8 @@
 -- design D-7, D-8).
 --
 -- The Status panel's rows and conditions for the registry's systems
--- (thermo, salt, hydration, nutrition, stamina, sleep; exhaustion has no row)
--- follow the unit's RESOLVED mode:
+-- (thermo, salt, hydration, nutrition, stamina, sleep, cardio; exhaustion has
+-- no row) follow the unit's RESOLVED mode:
 --
 --   * Simulated  -- unchanged: today's values, units, formats, colours.
 --   * Nominal    -- the row shows its healthy reading (a pool shows the
@@ -13,6 +13,11 @@
 --                   owns never appear.
 --   * Unsupported (bodyless unit) -- the row, and everything the system
 --                   owns, is hidden.
+--   * A DERIVED row whose Nominal answer is still live (circulation, SD-21) --
+--                   shown with its real value and its usual colour bands
+--                   under a Nominal system: blood loss, sepsis, fitness and
+--                   cold still act, so "always healthy" would be false. Only
+--                   an Unsupported system hides it.
 --   * Unowned keys (blood, pain, sleep, ...) -- untouched
 --                   pass-through; this module never reads them.
 --
@@ -48,8 +53,18 @@ local ROW_KEY = {
     -- The sleep system's pool (#2835): the system id is `sleep`, the row and
     -- the registry key are `sleep_pressure`.
     sleep_pressure = "sleep_pressure",
+    -- The cardio system (#2836): its two owned integrators and the derived
+    -- circulation it computes.
+    heart_rate     = "heart_rate",
+    blood_oxygen   = "blood_oxygen",
+    circulation    = "circulation",
 }
 M.ROW_KEY = ROW_KEY
+
+-- Rows whose Nominal answer is a LIVE derived value, not a healthy constant
+-- (the registry's `healthy: live`): they keep their value, colour and tooltip
+-- under a Nominal system and are hidden only when it is Unsupported.
+local LIVE_ROW = { circulation = true }
 
 -- "simulated" | "nominal" | "unsupported" for a registry-owned key, nil
 -- for an unowned one (no system owns it, so there is no mode to apply --
@@ -90,6 +105,14 @@ local function healthySalt(uid)
         math.floor((physiology.get(uid, "salt_conc") or 1.0) * 100 + 0.5))
 end
 local function poolText() return M.NOMINAL_TEXT end
+local function healthyHeartRate(uid)
+    return M.NOMINAL_TEXT .. string.format(" %d bpm",
+        math.floor((physiology.get(uid, "heart_rate") or 70) + 0.5))
+end
+local function healthyBloodOxygen(uid)
+    return M.NOMINAL_TEXT .. string.format(" %d%%",
+        math.floor((physiology.get(uid, "blood_oxygen") or 1.0) * 100 + 0.5))
+end
 
 local NOMINAL_TEXT_OF = {
     body_temp = healthyTemp,
@@ -99,13 +122,16 @@ local NOMINAL_TEXT_OF = {
     calories  = poolText,
     stamina   = poolText,
     sleep_pressure = poolText,
+    heart_rate   = healthyHeartRate,
+    blood_oxygen = healthyBloodOxygen,
 }
 
 -- The label and its healthy reading are two words, so a Nominal scalar row
 -- is set in the condition font: at the stat font the pair is wider than the
 -- panel's value column and would run over the icon. Rows are chosen at build
 -- time and a mode change rebuilds them, so the font follows the mode.
-local SCALAR_ROW = { body_temp = true, salt = true }
+local SCALAR_ROW = { body_temp = true, salt = true, heart_rate = true,
+                    blood_oxygen = true }
 
 -- Wrap one Status row definition so its value, colour and value tooltip
 -- follow the mode. An unowned row is returned as is. `uid` is the unit the
@@ -120,6 +146,14 @@ function M.row(def, uid)
     for k, v in pairs(def) do out[k] = v end
     if SCALAR_ROW[def.key] and M.keyState(uid, regKey) == "nominal" then
         out.opts = { fontSize = L.CONDITION_FONT_SIZE }
+    end
+    if LIVE_ROW[def.key] then
+        -- A live derived value: hidden only when the system is Unsupported.
+        out.value = function(uid)
+            if M.keyState(uid, regKey) == "unsupported" then return nil end
+            return value(uid)
+        end
+        return out
     end
     out.value = function(uid)
         local s = M.keyState(uid, regKey)

@@ -48,10 +48,10 @@ local function bodyTempColor(uid)
 end
 
 local function fmtCirculation(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "circulation") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "circulation") or 1.0) * 100 + 0.5))
 end
 local function circulationColor(uid)
-    local c = unit.getStat(uid, "circulation") or 1.0
+    local c = physiology.get(uid, "circulation") or 1.0
     if c <= 0.4 then return { 1.0, 0.30, 0.30, 1.0 } end
     if c <= 0.65 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
@@ -69,19 +69,19 @@ local function saltColor(uid)
 end
 
 local function fmtHeartRate(uid)
-    return string.format("%d bpm", math.floor((unit.getStat(uid, "heart_rate") or 70) + 0.5))
+    return string.format("%d bpm", math.floor((physiology.get(uid, "heart_rate") or 70) + 0.5))
 end
 local function heartRateColor(uid)
-    local hr = unit.getStat(uid, "heart_rate") or 70
+    local hr = physiology.get(uid, "heart_rate") or 70
     if hr <= 40 or hr >= 160 then return { 1.0, 0.30, 0.30, 1.0 } end
     if hr <= 50 or hr >= 120 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
 end
 local function fmtBloodOxygen(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "blood_oxygen") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "blood_oxygen") or 1.0) * 100 + 0.5))
 end
 local function bloodOxygenColor(uid)
-    local o = unit.getStat(uid, "blood_oxygen") or 1.0
+    local o = physiology.get(uid, "blood_oxygen") or 1.0
     if o <= 0.6 then return { 1.0, 0.30, 0.30, 1.0 } end
     if o <= 0.85 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
@@ -274,10 +274,10 @@ function M.buildStatusPanel(rect, uid)
           valueTooltip = bloodValueTooltip },
         { key = "pain",      value = fmtPain,  colorFn = painColorFn },
         physio.row({ key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor }, uid),
-        { key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor },
-        { key = "blood_oxygen", value = fmtBloodOxygen, colorFn = bloodOxygenColor },
+        physio.row({ key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor }, uid),
+        physio.row({ key = "blood_oxygen", value = fmtBloodOxygen, colorFn = bloodOxygenColor }, uid),
         { key = "consciousness", value = fmtConsciousness, colorFn = consciousnessColor },
-        { key = "circulation", value = fmtCirculation, colorFn = circulationColor },
+        physio.row({ key = "circulation", value = fmtCirculation, colorFn = circulationColor }, uid),
         physio.row({ key = "salt", value = fmtSalt, colorFn = saltColor }, uid),
         physio.row({ key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
           colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) }, uid),

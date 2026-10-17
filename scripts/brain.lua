@@ -172,7 +172,9 @@ end
 -- problem knocks you out. UNCHANGED from the original brain.lua.
 local function computeConsciousness(uid)
     local core = physiology.get(uid, "core_temp")  or 37.0
-    local o2   = unit.getStat(uid, "blood_oxygen") or 1.0
+    -- A Nominal or Unsupported cardio reads blood oxygen 1.0 (#2836): the
+    -- oxygen input is healthy and the rest of the rule is unchanged.
+    local o2   = physiology.get(uid, "blood_oxygen") or 1.0
     local conc = physiology.get(uid, "salt_conc")  or 1.0
 
     -- Core temp: confusion when hypothermic (<34°C) or hyperthermic (>39.5°C).

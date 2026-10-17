@@ -26,6 +26,7 @@ module Engine.Asset.YamlPhysiology
     , PhysiologyYamlOwned(..)
     , PhysiologyYamlHealthy(..)
     , PhysiologyYamlDerived(..)
+    , PhysiologyYamlDerivedHealthy(..)
     , PhysiologyYamlEntry(..)
     , PhysiologyYamlSubstitute(..)
       -- * Loading
@@ -107,10 +108,24 @@ instance FromJSON PhysiologyYamlOwned where
         onlyKeys ["key", "healthy"] o
         PhysiologyYamlOwned ⊚ o .: "key" ⊛ o .:? "healthy"
 
+-- | How a derived key's Nominal answer was written: a number, or the word
+--   @live@ (#2836, S9: the rule itself, evaluated with the system's inputs
+--   at their healthy readings and every other input live).
+data PhysiologyYamlDerivedHealthy
+    = YamlDerivedNumber !Float
+    | YamlDerivedWord !Text
+    deriving (Show, Eq)
+
+instance FromJSON PhysiologyYamlDerivedHealthy where
+    parseJSON v = case v of
+        Aeson.Number n → pure (YamlDerivedNumber (realToFrac n))
+        Aeson.String t → pure (YamlDerivedWord t)
+        _ → fail "a derived key's healthy value is a number or `live`"
+
 data PhysiologyYamlDerived = PhysiologyYamlDerived
     { pydKey     ∷ !Text
     , pydRule    ∷ !Text
-    , pydHealthy ∷ !(Maybe Float)
+    , pydHealthy ∷ !(Maybe PhysiologyYamlDerivedHealthy)
     } deriving (Show, Eq)
 
 instance FromJSON PhysiologyYamlDerived where
@@ -132,7 +147,7 @@ instance FromJSON PhysiologyYamlSubstitute where
             YamlQuantity q ← o .: "value"
             pure (YamlSubValue q)
         _ → fail "a substitute is `{ value: <q> }` or one of `none`, \
-                 \`virtual_meal`, `tissue_recovery`"
+                 \`virtual_meal`, `tissue_recovery`, `live`"
 
 -- | One @provides@ \/ @contributes@ \/ @effects@ entry.
 data PhysiologyYamlEntry = PhysiologyYamlEntry
@@ -253,7 +268,10 @@ refuse reason detail = Left (PhysiologyRefusal reason detail)
 --       finite, and a rule's @from:@ input is not itself a
 --       registry key (a healthy rule reads UNOWNED inputs);
 --     * the @salt_concentration@ rule has the @salt@ and @hydration@
---       keys it reads;
+--       keys it reads and a numeric healthy value; the @circulation@ rule
+--       (#2836) is @live@ and has the @heart_rate@ owned key it reads from
+--       its own system and the @core_temp@ owned key some system owns;
+--     * a @live@ substitute names a live derived key of its own system;
 --     * every profile names known systems with valid modes and covers
 --       every system (a profile is a fidelity tier for ALL of them).
 admitPhysiologyDoc ∷ FilePath → PhysiologyYamlDoc
@@ -298,6 +316,30 @@ admitPhysiologyDoc path doc = do
             DerivedSaltConcentration → do
                 requireOwned partial (psId s <> "." <> dkKey d) "salt"
                 requireOwned partial (psId s <> "." <> dkKey d) "hydration"
+                when (dkHealthy d ≡ DerivedLive) $
+                    refuse "physiology derived rule cannot be live"
+                           (psId s <> "." <> dkKey d)
+            DerivedCirculation → do
+                requireOwned partial (psId s <> "." <> dkKey d) "core_temp"
+                unless (any ((≡ "heart_rate") ∘ okKey) (psOwns s)) $
+                    refuse "unresolved physiology derived rule input"
+                           (psId s <> "." <> dkKey d
+                            <> " needs owned key heart_rate in its own system")
+                unless (Map.member "RESTING_HR" constants) $
+                    refuse "unresolved physiology derived rule input"
+                           (psId s <> "." <> dkKey d
+                            <> " needs the constant RESTING_HR")
+                -- SD-21: a Nominal circulation is the live rule, never a
+                -- constant that would erase blood loss, sepsis, fitness and
+                -- cold.
+                when (dkHealthy d ≢ DerivedLive) $
+                    refuse "physiology circulation must be live"
+                           (psId s <> "." <> dkKey d)
+        forM_ (psProvides s) $ \e → when (ieSubstitute e ≡ SubLive) $
+            unless (any (\d → dkKey d ≡ ieName e ∧ dkHealthy d ≡ DerivedLive)
+                        (psDerived s)) $
+                refuse "live physiology substitute without a live derived key"
+                       (psId s <> ".provides." <> ieName e)
     profiles ← traverse (admitProfile systems) (Map.toList (pydProfiles doc))
     pure partial { prProfiles = profiles }
   where
@@ -354,12 +396,18 @@ admitSystem constants s = do
         rule ← maybe (refuse "unknown physiology derived rule"
                              (sid <> "." <> pydKey d <> ": " <> pydRule d))
                      Right (parseDerivedRule (pydRule d))
-        healthy ← maybe (refuse "derived physiology key without a healthy value"
+        written ← maybe (refuse "derived physiology key without a healthy value"
                                 (sid <> "." <> pydKey d))
                         Right (pydHealthy d)
-        when (isNaN healthy ∨ isInfinite healthy) $
-            refuse "non-finite physiology value"
-                   (sid <> "." <> pydKey d <> ": " <> tshow healthy)
+        healthy ← case written of
+            YamlDerivedWord "live" → Right DerivedLive
+            YamlDerivedWord w → refuse "unknown physiology derived healthy value"
+                                       (sid <> "." <> pydKey d <> ": " <> w)
+            YamlDerivedNumber v
+                | isNaN v ∨ isInfinite v →
+                    refuse "non-finite physiology value"
+                           (sid <> "." <> pydKey d <> ": " <> tshow v)
+                | otherwise → Right (DerivedFixed v)
         pure (DerivedKey (pydKey d) rule healthy)
 
     admitEntry section e = do
@@ -373,6 +421,7 @@ admitSystem constants s = do
                 "none"            → Right SubNone
                 "virtual_meal"    → Right SubVirtualMeal
                 "tissue_recovery" → Right SubTissueRecovery
+                "live"            → Right SubLive
                 _ → refuse "unknown physiology substitute" (who <> ": " <> w)
         pure (InterfaceEntry (pyeName e) substitute)
 

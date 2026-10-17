@@ -29,14 +29,14 @@ import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
 -- rather than a script-side estimate.
 import Engine.Scripting.Lua.API.Units.Stamina
     (unitCommitStaminaFn, unitGetMaxStaminaFn)
--- #2828's five physiology READ verbs and #2831's mutating pair
+-- #2828's five physiology READ verbs (plus #2836's pure blood read) and #2831's mutating pair
 -- (setPhysioMode / clearPhysioMode, facade-only), imported directly for
 -- the same reason. Their own module: the pair applies one atomic
 -- unit-manager update and must be readable beside the reads it shares a
 -- context with.
 import Engine.Scripting.Lua.API.Units.Physiology
     ( unitGetPhysioModeFn, unitGetPhysioOverrideFn, unitGetPhysioDefaultFn
-    , unitReadPhysioFn, unitReadPhysioBaseFn
+    , unitReadPhysioFn, unitReadPhysioBaseFn, unitReadBloodViewFn
     , unitSetPhysioModeFn, unitClearPhysioModeFn
     , unitApplyCombatEngagementFn )
 import Engine.Core.State (EngineEnv)
@@ -86,6 +86,7 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "getPhysioDefault"  (unitGetPhysioDefaultFn env)
   registerLuaFunction callStats "unit" "readPhysio"        (unitReadPhysioFn env)
   registerLuaFunction callStats "unit" "readPhysioBase"    (unitReadPhysioBaseFn env)
+  registerLuaFunction callStats "unit" "readBloodView"     (unitReadBloodViewFn env)
   registerLuaFunction callStats "unit" "setPhysioMode"     (unitSetPhysioModeFn env)
   registerLuaFunction callStats "unit" "clearPhysioMode"   (unitClearPhysioModeFn env)
   registerLuaFunction callStats "unit" "recoverStance" (unitRecoverStanceFn env)

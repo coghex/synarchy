@@ -62,10 +62,13 @@ saved def stats overrides = (minimalUnitInstance [])
 body70 ∷ [(Text, Float)]
 body70 = bodyStats acolyteBody
 
--- | The same body for a unit whose stamina is Nominal (the exempt tier):
---   a Nominal system holds no @stamina@ key, so a canonical save has none.
+-- | The same body for a unit of the exempt tier: a Nominal stamina holds no
+--   @stamina@ key, so a canonical save has none, while cardio stays
+--   Simulated there (#2754's outcome, S9 #2836) and saves its two
+--   integrators at the healthy reading.
 bodyNominalStamina ∷ [(Text, Float)]
 bodyNominalStamina = filter ((≢ "stamina") ∘ fst) body70
+    ⧺ [("heart_rate", 70), ("blood_oxygen", 1)]
 
 -- | The Simulated keys a rich 70 kg acolyte is saved with.
 seeds70 ∷ [(Text, Float)]
@@ -74,9 +77,11 @@ seeds70 =
     , ("salt_store", 140), ("core_temp", 37) ] ⧺ poolSeeds
 
 -- | The exhaustion and sleep pools (#2835) of an endurance-1 unit, whose
---   Simulated systems save them at the full healthy value (endurance x 10).
+--   Simulated systems save them at the full healthy value (endurance x 10),
+--   and cardio's two integrators (#2836) at their healthy readings.
 poolSeeds ∷ [(Text, Float)]
-poolSeeds = [("exhaustion", 10), ("sleep_pressure", 10)]
+poolSeeds = [ ("exhaustion", 10), ("sleep_pressure", 10)
+            , ("heart_rate", 70), ("blood_oxygen", 1) ]
 
 defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text UnitPhysiology
 defsOf = HM.fromList

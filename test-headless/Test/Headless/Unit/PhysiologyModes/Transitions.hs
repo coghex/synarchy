@@ -579,12 +579,16 @@ derivedFreshness = describe "derived and cached reads" $ do
             after ← luaNum ls "unit.readPhysio(1, 'salt_conc')"
             near 1e-5 (before / 2) after
 
-    it "refreshes circulation and consciousness before a transition returns" $
-        withScene [ acolyte { usStats = [ ("core_temp", 31), ("circulation", 0.45)
-                                        , ("consciousness", 0.25) ] } ] $ \(_, ls) → do
+    it "reads a fresh circulation and refreshes consciousness before a transition returns" $
+        withScene [ acolyte { usStats = [ ("core_temp", 31), ("consciousness", 0.25) ] } ] $ \(_, ls) → do
+            -- the cold core (5 degrees under the vasoconstriction onset)
+            -- drags the derived circulation to 0.7, with no tick
+            luaNum ls "unit.readPhysio(1, 'circulation')" >>= \c →
+                c `shouldSatisfy` (\x → abs (x - 0.7) < 1e-4)
             _ ← setMode ls 1 "thermo" "nominal"
-            -- no tick has run: the caches already read the healthy core
-            luaNum ls "unit.getStat(1, 'circulation')" >>= \c →
+            -- no tick has run: circulation (derived, never stored) reads the
+            -- healthy core at once, and the brain cache is refreshed
+            luaNum ls "unit.readPhysio(1, 'circulation')" >>= \c →
                 c `shouldSatisfy` (> 0.9)
             luaNum ls "unit.getStat(1, 'consciousness')" >>= \c →
                 c `shouldSatisfy` (> 0.99)

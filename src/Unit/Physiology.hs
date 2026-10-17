@@ -71,6 +71,8 @@ import qualified Data.Map.Strict as Map
 import Control.Monad (foldM)
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Unit.Blood (BloodView(..))
+import Unit.Physiology.Circulation (CirculationInputs(..), circulationRule)
 import Unit.Physiology.Types
 import Unit.Stats (effectiveStat, maxStaminaOf)
 import Unit.Types.Def (StatModifier)
@@ -268,6 +270,9 @@ data PhysioContext = PhysioContext
     , pcNow        ∷ !Double
     , pcStats      ∷ !(HM.HashMap Text Float)
     , pcModifiers  ∷ !(HM.HashMap Text [StatModifier])
+    , pcBlood      ∷ !BloodView
+      -- ^ the unit's blood through "Unit.Blood": the one input the derived
+      --   @circulation@ reads that is not a stat (#2836, S9).
     }
 
 data PhysioOutcome
@@ -309,9 +314,18 @@ readRole kind ctx _ mode role = case role of
         ModeSimulated → Right (fromMaybe 0 (storedValue kind ctx m))
         _             → Right 0
     RoleDerived d → case mode of
-        ModeSimulated → case dkRule d of
-            DerivedSaltConcentration → saltConcentrationFor ctx
-        _             → Right (dkHealthy d)
+        ModeSimulated → derivedRule ctx d
+        _ → case dkHealthy d of
+            DerivedFixed v → Right v
+            -- A live key is its rule, whatever the mode (SD-21): the rule
+            -- reads its own system's inputs through THEIR mode.
+            DerivedLive    → derivedRule ctx d
+
+-- | Evaluate a derived key's named rule against the unit's current state.
+derivedRule ∷ PhysioContext → DerivedKey → Either Text Float
+derivedRule ctx d = case dkRule d of
+    DerivedSaltConcentration → saltConcentrationFor ctx
+    DerivedCirculation       → circulationFor ctx
 
 -- | A stored key's base, or its effective value.
 storedValue ∷ ReadKind → PhysioContext → Text → Maybe Float
@@ -426,6 +440,48 @@ saltConcentrationFor ctx = do
             cur  ← dependencyPool ctx "hydration"
             pure (cur / maxH)
         _ → Right 1.0
+
+-- | @circulation@ (#2836, S9): the shared pure rule over the unit's current
+--   state, never stored. Inputs, each read at the context's game time:
+--
+--     * blood: the fraction "Unit.Blood" computed for the context;
+--     * the effective @constitution@, @fat_mass@, @body_mass@ and @sepsis@,
+--       with the fallbacks the Lua rule had (1.0, 0, 70, 0): reading a
+--       derived value must not roll a stat, so a unit with none of them
+--       takes the fallback instead of a lazy roll;
+--     * the core temperature through its own read, so a Nominal or
+--       Unsupported thermo substitutes the baseline and a Simulated one with
+--       no stored core is an invariant violation;
+--     * the heart rate: the effective stored value while cardio is
+--       Simulated (an absent one is an invariant violation), and none under
+--       a Nominal cardio, whose heart-rate factor the rule makes exactly 1.0.
+circulationFor ∷ PhysioContext → Either Text Float
+circulationFor ctx = do
+    resting ← constant "RESTING_HR"
+    core    ← coreTemperature
+    heartRate ← case classifyKey reg "heart_rate" of
+        Just (csys, RoleOwned h) | modeOf ctx csys ≡ ModeSimulated →
+            Just <$> simulatedOwned ReadEffective ctx (okKey h)
+        Just _  → Right Nothing
+        Nothing → Left "the registry does not own 'heart_rate'"
+    pure $ circulationRule resting CirculationInputs
+        { ciBloodFraction = bvFraction (pcBlood ctx)
+        , ciConstitution  = stat "constitution" 1.0
+        , ciFatMass       = stat "fat_mass" 0.0
+        , ciBodyMass      = stat "body_mass" 70.0
+        , ciSepsis        = stat "sepsis" 0.0
+        , ciCore          = core
+        , ciHeartRate     = heartRate }
+  where
+    reg = pcRegistry ctx
+    stat k fallback = fromMaybe fallback (storedValue ReadEffective ctx k)
+    constant n = maybe (Left ("unknown constant " <> n)) Right
+                       (Map.lookup n (prConstants reg))
+    coreTemperature = case physioReadPure ReadEffective ctx "core_temp" of
+        OutcomeValue _ v     → Right v
+        OutcomeUnsupported   → constant "THERMO_BASELINE"
+        OutcomeInvariant why → Left why
+        OutcomeUnowned       → Left "the registry does not own 'core_temp'"
 
 -- * Consumer boundary (S5, #2830)
 

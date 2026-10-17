@@ -25,6 +25,7 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
+import Unit.Blood (bloodView)
 import Unit.Physiology
     (PhysioContext(..), physioConsumerView)
 import Unit.Physiology.Types
@@ -567,6 +568,7 @@ tickOneUnitWith physioReg gt def dt infMgr mClim gen0 inst testMode
             , pcNow        = gt
             , pcStats      = uiStats inst
             , pcModifiers  = uiModifiers inst
+            , pcBlood      = bloodView def inst
             }
     -- Only reached when 'physioView' is a Right (the guard above returns
     -- the untouched unit otherwise).

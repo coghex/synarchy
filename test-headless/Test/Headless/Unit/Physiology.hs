@@ -26,6 +26,7 @@ import Engine.Asset.YamlPhysiology
     (PhysiologyRefusal(..), PhysiologyYamlDoc, admitPhysiologyDoc)
 import Test.Headless.Unit.PhysiologyEngine (engineSpec)
 import Test.Headless.Unit.PhysiologyFixture (readShippedPhysiologyRegistry)
+import Unit.Blood (fullBloodView)
 import Unit.Physiology
 import Unit.Physiology.Types
 import Unit.Types (StatModifier(..))
@@ -46,7 +47,7 @@ allNominal   = withDefaults [ (s, PhysioNominal)   | s ← systemIds ]
 
 systemIds ∷ [Text]
 systemIds = ["hydration", "salt", "thermo", "nutrition", "stamina"
-            , "exhaustion", "sleep"]
+            , "exhaustion", "sleep", "cardio"]
 
 -- | The reference 70 kg unit's INPUTS: the stats a healthy rule reads.
 inputs ∷ HM.HashMap Text Float
@@ -59,13 +60,15 @@ owned ∷ HM.HashMap Text Float
 owned = HM.fromList
     [ ("hydration", 21), ("salt", 35), ("salt_store", 100)
     , ("core_temp", 38), ("hunger", 300), ("calories", 900), ("stamina", 6)
-    , ("exhaustion", 4), ("sleep_pressure", 7) ]
+    , ("exhaustion", 4), ("sleep_pressure", 7)
+    , ("heart_rate", 82), ("blood_oxygen", 0.9) ]
 
 mkCtx ∷ PhysiologyRegistry → UnitPhysiology → HM.HashMap Text Float
       → HM.HashMap Text [StatModifier] → Double → PhysioContext
 mkCtx reg up stats mods now = PhysioContext
     { pcRegistry = reg, pcPhysiology = up, pcOverrides = HM.empty
-    , pcNow = now, pcStats = stats, pcModifiers = mods }
+    , pcNow = now, pcStats = stats, pcModifiers = mods
+    , pcBlood = fullBloodView stats }
 
 simCtx ∷ PhysiologyRegistry → PhysioContext
 simCtx reg = mkCtx reg allSimulated (HM.union owned inputs) HM.empty 0
@@ -153,11 +156,12 @@ spec = describe "Unit.Physiology" $ do
 shippedRegistrySpec ∷ SpecWith PhysiologyRegistry
 shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
 
-    it "declares exactly the seven systems, in tick order (thermo \
-       \before salt, design D-7), each requiring a body" $ \reg → do
+    it "declares exactly the eight systems, in registry order (thermo \
+       \before salt, design D-7; cardio last in the file but ticked first by \
+       \the orchestration), each requiring a body" $ \reg → do
         map psId (prSystems reg)
             `shouldBe` [ "thermo", "salt", "hydration", "nutrition", "stamina"
-                       , "exhaustion", "sleep" ]
+                       , "exhaustion", "sleep", "cardio" ]
         forM_ (prSystems reg) $ \s → psRequires s `shouldBe` ["body"]
 
     it "owns, derives and meters exactly the v1 keys" $ \reg → do
@@ -172,12 +176,14 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             , ("nutrition", (["hunger", "calories"], [], []))
             , ("stamina", (["stamina"], [], []))
             , ("exhaustion", (["exhaustion"], [], []))
-            , ("sleep", (["sleep_pressure"], [], [])) ]
+            , ("sleep", (["sleep_pressure"], [], []))
+            , ("cardio", (["heart_rate", "blood_oxygen"], ["circulation"], []))
+            ]
 
     it "keeps the constants the healthy rules need as authoritative data" $
         \reg → prConstants reg `shouldBe` Map.fromList
             [ ("SALT_PER_KG", 1.0), ("SALT_STORE_CAP_FRAC", 2.0)
-            , ("THERMO_BASELINE", 37.0) ]
+            , ("THERMO_BASELINE", 37.0), ("RESTING_HR", 70.0) ]
 
     it "declares each healthy rule as the design states it" $ \reg → do
         let rule k = case classifyKey reg k of
@@ -203,11 +209,23 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         rule "exhaustion" `shouldBe` Just (HealthyFrom "endurance" [QLit 10])
         rule "sleep_pressure" `shouldBe`
             Just (HealthyFrom "endurance" [QLit 10])
+        -- cardio (#2836, S9): the resting rate is a registry constant, and
+        -- oxygen is a plain 1.0
+        rule "heart_rate" `shouldBe` Just (HealthyConst (QConst "RESTING_HR"))
+        rule "blood_oxygen" `shouldBe` Just (HealthyConst (QLit 1.0))
         case classifyKey reg "salt_conc" of
             Just (_, RoleDerived d) → do
                 dkRule d `shouldBe` DerivedSaltConcentration
-                dkHealthy d `shouldBe` 1.0
+                dkHealthy d `shouldBe` DerivedFixed 1.0
             other → expectationFailure ("salt_conc is not derived: "
+                                        ⧺ show other)
+        -- a Nominal circulation is the LIVE rule, never a constant (SD-21)
+        case classifyKey reg "circulation" of
+            Just (sys, RoleDerived d) → do
+                psId sys `shouldBe` "cardio"
+                dkRule d `shouldBe` DerivedCirculation
+                dkHealthy d `shouldBe` DerivedLive
+            other → expectationFailure ("circulation is not derived: "
                                         ⧺ show other)
 
     it "evaluates every healthy rule against effective inputs (a Nominal \
@@ -216,7 +234,12 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         forM_ [ ("hydration", 42), ("salt", 70), ("salt_store", 140)
               , ("core_temp", 37), ("hunger", 700), ("calories", 1400)
               , ("stamina", 10), ("exhaustion", 10), ("sleep_pressure", 10)
-              , ("salt_conc", 1) ] $ \(k, want) →
+              , ("salt_conc", 1)
+              -- cardio (#2836): the resting rate, a fully oxygenated blood
+              -- and, for a healthy unit with nothing else live, perfect
+              -- circulation
+              , ("heart_rate", 70), ("blood_oxygen", 1)
+              , ("circulation", 1) ] $ \(k, want) →
             near want (eff c k)
 
     it "records every Nominal substitute (D-1), including the two S4 \
@@ -246,6 +269,12 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             [("sleep_exhaustion_deficit", SubValue (QLit 0.0))]
         entries psProvides (sys "sleep") `shouldBe`
             [("sleep_deficit", SubValue (QLit 0.0))]
+        -- S9 (#2836): circulation's Nominal answer is the live rule
+        entries psProvides (sys "cardio") `shouldBe`
+            [("heart_rate", SubValue (QConst "RESTING_HR"))
+            ,("blood_oxygen", SubValue (QLit 1.0))
+            ,("circulation", SubLive)]
+        entries psContributes (sys "cardio") `shouldBe` []
         entries psContributes (sys "nutrition") `shouldBe`
             [("meal_salt_credit", SubVirtualMeal)
             ,("tissue_maintenance", SubTissueRecovery)]
@@ -262,14 +291,16 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
             , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
-            , ("sleep", PhysioSimulated) ])
+            , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated) ])
         modes "simple" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
             , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
-            , ("sleep", PhysioNominal) ])
+            , ("sleep", PhysioNominal), ("cardio", PhysioSimulated) ])
+        -- exempt keeps #2754's outcome: everything Nominal but a LIVE cardio
         modes "exempt" `shouldBe` Just (m
-            [(s, PhysioNominal) | s ← systemIds])
+            [ (s, if s ≡ "cardio" then PhysioSimulated else PhysioNominal)
+            | s ← systemIds ])
         map ppId (prProfiles reg) `shouldMatchList`
             ["rich", "reduced", "simple", "exempt"]
 
@@ -531,7 +562,7 @@ ownedReadSpec = describe "owned-key reads (requirement 4)" $ do
             base c k `shouldBe` OutcomeUnsupported
 
     it "hands an unowned key back for the caller to read as getStat does" $
-        \reg → forM_ ["heart_rate", "max_stamina", "max_sleep_pressure", "strength"
+        \reg → forM_ ["mood", "max_stamina", "max_sleep_pressure", "strength"
               , "nonesuch"] $ \k →
             eff (simCtx reg) k `shouldBe` OutcomeUnowned
 

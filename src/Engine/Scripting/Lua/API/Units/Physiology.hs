@@ -36,6 +36,7 @@ module Engine.Scripting.Lua.API.Units.Physiology
     , unitGetPhysioDefaultFn
     , unitReadPhysioFn
     , unitReadPhysioBaseFn
+    , unitReadBloodViewFn
     , unitSetPhysioModeFn
     , unitClearPhysioModeFn
     , unitApplyCombatEngagementFn
@@ -57,6 +58,7 @@ import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv)
 import Combat.Resolution.Common (isAlreadyDead)
 import Engine.Scripting.Lua.API.Units.Stats (getEffectiveStat, getOrRollStat)
+import Unit.Blood (BloodView(..), bloodView, bloodViewOf)
 import Unit.Physiology
 import Unit.Physiology.Transition
 import Unit.Physiology.Types
@@ -118,7 +120,15 @@ unitSnapshot env uid = do
             , pcNow        = now
             , pcStats      = uiStats inst
             , pcModifiers  = uiModifiers inst
+            , pcBlood      = bloodOf um inst
             }
+
+-- | The unit's blood through "Unit.Blood"; a unit whose definition is no
+--   longer registered has no wounds that can be priced, so no bleed.
+bloodOf ∷ UnitManager → UnitInstance → BloodView
+bloodOf um inst = case HM.lookup (uiDefName inst) (umDefs um) of
+    Just def → bloodView def inst
+    Nothing  → bloodViewOf (uiStats inst) (uiBlood inst) 0
 
 -- | What the unit's definition says; a unit whose definition is no
 --   longer registered has no capabilities and so resolves Unsupported.
@@ -178,6 +188,35 @@ unitReadPhysioFn = readVerb ReadEffective
 --   value as @readPhysio@.
 unitReadPhysioBaseFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitReadPhysioBaseFn = readVerb ReadBase
+
+-- | @unit.readBloodView(uid)@ → @{ volume, max, fraction, bleedRate }@ |
+--   @nil@ for a missing unit (#2836, S9). The pure Lua face of
+--   "Unit.Blood".'Unit.Blood.bloodView': the unit's stored blood volume, its
+--   maximum from BASE @body_mass@, the fraction clamped to @0..1@ and the
+--   live wound bleed in litres per second. It is how cardio reaches its
+--   blood input without changing @unit.getBlood@, whose record and current
+--   behaviour stay as they are until S10 migrates it. Like the five read
+--   verbs it changes nothing, so any code may call it.
+unitReadBloodViewFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitReadBloodViewFn env = do
+    idTy  ← Lua.ltype 1
+    idArg ← Lua.tointeger 1
+    mView ← case (idTy ≡ Lua.TypeNumber, idArg) of
+        (True, Just n) → Lua.liftIO $ do
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            pure (bloodOf um <$> HM.lookup (UnitId (fromIntegral n))
+                                           (umInstances um))
+        _ → pure Nothing
+    case mView of
+        Nothing → Lua.pushnil
+        Just v → do
+            Lua.newtable
+            forM_ [ ("volume", bvVolume v), ("max", bvMax v)
+                  , ("fraction", bvFraction v), ("bleedRate", bvBleedRate v) ] $
+                \(k, x) → do
+                    Lua.pushnumber (Lua.Number (realToFrac x))
+                    Lua.setfield (-2) k
+    return 1
 
 -- | @unit.getPhysioMode(uid, system)@ → @"nominal"@ | @"simulated"@ |
 --   @nil@. @nil@ for an Unsupported system, an unknown system id or a
@@ -266,7 +305,8 @@ applyTransition env uid plan = do
                             , pcOverrides  = uiPhysioOverrides inst
                             , pcNow        = now
                             , pcStats      = uiStats inst
-                            , pcModifiers  = uiModifiers inst }
+                            , pcModifiers  = uiModifiers inst
+                            , pcBlood      = bloodOf um inst }
                     in case plan ctx of
                         Left why → (um, Left why)
                         Right t →
@@ -398,7 +438,8 @@ applyEngagement env uid = do
                         , pcOverrides  = uiPhysioOverrides inst
                         , pcNow        = now
                         , pcStats      = uiStats inst
-                        , pcModifiers  = uiModifiers inst }
+                        , pcModifiers  = uiModifiers inst
+                        , pcBlood      = bloodOf um inst }
                 in case planEngagement ctx of
                     Left EngagementNotPending → (um, Left "not pending")
                     Left (EngagementSeedRefused code) →
