@@ -28,6 +28,7 @@ spec ∷ Spec
 spec = describe "the mental machine under each mode" $ do
     stressSpec
     seedSpec
+    injuredSeedSpec
     legacySpec
     consumableSpec
 
@@ -144,6 +145,47 @@ seedSpec = describe "T-S11-5: initialization" $ do
             before ← luaNum ls "unit.getStatBase(1, 'thought_next_at')"
             _ ← luaText ls "__physiology.setMode(1, 'mind', 'simulated'); return true"
             luaNum ls "unit.getStatBase(1, 'thought_next_at')" >>= near 1e-9 before
+
+-- | An unhealed severity-1 fracture: @kindPainFactor@ prices it 1.6 (the Lua
+--   getter used to price every kind but slash, stab and blunt at 1.0).
+fracture ∷ Wound
+fracture = Wound
+    { woundPart = "l_thigh", woundKind = "fracture", woundSeverity = 1.0
+    , woundAt = 0, woundBandage = 1.0, woundClot = 0.0, woundHeal = 0.0
+    , woundDressing = "", woundInfection = 0.0, woundClean = True
+    , woundInfectionType = "", woundNecrosis = 0.0 }
+
+injuredSeedSpec ∷ Spec
+injuredSeedSpec = describe "T-S11-5: the mood seed prices pain as the drift does" $ do
+    it "seeds an injured unit's mood at its Nominal to Simulated transition to the \
+       \Lua drift target (one pain, one kind factor)" $
+        withScene [ (unitSpec 1 "acolyte" (Just "rich"))
+                      { usOverrides = [("mind", PhysioNominal)], usWounds = [fracture] } ] $
+            \(_, ls) → do
+                _ ← luaText ls counters
+                -- the getter and the Haskell pain agree: 1.0 x 1.6
+                luaNum ls "unit.getPain(1)" >>= near 1e-5 1.6
+                luaText ls "return tostring(__physiology.setMode(1, 'mind', 'simulated'))"
+                    `shouldReturn` "true"
+                -- 1 - 0.45 x (1.6 / 5): not the 0.91 a pain of 1.0 would give
+                luaNum ls "unit.getStatBase(1, 'mood')" >>= near 1e-5 0.856
+                luaNum ls "unit.getStatBase(1, 'mood') - __brain.moodTarget(1)" >>= near 1e-5 0
+
+    it "repairs an absent mood at load with the same pain, priced from the saved wounds" $
+        withScene [ (unitSpec 1 "acolyte" (Just "rich")) { usWounds = [fracture] } ] $
+            \(env, ls) → do
+                _ ← luaText ls counters
+                (reg, defs, u0) ← gateInputs env
+                let legacy = u0 { uisStats = HM.delete "mood" (uisStats u0) }
+                case gate reg defs 123 legacy of
+                    Left msgs → expectationFailure (show msgs)
+                    Right (u1, notes) → do
+                        length notes `shouldBe` 1
+                        case HM.lookup "mood" (uisStats u1) of
+                            Just m → realToFrac m `shouldSatisfy` (\v → abs (v - 0.856 ∷ Double) < 1e-5)
+                            Nothing → expectationFailure "mood was not repaired"
+                        -- the live Lua target for the same unit agrees
+                        luaNum ls "__brain.moodTarget(1)" >>= near 1e-5 0.856
 
 -----------------------------------------------------------------------
 -- T-S11-5: legacy episodes through the load gate

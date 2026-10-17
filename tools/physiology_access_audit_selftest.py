@@ -439,6 +439,18 @@ def case_brain_and_mind_ownership_and_atomic_batches():
     expect_clean("a contribution batch is allowed anywhere", files={"scripts/other.lua":
         'local physiology = require("scripts.physiology")\n'
         'physiology.creditBatch(1, { { key = "mood", amount = 0.1 } })\n'})
+    # The three writer files are owners for COVERAGE only (scope "facade"): a
+    # raw read or write of a mind key inside any of them is a finding, so the
+    # atomic-batch contract cannot be bypassed from within an owner (#2838).
+    for path, key in (("scripts/brain.lua", "mood"),
+                      ("scripts/mental_state.lua", "mental_state"),
+                      ("scripts/thoughts.lua", "mood")):
+        base = BASE[path]
+        expect(f"raw {key} write in {path}", f"raw write of owned key '{key}'",
+               files={path: base + f'unit.setStat(1, "{key}", 0.5)\n'})
+        expect(f"raw {key} read in {path}", f"raw read of owned key '{key}'",
+               files={path: base + f'local v = unit.getStat(1, "{key}")\n'})
+    expect_clean("the writers still read and batch through the facade")
     # The three writer files each name their system's keys (coverage).
     expect("brain.lua names nothing", "no Lua owner of system 'consciousness' names any",
            files={"scripts/brain.lua": 'local b = {}\nreturn b\n'})

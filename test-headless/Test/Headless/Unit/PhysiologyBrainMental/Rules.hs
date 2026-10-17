@@ -280,7 +280,13 @@ interfaceSpec = describe "interface equivalence (I2)" $ do
 --   the worst difference between the two units' reads of @keys@.
 heldRun ∷ LuaBackendState → Text → [Text] → IO Double
 heldRun ls hold keys = luaNum ls $ T.concat
-    [ "(function() local worst = 0; for _ = 1, 600 do __resources.update(0.1); "
+    -- no thought may fire: a thought nudges the mood by a RANDOM delta, and the
+    -- two units draw different ones, which is a difference of the stream and
+    -- not of the interface under test
+    [ "(function() for _, u in ipairs({ 1, 2 }) do "
+    , "if unit.readPhysio(u, 'thought_next_at') ~= nil and unit.getPhysioMode(u, 'mind') == 'simulated' "
+    , "then unit.setStat(u, 'thought_next_at', 1e9) end end; "
+    , "local worst = 0; for _ = 1, 600 do __resources.update(0.1); "
     , hold, "; "
     , "for _, k in ipairs({", T.intercalate "," [ "'" <> k <> "'" | k ← keys ], "}) do "
     , "local a, b = unit.readPhysio(1, k), unit.readPhysio(2, k); "
