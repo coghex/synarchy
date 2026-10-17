@@ -30,7 +30,7 @@ import Equipment.Types (emptyEquipmentClassManager)
 import Infection.Types (emptyInfectionManager)
 import Item.Types (emptyItemManager)
 import Test.Headless.World.Save.Components.Fixture (page1)
-import World.Save.Physiology (PhysiologyNormalization(..))
+import World.Save.Physiology (PhysiologyNormalization(..), physiologyLoadGate)
 import World.Save.Snapshot (PageSnapshot(..))
 import World.Save.Types (UnitInstanceSnapshot(..), UnitSnapshot(..), fromUnitSnapshot)
 
@@ -39,6 +39,7 @@ spec = describe "persistence of the blood modes" $ do
     roundTripSpec
     nominalSpec
     legacySpec
+    malformedSpec
     pausedLoadSpec
 
 maxBlood ∷ Float
@@ -146,6 +147,51 @@ legacySpec = describe "a legacy shadow blood stat" $
             fmap uisBlood (HM.lookup (UnitId 1) (usnInstances us1)) `shouldBe` Just 2.0
             (us2, notes2) ← gate reg defs us1
             (us2, notes2) `shouldBe` (us1, [])
+
+-----------------------------------------------------------------------
+-- Storage-aware validation of the dedicated field
+-----------------------------------------------------------------------
+
+malformedSpec ∷ Spec
+malformedSpec = describe "a malformed dedicated volume" $
+    it "rejects a non-finite Simulated uisBlood before publication, accepts and \
+       \rewrites a non-finite NOMINAL one (it is ignored), and scrubs a stale \
+       \non-finite shadow blood stat beside a valid dedicated volume" $
+        withShipped $ \(env, _) → do
+            reg ← readShippedPhysiologyRegistry
+            defs ← shippedDefs env
+            placeUnits env
+                [ (1, "acolyte", Nothing, [], [])
+                , (2, "acolyte", Nothing, [("blood", PhysioNominal)], [])
+                , (3, "acolyte", Nothing, [], []) ]
+            setBlood env 1 (0 / 0)
+            setBlood env 2 (1 / 0)
+            modifyInstance env 3 $ \i →
+                i { uiStats = HM.insert "blood" (0 / 0) (uiStats i) }
+            onSavePage env [1, 2, 3]
+            pg ← pageSnapshotOf env
+            let units = pgsUnits pg
+                only keep = units { usnInstances = HM.filterWithKey
+                                      (\k _ → k ≡ UnitId keep) (usnInstances units) }
+                loadOf u = physiologyLoadGate reg (HM.map udPhysiology defs) 0
+                               [(page1, only u)]
+            -- a Simulated unit with a NaN dedicated volume is rejected
+            case loadOf 1 of
+                Left msgs → any (T.isInfixOf "blood") msgs `shouldBe` True
+                Right _ → expectationFailure "a non-finite Simulated blood passed the gate"
+            -- a Nominal one is ignored and rewritten to the canonical maximum
+            case loadOf 2 of
+                Right ([(_, us)], notes) → do
+                    notes `shouldBe` []
+                    fmap uisBlood (HM.lookup (UnitId 2) (usnInstances us)) `shouldBe` Just 5.25
+                other → expectationFailure ("Nominal NaN: " <> show (fmap (const ()) other))
+            -- a valid dedicated volume with a stale non-finite shadow: scrubbed, loads
+            case loadOf 3 of
+                Right ([(_, us)], notes) → do
+                    length notes `shouldBe` 1
+                    fmap (HM.member "blood" ∘ uisStats) (HM.lookup (UnitId 3) (usnInstances us))
+                        `shouldBe` Just False
+                other → expectationFailure ("shadow NaN: " <> show (fmap (const ()) other))
 
 -----------------------------------------------------------------------
 -- The paused load, and transience

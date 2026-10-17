@@ -312,6 +312,26 @@ transitionSpec = describe "transitions (T-S10-3)" $ do
                 map uiBlood after `shouldBe` map uiBlood before
                 map uiPhysioOverrides after `shouldBe` map uiPhysioOverrides before
 
+    forM_ [("+100 %", 1.0), ("-100 %", -1.0), ("-50 %", -0.5)] $ \(label, pct) →
+        it ("ignores a " <> label <> " modifier carried under the key blood: the \
+            \seed and a caller value are stored directly, the transition is \
+            \never refused for it, and reads ignore it") $
+            withScene [ (bloodUnit 1 (Just PhysioNominal) 1.0 [])
+                          { usModifiers = [("blood", [StatModifier 0 "spec" Nothing pct])] } ] $
+                \(env, ls) → do
+                    setModeText ls 1 "blood" "simulated" "" `shouldReturn` "true|true"
+                    bloodOf env 1 >>= near' maxBlood
+                    readOwned ls 1 "blood" `shouldReturn` "5.25|simulated"
+                    setModeText ls 1 "blood" "simulated" "{ blood = 2.5 }"
+                        `shouldReturn` "true|false"
+                    bloodOf env 1 >>= near' 2.5
+                    readOwned ls 1 "blood" `shouldReturn` "2.5|simulated"
+                    -- and a Nominal -> Simulated seed with a caller value
+                    setModeText ls 1 "blood" "nominal" "" `shouldReturn` "true|true"
+                    setModeText ls 1 "blood" "simulated" "{ blood = 1.25 }"
+                        `shouldReturn` "true|true"
+                    bloodOf env 1 >>= near' 1.25
+
     it "records a pin equal to the default as intent and runs the hook only \
        \on an effective change" $
         withScene [bloodUnit 1 Nothing maxBlood []] $ \(_, ls) → do

@@ -184,12 +184,24 @@ physiologyLoadRejections registry defs pages = concatMap pageRejections pages
               , resolveMode sys up (engagementApplied (uisStats u))
                     (HM.lookup (psId sys) resolved)
                     ≡ ModeSimulated
-              , key ← map okKey (psOwns sys) ⧺ psMeters sys
-              , Just v ← [HM.lookup key (uisStats u)]
+              , (key, v) ← storedValues sys u
               , isNaN v ∨ isInfinite v ]
             ⧺ [ MalformedEngagementMarker pid uid (uisDefName u) v
               | Just v ← [HM.lookup combatEngagedKey (uisStats u)]
               , isNaN v ∨ isInfinite v ∨ (v ≢ 1 ∧ v ≢ 2) ]
+
+-- | A system's stored values AS THE LOAD READS THEM, storage-aware (#2837): a
+--   field-backed owned key (blood) is the dedicated field @uisBlood@, never a
+--   @uiStats@ entry, so a malformed field is examined and rejected, and a
+--   stale non-finite legacy shadow entry (which the load scrubs) is not.
+storedValues ∷ PhysiologySystem → UnitInstanceSnapshot → [(Text, Float)]
+storedValues sys u =
+    [ (okKey o, v)
+    | o ← psOwns sys
+    , v ← case okField o of
+        Just _  → [uisBlood u]
+        Nothing → maybeToList (HM.lookup (okKey o) (uisStats u)) ]
+    ⧺ [ (m, v) | m ← psMeters sys, Just v ← [HM.lookup m (uisStats u)] ]
 
 -- * Deterministic normalization (S4, #2831; design D-6)
 

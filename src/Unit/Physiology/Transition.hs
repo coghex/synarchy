@@ -167,6 +167,18 @@ storeAs ctx key target =
             \multiplier is not positive, or the base would be negative \
             \or not finite)"
 
+-- | The value to STORE for an owned key whose EFFECTIVE target is @target@. A
+--   stat-backed key stores the base that 'effectiveStat' maps to the target
+--   under the key's active modifiers ('storeAs'). A field-backed key (blood,
+--   #2837) lives in a dedicated unit field that carries NO modifiers and whose
+--   reads ignore every modifier a stat key of that name might hold, so its
+--   target is stored directly: a stray modifier must neither change the seed
+--   nor refuse the transition.
+storeFor ∷ PhysioContext → OwnedKey → Float → Either Text Float
+storeFor ctx o target
+    | isJust (okField o) = Right target
+    | otherwise          = storeAs ctx (okKey o) target
+
 -- | Seed @sys@'s owned keys into @stats@. @explicit@ names the keys the
 --   caller chose a value for; the rest take 'seedTarget'. With
 --   @missingOnly@ a key already stored is left EXACTLY as it is (load
@@ -182,7 +194,7 @@ seedSystem ctx sys explicit missingOnly = flip (foldM step) (psOwns sys)
             target ← case lookup (okKey o) explicit of
                 Just v  → Right v
                 Nothing → seedTarget ctx' o
-            base ← storeAs ctx' (okKey o) target
+            base ← storeFor ctx' o target
             pure (HM.insert (okKey o) base stats)
 
 -- | Remove every key the system holds.
@@ -299,7 +311,7 @@ moveStats ctx sys before after mValues = case (before, after) of
     writeOne vs stats o = case lookup (okKey o) vs of
         Nothing → Right stats
         Just v  → do
-            base ← storeAs (ctx { pcStats = stats }) (okKey o) v
+            base ← storeFor (ctx { pcStats = stats }) o v
             pure (HM.insert (okKey o) base stats)
 
 -- * Combat engagement (SD-20, #2834)
