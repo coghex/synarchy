@@ -678,14 +678,18 @@ def exhaustion_sleep_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> N
                  .strip('"') == ES_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
         # The STANDARD spawn profile (#2756): every stat at its definition's
-        # mean, so each maximum is a known number, not a roll.
-        acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+        # mean, so each maximum is a known number, not a roll. The height is
+        # OMITTED (nil), so each unit spawns ON the resolved surface: an
+        # explicit Z of 0 sits off the generated terrain, the unit FALLS, and
+        # under a slow runner it dies of the fall before the engine can be
+        # paused with every unit standing (#2837's CI evidence).
+        acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, nil, "
                                     "'player', nil, nil, 'standard')"))
-        pinned = as_int(send(port, "return unit.spawn('red_squirrel', 5, 5, 0, "
+        pinned = as_int(send(port, "return unit.spawn('red_squirrel', 5, 5, nil, "
                                    "'player', nil, nil, 'standard')"))
-        plain = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, 0, "
+        plain = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, nil, "
                                   "'player', nil, nil, 'standard')"))
-        mule = as_int(send(port, "return unit.spawn('technomule', 7, 7, 0, "
+        mule = as_int(send(port, "return unit.spawn('technomule', 7, 7, nil, "
                                  "'player', nil, nil, 'standard')"))
         uids = (acolyte, pinned, plain, mule)
         chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
@@ -837,13 +841,13 @@ def cardio_circulation_cycles(chk: Checks, root: str, tmpdir: str, port: int) ->
         wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
                  .strip('"') == CC_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
-        acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+        acolyte = as_int(send(port, "return unit.spawn('acolyte', 4, 4, nil, "
                                     "'player', nil, nil, 'standard')"))
-        nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, 0, "
+        nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, nil, "
                                   "'player', nil, nil, 'standard')"))
-        squirrel = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, 0, "
+        squirrel = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, nil, "
                                      "'player', nil, nil, 'standard')"))
-        deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, 0, "
+        deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, nil, "
                                  "'player', nil, nil, 'standard')"))
         uids = (acolyte, nomad, squirrel, deer)
         chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
@@ -1011,13 +1015,13 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
                  .strip('"') == BL_PAGE, 30.0)
         send(port, "return world.waitForInit(30)", timeout=35)
-        bled = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, "
+        bled = as_int(send(port, "return unit.spawn('acolyte', 4, 4, nil, "
                                  "'player', nil, nil, 'standard')"))
-        nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, 0, "
+        nomad = as_int(send(port, "return unit.spawn('nomad_primitive', 5, 5, nil, "
                                   "'player', nil, nil, 'standard')"))
-        squirrel = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, 0, "
+        squirrel = as_int(send(port, "return unit.spawn('red_squirrel', 6, 6, nil, "
                                      "'player', nil, nil, 'standard')"))
-        deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, 0, "
+        deer = as_int(send(port, "return unit.spawn('white_tailed_deer', 7, 7, nil, "
                                  "'player', nil, nil, 'standard')"))
         uids = (bled, nomad, squirrel, deer)
         chk.ok(None not in uids and min(uids) >= 0, f"the four units spawned (got {uids})")
@@ -1051,15 +1055,24 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
                f"a raw blood write is refused and stores nothing (got {refused!r})")
 
         # Bleed one Simulated unit to a genuine partial volume, then pause.
-        send(port, f"unit.injure({bled}, 'torso', 'slash', 0.3, 1.0); return 'ok'")
+        send(port, f"unit.injure({bled}, 'torso', 'slash', 0.1, 1.0); return 'ok'")
         send(port, "require('scripts.pause').set(false); return 'ok'")
-        chk.ok(wait_for(port, lambda: (blood_state(port, bled)["cur"] or 99)
-                        < (blood_state(port, bled)["max"] or 0) - 0.05, 12.0),
+
+        def bled_partially() -> bool:
+            # pause the instant the volume has dropped: on a slow runner a
+            # poll interval is long enough for a deep cut to run the unit to
+            # zero and kill it (#2837 CI evidence), which is no partial volume
+            st = blood_state(port, bled)
+            if st["cur"] is None or st["cur"] >= (st["max"] or 0) - 0.05:
+                return False
+            send(port, "require('scripts.pause').set(true); return 'ok'")
+            return True
+        chk.ok(wait_for(port, bled_partially, 30.0),
                "the Simulated unit bled to a partial volume")
         send(port, "require('scripts.pause').set(true); return 'ok'")
         partial = blood_state(port, bled)
-        chk.ok(partial["cur"] is not None and partial["cur"] < partial["max"],
-               f"the bled unit holds a partial volume (got {partial})")
+        chk.ok(partial["cur"] is not None and 0.0 < partial["cur"] < partial["max"],
+               f"the bled unit holds a partial, non-zero volume (got {partial})")
         # Pin the nomad Nominal through the facade: the field is written canonical.
         pinned = send(port, f"local ok, ch = require('scripts.physiology')"
                             f".setMode({nomad}, 'blood', 'nominal'); "
@@ -1093,9 +1106,9 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         # while the Simulated unit keeps bleeding.
         send(port, f"unit.injure({nomad}, 'torso', 'slash', 0.6, 1.0); return 'ok'")
         # a fresh cut on the Simulated unit too: its saved wound may have clotted
-        send(port, f"unit.injure({bled}, 'torso', 'slash', 0.3, 1.0); return 'ok'")
+        send(port, f"unit.injure({bled}, 'torso', 'slash', 0.1, 1.0); return 'ok'")
         send(port, "require('scripts.pause').set(false); return 'ok'")
-        chk.ok(wait_for(port, lambda: (blood_state(port, bled)["cur"] or 99) < partial["cur"] - 0.02, 12.0),
+        chk.ok(wait_for(port, lambda: (blood_state(port, bled)["cur"] or 99) < partial["cur"] - 0.02, 30.0),
                "the Simulated unit drains after the reload and a fresh cut")
         st = blood_state(port, nomad)
         chk.ok(st["cur"] == st["max"] and st["pose"] != "dead"
