@@ -31,6 +31,7 @@ module Unit.Types
     , UnitDef(..)
     , UnitPhysiology(..)
     , noUnitPhysiology
+    , plainUnitPhysiology
     , PhysioMode(..)
     , PhysioOverrides
     , emptyPhysioOverrides

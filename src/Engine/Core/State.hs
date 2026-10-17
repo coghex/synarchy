@@ -722,9 +722,9 @@ data EngineEnv = EngineEnv
     --   its stat/skill templates against it and refuses to register with
     --   no registry loaded. Populated by `engine.loadPhysiologyYaml`;
     --   read through `engine.getPhysiologyRegistry` and the
-    --   `unit.*Physio*` read verbs. INACTIVE in S2: no production tick,
-    --   gameplay consumer or save path consults it. Rebuild content,
-    --   re-read from the data file on every boot.
+    --   `unit.*Physio*` read verbs, the facade, the tick gates, the spawn
+    --   seeding, the raw write gate and the load gate (S4, #2831).
+    --   Rebuild content, re-read from the data file on every boot.
   , tutorialRegistryRef ∷ IORef TutorialRegistry
     -- ^ The one active tutorial definition tree, loaded from
     --   data/tutorials/*.yaml at boot (#957). Pure authored data —

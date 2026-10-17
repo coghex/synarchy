@@ -87,6 +87,8 @@ import Data.List (maximumBy)
 import qualified System.Random as Random
 import Combat.Types (AttackMode(..), attackModeText)
 import Engine.Core.State (EngineEnv, loggerRef)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
@@ -113,6 +115,7 @@ import Combat.Resolution.Damage
     ( ResolvedStrike(..), swingKinematics, weaponPenetration, computeSeverity )
 import Combat.Resolution.Wear
     ( weaponWear, applyWeaponWear, applyArmorWear, spendStrikeCost )
+import Combat.Resolution.Stamina (staminaWorkFraction)
 import Combat.Resolution.Events
     ( missEvent, refusedEvent, hitEvent, deathEvent, pushEvent, setDead )
 
@@ -235,6 +238,12 @@ runResolution
     → UnitInstance → UnitDef
     → IO Bool
 runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef = do
+    -- The physiology registry, read once: the stamina mode of the
+    -- attacker decides what the swing costs and how winded it works
+    -- (#2834). Immutable content, so a read before the commit is exact.
+    physReg ← readIORef
+        (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+    let staminaFrac = staminaWorkFraction physReg (udPhysiology adef) gt atk
     let mEquipped = firstEquippedWeapon im (uiEquipment atk)
         mWeapon   = (\(_, _, w) → w) ⊚ mEquipped
         natW      = udNaturalWeapon adef
@@ -333,7 +342,7 @@ runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed
             -- world invalidated while this one resolved is refused
             -- here and charges nothing (#2328).
             committed ← commitStrike env reachBonus mode atkRaw tgtRaw rangeOf
-                            (\_ _ um' → spendStrikeCost gt mode atkRaw um')
+                            (\_ _ um' → spendStrikeCost physReg gt mode atkRaw um')
             case committed of
                 CommitVanished → pure False
                 CommitRefused refusal → do
@@ -367,7 +376,7 @@ runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed
                         [("slash", 0.85), ("blunt", 0.70), ("stab", 0.20)]
                     | otherwise = [(kind, 1.0)]
                 results =
-                    [ (k, computeSeverity sm im gt atk tdef mEquipped natW
+                    [ (k, computeSeverity sm im staminaFrac atk tdef mEquipped natW
                                 tgt partId k mode allocRoll w lungeSpeed)
                     | (k, w) ← components ]
                 sevOf (_, (s,_,_,_,_,_,_)) = s
@@ -455,7 +464,7 @@ runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed
             -- and the blood, the wear and the death check below are all
             -- skipped along with the hit event.
             committed ← commitStrike env reachBonus mode atkRaw tgtRaw rangeOf
-                            (\_ _ um' → spendStrikeCost gt mode atkRaw
+                            (\_ _ um' → spendStrikeCost physReg gt mode atkRaw
                                             (woundTarget um'))
             case committed of
               CommitVanished → pure False

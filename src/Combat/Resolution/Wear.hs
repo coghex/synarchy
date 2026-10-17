@@ -23,8 +23,10 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Types (ItemDef(..), ItemInstance(..), ItemManager(..), lookupItemDef)
 import Substance.Types (SubstanceManager, SubstanceDef(..), lookupSubstance)
+import Unit.Physiology.Types (PhysiologyRegistry, UnitPhysiology)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
-import Combat.Resolution.Common (maxStaminaFor)
+import Combat.Resolution.Stamina
+    (spendStaminaCost, definitionPhysiologyOf)
 import Combat.Resolution.Damage (defenderArmor)
 import Combat.Resolution.Constants
     ( sharpWearScale, condWearScale, refFractureToughness
@@ -152,26 +154,27 @@ staminaCostFraction Heavy = 0.25
 --   an EngineEnv/IORef — e.g. to confirm mental effectiveness (which
 --   this never reads) leaves it untouched.
 --
---   max_stamina comes from 'Combat.Resolution.Common.maxStaminaFor' (the
---   mirror of Lua's unit_stats derivation), resolved at @now@ — the
---   ATTACK's captured game-time sample. Since #1735 that mirror is the
---   EFFECTIVE pool, so an equipped accessory's buff or a unit def's
---   innate modifier on max_stamina/endurance changes what a swing
---   costs by exactly what Lua reports. A WOUND does not: nothing in
---   the wound path writes uiModifiers, so wounds leave the pool alone
---   (they cost the swing through pain and severity instead). Neither
+--   The stamina half is mode-aware (#2834, design S8.2): it goes through
+--   'Combat.Resolution.Stamina.spendStaminaCost', which charges the
+--   EFFECTIVE maximum ('Combat.Resolution.Common.maxStaminaFor', at
+--   @now@ — the ATTACK's captured game-time sample) through the one
+--   stamina commit rule, and only against a Simulated pool. A Nominal
+--   (or Unsupported) attacker's cost is DISCARDED and no @stamina@ key
+--   is created; the absent-as-zero insert that used to leave a poolless
+--   species winded after its first swing (S8-F1) is gone. STANCE is
+--   unowned and always on: it is spent in every mode. A WOUND does not
+--   move the pool: nothing in the wound path writes uiModifiers (they
+--   cost the swing through pain and severity instead). Neither
 --   concentration nor mental_state is read anywhere here.
-staminaDrainStats ∷ Double → AttackMode → UnitInstance → HM.HashMap Text Float
-staminaDrainStats now mode inst =
-    let stamina   = HM.lookupDefault 0.0 "stamina" (uiStats inst)
-        maxStam   = maxStaminaFor now inst
-        cost      = staminaCostFraction mode * maxStam
-        new       = max 0.0 (stamina - cost)
+staminaDrainStats ∷ PhysiologyRegistry → UnitPhysiology → Double → AttackMode
+                  → UnitInstance → HM.HashMap Text Float
+staminaDrainStats reg up now mode inst =
+    let spent     = spendStaminaCost reg up now (staminaCostFraction mode) inst
         -- Stance spent on the swing (absent ⇒ full 1.0).
         -- Floors at 0; unit_resources.lua regenerates it.
         stance    = HM.lookupDefault 1.0 "stance" (uiStats inst)
         stance'   = max 0.0 (stance - stanceAttackCost mode)
-    in HM.insert "stance" stance' $ HM.insert "stamina" new (uiStats inst)
+    in HM.insert "stance" stance' spent
 
 -- | Charge the attacker for one swing (hit or miss): its stamina +
 --   stance drained by 'staminaDrainStats'. @now@ is the resolution's
@@ -185,11 +188,13 @@ staminaDrainStats now mode inst =
 --   swing refused at commit cannot be charged for and a swing that
 --   commits cannot pay against a stance some other writer moved after
 --   the check. An attacker that vanished mid-resolution is left alone.
-spendStrikeCost ∷ Double → AttackMode → Word32 → UnitManager → UnitManager
-spendStrikeCost now mode atkRaw um =
+spendStrikeCost ∷ PhysiologyRegistry → Double → AttackMode → Word32
+                → UnitManager → UnitManager
+spendStrikeCost reg now mode atkRaw um =
     let uid = UnitId atkRaw
     in case HM.lookup uid (umInstances um) of
         Nothing → um
         Just inst →
-            let inst' = inst { uiStats = staminaDrainStats now mode inst }
+            let up    = definitionPhysiologyOf um inst
+                inst' = inst { uiStats = staminaDrainStats reg up now mode inst }
             in um { umInstances = HM.insert uid inst' (umInstances um) }

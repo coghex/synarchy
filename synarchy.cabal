@@ -623,7 +623,10 @@ library
                      Unit.Faction.Catalogue
                      Unit.Faction.Membership
                      Unit.Faction.Profile
+                     Unit.Blood
                      Unit.Physiology
+                     Unit.Physiology.Circulation
+                     Unit.Physiology.Transition
                      Unit.Physiology.Types
                      World.Save.Physiology
                      Gameplay.Tags.Types
@@ -793,6 +796,7 @@ library
                      Combat.Resolution.Strike
                      Combat.Resolution.Damage
                      Combat.Resolution.Wear
+                     Combat.Resolution.Stamina
                      Combat.Resolution.Events
                      Combat.Wounds
                      Combat.Wounds.Bleed
@@ -1651,6 +1655,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.RuinOccupantSurvival
                    Test.Headless.Unit.SurvivalExemption
                    Test.Headless.Unit.SaltReserve
+                   Test.Headless.Unit.PhysiologyConsumerMigration
                    Test.Headless.Unit.SweatMassScaling
                    Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.GenConfigDomain
@@ -1809,6 +1814,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.Clipping
                    Test.Headless.UI.ListScrollSync
                    Test.Headless.UI.InteractiveBounds
+                   Test.Headless.UI.PhysiologyModes
                    Test.Headless.UI.PopupPlacement
                    Test.Headless.Event.PlayerEventProgress
                    Test.Headless.Event.PopupCoordPage
@@ -1913,6 +1919,29 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.FactionCatalogue
                    Test.Headless.Unit.Physiology
                    Test.Headless.Unit.PhysiologyEngine
+                   Test.Headless.Unit.PhysiologySpeciesProfiles
+                   Test.Headless.Unit.PhysiologyBloodModes
+                   Test.Headless.Unit.PhysiologyBloodModes.Adapter
+                   Test.Headless.Unit.PhysiologyBloodModes.Modes
+                   Test.Headless.Unit.PhysiologyBloodModes.Persistence
+                   Test.Headless.Unit.PhysiologyBloodModes.WoundFold
+                   Test.Headless.Unit.PhysiologyCardioCirculationModes
+                   Test.Headless.Unit.PhysiologyCardioCirculationModes.Persistence
+                   Test.Headless.Unit.PhysiologyCardioCirculationModes.Rule
+                   Test.Headless.Unit.PhysiologyExhaustionSleepModes
+                   Test.Headless.Unit.PhysiologyExhaustionSleepModes.Persistence
+                   Test.Headless.Unit.PhysiologyExhaustionSleepModes.Sleep
+                   Test.Headless.Unit.PhysiologyStaminaModes
+                   Test.Headless.Unit.PhysiologyStaminaModes.Combat
+                   Test.Headless.Unit.PhysiologyStaminaModes.Persistence
+                   Test.Headless.Unit.PhysiologyStaminaModes.Tuning
+                   Test.Headless.Unit.PhysiologyModes
+                   Test.Headless.Unit.PhysiologyModes.Climates
+                   Test.Headless.Unit.PhysiologyModes.Harness
+                   Test.Headless.Unit.PhysiologyModes.Neutrality
+                   Test.Headless.Unit.PhysiologyModes.Persistence
+                   Test.Headless.Unit.PhysiologyModes.Tissue
+                   Test.Headless.Unit.PhysiologyModes.Transitions
                    Test.Headless.Unit.PhysiologyFixture
                    Test.Headless.Unit.FactionProfile
                    Test.Headless.Unit.FactionProfileWire

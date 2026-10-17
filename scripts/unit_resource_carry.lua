@@ -49,10 +49,12 @@
 --
 -- Both reads go through the same `unit.getStat` the tick itself reads
 -- `current` with -- the EFFECTIVE value -- so the stored value compared
--- against and the remainder taken from it are the same quantity. No
--- resource declares a stat modifier today; if one ever did, the
--- comparison below would simply see the shifted value as somebody
--- else's write and stop carrying, which is the safe direction.
+-- against and the remainder taken from it are the same quantity. The
+-- write is the other half of that: `unit.setStat` stores a BASE, so a pool
+-- that carries an active modifier (a retained one on an exhaustion or
+-- sleep pool, #2835) is written with the base whose EFFECTIVE value is the
+-- target (scripts/lib/stat_base.lua), and everything above stays in the
+-- effective domain. A pool with none writes the target itself.
 --
 -- The state is transient by construction (it is meaningless without the
 -- stored value it is a remainder OF) and is never serialized:
@@ -62,6 +64,8 @@
 -- per-uid cache does and for the same reason: they are tiny, bounded by
 -- the units ever spawned, and a reused id cannot inherit one, because
 -- the stored value it names has to still be there for it to be used.
+local statBase = require("scripts.lib.stat_base")
+
 local M = {}
 
 -- uid → resourceName → { stored = <what we wrote, as storage read it
@@ -229,7 +233,17 @@ function M.integrate(uid, resourceName, current, amount, maxVal)
         value = maxVal
     end
 
-    unit.setStat(uid, resourceName, value)
+    -- `value` is an EFFECTIVE target and setStat stores a BASE: with an active
+    -- modifier on the pool they differ (#2835), so solve for the base that
+    -- lands the effective value on it. Without one it is `value` itself, bit
+    -- for bit. No representable base (a multiplier that is not positive, or a
+    -- negative base) leaves the pool as it is, with no remainder.
+    local base = statBase.baseFor(uid, resourceName, value)
+    if base == nil then
+        M.forget(uid, resourceName)
+        return unit.getStat(uid, resourceName)
+    end
+    unit.setStat(uid, resourceName, base)
     -- Read back rather than predicting the rounding: this is the one
     -- value that is true by construction, and it is also what makes the
     -- residue below exact instead of a model of binary32.

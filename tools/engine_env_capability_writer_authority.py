@@ -348,7 +348,11 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         # them in the SAME transaction that re-checks the strike's
         # preconditions. Combat.Resolution now only READS the manager
         # (its snapshot early-out); Wear still writes it for weapon and
-        # armour wear.
+        # armour wear. #2834: the same transaction is the SD-20 engagement
+        # detection (absent -> pending marker, for attacker and target) and
+        # the strike's stamina charge, which goes through the one stamina
+        # commit rule (Combat.Resolution.Stamina) only against a Simulated
+        # pool.
         "Combat.Resolution.Admission",
         "Combat.Resolution.Wear",
         "Combat.Wounds.Tick",
@@ -363,6 +367,16 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Units.Equipment",
         "Engine.Scripting.Lua.API.Units.Inventory",
         "Engine.Scripting.Lua.API.Units.Medical",
+        # #2831: a physiology mode TRANSITION (setPhysioMode /
+        # clearPhysioMode) is one `atomicModifyIORef'` that reads the
+        # unit's CURRENT stats, overrides and modifiers, plans the seed or
+        # scrub, and publishes the result, so a mode change is observable
+        # whole or not at all. It cannot live in Stats: the plan reads the
+        # state it replaces inside the same transaction. #2834: the SD-20
+        # engagement APPLICATION (pending -> applied, with the full seed and
+        # the pinned override) is the same shape and the other of the
+        # marker's two writers.
+        "Engine.Scripting.Lua.API.Units.Physiology",
         "Engine.Scripting.Lua.API.Units.Selection",
         "Engine.Scripting.Lua.API.Units.Spawn",
         # #2470: the stamina commit is the same shape as the stance

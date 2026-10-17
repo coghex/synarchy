@@ -126,7 +126,13 @@ end
 -- Apply one tick's tissue deltas and write fat, lean and body.
 -- `fatDelta` / `leanDelta` are unclamped kilograms. Returns false when
 -- the unit has no composition to author (nothing is written).
-function M.commitComposition(uid, fatDelta, leanDelta)
+--
+-- `fatCap` / `leanCap` (optional, #2831 SD-18) bound a POSITIVE delta: the
+-- tissue grows toward the cap and stops there, and a tissue already above
+-- its cap is left exactly where it is (never pulled down). The clamp is
+-- applied BEFORE the sub-binary32 residue is taken, so growth the cap
+-- refused is not banked and repaid the moment the tissue leaves the bound.
+function M.commitComposition(uid, fatDelta, leanDelta, fatCap, leanCap)
     if not M.installWriteBarrier() then return false end
     local body = unit.getStat(uid, "body_mass")
     local lean = unit.getStat(uid, "lean_mass")
@@ -151,8 +157,14 @@ function M.commitComposition(uid, fatDelta, leanDelta)
     -- Clamp before the residue is taken, so unapplied burn/growth is
     -- not repaid the moment the tissue leaves the bound.
     local fatValue = fatExact + fatDelta
+    if fatCap and fatDelta > 0 then
+        fatValue = math.min(fatValue, math.max(fatCap, fatExact))
+    end
     if fatValue < 0 then fatValue = 0 end
     local leanValue = leanExact + leanDelta
+    if leanCap and leanDelta > 0 then
+        leanValue = math.min(leanValue, math.max(leanCap, leanExact))
+    end
     if leanValue < 0 then leanValue = 0 end
     local bodyValue = fatValue + leanValue + organ
     if bodyValue < 0 then bodyValue = 0 end

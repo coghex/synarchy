@@ -14,6 +14,7 @@ local addWaterSource       = core.addWaterSource
 local isGoalActive         = core.isGoalActive
 
 local mv = require("scripts.movement_speed")
+local physiology = require("scripts.physiology")
 local sourcePhase = require("scripts.unit_ai_source_phase")
 local needs = require("scripts.unit_ai_needs")
 local findCanteenWithWater = needs.findCanteenWithWater
@@ -224,11 +225,10 @@ local STRIDE_ASCEND  = 2
 local function drinkFromSourceUtility(uid, s, params)
     if sourcePhase.active(s) then return math.huge end
 
-    local hyd = unit.getStat(uid, "hydration")
-    local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
-    if not hyd or not maxHyd or maxHyd <= 0 then return -math.huge end
+    local frac = physiology.fraction(uid, "hydration", "max_hydration")
+    if not frac then return -math.huge end
 
-    local thirst = 1 - hyd / maxHyd
+    local thirst = 1 - frac
     if thirst < params.drink_min_thirst then return -math.huge end
     if not hasKnownWaterSource(s) then return -math.huge end
 
@@ -266,8 +266,8 @@ local function drinkFromSourceExecute(uid, s, params)
     -- setting the phase does not by itself supply any. When mostly
     -- full, kick off the ascent.
     if s.sourcePhase == "drinking" then
-        local hyd    = unit.getStat(uid, "hydration") or 0
-        local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration") or 0
+        local hyd    = physiology.get(uid, "hydration") or 0
+        local maxHyd = physiology.get(uid, "max_hydration") or 0
         -- maxHyd <= 0 means the stat went missing mid-drink (debug
         -- edit, def change). Bail into the ascent rather than holding
         -- the math.huge phase lock forever on a condition that can
@@ -375,10 +375,8 @@ local function searchUtility(uid, s, params)
     -- on its own — genuine thirst is carried by drink/refill, which
     -- scale past command themselves.
     if isGoalActive(s, "find_water") then
-        local hyd    = unit.getStat(uid, "hydration")
-        local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
-        local thirst = (hyd and maxHyd and maxHyd > 0)
-                       and math.max(0, math.min(1, 1 - hyd / maxHyd)) or 0
+        local frac   = physiology.fraction(uid, "hydration", "max_hydration")
+        local thirst = frac and math.max(0, math.min(1, 1 - frac)) or 0
         return params.goal_search_floor
              + params.goal_search_urgency * thirst
     end

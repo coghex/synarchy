@@ -193,6 +193,13 @@ import qualified Test.Headless.World.SessionEpoch as SessionEpoch
 import qualified Test.Headless.World.PageIncarnation as PageIncarnation
 import qualified Test.Headless.Unit.RuinOccupantSurvival as RuinOccupantSurvival
 import qualified Test.Headless.Unit.SaltReserve as SaltReserve
+import qualified Test.Headless.Unit.PhysiologyConsumerMigration as PhysiologyConsumerMigration
+import qualified Test.Headless.Unit.PhysiologyBloodModes as PhysiologyBloodModes
+import qualified Test.Headless.Unit.PhysiologyCardioCirculationModes as PhysiologyCardioCirculationModes
+import qualified Test.Headless.Unit.PhysiologyExhaustionSleepModes as PhysiologyExhaustionSleepModes
+import qualified Test.Headless.Unit.PhysiologyModes as PhysiologyModes
+import qualified Test.Headless.Unit.PhysiologySpeciesProfiles as PhysiologySpeciesProfiles
+import qualified Test.Headless.Unit.PhysiologyStaminaModes as PhysiologyStaminaModes
 import qualified Test.Headless.Unit.SweatMassScaling as SweatMassScaling
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
@@ -262,6 +269,7 @@ import qualified Test.Headless.UI.DropdownCommit as UIDropdownCommit
 import qualified Test.Headless.UI.Clipping as UIClipping
 import qualified Test.Headless.UI.ListScrollSync as UIListScrollSync
 import qualified Test.Headless.UI.InteractiveBounds as UIInteractiveBounds
+import qualified Test.Headless.UI.PhysiologyModes as UIPhysiologyModes
 import qualified Test.Headless.UI.PopupPlacement as UIPopupPlacement
 import qualified Test.Headless.Event.PlayerEventProgress as PlayerEventProgress
 import qualified Test.Headless.Event.PopupCoordPage as PopupCoordPage
@@ -1033,6 +1041,13 @@ restLane = do
     -- reported seed-14 world and steps its ruin roster through the bound.
     RuinOccupantSurvival.spec
     SaltReserve.spec
+    PhysiologyConsumerMigration.spec
+    PhysiologyModes.spec
+    PhysiologySpeciesProfiles.spec
+    PhysiologyStaminaModes.spec
+    PhysiologyExhaustionSleepModes.spec
+    PhysiologyCardioCirculationModes.spec
+    PhysiologyBloodModes.spec
     -- Own engine per example (#2825): one shipped thermo.tick each.
     SweatMassScaling.spec
     describe "Load.Status" LoadStatus.spec
@@ -1163,6 +1178,7 @@ restLane = do
     describe "UI.Clipping" UIClipping.spec
     describe "List scrollbar sync" UIListScrollSync.spec
     describe "UI.InteractiveBounds" UIInteractiveBounds.spec
+    UIPhysiologyModes.spec
     describe "UI.PopupPlacement" UIPopupPlacement.spec
     -- #1714: its own engine per example (the event store's sequence
     -- counter is process-lifetime, and one case drives the real

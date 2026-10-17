@@ -1,5 +1,15 @@
 -- | The survival-physiology exemption, unit by unit (#2754).
 --
+--   Since S4 (#2831) the exemption is the @exempt@ physiology profile: every
+--   system Nominal, so a nomad holds no survival key at all and reads the
+--   healthy substitutes through @unit.readPhysio@, where #2754 kept the
+--   keys and pinned them each tick. The OUTCOMES asserted below are the
+--   ones #2754 set; only how the nomad is built and read changed. The
+--   stale-save case moved to the load boundary, where the engine now scrubs
+--   a Nominal unit's stored survival keys (see
+--   "Test.Headless.Unit.PhysiologyModes.Persistence"); here a paused
+--   session's CACHES are what is left to refresh.
+--
 --   "Test.Headless.Unit.RuinOccupantSurvival" proves the exemption in
 --   the reported world. These specs pin its edges on a one-page scene:
 --   the SHIPPED @scripts\/unit_resources.lua@ (and everything it ticks)
@@ -25,6 +35,7 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Test.Headless.Unit.PhysiologyFixture (ensurePhysiologyRegistry, withProfile)
 import Test.Headless.Unit.TransferApi (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
@@ -51,7 +62,11 @@ healthy = HM.fromList
     , ("hydration", 42), ("max_hydration", 42)
     , ("hunger", 700), ("max_hunger", 700)
     , ("calories", 1400), ("max_calories", 1400)
-    , ("core_temp", 37), ("salt", 70), ("salt_conc", 1)
+    , ("core_temp", 37), ("salt", 70), ("salt_store", 140)
+    -- the exertion pool (#2834): the acolyte's stamina is Simulated, so its
+    -- brain and tick read a stored pool; the nomad's is Nominal (scrubbed or
+    -- ignored) and reads the effective maximum from `endurance`
+    , ("stamina", 10)
     , ("consciousness", 1), ("blood_oxygen", 1), ("heart_rate", 70) ]
 
 mkUnit ∷ Text → HM.HashMap Text Float → Float → [Wound] → UnitInstance
@@ -76,20 +91,31 @@ mkUnit defName stats blood ws = UnitInstance
 fullBlood ∷ Float
 fullBlood = 70 * 0.075
 
+-- | The keys a Nominal system must not hold (the exempt nomad's).
+survivalKeys ∷ [Text]
+survivalKeys =
+    [ "core_temp", "salt", "salt_store", "salt_conc", "hydration", "hunger"
+    , "calories", "hypothermia", "hyperthermia", "salt_imbalance" ]
+
 -- | Both units on one ACTIVE page (unit.getAllIds lists the active page
---   only), with the given stats, blood and wounds each.
+--   only), with the given stats, blood and wounds each. The acolyte (@rich@,
+--   every system Simulated) stores the stats as given; the nomad (@exempt@,
+--   every system Nominal) stores none of the survival keys.
 scene ∷ EngineEnv → HM.HashMap Text Float → Float → [Wound] → IO ()
 scene env stats blood ws = do
+    ensurePhysiologyRegistry env
     page ← emptyWorldState
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, page)], wmVisible = [fixturePage] }
     writeIORef (gameTimeRef env) 0
+    nomadDef   ← withProfile "exempt" (minimalDef "nomad_primitive" "Nomad")
+    acolyteDef ← withProfile "rich" (minimalDef "acolyte" "Acolyte")
+    let nomadStats = HM.filterWithKey (\k _ → k `notElem` survivalKeys) stats
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.fromList
-            [ ("nomad_primitive", minimalDef "nomad_primitive" "Nomad")
-            , ("acolyte", minimalDef "acolyte" "Acolyte") ]
+            [ ("nomad_primitive", nomadDef), ("acolyte", acolyteDef) ]
         , umInstances = HM.fromList
-            [ (nomadUid, mkUnit "nomad_primitive" stats blood ws)
+            [ (nomadUid, mkUnit "nomad_primitive" nomadStats blood ws)
             , (acolyteUid, mkUnit "acolyte" stats blood ws) ] }
     _ ← Q.flushQueue (unitQueue env)
     pure ()
@@ -122,11 +148,11 @@ setupLua env = do
         , "  for _ = 1, math.floor(seconds * 10 + 0.5) do"
         , "    resources.update(0.1)"
         , "    for uid, r in pairs(w) do"
-        , "      r.core = math.max(r.core, math.abs((unit.getStat(uid, 'core_temp') or 37) - 37))"
-        , "      r.salt = math.max(r.salt, math.abs((unit.getStat(uid, 'salt_conc') or 1) - 1))"
+        , "      r.core = math.max(r.core, math.abs((unit.readPhysio(uid, 'core_temp') or 37) - 37))"
+        , "      r.salt = math.max(r.salt, math.abs((unit.readPhysio(uid, 'salt_conc') or 1) - 1))"
         , "      r.cons = math.min(r.cons, brain.consciousness(uid))"
         , "      for _, m in ipairs(SURVIVAL) do"
-        , "        r.meter = math.max(r.meter, unit.getStat(uid, m) or 0)"
+        , "        r.meter = math.max(r.meter, unit.readPhysio(uid, m) or 0)"
         , "      end"
         , "    end"
         , "  end"
@@ -205,8 +231,7 @@ spec = describe "survival exemption" $ do
     forM_ [ ("lethal heat", 60, 0.9, healthy)
           , ("lethal cold", -40, 0.3, healthy)
           , ("no water and no salt", 20, 0.5
-            , HM.insert "hydration" 0 $ HM.insert "salt" 0
-                $ HM.insert "salt_conc" 0.1 healthy) ] $
+            , HM.insert "hydration" 0 $ HM.insert "salt" 0 healthy) ] $
       \(label, temp, humidity, stats) →
         it ("keeps a nomad neutral and alive under " <> label
             <> " while an acolyte degrades") $
@@ -230,8 +255,11 @@ spec = describe "survival exemption" $ do
     it "neutralizes a restored nomad's stale survival stats and meters \
        \while paused, leaving injury meters and the acolyte alone" $
       withHeadlessEngineNoWorld $ \env → do
+        -- The acolyte keeps its stale survival state; a Nominal nomad cannot
+        -- hold any (the load boundary scrubs it), so its stale cache is what
+        -- the hook has to refresh.
         let stale = HM.union (HM.fromList
-              [ ("salt_conc", 0.2), ("salt", 5), ("core_temp", 43)
+              [ ("salt", 5), ("core_temp", 43)
               , ("hyperthermia", 0.9), ("hypothermia", 0.3)
               , ("salt_imbalance", 0.9), ("consciousness", 0.1)
               , ("state_of_mind", 0.1), ("sepsis", 0.4) ]) healthy
@@ -243,8 +271,9 @@ spec = describe "survival exemption" $ do
         nomadReads ls "require('scripts.brain').state(uid)" `shouldReturn` "alert"
         nomadReads ls "unit.getStat(uid, 'consciousness') == 1" `shouldReturn` "true"
         nomadReads ls "unit.getStat(uid, 'state_of_mind') > 0.1" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'core_temp') == 37" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'salt_conc') == 1" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'core_temp') == 37" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'salt_conc') == 1" `shouldReturn` "true"
+        nomadReads ls "unit.getStat(uid, 'core_temp') == nil" `shouldReturn` "true"
         nomadReads ls "require('scripts.salts').speedMultiplier(uid) == 1" `shouldReturn` "true"
         nomadReads ls "require('scripts.salts').stateLabel(uid)" `shouldReturn` "Balanced"
         nomadReads ls "require('scripts.thermo').stateLabel(uid) == \
@@ -264,13 +293,13 @@ spec = describe "survival exemption" $ do
             `shouldReturn` "true"
         -- And the paused update leaves everything where the hook put it.
         _ ← luaText ls "__resources.update(0.1); return true"
-        nomadReads ls "unit.getStat(uid, 'core_temp') == 37" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'core_temp') == 37" `shouldReturn` "true"
 
     it "stands a nomad restored collapsed from a survival failure back up \
        \once the load is unpaused" $
       withHeadlessEngineNoWorld $ \env → do
         let stale = HM.union (HM.fromList
-              [ ("salt_conc", 0.2), ("salt", 5), ("salt_imbalance", 0.9)
+              [ ("salt", 5), ("salt_imbalance", 0.9)
               , ("consciousness", 0.1) ]) healthy
         scene env stale fullBlood []
         setPose env nomadUid "collapsed"
@@ -295,14 +324,17 @@ spec = describe "survival exemption" $ do
         scene env healthy (fullBlood * 0.25) []
         ls ← setupLua env
         _ ← run ls 60
-        nomadReads ls "unit.getStat(uid, 'circulation') < 0.5" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'heart_rate') > 100" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'blood_oxygen') < 0.95" `shouldReturn` "true"
+        -- circulation is DERIVED since S9 (#2836): read through the physiology
+        -- read verb (a stat read would answer nil), and the nomad's cardio is
+        -- Simulated, so its heart rate and oxygen are stored integrators.
+        nomadReads ls "unit.readPhysio(uid, 'circulation') < 0.5" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'heart_rate') > 100" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'blood_oxygen') < 0.95" `shouldReturn` "true"
         -- The acolyte beside it is impaired alike: blood loss is not
         -- survival physiology. (Its own core drifts a few hundredths of a
         -- degree at 20 °C, which is the only difference between them.)
         luaText ls (T.concat
-            [ "local a, b = unit.getStat(1, 'circulation'), unit.getStat(2, 'circulation'); "
+            [ "local a, b = unit.readPhysio(1, 'circulation'), unit.readPhysio(2, 'circulation'); "
             , "return math.abs(a - b) < 0.01" ]) `shouldReturn` "true"
 
     it "still lets a punctured lung suffocate an exempt nomad" $

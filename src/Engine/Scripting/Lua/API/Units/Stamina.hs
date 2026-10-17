@@ -36,32 +36,28 @@
 --   by construction already visible to both the addition and the
 --   checks.
 --
---   Four deliberate properties, each one a case the old path got wrong:
+--   Deliberate properties, each one a case an earlier path got wrong:
 --
 --   * The BOUND is resolved from the committing unit record, through
---     'Combat.Resolution.Common.maxStaminaFor' — the same mirror of
---     Lua's @unit_stats@ derivation combat sizes a swing against
---     (#1735: explicit @max_stamina@ wins, else effective
---     @endurance × 10@, both through 'Unit.Stats.effectiveStat'). A
---     modifier that expired, or an accessory that was equipped, during
---     the Lua rate calculation moves the clamp here rather than a tick
---     later. One captured game-time sample resolves every expiry, so
---     the bound cannot shift mid-transaction.
+--     'Combat.Resolution.Common.maxStaminaFor' — the ONE maximum rule
+--     ('Unit.Stats.maxStaminaOf', #2834) that the registry's healthy
+--     value, @unit.getMaxStamina@ and combat's swing cost share. One
+--     captured game-time sample resolves every expiry, so the bound
+--     cannot shift mid-transaction.
 --
---   * It works on the STORED BASE, exactly the value combat spends.
---     @unit.getStat@ returns the modifier-adjusted EFFECTIVE value, so
---     the old read-modify-write also baked an active stamina modifier
---     into the base, compounding it once per tick. Nothing here
---     consults 'uiModifiers' for the pool itself — only
---     'maxStaminaFor' does, for the bound.
+--   * The amount and every report are EFFECTIVE stamina (#2834): the
+--     commit runs 'Combat.Resolution.Stamina.staminaCore', which solves
+--     for the stored BASE whose effective value is nearest the target
+--     and reports the effective read of what it stored. A retained
+--     modifier on @stamina@ therefore never compounds into the base and
+--     a report never differs from an effective read of storage.
 --
---   * An ABSENT pool is initialised at COMMIT, not on the strength of
---     an earlier script-side read. @initialized@ says which path ran,
---     and the shipped caller skips that pass's consequences exactly as
---     the old first-tick @return@ did. A pool combat CREATED after the
---     script last looked therefore takes the ordinary delta path — the
---     old code refilled it to full, handing back every point the strike
---     had just spent.
+--   * An ABSENT pool on a Simulated receiver is a broken invariant, not
+--     a cue to refill (the old first-observation path is gone): spawn,
+--     load and transitions seed the pool, so the commit refuses with
+--     @missing_pool@ and mutates nothing. A Nominal receiver refuses
+--     with @nominal@ and an Unsupported one with @unsupported@, so a
+--     caller can tell "no pool by design" from "no body".
 --
 --   * A refusal mutates NOTHING and is named. The pool is the input to
 --     a death rule; silently treating a malformed call as a no-op write
@@ -75,12 +71,15 @@
 --   verbs take.
 module Engine.Scripting.Lua.API.Units.Stamina
   ( unitCommitStaminaFn
+  , unitGetMaxStaminaFn
   , StaminaCommit(..)
   , commitStaminaIn
   , staminaStatName
   ) where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -90,7 +89,10 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Data.IORef (atomicModifyIORef', readIORef)
-import Combat.Resolution.Common (maxStaminaFor)
+import Combat.Resolution.Stamina
+    (StaminaReport(..), StaminaStatus, staminaCommit, staminaStatusText)
+import Unit.Physiology.Types (PhysiologyRegistry)
+import Unit.Stats (maxStaminaOf)
 import Unit.Types
 
 -- | The @uiStats@ key combat spends and this verb adjusts. Named once
@@ -99,18 +101,16 @@ import Unit.Types
 staminaStatName ∷ Text
 staminaStatName = "stamina"
 
--- | What one commit actually did, as the transaction saw it.
---
---   'scBefore' is 'Nothing' only on the initialisation path — the pool
---   was absent when the transaction ran. The three numbers describe the
---   SAME update: 'scAfter' is what storage now holds and 'scMaximum' is
---   the bound it was clamped against, both resolved from the committing
+-- | What one commit actually did, as the transaction saw it: EFFECTIVE
+--   values (#2834). The numbers describe the SAME update: 'scAfter' is
+--   the effective read of what storage now holds and 'scMaximum' the
+--   bound it was clamped against, both resolved from the committing
 --   record rather than from anything the caller read earlier.
 data StaminaCommit = StaminaCommit
-    { scBefore      ∷ Maybe Float
-    , scAfter       ∷ Float
-    , scMaximum     ∷ Float
-    , scInitialized ∷ Bool
+    { scBefore  ∷ Float
+    , scAfter   ∷ Float
+    , scMaximum ∷ Float
+    , scStatus  ∷ StaminaStatus
     } deriving (Show, Eq)
 
 -- | The whole transaction, as a pure 'UnitManager' step so
@@ -120,54 +120,16 @@ data StaminaCommit = StaminaCommit
 --   returned unchanged and the caller reports @nil, reason@ to Lua.
 --
 --   @now@ is the caller's single captured game-time sample, used for
---   nothing but modifier expiry inside 'maxStaminaFor'.
---
---   The addition and the clamp happen in 'Double' and only the clamped
---   result narrows to the 'Float' 'uiStats' holds, so an amount that is
---   finite in Lua but outside 'Float' range (1e40, say) saturates at
---   the bound instead of publishing an infinity.
---
---   The one write elision — @new ≡ cur@ leaves the manager untouched —
---   is INSIDE the transaction and does not change what is reported:
---   'scAfter' is the value storage holds either way. It replaces the
---   script-side @abs(next − current) > 1e-4@ guard, which used to skip
---   the write on a stale comparison and take the thresholds with it.
-commitStaminaIn ∷ Double → UnitId → Double → UnitManager
+--   nothing but modifier expiry. The arithmetic is
+--   'Combat.Resolution.Stamina.staminaCommit''s.
+commitStaminaIn ∷ PhysiologyRegistry → Double → UnitId → Double → UnitManager
                 → (UnitManager, Either Text StaminaCommit)
-commitStaminaIn now uid amount um =
-    case HM.lookup uid (umInstances um) of
-        Nothing → (um, Left "no_such_unit")
-        Just inst →
-            let maxStam = maxStaminaFor now inst
-            in if isNaN maxStam ∨ isInfinite maxStam ∨ maxStam ≤ 0
-                 then (um, Left "invalid_maximum")
-                 else case HM.lookup staminaStatName (uiStats inst) of
-                    -- Absent AT COMMIT ⇒ first observation. Fill to the
-                    -- bound this transaction resolved and say so; the
-                    -- caller skips this pass's consequences.
-                    Nothing → ( publish inst maxStam
-                              , Right (StaminaCommit Nothing maxStam maxStam True) )
-                    Just cur
-                        | isNaN cur ∨ isInfinite cur → (um, Left "invalid_stamina")
-                        | otherwise →
-                            let new = clampStamina maxStam
-                                          (realToFrac cur + amount)
-                                um' | new ≡ cur = um
-                                    | otherwise = publish inst new
-                            in ( um'
-                               , Right (StaminaCommit (Just cur) new maxStam False) )
-  where
-    publish inst v =
-        let inst' = inst { uiStats = HM.insert staminaStatName v (uiStats inst) }
-        in um { umInstances = HM.insert uid inst' (umInstances um) }
-
--- | Add-then-clamp into @[0, maximum]@, narrowing only after the clamp.
---   Applied unconditionally, so a stored value some other writer left
---   outside the band — or one a SHRUNK maximum has just put outside it
---   — is brought back into range even by a zero delta.
-clampStamina ∷ Float → Double → Float
-clampStamina maxStam =
-    realToFrac ∘ min (realToFrac maxStam) ∘ max 0
+commitStaminaIn reg now uid amount um =
+    case staminaCommit reg now um uid amount of
+        Left reason → (um, Left reason)
+        Right (um', r) → ( um'
+                         , Right (StaminaCommit (srBefore r) (srAfter r)
+                                                (srMaximum r) (srStatus r)) )
 
 -- | The @uid@ argument: a Lua NUMBER (checked with 'Lua.ltype' before
 --   any conversion, so a numeric STRING such as @"47"@ is refused
@@ -213,37 +175,37 @@ pushRefusal reason = do
     Lua.pushstring (TE.encodeUtf8 reason)
     return 2
 
--- | The success shape: one table carrying the whole commit. @before@ is
---   OMITTED (so Lua reads @nil@) on the initialisation path, which is
---   the only way absence can be distinguished from a stored 0.
+-- | The success shape: one table carrying the whole commit, every value
+--   EFFECTIVE.
 pushCommit ∷ StaminaCommit → Lua.LuaE Lua.Exception Lua.NumResults
 pushCommit sc = do
     Lua.newtable
-    forM_ (scBefore sc) $ \b → do
-        Lua.pushnumber (Lua.Number (realToFrac b))
-        Lua.setfield (-2) "before"
+    Lua.pushnumber (Lua.Number (realToFrac (scBefore sc)))
+    Lua.setfield (-2) "before"
     Lua.pushnumber (Lua.Number (realToFrac (scAfter sc)))
     Lua.setfield (-2) "after"
     Lua.pushnumber (Lua.Number (realToFrac (scMaximum sc)))
     Lua.setfield (-2) "maximum"
-    Lua.pushboolean (scInitialized sc)
-    Lua.setfield (-2) "initialized"
+    Lua.pushstring (TE.encodeUtf8 (staminaStatusText (scStatus sc)))
+    Lua.setfield (-2) "status"
     return 1
 
 -- | @unit.commitStamina(uid, amount) → table | nil, reason@
 --
---   Adds @amount@ to @uid@'s STORED stamina and returns what the commit
---   did: @{ before, after, maximum, initialized }@, with @before@ nil
---   exactly when the pool was absent and this call filled it.
+--   Adds the EFFECTIVE @amount@ to @uid@'s stamina and returns what the
+--   commit did: @{ before, after, maximum, status }@, all effective,
+--   @status@ one of @"ok"@, @"floored"@, @"zeroMultiplier"@.
 --   Argument checks run BEFORE the unit lookup, so a malformed call is
 --   refused identically whether or not the unit exists and whether or
 --   not its pool is already full.
 --
 --   Refusal reasons: @invalid_unit_id@, @invalid_amount@,
---   @no_such_unit@ (absent at commit — never recreated),
---   @invalid_stamina@ (the stored value is not finite) and
---   @invalid_maximum@ (the resolved bound is not a positive finite
---   number). Every one of them leaves the unit manager untouched.
+--   @no_such_unit@, @dead@, @nominal@ (a Nominal receiver holds no
+--   pool), @unsupported@ (a bodyless unit), @missing_pool@ (a Simulated
+--   receiver whose pool is absent — never refilled), @invalid_stamina@
+--   (the stored value is not finite) and @invalid_maximum@ (the resolved
+--   bound is not a positive finite number). Every one of them leaves the
+--   unit manager untouched.
 unitCommitStaminaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitCommitStaminaFn env = do
     mUid ← readUnitIdArg 1
@@ -255,12 +217,40 @@ unitCommitStaminaFn env = do
             Just amount → do
                 res ← Lua.liftIO $ do
                     -- ONE game-time sample, read before the
-                    -- transaction, so every modifier expiry inside
-                    -- 'maxStaminaFor' resolves against the same instant.
+                    -- transaction, so every modifier expiry inside the
+                    -- commit resolves against the same instant.
                     now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+                    reg ← readIORef
+                        (crPhysiologyRegistryRef
+                            (toContentRegistriesCapability env))
                     atomicModifyIORef'
                         (ucUnitManagerRef (toUnitCombatCapability env))
-                        (commitStaminaIn now uid amount)
+                        (commitStaminaIn reg now uid amount)
                 case res of
                     Left reason → pushRefusal reason
                     Right sc    → pushCommit sc
+
+-- | @unit.getMaxStamina(uid) → number | nil@. A PURE read of the unit's
+--   effective maximum stamina through the ONE maximum rule
+--   ('Unit.Stats.maxStaminaOf', #2834) — what @stats.get(uid,
+--   "max_stamina")@ answers, so Lua reads, combat cost, commit bounds and
+--   seed targets cannot disagree. @nil@ for a missing unit and for a unit
+--   with neither an explicit @max_stamina@ nor an @endurance@ stat (only
+--   the statless bodyless definitions): combat's internal endurance-1.0
+--   fallback is not a maximum Lua may see. Any caller may use it: it
+--   writes nothing.
+unitGetMaxStaminaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitGetMaxStaminaFn env = do
+    mUid ← readUnitIdArg 1
+    mMax ← case mUid of
+        Nothing  → pure Nothing
+        Just uid → Lua.liftIO $ do
+            now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+            um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            pure $ do
+                inst ← HM.lookup uid (umInstances um)
+                maxStaminaOf Nothing now (uiStats inst) (uiModifiers inst)
+    case mMax of
+        Nothing → Lua.pushnil
+        Just v  → Lua.pushnumber (Lua.Number (realToFrac v))
+    return 1

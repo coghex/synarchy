@@ -12,11 +12,11 @@
 --   builds a registry by hand except where a test says so: the shipped
 --   registry is read through the production decoder.
 --
---   __S3 carries intent, it does not act on it.__ No setter, hook or
---   consumer exists, so a nonempty map arrives here only from a test or a
---   future save. The slice proves exact transport and the wire
---   migrations; the activated storage invariants (D-6 (b), (c), (f),
---   (g), (i), (j)) are S4's and are deliberately NOT asserted.
+--   __S3 carries intent, S4 acts on it.__ This gate proves exact transport
+--   and the wire migrations, and the rejections (d), (e) and (h). The
+--   activated storage invariants and the deterministic load normalization
+--   ((b), (c), (f), (g), (i), (j)) are S4's (#2831), asserted by
+--   "Test.Headless.Unit.PhysiologyModes.Persistence".
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "physiology override persistence"'@.
@@ -232,7 +232,7 @@ liveRestoreSpec = describe "capture and restore (requirement 1)" $ do
 
     let defs species = HM.fromList
             [ ("acolyte", (minimalDef "acolyte" "Acolyte")
-                  { udPhysiology = UnitPhysiology True Nothing species })
+                  { udPhysiology = plainUnitPhysiology True Nothing species })
             , ("bear_brown", minimalDef "bear_brown" "Bear") ]
         restore page snap defMap = case fromUnitSnapshot page defMap
                 emptyInfectionManager emptyEquipmentClassManager
@@ -412,9 +412,9 @@ fixtureSpec = describe "retained fixtures (requirement 5)" $ do
 --   species that defaults hydration Simulated, and a bodyless one.
 defPhysiology ∷ HM.HashMap T.Text UnitPhysiology
 defPhysiology = HM.fromList
-    [ ("acolyte", UnitPhysiology True Nothing
+    [ ("acolyte", plainUnitPhysiology True Nothing
           (HM.fromList [("hydration", PhysioSimulated)]))
-    , ("bear_brown", UnitPhysiology True Nothing HM.empty)
+    , ("bear_brown", plainUnitPhysiology True Nothing HM.empty)
     , ("tiller", noUnitPhysiology) ]
 
 rejectionsFor ∷ PhysiologyRegistry → [(Word32, UnitInstanceSnapshot)]

@@ -77,6 +77,7 @@ engineStubs = lns
     , "unit = { getInfo = function() return POS end,"
     , "         exists = function() return true end,"
     , "         getStat = function() return 100 end,"
+    , "         readPhysio = function() return nil, nil end,"
     , "         getCarryingWeight = function() return 0 end,"
     , "         moveTo = function(_, x, y, sp)"
     , "           MOVES[#MOVES + 1] = { x = x, y = y, speed = sp } end,"

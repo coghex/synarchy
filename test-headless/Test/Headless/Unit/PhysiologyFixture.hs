@@ -16,9 +16,16 @@ module Test.Headless.Unit.PhysiologyFixture
     ( shippedPhysiologyPath
     , readShippedPhysiologyRegistry
     , ensurePhysiologyRegistry
+    , profilePhysiology
+    , withProfile
+    , richPhysiology
+    , exemptPhysiology
+    , nutritionOnlyPhysiology
+    , staminaOnlyPhysiology
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, writeIORef)
 import System.FilePath ((</>))
 import Engine.Asset.YamlPhysiology
@@ -28,7 +35,9 @@ import Engine.Core.Capability.ContentRegistries
 import Engine.Core.Log
     (LogBackend(..), LogConfig(..), defaultLogConfig, initLogger)
 import Engine.Core.State (EngineEnv)
+import Unit.Physiology (resolveUnitPhysiology)
 import Unit.Physiology.Types
+import Unit.Types.Def (UnitDef(..))
 
 shippedPhysiologyPath ∷ FilePath
 shippedPhysiologyPath = "data" </> "physiology" </> "systems.yaml"
@@ -56,3 +65,70 @@ ensurePhysiologyRegistry env = do
     current ← readIORef ref
     unless (physiologyRegistryLoaded current) $
         readShippedPhysiologyRegistry ≫= writeIORef ref
+
+-- | A definition's physiology under a SHIPPED profile (@rich@, @reduced@,
+--   @simple@, @exempt@), with a @body:@ authored: what the profile block
+--   in @data\/units\/*.yaml@ resolves to. Fails the spec loudly for a name
+--   the shipped registry does not declare.
+profilePhysiology ∷ Text → IO UnitPhysiology
+profilePhysiology profile = do
+    reg ← readShippedPhysiologyRegistry
+    case resolveUnitPhysiology reg "fixture" True (Just profile) [] [] of
+        Left r   → error ("profilePhysiology " ⧺ show profile ⧺ ": " ⧺ show r)
+        Right up → pure up
+
+-- | A bodied fixture definition: the given one, carrying the profile.
+withProfile ∷ Text → UnitDef → IO UnitDef
+withProfile profile def = do
+    up ← profilePhysiology profile
+    pure def { udPhysiology = up }
+
+-- | The @rich@ profile as a pure value (every system Simulated), for a
+--   fixture definition that is not built in IO. A spec in the physiology
+--   group pins it equal to the shipped profile's expansion.
+richPhysiology ∷ UnitPhysiology
+richPhysiology = UnitPhysiology True (Just "rich")
+    (HM.fromList
+        [ (s, PhysioSimulated)
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
+             , "exhaustion", "sleep", "cardio", "blood"] ])
+    HM.empty
+
+-- | The @exempt@ profile as a pure value: every system Nominal except
+--   cardio and blood, which #2754 kept live (S9 #2836, S10 #2837).
+exemptPhysiology ∷ UnitPhysiology
+exemptPhysiology = UnitPhysiology True (Just "exempt")
+    (HM.fromList
+        [ (s, if s `elem` ["cardio", "blood"] then PhysioSimulated else PhysioNominal)
+        | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
+             , "exhaustion", "sleep", "cardio", "blood"] ])
+    HM.empty
+
+-- | Nutrition and stamina Simulated, the other three Nominal: for a fixture
+--   that exercises nutrition's effects (the fat-floor organ failure, which
+--   drains the STAMINA pool and so needs it Simulated, #2834) on a unit that
+--   carries no salt, hydration or temperature state, so no other system's
+--   Simulated invariants are in play.
+nutritionOnlyPhysiology ∷ UnitPhysiology
+nutritionOnlyPhysiology = UnitPhysiology True Nothing
+    (HM.fromList
+        [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
+        , ("hydration", PhysioNominal), ("nutrition", PhysioSimulated)
+        , ("stamina", PhysioSimulated), ("exhaustion", PhysioNominal)
+        , ("sleep", PhysioNominal), ("cardio", PhysioNominal)
+        -- blood keeps its wound-fold behavior in these isolation fixtures
+        , ("blood", PhysioSimulated) ])
+    HM.empty
+
+-- | Only stamina Simulated, every other system Nominal: for a fixture that
+--   drives the stamina pool (#2834) and nothing else.
+staminaOnlyPhysiology ∷ UnitPhysiology
+staminaOnlyPhysiology = UnitPhysiology True Nothing
+    (HM.fromList
+        [ ("thermo", PhysioNominal), ("salt", PhysioNominal)
+        , ("hydration", PhysioNominal), ("nutrition", PhysioNominal)
+        , ("stamina", PhysioSimulated), ("exhaustion", PhysioNominal)
+        , ("sleep", PhysioNominal), ("cardio", PhysioNominal)
+        -- blood keeps its wound-fold behavior in these isolation fixtures
+        , ("blood", PhysioSimulated) ])
+    HM.empty

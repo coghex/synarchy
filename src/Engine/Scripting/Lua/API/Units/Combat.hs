@@ -29,7 +29,10 @@ import qualified Data.List as L
 import Engine.Core.State (EngineEnv)
 import Infection.Types (InfectionDef(..), lookupInfection)
 import Unit.Types
-import Combat.Wounds (bleedRateFor)
+import Engine.Core.Capability.ContentRegistries
+    (crPhysiologyRegistryRef, toContentRegistriesCapability)
+import Unit.Blood (BloodView(..))
+import Unit.Physiology (unitBloodView)
 import Combat.Types (pushInjuryEvent)
 import Combat.Resolution.Common (mentalEffectiveness)
 import Blood.Impact (spawnImpactBlood, impactFallbackAngle)
@@ -386,11 +389,15 @@ unitGetInsulationFn env = do
             Lua.pushnumber (Lua.Number (realToFrac (total ∷ Float)))
             return 1
 
--- | unit.getBlood(uid) → { current, max } | nil
+-- | unit.getBlood(uid) → { current, max, bleedRate } | nil
 --
---   max is body_mass × 'bloodMassRatio'. current is the
---   spawn-time-seeded value minus per-tick bleed loss. Both in
---   litres.
+--   Reads the ONE mode-aware blood adapter ('unitBloodView', #2837, S10):
+--   max is BASE body_mass × 'bloodMassRatio' (70 kg fallback) and current the
+--   stored uiBlood (spawn-seeded, drained by bleeding, recovered by #2639) for
+--   a Simulated, Unsupported or undeclared blood, whose values are exactly
+--   what every reader saw before S10; a NOMINAL blood reads current = max
+--   whatever is stored. bleedRate is the live wound rate in either mode. Both
+--   in litres. nil only for a missing unit id.
 unitGetBloodFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetBloodFn env = do
     idArg ← Lua.tointeger 1
@@ -402,12 +409,14 @@ unitGetBloodFn env = do
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 case HM.lookup uid (umInstances um) of
                     Nothing → return Nothing
-                    Just inst →
-                        let bm = HM.lookupDefault 70.0 "body_mass"
-                                                 (uiStats inst)
-                            rate = maybe 0.0 (\d → bleedRateFor d inst)
-                                     (HM.lookup (uiDefName inst) (umDefs um))
-                        in return $ Just (uiBlood inst, bm * bloodMassRatio, rate)
+                    Just inst → do
+                        -- The one mode-aware adapter (#2837): a Nominal blood
+                        -- reads current = max, every other mode today's raw
+                        -- volume, with the live wound bleed rate either way.
+                        reg ← readIORef (crPhysiologyRegistryRef
+                                  (toContentRegistriesCapability env))
+                        let v = unitBloodView reg um inst
+                        return $ Just (bvVolume v, bvMax v, bvBleedRate v)
             case mPair of
                 Nothing → Lua.pushnil >> return 1
                 Just (cur, mx, rate) → do

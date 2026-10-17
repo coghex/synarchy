@@ -45,6 +45,9 @@ units:
       bulk:    { mean: 1.0, range: 1.0 }   # 0.5..1.5
       bodyfat: { mean: 0.2, range: 0.36 }  # 0.02..0.38
 
+    # Physiology profile (#2831, design D-10): the full simulation: every system Simulated, exhaustion and sleep included (#2835).
+    physiology: { profile: rich }
+
     skills:
       # Weapon-class skills. Skill XP applied on use (Phase 2.2+).
       # Range 30 → wide initial spread; most rolls fall in [40, 60].

@@ -8,6 +8,7 @@
 
 local mv      = require("scripts.movement_speed")
 local ambient = require("scripts.ambient_movement")
+local physiology = require("scripts.physiology")
 -- Retained-yield collection (#2550), shared with auto-harvest.
 local yieldCollect = require("scripts.unit_ai_yield")
 -- The land-food ladder's own two questions (#2553), shared with
@@ -33,11 +34,10 @@ end
 -- Action: wander
 -----------------------------------------------------------
 local function wanderUtility(uid, s, params)
-    local stamina = unit.getStat(uid, "stamina")
-    local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
-    if not stamina or not maxStam or maxStam <= 0 then return -math.huge end
-
-    local fraction = stamina / maxStam
+    -- Through the facade (#2834): a Nominal stamina system reads full, an
+    -- Unsupported one (a bodyless unit) has no fraction and never wanders.
+    local fraction = physiology.fraction(uid, "stamina", "max_stamina")
+    if not fraction then return -math.huge end
     if fraction < params.wander_min_stamina_fraction then
         return -math.huge
     end
@@ -112,11 +112,10 @@ local function findCanteenWithWater(uid, defName)
 end
 
 local function drinkUtility(uid, s, params)
-    local hyd = unit.getStat(uid, "hydration")
-    local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
-    if not hyd or not maxHyd or maxHyd <= 0 then return -math.huge end
+    local frac = physiology.fraction(uid, "hydration", "max_hydration")
+    if not frac then return -math.huge end
 
-    local thirst = 1 - hyd / maxHyd
+    local thirst = 1 - frac
     if thirst < params.drink_min_thirst then return -math.huge end
 
     if not findCanteenWithWater(uid, params.drink_canteen_def) then
@@ -133,8 +132,8 @@ local function drinkExecute(uid, s, params)
     local canteen = findCanteenWithWater(uid, params.drink_canteen_def)
     if not canteen then return end
 
-    local hyd    = unit.getStat(uid, "hydration") or 0
-    local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration") or 0
+    local hyd    = physiology.get(uid, "hydration") or 0
+    local maxHyd = physiology.get(uid, "max_hydration") or 0
     local deficit = maxHyd - hyd
     if deficit <= 0 then return end
 
@@ -171,7 +170,7 @@ local function drinkExecute(uid, s, params)
     -- Apply effects synchronously — engine drink command is just for
     -- the anim + state-block. If the anim is interrupted (it shouldn't
     -- be, since Drinking blocks movement) the unit still drank.
-    unit.setStat(uid, "hydration", math.min(maxHyd, hyd + drank * k))
+    physiology.credit(uid, "hydration", drank * k)
     unit.drink(uid)
 end
 
@@ -228,10 +227,8 @@ local function findFoodInInventory(uid, room, minRoomFraction)
 end
 
 local function eatUtility(uid, s, params)
-    local hun    = unit.getStat(uid, "hunger")
-    local maxHun = unit.getStat(uid, "max_hunger")
-    if not hun or not maxHun or maxHun <= 0 then return -math.huge end
-    local hungerFrac = hun / maxHun
+    local hungerFrac = physiology.fraction(uid, "hunger", "max_hunger")
+    if not hungerFrac then return -math.huge end
     if hungerFrac >= params.eat_max_fraction then return -math.huge end
     if not findFoodInInventory(uid) then return -math.huge end
     return (1 - hungerFrac) * params.eat_weight
@@ -255,8 +252,8 @@ local function eatExecute(uid, s, params)
     local fedOnce = false
 
     for _ = 1, 10 do
-        local hun    = unit.getStat(uid, "hunger")
-        local maxHun = unit.getStat(uid, "max_hunger")
+        local hun    = physiology.get(uid, "hunger")
+        local maxHun = physiology.get(uid, "max_hunger")
         if hun and maxHun and hun >= maxHun * 0.99 then break end
 
         local room = nil
@@ -307,15 +304,12 @@ end
 -- kills — it dominates the ramp so the emergency fires on real
 -- starvation, not on a between-meals stomach.
 local function forageNeed(uid)
-    local hun    = unit.getStat(uid, "hunger")
-    local maxHun = unit.getStat(uid, "max_hunger")
-    if not hun or not maxHun or maxHun <= 0 then return 0, 1 end
-    local hungerFrac = hun / maxHun
+    local hungerFrac = physiology.fraction(uid, "hunger", "max_hunger")
+    if not hungerFrac then return 0, 1 end
     local storeNeed = 0
-    local cal    = unit.getStat(uid, "calories")
-    local maxCal = unit.getStat(uid, "max_calories")
-    if cal and maxCal and maxCal > 0 then
-        storeNeed = 1 - math.max(0, math.min(1, cal / maxCal))
+    local calFrac = physiology.fraction(uid, "calories", "max_calories")
+    if calFrac then
+        storeNeed = 1 - math.max(0, math.min(1, calFrac))
     end
     return math.max((1 - hungerFrac) * 0.6, storeNeed), hungerFrac
 end

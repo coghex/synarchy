@@ -73,18 +73,16 @@ end
 stats.activityMultiplier = activityMultiplier
 
 local derived = {
-    -- Stamina pool size = endurance * 10. Larger endurance means
-    -- the unit can exert itself longer before stamina runs out.
-    -- NB: mirrored on the Haskell side by
-    -- Combat.Resolution.Common.maxStaminaFor (the combat thread can't
-    -- call into Lua) — change in lockstep. That mirror covers the
-    -- EFFECTIVE value, not just this dispatch (#1735): unit.getStat
-    -- below applies the unit's active stat modifiers, and so does the
-    -- Haskell side, so a buff on endurance (or on an explicit
-    -- max_stamina attribute) moves both pools by the same amount.
+    -- Stamina pool size: the unit's EFFECTIVE maximum, resolved by the
+    -- engine (#2834). unit.getMaxStamina is the ONE rule combat's swing
+    -- cost, the commit bound, the registry's healthy value and the seed
+    -- target share (Unit.Stats.maxStaminaOf): an explicit max_stamina
+    -- attribute wins (see the dispatch above), else
+    -- effective(endurance) * 10 with the modifiers on max_stamina applied.
+    -- It replaces the hand-kept Lua mirror ("change in lockstep") and
+    -- answers nil for a unit with no endurance (a bodyless definition).
     max_stamina = function(uid)
-        local e = unit.getStat(uid, "endurance")
-        return e and e * 10 or nil
+        return unit.getMaxStamina(uid)
     end,
 
     -- Exhaustion pool size (circadian epic #479 / #610) — same scale as

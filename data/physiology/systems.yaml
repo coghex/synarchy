@@ -7,30 +7,52 @@
 # value it PROVIDES, contribution it CONTRIBUTES and effect it has, each
 # with the substitute a dependent sees while the system is Nominal.
 #
-# This slice is inactive: nothing in the production tick, a gameplay
-# consumer or a save path reads this file. The five unit.*Physio* read
-# verbs and engine.getPhysiologyRegistry are the only readers. Species
-# defaults are assigned per unit definition (a `physiology:` block) in
-# S4/S7, not here.
+# The mode-aware answer is ACTIVE since S4 (#2831): the gameplay consumers read
+# this registry through scripts/physiology.lua and the wound tick's
+# physioConsumerView, a Nominal system reads its healthy values, and a unit's
+# systems run in the mode its species profile (a `physiology:` block in
+# data/units/*.yaml, D-10) or a per-unit override chooses. The five
+# unit.*Physio* read verbs and engine.getPhysiologyRegistry read it directly.
 #
 # Healthy rules:  { const: <value|CONSTANT> }
 #                 { from: <stat>, scale: <value|CONSTANT | [..]> }
+#                 { rule: <max_stamina | blood_max> }
+# An owned key may also name the dedicated unit FIELD that really stores it,
+# `field: uiBlood` (#2837): the value is not a uiStats key and no uiStats entry
+# is ever made for it.
 # `from:` reads the unit's EFFECTIVE value of an input stat that no
 # system owns. `scale:` factors multiply.
 #
 # Substitutes:    { value: <value|CONSTANT> } | none | virtual_meal
-#                 | tissue_recovery   (the last two are executed in S4;
-#                 here they are declarations.)
+#                 | tissue_recovery | live | wound_flow   (virtual_meal and
+#                 tissue_recovery are executed by S4: scripts/salts.lua's
+#                 virtual meal and scripts/unit_resource_upkeep.lua. `live`
+#                 (#2836, S9) is a provided DERIVED value whose Nominal answer
+#                 is the same rule evaluated with the system's own inputs at
+#                 their healthy readings and every other input live: cardio's
+#                 circulation.) `wound_flow` (#2837, S10) is blood's visual-loss
+#                 contribution under Nominal: the wound-derived external flow
+#                 credits the bleeding trail directly, with no volume debit.
+#
+# Derived keys:   { key, rule, healthy: <number> | live }. A number is the
+#                 constant a Nominal read returns (salt_conc); `live` makes a
+#                 Nominal read evaluate the rule, so injury physiology is not
+#                 erased by the mode (circulation, SD-21).
 
 # Authoritative home of the constants the healthy rules need. The Lua
 # modules still carry their own copies (scripts/salts.lua SALT_PER_KG and
-# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) until S4/S5 migrate their
-# consumers; Test.Headless.Unit.Physiology fails if the copies drift.
+# STORE_CAP_FRAC, scripts/thermo.lua BASELINE) because the system owners
+# compute with them every tick; Test.Headless.Unit.Physiology fails if the
+# copies drift.
 constants:
   SALT_PER_KG: 1.0
   # #2761's reserve capacity, as a multiple of max_salt.
   SALT_STORE_CAP_FRAC: 2.0
   THERMO_BASELINE: 37.0
+  # The resting heart rate in bpm (#2836, S9): heart_rate's healthy value and
+  # the divisor of circulation's heart-rate factor. scripts/cardio.lua keeps a
+  # copy (cardio.RESTING_HR) that Test.Headless.Unit.Physiology pins to this.
+  RESTING_HR: 70.0
 
 systems:
   # REGISTRY ORDER IS TICK ORDER (design D-7): thermo before salt, because
@@ -113,6 +135,131 @@ systems:
       - { name: fat_floor_organ_drain, substitute: none }
       - { name: eat_need,             substitute: none }
 
+  # Stamina (#2834, S8a): the exertion pool. Its Nominal read and seed target
+  # are the unit's effective max_stamina, which is DERIVED (never stored), so
+  # the healthy rule is the named `max_stamina` rule rather than a `from:`
+  # input: it resolves through the same maximum rule combat, the commit and
+  # unit.getMaxStamina use. Stance stays unowned and always on.
+  - id: stamina
+    requires: [body]
+    owns:
+      - key: stamina
+        healthy: { rule: max_stamina }
+    provides:
+      - name: stamina_fraction
+        substitute: { value: 1.0 }
+    effects:
+      - { name: collapse,      substitute: none }
+      - { name: kill_on_zero,  substitute: none }
+      - { name: strike_cost,   substitute: none }
+
+  # Exhaustion (#2835, S8b): the short-horizon fatigue pool. Its Nominal read
+  # and seed target are the unit's effective max_exhaustion, which is a
+  # Lua-only derived stat (scripts/unit_stats.lua: effective endurance x 10)
+  # and never stored, so the rule restates that derivation in the existing
+  # grammar; a test pins it equal to stats.get(max_exhaustion) for every
+  # shipped species. A Nominal system provides a fully rested unit: the
+  # restedness fraction and the movement multiplier are CONSTANTS here, never
+  # a ratio (binary32 healthy value versus a double maximum).
+  - id: exhaustion
+    requires: [body]
+    owns:
+      - key: exhaustion
+        healthy: { from: endurance, scale: 10 }
+    provides:
+      - name: restedness_fraction
+        substitute: { value: 1.0 }
+      - name: movement_multiplier
+        substitute: { value: 1.0 }
+    contributes:
+      # go_to_sleep's exhaustion term: zero while exhaustion is Nominal.
+      - { name: sleep_exhaustion_deficit, substitute: { value: 0.0 } }
+    effects:
+      - { name: speed_penalty, substitute: none }
+
+  # Sleep (#2835, S8b): the long multi-day sleep-debt pool. Same healthy rule
+  # reasoning as exhaustion (max_sleep_pressure = effective endurance x 10).
+  # Its effect is the sleep NEED: go_to_sleep and the pressure wake, which a
+  # Nominal (or Unsupported) system never has. The circadian urge stays the
+  # live, unowned sun-angle signal.
+  - id: sleep
+    requires: [body]
+    owns:
+      - key: sleep_pressure
+        healthy: { from: endurance, scale: 10 }
+    provides:
+      - name: sleep_deficit
+        substitute: { value: 0.0 }
+    effects:
+      - { name: sleep_need,    substitute: none }
+      - { name: pressure_wake, substitute: none }
+
+  # Cardio (#2836, S9): heart rate and blood oxygen, and the circulation
+  # they feed. Circulation is DERIVED, never stored: the named
+  # `circulation` rule (Unit.Physiology.circulationRule) computes it on demand
+  # from blood, constitution, fat, sepsis, core temperature and heart rate.
+  # Under a Nominal cardio the rule still runs (SD-21: blood loss, sepsis,
+  # fitness and cold stay live) with only the heart-rate factor at exactly
+  # 1.0. The hypoxia meter is NOT owned here: its lung path is injury
+  # physiology and keeps killing; only the oxygen path is cardio's effect.
+  # Tick order: cardio ticks FIRST in the pass, ahead of the registry-order
+  # loop (scripts/unit_resources.lua), so the registry position is not tick
+  # order for this system.
+  - id: cardio
+    requires: [body]
+    owns:
+      - key: heart_rate
+        healthy: { const: RESTING_HR }
+      - key: blood_oxygen
+        healthy: { const: 1.0 }
+    derived:
+      - { key: circulation, rule: circulation, healthy: live }
+    provides:
+      - name: heart_rate
+        substitute: { value: RESTING_HR }
+      - name: blood_oxygen
+        substitute: { value: 1.0 }
+      - name: circulation
+        substitute: live
+    effects:
+      - { name: oxygen_path_hypoxia, substitute: none }
+
+  # Blood (#2837, S10): the blood volume, stored in the dedicated unit field
+  # `uiBlood` (a Float field, not a uiStats key, so it has no modifiers and its
+  # seed is the target itself). Its Nominal read and seed target are the unit's
+  # blood_max: BASE body_mass x 0.075 (`bloodMassRatio`, the single source),
+  # never the effective body mass. blood_max and blood_fraction are derived and
+  # never stored; both are `live`, so a Nominal read evaluates them through the
+  # mode-aware Unit.Blood view (volume = maximum, fraction 1.0) while the wound
+  # bleed rate stays live. Blood owns no failure meter. Its owned effects are
+  # the wound fold's volume drain, the blood-loss collapse (< 30 %),
+  # exsanguination and the #2639 recovery: all absent while Nominal, with the
+  # wounds, pain, infection, necrosis and visual bleeding untouched. Under
+  # Nominal the visual-loss contribution is the wound-derived external flow
+  # credited to the trail directly (the one intentional exception to #882's
+  # conserved-volume accounting).
+  - id: blood
+    requires: [body]
+    owns:
+      - key: blood
+        field: uiBlood
+        healthy: { rule: blood_max }
+    derived:
+      - { key: blood_max,      rule: blood_max,      healthy: live }
+      - { key: blood_fraction, rule: blood_fraction, healthy: live }
+    provides:
+      - name: blood_max
+        substitute: live
+      - name: blood_fraction
+        substitute: live
+    contributes:
+      - { name: visual_loss, substitute: wound_flow }
+    effects:
+      - { name: volume_drain,         substitute: none }
+      - { name: blood_loss_collapse,  substitute: none }
+      - { name: exsanguination,       substitute: none }
+      - { name: volume_recovery,      substitute: none }
+
 # Species fidelity tiers (D-10): a mode for EVERY system. A definition
 # names one with `physiology: { profile: rich }` and may override single
 # systems beside it. Which species use which is S4/S7's.
@@ -122,18 +269,38 @@ profiles:
     salt: simulated
     thermo: simulated
     nutrition: simulated
+    stamina: simulated
+    exhaustion: simulated
+    sleep: simulated
+    cardio: simulated
+    blood: simulated
   reduced:
     hydration: nominal
     salt: simulated
     thermo: simulated
     nutrition: nominal
+    stamina: simulated
+    exhaustion: simulated
+    sleep: simulated
+    cardio: simulated
+    blood: simulated
   simple:
     hydration: nominal
     salt: nominal
     thermo: simulated
     nutrition: nominal
+    stamina: simulated
+    exhaustion: simulated
+    sleep: nominal
+    cardio: simulated
+    blood: simulated
   exempt:
     hydration: nominal
     salt: nominal
     thermo: nominal
     nutrition: nominal
+    stamina: nominal
+    exhaustion: nominal
+    sleep: nominal
+    cardio: simulated
+    blood: simulated

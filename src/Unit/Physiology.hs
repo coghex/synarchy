@@ -4,11 +4,11 @@
 --   the physiology stat-modes epic #2827; design
 --   @docs\/designs\/physiology_stat_modes_design.md@ D-1, D-2, D-3, D-5a).
 --
---   __This slice is inactive.__ Nothing in the production tick, a
---   gameplay consumer or a save path calls anything here. The functions
---   are the foundation S3 (the live override field), S5 (the consumer
---   facade) and S4 (activation) build on, and they are reachable today
---   only through the five @unit.*@ read verbs and the loader.
+--   __Active since S4 (#2831).__ Every gameplay consumer read — the Lua
+--   facade, @unit.readPhysio@ \/ @unit.readPhysioBase@, Haskell
+--   'physioRead', the wound tick's 'physioConsumerView' — answers the
+--   mode-aware contract below, and "Unit.Physiology.Transition" owns the
+--   transitions between modes.
 --
 --   __The read contract in one place__ (D-2, SD-19). A key is /owned/ when
 --   a registry system lists it as an owned key, a derived key or a
@@ -39,10 +39,15 @@ module Unit.Physiology
     , resolveQuantity
       -- * Mode resolution
     , unitCapabilities
+    , combatEngagedKey
+    , engagementPending
+    , engagementApplied
+    , declaresEngagement
     , resolveMode
       -- * Definition validation
     , resolveUnitPhysiology
     , rejectPhysiologyTemplates
+    , engagementSystem
       -- * Reading
     , saltConcentration
     , ReadKind(..)
@@ -50,15 +55,33 @@ module Unit.Physiology
     , PhysioOutcome(..)
     , modeOf
     , physioReadPure
+    , evalHealthy
+    , storedValue
+    , checkedInput
+    , checkedPool
+      -- * Consumer boundary
+    , physioConsumerView
+      -- * Blood (S10, #2837)
+    , bloodIsNominal
+    , instanceBloodView
+    , unitBloodView
+    , contextBlood
+    , bloodSystem
+      -- * Raw write gate
+    , rawWriteAllowed
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import Control.Monad (foldM)
 import Data.Set (Set)
 import qualified Data.Set as Set
+import Unit.Blood (BloodView(..), bloodView, bloodViewOf, nominalBlood)
+import Unit.Physiology.Circulation (CirculationInputs(..), circulationRule)
 import Unit.Physiology.Types
-import Unit.Stats (effectiveStat)
+import Unit.Stats (effectiveStat, maxStaminaOf)
+import Unit.Types (UnitDef(..), UnitInstance(..), UnitManager(..), bloodMassRatio)
 import Unit.Types.Def (StatModifier)
 
 -- * Registry queries
@@ -107,16 +130,38 @@ unitCapabilities up
     | upBodyAuthored up = Set.singleton bodyCapability
     | otherwise         = Set.empty
 
+-- | The unowned durable marker the SD-20 engagement trigger keeps in
+--   @uiStats@ (#2834): absent = never engaged, 1 = pending, 2 = applied.
+--   It is not a registry key (no system owns it); it is an INPUT of the
+--   mode resolver, so only the combat commit (absent → 1) and
+--   @unit.applyCombatEngagement@ (1 → 2) may write it.
+combatEngagedKey ∷ Text
+combatEngagedKey = "combat_engaged"
+
+-- | The marker's two valid values, read from a stat map.
+engagementPending, engagementApplied ∷ HM.HashMap Text Float → Bool
+engagementPending stats = HM.lookup combatEngagedKey stats ≡ Just 1
+engagementApplied stats = HM.lookup combatEngagedKey stats ≡ Just 2
+
+-- | Does the definition declare an engagement trigger for any system?
+declaresEngagement ∷ UnitPhysiology → Bool
+declaresEngagement = not ∘ HM.null ∘ upEngagement
+
 -- | The one pure mode resolver (requirement 3): capability failure
 --   yields 'ModeUnsupported' whatever else is supplied; otherwise the
---   explicit unit override, then the species default, then Nominal.
+--   explicit unit override, then — only once the unit's engagement has
+--   been APPLIED (@combat_engaged == 2@, the @applied@ argument) — the
+--   engagement default the definition declared, then the species
+--   default, then Nominal. A pending marker is not yet an engagement, so
+--   a pending unit still resolves its species default and the storage
+--   invariant (no Simulated mode without its seeded pool) holds.
 --
 --   The override is a @Maybe@ so that "no override" and "an override
 --   equal to the default" are different inputs, which is what intent
---   means (D-3). The live override field is S3's; until then callers
---   pass 'Nothing'.
-resolveMode ∷ PhysiologySystem → UnitPhysiology → Maybe PhysioMode → ResolvedMode
-resolveMode sys up mOverride
+--   means (D-3).
+resolveMode ∷ PhysiologySystem → UnitPhysiology → Bool → Maybe PhysioMode
+            → ResolvedMode
+resolveMode sys up applied mOverride
     | not (all (`Set.member` unitCapabilities up) (psRequires sys)) =
         ModeUnsupported
     | otherwise = case chosen of
@@ -125,7 +170,15 @@ resolveMode sys up mOverride
   where
     chosen = case mOverride of
         Just m  → m
-        Nothing → fromMaybe PhysioNominal (HM.lookup (psId sys) (upDefaults up))
+        Nothing
+            | applied, Just m ← HM.lookup (psId sys) (upEngagement up) → m
+            | otherwise →
+                fromMaybe PhysioNominal (HM.lookup (psId sys) (upDefaults up))
+
+-- | The one system an engagement declaration may name in v1 (SD-20): the
+--   verb that applies it is stamina's.
+engagementSystem ∷ Text
+engagementSystem = "stamina"
 
 -- * Definition validation
 
@@ -140,19 +193,41 @@ resolveUnitPhysiology
     → Bool                 -- ^ whether the YAML authored a @body:@ block
     → Maybe Text           -- ^ the block's @profile:@
     → [(Text, Text)]       -- ^ the block's per-system entries, as written
+    → [(Text, Text)]       -- ^ the block's @on_combat_engagement:@ entries
     → Either (Text, Text) UnitPhysiology
-resolveUnitPhysiology reg unit bodyAuthored mProfile entries = do
+resolveUnitPhysiology reg unit bodyAuthored mProfile entries engagement = do
     profileModes ← case mProfile of
         Nothing → Right []
         Just p  → case registryProfile reg p of
             Nothing → Left ("unknown physiology profile", unit <> ": " <> p)
             Just pr → Right (Map.toList (ppModes pr))
     explicit ← traverse one entries
+    let defaults = HM.fromList (profileModes ⧺ explicit)
+    onEngage ← traverse (oneEngagement defaults) engagement
     pure UnitPhysiology
         { upBodyAuthored = bodyAuthored
         , upProfile      = mProfile
-        , upDefaults     = HM.fromList (profileModes ⧺ explicit) }
+        , upDefaults     = defaults
+        , upEngagement   = HM.fromList onEngage }
   where
+    -- An engagement entry (SD-20): the named system must exist, be one
+    -- the engagement verb can transition (stamina in v1), be Nominal by
+    -- default (the trigger moves Nominal → Simulated, one way), and take
+    -- the mode "simulated".
+    oneEngagement defaults (sid, modeText) = case registrySystem reg sid of
+        Nothing → Left ( "unknown physiology system"
+                       , unit <> ": on_combat_engagement: " <> sid )
+        Just _
+            | sid ≢ engagementSystem → Left
+                ( "unsupported physiology engagement system"
+                , unit <> ": on_combat_engagement: " <> sid )
+            | parsePhysioMode modeText ≢ Just PhysioSimulated → Left
+                ( "invalid physiology engagement mode"
+                , unit <> ": on_combat_engagement: " <> sid <> ": " <> modeText )
+            | HM.lookup sid defaults ≡ Just PhysioSimulated → Left
+                ( "physiology engagement system is not Nominal by default"
+                , unit <> ": on_combat_engagement: " <> sid )
+            | otherwise → Right (sid, PhysioSimulated)
     one (sid, modeText) = case registrySystem reg sid of
         Nothing → Left ("unknown physiology system", unit <> ": " <> sid)
         Just _  → case parsePhysioMode modeText of
@@ -164,14 +239,17 @@ resolveUnitPhysiology reg unit bodyAuthored mProfile entries = do
 --   templates in @stats:@ or @skills:@, as @(reason, detail)@, or
 --   'Nothing'. An owned key is never a template (D-3): a template would
 --   let @getOrRollStat@ recreate a key a Nominal system must not hold.
---   Unowned names, lazy templates included, are untouched.
+--   Unowned names, lazy templates included, are untouched, except the
+--   engagement marker (#2834): its two atomic writers are the only way
+--   it may come to exist, so a template could create a value 2 with no
+--   seeded pool behind it.
 rejectPhysiologyTemplates ∷ PhysiologyRegistry → Text → [Text] → [Text]
                           → Maybe (Text, Text)
 rejectPhysiologyTemplates reg unit statKeys skillKeys = listToMaybe
     [ ("physiology key in unit template", unit <> ": " <> section <> "." <> k)
     | (section, ks) ← [("stats", statKeys), ("skills", skillKeys)]
     , k ← ks
-    , k `Set.member` owned ]
+    , k `Set.member` owned ∨ k ≡ combatEngagedKey ]
   where
     owned = registryKeys reg
 
@@ -199,6 +277,9 @@ data PhysioContext = PhysioContext
     , pcNow        ∷ !Double
     , pcStats      ∷ !(HM.HashMap Text Float)
     , pcModifiers  ∷ !(HM.HashMap Text [StatModifier])
+    , pcBlood      ∷ !BloodView
+      -- ^ the unit's blood through "Unit.Blood": the one input the derived
+      --   @circulation@ reads that is not a stat (#2836, S9).
     }
 
 data PhysioOutcome
@@ -215,7 +296,8 @@ data PhysioOutcome
 -- | The mode a system resolves to for this unit.
 modeOf ∷ PhysioContext → PhysiologySystem → ResolvedMode
 modeOf ctx sys =
-    resolveMode sys (pcPhysiology ctx) (HM.lookup (psId sys) (pcOverrides ctx))
+    resolveMode sys (pcPhysiology ctx) (engagementApplied (pcStats ctx))
+                (HM.lookup (psId sys) (pcOverrides ctx))
 
 -- | Read a registry-owned key. Pure: see the module header.
 physioReadPure ∷ ReadKind → PhysioContext → Text → PhysioOutcome
@@ -233,15 +315,31 @@ readRole ∷ ReadKind → PhysioContext → PhysiologySystem → ResolvedMode
          → KeyRole → Either Text Float
 readRole kind ctx _ mode role = case role of
     RoleOwned o → case mode of
-        ModeSimulated → simulatedOwned kind ctx (okKey o)
+        -- A field-backed key (blood, #2837) is stored in its dedicated unit
+        -- field, never in uiStats: its Simulated value is the RAW volume the
+        -- context carries, and it has no modifiers, so base = effective.
+        ModeSimulated
+            | isJust (okField o) → Right (bvVolume (pcBlood ctx))
+            | otherwise          → simulatedOwned kind ctx (okKey o)
         _             → evalHealthy ctx (okHealthy o)
     RoleMeter m → case mode of
         ModeSimulated → Right (fromMaybe 0 (storedValue kind ctx m))
         _             → Right 0
     RoleDerived d → case mode of
-        ModeSimulated → case dkRule d of
-            DerivedSaltConcentration → saltConcentrationFor ctx
-        _             → Right (dkHealthy d)
+        ModeSimulated → derivedRule ctx d
+        _ → case dkHealthy d of
+            DerivedFixed v → Right v
+            -- A live key is its rule, whatever the mode (SD-21): the rule
+            -- reads its own system's inputs through THEIR mode.
+            DerivedLive    → derivedRule ctx d
+
+-- | Evaluate a derived key's named rule against the unit's current state.
+derivedRule ∷ PhysioContext → DerivedKey → Either Text Float
+derivedRule ctx d = case dkRule d of
+    DerivedSaltConcentration → saltConcentrationFor ctx
+    DerivedCirculation       → circulationFor ctx
+    DerivedBloodMax          → Right (bvMax (contextBlood ctx))
+    DerivedBloodFraction     → Right (bvFraction (contextBlood ctx))
 
 -- | A stored key's base, or its effective value.
 storedValue ∷ ReadKind → PhysioContext → Text → Maybe Float
@@ -268,7 +366,22 @@ simulatedOwned kind ctx k = case storedValue kind ctx k of
 --   falls back to @body_mass or 70.0@, and a fallback is exactly how a
 --   bodyless unit passed for a 70 kg one.
 checkedInput ∷ Text → PhysioContext → Text → Either Text Float
-checkedInput missing ctx k = do
+checkedInput = checkedWith "positive" (≤ 0)
+
+-- | A stored POOL a rule reads as a numerator (the body-water pool behind
+--   @salt_conc@): present, finite and NON-NEGATIVE as stored and as
+--   effective. A present zero is a valid reading — a dehydrated unit's
+--   empty pool, which the concentration rule's @clamp 0.05 1@ exists to
+--   handle (S4, #2831: activation exposed it, because the pool really does
+--   reach zero) — while a negative, NaN or infinite pool, or an absent
+--   one, is still an invariant violation, and a positive modifier still
+--   cannot lift an invalid STORED pool into a plausible effective one.
+checkedPool ∷ Text → PhysioContext → Text → Either Text Float
+checkedPool = checkedWith "non-negative" (< 0)
+
+checkedWith ∷ Text → (Float → Bool) → Text → PhysioContext → Text
+            → Either Text Float
+checkedWith wanted invalid missing ctx k = do
     stored ← maybe (Left missing) Right (HM.lookup k (pcStats ctx))
     judge "stored" stored
     v ← maybe (Left missing) Right (storedValue ReadEffective ctx k)
@@ -279,8 +392,8 @@ checkedInput missing ctx k = do
         | isNaN x ∨ isInfinite x = Left $
             "input '" <> k <> "' is not finite (" <> which <> " "
             <> tshow x <> ")"
-        | x ≤ 0 = Left $
-            "input '" <> k <> "' is not positive (" <> which <> " "
+        | invalid x = Left $
+            "input '" <> k <> "' is not " <> wanted <> " (" <> which <> " "
             <> tshow x <> ")"
         | otherwise = Right ()
 
@@ -288,14 +401,15 @@ checkedInput missing ctx k = do
 capacity ∷ PhysioContext → Text → Either Text Float
 capacity ctx k = checkedInput ("input '" <> k <> "' is absent") ctx k
 
--- | A Simulated pool a DERIVED rule divides by (the body-water pool
---   behind @salt_conc@). Unlike a plain Simulated owned read, which
---   returns whatever is stored, a derived value built on a nonsensical
---   pool would be a wrong answer with no way to tell.
+-- | A Simulated pool a DERIVED rule reads (the body-water pool behind
+--   @salt_conc@). Unlike a plain Simulated owned read, which returns
+--   whatever is stored, a derived value built on a nonsensical pool would
+--   be a wrong answer with no way to tell: see 'checkedPool' for what
+--   counts as nonsensical.
 dependencyPool ∷ PhysioContext → Text → Either Text Float
 dependencyPool ctx k =
-    checkedInput ("Simulated owned key '" <> k <> "' has no stored value")
-                 ctx k
+    checkedPool ("Simulated owned key '" <> k <> "' has no stored value")
+                ctx k
 
 quantity ∷ PhysioContext → Quantity → Either Text Float
 quantity ctx q = case resolveQuantity (pcRegistry ctx) q of
@@ -308,6 +422,24 @@ evalHealthy ctx (HealthyFrom k scales) = do
     v  ← capacity ctx k
     fs ← traverse (quantity ctx) scales
     pure (v * product fs)
+evalHealthy ctx HealthyBloodMax
+    -- the BASE body mass (70 kg when absent, modifiers never applied) times the
+    -- ratio; a non-finite or negative result is no target to seed or rewrite
+    -- to (#2837), so it is refused like any other invalid seed input
+    | isNaN v ∨ isInfinite v = Left ("input 'blood_max' is not finite (" <> tshow v <> ")")
+    | v < 0                  = Left ("input 'blood_max' is negative (" <> tshow v <> ")")
+    | otherwise              = Right v
+  where
+    v = HM.lookupDefault 70.0 "body_mass" (pcStats ctx) * bloodMassRatio
+evalHealthy ctx HealthyMaxStamina =
+    case maxStaminaOf Nothing (pcNow ctx) (pcStats ctx) (pcModifiers ctx) of
+        Nothing → Left "input 'max_stamina' is absent (no endurance stat)"
+        Just v
+            | isNaN v ∨ isInfinite v → Left $
+                "input 'max_stamina' is not finite (" <> tshow v <> ")"
+            | v ≤ 0 → Left $
+                "input 'max_stamina' is not positive (" <> tshow v <> ")"
+            | otherwise → Right v
 
 -- | @salt_conc@ for a Simulated salt system: the shared pure rule over
 --   the unit's effective @salt@ against its healthy maximum, and the
@@ -331,3 +463,155 @@ saltConcentrationFor ctx = do
             cur  ← dependencyPool ctx "hydration"
             pure (cur / maxH)
         _ → Right 1.0
+
+-- | @circulation@ (#2836, S9): the shared pure rule over the unit's current
+--   state, never stored. Inputs, each read at the context's game time:
+--
+--     * blood: the fraction "Unit.Blood" computed for the context;
+--     * the effective @constitution@, @fat_mass@, @body_mass@ and @sepsis@,
+--       with the fallbacks the Lua rule had (1.0, 0, 70, 0): reading a
+--       derived value must not roll a stat, so a unit with none of them
+--       takes the fallback instead of a lazy roll;
+--     * the core temperature through its own read, so a Nominal or
+--       Unsupported thermo substitutes the baseline and a Simulated one with
+--       no stored core is an invariant violation;
+--     * the heart rate: the effective stored value while cardio is
+--       Simulated (an absent one is an invariant violation), and none under
+--       a Nominal cardio, whose heart-rate factor the rule makes exactly 1.0.
+circulationFor ∷ PhysioContext → Either Text Float
+circulationFor ctx = do
+    resting ← constant "RESTING_HR"
+    core    ← coreTemperature
+    heartRate ← case classifyKey reg "heart_rate" of
+        Just (csys, RoleOwned h) | modeOf ctx csys ≡ ModeSimulated →
+            Just <$> simulatedOwned ReadEffective ctx (okKey h)
+        Just _  → Right Nothing
+        Nothing → Left "the registry does not own 'heart_rate'"
+    pure $ circulationRule resting CirculationInputs
+        { ciBloodFraction = bvFraction (contextBlood ctx)
+        , ciConstitution  = stat "constitution" 1.0
+        , ciFatMass       = stat "fat_mass" 0.0
+        , ciBodyMass      = stat "body_mass" 70.0
+        , ciSepsis        = stat "sepsis" 0.0
+        , ciCore          = core
+        , ciHeartRate     = heartRate }
+  where
+    reg = pcRegistry ctx
+    stat k fallback = fromMaybe fallback (storedValue ReadEffective ctx k)
+    constant n = maybe (Left ("unknown constant " <> n)) Right
+                       (Map.lookup n (prConstants reg))
+    coreTemperature = case physioReadPure ReadEffective ctx "core_temp" of
+        OutcomeValue _ v     → Right v
+        OutcomeUnsupported   → constant "THERMO_BASELINE"
+        OutcomeInvariant why → Left why
+        OutcomeUnowned       → Left "the registry does not own 'core_temp'"
+
+-- * Blood (S10, #2837)
+
+-- | The registry's @blood@ system, if it declares one.
+bloodSystem ∷ PhysiologyRegistry → Maybe PhysiologySystem
+bloodSystem reg = registrySystem reg "blood"
+
+-- | Is this unit's blood Nominal? Only through the one pure resolver, against
+--   the registry's own @blood@ declaration. A registry that declares no
+--   @blood@ system (the wound tick's @emptyPhysiologyRegistry@, a hand-built
+--   fixture) and a blood that is Unsupported (a bodyless definition) are NOT
+--   Nominal: they read the raw pre-S10 values.
+bloodIsNominal ∷ PhysiologyRegistry → UnitPhysiology → PhysioOverrides
+               → HM.HashMap Text Float → Bool
+bloodIsNominal reg up overrides stats = case bloodSystem reg of
+    Nothing  → False
+    Just sys → resolveMode sys up (engagementApplied stats)
+                   (HM.lookup (psId sys) overrides) ≡ ModeNominal
+
+-- | The ONE mode-aware blood view of a unit instance: the raw view of
+--   "Unit.Blood" for a Simulated, Unsupported or undeclared blood, and its
+--   Nominal branch for a Nominal one. Every consumer (the wound fold, the
+--   movement multiplier, @unit.getBlood@, circulation and cardio's blood
+--   input) reads through it.
+instanceBloodView ∷ PhysiologyRegistry → UnitDef → UnitInstance → BloodView
+instanceBloodView reg def inst
+    | bloodIsNominal reg (udPhysiology def) (uiPhysioOverrides inst) (uiStats inst)
+        = nominalBlood raw
+    | otherwise = raw
+  where raw = bloodView def inst
+
+-- | 'instanceBloodView' for a unit looked up in a unit manager: a unit whose
+--   definition is no longer registered has no wounds that can be priced and no
+--   mode, so it reads the raw view with no bleed.
+unitBloodView ∷ PhysiologyRegistry → UnitManager → UnitInstance → BloodView
+unitBloodView reg um inst = case HM.lookup (uiDefName inst) (umDefs um) of
+    Just def → instanceBloodView reg def inst
+    Nothing  → bloodViewOf (uiStats inst) (uiBlood inst) 0
+
+-- | The blood a pure context reads: its raw view, in the Nominal branch when
+--   the context's blood is Nominal.
+contextBlood ∷ PhysioContext → BloodView
+contextBlood ctx
+    | bloodIsNominal (pcRegistry ctx) (pcPhysiology ctx) (pcOverrides ctx)
+                     (pcStats ctx) = nominalBlood (pcBlood ctx)
+    | otherwise = pcBlood ctx
+
+-- * Consumer boundary (S5, #2830)
+
+-- | A unit's stats AS A PURE GAMEPLAY CONSUMER SEES THEM, for the named
+--   registry keys: the Haskell face of @physiology.get@, used by code that
+--   already holds the unit instance inside a single atomic fold (the wound
+--   tick) and so cannot run the IO 'physioRead'.
+--
+--   Each named key is replaced by its mode-aware EFFECTIVE value (a
+--   Nominal pool reads its healthy rule), and a key whose system is
+--   Unsupported is removed so the consumer's absent-pool branch applies. @capacities@ are the
+--   unowned maxima those pools are read against: active, each present
+--   one is replaced by its EFFECTIVE value so a pool and its capacity
+--   agree on modifiers.
+--
+--   A violated invariant (a Simulated pool with no stored value, a
+--   healthy-rule input that is absent or not positive) is a 'Left' with
+--   the description, never a stored fallback: D-2 forbids reading it as
+--   healthy or absent, and the caller decides what an invariant violation
+--   means (the wound tick leaves the unit untouched and logs it).
+physioConsumerView ∷ [Text] → [Text] → PhysioContext
+                   → Either Text (HM.HashMap Text Float)
+physioConsumerView keys capacities ctx = do
+    owned ← foldM step (pcStats ctx) keys
+    pure (foldl' capacity owned capacities)
+  where
+    step acc k = case physioReadPure ReadEffective ctx k of
+        OutcomeValue _ v     → Right (HM.insert k v acc)
+        OutcomeUnsupported   → Right (HM.delete k acc)
+        OutcomeUnowned       → Right acc
+        OutcomeInvariant why → Left why
+    -- A capacity (@max_calories@, @max_hydration@) is an UNOWNED input,
+    -- but a pool's effective value is read against ITS effective
+    -- capacity: the Lua facade divides by @get(maxKey)@, which applies
+    -- the key's modifiers, so the view must too.
+    capacity acc k = case storedValue ReadEffective ctx k of
+        Just v  → HM.insert k v acc
+        Nothing → acc
+
+-- * Raw write gate (S4, #2831)
+
+-- | May the raw stat verb (@unit.setStat@) write @key@ for this unit?
+--   An unowned key always may, except the engagement marker (#2834): it
+--   is an input of the stamina resolver, so a raw 2 would make stamina
+--   Simulated with no seeded pool. A DERIVED key never may, in either
+--   mode (it is computed on demand and never stored). An owned key or
+--   meter may only while its system is Simulated: under Nominal the key
+--   does not exist, and under Unsupported it never does. A Simulated
+--   system's debug writes stay allowed (D-7). @applied@ is whether the
+--   unit's engagement marker is 2.
+rawWriteAllowed ∷ PhysiologyRegistry → UnitPhysiology → Bool → PhysioOverrides
+                → Text → Bool
+rawWriteAllowed reg up applied overrides key
+    | key ≡ combatEngagedKey = False
+    | otherwise = case classifyKey reg key of
+        Nothing → True
+        Just (sys, role) → case role of
+            RoleDerived _ → False
+            -- A field-backed key (blood, #2837) is stored in its dedicated
+            -- unit field: a raw stat write would create the shadow pool the
+            -- storage adapter forbids, so it is refused in every mode.
+            RoleOwned o | isJust (okField o) → False
+            _ → resolveMode sys up applied (HM.lookup (psId sys) overrides)
+                    ≡ ModeSimulated

@@ -177,6 +177,11 @@ prelude = lns
     , "  transferItemToUnit = function() TO_UNIT = TO_UNIT + 1; return false end,"
     , "  transferItemToBuilding = function()"
     , "    TO_BUILDING = TO_BUILDING + 1; return false end }"
+    -- The physiology facade (#2830) reads through unit.readPhysio, which for
+    -- every key while modes are inactive answers getStat's value and a nil
+    -- mode (nil, nil when undefined); readPhysioBase likewise for the base.
+    , "unit.readPhysio = function(uid, k) return unit.getStat(uid, k), nil end"
+    , "unit.readPhysioBase = unit.readPhysio"
     , "building = {"
     , "  getActiveIds = function()"
     , "    local ids = {}"

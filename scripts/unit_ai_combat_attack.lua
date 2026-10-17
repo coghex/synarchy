@@ -324,10 +324,8 @@ local function attackTargetExecute(uid, s, params)
             -- tank just collapses us two tiles short — only fleeing for our
             -- lives (retreat) runs to exhaustion.
             local sp      = mv.sprint(uid)
-            local stam    = unit.getStat(uid, "stamina")
-            local maxStam = require("scripts.unit_stats").get(uid, "max_stamina")
-            if stam and maxStam and maxStam > 0 then
-                local frac = stam / maxStam
+            local frac = require("scripts.physiology").fraction(uid, "stamina", "max_stamina")
+            if frac then
                 if frac < 0.30 then sp = mv.comfort(uid)      -- winded: cruise
                 elseif frac < 0.55 then sp = mv.ordered(uid)  -- tiring: push
                 end

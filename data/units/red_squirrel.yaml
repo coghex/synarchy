@@ -52,6 +52,11 @@ units:
       bulk:    { mean: 0.28,  range: 0.06 }
       bodyfat: { mean: 0.10,  range: 0.06 }
 
+    # Physiology profile (#2833, owner decision SD-10): hydration, salt and nutrition Nominal; thermo Simulated.
+    # Exhaustion is Simulated and sleep Nominal (#2835, S8b): the squirrel has no
+    # go_to_sleep behavior, so its sleep-pressure simulation was unused.
+    physiology: { profile: simple }
+
     skills:
       # Natural attacks (claws/incisors) ride the unarmed class.
       unarmed:  { base: 15.0, range: 10.0 }

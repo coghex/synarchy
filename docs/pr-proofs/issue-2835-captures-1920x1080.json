@@ -1,0 +1,45 @@
+{
+ "size": "1920x1080",
+ "units": {
+  "acolyte": 1,
+  "red_squirrel": 2,
+  "tiller": 3
+ },
+ "captures": [
+  {
+   "frame": "1920x1080_acolyte_sleep",
+   "note": "acolyte (sleep Simulated) (sleep=simulated pin=nil pool=7.7495393753052 exhaustion=simulated) scroll offset 10",
+   "selected": "1",
+   "offset": 10,
+   "rows": "1128.3 / 1128.3 | 33.8 / 33.8 | 7.7 / 7.7"
+  },
+  {
+   "frame": "1920x1080_squirrel_nominal_sleep",
+   "note": "red_squirrel (sleep Nominal: its shipped default) (sleep=nominal pin=nil pool=nil exhaustion=simulated) scroll offset 10",
+   "selected": "2",
+   "offset": 10,
+   "rows": "Nominal | Nominal | Nominal"
+  },
+  {
+   "frame": "1920x1080_squirrel_sleep_tooltip",
+   "note": "Nominal tooltip hover, Sleep row, shipped squirrel",
+   "selected": "2",
+   "offset": 10,
+   "rows": "Nominal | Nominal | Nominal"
+  },
+  {
+   "frame": "1920x1080_tiller_sleep",
+   "note": "tiller (bodyless: sleep Unsupported) (sleep=nil pin=nil pool=nil exhaustion=nil) scroll offset 5",
+   "selected": "3",
+   "offset": 5,
+   "rows": "100% | Bleeding | Deep lacerati\u2026"
+  },
+  {
+   "frame": "1920x1080_squirrel_pinned_sleep",
+   "note": "red_squirrel after sleep pinned Simulated through the facade (sleep=simulated pin=simulated pool=5.4296135902405 exhaustion=simulated)",
+   "selected": "2",
+   "offset": 10,
+   "rows": "Nominal | Nominal | 5.4 / 5.4"
+  }
+ ]
+}

@@ -26,6 +26,7 @@
 local M = {}
 
 local clamp = require("scripts.lib.numeric").clamp
+local physiology = require("scripts.physiology")
 
 -- Fraction 0..1 of the calorie ENERGY STORE. nil (not a band member —
 -- callers all treat this as "unaffected") when the unit has no live
@@ -33,9 +34,8 @@ local clamp = require("scripts.lib.numeric").clamp
 -- (requirement 4: units without a live calorie pool must remain
 -- unaffected).
 function M.fraction(uid)
-    local cur = unit.getStat(uid, "calories")
-    local mx  = unit.getStat(uid, "max_calories")
-    if cur and mx and mx > 0 then return clamp(cur / mx, 0, 1) end
+    local f = physiology.fraction(uid, "calories", "max_calories")
+    if f then return clamp(f, 0, 1) end
     return nil
 end
 

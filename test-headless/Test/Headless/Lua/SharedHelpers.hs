@@ -63,10 +63,12 @@ runsOk chunkText = do
 lns ∷ [Text] → Text
 lns = T.intercalate "\n"
 
--- | The eleven modules that carried a private @clamp@ (issue #1158's list).
+-- | The modules that still use the shared @clamp@: issue #1158's eleven,
+--   less @scripts/circulation.lua@, whose formula moved to the Haskell
+--   @circulationRule@ (S9, #2836) and which now only names the derived read.
 clampConsumers ∷ [FilePath]
 clampConsumers =
-    [ "scripts/brain.lua", "scripts/cardio.lua", "scripts/circulation.lua"
+    [ "scripts/brain.lua", "scripts/cardio.lua"
     , "scripts/consumable.lua", "scripts/exhaustion.lua"
     , "scripts/mental_state.lua", "scripts/movement_speed.lua"
     , "scripts/salts.lua", "scripts/starvation.lua", "scripts/thermo.lua"
@@ -85,7 +87,8 @@ formatterConsumers =
 scannedScripts ∷ [FilePath]
 scannedScripts =
     clampConsumers <> formatterConsumers
-        <> [ "scripts/lib/numeric.lua", "scripts/lib/game_time.lua"
+        <> [ "scripts/circulation.lua"
+           , "scripts/lib/numeric.lua", "scripts/lib/game_time.lua"
            , "scripts/event_log.lua" ]
 
 readScript ∷ FilePath → IO Text
@@ -194,7 +197,7 @@ spec = do
                 (path, occurrences "local function formatGameTimeHMS" body)
                     `shouldBe` (path, 0)
 
-        it "imports clamp from the library in all eleven physiology modules" $
+        it "imports clamp from the library in every physiology module that uses it" $
             forM_ clampConsumers $ \path → do
                 body ← readScript path
                 (path, T.isInfixOf "require(\"scripts.lib.numeric\").clamp" body)

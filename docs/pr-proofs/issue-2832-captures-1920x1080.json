@@ -1,0 +1,172 @@
+{
+ "size": "1920x1080",
+ "units": {
+  "acolyte": 1,
+  "bear_brown": 2,
+  "nomad_primitive": 3,
+  "tiller": 4
+ },
+ "captures": [
+  {
+   "frame": "1920x1080_acolyte_off00",
+   "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 0",
+   "selected": "1",
+   "offset": 0,
+   "rows": "3.6 / 3.6 L | 0.00 | 37.0\u00b0C"
+  },
+  {
+   "frame": "1920x1080_acolyte_off03",
+   "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 3",
+   "selected": "1",
+   "offset": 3,
+   "rows": "70 bpm | 100% | 100%"
+  },
+  {
+   "frame": "1920x1080_acolyte_off06",
+   "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 6",
+   "selected": "1",
+   "offset": 6,
+   "rows": "100% | 100% | ?"
+  },
+  {
+   "frame": "1920x1080_acolyte_off09",
+   "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 9",
+   "selected": "1",
+   "offset": 9,
+   "rows": "479.9 / 479.9 | 959.8 / 959.8 | 28.8 / 28.8"
+  },
+  {
+   "frame": "1920x1080_acolyte_off11",
+   "note": "acolyte (rich: all Simulated) (thermo=simulated,salt=simulated,hydration=simulated,nutrition=simulated) scroll offset 11",
+   "selected": "1",
+   "offset": 11,
+   "rows": "28.8 / 28.8 | ? | 12.1 / 17.2 kg"
+  },
+  {
+   "frame": "1920x1080_bear_brown_off00",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 0",
+   "selected": "2",
+   "offset": 0,
+   "rows": "17.9 / 17.9 L | 0.00 | 37.0\u00b0C"
+  },
+  {
+   "frame": "1920x1080_bear_brown_off03",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 3",
+   "selected": "2",
+   "offset": 3,
+   "rows": "70 bpm | 100% | 100%"
+  },
+  {
+   "frame": "1920x1080_bear_brown_off06",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 6",
+   "selected": "2",
+   "offset": 6,
+   "rows": "100% | 100% | ?"
+  },
+  {
+   "frame": "1920x1080_bear_brown_off09",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 9",
+   "selected": "2",
+   "offset": 9,
+   "rows": "Nominal | Nominal | Nominal"
+  },
+  {
+   "frame": "1920x1080_bear_brown_off11",
+   "note": "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal) (thermo=simulated,salt=simulated,hydration=nominal,nutrition=nominal) scroll offset 11",
+   "selected": "2",
+   "offset": 11,
+   "rows": "Nominal | ? | 0.0 / 155.2 kg"
+  },
+  {
+   "frame": "1920x1080_nomad_primitive_off00",
+   "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 0",
+   "selected": "3",
+   "offset": 0,
+   "rows": "2.4 / 2.4 L | 0.00 | Nominal 37.0\u00b0C"
+  },
+  {
+   "frame": "1920x1080_nomad_primitive_off03",
+   "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 3",
+   "selected": "3",
+   "offset": 3,
+   "rows": "70 bpm | 100% | 100%"
+  },
+  {
+   "frame": "1920x1080_nomad_primitive_off06",
+   "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 6",
+   "selected": "3",
+   "offset": 6,
+   "rows": "100% | Nominal 100% | ?"
+  },
+  {
+   "frame": "1920x1080_nomad_primitive_off09",
+   "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 9",
+   "selected": "3",
+   "offset": 9,
+   "rows": "Nominal | Nominal | Nominal"
+  },
+  {
+   "frame": "1920x1080_nomad_primitive_off11",
+   "note": "nomad_primitive (exempt: all Nominal) (thermo=nominal,salt=nominal,hydration=nominal,nutrition=nominal) scroll offset 11",
+   "selected": "3",
+   "offset": 11,
+   "rows": "Nominal | ? | 0.0 / 13.7 kg"
+  },
+  {
+   "frame": "1920x1080_tiller_off00",
+   "note": "tiller (bodyless: all Unsupported, one injury) (thermo=nil,salt=nil,hydration=nil,nutrition=nil) scroll offset 0",
+   "selected": "4",
+   "offset": 0,
+   "rows": "0.0 / 5.2 L | 0.50 | 70 bpm"
+  },
+  {
+   "frame": "1920x1080_tiller_off03",
+   "note": "tiller (bodyless: all Unsupported, one injury) (thermo=nil,salt=nil,hydration=nil,nutrition=nil) scroll offset 3",
+   "selected": "4",
+   "offset": 3,
+   "rows": "100% | 100% | 100%"
+  },
+  {
+   "frame": "1920x1080_tiller_off06",
+   "note": "tiller (bodyless: all Unsupported, one injury) (thermo=nil,salt=nil,hydration=nil,nutrition=nil) scroll offset 6",
+   "selected": "4",
+   "offset": 6,
+   "rows": "? | ? | Bleeding"
+  },
+  {
+   "frame": "1920x1080_tiller_off07",
+   "note": "tiller (bodyless: all Unsupported, one injury) (thermo=nil,salt=nil,hydration=nil,nutrition=nil) scroll offset 7",
+   "selected": "4",
+   "offset": 7,
+   "rows": "? | Bleeding | Deep lacerati\u2026"
+  },
+  {
+   "frame": "1920x1080_transition_1_simulated",
+   "note": "acolyte selected, hunger/calories/hydration, all Simulated",
+   "selected": "1",
+   "offset": 9,
+   "rows": "479.9 / 479.9 | 959.8 / 959.8 | 28.8 / 28.8"
+  },
+  {
+   "frame": "1920x1080_transition_2_nominal",
+   "note": "same unit, no reselect, hydration+nutrition now Nominal, scroll preserved",
+   "selected": "1",
+   "offset": 9,
+   "rows": "Nominal | Nominal | Nominal"
+  },
+  {
+   "frame": "1920x1080_transition_3_tooltip",
+   "note": "Nominal tooltip hover on the same unit",
+   "selected": "1",
+   "offset": 9,
+   "rows": "Nominal | Nominal | Nominal"
+  },
+  {
+   "frame": "1920x1080_transition_4_back",
+   "note": "back to Simulated, values reseeded healthy",
+   "selected": "1",
+   "offset": 9,
+   "rows": "479.9 / 479.9 | 959.8 / 959.8 | 28.8 / 28.8"
+  }
+ ]
+}

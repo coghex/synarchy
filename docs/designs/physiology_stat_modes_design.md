@@ -350,6 +350,10 @@ Incoming contributions follow the receiver's mode. A debit or credit into a
 Nominal system is discarded: `physiology.debit` and `credit` return 0. A
 Simulated receiver applies it.
 
+*Amended by S9 (#2836): `circulation` is no longer an always-on step or a
+cache. It is the on-demand derived key of the `cardio` system (S9.2, S9.9),
+and the paragraph below describes the S4 state it replaced.*
+
 `circulation` is not owned by any system. It becomes its own always-on
 orchestration step, after cardio and before thermo, computed from the
 *effective* core read. That reproduces where thermo computes it today
@@ -613,7 +617,9 @@ added or expiring, or a `recomputeBody` that moves `maxSalt`. A legacy stored
 moves to the accessor in S5: brain, cramps, `sweatFactor`, the status row
 and the probe. No Haskell code reads `salt_conc` (grep of `src/`).
 
-**2. Non-v1 caches stay tick-lagged, as today.** These are `circulation` and
+**2. Non-v1 caches stay tick-lagged, as today.** *(S9, #2836: `circulation`
+left this list; it is derived on demand and never cached. The facade's
+`refresh` now recomputes only the brain.)* These were `circulation` and
 brain's outputs (`consciousness`, `concentration`, `state_of_mind`, `mood`).
 No v1 system owns them, and they keep their current tick-lagged semantics.
 
@@ -656,7 +662,7 @@ Classification of the `uiStats` values this design touches (R2-5):
 | Durable intent | `uiPhysioOverrides` | *Persist exactly* | exact equality |
 | Durable body state | `tissue_recovering` (SD-18; unowned), alongside the existing `fat_mass` / `lean_mass` / `frame_mass` | *Persist exactly* | exact equality |
 | v1 derived | `salt_conc` | **not stored** (computed on demand, D-5a) | absent from the payload; the on-demand value is compared after load |
-| Tick-lagged caches | `circulation`, `consciousness`, `concentration`, `state_of_mind`, and the body-derived `strength` / `strength_body` / maxima | **Rebuild deterministically, serialized but ignored** (see below) | compared as the **canonical recomputation** from the loaded durable state, not by stored bytes |
+| Tick-lagged caches | `consciousness`, `concentration`, `state_of_mind`, and the body-derived `strength` / `strength_body` / maxima (`circulation` left this row in S9, #2836: it is derived, **not stored**, and a legacy stored value is scrubbed at load in every mode, D-6 (i)) | **Rebuild deterministically, serialized but ignored** (see below) | compared as the **canonical recomputation** from the loaded durable state, not by stored bytes |
 
 **Taxonomy note (R3-5).** `docs/persistence_contract.md:128-137` defines
 *Rebuild deterministically* as never serialized. Only *Reset to a documented
@@ -810,7 +816,8 @@ Facade `scripts/physiology.lua`:
 - `refresh(uid)`
 - `registerSystem(id, { tick, onModeChanged })`
 
-Orchestration: `unit_resources.update` runs cardio → circulation → each
+Orchestration: `unit_resources.update` runs cardio (S9: only while Simulated;
+circulation is no longer a step) → each
 Simulated system's `tick` in registry order (thermo before salt, as today) →
 brain → … Pool entries, digestion, starvation, regrowth and the strength
 *discount* run only when nutrition is Simulated. **Nominal upkeep** (D-9)
@@ -825,19 +832,15 @@ are exempt), registry coverage
 (every system has a Lua owner, every owned key a healthy rule, every
 `contributes` entry a substitute), and templated physiology names.
 
-**Temporary UI exception (S5 to S6).** The audit carries one named,
-enumerated, *temporary* exception, for the legacy UI pool reads that stay
-raw until S6's Nominal-aware display. It lists exactly these sites, and any
-other raw UI read is still flagged:
-
-- `scripts/unit_info_panel.lua`: the `hydration`, `hunger` and `calories`
-  reads (about lines 85, 93 and 101);
-- `scripts/unit_info_v2_stat_defs.lua`: the generic `stats.get` pool reads
-  in `fmtCurMax` (about lines 25-26).
-
-The `salt_conc` status row (`scripts/unit_info_v2_status.lua`, about lines
-60 and 63) is **not** excepted. It moves to the accessor in S5, as D-5a
-requires. S6 deletes the exception.
+**Former temporary UI exception (S5 to S6; deleted by S6, #2832).** The audit
+carried one named, enumerated, *temporary* exception for the legacy UI pool
+reads that stayed raw until S6's Nominal-aware display: the `hydration`,
+`hunger` and `calories` reads in `scripts/unit_info_panel.lua` and the generic
+`stats.get` pool reads in `fmtCurMax` of `scripts/unit_info_v2_stat_defs.lua`.
+The `salt_conc` status row was never excepted (S5 moved it to the accessor, as
+D-5a requires). S6 routed those sites through the facade and **deleted the
+exception**, its types and its matching: no UI allowance remains, and the
+audit's self-test now proves each former raw form is flagged like any other.
 
 ### D-8. UI display
 
@@ -975,7 +978,50 @@ changes, listed in its PR:
 
 (Mass-proportional sweat costs arrive earlier, through #2825.)
 
+**Final species table, applied by S7 (#2833).** The shipped `data/units/*.yaml`
+now carry exactly the SD-10 table above. Relative to S4's activation set, the
+one **intentional effective change** is `red_squirrel`: `reduced` → `simple`,
+so its salt goes Simulated → Nominal (hydration and nutrition were already
+Nominal, thermo stays Simulated). A squirrel therefore holds no `salt` /
+`salt_store` / `salt_conc` / `salt_imbalance` state, reads `salt_conc` 1.0
+Nominal, has no cramps and no salt failure contribution, and its sweat factor
+is 1.0; its thermo, circulation and every unowned system are untouched. Bodyless
+definitions (`tiller`, `unknown_unit`, `white_tailed_deer`) stay Unsupported.
+Nothing else is retuned. Saves follow D-6 (b): an unpinned squirrel saved under
+`reduced` adopts `simple` on load (salt state scrubbed, one normalization note,
+idempotent), while a squirrel pinned to salt Simulated keeps its pin and its
+durable salt and reserve state exactly, a pin equal to the old default
+included.
+
+**Independent small-mass Simulated coverage.** The production squirrel's Nominal
+salt must not stand in for the Simulated regression at 0.3 kg. That coverage
+stays on explicit fixtures that pin their own modes: T-1's four salt x hydration
+combinations and T-12's virtual-meal controls (`physiology stat modes`, all on
+an explicit `reduced` fixture, unaffected by the shipped default), plus, in
+`physiology species profiles`, the shipped squirrel with salt pinned Simulated
+through the facade, held to the probe's 0.7 to 1.3 concentration and 33.5 to 39
+core bounds under idle and exertion. No bound was relaxed. The physiology probe
+asserts the squirrel's Nominal semantics through the mode API
+(`tools/physiology_probe.py`, predicate proved engine-free by
+`tools/test_physiology_probe.py`): thermo Simulated, salt, hydration and
+nutrition Nominal as the species default (no probe-written pin), `salt_conc`
+1.0 Nominal (never a zero standing in for an absent key), no Nominal state
+stored, no imbalance, no cramps; it keeps the temperate core range, the
+no-death check, the body-composition checks, the cold response and the
+exhaustion-amble regression.
+
 S7 applies the owner's table (SD-10).
+
+**Stamina column, applied by S8a (#2834).** The table gains its fifth system.
+`acolyte`, `bear_brown` and `red_squirrel` run stamina Simulated; `technomule`
+runs it Nominal (`reduced` plus an explicit `stamina: nominal`, S8-F1: the mule
+has no pool configuration, so a Simulated one would leave it permanently
+winded); `nomad_primitive` is `exempt` with `stamina: nominal` and
+`on_combat_engagement: { stamina: simulated }` (SD-20), so it spawns with no
+pool and becomes an acolyte-like Simulated unit at its first admitted combat
+attempt. All four profiles name stamina (`rich`, `reduced` and `simple`
+Simulated, `exempt` Nominal), because the loader refuses a profile that does
+not name every system. Bodyless definitions stay Unsupported.
 
 Capture is out of scope (Non-goals). When it is designed, it uses
 `physiology.setMode` per unit. The override semantics (SD-7) and
@@ -1387,8 +1433,9 @@ and round-trip contract.
    The access audit lands with them. While inactive, the facade reports
    today's semantics for every key, so S5 is behavior-preserving. Advertised:
    the audit and its self-test, plus existing gates unchanged.
-   The audit ships with the temporary UI exception (D-7) for exactly the
-   enumerated legacy pool reads. The `salt_conc` status row is migrated here.
+   The audit shipped with the temporary UI exception (D-7) for exactly the
+   enumerated legacy pool reads (deleted by S6). The `salt_conc` status row is
+   migrated here.
 4. **S4. Activation.** Tick gating; the write gate; transitions and setters;
    modifier-aware seeding; on-demand `salt_conc`; `refresh`; nutrition
    effect gating and Nominal upkeep; the dependency contributions, including
@@ -1402,13 +1449,19 @@ and round-trip contract.
      status and debug panels show `?` for a Nominal pool, which is absent
      from storage (`scripts/unit_info_v2_stat_defs.lua:23-28`,
      `scripts/unit_info_panel.lua:84-88`). This is presentation only.
-     Gameplay readers already use the facade from S5.
+     Gameplay readers already use the facade from S5. **Ended by S6 (#2832):**
+     the panels now show `Nominal` (D-8), and the `?` for a Nominal pool is
+     gone.
 5. **S6.** UI display of Nominal, with `--offscreen` evidence in
    `docs/pr-proofs/`. S6 migrates the excepted legacy UI pool reads (D-7) to
    the Nominal-aware display and **deletes the temporary audit exception**.
    Acceptance includes the access audit passing with the exception removed.
+   Delivered as #2832: the unit-info Status panel and the legacy debug text
+   follow the resolved modes; the exception is deleted; the real offscreen
+   evidence is `docs/pr-proofs/issue-2832-nominal-mode-ui.md`.
 6. **S7.** The owner's profile table (SD-10), and the probe's switch to Nominal
    assertions where squirrel modes change.
+   Delivered as #2833 (see D-10, "Final species table, applied by S7").
 The remaining systems (SD-12) follow, with the owner-approved addenda as
 their design (section "Addenda: remaining systems (S8 to S11)"). **S8a, S8b,
 S9, S10 and S11a each depend only on S4 (#2831), and are independent of one
@@ -1420,6 +1473,7 @@ S11a.
    `unit.getMaxStamina`, the shiver debit through `commitStamina`, and the
    SD-20 nomad engagement in full. Tests T-S8-1 to T-S8-8. Depends on S4;
    independent.
+   Delivered as #2834 (see S8.9, "S8a delivered").
 8. **S8b. Exhaustion and sleep pressure.** Addendum S8, slice plan S8.7
    (S8b). Lua-only. Depends on S4; independent of S8a.
 9. **S9. Cardio and circulation.** Addendum S9 (S9.1 to S9.8), with SD-21.
@@ -2022,6 +2076,143 @@ the new system ids are override keys in the v4 `uiPhysioOverrides` map.
   - Parameters are generous, and the trigger and application are as in
     S8.3. None of the drafted options (a) to (c) was taken.
 
+#### S8.9 S8a delivered (#2834)
+
+What the slice built, as the code now states it. Where an implementation
+choice fills a gap the text above leaves, it is named here.
+
+- **Registry.** `stamina` is the fifth system (`data/physiology/systems.yaml`,
+  last in registry order): requires `body`, owns `stamina`, no meters,
+  provides `stamina_fraction` (1.0 under Nominal) and has the effects
+  `collapse`, `kill_on_zero` and `strike_cost`, each absent under Nominal. Its
+  healthy rule is the NAMED rule `{ rule: max_stamina }` (`HealthyMaxStamina`),
+  because `max_stamina` is derived and never stored, so a `from:` rule could not
+  read it, and the review forbade storing it (an explicit attribute would then
+  switch every unit to the explicit branch). The healthy read and the seed
+  target resolve through the same rule as `maxStaminaFor`.
+- **One maximum.** `Unit.Stats.maxStaminaOf` is the rule: an explicit
+  `max_stamina` wins (its own modifiers apply); otherwise
+  `effectiveStat now (effective(endurance) x 10) (modifiers on max_stamina)`.
+  `maxStaminaFor`, the registry's healthy value, `unit.getMaxStamina` (a pure
+  read verb, `nil` for a unit with no endurance) and `stats.get(uid,
+  "max_stamina")` all call it, so the hand-kept Lua mirror is gone.
+- **One commit rule.** `Combat.Resolution.Stamina.staminaCore` is the pure
+  arithmetic of S8.2 (the m > 0, m = 0 and m < 0 rows, floored and
+  zeroMultiplier statuses). `unit.commitStamina` (pool tick, facade debit and
+  credit, shiver) and the combat strike cost both use it; a transition's seed
+  uses the same `t / m - d` solve through `invertEffectiveStatWhy` with D-5's
+  guards. The verb now returns `{ before, after, maximum, status }` (all
+  effective) and refuses by name: `nominal` and `unsupported` (distinct),
+  `missing_pool` (a Simulated receiver without a pool is a broken invariant;
+  the old first-observation fill is gone), `dead` (the combat lethality rule),
+  `invalid_amount`, `invalid_stamina`, `invalid_maximum`, `no_such_unit`.
+- **Combat.** `Wear` charges only a Simulated pool that exists (a Nominal or
+  Unsupported attacker creates no key; stance is spent in every mode) and
+  `Damage` reads `staminaWorkFraction` (1.0 for Nominal, Unsupported or an
+  absent pool; the effective fraction with the 0.3 floor for Simulated).
+  `Combat.Resolution.runResolution` reads the registry once per strike.
+- **Engagement.** `UnitPhysiology` gains `upEngagement`; the YAML block is
+  `on_combat_engagement: { stamina: simulated }`, validated at registration
+  (the system exists, is stamina, is Nominal by default, mode `simulated`). The
+  resolver takes a fourth input, the unit's marker: override, else the
+  engagement default only when `combat_engaged == 2`, else the species default.
+  `commitIfAdmitted` stamps the absent marker to 1 for attacker and target in
+  the strike's own update; `unit.applyCombatEngagement` (facade-only) applies
+  it: dead (the combat lethality rule, not the pose mirror) refuses and stays
+  pending, an explicit override of either mode latches, otherwise it is
+  `planSetMode` Simulated (so D-5's guards are a scripted `setMode`'s) with
+  marker 2 in the same update, or `seedUnrepresentable` with a reason code
+  (`nonpositive_multiplier`, `negative_base`). The facade logs a refusal once
+  per unit and reason; the debounce is cleared with the other session caches.
+  The marker is never writable by `unit.setStat` and never a definition
+  template.
+- **Nomad parameters.** `nomad_primitive` gets the acolyte's stamina entry with
+  `regen_factor_idle`, `_walking`, `_collapsed`, `_crouching` and
+  `move_regen_factor` scaled 2.25 (derived from the acolyte's table, so the two
+  cannot drift) and an innate +50% `max_stamina` modifier. Side effect worth
+  the owner's attention: `move_regen_factor` is also the speed-drain effort
+  coefficient (`supply = move_regen_factor x endurance`, `drain = supply x
+  ratio^2`), so an engaged nomad's fractional drain above comfort speed is 1.5x
+  the acolyte's too; T-S8-5 holds both units stationary and cannot see it.
+  Calibration (T-S8-5): B passes with the starting values, the nomad holding at
+  or above both 0.1 and the acolyte's fraction at every sample (about 0.25 at
+  30 s against the acolyte spent by 20 s); E is valid and passes, ending at the
+  nomad's wound collapse (about 13.6 s) with its fraction never below 0.76. No
+  parameter was retuned.
+- **Persistence.** No wire change. `combat_engaged` is Persist exactly (absent,
+  1, 2); a value outside the set or non-finite rejects the load (D-6 (h));
+  stray stamina on a Nominal unit (a legacy nomad's `stamina = 0`, the mule's)
+  is scrubbed (D-6 (b)); modifiers are not migrated, so a nomad saved before
+  this slice keeps a maximum of 10. Combat may admit an attack at a paused save
+  boundary, which only creates a pending marker.
+- **Consumers.** Brain, AI wander, pacing, lunge and attack, `checkRevive` and
+  the unit-info panels read stamina through the facade (a Nominal system reads
+  full, an Unsupported one nothing). The Status row and the legacy debug text
+  follow the S6 contract: Nominal shows the word and the neutral tooltip, an
+  Unsupported unit hides the row. The access audit gains stamina ownership
+  (the pool engine), the facade-only `applyCombatEngagement` and the atomic
+  `commitStamina` seam (facade and pool engine only).
+
+#### S8.10 S8b delivered (#2835)
+
+What the slice built, as the code now states it. Lua and content only: no
+Haskell source changed.
+
+- **Registry.** `exhaustion` and `sleep` are the sixth and seventh systems
+  (`data/physiology/systems.yaml`), each requiring `body` with no meters.
+  `exhaustion` owns `exhaustion` and provides `restedness_fraction` and
+  `movement_multiplier` (both the constant 1.0 under Nominal), contributes a
+  zero `sleep_exhaustion_deficit` to the sleep utility, and has the effect
+  `speed_penalty`. `sleep` owns `sleep_pressure` and provides `sleep_deficit`
+  (0.0), with the effects `sleep_need` and `pressure_wake`. The system id and
+  the key differ for sleep, so `SYSTEM_OF` maps `sleep_pressure` to `sleep`.
+- **Healthy rule.** `{ from: endurance, scale: 10 }` for both pools. The
+  maxima are Lua-only derived stats (`max_exhaustion`, `max_sleep_pressure` =
+  effective endurance x 10) and never stored, so a literal
+  `{ from: max_exhaustion }` would name an input no unit holds and refuse every
+  spawn. A hspec case pins the seed target equal to `stats.get(max_*)` at
+  binary32 for each shipped species over a spread of endurances. The one
+  numerical trap: a Nominal substitute computed as `get(owned) / get(max)`
+  reads 0.99999996 at endurance 0.3 (binary32 healthy 3.0 against a double
+  3.0000001192), so every Nominal and Unsupported substitute is a constant.
+- **Profiles.** `rich` S/S, `reduced` S/S, `simple` S/N, `exempt` N/N; the
+  technomule overrides both to Nominal. The squirrel's sleep is Nominal
+  because it has no `go_to_sleep`: its `sleep_pressure` config entry stays as
+  the drain-only parameters of a pinned squirrel and the circadian shape.
+- **Ticking.** `unit_resource_params.lua` maps `exhaustion` and
+  `sleep_pressure` to their systems (acolyte entries are the registry
+  defaults), so the pool tick runs each only while Simulated.
+- **Consumers.** `exhaustion.fraction` and `speedMultiplier` answer 1.0
+  unless exhaustion is Simulated, and compose into every gait through
+  `movement_speed.bandMultiplier` as before (0.35 start, 0.55 floor). The sleep
+  need is gated on sleep's mode before the latch, the pressure wake on
+  Simulated sleep, and `unit_ai_sleep.lua` reads the pool through the facade.
+  The Status row follows the S6 contract; exhaustion has no row.
+- **Cancelling the latch.** The `go_to_sleep` hook (sleep only) and the
+  utility's own check of a restored sequence abandon it: every sequence field
+  is cleared and the unit is unwound to a pose it can act from. This is not
+  just a -infinity utility, which would strand a Sleeping unit (Motion moves
+  only Standing or Crawling units, revive acts only on Collapsed or Crawling,
+  and the injury tick's crawling exemption keys on the phase). A hop in flight
+  is waited out, because `unit.transitionTo` is a no-op mid-transition and
+  `getPose` reports the pose being left.
+- **Persistence.** No wire change; both pools Persist exactly while
+  Simulated; the AI sequence is durable and untouched by the load and
+  teardown resets. A legacy squirrel's stored `sleep_pressure` is scrubbed by
+  D-6 (b), logged once.
+- **Retained modifiers.** Seeds were already modifier-aware (D-5); S8b makes
+  the other writers of the two pools so. `scripts/lib/stat_base.lua` solves
+  the stored base for an effective target (`t / (1 + sum p) - sum d`, a
+  modifier active while `now < expiry`); `credit` / `debit` for both pools and
+  the resource tick's carry integrator use it, so a +50% or -50% modifier no
+  longer turns an effective 10 into 13.5 on a debit or into 15 on the next
+  tick. The integrator is shared, so a modified hydration or hunger pool gets
+  the same correction; with no active modifier nothing changes bit for bit.
+- **Facade and audit.** `credit` / `debit` gain rules for both pools (a
+  Nominal receiver discards). The access audit gains the two owners, the
+  probe's exhaustion fixture pins, and an updated self-test whose unowned
+  example is `heart_rate`.
+
 ### S9. Cardio and circulation
 
 #### S9.1 Current state
@@ -2123,6 +2314,87 @@ One issue, S9, **independent**; it needs S4.
   vasoconstriction), and only heart rate reads healthy (factor 1.0). The
   `circulationRule` (S9.2) implements exactly that, and T-S9-3 asserts that
   frostbite drive still responds to heavy blood loss under Nominal cardio.
+
+#### S9.9 Implementation record (#2836)
+
+What shipped, where it differs from the S9.2 sketch, and why. The six
+corrections of the approved issue review (issuecomment-6229566105) are applied
+literally; each is noted.
+
+- **Registry (S9.2).** `cardio` is the eighth system, appended after `sleep`
+  in `data/physiology/systems.yaml`. It requires `body`, owns `heart_rate`
+  (healthy `RESTING_HR`) and `blood_oxygen` (healthy 1.0), derives
+  `circulation`, owns no meter, makes no outgoing contribution and has one
+  effect, `oxygen_path_hypoxia` (absent while Nominal). `RESTING_HR: 70` is a
+  registry constant (correction 6): `cardio.RESTING_HR` is a drift-tested
+  copy, and circulation's divisor is the registry's, read by the Haskell
+  rule. The `hypoxia` meter is owned by nobody.
+- **Profile columns (correction 2).** The loader refuses a profile that does
+  not name every system, so `cardio: simulated` is added to all four
+  profiles (`rich`, `reduced`, `simple`, `exempt`). The existing columns are
+  untouched. All five bodied species therefore resolve Simulated with no
+  per-species entry, `exempt` keeps #2754's live cardio, and a definition
+  with no `body:` resolves Unsupported.
+- **A Nominal circulation is not a constant (correction 3).** The derived-key
+  grammar gains `healthy: live`: a Nominal read evaluates the rule instead of
+  returning a number. The interface-substitute grammar gains `live`, valid
+  only on a `provides` entry naming a live derived key of its own system. The
+  loader, the Lua registry export and the access audit's coverage check all
+  accept it, and the loader refuses a `circulation` rule that is not live
+  (it would erase the SD-21 factors) and a `salt_concentration` rule that is.
+- **The rule.** `Unit.Physiology.Circulation.circulationRule` is a pure port
+  of `circulation.compute` with the old constants, clamps and fallbacks. Its
+  inputs are gathered by `Unit.Physiology.circulationFor`: the effective
+  constitution, fat mass, body mass and sepsis (fallbacks 1.0, 0, 70, 0,
+  never a lazy roll), the core temperature through its own mode-aware read
+  (the thermo baseline under a Nominal or Unsupported thermo; a Simulated
+  thermo with no stored core is an invariant violation), the effective heart
+  rate while cardio is Simulated (a missing one is an invariant violation)
+  and none under a Nominal cardio, whose heart-rate factor is exactly 1.0.
+  `scripts/circulation.lua` is now a two-line reader over `unit.readPhysio`
+  and holds no formula.
+- **Blood (S9.2 requirement 2).** `Unit.Blood.bloodView` is the pure adapter
+  in its unmoded form: the stored `uiBlood`, the maximum from BASE
+  `body_mass` (70 kg fallback) times 0.075, the fraction clamped to 0..1 (1.0
+  when the maximum is not positive) and the live wound bleed rate (lazy).
+  `PhysioContext` carries it (`pcBlood`). Lua reaches it through the pure
+  read verb `unit.readBloodView` (correction: cardio's Lua blood input);
+  `unit.getBlood` is untouched until S10.
+- **Writers removed (correction 1).** thermo no longer computes anything: it
+  reads circulation on demand. `circulation.update` (the every-pass call in
+  `unit_resources.lua` and the `physiology.refresh` call) is gone, so
+  `refresh` keeps only the brain, and `circulation` leaves
+  `rebuiltCacheStats` and the `onSaveLoaded` rebuild. (`unit_survival_exempt`
+  no longer exists, S4 removed it.)
+- **Tick order (correction 5).** Cardio keeps its dedicated call ahead of the
+  registry-order loop, now gated on a Simulated cardio (it used to run for
+  every unit, bodyless ones included). Its registry position is last; the
+  comment in the registry says so. It integrates heart rate first and then
+  reads circulation for the oxygen delivery, which removes the one-tick lag.
+  That, and nothing else about the integration equations, drift factors or
+  bands, is the intended numeric change.
+- **Writers under modifiers.** The cardio integrators write the stored base
+  whose EFFECTIVE value is the integrated one (`scripts/lib/stat_base.lua`,
+  the S8b rule), so a retained modifier on `heart_rate` or `blood_oxygen`
+  does not skew the trajectory.
+- **Bodyless units (the intended behavior change).** A bodyless unit's cardio
+  is Unsupported. Before, it integrated compensatory tachycardia and
+  depressed oxygen and circulation from a 0 L blood seed against a 5.25 L
+  fallback maximum, and brain consciousness read that. Now those keys are not
+  stored (a stored value is scrubbed at load), cardio does not tick, brain
+  reads oxygen 1.0, the hypoxia oxygen path is 0 and the lung path is
+  unchanged. No consumer raises on the nil.
+- **Status rows (correction 4).** The Nominal row text "Not simulated for this
+  unit: always healthy." is false for circulation under a Nominal cardio.
+  Heart rate and blood oxygen follow D-8 ("Nominal 70 bpm", "Nominal 100%";
+  hidden when Unsupported). Circulation shows its live value in its usual
+  colour bands under a Nominal cardio and is hidden only when Unsupported.
+  The injury-driven Suffocating condition is unaffected.
+- **Persistence (S9.5).** No wire change. `heart_rate` and `blood_oxygen` stay
+  durable owned keys; a stored `circulation` is scrubbed in every mode, logged
+  once, and a re-save/reload scrubs nothing more (D-6 (i) through the
+  existing derived-key repair). Canonical circulation is computable before
+  the first paused observation without being stored.
 
 ### S10. Blood volume and recovery
 
@@ -2314,6 +2586,70 @@ introduces `bloodView` (S10.2).
     every unit anyway (`src/Combat/Wounds/Tick.hs:185`, recovery
     `:540-553`). Nominal would save nothing material.
   - Bleeding also stays combat physiology for nomads, as #2754 intended.
+
+#### S10.9 Implementation record (#2837)
+
+What shipped, where it differs from the S10.2 sketch, and why. The four
+corrections and the spec additions of the approved issue review
+(issuecomment-6231193340) are applied literally.
+
+- **Registry.** `blood` is the ninth system, appended after `cardio` in
+  `data/physiology/systems.yaml`. It requires `body`, owns the key `blood` with
+  `field: uiBlood` (healthy: the new named rule `blood_max`), derives
+  `blood_max` and `blood_fraction` (both `live`), owns no meter and contributes
+  `visual_loss` with the new substitute `wound_flow`. Its effects (volume
+  drain, blood-loss collapse, exsanguination, volume recovery) are absent
+  while Nominal. `blood: simulated` is added to all four profiles (correction
+  3); no `data/units/*.yaml` physiology block changes, so the five bodied
+  species resolve Simulated (SD-22) and bodyless definitions Unsupported.
+- **Healthy rule (correction 4).** `from:` reads the EFFECTIVE input, so a
+  `body_mass` modifier would move the maximum. The `blood_max` rule is BASE
+  `body_mass` x `bloodMassRatio` (0.075, the single source; no registry copy
+  to drift) with the 70 kg fallback every blood reader has. The Nominal read,
+  the transition seed and the caller-value cap all use it.
+- **One adapter (correction 1).** `Unit.Blood` is extended, not duplicated:
+  `bloodView` stays the RAW view (what a Simulated, Unsupported or undeclared
+  blood reads, exactly the pre-S10 values), `nominalBlood` is the Nominal
+  branch (volume = maximum, the stored `uiBlood` ignored, fraction 1.0, live
+  bleed rate). `Unit.Physiology.instanceBloodView` / `unitBloodView` choose
+  between them through the one pure resolver against the registry's own
+  `blood` declaration; a registry with no `blood` system (the wound tick's
+  `emptyPhysiologyRegistry`, hand-built fixtures) and an unregistered
+  definition read raw. Every consumer reads through it: the wound fold, the
+  unit-thread movement multiplier (`injurySpeedMult` now takes the view),
+  `unit.getBlood` (record shape `{current, max, bleedRate}` unchanged),
+  `unit.readBloodView`, circulation and cardio (consumed Nominal fraction 1.0
+  without any change to their code).
+- **Storage adapter (correction: no shadow pool).** The volume is never a
+  `uiStats` key. A simulated owned read of a field-backed key returns the
+  context's raw volume; the transition plans run over the stats with the field
+  key materialized and split it back out (`Transition.trBlood`), so seeding,
+  scrubbing, caller values and their caps are the generic code; the
+  reconciliation used by spawn and the load gate skips field keys and scrubs a
+  stored legacy `blood` stat in every mode; a raw `unit.setStat` of the
+  volume or either derived key is refused. The access audit expresses the
+  owner through `HASKELL_OWNERS` and inventories every Haskell file that
+  touches the field or the view (`BLOOD_FIELD_INVENTORY`), with no Lua owner
+  fabricated and no exemption.
+- **Wound fold.** Inside the existing atomic update the resolver is consulted
+  per unit. Under Nominal: no volume debit, no recovery (including the
+  unwounded-unit branch), no blood-loss collapse and no exsanguination outcome;
+  gangrene death, wound progression, infection, necrosis, pain, clotting,
+  bandages and the bleed rate are unchanged. The trail accumulator is credited
+  the wound-derived external flow directly; under Simulated it is credited the
+  conserved external share of the volume actually removed, exactly as #882.
+  Zero-external-bleed cleanup is identical in both modes.
+- **Persistence (correction: D-6 zero normalization).** `uisBlood` and the
+  units-v4 override map are unchanged. A Nominal unit's stored volume is
+  serialized but ignored: the load gate rewrites it silently to the current
+  canonical maximum, as the other rebuilt caches are, so a unit saved by
+  current code whose body mass moved afterwards logs zero repairs and a second
+  load finds it canonical. A stored legacy `blood` stat is logged once.
+- **Presentation (correction).** The blood row follows the S6 contract: a
+  Nominal blood reads `Nominal` in the neutral colour, its tooltip keeps the
+  LIVE bleed rate, the wound-driven Bleeding condition stays with text that no
+  longer claims exsanguination, the volume-derived blood-loss collapse
+  condition is suppressed, and an Unsupported unit's row is hidden.
 
 ### S11. Brain and mental state
 

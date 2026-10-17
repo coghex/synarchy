@@ -20,7 +20,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Unit.Types (UnitInstance(..), UnitDef(..), BodyPart(..), Wound(..)
                   , woundEffSeverity)
-import Unit.Stats (effectiveStat)
+import Unit.Stats (maxStaminaOf)
 import Combat.Resolution.Constants (kindPainFactor, painCeiling)
 
 -- Pain eases as a wound heals (and floors on necrosis): drive it off
@@ -76,6 +76,12 @@ skillOr name def inst = HM.lookupDefault def name (uiSkills inst)
 --   wins outright: when it is present, an @endurance@ modifier is
 --   irrelevant, exactly as in Lua.
 --
+--   #2834: the dispatch is now 'Unit.Stats.maxStaminaOf', the ONE rule
+--   the physiology registry's healthy value, @unit.getMaxStamina@ and
+--   every commit share. Without an explicit attribute the derived base
+--   (@effective endurance × 10@) also takes the modifiers on
+--   @max_stamina@ itself, which the old endurance-only branch ignored.
+--
 --   @now@ is the ATTACK's captured game-time sample (read once in
 --   'Combat.Resolution.resolveAttack'), so a modifier's expiry
 --   boundary — active iff @now < smExpiry@, matching
@@ -86,13 +92,8 @@ skillOr name def inst = HM.lookupDefault def name (uiSkills inst)
 --   writes uiModifiers), concentration, and mental_state. A unit with
 --   no modifier on either input gets exactly the pre-#1735 value.
 maxStaminaFor ∷ Double → UnitInstance → Float
-maxStaminaFor now inst = case HM.lookup "max_stamina" (uiStats inst) of
-    Just m  → effectiveStat now m (modsOn "max_stamina")
-    Nothing → effectiveStat now (statOr "endurance" 1.0 inst)
-                                (modsOn "endurance")
-                * 10.0
-  where
-    modsOn name = HM.lookupDefault [] name (uiModifiers inst)
+maxStaminaFor now inst =
+    fromMaybe 10.0 (maxStaminaOf (Just 1.0) now (uiStats inst) (uiModifiers inst))
 
 -- | The #353 canonical mental-effectiveness multiplier — the ONE
 --   authoritative calculation every combat (hit chance, active dodge),

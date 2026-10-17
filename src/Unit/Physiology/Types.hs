@@ -31,11 +31,13 @@ module Unit.Physiology.Types
       -- * Per-definition defaults
     , UnitPhysiology(..)
     , noUnitPhysiology
+    , plainUnitPhysiology
       -- * Registry
     , Quantity(..)
     , HealthyRule(..)
     , OwnedKey(..)
     , DerivedRule(..)
+    , DerivedHealthy(..)
     , derivedRuleText
     , parseDerivedRule
     , DerivedKey(..)
@@ -71,8 +73,7 @@ data PhysioMode = PhysioNominal | PhysioSimulated
 -- | A unit's explicit per-system mode intent: system id → mode. The
 --   PRESENCE of an entry records intent, independent of the effective
 --   mode, so an override equal to the species default is kept exactly
---   (D-3). Empty for every production-created unit until S4 installs
---   the setters.
+--   (D-3). Empty until @physiology.setMode@ (S4, #2831) records one.
 type PhysioOverrides = HM.HashMap Text PhysioMode
 
 emptyPhysioOverrides ∷ PhysioOverrides
@@ -119,6 +120,12 @@ data UnitPhysiology = UnitPhysiology
       --   the map has no authored default, which is different from a
       --   default of 'PhysioNominal': the resolver's last-resort Nominal
       --   is not reported as one.
+    , upEngagement ∷ !(HM.HashMap Text PhysioMode)
+      -- ^ system id → the mode the system takes once the unit's first
+      --   combat engagement has been APPLIED (@on_combat_engagement:@,
+      --   SD-20, #2834). Empty for every species but the one that
+      --   declares the trigger. The resolver reads it only while the
+      --   unit's @combat_engaged@ marker is 2.
     } deriving (Show, Eq)
 
 -- | A definition that authored no @body:@ and no @physiology:@ block —
@@ -126,7 +133,16 @@ data UnitPhysiology = UnitPhysiology
 --   test fixture that does not care about physiology uses.
 noUnitPhysiology ∷ UnitPhysiology
 noUnitPhysiology = UnitPhysiology
-    { upBodyAuthored = False, upProfile = Nothing, upDefaults = HM.empty }
+    { upBodyAuthored = False, upProfile = Nothing, upDefaults = HM.empty
+    , upEngagement = HM.empty }
+
+-- | A definition's physiology with NO engagement trigger: the shape every
+--   species but the one that declares @on_combat_engagement:@ has.
+plainUnitPhysiology ∷ Bool → Maybe Text → HM.HashMap Text PhysioMode
+                    → UnitPhysiology
+plainUnitPhysiology bodyAuthored profile defaults = UnitPhysiology
+    { upBodyAuthored = bodyAuthored, upProfile = profile
+    , upDefaults = defaults, upEngagement = HM.empty }
 
 -- * Registry
 
@@ -145,30 +161,71 @@ data HealthyRule
       -- ^ @{ from: body_mass, scale: [SALT_PER_KG] }@: the unit's
       --   EFFECTIVE value of the named input stat times the product of
       --   the scale factors (none = 1).
+    | HealthyBloodMax
+      -- ^ @{ rule: blood_max }@ (#2837): BASE @body_mass@ times
+      --   'Unit.Types.Wound.bloodMassRatio' (the 70 kg fallback every blood
+      --   reader has), deliberately NOT the effective body mass, so a
+      --   @body_mass@ modifier never moves it. The rule cannot be a @from:@
+      --   because @from:@ reads the EFFECTIVE input.
+    | HealthyMaxStamina
+      -- ^ @{ rule: max_stamina }@ (#2834): the unit's effective
+      --   @max_stamina@ through the ONE maximum rule
+      --   ('Unit.Stats.maxStaminaOf'). @max_stamina@ is derived and never
+      --   stored, so a @from:@ rule could not read it.
     deriving (Show, Eq)
 
 -- | One stored key a system owns, with its healthy rule.
 data OwnedKey = OwnedKey
     { okKey     ∷ !Text
     , okHealthy ∷ !HealthyRule
+    , okField   ∷ !(Maybe Text)
+      -- ^ the dedicated unit FIELD that really stores the key (#2837:
+      --   @uiBlood@), or 'Nothing' for the usual @uiStats@ entry. A
+      --   field-backed key never gets a @uiStats@ entry: every generic path
+      --   that seeds, scrubs, reads or writes stats routes it to the field.
     } deriving (Show, Eq)
 
 -- | The named pure function that computes a derived key.
-data DerivedRule = DerivedSaltConcentration
+data DerivedRule
+    = DerivedSaltConcentration
+    | DerivedBloodMax
+      -- ^ blood's @blood_max@ (#2837), the mode-aware maximum of "Unit.Blood".
+    | DerivedBloodFraction
+      -- ^ blood's @blood_fraction@ (#2837), the mode-aware clamped fraction.
+    | DerivedCirculation
+      -- ^ cardio's @circulation@ (#2836, S9), computed by
+      --   @circulationRule@ in "Unit.Physiology.Circulation".
     deriving (Show, Eq)
 
 derivedRuleText ∷ DerivedRule → Text
 derivedRuleText DerivedSaltConcentration = "salt_concentration"
+derivedRuleText DerivedCirculation       = "circulation"
+derivedRuleText DerivedBloodMax          = "blood_max"
+derivedRuleText DerivedBloodFraction     = "blood_fraction"
 
 parseDerivedRule ∷ Text → Maybe DerivedRule
 parseDerivedRule "salt_concentration" = Just DerivedSaltConcentration
+parseDerivedRule "circulation"        = Just DerivedCirculation
+parseDerivedRule "blood_max"          = Just DerivedBloodMax
+parseDerivedRule "blood_fraction"     = Just DerivedBloodFraction
 parseDerivedRule _                    = Nothing
+
+-- | What a derived key reads while its system is not Simulated.
+data DerivedHealthy
+    = DerivedFixed !Float
+      -- ^ a constant (@salt_conc@ reads 1.0).
+    | DerivedLive
+      -- ^ the rule itself, evaluated with the system's own inputs at their
+      --   healthy readings and every other input live (@circulation@
+      --   under a Nominal cardio, SD-21): the key is not erased by the
+      --   mode, so it has no constant.
+    deriving (Show, Eq)
 
 -- | A key a system computes on demand and never stores.
 data DerivedKey = DerivedKey
     { dkKey     ∷ !Text
     , dkRule    ∷ !DerivedRule
-    , dkHealthy ∷ !Float
+    , dkHealthy ∷ !DerivedHealthy
       -- ^ what the key reads while its system is Nominal.
     } deriving (Show, Eq)
 
@@ -180,11 +237,21 @@ data Substitute
     | SubNone
       -- ^ nothing: a debit is discarded, an effect does not happen.
     | SubVirtualMeal
-      -- ^ nutrition's meal salt credit becomes a virtual meal (SD-4).
-      --   Execution is S4's; this slice only records it.
+      -- ^ nutrition's meal salt credit becomes a virtual meal (SD-4),
+      --   executed by @scripts\/salts.lua@.
     | SubTissueRecovery
       -- ^ tissue maintenance becomes depletion-only recovery toward the
-      --   healthy target (SD-5). Execution is S4's.
+      --   healthy target (SD-5), executed by
+      --   @scripts\/unit_resource_upkeep.lua@.
+    | SubWoundFlow
+      -- ^ blood's visual-loss contribution (#2837): under Nominal the
+      --   wound-derived external flow credits the bleeding trail directly,
+      --   with no volume debit (the one exception to #882's conserved-volume
+      --   accounting), executed by "Combat.Wounds.Tick".
+    | SubLive
+      -- ^ a provided DERIVED value whose Nominal answer is its rule
+      --   evaluated live, not a constant (#2836, S9: circulation keeps its
+      --   injury factors under a Nominal cardio, SD-21).
     deriving (Show, Eq)
 
 -- | One @provides@ \/ @contributes@ \/ @effects@ entry and its Nominal
@@ -208,7 +275,8 @@ data PhysiologySystem = PhysiologySystem
     , psRenamedFrom ∷ ![Text]
       -- ^ system ids this system was previously known by (#2829). A
       --   stored override naming one is RECOGNIZED at load, not rejected
-      --   as an undeclared system; remapping it is S4's.
+      --   as an undeclared system; the load gate REMAPS it to this
+      --   system (S4, #2831).
     } deriving (Show, Eq)
 
 -- | A named species fidelity tier: a mode for EVERY system (D-10).
@@ -232,7 +300,8 @@ data PhysiologyRegistry = PhysiologyRegistry
     , prRetired   ∷ ![Text]
       -- ^ system ids that no longer exist (#2829). A stored override
       --   naming one is RECOGNIZED at load, not rejected as undeclared;
-      --   dropping it and any orphaned keys is S4's.
+      --   the load gate DROPS it (S4, #2831). Only ids are listed, so a
+      --   retired system's keys are left as ordinary stats.
     } deriving (Show, Eq)
 
 emptyPhysiologyRegistry ∷ PhysiologyRegistry

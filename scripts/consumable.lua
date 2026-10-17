@@ -33,7 +33,7 @@
 --                              precisely the failure the gesture's
 --                              per-instance submenu exists to avoid.
 
-local stats = require("scripts.unit_stats")
+local physiology = require("scripts.physiology")
 
 local consumable = {}
 
@@ -169,11 +169,7 @@ local function applySip(uid, it, cfg)
     -- Hydration: quality-scaled (excellent hydrates more than
     -- atrocious, per the epic's stated ask).
     local hydration = sip * cfg.hydration_per_litre * qualityFrac
-    local maxHyd = stats.get(uid, "max_hydration")
-    if maxHyd and maxHyd > 0 then
-        local hyd = unit.getStat(uid, "hydration") or 0
-        unit.setStat(uid, "hydration", math.min(maxHyd, hyd + hydration))
-    end
+    physiology.credit(uid, "hydration", hydration)
 
     -- Caffeine (brain.lua's stimulant meter): quality- and warmth-
     -- scaled — a stone-cold cup barely jolts you.

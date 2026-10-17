@@ -213,6 +213,10 @@ step "lua duplicate function audit"
 python3 tools/test_lua_duplicate_function_audit.py
 python3 tools/lua_duplicate_function_audit.py
 
+step "physiology access audit"
+python3 tools/physiology_access_audit.py --self-test
+python3 tools/physiology_access_audit.py
+
 step "lua registration audit"
 python3 tools/test_lua_registration_audit.py
 python3 tools/lua_registration_audit.py
@@ -716,6 +720,7 @@ python3 tools/test_construction_probe.py
 python3 tools/test_expedition_loop_day_budget.py
 python3 tools/test_mental_efficiency_probe.py
 python3 tools/test_transfer_context_menu_probe.py
+python3 tools/test_physiology_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the
@@ -749,6 +754,7 @@ step "CI cache policy and report self-tests"
 python3 tools/ci_cache_epoch.py --self-test
 python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
+python3 tools/ci_lane_report.py --self-test
 
 # #2303: only pure fixture and arithmetic checks, never the measurement.
 step "map-page codec measurement self-test"

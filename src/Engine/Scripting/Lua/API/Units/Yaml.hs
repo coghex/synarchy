@@ -413,6 +413,7 @@ resolveUnitPhysiologies registry defs
                 resolveUnitPhysiology registry name (uydBodyAuthored def)
                     (uydPhysiology def ⌦ uypProfile)
                     (maybe [] (Map.toList ∘ uypSystems) (uydPhysiology def))
+                    (maybe [] (Map.toList ∘ uypEngagement) (uydPhysiology def))
 
 -- | Surface Z at a tile in ONE specific world. The unit's height must
 --   come from the same page the unit is stamped into — walking wmVisible

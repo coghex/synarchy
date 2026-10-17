@@ -44,6 +44,8 @@ import Item.Types (ItemInstance(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, mkItem, newBareLuaBackend)
+import Test.Headless.Unit.PhysiologyFixture
+    (ensurePhysiologyRegistry, nutritionOnlyPhysiology, staminaOnlyPhysiology)
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
@@ -123,6 +125,7 @@ statsWithoutStamina = HM.fromList [("endurance", 1.0)]
 resetSceneFull ∷ EngineEnv → Text → UnitDef → HM.HashMap Text Float
                → HM.HashMap Text [StatModifier] → Text → IO ()
 resetSceneFull env defName def stats mods pose = do
+    ensurePhysiologyRegistry env
     writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.singleton defName def
@@ -130,11 +133,15 @@ resetSceneFull env defName def stats mods pose = do
             ((mkUnitWith defName stats) { uiModifiers = mods
                                         , uiPose = pose }) }
 
+-- | The acolyte's NUTRITION is Simulated (#2831), which is what lets the
+--   fat-floor organ failure exist; the other systems are Nominal.
 acolyteDef ∷ UnitDef
-acolyteDef = minimalDef "acolyte" "Acolyte"
+acolyteDef = (minimalDef "acolyte" "Acolyte")
+    { udPhysiology = nutritionOnlyPhysiology }
 
 bearDef ∷ UnitDef
-bearDef = minimalDef "bear_brown" "Brown Bear"
+bearDef = (minimalDef "bear_brown" "Brown Bear")
+    { udPhysiology = staminaOnlyPhysiology }
 
 resetScene ∷ EngineEnv → HM.HashMap Text Float → IO ()
 resetScene env stats =
@@ -223,8 +230,9 @@ luaNear expr v = T.concat
 applyStrike ∷ EngineEnv → AttackMode → IO ()
 applyStrike env mode = do
     now ← readIORef (gameTimeRef env)
+    reg ← readIORef (physiologyRegistryRef env)
     atomicModifyIORef' (unitManagerRef env) $ \um →
-        (spendStrikeCost now mode (unUnitId acolyteUid) um, ())
+        (spendStrikeCost reg now mode (unUnitId acolyteUid) um, ())
 
 -- | An UNRELATED concurrent write landing in the same window: another
 --   stat in the very map the commit rewrites, plus a non-stat field.
@@ -436,7 +444,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
             evalDebug ls (T.concat
                 [ "local r = unit.commitStamina(1, "
                 , tshow (realToFrac idleGain ∷ Double), "); "
-                , "return r ~= nil and r.initialized == false and "
+                , "return r ~= nil and r.status == 'ok' and "
                 , luaNear "r.before" 0, " and ", luaNear "r.after" idleGain
                 , " and ", luaNear "r.maximum" fixtureMax ])
                 `shouldReturn` "true"
@@ -535,56 +543,36 @@ spec = aroundAll withHeadlessEngineNoWorld $
                             <> tshow (realToFrac v ∷ Double))
                               `shouldReturn` "true"
 
-    -- §4 Initialisation is decided at COMMIT, never from an earlier
-    -- script-side nil.
-    describe "initialisation at commit (§4)" $ do
-        it "a still-absent pool is filled to the effective maximum and \
-           \reports initialized with no before" $ \env → do
+    -- §4 An absent pool is never initialised (#2834): spawn, load and a
+    -- transition SEED a Simulated pool, so a Simulated receiver without one
+    -- is a broken invariant. The commit refuses it by name and the strike
+    -- cost no longer creates it (S8-F1's absent-as-zero insert).
+    describe "an absent pool is refused, never created (§4)" $ do
+        it "a Simulated receiver whose pool is absent is refused as \
+           \missing_pool without mutating" $ \env → do
             resetScene env statsWithoutStamina
             ls ← newBareLuaBackend env
-            evalDebug ls (T.concat
-                [ "local r = unit.commitStamina(1, 0.05); "
-                , "return r ~= nil and r.before == nil and "
-                , "r.initialized == true and "
-                , luaNear "r.after" fixtureMax, " and "
-                , luaNear "r.maximum" fixtureMax ])
-                `shouldReturn` "true"
-            storedStamina env `shouldBeNear` fixtureMax
+            expectRefusal env ls "unit.commitStamina(1, 0.05)" "missing_pool"
+            storedStamina env `shouldReturn` Nothing
 
-        it "the shipped tick fills an absent pool and skips that pass's \
-           \consequences, exactly as the old first-tick return did" $
-          \env → do
+        it "the shipped tick RAISES the refusal for an absent Simulated \
+           \pool and creates nothing" $ \env → do
             resetScene env statsWithoutStamina
             ls ← newBareLuaBackend env
-            installRequestRecorders ls
 
-            tickStamina ls `shouldReturn` "true"
+            raised ← tickStamina ls
 
-            storedStamina env `shouldBeNear` fixtureMax
-            luaCount ls "__killed" `shouldReturn` "0"
-            luaCount ls "__collapsed" `shouldReturn` "0"
+            raised `shouldSatisfy` T.isInfixOf "missing_pool"
+            storedStamina env `shouldReturn` Nothing
 
-        it "a pool combat CREATED after the nil observation is NOT \
-           \refilled — the delta path runs and initialized is false" $
-          \env → do
+        it "a strike on an attacker whose pool is absent creates no pool \
+           \and still spends stance" $ \env → do
             resetScene env statsWithoutStamina
-            ls ← newBareLuaBackend env
-            -- The strike materialises the entry (absent reads as 0, so
-            -- the debit stores 0) in the window between the script's nil
-            -- read and the commit.
-            installHook env ls (applyStrike env Heavy)
-            interposeAfterSnapshot ls "endurance"
-            installRequestRecorders ls
+            applyStrike env Heavy
+            storedStamina env `shouldReturn` Nothing
+            storedStat env "stance" `shouldBeNear` heavyStanceLeft
 
-            tickStamina ls `shouldReturn` "true"
-
-            -- The old code refilled to 10 here, handing back the whole
-            -- pool; the pre-recovery zero also has to still kill.
-            storedStamina env `shouldBeNear` idleGain
-            luaCount ls "__killed" `shouldReturn` "1"
-
-        it "a pool SPENT after the nil observation takes the delta path \
-           \and reports initialized = false" $ \env → do
+        it "a pool SPENT after the nil observation takes the delta path" $ \env → do
             resetScene env statsWithoutStamina
             ls ← newBareLuaBackend env
             installHook env ls
@@ -701,6 +689,57 @@ spec = aroundAll withHeadlessEngineNoWorld $
             mods ← uiModifiers ⊚ acolyte env
             HM.lookup "stamina" mods `shouldBe` Just [permanent 0.3]
 
+    -- §6b (#2834) Every report is EFFECTIVE stamina against the effective
+    -- maximum, and the stored value is the BASE that reads as the target.
+    describe "effective reports with a retained modifier (§6b)" $ do
+        it "a flat +0.3 modifier: before/after are the effective reads and the \
+           \stored base is what makes the target" $ \env → do
+            resetSceneMods env (statsWithStamina 5.0)
+                (HM.singleton "stamina" [permanent 0.3])
+            ls ← newBareLuaBackend env
+            evalDebug ls ("local r = unit.commitStamina(1, -1); return "
+                          <> luaNear "r.before" 5.3 <> " and "
+                          <> luaNear "r.after" 4.3 <> " and r.status == 'ok'")
+                `shouldReturn` "true"
+            storedStamina env `shouldBeNear` 4.0
+            evalDebug ls ("return " <> luaNear "unit.getStat(1, 'stamina')" 4.3)
+                `shouldReturn` "true"
+
+        it "a -50% modifier on a base of 20: a heavy-sized debit reports 10 -> 7.5 \
+           \and stores 15; a refill past the maximum clamps at the effective 10" $ \env → do
+            resetSceneMods env (statsWithStamina 20.0)
+                (HM.singleton "stamina" [(permanent 0) { smPercent = -0.5 }])
+            ls ← newBareLuaBackend env
+            evalDebug ls ("local r = unit.commitStamina(1, -2.5); return "
+                          <> luaNear "r.before" 10 <> " and "
+                          <> luaNear "r.after" 7.5 <> " and "
+                          <> luaNear "r.maximum" 10)
+                `shouldReturn` "true"
+            storedStamina env `shouldBeNear` 15.0
+            evalDebug ls ("local r = unit.commitStamina(1, 100); return "
+                          <> luaNear "r.after" 10 <> " and r.status == 'ok'")
+                `shouldReturn` "true"
+            storedStamina env `shouldBeNear` 20.0
+
+        it "a Nominal receiver is refused as nominal and mutates nothing, and the \
+           \tick never calls the verb for it" $ \env → do
+            ensurePhysiologyRegistry env
+            resetSceneFull env "acolyte"
+                acolyteDef { udPhysiology = (udPhysiology acolyteDef)
+                                { upDefaults = HM.insert "stamina" PhysioNominal
+                                    (upDefaults (udPhysiology acolyteDef)) } }
+                statsWithoutStamina HM.empty "standing"
+            ls ← newBareLuaBackend env
+            installCommitCounter ls
+            expectRefusal env ls "unit.commitStamina(1, 0.05)" "nominal"
+            storedStamina env `shouldReturn` Nothing
+            -- (the refusal above was itself a call; count only the pass's)
+            _ ← evalDebug ls "_G.__commits = 0; return true"
+            -- a whole physiology pass over the unit reaches no commit
+            _ ← evalDebug ls "require('scripts.unit_resources').update(0.1); return true"
+            luaCount ls "__commits" `shouldReturn` "0"
+            storedStamina env `shouldReturn` Nothing
+
     -- §7 Arithmetic edges, the in-transaction write elision, and every
     -- refusal.
     describe "deltas, saturation and refusals (§7)" $ do
@@ -710,7 +749,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
             ls ← newBareLuaBackend env
             evalDebug ls (T.concat
                 [ "local r = unit.commitStamina(1, 0); "
-                , "return r ~= nil and r.initialized == false and "
+                , "return r ~= nil and r.status == 'ok' and "
                 , luaNear "r.before" 0, " and ", luaNear "r.after" 0 ])
                 `shouldReturn` "true"
 
@@ -878,18 +917,11 @@ spec = aroundAll withHeadlessEngineNoWorld $
             luaCount ls "__killed" `shouldReturn` "1"
             luaCount ls "__collapsed" `shouldReturn` "0"
 
-        it "a dead unit is neither killed again nor collapsed, and the \
-           \commit still happens" $ \env → do
+        it "a dead unit's commit is refused as dead and mutates nothing \
+           \(the corpse branch never ticks one)" $ \env → do
             resetScenePosed env (statsWithStamina 0.0) "dead"
             ls ← newBareLuaBackend env
-            installRequestRecorders ls
-
-            tickStaminaAs ls "acolyte" "idle" "dead" tickDt
-                `shouldReturn` "true"
-
-            storedStamina env `shouldBeNear` idleGain
-            luaCount ls "__killed" `shouldReturn` "0"
-            luaCount ls "__collapsed" `shouldReturn` "0"
+            expectRefusal env ls "unit.commitStamina(1, 0.05)" "dead"
 
         it "an already-collapsed unit is not re-collapsed, but is still \
            \killed by a committed zero" $ \env → do

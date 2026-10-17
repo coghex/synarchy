@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""#2832 rendered evidence: the unit-info Status panel under each physiology
+mode, captured from a real `--offscreen` engine (GPU on, window off).
+
+Nothing here fakes the UI: units are spawned through `unit.spawn`, SELECTED
+by a real `input.click` at the sprite found with `unit.hitTestAt`, the panel
+is SCROLLED with real `input.scroll` wheel events over it, the Nominal
+tooltip is raised by a real `input.moveMouse` hover (the engine's own
+dwell), and every frame is `debug.captureScreenshot`. The only console
+writes are the facade's own mode verb (`physiology.setMode`, the verb a
+transition uses) and `unit.injure` to give the bodyless unit an injury.
+
+    python3 issue-2832-capture.py --out DIR [--size 1920x1080] [--port 9018]
+                                  [--resource-root DIR] [--quick]
+
+It boots its own engine (`--offscreen --arena`, never port 8008), stops only
+that engine through `engine.quit()`, and writes the raw frames, per-capture
+row-text records (`captures.json`) and the cropped contact sheets.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import socket
+import sys
+import time
+
+from PIL import Image, ImageDraw
+
+
+def send(port, lua, idle=1.0, total=40.0):
+    sock = socket.create_connection(("127.0.0.1", port), timeout=total)
+    sock.sendall((lua.replace("\n", " ") + "\n").encode())
+    sock.settimeout(idle)
+    buf, end = b"", time.time() + total
+    while time.time() < end:
+        try:
+            data = sock.recv(65536)
+        except socket.timeout:
+            break
+        if not data:
+            break
+        buf += data
+        if buf.endswith(b"\n"):
+            break
+    sock.close()
+    text = buf.decode(errors="replace")
+    for line in text.splitlines():
+        if line.startswith("> ") and len(line) > 2:
+            return line[2:].strip()
+    return ""
+
+
+def lua(port, code, **kw):
+    out = send(port, code, **kw)
+    try:
+        return json.loads(out)
+    except ValueError:
+        return out
+
+
+def wait(port, what, code, ok, seconds=120.0):
+    end = time.time() + seconds
+    while time.time() < end:
+        if ok(lua(port, code)):
+            return
+        time.sleep(1.0)
+    raise SystemExit(f"timed out waiting for {what}")
+
+
+class Run:
+    def __init__(self, args):
+        self.a, self.port = args, args.port
+        os.makedirs(args.out, exist_ok=True)
+        self.records = []
+        self.shots = 0
+
+    # -- engine ------------------------------------------------------------
+    def boot(self):
+        a = self.a
+        cmd = [a.exe, "--offscreen", "--port", str(a.port), "--size", a.size,
+               "--arena", "--resource-root", a.resource_root]
+        self.log = open(os.path.join(a.out, "engine.log"), "w")
+        self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=self.log)
+        print("boot:", " ".join(cmd))
+        end = time.time() + 180
+        while time.time() < end:
+            if "READY" in open(self.log.name).read():
+                break
+            time.sleep(0.5)
+        else:
+            raise SystemExit("engine never printed READY")
+        wait(self.port, "unit defs", "return #unit.listDefs()", lambda v: v and v > 0)
+        wait(self.port, "the arena view",
+             "local h=package.loaded['scripts.hud']; local gx=world.pickTile(%d,%d);"
+             " return h.visible == true and gx ~= nil"
+             % (self.w() // 2, self.h() // 2), lambda v: v is True)
+        time.sleep(3.0)
+
+    def quit(self):
+        try:
+            send(self.port, "engine.quit()", idle=2.0)
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            self.proc.terminate()   # our own child only
+
+    def w(self):
+        return int(self.a.size.split("x")[0])
+
+    def h(self):
+        return int(self.a.size.split("x")[1])
+
+    # -- capture -----------------------------------------------------------
+    def park(self):
+        """Move the cursor onto plain terrain so no stale tooltip rides into the frame."""
+        send(self.port, "return input.moveMouse(%d,%d)" % (self.w() // 2, 40))
+        time.sleep(0.8)
+
+    def shot(self, name, note, settle=1.0, hover=False):
+        if not hover:
+            self.park()
+        path = os.path.join(self.a.out, name + ".png")
+        if os.path.exists(path):
+            os.remove(path)
+        time.sleep(settle)
+        send(self.port, "return debug.captureScreenshot('%s')" % path, idle=3.0)
+        assert os.path.getsize(path) > 4096, name
+        rec = {"frame": name, "note": note,
+               "selected": lua(self.port, "return table.concat(unit.getSelected() or {}, ',')"),
+               "offset": lua(self.port, U + ".statsScrollOffset"),
+               "rows": self.rows()}
+        self.records.append(rec)
+        print("  shot", name, rec["rows"])
+        return path
+
+    def rows(self):
+        out = lua(self.port,
+                  "local L=package.loaded['scripts.ui.label']; local o={}"
+                  " for _,e in ipairs(%s.statsContentElements) do"
+                  " if e.kind=='label' then o[#o+1]=L.getText(e.id) end end"
+                  " return table.concat(o,' | ')" % UB)
+        return out
+
+    # -- scene -------------------------------------------------------------
+    def spawn(self):
+        lua(self.port, "engine.setPaused(true); world.setTimeScale(0);"
+                       " world.setSunAngle(0.5); engine.hideDebug(); return 'ok'")
+        self.uids = {}
+        code = ("local gx,gy=world.pickTile(%d,%d); local o={}"
+                " local defs={'acolyte','bear_brown','nomad_primitive','tiller'}"
+                " for i,d in ipairs(defs) do o[#o+1]=tostring(unit.spawn(d,"
+                " gx+0.5+(i-2.5)*1.6, gy+0.5, nil, 'player')) end"
+                " return table.concat(o,',')" % (self.w() // 2, self.h() // 2))
+        ids = [int(float(x)) for x in str(lua(self.port, code)).split(",")]
+        self.uids = dict(zip(["acolyte", "bear_brown", "nomad_primitive", "tiller"], ids))
+        lua(self.port, "return unit.injure(%d,'torso','slash',0.5,1.0)" % self.uids["tiller"])
+        time.sleep(2.0)
+        print("units:", self.uids)
+
+    def modes(self, uid):
+        return lua(self.port,
+                   "local m={} for _,s in ipairs({'thermo','salt','hydration','nutrition'})"
+                   " do m[#m+1]=s..'='..tostring(unit.getPhysioMode(%d,s)) end"
+                   " return table.concat(m,',')" % uid)
+
+    def click_unit(self, uid):
+        """Select by a real click on the sprite: find it with hitTestAt."""
+        for _ in range(3):
+            pts = []
+            code = ("local p={} for y=%d,%d,6 do for x=%d,%d,6 do"
+                    " if unit.hitTestAt(x,y)==%d then p[#p+1]=x..','..y end end end"
+                    " return table.concat(p,';')" % (80, self.h() - 80, 80, self.w() - 80, uid))
+            got = lua(self.port, code, total=60.0)
+            for part in str(got).split(";"):
+                if "," in part:
+                    pts.append(tuple(int(v) for v in part.split(",")))
+            if pts:
+                break
+        assert pts, "no sprite found for %d" % uid
+        x = sum(p[0] for p in pts) // len(pts)
+        y = sum(p[1] for p in pts) // len(pts)
+        send(self.port, "input.moveMouse(%d,%d); return input.click(%d,%d)" % (x, y, x, y))
+        time.sleep(1.5)
+        sel = str(lua(self.port, "return table.concat(unit.getSelected() or {}, ',')"))
+        assert sel == str(uid), "selected %r, wanted %r" % (sel, uid)
+
+    def rect(self):
+        r = lua(self.port, "local r=%s.statsContentRect; local b=%s.getBounds();"
+                           " return {x=r.x,y=r.y,w=r.w,h=r.h,bx=b.x,by=b.y,bw=b.w,bh=b.h}" % (U, U))
+        return r
+
+    def scroll_to(self, offset):
+        r = self.rect()
+        cx, cy = r["x"] + r["w"] // 2, r["y"] + r["h"] // 2
+        send(self.port, "return input.moveMouse(%d,%d)" % (cx, cy))
+        for _ in range(60):
+            cur = lua(self.port, U + ".statsScrollOffset")
+            if cur == offset:
+                return
+            send(self.port, "return input.scroll(0, %d)" % (-1 if cur < offset else 1))
+            time.sleep(0.25)
+        raise SystemExit("could not scroll to %d" % offset)
+
+    def max_offset(self):
+        self.scroll_to(0)
+        r = self.rect()
+        cx, cy = r["x"] + r["w"] // 2, r["y"] + r["h"] // 2
+        send(self.port, "return input.moveMouse(%d,%d)" % (cx, cy))
+        last = -1
+        for _ in range(60):
+            send(self.port, "return input.scroll(0, -1)")
+            time.sleep(0.2)
+            cur = lua(self.port, U + ".statsScrollOffset")
+            if cur == last:
+                return cur
+            last = cur
+        return last
+
+    def crop(self, frame):
+        r = self.rect()
+        path = os.path.join(self.a.out, frame + ".png")
+        im = Image.open(path)
+        left = r["bx"] - (330 if "tooltip" in frame else 0)   # a tooltip opens to the panel's left
+        box = (max(0, left), r["by"], min(im.width, r["bx"] + r["bw"]),
+               min(im.height, r["y"] + r["h"] + 24))
+        return im.crop(box)
+
+    def sheet(self, name, title, frames):
+        crops = [self.crop(f) for f in frames]
+        pad = 22
+        w = sum(c.width for c in crops) + 4 * (len(crops) + 1)
+        h = max(c.height for c in crops) + pad + 8
+        sheet = Image.new("RGB", (w, h), (40, 40, 40))
+        d = ImageDraw.Draw(sheet)
+        d.text((4, 4), title, fill=(255, 255, 255))
+        x = 4
+        for c, f in zip(crops, frames):
+            sheet.paste(c, (x, pad))
+            x += c.width + 4
+        sheet.save(os.path.join(self.a.out, name + ".png"))
+        print("  sheet", name, sheet.size)
+
+    def hover_nominal(self, frame, note):
+        """Hover the first row reading Nominal; the engine's own dwell raises the tooltip."""
+        code = ("local L=package.loaded['scripts.ui.label']; for _,e in ipairs(%s.statsContentElements)"
+                " do if e.kind=='label' and L.getText(e.id):sub(1,7)=='Nominal' then local i=UI.getElementInfo("
+                "L.getElementHandle(e.id)); return {x=i.x,y=i.y} end end return nil" % UB)
+        pos = lua(self.port, code)
+        assert isinstance(pos, dict), "no Nominal row visible"
+        x, y = pos["x"] + 30, pos["y"] - 10
+        send(self.port, "return input.moveMouse(%d,%d)" % (x - 40, y))
+        send(self.port, "return input.moveMouse(%d,%d)" % (x, y))
+        return self.shot(frame, note, settle=1.6, hover=True)
+
+    # -- the evidence --------------------------------------------------------
+    def survey(self, key, uid, label):
+        self.click_unit(uid)
+        lua(self.port, "return 1")
+        top = self.rect()
+        frames = []
+        mx = self.max_offset()
+        cap = max(1, (top["h"] - 8) // 48)
+        offs = list(range(0, mx + 1, cap)) + ([mx] if mx % cap else [])
+        if self.a.mode == "owned" and key != "tiller":
+            # Body Temp (row 2), Salt (7), Hunger (9), Calories (10), Hydration (11),
+            # each shown as the last visible row of its window
+            offs = sorted({min(mx, max(0, i - (cap - 1))) for i in (2, 7, 9, 10, 11)})
+        for off in offs:
+            self.scroll_to(off)
+            f = "%s_%s_off%02d" % (self.a.tag, key, off)
+            self.shot(f, "%s (%s) scroll offset %d" % (label, self.modes(uid), off))
+            frames.append(f)
+        self.sheet("%s_%s_sheet" % (self.a.tag, key),
+                   "%s  uid %d  %s  %s" % (label, uid, self.modes(uid), self.a.size), frames)
+        return mx, cap
+
+    def run(self):
+        self.boot()
+        self.spawn()
+        sizes = {}
+        order = [("acolyte", "acolyte (rich: all Simulated)"),
+                 ("bear_brown", "bear_brown (mixed: thermo+salt Simulated, hydration+nutrition Nominal)"),
+                 ("nomad_primitive", "nomad_primitive (exempt: all Nominal)"),
+                 ("tiller", "tiller (bodyless: all Unsupported, one injury)")]
+        if self.a.quick:
+            order = [order[2]]      # the all-Nominal unit: scalar rows and pools
+        for key, label in order:
+            sizes[key] = self.survey(key, self.uids[key], label)
+        if not self.a.quick:
+            self.transition()
+        else:
+            self.click_unit(self.uids["nomad_primitive"])
+            mx, cap = sizes["nomad_primitive"]
+            for row, what in ((2, "temp"), (11, "hydration")):
+                self.scroll_to(min(mx, max(0, row - (cap - 1))))
+                self.hover_nominal("%s_nomad_%s_tooltip" % (self.a.tag, what),
+                                   "Nominal tooltip hover, %s row, all-Nominal unit" % what)
+        json.dump({"size": self.a.size, "units": self.uids, "captures": self.records},
+                  open(os.path.join(self.a.out, "captures-%s.json" % self.a.tag), "w"), indent=1)
+
+    def transition(self):
+        uid = self.uids["acolyte"]
+        self.click_unit(uid)
+        self.max_offset()
+        # hydration is the 12th row (index 11) of an all-Simulated unit's list: show
+        # it as the last visible row, with the hunger and calories rows above it
+        cap = max(1, (self.rect()["h"] - 8) // 48)
+        self.scroll_to(max(0, 11 - (cap - 1)))
+        a = self.shot("%s_transition_1_simulated" % self.a.tag,
+                      "acolyte selected, hunger/calories/hydration, all Simulated")
+        for system in ("hydration", "nutrition"):
+            lua(self.port, "return tostring(package.loaded['scripts.physiology'].setMode(%d,'%s','nominal'))"
+                % (uid, system))
+        time.sleep(1.0)
+        self.shot("%s_transition_2_nominal" % self.a.tag,
+                  "same unit, no reselect, hydration+nutrition now Nominal, scroll preserved")
+        self.hover_nominal("%s_transition_3_tooltip" % self.a.tag, "Nominal tooltip hover on the same unit")
+        for system in ("hydration", "nutrition"):
+            lua(self.port, "return tostring(package.loaded['scripts.physiology'].setMode(%d,'%s','simulated'))"
+                % (uid, system))
+        time.sleep(1.0)
+        self.shot("%s_transition_4_back" % self.a.tag, "back to Simulated, values reseeded healthy")
+        self.sheet("%s_transition_sheet" % self.a.tag,
+                   "acolyte: Simulated -> Nominal -> tooltip -> Simulated, selected throughout (uid %d)" % uid,
+                   ["%s_transition_%d_%s" % (self.a.tag, i, n) for i, n in
+                    ((1, "simulated"), (2, "nominal"), (3, "tooltip"), (4, "back"))])
+
+
+U = "package.loaded['scripts.unit_info_v2']"
+UB = U
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--size", default="1920x1080")
+    ap.add_argument("--port", type=int, default=9018)
+    ap.add_argument("--resource-root", default=os.getcwd())
+    ap.add_argument("--exe", default=None)
+    ap.add_argument("--tag", default=None)
+    ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--mode", choices=["full", "owned"], default="full",
+                    help="full: every scroll window; owned: only the windows holding the "
+                         "five physiology rows (the full survey for the bodyless unit)")
+    a = ap.parse_args()
+    if a.port == 8008:
+        raise SystemExit("never port 8008 (the owner's GUI)")
+    a.tag = a.tag or a.size
+    if a.exe is None:
+        a.exe = subprocess.check_output(["cabal-3.16.1.0", "list-bin", "exe:synarchy"],
+                                        cwd=a.resource_root, text=True).strip()
+    run = Run(a)
+    try:
+        run.run()
+    finally:
+        run.quit()
+
+
+if __name__ == "__main__":
+    main()

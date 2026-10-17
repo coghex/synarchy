@@ -10,9 +10,11 @@
 
 local injuries   = require("scripts.injuries")
 local stats      = require("scripts.unit_stats")
+local physiology = require("scripts.physiology")
 local thermo     = require("scripts.thermo")
 local statDefs   = require("scripts.unit_info_v2_stat_defs")
 local panelEngine = require("scripts.unit_info_v2_panel_engine")
+local physio     = require("scripts.unit_info_v2_physio")
 local L          = require("scripts.unit_info_v2_layout")
 
 local M = {}
@@ -46,10 +48,10 @@ local function bodyTempColor(uid)
 end
 
 local function fmtCirculation(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "circulation") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "circulation") or 1.0) * 100 + 0.5))
 end
 local function circulationColor(uid)
-    local c = unit.getStat(uid, "circulation") or 1.0
+    local c = physiology.get(uid, "circulation") or 1.0
     if c <= 0.4 then return { 1.0, 0.30, 0.30, 1.0 } end
     if c <= 0.65 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
@@ -57,29 +59,29 @@ end
 
 -- Salt concentration as % of ideal (100% = balanced); both directions bad.
 local function fmtSalt(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "salt_conc") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "salt_conc") or 1.0) * 100 + 0.5))
 end
 local function saltColor(uid)
-    local c = unit.getStat(uid, "salt_conc") or 1.0
+    local c = physiology.get(uid, "salt_conc") or 1.0
     if c <= 0.55 or c >= 1.6 then return { 1.0, 0.30, 0.30, 1.0 } end
     if c <= 0.8  or c >= 1.35 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
 end
 
 local function fmtHeartRate(uid)
-    return string.format("%d bpm", math.floor((unit.getStat(uid, "heart_rate") or 70) + 0.5))
+    return string.format("%d bpm", math.floor((physiology.get(uid, "heart_rate") or 70) + 0.5))
 end
 local function heartRateColor(uid)
-    local hr = unit.getStat(uid, "heart_rate") or 70
+    local hr = physiology.get(uid, "heart_rate") or 70
     if hr <= 40 or hr >= 160 then return { 1.0, 0.30, 0.30, 1.0 } end
     if hr <= 50 or hr >= 120 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
 end
 local function fmtBloodOxygen(uid)
-    return string.format("%d%%", math.floor((unit.getStat(uid, "blood_oxygen") or 1.0) * 100 + 0.5))
+    return string.format("%d%%", math.floor((physiology.get(uid, "blood_oxygen") or 1.0) * 100 + 0.5))
 end
 local function bloodOxygenColor(uid)
-    local o = unit.getStat(uid, "blood_oxygen") or 1.0
+    local o = physiology.get(uid, "blood_oxygen") or 1.0
     if o <= 0.6 then return { 1.0, 0.30, 0.30, 1.0 } end
     if o <= 0.85 then return { 1.0, 0.62, 0.25, 1.0 } end
     return { 0.75, 0.85, 0.70, 1.0 }
@@ -122,10 +124,12 @@ local function unitConditions(uid)
             if blood and blood.max > 0 and blood.current / blood.max < 0.5 then
                 out[#out + 1] = { name = "Unconscious (blood loss)", icon = "blood",
                     hint = "Out cold from blood loss. Rebuilds blood once the bleeding stops; wakes at 50%." }
-            elseif lowFrac(uid, "hydration", "max_hydration", 0.5) then
+            elseif physio.active(uid, "hydration")
+                   and lowFrac(uid, "hydration", "max_hydration", 0.5) then
                 out[#out + 1] = { name = "Collapsed (dehydrated)", icon = "hydration",
                     hint = "Collapsed from thirst. Rises once hydration recovers above 50%." }
-            elseif lowFrac(uid, "stamina", "max_stamina", 0.5) then
+            elseif physio.active(uid, "stamina")
+                   and lowFrac(uid, "stamina", "max_stamina", 0.5) then
                 out[#out + 1] = { name = "Collapsed (exhausted)", icon = "stamina",
                     hint = "Collapsed from exhaustion. Rises once stamina recovers above 50%." }
             else
@@ -150,63 +154,10 @@ local function unitConditions(uid)
             hint = "Mentally clouded. Worsens toward delirium and collapse." }
     end
 
-    -- Failure meters (delayed-death pathways) — show the rising % so the
-    -- player sees the clock and can treat in time. The tooltip carries the
-    -- real numbers: current %, the per-second fill/recover rate, and what it
-    -- kills you with. Bucketed to 10% in the row name so the panel rebuilds
-    -- in steps, not every tick.
-    local METER_CONDITIONS = {
-        { stat = "hypoxia", label = "Suffocating",   icon = "hydration",
-          title = "Cell hypoxia", fatal = "suffocation",
-          desc  = "Lungs/airway can't oxygenate the blood." },
-        { stat = "neuro",   label = "Brain failing", icon = "nerve_injury",
-          title = "Neural shutdown", fatal = "brain death",
-          desc  = "Catastrophic brain trauma is shutting the nervous system down." },
-        { stat = "shock",   label = "In shock",      icon = "blood",
-          title = "Systemic shock", fatal = "cardiac arrest",
-          desc  = "The body's whole-system collapse under massive trauma." },
-        { stat = "organ",   label = "Organ failure", icon = "festered_injury",
-          title = "Organ failure", fatal = "sepsis",
-          desc  = "Untreated visceral trauma festering (sepsis / encephalopathy)." },
-        { stat = "sepsis",  label = "Septic",        icon = "festered_injury",
-          title = "Sepsis", fatal = "sepsis",
-          desc  = "Infection from untreated wounds has spread to the blood. "
-                  .. "Antibiotics can still cure it." },
-        { stat = "hypothermia", label = "Hypothermic", icon = "frostbite",
-          title = "Hypothermia", fatal = "hypothermia",
-          desc  = "Core body temperature is dangerously low. Get the unit "
-                  .. "somewhere warm." },
-        { stat = "hyperthermia", label = "Overheating", icon = "frostbite",
-          title = "Hyperthermia", fatal = "heat stroke",
-          desc  = "Core body temperature is dangerously high. Get the unit "
-                  .. "out of the heat and rehydrated." },
-        { stat = "salt_imbalance", label = "Electrolyte crisis", icon = "salt",
-          title = "Electrolyte imbalance", fatal = "electrolyte imbalance",
-          desc  = "Blood sodium is dangerously off balance (hypo- or "
-                  .. "hypernatremia). Food restores salt; water rebalances it." },
-    }
-    local meterInfo = require("scripts.unit_resources").meterInfo(uid)
-    for _, mc in ipairs(METER_CONDITIONS) do
-        local v = stats.get(uid, mc.stat)
-        if v and v > 0.02 then
-            local mi   = meterInfo[mc.stat] or {}
-            local rate = mi.rate or 0
-            local rateLine
-            if rate > 0 then
-                rateLine = string.format(
-                    "Rising %.2f%%/s → fatal (%s) at 100%%.", rate * 100, mc.fatal)
-            else
-                rateLine = string.format(
-                    "Recovering %.2f%%/s (injury treated).", -rate * 100)
-            end
-            out[#out + 1] = {
-                name = string.format("%s (%d%%)", mc.label, math.floor(v * 10) * 10),
-                icon = mc.icon,
-                hint = string.format("%s: %.0f%%\n%s\n%s",
-                    mc.title, (mi.value or v) * 100, rateLine, mc.desc),
-            }
-        end
-    end
+    -- Failure meters (delayed-death pathways): the rising % so the player
+    -- sees the clock. Mode-aware (unit_info_v2_physio.lua): a meter a
+    -- Nominal or Unsupported system owns never shows.
+    for _, c in ipairs(physio.meterConditions(uid)) do out[#out + 1] = c end
 
     -- Bleeding: an open (cutting) wound that is actually seeping. Two
     -- gates, matching what bleedRateFor actually squares for live blood
@@ -223,9 +174,16 @@ local function unitConditions(uid)
             local seep = (1 - (w.clot or 0)) * (w.bandage or 1)
             if (w.kind == "slash" or w.kind == "stab")
                and effSev >= 0.2 and seep > 0.02 then
-                out[#out + 1] = { name = "Bleeding", icon = "blood",
-                    hint = "Losing blood from open wounds.\n"
-                        .. "Bleeds out at 0 blood; revives once it recovers." }
+                -- Under a Nominal blood the volume is never lost: the wound-driven
+                -- condition stays, but it must not claim exsanguination or a
+                -- volume-based revival (#2837).
+                local hint = "Losing blood from open wounds.\n"
+                    .. "Bleeds out at 0 blood; revives once it recovers."
+                if physio.keyState(uid, "blood") == "nominal" then
+                    hint = "Open wounds are bleeding (and marking the ground).\n"
+                        .. "Blood volume is not simulated for this unit, so it is not lost."
+                end
+                out[#out + 1] = { name = "Bleeding", icon = "blood", hint = hint }
                 break
             end
         end
@@ -233,13 +191,15 @@ local function unitConditions(uid)
 
     -- Standing daily-need warnings.
     if pose ~= "collapsed" then
-        if lowFrac(uid, "hydration", "max_hydration", 0.25) then
+        if physio.active(uid, "hydration")
+           and lowFrac(uid, "hydration", "max_hydration", 0.25) then
             out[#out + 1] = { name = "Dehydrated", icon = "hydration",
                 hint = "Water below 25%. Collapses near empty; find a water source." }
         end
         -- Hungry/Starving (#806): scripts.starvation's fraction bands
         -- (distinct from the "is starving" empty-store popup).
-        local band = require("scripts.starvation").band(uid)
+        local band = physio.active(uid, "calories")
+                     and require("scripts.starvation").band(uid) or "full"
         local hint = ({ starving = "Energy store critical — measurably weaker, and burning fat then muscle.", hungry = "Energy store low — measurably slower until it refills." })[band]
         if hint then out[#out + 1] = { name = band:sub(1, 1):upper() .. band:sub(2), icon = "hunger", hint = hint } end
     end
@@ -282,14 +242,14 @@ local function painColorFn(uid)
 end
 local function fracColorFn(cur, maxName, crit, warn)
     return function(uid)
-        local c = stats.get(uid, cur)
-        local m = stats.get(uid, maxName)
-        if not (c and m and m > 0) then return L.CONTENT_VAL_COLOR end
-        return dangerColor(c / m, crit, warn)
+        local f = physiology.fraction(uid, cur, maxName)
+        if not f then return L.CONTENT_VAL_COLOR end
+        return dangerColor(f, crit, warn)
     end
 end
 local function sleepPressureColorFn(uid)
-    local c, m = stats.get(uid, "sleep_pressure"), stats.get(uid, "max_sleep_pressure"); return (c and m and m > 0) and dangerColor(1 - c / m, 0.10, 0.30) or L.CONTENT_VAL_COLOR end
+    local f = physiology.fraction(uid, "sleep_pressure", "max_sleep_pressure")
+    return f and dangerColor(1 - f, 0.10, 0.30) or L.CONTENT_VAL_COLOR end
 
 -- Blood value tooltip: the live BLEED rate in ml/s (with %/s of total blood
 -- in parens). engine.getBlood exposes bleedRate (L/s) summed over wounds.
@@ -317,25 +277,25 @@ end
 -- can or can't act.
 function M.buildStatusPanel(rect, uid)
     local rows = {
-        { key = "blood",     value = fmtBlood, colorFn = bloodColorFn,
-          valueTooltip = bloodValueTooltip },
+        physio.row({ key = "blood", value = fmtBlood, colorFn = bloodColorFn,
+          valueTooltip = bloodValueTooltip }, uid),
         { key = "pain",      value = fmtPain,  colorFn = painColorFn },
-        { key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor },
-        { key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor },
-        { key = "blood_oxygen", value = fmtBloodOxygen, colorFn = bloodOxygenColor },
+        physio.row({ key = "body_temp", value = fmtBodyTemp, colorFn = bodyTempColor }, uid),
+        physio.row({ key = "heart_rate", value = fmtHeartRate, colorFn = heartRateColor }, uid),
+        physio.row({ key = "blood_oxygen", value = fmtBloodOxygen, colorFn = bloodOxygenColor }, uid),
         { key = "consciousness", value = fmtConsciousness, colorFn = consciousnessColor },
-        { key = "circulation", value = fmtCirculation, colorFn = circulationColor },
-        { key = "salt",      value = fmtSalt, colorFn = saltColor },
-        { key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
-          colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) },
-        { key = "hunger",    value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
-          colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) },
-        { key = "calories",  value = function(u) return fmtCurMax(u, "calories",  "max_calories")  end,
-          colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) },
-        { key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
-          colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) },
-        { key = "sleep_pressure", value = function(u) return fmtCurMax(u, "sleep_pressure", "max_sleep_pressure") end,
-          colorFn = sleepPressureColorFn },   -- inverted: HIGH means needs sleep
+        physio.row({ key = "circulation", value = fmtCirculation, colorFn = circulationColor }, uid),
+        physio.row({ key = "salt", value = fmtSalt, colorFn = saltColor }, uid),
+        physio.row({ key = "stamina",   value = function(u) return fmtCurMax(u, "stamina",   "max_stamina")   end,
+          colorFn = fracColorFn("stamina",   "max_stamina",   0.10, 0.30) }, uid),
+        physio.row({ key = "hunger",   value = function(u) return fmtCurMax(u, "hunger",    "max_hunger")    end,
+          colorFn = fracColorFn("hunger",    "max_hunger",    0.05, 0.25) }, uid),
+        physio.row({ key = "calories", value = function(u) return fmtCurMax(u, "calories",  "max_calories")  end,
+          colorFn = fracColorFn("calories",  "max_calories",  0.05, 0.25) }, uid),
+        physio.row({ key = "hydration", value = function(u) return fmtCurMax(u, "hydration", "max_hydration") end,
+          colorFn = fracColorFn("hydration", "max_hydration", 0.10, 0.25) }, uid),
+        physio.row({ key = "sleep_pressure", value = function(u) return fmtCurMax(u, "sleep_pressure", "max_sleep_pressure") end,
+          colorFn = sleepPressureColorFn }, uid),   -- inverted: HIGH means needs sleep
         { key          = "carrying_capacity",
           value        = fmtCarry,
           valueTooltip = statDefs.carryValueTooltip },

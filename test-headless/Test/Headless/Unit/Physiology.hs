@@ -26,6 +26,7 @@ import Engine.Asset.YamlPhysiology
     (PhysiologyRefusal(..), PhysiologyYamlDoc, admitPhysiologyDoc)
 import Test.Headless.Unit.PhysiologyEngine (engineSpec)
 import Test.Headless.Unit.PhysiologyFixture (readShippedPhysiologyRegistry)
+import Unit.Blood (fullBloodView)
 import Unit.Physiology
 import Unit.Physiology.Types
 import Unit.Types (StatModifier(..))
@@ -45,25 +46,29 @@ allSimulated = withDefaults [ (s, PhysioSimulated) | s ← systemIds ]
 allNominal   = withDefaults [ (s, PhysioNominal)   | s ← systemIds ]
 
 systemIds ∷ [Text]
-systemIds = ["hydration", "salt", "thermo", "nutrition"]
+systemIds = ["hydration", "salt", "thermo", "nutrition", "stamina"
+            , "exhaustion", "sleep", "cardio", "blood"]
 
 -- | The reference 70 kg unit's INPUTS: the stats a healthy rule reads.
 inputs ∷ HM.HashMap Text Float
 inputs = HM.fromList
     [ ("body_mass", 70), ("max_hydration", 42)
-    , ("max_hunger", 700), ("max_calories", 1400) ]
+    , ("max_hunger", 700), ("max_calories", 1400), ("endurance", 1) ]
 
 -- | Its stored OWNED values, as a Simulated unit would carry them.
 owned ∷ HM.HashMap Text Float
 owned = HM.fromList
     [ ("hydration", 21), ("salt", 35), ("salt_store", 100)
-    , ("core_temp", 38), ("hunger", 300), ("calories", 900) ]
+    , ("core_temp", 38), ("hunger", 300), ("calories", 900), ("stamina", 6)
+    , ("exhaustion", 4), ("sleep_pressure", 7)
+    , ("heart_rate", 82), ("blood_oxygen", 0.9) ]
 
 mkCtx ∷ PhysiologyRegistry → UnitPhysiology → HM.HashMap Text Float
       → HM.HashMap Text [StatModifier] → Double → PhysioContext
 mkCtx reg up stats mods now = PhysioContext
     { pcRegistry = reg, pcPhysiology = up, pcOverrides = HM.empty
-    , pcNow = now, pcStats = stats, pcModifiers = mods }
+    , pcNow = now, pcStats = stats, pcModifiers = mods
+    , pcBlood = fullBloodView stats }
 
 simCtx ∷ PhysiologyRegistry → PhysioContext
 simCtx reg = mkCtx reg allSimulated (HM.union owned inputs) HM.empty 0
@@ -151,10 +156,12 @@ spec = describe "Unit.Physiology" $ do
 shippedRegistrySpec ∷ SpecWith PhysiologyRegistry
 shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
 
-    it "declares exactly the four v1 systems, in tick order (thermo \
-       \before salt, design D-7), each requiring a body" $ \reg → do
+    it "declares exactly the nine systems, in registry order (thermo \
+       \before salt, design D-7; cardio and blood last in the file; cardio is \
+       \ticked first by the orchestration), each requiring a body" $ \reg → do
         map psId (prSystems reg)
-            `shouldBe` ["thermo", "salt", "hydration", "nutrition"]
+            `shouldBe` [ "thermo", "salt", "hydration", "nutrition", "stamina"
+                       , "exhaustion", "sleep", "cardio", "blood" ]
         forM_ (prSystems reg) $ \s → psRequires s `shouldBe` ["body"]
 
     it "owns, derives and meters exactly the v1 keys" $ \reg → do
@@ -166,12 +173,18 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             , ("salt", (["salt", "salt_store"], ["salt_conc"]
                        , ["salt_imbalance"]))
             , ("thermo", (["core_temp"], [], ["hypothermia", "hyperthermia"]))
-            , ("nutrition", (["hunger", "calories"], [], [])) ]
+            , ("nutrition", (["hunger", "calories"], [], []))
+            , ("stamina", (["stamina"], [], []))
+            , ("exhaustion", (["exhaustion"], [], []))
+            , ("sleep", (["sleep_pressure"], [], []))
+            , ("cardio", (["heart_rate", "blood_oxygen"], ["circulation"], []))
+            , ("blood", (["blood"], ["blood_max", "blood_fraction"], []))
+            ]
 
     it "keeps the constants the healthy rules need as authoritative data" $
         \reg → prConstants reg `shouldBe` Map.fromList
             [ ("SALT_PER_KG", 1.0), ("SALT_STORE_CAP_FRAC", 2.0)
-            , ("THERMO_BASELINE", 37.0) ]
+            , ("THERMO_BASELINE", 37.0), ("RESTING_HR", 70.0) ]
 
     it "declares each healthy rule as the design states it" $ \reg → do
         let rule k = case classifyKey reg k of
@@ -186,11 +199,46 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         rule "core_temp" `shouldBe` Just (HealthyConst (QConst "THERMO_BASELINE"))
         rule "hunger" `shouldBe` Just (HealthyFrom "max_hunger" [])
         rule "calories" `shouldBe` Just (HealthyFrom "max_calories" [])
+        -- stamina's seed target is the EFFECTIVE max_stamina, which is
+        -- derived and never stored, so its rule is the named one (#2834)
+        rule "stamina" `shouldBe` Just HealthyMaxStamina
+        -- exhaustion and sleep (#2835): their maxima are Lua-only derived
+        -- stats, never stored, so the rule restates the derivation
+        -- (effective endurance x 10) in the existing grammar -- a `from:` of
+        -- the max_* key would be an input that is never stored and would
+        -- refuse every spawn.
+        rule "exhaustion" `shouldBe` Just (HealthyFrom "endurance" [QLit 10])
+        rule "sleep_pressure" `shouldBe`
+            Just (HealthyFrom "endurance" [QLit 10])
+        -- blood (#2837, S10): the volume's healthy value is the named rule
+        -- over BASE body mass (a `from:` would read the EFFECTIVE input), and
+        -- it is stored in the dedicated unit field, never a uiStats key
+        rule "blood" `shouldBe` Just HealthyBloodMax
+        [ okField o | Just (_, RoleOwned o) ← [classifyKey reg "blood"] ]
+            `shouldBe` [Just "uiBlood"]
+        let bloodDerived =
+                [ (dkRule d, dkHealthy d)
+                | k ← ["blood_max", "blood_fraction"]
+                , Just (_, RoleDerived d) ← [classifyKey reg k] ]
+        bloodDerived `shouldBe`
+            [(DerivedBloodMax, DerivedLive), (DerivedBloodFraction, DerivedLive)]
+        -- cardio (#2836, S9): the resting rate is a registry constant, and
+        -- oxygen is a plain 1.0
+        rule "heart_rate" `shouldBe` Just (HealthyConst (QConst "RESTING_HR"))
+        rule "blood_oxygen" `shouldBe` Just (HealthyConst (QLit 1.0))
         case classifyKey reg "salt_conc" of
             Just (_, RoleDerived d) → do
                 dkRule d `shouldBe` DerivedSaltConcentration
-                dkHealthy d `shouldBe` 1.0
+                dkHealthy d `shouldBe` DerivedFixed 1.0
             other → expectationFailure ("salt_conc is not derived: "
+                                        ⧺ show other)
+        -- a Nominal circulation is the LIVE rule, never a constant (SD-21)
+        case classifyKey reg "circulation" of
+            Just (sys, RoleDerived d) → do
+                psId sys `shouldBe` "cardio"
+                dkRule d `shouldBe` DerivedCirculation
+                dkHealthy d `shouldBe` DerivedLive
+            other → expectationFailure ("circulation is not derived: "
                                         ⧺ show other)
 
     it "evaluates every healthy rule against effective inputs (a Nominal \
@@ -198,7 +246,15 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
         let c = nomCtx reg
         forM_ [ ("hydration", 42), ("salt", 70), ("salt_store", 140)
               , ("core_temp", 37), ("hunger", 700), ("calories", 1400)
-              , ("salt_conc", 1) ] $ \(k, want) →
+              , ("stamina", 10), ("exhaustion", 10), ("sleep_pressure", 10)
+              , ("salt_conc", 1)
+              -- cardio (#2836): the resting rate, a fully oxygenated blood
+              -- and, for a healthy unit with nothing else live, perfect
+              -- circulation
+              , ("heart_rate", 70), ("blood_oxygen", 1)
+              , ("circulation", 1)
+              -- blood (#2837): the maximum, the full Nominal volume, fraction 1
+              , ("blood", 5.25), ("blood_max", 5.25), ("blood_fraction", 1) ] $ \(k, want) →
             near want (eff c k)
 
     it "records every Nominal substitute (D-1), including the two S4 \
@@ -218,6 +274,27 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             [("sweat_debit", SubNone), ("shiver_debit", SubNone)]
         entries psProvides (sys "nutrition") `shouldBe`
             [("cal_factor", SubValue (QLit 1.0)), ("strength_discount", SubNone)]
+        entries psProvides (sys "stamina") `shouldBe`
+            [("stamina_fraction", SubValue (QLit 1.0))]
+        -- S8b (#2835): constants, never ratios
+        entries psProvides (sys "exhaustion") `shouldBe`
+            [("restedness_fraction", SubValue (QLit 1.0))
+            ,("movement_multiplier", SubValue (QLit 1.0))]
+        entries psContributes (sys "exhaustion") `shouldBe`
+            [("sleep_exhaustion_deficit", SubValue (QLit 0.0))]
+        entries psProvides (sys "sleep") `shouldBe`
+            [("sleep_deficit", SubValue (QLit 0.0))]
+        -- S9 (#2836): circulation's Nominal answer is the live rule
+        entries psProvides (sys "cardio") `shouldBe`
+            [("heart_rate", SubValue (QConst "RESTING_HR"))
+            ,("blood_oxygen", SubValue (QLit 1.0))
+            ,("circulation", SubLive)]
+        entries psContributes (sys "cardio") `shouldBe` []
+        -- S10 (#2837): blood's visual-loss contribution is the wound flow
+        entries psProvides (sys "blood") `shouldBe`
+            [("blood_max", SubLive), ("blood_fraction", SubLive)]
+        entries psContributes (sys "blood") `shouldBe`
+            [("visual_loss", SubWoundFlow)]
         entries psContributes (sys "nutrition") `shouldBe`
             [("meal_salt_credit", SubVirtualMeal)
             ,("tissue_maintenance", SubTissueRecovery)]
@@ -232,12 +309,21 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             [(s, PhysioSimulated) | s ← systemIds])
         modes "reduced" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
-            , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal) ])
+            , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
+            , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
+            , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated)
+            , ("blood", PhysioSimulated) ])
         modes "simple" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
-            , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal) ])
+            , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
+            , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
+            , ("sleep", PhysioNominal), ("cardio", PhysioSimulated)
+            , ("blood", PhysioSimulated) ])
+        -- exempt keeps #2754's outcome: everything Nominal but a LIVE cardio
+        -- and live blood (S10 #2837, SD-22: the nomad's blood stays Simulated)
         modes "exempt" `shouldBe` Just (m
-            [(s, PhysioNominal) | s ← systemIds])
+            [ (s, if s `elem` ["cardio", "blood"] then PhysioSimulated else PhysioNominal)
+            | s ← systemIds ])
         map ppId (prProfiles reg) `shouldMatchList`
             ["rich", "reduced", "simple", "exempt"]
 
@@ -402,14 +488,14 @@ resolverSpec = describe "the pure mode resolver (requirement 3)" $ do
             forM_ [Nothing, Just PhysioNominal, Just PhysioSimulated] $ \ovr →
                 resolveMode sys (bodied { upDefaults = maybe HM.empty
                                               (HM.singleton "thermo") dflt })
-                                ovr
+                                False ovr
                     `shouldBe` expectedFor dflt ovr
 
     it "tells an ABSENT override from one that merely equals the default: \
        \only the absent one follows the default" $ \reg → do
         let sys = fromMaybe (error "no thermo") (registrySystem reg "thermo")
             resolveWith dflt ovr = resolveMode sys
-                (withDefaults [("thermo", dflt)]) ovr
+                (withDefaults [("thermo", dflt)]) False ovr
         -- same default, same OUTCOME …
         resolveWith PhysioSimulated Nothing
             `shouldBe` resolveWith PhysioSimulated (Just PhysioSimulated)
@@ -425,7 +511,7 @@ resolverSpec = describe "the pure mode resolver (requirement 3)" $ do
                     { upDefaults = HM.fromList
                         [ (psId sys, PhysioSimulated) ] }
             forM_ [Nothing, Just PhysioNominal, Just PhysioSimulated] $ \ovr →
-                resolveMode sys bodyless ovr `shouldBe` ModeUnsupported
+                resolveMode sys bodyless False ovr `shouldBe` ModeUnsupported
             -- stored keys never rescue it
             modeOf (mkCtx reg bodyless (HM.union owned inputs) HM.empty 0) sys
                 `shouldBe` ModeUnsupported
@@ -493,18 +579,20 @@ ownedReadSpec = describe "owned-key reads (requirement 4)" $ do
                 [ (k, ()) | k ← ["hydration", "salt", "salt_store", "core_temp"
                                , "hunger", "calories", "salt_conc"
                                , "salt_imbalance", "hypothermia"
-                               , "hyperthermia"] ])) $ \k → do
+                               , "hyperthermia", "stamina", "exhaustion"
+                               , "sleep_pressure"] ])) $ \k → do
             eff c k `shouldBe` OutcomeUnsupported
             base c k `shouldBe` OutcomeUnsupported
 
     it "hands an unowned key back for the caller to read as getStat does" $
-        \reg → forM_ ["stamina", "max_stamina", "strength", "nonesuch"] $ \k →
+        \reg → forM_ ["mood", "max_stamina", "max_sleep_pressure", "strength"
+              , "nonesuch"] $ \k →
             eff (simCtx reg) k `shouldBe` OutcomeUnowned
 
     it "raises an invariant error, never a fallback, for a Simulated \
        \owned key with no stored value" $ \reg →
         forM_ ["hydration", "salt", "salt_store", "core_temp", "hunger"
-              , "calories"] $ \k → do
+              , "calories", "stamina", "exhaustion", "sleep_pressure"] $ \k → do
             let c = mkCtx reg allSimulated
                         (HM.delete k (HM.union owned inputs)) HM.empty 0
             eff c k `shouldSatisfy` isInvariant
@@ -606,23 +694,27 @@ saltConcentrationSpec = describe "on-demand salt concentration (D-5a)" $ do
                       "salt_conc")
 
     it "raises an invariant error, not a clamped reading, for a Simulated \
-       \hydration pool that is zero, negative, NaN or infinite — the clamp \
-       \and effectiveStat must not hide an invalid dependency" $ \reg → do
+       \hydration pool that is negative, NaN or infinite, and reads a present \
+       \ZERO pool through the 0.05 clamp — the clamp and effectiveStat must \
+       \not hide an invalid dependency, and an empty pool is not one" $ \reg → do
         let sim = up PhysioSimulated PhysioSimulated
             at s mods = eff (mkCtx reg sim s mods 0) "salt_conc"
-        forM_ [0, -3, 0 / 0, 1 / 0, -1 / 0] $ \bad →
+        forM_ [-3, 0 / 0, 1 / 0, -1 / 0] $ \bad →
             at (HM.insert "hydration" bad stats) HM.empty
                 `shouldSatisfy` isInvariant
-        -- a positive modifier must not lift a zero or negative STORED
-        -- pool into a plausible effective one
-        forM_ [(0, 21), (-3, 24)] $ \(stored, lift) →
-            at (HM.insert "hydration" stored stats)
-               (HM.fromList [("hydration", [mkMod lift Nothing])])
-                `shouldSatisfy` isInvariant
-        -- a modifier that drives the EFFECTIVE pool to zero is judged too
-        at stats (HM.fromList [("hydration", [mkMod (-100) Nothing])])
+        -- a positive modifier must not lift a NEGATIVE stored pool into a
+        -- plausible effective one
+        at (HM.insert "hydration" (-3) stats)
+           (HM.fromList [("hydration", [mkMod 24 Nothing])])
             `shouldSatisfy` isInvariant
-        -- the lowest valid pool still reads, through the 0.05 clamp
+        -- an EMPTY pool is a valid reading (a dehydrated unit's): the
+        -- concentration is salt over the clamped 0.05 floor (#2831)
+        let empty = at (HM.insert "hydration" 0 stats) HM.empty
+        near (0.5 / 0.05) empty
+        -- a modifier that drives the EFFECTIVE pool to zero reads the same
+        near (0.5 / 0.05)
+            (at stats (HM.fromList [("hydration", [mkMod (-100) Nothing])]))
+        -- the lowest valid pools still read, through the 0.05 clamp
         near 10 (at (HM.insert "hydration" 0.001 stats) HM.empty)
         -- and the base read of the derived key judges it the same way
         base (mkCtx reg sim (HM.insert "hydration" (1 / 0) stats) HM.empty 0)

@@ -30,6 +30,21 @@ units:
       bulk:    { mean: 1.0, range: 1.0 }
       bodyfat: { mean: 0.2, range: 0.36 }
 
+    # Physiology profile (#2831, design D-10): every system Nominal except cardio: ignores survival
+    # physiology (#2754). Cardio stays Simulated (S9, #2836), as #2754 kept the nomad's heart rate and
+    # blood oxygen live: a punctured lung or heavy blood loss still suffocates.
+    # Stamina starts Nominal and becomes Simulated, one way, at the unit's first
+    # admitted combat attempt (SD-20, #2834): an acolyte-like pool afterwards,
+    # with the generous parameters in scripts/unit_resource_config.lua.
+    physiology:
+      profile: exempt
+      stamina: nominal
+      on_combat_engagement: { stamina: simulated }
+
+    # Innate +50% maximum stamina (SD-20): an endurance-1 nomad's maximum is 15.
+    modifiers:
+      - { stat: "max_stamina", percent: 0.5, source: "nomad hardiness" }
+
     skills:
       unarmed: { base: 30.0, range: 20.0 }
       balance: { base: 50.0, range: 40.0 }

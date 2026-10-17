@@ -147,11 +147,14 @@ pushSystem reg s = do
         Lua.newtable
         field "key" (pushText (okKey o))
         field "healthy" (pushHealthy reg (okHealthy o))
+        forM_ (okField o) $ \f → field "field" (pushText f)
     field "derived" $ pushArray (psDerived s) $ \d → do
         Lua.newtable
         field "key" (pushText (dkKey d))
         field "rule" (pushText (derivedRuleText (dkRule d)))
-        field "healthy" (pushNum (dkHealthy d))
+        field "healthy" $ case dkHealthy d of
+            DerivedFixed v → pushNum v
+            DerivedLive    → pushText "live"
     field "meters" (pushArray (psMeters s) pushText)
     field "provides" (pushEntries reg (psProvides s))
     field "contributes" (pushEntries reg (psContributes s))
@@ -170,6 +173,10 @@ pushHealthy reg rule = do
             field "from" (pushText k)
             field "scale" (pushNum (product (map resolved qs)))
             field "scaleRefs" (pushArray qs (pushText ∘ quantityRef))
+        HealthyMaxStamina → do
+            field "kind" (pushText "max_stamina")
+        HealthyBloodMax → do
+            field "kind" (pushText "blood_max")
   where
     resolved q = fromMaybe 0 (resolveQuantity' q)
     resolveQuantity' (QLit f)   = Just f
@@ -197,6 +204,8 @@ pushEntries reg es = pushArray es $ \e → do
             SubNone           → field "kind" (pushText "none")
             SubVirtualMeal    → field "kind" (pushText "virtual_meal")
             SubTissueRecovery → field "kind" (pushText "tissue_recovery")
+            SubLive           → field "kind" (pushText "live")
+            SubWoundFlow      → field "kind" (pushText "wound_flow")
   where
     resolve (QLit f)   = Just f
     resolve (QConst n) = Map.lookup n (prConstants reg)

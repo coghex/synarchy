@@ -21,6 +21,8 @@ module Engine.Scripting.Lua.API.Units.Stats
     where
 
 import UPrelude
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
@@ -30,6 +32,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
+import Unit.Physiology (rawWriteAllowed, engagementApplied)
 import Unit.Types
 import Unit.Stats (rollStat, effectiveStat, applySkillXP)
 
@@ -338,9 +341,16 @@ unitGetStatBaseFn env = do
             return 1
 
 -- | unit.setStat(id, name, value) — overwrite a stat. Clamps at >= 0.
---   Returns true if the unit exists, false otherwise. No definition
---   check: setting a stat the unit type doesn't declare is allowed
---   (the value becomes accessible via getStat from then on).
+--   Returns true if the write happened, false if the unit does not exist
+--   or the physiology write gate refused it (S4, #2831): a key a Nominal
+--   or Unsupported system owns, or a derived key (@salt_conc@) in any
+--   mode, cannot be written — the unit holds no such key, and a write
+--   would create the very state a Nominal system must not have. The mode
+--   is read INSIDE the same unit-manager update that stores the value, so
+--   a concurrent transition cannot slip between the check and the write.
+--   Otherwise no definition check: setting a stat the unit type doesn't
+--   declare is allowed (the value becomes accessible via getStat from
+--   then on).
 unitSetStatFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSetStatFn env = do
     idArg   ← Lua.tointeger 1
@@ -351,14 +361,22 @@ unitSetStatFn env = do
             let uid  = UnitId (fromIntegral n)
                 name = TE.decodeUtf8Lenient nameBS
                 clamped = max 0 (realToFrac v)
+            reg ← Lua.liftIO $ readIORef
+                (crPhysiologyRegistryRef (toContentRegistriesCapability env))
             ok ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
-                    Just inst →
-                        let inst' = inst { uiStats =
-                                HM.insert name clamped (uiStats inst) }
-                        in (um { umInstances = HM.insert uid inst'
-                                                 (umInstances um) }, True)
+                    Just inst
+                        | not (rawWriteAllowed reg
+                                 (maybe noUnitPhysiology udPhysiology
+                                     (HM.lookup (uiDefName inst) (umDefs um)))
+                                 (engagementApplied (uiStats inst))
+                                 (uiPhysioOverrides inst) name) → (um, False)
+                        | otherwise →
+                            let inst' = inst { uiStats =
+                                    HM.insert name clamped (uiStats inst) }
+                            in (um { umInstances = HM.insert uid inst'
+                                                     (umInstances um) }, True)
             Lua.pushboolean ok
             return 1
         _ → do

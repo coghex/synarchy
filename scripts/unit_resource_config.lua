@@ -13,6 +13,13 @@
 --      in scripts/unit_stats.lua or as an attribute in the YAML.
 --   3. Add a branch in unit_resource_tick.lua's tickResource if the
 --      trigger differs from stamina's "collapse when below threshold".
+--
+-- Which entries tick (#2831, #2834, #2835): a pool owned by a physiology
+-- system -- hydration, hunger, calories, stamina, exhaustion and
+-- sleep_pressure (the `sleep` system) -- ticks only while its system is
+-- Simulated for the unit (scripts/unit_resource_params.lua). An entry for a
+-- Nominal or Unsupported system stays as the PARAMETERS a pinned-Simulated
+-- unit would tick with, and the acolyte's entries are the registry defaults.
 local config = {
     acolyte = {
         stamina = {
@@ -296,7 +303,11 @@ local config = {
         },
         -- Same drain-only sleep-pressure model as acolyte (circadian epic
         -- #479 / #611) — see the acolyte entry above for the full
-        -- calibration rationale.
+        -- calibration rationale. The squirrel's sleep system is Nominal by
+        -- default (#2835, S8b): it has no go_to_sleep behavior, so this pool
+        -- no longer ticks. The entry stays as the drain-only parameters of a
+        -- squirrel pinned Simulated, and circadian.shapeFor still reads its
+        -- phase and width.
         sleep_pressure = {
             max_from            = "max_sleep_pressure",
             drain_constant_frac = 1 / 3600,
@@ -305,5 +316,32 @@ local config = {
         },
     },
 }
+
+-- Nomad stamina (#2834, SD-20 owner intent; design S8.3 "Nomad stamina
+-- tuning"). A nomad spawns with stamina Nominal and becomes Simulated at its
+-- first admitted combat attempt (data/units/nomad_primitive.yaml), so this
+-- entry only ticks AFTER that engagement. It has ACOLYTE semantics,
+-- including kill_on_zero and the acolyte's collapse/revive thresholds, and
+-- every regen-side factor is 2.25x the acolyte's:
+-- regen_factor_idle/_walking/_collapsed/_crouching and move_regen_factor.
+-- Strike costs are a FRACTION of the maximum (5% quick, 25% heavy), and the
+-- nomad's innate +50% max_stamina modifier (maximum 15 at endurance 1) buys
+-- no fight endurance by itself, so recovery must grow faster than the
+-- maximum: 2.25 = 1.5 x 1.5 is 1.5x the acolyte's recovery as a fraction of
+-- the pool. NOTE the side effect: move_regen_factor is also the
+-- speed-drain effort coefficient (unit_resource_tick.lua: supply =
+-- move_regen_factor * endurance, drainActivity = supply * ratio^2), so the
+-- nomad's fractional drain above comfort speed is 1.5x the acolyte's too.
+-- These are starting values calibrated against T-S8-5; a nomad dying of
+-- exhaustion in an ordinary encounter is a tuning defect.
+local NOMAD_REGEN_SCALE = 2.25
+local nomadStamina = {}
+for k, v in pairs(config.acolyte.stamina) do nomadStamina[k] = v end
+for _, k in ipairs({ "regen_factor_idle", "regen_factor_walking",
+                     "regen_factor_collapsed", "regen_factor_crouching",
+                     "move_regen_factor" }) do
+    nomadStamina[k] = config.acolyte.stamina[k] * NOMAD_REGEN_SCALE
+end
+config.nomad_primitive = { stamina = nomadStamina }
 
 return config

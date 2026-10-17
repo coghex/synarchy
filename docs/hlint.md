@@ -1,9 +1,16 @@
 # HLint pilot
 
-The initial configuration is on local branch `tooling/hlint-initial`, commit
-`1d8669acb`, in the `hlint-initial` worktree. It is an advisory pilot, not a
-required CI gate. No Haskell source was rewritten. This document records the
-pilot before its tooling is merged.
+The initial rollout enforces **parseability only**, with no HLint style or
+project-rule requirements. The implementation is on `tooling/hlint-initial`
+pending normal PR delivery. No Haskell source is rewritten.
+
+`static-audits` and `make ci` run `python3 tools/test_hlint.py` and
+`python3 tools/hlint_parse.py`. The gate checks production and development CPP
+branches, fails on parse errors or a broken/missing tool, and reports only a
+count of nonblocking style hints. The CI image includes the checksum-verified
+HLint 3.10 Linux release; the local runner and image version are checked for
+agreement. Default hints remain available for local reports. The sample custom
+rules are opt-in in `tools/hlint-advisory.yaml`; they are not loaded by CI.
 
 ## Installation and commands
 
@@ -31,7 +38,9 @@ without building the game or loading its libraries.
 From the pilot worktree:
 
 ```sh
-bash tools/hlint.sh
+python3 tools/hlint_parse.py # same parse-only gate as CI
+bash tools/hlint.sh         # report all default hints; hints exit nonzero
+bash tools/hlint.sh --hint=.hlint.yaml --hint=tools/hlint-advisory.yaml # optional candidate rules
 bash tools/hlint.sh --json > /tmp/synarchy-hlint.json
 bash tools/hlint.sh --report=/tmp/synarchy-hlint.html
 bash tools/hlint.sh --cpp-define=DEVELOPMENT --json > /tmp/synarchy-hlint-dev.json
@@ -39,18 +48,26 @@ python3 tools/test_hlint.py
 ```
 
 The runner changes to its own repository root, checks the version, runs four
-threads, and selects tracked `.hs`/`.lhs` files through `--git`. Untracked new
-files are not included: stage them before the sweep, or run `hlint path/to/File.hs`
-from the repository root. Darwin defines `DARWIN`; `DEVELOPMENT` is opt-in.
-Hints retain HLint's nonzero exit status. The baseline runs exited 1 because
-of hints, not a parser/tool failure. Use HTML and JSON output in separate
+threads, and selects tracked plus non-ignored untracked `.hs`/`.lhs` files
+through `--git`. Ignored build output is excluded. This corrects the original
+pilot's description: HLint 3.10's implementation includes non-ignored untracked
+files even though its help calls the option “tracked by git”. Darwin defines `DARWIN`; `DEVELOPMENT` is opt-in.
+The report runner retains HLint's nonzero exit status for hints. The parse-only
+gate instead inspects JSON and ignores all non-parse hints. It does not use
+`--only="Parse error"`: that exact-name selector misses errors with names such
+as `Parse error: possibly incorrect indentation or mismatched brackets`.
+Malformed JSON, tool failures and inconsistent failed-with-no-hints output
+fail the gate. The original baseline reports exited 1 because of hints, not
+a parser/tool failure. Use HTML and JSON output in separate
 commands: HLint 3.10 prioritizes JSON when both are requested.
 
-## Initial policy
+## Parser configuration and optional candidate rules
 
-All standard hints remain enabled. `.hlint.yaml` supplies the common Cabal
-language extensions and fixities for UPrelude's local and re-exported Unicode
-operators. Keep these synchronized with `synarchy.cabal` and `src/UPrelude.hs`.
+`.hlint.yaml` supplies only the common Cabal language extensions and fixities
+for UPrelude's local and re-exported Unicode operators. Keep these synchronized
+with `synarchy.cabal` and `src/UPrelude.hs`. All standard hints remain available,
+but none are required by the parse-only gate. The following are candidate rules
+in the separate optional advisory file, pending owner selection:
 
 - Prefer `tshow` for strict `Data.Text.pack (show x)` and ASCII/Unicode
   compositions. Preserve `UPrelude.tshow` itself and the independent reference
@@ -71,10 +88,12 @@ observes broader failures. The older `tryEngine`, `throwEngineException`, and
 `catchEngine` wrappers were removed. These behaviors cannot be replaced by a
 single syntactic preference for `try`.
 
-The seven Python checks exercise the real HLint CLI/configuration with temporary
-Haskell snippets, covering useful matches, false-positive boundaries, exact
-unsafe-binding scope, reference-test exceptions, and retained default hints.
-They require no game build.
+The Python checks exercise the real HLint CLI/configuration with temporary
+Haskell snippets. They verify that style hints pass, malformed Haskell fails,
+broken tool output fails, custom rules are opt-in, and the CI image version
+matches the local pin. Candidate-rule checks cover useful matches,
+false-positive boundaries, exact unsafe-binding scope and reference-test
+exceptions. They require no game build.
 
 ## Initial baseline — 2026-10-13
 
@@ -116,6 +135,8 @@ type-check or resolve the complete import/re-export graph. Do not apply the
 report wholesale. The macOS profiles do not establish coverage of every
 possible platform/CPP configuration.
 
-A useful next stage is to review the 106 `tshow` sites, curate the noisy default
-rules, then integrate the accepted rules with `static-audits`, the local CI
-command and its parity check. No CI gate or source cleanup is part of this pilot.
+This historical report used the optional custom rules as well as the defaults.
+The first CI rollout adds only the parseability gate; source cleanup and the
+selection of enforceable style/custom rules are separate follow-ups. Existing
+independent gates, including the project's `tshow` spelling audit, retain their
+own contracts.

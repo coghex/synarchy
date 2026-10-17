@@ -8,8 +8,10 @@
 -- functions here) kill the unit, with a survival window so it can be rescued
 -- by getting it to better conditions.
 --
--- core_temp lives as a unit STAT ("core_temp", °C), so it saves with the unit
--- and shows in the Status panel. Ticked from unit_resources.update.
+-- core_temp lives as a unit STAT ("core_temp", °C) while the thermo system is
+-- SIMULATED, so it saves with the unit and shows in the Status panel; a
+-- Nominal thermo stores nothing and reads the baseline (#2831). Ticked from
+-- unit_resources.update, only for a Simulated thermo.
 --
 -- Future layers (circulation, heart rate, blood oxygen, salts, brain effects,
 -- frostbite, fever feedback) read/extend core_temp — see the treatment-arc
@@ -18,6 +20,7 @@
 local circulation = require("scripts.circulation")
 local salts       = require("scripts.salts")
 local injuries    = require("scripts.injuries")
+local physiology  = require("scripts.physiology")
 
 local thermo = {}
 
@@ -122,13 +125,19 @@ function thermo.tick(uid, info, dt)
     local clim = world.getClimateAt(gx, gy)
     if not clim then return end   -- no active world → leave core_temp alone
 
-    local core = unit.getStat(uid, "core_temp")
-    if not core or core <= 0 then core = thermo.BASELINE end
+    -- Only a SIMULATED thermo ticks (scripts/unit_resources.lua gates it), so
+    -- its stored core is present by the seeding rule (#2831): a missing one
+    -- is an invariant violation that physiology.get raises, never a cue to
+    -- start from the baseline.
+    local core = physiology.get(uid, "core_temp")
+    if not core then return end
 
-    -- Circulation, recomputed each tick (vasoconstriction uses this core). Set
-    -- always — other systems (frostbite, display) read the stat.
-    local circ = circulation.compute(uid, core)
-    unit.setStat(uid, "circulation", circ)
+    -- Circulation, derived on demand (#2836, S9) from the unit's current
+    -- inputs, so it is coherent with this tick's blood, stats and heart rate.
+    -- A Nominal cardio still computes it with every injury factor live (SD-21)
+    -- and a unit this runs for always has a body, so the nil case is only a
+    -- guard.
+    local circ = circulation.get(uid) or 1.0
 
     -- Ambient is ELEVATION-CORRECTED: world.getAmbientAt applies the worldgen
     -- altitude lapse rate (the same one the ice system uses), so a unit on an
@@ -157,14 +166,10 @@ function thermo.tick(uid, info, dt)
     -- a unit with an empty stomach but a fed store keeps full output)
     -- throttles metabolic heat.
     local calFactor = 1.0
-    local maxCal = unit.getStat(uid, "max_calories")
-    local curCal = unit.getStat(uid, "calories")
-    if maxCal and maxCal > 0 and curCal then
-        local frac = curCal / maxCal
-        if frac < HUNGER_HEAT_FLOOR_FRAC then
-            calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
-                                          * (frac / HUNGER_HEAT_FLOOR_FRAC)
-        end
+    local frac = physiology.fraction(uid, "calories", "max_calories")
+    if frac and frac < HUNGER_HEAT_FLOOR_FRAC then
+        calFactor = HUNGER_HEAT_MIN + (1 - HUNGER_HEAT_MIN)
+                                      * (frac / HUNGER_HEAT_FLOOR_FRAC)
     end
 
     -- Metabolic heat production (basal + activity + shivering). All three
@@ -217,22 +222,19 @@ function thermo.tick(uid, info, dt)
 
     -- Minimal costs of thermoregulating.
     if shiver > 0 then
-        local st = unit.getStat(uid, "stamina")
-        if st then unit.setStat(uid, "stamina",
-            math.max(0, st - SHIVER_STAMINA_K * shiver * dt)) end
+        -- A relative, atomic debit (#2834, S8-F2): the old read-modify-write
+        -- republished an absolute value and refunded any strike combat
+        -- committed in between. A Nominal stamina receiver discards it.
+        physiology.debit(uid, "stamina", SHIVER_STAMINA_K * shiver * dt)
     end
     if sweat > 0 then
         -- Debits scale with body mass (thermo.sweatMassScale): the same
         -- sweat removes the same FRACTION of any body's pools.
         local massScale = thermo.sweatMassScale(bodyM)
-        local hy = unit.getStat(uid, "hydration")
-        if hy then unit.setStat(uid, "hydration",
-            math.max(0, hy - SWEAT_HYDRATION_K * massScale * sweat * dt)) end
+        physiology.debit(uid, "hydration", SWEAT_HYDRATION_K * massScale * sweat * dt)
         -- Sweat loses salt too. With water replaced by drinking but salt only
         -- by eating, heavy sweating + plain water → hyponatremia.
-        local s = unit.getStat(uid, "salt")
-        if s then unit.setStat(uid, "salt",
-            math.max(0, s - SWEAT_SALT_K * massScale * sweat * dt)) end
+        physiology.debit(uid, "salt", SWEAT_SALT_K * massScale * sweat * dt)
     end
 
     -- Frostbite: freeze the extremities when it's cold and circulation is poor.

@@ -24,10 +24,11 @@ local M = {}
 -- at all, by design) and a freshly-spawned acolyte before its first
 -- resource-init tick.
 local function staminaPct(uid)
-    local s  = unit.getStat(uid, "stamina")
-    local ms = require("scripts.unit_stats").get(uid, "max_stamina")
-    if s and ms and ms > 0 then
-        return math.max(0, math.min(1, s / ms))
+    -- Through the physiology facade (#2834): a Nominal stamina system reads
+    -- full (1.0), a Simulated one its effective fraction.
+    local f = require("scripts.physiology").fraction(uid, "stamina", "max_stamina")
+    if f then
+        return math.max(0, math.min(1, f))
     end
     return 1.0
 end

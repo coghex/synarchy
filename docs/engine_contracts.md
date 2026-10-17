@@ -172,8 +172,10 @@ sixteen probe-runner self-tests (`ci_probes.py --self-test`,
 `test_movement_probe.py`), `ci_cache_report.py --self-test` (#1358 — the
 cache-outcome report's own classification, plus the `ci.yml` wiring it
 reads), the project-cache epoch and cleanup policy self-tests
-(`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
-parity audit itself.
+(`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`),
+`ci_lane_report.py --self-test` (#2748 — the headless-lane time report's
+rendering, the `ci.yml` lane-step wiring, and a failing lane's propagation
+through the log capture), and the parity audit itself.
 
 **The haddock link audit (#2292)** is the newest member, and is owned
 by `ci.yml`'s `static-audits` worker — the engine-free half #2272 split
@@ -430,6 +432,13 @@ locally, and its bare `ci_cache_report.py` (#1358) classifies what the two
 classify, and the command reports rather than gates. Its `--self-test`
 form is not exempt and runs on both sides — in `static-audits`, with the
 cache-key and retention self-tests, since none of the three reads a cache.
+The `headless-lanes` job's `ci_lane_report.py` (#2748) is CI-only reporting
+as well: it writes each lane's headless step time, example count and slowest
+items to that leg's run summary and flags a lane over its advisory budget, and
+`make ci`, which runs the suite in one process with no lane legs, has nothing
+to report against. It never changes a result (`continue-on-error`, exit 0), the
+lane job is no audited gate set, so only the stale-exemption check reads its
+command, and its `--self-test` runs on both sides.
 `static-audits` also owns `ci_expensive_gates.py --stdin --gate
 unit-assets`, which moved there with the unit-asset gate it decides
 (#2272); it is exempt for the same reason its siblings are.
@@ -2054,15 +2063,58 @@ spawn ingress), `--match "Startup readiness"` / `"Startup asset logging"`, and
 
 ---
 
-## The physiology system registry and read contract (#2828)
+## The physiology system registry, read contract and modes (#2828, #2831)
 
 S2 of the physiology stat-modes epic #2827 (design:
 `docs/designs/physiology_stat_modes_design.md`, D-1, D-2, D-3, D-5a, D-7,
-D-10 and SD-8/13/17/19). It supplies the registry, the species-default
-machinery and five READ verbs. **It is inactive**: no production tick,
-gameplay consumer or save path calls any of it, and no mode setter or
-override field exists yet (S3 adds the field, S4 the setters and
-activation, S5 migrates the consumers).
+D-10 and SD-8/13/17/19) supplies the registry, the species-default machinery
+and five READ verbs; S5 (#2830) routed every gameplay consumer through them;
+**S4 (#2831) activated them**: a unit's systems now run in an explicit mode,
+Nominal, Simulated or Unsupported, and every behavior below follows from it.
+
+**The consumer facade (#2830, S5).** Gameplay code reads a registry-owned key
+ONLY through `scripts/physiology.lua` (`get`, `getBase`, `fraction`) or
+Haskell `physioRead` / `physioConsumerView`, writes one across systems ONLY
+through `debit` / `credit`, and changes a mode ONLY through `setMode` /
+`clearMode`. `tools/physiology_access_audit.py` (with `--self-test`, in
+`static-audits`) enforces it; there is no UI allowance since S6 (#2832
+deleted the enumerated temporary exception), and #2754's survival exemption is
+gone, it is the `exempt` profile. The wound tick (`Healing.hs`, `Wounds/Tick.hs`)
+reads `calories`, `hydration` and `core_temp` (and their maxima, resolved
+effectively) through `physioConsumerView` via `tickOneUnitWith`; an invariant
+violation returns the unit untouched as `PhysioInvariant` instead of a
+guessed pool. Reference: `docs/physiology_consumer_facade.md`. Gates: hspec
+`--match "physiology stat modes"` and `"physiology consumer migration"`, the
+access audit and its self-test, and the `physiology`, `consumable_effects`
+and `state_of_mind` probes.
+
+**Unit-info display of modes (#2832, S6).** The unit-info Status panel and the
+legacy debug text show a unit's RESOLVED modes (design D-8). A supported
+Nominal row shows the word `Nominal` (a pool shows just that; the temperature
+and salt rows add their healthy reading, `Nominal 37.0°C` / `Nominal 100%`, in
+the smaller condition font so the pair fits) in the neutral value colour (`L.CONTENT_VAL_COLOR`, not the in-range green) with the
+value-tooltip hint `Not simulated for this unit: always healthy.` (the icon's
+description tooltip is unchanged); `body_temp` follows thermo (`core_temp`) and
+the salt row follows salt (`salt_conc`), so a mixed-mode unit shows each from
+its OWN system. An Unsupported row is hidden; a Simulated row keeps today's
+value, units, format and threshold colour; an unowned row (stamina, blood, pain,
+sleep, ...) passes through untouched. The conditions and failure meters a
+Nominal or Unsupported system owns never appear (hydration: `Collapsed
+(dehydrated)`, `Dehydrated`; nutrition: `Hungry`/`Starving`; thermo:
+`hypothermia`/`hyperthermia`; salt: `salt_imbalance`), while the injury-driven
+and unowned ones keep their rules. `panelShapeSig` folds in
+`unit_info_v2_physio.signature(uid)`, so a mode, support or default change
+rebuilds the rows and tooltips of the SELECTED unit without reselecting it and
+the tab, scroll offset (clamped to the new row count) and scrollbar survive;
+values inside an unchanged mode refresh in place. Rendering is read-only: it
+goes through the facade, stores nothing, changes no mode or override and rolls
+nothing for an owned read. The panel logic lives in
+`scripts/unit_info_v2_physio.lua` (`unit_info_v2_status.lua` is at its line
+budget). Gates: hspec `--match "UI.PhysiologyModes"` (rows, colours, exact
+tooltip, hidden rows, suppressed conditions, the transitions, read-only
+rendering and the debug text), the access audit and its self-test. Rendered
+evidence (real `--offscreen` captures at 1920x1080, 1280x720 and 800x600) is
+`docs/pr-proofs/issue-2832-nominal-mode-ui.md`.
 
 **The registry** is `data/physiology/systems.yaml`, decoded by
 `Engine.Asset.YamlPhysiology` and registered by
@@ -2110,7 +2162,7 @@ explicit override, then the species default, then Nominal. An absent
 override and an override equal to the default are different inputs.
 
 **Reads.** `unit.getPhysioMode`, `getPhysioOverride` (the unit's STORED
-override, S3; `nil` for every unit this build creates), `getPhysioDefault`, `readPhysio` and `readPhysioBase`, and Haskell
+override, S3; `nil` until a setter records one), `getPhysioDefault`, `readPhysio` and `readPhysioBase`, and Haskell
 `physioRead` / `physioReadBase`, may be called by anyone; they never
 change state. A registry-owned, derived or meter key is read purely and
 never initializes, rolls or writes. Nominal reads evaluate the healthy
@@ -2120,13 +2172,16 @@ the base verb returns the stored base; an absent Simulated meter reads
 0. A missing Simulated owned value, and a healthy-rule input that is
 absent, non-finite or non-positive, raise an invariant error and never a
 fallback. The same holds for the Simulated `hydration` pool `salt_conc`
-divides by (zero, negative, NaN and infinity included). Every such input
-is judged both as stored and as effective, so neither the zero clamp nor
-a positive modifier can make an invalid stored value read as valid. A derived key is computed on demand by the shared
+divides by, except that an EMPTY pool is a valid reading (the concentration
+rule's `clamp 0.05 1` exists for it; a dehydrated unit's pool really does reach
+zero) while a negative, NaN or infinite one is not. Every such input is judged
+both as stored and as effective, so neither the zero clamp nor a positive
+modifier can make an invalid stored value read as valid. A derived key is computed on demand by the shared
 `saltConcentration` rule and never stored; a stored legacy `salt_conc`
 is ignored. An UNOWNED key reads exactly as `unit.getStat` /
 `getStatBase` do (mode `nil`), lazy roll and cache included; the
-`scripts/unit_stats.lua` formulas are the S5 facade's, not these verbs'.
+`scripts/unit_stats.lua` formulas are the S5 facade's
+(`scripts/physiology.lua`), not these verbs'.
 `engine.getPhysiologyRegistry()` returns a read-only copy of the loaded
 registry for Lua.
 
@@ -2137,9 +2192,8 @@ append-only baseline entry is S3's (#2829).
 explicit per-system mode intent, `uiPhysioOverrides` (system id →
 `PhysioMode`), is **Persist exactly** and rides `units` from v4. Presence
 is the intent: an override equal to the species default is kept, and an
-absent one keeps following the default through the S2 resolver. Every
-production-created unit has an empty map; no setter, hook or consumer
-exists before S4, so only a test or a later save holds a nonempty one.
+absent one keeps following the default through the S2 resolver. A unit
+holds an empty map until `physiology.setMode` records an override (S4).
 `PhysioMode` is a positional `Generic Serialize` enum (tag 0
 `PhysioNominal`, tag 1 `PhysioSimulated`); it is append-only and is
 recorded in `docs/save_compat/enum_baseline.json` by
@@ -2162,23 +2216,288 @@ the same frozen graph) and `z8-units-v4-physiology-overrides` (the
 current version); the canonical summary records each unit's overrides and
 `salt_store`, so losing a nonempty map or a durable value is observable.
 
-**Load policy for decoded physiology state (D-6 (d), (e), (h)).** The
-content-aware load boundary (`World.Save.Physiology`, beside the
-missing-definition checks and BEFORE staging, so the old session is
-untouched and left paused) rejects an override naming a system the
-registry neither declares nor lists as `retired:` / `renamed_from:`
-(an active gameplay definition is missing), and a NaN or infinite stored
-value of a Simulated system's owned key or meter (mode decided by the
-resolver from the unit's stored overrides and its definition's
-defaults). An unknown `PhysioMode` tag fails cereal's generic decode as a
-malformed payload. A retired or renamed id is RECOGNIZED and restored
-verbatim; applying its declared migration, and every other D-6 case
-((b), (c), (f), (g), (i), (j)), is S4's. A derived key (`salt_conc`) is
-never examined and finite out-of-range values are retained exactly. The
-registry accepts top-level `retired: [ids]` and per-system
-`renamed_from: [ids]` (validated not to name an active system).
+**Load policy for decoded physiology state (D-6).** The content-aware load
+gate (`World.Save.Physiology.physiologyLoadGate`, beside the
+missing-definition checks and BEFORE staging, so a rejection leaves the old
+session untouched and paused) first rejects an override naming a system the
+registry neither declares nor lists as `retired:` / `renamed_from:` (d) and a
+NaN or infinite stored value of a Simulated system's owned key or meter (h),
+then NORMALIZES every unit deterministically (S4, #2831), logging each unit
+that changed ONCE and changing nothing on a second pass or on a canonical
+save: (b) a Nominal or Unsupported system's stored keys are scrubbed and a
+Simulated system's MISSING owned keys are seeded by the one seeding rule
+(hydration before salt; present values kept exactly); (c) an override for a
+renamed system is remapped to its successor (a successor's own override wins)
+and one for a retired system dropped; (f) a Simulated override for a system
+the definition no longer supports rejects; (g) a required seed input or the
+Nominal-nutrition upkeep's `frame_mass` that is zero, non-finite or missing
+with no legacy rule rejects, naming the unit, key and input; (i) a stored
+legacy `salt_conc` is scrubbed in every mode; (j) a bodied pre-frame unit with
+a height gets `frame_mass = 22 x height^2` (the bulk-1.0 spawn frame, so its
+legacy fat and lean floors are unchanged). An unknown `PhysioMode` tag fails
+cereal's generic decode as a malformed payload (e). Finite out-of-range
+values are retained exactly. The registry accepts top-level `retired: [ids]`
+and per-system `renamed_from: [ids]` (validated not to name an active
+system); it lists retired systems by id only, so a retired system's keys,
+which no registry entry names any more, are left as ordinary stats.
 
-Gates: hspec `--match "physiology override persistence"` (the units
+**Modes, activated (#2831, S4).** A system's mode for a unit is the resolver's
+(capability, then override, then species default, then Nominal). The rules
+every consumer relies on:
+
+* *Nominal* reads healthy values (the registry's healthy rules over effective
+  inputs, meters 0), stores NONE of the system's owned, derived or meter
+  keys, discards contributions into it (`debit` / `credit` return 0), and
+  suppresses the system's effects: no tick, no collapse, `death_threshold`,
+  `kill_on_zero` or survival alert from its pools, no failure-meter kill, no
+  AI need for its resource. *Unsupported* is not Nominal: it never ticks,
+  holds nothing, reads `nil` (dependents read the declared substitutes, core
+  37.0 for circulation, brain and fever; `salt_conc` and `sweat_factor` 1.0;
+  hydration and nutrition fractions 1.0; heart rate 70 and blood oxygen 1.0
+  for circulation, brain and the hypoxia oxygen path). *Simulated* is today's behavior,
+  with the owned keys present: a missing one is an invariant error, never a
+  first-tick fill.
+* *Profiles* (D-10, in `data/units/*.yaml`; the final SD-10 table, S7, #2833):
+  `acolyte` is `rich` (all Simulated); `bear_brown` and `technomule` are
+  `reduced` (hydration and nutrition Nominal, salt and thermo Simulated);
+  `red_squirrel` is `simple` (hydration, salt and nutrition Nominal, thermo
+  Simulated: S7's one effective change from S4, the squirrel's salt going
+  Nominal, so it holds no salt state and has no cramps);
+  `nomad_primitive` is `exempt`; a definition with no `body:` is Unsupported
+  throughout. Cardio (S9, #2836) is Simulated in EVERY profile, `exempt`
+  included, because #2754 kept the nomad's heart and oxygen live. The three
+  INTENTIONAL behavior changes of activation are the
+  bodyless Unsupported units, the virtual meals of a Simulated salt over a
+  Nominal nutrition (below), and the depletion-only recovery of a wasted unit
+  under a Nominal nutrition (below). Blood (S10, #2837) is Simulated in every
+  profile, the `exempt` one included (#2754 kept bleeding as combat
+  physiology). S9 adds a fourth: a bodyless unit's
+  cardio is Unsupported (it used to integrate tachycardia and depressed
+  oxygen from a 0 L blood seed), and cardio's oxygen delivery no longer lags
+  circulation by a tick.
+* *Tick order* (`scripts/unit_resources.lua`): cardio first (only while it is
+  Simulated; its registry position is last but it is ticked ahead of the
+  loop; circulation is derived on demand and is no longer a step), then the
+  Simulated systems that tick themselves in registry order (thermo before
+  salt), then brain,
+  thoughts, mental state, injuries and the failure meters (an owned meter
+  only while its system is Simulated; injury meters always), then the
+  per-def pools (`hydration`, `hunger`, `calories`, `stamina`, `exhaustion`
+  and `sleep_pressure` only while their system is Simulated, with the
+  species' resource parameters or, failing those, the registry defaults in
+  `scripts/unit_resource_params.lua`), then nutrition's digestion and
+  catabolism (Simulated) or its upkeep (Nominal), then `checkRevive` over the
+  Simulated pools only. Each unit's pass is a `pcall`: a fault in one unit is
+  logged once and skipped, never aborting the pass for the rest.
+* *Transitions.* `physiology.setMode(uid, system, mode [, values])` and
+  `clearMode(uid, system)` are the only callers of the engine verbs
+  `unit.setPhysioMode` / `clearPhysioMode`, each ONE unit-manager update that
+  plans against the unit's own current state (`Unit.Physiology.Transition`).
+  Set always records the override (even one equal to the default), clear always
+  removes it, and seeds, scrubs and the change hooks run only on an EFFECTIVE
+  change. A seed is the key's healthy value (salt: its maximum times the
+  clamped body-water fraction, so `salt_conc` reads 1.0; meters 0), stored as
+  the BASE that makes the EFFECTIVE value the target under the unit's active
+  modifiers, `t / (1 + Σp) − Σδ`. A refusal changes nothing, atomically: an
+  Unsupported or unknown system, a dead unit, a multiplier that is not
+  positive, a negative or non-finite base, `values` that are not finite
+  owned keys of a Simulated system within the key's maximum, a Simulated
+  system with no resource parameters (species or registry). Any transition or
+  value write resets the carry remainders, the regrowth authorship and the
+  alert debounce; an effective change also runs the registered hooks (the
+  source-drinking sequence is abandoned when hydration changes mode; leaving
+  Simulated nutrition restores undiscounted strength synchronously). The
+  facade then refreshes the brain at dt 0 before returning (other threads
+  may see a non-v1 cache up to one pass old); derived reads are fresh by
+  construction.
+* *The write gate.* `unit.setStat` refuses (returns false) a key a Nominal or
+  Unsupported system owns, and a derived key in either mode; it reads the
+  mode inside the same update that stores the value. A Simulated system's
+  debug writes stay allowed. Owned modifiers are retained but ignored under
+  Nominal; modifiers on a maximum still move the Nominal healthy value.
+* *Blood (S10, #2837).* Blood is the ninth system and the one whose owned key
+  is stored in a dedicated unit FIELD: the volume is `uiBlood` (serialized as
+  `uisBlood`), never a `uiStats` key, and it has no modifiers. Its Nominal read
+  and seed target are `blood_max`, BASE `body_mass` x `bloodMassRatio` (0.075,
+  70 kg fallback; never the effective body mass), and `blood_max` /
+  `blood_fraction` are derived and never stored. `Unit.Blood` is the ONE pure
+  adapter: the raw view for a Simulated, Unsupported or undeclared blood (the
+  pre-S10 values), its Nominal branch (volume = maximum, stored volume ignored,
+  fraction 1.0, live bleed rate) otherwise, chosen by the pure mode resolver
+  (`instanceBloodView`). The wound fold, the unit-thread movement multiplier,
+  `unit.getBlood` (still `{current, max, bleedRate}`), `unit.readBloodView`,
+  circulation and cardio all read through it. Under Nominal the combat wound
+  fold, inside its one atomic update, debits no volume, recovers none and
+  raises no blood-loss collapse or exsanguination, while wounds, healing,
+  infection, necrosis, gangrene death, pain, clotting, bandages and the bleed
+  rate are unchanged (Nominal blood is not injury immunity); the visual
+  bleeding trail is credited the wound-derived external flow directly, the one
+  intentional exception to #882's conserved accounting, and zero external
+  bleeding (a sealing dressing, full clotting, a healed-out wound) clears the
+  accumulator at once in both modes. A transition writes the dedicated field
+  atomically (Nominal -> Simulated seeds the maximum, Simulated -> Nominal
+  writes it); a raw `unit.setStat` of the volume or a derived key is refused;
+  an Unsupported (bodyless) unit keeps today's raw blood behavior and reads
+  `nil` through the physiology verbs. A Nominal stored volume is serialized but
+  ignored and rebuilt silently at load. Gates: hspec `--match "physiology
+  blood modes"`, `tools/bleeding_trail_probe.py`,
+  `tools/persistence_contract_probe.py` and the access audit.
+* *`salt_conc`* is computed on every read (and inside salt's excretion) by one
+  shared pure rule and never stored.
+* *Cardio and circulation (S9, #2836).* Cardio owns `heart_rate` (healthy
+  `RESTING_HR`, a registry constant, 70 bpm) and `blood_oxygen` (1.0) and
+  derives `circulation` on demand with `Unit.Physiology.Circulation
+  .circulationRule`, the pure port of the old `circulation.compute`: blood
+  fraction (`Unit.Blood.bloodView`, unmoded until S10: stored volume over the
+  BASE body mass times 0.075), fitness, sepsis, cold vasoconstriction and the
+  heart-rate factor. Reads initialize, roll and cache nothing, evaluate
+  modifiers at the read's game time and are coherent the instant an input
+  changes. The registry's derived grammar gains `healthy: live` and the
+  substitute grammar `live`: **under a Nominal cardio circulation is still
+  computed** with only the heart-rate factor at exactly 1.0 (SD-21), so blood
+  loss, sepsis, fitness and cold still lower it and still drive thermo's heat
+  loss and frostbite; a Nominal `heart_rate` / `blood_oxygen` read 70 / 1.0
+  and are not stored; an Unsupported cardio (no body) reads `nil` for all
+  three. The `hypoxia` meter belongs to no system: its driver stays
+  `max(oxygen path, pulmonaryFailure)`, a Nominal cardio zeroes only the
+  oxygen path (so a punctured lung still suffocates), and brain's oxygen
+  input reads 1.0. Raw `unit.setStat` of `circulation` is refused in every
+  mode. Cardio's integrators write the stored base whose EFFECTIVE value is
+  the integrated one under the key's retained modifiers. Lua reaches the
+  blood fraction through the pure read verb `unit.readBloodView`;
+  `unit.getBlood` is unchanged until S10. Gates: hspec `--match "physiology
+  cardio and circulation modes"`, `tools/persistence_contract_probe.py`
+  (fresh-process cycles), the `physiology` probe and the access audit.
+* *Nutrition's effects*: digestion, catabolism, the lean-floor starvation
+  death, surplus regrowth, the strength discount and the nutrition fat-floor
+  organ-failure contribution inside stamina all belong to a Simulated
+  nutrition; the wound-driven organ meter and stamina exhaustion kill either
+  way. A Nominal nutrition's depletion-only upkeep (SD-18,
+  `scripts/unit_resource_upkeep.lua`) recovers a unit below its spawn margin
+  toward the species mean at the surplus-regrowth rate, spending nothing,
+  idle 90/10 and walking 30/70 fat/lean, never reducing tissue above target,
+  gated by the persisted unowned `tissue_recovering` flag.
+* *Virtual meals* (SD-4): a Simulated salt over a Nominal nutrition is credited
+  one meal (0.30 of `maxSalt`, capped at the reserve) through the real
+  reserve path once per salt tick when the pool is below 0.85 of `maxSalt`
+  and the reserve below 0.30 of it.
+* *Stamina (#2834, S8a).* A fifth system, `stamina`: requires a body, owns
+  `stamina` (no meters), healthy value and seed target = the effective
+  `max_stamina` (the named registry rule `max_stamina`), `stamina_fraction`
+  1.0 under Nominal, and no collapse, `kill_on_zero` or strike cost while
+  Nominal. Species: acolyte, bear_brown and red_squirrel Simulated; technomule
+  Nominal; nomad_primitive Nominal until its first admitted combat attempt;
+  bodyless Unsupported. Stance stays unowned and always on.
+  * *One maximum.* `Unit.Stats.maxStaminaOf`: an explicit `max_stamina` wins
+    (its own modifiers apply), else `effective(endurance) x 10` with the
+    modifiers on `max_stamina` applied. `maxStaminaFor`, the healthy value,
+    `unit.getMaxStamina(uid)` (pure; `nil` with no endurance) and
+    `stats.get(uid, "max_stamina")` share it. `max_stamina` is never stored.
+  * *One commit.* `Combat.Resolution.Stamina.staminaCore`: with `d` the active
+    flat modifiers on `stamina`, `m = 1 + sum(percent)` and `eff(b) = max 0
+    ((b + d) x m)`, `before = eff(b)`, `target = clamp(before + delta) 0
+    max`, and the stored base is `target/m - d` (floored at 0, status
+    `floored`; `m = 0` leaves the base and reports 0, status
+    `zeroMultiplier`); every report is the effective read of what is stored.
+    `unit.commitStamina` returns `{ before, after, maximum, status }` (effective)
+    or refuses with a name and no mutation: `nominal`, `unsupported`,
+    `missing_pool`, `dead`, `invalid_amount`, `invalid_stamina`,
+    `invalid_maximum`, `no_such_unit`. The pool tick, `physiology.debit` /
+    `credit` on stamina (the thermo shiver included) and combat's strike cost
+    all go through it, each inside one unit-manager update, so a strike is
+    never refunded. Transition eligibility is separate: a Nominal-to-Simulated
+    seed refuses when `m <= 0` or `t/m - d` is negative or non-finite, whatever
+    an ordinary commit would have returned.
+  * *Combat.* `Wear` charges a Simulated pool that exists (`fraction x
+    effective maximum`) and creates no key for a Nominal or Unsupported
+    attacker; `Damage` reads `staminaWorkFraction` (1.0 unless Simulated, the
+    effective fraction with the 0.3 floor otherwise).
+  * *SD-20 engagement.* `on_combat_engagement: { stamina: simulated }` (nomad
+    only). `combat_engaged` (unowned, durable `uiStats`): absent / 1 pending /
+    2 applied. An admitted attempt (`commitIfAdmitted`, hit or miss) sets an
+    absent marker to 1 for a declaring attacker and target in the strike's
+    own update; refused attempts, range and AI targeting do not count. The
+    resolver reads the engagement default only at marker 2. At the start of a
+    live pass the facade calls `unit.applyCombatEngagement` for pending units
+    (facade-only, one update): `refusedDead` (the combat lethality rule; stays
+    pending), `latched` (an explicit override of either mode: marker 2 only),
+    `transitioned` (seed the full effective maximum, pin a Simulated override,
+    marker 2; hooks and refresh follow) or `seedUnrepresentable` with a
+    reason code (stays pending and Nominal; retried every pass; logged once
+    per unit and reason). Free pending strikes end at the next success.
+    `unit.setStat` refuses the marker and a definition may not template it.
+  * *Nomad parameters.* The acolyte's stamina entry with every regen-side
+    factor x 2.25 and an innate +50% `max_stamina` modifier (maximum 15 at
+    endurance 1). `move_regen_factor` is also the speed-drain effort
+    coefficient, so the engaged nomad's fractional drain above comfort speed
+    is 1.5x the acolyte's.
+* *Exhaustion and sleep (#2835, S8b).* Two more systems, `exhaustion` and
+  `sleep`, each requiring a body, owning one pool (`exhaustion`;
+  `sleep_pressure`) and no meters. Their healthy value and seed target are
+  `effective(endurance) x 10`, spelled `{ from: endurance, scale: 10 }` (the
+  Lua-only maxima `max_exhaustion` / `max_sleep_pressure` are never stored, so
+  a `from:` of them would refuse every spawn); a hspec case pins it equal to
+  `stats.get(max_*)` to binary32 precision for every shipped species.
+  Profiles: `rich` S/S, `reduced` S/S, `simple` S/N, `exempt` N/N; the
+  technomule overrides both to Nominal; bodyless units are Unsupported. The
+  squirrel's sleep is Nominal because it has no `go_to_sleep` behavior: its
+  `sleep_pressure` config entry stays as the drain-only parameters of a
+  squirrel pinned Simulated (and `scripts/circadian.lua` still reads its phase).
+  * *Substitutes are constants, never ratios.* A Nominal or Unsupported
+    exhaustion answers restedness exactly 1.0, a movement multiplier exactly
+    1.0 and a zero sleep-utility term; the binary32 healthy value over the
+    double maximum would read 0.99999996 at a rolled endurance of 0.3 and look
+    like a deficit. A Nominal or Unsupported sleep has go_to_sleep utility
+    -infinity and no pressure wake. Unsupported exhaustion still reports
+    Unsupported through the read API.
+  * *The sleep need is sleep's effect.* `sleepUtility` returns -infinity
+    BEFORE it looks at the sequence's latch when sleep is not Simulated, and
+    abandons a sequence it finds. A sleep mode change runs the registered
+    `go_to_sleep` hook (sleep only; an exhaustion change never interrupts a
+    sequence), which clears `sleepPhase`, `sleepSpot`, `sleepSession`,
+    `sleepSpotPickedAt`, `sleepLastSunAngle` and `sleepWakeRequested` and
+    unwinds the pose: Sleeping goes to Crawling (the injury tick's
+    healthy-crawler revive then stands it up, the phase being nil), Crouching
+    to Standing, Crawling is left to the injury tick; a hop in flight is waited
+    out. The durable sequence is NOT reset by load or teardown: a Simulated
+    sleeper resumes; one restored under a non-Simulated sleep mode is
+    abandoned on its first think.
+  * *Retained modifiers.* A pool's stat reads `(base + sum d) x (1 + sum p)`
+    over its active modifiers, and `unit.setStat` stores a BASE, so every
+    writer that works in effective values solves the base
+    (`scripts/lib/stat_base.lua`, `t / (1 + sum p) - sum d`; a modifier is
+    active while `now < expiry`): the transition seed (as before), the facade's
+    `credit` / `debit` for these pools (an effective delta, clamped to
+    [0, maximum], answering the effective change read back) and the resource
+    tick's carry integrator (so the sub-Float remainder stays in the effective
+    domain). No base representable (a multiplier that is not positive, or a
+    negative base) writes nothing. With no active modifier the target is
+    written unchanged, so every unmodified pool is bit-identical to before.
+  * *Persistence.* No wire change. Both pools are Persist exactly while
+    Simulated; a squirrel saved by an earlier build has its stored
+    `sleep_pressure` scrubbed on load (logged once, idempotent), a pinned
+    Simulated one keeps its pin and its exact partial pool.
+  * Gates: hspec `--match "physiology exhaustion and sleep modes"`,
+    `tools/persistence_contract_probe.py` (fresh-process cycles) and the
+    `sleep`, `circadian`, `circadian_species` and `physiology` probes.
+* *Persistence*: pools and meters of a Simulated system, overrides,
+  `combat_engaged` and `tissue_recovering` are Persist exactly; `heart_rate` and `blood_oxygen` of a Simulated cardio are Persist exactly;
+  `circulation` is derived and never stored (a legacy stored one is scrubbed
+  at load in every mode, logged once, S9 #2836); `consciousness`,
+  `concentration`, `state_of_mind`, the strength values and the body-derived
+  maxima are Rebuild (serialized-but-ignored) and rebuilt by
+  `unitResources.onSaveLoaded` before the first paused frame; the structural
+  save comparison excludes exactly those. See `docs/persistence_contract.md`
+  §2 and the inventory's `UnitInstance (physiology stats)` table.
+* *Display until S6*: the status panels still read the legacy pool stats, so a
+  Nominal unit's hydration, hunger and calorie rows show `?`. That is the
+  documented temporary state, not a defect.
+
+Gates: hspec `--match "physiology stat modes"` (S4's acceptance: transitions
+and refusals, Nominal neutrality, the six interface edges, the healthy
+steady state, the small-creature, heat, feedback, virtual-meal and tissue
+cases, and the load normalization and codec round trips),
+`--match "physiology override persistence"` (the units
 v4 wire, capture and restore, the frozen v1/v2/v3 shapes and fixtures, and
 every rejection), `--match "Unit.Physiology"` (the shipped registry and
 profiles, every registry refusal, the resolver, the owned-read contract,
@@ -2401,21 +2720,22 @@ load-integrity error. Hand-stamped locations without a placed instance do
 not acquire an encounter.
 
 Occupants are enemy units and ignore survival requirements (#2754), so
-a roster can only be completed by combat. `nomad_primitive` is listed in
-`scripts/unit_survival_exempt.lua`: in place of thermoregulation and salt
-balance, `scripts/unit_resources.lua` pins its core temperature, salt and
-the hypothermia / hyperthermia / salt-imbalance meters at homeostasis,
-and it has no hydration, hunger or calorie pools. It can therefore never
-go delirious from, or die of, heat, cold, thirst, hunger or electrolyte
-imbalance. Wounds, bleeding, circulation's blood-volume and sepsis
-factors, blood oxygen, pain, injury collapse and the injury failure meters
-all stay live, and a collapsed exempt unit still rises through
-`resourceTick.checkRevive`'s knockdown, injury, consciousness and
-blood-loss gates (it has no resource thresholds to add). A load
-neutralizes exempt survivors in
-`unitResources.onSaveLoaded`, before the first paused frame reads them,
-because a save made before the exemption can carry an occupant whose
-temperature or salt had already drifted. Mandatory gate: the nested
+a roster can only be completed by combat. `nomad_primitive` has the `exempt`
+physiology profile (#2831; it was a script exemption before): every system
+Nominal, so it holds no survival key at all, reads core temperature 37 and
+salt concentration 1.0, never ticks thermoregulation or salt balance, never
+reaches a hypothermia, hyperthermia or salt-imbalance meter, and has no
+hydration, hunger or calorie pools. It can therefore never go delirious from,
+or die of, heat, cold, thirst, hunger or electrolyte imbalance. Wounds,
+bleeding, circulation's blood-volume and sepsis factors, blood oxygen (its
+cardio stays Simulated, S9), pain,
+injury collapse and the injury failure meters all stay live, and a collapsed
+exempt unit still rises through `resourceTick.checkRevive`'s knockdown,
+injury, consciousness and blood-loss gates (it has no Simulated pools to add
+thresholds). A load scrubs a Nominal unit's stored survival keys at the load
+gate and `unitResources.onSaveLoaded` rebuilds the caches before the first
+paused frame reads them, because a save made before the exemption can carry
+an occupant whose temperature or salt had already drifted. Mandatory gate: the nested
 hspec "survival exemption" cases (eight finite examples), which run in
 the CI lane that owns their parent group, `--match "ruin occupant
 survival (#2754)"`. Optional local evidence (#2809): the parent group's
