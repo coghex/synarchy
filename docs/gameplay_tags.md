@@ -1,8 +1,10 @@
 # Gameplay tags: registry and query contract
 
-Status: the pure foundation (#2700, SCN-02 of epic #2698). Runtime
-ownership, persistence, lifecycle hooks, and Lua access are later work
-(see [Not yet integrated](#not-yet-integrated)).
+Status: the pure foundation (#2700, SCN-02 of epic #2698), and live
+ownership, lifecycle and persistence for units, buildings and locations
+(#2701, SCN-03; see [Live tags](#live-tags-units-buildings-and-locations)).
+Plants, items, tiles and Lua access are later work (see
+[Not yet integrated](#not-yet-integrated)).
 
 Gameplay tags are optional, many-to-many labels that scripts attach to
 units, buildings, locations, plants, physical items, and map tiles.
@@ -21,11 +23,18 @@ does not depend on that document.
 
 | Module | Owns |
 |---|---|
-| `Gameplay.Tags.Types` | `GameplayTag`, `NonEmptySet`, the typed targets and `TagCategory` |
+| `Gameplay.Tags.Tag` | `GameplayTag` and `NonEmptySet` (re-exported by `Gameplay.Tags.Types`) |
+| `Gameplay.Tags.Index` | `CategoryIndex`, one category's forward and reverse maps and their one mutation |
+| `Gameplay.Tags.Types` | the typed targets and `TagCategory` |
 | `Gameplay.Tags.Registry` | `TagRegistry`, the mutations, inspection, rebuild, invariant check |
 | `Gameplay.Tags.Query` | `TagQuery`, `TagFilter`, universes/results (`TargetSets`), evaluation |
+| `Gameplay.Tags.Live` | the internal edit, inspect and query operations over the live owners (#2701) |
 
-All three are pure. Nothing in them holds live state.
+The first five are pure. `Gameplay.Tags.Tag` and `Gameplay.Tags.Index`
+import no object identity, which is what lets the unit and building
+managers and the location table hold an index without an import cycle.
+`Gameplay.Tags.Live` is the only module that reads or writes live
+assignments.
 
 ## Tags are not faction tags
 
@@ -107,9 +116,10 @@ The invariants:
 | `registryCounts` | Forward entries, reverse entries, and memberships per category. |
 
 A mutation touches only its own target. Other targets that share the
-same tags keep them. `fromAssignments` is the path a later
-persistence layer will use. It takes forward assignments only, so a
-caller cannot supply a competing reverse index. A target that appears
+same tags keep them. `fromAssignments` rebuilds a whole registry from
+forward assignments only, so a caller cannot supply a competing reverse
+index; the persistence layer rebuilds each owner's index the same way,
+with `Gameplay.Tags.Index.categoryFromAssignments`. A target that appears
 more than once receives the union of its sets, and empty sets add
 nothing. For every registry `r`,
 `fromAssignments (assignments r) ≡ r`. This is an in-memory
@@ -226,22 +236,133 @@ SYNARCHY_TAG_MEMORY=1 cabal test synarchy-test-headless \
   --test-options='--match "Gameplay.Tags memory" +RTS -T -RTS'
 ```
 
+## Live tags: units, buildings and locations
+
+Since #2701 the unit, building and location assignments are held by the
+state that owns the objects, following capability inventory §6.4(a).
+No instance carries a tag field, and `EngineEnv` gained no field.
+
+| Category | Owner field | Key |
+|---|---|---|
+| Units | `UnitManager.umTags` | `UnitId` (global) |
+| Buildings | `BuildingManager.bmTags` | `BuildingId` (global) |
+| Locations | `LocationInstances.lisTags`, in each page's `WorldGenParams` | the page-local `LocationInstanceId` |
+
+Each is a `CategoryIndex`: the forward map is the authority and the
+reverse map is derived. A page owns its own location table, so two
+pages' location 7 are different keys by construction. A query lifts
+each page's keys to `LocationTarget` (`mapCategoryKeysMonotonic`) and
+assembles one registry with `registryFromCategories`.
+
+### Operations and synchronization
+
+`Gameplay.Tags.Live` is the internal Haskell API. It has no Lua
+binding; SCN-06 owns the public verbs.
+
+- `mutateUnitTags`, `mutateBuildingTags` and `mutateLocationTags` apply
+  a `TagEdit` (add, remove, replace, clear) as one `atomicModifyIORef'`
+  of the owning ref. Every in-session writer of those refs already uses
+  `atomicModifyIORef'`, so an edit cannot lose a concurrent update. The
+  same modify checks that the target exists: an edit naming a missing
+  unit, building or location answers `TagEditNoTarget` and creates
+  nothing.
+- A location edit resolves its page once through `wmWorlds` and
+  modifies that page's `wsGenParamsRef`. Every page initialization
+  builds a fresh `WorldState`, so an edit that resolved a page before it
+  was destroyed or replaced lands on the departed incarnation and never
+  reaches the replacement.
+- `unitTagsIn`, `buildingTagsIn` and `locationTagsIn` inspect one
+  target, returning `Nothing` for a target that does not exist.
+- `captureLiveTagView` reads each owner ref once. Within a category the
+  two maps and the query universe come from one value, so a query never
+  sees an index pair mid-update or a tag outside its universe. Across
+  categories and pages the reads are separate, the same guarantee every
+  other cross-manager read has. `runLiveTagQuery` evaluates against
+  that view, with every existing target, tagged or not, in the universe.
+
+### Lifecycle
+
+| Event | Effect on tags |
+|---|---|
+| A unit moves, changes pose, enters the dead pose, or is otherwise changed in place | kept: the instance still exists |
+| A building is changed in place | kept |
+| A location moves through any lifecycle state (hinted, discovered, active, cleared, depleted) | kept: an in-place change to a surviving instance |
+| `UnitDestroy`, `BuildingDestroy` | that target's entry leaves both maps in the same modify that removes the instance; other targets keep shared tag names |
+| `UnitClearAll`, `BuildingClearAll` | every unit or building entry goes |
+| A page is destroyed or replaced (`world.destroy`, `world.init`/`world.initArena` over a live id) | `retirePageUnits`/`retirePageBuildings` remove the old incarnation's entries immediately, under the lifecycle lock, and again in the queued cutoff-bounded clear; entities admitted at or above the cutoff keep theirs. The page's location table, tags and all, goes with its `WorldState` |
+| Destroy-all (exit to menu) | every page's table goes; the clear-alls take the rest |
+| A load publishes | the managers and pages are replaced whole by the restored ones |
+
+New objects inherit nothing. Unit and building ids are monotonic within
+a session, and a load replaces every outgoing assignment. Location ids
+restart at 1 on each page, so a replacement page's location 1 is a new
+key in a new table.
+
+General tags are not faction tags. Tagging changes nothing about an
+instance: not its faction membership, ownership, combat or location
+clearance.
+
+### Persistence
+
+| Component | Version | Carries |
+|---|---|---|
+| `units` | v5 | each page slice's `puTags`, the forward assignments of that page's units |
+| `buildings` | v3 | each page slice's `pbTags` |
+| `world-pages` | v14 | each page core's `pcLocationTags`, beside the frozen location-table DTO |
+
+- **Capture.** The save barrier captures `usnTags`/`bsnTags` by the same
+  page filter as the instances, so each assignment travels with its
+  target's page. The location tags ride the page's own table.
+- **Wire.** `World.Save.Component.GameplayTags` defines the one shape:
+  `[(key, [Text])]`, ascending, forward assignments only. A malformed
+  entry fails the owning component's validation: an empty tag, an empty
+  or repeated tag list, or a key listed twice.
+- **Migration.** `units` v1–v4, `buildings` v1–v2 and `world-pages`
+  v1–v13 migrate explicitly with no assignments. The outgoing v4, v2
+  and v13 slices are frozen as `UnitsDTOv4`, `BuildingsDTOv2` and
+  `PageCoreDTOv13`. Faction tags never populate general tags.
+- **Integrity.** A unit or building assignment whose target exists only
+  on another page is a `wrong-page` error at both the save and the load
+  boundary. An assignment naming no existing target is a
+  `dangling-reference` diagnostic (`sessionIntegrityWarnings`), and the
+  restore drops it with a log line rather than install a tag on nothing.
+- **Restore.** `fromUnitSnapshot` and `fromBuildingSnapshot` rebuild
+  each index from the restored forward assignments. Staging merges the
+  pages and prunes the location tags (`pruneLocationTags`) before
+  publication, so no query ever sees a restored reverse map that was not
+  derived. The load transaction is unchanged: a failure before
+  publication leaves the old session and its tags intact and paused, and
+  a load never merges registries or reads scenario YAML.
+- **Tooling.** `exe:synarchy-save-codec`'s canonical summary lists each
+  page's assignments by target id, and its `seed-tags` operation writes
+  assignments into a save through the real codec, for fixtures and the
+  probe only.
+
+### Gates
+
+- Hspec `--match "Gameplay.Tags"`, which includes
+  `Gameplay.Tags.Persistence`: every live edit and lifecycle path above
+  through the real handlers, page replacement through all three
+  transitions, nonempty codec round trips, migrated empty defaults,
+  dangling and wrong-page handling, and pre-publication failure.
+- `--match "save migrations"`: the tracked `z9-gameplay-tags` fixture
+  (nonempty assignments in all three categories) and every older
+  fixture's empty default, compared exactly.
+- `python3 tools/test_save_compat_audit.py --only-reproducibility`:
+  seeded fixtures are byte-reproducible, and the summary reads none off
+  `z8` and nonempty ones off `z9`.
+- `tools/gameplay_tag_persistence_probe.py` (manual-only): generated
+  world, autosave and arena fresh-process cycles over codec-seeded tags.
+- `tools/persistence_inventory_audit.py` for the inventory rows.
+
 ## Not yet integrated
 
-This slice is a pure value. Later slices of epic #2698 still owe:
+Later slices of epic #2698 still owe:
 
-- **Runtime ownership.** A manager or world owner holds the live
-  registry, not `EngineEnv`, following capability inventory §6.4(a).
-  Universes are enumerated from the object managers and from loaded
-  tile storage.
-- **Persistence.** The forward assignments are classified in the
-  persistence inventory and saved with their owners, and the reverse
-  index is rebuilt with `fromAssignments` on load. A save version or
-  component migration follows the save rules.
-- **Lifecycle hooks.** Destroying an object, or actually removing a
-  tile, clears its assignments. Moves, equipping, and storage keep
-  them. New objects never inherit tags. Chunk eviction must not look
-  like deletion.
+- **Plants, items and tiles.** Their categories exist in the registry
+  but have no live owner yet (SCN-04/05). Their universes come from the
+  flora tables, the item containers and loaded tile storage. Chunk
+  eviction must not look like deletion.
 - **Lua access.** This includes argument decoding and result
   marshalling. `count` and `exists` must return scalars, not lists.
 

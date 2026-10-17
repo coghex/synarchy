@@ -2307,9 +2307,9 @@ every consumer relies on:
   alert debounce; an effective change also runs the registered hooks (the
   source-drinking sequence is abandoned when hydration changes mode; leaving
   Simulated nutrition restores undiscounted strength synchronously). The
-  facade then refreshes the brain at dt 0 before returning (other threads
-  may see a non-v1 cache up to one pass old); derived reads are fresh by
-  construction.
+  facade runs no refresh and the load runs no brain pass (#2838): the
+  values that read physiology are derived on demand, so there is no cache to
+  bring up to date and nothing to see "up to one pass old".
 * *The write gate.* `unit.setStat` refuses (returns false) a key a Nominal or
   Unsupported system owns, and a derived key in either mode; it reads the
   mode inside the same update that stores the value. A Simulated system's
@@ -2344,6 +2344,64 @@ every consumer relies on:
   `tools/persistence_contract_probe.py` and the access audit.
 * *`salt_conc`* is computed on every read (and inside salt's excretion) by one
   shared pure rule and never stored.
+* *Consciousness and mind (S11a, #2838).* Two systems, both registered
+  all-Simulated for every supported species in this slice (S11b applies the
+  SD-23 Nominal-mind defaults; a bodyless definition is Unsupported). 
+  `consciousness` owns nothing stored: it DERIVES `consciousness` and
+  `concentration` on demand through `Unit.Physiology.Mind` (the worst of the
+  temperature, oxygen and salt factors; that, scaled by normalized injury
+  pain, the stamina fraction and caffeine, plus the clamped +0.10 euphoria lift
+  applied exactly once, in the rule), every input read through its own system's
+  mode (a Nominal thermo reads the baseline, cardio oxygen 1.0, salt
+  concentration 1.0). A Nominal consciousness reads 1.0 for both (never
+  delirious, confused or collapsed FROM PHYSIOLOGY; a concussion still knocks a
+  unit out). `mind` owns eleven durable keys (`mood`, `emotional_pain`,
+  `caffeine`, `mental_state`, `mental_since`, `mental_until`,
+  `mental_next_roll_at`, `mental_cooldown_until`, `mental_high_since`,
+  `mental_break_behavior`, `thought_next_at`) with a Nominal read and a seed
+  each (the registry grammar gains a per-key `seed:`: a constant, `now`,
+  `now_plus`, or the named rules `mood_target` and `episode_end`), and derives
+  `state_of_mind` live (a Nominal mind reads mood 1 and emotional pain 0, which
+  makes it the live consciousness read). A Nominal mind has no thoughts,
+  breaks or euphoria, no caffeine stamina-regen bonus, and discards incoming
+  consumable credits. Every reader evaluates the SAME rules against one
+  instance snapshot and one captured game-time sample: the Lua brain and
+  facade (`unit.readPhysio`), combat's `mentalEffectiveness` (hit chance,
+  active dodge), `unit.getMentalEffectiveness` and craft quality/progress.
+  `mentalEffectiveness` runs on the combat thread and inside craft's atomic
+  update, so an unanswerable derived read (a violated precondition, e.g. a
+  Simulated mind with no stored caffeine, or a non-finite rule input) is
+  CONTAINED there as neutral concentration 1.0 / non-euphoric inside the
+  existing finite 0.75-1.10 guard, never raised; the Lua getter and tick
+  report it through their existing paths. **Atomic writes**
+  (`unit.commitPhysio(uid, {key = value, ...})`, S11-F1): the batch is
+  validated key by key through the existing write gate INSIDE the one
+  `atomicModifyIORef'` that stores it, or nothing is stored; values are stored
+  bases with `unit.setStat`'s semantics (clamp at zero); it refuses the whole
+  batch, returning `nil, reason` like `unit.commitStamina`, for a missing
+  unit, a non-table or empty batch, a non-string key, a non-number or
+  non-finite value, or any key `rawWriteAllowed` refuses (a derived key, a
+  Nominal-owned key, a field-backed key). Every mind writer is one batch per
+  event: `brain.tick` (mood, emotional pain, caffeine), `thoughts.tick` (the
+  deadline, with the mood nudge when the thought has one), each mental-state
+  event (a break entry: behavior, deadline, state, since and next roll
+  together; an episode end: cooldown with the next state and its timing; the
+  stressed label; the high-since tracker) and `consumable.drink`'s caffeine and
+  mood (through `physiology.creditBatch`). Unless the mind is Simulated none of
+  them makes an attempt, draws a random number, records a thought or emits an
+  event, and a refused batch publishes none of its consequences nor raises in
+  the per-unit pass. Intra-pass timing is a consequence of deriving on demand:
+  the machine reads `state_of_mind` when it runs, so a same-pass thought
+  nudge reaches it in that pass; the euphoria lift exists exactly from
+  `enterEuphoria` to `endEpisode`; consciousness consumers read current inputs,
+  not the last tick's cache; and a unit seeded at spawn or by repair stores
+  `now` for `thought_next_at` (its first thought is eligible on its first
+  pass), while the mode-change hook re-rolls it to `now + random x 30` on the
+  gameplay stream only on an effective change. Gates: hspec `--match
+  "physiology brain and mental atomicity"`, `--match "Mental effectiveness"`,
+  the access audit (`physiology.commit` is callable only by `brain.lua`,
+  `mental_state.lua` and `thoughts.lua`; `unit.commitPhysio` only by the
+  facade), `tools/persistence_contract_probe.py` and the mental probes.
 * *Cardio and circulation (S9, #2836).* Cardio owns `heart_rate` (healthy
   `RESTING_HR`, a registry constant, 70 bpm) and `blood_oxygen` (1.0) and
   derives `circulation` on demand with `Unit.Physiology.Circulation
