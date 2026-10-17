@@ -155,12 +155,15 @@ payload and still not be durable: it is a CACHE of other state, recomputed
 canonically before the first paused frame, and never read back as authority.
 It is classified **Rebuild deterministically**, with the qualifier
 *serialized-but-ignored* in the inventory's classification cell: the
-circulation, consciousness, concentration and state-of-mind caches, the
+consciousness, concentration and state-of-mind caches, the
 strength values the body recompute re-derives, and the body-derived maxima.
+(Circulation was one until S9, #2836: it is now derived on demand and never
+stored, like `salt_conc`, so a legacy stored copy is scrubbed at load in every
+mode rather than ignored.)
 The wire is unchanged (the stat map is still serialized wholesale, so no
 filter and no codec change), and the load simply does not trust those values:
 `unitResources.onSaveLoaded` runs `unit.recomputeBody` and refreshes
-circulation and the brain at dt 0. Consequently a save taken a tick before
+the brain at dt 0. Consequently a save taken a tick before
 that recompute may hold a stale cache and a save taken after it a canonical
 one, and the structural save comparison
 (`World.Save.Physiology.withoutRebuiltCaches`, used by the save codec's

@@ -1,0 +1,73 @@
+{
+ "size": "1920x1080",
+ "units": {
+  "simulated": 1,
+  "nominal": 2,
+  "tiller": 3
+ },
+ "captures": [
+  {
+   "frame": "1920x1080_simulated_hr",
+   "note": "acolyte (cardio Simulated, the shipped default), window hr (cardio=simulated pin=nil hr=70.0 o2=1.0 circ=0.79546827077866 stored_circ=nil)",
+   "selected": "1",
+   "offset": 2,
+   "rows": "37.0\u00b0C | 70 bpm | 100%"
+  },
+  {
+   "frame": "1920x1080_simulated_circ",
+   "note": "acolyte (cardio Simulated, the shipped default), window circ (cardio=simulated pin=nil hr=70.0 o2=1.0 circ=0.79546827077866 stored_circ=nil)",
+   "selected": "1",
+   "offset": 4,
+   "rows": "100% | 100% | 80%"
+  },
+  {
+   "frame": "1920x1080_nominal_hr",
+   "note": "acolyte pinned Nominal, frail constitution (circulation stays live), window hr (cardio=nominal pin=nominal hr=70.0 o2=1.0 circ=0.59341889619827 stored_circ=nil)",
+   "selected": "2",
+   "offset": 2,
+   "rows": "37.0\u00b0C | Nominal 70 bpm | Nominal 100%"
+  },
+  {
+   "frame": "1920x1080_nominal_circ",
+   "note": "acolyte pinned Nominal, frail constitution (circulation stays live), window circ (cardio=nominal pin=nominal hr=70.0 o2=1.0 circ=0.59341889619827 stored_circ=nil)",
+   "selected": "2",
+   "offset": 4,
+   "rows": "Nominal 100% | 100% | 59%"
+  },
+  {
+   "frame": "1920x1080_nominal_tooltip",
+   "note": "Nominal tooltip hover, Heart Rate row",
+   "selected": "2",
+   "offset": 2,
+   "rows": "37.0\u00b0C | Nominal 70 bpm | Nominal 100%"
+  },
+  {
+   "frame": "1920x1080_tiller_w0",
+   "note": "tiller (bodyless: cardio Unsupported), window w0 (cardio=nil pin=nil hr=nil o2=nil circ=nil stored_circ=nil)",
+   "selected": "3",
+   "offset": 0,
+   "rows": "0.0 / 5.2 L | 0.50 | 100%"
+  },
+  {
+   "frame": "1920x1080_tiller_w1",
+   "note": "tiller (bodyless: cardio Unsupported), window w1 (cardio=nil pin=nil hr=nil o2=nil circ=nil stored_circ=nil)",
+   "selected": "3",
+   "offset": 1,
+   "rows": "0.50 | 100% | Bleeding"
+  },
+  {
+   "frame": "1920x1080_nominal_conditions",
+   "note": "the Nominal acolyte's conditions (punctured lung) (cardio=nominal pin=nominal hr=70.0 o2=1.0 circ=0.59341889619827 stored_circ=nil)",
+   "selected": "2",
+   "offset": 13,
+   "rows": "12.1 / 26.9 kg | Suffocating (\u2026 | Collapsed lung"
+  },
+  {
+   "frame": "1920x1080_simulated_switched_hr",
+   "note": "the Simulated acolyte after cardio pinned Nominal through the facade (cardio=nominal pin=nominal hr=70.0 o2=1.0 circ=0.79546827077866 stored_circ=nil)",
+   "selected": "1",
+   "offset": 2,
+   "rows": "37.0\u00b0C | Nominal 70 bpm | Nominal 100%"
+  }
+ ]
+}

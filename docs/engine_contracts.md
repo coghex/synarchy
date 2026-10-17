@@ -2253,7 +2253,8 @@ every consumer relies on:
   AI need for its resource. *Unsupported* is not Nominal: it never ticks,
   holds nothing, reads `nil` (dependents read the declared substitutes, core
   37.0 for circulation, brain and fever; `salt_conc` and `sweat_factor` 1.0;
-  hydration and nutrition fractions 1.0). *Simulated* is today's behavior,
+  hydration and nutrition fractions 1.0; heart rate 70 and blood oxygen 1.0
+  for circulation, brain and the hypoxia oxygen path). *Simulated* is today's behavior,
   with the owned keys present: a missing one is an invariant error, never a
   first-tick fill.
 * *Profiles* (D-10, in `data/units/*.yaml`; the final SD-10 table, S7, #2833):
@@ -2263,13 +2264,20 @@ every consumer relies on:
   Simulated: S7's one effective change from S4, the squirrel's salt going
   Nominal, so it holds no salt state and has no cramps);
   `nomad_primitive` is `exempt`; a definition with no `body:` is Unsupported
-  throughout. The three INTENTIONAL behavior changes of activation are the
+  throughout. Cardio (S9, #2836) is Simulated in EVERY profile, `exempt`
+  included, because #2754 kept the nomad's heart and oxygen live. The three
+  INTENTIONAL behavior changes of activation are the
   bodyless Unsupported units, the virtual meals of a Simulated salt over a
   Nominal nutrition (below), and the depletion-only recovery of a wasted unit
-  under a Nominal nutrition (below).
-* *Tick order* (`scripts/unit_resources.lua`): cardio, then circulation (always
-  on, from the EFFECTIVE core temperature), then the Simulated systems that
-  tick themselves in registry order (thermo before salt), then brain,
+  under a Nominal nutrition (below). S9 adds a fourth: a bodyless unit's
+  cardio is Unsupported (it used to integrate tachycardia and depressed
+  oxygen from a 0 L blood seed), and cardio's oxygen delivery no longer lags
+  circulation by a tick.
+* *Tick order* (`scripts/unit_resources.lua`): cardio first (only while it is
+  Simulated; its registry position is last but it is ticked ahead of the
+  loop; circulation is derived on demand and is no longer a step), then the
+  Simulated systems that tick themselves in registry order (thermo before
+  salt), then brain,
   thoughts, mental state, injuries and the failure meters (an owned meter
   only while its system is Simulated; injury meters always), then the
   per-def pools (`hydration`, `hunger`, `calories`, `stamina`, `exhaustion`
@@ -2297,8 +2305,9 @@ every consumer relies on:
   alert debounce; an effective change also runs the registered hooks (the
   source-drinking sequence is abandoned when hydration changes mode; leaving
   Simulated nutrition restores undiscounted strength synchronously). The
-  facade then refreshes circulation and the brain at dt 0 before returning
-  (other threads may see a non-v1 cache up to one pass old).
+  facade then refreshes the brain at dt 0 before returning (other threads
+  may see a non-v1 cache up to one pass old); derived reads are fresh by
+  construction.
 * *The write gate.* `unit.setStat` refuses (returns false) a key a Nominal or
   Unsupported system owns, and a derived key in either mode; it reads the
   mode inside the same update that stores the value. A Simulated system's
@@ -2306,6 +2315,30 @@ every consumer relies on:
   Nominal; modifiers on a maximum still move the Nominal healthy value.
 * *`salt_conc`* is computed on every read (and inside salt's excretion) by one
   shared pure rule and never stored.
+* *Cardio and circulation (S9, #2836).* Cardio owns `heart_rate` (healthy
+  `RESTING_HR`, a registry constant, 70 bpm) and `blood_oxygen` (1.0) and
+  derives `circulation` on demand with `Unit.Physiology.Circulation
+  .circulationRule`, the pure port of the old `circulation.compute`: blood
+  fraction (`Unit.Blood.bloodView`, unmoded until S10: stored volume over the
+  BASE body mass times 0.075), fitness, sepsis, cold vasoconstriction and the
+  heart-rate factor. Reads initialize, roll and cache nothing, evaluate
+  modifiers at the read's game time and are coherent the instant an input
+  changes. The registry's derived grammar gains `healthy: live` and the
+  substitute grammar `live`: **under a Nominal cardio circulation is still
+  computed** with only the heart-rate factor at exactly 1.0 (SD-21), so blood
+  loss, sepsis, fitness and cold still lower it and still drive thermo's heat
+  loss and frostbite; a Nominal `heart_rate` / `blood_oxygen` read 70 / 1.0
+  and are not stored; an Unsupported cardio (no body) reads `nil` for all
+  three. The `hypoxia` meter belongs to no system: its driver stays
+  `max(oxygen path, pulmonaryFailure)`, a Nominal cardio zeroes only the
+  oxygen path (so a punctured lung still suffocates), and brain's oxygen
+  input reads 1.0. Raw `unit.setStat` of `circulation` is refused in every
+  mode. Cardio's integrators write the stored base whose EFFECTIVE value is
+  the integrated one under the key's retained modifiers. Lua reaches the
+  blood fraction through the pure read verb `unit.readBloodView`;
+  `unit.getBlood` is unchanged until S10. Gates: hspec `--match "physiology
+  cardio and circulation modes"`, `tools/persistence_contract_probe.py`
+  (fresh-process cycles), the `physiology` probe and the access audit.
 * *Nutrition's effects*: digestion, catabolism, the lean-floor starvation
   death, surplus regrowth, the strength discount and the nutrition fat-floor
   organ-failure contribution inside stamina all belong to a Simulated
@@ -2419,7 +2452,9 @@ every consumer relies on:
     `tools/persistence_contract_probe.py` (fresh-process cycles) and the
     `sleep`, `circadian`, `circadian_species` and `physiology` probes.
 * *Persistence*: pools and meters of a Simulated system, overrides,
-  `combat_engaged` and `tissue_recovering` are Persist exactly; `circulation`, `consciousness`,
+  `combat_engaged` and `tissue_recovering` are Persist exactly; `heart_rate` and `blood_oxygen` of a Simulated cardio are Persist exactly;
+  `circulation` is derived and never stored (a legacy stored one is scrubbed
+  at load in every mode, logged once, S9 #2836); `consciousness`,
   `concentration`, `state_of_mind`, the strength values and the body-derived
   maxima are Rebuild (serialized-but-ignored) and rebuilt by
   `unitResources.onSaveLoaded` before the first paused frame; the structural
@@ -2663,7 +2698,8 @@ salt concentration 1.0, never ticks thermoregulation or salt balance, never
 reaches a hypothermia, hyperthermia or salt-imbalance meter, and has no
 hydration, hunger or calorie pools. It can therefore never go delirious from,
 or die of, heat, cold, thirst, hunger or electrolyte imbalance. Wounds,
-bleeding, circulation's blood-volume and sepsis factors, blood oxygen, pain,
+bleeding, circulation's blood-volume and sepsis factors, blood oxygen (its
+cardio stays Simulated, S9), pain,
 injury collapse and the injury failure meters all stay live, and a collapsed
 exempt unit still rises through `resourceTick.checkRevive`'s knockdown,
 injury, consciousness and blood-loss gates (it has no Simulated pools to add

@@ -57,7 +57,7 @@ removed the switch with the thing it guarded. Now:
 | `setMode(uid, system, mode [, values])` → `true, changed` or `nil, reason` | the ONLY caller of `unit.setPhysioMode`: seeds or scrubs atomically, resets the carry / regrowth / alert-debounce caches, runs the change hooks on an EFFECTIVE change, refreshes the caches, and refuses atomically (see the engine contract) |
 | `clearMode(uid, system)` | the same for `unit.clearPhysioMode` (removes the override) |
 | `applyEngagement(uid)` → outcome, code | the ONLY caller of `unit.applyCombatEngagement` (#2834, SD-20): applies a pending combat engagement in one atomic update (`transitioned`, `latched`, `refusedDead`, `seedUnrepresentable`), runs the hooks and the refresh on `transitioned`, and logs a refused seed once per unit and reason |
-| `refresh(uid)` | recompute circulation, then the brain at dt 0 |
+| `refresh(uid)` | recompute the brain's cache at dt 0 (circulation is derived on demand since #2836, so there is nothing to refresh) |
 | `onModeChanged(id, system, fn)` | register a hook `fn(uid, system, from, to)`, replaced by id |
 
 `credit` / `debit` carry the per-key rules of the callers they replaced
@@ -112,13 +112,15 @@ systems.
 | Thermo calorie throttle | `thermo.lua` | `fraction("calories")` |
 | Salt's hydration term, concentration, cramps, sweat factor | `salts.lua` | `fraction`, `get("salt_conc")` |
 | Brain consciousness inputs and hunger fraction | `brain.lua` (`fracOf` is a dynamic-key helper shared with stamina) | `get`, `fraction` |
-| Cardio temperature input | `cardio.lua` | `get("core_temp")` |
+| Cardio temperature input, its own integrators and blood fraction (#2836) | `cardio.lua` | `get("core_temp")`, `get("heart_rate")` / `get("blood_oxygen")`, `get("circulation")`, and the pure `unit.readBloodView` for the blood fraction |
+| Circulation reads: thermo's heat loss and frostbite, the Status row | `thermo.lua`, `circulation.lua`, `unit_info_v2_status.lua` | `get("circulation")`: derived on demand; live under a Nominal cardio (SD-21); `nil` only when cardio is Unsupported |
+| Brain's oxygen input and the hypoxia driver | `brain.lua`, `cardio.lua` | `get("blood_oxygen") or 1.0` (a Nominal or Unsupported cardio reads 1.0) |
 | Starvation calorie fraction | `starvation.lua` | `fraction` |
 | Status panel: `salt_conc` row text and colour, hydration conditions (`lowFrac`), pool row colours (`fracColorFn`), meter conditions | `unit_info_v2_status.lua`, `unit_info_v2_stat_defs.lua` | `get`, `fraction` |
 | Wound healing, blood-recovery nutrition, fever suppression | `Healing.hs` / `Wounds/Tick.hs` | `physioConsumerView` |
-| Physiology probe aggregate, stomach and hydration observations | `tools/physiology_probe.py` | `unit.readPhysio` (circulation remains an unowned pass-through read) |
+| Physiology probe aggregate, stomach and hydration observations | `tools/physiology_probe.py` | `unit.readPhysio` (circulation is the derived key of the cardio system since #2836) |
 
-Not migrated, by design: circulation, blood, injury and mental-state
+Not migrated, by design: blood (S10), injury and mental-state
 redesigns; the engine's own `unit.feed` / `unit.getCalories` food primitives
 (`unit.feed` refuses a unit with no `hunger`, which is every Nominal one);
 S6's presentation.
