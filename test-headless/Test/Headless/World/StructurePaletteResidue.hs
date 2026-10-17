@@ -366,6 +366,7 @@ encodedPalettePaths env = do
             , sgLiveCamera     = LiveCameraSnapshot
                 { lcsOwnerPage = Just visiblePage
                 , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceNorth }
+            , sgItemTags = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
             }
         pages = [ blankPageSnapshot visiblePage genParams ]

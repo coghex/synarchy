@@ -112,7 +112,7 @@ import qualified Data.Set as Set
 import Data.Aeson ((.:), (.:?), (.!=))
 import Control.Monad (foldM)
 import Gameplay.Tags.Index (categoryForward, setCategoryTags)
-import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag)
+import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag, itemTargetId, mkItemTarget)
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Save.Envelope.Types (EnvelopeError(..))
@@ -274,6 +274,14 @@ canonicalSummary meta snap luaComponentCount isMigrated = Aeson.object
       -- carrying no such component really restores.
     , "portableKnowledge" .= map dumpPortableRecord
         (sortOn fst (HM.toList (pkRecords (snapPortableKnowledge snap))))
+      -- #2703: the session's physical-item gameplay tag assignments,
+      -- keyed by item instance id, SESSION-scoped like the item
+      -- allocator. Absent before core-session v2, which the Baselines
+      -- reader reads as "no assignments".
+    , "itemTags" .=
+        [ Aeson.object [ "id" .= itemTargetId t
+                       , "tags" .= map gameplayTagText (Set.toAscList ts) ]
+        | (t, ts) ← Map.toAscList (snapItemTags snap) ]
     , "isMigratedLegacyBaseline" .= isMigrated
     ]
   where
@@ -781,9 +789,12 @@ writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode
 --   @--spec@ is JSON:
 --
 --   > {"units":     [{"page": "main_world", "id": 1, "tags": ["a", "b"]}],
---   >  "buildings": [...], "locations": [...]}
+--   >  "buildings": [...], "locations": [...],
+--   >  "items":     [{"id": 42, "tags": ["c"]}]}
 --
---   An empty @tags@ list clears the target. Each category is optional.
+--   Items (#2703) carry no page: their assignments are session-scoped
+--   and keyed by item instance id, which must not be 0. An empty @tags@
+--   list clears the target. Each category is optional.
 runSeedTags ∷ [String] → IO ()
 runSeedTags args = do
     (fixturePath, rest0) ← orUsageFailure (requireFlag "--fixture" args)
@@ -819,21 +830,35 @@ instance Aeson.FromJSON SeedEntry where
     parseJSON = Aeson.withObject "seed entry" $ \o →
         SeedEntry <$> o .: "page" <*> o .: "id" <*> o .: "tags"
 
+-- | One item's complete tag set (#2703): session-scoped, so no page.
+data ItemSeedEntry = ItemSeedEntry { iseId ∷ !Word64, iseTags ∷ ![Text] }
+
+instance Aeson.FromJSON ItemSeedEntry where
+    parseJSON = Aeson.withObject "item seed entry" $ \o →
+        ItemSeedEntry <$> o .: "id" <*> o .: "tags"
+
 data TagSeed = TagSeed
     { tsUnitSeeds ∷ ![SeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
-    , tsLocationSeeds ∷ ![SeedEntry] }
+    , tsLocationSeeds ∷ ![SeedEntry], tsItemSeeds ∷ ![ItemSeedEntry] }
 
 instance Aeson.FromJSON TagSeed where
     parseJSON = Aeson.withObject "tag seed" $ \o → TagSeed
         <$> o .:? "units" .!= [] <*> o .:? "buildings" .!= []
-        <*> o .:? "locations" .!= []
+        <*> o .:? "locations" .!= [] <*> o .:? "items" .!= []
 
 applyTagSeed ∷ TagSeed → SessionSnapshot → Either String SessionSnapshot
 applyTagSeed seed snap0 =
     foldM (entry onUnit) snap0 (tsUnitSeeds seed)
         ≫= \s1 → foldM (entry onBuilding) s1 (tsBuildingSeeds seed)
         ≫= \s2 → foldM (entry onLocation) s2 (tsLocationSeeds seed)
+        ≫= \s3 → foldM itemEntry s3 (tsItemSeeds seed)
   where
+    itemEntry snap e = do
+        t ← maybe (Left "item instance id 0 names no item") Right
+                  (mkItemTarget (iseId e))
+        tags ← maybe (Left ("empty tag for item " ⧺ show (iseId e)))
+                     (Right . Set.fromList) (traverse mkGameplayTag (iseTags e))
+        pure snap { snapItemTags = setOrClear t tags (snapItemTags snap) }
     entry f snap e = do
         tags ← maybe (Left ("empty tag for " ⧺ T.unpack (sePage e) ⧺ "/"
                             ⧺ show (seId e)))

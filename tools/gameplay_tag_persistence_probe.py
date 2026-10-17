@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Fresh-process gameplay-tag persistence probe (issue #2701, SCN-03 of
-epic #2698).
+epic #2698; physical items added by #2703, SCN-04).
 
 General gameplay tags on units, buildings and locations live with their
 owners and ride the ordinary `units` (v5), `buildings` (v3) and
@@ -9,6 +9,14 @@ owners and ride the ordinary `units` (v5), `buildings` (v3) and
 proves what only separate processes can: that saved assignments, with
 their target identities, survive ordinary load -> save -> fresh-process
 load for a GENERATED world and an ARENA, and through the AUTOSAVE path.
+
+#2703 adds PHYSICAL-ITEM assignments, session-scoped and keyed by item
+instance id (`core-session` v2): carried, nested, equipped, worn,
+building-stored and ground items. Between the loads the generated leg
+moves tagged items between owners (unit to unit, unit to ground),
+consumes one and destroys a ground one through the real Lua verbs, and
+every later generation must carry exactly the survivors' assignments,
+with their ids, and nothing for the destroyed items.
 
 There is no public tag verb yet (SCN-06), so assignments are seeded the
 only way that exists: `exe:synarchy-save-codec seed-tags`, which decodes
@@ -203,6 +211,52 @@ def page_tags(chk: Checks, tmp: str, root: str, slot: str, page: str) -> dict:
     return {}
 
 
+def item_tags(chk: Checks, tmp: str, root: str, slot: str) -> dict:
+    """The session's item assignments (#2703), as the compiled codec
+    reads them off the save on disk: {instance id: [tags]}."""
+    out = Path(tmp) / f"{slot}.items.json"
+    ok, tail = dump_canonical_summary(Path(slot_path(root, slot)), out)
+    chk.ok(ok, f"canonical summary of '{slot}'" + ("" if ok else f": {tail}"))
+    if not ok:
+        return {}
+    summary = json.loads(out.read_text())
+    return {e["id"]: e["tags"] for e in summary.get("itemTags", [])}
+
+
+def summary_inventory(tmp: str, root: str, slot: str, page: str, uid: int) -> list:
+    """One unit's inventory rows (instanceId, defName, contents) off the
+    save's canonical summary."""
+    out = Path(tmp) / f"{slot}.inv.json"
+    ok, _tail = dump_canonical_summary(Path(slot_path(root, slot)), out)
+    if not ok:
+        return []
+    for p in json.loads(out.read_text()).get("pages", []):
+        if p.get("pageId") == page:
+            for u in p.get("units", []):
+                if u.get("id") == uid:
+                    return u.get("inventory", [])
+    return []
+
+
+def first_id(rows: list, def_name: str, nth: int = 0):
+    ids = [r["instanceId"] for r in rows if r.get("defName") == def_name]
+    return ids[nth] if len(ids) > nth else None
+
+
+def lua_rows(port: int, expr: str) -> list:
+    """[(instanceId, defName, extra)] from a Lua array of item tables,
+    flattened to a string so an empty array is unambiguous."""
+    raw = send(port, "local out = {} for _, r in ipairs((" + expr + ") or {}) do "
+                     "out[#out + 1] = tostring(r.instanceId) .. ':' .. tostring(r.defName) "
+                     ".. ':' .. tostring(r.id) end return table.concat(out, ';')")
+    rows = []
+    for part in raw.strip('"').split(";"):
+        bits = part.split(":")
+        if len(bits) == 3 and as_int(bits[0]) is not None:
+            rows.append((as_int(bits[0]), bits[1], as_int(bits[2])))
+    return rows
+
+
 def spec_tags(spec: dict, page: str) -> dict:
     return {cat: {e["id"]: sorted(e["tags"]) for e in spec.get(cat, [])
                   if e["page"] == page and e["tags"]}
@@ -241,9 +295,43 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
                 time.sleep(0.5)
         chk.ok(lid is not None and lid >= 1,
                f"page '{PAGE}' has a placed location to tag (instance {lid})")
+        # #2703: items in every owner category. A kit brings nested
+        # contents; the radio goes into the cargo hold's storage; a
+        # ration lies on the ground; the dagger is unequipped and
+        # re-equipped so its id is readable, and stays equipped.
+        chk.ok(send(port, f"return unit.addItem({u1}, 'first_aid_kit', 0)").strip() == "true",
+               "the acolyte received a first-aid kit with its default contents")
+        chk.ok(send(port, f"return unit.depositToCargo({u1}, {bid}, 'radio')").strip() == "true",
+               "the radio was deposited into the cargo hold's storage")
+        chk.ok(send(port, f"return equipment.unequip({u1}, 'right_hand')").strip() == "true",
+               "the dagger was unequipped")
+        inv0 = lua_rows(port, f"unit.getInventory({u1})")
+        dagger = first_id([{"instanceId": i, "defName": d} for i, d, _ in inv0], "steel_dagger")
+        chk.ok(send(port, f"return equipment.equip({u1}, 'right_hand', 'steel_dagger')").strip() == "true",
+               "the dagger was re-equipped")
+        gid = as_int(send(port, f"return item.spawnGround('rations', 1.5, 1.5, nil, '{PAGE}')"))
+        ground = [r for r in lua_rows(port, "item.listGround()") if r[2] == gid]
+        ground_id = ground[0][0] if ground else None
+        worn = lua_rows(port, f"equipment.getAccessories({u1})")
+        stored = lua_rows(port, f"building.getStorage({bid})")
         save_and_wait(chk, port, PAGE, "base")
     finally:
         quit_engine(port, proc)
+
+    inv = summary_inventory(tmp, root, "base", PAGE, u1)
+    kit = first_id(inv, "first_aid_kit")
+    kit_row = next((r for r in inv if r.get("instanceId") == kit), {})
+    bandage = first_id(kit_row.get("contents", []), "bandage")
+    items = {
+        "rationsA": first_id(inv, "rations", 0), "rationsB": first_id(inv, "rations", 1),
+        "pick": first_id(inv, "pick_steel"), "axe": first_id(inv, "axe_steel"),
+        "kit": kit, "bandage": bandage, "dagger": dagger,
+        "worn": worn[0][0] if worn else None,
+        "stored": first_id([{"instanceId": i, "defName": d} for i, d, _ in stored], "radio"),
+        "ground": ground_id,
+    }
+    chk.ok(all(v is not None for v in items.values()),
+           f"every owner category holds an item to tag: {items}")
 
     seeded = {
         "units": [{"page": PAGE, "id": u1, "tags": ["defender", "meeting_point"]},
@@ -252,11 +340,24 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         "buildings": [{"page": PAGE, "id": bid, "tags": ["depot"]}],
         "locations": [{"page": PAGE, "id": lid, "tags": ["landmark"]},
                       {"page": PAGE, "id": 777, "tags": ["ghost"]}],
+        "items": [{"id": items["rationsA"], "tags": ["food", "consumed_later"]},
+                  {"id": items["rationsB"], "tags": ["food"]},
+                  {"id": items["pick"], "tags": ["tool", "moved_to_unit"]},
+                  {"id": items["axe"], "tags": ["tool", "dropped"]},
+                  {"id": items["kit"], "tags": ["medical"]},
+                  {"id": items["bandage"], "tags": ["medical", "nested"]},
+                  {"id": items["dagger"], "tags": ["weapon"]},
+                  {"id": items["worn"], "tags": ["worn"]},
+                  {"id": items["stored"], "tags": ["stored"]},
+                  {"id": items["ground"], "tags": ["ground", "destroyed_later"]},
+                  {"id": 99999, "tags": ["ghost"]}],
     }
     outgoing = {
         "units": [{"page": PAGE, "id": u1, "tags": ["outgoing"]}],
         "buildings": [{"page": PAGE, "id": bid, "tags": ["outgoing"]}],
         "locations": [{"page": PAGE, "id": lid, "tags": ["outgoing"]}],
+        "items": [{"id": items["rationsB"], "tags": ["outgoing"]},
+                  {"id": items["kit"], "tags": ["outgoing"]}],
     }
     seed(chk, root, tmp, "base", "seeded", seeded)
     seed(chk, root, tmp, "base", "outgoing", outgoing)
@@ -268,6 +369,15 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     as_written = page_tags(chk, tmp, root, "seeded", PAGE)
     chk.ok(as_written.get("units", {}).get(9999) == ["ghost"],
            "the seeded save really carries the dangling unit assignment")
+    seeded_items = item_tags(chk, tmp, root, "seeded")
+    chk.ok(seeded_items.get(99999) == ["ghost"] and len(seeded_items) == 11,
+           f"the seeded save carries all eleven item assignments, the dangling "
+           f"one included (got {seeded_items})")
+    # Survivors after engine B's changes: the consumed ration and the
+    # destroyed ground ration lose theirs; the dangling one is dropped.
+    gone = {items["rationsA"], items["ground"], 99999}
+    expected_items = {e["id"]: sorted(e["tags"]) for e in seeded["items"]
+                      if e["id"] not in gone}
 
     print("=== engine B: fresh process, load 'outgoing', load 'seeded' over it, save 'gen1' ===")
     log_b = os.path.join(tmp, "engineB.log")
@@ -276,6 +386,18 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         bootstrap_defs(port)
         load_and_wait(chk, port, "outgoing")
         load_and_wait(chk, port, "seeded")
+        # #2703: ownership changes and cleanup through the real verbs.
+        moved = send(port, f"return unit.transferItemToUnit({u1}, {u2}, 'pick_steel', "
+                           f"{items['pick']})")
+        chk.ok(moved.strip() == "true", f"the tagged pick moved unit to unit (got {moved!r})")
+        dropped_axe = send(port, f"return unit.dropItemById({u1}, {items['axe']})")
+        chk.ok(dropped_axe.strip() == "true", f"the tagged axe was dropped (got {dropped_axe!r})")
+        eaten = send(port, f"return unit.removeItem({u1}, 'rations')")
+        chk.ok(eaten.strip() == "true", f"the first tagged ration was consumed (got {eaten!r})")
+        row = [r for r in lua_rows(port, "item.listGround()") if r[0] == items["ground"]]
+        removed = send(port, f"return item.removeGround({row[0][2]})") if row else "no row"
+        chk.ok(removed.strip() == "true",
+               f"the tagged ground ration was destroyed (got {removed!r})")
         save_and_wait(chk, port, PAGE, "gen1")
     finally:
         quit_engine(port, proc)
@@ -283,9 +405,13 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     dropped = [line for line in engine_log.splitlines()
                if "dropped gameplay tags" in line]
     chk.ok(any("unit id" in line and "9999" in line for line in dropped)
-           and any("location id" in line and "777" in line for line in dropped),
-           f"the load reported dropping both dangling assignments "
-           f"(diagnostics: {dropped})")
+           and any("location id" in line and "777" in line for line in dropped)
+           and any("item id" in line and "99999" in line for line in dropped),
+           f"the load reported dropping the dangling unit, location and item "
+           f"assignments (diagnostics: {dropped})")
+    moved_to = [r.get("instanceId") for r in summary_inventory(tmp, root, "gen1", PAGE, u2)]
+    chk.ok(items["pick"] in moved_to,
+           f"'gen1' holds the tagged pick in the second unit's inventory (got {moved_to})")
 
     print("=== engine C: fresh process, load 'gen1', save 'gen2', one autosave cycle ===")
     proc = boot(port, log=os.path.join(tmp, "engineC.log"),
@@ -326,6 +452,10 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
                f"(got {got}, expected {expected})")
         chk.ok(not (all_tag_names(got) & {"outgoing", "ghost"}),
                f"'{slot}' carries no outgoing-session and no dangling tag")
+        got_items = {i: sorted(ts) for i, ts in item_tags(chk, tmp, root, slot).items()}
+        chk.ok(got_items == expected_items,
+               f"'{slot}' carries exactly the surviving items' assignments, by id "
+               f"(got {got_items}, expected {expected_items})")
 
 
 def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
@@ -346,10 +476,16 @@ def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     finally:
         quit_engine(port, proc)
 
+    arena_inv = summary_inventory(tmp, root, "arena0", ARENA, uid)
+    arena_items = [r["instanceId"] for r in arena_inv[:2]]
+    chk.ok(len(arena_items) == 2, f"the arena unit carries items to tag (got {arena_items})")
     spec = {"units": [{"page": ARENA, "id": uid, "tags": ["guard", "shared"]}],
-            "buildings": [{"page": ARENA, "id": bid, "tags": ["shared"]}]}
+            "buildings": [{"page": ARENA, "id": bid, "tags": ["shared"]}],
+            "items": [{"id": i, "tags": ["shared", f"arena_item_{n}"]}
+                      for n, i in enumerate(arena_items)]}
     seed(chk, root, tmp, "arena0", "arena_seeded", spec)
     expected = spec_tags(spec, ARENA)
+    expected_items = {e["id"]: sorted(e["tags"]) for e in spec["items"]}
 
     prev = "arena_seeded"
     for letter, nxt in (("F", "arena1"), ("G", "arena2")):
@@ -366,6 +502,10 @@ def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         chk.ok(got == expected,
                f"'{nxt}' carries exactly the arena's saved assignments "
                f"(got {got}, expected {expected})")
+        got_items = {i: sorted(ts) for i, ts in item_tags(chk, tmp, root, nxt).items()}
+        chk.ok(got_items == expected_items,
+               f"'{nxt}' carries exactly the arena's item assignments "
+               f"(got {got_items}, expected {expected_items})")
         prev = nxt
 
 

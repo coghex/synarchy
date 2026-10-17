@@ -59,7 +59,7 @@ import Location.Instance
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryAssignments)
-import Gameplay.Tags.Tag (gameplayTagText)
+import Gameplay.Tags.Tag (gameplayTagText, itemTargetId)
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import Language.Etymology
@@ -488,6 +488,10 @@ data ExpectedSummary = ExpectedSummary
       -- ^ #2512. Defaults to @[]@, which is what every fixture written
       --   before the component existed genuinely restores: no crate has
       --   ever been hefted or opened.
+    , esItemTags ∷ ![(Word64, [Text])]
+      -- ^ #2703: the session's item gameplay-tag assignments, ascending
+      --   by item id. Absent before core-session v2 and read as NONE,
+      --   which is what every such payload restores.
     , esIsMigratedLegacyBaseline ∷ !Bool
     }
 
@@ -498,6 +502,7 @@ instance Aeson.FromJSON ExpectedSummary where
         <*> o .: "activePage" <*> o .: "visiblePages"
         <*> o .: "pages" <*> o .: "luaComponentCount"
         <*> o .:? "portableKnowledge" .!= []
+        <*> (map unTagged ⊚ (o .:? "itemTags" .!= []))
         <*> o .: "isMigratedLegacyBaseline"
 
 decodeJSONFile ∷ Aeson.FromJSON a ⇒ FilePath → IO (Either String a)
@@ -620,6 +625,14 @@ manifestFixturesSpec =
                         checkPortableKnowledge
                             (snapPortableKnowledge snap)
                             (esPortableKnowledge expected)
+
+                        -- #2703: compared EXACTLY, so the tagged
+                        -- fixture proves every item assignment and its
+                        -- physical id survive decode, and every older
+                        -- fixture proves its migration yields none.
+                        [ (itemTargetId t, map gameplayTagText (Set.toAscList ts))
+                          | (t, ts) ← Map.toAscList (snapItemTags snap) ]
+                            `shouldBe` esItemTags expected
 
                         snapGameTime snap `shouldBe` esGameTime expected
                         snapNextItemId snap `shouldBe` esNextItemId expected

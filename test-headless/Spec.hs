@@ -464,6 +464,7 @@ import qualified Test.Headless.Unit.FactionProfileWire as UnitFactionProfileWire
 import qualified Test.Headless.Gameplay.Tags as GameplayTags
 import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
 import qualified Test.Headless.Gameplay.TagsPersistence as GameplayTagsPersistence
+import qualified Test.Headless.Gameplay.TagsItems as GameplayTagsItems
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -694,6 +695,8 @@ restLane = do
     -- spawns units and drains the unit queue BY HAND against the live
     -- world thread, which the shared-worlds engine must not see either.
     aroundAll withHeadlessEngine SolidificationOccupants.spec
+    -- #2703: the item-tag cleanup on the same real reaction path.
+    aroundAll withHeadlessEngine SolidificationOccupants.itemTagSpec
     -- Own engine (#2477): DESTROYS and re-creates a page under the same
     -- id, and drives the sim's own command handler and emit step by
     -- hand against the live world thread -- none of which the
@@ -1372,6 +1375,7 @@ restLane = do
     -- Own engine for the group (#2701): the real unit, building and
     -- world handlers plus a real stage and publish.
     GameplayTagsPersistence.spec
+    GameplayTagsItems.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec

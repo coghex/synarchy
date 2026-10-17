@@ -149,6 +149,7 @@ snapshotWith active rest =
         , sgLiveCamera = LiveCameraSnapshot
             { lcsOwnerPage = Nothing, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
+        , sgItemTags = mempty
         , sgPortableKnowledge = emptyPortableKnowledge
         }
     mkPage (pid, gid) =

@@ -364,6 +364,7 @@ saveWith (x, y, zoom) = snapshotToSaveData
         , snapPages          = HM.singleton stagedPageId
             (blankPageSnapshot stagedPageId arenaParams)
                 { pgsTimeHour = sentinelHour }
+        , snapItemTags = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

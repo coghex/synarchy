@@ -43,6 +43,7 @@
 module Test.Headless.Craft.BillReconcile (spec) where
 
 import UPrelude
+import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import Control.Concurrent (threadDelay)
 import qualified Data.Map.Strict as Map
@@ -271,6 +272,7 @@ stagedSessionWith bills = do
         , ssPreview       = Nothing
         , ssReconcile     = emptyLoadReconcileContext
         , ssMaterialRegistry = emptyMaterialRegistry
+        , ssItemTags = emptyCategoryIndex
         , ssPortableKnowledge = emptyPortableKnowledge
         }
 

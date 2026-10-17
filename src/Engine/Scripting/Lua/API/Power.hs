@@ -29,6 +29,7 @@ module Engine.Scripting.Lua.API.Power
     ) where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (forgetItemTags, itemTreeIds)
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistriesView
@@ -193,6 +194,8 @@ powerPlaceNodeFn env = do
 placeNodeOn ∷ EngineEnv → WorldState → WorldPageId → Text → UnitId → Int → Int
             → PowerRole → Float → IO (Either Text (PowerNodeId, BuildingId))
 placeNodeOn env ws pid defName uid gx gy role param = do
+    -- #2703: read before the pop, to guard the forget below.
+    tagEpoch ← wmSessionEpoch ⊚ readIORef wmRef
     ePopped ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing → (um, Left ("unit has no " <> defName))
@@ -264,18 +267,29 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                                                       pid epoch
                                     nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
                                         addPowerNode bid role param
+                                    -- #2703: the item is spent on the
+                                    -- node, so its tags go with it.
+                                    forgetItemTags wmRef tagEpoch (itemTreeIds item)
                                     pure (Right (nid, bid))
   where
     WorldPageId pidText = pid
     -- Splice the popped instance back at its ORIGINAL index — list
     -- order is gameplay/UI-visible (unit.getInventory), so a rejected
     -- placement must leave the unit's inventory exactly as it was.
-    rollback item ix = atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        case HM.lookup uid (umInstances um) of
-            Nothing → (um, ())
-            Just u  →
-                let u' = u { uiInventory = insertAt ix item (uiInventory u) }
-                in (um { umInstances = HM.insert uid u' (umInstances um) }, ())
+    wmRef = wsWorldManagerRef (toWorldSimCapability env)
+    -- A refused placement restores the item and keeps its tags. Only a
+    -- carrier that vanished in between loses it — the item then has no
+    -- owner and is gone, so its tags go too (#2703).
+    rollback item ix = do
+        restored ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+            case HM.lookup uid (umInstances um) of
+                Nothing → (um, False)
+                Just u  →
+                    let u' = u { uiInventory = insertAt ix item (uiInventory u) }
+                    in (um { umInstances = HM.insert uid u' (umInstances um) }, True)
+        unless restored $ do
+            epoch ← wmSessionEpoch ⊚ readIORef wmRef
+            forgetItemTags wmRef epoch (itemTreeIds item)
 
 -- | Terrain Z at the anchor tile. Falls back to 0 if the chunk isn't
 --   loaded — shouldn't happen since canPlaceAt already verified,

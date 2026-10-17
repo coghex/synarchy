@@ -77,6 +77,7 @@ knowledgeSnapshot = buildSessionSnapshot globals [page]
         , sgLiveCamera = LiveCameraSnapshot
             { lcsOwnerPage = Just pkPageA, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
+        , sgItemTags = mempty
         , sgPortableKnowledge = allFourStates
         }
 

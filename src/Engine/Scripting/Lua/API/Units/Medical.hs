@@ -21,6 +21,7 @@ module Engine.Scripting.Lua.API.Units.Medical
     where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems, unitConsumption)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.UnitCombat
@@ -183,8 +184,11 @@ treatBleedingIO env medic patient mOwner = do
             -- refusal, which now also happens inside the transaction.
             (reservedFrom, kept, local) ← reserveTreatGen env
             let (gStat, gLoop) = Random.splitGen local
-            committed ← atomicModifyIORef'
-                (ucUnitManagerRef (toUnitCombatCapability env)) $
+            -- #2703: a bandage drawn from a kit ceases to exist and
+            -- loses its tags; the kit and every other supply keep theirs.
+            committed ← withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+                unitConsumption [medic, patient, owner] $
                 commitInReach medic patient owner $
                     commitTreatBleeding now gStat gLoop nLevel
                                         medic patient owner
@@ -624,8 +628,9 @@ treatInfectionIO env medic patient mOwner = do
             -- transaction too: each returns the manager untouched, so
             -- neither spends a dose nor the pool.
             (reservedFrom, kept, local) ← reserveTreatGen env
-            committed ← atomicModifyIORef'
-                (ucUnitManagerRef (toUnitCombatCapability env)) $
+            committed ← withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+                unitConsumption [medic, patient, owner] $
                 commitInReach medic patient owner $
                     commitTreatInfection now local nLevel curableW cureRateW
                                          medic patient owner

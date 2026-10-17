@@ -108,24 +108,6 @@ plantTargetPage (PlantTarget p _) = p
 plantTargetId ∷ PlantTarget → FloraInstanceId
 plantTargetId (PlantTarget _ i) = i
 
--- | One physical item, by its process-unique
---   'Item.Types.iiInstanceId'. That counter starts at 1 and id 0 means
---   "no identity" ('Item.Types.itemMatches' treats only @iid > 0@ as an
---   identity), so 0 is refused.
-newtype ItemTarget = ItemTarget Word64
-    deriving (Show, Eq, Ord)
-
-instance NFData ItemTarget where
-    rnf (ItemTarget i) = rnf i
-
--- | 'Nothing' for the non-identity 0.
-mkItemTarget ∷ Word64 → Maybe ItemTarget
-mkItemTarget 0 = Nothing
-mkItemTarget i = Just (ItemTarget i)
-
-itemTargetId ∷ ItemTarget → Word64
-itemTargetId (ItemTarget i) = i
-
 -- | One map tile on one page, at its CANONICAL (stored-frame) global
 --   coordinate. Ordered by page, then @gx@, @gy@, @z@.
 data TileTarget = TileTarget !WorldPageId !Int !Int !Int

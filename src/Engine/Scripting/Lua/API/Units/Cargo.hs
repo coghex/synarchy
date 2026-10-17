@@ -9,13 +9,14 @@ module Engine.Scripting.Lua.API.Units.Cargo
     where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (forgetItemTags, itemTagEpoch, itemTreeIds)
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
-import Engine.Core.Capability.WorldSim (toWorldSimCapability)
+import Engine.Core.Capability.WorldSim (WorldSimCapability(..), toWorldSimCapability)
 import Building.Knowledge.Live
     (ContainerObserver, containerObserver, revealContainerForUnit)
 import qualified Data.Text.Encoding as TE
@@ -95,6 +96,8 @@ unitTransferItemToBuildingFn env = do
             -- same transaction that would perform it, so nothing is
             -- popped, spliced or duplicated on the way out.
             mBPage ← Lua.liftIO $ buildingPage env bid
+            -- #2703: read before the pop, to guard the lost-item forget.
+            tagEpoch ← Lua.liftIO $ itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
             mItem ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, Nothing)
@@ -145,6 +148,10 @@ unitTransferItemToBuildingFn env = do
                                                                 (umInstances um) }
                                            , True)
                         unless restored $ do
+                            -- #2703: the item has no owner left and is gone, so its
+                            -- tags (and its descendants') go too.
+                            Lua.liftIO $ forgetItemTags (wsWorldManagerRef (toWorldSimCapability env))
+                                tagEpoch (itemTreeIds item)
                             logger ← Lua.liftIO $ readIORef (loggerRef env)
                             Lua.liftIO $ logWarn logger CatThread $
                                 "transferItemToBuilding: building "
@@ -281,6 +288,8 @@ unitDepositToCargoFn env = do
                 -- #1087 container reveal below, which is committed-path
                 -- only.
                 mBPage ← Lua.liftIO $ buildingPage env bid
+                -- #2703: read before the pop, to guard the lost-item forget.
+                tagEpoch ← Lua.liftIO $ itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
                 mItem ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                     case HM.lookup uid (umInstances um) of
                         Nothing → (um, Nothing)
@@ -328,6 +337,10 @@ unitDepositToCargoFn env = do
                                                          (umInstances um) }
                                                , True)
                             unless restored $ do
+                                -- #2703: the item has no owner left and is gone, so its
+                                -- tags (and its descendants') go too.
+                                Lua.liftIO $ forgetItemTags (wsWorldManagerRef (toWorldSimCapability env))
+                                    tagEpoch (itemTreeIds item)
                                 logger ← Lua.liftIO $ readIORef (loggerRef env)
                                 Lua.liftIO $ logWarn logger CatThread $
                                     "depositToCargo: building "
@@ -378,6 +391,8 @@ unitWithdrawFromCargoFn env = do
             -- first, so the unit's page is what gets captured and the
             -- guard rides the building transaction. No pop, no reveal.
             mUPage ← Lua.liftIO $ unitPage env uid
+            -- #2703: read before the pop, to guard the lost-item forget.
+            tagEpoch ← Lua.liftIO $ itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
             mItem ← Lua.liftIO $ atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
                 case HM.lookup bid (bmInstances bm) of
                     Nothing → (bm, Nothing)
@@ -423,6 +438,10 @@ unitWithdrawFromCargoFn env = do
                                                                   (bmInstances bm) }
                                            , True)
                         unless restored $ do
+                            -- #2703: the item has no owner left and is gone, so its
+                            -- tags (and its descendants') go too.
+                            Lua.liftIO $ forgetItemTags (wsWorldManagerRef (toWorldSimCapability env))
+                                tagEpoch (itemTreeIds item)
                             logger ← Lua.liftIO $ readIORef (loggerRef env)
                             Lua.liftIO $ logWarn logger CatThread $
                                 "withdrawFromCargo: unit "

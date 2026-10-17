@@ -254,6 +254,7 @@ minimalGlobals active = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just active, lcsX = 0, lcsY = 0, lcsZoom = 1
         , lcsFacing = FaceSouth }
+    , sgItemTags = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
     }
 

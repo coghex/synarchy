@@ -24,6 +24,8 @@ import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.MotionGuard (motionPayloadOk)
 import Unit.Transfer.Live (retireTransferOrdersEverywhere)
+import Gameplay.Tags.ItemLifecycle
+    (withDestroyedItems, itemForestIds, unitItems, retiredUnitItemIds)
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Page.Types (WorldPageId(..))
 import World.Generate (globalToChunk)
@@ -36,11 +38,17 @@ handleUnitDestroyCommand env utsRef uid = do
     -- it from the selection set and its gameplay tags (#2701), so no
     -- observer ever sees a "selected but dead" state or a tag on a unit
     -- that no longer exists. Shared tag names stay on every survivor.
-    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+    --
+    -- #2703: what it carried, equipped and wore is destroyed with it
+    -- (nothing spills), so those items' tags are forgotten afterwards,
+    -- epoch-guarded ("Gameplay.Tags.ItemLifecycle").
+    withDestroyedItems wmRef $
+      atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         (um { umInstances = HM.delete uid (umInstances um)
             , umSelected  = HS.delete uid (umSelected um)
             , umTags      = deleteCategoryTarget uid (umTags um)
-            }, ())
+            }, ((), maybe HS.empty (itemForestIds . unitItems)
+                          (HM.lookup uid (umInstances um))))
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
     -- A durable transfer order (#1246) outliving its carrier is an
@@ -50,17 +58,20 @@ handleUnitDestroyCommand env utsRef uid = do
     -- acting-unit reference (#1253). Runs AFTER the instance is gone,
     -- like the demolition twins in "Building.Thread.Command", so no
     -- reader can observe an order whose carrier is half-removed.
-    retireTransferOrdersEverywhere (wsWorldManagerRef (toWorldSimCapability env))
-                                   uid
+    retireTransferOrdersEverywhere wmRef uid
+  where
+    wmRef = wsWorldManagerRef (toWorldSimCapability env)
 
 handleUnitClearAllCommand ∷ EngineEnv → IORef UnitThreadState → IO ()
 handleUnitClearAllCommand env utsRef = do
     -- Wipe all units + selection + sim state. Processed in queue order, so
     -- it runs AFTER any UnitSpawns queued before Exit to Menu — those
     -- insert first, then this clears, leaving no orphans (#58).
-    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        (um { umInstances = HM.empty, umSelected = HS.empty
-            , umTags = emptyCategoryIndex }, ())
+    withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+      atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+        let um' = um { umInstances = HM.empty, umSelected = HS.empty
+                     , umTags = emptyCategoryIndex }
+        in (um', ((), retiredUnitItemIds um um'))
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())
 
@@ -105,10 +116,11 @@ handleUnitClearPageCommand env utsRef pageId cutoff = do
     -- transition removed everything it could see, and what is left for
     -- this message is whatever a spawn queued ahead of it re-inserted
     -- afterwards (#58).
-    live ← atomicModifyIORef'
+    live ← withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
+      atomicModifyIORef'
         (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
             let (um', _) = retirePageUnits pageId cutoff um
-            in (um', HM.keysSet (umInstances um'))
+            in (um', (HM.keysSet (umInstances um'), retiredUnitItemIds um um'))
     -- The sim states are ONLY removed here, and they are identified by
     -- what the manager no longer holds rather than by the ids this
     -- message just retired — because by now it has usually retired

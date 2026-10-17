@@ -794,6 +794,7 @@ restoreThroughProduction env page = do
             , sgLiveCamera        = LiveCameraSnapshot
                 { lcsOwnerPage = Just mainPage, lcsX = 0, lcsY = 0
                 , lcsZoom = 1, lcsFacing = FaceSouth }
+            , sgItemTags = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
             }
         req = SaveRequestMeta { srmSlotName = "teardown_test"

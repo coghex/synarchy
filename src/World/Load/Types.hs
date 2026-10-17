@@ -28,6 +28,8 @@ import Engine.Graphics.Camera (Camera2D)
 import Structure.Palette (TexPalette)
 import Building.Types (BuildingManager)
 import Item.Knowledge (PortableKnowledge)
+import Gameplay.Tags.Index (CategoryIndex)
+import Gameplay.Tags.Tag (ItemTarget)
 import Unit.Types (UnitManager, UnitId)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
@@ -96,6 +98,11 @@ data StagedSession = StagedSession
       --   broadcast. Data, not a live query: the Lua side must never
       --   have to ask the ACTIVE page about a per-page id belonging to
       --   some other page.
+    , ssItemTags ∷ !(CategoryIndex ItemTarget)
+      -- ^ #2703: the restored physical-item gameplay tags, SCRUBBED
+      --   against this replacement session's own live item enumeration
+      --   and with the reverse index rebuilt, ready to install as
+      --   'World.State.Types.wmItemTags'.
     , ssPortableKnowledge ∷ !PortableKnowledge
       -- ^ #2512: the session-wide portable-container memory, already
       --   SCRUBBED against this replacement session's own complete live

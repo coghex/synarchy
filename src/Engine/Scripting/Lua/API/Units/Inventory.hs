@@ -37,9 +37,10 @@ import Engine.Scripting.Lua.API.Items.Contents
     (pushGroupedContents, readInstanceIdPath, resolveContainedItem)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
 import Unit.Types
+import Gameplay.Tags.ItemLifecycle
+    (withDestroyedItems, unitConsumption, itemTagEpoch, placeOnGround)
 import Engine.Asset.Handle (TextureHandle(..))
 import Item.Materialize (filledItem, materializeItem)
-import Item.Ground (spawnGroundItem)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Weather.Ambient (ambientTempAt)
 import Item.Temperature (effectiveItemTemp)
@@ -231,7 +232,12 @@ unitRemoveItemFn env = do
         (Just n, Just nameBS) → do
             let uid     = UnitId (fromIntegral n)
                 defName = TE.decodeUtf8Lenient nameBS
-            removed ← Lua.liftIO $ atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+            -- #2703: consumption — the removed item (and anything
+            -- nested in it) ceases to exist, so its tags go too.
+            removed ← Lua.liftIO $ withDestroyedItems
+                (wsWorldManagerRef (toWorldSimCapability env)) $
+                atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
+                unitConsumption [uid] $ \um →
                 case HM.lookup uid (umInstances um) of
                     Nothing → (um, False)
                     Just u  →
@@ -318,6 +324,7 @@ unitDropEquipmentToGroundFn env = do
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
+                    tagEpoch ← Lua.liftIO $ itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
                     mDrop ← Lua.liftIO $
                         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -338,9 +345,10 @@ unitDropEquipmentToGroundFn env = do
                     case mDrop of
                         Nothing → Lua.pushboolean False >> return 1
                         Just (it, gx, gy) → do
-                            _ ← Lua.liftIO $
-                                atomicModifyIORef' (wsGroundItemsRef ws) $
-                                    spawnGroundItem it gx gy
+                            -- #2703: re-checks the page after placing.
+                            _ ← Lua.liftIO $ placeOnGround
+                                    (wsWorldManagerRef (toWorldSimCapability env))
+                                    tagEpoch ws it gx gy
                             Lua.pushboolean True
                             return 1
         _ → Lua.pushboolean False >> return 1
@@ -371,6 +379,7 @@ unitDropItemToGroundFn env = do
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
+                    tagEpoch ← Lua.liftIO $ itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
                     mDrop ← Lua.liftIO $
                         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -390,9 +399,10 @@ unitDropItemToGroundFn env = do
                     case mDrop of
                         Nothing → Lua.pushboolean False >> return 1
                         Just (it, gx, gy) → do
-                            _ ← Lua.liftIO $
-                                atomicModifyIORef' (wsGroundItemsRef ws) $
-                                    spawnGroundItem it gx gy
+                            -- #2703: re-checks the page after placing.
+                            _ ← Lua.liftIO $ placeOnGround
+                                    (wsWorldManagerRef (toWorldSimCapability env))
+                                    tagEpoch ws it gx gy
                             Lua.pushboolean True
                             return 1
         _ → Lua.pushboolean False >> return 1
@@ -419,6 +429,7 @@ unitDropItemByIdFn env = do
             case mWs of
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
+                    tagEpoch ← Lua.liftIO $ itemTagEpoch (wsWorldManagerRef (toWorldSimCapability env))
                     mDrop ← Lua.liftIO $
                         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
                             case HM.lookup uid (umInstances um) of
@@ -438,9 +449,10 @@ unitDropItemByIdFn env = do
                     case mDrop of
                         Nothing → Lua.pushboolean False >> return 1
                         Just (it, gx, gy) → do
-                            _ ← Lua.liftIO $
-                                atomicModifyIORef' (wsGroundItemsRef ws) $
-                                    spawnGroundItem it gx gy
+                            -- #2703: re-checks the page after placing.
+                            _ ← Lua.liftIO $ placeOnGround
+                                    (wsWorldManagerRef (toWorldSimCapability env))
+                                    tagEpoch ws it gx gy
                             Lua.pushboolean True
                             return 1
         _ → Lua.pushboolean False >> return 1

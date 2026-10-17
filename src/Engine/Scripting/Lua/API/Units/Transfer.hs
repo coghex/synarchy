@@ -81,6 +81,7 @@ module Engine.Scripting.Lua.API.Units.Transfer
     where
 
 import UPrelude
+import Gameplay.Tags.ItemLifecycle (forgetItemTags, itemTagEpoch, itemTreeIds)
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistriesView
@@ -598,10 +599,13 @@ commitCross ∷ EngineEnv → TransferEndpoint → TransferEndpoint
             → (PopStep, RestoreStep) → PushStep → TransferItemRef
             → IO (Either TransferFailure ItemInstance)
 commitCross env from to (pop, restore) push ref = do
+    let wmRef = wsWorldManagerRef (toWorldSimCapability env)
     ls ← readLiveState env
     case commitItem (sceneFor ls from to) from to ref of
         Left f  → pure (Left f)
         Right c → do
+            -- #2703: read before the pop, to guard the lost-item forget.
+            tagEpoch ← itemTagEpoch wmRef
             popped ← pop env (tcIndex c) (tcItem c)
             case popped of
                 Left r → pure (Left (staleFailure r))
@@ -611,6 +615,12 @@ commitCross env from to (pop, restore) push ref = do
                         Right () → pure (Right item)
                         Left r   → do
                             restored ← restore env (tcIndex c) item
+                            -- #2703: a failed push whose source is gone
+                            -- too leaves the item with no owner: it is
+                            -- destroyed, so its tree's tags go. A
+                            -- restored item keeps every tag.
+                            either (const (forgetItemTags wmRef tagEpoch (itemTreeIds item)))
+                                   (const (pure ())) restored
                             pure $ Left $ staleFailure $ case restored of
                                 Right () → r
                                 Left rr  → rr

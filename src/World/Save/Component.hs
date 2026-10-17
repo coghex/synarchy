@@ -36,6 +36,7 @@ module World.Save.Component
     ) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -336,6 +337,9 @@ assembleSnapshot meta de = do
           -- makes the component's optionality honest rather than a
           -- fabricated default.
         , snapPortableKnowledge = emptyPortableKnowledge
+          -- #2703: filled by @core-session@ v2's fold; every older
+          -- payload carries none.
+        , snapItemTags = Map.empty
         }
 
 -- | Lift a whole-session snapshot invariant failure into a component
