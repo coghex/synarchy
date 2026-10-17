@@ -399,8 +399,9 @@ physical item.
   never treated as destroyed. An item a transfer has momentarily
   detached between its pop and its push is simply not editable at that
   instant (`TagEditNoTarget`), and the tags it already carries are
-  untouched. A session replacement between the check and the write
-  refuses the write.
+  untouched. The session epoch is read once for the whole operation, so
+  a retry that crosses a session replacement fails instead of adopting
+  the new session, where the same ids name other items.
 - `itemTagsIn` inspects one item (`Nothing` when no live item has the
   id), `liveItemTargets` is the item universe, and `onPage` narrows a
   universe (every category) to the caller's selected page.
@@ -425,7 +426,8 @@ transfer's temporary detach, a refused move and a rolled-back batch.
 | Consumption: a discrete meal, a bulk sack eaten dry (`unit.feed`), `unit.removeItem`, craft and repair inputs, a bandage drawn from a kit, a power item placed as a node | the consumed items' assignments go; the kit, the surviving siblings and their shared tag names stay |
 | Construction-designation payment | the paid items are consumed and their assignments go. A refund mints new, untagged items (owner decision, 2026-10-17) |
 | `item.removeGround`; lava solidifying over ground items | the destroyed tree's assignments go. A pickup reaches the same ground removal but forgets nothing |
-| `UnitDestroy`, `BuildingDestroy`, both clear-alls, page retirement (immediate and queued), page destroy or replace | everything the removed owner held goes, and on a page teardown its ground too. These paths spill nothing |
+| `UnitDestroy`, `BuildingDestroy`, both clear-alls, page retirement (immediate and queued), page destroy or replace | everything the removed owner held goes, and on a page teardown its ground too. These paths spill nothing. A teardown reads the doomed ground only after the page is unreachable (out of `wmWorlds`, or replaced) and forgets after that, so a write that validated against the old ground is either retried or removed |
+| A drop or a pickup rollback that lands on a page torn down after the item was popped | the departed `WorldState` takes the insert but is unreachable, so the item is destroyed. `placeOnGround` re-checks, after inserting, that the page's ground ref is still live and forgets the tree if not; every interleaving with the teardown's read is covered by that order |
 | A unit dies | kept: the corpse keeps its items |
 | Destroy-all (exit to menu) | the index is emptied with the page set |
 | A load publishes | the restored index replaces the outgoing one |
@@ -452,6 +454,9 @@ refunds are new identities.
 - **Capture.** `World.Thread.Command.Save.WriteWorld` captures
   `sgItemTags` from the same manager read as the pages, so the
   assignments and the item trees they name are one capture.
+  `captureSessionSnapshot` keeps only assignments for items in those
+  captured trees, so a save can never carry a tag on a dead item, even
+  one a teardown race left behind for a moment.
 - **Migration.** `core-session` v1 is frozen as `CoreSessionDTOv1` and
   migrates explicitly to no assignments. `currentSaveVersion` is
   unchanged.
