@@ -282,19 +282,25 @@ installHook _ ls act =
 --   @'endurance'@ is the regen read (requirement-era reproduction's own
 --   injection point); @'caffeine'@ is the last read before the commit,
 --   used when an example must move the BOUND without also moving the
---   rate the script already computed.
+--   rate the script already computed. Since #2838 caffeine is a registry key
+--   of the mind system, read through @unit.readPhysio@ (the facade), so BOTH
+--   read verbs are wrapped: whichever one the script reaches the trigger
+--   through fires the hook once, after the stamina snapshot.
 interposeAfterSnapshot ∷ LuaBackendState → Text → IO ()
 interposeAfterSnapshot ls trigger = do
     r ← evalDebug ls $ T.concat
         [ "_G.__fired = false; local seen = false; "
-        , "local real = unit.getStat; "
-        , "unit.getStat = function(uid, name) "
-        , "  if name == 'stamina' then seen = true end; "
-        , "  if seen and name == '", trigger, "' and not _G.__fired then "
-        , "    _G.__fired = true; __hook(uid); "
-        , "  end; "
-        , "  return real(uid, name); "
-        , "end; return true" ]
+        , "local function wrap(real) "
+        , "  return function(uid, name, ...) "
+        , "    if name == 'stamina' then seen = true end; "
+        , "    if seen and name == '", trigger, "' and not _G.__fired then "
+        , "      _G.__fired = true; __hook(uid); "
+        , "    end; "
+        , "    return real(uid, name, ...); "
+        , "  end "
+        , "end; "
+        , "unit.getStat = wrap(unit.getStat); "
+        , "unit.readPhysio = wrap(unit.readPhysio); return true" ]
     r `shouldBe` "true"
 
 -- | Count kill\/collapse\/revive REQUESTS while still calling through to

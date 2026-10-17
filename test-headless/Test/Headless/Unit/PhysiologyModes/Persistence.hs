@@ -68,7 +68,7 @@ body70 = bodyStats acolyteBody
 --   integrators at the healthy reading.
 bodyNominalStamina ∷ [(Text, Float)]
 bodyNominalStamina = filter ((≢ "stamina") ∘ fst) body70
-    ⧺ [("heart_rate", 70), ("blood_oxygen", 1)]
+    ⧺ [("heart_rate", 70), ("blood_oxygen", 1)] ⧺ mindSeeds
 
 -- | The Simulated keys a rich 70 kg acolyte is saved with.
 seeds70 ∷ [(Text, Float)]
@@ -81,7 +81,18 @@ seeds70 =
 --   and cardio's two integrators (#2836) at their healthy readings.
 poolSeeds ∷ [(Text, Float)]
 poolSeeds = [ ("exhaustion", 10), ("sleep_pressure", 10)
-            , ("heart_rate", 70), ("blood_oxygen", 1) ]
+            , ("heart_rate", 70), ("blood_oxygen", 1) ] ⧺ mindSeeds
+
+-- | The mind keys (#2838, S11a) a Simulated mind is saved with when the unit
+--   was seeded at game time 0: mood at its drift target (1.0 for a healthy
+--   unit), the roll cadence a CHECK_INTERVAL ahead and the thought clock at
+--   the seeding sample.
+mindSeeds ∷ [(Text, Float)]
+mindSeeds =
+    [ ("mood", 1), ("emotional_pain", 0), ("caffeine", 0), ("mental_state", 0)
+    , ("mental_since", 0), ("mental_until", 0), ("mental_next_roll_at", 8)
+    , ("mental_cooldown_until", 0), ("mental_high_since", 0)
+    , ("mental_break_behavior", 0), ("thought_next_at", 0) ]
 
 defsOf ∷ [(Text, UnitPhysiology)] → HM.HashMap Text UnitPhysiology
 defsOf = HM.fromList
@@ -428,7 +439,7 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
             clean = map (T.strip ∘ T.filter (≢ '`')) named
         sort clean `shouldBe` sort rebuiltCacheStats
         -- and the erasure leaves a durable stat and an override alone
-        let u = saved "acolyte" [("hydration", 21), ("consciousness", 0.5), ("concentration", 0.7)]
+        let u = saved "acolyte" [("hydration", 21), ("strength", 0.5), ("strength_body", 0.7)]
                     [("hydration", PhysioSimulated)]
             snapOf us = (minimalPage page1) { pgsUnits = us }
             sess = captureSessionSnapshot minimalGlobals [snapOf (UnitSnapshot (HM.fromList [(UnitId 1, u)]) 10)]
@@ -463,12 +474,16 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
                 `shouldBe` Right ([(page1, pgsUnits back)], [])
             -- caches: load the ORIGINAL and the ROUND-TRIPPED unit through the
             -- load hook; both rebuild to the same canonical values
-            let cacheKeys = [ "circulation", "consciousness", "concentration"
-                            , "state_of_mind", "strength", "strength_body"
+            let cacheKeys = [ "circulation", "strength", "strength_body"
                             , "max_hydration", "max_hunger", "max_calories"
                             , "carrying_capacity", "heart_rate" ]
-                readCaches uid = forM cacheKeys $ \k → luaNum ls
-                    ("unit.getStat(" <> tshow uid <> ", '" <> k <> "') or -1")
+                -- the brain's values are DERIVED since #2838: no cache, so the
+                -- rebuilt unit and the round-tripped one read the same values
+                derivedKeys = [ "consciousness", "concentration", "state_of_mind" ]
+                readCaches uid = (⧺) <$> forM cacheKeys (\k → luaNum ls
+                    ("unit.getStat(" <> tshow uid <> ", '" <> k <> "') or -1"))
+                    <*> forM derivedKeys (\k → luaNum ls
+                    ("unit.readPhysio(" <> tshow uid <> ", '" <> k <> "') or -1"))
                 rebuild = do
                     _ ← luaText ls "__resources.onSaveLoaded({ 1, 2, 3 }, {}); return true"
                     mapM readCaches [1, 2, 3 ∷ Int]
@@ -513,5 +528,5 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
                     _ ← luaText ls "__resources.onSaveLoaded({ 1 }, {}); return true"
                     readOwned ls 1 "core_temp" `shouldReturn` "37|nominal"
                     readOwned ls 1 "salt_conc" `shouldReturn` "1|nominal"
-                    luaNum ls "unit.getStat(1, 'consciousness')" >>= near 1e-9 1
+                    luaNum ls "unit.readPhysio(1, 'consciousness')" >>= near 1e-9 1
                 Right _ → expectationFailure "unexpected page shape"

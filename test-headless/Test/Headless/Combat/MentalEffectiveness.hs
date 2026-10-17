@@ -20,14 +20,16 @@ import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Faction.Membership (resolveLegacyFaction)
 import Combat.Types (AttackMode(..))
-import Combat.Resolution.Common (mentalEffectiveness, maxStaminaFor)
+import Combat.Resolution.Common (mentalEffectiveness, mentalMultiplier, maxStaminaFor)
 import Combat.Resolution.Strike
     ( computeAttackerSkill, computeDefenderEvasion, hitChance
     , defenderDodgeChance )
 import Combat.Resolution.Constants (dodgeMaxChance)
 import Combat.Resolution.Damage (computeSeverity)
 import Combat.Resolution.Stamina (staminaWorkFraction)
-import Unit.Physiology.Types (emptyPhysiologyRegistry)
+import Test.Headless.Unit.PhysiologyFixture (readShippedPhysiologyRegistry)
+import Unit.Physiology.Types
+    (PhysiologyRegistry(..), PhysiologySystem(..), emptyPhysiologyRegistry)
 import Combat.Resolution.Wear (staminaDrainStats)
 import Substance.Types (emptySubstanceManager)
 import Item.Types (emptyItemManager)
@@ -81,12 +83,34 @@ targetDef = UnitDef
     , udNaturalResistance = defaultNaturalResistance
     , udNaturalWeapon = Nothing, udModifiers = [] , udFactionTags = [], udPhysiology = noUnitPhysiology }
 
--- A unit with only concentration (and, optionally, an EUPHORIC
--- mental_state = 3) set — everything mentalEffectiveness reads.
-concEuph ∷ Float → Bool → UnitInstance
-concEuph conc euphoric = mkInst
-    (HM.fromList (("concentration", conc) : [("mental_state", 3.0) | euphoric]))
-    HM.empty
+-- The multiplier for a derived concentration (and, optionally, an EUPHORIC
+-- mental_state): concentration is DERIVED since #2838 (S11a), so the band is
+-- driven through 'mentalMultiplier', the one pure function
+-- 'mentalEffectiveness' ends in; the derived path itself (the rule, the
+-- stored mind keys, containment of a failed read) is the "physiology brain and
+-- mental atomicity" group's.
+concEuph ∷ Float → Bool → Float
+concEuph = mentalMultiplier
+
+-- | mentalEffectiveness through the real derived path for a unit whose
+--   consciousness and mind are Simulated and everything else Nominal, with
+--   the given stored mind keys over a benign baseline.
+derivedEffectiveness ∷ [(Text, Float)] → IO Float
+derivedEffectiveness overrides = do
+    reg ← readShippedPhysiologyRegistry
+    let physio = plainUnitPhysiology True Nothing $ HM.fromList
+            [ (psId s, if psId s `elem` ["consciousness", "mind"]
+                          then PhysioSimulated else PhysioNominal)
+            | s ← prSystems reg ]
+        baseline = HM.fromList
+            [ ("mood", 1.0), ("emotional_pain", 0.0), ("caffeine", 0.0)
+            , ("mental_state", 0.0), ("mental_since", 0.0)
+            , ("mental_until", 0.0), ("mental_next_roll_at", 0.0)
+            , ("mental_cooldown_until", 0.0), ("mental_high_since", 0.0)
+            , ("mental_break_behavior", 0.0), ("thought_next_at", 0.0) ]
+        stats = foldl' (\m (k, v) → HM.insert k v m) baseline overrides
+    pure (mentalEffectiveness reg (targetDef { udPhysiology = physio }) 0
+                              (mkInst stats HM.empty))
 
 near ∷ Float → Float → Bool
 near expect x = abs (x - expect) < 0.0005
@@ -117,37 +141,35 @@ spec = describe "Mental effectiveness" $ do
     -- ---- 1/2: the mentalEffectiveness formula itself ----
     describe "mentalEffectiveness formula" $ do
         it "normal concentration without euphoria is neutral at 1.00" $
-            mentalEffectiveness (concEuph 1.0 False) `shouldBe` 1.00
+            concEuph 1.0 False `shouldBe` 1.00
 
         it "concentration 0.50 without euphoria is 0.875" $
-            mentalEffectiveness (concEuph 0.5 False) `shouldBe` 0.875
+            concEuph 0.5 False `shouldBe` 0.875
 
-        it "missing concentration defaults to 1.0 (neutral)" $
-            mentalEffectiveness (mkInst HM.empty HM.empty) `shouldBe` 1.00
+        it "a unit whose concentration reads neutral (1.0) is neutral" $
+            concEuph 1.0 False `shouldBe` 1.00
 
-        it "missing mental_state defaults to non-euphoric" $
-            mentalEffectiveness
-                (mkInst (HM.fromList [("concentration", 0.5)]) HM.empty)
-                `shouldBe` 0.875
+        it "a non-euphoric unit confers no bonus" $
+            concEuph 0.5 False `shouldBe` 0.875
 
         it "zero concentration bottoms out at a 25% penalty (0.75)" $
-            mentalEffectiveness (concEuph 0.0 False) `shouldBe` 0.75
+            concEuph 0.0 False `shouldBe` 0.75
 
         it "concentration is clamped to 0..1 before use (below 0)" $
-            mentalEffectiveness (concEuph (-5.0) False) `shouldBe` 0.75
+            concEuph (-5.0) False `shouldBe` 0.75
 
         it "concentration is clamped to 0..1 before use (above 1)" $
-            mentalEffectiveness (concEuph 5.0 False) `shouldBe` 1.00
+            concEuph 5.0 False `shouldBe` 1.00
 
         it "euphoria at zero concentration multiplies the 0.75 floor by 1.10" $
-            mentalEffectiveness (concEuph 0.0 True) `shouldSatisfy` near (0.75 * 1.10)
+            concEuph 0.0 True `shouldSatisfy` near (0.75 * 1.10)
 
         it "euphoria at full concentration is capped at 1.10 (not 1.10 x 1.10)" $
-            mentalEffectiveness (concEuph 1.0 True) `shouldSatisfy` near 1.10
+            concEuph 1.0 True `shouldSatisfy` near 1.10
 
         it "the final result never leaves the 0.75..1.10 band" $ do
-            mentalEffectiveness (concEuph 1.0 True) `shouldSatisfy` (≤ 1.10)
-            mentalEffectiveness (concEuph 0.0 False) `shouldSatisfy` (≥ 0.75)
+            concEuph 1.0 True `shouldSatisfy` (≤ 1.10)
+            concEuph 0.0 False `shouldSatisfy` (≥ 0.75)
 
     -- ---- #1733: containment of an ALREADY-corrupt stat map ----
     -- Requirement 2 is a containment guarantee, not an ingress one: a
@@ -160,33 +182,45 @@ spec = describe "Mental effectiveness" $ do
     describe "mentalEffectiveness contains a non-finite stat (#1733)" $ do
         it "a non-finite concentration still yields a finite 0.75..1.10 result" $
             forM_ nonFinites $ \(label, bad) → do
-                let got = mentalEffectiveness (concEuph bad False)
+                let got = concEuph bad False
                 (label, finiteWithin 0.75 1.10 got) `shouldBe` (label, True)
 
         it "…and with euphoria layered on top as well" $
             forM_ nonFinites $ \(label, bad) → do
-                let got = mentalEffectiveness (concEuph bad True)
+                let got = concEuph bad True
                 (label, finiteWithin 0.75 1.10 got) `shouldBe` (label, True)
 
+        -- Through the REAL derived path (#2838): the shipped registry, a unit
+        -- whose consciousness and mind are Simulated, and corrupt STORED mind
+        -- keys. A rule input that is not finite makes the derived read a
+        -- violated precondition, which mentalEffectiveness CONTAINS (it runs
+        -- on the combat thread and inside craft's atomic update, so it never
+        -- raises): neutral concentration, non-euphoric.
         it "a non-finite mental_state reads as non-euphoric, not as a bonus" $
             forM_ nonFinites $ \(label, bad) → do
-                let inst = mkInst (HM.fromList [ ("concentration", 1.0)
-                                               , ("mental_state", bad) ])
-                                  HM.empty
-                (label, mentalEffectiveness inst) `shouldBe` (label, 1.00)
+                got ← derivedEffectiveness [("mental_state", bad)]
+                (label, got) `shouldBe` (label, 1.00)
 
-        it "both stats corrupt at once is still contained" $
+        it "both stored mind keys corrupt at once is still contained" $
             forM_ nonFinites $ \(label, bad) → do
-                let inst = mkInst (HM.fromList [ ("concentration", bad)
-                                               , ("mental_state", bad) ])
-                                  HM.empty
-                    got  = mentalEffectiveness inst
+                got ← derivedEffectiveness [("caffeine", bad), ("mental_state", bad)]
                 (label, finiteWithin 0.75 1.10 got) `shouldBe` (label, True)
+
+        it "a non-finite caffeine (a rule input) is contained: neutral concentration, still inside the band" $
+            forM_ nonFinites $ \(label, bad) → do
+                -- the rule cannot be answered, so concentration reads the
+                -- neutral 1.0 (never the corrupt value, never a raise); a
+                -- euphoric mental_state still gives its separate bonus,
+                -- inside the finite guard
+                calm     ← derivedEffectiveness [("caffeine", bad)]
+                euphoric ← derivedEffectiveness [("caffeine", bad), ("mental_state", 3.0)]
+                (label, calm) `shouldBe` (label, 1.00)
+                (label, finiteWithin 0.75 1.10 euphoric) `shouldBe` (label, True)
 
         it "a NaN concentration takes the FLOOR, not the neutral default" $
             -- The distinction matters: mapping NaN to the missing-stat
             -- default (1.0) would hand a corrupt unit full effectiveness.
-            mentalEffectiveness (concEuph (0 / 0) False) `shouldBe` 0.75
+            concEuph (0 / 0) False `shouldBe` 0.75
 
         it "every FINITE concentration is bit-identical to the old clamp chain" $
             -- Requirement 4. Spans both bounds and the interior, so an
@@ -194,7 +228,7 @@ spec = describe "Mental effectiveness" $ do
             -- rather than only in the examples above.
             forM_ [-5.0, -1.0, 0.0, 0.25, 0.5, 0.75, 1.0, 2.0, 5.0] $ \c → do
                 let expect = clamp 0.75 1.10 (0.75 + 0.25 * clamp 0.0 1.0 c)
-                mentalEffectiveness (concEuph c False) `shouldBe` expect
+                concEuph c False `shouldBe` expect
 
     -- ---- 3: sign-safe hit/dodge monotonicity ----
     describe "attacker hit chance (Combat.Resolution.Strike.hitChance)" $ do
@@ -273,7 +307,7 @@ spec = describe "Mental effectiveness" $ do
                 calm       = mkInst base HM.empty
                 distracted = mkInst
                     (HM.insert "mental_state" 3.0
-                        (HM.insert "concentration" 0.1 base))
+                        (HM.insert "caffeine" 0.1 base))
                     HM.empty
             computeAttackerSkill calm Nothing Nothing 0 0.2 Quick
                 `shouldBe`
@@ -290,7 +324,7 @@ spec = describe "Mental effectiveness" $ do
                 calm     = mkInst base HM.empty
                 euphoric = mkInst
                     (HM.insert "mental_state" 3.0
-                        (HM.insert "concentration" 1.0 base))
+                        (HM.insert "caffeine" 1.0 base))
                     HM.empty
             computeDefenderEvasion calm 0.1
                 `shouldBe` computeDefenderEvasion euphoric 0.1
@@ -312,7 +346,7 @@ spec = describe "Mental effectiveness" $ do
                 calm       = mkInst base HM.empty
                 distracted = mkInst
                     (HM.insert "mental_state" 3.0
-                        (HM.insert "concentration" 0.0 base))
+                        (HM.insert "caffeine" 0.0 base))
                     HM.empty
                 tgt = mkInst (HM.fromList [("body_mass", 70.0)]) HM.empty
                 severityOf atk = computeSeverity emptySubstanceManager emptyItemManager
@@ -334,7 +368,7 @@ spec = describe "Mental effectiveness" $ do
                 calm     = mkInst base HM.empty
                 euphoric = mkInst
                     (HM.insert "mental_state" 3.0
-                        (HM.insert "concentration" 1.0 base))
+                        (HM.insert "caffeine" 1.0 base))
                     HM.empty
             maxStaminaFor 0 calm `shouldBe` maxStaminaFor 0 euphoric
 
@@ -350,7 +384,7 @@ spec = describe "Mental effectiveness" $ do
                 calm       = mkInst base HM.empty
                 distracted = mkInst
                     (HM.insert "mental_state" 3.0
-                        (HM.insert "concentration" 0.0 base))
+                        (HM.insert "caffeine" 0.0 base))
                     HM.empty
                 -- staminaDrainStats returns the crafter's WHOLE stat
                 -- map (it's just the post-swing uiStats), so it

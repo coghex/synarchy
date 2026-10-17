@@ -67,7 +67,14 @@ healthy = HM.fromList
     -- brain and tick read a stored pool; the nomad's is Nominal (scrubbed or
     -- ignored) and reads the effective maximum from `endurance`
     , ("stamina", 10)
-    , ("consciousness", 1), ("blood_oxygen", 1), ("heart_rate", 70) ]
+    , ("blood_oxygen", 1), ("heart_rate", 70)
+    -- the mind (#2838, S11a): both units' mind is Simulated in this slice, so
+    -- both store the seeds a spawn would (consciousness is derived: nothing
+    -- stored)
+    , ("mood", 1), ("emotional_pain", 0), ("caffeine", 0), ("mental_state", 0)
+    , ("mental_since", 0), ("mental_until", 0), ("mental_next_roll_at", 8)
+    , ("mental_cooldown_until", 0), ("mental_high_since", 0)
+    , ("mental_break_behavior", 0), ("thought_next_at", 0) ]
 
 mkUnit ∷ Text → HM.HashMap Text Float → Float → [Wound] → UnitInstance
 mkUnit defName stats blood ws = UnitInstance
@@ -269,8 +276,8 @@ spec = describe "survival exemption" $ do
         _ ← luaText ls "__resources.onSaveLoaded({ 1, 2 }, {}); return true"
         -- No physiology tick has run: these are what a paused load shows.
         nomadReads ls "require('scripts.brain').state(uid)" `shouldReturn` "alert"
-        nomadReads ls "unit.getStat(uid, 'consciousness') == 1" `shouldReturn` "true"
-        nomadReads ls "unit.getStat(uid, 'state_of_mind') > 0.1" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'consciousness') == 1" `shouldReturn` "true"
+        nomadReads ls "unit.readPhysio(uid, 'state_of_mind') > 0.1" `shouldReturn` "true"
         nomadReads ls "unit.readPhysio(uid, 'core_temp') == 37" `shouldReturn` "true"
         nomadReads ls "unit.readPhysio(uid, 'salt_conc') == 1" `shouldReturn` "true"
         nomadReads ls "unit.getStat(uid, 'core_temp') == nil" `shouldReturn` "true"

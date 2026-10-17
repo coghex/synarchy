@@ -438,23 +438,24 @@ hooks = describe "change hooks and transient state" $ do
                 _ ← setModeWith ls 1 "hydration" "simulated" "{ hydration = 30 }"  -- so does a value write
                 _ ← luaText ls "__resources.onSaveLoaded({ 1 }, {}); return true"   -- and a load
                 bases `shouldReturn` before
-                -- the cache itself still reads the EFFECTIVE mood
-                luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v →
+                -- the derived value still reads the EFFECTIVE mood
+                luaNum ls "unit.readPhysio(1, 'state_of_mind')" >>= \v →
                     v `shouldSatisfy` (< 0.7)
 
-    it "rebuilds state_of_mind even for a unit that has never ticked (no mood yet), without storing a mood" $ do
-        -- through a value write ...
+    it "derives state_of_mind at once for a unit that has never ticked, with no cache to refresh and no mood stored by the read" $ do
+        -- through a value write ... (the mood was SEEDED at spawn, #2838, and
+        -- a read advances nothing)
         withScene [acolyte] $ \(_, ls) → do
-            luaText ls "return tostring(unit.getStat(1, 'mood'))" `shouldReturn` "nil"
+            before ← luaText ls "return string.format('%.6f', unit.getStatBase(1, 'mood'))"
             _ ← setModeWith ls 1 "thermo" "simulated" "{ core_temp = 41 }"
-            luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v → v `shouldSatisfy` (< 0.6)
-            luaText ls "return tostring(unit.getStat(1, 'mood'))" `shouldReturn` "nil"
-        -- ... and through a load of a stale cache
+            luaNum ls "unit.readPhysio(1, 'state_of_mind')" >>= \v → v `shouldSatisfy` (< 0.6)
+            luaText ls "return string.format('%.6f', unit.getStatBase(1, 'mood'))"
+                `shouldReturn` before
+        -- ... and across a load, where a stale legacy cache is IGNORED
         withScene [acolyte { usStats = [ ("core_temp", 41), ("state_of_mind", 1.0)
                                        , ("consciousness", 1.0) ] }] $ \(_, ls) → do
             _ ← luaText ls "__resources.onSaveLoaded({ 1 }, {}); return true"
-            luaNum ls "unit.getStat(1, 'state_of_mind')" >>= \v → v `shouldSatisfy` (< 0.6)
-            luaText ls "return tostring(unit.getStat(1, 'mood'))" `shouldReturn` "nil"
+            luaNum ls "unit.readPhysio(1, 'state_of_mind')" >>= \v → v `shouldSatisfy` (< 0.6)
 
     it "treats an EMPTY values table as no value write: nothing is reset" $ do
         let finalLean calls = withScene [acolyte { usModes = [("salt", PhysioNominal)] }] $
@@ -579,18 +580,19 @@ derivedFreshness = describe "derived and cached reads" $ do
             after ← luaNum ls "unit.readPhysio(1, 'salt_conc')"
             near 1e-5 (before / 2) after
 
-    it "reads a fresh circulation and refreshes consciousness before a transition returns" $
-        withScene [ acolyte { usStats = [ ("core_temp", 31), ("consciousness", 0.25) ] } ] $ \(_, ls) → do
+    it "reads a fresh circulation and a fresh derived consciousness before a transition returns" $
+        withScene [ acolyte { usStats = [ ("core_temp", 31) ] } ] $ \(_, ls) → do
             -- the cold core (5 degrees under the vasoconstriction onset)
             -- drags the derived circulation to 0.7, with no tick
             luaNum ls "unit.readPhysio(1, 'circulation')" >>= \c →
                 c `shouldSatisfy` (\x → abs (x - 0.7) < 1e-4)
             _ ← setMode ls 1 "thermo" "nominal"
             -- no tick has run: circulation (derived, never stored) reads the
-            -- healthy core at once, and the brain cache is refreshed
+            -- healthy core at once, and so does the DERIVED consciousness
+            -- (there is no brain cache to refresh since #2838)
             luaNum ls "unit.readPhysio(1, 'circulation')" >>= \c →
                 c `shouldSatisfy` (> 0.9)
-            luaNum ls "unit.getStat(1, 'consciousness')" >>= \c →
+            luaNum ls "unit.readPhysio(1, 'consciousness')" >>= \c →
                 c `shouldSatisfy` (> 0.99)
   where
     ignore _ = pure ()

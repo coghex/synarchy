@@ -324,7 +324,8 @@ interfaceSpec = describe "interface equivalence (I2)" $ do
                     -- the stub: unit 2's interface is held at the healthy values
                     , "  unit.setStat(2, 'heart_rate', 70); unit.setStat(2, 'blood_oxygen', 1)"
                     , "  for _, k in ipairs(keys) do"
-                    , "    local a, b = unit.getStat(1, k), unit.getStat(2, k)"
+                    -- the brain's values are derived (#2838): the mode-aware read
+                    , "    local a, b = unit.readPhysio(1, k), unit.readPhysio(2, k)"
                     , "    if a ~= a or b ~= b then finite = false end"
                     , "    if a ~= nil and b ~= nil then"
                     , "      worst = math.max(worst, math.abs(a - b)) end"
@@ -338,11 +339,11 @@ interfaceSpec = describe "interface equivalence (I2)" $ do
                     _ → expectationFailure ("not a number: " <> T.unpack rest)
                 -- ... and the brain was genuinely driven by the interface: the
                 -- same units with oxygen at 0.4 are unconscious
-                _ ← luaText ls "unit.setStat(2, 'blood_oxygen', 0.4); \
-                               \require('scripts.brain').refresh(2); return true"
-                luaNum ls "unit.getStat(2, 'consciousness')"
+                -- (derived on demand: no refresh to run)
+                _ ← luaText ls "unit.setStat(2, 'blood_oxygen', 0.4); return true"
+                luaNum ls "unit.readPhysio(2, 'consciousness')"
                     >>= \c → c `shouldSatisfy` (< 0.1)
-                luaNum ls "unit.getStat(1, 'consciousness')"
+                luaNum ls "unit.readPhysio(1, 'consciousness')"
                     >>= \c → c `shouldSatisfy` (> 0.99)
 
     it "blood -> cardio: with blood at its maximum (the future Nominal blood \

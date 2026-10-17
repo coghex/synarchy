@@ -8,9 +8,12 @@
 --   guard lives at the Lua boundary rather than in the formula. Both
 --   lookup branches are exercised: @unitAddXPFn@ writes @uiSkills@ and
 --   @uiStats@ through separate arms, so a guard added to one only
---   would pass a skill-only test while still corrupting a stat — and
---   @concentration@, the stat this issue's whole downstream chain
---   hangs off, lives in the second one.
+--   would pass a skill-only test while still corrupting a stat. The stat
+--   arm is exercised on an UNOWNED stat (@perception@): since #2838 (S11a)
+--   @concentration@ is derived and never stored, so it is no longer an
+--   addXP target, and the downstream chain the issue names (a non-finite
+--   value reaching 'Combat.Resolution.Common.mentalEffectiveness') is
+--   covered through the DERIVED path: a non-finite stored rule input.
 --
 --   Same bare-Lua-backend technique as
 --   'Test.Headless.Unit.TransferApi', whose unit fixture primitives
@@ -30,40 +33,55 @@ import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState)
+import Test.Headless.Unit.PhysiologyFixture
+    (ensurePhysiologyRegistry, mindSeedStats)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, mkUnit, newBareLuaBackend)
+import Unit.Physiology.Types (PhysioMode(..), plainUnitPhysiology)
 import Unit.Faction (Faction(..))
 import Unit.Stats (applySkillXP)
 import Unit.Types
-    (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
+    (UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager)
 
 subjectUid ∷ UnitId
 subjectUid = UnitId 1
 
 -- The two names the verb's two lookup arms own. "smithing" is a skill,
--- "concentration" is a stat — and the stat that mentalEffectiveness
--- reads, which is what makes the second arm the dangerous one.
+-- "perception" an unowned stat (a registry-owned stat is a stored base whose
+-- write the physiology gate governs; the derived brain values cannot be
+-- written at all).
 startingSkill, startingStat ∷ Float
 startingSkill = 4.0
 startingStat  = 0.5
 
--- | A single player acolyte carrying exactly one skill and one stat.
---   @conc@ is a parameter so the containment cases below can seed a
---   stat map that is ALREADY non-finite — a corruption that reached the
---   manager by some route other than @unit.addXP@, which is exactly
---   what requirement 2 has to contain.
+-- | A single player acolyte carrying exactly one skill, one unowned stat and
+--   a Simulated brain and mind (consciousness and mind Simulated, everything
+--   else Nominal, the mind seeded). @caffeine@ is a parameter so the
+--   containment cases below can seed a rule input that is ALREADY
+--   non-finite — a corruption that reached the manager by some route other
+--   than @unit.addXP@, which is exactly what requirement 2 has to contain.
 resetUnitsWith ∷ EngineEnv → Float → IO ()
-resetUnitsWith env conc = writeIORef (unitManagerRef env) emptyUnitManager
-    { umDefs = HM.singleton "acolyte" (minimalDef "acolyte" "Acolyte")
-    , umInstances = HM.singleton subjectUid
-        ((mkUnit "acolyte" FactionPlayer (10, 10) 100 [] [])
-            { uiSkills = HM.singleton "smithing" startingSkill
-            , uiStats  = HM.fromList [ ("concentration", conc)
-                                     , ("carrying_capacity", 100) ] })
-    }
+resetUnitsWith env caffeine = do
+    ensurePhysiologyRegistry env
+    writeIORef (unitManagerRef env) emptyUnitManager
+        { umDefs = HM.singleton "acolyte"
+            ((minimalDef "acolyte" "Acolyte")
+                { udPhysiology = plainUnitPhysiology True Nothing $ HM.fromList
+                    [ (s, if s `elem` ["consciousness", "mind"]
+                             then PhysioSimulated else PhysioNominal)
+                    | s ← ["thermo", "salt", "hydration", "nutrition"
+                         , "stamina", "exhaustion", "sleep", "cardio"
+                         , "blood", "consciousness", "mind"] ] })
+        , umInstances = HM.singleton subjectUid
+            ((mkUnit "acolyte" FactionPlayer (10, 10) 100 [] [])
+                { uiSkills = HM.singleton "smithing" startingSkill
+                , uiStats  = HM.insert "caffeine" caffeine $ HM.fromList
+                    (mindSeedStats ⧺ [ ("perception", startingStat)
+                                     , ("carrying_capacity", 100) ]) })
+        }
 
 resetUnits ∷ EngineEnv → IO ()
-resetUnits env = resetUnitsWith env startingStat
+resetUnits env = resetUnitsWith env 0
 
 -- | The stored value of a skill, read straight from the manager ref —
 --   the only witness that says whether the verb wrote anything.
@@ -119,9 +137,9 @@ spec = describe "applySkillXP at the unit.addXP Lua boundary (#1733)" $ do
         it "still grows a STAT and returns the new value" $ \env → do
             resetUnits env
             ls ← newBareLuaBackend env
-            r  ← addXP ls "concentration" "0.5"
+            r  ← addXP ls "perception" "0.5"
             r `shouldNotBe` q "nil"
-            got ← storedStat env "concentration"
+            got ← storedStat env "perception"
             got `shouldBe` Just (applySkillXP startingStat 0.5)
 
     describe "a non-finite amount is refused" $ do
@@ -138,9 +156,9 @@ spec = describe "applySkillXP at the unit.addXP Lua boundary (#1733)" $ do
             forM_ refusedAmounts $ \(label, lit) → do
                 resetUnits env
                 ls ← newBareLuaBackend env
-                r  ← addXP ls "concentration" lit
+                r  ← addXP ls "perception" lit
                 (label, r) `shouldBe` (label, q "nil")
-                got ← storedStat env "concentration"
+                got ← storedStat env "perception"
                 (label, got) `shouldBe` (label, Just startingStat)
 
         it "refuses before the lookup, so an unknown name is not special" $ \env → do
@@ -155,24 +173,23 @@ spec = describe "applySkillXP at the unit.addXP Lua boundary (#1733)" $ do
             nonFin  `shouldBe` q "nil"
 
         it "a refused call cannot make the stat map non-finite" $ \env → do
-            -- The end of the chain the issue names: a NaN written into
-            -- "concentration" would reach mentalEffectiveness, and
-            -- through it hit chance, active dodge and item quality.
+            -- A NaN written into a stat map is what the guard keeps out:
+            -- the stat arm of the verb writes straight into uiStats.
             resetUnits env
             ls ← newBareLuaBackend env
-            _  ← addXP ls "concentration" "0/0"
-            got ← storedStat env "concentration"
+            _  ← addXP ls "perception" "0/0"
+            got ← storedStat env "perception"
             fmap isNaN got `shouldBe` Just False
 
     -- Requirement 2 is independent of the ingress above: whatever route
-    -- put a non-finite concentration in the map, the live
-    -- unit.getMentalEffectiveness verb must still answer inside the
-    -- documented band. `e == e` is false for a NaN, so the Lua-side
-    -- predicate checks finiteness and the band together.
-    describe "an ALREADY-corrupt stat is contained downstream" $
+    -- put a non-finite value in a rule input of the DERIVED concentration
+    -- (#2838), the live unit.getMentalEffectiveness verb must still answer
+    -- inside the documented band. `e == e` is false for a NaN, so the
+    -- Lua-side predicate checks finiteness and the band together.
+    describe "an ALREADY-corrupt rule input is contained downstream" $
         forM_ [("NaN", 0 / 0), ("+Infinity", 1 / 0), ("-Infinity", -1 / 0)]
             $ \(label, bad) →
-                it ("with concentration = " ⧺ label) $ \env → do
+                it ("with a stored caffeine = " ⧺ label) $ \env → do
                     resetUnitsWith env bad
                     ls ← newBareLuaBackend env
                     r  ← evalDebug ls $ T.concat
