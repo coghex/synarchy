@@ -631,7 +631,10 @@ library
                      Unit.Physiology.Transition
                      Unit.Physiology.Types
                      World.Save.Physiology
+                     Gameplay.Tags.Tag
+                     Gameplay.Tags.Index
                      Gameplay.Tags.Types
+                     Gameplay.Tags.Live
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
                      Scenario.Types
@@ -1057,6 +1060,7 @@ library
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component.EntitySnapshots
+                     World.Save.Component.GameplayTags
                      World.Save.Component.EntitySimulation
                      World.Save.Component.EntitySystems
                      World.Save.Component.Knowledge
@@ -1355,6 +1359,7 @@ executable synarchy-save-codec
                  , aeson
                  , bytestring
                  , cereal
+                 , containers
                  , synarchy
                  , text
                  , unordered-containers
@@ -1954,6 +1959,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
+                   Test.Headless.Gameplay.TagsPersistence
                    Test.Headless.Scenario.Schema
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance

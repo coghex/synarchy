@@ -142,6 +142,7 @@ import Location.Types
     (LocationContent(..), LocationDef(..), LocationRegistry, lookupLocation)
 import Language.Generated.Hash (fmix64)
 import Unit.Types.Manager (UnitId)
+import Gameplay.Tags.Index (CategoryIndex, emptyCategoryIndex)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 
 -- * Identity ---------------------------------------------------------
@@ -616,6 +617,17 @@ data LocationInstances = LocationInstances
       --   the location registry needed to resolve bounds\/labels is
       --   actually available. 'Nothing' everywhere else: at placement
       --   time, after a v2 decode, and after resolution.
+    , lisTags          ∷ !(CategoryIndex LocationInstanceId)
+      -- ^ The AUTHORITATIVE general gameplay tag assignments of this
+      --   page's locations (#2701), both indexes, sparse. Keyed by the
+      --   page-local id, so two pages' location 7 are different keys by
+      --   construction: each page owns its own table. Every key names an
+      --   instance in 'lisById'. A lifecycle step (hinted, discovered,
+      --   active, cleared, depleted) is an in-place change to a surviving
+      --   instance and never touches this; the tags leave only with the
+      --   whole table, which is to say with the page. Persisted by the
+      --   @world-pages@ component beside the table; the reverse index is
+      --   rebuilt on decode. Mutated only through "Gameplay.Tags.Live".
     } deriving (Show, Eq, Generic, NFData)
 
 -- | The pre-#911 per-chunk flags a @world-pages@ v1 payload carries,
@@ -632,6 +644,7 @@ emptyLocationInstances = LocationInstances
     { lisNextId        = firstLocationInstanceId
     , lisById          = HM.empty
     , lisPendingLegacy = Nothing
+    , lisTags          = emptyCategoryIndex
     }
 
 -- * Checked geometry construction ------------------------------------
@@ -873,6 +886,7 @@ buildLocationInstancesWithSeed seed namer registry overlay = do
         { lisNextId        = firstLocationInstanceId + length entries
         , lisById          = HM.fromList [ (liId i, i) | Just i ← built ]
         , lisPendingLegacy = Nothing
+        , lisTags          = emptyCategoryIndex
         }
   where
     entries = zip [firstLocationInstanceId ..] (overlayToList overlay)

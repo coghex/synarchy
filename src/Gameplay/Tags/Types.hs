@@ -8,6 +8,10 @@
 --   relationships, a gameplay tag decides nothing, and the type system
 --   keeps one from being passed where the other is expected.
 --
+--   The tag and the nonempty set are defined in "Gameplay.Tags.Tag"
+--   (#2701, so the live owners can index them without importing the
+--   targets) and re-exported here unchanged.
+--
 --   The contract (identity scoping, index invariants, query semantics,
 --   ordering and memory) is written up in @docs\/gameplay_tags.md@.
 module Gameplay.Tags.Types
@@ -45,8 +49,6 @@ module Gameplay.Tags.Types
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
-import qualified Data.Set as Set
-import qualified Data.Text as T
 import Building.Types (BuildingId(..))
 import Location.Instance (LocationInstanceId(..))
 import Unit.Types.Manager (UnitId(..))
@@ -54,58 +56,7 @@ import World.Chunk.Types (ChunkCoord)
 import World.Flora.Identity (FloraInstanceId, isFloraInstanceIdNone)
 import World.Generate.Coordinates (canonicalTileFrameWith)
 import World.Page.Types (WorldPageId(..))
-
--- * Tags
-
--- | An opaque gameplay label. The only validation is that the text is
---   nonempty: an empty label names nothing a script could ask for.
---   Anything else is a legitimate label; the tag system never reads
---   meaning into a tag's spelling.
-newtype GameplayTag = GameplayTag Text
-    deriving (Show, Eq, Ord)
-
-instance NFData GameplayTag where
-    rnf (GameplayTag t) = rnf t
-
--- | 'Nothing' for the empty string.
-mkGameplayTag ∷ Text → Maybe GameplayTag
-mkGameplayTag t
-    | T.null t  = Nothing
-    | otherwise = Just (GameplayTag t)
-
-gameplayTagText ∷ GameplayTag → Text
-gameplayTagText (GameplayTag t) = t
-
--- * Nonempty sets
-
--- | A 'Set.Set' that is never empty. The constructor is not exported,
---   so 'nonEmptySet' is the only way in and an empty record can never
---   be stored in either registry index.
-newtype NonEmptySet a = NonEmptySet (Set.Set a)
-    deriving (Show, Eq, Ord)
-
-instance NFData a ⇒ NFData (NonEmptySet a) where
-    rnf (NonEmptySet s) = rnf s
-
--- | 'Nothing' for the empty set.
-nonEmptySet ∷ Set.Set a → Maybe (NonEmptySet a)
-nonEmptySet s
-    | Set.null s = Nothing
-    | otherwise  = Just (NonEmptySet s)
-
-nonEmptySetToSet ∷ NonEmptySet a → Set.Set a
-nonEmptySetToSet (NonEmptySet s) = s
-
-singletonNonEmptySet ∷ a → NonEmptySet a
-singletonNonEmptySet = NonEmptySet . Set.singleton
-
--- | Inserting never empties a set, so this needs no check.
-insertNonEmptySet ∷ Ord a ⇒ a → NonEmptySet a → NonEmptySet a
-insertNonEmptySet x (NonEmptySet s) = NonEmptySet (Set.insert x s)
-
--- | 'Nothing' once the last element is gone.
-deleteNonEmptySet ∷ Ord a ⇒ a → NonEmptySet a → Maybe (NonEmptySet a)
-deleteNonEmptySet x (NonEmptySet s) = nonEmptySet (Set.delete x s)
+import Gameplay.Tags.Tag
 
 -- * Targets
 

@@ -100,7 +100,7 @@ defsOf = HM.fromList
 pageOf ∷ [(Word32, UnitInstanceSnapshot)] → [(WorldPageId, UnitSnapshot)]
 pageOf us = [(page1, UnitSnapshot
     { usnInstances = HM.fromList [ (UnitId n, u) | (n, u) ← us ]
-    , usnNextId = 100 })]
+    , usnNextId = 100, usnTags = mempty })]
 
 -- | Run the gate over one unit (id 1) and answer the normalized unit and
 --   its notes, or the rejection messages.
@@ -442,7 +442,7 @@ engineSpec = describe "through the real codec and the shipped Lua" $ do
         let u = saved "acolyte" [("hydration", 21), ("strength", 0.5), ("strength_body", 0.7)]
                     [("hydration", PhysioSimulated)]
             snapOf us = (minimalPage page1) { pgsUnits = us }
-            sess = captureSessionSnapshot minimalGlobals [snapOf (UnitSnapshot (HM.fromList [(UnitId 1, u)]) 10)]
+            sess = captureSessionSnapshot minimalGlobals [snapOf (UnitSnapshot (HM.fromList [(UnitId 1, u)]) 10 mempty)]
         case sess of
             Left errs → expectationFailure (show errs)
             Right sn → case HM.lookup page1 (snapPages (withoutRebuiltCaches sn)) of

@@ -9,16 +9,19 @@
 --     [reverse] tag → its nonempty target set. Always derivable from
 --       the forward map; kept so a tag's members are one lookup away.
 --
---   Every mutation goes through 'setTargetTags', which updates both
---   directions together and drops a record the moment it would become
---   empty, so the two indexes cannot disagree and no empty record can
---   survive. 'fromAssignments' is the rebuild path a later persistence
---   layer uses: it takes forward assignments only and DERIVES the
---   reverse index, so a caller can never supply a competing authority.
+--   Each category is a "Gameplay.Tags.Index" 'CategoryIndex', whose one
+--   mutation updates both directions together and drops a record the
+--   moment it would become empty, so the two indexes cannot disagree
+--   and no empty record can survive. 'fromAssignments' takes forward
+--   assignments only and DERIVES the reverse index, so a caller can
+--   never supply a competing authority.
 --
---   This is a pure, in-memory value. Runtime ownership, persistence,
---   lifecycle hooks and Lua access are later integration work; see
---   @docs\/gameplay_tags.md@.
+--   This is a pure, in-memory value. Since #2701 the unit, building and
+--   location categories are OWNED by live state — the unit and building
+--   managers and each page's location table — and a live query
+--   assembles a registry from them with 'registryFromCategories'
+--   ("Gameplay.Tags.Live"). Plants, items, tiles and Lua access are
+--   later integration work; see @docs\/gameplay_tags.md@.
 module Gameplay.Tags.Registry
     ( -- * The registry
       TagRegistry
@@ -37,6 +40,7 @@ module Gameplay.Tags.Registry
     , assignments
       -- * Rebuild and invariants
     , fromAssignments
+    , registryFromCategories
     , registryInvariantViolations
     , RegistryCounts(..)
     , registryCounts
@@ -53,75 +57,21 @@ module Gameplay.Tags.Registry
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
-import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Building.Types (BuildingId(..))
+import Gameplay.Tags.Index
 import Gameplay.Tags.Types
 import Unit.Types.Manager (UnitId)
 
 -- * Per-category index
 
--- | One category's two indexes. Abstract: only this module can change
---   either map, and only through 'setIndexTags'.
-data CategoryIndex k = CategoryIndex
-    { ciForward ∷ !(Map.Map k (NonEmptySet GameplayTag))
-    , ciReverse ∷ !(Map.Map GameplayTag (NonEmptySet k))
-    } deriving (Show, Eq)
-
-emptyIndex ∷ CategoryIndex k
-emptyIndex = CategoryIndex Map.empty Map.empty
-
--- | The members of one tag in one category; empty for a tag nobody
---   carries (a missing tag name denotes the empty set).
-indexMembers ∷ Ord k ⇒ GameplayTag → CategoryIndex k → Set.Set k
-indexMembers t ix = maybe Set.empty nonEmptySetToSet (Map.lookup t (ciReverse ix))
-
-indexTags ∷ Ord k ⇒ k → CategoryIndex k → Set.Set GameplayTag
-indexTags k ix = maybe Set.empty nonEmptySetToSet (Map.lookup k (ciForward ix))
-
--- | Set one target's complete tag set, updating both indexes. The one
---   mutation every public operation reduces to.
-setIndexTags ∷ Ord k ⇒ k → Set.Set GameplayTag → CategoryIndex k → CategoryIndex k
-setIndexTags k new ix
-    | new ≡ old = ix
-    | otherwise = CategoryIndex fwd' rev'
-  where
-    old     = indexTags k ix
-    fwd'    = case nonEmptySet new of
-        Nothing → Map.delete k (ciForward ix)
-        Just ne → Map.insert k ne (ciForward ix)
-    removed = Set.difference old new
-    added   = Set.difference new old
-    rev1    = foldl' (\m t → Map.update (deleteNonEmptySet k) t m)
-                     (ciReverse ix) (Set.toList removed)
-    rev'    = foldl' (\m t → Map.alter (Just . addMember) t m)
-                     rev1 (Set.toList added)
-    addMember = maybe (singletonNonEmptySet k) (insertNonEmptySet k)
-
--- | The reverse index a forward map implies.
-deriveReverse ∷ Ord k
-              ⇒ Map.Map k (NonEmptySet GameplayTag)
-              → Map.Map GameplayTag (NonEmptySet k)
-deriveReverse fwd =
-    Map.mapMaybe nonEmptySet $ Map.fromListWith Set.union
-        [ (t, Set.singleton k)
-        | (k, ts) ← Map.toList fwd
-        , t ← Set.toList (nonEmptySetToSet ts) ]
-
-indexFromForward ∷ Ord k ⇒ Map.Map k (Set.Set GameplayTag) → CategoryIndex k
-indexFromForward raw =
-    let fwd = Map.mapMaybe nonEmptySet raw
-    in CategoryIndex fwd (deriveReverse fwd)
-
--- | What is wrong with one index, if anything: a forward/reverse
---   disagreement. Empty records are unrepresentable ('NonEmptySet').
-indexViolations ∷ (Ord k, Show k) ⇒ TagCategory → CategoryIndex k → [Text]
+-- | What is wrong with one index, if anything. The index type itself
+--   lives in "Gameplay.Tags.Index" (#2701), where it is just as
+--   abstract.
+indexViolations ∷ Ord k ⇒ TagCategory → CategoryIndex k → [Text]
 indexViolations cat ix =
     [ tshow cat <> ": reverse index disagrees with the forward assignments"
-    | ciReverse ix ≢ deriveReverse (ciForward ix) ]
-
-instance NFData k ⇒ NFData (CategoryIndex k) where
-    rnf (CategoryIndex f r) = rnf f `seq` rnf r
+    | categoryIncoherent ix ]
 
 -- * The registry
 
@@ -142,16 +92,22 @@ data TagRegistry = TagRegistry
 --   forcing the building index's values and reverse sets is enough.
 instance NFData TagRegistry where
     rnf (TagRegistry u b l p i t) =
-        rnf u `seq` rnfBuildings b `seq` rnf l `seq` rnf p `seq` rnf i `seq` rnf t
-      where
-        rnfBuildings (CategoryIndex f r) =
-            rnf (Map.elems f) `seq` rnf (Map.keys r)
-            `seq` rnf (fmap unBuildingId . Set.toList . nonEmptySetToSet
-                         <$> Map.elems r)
+        rnf u `seq` rnf (mapCategoryKeysMonotonic unBuildingId b)
+        `seq` rnf l `seq` rnf p `seq` rnf i `seq` rnf t
 
 emptyTagRegistry ∷ TagRegistry
-emptyTagRegistry = TagRegistry emptyIndex emptyIndex emptyIndex
-                               emptyIndex emptyIndex emptyIndex
+emptyTagRegistry = TagRegistry emptyCategoryIndex emptyCategoryIndex
+                               emptyCategoryIndex emptyCategoryIndex
+                               emptyCategoryIndex emptyCategoryIndex
+
+-- | The registry a live query runs against (#2701): the three
+--   categories whose authority lives with an owner — the unit and
+--   building managers and each page's location table — with the three
+--   not yet integrated left empty. O(1); nothing is copied.
+registryFromCategories ∷ CategoryIndex UnitId → CategoryIndex BuildingId
+                       → CategoryIndex LocationTarget → TagRegistry
+registryFromCategories u b l = emptyTagRegistry
+    { trUnits = u, trBuildings = b, trLocations = l }
 
 -- | No assignments at all.
 nullTagRegistry ∷ TagRegistry → Bool
@@ -183,7 +139,7 @@ modifyTargetTags f target r = case target of
     TargetTile k     → r { trTiles     = go k (trTiles r) }
   where
     go ∷ Ord k ⇒ k → CategoryIndex k → CategoryIndex k
-    go k ix = setIndexTags k (f (indexTags k ix)) ix
+    go = modifyCategoryTags f
 
 -- | Add every tag in the set; tags the target already carries are
 --   unchanged (membership is a set, so repeats are idempotent).
@@ -214,12 +170,12 @@ clearTags target = modifyTargetTags (const Set.empty) target
 -- | A target's tags; empty for an untagged target.
 tagsOf ∷ TagTarget → TagRegistry → Set.Set GameplayTag
 tagsOf target r = case target of
-    TargetUnit k     → indexTags k (trUnits r)
-    TargetBuilding k → indexTags k (trBuildings r)
-    TargetLocation k → indexTags k (trLocations r)
-    TargetPlant k    → indexTags k (trPlants r)
-    TargetItem k     → indexTags k (trItems r)
-    TargetTile k     → indexTags k (trTiles r)
+    TargetUnit k     → categoryTagsOf k (trUnits r)
+    TargetBuilding k → categoryTagsOf k (trBuildings r)
+    TargetLocation k → categoryTagsOf k (trLocations r)
+    TargetPlant k    → categoryTagsOf k (trPlants r)
+    TargetItem k     → categoryTagsOf k (trItems r)
+    TargetTile k     → categoryTagsOf k (trTiles r)
 
 hasTag ∷ TagTarget → GameplayTag → TagRegistry → Bool
 hasTag target t r = Set.member t (tagsOf target r)
@@ -236,8 +192,7 @@ assignments r = concat
     , part TargetTile     (trTiles r) ]
   where
     part ∷ (k → TagTarget) → CategoryIndex k → [(TagTarget, Set.Set GameplayTag)]
-    part wrap ix = [ (wrap k, nonEmptySetToSet ts)
-                   | (k, ts) ← Map.toAscList (ciForward ix) ]
+    part wrap ix = [ (wrap k, ts) | (k, ts) ← categoryAssignments ix ]
 
 -- | Build a registry from forward assignments alone, deriving every
 --   reverse index. A target listed more than once receives the union of
@@ -245,16 +200,13 @@ assignments r = concat
 --   @fromAssignments (assignments r) ≡ r@.
 fromAssignments ∷ [(TagTarget, Set.Set GameplayTag)] → TagRegistry
 fromAssignments xs = TagRegistry
-    { trUnits     = indexFromForward (collect [ (k, ts) | (TargetUnit k, ts) ← xs ])
-    , trBuildings = indexFromForward (collect [ (k, ts) | (TargetBuilding k, ts) ← xs ])
-    , trLocations = indexFromForward (collect [ (k, ts) | (TargetLocation k, ts) ← xs ])
-    , trPlants    = indexFromForward (collect [ (k, ts) | (TargetPlant k, ts) ← xs ])
-    , trItems     = indexFromForward (collect [ (k, ts) | (TargetItem k, ts) ← xs ])
-    , trTiles     = indexFromForward (collect [ (k, ts) | (TargetTile k, ts) ← xs ])
+    { trUnits     = categoryFromAssignments [ (k, ts) | (TargetUnit k, ts) ← xs ]
+    , trBuildings = categoryFromAssignments [ (k, ts) | (TargetBuilding k, ts) ← xs ]
+    , trLocations = categoryFromAssignments [ (k, ts) | (TargetLocation k, ts) ← xs ]
+    , trPlants    = categoryFromAssignments [ (k, ts) | (TargetPlant k, ts) ← xs ]
+    , trItems     = categoryFromAssignments [ (k, ts) | (TargetItem k, ts) ← xs ]
+    , trTiles     = categoryFromAssignments [ (k, ts) | (TargetTile k, ts) ← xs ]
     }
-  where
-    collect ∷ Ord k ⇒ [(k, Set.Set GameplayTag)] → Map.Map k (Set.Set GameplayTag)
-    collect = Map.fromListWith Set.union
 
 -- | Every broken index invariant, as text; empty when the registry is
 --   coherent. The public API cannot produce a violation — this exists
@@ -288,8 +240,8 @@ registryCounts r =
     , (TileCategory,     counts (trTiles r)) ]
   where
     counts ∷ CategoryIndex k → RegistryCounts
-    counts ix = RegistryCounts
-        { rcForwardEntries = Map.size (ciForward ix)
-        , rcReverseEntries = Map.size (ciReverse ix)
-        , rcMemberships    = sum (Set.size . nonEmptySetToSet <$> Map.elems (ciForward ix))
+    counts ix = let c = categoryCounts ix in RegistryCounts
+        { rcForwardEntries = ccForwardEntries c
+        , rcReverseEntries = ccReverseEntries c
+        , rcMemberships    = ccMemberships c
         }

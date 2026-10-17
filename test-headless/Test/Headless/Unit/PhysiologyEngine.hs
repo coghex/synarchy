@@ -1151,7 +1151,7 @@ writeSave ∷ String → UnitInstanceSnapshot → IO ()
 writeSave slot unit = do
     let page = (minimalPage page1)
             { pgsUnits = UnitSnapshot
-                (HM.singleton (UnitId 7) unit) 10
+                (HM.singleton (UnitId 7) unit) 10 mempty
             , pgsUnitSimStates = HM.singleton (UnitId 7) minimalSimState }
     case captureSessionSnapshot minimalGlobals [page] of
         Left errs → expectationFailure ("fixture session invalid: " ⧺ show errs)

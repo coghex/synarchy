@@ -101,6 +101,78 @@ def test_normalize_fixture_timestamp_makes_generation_reproducible() -> None:
                "drift between runs")
 
 
+#: The tracked pre-#2701 fixture (units v4, buildings v2, world-pages v13)
+#: and its nonempty, current-version counterpart.
+_PRE_TAG_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z8-units-v4-physiology-overrides.bin"
+_TAGGED_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z9-gameplay-tags.bin"
+
+#: One assignment per owned category, on z8's own page and ids.
+_TAG_SEED = ('{"units":[{"page":"generated_page","id":1,"tags":["defender"]}],'
+             '"buildings":[],'
+             '"locations":[{"page":"generated_page","id":1,"tags":["landmark"]}]}')
+
+
+def _summary_tags(fixture: Path, out: Path) -> dict | None:
+    ok, tail = codec.dump_canonical_summary(fixture, out)
+    if not ok:
+        expect(False, f"expected a canonical summary of {fixture.name}, got: {tail}")
+        return None
+    import json
+    return {p["pageId"]: p.get("gameplayTags", {})
+            for p in json.loads(out.read_text())["pages"]}
+
+
+def test_seeded_tag_fixture_generation_is_reproducible() -> None:
+    print("#2701: tag seeding (synarchy-save-codec seed-tags, the one way a "
+          "generated fixture carries general gameplay tags) is as reproducible "
+          "as generation itself -- two timestamp variants seeded with the same "
+          "spec converge to byte-identical files after normalization -- and the "
+          "canonical summary reads NO assignments off the pre-tag fixture and "
+          "nonempty ones, with their target ids, off the seeded and tracked "
+          "tagged fixtures")
+    for path in (_PRE_TAG_FIXTURE_PATH, _TAGGED_FIXTURE_PATH):
+        if not path.exists():
+            expect(False, f"expected the tracked fixture to exist at {path}")
+            return
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        tmp = Path(d)
+        spec = tmp / "seed.json"
+        spec.write_text(_TAG_SEED)
+        variants = []
+        for name, timestamp in (("a", _VARIANT_A_TIMESTAMP), ("b", _VARIANT_B_TIMESTAMP)):
+            variant = tmp / f"seeded_{name}.bin"
+            ok, tail = codec.set_fixture_timestamp(_PRE_TAG_FIXTURE_PATH, timestamp, variant)
+            expect(ok, f"expected timestamp variant {name} to be written, got: {tail}")
+            ok, tail = codec.seed_fixture_tags(variant, spec, variant)
+            expect(ok, f"expected variant {name} to be seeded, got: {tail}")
+            ok, tail = codec.normalize_fixture_timestamp(variant)
+            expect(ok, f"expected variant {name} to normalize, got: {tail}")
+            variants.append(variant)
+        if not all(v.exists() for v in variants):
+            return
+        expect(variants[0].read_bytes() == variants[1].read_bytes(),
+               "expected the two seeded variants to be byte-identical after "
+               "normalization")
+
+        before = _summary_tags(_PRE_TAG_FIXTURE_PATH, tmp / "before.json")
+        after = _summary_tags(variants[0], tmp / "after.json")
+        tracked = _summary_tags(_TAGGED_FIXTURE_PATH, tmp / "tracked.json")
+        if before is None or after is None or tracked is None:
+            return
+        empty = {"units": [], "buildings": [], "locations": []}
+        expect(all(tags == empty for tags in before.values()),
+               f"expected the pre-tag fixture to read no assignments, got {before}")
+        expect(after.get("generated_page") ==
+               {"units": [{"id": 1, "tags": ["defender"]}], "buildings": [],
+                "locations": [{"id": 1, "tags": ["landmark"]}]},
+               f"expected the seeded variant to carry exactly the seeded "
+               f"assignments, got {after}")
+        page = tracked.get("generated_page", {})
+        expect(all(page.get(cat) for cat in ("units", "buildings", "locations")),
+               f"expected the tracked tagged fixture to carry nonempty unit, "
+               f"building and location assignments, got {tracked}")
+
+
 #: This owner's members, in the run order the façade concatenates
 #: (issue #2073 requirement 12). The façade also takes this list AS
 #: `REPRODUCIBILITY_TESTS`, so requirement 13's "exactly the one
@@ -108,4 +180,5 @@ def test_normalize_fixture_timestamp_makes_generation_reproducible() -> None:
 #: than of a second list that could drift from it.
 TESTS = [
     test_normalize_fixture_timestamp_makes_generation_reproducible,
+    test_seeded_tag_fixture_generation_is_reproducible,
 ]

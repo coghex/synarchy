@@ -19,6 +19,8 @@ module World.Save.Types
     , UnitInstanceSnapshot(..)
     , toUnitSnapshot
     , fromUnitSnapshot
+    , restoredTags
+    , danglingTagTargets
     , flattenItemInstances
     , ItemWalkOrder(..)
     , pageItemContainers
@@ -74,6 +76,11 @@ import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.List as L
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Data.Hashable (Hashable)
+import Gameplay.Tags.Index (CategoryIndex, categoryForward, categoryFromAssignments)
+import Gameplay.Tags.Tag (GameplayTag)
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
@@ -622,6 +629,13 @@ checkWorldCount sd = case sdWorlds sd of
 data BuildingSnapshot = BuildingSnapshot
     { bsnInstances ∷ !(HM.HashMap BuildingId BuildingInstanceSnapshot)
     , bsnNextId    ∷ !Word32
+    , bsnTags      ∷ !(Map.Map BuildingId (Set.Set GameplayTag))
+      -- ^ This page's buildings' authoritative gameplay tag assignments
+      --   (#2701): the forward map only, partitioned out of the global
+      --   'Building.Types.bmTags' by the same page filter as
+      --   'bsnInstances' and under the same save barrier. Every set is
+      --   nonempty. The reverse index is never captured; restore
+      --   rebuilds it.
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingInstance`. Drops `biTexture`
@@ -653,10 +667,12 @@ data BuildingInstanceSnapshot = BuildingInstanceSnapshot
 --   YAML on next boot) and `bmSelected` (resets to Nothing).
 toBuildingSnapshot ∷ WorldPageId → BuildingManager → BuildingSnapshot
 toBuildingSnapshot page bm = BuildingSnapshot
-    { bsnInstances = HM.map toBuildingInstanceSnapshot
-                            (buildingsOnPage page (bmInstances bm))
+    { bsnInstances = HM.map toBuildingInstanceSnapshot onPage
     , bsnNextId    = bmNextId bm
+    , bsnTags      = Map.restrictKeys (categoryForward (bmTags bm))
+                                      (Set.fromList (HM.keys onPage))
     }
+  where onPage = buildingsOnPage page (bmInstances bm)
 
 toBuildingInstanceSnapshot ∷ BuildingInstance → BuildingInstanceSnapshot
 toBuildingInstanceSnapshot bi = BuildingInstanceSnapshot
@@ -709,6 +725,11 @@ fromBuildingSnapshot page defs snap =
                   -- Destruction presentations are session-transient
                   -- (#2091): never in the snapshot, never restored.
                 , bmDestructions = HM.empty
+                  -- #2701: the restored buildings' own assignments, the
+                  -- reverse index rebuilt from them. One naming a
+                  -- building this restore did not produce is dropped
+                  -- ('danglingTagTargets' reports it).
+                , bmTags = restoredTags (HS.fromList (map fst resolved)) (bsnTags snap)
                 }
     in (bm, orphans)
 
@@ -737,6 +758,9 @@ fromBuildingInstanceSnapshot page def s = BuildingInstance
 data UnitSnapshot = UnitSnapshot
     { usnInstances ∷ !(HM.HashMap UnitId UnitInstanceSnapshot)
     , usnNextId    ∷ !Word32
+    , usnTags      ∷ !(Map.Map UnitId (Set.Set GameplayTag))
+      -- ^ This page's units' authoritative gameplay tag assignments
+      --   (#2701); see 'bsnTags', which this mirrors exactly.
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Persistable snapshot of `UnitInstance`. Drops `uiTexture` +
@@ -815,10 +839,12 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
 --   them onto the load target (#78).
 toUnitSnapshot ∷ WorldPageId → UnitManager → UnitSnapshot
 toUnitSnapshot page um = UnitSnapshot
-    { usnInstances = HM.map toUnitInstanceSnapshot
-                            (unitsOnPage page (umInstances um))
+    { usnInstances = HM.map toUnitInstanceSnapshot onPage
     , usnNextId    = umNextId um
+    , usnTags      = Map.restrictKeys (categoryForward (umTags um))
+                                      (Set.fromList (HM.keys onPage))
     }
+  where onPage = unitsOnPage page (umInstances um)
 
 toUnitInstanceSnapshot ∷ UnitInstance → UnitInstanceSnapshot
 toUnitInstanceSnapshot ui = UnitInstanceSnapshot
@@ -959,8 +985,27 @@ fromUnitSnapshot page defs infMgr ecMgr itemMgr snap =
                 , umInstances = HM.fromList resolved
                 , umSelected  = mempty
                 , umNextId    = usnNextId snap
+                  -- #2701: as 'fromBuildingSnapshot' does for buildings.
+                , umTags      = restoredTags (HS.fromList (map fst resolved))
+                                             (usnTags snap)
                 }
     in (um, orphans, unknownFactions, immScrub, eqOrphans)
+
+-- | The live index for the instances a restore actually produced
+--   (#2701): their saved forward assignments, with the reverse index
+--   DERIVED, so a restored session never carries a reverse map nobody
+--   checked. An assignment naming anything else is not restored —
+--   a tag on nothing is not a state the live owners can hold.
+restoredTags ∷ (Ord k, Hashable k)
+             ⇒ HS.HashSet k → Map.Map k (Set.Set GameplayTag) → CategoryIndex k
+restoredTags live saved =
+    categoryFromAssignments [ (k, ts) | (k, ts) ← Map.toList saved, HS.member k live ]
+
+-- | The saved assignments whose target a restore did not produce,
+--   ascending: what 'restoredTags' drops, for the load's diagnostic.
+danglingTagTargets ∷ (Ord k, Hashable k)
+                   ⇒ HS.HashSet k → Map.Map k (Set.Set GameplayTag) → [k]
+danglingTagTargets live saved = filter (not . (`HS.member` live)) (Map.keys saved)
 
 fromUnitInstanceSnapshot ∷ WorldPageId → UnitDef → UnitInstanceSnapshot
                          → UnitInstance

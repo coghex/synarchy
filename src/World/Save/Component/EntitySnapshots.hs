@@ -65,7 +65,11 @@ module World.Save.Component.EntitySnapshots
     , PageBuildingsDTO(..)
     , BuildingsDTO(..)
     , BuildingInstanceDTO(..)
+    , toBuildingInstanceDTO
     , fromBuildingInstanceDTO
+    , PageBuildingsDTOv2(..)
+    , BuildingsDTOv2(..)
+    , migrateBuildingsDTOv2
     , BuildingInstanceDTOv1(..)
     , PageBuildingsDTOv1(..)
     , BuildingsDTOv1(..)
@@ -80,6 +84,9 @@ module World.Save.Component.EntitySnapshots
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , PageUnitsDTOv4(..)
+    , UnitsDTOv4(..)
+    , migrateUnitsDTOv4
     , UnitInstanceDTOv3(..)
     , PageUnitsDTOv3(..)
     , UnitsDTOv3(..)
@@ -105,9 +112,9 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
-import World.Page.Types (WorldPageId)
-import Building.Types (BuildingId)
-import Unit.Types (UnitId, StatModifier(..), Wound(..), Scar(..), PhysioMode)
+import World.Page.Types (WorldPageId(..))
+import Building.Types (BuildingId(..))
+import Unit.Types (UnitId(..), StatModifier(..), Wound(..), Scar(..), PhysioMode)
 import Unit.Sim.Types (Direction)
 import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
@@ -120,6 +127,7 @@ import World.Save.UnitFaction
     ( UnitFactionDTO(..), fromUnitFactionDTO, legacyFactionText
     , toUnitFactionDTO )
 import World.Save.Component.Types
+import World.Save.Component.GameplayTags (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
 import World.Save.PageOrder (orderedPages)
 
 -- buildings ---------------------------------------------------------
@@ -249,11 +257,38 @@ migrateBuildingInstanceDTOv1 d = BuildingInstanceDTO
 data PageBuildingsDTO = PageBuildingsDTO
     { pbPageId    ∷ !WorldPageId
     , pbInstances ∷ !(HM.HashMap BuildingId BuildingInstanceDTO)
+    , pbTags      ∷ !(TagAssignmentsDTO BuildingId)
+      -- ^ #2701 (v3): this page's buildings' general gameplay tag
+      --   assignments, forward only, in the shared wire shape
+      --   ("World.Save.Component.GameplayTags"). APPENDED, which is what
+      --   makes v3 a distinct wire shape.
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
+
+-- | The FROZEN v2 page slice (#1233 → #2701): the current slice without
+--   its tag assignments. Never edited. Its instances are the unchanged
+--   'BuildingInstanceDTO', the component-owned frozen shape v2 and v3
+--   share — a later change to it freezes the v2/v3 shape for both, the
+--   way 'World.Save.Component.WorldGenHistory.WorldGenParamsDTOv9'
+--   serves every @world-pages@ version from v9 to v12.
+data PageBuildingsDTOv2 = PageBuildingsDTOv2
+    { pb2PageId    ∷ !WorldPageId
+    , pb2Instances ∷ !(HM.HashMap BuildingId BuildingInstanceDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype BuildingsDTOv2 = BuildingsDTOv2 { bd2Pages ∷ [PageBuildingsDTOv2] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+-- | v2 → v3: every instance crosses unchanged and the page carries NO
+--   gameplay tags — a v2 save predates them, and nothing else (faction
+--   tags included) may stand in for them.
+migrateBuildingsDTOv2 ∷ BuildingsDTOv2 → BuildingsDTO
+migrateBuildingsDTOv2 (BuildingsDTOv2 slices) = BuildingsDTO
+    [ PageBuildingsDTO (pb2PageId s) (pb2Instances s) [] | s ← slices ]
 
 -- | The FROZEN v2 page slice (#2515), carrying the frozen v2 instances.
 data PageUnitsDTOv2 = PageUnitsDTOv2
@@ -266,7 +301,8 @@ newtype UnitsDTOv2 = UnitsDTOv2 { ud2Pages ∷ [PageUnitsDTOv2] }
     deriving newtype (Show, Eq, Serialize)
 
 -- | v2 → the FROZEN v3 (#2829). Re-targeted from the current DTO so a
---   v2 payload crosses to v4 exactly once, through 'migrateUnitsDTOv3'.
+--   v2 payload crosses to the current version exactly once, through
+--   'migrateUnitsDTOv3'.
 migrateUnitsDTOv2 ∷ UnitsDTOv2 → UnitsDTOv3
 migrateUnitsDTOv2 (UnitsDTOv2 slices) = UnitsDTOv3
     [ PageUnitsDTOv3 (pu2PageId s)
@@ -286,7 +322,7 @@ newtype BuildingsDTOv1 = BuildingsDTOv1 { bd1Pages ∷ [PageBuildingsDTOv1] }
 migrateBuildingsDTOv1 ∷ BuildingsDTOv1 → BuildingsDTO
 migrateBuildingsDTOv1 (BuildingsDTOv1 slices) = BuildingsDTO
     [ PageBuildingsDTO (pb1PageId s)
-          (HM.map migrateBuildingInstanceDTOv1 (pb1Instances s))
+          (HM.map migrateBuildingInstanceDTOv1 (pb1Instances s)) []
     | s ← slices ]
 
 -- Depends on @"core-session"@ too: assembly refills each page's
@@ -296,19 +332,29 @@ migrateBuildingsDTOv1 (BuildingsDTOv1 slices) = BuildingsDTO
 -- v2 (#1233): a building's delivered materials and loose storage carry
 -- the physical values #1233 appended to the recursive item tree, so the
 -- shape changed and v1 decodes through its own frozen tree.
+--
+-- v3 (#2701): each page slice carries its buildings' general gameplay
+-- tag assignments. v1 and v2 each migrate explicitly to v3 with none.
 buildingsCodec ∷ ComponentCodec BuildingsDTO
 buildingsCodec = componentCodec ComponentSpec
     { csComponent     = buildingsComponentId
-    , csVersion       = 2
+    , csVersion       = 3
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → BuildingsDTO
         [ PageBuildingsDTO (pgsPageId p)
               (HM.map toBuildingInstanceDTO (bsnInstances (pgsBuildings p)))
+              (encodeTagAssignments (bsnTags (pgsBuildings p)))
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 migrateBuildingsDTOv1 ]
-    , csValidate      = const []
+    , csOlderVersions = [ atVersion 1 migrateBuildingsDTOv1
+                        , atVersion 2 migrateBuildingsDTOv2 ]
+    , csValidate      = \(BuildingsDTO slices) →
+        [ ComponentError buildingsComponentId 3 ValidatePhase
+              ("page '" <> unWorldPageId (pbPageId s) <> "': " <> msg)
+        | s ← slices
+        , msg ← tagAssignmentErrors (\b → "building " <> tshow (unBuildingId b))
+                              (pbTags s) ]
     }
 
 -- | Reconstruct each page's 'BuildingSnapshot' from its instance slice,
@@ -325,7 +371,8 @@ applyBuildings ver nextId (BuildingsDTO slices) =
         (\s p → p { pgsBuildings = BuildingSnapshot
                         { bsnInstances =
                             HM.map fromBuildingInstanceDTO (pbInstances s)
-                        , bsnNextId = nextId } })
+                        , bsnNextId = nextId
+                        , bsnTags   = decodeTagAssignments (pbTags s) } })
         slices
 
 -- units -------------------------------------------------------------
@@ -642,7 +689,7 @@ newtype UnitsDTOv3 = UnitsDTOv3 { ud3Pages ∷ [PageUnitsDTOv3] }
 migrateUnitsDTOv3 ∷ UnitsDTOv3 → UnitsDTO
 migrateUnitsDTOv3 (UnitsDTOv3 slices) = UnitsDTO
     [ PageUnitsDTO (pu3PageId s)
-          (HM.map migrateUnitInstanceDTOv3 (pu3Instances s))
+          (HM.map migrateUnitInstanceDTOv3 (pu3Instances s)) []
     | s ← slices ]
 
 -- | The FROZEN v2 unit instance (#1233 → #2515), preserved verbatim for
@@ -853,11 +900,32 @@ migrateUnitInstanceDTOv1 d = UnitInstanceDTOv3
 data PageUnitsDTO = PageUnitsDTO
     { puPageId    ∷ !WorldPageId
     , puInstances ∷ !(HM.HashMap UnitId UnitInstanceDTO)
+    , puTags      ∷ !(TagAssignmentsDTO UnitId)
+      -- ^ #2701 (v5): this page's units' general gameplay tag
+      --   assignments; see 'pbTags'.
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
+
+-- | The FROZEN v4 page slice (#2829 → #2701): the current slice without
+--   its tag assignments. Never edited. Its instances are the unchanged
+--   'UnitInstanceDTO' v4 and v5 share; see 'PageBuildingsDTOv2'.
+data PageUnitsDTOv4 = PageUnitsDTOv4
+    { pu4PageId    ∷ !WorldPageId
+    , pu4Instances ∷ !(HM.HashMap UnitId UnitInstanceDTO)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitsDTOv4 = UnitsDTOv4 { ud4Pages ∷ [PageUnitsDTOv4] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+-- | v4 → v5: every instance crosses unchanged and the page carries NO
+--   gameplay tags (see 'migrateBuildingsDTOv2').
+migrateUnitsDTOv4 ∷ UnitsDTOv4 → UnitsDTO
+migrateUnitsDTOv4 (UnitsDTOv4 slices) = UnitsDTO
+    [ PageUnitsDTO (pu4PageId s) (pu4Instances s) [] | s ← slices ]
 
 -- | The FROZEN v1 page slice (#1233), carrying the frozen v1 instances.
 data PageUnitsDTOv1 = PageUnitsDTOv1
@@ -895,22 +963,34 @@ migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTOv3
 -- migrate to the FROZEN v3 and every older version then crosses to v4
 -- exactly once through 'migrateUnitsDTOv3', which supplies EMPTY
 -- overrides. There is no implicit chain: 'componentCodec' selects one
--- decoder per encoded version. Re-encoding emits v4 only.
+-- decoder per encoded version.
+--
+-- v5 (#2701): each page slice carries its units' general gameplay tag
+-- assignments. The outgoing v4 slice is frozen ('UnitsDTOv4') and crosses
+-- through 'migrateUnitsDTOv4'; 'migrateUnitsDTOv3' (and so v1/v2 through
+-- it) lands on v5 directly. Every older version arrives with NO tags.
+-- Re-encoding emits v5 only.
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = componentCodec ComponentSpec
     { csComponent     = unitsComponentId
-    , csVersion       = 4
+    , csVersion       = 5
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → UnitsDTO
         [ PageUnitsDTO (pgsPageId p)
               (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
+              (encodeTagAssignments (usnTags (pgsUnits p)))
         | p ← orderedPages snap ]
     , csDecode        = id
     , csOlderVersions = [ atVersion 1 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv1)
                         , atVersion 2 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv2)
-                        , atVersion 3 migrateUnitsDTOv3 ]
-    , csValidate      = const []
+                        , atVersion 3 migrateUnitsDTOv3
+                        , atVersion 4 migrateUnitsDTOv4 ]
+    , csValidate      = \(UnitsDTO slices) →
+        [ ComponentError unitsComponentId 5 ValidatePhase
+              ("page '" <> unWorldPageId (puPageId s) <> "': " <> msg)
+        | s ← slices
+        , msg ← tagAssignmentErrors (\u → "unit " <> tshow (unUnitId u)) (puTags s) ]
     }
 
 applyUnits
@@ -921,5 +1001,6 @@ applyUnits ver nextId (UnitsDTO slices) =
         (\s p → p { pgsUnits = UnitSnapshot
                         { usnInstances =
                             HM.map fromUnitInstanceDTO (puInstances s)
-                        , usnNextId = nextId } })
+                        , usnNextId = nextId
+                        , usnTags   = decodeTagAssignments (puTags s) } })
         slices

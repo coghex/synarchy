@@ -110,7 +110,11 @@ import Infection.Types (InfectionManager)
 import Equipment.Types (EquipmentClassManager)
 import Equipment.Reconcile (renderEquipmentOrphan)
 import Item.Types (ItemManager)
-import Unit.Types (UnitManager(..), UnitId, UnitDef)
+import Unit.Types (UnitManager(..), UnitId(..), UnitDef)
+import Gameplay.Tags.Index
+    (unionDisjointCategories, categoryTargets, restrictCategoryIndex)
+import Location.Instance (LocationInstances(..), LocationInstanceId(..))
+import qualified Data.Set as Set
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
@@ -331,14 +335,21 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                   -- session has no claim on the incoming one's tiles,
                   -- and its queued spawn is refused at commit for
                   -- exactly that reason.
+                  -- #2701: every page's restored assignments, one
+                  -- index. Unit and building ids are global, so the
+                  -- pages' key sets are disjoint and this is a union.
                   finalBuildings = BuildingManager
                       { bmDefs = buildingDefs, bmInstances = mergedBuildings
                       , bmNextId = nextBid, bmSelected = Nothing
                       , bmReservations = HM.empty
-                      , bmDestructions = HM.empty }
+                      , bmDestructions = HM.empty
+                      , bmTags = unionDisjointCategories
+                                     (map (bmTags . psrBuildings) results) }
                   finalUnits = UnitManager
                       { umDefs = unitDefs, umInstances = mergedUnits
-                      , umSelected = mempty, umNextId = nextUid }
+                      , umSelected = mempty, umNextId = nextUid
+                      , umTags = unionDisjointCategories
+                                     (map (umTags . psrUnits) results) }
                   mCamera    = listToMaybe [ c | Just c ← map psrCamera results ]
                   -- #1670: keep the atlas paired with the id of the page
                   -- whose own zoom cache produced it. Only one staged
@@ -596,7 +607,13 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         -- written to the staged world state, so nothing downstream --
         -- chunk generation, the zoom cache, publication -- can see the
         -- stored value.
-        (params, genRejections) = repairWorldGenParams (wpsGenParams wps)
+        (repairedParams, genRejections) = repairWorldGenParams (wpsGenParams wps)
+        -- #2701: a location gameplay tag naming an id this page's own
+        -- table does not hold is dropped here, before the params can be
+        -- published, and reported below — the decode kept it so the
+        -- integrity graph could see it, and a tag on nothing is not a
+        -- state the live table may hold.
+        (params, danglingLocationTags) = pruneLocationTags repairedParams
         seed      = wgpSeed params
         worldSize = wgpWorldSize params
         -- #2336: an entry whose stored position is not finite is
@@ -651,6 +668,9 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         logWarn logger CatWorld (stagedWorldDateWarning pid savedDate stagedDate)
     when remainderRepaired $
         logWarn logger CatWorld (stagedTimeRemainderWarning pid savedRemainder)
+    unless (null danglingLocationTags) $
+        logInfo logger CatWorld $ danglingTagsMessage pid "location"
+            (map (tshow . unLocationInstanceId) danglingLocationTags)
 
     worldState ← emptyWorldState
     let phaseRef   = wsLoadPhaseRef worldState
@@ -1110,6 +1130,18 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         liveUids   = HM.keysSet (umInstances restoredUm)
         simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
                                       (wpsUnitSimStates wps)
+        -- #2701: the assignments the two restores just declined to
+        -- attach, because nothing they produced carries that id.
+        danglingUnitTags = danglingTagTargets liveUids (usnTags (wpsUnits wps))
+        danglingBuildingTags = danglingTagTargets
+            (HM.keysSet (bmInstances restoredBm)) (bsnTags (wpsBuildings wps))
+
+    unless (null danglingUnitTags) $
+        logInfo logger CatWorld $ danglingTagsMessage pid "unit"
+            (map (tshow . unUnitId) danglingUnitTags)
+    unless (null danglingBuildingTags) $
+        logInfo logger CatWorld $ danglingTagsMessage pid "building"
+            (map (tshow . unBuildingId) danglingBuildingTags)
 
     -- #2305: acquired immunity to an infection definition that no longer
     -- exists is the same kind of memory the container-knowledge scrub
@@ -1179,3 +1211,23 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             Left (ConstructReconcileError t) → Just (StageError t)
             Right () → mStageErr
         }
+
+-- | Drop the location gameplay tags (#2701) naming an id the page's own
+--   table does not hold, answering what was dropped, ascending.
+pruneLocationTags ∷ WorldGenParams → (WorldGenParams, [LocationInstanceId])
+pruneLocationTags params =
+    let lis      = wgpLocationInstances params
+        live k   = HM.member k (lisById lis)
+        dropped  = filter (not . live) (Set.toAscList (categoryTargets (lisTags lis)))
+    in if null dropped then (params, [])
+       else ( params { wgpLocationInstances =
+                         lis { lisTags = restrictCategoryIndex live (lisTags lis) } }
+            , dropped )
+
+-- | The one diagnostic for dropped dangling tag assignments (#2701):
+--   non-blocking, like every other dangling reference a load meets.
+danglingTagsMessage ∷ WorldPageId → Text → [Text] → Text
+danglingTagsMessage pid kind ids =
+    "Save load: page '" <> unWorldPageId pid <> "': dropped gameplay tags on "
+        <> tshow (length ids) <> " " <> kind <> " id(s) that name no existing "
+        <> kind <> " (" <> T.intercalate ", " ids <> ")"

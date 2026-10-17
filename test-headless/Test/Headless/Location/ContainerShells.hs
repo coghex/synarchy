@@ -1603,7 +1603,7 @@ currentPageCore = PageCoreDTO
     , pcDateDay       = 3
     , pcMapMode       = ZMDefault
     , pcIdentity      = Nothing
-    , pcGeneratedId   = Nothing
+    , pcGeneratedId   = Nothing, pcLocationTags = []
     }
 
 -- | The frozen pre-#2505 (v11) shape of the same page: byte-identical

@@ -7,13 +7,16 @@ A LEAF service (requirement 15): the ONE owner of every real-codec
 operation the Python save tooling performs, and of the subprocess
 protocol behind them. It imports only the shared definitions owner.
 
-It owns the four operations, and the one binary that serves them:
+It owns the five operations, and the one binary that serves them:
 
   - fixed-timestamp rewriting (`set_fixture_timestamp`, and its
     in-place `normalize_fixture_timestamp` form);
   - decoded fixture-descriptor dumping (`dump_fixture_descriptors`);
   - canonical-summary dumping (`dump_canonical_summary`);
-  - structural session comparison (`compare_session_snapshots`).
+  - structural session comparison (`compare_session_snapshots`);
+  - general gameplay-tag seeding (`seed_fixture_tags`, #2701) -- the one
+    way a fixture can carry tag assignments before any public tag verb
+    exists, through the real session decoder and encoder.
 
 Everything else CALLS these; nothing else re-implements one
 (requirement 16). In particular save_compat_audit_manifest's
@@ -286,6 +289,20 @@ def set_fixture_timestamp(fixture_path: Path, timestamp: str,
     if output_path is not None:
         args += ["--output", str(output_path)]
     return _run_codec(args, "NORMALIZE_OK")
+
+
+def seed_fixture_tags(fixture_path: Path, spec_path: Path,
+                      output_path: Path) -> tuple[bool, str]:
+    """Write the general gameplay-tag assignments `spec_path` names
+    (#2701; JSON, see `app-save-codec/Main.hs`'s `seed-tags`) into
+    `fixture_path`, writing the result to `output_path` (which may be
+    the same path). The save is decoded and re-encoded through the real
+    session codec, Lua components verbatim. Returns
+    (ok, diagnostic-tail-on-failure).
+    """
+    return _run_codec(["seed-tags", "--fixture", str(fixture_path),
+                       "--spec", str(spec_path), "--output", str(output_path)],
+                      "SEED_OK")
 
 
 def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:

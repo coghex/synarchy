@@ -13,6 +13,7 @@ module Test.Headless.World.Save.Components.Integrity
     (spec) where
 
 import UPrelude
+import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -88,12 +89,12 @@ spec = do
             knownU = HS.fromList ["test_unit"]
             withB defName = BuildingSnapshot
                 (HM.singleton (BuildingId 1)
-                    ((minimalBuildingInstance []) { bisDefName = defName })) 10
+                    ((minimalBuildingInstance []) { bisDefName = defName })) 10 mempty
             withU defName = UnitSnapshot
                 (HM.singleton (UnitId 1)
-                    ((minimalUnitInstance []) { uisDefName = defName })) 10
-            emptyB = BuildingSnapshot HM.empty 10
-            emptyU = UnitSnapshot HM.empty 10
+                    ((minimalUnitInstance []) { uisDefName = defName })) 10 mempty
+            emptyB = BuildingSnapshot HM.empty 10 mempty
+            emptyU = UnitSnapshot HM.empty 10 mempty
 
         it "accepts a save whose every building/unit def resolves" $
             missingDefReferences knownB knownU
@@ -148,7 +149,7 @@ spec = do
                     { pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1)
                             ((minimalBuildingInstance [nestedTooHigh])))
-                        10 }
+                        10 mempty }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextItemId = 1000 } [badPage]
             validateSessionSnapshot snap
@@ -168,7 +169,7 @@ spec = do
                     { pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1)
                             (minimalBuildingInstance [dupNested]))
-                        10 }
+                        10 mempty }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextItemId = 1000 } [badPage]
             validateSessionSnapshot snap
@@ -196,7 +197,7 @@ spec = do
                 (pageWith (minimalWorldPageSave page1)
                     { wpsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1)
-                            (minimalBuildingInstance [richItem])) 10 })
+                            (minimalBuildingInstance [richItem])) 10 mempty })
                 `shouldBe` []
 
         it "flags a NESTED item (inside a kit-in-kit) whose def is \
@@ -206,7 +207,7 @@ spec = do
                     (pageWith (minimalWorldPageSave page1)
                         { wpsBuildings = BuildingSnapshot
                             (HM.singleton (BuildingId 1)
-                                (minimalBuildingInstance [richItem])) 10 })
+                                (minimalBuildingInstance [richItem])) 10 mempty })
             map midrDefName missing `shouldBe` ["mini_kit"]
 
         it "flags an unregistered ground item" $ do
@@ -228,7 +229,7 @@ spec = do
                 missing = missingItemDefReferences (HS.fromList ["bandage"])
                     (pageWith (minimalWorldPageSave page1)
                         { wpsUnits = UnitSnapshot
-                            (HM.singleton (UnitId 1) u) 10 })
+                            (HM.singleton (UnitId 1) u) 10 mempty })
             HS.fromList (map midrDefName missing)
                 `shouldBe` HS.fromList ["first_aid_kit", "ghost_helmet"]
 
@@ -246,7 +247,7 @@ spec = do
                         { lisNextId = 2
                         , lisById = HM.singleton (LocationInstanceId 1)
                             (significantOwner entries)
-                        , lisPendingLegacy = Nothing } } })]
+                        , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex } } })]
 
         it "accepts an obligation whose stored item def still resolves" $
             missingSignificantItemReferences
@@ -449,7 +450,7 @@ spec = do
             immUnit imm = (minimalUnitInstance [])
                 { uisImmunities = HM.fromList imm }
             woundedUnit imm wounds = (immUnit imm) { uisWounds = wounds }
-            snapshotOf us = UnitSnapshot (HM.fromList us) 99
+            snapshotOf us = UnitSnapshot (HM.fromList us) 99 mempty
             restore infMgr snap =
                 fromUnitSnapshot page1 immunityUnitDefs infMgr
                     emptyEquipmentClassManager emptyItemManager snap
@@ -692,13 +693,13 @@ containerCoveragePage = (minimalPage page1)
                 { uisEquipped =
                     HM.singleton "head" (nestedCoverItem 300 "equipped")
                 , uisAccessories = [nestedCoverItem 400 "accessory"] })
-        10
+        10 mempty
     , pgsBuildings = BuildingSnapshot
         (HM.singleton (BuildingId 1)
             (minimalBuildingInstance [nestedCoverItem 500 "storage"])
                 { bisMaterialsDelivered =
                     HM.singleton "wood" [nestedCoverItem 600 "delivered"] })
-        10
+        10 mempty
     }
 
 containerCoverageSnapshot ∷ SessionSnapshot
@@ -746,8 +747,8 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsConstructDesignations = HM.empty
     , wpsGroundItems  = emptyGroundItems
     , wpsSpoilPiles   = emptySpoilPiles
-    , wpsBuildings    = BuildingSnapshot HM.empty 10
-    , wpsUnits        = UnitSnapshot HM.empty 10
+    , wpsBuildings    = BuildingSnapshot HM.empty 10 mempty
+    , wpsUnits        = UnitSnapshot HM.empty 10 mempty
     , wpsUnitSimStates = HM.empty
     , wpsFloraHarvests = emptyFloraHarvests
     , wpsChopDesignations = HM.empty

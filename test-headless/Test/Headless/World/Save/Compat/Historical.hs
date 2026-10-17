@@ -19,6 +19,7 @@ module Test.Headless.World.Save.Compat.Historical
     ) where
 
 import UPrelude
+import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -708,7 +709,7 @@ legacyNamedInstances = LocationInstances
         , liContainers      = []
         , liClearEventEmitted = False
         }
-    , lisPendingLegacy = Nothing
+    , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex
     }
 
 -- | #1101: the current page core carrying a location named in the
@@ -795,7 +796,7 @@ richInstances = LocationInstances
         , liContainers      = []
         , liClearEventEmitted = False
         }
-    , lisPendingLegacy = Nothing
+    , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex
     }
 
 encounterInstances ∷ LocationInstances
@@ -1071,7 +1072,7 @@ currentPageCore = PageCoreDTO
                                           0xABCDEF0123456789 1))
                                Nothing)
     , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage
-                                (WorldPageId "legacy_page"))
+                                (WorldPageId "legacy_page")), pcLocationTags = []
     }
 
 

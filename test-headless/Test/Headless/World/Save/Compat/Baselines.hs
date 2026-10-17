@@ -54,7 +54,12 @@ import World.Save.Types
 import Test.Headless.Location.Fixture (expectGeometry)
 import Unit.Physiology.Types (physioModeText)
 import Location.Types (emptyLocationRegistry)
-import Location.Instance (LocationInstance(..), instancesToList)
+import Location.Instance
+    (LocationInstance(..), LocationInstances(..), LocationInstanceId(..), instancesToList)
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Gameplay.Tags.Index (categoryAssignments)
+import Gameplay.Tags.Tag (gameplayTagText)
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import Language.Etymology
@@ -218,6 +223,45 @@ instance Aeson.FromJSON ExpectedPowerNode where
         <$> o .: "id" <*> o .: "building" <*> o .: "role"
         <*> o .: "peakWatts" <*> o .: "capacityWh" <*> o .: "storedWh"
 
+-- | One page's general gameplay-tag assignments (#2701), per category,
+--   each as (target id, ascending tags). Absent from every summary
+--   generated before units v5 \/ buildings v3 \/ world-pages v14, and
+--   read as NO assignments then -- exactly what those payloads restore.
+data ExpectedPageTags = ExpectedPageTags
+    { eptUnits     ∷ ![(Word32, [Text])]
+    , eptBuildings ∷ ![(Word32, [Text])]
+    , eptLocations ∷ ![(Int, [Text])]
+    } deriving (Show, Eq)
+
+noExpectedPageTags ∷ ExpectedPageTags
+noExpectedPageTags = ExpectedPageTags [] [] []
+
+instance Aeson.FromJSON ExpectedPageTags where
+    parseJSON = Aeson.withObject "gameplayTags" $ \o → ExpectedPageTags
+        <$> (map unTagged ⊚ (o .:? "units" .!= []))
+        <*> (map unTagged ⊚ (o .:? "buildings" .!= []))
+        <*> (map unTagged ⊚ (o .:? "locations" .!= []))
+
+newtype ExpectedTagged k = ExpectedTagged { unTagged ∷ (k, [Text]) }
+
+instance Aeson.FromJSON k ⇒ Aeson.FromJSON (ExpectedTagged k) where
+    parseJSON = Aeson.withObject "tagged" $ \o →
+        curry ExpectedTagged <$> o .: "id" <*> o .: "tags"
+
+-- | The same assignments, read off a DECODED page, in the summary's own
+--   order (ascending ids, ascending tags).
+pageTagAggregate ∷ PageSnapshot → ExpectedPageTags
+pageTagAggregate page = ExpectedPageTags
+    { eptUnits = [ (unUnitId u, tagTexts ts)
+                 | (u, ts) ← Map.toAscList (usnTags (pgsUnits page)) ]
+    , eptBuildings = [ (unBuildingId b, tagTexts ts)
+                     | (b, ts) ← Map.toAscList (bsnTags (pgsBuildings page)) ]
+    , eptLocations = [ (unLocationInstanceId l, tagTexts ts)
+                     | (l, ts) ← categoryAssignments
+                         (lisTags (wgpLocationInstances (pgsGenParams page))) ]
+    }
+  where tagTexts = map gameplayTagText . Set.toAscList
+
 data ExpectedPage = ExpectedPage
     { epPageId ∷ !Text, epBuildingCount ∷ !Int, epUnitCount ∷ !Int
     , epUnitSimStateCount ∷ !Int, epCraftBillCount ∷ !Int
@@ -232,6 +276,7 @@ data ExpectedPage = ExpectedPage
     , epCraftBills ∷ ![ExpectedCraftBill]
     , epPowerNodes ∷ ![ExpectedPowerNode]
     , epFluidSnapshots ∷ !(Maybe ExpectedFluidSnapshots)
+    , epGameplayTags ∷ !ExpectedPageTags
     }
 
 -- | The same aggregates, read off a DECODED page. Kept beside the type
@@ -405,6 +450,7 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .:? "craftBills" .!= []
         <*> o .:? "powerNodes" .!= []
         <*> o .:? "fluidSnapshots"
+        <*> o .:? "gameplayTags" .!= noExpectedPageTags
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -633,6 +679,15 @@ manifestFixturesSpec =
                                     pgsDateDay page `shouldBe` epDateDay ep
                                     T.pack (show (pgsMapMode page))
                                         `shouldBe` epMapMode ep
+
+                                    -- #2701: compared EXACTLY, so a
+                                    -- tagged fixture proves every
+                                    -- assignment and its target id
+                                    -- survives decode, and every older
+                                    -- fixture proves its migration
+                                    -- yields none.
+                                    pageTagAggregate page
+                                        `shouldBe` epGameplayTags ep
 
                                     -- #2520: pinned exactly when the
                                     -- fixture declares it, so a v4

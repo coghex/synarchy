@@ -80,6 +80,8 @@ module World.Save.Component.PageCore
     , WorldPagesDTOv11(..)
     , PageCoreDTOv12(..)
     , WorldPagesDTOv12(..)
+    , PageCoreDTOv13(..)
+    , WorldPagesDTOv13(..)
       -- * The component
     , worldPagesVersion
     , WorldPages(..)
@@ -99,6 +101,7 @@ module World.Save.Component.PageCore
     , migrateWorldPagesV10
     , migrateWorldPagesV11
     , migrateWorldPagesV12
+    , migrateWorldPagesV13
     ) where
 
 import UPrelude
@@ -130,9 +133,13 @@ import World.Save.Component.WorldGen
     , toEtymologySourceDTO, fromEtymologySourceDTO )
 import Location.Instance
     ( locationInstanceAllocatorErrors, locationInstanceBoundsErrors
-    , locationSignificantItemErrors, locationContainerSlotErrors )
+    , locationSignificantItemErrors, locationContainerSlotErrors
+    , LocationInstances(..), LocationInstanceId(..) )
+import Gameplay.Tags.Index (categoryForward, categoryFromAssignments)
+import World.Save.Component.GameplayTags (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
+import qualified Data.Map.Strict as Map
 import World.Generate.Types (WorldGenParams(..))
-import World.Page.Types (WorldPageId, WorldIdentity(..))
+import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..) )
@@ -316,11 +323,79 @@ data PageCoreDTO = PageCoreDTO
       --   a frozen DTO, under the frozen-DTO boundary rule's carve-out
       --   for durable opaque id leaves: it is 128 bits with no internal
       --   structure a later change could reshape.
+    , pcLocationTags ∷ !(TagAssignmentsDTO LocationInstanceId)
+      -- ^ #2701 (v14): this page's locations' general gameplay tag
+      --   assignments, forward only, keyed by the page-local instance
+      --   id, in the shared wire shape
+      --   ("World.Save.Component.GameplayTags"). Beside the page's gen
+      --   params rather than inside 'WorldGenParamsDTO', so the location
+      --   table's own DTO is unchanged; APPENDED, which is what makes
+      --   v14 a distinct wire shape. Hence 'PageCoreDTOv13' below.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTO = WorldPagesDTO { wpdPages ∷ [PageCoreDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
+
+-- | The FROZEN v13 wire shape (#2533 → #2701): the current page without
+--   its location tags. Never edited. Its gen params are the unchanged
+--   'WorldGenParamsDTO' that v13 and v14 share, the way
+--   'WorldGenParamsDTOv9' serves v9 to v12 and 'PageCoreDTOv12' reuses
+--   'WorldIdentityDTO': a later change to that DTO freezes it for v13
+--   as well.
+data PageCoreDTOv13 = PageCoreDTOv13
+    { pc13PageId ∷ !WorldPageId
+    , pc13GenParams ∷ !WorldGenParamsDTO
+    , pc13CameraX ∷ !Float
+    , pc13CameraY ∷ !Float
+    , pc13TimeHour ∷ !Int
+    , pc13TimeMinute ∷ !Int
+    , pc13TimeRemainder ∷ !Double
+    , pc13DateYear ∷ !Int
+    , pc13DateMonth ∷ !Int
+    , pc13DateDay ∷ !Int
+    , pc13MapMode ∷ !ZoomMapMode
+    , pc13Identity ∷ !(Maybe WorldIdentityDTO)
+    , pc13GeneratedId ∷ !(Maybe GeneratedWorldId)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv13 = WorldPagesDTOv13 { wpd13Pages ∷ [PageCoreDTOv13] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | v13 → v14: every field crosses unchanged and the page carries NO
+--   location tags (a v13 save predates them). No river migration: v13
+--   already stores exact surfaces.
+migrateWorldPagesV13 ∷ WorldPagesDTOv13 → WorldPages
+migrateWorldPagesV13 (WorldPagesDTOv13 ps) = basePageSnapshots $ WorldPagesDTO $ map current ps
+  where
+    current p = PageCoreDTO
+        { pcPageId = pc13PageId p
+        , pcGenParams = pc13GenParams p
+        , pcCameraX = pc13CameraX p
+        , pcCameraY = pc13CameraY p
+        , pcTimeHour = pc13TimeHour p
+        , pcTimeMinute = pc13TimeMinute p
+        , pcTimeRemainder = pc13TimeRemainder p
+        , pcDateYear = pc13DateYear p
+        , pcDateMonth = pc13DateMonth p
+        , pcDateDay = pc13DateDay p
+        , pcMapMode = pc13MapMode p
+        , pcIdentity = pc13Identity p
+        , pcGeneratedId = pc13GeneratedId p
+        , pcLocationTags = []
+        }
+
+-- | Install decoded location tags on the page's own location table.
+--   The table is the authority for which locations exist; a tag naming
+--   one it does not hold is kept HERE (a decode is faithful) and is the
+--   integrity graph's and the load stage's to report and drop.
+withLocationTags ∷ TagAssignmentsDTO LocationInstanceId → WorldGenParams → WorldGenParams
+withLocationTags [] params = params
+withLocationTags wire params =
+    let lis = wgpLocationInstances params
+    in params { wgpLocationInstances = lis
+        { lisTags = categoryFromAssignments (Map.toList (decodeTagAssignments wire)) } }
 
 -- | The FROZEN v1 wire shape, preserved verbatim for decode-only
 --   backward compatibility: identical to 'PageCoreDTO' except that its
@@ -536,6 +611,15 @@ newtype WorldPagesDTOv8 = WorldPagesDTOv8 { wpd8Pages ∷ [PageCoreDTOv8] }
 data WorldPages = WorldPages
     { wpPageIds ∷ ![WorldPageId]
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
+    , wpTagErrors ∷ ![Text]
+      -- ^ #2701: every malformed location gameplay-tag entry the decode
+      --   found (an empty tag, an empty or repeated tag list, a location
+      --   listed twice), rendered and named by page. Empty for every
+      --   migrated pre-v14 payload, which carries no tags. Carried
+      --   rather than re-derived for the same reason as
+      --   'wpIdsFromPayload' below: by the time @validatePages@ sees the
+      --   pages, the wire list has become an index that cannot hold a
+      --   malformed entry at all.
     , wpIdsFromPayload ∷ !Bool
       -- ^ #2021: whether the payload this value was decoded FROM carries
       --   generated-world ids at all — 'True' for v9 (and every later
@@ -552,8 +636,10 @@ data WorldPages = WorldPages
       --   without guessing which version it is looking at.
     } deriving (Show)
 
--- | Encoding writes v13 exact river surfaces; v12 payloads decode through
---   'migrateWorldPagesV12' (#2533), and v11 payloads decode
+-- | Encoding writes v14, which carries each page's location gameplay
+--   tags (#2701); v13 payloads decode through 'migrateWorldPagesV13'
+--   with none. v13 introduced exact river surfaces; v12 payloads decode
+--   through 'migrateWorldPagesV12' (#2533), and v11 payloads decode
 --   through their own frozen DTO via 'migrateWorldPagesV11' (#2505), v10
 --   via 'migrateWorldPagesV10' (#2471), v9
 --   via 'migrateWorldPagesV9' (#917), v8
@@ -584,7 +670,7 @@ data WorldPages = WorldPages
 --   "world-pages stamps its errors with the version it WRITES", which
 --   asserts @ccVersion worldPagesCodec ≡ worldPagesVersion@.
 worldPagesVersion ∷ Word32
-worldPagesVersion = 13
+worldPagesVersion = 14
 
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
@@ -592,13 +678,14 @@ worldPagesCodec = componentCodec ComponentSpec
       -- A literal, not 'worldPagesVersion': the save-compat audit parses
       -- this field statically. The example named on that constant is
       -- what keeps the two from drifting.
-    , csVersion       = 13
+    , csVersion       = 14
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 12 migrateWorldPagesV12
+    , csOlderVersions = [ atVersion 13 migrateWorldPagesV13
+                        , atVersion 12 migrateWorldPagesV12
                         , atVersion 11 migrateWorldPagesV11
                         , atVersion 10 migrateWorldPagesV10
                         , atVersion 9 migrateWorldPagesV9
@@ -631,6 +718,9 @@ worldPagesCodec = componentCodec ComponentSpec
         -- this is 'Just' for every save this build writes; @validatePages@
         -- is what refuses a v9 payload that somehow says otherwise.
         , pcGeneratedId = pgsGeneratedId p
+          -- #2701: the page's own location table's forward assignments.
+        , pcLocationTags = encodeTagAssignments $ categoryForward $
+            lisTags (wgpLocationInstances (pgsGenParams p))
         }
 
 -- | Component-local invariant (requirement 3): the page-set authority
@@ -642,7 +732,9 @@ validatePages ∷ WorldPages → [ComponentError]
 validatePages wp
     | null (wpPageIds wp) = [err "no world pages in save"]
     | otherwise =
-        [ err ("duplicate page id " <> tshow pid)
+        -- #2701: a malformed location-tag entry refuses the payload.
+        map err (wpTagErrors wp)
+        ⧺ [ err ("duplicate page id " <> tshow pid)
         | (pid, n) ← HM.toList
                       (HM.fromListWith (+) [ (p, 1 ∷ Int) | p ← wpPageIds wp ])
         , n > 1 ]
@@ -706,10 +798,20 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
     { wpPageIds = map pcPageId ps
     , wpBase    = HM.fromList [ (pcPageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+      -- #2701: every malformed location-tag entry, named by page. The
+      -- decode below keeps what is well formed; 'validatePages' refuses
+      -- the payload over these.
+    , wpTagErrors =
+        [ "page '" <> unWorldPageId (pcPageId p) <> "': " <> msg
+        | p ← ps
+        , msg ← tagAssignmentErrors
+                  (\l → "location " <> tshow (unLocationInstanceId l))
+                  (pcLocationTags p) ]
     }
   where
     toBase p = (blankPageSnapshot (pcPageId p)
-                    (fromWorldGenParamsDTO (pcGenParams p)))
+                    (withLocationTags (pcLocationTags p)
+                        (fromWorldGenParamsDTO (pcGenParams p))))
         { pgsCameraX    = pcCameraX p
         , pgsCameraY    = pcCameraY p
         , pgsTimeHour   = pcTimeHour p
@@ -762,6 +864,7 @@ migrateWorldPagesV12 (WorldPagesDTOv12 ps) = migrateWholeRiverSurfaces $
         , pcMapMode = pc12MapMode p
         , pcIdentity = pc12Identity p
         , pcGeneratedId = pc12GeneratedId p
+        , pcLocationTags = []
         }
 
 -- | Each historical dispatch calls this ONCE, including the V1 entry used
@@ -805,6 +908,7 @@ migrateWorldPagesV8 (WorldPagesDTOv8 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc8PageId ps
     , wpBase    = HM.fromList [ (pc8PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc8PageId p)
@@ -874,6 +978,7 @@ migrateWorldPagesV9 (WorldPagesDTOv9 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc9PageId ps
     , wpBase    = HM.fromList [ (pc9PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc9PageId p)
@@ -944,6 +1049,7 @@ migrateWorldPagesV10 (WorldPagesDTOv10 ps) = migrateWholeRiverSurfaces $ WorldPa
     { wpPageIds = map pc10PageId ps
     , wpBase    = HM.fromList [ (pc10PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc10PageId p)
@@ -1016,6 +1122,7 @@ migrateWorldPagesV11 (WorldPagesDTOv11 ps) = migrateWholeRiverSurfaces $ WorldPa
     { wpPageIds = map pc11PageId ps
     , wpBase    = HM.fromList [ (pc11PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc11PageId p)
@@ -1042,6 +1149,7 @@ migrateWorldPagesV7 (WorldPagesDTOv7 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc7PageId ps
     , wpBase    = HM.fromList [ (pc7PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc7PageId p)
@@ -1074,6 +1182,7 @@ migrateWorldPagesV6 (WorldPagesDTOv6 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc6PageId ps
     , wpBase    = HM.fromList [ (pc6PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc6PageId p)
@@ -1106,6 +1215,7 @@ migrateWorldPagesV5 (WorldPagesDTOv5 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc5PageId ps
     , wpBase    = HM.fromList [ (pc5PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc5PageId p)
@@ -1138,6 +1248,7 @@ migrateWorldPagesV4 (WorldPagesDTOv4 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc4PageId ps
     , wpBase    = HM.fromList [ (pc4PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc4PageId p)
@@ -1167,6 +1278,7 @@ migrateWorldPagesV3 (WorldPagesDTOv3 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc3PageId ps
     , wpBase    = HM.fromList [ (pc3PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc3PageId p)
@@ -1195,6 +1307,7 @@ migrateWorldPagesV2 (WorldPagesDTOv2 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc2PageId ps
     , wpBase    = HM.fromList [ (pc2PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc2PageId p)
@@ -1229,6 +1342,7 @@ migrateWorldPagesV1 (WorldPagesDTOv1 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc1PageId ps
     , wpBase    = HM.fromList [ (pc1PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpTagErrors = []
     }
   where
     toBase p = (blankPageSnapshot (pc1PageId p)
@@ -1278,8 +1392,8 @@ blankPageSnapshot pid params =
         , pgsConstructNextAttempt  = firstConstructAttemptId
         , pgsGroundItems  = emptyGroundItems
         , pgsSpoilPiles   = emptySpoilPiles
-        , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 0 }
-        , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 0 }
+        , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 0, bsnTags = Map.empty }
+        , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 0, usnTags = Map.empty }
         , pgsUnitSimStates = HM.empty
         , pgsFloraHarvests = emptyFloraHarvests
         , pgsChopDesignations = HM.empty

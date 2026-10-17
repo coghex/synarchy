@@ -289,6 +289,15 @@ def main() -> int:
                           "Generation FAILS if it never becomes true, so a "
                           "fixture cannot silently come out missing the very "
                           "state it was created to capture")
+    ap.add_argument("--seed-tags", default=None, metavar="JSON",
+                     help="--generate-session only: general gameplay-tag "
+                          "assignments (#2701) to write into the saved "
+                          "fixture through the real codec "
+                          "(synarchy-save-codec seed-tags), as an inline "
+                          "JSON spec with {bid}/{uid} substituted for the "
+                          "spawned ids. There is no public tag verb yet, so "
+                          "this is the only way a generated fixture can "
+                          "carry assignments")
     ap.add_argument("--port", type=int, default=9280,
                      help="--generate-session only: debug-console port "
                           "for the generation engine boot")

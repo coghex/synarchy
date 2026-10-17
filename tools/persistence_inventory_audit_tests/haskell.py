@@ -455,8 +455,9 @@ def test_pointer_reached_managers_parse_from_their_real_sources():
     record_sources, _, _, _, _ = _load_repo_state()
     # BuildingManager: bmDefs, bmInstances, bmNextId, bmSelected, plus
     # #2326's session-transient bmReservations and #2091's
-    # session-transient bmDestructions.
-    expected_counts = {"UnitManager": 4, "BuildingManager": 6,
+    # session-transient bmDestructions, and #2701's bmTags. UnitManager
+    # gained #2701's umTags beside its original four.
+    expected_counts = {"UnitManager": 5, "BuildingManager": 7,
                        "UnitThreadState": 1}
     for label, relpath, pattern in POINTER_REACHED_MANAGERS:
         expect(relpath in record_sources,

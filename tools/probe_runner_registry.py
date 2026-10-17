@@ -180,6 +180,11 @@ PROBES = [
     ("mental_efficiency", "mental_efficiency_probe.py",
      "mental-effectiveness combat/craft tie-ins: getMentalEffectiveness, "
      "craft-bill progress rate, craft-quality delta, damage-energy invariance (#353)"),
+    ("gameplay_tag_persistence", "gameplay_tag_persistence_probe.py",
+     "general gameplay tags on units/buildings/locations survive fresh-process "
+     "load->save->load for a generated world, an arena and the autosave path, "
+     "seeded through the real codec; outgoing-session and dangling tags never "
+     "survive (#2701)"),
     ("mental_state", "mental_state_probe.py",
      "mental-state ladder: stressed hysteresis, break episodes + wander/flee AI, euphoria (#352)"),
     ("movement", "movement_probe.py",

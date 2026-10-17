@@ -869,7 +869,7 @@ drainSpec = describe "the real destroy drain" $ aroundAll setup $ do
         HM.lookup theId (bmDestructions bm) `shouldBe` Just expected
         -- The effect owns nothing a live building owned.
         toBuildingSnapshot fixturePage bm `shouldBe`
-            BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 100 }
+            BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 100, bsnTags = mempty }
         -- And it counts in the building pass while the map is empty.
         scannedBuildings env `shouldReturn` (1, 0)
 

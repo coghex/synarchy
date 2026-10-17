@@ -39,6 +39,7 @@ import Building.Knowledge.Live
     ( containerObserver, forgetAllContainers, forgetContainerEverywhere
     , markPendingSeed, sweepPendingSeeds )
 import Building.Command.Types (BuildingCommand(..))
+import Gameplay.Tags.Index (deleteCategoryTarget, emptyCategoryIndex)
 import Power.Live (retirePowerNodeEverywhere)
 
 -- | Drain the building command queue in one pass. Called from the
@@ -129,7 +130,9 @@ handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
                 _                → bmDestructions bm
         in ( bm { bmInstances    = HM.delete bid (bmInstances bm)
                 , bmSelected     = cleared
-                , bmDestructions = effects }
+                , bmDestructions = effects
+                  -- #2701: its gameplay tags leave with the instance.
+                , bmTags         = deleteCategoryTarget bid (bmTags bm) }
            , either Just (const Nothing) captured )
     -- An invalid destruction declaration degrades to "no visual" and
     -- is reported with its building/animation context; it never
@@ -165,7 +168,7 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
         -- session that is being torn down and can never commit.
         ( clearReservations bm
             { bmInstances = HM.empty, bmSelected = Nothing
-            , bmDestructions = HM.empty }
+            , bmDestructions = HM.empty, bmTags = emptyCategoryIndex }
         , () )
     forgetAllContainers (wsWorldManagerRef sim)
 
