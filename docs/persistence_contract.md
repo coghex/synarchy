@@ -159,7 +159,10 @@ consciousness, concentration and state-of-mind caches, the
 strength values the body recompute re-derives, and the body-derived maxima.
 (Circulation was one until S9, #2836: it is now derived on demand and never
 stored, like `salt_conc`, so a legacy stored copy is scrubbed at load in every
-mode rather than ignored.)
+mode rather than ignored. The blood volume (S10, #2837) is the dedicated
+`uiBlood` field: Persist exactly while blood is Simulated, serialized-but-ignored
+while Nominal, where the load rewrites it silently to the current canonical
+maximum so a Nominal-blood unit saved by current code normalizes zero times.)
 The wire is unchanged (the stat map is still serialized wholesale, so no
 filter and no codec change), and the load simply does not trust those values:
 `unitResources.onSaveLoaded` runs `unit.recomputeBody` and refreshes
