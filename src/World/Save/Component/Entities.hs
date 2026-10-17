@@ -84,7 +84,11 @@ module World.Save.Component.Entities
     , PageBuildingsDTO(..)
     , BuildingsDTO(..)
     , BuildingInstanceDTO(..)
+    , toBuildingInstanceDTO
     , fromBuildingInstanceDTO
+    , PageBuildingsDTOv2(..)
+    , BuildingsDTOv2(..)
+    , migrateBuildingsDTOv2
     , BuildingInstanceDTOv1(..)
     , PageBuildingsDTOv1(..)
     , BuildingsDTOv1(..)
@@ -98,6 +102,9 @@ module World.Save.Component.Entities
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , PageUnitsDTOv4(..)
+    , UnitsDTOv4(..)
+    , migrateUnitsDTOv4
     , UnitInstanceDTOv3(..)
     , PageUnitsDTOv3(..)
     , UnitsDTOv3(..)

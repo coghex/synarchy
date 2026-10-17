@@ -35,6 +35,7 @@ import World.Magma.Types (VolcanoCtx, emptyVolcanoCtx)
 import World.Magma.Init (buildVolcanoCtx)
 import Location.Overlay.Types (LocationOverlay, emptyLocationOverlay)
 import Location.Instance (LocationInstances(..), emptyLocationInstances)
+import Gameplay.Tags.Index (categoryAssignments, categoryFromAssignments)
 import World.River.Naming (RiverNames, emptyRiverNames)
 import World.Chunk.Types (ChunkCoord)
 
@@ -151,8 +152,9 @@ data WorldGenParams = WorldGenParams
 -- | Manual Serialize: every field except @wgpVolcanoCtx@, plus the
 --   equally transient 'Location.Instance.lisPendingLegacy' inside
 --   @wgpLocationInstances@ (the instance table is written as its
---   allocator + map, so a decoded table always comes back with nothing
---   pending). Field order matches the data declaration.
+--   allocator + map + forward gameplay-tag assignments (#2701), so a
+--   decoded table always comes back with nothing pending and its tag
+--   index rebuilt). Field order matches the data declaration.
 --
 --   NB this instance is NOT the save path — @world.synworld@ goes
 --   through the frozen 'World.Save.Component.WorldGenCurrent.WorldGenParamsDTO'
@@ -182,6 +184,7 @@ instance Serialize WorldGenParams where
         put (wgpLocationOverlay p)
         put (lisNextId (wgpLocationInstances p))
         put (lisById (wgpLocationInstances p))
+        put (categoryAssignments (lisTags (wgpLocationInstances p)))
         put (wgpLocationStamped p)
         put (wgpRiverNames p)
         put (wgpExactRiverBeds p)
@@ -208,6 +211,7 @@ instance Serialize WorldGenParams where
         locOverlay ← get
         locNextId  ← get
         locById    ← get
+        locTags    ← get
         locStamped ← get
         riverNames ← get
         exactRiverBeds ← get
@@ -237,6 +241,7 @@ instance Serialize WorldGenParams where
                 { lisNextId        = locNextId
                 , lisById          = locById
                 , lisPendingLegacy = Nothing
+                , lisTags          = categoryFromAssignments locTags
                 }
             , wgpLocationStamped  = locStamped
             , wgpRiverNames       = riverNames

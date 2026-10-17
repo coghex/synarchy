@@ -136,8 +136,8 @@ minimalPage pid = PageSnapshot
     -- SessionGlobals' sgNextBuildingId note), and B2's buildings/units
     -- components no longer carry an independent per-page copy — they
     -- refill it from the global on decode. minimalGlobals below uses 10.
-    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 10 }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 10 }
+    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 10, bsnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 10, usnTags = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
@@ -257,10 +257,10 @@ richPage pid = (minimalPage pid)
                                Nothing)
     , pgsBuildings = BuildingSnapshot
         { bsnInstances = HM.singleton (BuildingId 1) (minimalBuildingInstance [])
-        , bsnNextId = 10 }
+        , bsnNextId = 10, bsnTags = mempty }
     , pgsUnits = UnitSnapshot
         { usnInstances = HM.singleton (UnitId 1) (minimalUnitInstance [])
-        , usnNextId = 10 }
+        , usnNextId = 10, usnTags = mempty }
     , pgsUnitSimStates = HM.singleton (UnitId 1) minimalSimState
     }
 
@@ -418,7 +418,7 @@ pageCore pid = PageCoreDTO
     , pcTimeRemainder = 0
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
     , pcIdentity = Nothing
-    , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage pid) }
+    , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage pid), pcLocationTags = [] }
 
 isLeft ∷ Either a b → Bool
 isLeft (Left _) = True

@@ -366,6 +366,13 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:4:R world-activity:6:R '
         'world-edits:4:R world-pages:13:R',
+    "z9-gameplay-tags.bin":
+        'buildings:3:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:10:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:5:R world-activity:6:R '
+        'world-edits:4:R world-pages:14:R',
 }
 
 

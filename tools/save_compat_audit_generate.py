@@ -121,6 +121,21 @@ def render_setup_lua(stmt: str, bid, uid) -> str:
             .replace("{uid}", "nil" if uid is None else str(uid)))
 
 
+def seed_generated_fixture(out_path: Path, seed_tags: str, bid, uid) -> None:
+    """Write the --seed-tags spec (#2701) into a generated fixture in
+    place through the real codec, with {bid}/{uid} rendered exactly as
+    --setup-lua renders them. The spec file is temporary and removed
+    whatever the outcome; a refusal raises GenerationError."""
+    spec_path = out_path.with_suffix(".seed-tags.json")
+    try:
+        spec_path.write_text(render_setup_lua(seed_tags, bid, uid))
+        ok, tail = codec.seed_fixture_tags(out_path, spec_path, out_path)
+    finally:
+        spec_path.unlink(missing_ok=True)
+    if not ok:
+        raise GenerationError(f"tag seeding failed: {tail}")
+
+
 def generate_current_format_session(
         port: int, page_id: str, seed: int, world_size: int, plate_count: int,
         spawn_building: str, spawn_unit: str, out_path: Path,
@@ -132,7 +147,8 @@ def generate_current_format_session(
         world_gloss: str | None = None,
         language_seed: str | None = None,
         language_version: int | None = None,
-        name_expr: str | None = None) -> None:
+        name_expr: str | None = None,
+        seed_tags: str | None = None) -> None:
     """Boot a REAL headless engine (isolated resource root -- see
     _make_isolated_gen_root), init a world, optionally spawn ONE building
     and/or ONE unit through the SAME engine.saveWorld/building.spawn/
@@ -176,6 +192,7 @@ def generate_current_format_session(
     tmpdir = tempfile.mkdtemp(prefix="save_compat_gen_")
     slot = "generated"
     proc = None
+    spawned_bid = spawned_uid = None
     try:
         root = _make_isolated_gen_root(tmpdir)
         proc = boot(port, log=f"/tmp/save_compat_gen_{page_id}.log",
@@ -285,10 +302,17 @@ def generate_current_format_session(
             raise GenerationError(f"saved file never appeared at {saved_path}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(saved_path, out_path)
+        spawned_bid, spawned_uid = bid, uid
     finally:
         if proc is not None:
             quit_engine(port, proc)
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # #2701: tag assignments have no Lua verb yet, so they are written
+    # into the saved bytes through the real codec, BEFORE normalization
+    # (the seed re-encodes the session and keeps its metadata as found).
+    if seed_tags is not None:
+        seed_generated_fixture(out_path, seed_tags, spawned_bid, spawned_uid)
 
     # Round-11 review: normalize the freshly-generated fixture's
     # smTimestamp to a fixed constant AFTER the engine has already
@@ -357,7 +381,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
             require_lua=args.require_lua, world_name=args.world_name,
             world_gloss=args.world_gloss, language_seed=args.language_seed,
             language_version=args.language_version,
-            name_expr=args.name_expr)
+            name_expr=args.name_expr, seed_tags=args.seed_tags)
     except GenerationError as e:
         # Round-16 review: generate_current_format_session no longer
         # ONLY writes fixture_path as an untouchable-if-failed last step
@@ -404,7 +428,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
             + f", then engine.saveWorld -- the exact production save path "
               f"an ordinary player save takes. Its canonical summary was "
               f"derived directly from the real decoded SessionSnapshot "
-              f"(dump_canonical_summary), not hand-transcribed.")
+              f"(dump_canonical_summary), not hand-transcribed."
+            + (f" Before that, synarchy-save-codec seed-tags wrote the "
+               f"general gameplay-tag assignments {args.seed_tags} into the "
+               f"saved bytes through the real session decoder and encoder "
+               f"(#2701: no public tag verb exists yet)."
+               if args.seed_tags else ""))
     rc = register.cmd_add_baseline(args)
     if rc != 0:
         restore_files()

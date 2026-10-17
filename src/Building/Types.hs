@@ -34,6 +34,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
+import Gameplay.Tags.Index
+    (CategoryIndex, emptyCategoryIndex, restrictCategoryIndex)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Schema
@@ -385,6 +387,16 @@ data BuildingManager = BuildingManager
       --   never persisted, empty in every freshly constructed manager
       --   (boot, load replacement, 'BuildingClearAll'), and pruned by
       --   the building command drain against the game clock.
+    , bmTags ∷ !(CategoryIndex BuildingId)
+      -- ^ The AUTHORITATIVE general gameplay tag assignments of these
+      --   buildings (#2701), both indexes, sparse. The building twin of
+      --   'Unit.Types.Manager.umTags', for the same reason: every
+      --   transition that removes an instance removes its tags in the
+      --   same atomic modify. Every key names an instance in
+      --   'bmInstances' — never a reservation, which is not yet a
+      --   building. Persisted per page by the @buildings@ component;
+      --   the reverse index is rebuilt. Mutated only through
+      --   "Gameplay.Tags.Live".
     } deriving (Show, Eq)
 
 emptyBuildingManager ∷ BuildingManager
@@ -395,6 +407,7 @@ emptyBuildingManager = BuildingManager
     , bmSelected     = Nothing
     , bmReservations = HM.empty
     , bmDestructions = HM.empty
+    , bmTags         = emptyCategoryIndex
     }
 
 nextBuildingId ∷ BuildingManager → (BuildingId, BuildingManager)
@@ -425,6 +438,9 @@ nextBuildingId bm =
 --   that already committed on the world thread (#1602).
 --
 --   The allocator is untouched, for the same reason the unit half's is.
+--
+--   The retired buildings' gameplay tags go with them (#2701), keyed by
+--   the same retired set, so a replacement's own tags survive.
 retirePageBuildings ∷ WorldPageId → BuildingId → BuildingManager
                     → BuildingManager
 retirePageBuildings pageId cutoff bm = bm
@@ -438,6 +454,8 @@ retirePageBuildings pageId cutoff bm = bm
     , bmSelected = case bmSelected bm of
           Just sel | HM.member sel retired → Nothing
           keep                             → keep
+    , bmTags = restrictCategoryIndex (\bid → not (HM.member bid retired))
+                                     (bmTags bm)
     }
   where
     retired = HM.filterWithKey

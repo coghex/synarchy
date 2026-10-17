@@ -463,6 +463,7 @@ import qualified Test.Headless.Unit.FactionProfile as UnitFactionProfile
 import qualified Test.Headless.Unit.FactionProfileWire as UnitFactionProfileWire
 import qualified Test.Headless.Gameplay.Tags as GameplayTags
 import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
+import qualified Test.Headless.Gameplay.TagsPersistence as GameplayTagsPersistence
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -1368,6 +1369,9 @@ restLane = do
     -- SYNARCHY_TAG_MEMORY=1 (see its module header).
     describe "Gameplay.Tags" GameplayTags.spec
     describe "Gameplay.Tags memory" GameplayTagsMemory.spec
+    -- Own engine for the group (#2701): the real unit, building and
+    -- world handlers plus a real stage and publish.
+    GameplayTagsPersistence.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec

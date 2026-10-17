@@ -50,7 +50,17 @@
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Page incarnation entity teardown"'@.
-module Test.Headless.World.PageIncarnation (spec) where
+module Test.Headless.World.PageIncarnation
+    ( spec
+      -- * Production-path fixture support, shared with
+      --   "Test.Headless.Gameplay.TagsPersistence" (#2701)
+    , incPage, keepPage, unitTile, oldTile, lateTile, buildingDefName
+    , resetScene, drainEntities, drainQueues
+    , spawnUnitOn, spawnBuildingOn
+    , destroyPage, initArenaPage, initWorldPage, showPage
+    , Path(..), paths
+    , newBareLuaBackend
+    ) where
 
 import UPrelude
 import Test.Hspec

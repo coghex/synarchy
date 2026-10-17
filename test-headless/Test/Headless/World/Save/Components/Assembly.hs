@@ -199,21 +199,21 @@ spec = do
            \declares" $ do
             let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2]))
                 bad  = BuildingsDTO
-                    [ PageBuildingsDTO page1 HM.empty ]  -- page2 missing
+                    [ PageBuildingsDTO page1 HM.empty [] ]  -- page2 missing
             applyBuildings 1 1 bad base `shouldSatisfy` isLeft
 
         it "rejects a page-scoped slice for a page the authority does NOT \
            \declare" $ do
             let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1]))
                 bad  = BuildingsDTO
-                    [ PageBuildingsDTO page1 HM.empty
-                    , PageBuildingsDTO page2 HM.empty ]
+                    [ PageBuildingsDTO page1 HM.empty []
+                    , PageBuildingsDTO page2 HM.empty [] ]
             applyBuildings 1 1 bad base `shouldSatisfy` isLeft
 
         it "reports the component's real encoded version (NOT a placeholder \
            \0) on a page-set mismatch (requirement 6)" $ do
             let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2]))
-                bad  = BuildingsDTO [ PageBuildingsDTO page1 HM.empty ]  -- page2 missing
+                bad  = BuildingsDTO [ PageBuildingsDTO page1 HM.empty [] ]  -- page2 missing
             case applyBuildings 1 10 bad base of
                 Left es → do
                     map ceVersion es `shouldSatisfy` all (≡ 1)
@@ -224,14 +224,14 @@ spec = do
         it "accepts a slice set matching the authority exactly" $ do
             let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1, pageCore page2]))
                 ok   = BuildingsDTO
-                    [ PageBuildingsDTO page1 HM.empty
-                    , PageBuildingsDTO page2 HM.empty ]
+                    [ PageBuildingsDTO page1 HM.empty []
+                    , PageBuildingsDTO page2 HM.empty [] ]
             applyBuildings 1 1 ok base `shouldSatisfy` (not . isLeft)
 
         it "reconstructs the building allocator from the global counter, \
            \not a per-page copy (requirement 9)" $ do
             let base = wpBase (basePageSnapshots (WorldPagesDTO [pageCore page1]))
-                ok   = BuildingsDTO [ PageBuildingsDTO page1 HM.empty ]
+                ok   = BuildingsDTO [ PageBuildingsDTO page1 HM.empty [] ]
             case applyBuildings 1 42 ok base of
                 Right m  → (bsnNextId . pgsBuildings <$> HM.lookup page1 m)
                              `shouldBe` Just 42
@@ -465,8 +465,8 @@ spec = do
         it "rejects a session-global item/building/unit allocator of 0 \
            \even with EVERY entity map empty" $ do
             let bare = (minimalPage page1)
-                    { pgsBuildings = BuildingSnapshot HM.empty 1
-                    , pgsUnits     = UnitSnapshot HM.empty 1
+                    { pgsBuildings = BuildingSnapshot HM.empty 1 mempty
+                    , pgsUnits     = UnitSnapshot HM.empty 1 mempty
                     , pgsUnitSimStates = HM.empty }
                 globals = minimalGlobals
                     { sgNextBuildingId = 1, sgNextUnitId = 1 }
@@ -483,8 +483,8 @@ spec = do
         it "surfaces a rejected session-global floor through the real \
            \envelope decode, attributed to core-session" $ do
             let bare = (minimalPage page1)
-                    { pgsBuildings = BuildingSnapshot HM.empty 1
-                    , pgsUnits     = UnitSnapshot HM.empty 1
+                    { pgsBuildings = BuildingSnapshot HM.empty 1 mempty
+                    , pgsUnits     = UnitSnapshot HM.empty 1 mempty
                     , pgsUnitSimStates = HM.empty }
                 snap = (buildSessionSnapshot minimalGlobals [bare])
                            { snapNextBuildingId = 0 }
@@ -544,7 +544,7 @@ spec = do
             let badPage = (minimalPage page1)
                     { pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 50) (minimalBuildingInstance []))
-                        51 }
+                        51 mempty }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextBuildingId = 50 } [badPage]
                 meta = snapshotSaveMetadata (SaveRequestMeta "s" "t" False) snap

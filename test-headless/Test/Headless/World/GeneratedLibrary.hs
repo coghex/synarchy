@@ -257,8 +257,8 @@ minimalPage pid gid = PageSnapshot
     , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
-    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1 }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1 }
+    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty

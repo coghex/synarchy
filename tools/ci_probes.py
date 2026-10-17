@@ -507,6 +507,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     "fluid_reaction": (Reason(SLOW_WORLDGEN, "generates a real world page and boots two "
                               "engines (react+save, fresh-process load) to prove the "
                               "reaction product survives leaving the process (#2485)"),),
+    "gameplay_tag_persistence": (Reason(SLOW_WORLDGEN, "generates a real worldSize-16 "
+                                        "page and boots seven engines (generated-world, "
+                                        "autosave and arena fresh-process load->save legs "
+                                        "over codec-seeded tags) (#2701)"),),
     "multiworld_save": (Reason(SLOW_WORLDGEN, "generates two real world pages"),),
     "persistence_integrity": (Reason(SLOW_WORLDGEN, "generates a real world page and boots "
                                      "three engines (build+save, dangling-reference load, "

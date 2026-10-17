@@ -395,6 +395,74 @@ def test_generate_session_rolls_back_fixture_and_summary_on_dump_failure() -> No
             codec.dump_canonical_summary = old_dump
 
 
+def test_generate_session_forwards_seed_tags_and_records_them() -> None:
+    print("#2701: --generate-session forwards --seed-tags to generation and "
+          "records the spec in the fixture's provenance")
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        tmp = Path(d)
+        fixture_path = tmp / "gen.bin"
+        summary_path = tmp / "gen.expected.json"
+        spec = '{"units":[{"page":"p","id":{uid},"tags":["a"]}]}'
+        seen = {}
+        old_gen = generate.generate_current_format_session
+        old_dump = codec.dump_canonical_summary
+        old_register = generate.register.cmd_add_baseline
+        generate.generate_current_format_session = (
+            lambda **kw: (seen.update(seed=kw.get("seed_tags")),
+                          kw["out_path"].write_bytes(b"bytes"))[1])
+        codec.dump_canonical_summary = (
+            lambda fp, sp: (sp.write_text("{}"), (True, ""))[1])
+        generate.register.cmd_add_baseline = (
+            lambda args: (seen.update(provenance=args.provenance), 0)[1])
+        try:
+            rc = generate.cmd_generate(_Args(
+                baseline_id="b", fixture_id="f",
+                path=str(fixture_path.relative_to(common.REPO_ROOT)),
+                summary=str(summary_path.relative_to(common.REPO_ROOT)),
+                seed_tags=spec))
+            expect(rc == 0, f"expected success, got exit code {rc}")
+            expect(seen.get("seed") == spec,
+                   f"expected the spec to reach generation verbatim, got {seen}")
+            expect(spec in (seen.get("provenance") or "")
+                   and "seed-tags" in (seen.get("provenance") or ""),
+                   f"expected the provenance to record the seeding, got {seen}")
+        finally:
+            generate.generate_current_format_session = old_gen
+            codec.dump_canonical_summary = old_dump
+            generate.register.cmd_add_baseline = old_register
+
+
+def test_seed_generated_fixture_renders_ids_and_cleans_up() -> None:
+    print("#2701: the seeding step renders {bid}/{uid} like --setup-lua, hands "
+          "the codec a spec file next to the fixture, removes it afterwards, "
+          "and turns a codec refusal into a GenerationError")
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        fixture = Path(d) / "gen.bin"
+        fixture.write_bytes(b"bytes")
+        handed = []
+        old_seed = codec.seed_fixture_tags
+        codec.seed_fixture_tags = (
+            lambda fp, sp, op: (handed.append((fp, sp.read_text(), op)), (True, ""))[1])
+        try:
+            generate.seed_generated_fixture(
+                fixture, '{"units":[{"id":{uid}}],"buildings":[{"id":{bid}}]}', 7, 3)
+            expect(handed == [(fixture, '{"units":[{"id":3}],"buildings":[{"id":7}]}',
+                               fixture)],
+                   f"expected the rendered spec, in place, got {handed}")
+            expect(not fixture.with_suffix(".seed-tags.json").exists(),
+                   "expected the temporary spec file to be removed")
+            codec.seed_fixture_tags = lambda fp, sp, op: (False, "SEED_FAILED: no")
+            try:
+                generate.seed_generated_fixture(fixture, "{}", None, None)
+                expect(False, "expected a refused seed to raise GenerationError")
+            except generate.GenerationError as e:
+                expect("SEED_FAILED" in str(e), f"expected the codec's reason, got {e}")
+            expect(not fixture.with_suffix(".seed-tags.json").exists(),
+                   "expected the spec file removed after a refusal too")
+        finally:
+            codec.seed_fixture_tags = old_seed
+
+
 def test_generate_session_rolls_back_fixture_and_summary_on_validation_failure() -> None:
     print("--generate-session restores fixture+summary (not just the manifest) if real-codec validation fails")
     with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
@@ -698,6 +766,8 @@ TESTS = [
     test_generate_session_refuses_when_summary_exists_without_force,
     test_generate_session_rolls_back_on_generation_error_after_fixture_written,
     test_generate_session_rolls_back_fixture_and_summary_on_dump_failure,
+    test_generate_session_forwards_seed_tags_and_records_them,
+    test_seed_generated_fixture_renders_ids_and_cleans_up,
     test_generate_session_rolls_back_fixture_and_summary_on_validation_failure,
     test_generate_session_rolls_back_when_the_summary_destination_is_unusable,
     test_dump_canonical_summary_reports_an_unusable_destination_as_failure,

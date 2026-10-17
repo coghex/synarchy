@@ -1,7 +1,7 @@
 -- | The save-compatibility tooling's compiled codec helper (issue
 --   #2273).
 --
---   Four operations the Python save tooling needs from the REAL
+--   Five operations the Python save tooling needs from the REAL
 --   Haskell save codec, and nothing else:
 --
 --     * @summary@         — derive a fixture's canonical-summary JSON
@@ -82,7 +82,8 @@ import System.IO (hPutStrLn, stderr)
 import Control.Exception (IOException, try)
 
 import World.Save.Envelope (decodeSessionEnvelope, currentEnvelopeVersion
-                           , metadataComponentId, LuaComponentSpec(..))
+                           , metadataComponentId, LuaComponentSpec(..)
+                           , encodeSessionSnapshot)
 import World.Save.Envelope.Codec (DecodedEnvelope(..), decodeEnvelope
                                  , encodeEnvelope)
 import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..), fnv1a64
@@ -106,6 +107,16 @@ import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Item.Knowledge
+import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
+import Data.Aeson ((.:), (.:?), (.!=))
+import Control.Monad (foldM)
+import Gameplay.Tags.Index (categoryForward, setCategoryTags)
+import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag)
+import Location.Instance (LocationInstances(..), LocationInstanceId(..))
+import World.Generate.Types (WorldGenParams(..))
+import World.Save.Envelope.Types (EnvelopeError(..))
+import World.Save.Component.Types (luaComponentPrefix)
 
 -- | The live Lua persistent-component names @decodeSessionEnvelope@ is
 --   given as BOTH its known and its required set when deriving a
@@ -146,6 +157,7 @@ main = getArgs ≫= \case
     ("set-timestamp" : rest) → runSetTimestamp rest
     ("descriptors" : rest)   → runDescriptors rest
     ("compare" : rest)       → runCompare rest
+    ("seed-tags" : rest)     → runSeedTags rest
     args                     → usageFailure args
 
 usageFailure ∷ ∀ α. [String] → IO α
@@ -161,6 +173,7 @@ usageFailure args = do
               ⧺ "[--output PATH]"
         , "  " ⧺ prog ⧺ " descriptors --output PATH FIXTURE [FIXTURE ...]"
         , "  " ⧺ prog ⧺ " compare --output PATH FIXTURE FIXTURE [FIXTURE ...]"
+        , "  " ⧺ prog ⧺ " seed-tags --fixture PATH --spec PATH --output PATH"
         ]
     exitFailure
 
@@ -401,8 +414,24 @@ dumpPage (WorldPageId pid, page) = Aeson.object
     -- the Baselines reader treats as "this fixture pins nothing here"
     -- rather than as zero.
     , "fluidSnapshots" .= dumpFluidSnapshots page
+      -- #2701: the page's authoritative general gameplay tag
+      -- assignments, per category, with their target ids -- so losing,
+      -- leaking or re-targeting one is observable. Absent from every
+      -- summary generated before units v5 / buildings v3 / world-pages
+      -- v14, which the Baselines reader reads as "no assignments": the
+      -- value every migrated older payload really restores.
+    , "gameplayTags" .= Aeson.object
+        [ "units" .= dumpTagged unUnitId (usnTags (pgsUnits page))
+        , "buildings" .= dumpTagged unBuildingId (bsnTags (pgsBuildings page))
+        , "locations" .= dumpTagged unLocationInstanceId
+            (categoryForward (lisTags (wgpLocationInstances (pgsGenParams page))))
+        ]
     ]
   where
+    dumpTagged ∷ Aeson.ToJSON i ⇒ (k → i) → Map.Map k (Set.Set GameplayTag) → [Aeson.Value]
+    dumpTagged key m =
+        [ Aeson.object [ "id" .= key k, "tags" .= map gameplayTagText (Set.toAscList ts) ]
+        | (k, ts) ← Map.toAscList m ]
     dumpFluidSnapshots pg =
         let ordered = fluidSnapshotCells pg
             cells = [ (ft, z) | (_, _, ft, z) ← ordered ]
@@ -731,3 +760,115 @@ decodeOne path = do
 --   with nothing but the stdout line to parse.
 writeCompareReport ∷ FilePath → Aeson.Value → IO ()
 writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode
+
+-- * seed-tags
+
+-- | Write general gameplay tag assignments (#2701) into a save and
+--   write the result to @--output@: decode the whole session through
+--   the real decoder ('decodeSessionEnvelope'), set each named target's
+--   COMPLETE tag set on its owning page, and re-encode through the very
+--   encoder an ordinary save uses ('encodeSessionSnapshot'), carrying
+--   every Lua component's payload across verbatim.
+--
+--   This is fixture support for the compatibility corpus and
+--   @tools\/gameplay_tag_persistence_probe.py@, nothing more: there is
+--   no gameplay verb for tags yet (SCN-06), and this program is not
+--   reachable from Lua. It deliberately does NOT check that a target
+--   exists, so a probe can seed a dangling assignment and prove the
+--   load's integrity rules drop it; a malformed tag (the empty string)
+--   is refused, because the codec itself could never carry one.
+--
+--   @--spec@ is JSON:
+--
+--   > {"units":     [{"page": "main_world", "id": 1, "tags": ["a", "b"]}],
+--   >  "buildings": [...], "locations": [...]}
+--
+--   An empty @tags@ list clears the target. Each category is optional.
+runSeedTags ∷ [String] → IO ()
+runSeedTags args = do
+    (fixturePath, rest0) ← orUsageFailure (requireFlag "--fixture" args)
+    (specPath, rest1)    ← orUsageFailure (requireFlag "--spec" rest0)
+    (outputPath, rest2)  ← orUsageFailure (requireFlag "--output" rest1)
+    unless (null rest2) (orUsageFailure (Left ("unexpected arguments: "
+                                               ⧺ unwords rest2)))
+    specBytes ← BSL.readFile specPath
+    seed ← case Aeson.eitherDecode specBytes of
+        Left e  → failWith "SEED_FAILED" specPath ("spec: " ⧺ e)
+        Right v → pure v
+    bytes ← BS.readFile fixturePath
+    luaNames ← case luaComponentNamesIn bytes of
+        Left e  → failWith "SEED_FAILED" fixturePath ("envelope: " ⧺ e)
+        Right n → pure n
+    case decodeSessionEnvelope luaNames HS.empty bytes of
+        Left err → failWith "SEED_FAILED" fixturePath ("decode: " ⧺ T.unpack err)
+        Right (_, _, _, True) → failWith "SEED_FAILED" fixturePath
+            "a migrated legacy baseline cannot be re-encoded as a seeded save"
+        Right (meta, snap, luaComponents, False) →
+            case applyTagSeed seed snap of
+                Left e → failWith "SEED_FAILED" fixturePath e
+                Right snap' → do
+                    BS.writeFile outputPath
+                        (encodeSessionSnapshot meta snap' luaComponents)
+                    putStrLn "SEED_OK"
+
+-- | One target's complete tag set.
+data SeedEntry = SeedEntry
+    { sePage ∷ !Text, seId ∷ !Int, seTags ∷ ![Text] }
+
+instance Aeson.FromJSON SeedEntry where
+    parseJSON = Aeson.withObject "seed entry" $ \o →
+        SeedEntry <$> o .: "page" <*> o .: "id" <*> o .: "tags"
+
+data TagSeed = TagSeed
+    { tsUnitSeeds ∷ ![SeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
+    , tsLocationSeeds ∷ ![SeedEntry] }
+
+instance Aeson.FromJSON TagSeed where
+    parseJSON = Aeson.withObject "tag seed" $ \o → TagSeed
+        <$> o .:? "units" .!= [] <*> o .:? "buildings" .!= []
+        <*> o .:? "locations" .!= []
+
+applyTagSeed ∷ TagSeed → SessionSnapshot → Either String SessionSnapshot
+applyTagSeed seed snap0 =
+    foldM (entry onUnit) snap0 (tsUnitSeeds seed)
+        ≫= \s1 → foldM (entry onBuilding) s1 (tsBuildingSeeds seed)
+        ≫= \s2 → foldM (entry onLocation) s2 (tsLocationSeeds seed)
+  where
+    entry f snap e = do
+        tags ← maybe (Left ("empty tag for " ⧺ T.unpack (sePage e) ⧺ "/"
+                            ⧺ show (seId e)))
+                     (Right . Set.fromList) (traverse mkGameplayTag (seTags e))
+        let pid = WorldPageId (sePage e)
+        page ← maybe (Left ("no page '" ⧺ T.unpack (sePage e) ⧺ "' in the save"))
+                     Right (HM.lookup pid (snapPages snap))
+        pure snap { snapPages = HM.insert pid (f (seId e) tags page) (snapPages snap) }
+    setOrClear k ts m | Set.null ts = Map.delete k m
+                      | otherwise   = Map.insert k ts m
+    onUnit i ts page = page { pgsUnits = (pgsUnits page)
+        { usnTags = setOrClear (UnitId (fromIntegral i)) ts (usnTags (pgsUnits page)) } }
+    onBuilding i ts page = page { pgsBuildings = (pgsBuildings page)
+        { bsnTags = setOrClear (BuildingId (fromIntegral i)) ts
+                               (bsnTags (pgsBuildings page)) } }
+    onLocation i ts page =
+        let params = pgsGenParams page
+            lis    = wgpLocationInstances params
+        in page { pgsGenParams = params { wgpLocationInstances = lis
+                { lisTags = setCategoryTags (LocationInstanceId i) ts (lisTags lis) } } }
+
+-- | Every @lua.\<name\>@ component the envelope carries, by bare name,
+--   found by asking the real envelope decoder: each Lua component it
+--   reports as an unknown REQUIRED id is added to the known set and the
+--   decode retried, so the answer is the manifest's own, validated.
+luaComponentNamesIn ∷ BS.ByteString → Either String (HS.HashSet Text)
+luaComponentNamesIn bytes = go (64 ∷ Int) structuralKnownIds
+  where
+    go 0 _ = Left "too many unknown Lua components"
+    go n known = case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
+                                     known HS.empty bytes of
+        Left (UnknownRequiredComponent cid@(ComponentId t))
+            | luaComponentPrefix `T.isPrefixOf` t → go (n - 1) (HS.insert cid known)
+        Left e → Left (show e)
+        Right decoded → Right $ HS.fromList
+            [ name | d ← emComponents (deManifest decoded)
+                   , Just name ← [T.stripPrefix luaComponentPrefix
+                                                (componentIdText (cdId d))] ]
