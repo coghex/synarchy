@@ -350,6 +350,10 @@ Incoming contributions follow the receiver's mode. A debit or credit into a
 Nominal system is discarded: `physiology.debit` and `credit` return 0. A
 Simulated receiver applies it.
 
+*Amended by S9 (#2836): `circulation` is no longer an always-on step or a
+cache. It is the on-demand derived key of the `cardio` system (S9.2, S9.9),
+and the paragraph below describes the S4 state it replaced.*
+
 `circulation` is not owned by any system. It becomes its own always-on
 orchestration step, after cardio and before thermo, computed from the
 *effective* core read. That reproduces where thermo computes it today
@@ -613,7 +617,9 @@ added or expiring, or a `recomputeBody` that moves `maxSalt`. A legacy stored
 moves to the accessor in S5: brain, cramps, `sweatFactor`, the status row
 and the probe. No Haskell code reads `salt_conc` (grep of `src/`).
 
-**2. Non-v1 caches stay tick-lagged, as today.** These are `circulation` and
+**2. Non-v1 caches stay tick-lagged, as today.** *(S9, #2836: `circulation`
+left this list; it is derived on demand and never cached. The facade's
+`refresh` now recomputes only the brain.)* These were `circulation` and
 brain's outputs (`consciousness`, `concentration`, `state_of_mind`, `mood`).
 No v1 system owns them, and they keep their current tick-lagged semantics.
 
@@ -656,7 +662,7 @@ Classification of the `uiStats` values this design touches (R2-5):
 | Durable intent | `uiPhysioOverrides` | *Persist exactly* | exact equality |
 | Durable body state | `tissue_recovering` (SD-18; unowned), alongside the existing `fat_mass` / `lean_mass` / `frame_mass` | *Persist exactly* | exact equality |
 | v1 derived | `salt_conc` | **not stored** (computed on demand, D-5a) | absent from the payload; the on-demand value is compared after load |
-| Tick-lagged caches | `circulation`, `consciousness`, `concentration`, `state_of_mind`, and the body-derived `strength` / `strength_body` / maxima | **Rebuild deterministically, serialized but ignored** (see below) | compared as the **canonical recomputation** from the loaded durable state, not by stored bytes |
+| Tick-lagged caches | `consciousness`, `concentration`, `state_of_mind`, and the body-derived `strength` / `strength_body` / maxima (`circulation` left this row in S9, #2836: it is derived, **not stored**, and a legacy stored value is scrubbed at load in every mode, D-6 (i)) | **Rebuild deterministically, serialized but ignored** (see below) | compared as the **canonical recomputation** from the loaded durable state, not by stored bytes |
 
 **Taxonomy note (R3-5).** `docs/persistence_contract.md:128-137` defines
 *Rebuild deterministically* as never serialized. Only *Reset to a documented
@@ -810,7 +816,8 @@ Facade `scripts/physiology.lua`:
 - `refresh(uid)`
 - `registerSystem(id, { tick, onModeChanged })`
 
-Orchestration: `unit_resources.update` runs cardio → circulation → each
+Orchestration: `unit_resources.update` runs cardio (S9: only while Simulated;
+circulation is no longer a step) → each
 Simulated system's `tick` in registry order (thermo before salt, as today) →
 brain → … Pool entries, digestion, starvation, regrowth and the strength
 *discount* run only when nutrition is Simulated. **Nominal upkeep** (D-9)
@@ -2307,6 +2314,87 @@ One issue, S9, **independent**; it needs S4.
   vasoconstriction), and only heart rate reads healthy (factor 1.0). The
   `circulationRule` (S9.2) implements exactly that, and T-S9-3 asserts that
   frostbite drive still responds to heavy blood loss under Nominal cardio.
+
+#### S9.9 Implementation record (#2836)
+
+What shipped, where it differs from the S9.2 sketch, and why. The six
+corrections of the approved issue review (issuecomment-6229566105) are applied
+literally; each is noted.
+
+- **Registry (S9.2).** `cardio` is the eighth system, appended after `sleep`
+  in `data/physiology/systems.yaml`. It requires `body`, owns `heart_rate`
+  (healthy `RESTING_HR`) and `blood_oxygen` (healthy 1.0), derives
+  `circulation`, owns no meter, makes no outgoing contribution and has one
+  effect, `oxygen_path_hypoxia` (absent while Nominal). `RESTING_HR: 70` is a
+  registry constant (correction 6): `cardio.RESTING_HR` is a drift-tested
+  copy, and circulation's divisor is the registry's, read by the Haskell
+  rule. The `hypoxia` meter is owned by nobody.
+- **Profile columns (correction 2).** The loader refuses a profile that does
+  not name every system, so `cardio: simulated` is added to all four
+  profiles (`rich`, `reduced`, `simple`, `exempt`). The existing columns are
+  untouched. All five bodied species therefore resolve Simulated with no
+  per-species entry, `exempt` keeps #2754's live cardio, and a definition
+  with no `body:` resolves Unsupported.
+- **A Nominal circulation is not a constant (correction 3).** The derived-key
+  grammar gains `healthy: live`: a Nominal read evaluates the rule instead of
+  returning a number. The interface-substitute grammar gains `live`, valid
+  only on a `provides` entry naming a live derived key of its own system. The
+  loader, the Lua registry export and the access audit's coverage check all
+  accept it, and the loader refuses a `circulation` rule that is not live
+  (it would erase the SD-21 factors) and a `salt_concentration` rule that is.
+- **The rule.** `Unit.Physiology.Circulation.circulationRule` is a pure port
+  of `circulation.compute` with the old constants, clamps and fallbacks. Its
+  inputs are gathered by `Unit.Physiology.circulationFor`: the effective
+  constitution, fat mass, body mass and sepsis (fallbacks 1.0, 0, 70, 0,
+  never a lazy roll), the core temperature through its own mode-aware read
+  (the thermo baseline under a Nominal or Unsupported thermo; a Simulated
+  thermo with no stored core is an invariant violation), the effective heart
+  rate while cardio is Simulated (a missing one is an invariant violation)
+  and none under a Nominal cardio, whose heart-rate factor is exactly 1.0.
+  `scripts/circulation.lua` is now a two-line reader over `unit.readPhysio`
+  and holds no formula.
+- **Blood (S9.2 requirement 2).** `Unit.Blood.bloodView` is the pure adapter
+  in its unmoded form: the stored `uiBlood`, the maximum from BASE
+  `body_mass` (70 kg fallback) times 0.075, the fraction clamped to 0..1 (1.0
+  when the maximum is not positive) and the live wound bleed rate (lazy).
+  `PhysioContext` carries it (`pcBlood`). Lua reaches it through the pure
+  read verb `unit.readBloodView` (correction: cardio's Lua blood input);
+  `unit.getBlood` is untouched until S10.
+- **Writers removed (correction 1).** thermo no longer computes anything: it
+  reads circulation on demand. `circulation.update` (the every-pass call in
+  `unit_resources.lua` and the `physiology.refresh` call) is gone, so
+  `refresh` keeps only the brain, and `circulation` leaves
+  `rebuiltCacheStats` and the `onSaveLoaded` rebuild. (`unit_survival_exempt`
+  no longer exists, S4 removed it.)
+- **Tick order (correction 5).** Cardio keeps its dedicated call ahead of the
+  registry-order loop, now gated on a Simulated cardio (it used to run for
+  every unit, bodyless ones included). Its registry position is last; the
+  comment in the registry says so. It integrates heart rate first and then
+  reads circulation for the oxygen delivery, which removes the one-tick lag.
+  That, and nothing else about the integration equations, drift factors or
+  bands, is the intended numeric change.
+- **Writers under modifiers.** The cardio integrators write the stored base
+  whose EFFECTIVE value is the integrated one (`scripts/lib/stat_base.lua`,
+  the S8b rule), so a retained modifier on `heart_rate` or `blood_oxygen`
+  does not skew the trajectory.
+- **Bodyless units (the intended behavior change).** A bodyless unit's cardio
+  is Unsupported. Before, it integrated compensatory tachycardia and
+  depressed oxygen and circulation from a 0 L blood seed against a 5.25 L
+  fallback maximum, and brain consciousness read that. Now those keys are not
+  stored (a stored value is scrubbed at load), cardio does not tick, brain
+  reads oxygen 1.0, the hypoxia oxygen path is 0 and the lung path is
+  unchanged. No consumer raises on the nil.
+- **Status rows (correction 4).** The Nominal row text "Not simulated for this
+  unit: always healthy." is false for circulation under a Nominal cardio.
+  Heart rate and blood oxygen follow D-8 ("Nominal 70 bpm", "Nominal 100%";
+  hidden when Unsupported). Circulation shows its live value in its usual
+  colour bands under a Nominal cardio and is hidden only when Unsupported.
+  The injury-driven Suffocating condition is unaffected.
+- **Persistence (S9.5).** No wire change. `heart_rate` and `blood_oxygen` stay
+  durable owned keys; a stored `circulation` is scrubbed in every mode, logged
+  once, and a re-save/reload scrubs nothing more (D-6 (i) through the
+  existing derived-key repair). Canonical circulation is computable before
+  the first paused observation without being stored.
 
 ### S10. Blood volume and recovery
 
