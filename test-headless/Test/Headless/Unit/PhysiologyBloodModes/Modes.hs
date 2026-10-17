@@ -312,6 +312,20 @@ transitionSpec = describe "transitions (T-S10-3)" $ do
                 map uiBlood after `shouldBe` map uiBlood before
                 map uiPhysioOverrides after `shouldBe` map uiPhysioOverrides before
 
+    it "refuses a seed whose base body mass is non-finite or negative, whole, and \
+       \mutates nothing" $
+        forM_ [1 / 0, 0 / 0, -70] $ \mass →
+            withScene [ bloodUnit 1 (Just PhysioNominal) 1.0 [] ] $ \(env, ls) → do
+                -- the mass goes bad AFTER the spawn (a spawn with one is refused)
+                modifyInstance env 1 $ \i →
+                    i { uiStats = HM.insert "body_mass" mass (uiStats i) }
+                before ← bloodOf env 1
+                res ← setModeText ls 1 "blood" "simulated" ""
+                T.isPrefixOf "nil|" res `shouldBe` True
+                bloodOf env 1 >>= (`shouldBe` before)
+                -- still pinned Nominal: a second attempt is refused the same way
+                setModeText ls 1 "blood" "simulated" "" >>= (`shouldBe` res)
+
     forM_ [("+100 %", 1.0), ("-100 %", -1.0), ("-50 %", -0.5)] $ \(label, pct) →
         it ("ignores a " <> label <> " modifier carried under the key blood: the \
             \seed and a caller value are stored directly, the transition is \

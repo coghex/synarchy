@@ -163,12 +163,15 @@ malformedSpec = describe "a malformed dedicated volume" $
             placeUnits env
                 [ (1, "acolyte", Nothing, [], [])
                 , (2, "acolyte", Nothing, [("blood", PhysioNominal)], [])
-                , (3, "acolyte", Nothing, [], []) ]
+                , (3, "acolyte", Nothing, [], [])
+                , (4, "acolyte", Nothing, [("blood", PhysioNominal)], []) ]
             setBlood env 1 (0 / 0)
             setBlood env 2 (1 / 0)
             modifyInstance env 3 $ \i →
                 i { uiStats = HM.insert "blood" (0 / 0) (uiStats i) }
-            onSavePage env [1, 2, 3]
+            modifyInstance env 4 $ \i →
+                i { uiStats = HM.insert "body_mass" (1 / 0) (uiStats i) }
+            onSavePage env [1, 2, 3, 4]
             pg ← pageSnapshotOf env
             let units = pgsUnits pg
                 only keep = units { usnInstances = HM.filterWithKey
@@ -185,6 +188,11 @@ malformedSpec = describe "a malformed dedicated volume" $
                     notes `shouldBe` []
                     fmap uisBlood (HM.lookup (UnitId 2) (usnInstances us)) `shouldBe` Just 5.25
                 other → expectationFailure ("Nominal NaN: " <> show (fmap (const ()) other))
+            -- a Nominal unit whose base body mass is non-finite has no canonical
+            -- maximum to rewrite to: rejected, not rebuilt to infinity
+            case loadOf 4 of
+                Left msgs → any (T.isInfixOf "blood") msgs `shouldBe` True
+                Right _ → expectationFailure "a non-finite Nominal target loaded"
             -- a valid dedicated volume with a stale non-finite shadow: scrubbed, loads
             case loadOf 3 of
                 Right ([(_, us)], notes) → do

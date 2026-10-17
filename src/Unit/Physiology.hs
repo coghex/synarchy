@@ -422,8 +422,15 @@ evalHealthy ctx (HealthyFrom k scales) = do
     v  ← capacity ctx k
     fs ← traverse (quantity ctx) scales
     pure (v * product fs)
-evalHealthy ctx HealthyBloodMax =
-    Right (HM.lookupDefault 70.0 "body_mass" (pcStats ctx) * bloodMassRatio)
+evalHealthy ctx HealthyBloodMax
+    -- the BASE body mass (70 kg when absent, modifiers never applied) times the
+    -- ratio; a non-finite or negative result is no target to seed or rewrite
+    -- to (#2837), so it is refused like any other invalid seed input
+    | isNaN v ∨ isInfinite v = Left ("input 'blood_max' is not finite (" <> tshow v <> ")")
+    | v < 0                  = Left ("input 'blood_max' is negative (" <> tshow v <> ")")
+    | otherwise              = Right v
+  where
+    v = HM.lookupDefault 70.0 "body_mass" (pcStats ctx) * bloodMassRatio
 evalHealthy ctx HealthyMaxStamina =
     case maxStaminaOf Nothing (pcNow ctx) (pcStats ctx) (pcModifiers ctx) of
         Nothing → Left "input 'max_stamina' is absent (no endurance stat)"

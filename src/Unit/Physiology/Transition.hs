@@ -34,6 +34,7 @@ module Unit.Physiology.Transition
     , planClearMode
       -- * Field-backed keys (blood, #2837)
     , canonicalBlood
+    , canonicalBloodChecked
       -- * Combat engagement (SD-20)
     , EngagementOutcome(..)
     , EngagementRefusal(..)
@@ -101,11 +102,19 @@ splitFields reg stats = foldl' (flip HM.delete) stats (registryFieldKeys reg)
 --   body mass x 0.075). 'Nothing' for any other mode. Spawn and the load gate
 --   write it, because a Nominal @uiBlood@ is serialized but ignored (#2837).
 canonicalBlood ∷ PhysioContext → Maybe Float
-canonicalBlood ctx = do
-    sys ← bloodSystem (pcRegistry ctx)
-    guard (modeOf ctx sys ≡ ModeNominal)
-    o ← listToMaybe [ o | o ← psOwns sys, isJust (okField o) ]
-    either (const Nothing) Just (evalHealthy ctx (okHealthy o))
+canonicalBlood = either (const Nothing) id ∘ canonicalBloodChecked
+
+-- | 'canonicalBlood' that says WHY a Nominal blood has no canonical maximum
+--   (a non-finite or negative base body mass): system, key and reason, the
+--   shape 'reconcileStoredKeys' rejects with, so spawn and the load gate
+--   refuse the unit rather than write a non-finite volume (#2837).
+canonicalBloodChecked ∷ PhysioContext → Either (Text, Text, Text) (Maybe Float)
+canonicalBloodChecked ctx = case bloodSystem (pcRegistry ctx) of
+    Just sys | modeOf ctx sys ≡ ModeNominal
+             , (o : _) ← [ o | o ← psOwns sys, isJust (okField o) ] →
+        either (\why → Left (psId sys, okKey o, why)) (Right ∘ Just)
+               (evalHealthy ctx (okHealthy o))
+    _ → Right Nothing
 
 -- | Every stored name a system owns: owned keys, derived keys, meters.
 systemKeyNames ∷ PhysiologySystem → [Text]
@@ -419,7 +428,9 @@ data KeyRepair
 reconcileStoredKeys ∷ PhysioContext
                     → Either (Text, Text, Text)
                              (HM.HashMap Text Float, [KeyRepair])
-reconcileStoredKeys ctx0 = foldM step (pcStats ctx0, []) (seedOrder reg)
+reconcileStoredKeys ctx0 =
+    canonicalBloodChecked ctx0 ≫= \_ →
+        foldM step (pcStats ctx0, []) (seedOrder reg)
   where
     reg = pcRegistry ctx0
     step (stats, repairs) sys = do
