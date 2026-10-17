@@ -112,6 +112,9 @@ import qualified Data.Set as Set
 import Data.Aeson ((.:), (.:?), (.!=))
 import Control.Monad (foldM)
 import Gameplay.Tags.Index (categoryForward, setCategoryTags)
+import Gameplay.Tags.Page (PageTagsSnapshot(..))
+import Data.Int (Int64)
+import World.Flora.Identity (floraInstanceIdToLua, floraInstanceIdFromLua)
 import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag, itemTargetId, mkItemTarget)
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
 import World.Generate.Types (WorldGenParams(..))
@@ -433,6 +436,22 @@ dumpPage (WorldPageId pid, page) = Aeson.object
         , "buildings" .= dumpTagged unBuildingId (bsnTags (pgsBuildings page))
         , "locations" .= dumpTagged unLocationInstanceId
             (categoryForward (lisTags (wgpLocationInstances (pgsGenParams page))))
+          -- #2705: cells, flora occurrences (with their recorded tile)
+          -- and groundcover plots, by target identity. Absent before
+          -- world-edits v5 and read as "no assignments".
+        , "tiles" .=
+            [ Aeson.object [ "x" .= x, "y" .= y, "z" .= z
+                           , "tags" .= map gameplayTagText (Set.toAscList ts) ]
+            | ((x, y, z), ts) ← Map.toAscList (ptsTiles (pgsPageTags page)) ]
+        , "plants" .=
+            [ Aeson.object [ "id" .= floraInstanceIdToLua fid
+                           , "tile" .= Map.lookup fid (ptsOccurrenceTiles (pgsPageTags page))
+                           , "tags" .= map gameplayTagText (Set.toAscList ts) ]
+            | (fid, ts) ← Map.toAscList (ptsOccurrences (pgsPageTags page)) ]
+        , "plots" .=
+            [ Aeson.object [ "x" .= x, "y" .= y
+                           , "tags" .= map gameplayTagText (Set.toAscList ts) ]
+            | ((x, y), ts) ← Map.toAscList (ptsPlots (pgsPageTags page)) ]
         ]
     ]
   where
@@ -837,14 +856,29 @@ instance Aeson.FromJSON ItemSeedEntry where
     parseJSON = Aeson.withObject "item seed entry" $ \o →
         ItemSeedEntry <$> o .: "id" <*> o .: "tags"
 
+-- | One page-local cell, occurrence or plot seed (#2705). Cells and
+--   plots name a canonical tile (@z@ only for a cell); an occurrence
+--   names its 'floraInstanceIdToLua' id and the tile it stands on.
+data PlaceSeedEntry = PlaceSeedEntry
+    { pseePage ∷ !Text, pseeX ∷ !Int, pseeY ∷ !Int, pseeZ ∷ !(Maybe Int)
+    , pseeId ∷ !(Maybe Int64), pseeTags ∷ ![Text] }
+
+instance Aeson.FromJSON PlaceSeedEntry where
+    parseJSON = Aeson.withObject "page seed entry" $ \o → PlaceSeedEntry
+        <$> o .: "page" <*> o .: "x" <*> o .: "y" <*> o .:? "z" <*> o .:? "id"
+        <*> o .: "tags"
+
 data TagSeed = TagSeed
     { tsUnitSeeds ∷ ![SeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
-    , tsLocationSeeds ∷ ![SeedEntry], tsItemSeeds ∷ ![ItemSeedEntry] }
+    , tsLocationSeeds ∷ ![SeedEntry], tsItemSeeds ∷ ![ItemSeedEntry]
+    , tsTileSeeds ∷ ![PlaceSeedEntry], tsPlantSeeds ∷ ![PlaceSeedEntry]
+    , tsPlotSeeds ∷ ![PlaceSeedEntry] }
 
 instance Aeson.FromJSON TagSeed where
     parseJSON = Aeson.withObject "tag seed" $ \o → TagSeed
         <$> o .:? "units" .!= [] <*> o .:? "buildings" .!= []
         <*> o .:? "locations" .!= [] <*> o .:? "items" .!= []
+        <*> o .:? "tiles" .!= [] <*> o .:? "plants" .!= [] <*> o .:? "plots" .!= []
 
 applyTagSeed ∷ TagSeed → SessionSnapshot → Either String SessionSnapshot
 applyTagSeed seed snap0 =
@@ -852,7 +886,32 @@ applyTagSeed seed snap0 =
         ≫= \s1 → foldM (entry onBuilding) s1 (tsBuildingSeeds seed)
         ≫= \s2 → foldM (entry onLocation) s2 (tsLocationSeeds seed)
         ≫= \s3 → foldM itemEntry s3 (tsItemSeeds seed)
+        ≫= \s4 → foldM (placeEntry onTile) s4 (tsTileSeeds seed)
+        ≫= \s5 → foldM (placeEntry onPlant) s5 (tsPlantSeeds seed)
+        ≫= \s6 → foldM (placeEntry onPlot) s6 (tsPlotSeeds seed)
   where
+    placeEntry f snap e = do
+        tags ← maybe (Left ("empty tag for " ⧺ T.unpack (pseePage e)))
+                     (Right . Set.fromList) (traverse mkGameplayTag (pseeTags e))
+        let pid = WorldPageId (pseePage e)
+        page ← maybe (Left ("no page '" ⧺ T.unpack (pseePage e) ⧺ "' in the save"))
+                     Right (HM.lookup pid (snapPages snap))
+        page' ← f e tags page
+        pure snap { snapPages = HM.insert pid page' (snapPages snap) }
+    withPageTags page g = page { pgsPageTags = g (pgsPageTags page) }
+    onTile e ts page = case pseeZ e of
+        Nothing → Left "a tile seed needs z"
+        Just z → Right $ withPageTags page $ \pt →
+            pt { ptsTiles = setOrClear (pseeX e, pseeY e, z) ts (ptsTiles pt) }
+    onPlant e ts page = case pseeId e ⌦ floraInstanceIdFromLua of
+        Nothing → Left "a plant seed needs a real flora occurrence id"
+        Just fid → Right $ withPageTags page $ \pt →
+            pt { ptsOccurrences = setOrClear fid ts (ptsOccurrences pt)
+               , ptsOccurrenceTiles =
+                   if Set.null ts then Map.delete fid (ptsOccurrenceTiles pt)
+                   else Map.insert fid (pseeX e, pseeY e) (ptsOccurrenceTiles pt) }
+    onPlot e ts page = Right $ withPageTags page $ \pt →
+        pt { ptsPlots = setOrClear (pseeX e, pseeY e) ts (ptsPlots pt) }
     itemEntry snap e = do
         t ← maybe (Left "item instance id 0 names no item") Right
                   (mkItemTarget (iseId e))

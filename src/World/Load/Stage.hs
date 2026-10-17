@@ -30,6 +30,8 @@ module World.Load.Stage
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..), RestoredPageTags(..), restorePageTags)
+import Gameplay.Tags.PageLive (reconcileAdmittedPageTags)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -800,7 +802,26 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsPlantedFloraCursorRef worldState)
         (wpsPlantedFloraCursor wps)
     writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
-    writeIORef (wsCropPlotsRef worldState) liveCropPlots
+    -- #2705: the page's tile, occurrence and plot gameplay tags, with
+    -- their reverse indexes rebuilt here, before anything can query
+    -- them. Cells and occurrences are kept whether or not their chunk
+    -- is resident (none is, yet) — the admission of the chunk that owns
+    -- each one reconciles it. A plot assignment naming no plot this page
+    -- restored is a tag on nothing, and is dropped with a diagnostic.
+    let restoredTags = restorePageTags (wpsPageId wps) liveCropPlots (wpsPageTags wps)
+    writeIORef (wsCropPlotsRef worldState)
+        (CropPlotStore liveCropPlots (rptPlotTags restoredTags))
+    writeIORef (wsPageTagsRef worldState) (rptPageTags restoredTags)
+    unless (null (rptDroppedPlots restoredTags)) $
+        logInfo logger CatWorld $ "Save load: page " <> unWorldPageId (wpsPageId wps)
+            <> ": dropped gameplay tags on " <> tshow (length (rptDroppedPlots restoredTags))
+            <> " crop plot tile(s) that hold no plot: "
+            <> T.intercalate ", " (map tshow (rptDroppedPlots restoredTags))
+    unless (null (rptDroppedOccurrences restoredTags)) $
+        logInfo logger CatWorld $ "Save load: page " <> unWorldPageId (wpsPageId wps)
+            <> ": dropped gameplay tags on "
+            <> tshow (length (rptDroppedOccurrences restoredTags))
+            <> " flora occurrence(s) with no recorded tile"
     writeIORef (wsPlantDesignationsRef worldState) livePlantDesignations
     -- Issue #763: craft bills / power nodes are restored VERBATIM,
     -- never filtered against the save's own building snapshot. A
@@ -896,6 +917,10 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           _ ← evaluate (force arenaChunks)
           publishSeedChunks worldState arenaClaims
               WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
+          -- #2705: a seed is an admission too, so the restored tags its
+          -- chunks own are reconciled against what they really hold.
+          readIORef (wsTilesRef worldState)
+              ≫= reconcileAdmittedPageTags logger worldState pid arenaChunks
           let seeds = [ (lcCoord c, lcFluidMap c, lcTerrainSurfaceMap c)
                       | c ← arenaChunks ]
           writeIORef (wsInitQueueRef worldState) []
@@ -1087,6 +1112,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           publishSeedChunks worldState centreClaims
               WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
                             , wtdMaxChunks = 200 }
+          readIORef (wsTilesRef worldState)
+              ≫= reconcileAdmittedPageTags logger worldState pid [centerChunk]
           let seeds = [ (centerCoord, lcFluidMap centerChunk
                         , lcTerrainSurfaceMap centerChunk) ]
               stamps = locationStampsFor params [centerChunk]

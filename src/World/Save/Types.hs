@@ -71,6 +71,7 @@ module World.Save.Types
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (PageTagsSnapshot)
 import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import qualified Data.HashMap.Strict as HM
@@ -457,6 +458,10 @@ data WorldPageSave = WorldPageSave
         --   designation layers, restored straight into
         --   wsTillDesignationsRef; markers re-render from the stored z.
         --   Appended for save v76.
+    , wpsPageTags ∷ !PageTagsSnapshot
+        -- ^ #2705: the page's tile, occurrence and plot gameplay tags
+        --   ('World.Save.Snapshot.pgsPageTags'), restored by
+        --   @World.Load.Stage.stagePage@ into the staged page's stores.
     , wpsCropPlots ∷ !SavedCropPlots
         -- ^ Planted groundcover-crop tiles (#334): tile → (species,
         --   planted day, health). Restored into wsCropPlotsRef by

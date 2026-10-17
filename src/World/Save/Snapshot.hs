@@ -43,6 +43,7 @@ module World.Save.Snapshot
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (PageTagsSnapshot)
 import qualified Data.HashMap.Strict as HM
 import Structure.Palette (TexPalette(..))
 import World.Generate.Types (WorldGenParams)
@@ -197,6 +198,12 @@ data PageSnapshot = PageSnapshot
       --   diagnostic 'World.Save.Integrity.sessionIntegrityWarnings'
       --   reports.
     , pgsTillDesignations ∷ !TillDesignations
+    , pgsPageTags     ∷ !PageTagsSnapshot
+      -- ^ #2705: this page's general gameplay tags on terrain cells,
+      --   flora occurrences and groundcover plots, captured with the
+      --   edits, the occurrence identity state and the plots under the
+      --   save barrier — EVICTED targets' assignments included. Carried
+      --   by @world-edits@ v5.
     , pgsCropPlots    ∷ !SavedCropPlots
       -- ^ #2243: species by authored NAME, not by the runtime handle
       --   the live 'World.Flora.CropPlot.CropPlots' carries — see

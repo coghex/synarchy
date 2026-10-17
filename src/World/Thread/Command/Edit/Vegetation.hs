@@ -9,6 +9,7 @@ module World.Thread.Command.Edit.Vegetation
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..))
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
@@ -138,7 +139,7 @@ handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
                             (\fi → fromIntegral (fiTileX fi) ≡ lx
                                  ∧ fromIntegral (fiTileY fi) ≡ ly)
                             (fcdInstances (lcFlora lc))
-                    plots ← readIORef (wsCropPlotsRef ws)
+                    plots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef ws))
                     let hasExistingPlot = HM.member (gx, gy) plots
                     case resolved of
                         Nothing →

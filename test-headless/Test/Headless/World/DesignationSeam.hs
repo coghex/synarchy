@@ -26,6 +26,7 @@
 module Test.Headless.World.DesignationSeam (spec, engineSpec) where
 
 import UPrelude
+import Gameplay.Tags.Page (plotStoreFromPlots)
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdToLua, generatedFloraInstanceId)
 import Test.Hspec
@@ -959,7 +960,7 @@ engineSpec = beforeAll setup $ do
       -- chunk box gates them) but were measured planar, which put this
       -- one outside the radius entirely.
       ws ← forageWorld env worldSize vegTilledSoil noFlora
-      writeIORef (wsCropPlotsRef ws) $ HM.fromList
+      writeIORef (wsCropPlotsRef ws) $ plotStoreFromPlots $ HM.fromList
           [ (seamCandidate,   newCropPlot cloverSpecies 0 1)
           , (planarCandidate, newCropPlot cloverSpecies 0 1) ]
       findFlora ls forageOrigin forageRadius Nothing

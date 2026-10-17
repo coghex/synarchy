@@ -85,6 +85,9 @@ data RefKind
     | RefGroundItem
     | RefContent !ContentKind
     | RefLocationInstance
+    | RefCropPlot
+      -- ^ #2705: a groundcover crop plot, by its page-local canonical
+      --   tile. APPENDED (positional encoding).
     deriving (Show, Eq, Ord, Generic, Serialize)
 
 -- | Gameplay content catalogues a stable, kind-qualified def-name
@@ -139,6 +142,7 @@ refKindText k = case k of
     RefGroundItem   → "ground_item"
     RefContent ck   → "content_" <> contentKindText ck
     RefLocationInstance → "location_instance"
+    RefCropPlot     → "crop_plot"
 
 contentKindText ∷ ContentKind → Text
 contentKindText ck = case ck of

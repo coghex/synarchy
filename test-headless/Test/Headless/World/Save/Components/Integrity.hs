@@ -13,6 +13,7 @@ module Test.Headless.World.Save.Components.Integrity
     (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -760,6 +761,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsPowerNodes   = emptyPowerNodes
     , wpsTillDesignations = HM.empty
     , wpsCropPlots    = HM.empty
+    , wpsPageTags = emptyPageTagsSnapshot
     , wpsPlantDesignations = HM.empty
     , wpsContainerKnowledge = emptyContainerKnowledge
     , wpsIdentity     = Nothing

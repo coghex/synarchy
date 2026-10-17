@@ -27,7 +27,8 @@ import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
                                   , handleWorldDestroyCommand
                                   , handleWorldDestroyAllCommand
-                                  , handleWorldRecordPortableKnowledgeCommand)
+                                  , handleWorldRecordPortableKnowledgeCommand
+                                  , handleWorldEditPageTagsCommand)
 import World.Thread.Command.Init (handleWorldInitCommand
                                  , handleWorldInitArenaCommand
                                  , handleWorldInitArenaDoneCommand)
@@ -254,6 +255,8 @@ handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env logger WorldDestroyAll
   = handleWorldDestroyAllCommand env logger
+handleWorldCommand env _ (WorldEditPageTags pageId epoch target edit reply)
+  = handleWorldEditPageTagsCommand env pageId epoch target edit reply
 handleWorldCommand env _ (WorldRecordPortableKnowledge epoch iid mObs)
   = handleWorldRecordPortableKnowledgeCommand env epoch iid mObs
 handleWorldCommand env logger (WorldApplyFluids batch)

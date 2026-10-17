@@ -7,6 +7,7 @@ module Engine.Scripting.Lua.API.Forage.Crop
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..), insertPlot)
 import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
@@ -96,7 +97,7 @@ worldPlantCropAtFn wsc = do
                                         (\fi → fromIntegral (fiTileX fi) ≡ lx
                                              ∧ fromIntegral (fiTileY fi) ≡ ly)
                                         (fcdInstances (lcFlora lc))
-                                plots ← readIORef (wsCropPlotsRef ws)
+                                plots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef ws))
                                 let hasExistingPlot = HM.member (gx, gy) plots
                                 if not (isTilledSoil vg)
                                    ∨ hasExistingFlora ∨ hasExistingPlot
@@ -113,8 +114,9 @@ worldPlantCropAtFn wsc = do
                                                         ≡ groundcoverCropCategory → do
                                                     (_, absDay) ← growthClock ws
                                                     let plot = newCropPlot fid absDay 1.0
+                                                    -- #2705: a new plot starts untagged.
                                                     atomicModifyIORef' (wsCropPlotsRef ws) $
-                                                        \ps → (HM.insert (gx, gy) plot ps, ())
+                                                        \ps → (insertPlot (gx, gy) plot ps, ())
                                                     bumpQuadCacheGen ws
                                                     pure True
                                                 _ → pure False

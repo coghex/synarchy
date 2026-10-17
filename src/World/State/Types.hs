@@ -70,7 +70,7 @@ import Engine.Asset.Handle (TextureHandle)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests,
                             emptyFloraHarvests, emptyPendingFloraHarvests)
-import World.Flora.CropPlot (CropPlots, emptyCropPlots)
+import Gameplay.Tags.Page (PageTags, emptyPageTags, CropPlotStore, emptyCropPlotStore)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Item.Knowledge (PortableKnowledge, emptyPortableKnowledge)
 import Item.Ground (GroundItems, emptyGroundItems)
@@ -486,13 +486,32 @@ data WorldState = WorldState
       --   thread (WorldDesignateTill / cancel commands), read by the
       --   render pass (marker) and the till AI. Persisted in saves
       --   (wpsTillDesignations, v76).
-    , wsCropPlotsRef ∷ IORef CropPlots
+    , wsCropPlotsRef ∷ IORef CropPlotStore
       -- ^ Planted groundcover-crop set (#334): tile (gx, gy) → plot
       --   (species + planted day + health; see World.Flora.CropPlot).
       --   World-level (NOT in chunk data, which is transient) so
       --   eviction can't wipe it; written by world.plantCropAt, read
       --   by the render pass (tile-fill texture) and world.harvestFlora
       --   / world.getCropPlotAt. Persisted in saves (wpsCropPlots, v77).
+      --
+      --   #2705: the plots' general gameplay tags share this ref
+      --   ('Gameplay.Tags.Page.CropPlotStore'), so a plot tag write and
+      --   a plot removal are each ONE atomic step and a plot's tags can
+      --   never outlive it or reach the plot replanted on its tile.
+      --   Plots are written from the Lua and the world thread alike.
+    , wsPageTagsRef ∷ IORef PageTags
+      -- ^ #2705: this page's general gameplay tags on terrain CELLS
+      --   (canonical @(x, y, z)@) and flora OCCURRENCES (by
+      --   'World.Flora.Identity.FloraInstanceId', with each tagged
+      --   occurrence's canonical tile). Page state, not chunk data, so
+      --   EVICTION keeps it — residency decides only what is live.
+      --   Written ONLY by the world thread, the sole writer of the tile
+      --   store its targets live in: tag edits
+      --   ('World.Command.Types.WorldEditPageTags'), the destruction
+      --   cleanup of in-place chunk edits and flora removal
+      --   ("World.Flora.Designation"), admission reconciliation
+      --   ("World.Thread.ChunkLoading") and load staging. Persisted by
+      --   @world-edits@ v5.
     , wsPlantDesignationsRef ∷ IORef PlantDesignations
       -- ^ Plant-designation set (#335): tile (gx, gy) → designation
       --   (surface z + chosen crop; see World.Plant.Types). Written by
@@ -616,7 +635,8 @@ emptyWorldState = do
     wsContainerKnowledgeRef ← newIORef emptyContainerKnowledge
     wsPendingContainerSeedsRef ← newIORef HS.empty
     wsTillDesignationsRef ← newIORef HM.empty
-    wsCropPlotsRef ← newIORef emptyCropPlots
+    wsCropPlotsRef ← newIORef emptyCropPlotStore
+    wsPageTagsRef ← newIORef emptyPageTags
     wsPlantDesignationsRef ← newIORef HM.empty
     wsBloodStoreRef ← newIORef (emptyBloodStore defaultBloodTextureCap)
     wsBloodTextureHandlesRef ← newIORef HM.empty
@@ -654,7 +674,7 @@ emptyWorldState = do
                         wsPowerNodesRef wsContainerKnowledgeRef
                         wsPendingContainerSeedsRef
                         wsTillDesignationsRef
-                        wsCropPlotsRef wsPlantDesignationsRef
+                        wsCropPlotsRef wsPageTagsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
                         wsIdentityRef wsGeneratedIdRef
 

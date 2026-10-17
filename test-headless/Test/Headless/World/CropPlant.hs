@@ -33,6 +33,7 @@
 module Test.Headless.World.CropPlant (spec, engineSpec, saveSpec) where
 
 import UPrelude
+import Gameplay.Tags.Page (plotStoreFromPlots)
 import Test.Hspec
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
@@ -741,7 +742,7 @@ engineSpec = beforeAll setup $ do
         ws ← resetPage env vegTilledSoil
         logger ← readIORef (loggerRef env)
         writeIORef (floraCatalogRef env) cropCatalog
-        writeIORef (wsCropPlotsRef ws) $
+        writeIORef (wsCropPlotsRef ws) $ plotStoreFromPlots $
             HM.singleton plantTile (newCropPlot probeCrop 0 1.0)
         handleWorldDesignatePlantCommand env logger fixturePage
             (fst plantTile) (snd plantTile) "probe_crop"

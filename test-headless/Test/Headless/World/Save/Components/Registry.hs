@@ -915,7 +915,10 @@ goldenRichPayloads =
       -- fixture has none), and @world-activity@ v4 appends the two
       -- deferred legacy-migration maps and re-keys Chop/harvest state
       -- onto FloraInstanceId. Every other row is unchanged.
-    , ("world-edits",         (66,   "5f4fc96e8f002516"))
+      -- #2705 re-pinned: @world-edits@ v5 appends each page slice's four
+      -- (empty here) tile / occurrence / occurrence-tile / plot tag
+      -- lists, 32 bytes for two pages.
+    , ("world-edits",         (130,  "4e4ca9c111e4f196"))
       -- #1844 re-pinned again: world-activity v5 appends each
       -- designation's attempt identity and payment record, and the
       -- page's own attempt allocator.
@@ -955,7 +958,7 @@ goldenFullPayloads =
       -- #2701 re-pinned: v14's empty location-tag list (8 bytes).
     , ("world-pages",         (717, "f727338a4160a61a"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
-    , ("world-edits",         (78,  "d70f14ce21048a09"))
+    , ("world-edits",  (110, "04ebe3ec1c71ce89"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and
       -- world-activity v3 appended the item tree's physical values (an
       -- absent Maybe pair per item, ×3 nesting levels). #1854 re-pinned

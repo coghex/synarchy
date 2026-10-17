@@ -37,6 +37,7 @@ module Test.Headless.World.Save.Integrity
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Unit.Faction.Membership (inertUnitProfile)
 import World.Save.UnitFaction (UnitFactionSnapshot(..))
@@ -145,6 +146,7 @@ minimalPage pid = PageSnapshot
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = HM.empty
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
@@ -195,6 +197,7 @@ pageSaveWith edits crops plants =
     let snap = buildSnap page1 [ (minimalPage page1)
                    { pgsEdits = edits
                    , pgsCropPlots = crops
+                   , pgsPageTags = emptyPageTagsSnapshot
                    , pgsPlantDesignations = plants
                    , pgsPlantedFloraCursor = 2 } ]
         req = SaveRequestMeta { srmSlotName = "flora_refs"

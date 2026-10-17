@@ -10,6 +10,7 @@ module Engine.Scripting.Lua.API.Forage.Harvest
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..), removePlot)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
@@ -91,7 +92,7 @@ worldHarvestFloraFn env = do
                         -- question between the two arises.
                         mPlot ← if isJust tagFilter then pure Nothing
                                 else HM.lookup (gx, gy) ⊚
-                                         readIORef (wsCropPlotsRef ws)
+                                         (cpsPlots ⊚ readIORef (wsCropPlotsRef ws))
                         cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
                         (doy, absDay) ← growthClock ws
                         let mPlotHarvest = do
@@ -125,8 +126,13 @@ worldHarvestFloraFn env = do
                                 -- the plot instead of starting a
                                 -- regrowth timer — the tile reverts to
                                 -- bare tilled soil until replanted.
+                                --
+                                -- #2705: the harvest is the plot's
+                                -- destruction, so its gameplay tags go
+                                -- in the SAME atomic step and a plot
+                                -- replanted here starts untagged.
                                 atomicModifyIORef' (wsCropPlotsRef ws) $
-                                    \ps → (HM.delete (gx, gy) ps, ())
+                                    \ps → (removePlot (gx, gy) ps, ())
                                 bumpQuadCacheGen ws
                                 pure (Just spawned)
                             Nothing | isJust mPlot → pure Nothing

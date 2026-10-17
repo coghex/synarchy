@@ -4,9 +4,16 @@ module World.Thread.Command.Basic
     , handleWorldDestroyCommand
     , handleWorldDestroyAllCommand
     , handleWorldRecordPortableKnowledgeCommand
+    , handleWorldEditPageTagsCommand
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (putMVar)
+import Gameplay.Tags.Edit (TagEdit, TagEditResult(..))
+import Gameplay.Tags.PageLive (mutatePageTargetTags)
+import Gameplay.Tags.Types (TagTarget)
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 import qualified Data.HashSet as HS
 import Gameplay.Tags.ItemLifecycle
     (forgetItemTags, groundItemIds, retiredUnitItemIds, retiredBuildingItemIds)
@@ -325,3 +332,20 @@ handleWorldRecordPortableKnowledgeCommand env epoch iid mObs =
     merge = case mObs of
         Just obs → applyPortableObservation iid obs
         Nothing  → forgetPortable iid
+
+-- | #2705: one tile or plant tag edit, on the world thread (see
+--   'World.Command.Types.WorldEditPageTags'). A page that is gone, or
+--   whose incarnation moved since the caller resolved it, answers
+--   'TagEditNoTarget' and is left alone.
+handleWorldEditPageTagsCommand
+    ∷ EngineEnv → WorldPageId → ChunkGeneration → TagTarget → TagEdit
+    → TagEditReply → IO ()
+handleWorldEditPageTagsCommand env pageId epoch target edit (TagEditReply reply) = do
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    result ← case lookup pageId (wmWorlds mgr) of
+        Nothing → pure TagEditNoTarget
+        Just ws → do
+            now ← pageIncarnation ws
+            if now ≢ epoch then pure TagEditNoTarget
+                           else mutatePageTargetTags pageId ws target edit
+    putMVar reply result

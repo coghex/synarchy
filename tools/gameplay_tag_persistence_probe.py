@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fresh-process gameplay-tag persistence probe (issue #2701, SCN-03 of
-epic #2698; physical items added by #2703, SCN-04).
+epic #2698; physical items added by #2703, SCN-04; terrain cells and
+plants by #2705, SCN-05).
 
 General gameplay tags on units, buildings and locations live with their
 owners and ride the ordinary `units` (v5), `buildings` (v3) and
@@ -17,6 +18,15 @@ moves tagged items between owners (unit to unit, unit to ground),
 consumes one and destroys a ground one through the real Lua verbs, and
 every later generation must carry exactly the survivors' assignments,
 with their ids, and nothing for the destroyed items.
+
+#2705 adds terrain-CELL, flora-OCCURRENCE (wild and planted) and
+groundcover-PLOT assignments, page-owned and keyed by canonical cell,
+occurrence id and plot tile (`world-edits` v5). The place leg tags real
+targets in a far chunk and near the camera, saves a fresh-process load
+while the far chunk is ABSENT from the tile store (its assignments must
+survive), readmits it, destroys a tagged top cell and a tagged plant's
+tile through the real edit verb, and every later generation must carry
+exactly the survivors' assignments, including after an autosave.
 
 There is no public tag verb yet (SCN-06), so assignments are seeded the
 only way that exists: `exe:synarchy-save-codec seed-tags`, which decodes
@@ -129,6 +139,8 @@ def bootstrap_defs(port: int) -> None:
         ("data/physiology/*.yaml", "engine.loadPhysiologyYaml"),
         ("data/units/*.yaml",      "engine.loadUnitYaml"),
         ("data/buildings/*.yaml",  "engine.loadBuildingYaml"),
+        # #2705: the place leg tags real flora and plants a real crop.
+        ("data/flora/*.yaml",      "engine.loadFloraYaml"),
     ]
     for pattern, fn in loaders:
         for path in sorted(glob.glob(str(REPO / pattern))):
@@ -509,6 +521,221 @@ def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         prev = nxt
 
 
+PLACE = "tag_place"
+
+
+def place_tags(chk: Checks, tmp: str, root: str, slot: str) -> dict:
+    """The place page's cell / plant / plot assignments off the save:
+    {"tiles": {(x, y, z): tags}, "plants": {id: (tile, tags)},
+    "plots": {(x, y): tags}}."""
+    out = Path(tmp) / f"{slot}.place.json"
+    ok, tail = dump_canonical_summary(Path(slot_path(root, slot)), out)
+    chk.ok(ok, f"canonical summary of '{slot}'" + ("" if ok else f": {tail}"))
+    if not ok:
+        return {}
+    for p in json.loads(out.read_text()).get("pages", []):
+        if p.get("pageId") == PLACE:
+            g = p.get("gameplayTags", {})
+            return {
+                "tiles": {(e["x"], e["y"], e["z"]): sorted(e["tags"]) for e in g.get("tiles", [])},
+                "plants": {e["id"]: (tuple(e["tile"]) if e.get("tile") else None, sorted(e["tags"]))
+                           for e in g.get("plants", [])},
+                "plots": {(e["x"], e["y"]): sorted(e["tags"]) for e in g.get("plots", [])},
+            }
+    chk.ok(False, f"'{slot}' has no page '{PLACE}'")
+    return {}
+
+
+def surface_terrain_z(port: int, gx: int, gy: int):
+    r = send(port, f"local sz, tz = world.getSurfaceAt({gx}, {gy}); return tostring(tz)")
+    return as_int(r.strip('"'))
+
+
+def chunk_loaded(port: int, cx: int, cy: int) -> bool:
+    r = send(port, f"local i = world.getChunkInfo({cx}, {cy}); return tostring(i ~= nil and i.loaded == true)")
+    return r.strip('"') == "true"
+
+
+def find_in_chunks(port: int, chunks: list, want_flora: bool, exclude: set):
+    """The first suitable tile in these chunks: a dry, real-terrain column
+    with no flora (want_flora False), or one carrying a flora occurrence
+    (want_flora True). Answers ((gx, gy), terrain z, occurrence id or
+    None), or None. A sentinel (void) column is never suitable."""
+    cs = ",".join(f"{{{cx},{cy}}}" for cx, cy in chunks)
+    ex = " or ".join(f"(gx=={a} and gy=={b})" for a, b in exclude) or "false"
+    cond = "f and f.instanceId" if want_flora else "not f"
+    r = send(port, f"for _, c in ipairs({{{cs}}}) do "
+                   f"for lx=0,15 do for ly=0,15 do "
+                   f"local gx, gy = c[1]*16+lx, c[2]*16+ly; "
+                   f"if not ({ex}) then "
+                   f"local sz, tz, ft = world.getSurfaceAt(gx, gy); "
+                   f"local f = world.getFloraAt(gx, gy); "
+                   f"if sz and tz and tz > -100000 and not ft and {cond} then "
+                   f"return gx..','..gy..','..tz..','..tostring(f and f.instanceId or 0) end "
+                   f"end end end end return 'none'",
+             timeout=120.0).strip('"')
+    if r == "none":
+        return None
+    gx, gy, tz, iid = r.split(",")
+    return (int(gx), int(gy)), int(tz), (int(iid) or None)
+
+
+def ring(r: int) -> list:
+    return [(cx, cy) for cx in range(-r, r + 1) for cy in range(-r, r + 1)
+            if max(abs(cx), abs(cy)) == r]
+
+
+def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
+    print("=== engine P1: tagged cells, plants and a plot in a far chunk and near the camera ===")
+    proc = boot(port, log=os.path.join(tmp, "engineP1.log"),
+                args=["--resource-root", root], ready_timeout=180)
+    far_chunk = None
+    try:
+        bootstrap_defs(port)
+        send(port, f"world.init('{PLACE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}); return 'ok'")
+        show_and_wait(chk, port, PLACE)
+        send(port, "return world.waitForInit(60)", timeout=70)
+        send(port, f"return world.loadChunksInRegion(-5, -5, 5, 5, '{PLACE}')")
+        send(port, "return world.waitForChunks(240)", timeout=250)
+        # The FAR targets: a dry column and a plant in one chunk on the
+        # outer ring, which a fresh-process load leaves absent; the NEAR
+        # ones anywhere nearer. Searched rather than assumed: a seed's
+        # coast and void edge decide where land is.
+        far_col = far_plant = None
+        for r in (5, 4):
+            for c in ring(r):
+                col = find_in_chunks(port, [c], False, set())
+                pl = find_in_chunks(port, [c], True, set()) if col else None
+                if col and pl:
+                    far_chunk, far_col, far_plant = c, col, pl
+                    break
+            if far_chunk:
+                break
+        inner = [c for r in (0, 1, 2) for c in ring(r)]
+        near_col = find_in_chunks(port, inner, False, set())
+        near_plant = find_in_chunks(port, inner, True, set())
+        plot_col = find_in_chunks(port, inner, False, {near_col[0]} if near_col else set())
+        chk.ok(None not in (far_chunk, near_col, near_plant, plot_col),
+               f"found real targets: far chunk {far_chunk} column {far_col} plant {far_plant}, "
+               f"near column {near_col}, near plant {near_plant}, plot tile {plot_col}")
+        if None in (far_chunk, near_col, near_plant, plot_col):
+            return
+        far, far_z = far_col[0], far_col[1]
+        fpt, fpid = far_plant[0], far_plant[2]
+        near = (near_col[0][0], near_col[0][1], near_col[1])
+        npt, npid = near_plant[0], near_plant[2]
+        plot = (plot_col[0][0], plot_col[0][1], plot_col[1])
+        send(port, f"world.setVegAt('{PLACE}', {plot[0]}, {plot[1]}, {plot[2]}, 77); return 'ok'")
+        deadline = time.time() + 20.0
+        while time.time() < deadline and send(port, f"return world.isPlantable({plot[0]},{plot[1]})").strip() != "true":
+            time.sleep(0.2)
+        planted = send(port, f"return world.plantCropAt({plot[0]}, {plot[1]}, 'wheat')")
+        chk.ok(planted.strip() == "true", f"a wheat plot was planted (got {planted!r})")
+        save_and_wait(chk, port, PLACE, "place_base")
+    finally:
+        quit_engine(port, proc)
+
+    if far_chunk is None:
+        return
+    fcx, fcy = far_chunk
+    spec = {
+        "tiles": [{"page": PLACE, "x": far[0], "y": far[1], "z": far_z, "tags": ["far_top", "shared"]},
+                  # Not a target: air above the far column. Kept while its
+                  # chunk is absent (absence is not destruction), then
+                  # dropped, and logged, by the real readmission.
+                  {"page": PLACE, "x": far[0], "y": far[1], "z": far_z + 3, "tags": ["far_air"]},
+                  {"page": PLACE, "x": near[0], "y": near[1], "z": near[2], "tags": ["dug_away", "shared"]},
+                  {"page": PLACE, "x": near[0], "y": near[1], "z": near[2] - 1, "tags": ["exposed"]}],
+        "plants": [{"page": PLACE, "x": fpt[0], "y": fpt[1], "id": fpid, "tags": ["far_plant", "shared"]},
+                   {"page": PLACE, "x": npt[0], "y": npt[1], "id": npid, "tags": ["uprooted"]}],
+        "plots": [{"page": PLACE, "x": plot[0], "y": plot[1], "tags": ["field"]},
+                  {"page": PLACE, "x": plot[0] + 1, "y": plot[1] + 7, "tags": ["ghost"]}],
+    }
+    seed(chk, root, tmp, "place_base", "place_seeded", spec)
+    seeded = place_tags(chk, tmp, root, "place_seeded")
+    chk.ok(len(seeded.get("tiles", {})) == 4 and len(seeded.get("plants", {})) == 2
+           and len(seeded.get("plots", {})) == 2,
+           f"the seeded save carries every cell, plant and plot assignment (got {seeded})")
+    kept = {"tiles": {k: v for k, v in seeded.get("tiles", {}).items()},
+            "plants": dict(seeded.get("plants", {})),
+            "plots": {k: v for k, v in seeded.get("plots", {}).items() if "ghost" not in v}}
+    after_dig = {"tiles": {k: v for k, v in kept["tiles"].items()
+                           if "dug_away" not in v and "far_air" not in v},
+                 "plants": {k: v for k, v in kept["plants"].items() if "uprooted" not in v[1]},
+                 "plots": kept["plots"]}
+
+    print("=== engine P2: fresh process, load, save while the far chunk is ABSENT ===")
+    log_p2 = os.path.join(tmp, "engineP2.log")
+    proc = boot(port, log=log_p2, args=["--resource-root", root], ready_timeout=180)
+    try:
+        bootstrap_defs(port)
+        load_and_wait(chk, port, "place_seeded")
+        absent = not chunk_loaded(port, fcx, fcy)
+        chk.ok(absent, f"the far chunk {far_chunk} is absent from the tile store at save time")
+        save_and_wait(chk, port, PLACE, "place_gen1")
+    finally:
+        quit_engine(port, proc)
+    p2 = Path(log_p2).read_text(errors="replace")
+    chk.ok("crop plot tile(s) that hold no plot" in p2,
+           "the load reported dropping the plot assignment that names no plot")
+    got = place_tags(chk, tmp, root, "place_gen1")
+    chk.ok(got == kept, f"'place_gen1' (saved with the far chunk absent) keeps every real "
+                        f"assignment (got {got}, expected {kept})")
+
+    print("=== engine P3: fresh process, readmit the far chunk, dig, save, autosave ===")
+    log_p3 = os.path.join(tmp, "engineP3.log")
+    proc = boot(port, log=log_p3,
+                args=["--resource-root", root], ready_timeout=180)
+    try:
+        bootstrap_defs(port)
+        load_and_wait(chk, port, "place_gen1")
+        send(port, f"return world.loadChunksInRegion({fcx}, {fcy}, {fcx}, {fcy}, '{PLACE}')")
+        # The near targets' chunks, which a fresh load need not hold.
+        for gx, gy in (near[:2], npt):
+            cx, cy = gx // 16, gy // 16
+            send(port, f"return world.loadChunksInRegion({cx}, {cy}, {cx}, {cy}, '{PLACE}')")
+        send(port, "return world.waitForChunks(120)", timeout=125)
+        chk.ok(chunk_loaded(port, fcx, fcy), f"the far chunk {far_chunk} was readmitted")
+        for (gx, gy), want in ((near[:2], near[2] - 1), (npt, None)):
+            before = surface_terrain_z(port, gx, gy)
+            send(port, f"return world.deleteTile('{PLACE}', {gx}, {gy})")
+            target = want if want is not None else (before - 1 if before is not None else None)
+            deadline = time.time() + 20.0
+            while time.time() < deadline and surface_terrain_z(port, gx, gy) != target:
+                time.sleep(0.2)
+            chk.ok(surface_terrain_z(port, gx, gy) == target,
+                   f"the top cell at ({gx}, {gy}) was dug away (terrain z now {target})")
+        save_and_wait(chk, port, PLACE, "place_gen2")
+        prepared = send(port, f"return engine.prepareAutosaveCycle({AUTOSAVE_DEPTH})")
+        chk.ok(prepared.strip() == "true", "engine.prepareAutosaveCycle accepted")
+        save_and_wait(chk, port, PLACE, "autosave-incoming", "{ autosave = true }")
+        rotated = send(port, f"return engine.finalizeAutosaveRotation({AUTOSAVE_DEPTH})")
+        chk.ok(rotated.strip() == "true", "engine.finalizeAutosaveRotation accepted")
+    finally:
+        quit_engine(port, proc)
+
+    p3 = Path(log_p3).read_text(errors="replace")
+    air = f"({far[0]},{far[1]},{far_z + 3})"
+    chk.ok(any("dropped tags on" in line and air in line for line in p3.splitlines()),
+           f"the readmission of the far chunk reported dropping the non-target cell {air}")
+    print("=== engine P4: fresh process, load the autosave, save ===")
+    proc = boot(port, log=os.path.join(tmp, "engineP4.log"),
+                args=["--resource-root", root], ready_timeout=180)
+    try:
+        bootstrap_defs(port)
+        load_and_wait(chk, port, "autosave-1")
+        save_and_wait(chk, port, PLACE, "place_gen3")
+    finally:
+        quit_engine(port, proc)
+
+    for slot in ("place_gen2", "autosave-1", "place_gen3"):
+        got = place_tags(chk, tmp, root, slot)
+        chk.ok(got == after_dig,
+               f"'{slot}' carries exactly the survivors: the dug cell and the uprooted "
+               f"plant lost theirs, the exposed cell and the far targets kept theirs "
+               f"(got {got}, expected {after_dig})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -525,6 +752,7 @@ def main() -> int:
         chk.ok(found == [], f"the resource root holds no scenario file (got {found})")
         generated_leg(chk, args.port, root, tmp)
         arena_leg(chk, args.port, root, tmp)
+        place_leg(chk, args.port, root, tmp)
     finally:
         if chk.failed:
             print(f"  logs kept at {tmp}")

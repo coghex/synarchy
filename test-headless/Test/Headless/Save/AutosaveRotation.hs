@@ -29,6 +29,7 @@
 module Test.Headless.Save.AutosaveRotation (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Test.Hspec
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
@@ -113,6 +114,7 @@ minimalPage = PageSnapshot
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = HM.empty
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing

@@ -13,6 +13,7 @@ module Engine.Scripting.Lua.API.Forage.Query
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..))
 import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Encoding as TE
@@ -310,7 +311,7 @@ worldFindHarvestableFloraFn env = do
                         tileData ← readIORef (wsTilesRef ws)
                         cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
                         harvests ← readIORef (wsFloraHarvestsRef ws)
-                        cropPlots ← readIORef (wsCropPlotsRef ws)
+                        cropPlots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef ws))
                         (doy, absDay) ← growthClock ws
                         itemMgr ← readReadOnlyRef
                             (crvItemManagerRef (toContentRegistriesViewCapability env))
@@ -527,7 +528,7 @@ worldGetCropPlotAtFn env = do
                 case mWs of
                     Nothing → pure Nothing
                     Just ws → do
-                        plots ← readIORef (wsCropPlotsRef ws)
+                        plots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef ws))
                         case HM.lookup (gx, gy) plots of
                             Nothing → pure Nothing
                             Just cp → do

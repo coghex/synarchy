@@ -16,6 +16,7 @@ module World.Thread.Command.Save.WriteWorld
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..), capturePageTags)
 import Gameplay.Tags.Index (categoryForward)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -199,7 +200,12 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 plantedCursor ← readIORef
                                     (wsPlantedFloraCursorRef ws)
                                 tillDesigs ← readIORef (wsTillDesignationsRef ws)
-                                cropPlots ← readIORef (wsCropPlotsRef ws)
+                                cropStore ← readIORef (wsCropPlotsRef ws)
+                                let cropPlots = cpsPlots cropStore
+                                -- #2705: the cell and occurrence tags,
+                                -- read beside the edits and the plots
+                                -- (whose tags ride the plot store).
+                                pageTags ← readIORef (wsPageTagsRef ws)
                                 plantDesigs ← readIORef (wsPlantDesignationsRef ws)
                                 craftBills ← readIORef (wsCraftBillsRef ws)
                                 transferOrders ← readIORef
@@ -269,6 +275,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                         , pgsContainerKnowledge = containerKnowledge
                                         , pgsTillDesignations = tillDesigs
                                         , pgsCropPlots   = namedCrops
+                                        , pgsPageTags    = capturePageTags pageTags cropStore
                                         , pgsPlantDesignations = namedPlants
                                         , pgsIdentity    = identity
                                         -- #2021: always 'Just' — the

@@ -8,6 +8,7 @@ module World.Thread.ChunkLoading
     ) where
 
 import UPrelude
+import Gameplay.Tags.PageLive (reconcileAdmittedPageTags)
 import qualified Data.HashMap.Strict as HM
 import Data.List (nub, partition, sortOn)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
@@ -234,6 +235,11 @@ updateChunkLoading env logger = do
                                 -- the admitted chunks.
                                 forgetFloraDroppedSince worldState
                                     newChunks' finalTd
+                                -- #2705: and the general gameplay tags
+                                -- the admitted chunks own, against the
+                                -- same committed result.
+                                reconcileAdmittedPageTags logger worldState
+                                    pageId newChunks' finalTd
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -518,6 +524,8 @@ drainInitQueues env logger = do
                         -- it.
                         finalTd ← readIORef (wsTilesRef worldState)
                         forgetFloraDroppedSince worldState newChunks' finalTd
+                        reconcileAdmittedPageTags logger worldState pageId
+                                                  newChunks' finalTd
 
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump

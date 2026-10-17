@@ -38,6 +38,7 @@ module World.Flora.Designation
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (forgetDestroyedCells, forgetOccurrences)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
@@ -318,6 +319,9 @@ forgetFloraInstances _ [] = pure ()
 forgetFloraInstances ws iids = do
     atomicModifyIORef' (wsFloraHarvestsRef ws) $ \m →
         (foldl' (flip HM.delete) m iids, ())
+    -- #2705: the plant's general gameplay tags are identity-keyed state
+    -- too, and leave at exactly this boundary — never on eviction.
+    atomicModifyIORef' (wsPageTagsRef ws) $ \pt → (forgetOccurrences iids pt, ())
     desigs ← readIORef (wsChopDesignationsRef ws)
     setChopDesignations ws
         [ (iid, chopDesignationTile cd, Nothing)
@@ -368,6 +372,11 @@ replaceChunkForgettingFlora
     ∷ WorldState → LoadedChunk → LoadedChunk → IO ()
 replaceChunkForgettingFlora ws old new = do
     atomicModifyIORef' (wsTilesRef ws) $ \w → (insertChunk new w, ())
+    -- #2705: a tagged CELL this in-place change made air, or took out of
+    -- its column's stored range, ceased to exist; its tags go. Every
+    -- surviving cell keeps its own, and nothing transfers to a cell the
+    -- change exposed or created.
+    atomicModifyIORef' (wsPageTagsRef ws) $ \pt → (fst (forgetDestroyedCells new pt), ())
     let kept = HM.fromList
             [ (fiInstanceId fi, ()) | fi ← fcdInstances (lcFlora new) ]
         gone = [ fiInstanceId fi

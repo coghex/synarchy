@@ -16,6 +16,7 @@
 module Test.Headless.World.Save.Storage (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Test.Hspec
 import Control.Exception (finally, catch, SomeException)
 import qualified Data.ByteString as BS
@@ -127,6 +128,7 @@ minimalPage gp = PageSnapshot
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = HM.empty
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing

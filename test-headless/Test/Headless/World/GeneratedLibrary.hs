@@ -13,6 +13,7 @@
 module Test.Headless.World.GeneratedLibrary (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Test.Hspec
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, wait, poll, concurrently)
@@ -270,6 +271,7 @@ minimalPage pid gid = PageSnapshot
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = HM.empty
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
