@@ -68,7 +68,7 @@ PROBE_CHECKS = [
     ("half_concentration_effectiveness", "concentration 0.5 -> 0.875"),
     ("zero_concentration_effectiveness", "zero concentration -> 0.75"),
     ("euphoric_effectiveness", "full concentration + euphoria -> 1.10"),
-    ("distracted_euphoric_effectiveness", "zero concentration + euphoria -> 0.75 x 1.10"),
+    ("distracted_euphoric_effectiveness", "zero concentration + euphoria -> (0.75 + 0.25 x 0.10) x 1.10"),
     ("probe_recipe_loaded", "probe recipe loaded"),
     ("distracted_bill_added", "distracted probe bill added"),
     ("distracted_bill_worked", "the real AI claimed + worked the distracted probe bill"),
@@ -212,13 +212,27 @@ def resources_off(port):
          "ur.update = function() end; return 'ok'")
 
 
+def oxygen_for(concentration):
+    """The blood oxygen that makes a HEALTHY unit's derived consciousness,
+    and so its derived concentration, equal `concentration` (#2838, S11a):
+    consciousness is (oxygen - 0.5) / 0.3 clamped to 0..1, and concentration
+    is consciousness x (1 - 0.6 pain) x (0.4 + 0.6 stamina fraction) +
+    0.15 caffeine with pain 0, a full stamina pool and no caffeine."""
+    return 1.0 if concentration >= 1.0 else 0.5 + 0.3 * max(0.0, concentration)
+
+
 def pin(port, uid, concentration, euphoric):
-    """Pin concentration + mental_state directly (0 = STABLE, 3 = EUPHORIC
-    in scripts/mental_state.lua) — never treating the world seed as a
-    combat RNG seed, per the issue's explicit requirement."""
+    """Pin the INPUTS of the derived concentration (0 = STABLE, 3 = EUPHORIC
+    in scripts/mental_state.lua): concentration cannot be stored any more
+    (#2838), so the blood-oxygen input is set so the derived value reads
+    `concentration` while the unit is otherwise healthy, and mental_state
+    is set directly. Euphoria lifts the derived concentration by +0.10
+    (clamped) by design, so a euphoric pin reads concentration + 0.10 —
+    never treating the world seed as a combat RNG seed, per the issue's
+    explicit requirement."""
     ms = 3 if euphoric else 0
     send(port,
-         f"unit.setStat({uid}, 'concentration', {concentration}); "
+         f"unit.setStat({uid}, 'blood_oxygen', {oxygen_for(concentration)}); "
          f"unit.setStat({uid}, 'mental_state', {ms}); return 'ok'")
 
 
@@ -560,10 +574,14 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
         eff = get_effectiveness(port, uid)
         passed = check(passed, near(eff, 1.10), "full concentration + euphoria -> 1.10", f"eff={eff}")
 
+        # Euphoria lifts the DERIVED concentration by +0.10 exactly once, so a
+        # zero base reads 0.10 and the band floor lifts with it before the
+        # separate x1.10: (0.75 + 0.25 x 0.10) x 1.10.
         pin(port, uid, 0.0, True)
         eff = get_effectiveness(port, uid)
-        passed = check(passed, near(eff, 0.75 * 1.10),
-                       "zero concentration + euphoria -> 0.75 x 1.10", f"eff={eff}")
+        passed = check(passed, near(eff, (0.75 + 0.25 * 0.10) * 1.10),
+                       "zero concentration + euphoria -> (0.75 + 0.25 x 0.10) x 1.10",
+                       f"eff={eff}")
 
         # --- setup for 2/3: a built furnace + the probe recipe ---
         with open(TEST_YAML, "w") as f:

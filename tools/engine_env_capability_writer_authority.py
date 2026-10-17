@@ -377,6 +377,12 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         # the pinned override) is the same shape and the other of the
         # marker's two writers.
         "Engine.Scripting.Lua.API.Units.Physiology",
+        # #2838: the batch commit (`unit.commitPhysio`) validates every key
+        # through the write gate and stores the WHOLE batch inside one
+        # `atomicModifyIORef'`, so the mental machine's multi-key events are
+        # observable whole or not at all (S11-F1). It cannot live in Stats:
+        # the gate is read inside the same transaction that stores the batch.
+        "Engine.Scripting.Lua.API.Units.CommitPhysio",
         "Engine.Scripting.Lua.API.Units.Selection",
         "Engine.Scripting.Lua.API.Units.Spawn",
         # #2470: the stamina commit is the same shape as the stance

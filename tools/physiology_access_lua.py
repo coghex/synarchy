@@ -29,8 +29,14 @@ from typing import Iterator, Optional
 RAW_UNIT_VERBS = {"getStat": "read", "getStatBase": "read", "setStat": "write"}
 RAW_STATS_VERBS = {"get": "read"}
 STATS_MODULE = "scripts.unit_stats"
+FACADE_MODULE = "scripts.physiology"
+# Facade calls that WRITE a system's own durable keys: the atomic batch seam
+# (#2838). physiology.creditBatch is a contribution (like credit/debit) and
+# is allowed everywhere, so it is not listed.
+FACADE_WRITE_VERBS = ("commit",)
 MUTATING_MODE_VERBS = ("setPhysioMode", "clearPhysioMode",
-                       "applyCombatEngagement", "commitStamina")
+                       "applyCombatEngagement", "commitStamina",
+                       "commitPhysio")
 
 
 # ---------------------------------------------------------------- tokens
@@ -209,6 +215,7 @@ def block_events(toks: list[Tok], aliases: set[str]) -> list[Event]:
     mention and call together with the blocks enclosing it."""
     events: list[Event] = []
     stack: list[Frame] = []
+    phys_aliases = physiology_aliases(toks)
     pending_do_owner = 0     # loop headers whose `do` is not a new block
     for i, t in enumerate(toks):
         if t.kind == "name":
@@ -262,6 +269,21 @@ def block_events(toks: list[Tok], aliases: set[str]) -> list[Event]:
                 elif tx == "unit" and nn.text in MUTATING_MODE_VERBS:
                     events.append(Event("mode-verb", i + 2, tuple(stack),
                                         f"unit.{nn.text}"))
+                elif tx in phys_aliases and nn.text in FACADE_WRITE_VERBS \
+                        and n3 and n3.text == "(" and not _after_dot(toks, i):
+                    # the facade's atomic batch seam (#2838): only the mind's
+                    # writers may call it
+                    events.append(Event("mode-verb", i + 2, tuple(stack),
+                                        f"physiology.{nn.text}"))
+            elif tx == "require" and nxt and nxt.text == "(" and nn \
+                    and nn.kind == "str" and nn.text == FACADE_MODULE:
+                # require("scripts.physiology").commit(...)
+                close = _match(toks, i + 1)
+                if close + 3 < len(toks) and toks[close + 1].text == "." \
+                        and toks[close + 2].text in FACADE_WRITE_VERBS \
+                        and toks[close + 3].text == "(":
+                    events.append(Event("mode-verb", close + 2, tuple(stack),
+                                        f"physiology.{toks[close + 2].text}"))
             elif tx == "require" and nxt and nxt.text == "(" and nn \
                     and nn.kind == "str" and nn.text == STATS_MODULE:
                 close = _match(toks, i + 1)
@@ -274,6 +296,20 @@ def block_events(toks: list[Tok], aliases: set[str]) -> list[Event]:
             if nxt and nxt.text == "(" and tx not in _KEYWORDS:
                 events.append(Event("call", i, tuple(stack), callee=tx))
     return events
+
+
+def physiology_aliases(toks: list[Tok]) -> set[str]:
+    """``physiology`` plus every name bound to ``require("scripts.physiology")``
+    in the text: the facade's write seam (``commit``) is recognized through any
+    local alias, not only the conventional name."""
+    out: set[str] = {"physiology"}
+    for i in range(len(toks) - 5):
+        if toks[i].text == "local" and toks[i + 1].kind == "name" \
+                and toks[i + 2].text == "=" and toks[i + 3].text == "require" \
+                and toks[i + 4].text == "(" and toks[i + 5].kind == "str" \
+                and toks[i + 5].text == FACADE_MODULE:
+            out.add(toks[i + 1].text)
+    return out
 
 
 def _after_dot(toks: list[Tok], i: int) -> bool:

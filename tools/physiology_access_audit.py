@@ -169,6 +169,16 @@ OWNERS: tuple[Owner, ...] = (
     Owner("exhaustion", "scripts/unit_resource_params.lua"),
     Owner("sleep", "scripts/unit_resource_tick.lua"),
     Owner("sleep", "scripts/unit_resource_params.lua"),
+    # Consciousness and mind (#2838, S11a): the brain's file names both
+    # systems' keys (consciousness, concentration, state_of_mind are DERIVED
+    # and read through the facade; mood, emotional_pain and caffeine are
+    # drifted there), and the mental-state machine and the thought clock own
+    # the episode and thought keys. None of them touches a key raw: every read
+    # is physiology.get and every write one physiology.commit batch.
+    Owner("consciousness", "scripts/brain.lua"),
+    Owner("mind", "scripts/brain.lua"),
+    Owner("mind", "scripts/mental_state.lua"),
+    Owner("mind", "scripts/thoughts.lua"),
     # The failure-meter engine: only the meters of the systems that declare
     # them, never their pools.
     Owner("thermo", "scripts/unit_resource_failure.lua", "meters"),
@@ -247,6 +257,13 @@ PROBE_FIXTURE_WRITES = FixtureWrites(
 # (#2470): the pool engine drives the tick's regen/drain through it.
 ATOMIC_VERB_CALLERS: dict[str, frozenset[str]] = {
     "unit.commitStamina": frozenset({"scripts/unit_resource_tick.lua"}),
+    # The atomic batch seam (#2838, S11a): ``unit.commitPhysio`` is called by
+    # the facade alone (its ``commit``), and ``physiology.commit`` only by the
+    # three writers of the mind's durable keys. A script that wrote a mind key
+    # any other way would reopen the torn-read race (S11-F1).
+    "physiology.commit": frozenset({"scripts/brain.lua",
+                                    "scripts/mental_state.lua",
+                                    "scripts/thoughts.lua"}),
 }
 
 
@@ -274,6 +291,9 @@ BLOOD_FIELD_INVENTORY: dict[str, str] = {
     "src/Engine/Asset/YamlPhysiology.hs":
         "the registry loader validates the `field:` name (no access)",
     "src/Combat/Wounds.hs": "documentation of the wound tick (no access)",
+    "src/Combat/Resolution/Common.hs":
+        "mentalEffectiveness builds a derived-read context; neither derived "
+        "value reads blood (it passes the raw view, never a volume)",
     "src/Combat/Wounds/Tick.hs":
         "the wound fold: the only drain/recovery writer, gated by "
         "bloodIsNominal; the raw view builds its physiology context",
