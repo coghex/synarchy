@@ -1922,6 +1922,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.PhysiologySpeciesProfiles
                    Test.Headless.Unit.PhysiologyBloodModes
                    Test.Headless.Unit.PhysiologyBloodModes.Adapter
+                   Test.Headless.Unit.PhysiologyBloodModes.Modes
+                   Test.Headless.Unit.PhysiologyBloodModes.Persistence
                    Test.Headless.Unit.PhysiologyBloodModes.WoundFold
                    Test.Headless.Unit.PhysiologyCardioCirculationModes
                    Test.Headless.Unit.PhysiologyCardioCirculationModes.Persistence
