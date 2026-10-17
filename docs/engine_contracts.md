@@ -2272,10 +2272,10 @@ every consumer relies on:
   tick themselves in registry order (thermo before salt), then brain,
   thoughts, mental state, injuries and the failure meters (an owned meter
   only while its system is Simulated; injury meters always), then the
-  per-def pools (`hydration`, `hunger`, `calories` and `stamina` only while
-  their system is Simulated, with the species' resource parameters or, failing
-  those, the registry defaults in `scripts/unit_resource_params.lua`;
-  exhaustion and sleep pressure as always), then nutrition's digestion and
+  per-def pools (`hydration`, `hunger`, `calories`, `stamina`, `exhaustion`
+  and `sleep_pressure` only while their system is Simulated, with the
+  species' resource parameters or, failing those, the registry defaults in
+  `scripts/unit_resource_params.lua`), then nutrition's digestion and
   catabolism (Simulated) or its upkeep (Nominal), then `checkRevive` over the
   Simulated pools only. Each unit's pass is a `pcall`: a fault in one unit is
   logged once and skipped, never aborting the pass for the rest.
@@ -2369,6 +2369,55 @@ every consumer relies on:
     endurance 1). `move_regen_factor` is also the speed-drain effort
     coefficient, so the engaged nomad's fractional drain above comfort speed
     is 1.5x the acolyte's.
+* *Exhaustion and sleep (#2835, S8b).* Two more systems, `exhaustion` and
+  `sleep`, each requiring a body, owning one pool (`exhaustion`;
+  `sleep_pressure`) and no meters. Their healthy value and seed target are
+  `effective(endurance) x 10`, spelled `{ from: endurance, scale: 10 }` (the
+  Lua-only maxima `max_exhaustion` / `max_sleep_pressure` are never stored, so
+  a `from:` of them would refuse every spawn); a hspec case pins it equal to
+  `stats.get(max_*)` to binary32 precision for every shipped species.
+  Profiles: `rich` S/S, `reduced` S/S, `simple` S/N, `exempt` N/N; the
+  technomule overrides both to Nominal; bodyless units are Unsupported. The
+  squirrel's sleep is Nominal because it has no `go_to_sleep` behavior: its
+  `sleep_pressure` config entry stays as the drain-only parameters of a
+  squirrel pinned Simulated (and `scripts/circadian.lua` still reads its phase).
+  * *Substitutes are constants, never ratios.* A Nominal or Unsupported
+    exhaustion answers restedness exactly 1.0, a movement multiplier exactly
+    1.0 and a zero sleep-utility term; the binary32 healthy value over the
+    double maximum would read 0.99999996 at a rolled endurance of 0.3 and look
+    like a deficit. A Nominal or Unsupported sleep has go_to_sleep utility
+    -infinity and no pressure wake. Unsupported exhaustion still reports
+    Unsupported through the read API.
+  * *The sleep need is sleep's effect.* `sleepUtility` returns -infinity
+    BEFORE it looks at the sequence's latch when sleep is not Simulated, and
+    abandons a sequence it finds. A sleep mode change runs the registered
+    `go_to_sleep` hook (sleep only; an exhaustion change never interrupts a
+    sequence), which clears `sleepPhase`, `sleepSpot`, `sleepSession`,
+    `sleepSpotPickedAt`, `sleepLastSunAngle` and `sleepWakeRequested` and
+    unwinds the pose: Sleeping goes to Crawling (the injury tick's
+    healthy-crawler revive then stands it up, the phase being nil), Crouching
+    to Standing, Crawling is left to the injury tick; a hop in flight is waited
+    out. The durable sequence is NOT reset by load or teardown: a Simulated
+    sleeper resumes; one restored under a non-Simulated sleep mode is
+    abandoned on its first think.
+  * *Retained modifiers.* A pool's stat reads `(base + sum d) x (1 + sum p)`
+    over its active modifiers, and `unit.setStat` stores a BASE, so every
+    writer that works in effective values solves the base
+    (`scripts/lib/stat_base.lua`, `t / (1 + sum p) - sum d`; a modifier is
+    active while `now < expiry`): the transition seed (as before), the facade's
+    `credit` / `debit` for these pools (an effective delta, clamped to
+    [0, maximum], answering the effective change read back) and the resource
+    tick's carry integrator (so the sub-Float remainder stays in the effective
+    domain). No base representable (a multiplier that is not positive, or a
+    negative base) writes nothing. With no active modifier the target is
+    written unchanged, so every unmodified pool is bit-identical to before.
+  * *Persistence.* No wire change. Both pools are Persist exactly while
+    Simulated; a squirrel saved by an earlier build has its stored
+    `sleep_pressure` scrubbed on load (logged once, idempotent), a pinned
+    Simulated one keeps its pin and its exact partial pool.
+  * Gates: hspec `--match "physiology exhaustion and sleep modes"`,
+    `tools/persistence_contract_probe.py` (fresh-process cycles) and the
+    `sleep`, `circadian`, `circadian_species` and `physiology` probes.
 * *Persistence*: pools and meters of a Simulated system, overrides,
   `combat_engaged` and `tissue_recovering` are Persist exactly; `circulation`, `consciousness`,
   `concentration`, `state_of_mind`, the strength values and the body-derived
