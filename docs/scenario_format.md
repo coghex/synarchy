@@ -468,7 +468,9 @@ automatic path id (`units[2].inventory[0]`) is captured in its explicit form
 (`units.2.inventory.0`). An unmapped item gets `<owner>.<collection>.<index>`
 (`scout.inventory.2`, `ground.0`), made unique with `-2`, `-3`, … against every
 reference already taken; the names depend on position only, never on instance ids.
-A derived name is shortened with a stable hash when it would pass 512 characters.
+An item's existing reference is preserved verbatim at any admitted length; only a
+generated name (or the numeric suffix that resolves a clash) is shortened with a stable
+hash, and only when it would pass 512 characters.
 Every reference an item already holds is reserved before any name is chosen, authored
 explicit ids first: an automatic id converts to its bracketless form only when no
 authored id already spells it, and is otherwise disambiguated (`-2`), so two distinct
