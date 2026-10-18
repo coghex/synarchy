@@ -172,25 +172,31 @@ captureNodes ctx st00 roots = (stN, Captured (concatMap fst parts) (concatMap sn
                    | otherwise → freshRef m r
             Nothing → freshRef m (spelling base)
 
--- | A reference as an explicit id that fits the save: the bracketless
---   spelling ('explicitRefOf'), shortened (with a stable hash of the
---   whole, so two long names stay distinct) when it would exceed the
---   room 'freshRef' keeps for its numeric suffix.
+-- | The explicit-id spelling of a reference an item ALREADY holds,
+--   verbatim: an admitted reference is at most 'maxItemRefLength'
+--   characters and the bracketless conversion never lengthens it, so an
+--   existing id is preserved exactly, however close to the limit.
 spelling ∷ Text → Text
-spelling t
-    | T.length e ≤ roomy = e
-    | otherwise = T.take (roomy - 17) e <> "-" <> T.justifyRight 16 '0' (T.pack (showHex (stableHash64 e) ""))
-  where e = explicitRefOf t
-        roomy = maxItemRefLength - 12
+spelling = explicitRefOf
+
+-- | A GENERATED name that fits the save: kept when it fits, otherwise
+--   cut short with a stable hash of the whole so two long names stay
+--   distinct. Only generated names (position-derived, or a numeric
+--   suffix added to resolve a clash) are ever shortened.
+bounded ∷ Text → Text
+bounded c
+    | T.length c ≤ maxItemRefLength = c
+    | otherwise = T.take (maxItemRefLength - 17) c <> "-"
+        <> T.justifyRight 16 '0' (T.pack (showHex (stableHash64 c) ""))
 
 -- | The first free spelling of a base: the base itself, then @-2@,
 --   @-3@, … — deterministic, and independent of anything but the
---   references already taken.
+--   references already taken. Every candidate fits the save.
 freshRef ∷ HM.HashMap Text Word64 → Text → Text
-freshRef m base = head' [ c | c ← base : [ base <> "-" <> tshow n | n ← [2 ∷ Int ..] ]
-                           , not (HM.member c m) ]
+freshRef m base = head' [ c | c0 ← base : [ base <> "-" <> tshow n | n ← [2 ∷ Int ..] ]
+                           , let c = bounded c0, not (HM.member c m) ]
   where head' (x : _) = x
-        head' [] = base
+        head' [] = bounded base
 
 mapAccumL' ∷ (s → a → (s, b)) → s → [a] → (s, [b])
 mapAccumL' _ s [] = (s, [])
@@ -277,16 +283,23 @@ captureGroundItems ctx st0 g = (st1, zip3 xs ys (capEntries c), c)
     -- and its tags, at every node. The order therefore never leans on
     -- the allocator or on the ground-row ids; two rows that still tie
     -- are indistinguishable in the output, so their order cannot show.
-    structure i = T.intercalate "|"
+    -- A STRUCTURED key: a tag may contain any character, so nothing is
+    -- joined into one string that two different tag sets could share.
+    structure i = Sig
         [ iiDefName i, tshow (iiCurrentFill i), tshow (iiQuality i)
         , tshow (iiCondition i), tshow (iiWeight i), tshow (iiSharpness i)
         , tshow (iiTemp i), tshow (iiBulk i)
-        , tshow (fmap (\st → (isWeightCapacity st, isBulkCapacity st)) (iiStorage i))
-        , fromMaybe "" (spelling ⊚ ccRef ctx (iiInstanceId i))
-        , T.intercalate "," (map gameplayTagText (Set.toAscList (ccTags ctx (iiInstanceId i))))
-        , "[" <> T.intercalate "," (map structure (iiContents i)) <> "]" ]
+        , tshow (fmap (\st → (isWeightCapacity st, isBulkCapacity st)) (iiStorage i)) ]
+        (spelling ⊚ ccRef ctx (iiInstanceId i))
+        (map gameplayTagText (Set.toAscList (ccTags ctx (iiInstanceId i))))
+        (map structure (iiContents i))
     xs = map G.giX rows
     ys = map G.giY rows
     st0' = reserveMapped ctx (map G.giInst rows) st0
     (st1, c) = captureNodes ctx st0'
         [ ("ground." <> tshow (n ∷ Int), G.giInst r) | (n, r) ← zip [0 ..] rows ]
+
+-- | One node of the ground-order key: physical fields, reference, tags
+--   and children, each kept as its own element.
+data Sig = Sig [Text] (Maybe Text) [Text] [Sig]
+    deriving (Eq, Ord)

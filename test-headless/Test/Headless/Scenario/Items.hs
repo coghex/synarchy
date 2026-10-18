@@ -1094,6 +1094,28 @@ spec = describe "Scenario.Items" $ do
             map (scenarioIdText ∘ ieId) (capEntries (snd (captureNodes ctx emptyCaptureState
                 [(owner ".one", r0), (owner ".two", r1)]))) `shouldBe` names
 
+        it "an authored id of any admitted length is preserved verbatim through \
+           \materialize, capture, encode and decode" $
+            forM_ [maxItemRefLength - 12 .. maxItemRefLength] $ \n → do
+                let name = T.replicate n "a"
+                (decoded, ds) ← decodeDoc $ BC.pack $ unlines
+                    [ "version: 1", "ground_items:"
+                    , "  - {id: " ⧺ T.unpack name ⧺ ", definition: ring, x: 0, y: 0}" ]
+                ds `shouldBe` []
+                (env, _) ← newEnv defs 0
+                (placements, gb) ← buildGroundItems env (scGroundItems decoded)
+                ibDiagnostics gb `shouldBe` []
+                let (store, _) = installGroundItems (catMaybes placements) emptyGroundItems
+                    ctx = ctxOf (ibRefs gb) []
+                    (_, rows, _) = captureGroundItems ctx emptyCaptureState store
+                    doc = A.object [ "version" A..= (1 ∷ Int)
+                        , "ground_items" A..= [ A.object (("x", A.toJSON x) : ("y", A.toJSON y) : itemEntryFields e)
+                                              | (x, y, e) ← rows ] ]
+                map (\(_, _, e) → ieId e) rows `shouldBe` [ExplicitId name]
+                (back, ds2) ← decodeDoc (Y.encode doc)
+                ds2 `shouldBe` []
+                map (ieId ∘ giItem) (scGroundItems back) `shouldBe` [ExplicitId name]
+
         it "ground rows that differ only in tags or references keep their own \
            \identity however they were laid down" $ do
             let mk i d = do
@@ -1108,6 +1130,13 @@ spec = describe "Scenario.Items" $ do
                 ctx = CaptureCtx (const Nothing) (\i → fromMaybe Set.empty (lookup i tagsOf))
                 capture g = let (_, rows, _) = captureGroundItems ctx emptyCaptureState g in rows
             capture (lay [ra, rb]) `shouldBe` capture (lay [rb, ra])
+            -- a tag may contain any character: ["alpha,beta"] and ["alpha", "beta"]
+            -- are different sets and must not tie
+            let tagsB = [ (iiInstanceId ra, Set.fromList [tg "alpha,beta"])
+                        , (iiInstanceId rb, Set.fromList [tg "alpha", tg "beta"]) ]
+                ctxB = CaptureCtx (const Nothing) (\i → fromMaybe Set.empty (lookup i tagsB))
+                captureB g = let (_, rows, _) = captureGroundItems ctxB emptyCaptureState g in rows
+            captureB (lay [ra, rb]) `shouldBe` captureB (lay [rb, ra])
             -- and the tags really did travel with the item that held them
             [ (ieId e, ieTags e) | (_, _, e) ← capture (lay [rb, ra]) ]
                 `shouldBe` [ (ExplicitId "ground.0", [tg "alpha"]), (ExplicitId "ground.1", [tg "beta"]) ]
