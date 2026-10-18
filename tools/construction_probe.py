@@ -129,13 +129,15 @@ def bootstrap(port: int) -> None:
     if not poll_until(port, 30, lambda: wid(port)):
         sys.exit("arena page never became the active world")
     # Make sure the chunks around the test sites exist before designating
-    # (designation skips unloaded-chunk tiles). The flat arena's footprint
-    # is a fixed 5x5 chunk grid centred on the origin (arenaRadius = 2,
-    # World.Generate.Arena) — chunks -2..2 (tiles -32..47). Requesting
-    # chunks OUTSIDE that footprint falls through to the real terrain
-    # generator against the arena's synthetic gen params and crashes the
-    # world thread, so this loads the arena's FULL footprint (needed for
-    # the #799 phases' negative-Y sites below) and no further.
+    # (designation skips unloaded-chunk tiles). The arena's STARTUP
+    # footprint is a 5x5 chunk grid centred on the origin (arenaFootprintRadius
+    # = 2, World.Generate.Arena) — chunks -2..2 (tiles -32..47). It is a
+    # startup set, not an extent: since #2707 demand for any chunk beyond it
+    # reaches the same arena generator (World.Thread.ChunkLoading.
+    # generateDemandedChunks) and succeeds, where it used to fall through to
+    # the real terrain generator against the arena's synthetic gen params
+    # and crash the world thread. This probe only needs the footprint (the
+    # #799 phases' negative-Y sites below), so it loads that and no further.
     send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)")
     send(port, "return world.waitForChunks(60)", timeout=65.0)
 

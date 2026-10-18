@@ -42,7 +42,7 @@ import World.Weather.Types (ClimateState(..), initClimateState)
 
 import Engine.Scripting.Lua.API.Debug (setFluidSurfaceFn)
 import World.Thread.Command.Edit.Fluid (handleWorldDebugSetFluidSurfaceCommand)
-import World.Generate.Arena (generateFlatChunk)
+import World.Generate.Arena (generateArenaChunk)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Tile.Types (WorldTileData(..))
 import World.Edit.Types (WorldEdit(..))
@@ -285,7 +285,7 @@ debugEditSpec = describe "exact capture edit hook" $
                 wsc = toWorldSimCapability env
                 coord = ChunkCoord 0 0
                 cell = Just (FluidCell Lake (-3))
-                lc = (generateFlatChunk coord) { lcTerrainSurfaceMap = VU.replicate 256 (-4) }
+                lc = (generateArenaChunk 0 coord) { lcTerrainSurfaceMap = VU.replicate 256 (-4) }
             writeIORef (wsWorldManagerRef wsc) emptyWorldManager { wmWorlds = [(page, ws)] }
             writeIORef (wsGenParamsRef ws) (Just defaultWorldGenParams { wgpWorldSize = 64 })
             writeIORef (wsTilesRef ws) (WorldTileData (HM.singleton coord lc) 1)

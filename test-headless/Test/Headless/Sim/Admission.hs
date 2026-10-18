@@ -56,7 +56,7 @@ import Test.Headless.Harness
     (moveCamera, queueChunks, sendWorldCommand, waitForWorldInit)
 import World.Chunk.Residency (ChunkGeneration)
 import World.Fluid.Internal (FluidMap)
-import World.Generate.Arena (arenaGenForSeed, generateArenaChunks)
+import World.Generate.Arena (generateArenaChunks)
 import World.Types
 
 -- * Fixture
@@ -386,7 +386,7 @@ spec = beforeAllWith setup $ do
     describe "arena init" $ do
         it "seeds every generated arena chunk exactly once" $ \fx → do
             let generated = map lcCoord
-                    (generateArenaChunks (arenaGenForSeed 0))
+                    (generateArenaChunks 0)
                 seeded = map seedCoord (fxArenaSeeds fx)
             length generated `shouldBe` 25
             sort seeded `shouldBe` sort generated
@@ -395,7 +395,7 @@ spec = beforeAllWith setup $ do
            \fluid and terrain surface" $ \fx → do
             let byCoord = HM.fromList
                     [ (lcCoord lc, lc)
-                    | lc ← generateArenaChunks (arenaGenForSeed 0) ]
+                    | lc ← generateArenaChunks 0 ]
             forM_ (fxArenaSeeds fx) $ \s → do
                 seedTopo s `shouldBe` fxArenaTopo fx
                 case HM.lookup (seedCoord s) byCoord of

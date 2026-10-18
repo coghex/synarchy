@@ -1709,6 +1709,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Load.ReplacementTeardown
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
+                   Test.Headless.World.ArenaGenerationConsistency
                    Test.Headless.World.GeneratedIdentity
                    Test.Headless.World.Identity
                    Test.Headless.World.MapImagePlan

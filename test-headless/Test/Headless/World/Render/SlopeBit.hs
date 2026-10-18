@@ -50,9 +50,10 @@ import World.Fluid.Types (fluidCellAtZ, FluidCell(..), FluidType(..))
 import World.Material (MaterialId(..), MaterialProps(..), MaterialRegistry
                       , defaultMaterialProps, emptyMaterialRegistry
                       , matLoam, registerMaterial)
+import World.Constants (seaLevel)
+import World.Generate.Arena (generateArenaChunk)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, insertChunk
                         , lookupChunk)
-import World.Generate.Arena (generateFlatChunk)
 import World.Slope (slopeBit, wrapChunkCoordU, slopeRecomputeAffected
                    , recomputeNeighborSlopes)
 
@@ -90,10 +91,28 @@ wetNeighborMap = fluidMapWith [((6, 5), fluidCellAtZ Lake 9)]
 nbr ∷ (Int, Int)
 nbr = (6, 5)
 
+-- | A one-loam-cell-per-column chunk at sea level: the minimal fixture
+--   these slope examples are written against. It is a TEST fixture, not
+--   a generator — the arena's own base is the sixteen-cell column of
+--   'World.Generate.Arena.generateArenaChunk', which these examples do
+--   not exercise (they set each column's start z and surface map
+--   themselves).
+flatLoamChunk ∷ ChunkCoord → LoadedChunk
+flatLoamChunk coord =
+    let MaterialId loamId = matLoam
+        area = chunkSize * chunkSize
+        col = ColumnTiles
+            { ctStartZ = seaLevel
+            , ctMats = VU.singleton loamId
+            , ctSlopes = VU.singleton 0
+            , ctVeg = VU.singleton 0 }
+        base = generateArenaChunk 0 coord
+    in base { lcTiles = V.replicate area col }
+
 -- | A WorldTileData holding (flat) chunks at exactly the given coords;
 --   'slopeRecomputeAffected' only inspects which coords are present.
 tileWith ∷ [ChunkCoord] → WorldTileData
-tileWith = foldr (insertChunk . generateFlatChunk) emptyWorldTileData
+tileWith = foldr (insertChunk . flatLoamChunk) emptyWorldTileData
 
 -- * Cross-chunk fixtures (issue #1685)
 --
@@ -109,7 +128,7 @@ tileWith = foldr (insertChunk . generateFlatChunk) emptyWorldTileData
 fixtureSeed ∷ Word64
 fixtureSeed = 4242
 
--- | Loam (what 'generateFlatChunk' lays down) registered SOFT: hardness
+-- | Loam (the single-cell column 'flatLoamChunk' lays down) registered SOFT: hardness
 --   0.25 is below 'slopeHardnessThreshold' (0.7) so the soft terrace path
 --   runs, and below the 0.3 roughness floor so 'applyRoughness' is the
 --   identity. The stored bitmask is therefore exactly the raw slope.
@@ -122,7 +141,7 @@ softRegistry =
 --   listed local cells holding a lake cell.
 flatChunkAt ∷ ChunkCoord → Int → [(Int, Int)] → LoadedChunk
 flatChunkAt coord z wets =
-    let base = generateFlatChunk coord
+    let base = flatLoamChunk coord
         area = chunkSize * chunkSize
         col  = (V.head (lcTiles base)) { ctStartZ = z }
     in base { lcTiles             = V.replicate area col
