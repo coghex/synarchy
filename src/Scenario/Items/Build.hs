@@ -51,6 +51,7 @@ module Scenario.Items.Build
     , itemCatalogEntryOf
     , itemCatalogOf
     , defHoldsItems
+    , canOwnContents
       -- * Deterministic defaults
     , scenarioItemSeed
     , scenarioItemRolls
@@ -62,14 +63,13 @@ import Data.IORef (newIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.ByteString as BS
 import System.Random (StdGen, mkStdGen)
 import Gameplay.Tags.Tag (ItemTarget, mkItemTarget)
 import Gameplay.Tags.Types (GameplayTag)
 import Item.Materialize
 import Item.Types
 import Scenario.Decode.Monad (indexPath, keyPath)
+import Scenario.Items.Refs (itemRefTextError, maxItemRefLength, stableHash64)
 import Scenario.Types
 
 -- | What construction needs from the engine: the item registry and the
@@ -108,10 +108,13 @@ itemTagTargets b = [ (t, ts) | (i, ts) ← ibTags b, Just t ← [mkItemTarget i]
 
 -- * Definition catalog
 
--- | Whether an instance of this definition may OWN item contents: an
---   item with internal storage, or one that authors default contents (a
---   shipped kit or toolbox authors @contents:@ and no @storage:@). The
---   decoder's catalog flag and this builder read the same rule.
+-- | Whether instances of this DEFINITION may own item contents: an item
+--   with internal storage, or one that authors default contents (a
+--   shipped kit or toolbox authors @contents:@ and no @storage:@). An
+--   individual instance can also be storage-capable by stating its own
+--   @storage_capacity@ ('Item.Ownership' keys an insert on the
+--   INSTANCE's 'iiStorage'); 'canOwnContents' is the whole rule, and the
+--   decoder's catalog flag reads the definition half.
 defHoldsItems ∷ ItemDef → Bool
 defHoldsItems d = isJust (idStorage d) ∨ not (null (idDefaultContents d))
 
@@ -137,12 +140,8 @@ itemCatalogOf = HM.map itemCatalogEntryOf ∘ imDefs
 --   the order siblings are built in. The encoding is fixed; changing it
 --   changes every scenario's omitted values and is a format version.
 scenarioItemSeed ∷ Text → Text → Word64
-scenarioItemSeed ref domain = BS.foldl' step offset bytes
-  where
-    bytes = TE.encodeUtf8 ("synarchy.scenario.item/v1\0" <> ref <> "\0" <> domain)
-    offset = 14695981039346656037
-    prime = 1099511628211
-    step h b = (h `xor` fromIntegral b) * prime
+scenarioItemSeed ref domain =
+    stableHash64 ("synarchy.scenario.item/v1\0" <> ref <> "\0" <> domain)
 
 -- | The per-domain generator of one node, for 'Item.Materialize.spRolls'.
 scenarioItemRolls ∷ Text → Text → StdGen
@@ -168,6 +167,15 @@ checkEntry items path e = case lookupItemDef (ieDefinition e) items of
         ( ScenarioDiagnostic path (UnknownDefinition (ieDefinition e)) EntryRejected
           : cascade path e
         , Nothing )
+    -- An identity the ordinary save could not carry would load and then
+    -- fail the first save: reject it here, with what it owns.
+    Just _ | Just _ ← itemRefTextError (scenarioIdText (ieId e)) →
+        ( ScenarioDiagnostic path
+              (InvalidValue ("an id of at most " <> tshow maxItemRefLength
+                             <> " letters, digits and '_ - : . [ ]'"))
+              EntryRejected
+          : cascade path e
+        , Nothing )
     Just def →
         let (fieldDiags, e1) = checkFields def path e
             (kidDiags, kids) = checkContents items def path e1
@@ -184,13 +192,22 @@ cascade owner e = go (keyPath owner "contents") (authoredOr [] (ieContents e))
           : go (keyPath cp "contents") (authoredOr [] (ieContents k))
         | (i, k) ← zip [0 ..] kids, let cp = indexPath base i ]
 
+-- | Whether this entry may own contents: its definition holds items, or
+--   it states an internal storage capacity of its own (an instance with
+--   storage accepts ordinary inserts, so a capture of one lists what it
+--   holds and must read back).
+canOwnContents ∷ ItemDef → ItemEntry → Bool
+canOwnContents def e = defHoldsItems def ∨ case ieStorage e of
+    Authored (Just _) → True
+    _ → False
+
 checkContents ∷ ItemManager → ItemDef → Text → ItemEntry
               → ([ScenarioDiagnostic], Maybe [Checked])
 checkContents items def path e = case ieContents e of
     Omitted → ([], Nothing)
     Authored [] → ([], Just [])
     Authored kids
-        | defHoldsItems def →
+        | canOwnContents def e →
             let base = keyPath path "contents"
                 rs = [ checkEntry items (indexPath base i) k | (i, k) ← zip [0 ..] kids ]
             in (concatMap fst rs, Just (catMaybes (map snd rs)))

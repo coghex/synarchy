@@ -103,6 +103,7 @@ module Gameplay.Tags.Live
     ) where
 
 import UPrelude
+import Data.List (nub)
 import Control.Concurrent.MVar (withMVar)
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
@@ -119,7 +120,7 @@ import Gameplay.Tags.Index
 import Gameplay.Tags.Query (QueryUniverse, QueryResult, TagQuery, TargetSets(..), evaluateQuery)
 import Gameplay.Tags.Registry (TagRegistry, registryFromCategories, assignments)
 import Gameplay.Tags.Types
-import Scenario.Items.Refs (insertItemRefs, itemRefsToAscList, lookupItemRef)
+import Scenario.Items.Refs (ItemRefs, insertItemRefs, itemRefTextError, itemRefsToAscList, lookupItemRef)
 import Gameplay.Tags.Edit
 import Location.Instance (LocationInstances(..), LocationInstanceId)
 import Unit.Types.Manager (UnitManager(..), UnitId)
@@ -251,7 +252,7 @@ mutateItemTagsWith seam umRef bmRef wmRef scope t edit =
         if not (Set.member t (maybe id (\p → (`Set.intersection` liveItemTargetsOn v p)) scope
                                        (liveItemTargets v)))
             then Left TagEditNoTarget
-            else Right (onItemTags (modifyCategoryTags (applyTagEdit edit) t), TagEditApplied))
+            else Right (Right ∘ onItemTags (modifyCategoryTags (applyTagEdit edit) t), TagEditApplied))
 
 -- | The shared discipline of every item-index WRITE: read the session
 --   epoch and the destruction generation, capture a view, decide, and
@@ -260,7 +261,7 @@ mutateItemTagsWith seam umRef bmRef wmRef scope t edit =
 --   was replaced or the retries ran out; the decision's own refusal
 --   otherwise.
 guardedItemWrite ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager → IORef WorldManager
-                 → (LiveTagView → Either α (WorldManager → WorldManager, α))
+                 → (LiveTagView → Either α (WorldManager → Either α WorldManager, α))
                  → IO (Maybe α)
 guardedItemWrite seam umRef bmRef wmRef decide = do
     -- The session is pinned ONCE for the whole operation: a retry that
@@ -281,14 +282,22 @@ guardedItemWrite seam umRef bmRef wmRef decide = do
                 outcome ← atomicModifyIORef' wmRef $ \mgr →
                     if wmSessionEpoch mgr ≢ epoch0 then (mgr, WriteReplaced)
                     else if wmItemDestroyGen mgr ≢ wmItemDestroyGen m0 then (mgr, WriteRaced)
-                    else (change mgr, WriteDone)
+                    else case change mgr of
+                        -- The change re-checks what only the manager
+                        -- being committed can answer (#2709: a
+                        -- scenario reference another attachment took
+                        -- after the view was read), in the SAME atomic
+                        -- step, so it refuses with the manager untouched.
+                        Left refusal → (mgr, WriteRefused refusal)
+                        Right mgr' → (mgr', WriteDone)
                 case outcome of
-                    WriteDone     → pure (Just answer)
-                    WriteReplaced → pure Nothing
-                    WriteRaced    → go (n - 1)
+                    WriteDone        → pure (Just answer)
+                    WriteReplaced    → pure Nothing
+                    WriteRefused r   → pure (Just r)
+                    WriteRaced       → go (n - 1)
     go 16
 
-data WriteOutcome = WriteDone | WriteRaced | WriteReplaced
+data WriteOutcome α = WriteDone | WriteRaced | WriteReplaced | WriteRefused α
 
 -- * Live reads and queries
 
@@ -533,31 +542,39 @@ commitItemTreeAssignmentsWith seam umRef bmRef wmRef assigned refs =
     fromMaybe (Left (map fst assigned ⧺ map fst refs)) ⊚ guardedItemWrite seam umRef bmRef wmRef (\v →
         let liveSet = liveItemTargets v
             missing = [ t | t ← map fst assigned ⧺ map fst refs, not (Set.member t liveSet) ]
-            held = wmItemScenarioRefs (ltvManager v)
-            heldRefs = map snd (itemRefsToAscList held)
-            -- A reference is one item's and an item has one reference.
-            -- Re-attaching the SAME pair is fine (an idempotent
-            -- retry); anything else refuses the whole commit rather
-            -- than silently keeping one side.
-            clashes =
-                [ t | (t, r) ← refs
-                , let i = itemTargetId t
-                , case lookupItemRef i held of
-                    Just r0 → r0 ≢ r
-                    Nothing → r `elem` heldRefs ]
-                ⧺ [ t | (t, r) ← refs
-                  , length [ () | (t', r') ← refs, r' ≡ r, t' ≢ t ] > 0 ]
-                ⧺ [ t | (t, r) ← refs
-                  , length [ () | (t', r') ← refs, t' ≡ t, r' ≢ r ] > 0 ]
+            early = refConflicts (wmItemScenarioRefs (ltvManager v)) refs
         in if not (null missing) then Left (Left missing)
-           else if not (null clashes) then Left (Left clashes)
-           else Right ( \mgr → mgr
-                          { wmItemTags = foldl' (\acc (t, ts) → modifyCategoryTags (Set.union ts) t acc)
-                                                (wmItemTags mgr) assigned
-                          , wmItemScenarioRefs = insertItemRefs
-                                [ (itemTargetId t, r) | (t, r) ← refs ]
-                                (wmItemScenarioRefs mgr) }
+           else if not (null early) then Left (Left early)
+           else Right ( \mgr →
+                          -- The authoritative check, against the manager
+                          -- being committed: an attachment that landed
+                          -- after 'v' was read changes neither guard the
+                          -- write holds, so only this one sees it.
+                          case refConflicts (wmItemScenarioRefs mgr) refs of
+                              cs@(_ : _) → Left (Left cs)
+                              [] → Right mgr
+                                  { wmItemTags = foldl' (\acc (t, ts) → modifyCategoryTags (Set.union ts) t acc)
+                                                        (wmItemTags mgr) assigned
+                                  , wmItemScenarioRefs = insertItemRefs
+                                        [ (itemTargetId t, r) | (t, r) ← refs ]
+                                        (wmItemScenarioRefs mgr) }
                       , Right () ))
+
+-- | The targets whose reference cannot be attached to @held@: a
+--   reference is one item's and an item has one reference, and a
+--   reference must be persistable ('itemRefTextError'). Re-attaching the
+--   SAME pair is fine (an idempotent retry); anything else refuses the
+--   whole commit rather than silently keeping one side.
+refConflicts ∷ ItemRefs → [(ItemTarget, Text)] → [ItemTarget]
+refConflicts held refs = nub
+    [ t | (t, r) ← refs
+    , let i = itemTargetId t
+    , isJust (itemRefTextError r)
+      ∨ (case lookupItemRef i held of
+            Just r0 → r0 ≢ r
+            Nothing → r `elem` heldRefs)
+      ∨ any (\(t', r') → (r' ≡ r ∧ t' ≢ t) ∨ (t' ≡ t ∧ r' ≢ r)) refs ]
+  where heldRefs = map snd (itemRefsToAscList held)
 
 -- | Lift an item-tag index change to the whole manager.
 onItemTags ∷ (CategoryIndex ItemTarget → CategoryIndex ItemTarget) → WorldManager → WorldManager

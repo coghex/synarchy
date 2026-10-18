@@ -57,8 +57,10 @@ import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import Numeric (showHex)
+import Scenario.Items.Refs (maxItemRefLength, refIsAutomatic, stableHash64)
 import Building.Types (BuildingInstance(..))
-import Gameplay.Tags.Types (GameplayTag)
+import Gameplay.Tags.Types (GameplayTag, gameplayTagText)
 import qualified Item.Ground as G
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..), ItemStorage(..))
@@ -107,20 +109,33 @@ explicitRefOf = T.concatMap f
 --   claim one reference the first in traversal order keeps it; the
 --   other is treated as unmapped.
 reserveMapped ∷ CaptureCtx → [ItemInstance] → CaptureState → CaptureState
-reserveMapped ctx roots st0 = foldl' step st0 (concatMap flat roots)
+reserveMapped ctx roots st0 = foldl' claim (foldl' claim st0 authored) converted
   where
     flat i = i : concatMap flat (iiContents i)
-    step st@(CaptureState m) i = case explicitRefOf ⊚ ccRef ctx (iiInstanceId i) of
-        Just r | not (HM.member r m) → CaptureState (HM.insert r (iiInstanceId i) m)
-        _ → st
+    mapped = [ (iiInstanceId i, r) | i ← concatMap flat roots
+             , Just r ← [ccRef ctx (iiInstanceId i)] ]
+    -- An authored explicit reference is the document's own spelling and
+    -- is claimed FIRST; a converted automatic path (@units[0].inventory[0]@
+    -- → @units.0.inventory.0@) only gets that spelling if no authored
+    -- reference already has it, and is disambiguated otherwise. Two
+    -- distinct references must never collapse onto one name.
+    authored = [ (i, spelling r) | (i, r) ← mapped, not (refIsAutomatic r) ]
+    converted = [ (i, spelling r) | (i, r) ← mapped, refIsAutomatic r ]
+    claim st@(CaptureState m) (i, r)
+        | HM.member r m = st
+        | otherwise = CaptureState (HM.insert r i m)
 
 -- | Capture a list of roots, each with the base reference an UNMAPPED
 --   node would take. Contents are captured recursively and in order; a
 --   child's base is its parent's final reference plus @.contents.i@.
 captureNodes ∷ CaptureCtx → CaptureState → [(Text, ItemInstance)]
              → (CaptureState, Captured)
-captureNodes ctx st0 roots = (stN, Captured (concatMap fst parts) (concatMap snd parts))
+captureNodes ctx st00 roots = (stN, Captured (concatMap fst parts) (concatMap snd parts))
   where
+    -- every reference these roots already hold is taken before any node
+    -- is named, whatever order they sit in (idempotent for a caller that
+    -- already reserved them)
+    st0 = reserveMapped ctx (map snd roots) st00
     (stN, parts) = mapAccumL' one st0 roots
     one st (base, inst) =
         let (st', e, rs) = node st base inst in (st', ([e], rs))
@@ -149,11 +164,24 @@ captureNodes ctx st0 roots = (stN, Captured (concatMap fst parts) (concatMap snd
         in (st2, entry, (iid, ref) : concatMap snd kids)
     toCap s = StorageCapacity (isWeightCapacity s) (isBulkCapacity s)
     resolve (CaptureState m) base iid =
-        case explicitRefOf ⊚ ccRef ctx iid of
+        case spelling ⊚ ccRef ctx iid of
             -- a mapped node keeps its reference unless a DIFFERENT
-            -- instance already holds it
+            -- instance already holds it; then it is disambiguated from
+            -- its OWN spelling, not renamed to the position it sits at
             Just r | maybe True (≡ iid) (HM.lookup r m) → r
-            _ → freshRef m (explicitRefOf base)
+                   | otherwise → freshRef m r
+            Nothing → freshRef m (spelling base)
+
+-- | A reference as an explicit id that fits the save: the bracketless
+--   spelling ('explicitRefOf'), shortened (with a stable hash of the
+--   whole, so two long names stay distinct) when it would exceed the
+--   room 'freshRef' keeps for its numeric suffix.
+spelling ∷ Text → Text
+spelling t
+    | T.length e ≤ roomy = e
+    | otherwise = T.take (roomy - 17) e <> "-" <> T.justifyRight 16 '0' (T.pack (showHex (stableHash64 e) ""))
+  where e = explicitRefOf t
+        roomy = maxItemRefLength - 12
 
 -- | The first free spelling of a base: the base itself, then @-2@,
 --   @-3@, … — deterministic, and independent of anything but the
@@ -244,13 +272,18 @@ captureGroundItems ctx st0 g = (st1, zip3 xs ys (capEntries c), c)
   where
     rows = sortOn key (map snd (sortOn fst (HM.toList (gisItems g))))
     key r = (G.giX r, G.giY r, iiDefName (G.giInst r), structure (G.giInst r))
-    -- Everything about a tree EXCEPT its instance ids, so the order
-    -- never leans on the allocator.
+    -- Everything the capture will EXPORT about a tree except its
+    -- instance ids: physical state, the scenario reference it carries
+    -- and its tags, at every node. The order therefore never leans on
+    -- the allocator or on the ground-row ids; two rows that still tie
+    -- are indistinguishable in the output, so their order cannot show.
     structure i = T.intercalate "|"
         [ iiDefName i, tshow (iiCurrentFill i), tshow (iiQuality i)
         , tshow (iiCondition i), tshow (iiWeight i), tshow (iiSharpness i)
         , tshow (iiTemp i), tshow (iiBulk i)
         , tshow (fmap (\st → (isWeightCapacity st, isBulkCapacity st)) (iiStorage i))
+        , fromMaybe "" (spelling ⊚ ccRef ctx (iiInstanceId i))
+        , T.intercalate "," (map gameplayTagText (Set.toAscList (ccTags ctx (iiInstanceId i))))
         , "[" <> T.intercalate "," (map structure (iiContents i)) <> "]" ]
     xs = map G.giX rows
     ys = map G.giY rows

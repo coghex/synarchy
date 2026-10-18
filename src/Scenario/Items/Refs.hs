@@ -41,6 +41,7 @@ module Scenario.Items.Refs
     , itemRefTextError
     , itemRefsError
     , maxItemRefLength
+    , stableHash64
     ) where
 
 import UPrelude hiding (get)
@@ -48,6 +49,8 @@ import Data.Serialize (Serialize(..))
 import qualified Data.Map.Strict as Map
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString as BS
 
 -- | Instance id → scenario reference text. Sparse: an item nothing
 --   constructed from a scenario has no entry. Abstract so every writer
@@ -120,6 +123,13 @@ refIsAutomatic = T.any (≡ '[')
 --   it bounds what a corrupt save can make the loader hold.
 maxItemRefLength ∷ Int
 maxItemRefLength = 512
+
+-- | FNV-1a (64-bit) over a text's UTF-8 bytes: the stable mixer behind
+--   every derived name and roll in scenario construction. Fixed: changing
+--   it renames every derived reference.
+stableHash64 ∷ Text → Word64
+stableHash64 = BS.foldl' step 14695981039346656037 ∘ TE.encodeUtf8
+  where step h b = (h `xor` fromIntegral b) * 1099511628211
 
 -- | Why a reference text cannot be one, if it cannot: non-empty, bounded,
 --   and drawn from the scenario id vocabulary (letters, digits,

@@ -956,6 +956,162 @@ spec = describe "Scenario.Items" $ do
                     [("x", r0), ("x", r1)]
             map ieId (capEntries clash) `shouldBe` [ExplicitId "x", ExplicitId "x-2"]
 
+    describe "an instance with its own storage owns what it holds" $ do
+
+        it "a definition that holds nothing still round-trips contents once the \
+           \instance states a storage capacity, and ordinary insertion into it works" $ do
+            let storing = (bare (ExplicitId "knife-box") "knife")
+                    { ieStorage = Authored (Just (StorageCapacity 1.0 1.0)) }
+            (env, _) ← newEnv defs 1
+            built ← buildItemForest env [("units[0].inventory[0]", storing)]
+            ibDiagnostics built `shouldBe` []
+            [Just knife] ← pure (ibTrees built)
+            (env2, _) ← newEnv defs 500
+            [Just bandage] ← ibTrees ⊚ buildItemForest env2
+                [("x", bare (ExplicitId "dressing") "bandage")]
+            -- the ordinary policy keys the insert on the INSTANCE's storage
+            let scene = OwnershipScene [knife] [] RootUnlimited iiWeight
+            filled ← case insertInstance scene (iiInstanceId knife) bandage of
+                Right [k] → pure k
+                other → expectationFailure ("insert refused: " ⧺ show (fmap (map iiDefName) other))
+                          ≫ error "unreachable"
+            map iiDefName (iiContents filled) `shouldBe` ["bandage"]
+            -- capture states the child; the decoder accepts it; rebuild keeps it
+            let ctx = CaptureCtx (const Nothing) (const Set.empty)
+                (_, cap) = captureNodes ctx emptyCaptureState [("scout.inventory.0", filled)]
+                doc = A.object
+                    [ "version" A..= (1 ∷ Int)
+                    , "units" A..= [ A.object
+                        [ "id" A..= ("scout" ∷ Text), "definition" A..= ("acolyte" ∷ Text)
+                        , "x" A..= (0 ∷ Int), "y" A..= (0 ∷ Int)
+                        , "inventory" A..= map itemEntryValue (capEntries cap) ] ] ]
+            (decoded, ds) ← decodeDoc (Y.encode doc)
+            ds `shouldBe` []
+            (env3, _) ← newEnv defs 9000
+            [u] ← pure (scUnits decoded)
+            (items, _) ← buildUnitItems env3 "units[0]" u
+            fmap (map (map iiDefName ∘ iiContents)) (uitInventory items)
+                `shouldBe` Authored [["bandage"]]
+
+        it "an item that neither holds items nor states storage still cannot own contents" $ do
+            sc ← decodeDoc $ BC.pack $ unlines
+                [ "version: 1", "units:"
+                , "  - id: u"
+                , "    definition: acolyte"
+                , "    x: 0"
+                , "    y: 0"
+                , "    inventory:"
+                , "      - id: k"
+                , "        definition: knife"
+                , "        contents: [{id: b, definition: bandage}]" ]
+            map sdPath (snd sc) `shouldBe` ["units[0].inventory[0].contents", "units[0].inventory[0].contents[0]"]
+
+    describe "references stay unique, persistable and attached atomically" $ do
+
+        let autoRing = bare (AutoId "units[0].inventory[0]") "ring"
+            plainRing = bare (ExplicitId "units.0.inventory.0") "ring"
+
+        it "an automatic id and an explicit id that spells like it stay two names, \
+           \whichever is traversed first" $ do
+            (env, _) ← newEnv defs 0
+            b ← buildItemForest env [("a", autoRing), ("b", plainRing)]
+            [Just ra, Just rb] ← pure (ibTrees b)
+            let ctx = ctxOf (ibRefs b) []
+                names order = map ieId $ capEntries $ snd $
+                    captureNodes ctx emptyCaptureState order
+            -- the authored explicit id is never renamed; the converted one yields
+            names [("p.0", ra), ("p.1", rb)]
+                `shouldBe` [ExplicitId "units.0.inventory.0-2", ExplicitId "units.0.inventory.0"]
+            names [("p.0", rb), ("p.1", ra)]
+                `shouldBe` [ExplicitId "units.0.inventory.0", ExplicitId "units.0.inventory.0-2"]
+
+        it "a losing concurrent attachment installs nothing: the reference is \
+           \re-checked in the atomic step" $ do
+            sc ← cleanDoc mainYaml
+            (env, _) ← newEnv defs 1000
+            w ← buildWorld env sc
+            lv ← newLive (wUnit w) (wBuilding w) (wGround w)
+            ((ia, _) : (ib, _) : _) ← pure (worldRefs w)
+            let rival = commitItemTreeAssignments (lvUm lv) (lvBm lv) (lvWm lv)
+                            [] [(itemTarget ib, "contested")]
+                seam = noItemWriteSeam
+                    { iwsBeforeCommit = \n → when (n ≡ 1) (rival ⌦ (`shouldBe` Right ())) }
+            r ← commitItemTreeAssignmentsWith seam (lvUm lv) (lvBm lv) (lvWm lv)
+                    [(itemTarget ia, Set.fromList [tg "late"])] [(itemTarget ia, "contested")]
+            r `shouldBe` Left [itemTarget ia]
+            wm ← readIORef (lvWm lv)
+            lookupItemRef ia (wmItemScenarioRefs wm) `shouldBe` Nothing
+            lookupItemRef ib (wmItemScenarioRefs wm) `shouldBe` Just "contested"
+            -- the loser's tags were not installed either
+            v ← captureLiveTagView (lvUm lv) (lvBm lv) (lvWm lv)
+            itemTagsIn v (itemTarget ia) `shouldBe` Just Set.empty
+
+        it "only persistable references are admitted: the decoder, the builder and \
+           \the attachment boundary agree on the limit" $ do
+            let long = T.replicate (maxItemRefLength + 1) "a"
+                ok = T.replicate maxItemRefLength "a"
+            -- decoder: an over-long explicit id is a rejected field (falls back to the automatic id)
+            (sc, ds) ← decodeDoc $ BC.pack $ unlines
+                [ "version: 1", "ground_items:"
+                , "  - {id: " ⧺ T.unpack long ⧺ ", definition: ring, x: 0, y: 0}"
+                , "  - {id: " ⧺ T.unpack ok ⧺ ", definition: ring, x: 1, y: 0}" ]
+            map sdPath ds `shouldBe` ["ground_items[0].id"]
+            map (scenarioIdText ∘ ieId ∘ giItem) (scGroundItems sc)
+                `shouldBe` ["ground_items[0]", ok]
+            -- builder: a caller-built entry with a reference the save cannot carry is rejected whole
+            (env, spent) ← newEnv defs 0
+            b ← buildItemForest env [("p[0]", bare (ExplicitId long) "ring"), ("p[1]", bare (ExplicitId "fine") "ring")]
+            map sdEffect (ibDiagnostics b) `shouldBe` [EntryRejected]
+            map snd (ibRefs b) `shouldBe` ["fine"]
+            spent `shouldReturn` 1
+            -- boundary: refuses it too (and a malformed one), installing nothing
+            sc2 ← cleanDoc mainYaml
+            (env2, _) ← newEnv defs 1000
+            w ← buildWorld env2 sc2
+            lv ← newLive (wUnit w) (wBuilding w) (wGround w)
+            ((ia, _) : _) ← pure (worldRefs w)
+            commitItemTreeAssignments (lvUm lv) (lvBm lv) (lvWm lv) [] [(itemTarget ia, long)]
+                `shouldReturn` Left [itemTarget ia]
+            commitItemTreeAssignments (lvUm lv) (lvBm lv) (lvWm lv) [] [(itemTarget ia, "has space")]
+                `shouldReturn` Left [itemTarget ia]
+            readIORef (lvWm lv) ⌦ \wm → itemRefsToAscList (wmItemScenarioRefs wm) `shouldBe` []
+
+        it "a derived reference always fits: long owner names are shortened with a \
+           \stable hash and stay distinct" $ do
+            (env, _) ← newEnv defs 0
+            b ← buildItemForest env
+                [("a", bare (ExplicitId "x") "ring"), ("b", bare (ExplicitId "y") "ring")]
+            [Just r0, Just r1] ← pure (ibTrees b)
+            let ctx = CaptureCtx (const Nothing) (const Set.empty)
+                owner suffix = T.replicate 700 "o" <> suffix
+                cap = snd (captureNodes ctx emptyCaptureState
+                    [(owner ".one", r0), (owner ".two", r1)])
+                names = map (scenarioIdText ∘ ieId) (capEntries cap)
+            map T.length names `shouldSatisfy` all (≤ maxItemRefLength)
+            length (nub names) `shouldBe` 2
+            map itemRefTextError names `shouldBe` [Nothing, Nothing]
+            -- and the same arena captures to the same names
+            map (scenarioIdText ∘ ieId) (capEntries (snd (captureNodes ctx emptyCaptureState
+                [(owner ".one", r0), (owner ".two", r1)]))) `shouldBe` names
+
+        it "ground rows that differ only in tags or references keep their own \
+           \identity however they were laid down" $ do
+            let mk i d = do
+                    (env, _) ← newEnv defs i
+                    [Just it'] ← ibTrees ⊚ buildItemForest env [("g", bare (ExplicitId d) "ring")]
+                    pure it'
+            ra ← mk (0 ∷ Word64) "scratch-a"
+            rb ← mk 100 "scratch-b"
+            let lay xs = fst (installGroundItems [ GroundPlacement 1 1 i | i ← xs ] emptyGroundItems)
+                tagsOf = [ (iiInstanceId ra, Set.fromList [tg "alpha"])
+                         , (iiInstanceId rb, Set.fromList [tg "beta"]) ]
+                ctx = CaptureCtx (const Nothing) (\i → fromMaybe Set.empty (lookup i tagsOf))
+                capture g = let (_, rows, _) = captureGroundItems ctx emptyCaptureState g in rows
+            capture (lay [ra, rb]) `shouldBe` capture (lay [rb, ra])
+            -- and the tags really did travel with the item that held them
+            [ (ieId e, ieTags e) | (_, _, e) ← capture (lay [rb, ra]) ]
+                `shouldBe` [ (ExplicitId "ground.0", [tg "alpha"]), (ExplicitId "ground.1", [tg "beta"]) ]
+
     describe "ordinary-save identity metadata" $ do
 
         it "core-session v3 carries the references through the real codec; v2 and v1 \
