@@ -29,6 +29,7 @@ import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
 -- rather than a script-side estimate.
 import Engine.Scripting.Lua.API.Units.Stamina
     (unitCommitStaminaFn, unitGetMaxStaminaFn)
+import Engine.Scripting.Lua.API.Units.CommitPhysio (unitCommitPhysioFn)
 -- #2828's five physiology READ verbs (plus #2836's pure blood read) and #2831's mutating pair
 -- (setPhysioMode / clearPhysioMode, facade-only), imported directly for
 -- the same reason. Their own module: the pair applies one atomic
@@ -91,6 +92,7 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "clearPhysioMode"   (unitClearPhysioModeFn env)
   registerLuaFunction callStats "unit" "recoverStance" (unitRecoverStanceFn env)
   registerLuaFunction callStats "unit" "commitStamina" (unitCommitStaminaFn env)
+  registerLuaFunction callStats "unit" "commitPhysio" (unitCommitPhysioFn env)
   registerLuaFunction callStats "unit" "getMaxStamina" (unitGetMaxStaminaFn env)
   registerLuaFunction callStats "unit" "applyCombatEngagement"
                       (unitApplyCombatEngagementFn env)

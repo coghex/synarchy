@@ -55,6 +55,7 @@ module Unit.Physiology
     , PhysioOutcome(..)
     , modeOf
     , physioReadPure
+    , moodTargetFor
     , evalHealthy
     , storedValue
     , checkedInput
@@ -79,6 +80,9 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 import Unit.Blood (BloodView(..), bloodView, bloodViewOf, nominalBlood)
 import Unit.Physiology.Circulation (CirculationInputs(..), circulationRule)
+import Unit.Physiology.Mind
+    ( ConsciousnessInputs(..), MoodTargetInputs(..), concentrationRule
+    , consciousnessRule, euphoricState, moodTargetRule, stateOfMindRule )
 import Unit.Physiology.Types
 import Unit.Stats (effectiveStat, maxStaminaOf)
 import Unit.Types (UnitDef(..), UnitInstance(..), UnitManager(..), bloodMassRatio)
@@ -280,6 +284,11 @@ data PhysioContext = PhysioContext
     , pcBlood      ∷ !BloodView
       -- ^ the unit's blood through "Unit.Blood": the one input the derived
       --   @circulation@ reads that is not a stat (#2836, S9).
+    , pcPain       ∷ !Float
+      -- ^ the unit's NORMALIZED injury pain, @0..1@
+      --   ('Combat.Resolution.Common.painFor'): the one input the derived
+      --   @concentration@ and the mood-drift target read that is not a stat
+      --   (#2838). Pain is injury-owned and always on, so no mode touches it.
     }
 
 data PhysioOutcome
@@ -340,6 +349,9 @@ derivedRule ctx d = case dkRule d of
     DerivedCirculation       → circulationFor ctx
     DerivedBloodMax          → Right (bvMax (contextBlood ctx))
     DerivedBloodFraction     → Right (bvFraction (contextBlood ctx))
+    DerivedConsciousness     → consciousnessFor ctx
+    DerivedConcentration     → concentrationFor ctx
+    DerivedStateOfMind       → stateOfMindFor ctx
 
 -- | A stored key's base, or its effective value.
 storedValue ∷ ReadKind → PhysioContext → Text → Maybe Float
@@ -505,6 +517,105 @@ circulationFor ctx = do
         OutcomeUnsupported   → constant "THERMO_BASELINE"
         OutcomeInvariant why → Left why
         OutcomeUnowned       → Left "the registry does not own 'core_temp'"
+
+-- | The mode-aware EFFECTIVE value of a registry key, or 'Nothing' when its
+--   system is Unsupported for the unit (the absent-key neutral every Lua
+--   reader had). A violated precondition is a 'Left'. A value that is not
+--   finite is refused here, so a rule never folds a NaN into a "valid" answer
+--   (#1733).
+readInput ∷ PhysioContext → Text → Either Text (Maybe Float)
+readInput ctx k = case physioReadPure ReadEffective ctx k of
+    OutcomeValue mode v → do
+        -- 'effectiveStat' clamps with @max 0@, which turns a stored NaN into
+        -- 0, so a Simulated stored key is judged AS STORED first (the order
+        -- 'checkedWith' uses): a corrupt base cannot read as a plausible
+        -- effective value.
+        case (mode, storedValue ReadBase ctx k, classifyKey (pcRegistry ctx) k) of
+            (ModeSimulated, Just b, Just (_, RoleOwned _))
+                | isNaN b ∨ isInfinite b → Left $
+                    "input '" <> k <> "' is not finite (stored " <> tshow b <> ")"
+            _ → Right ()
+        if isNaN v ∨ isInfinite v
+            then Left ("input '" <> k <> "' is not finite (" <> tshow v <> ")")
+            else Right (Just v)
+    OutcomeUnsupported   → Right Nothing
+    OutcomeInvariant why → Left why
+    OutcomeUnowned       → Left ("the registry does not own '" <> k <> "'")
+
+-- | A pool's fraction of its healthy maximum, clamped to @0..1@: 1.0 for a
+--   Nominal or Unsupported pool, and for a Simulated one whose maximum is not
+--   usable (a unit with no such resource reads as neutral, not penalized). A
+--   Simulated pool with no stored value is an invariant violation.
+poolFraction ∷ PhysioContext → Text → Either Text Float
+poolFraction ctx k = case classifyKey (pcRegistry ctx) k of
+    Just (sys, RoleOwned o) | modeOf ctx sys ≡ ModeSimulated → do
+        cur ← simulatedOwned ReadEffective ctx k
+        pure $ case evalHealthy ctx (okHealthy o) of
+            Right cap | cap > 0 → clamp 0 1 (cur / cap)
+            _                   → 1.0
+    Just _  → Right 1.0
+    Nothing → Left ("the registry does not own '" <> k <> "'")
+
+-- | @consciousness@ (#2838): the shared pure rule over the unit's current
+--   state, never stored. Each input is read through its own system's mode:
+--   a Nominal or Unsupported thermo reads the baseline, cardio blood oxygen
+--   1.0 and salt concentration 1.0.
+consciousnessFor ∷ PhysioContext → Either Text Float
+consciousnessFor ctx = do
+    baseline ← maybe (Left "unknown constant THERMO_BASELINE") Right
+                     (Map.lookup "THERMO_BASELINE" (prConstants (pcRegistry ctx)))
+    core   ← fromMaybe baseline <$> readInput ctx "core_temp"
+    oxygen ← fromMaybe 1.0 <$> readInput ctx "blood_oxygen"
+    salt   ← fromMaybe 1.0 <$> readInput ctx "salt_conc"
+    pure (consciousnessRule ConsciousnessInputs
+            { cnCore = core, cnOxygen = oxygen, cnSaltConcentration = salt })
+
+-- | The consciousness every OTHER rule reads: through the accessor, so a
+--   Nominal or Unsupported consciousness system supplies 1.0.
+consciousnessRead ∷ PhysioContext → Either Text Float
+consciousnessRead ctx = fromMaybe 1.0 <$> readInput ctx "consciousness"
+
+-- | @concentration@ (#2838): consciousness, normalized pain, the effective
+--   stamina fraction, caffeine, and the euphoria lift while @mental_state@
+--   is EUPHORIC. Caffeine and the mental state are the MIND system's keys,
+--   read through its mode: Nominal reads 0 and STABLE, Unsupported nothing.
+--   A Simulated mind with no stored caffeine is an invariant violation.
+concentrationFor ∷ PhysioContext → Either Text Float
+concentrationFor ctx = do
+    consciousness ← consciousnessFor ctx
+    stamina  ← poolFraction ctx "stamina"
+    caffeine ← fromMaybe 0.0 <$> readInput ctx "caffeine"
+    state    ← fromMaybe 0.0 <$> readInput ctx "mental_state"
+    pure (concentrationRule consciousness (clamp 0 1 (pcPain ctx)) stamina
+                            caffeine (state ≡ euphoricState))
+
+-- | @state_of_mind@ (#2838): the worse of the (mode-aware) consciousness and
+--   the wellbeing mood and emotional pain give. Under a Nominal mind mood is
+--   1 and emotional pain 0, so the live rule IS the consciousness read.
+stateOfMindFor ∷ PhysioContext → Either Text Float
+stateOfMindFor ctx = do
+    consciousness ← consciousnessRead ctx
+    mood ← fromMaybe 1.0 <$> readInput ctx "mood"
+    ep   ← fromMaybe 0.0 <$> readInput ctx "emotional_pain"
+    pure (stateOfMindRule consciousness mood ep)
+
+-- | The mood the drift moves toward right now: what a Simulated mind is
+--   SEEDED to (spawn, the Nominal to Simulated transition, absent-only load
+--   repair), as the first brain tick used to seed it. Pain is the context's;
+--   hunger and stamina are the mode-aware fractions; awareness is the
+--   effective perception against the species baseline 1.0, floor-only.
+moodTargetFor ∷ PhysioContext → Either Text Float
+moodTargetFor ctx = do
+    consciousness ← consciousnessRead ctx
+    hunger  ← poolFraction ctx "hunger"
+    stamina ← poolFraction ctx "stamina"
+    let perception = fromMaybe 1.0 (storedValue ReadEffective ctx "perception")
+        awareness  = if isNaN perception ∨ isInfinite perception
+                         then 1.0 else clamp 0 1 perception
+    pure (moodTargetRule MoodTargetInputs
+            { mtPain = clamp 0 1 (pcPain ctx), mtHungerFraction = hunger
+            , mtStaminaFraction = stamina, mtConsciousness = consciousness
+            , mtAwareness = awareness })
 
 -- * Blood (S10, #2837)
 

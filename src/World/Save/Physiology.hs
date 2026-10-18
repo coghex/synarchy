@@ -44,6 +44,7 @@ module World.Save.Physiology
     , withoutRebuiltCaches
     ) where
 
+import Combat.Resolution.Common (woundsPain)
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
@@ -294,7 +295,9 @@ normalizeUnit registry defs now pid uid u = case HM.lookup (uisDefName u) defs o
                 -- The load gate seeds and scrubs stored keys; nothing it
                 -- does reads blood, and the wounds that price a bleed rate
                 -- are not needed to repair a stat map.
-                , pcBlood = bloodViewOf statsJ (uisBlood u) 0 }
+                , pcBlood = bloodViewOf statsJ (uisBlood u) 0
+                -- the saved wounds price the pain the mood seed reads (#2838)
+                , pcPain = woundsPain (uisWounds u) }
         -- (g): the Nominal-nutrition upkeep's input.
         case upkeepInputProblem registry ctx of
             Just (sid, key, why) → reject sid key why
@@ -417,22 +420,23 @@ physiologyLoadGate registry defs now pages
 --   @docs\/persistence_state_inventory.md@'s @UnitInstance (physiology
 --   stats)@ table) and are recomputed canonically before the first paused
 --   frame by @unitResources.onSaveLoaded@ (@unit.recomputeBody@, then the
---   brain at dt 0). @circulation@ is not one of them since #2836 (S9): it is
---   derived on demand and never stored, and a legacy stored copy is scrubbed
---   by the load gate.
+--   physiology refresh). @circulation@ (#2836, S9) and, since #2838 (S11a),
+--   @consciousness@, @concentration@ and @state_of_mind@ are not among them:
+--   they are derived on demand and never stored, and a legacy stored copy is
+--   scrubbed by the load gate in every mode.
 --
 --   They can legitimately differ between a save and the load of that save:
---   a pass drains hydration after the brain ticked, so the saved
---   @concentration@ is a tick stale and the rebuilt one is not. That is
+--   a pass drains hydration after the recompute ran, so the saved
+--   @max_hydration@ can be a tick stale and the rebuilt one is not. That is
 --   not a persistence defect, so the structural save comparison
 --   ('withoutRebuiltCaches') does not count them as durable state.
 --   Everything NOT listed here — the pools, meters, overrides,
 --   @tissue_recovering@, the integrators (@heart_rate@, @blood_oxygen@,
---   @mood@, @emotional_pain@, @caffeine@) — is durable and compared exactly.
+--   @mood@, @emotional_pain@, @caffeine@) and the mind's episode keys — is
+--   durable and compared exactly.
 rebuiltCacheStats ∷ [Text]
 rebuiltCacheStats =
-    [ "consciousness", "concentration", "state_of_mind"
-    , "strength", "strength_body"
+    [ "strength", "strength_body"
     , "max_hydration", "max_hunger", "max_calories", "carrying_capacity" ]
 
 -- | A session snapshot without those caches in any unit's stat map, and

@@ -98,17 +98,42 @@ scaleList o = case KM.lookup (Key.fromText "scale") o of
   where
     unwrap (YamlQuantity q) = q
 
+-- | How a seed was written (#2838): @{ const: <q> }@, @{ now: true }@,
+--   @{ now_plus: <q> }@ or @{ rule: <name> }@.
+data PhysiologyYamlSeed
+    = YamlSeedConst !Quantity
+    | YamlSeedNow
+    | YamlSeedNowPlus !Quantity
+    | YamlSeedRule !Text
+    deriving (Show, Eq)
+
+instance FromJSON PhysiologyYamlSeed where
+    parseJSON = withObject "seed rule" $ \o → do
+        onlyKeys ["const", "now", "now_plus", "rule"] o
+        mConst ← o .:? "const"
+        mNow   ← o .:? "now"
+        mPlus  ← o .:? "now_plus"
+        mRule  ← o .:? "rule"
+        case (mConst, mNow, mPlus, mRule) of
+            (Just (YamlQuantity q), Nothing, Nothing, Nothing) → pure (YamlSeedConst q)
+            (Nothing, Just True, Nothing, Nothing) → pure YamlSeedNow
+            (Nothing, Nothing, Just (YamlQuantity q), Nothing) → pure (YamlSeedNowPlus q)
+            (Nothing, Nothing, Nothing, Just r) → pure (YamlSeedRule r)
+            _ → fail "a seed rule is exactly one of `const: <value>`, \
+                     \`now: true`, `now_plus: <value>` or `rule: <name>`"
+
 data PhysiologyYamlOwned = PhysiologyYamlOwned
     { pyoKey     ∷ !Text
     , pyoHealthy ∷ !(Maybe PhysiologyYamlHealthy)
+    , pyoSeed    ∷ !(Maybe PhysiologyYamlSeed)
     , pyoField   ∷ !(Maybe Text)
       -- ^ @field: uiBlood@ (#2837): the dedicated unit field storing the key
     } deriving (Show, Eq)
 
 instance FromJSON PhysiologyYamlOwned where
     parseJSON = withObject "owned key" $ \o → do
-        onlyKeys ["key", "healthy", "field"] o
-        PhysiologyYamlOwned ⊚ o .: "key" ⊛ o .:? "healthy" ⊛ o .:? "field"
+        onlyKeys ["key", "healthy", "seed", "field"] o
+        PhysiologyYamlOwned ⊚ o .: "key" ⊛ o .:? "healthy" ⊛ o .:? "seed" ⊛ o .:? "field"
 
 -- | How a derived key's Nominal answer was written: a number, or the word
 --   @live@ (#2836, S9: the rule itself, evaluated with the system's inputs
@@ -321,6 +346,26 @@ admitPhysiologyDoc path doc = do
                 when (dkHealthy d ≡ DerivedLive) $
                     refuse "physiology derived rule cannot be live"
                            (psId s <> "." <> dkKey d)
+            DerivedConsciousness → do
+                mapM_ (requireOwned partial (psId s <> "." <> dkKey d))
+                      ["core_temp", "blood_oxygen"]
+                requireDerived partial (psId s <> "." <> dkKey d) "salt_conc"
+                fixedDerived s d
+            DerivedConcentration → do
+                mapM_ (requireOwned partial (psId s <> "." <> dkKey d))
+                      ["stamina", "caffeine", "mental_state"]
+                requireDerived partial (psId s <> "." <> dkKey d) "consciousness"
+                fixedDerived s d
+            DerivedStateOfMind → do
+                requireDerived partial (psId s <> "." <> dkKey d) "consciousness"
+                forM_ ["mood", "emotional_pain"] $ \k →
+                    unless (any ((≡ k) ∘ okKey) (psOwns s)) $
+                        refuse "unresolved physiology derived rule input"
+                               (psId s <> "." <> dkKey d
+                                <> " needs owned key " <> k <> " in its own system")
+                when (dkHealthy d ≢ DerivedLive) $
+                    refuse "physiology state_of_mind must be live"
+                           (psId s <> "." <> dkKey d)
             DerivedBloodMax      → bloodDerived s d
             DerivedBloodFraction → bloodDerived s d
             DerivedCirculation → do
@@ -365,6 +410,18 @@ admitPhysiologyDoc path doc = do
             refuse "physiology blood derived key must be live"
                    (psId s <> "." <> dkKey d)
 
+    -- #2838: consciousness and concentration read a constant when their
+    -- system is not Simulated.
+    fixedDerived s d = case dkHealthy d of
+        DerivedFixed _ → pure ()
+        DerivedLive → refuse "physiology derived rule must be a constant"
+                             (psId s <> "." <> dkKey d)
+
+    requireDerived reg who k = case classifyKey reg k of
+        Just (_, RoleDerived _) → pure ()
+        _ → refuse "unresolved physiology derived rule input"
+                   (who <> " needs derived key " <> k)
+
     requireOwned reg who k = case classifyKey reg k of
         Just (_, RoleOwned _) → pure ()
         _ → refuse "unresolved physiology derived rule input"
@@ -378,7 +435,7 @@ admitSystem constants s = do
     forM_ (pysRequires s) $ \c →
         when (c `notElem` knownCapabilities) $
             refuse "unknown physiology capability" (sid <> ": " <> c)
-    when (null (pysOwns s) ∧ null (pysMeters s)) $
+    when (null (pysOwns s) ∧ null (pysMeters s) ∧ null (pysDerived s)) $
         refuse "incomplete physiology system" (sid <> " owns nothing")
     owns ← traverse admitOwned (pysOwns s)
     derived ← traverse admitDerived (pysDerived s)
@@ -412,7 +469,16 @@ admitSystem constants s = do
                 Just "uiBlood" → Right (Just "uiBlood")
                 Just f → refuse "unknown physiology storage field"
                                 (ownedLabel o <> ": " <> f)
-            pure (OwnedKey (pyoKey o) rule field)
+            seed ← case pyoSeed o of
+                Nothing → Right Nothing
+                Just (YamlSeedConst q) → Just . SeedConst <$> declared (ownedLabel o) q
+                Just YamlSeedNow → Right (Just SeedNow)
+                Just (YamlSeedNowPlus q) → Just . SeedNowPlus <$> declared (ownedLabel o) q
+                Just (YamlSeedRule "episode_end") → Right (Just SeedEpisodeEnd)
+                Just (YamlSeedRule "mood_target") → Right (Just SeedMoodTarget)
+                Just (YamlSeedRule r) → refuse "unknown physiology seed rule"
+                                               (ownedLabel o <> ": " <> r)
+            pure (OwnedKey (pyoKey o) rule seed field)
 
     admitDerived d = do
         rule ← maybe (refuse "unknown physiology derived rule"

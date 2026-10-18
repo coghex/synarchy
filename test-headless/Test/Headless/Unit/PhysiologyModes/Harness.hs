@@ -113,8 +113,7 @@ bodyStats (Body m h) =
     , ("endurance", 1), ("constitution", 1), ("metabolism", 1)
     , ("max_hydration", 0.6 * m), ("max_hunger", 10 * m)
     , ("max_calories", 20 * m)
-    , ("stamina", 100), ("max_stamina", 100)
-    , ("consciousness", 1) ]
+    , ("stamina", 100), ("max_stamina", 100) ]
 
 -----------------------------------------------------------------------
 -- Units
@@ -195,7 +194,8 @@ buildUnit def sp = do
             { pcRegistry = reg, pcPhysiology = udPhysiology def
             , pcOverrides = HM.fromList (usOverrides sp), pcNow = 0
             , pcStats = stats0, pcModifiers = mods
-            , pcBlood = fullBloodView stats0 }
+            , pcBlood = fullBloodView stats0
+            , pcPain = 0 }
     stats ← case reconcileStoredKeys ctx of
         Right (s, _) → pure s
         Left why → do
@@ -295,7 +295,7 @@ withScene specs act = withHeadlessEngineNoWorld $ \env → do
         , "    if hook then hook(step, step * dt) end"
         , "    for _, k in ipairs(keys) do"
         , "      local v"
-        , "      if k == 'cons' then v = unit.getStat(uid, 'consciousness')"
+        , "      if k == 'cons' then v = unit.readPhysio(uid, 'consciousness')"
         , "      else v = unit.readPhysio(uid, k) end"
         , "      local o = out[k]"
         , "      if v ~= v then o.nan = o.nan + 1"
@@ -364,7 +364,7 @@ data Extremes = Extremes
 -- | Tick for @seconds@ at @dt@ and report, per read key, its minimum,
 --   maximum and NaN count over the run. A key is read through
 --   @unit.readPhysio@ (so an owned key answers its mode-aware value);
---   @cons@ is the stored consciousness. A key that was never defined
+--   @cons@ is the DERIVED consciousness (#2838), read the same way. A key that was never defined
 --   reports @(inf, -inf)@.
 track ∷ LuaBackendState → Int → Double → Double → [Text]
       → IO (HM.HashMap Text Extremes)

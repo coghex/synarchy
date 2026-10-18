@@ -102,8 +102,8 @@ UNCONSCIOUS_BELOW = 0.15
 # predicate that read state_of_mind instead of consciousness would return
 # the `wrong_state` named here instead of "alert"/false.
 #
-# Targets are `mood - 0.5 * emotional_pain` (brain.lua's computeStateOfMind
-# wellbeing term, which state_of_mind then min()s against consciousness),
+# Targets are `mood - 0.5 * emotional_pain` (stateOfMindRule's wellbeing term,
+# Unit.Physiology.Mind, which state_of_mind then min()s against consciousness),
 # picked mid-band so the slow drift back toward a healthy mood target
 # between the write and the sample cannot walk a sample out of its band:
 #   0.75 - 0.5*0.40 = 0.55   0.57 - 0.5*0.60 = 0.27   0.46 - 0.5*0.80 = 0.06
@@ -113,21 +113,6 @@ GUARD_BANDS = [
     ("delirious",    0.57, 0.60,           UNCONSCIOUS_BELOW, DELIRIOUS_BELOW,   "delirious"),
     ("unconscious",  0.46, 0.80,           0.0,               UNCONSCIOUS_BELOW, "unconscious"),
 ]
-
-# The "has production run yet?" marker. computeStateOfMind min()s a 0..1
-# wellbeing against a 0..1 consciousness, so it can never produce a value
-# above 1.0 — a stored state_of_mind that has dropped back into range can
-# only be a real brain.tick recomputation, never the probe's own write.
-#
-# It must be ABOVE the range, not below: unit.setStat clamps its argument at
-# >= 0 (`clamped = max 0 v`, src/Engine/Scripting/Lua/API/Units/Stats.hs),
-# so a negative marker would silently store 0.0 and read as an already-valid
-# value, making the wait vacuous. There is no upper clamp. band_fixture
-# re-reads the marker inside the same Lua chunk that wrote it and fails loudly
-# if it did not survive, so a future clamp change cannot quietly restore that
-# vacuum.
-RECOMPUTE_SENTINEL = 2.0
-
 
 def bootstrap(port):
     loaders = [
@@ -205,55 +190,24 @@ def gates_alert(g):
             and not g["conf"] and g["state"] == "alert")
 
 
-def stored_state_of_mind(port, uid):
-    """The raw stored stat, or None if it did not read back as a number."""
-    try:
-        return float(send(port, f"return unit.getStat({uid},'state_of_mind')"))
-    except (TypeError, ValueError):
-        return None
-
-
-def band_fixture(port, uid, mood, emotional_pain, timeout=8.0):
+def band_fixture(port, uid, mood, emotional_pain):
     """Depress state_of_mind into one band, leaving consciousness alone.
 
     Consciousness is re-affirmed through its own three inputs rather
     than written directly, and the depression goes in through mood and
-    emotional_pain — the pair brain.tick actually blends — so the value
-    the guard samples is production's own, not one the next tick would
-    recompute away.
-
-    The out-of-range marker is what makes that last claim checkable: the
-    write and its read-back share ONE Lua chunk, so no tick can slip
-    between them and the read-back proves the marker really landed; the
-    wait then proves a real brain.tick replaced it before anything is
-    sampled. Returns ``(observation, None)``, or ``(None, reason)``.
+    emotional_pain, the pair the derived state of mind blends. Since #2838
+    (S11a) state_of_mind is DERIVED on demand and never stored, so there is
+    no cache a tick must recompute and no marker to wait for: the inputs go
+    in and the same Lua chunk that reads the gates reads the value the
+    production rule computes from them. Returns ``(observation, None)``.
     """
-    landed = send(port, f"local u={uid} "
-                        f"unit.setStat(u,'core_temp',37.0) "
-                        f"unit.setStat(u,'blood_oxygen',1.0) "
-                        f"unit.setStat(u,'salt_conc',1.0) "
-                        f"unit.setStat(u,'mood',{mood}) "
-                        f"unit.setStat(u,'emotional_pain',{emotional_pain}) "
-                        f"unit.setStat(u,'state_of_mind',{RECOMPUTE_SENTINEL}) "
-                        f"return unit.getStat(u,'state_of_mind')")
-    try:
-        landed_val = float(landed)
-    except (TypeError, ValueError):
-        return None, (f"the recompute marker did not read back as a number "
-                      f"({landed!r}) — the wait below would prove nothing")
-    if landed_val <= 1.0:
-        return None, (f"unit.setStat stored {landed_val} for the "
-                      f"{RECOMPUTE_SENTINEL} recompute marker, which is inside "
-                      f"the producible 0..1 range — the wait below would pass "
-                      f"before brain.tick ever ran and prove nothing")
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        time.sleep(0.1)
-        current = stored_state_of_mind(port, uid)
-        if current is not None and current <= 1.0:
-            return gate_observation(port, uid), None
-    return None, ("brain.tick never replaced the recompute marker, so no "
-                  "production-computed state_of_mind was ever available")
+    send(port, f"local u={uid} "
+               f"unit.setStat(u,'core_temp',37.0) "
+               f"unit.setStat(u,'blood_oxygen',1.0) "
+               f"unit.setStat(u,'mood',{mood}) "
+               f"unit.setStat(u,'emotional_pain',{emotional_pain}) "
+               f"return 'ok'")
+    return gate_observation(port, uid), None
 
 
 def main():

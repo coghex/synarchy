@@ -41,6 +41,8 @@ import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
+import Test.Headless.Unit.PhysiologyFixture
+    (ensurePhysiologyRegistry, hydrationBrainPhysiology, hydrationBrainStats)
 import Test.Headless.Unit.TransferApi
     (evalDebug, minimalDef, newBareLuaBackend)
 import Unit.Command.Types (UnitCommand(..))
@@ -94,13 +96,13 @@ tol = 1e-3
 
 -- | The stats the hydration tick and the injury tick actually read.
 --   @max_hydration@ is an attribute (the engine recomputes it into
---   @uiStats@), @endurance@ scales regen, and @consciousness@ pins the
---   collapse\/crawl machine so no case depends on a defaulted brain
---   reading.
+--   @uiStats@), @endurance@ scales regen, and the stored brain inputs (healthy
+--   cardio integrators, a seeded mind) pin the DERIVED consciousness (#2838)
+--   at 1.0 so no case depends on a defaulted brain reading.
 baseStats ∷ HM.HashMap Text Float
 baseStats = HM.fromList
-    [ ("hydration", startHydration), ("max_hydration", maxHydration)
-    , ("endurance", 1.0), ("consciousness", 1.0) ]
+    ([ ("hydration", startHydration), ("max_hydration", maxHydration)
+     , ("endurance", 1.0), ("stamina", 10) ] ⧺ hydrationBrainStats)
 
 mkAcolyte ∷ Text → HM.HashMap Text Float → [Wound] → UnitInstance
 mkAcolyte pose stats ws = UnitInstance
@@ -132,11 +134,20 @@ shatteredLeg = Wound
 
 -- | Install a one-unit scene and drain any command the previous example
 --   left on the queue, so nothing leaks across examples.
+-- | The fixture definition: the hydration pool, the exertion pool (the
+--   "other resources" cases tick it), cardio and the brain Simulated.
+acolyteDef ∷ UnitDef
+acolyteDef = (minimalDef "acolyte" "Acolyte")
+    { udPhysiology = hydrationBrainPhysiology
+        { upDefaults = HM.insert "stamina" PhysioSimulated
+                                 (upDefaults hydrationBrainPhysiology) } }
+
 resetScene ∷ EngineEnv → Text → HM.HashMap Text Float → [Wound] → IO ()
 resetScene env pose stats ws = do
+    ensurePhysiologyRegistry env
     writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.singleton "acolyte" (minimalDef "acolyte" "Acolyte")
+        { umDefs = HM.singleton "acolyte" acolyteDef
         , umInstances = HM.singleton acolyteUid (mkAcolyte pose stats ws) }
     _ ← Q.flushQueue (unitQueue env)
     pure ()
@@ -531,8 +542,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
 
             -- Same live position, same water, page erased.
             writeIORef (unitManagerRef env) emptyUnitManager
-                { umDefs = HM.singleton "acolyte"
-                             (minimalDef "acolyte" "Acolyte")
+                { umDefs = HM.singleton "acolyte" acolyteDef
                 , umInstances = HM.singleton acolyteUid
                     ((mkAcolyte "crawling" baseStats [])
                         { uiPage = WorldPageId "" }) }
@@ -549,8 +559,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
             eligible ls `shouldReturn` "true"
 
             writeIORef (unitManagerRef env) emptyUnitManager
-                { umDefs = HM.singleton "acolyte"
-                             (minimalDef "acolyte" "Acolyte") }
+                { umDefs = HM.singleton "acolyte" acolyteDef }
             eligible ls `shouldReturn` "false"
             storedHydration env `shouldReturn` Nothing
 

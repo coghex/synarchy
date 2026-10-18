@@ -461,6 +461,7 @@ library
                      Engine.Scripting.Lua.API.Units.Physiology
                      Engine.Scripting.Lua.API.Units.Stance
                      Engine.Scripting.Lua.API.Units.Stamina
+                     Engine.Scripting.Lua.API.Units.CommitPhysio
                      Engine.Scripting.Lua.API.Units.Selection
                      Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
@@ -626,6 +627,7 @@ library
                      Unit.Blood
                      Unit.Physiology
                      Unit.Physiology.Circulation
+                     Unit.Physiology.Mind
                      Unit.Physiology.Transition
                      Unit.Physiology.Types
                      World.Save.Physiology
@@ -1935,6 +1937,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.PhysiologyBloodModes.Modes
                    Test.Headless.Unit.PhysiologyBloodModes.Persistence
                    Test.Headless.Unit.PhysiologyBloodModes.WoundFold
+                   Test.Headless.Unit.PhysiologyBrainMental
+                   Test.Headless.Unit.PhysiologyBrainMental.Atomicity
+                   Test.Headless.Unit.PhysiologyBrainMental.Machine
+                   Test.Headless.Unit.PhysiologyBrainMental.Modes
+                   Test.Headless.Unit.PhysiologyBrainMental.Rules
                    Test.Headless.Unit.PhysiologyCardioCirculationModes
                    Test.Headless.Unit.PhysiologyCardioCirculationModes.Persistence
                    Test.Headless.Unit.PhysiologyCardioCirculationModes.Rule

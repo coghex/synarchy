@@ -83,8 +83,14 @@ referenceStats = HM.fromList
     , ("calories", 1400), ("max_calories", 1400)
     , ("stamina", 100), ("max_stamina", 100)
     , ("exhaustion", 10), ("sleep_pressure", 10)   -- endurance x 10 (#2835)
-    , ("core_temp", 37), ("consciousness", 1), ("blood_oxygen", 1)
-    , ("heart_rate", 70) ]
+    , ("core_temp", 37), ("blood_oxygen", 1)
+    , ("heart_rate", 70)
+    -- the mind (#2838, S11a): Simulated for the reference acolyte, seeded as a
+    -- spawn would; consciousness is derived and holds nothing
+    , ("mood", 1), ("emotional_pain", 0), ("caffeine", 0), ("mental_state", 0)
+    , ("mental_since", 0), ("mental_until", 0), ("mental_next_roll_at", 8)
+    , ("mental_cooldown_until", 0), ("mental_high_since", 0)
+    , ("mental_break_behavior", 0), ("thought_next_at", 0) ]
 
 mkAcolyte ∷ HM.HashMap Text Float → [ItemInstance] → UnitInstance
 mkAcolyte stats inv = UnitInstance

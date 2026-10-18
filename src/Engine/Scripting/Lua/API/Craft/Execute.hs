@@ -15,6 +15,8 @@ import UPrelude
 import Gameplay.Tags.ItemLifecycle (withDestroyedItems, unitConsumption)
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.ContentRegistries
+    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.Capability.Core
@@ -35,6 +37,7 @@ import Craft.Execute (consumeIngredients, craftQuality, applyMentalQuality)
 import Combat.Resolution.Common (mentalEffectiveness)
 import Item.Materialize (ItemOverrides(..), materializeItem, pristineItem)
 import Item.Types (ItemDef, ItemInstance(..), ItemManager, lookupItemDef)
+import Unit.Physiology.Types (PhysiologyRegistry)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingActivity(..), BuildingManager(..),
@@ -222,12 +225,19 @@ executeCraft env uid rid = do
                 Right outs → do
                     instances ← concat
                         ⊚ mapM (rollOutputs env im (rdOutputTemp recipe)) outs
+                    -- #2838: the crafter's concentration is DERIVED, so the
+                    -- registry and ONE game-time sample are captured here,
+                    -- before the atomic update that reads the same unit
+                    -- snapshot the rest of the craft uses.
+                    physReg ← readIORef
+                        (crPhysiologyRegistryRef (toContentRegistriesCapability env))
+                    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                     -- #2703: consumed inputs cease to exist and lose
                     -- their tags; the fresh outputs were never tagged.
                     withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
                         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $
                         unitConsumption [uid] $ \um →
-                        applyCraft recipe instances uid um
+                        applyCraft physReg now recipe instances uid um
   where
     resolve im ing = case lookupItemDef (riItem ing) im of
         Nothing  → Left ("unknown output item " <> riItem ing)
@@ -243,9 +253,9 @@ executeCraft env uid rid = do
 --   EVERY output — tagged or untagged alike — sampled from the same
 --   UnitInstance snapshot `u` that supplies skill/knowledge, so
 --   completion stays atomic.
-applyCraft ∷ RecipeDef → [ItemInstance] → UnitId → UnitManager
-           → (UnitManager, Either Text [Word64])
-applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
+applyCraft ∷ PhysiologyRegistry → Double → RecipeDef → [ItemInstance]
+           → UnitId → UnitManager → (UnitManager, Either Text [Word64])
+applyCraft physReg now recipe outs uid um = case HM.lookup uid (umInstances um) of
     Nothing → (um, Left "no such unit")
     Just u → case rdKnowledge recipe of
         Just k | not (HM.member k (uiKnowledge u)) →
@@ -261,7 +271,8 @@ applyCraft recipe outs uid um = case HM.lookup uid (umInstances um) of
                                      ((\k → HM.lookup k (uiKnowledge u))
                                         =≪ rdKnowledge recipe)
                             in map (\o → o { iiQuality = q }) outs
-                    eff   = mentalEffectiveness u
+                    eff   = maybe 1.0 (\d → mentalEffectiveness physReg d now u)
+                                  (HM.lookup (uiDefName u) (umDefs um))
                     outs' = map (\o → o { iiQuality =
                                     applyMentalQuality eff (iiQuality o) })
                                 baseOuts

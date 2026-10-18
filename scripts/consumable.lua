@@ -174,17 +174,27 @@ local function applySip(uid, it, cfg)
     -- Caffeine (brain.lua's stimulant meter): quality- and warmth-
     -- scaled — a stone-cold cup barely jolts you.
     local caffeineGain = sip * cfg.caffeine_per_litre * qualityFrac * warmth
-    local caffeine = unit.getStat(uid, "caffeine") or 0.0
-    unit.setStat(uid, "caffeine", clamp(caffeine + caffeineGain, 0, 1))
 
     -- Mood: a one-off nudge fed into the normal drift (brain.lua) — it
     -- fades at the usual MOOD_DRIFT rate like any other mood event,
     -- rather than snapping and holding.
     local moodDelta = sip * cfg.mood_swing_per_litre
                      * (quality - cfg.quality_mid) / cfg.quality_mid
-    local mood = unit.getStat(uid, "mood")
-    if mood == nil then mood = 1.0 end
-    unit.setStat(uid, "mood", clamp(mood + moodDelta, 0, 1))
+
+    -- Both credits go to the MIND system as ONE atomic batch (#2838, S11a),
+    -- through the facade: a Nominal or Unsupported mind holds neither value
+    -- and DISCARDS them (D-4), while the fluid draw, the hydration credit
+    -- and the drink result above and below still succeed. The summary
+    -- keeps reporting the computed contributions (before the 0..1 clamp)
+    -- when they were credited, and zero when they were discarded.
+    local credited = physiology.contributionApplies(uid, "caffeine")
+    physiology.creditBatch(uid, {
+        { key = "caffeine", amount = caffeineGain, lo = 0, hi = 1 },
+        { key = "mood",     amount = moodDelta,    lo = 0, hi = 1 },
+    })
+    if not credited then
+        caffeineGain, moodDelta = 0, 0
+    end
 
     unit.drink(uid)
 

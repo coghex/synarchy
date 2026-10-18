@@ -56,7 +56,7 @@ import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Data.IORef (atomicModifyIORef', readIORef)
 import Engine.Core.State (EngineEnv)
-import Combat.Resolution.Common (isAlreadyDead)
+import Combat.Resolution.Common (isAlreadyDead, painFor)
 import Engine.Scripting.Lua.API.Units.Stats (getEffectiveStat, getOrRollStat)
 import Unit.Blood (BloodView(..), bloodView, bloodViewOf)
 import Unit.Physiology
@@ -121,6 +121,7 @@ unitSnapshot env uid = do
             , pcStats      = uiStats inst
             , pcModifiers  = uiModifiers inst
             , pcBlood      = bloodOf um inst
+            , pcPain       = painFor inst
             }
 
 -- | The unit's RAW blood through "Unit.Blood" (the context applies the
@@ -308,7 +309,8 @@ applyTransition env uid plan = do
                             , pcNow        = now
                             , pcStats      = uiStats inst
                             , pcModifiers  = uiModifiers inst
-                            , pcBlood      = bloodOf um inst }
+                            , pcBlood      = bloodOf um inst
+                            , pcPain       = painFor inst }
                     in case plan ctx of
                         Left why → (um, Left why)
                         Right t →
@@ -443,7 +445,8 @@ applyEngagement env uid = do
                         , pcNow        = now
                         , pcStats      = uiStats inst
                         , pcModifiers  = uiModifiers inst
-                        , pcBlood      = bloodOf um inst }
+                        , pcBlood      = bloodOf um inst
+                        , pcPain       = painFor inst }
                 in case planEngagement ctx of
                     Left EngagementNotPending → (um, Left "not pending")
                     Left (EngagementSeedRefused code) →

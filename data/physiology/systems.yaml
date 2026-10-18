@@ -53,6 +53,11 @@ constants:
   # the divisor of circulation's heart-rate factor. scripts/cardio.lua keeps a
   # copy (cardio.RESTING_HR) that Test.Headless.Unit.Physiology pins to this.
   RESTING_HR: 70.0
+  # The interval between mental-episode rolls in game seconds (#2838, S11a):
+  # the seed of mental_next_roll_at is `now + MENTAL_CHECK_INTERVAL`, as
+  # mental.setState writes it. scripts/mental_state.lua keeps a copy
+  # (mental.TUNE.CHECK_INTERVAL) that Test.Headless.Unit.Physiology pins to this.
+  MENTAL_CHECK_INTERVAL: 8.0
 
 systems:
   # REGISTRY ORDER IS TICK ORDER (design D-7): thermo before salt, because
@@ -260,6 +265,67 @@ systems:
       - { name: exsanguination,       substitute: none }
       - { name: volume_recovery,      substitute: none }
 
+  # Consciousness (#2838, S11a): the physiological half of the brain. It owns
+  # NOTHING stored: consciousness and concentration are DERIVED, computed on
+  # demand by the shared pure rules (Unit.Physiology.Mind) from core
+  # temperature, blood oxygen and salt concentration (consciousness) and from
+  # that, pain, the stamina fraction, caffeine and the euphoria lift
+  # (concentration). A Nominal consciousness is a lucid unit: both read the
+  # constant 1.0, so it is never delirious, confused or collapsed FROM
+  # PHYSIOLOGY (a concussion still knocks a unit out). Its effects are the
+  # physiological collapse, delirium and confusion.
+  - id: consciousness
+    requires: [body]
+    derived:
+      - { key: consciousness, rule: consciousness, healthy: 1.0 }
+      - { key: concentration, rule: concentration, healthy: 1.0 }
+    provides:
+      - name: consciousness
+        substitute: { value: 1.0 }
+      - name: concentration
+        substitute: { value: 1.0 }
+    effects:
+      - { name: physiological_collapse, substitute: none }
+      - { name: delirium,               substitute: none }
+      - { name: confusion,              substitute: none }
+
+  # Mind (#2838, S11a): the psychological half, and the durable mental state.
+  # Every owned key has a Nominal read (`healthy`) and, where the starting
+  # value differs, a `seed` for the moment the system turns Simulated (spawn,
+  # the Nominal to Simulated transition, absent-only load repair). `now` is
+  # the seeding game-time sample. state_of_mind is derived and live: a
+  # Nominal mind reads mood 1 and emotional pain 0, which makes it the
+  # consciousness read. A Nominal mind has no thoughts, mental breaks or
+  # euphoria, no caffeine stamina-regen bonus, and discards incoming
+  # consumable credits.
+  - id: mind
+    requires: [body]
+    owns:
+      - { key: mood,                  healthy: { const: 1.0 }, seed: { rule: mood_target } }
+      - { key: emotional_pain,        healthy: { const: 0.0 } }
+      - { key: caffeine,              healthy: { const: 0.0 } }
+      - { key: mental_state,          healthy: { const: 0.0 } }
+      - { key: mental_since,          healthy: { const: 0.0 }, seed: { now: true } }
+      - { key: mental_until,          healthy: { const: 0.0 }, seed: { rule: episode_end } }
+      - { key: mental_next_roll_at,   healthy: { const: 0.0 }, seed: { now_plus: MENTAL_CHECK_INTERVAL } }
+      - { key: mental_cooldown_until, healthy: { const: 0.0 } }
+      - { key: mental_high_since,     healthy: { const: 0.0 } }
+      - { key: mental_break_behavior, healthy: { const: 0.0 } }
+      - { key: thought_next_at,       healthy: { const: 0.0 }, seed: { now: true } }
+    derived:
+      - { key: state_of_mind, rule: state_of_mind, healthy: live }
+    provides:
+      - name: state_of_mind
+        substitute: live
+    contributes:
+      - { name: caffeine_stamina_regen, substitute: { value: 0.0 } }
+      - { name: caffeine_credit,        substitute: none }
+      - { name: mood_credit,            substitute: none }
+    effects:
+      - { name: mental_breaks, substitute: none }
+      - { name: euphoria,      substitute: none }
+      - { name: thoughts,      substitute: none }
+
 # Species fidelity tiers (D-10): a mode for EVERY system. A definition
 # names one with `physiology: { profile: rich }` and may override single
 # systems beside it. Which species use which is S4/S7's.
@@ -274,6 +340,8 @@ profiles:
     sleep: simulated
     cardio: simulated
     blood: simulated
+    consciousness: simulated
+    mind: simulated
   reduced:
     hydration: nominal
     salt: simulated
@@ -284,6 +352,8 @@ profiles:
     sleep: simulated
     cardio: simulated
     blood: simulated
+    consciousness: simulated
+    mind: simulated
   simple:
     hydration: nominal
     salt: nominal
@@ -294,6 +364,8 @@ profiles:
     sleep: nominal
     cardio: simulated
     blood: simulated
+    consciousness: simulated
+    mind: simulated
   exempt:
     hydration: nominal
     salt: nominal
@@ -304,3 +376,5 @@ profiles:
     sleep: nominal
     cardio: simulated
     blood: simulated
+    consciousness: simulated
+    mind: simulated
