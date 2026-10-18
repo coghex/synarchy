@@ -38,9 +38,10 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.List (sortOn)
 import System.Random (StdGen, mkStdGen)
-import Equipment.Types (EquipmentClass(..), EquipmentSlot(..))
+import Equipment.Types (EquipmentClass)
 import Item.Materialize (ItemSpec(..), itemSpec, filledItem)
-import Item.Types (ItemDef(..), ItemManager, lookupItemDef)
+import Item.Types (ItemManager)
+import Unit.Thread.Command.Spawn (startingEquipmentCheck)
 import Scenario.Items.Refs (stableHash64)
 import Unit.Stats (rollStat, pickName)
 import Unit.Types (UnitDef(..))
@@ -81,9 +82,9 @@ data DefaultLoadout = DefaultLoadout
 
 -- | The definition's starting inventory, equipment and accessories as
 --   explicit construction trees, every roll private to the unit
---   (@<collection>/<slot>/<roll>@). Starting equipment follows the
---   spawn rule ('Unit.Thread.Command.Spawn.buildStartingEquipment'): an
---   entry whose slot the class does not declare, or whose item's kind
+--   (@<collection>/<slot>/<roll>@). Starting equipment is judged by the
+--   spawn rule itself ('Unit.Thread.Command.Spawn.startingEquipmentCheck'):
+--   an entry whose slot the class does not declare, or whose item's kind
 --   the slot does not accept, is not part of the kit. Nothing is shed
 --   for capacity: that is ordinary spawning's rule, not a scenario
 --   default (the trusted review's capacity addition).
@@ -95,11 +96,8 @@ defaultLoadoutSpecs items mClass ref d = DefaultLoadout
     , dlEquipment =
         [ (slot, spec ("equipment/" <> slot) name)
         | Just cls ← [mClass]
-        , let slots = HM.fromList [ (esId s, s) | s ← ecSlots cls ]
         , (slot, name) ← sortOn fst (HM.toList (udStartingEquipment d))
-        , Just s ← [HM.lookup slot slots]
-        , Just idef ← [lookupItemDef name items]
-        , idKind idef ≡ esKind s ]
+        , Right () ← [startingEquipmentCheck items cls slot name] ]
     , dlAccessories =
         [ spec ("accessories/" <> tshow i) name
         | (i, name) ← zip [0 ∷ Int ..] (udStartingAccessories d) ]

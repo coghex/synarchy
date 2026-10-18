@@ -135,10 +135,16 @@ function M.injuryPose(uid, info, pose)
     return "upright"
 end
 
+-- The lethality the injury pass kills by (injuries.lethalCause): its cause,
+-- or nil. Shared with a scenario unit's paused readiness (#2710).
+function M.lethalCause(uid)
+    return injuries.lethalCause(uid)
+end
+
 function M.tickInjuries(uid, info, pose)
     if pose == "dead" then return false end
 
-    local cause = injuries.lethalCause(uid)
+    local cause = M.lethalCause(uid)
     if cause then
         alerts.emitDeathAlert(uid, cause, "injury")
         unit.kill(uid)

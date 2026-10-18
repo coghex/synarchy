@@ -44,6 +44,7 @@ module Unit.Physiology.Transition
       -- * Seeding and scrubbing
     , seedTarget
     , seedOrder
+    , validateValues
     , systemKeyNames
       -- * Load reconciliation
     , KeyRepair(..)
@@ -231,7 +232,9 @@ scrubSystem ∷ PhysiologySystem → HM.HashMap Text Float
 scrubSystem sys stats = foldl' (flip HM.delete) stats (systemKeyNames sys)
 
 -- | Validate caller-supplied EFFECTIVE targets: owned keys of the
---   system, finite, non-negative and not above the key's maximum.
+--   system, finite, non-negative and not above the key's maximum. The one
+--   rule @physiology.setMode@'s explicit values and a scenario unit's
+--   stated pools (#2710, "Scenario.Units.Build") are both judged by.
 validateValues ∷ PhysioContext → PhysiologySystem → [(Text, Float)]
                → Either Text ()
 validateValues ctx sys = mapM_ one

@@ -44,6 +44,7 @@ module Scenario.Units.Install
     ( UnitInstallRefs(..)
     , UnitCompletion(..)
     , UnitInstallFailure(..)
+    , Readiness(..)
     , installBuiltUnit
     , installUnitBuilds
     ) where
@@ -51,18 +52,19 @@ module Scenario.Units.Install
 import UPrelude
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Building.Types (BuildingManager)
-import Gameplay.Tags.Index (deleteCategoryTarget, setCategoryTags)
+import Gameplay.Tags.Index (setCategoryTags)
 import Gameplay.Tags.Live (commitItemTreeAssignments)
 import Gameplay.Tags.Tag (ItemTarget)
 import Scenario.Items.Build (itemRefTargets, itemTagTargets)
-import Scenario.Types (ScenarioDiagnostic)
+import Scenario.Types (DiagnosticEffect(..), DiagnosticReason(..), ScenarioDiagnostic(..))
 import Scenario.Units.Build (BuiltUnit(..), UnitBuild(..))
 import Unit.Anim (poseTag)
 import Unit.Sim.Types (Pose(..), UnitSimState(..), UnitThreadState(..))
+import Gameplay.Tags.ItemLifecycle (withDestroyedItems)
+import Unit.Thread.Command.Lifecycle (destroyedUnit)
 import Unit.Thread.Command.Pose (handleUnitCollapseCommand, handleUnitCrawlCommand)
 import Unit.Types
 import World.Chunk.Admit (pageIncarnation)
@@ -78,12 +80,20 @@ data UnitInstallRefs = UnitInstallRefs
     , uirBuildings ∷ IORef BuildingManager
     , uirWorld     ∷ IORef WorldManager
     , uirLifecycle ∷ ∀ α. IO α → IO α
-    , uirReady     ∷ UnitId → IO (Either Text (Maybe Text))
+    , uirReady     ∷ UnitId → IO (Either Text Readiness)
       -- ^ The paused-readiness hook: settles the unit's Lua-owned derived
-      --   state and answers the locomotor pose to establish
-      --   (@"collapsed"@, @"crawling"@, @"upright"@), or 'Nothing' to keep
-      --   the built one. 'Left' is the hook's error.
+      --   state and answers what to establish. 'Left' is the hook's error.
     }
+
+-- | What the paused-readiness hook answered.
+data Readiness
+    = ReadyPose !(Maybe Text)
+      -- ^ the locomotor pose to establish (@"collapsed"@, @"crawling"@,
+      --   @"upright"@), or 'Nothing' to keep the built one
+    | ReadyLethal !Text
+      -- ^ the gameplay injury pass would kill this unit now
+      --   (@injuries.lethalCause@); the cause
+    deriving (Show, Eq)
 
 data UnitInstallFailure
     = PageNotAdmitting
@@ -97,6 +107,9 @@ data UnitInstallFailure
     | ReadinessFailed !Text
       -- ^ the paused-readiness hook failed or answered an unknown pose;
       --   the unit was retired again
+    | AlreadyLethal !Text
+      -- ^ the gameplay lethality rule rejects the unit's health; retired
+      --   again, and reported by 'installUnitBuilds' as a rejection
     deriving (Show, Eq)
 
 -- | The terminal result for one unit entry.
@@ -147,14 +160,16 @@ installBuiltUnit refs page epoch b = do
                     settled ← uirReady refs uid
                     let failed why = do
                             retire uid
-                            pure (Left (ReadinessFailed why))
+                            pure (Left why)
                     case settled of
-                        Left why → failed why
-                        Right Nothing → pure (Right uid)
-                        Right (Just "upright") → pure (Right uid)
-                        Right (Just "collapsed") → establish uid Collapsed handleUnitCollapseCommand
-                        Right (Just "crawling") → establish uid Crawling handleUnitCrawlCommand
-                        Right (Just other) → failed ("unknown readiness pose '" <> other <> "'")
+                        Left why → failed (ReadinessFailed why)
+                        Right (ReadyLethal cause) → failed (AlreadyLethal cause)
+                        Right (ReadyPose Nothing) → pure (Right uid)
+                        Right (ReadyPose (Just "upright")) → pure (Right uid)
+                        Right (ReadyPose (Just "collapsed")) → establish uid Collapsed handleUnitCollapseCommand
+                        Right (ReadyPose (Just "crawling")) → establish uid Crawling handleUnitCrawlCommand
+                        Right (ReadyPose (Just other)) →
+                            failed (ReadinessFailed ("unknown readiness pose '" <> other <> "'"))
   where
     -- the queued pose command's own handler, run now, and the published
     -- mirror the unit thread would write from it
@@ -166,13 +181,14 @@ installBuiltUnit refs page epoch b = do
             ( um { umInstances = HM.adjust (\i → i { uiPose = poseTag simPose }) uid (umInstances um) }
             , () )
         pure (Right uid)
+    -- the unit-destroy command's own step ('destroyedUnit'): instance,
+    -- selection, tags and reference in one modify, and every item it held
+    -- forgotten by the epoch-guarded item-destruction cleanup
+    -- ('withDestroyedItems'), which releases their tags and references
     retire uid = uirLifecycle refs $ do
-        atomicModifyIORef' (uirUnits refs) $ \um →
-            ( um { umInstances = HM.delete uid (umInstances um)
-                 , umSelected = HS.delete uid (umSelected um)
-                 , umTags = deleteCategoryTarget uid (umTags um)
-                 , umScenarioRefs = Map.delete uid (umScenarioRefs um) }
-            , () )
+        withDestroyedItems (uirWorld refs) $
+            atomicModifyIORef' (uirUnits refs) $ \um →
+                let (um', destroyed) = destroyedUnit uid um in (um', ((), destroyed))
         atomicModifyIORef' (uirSims refs) $ \uts →
             (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
 
@@ -184,5 +200,13 @@ installUnitBuilds refs page epoch = mapM one
   where
     one ub = case ubUnit ub of
         Nothing → pure (UnitRejected (ubDiagnostics ub))
-        Just b → either (UnitNotInstalled (buRef b)) (\uid → UnitInstalled uid (buRef b))
-                     ⊚ installBuiltUnit refs page epoch b
+        Just b → installBuiltUnit refs page epoch b ≫= \case
+            Right uid → pure (UnitInstalled uid (buRef b))
+            -- the same structured rejection as the native death checks
+            Left (AlreadyLethal cause) → pure $ UnitRejected
+                (ubDiagnostics ub
+                 ⧺ [ScenarioDiagnostic (buPath b)
+                        (InvalidValue ("a living unit: the injury pass would kill it ("
+                                       <> cause <> ")"))
+                        EntryRejected])
+            Left why → pure (UnitNotInstalled (buRef b) why)

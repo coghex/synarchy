@@ -66,7 +66,7 @@ import Infection.Types (InfectionManager(..))
 import Item.Types (ItemInstance(..), ItemManager, itemTotalWeight)
 import Scenario.Items.Build (ItemBuildEnv(..), itemCatalogOf)
 import Scenario.Items.Capture (CaptureCtx(..))
-import Scenario.Items.Refs (lookupItemRef, nullItemRefs)
+import Scenario.Items.Refs (itemRefsToAscList, lookupItemRef, nullItemRefs)
 import Scenario.Schema (decodeScenarioBytes)
 import Scenario.Types
 import Scenario.Units.Build
@@ -1059,6 +1059,76 @@ lifecycleSpec = describe "lifecycle" $ do
         HM.size (utsSimStates uts) `shouldBe` 0
         wm ← readIORef (worldManagerRef env)
         (nullCategoryIndex (wmItemTags wm), nullItemRefs (wmItemScenarioRefs wm)) `shouldBe` (True, True)
+
+    describe "every failed commit leaves nothing behind, and a retry succeeds" $ do
+        let doc = "  - {id: carrier, tags: [c-unit], definition: acolyte, x: 1, y: 1, \
+                  \inventory: [{id: kit-9, tags: [c-item], definition: first_aid_kit}]}\n"
+            nothingLeft fx = do
+                let env = fxEnv fx
+                um ← readIORef (unitManagerRef env)
+                (HM.size (umInstances um), Map.size (umScenarioRefs um), nullCategoryIndex (umTags um))
+                    `shouldBe` (0, 0, True)
+                uts ← readIORef (ucUtsRef (toUnitCombatCapability env))
+                HM.size (utsSimStates uts) `shouldBe` 0
+                wm ← readIORef (worldManagerRef env)
+                (nullCategoryIndex (wmItemTags wm), nullItemRefs (wmItemScenarioRefs wm)) `shouldBe` (True, True)
+            failingWith ready fx = do
+                let env = fxEnv fx
+                ws ← resetScene env
+                us ← cleanUnits env doc
+                benv ← buildEnvOf env
+                [b] ← forM us (buildUnit benv "units[0]")
+                epoch ← pageIncarnation ws
+                cs ← installUnitBuilds (installRefsOf fx) { uirReady = ready } pageP epoch [b]
+                nothingLeft fx
+                -- the same entry, freshly built, installs cleanly afterwards
+                (cs2, _) ← construct fx ws us
+                [ () | UnitInstalled _ _ ← cs2 ] `shouldBe` [()]
+                pure cs
+        it "a failing readiness hook" $ \fx → do
+            cs ← failingWith (\_ → pure (Left "injected failure")) fx
+            cs `shouldBe` [UnitNotInstalled "carrier" (ReadinessFailed "injected failure")]
+        it "an unknown readiness pose" $ \fx → do
+            cs ← failingWith (\_ → pure (Right (ReadyPose (Just "flying")))) fx
+            cs `shouldBe` [UnitNotInstalled "carrier" (ReadinessFailed "unknown readiness pose 'flying'")]
+        it "a gameplay-lethal answer is a rejection" $ \fx → do
+            cs ← failingWith (\_ → pure (Right (ReadyLethal "a ruptured heart"))) fx
+            [ map sdEffect ds | UnitRejected ds ← cs ] `shouldBe` [[EntryRejected]]
+        it "an item attachment the session refuses" $ \fx → do
+            let env = fxEnv fx
+            ws ← resetScene env
+            -- another live item already holds the reference kit-9
+            _ ← constructClean fx ws "  - {id: holder, definition: acolyte, x: 2, y: 2, \
+                                     \inventory: [{id: kit-9, definition: bandage}]}\n"
+            um0 ← readIORef (unitManagerRef env)
+            us ← cleanUnits env doc
+            (cs, _) ← construct fx ws us
+            [ () | UnitNotInstalled "carrier" (ItemsRefused _) ← cs ] `shouldBe` [()]
+            um ← readIORef (unitManagerRef env)
+            HM.keys (umInstances um) `shouldBe` HM.keys (umInstances um0)
+            Map.elems (umScenarioRefs um) `shouldBe` ["holder"]
+            wm ← readIORef (worldManagerRef env)
+            map snd (itemRefsToAscList (wmItemScenarioRefs wm)) `shouldBe` ["kit-9"]
+
+    it "rejects a worsening vital wound the injury pass would kill at once (gameplay severity)" $ \fx → do
+        let env = fxEnv fx
+        ws ← resetScene env
+        -- inflicted 0.8, but healing backwards: the gameplay view reads
+        -- 0.8 × (1 − (−0.5)) = 1.2 on the heart
+        us ← cleanUnits env "  - {id: dying, definition: acolyte, x: 1, y: 1, \
+                            \wounds: [{part: heart, kind: stab, severity: 0.8, heal: -0.5}], \
+                            \inventory: [{id: k2, tags: [t2], definition: bandage}]}\n"
+        (cs, _) ← construct fx ws us
+        [ [ (sdPath d, sdEffect d) | d ← ds ] | UnitRejected ds ← cs ] `shouldBe` [[("units[0]", EntryRejected)]]
+        um ← readIORef (unitManagerRef env)
+        HM.size (umInstances um) `shouldBe` 0
+        wm ← readIORef (worldManagerRef env)
+        (nullCategoryIndex (wmItemTags wm), nullItemRefs (wmItemScenarioRefs wm)) `shouldBe` (True, True)
+        -- the same wound healing forwards is sub-lethal and installs
+        us2 ← cleanUnits env "  - {id: mending, definition: acolyte, x: 1, y: 1, \
+                             \wounds: [{part: heart, kind: stab, severity: 0.8, heal: 0.5}]}\n"
+        (cs2, _) ← construct fx ws us2
+        [ () | UnitInstalled _ _ ← cs2 ] `shouldBe` [()]
 
     it "a second unit claiming a held reference is not installed" $ \fx → do
         let env = fxEnv fx

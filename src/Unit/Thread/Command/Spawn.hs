@@ -16,6 +16,8 @@ module Unit.Thread.Command.Spawn
     , buildStartingInventory
     , buildStartingEquipment
     , buildStartingAccessories
+    , startingEquipmentCheck
+    , freshSimState
       -- * The per-individual draws (#2756)
     , rollTemplates
     , standardTemplates
@@ -311,34 +313,7 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     , uiPhysioOverrides = emptyPhysioOverrides
                     , uiTrailState  = Nothing
                     }
-            let ss = UnitSimState
-                    { usRealX     = gx
-                    , usRealY     = gy
-                    , usGridZ     = gz
-                    , usRealZ     = fromIntegral gz
-                    , usTarget    = Nothing
-                    , usState     = Idle
-                    , usFacing    = DirS
-                    , usLocalPath = []
-                    , usPose         = Standing
-                    , usDrinkUntil   = Nothing
-                    , usEatUntil     = Nothing
-                    , usPickupUntil  = Nothing
-                    , usTransitionUntil  = Nothing
-                    , usTransitionStride = 1
-                    , usPostTransition   = []
-                    , usClimbFromTile    = Nothing
-                    , usClimbToTile      = Nothing
-                    , usClimbStartTime   = Nothing
-                    , usClimbSlipAt      = Nothing
-                    , usFallFromTile     = Nothing
-                    , usFallToTile       = Nothing
-                    , usPendingClimbXP   = 0
-                    , usGetUpAt          = Nothing
-                    , usPendingFallDrop = Nothing
-                    , usJumpApex         = Nothing
-                    , usMoveGrade        = 0
-                    }
+            let ss = freshSimState gx gy gz
             -- #2476: the epoch read at the top of this handler is a
             -- time-of-CHECK, and everything between it and here — the
             -- def lookup, the stat and body rolls, the capacity shed —
@@ -384,6 +359,39 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
                     "UnitSpawn: page " <> unWorldPageId pageId
                     <> " was replaced while this spawn was being built; \
                        \dropping it"
+
+-- | The simulation state a newly created unit starts in: at rest at its
+--   position, standing, facing south. Shared with scenario construction
+--   (#2710, "Scenario.Units.Build"), which sets its own facing and pose.
+freshSimState ∷ Float → Float → Int → UnitSimState
+freshSimState gx gy gz = UnitSimState
+    { usRealX     = gx
+    , usRealY     = gy
+    , usGridZ     = gz
+    , usRealZ     = fromIntegral gz
+    , usTarget    = Nothing
+    , usState     = Idle
+    , usFacing    = DirS
+    , usLocalPath = []
+    , usPose         = Standing
+    , usDrinkUntil   = Nothing
+    , usEatUntil     = Nothing
+    , usPickupUntil  = Nothing
+    , usTransitionUntil  = Nothing
+    , usTransitionStride = 1
+    , usPostTransition   = []
+    , usClimbFromTile    = Nothing
+    , usClimbToTile      = Nothing
+    , usClimbStartTime   = Nothing
+    , usClimbSlipAt      = Nothing
+    , usFallFromTile     = Nothing
+    , usFallToTile       = Nothing
+    , usPendingClimbXP   = 0
+    , usGetUpAt          = Nothing
+    , usPendingFallDrop = Nothing
+    , usJumpApex         = Nothing
+    , usMoveGrade        = 0
+    }
 
 -- | Effective carrying capacity at spawn: the rolled base stat with
 --   the spawn modifier map applied — the same
@@ -553,44 +561,41 @@ buildStartingEquipment env rng logger itemMgr mClass entries =
                     "Unit has starting_equipment but no equipment_class"
                     <> " — skipping all entries"
                 return HM.empty
-        Just cls → do
-            let slotIndex = HM.fromList
-                    [ (esId s, s) | s ← ecSlots cls ]
+        Just cls →
             HM.foldlWithKey'
                 (\acc slotId itemName → do
                     m ← acc
-                    case HM.lookup slotId slotIndex of
-                        Nothing → do
+                    case startingEquipmentCheck itemMgr cls slotId itemName of
+                        Left why → do
                             logWarn logger CatThread $
-                                "starting_equipment: unknown slot '"
-                                <> slotId <> "' on class '"
-                                <> ecName cls <> "' — skipping"
+                                "starting_equipment: " <> why <> " — skipping"
                             return m
-                        Just slot → case lookupItemDef itemName itemMgr of
-                            Nothing → do
-                                logWarn logger CatThread $
-                                    "starting_equipment: unknown item '"
-                                    <> itemName <> "' for slot '"
-                                    <> slotId <> "' — skipping"
-                                return m
-                            Just iDef
-                                | idKind iDef ≢ esKind slot → do
-                                    logWarn logger CatThread $
-                                        "starting_equipment: item '"
-                                        <> itemName <> "' (kind="
-                                        <> idKind iDef
-                                        <> ") doesn't match slot '"
-                                        <> slotId <> "' (kind="
-                                        <> esKind slot <> ") — skipping"
-                                    return m
-                                | otherwise → do
-                                    mInst ← materializeItem itemMgr logger rng
-                                              (freshItemInstanceId env)
-                                              pristineItem itemName
-                                    return $ case mInst of
-                                        Nothing   → m
-                                        Just inst → HM.insert slotId inst m
+                        Right () → do
+                            mInst ← materializeItem itemMgr logger rng
+                                      (freshItemInstanceId env)
+                                      pristineItem itemName
+                            return $ case mInst of
+                                Nothing   → m
+                                Just inst → HM.insert slotId inst m
                 ) (return HM.empty) entries
+
+-- | Whether an item may sit in a slot of an equipment class: the slot
+--   exists on the class, the item's definition is registered, and its
+--   kind is the one the slot accepts. 'Left' says which failed. The one
+--   rule starting equipment and a scenario unit's stated or default
+--   equipment (#2710) are both judged by.
+startingEquipmentCheck ∷ ItemManager → EquipmentClass → Text → Text → Either Text ()
+startingEquipmentCheck itemMgr cls slotId itemName =
+    case lookup slotId [ (esId s, s) | s ← ecSlots cls ] of
+        Nothing → Left ("unknown slot '" <> slotId <> "' on class '" <> ecName cls <> "'")
+        Just slot → case lookupItemDef itemName itemMgr of
+            Nothing → Left ("unknown item '" <> itemName <> "' for slot '" <> slotId <> "'")
+            Just iDef
+                | idKind iDef ≢ esKind slot → Left
+                    ("item '" <> itemName <> "' (kind=" <> idKind iDef
+                     <> ") doesn't match slot '" <> slotId <> "' (kind="
+                     <> esKind slot <> ")")
+                | otherwise → Right ()
 
 -- | The one spawn-time modifier map (#1213): the def's innate
 --   modifiers with the starting accessories' buffs folded on. Both

@@ -2,12 +2,14 @@
 --   SCN-10 of epic #2698): 'Scenario.Units.Install.uirReady' run against
 --   the Lua state.
 --
---   It calls @unit_resources.settleScenarioUnit(uid)@, which settles the
---   two Lua-owned derived states through the producers the per-tick pass
---   itself uses — the calorie strength discount (@reconcileStrength@ →
---   @starvation.refreshStrength@) and the locomotor pose
---   (@unit_resource_injury.injuryPose@) — and answers the pose to
---   establish. Nothing is advanced and nothing is queued.
+--   It calls @unit_resources.settleScenarioUnit(uid)@, which first applies
+--   the gameplay lethality rule the injury pass kills by
+--   (@injuries.lethalCause@, over the gameplay-visible wound view) and
+--   then settles the two Lua-owned derived states through the producers
+--   the per-tick pass itself uses — the calorie strength discount
+--   (@reconcileStrength@ → @starvation.refreshStrength@) and the
+--   locomotor pose (@unit_resource_injury.injuryPose@) — and answers what
+--   to establish. Nothing is advanced and nothing is queued.
 --
 --   It runs Lua directly, so it must be called on the Lua thread (the
 --   thread that owns the state), as the session loader's paused
@@ -21,16 +23,17 @@ module Scenario.Units.Ready
 import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
+import Scenario.Units.Install (Readiness(..))
 import Unit.Types (UnitId(..))
 
 -- | The Lua function the hook calls: @require(module)[name]@.
 settleFunction ∷ (Text, Text)
 settleFunction = ("scripts.unit_resources", "settleScenarioUnit")
 
-luaUnitReadiness ∷ Lua.State → UnitId → IO (Either Text (Maybe Text))
+luaUnitReadiness ∷ Lua.State → UnitId → IO (Either Text Readiness)
 luaUnitReadiness st (UnitId n) = Lua.runWith st settle
   where
-  settle ∷ Lua.LuaE Lua.Exception (Either Text (Maybe Text))
+  settle ∷ Lua.LuaE Lua.Exception (Either Text Readiness)
   settle = do
     top ← Lua.gettop
     let (modName, fnName) = settleFunction
@@ -50,9 +53,16 @@ luaUnitReadiness st (UnitId n) = Lua.runWith st settle
             then finish (Left (modName <> "." <> fnName <> " is not a function"))
             else do
                 Lua.pushinteger (fromIntegral n)
-                called ← Lua.pcall 1 1 Nothing
+                called ← Lua.pcall 1 2 Nothing
                 if called ≢ Lua.OK then failure else do
-                    isNil ← Lua.isnil (-1)
-                    if isNil then finish (Right Nothing) else do
-                        s ← Lua.tostring (-1)
-                        finish (Right (TE.decodeUtf8Lenient ⊚ s))
+                    answer ← textAt (-2)
+                    detail ← textAt (-1)
+                    finish $ Right $ case answer of
+                        Just "lethal" → ReadyLethal (fromMaybe "a lethal injury" detail)
+                        other → ReadyPose other
+
+-- | A text at a stack index, or 'Nothing' for nil.
+textAt ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe Text)
+textAt i = do
+    isNil ← Lua.isnil i
+    if isNil then pure Nothing else fmap TE.decodeUtf8Lenient ⊚ Lua.tostring i

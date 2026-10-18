@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Lifecycle
     ( handleUnitDestroyCommand
+    , destroyedUnit
     , handleUnitClearAllCommand
     , handleUnitClearPageCommand
     , handleUnitTeleportCommand
@@ -46,12 +47,7 @@ handleUnitDestroyCommand env utsRef uid = do
     -- epoch-guarded ("Gameplay.Tags.ItemLifecycle").
     withDestroyedItems wmRef $
       atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        (um { umInstances = HM.delete uid (umInstances um)
-            , umSelected  = HS.delete uid (umSelected um)
-            , umTags      = deleteCategoryTarget uid (umTags um)
-            , umScenarioRefs = Map.delete uid (umScenarioRefs um)
-            }, ((), maybe HS.empty (itemForestIds . unitItems)
-                          (HM.lookup uid (umInstances um))))
+        let (um', destroyed) = destroyedUnit uid um in (um', ((), destroyed))
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.delete uid (utsSimStates uts) }, ())
     -- A durable transfer order (#1246) outliving its carrier is an
@@ -64,6 +60,20 @@ handleUnitDestroyCommand env utsRef uid = do
     retireTransferOrdersEverywhere wmRef uid
   where
     wmRef = wsWorldManagerRef (toWorldSimCapability env)
+
+-- | The manager after one unit is destroyed, and the ids of every item it
+--   carried, equipped or wore (for 'withDestroyedItems'): the instance,
+--   its selection, its gameplay tags (#2701) and its scenario reference
+--   (#2710) go together. Pure, so the destroy command and a scenario
+--   unit's retirement ("Scenario.Units.Install") apply the same step.
+destroyedUnit ∷ UnitId → UnitManager → (UnitManager, HS.HashSet Word64)
+destroyedUnit uid um =
+    ( um { umInstances = HM.delete uid (umInstances um)
+         , umSelected  = HS.delete uid (umSelected um)
+         , umTags      = deleteCategoryTarget uid (umTags um)
+         , umScenarioRefs = Map.delete uid (umScenarioRefs um)
+         }
+    , maybe HS.empty (itemForestIds . unitItems) (HM.lookup uid (umInstances um)) )
 
 handleUnitClearAllCommand ∷ EngineEnv → IORef UnitThreadState → IO ()
 handleUnitClearAllCommand env utsRef = do

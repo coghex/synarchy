@@ -62,17 +62,16 @@ import qualified Data.HashSet as HS
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import System.Random (mkStdGen)
-import Combat.Resolution.Common (painFor)
+import Combat.Resolution.Common (isAlreadyDead, painFor)
 import Combat.Wounds.Tick (WoundTickOutcome(..), tickOneUnitWith)
 import Unit.Anim (poseTag)
-import Combat.Wounds.Infection (necrosisLethalVital)
-import Equipment.Types (EquipmentClass(..), EquipmentClassManager, EquipmentSlot(..),
+import Equipment.Types (EquipmentClass(..), EquipmentClassManager,
                         lookupEquipmentClass)
 import Gameplay.Tags.Types (GameplayTag)
 import Infection.Types (InfectionManager, lookupInfection)
 import Item.Materialize (ItemSpec(..), DefaultContentNote(..), DefaultContentIssue(..),
                          materializeSpec)
-import Item.Types (ItemDef(..), ItemInstance(..), ItemManager, lookupItemDef)
+import Item.Types (ItemInstance(..), ItemManager, lookupItemDef)
 import Scenario.Decode.Monad (indexPath, keyPath)
 import Scenario.Items.Build (ItemBuildEnv(..), ItemBuild(..))
 import Scenario.Items.Owners (UnitItems(..), buildUnitItems)
@@ -82,14 +81,14 @@ import Scenario.Units.Defaults
 import Scenario.Types
 import Unit.Blood (bloodViewOf)
 import Unit.Faction.Membership (resolveSpawnFaction)
-import Unit.Physiology (PhysioContext(..), evalHealthy, resolveMode, bloodSystem)
-import Unit.Physiology.Transition (canonicalBlood, reconcileStoredKeys)
+import Unit.Physiology (PhysioContext(..), resolveMode, bloodSystem)
+import Unit.Physiology.Transition (canonicalBlood, reconcileStoredKeys, validateValues)
 import Unit.Physiology.Types
 import Unit.Sim.Types
 import Unit.Stats (effectiveStat)
 import Unit.Thread.Command.Body (bloodSeedFromStats, recomputeBodyDerivedStats,
                                  seedBodyComposition)
-import Unit.Thread.Command.Spawn (spawnModifierMap)
+import Unit.Thread.Command.Spawn (freshSimState, spawnModifierMap, startingEquipmentCheck)
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
 
@@ -232,9 +231,14 @@ buildWith env path u def z
                         UnconsciousNow _ → Collapsed
                         _ → Standing
                     inst = standing { uiPose = poseTag pose }
-                    ss = (spawnSimState (ueX u) (ueY u) z facing) { usPose = pose }
+                    ss = (freshSimState (ueX u) (ueY u) z) { usFacing = facing, usPose = pose }
                     notes = map (noteDiag path) (invNotes ⧺ eqNotes ⧺ accNotes)
                 case verdict of
+                  DiedNow part cause → pure $ UnitBuild Nothing
+                    (statDiags ⧺ woundDiags ⧺ poolDiags
+                     ⧺ [diagAt path (InvalidValue ("a living unit: the wound tick would record death by "
+                                                   <> cause <> " (" <> part <> ")")) EntryRejected]
+                     ⧺ cascadeUnitItems path u)
                   PhysioInvariant why → pure $ UnitBuild Nothing
                     (statDiags ⧺ woundDiags ⧺ poolDiags
                      ⧺ [diagAt path (InvalidValue ("a coherent physiology: " <> why)) EntryRejected]
@@ -262,14 +266,13 @@ buildWith env path u def z
     name = authoredOr (rollName ref def) (ueName u)
     -- 5. health
     (woundDiags, wounds) = resolveWounds env path (authoredOr [] (ueWounds u))
-    parts = HM.fromList [ (bpId p, p) | p ← udBodyParts def ]
-    vital w = maybe False bpVital (HM.lookup (woundPart w) parts)
+    -- the combat rule's own lethality test ('isAlreadyDead': an inflicted
+    -- severity of 1 or more on a vital part); gangrene is the wound
+    -- tick's verdict below, and the gameplay-visible lethality the injury
+    -- pass applies is checked by the paused-readiness step
     deathCondition
-        | any (\w → vital w ∧ woundSeverity w ≥ 1.0) wounds =
+        | isAlreadyDead (baseInstance { uiWounds = wounds }) def =
             Just "a living unit: a wound of severity 1 or more on a vital part is lethal"
-        | any (\w → vital w ∧ woundNecrosis w ≥ necrosisLethalVital) wounds =
-            Just ("a living unit: necrosis of " <> tshow necrosisLethalVital
-                  <> " or more on a vital part is death by gangrene")
         | Authored b ← ueBlood u, b ≤ 0, bloodSimulated =
             Just "a living unit: no blood is death by exsanguination"
         | otherwise = Nothing
@@ -317,19 +320,6 @@ noteDiag path (DefaultContentNote p issue) = case issue of
     DefaultCyclic closed →
         diagAt (path <> ".default." <> p) (CyclicContents (T.intercalate " → " closed))
                EntryRejected
-
--- | The sim state a fresh spawn starts in, at the unit's own position
---   and facing ('Unit.Thread.Command.Spawn').
-spawnSimState ∷ Float → Float → Int → Direction → UnitSimState
-spawnSimState x y z facing = UnitSimState
-    { usRealX = x, usRealY = y, usGridZ = z, usRealZ = fromIntegral z
-    , usTarget = Nothing, usState = Idle, usFacing = facing, usLocalPath = []
-    , usPose = Standing, usDrinkUntil = Nothing, usEatUntil = Nothing
-    , usPickupUntil = Nothing, usTransitionUntil = Nothing, usTransitionStride = 1
-    , usPostTransition = [], usClimbFromTile = Nothing, usClimbToTile = Nothing
-    , usClimbStartTime = Nothing, usClimbSlipAt = Nothing, usFallFromTile = Nothing
-    , usFallToTile = Nothing, usPendingClimbXP = 0, usGetUpAt = Nothing
-    , usPendingFallDrop = Nothing, usJumpApex = Nothing, usMoveGrade = 0 }
 
 -- * Stats and body
 
@@ -393,22 +383,21 @@ resolveStats reg def ref path explicit0 = (ruleDiags ⧺ valueDiags ⧺ groupDia
 --   rejected; the seeding authority then fills them like an omission.
 checkPools ∷ Text → PhysiologyRegistry → UnitDef → HM.HashMap Text [StatModifier] → Double
            → HM.HashMap Text Float → ([ScenarioDiagnostic], HM.HashMap Text Float)
-checkPools path reg def mods now stats = (diags, foldl' (flip HM.delete) stats (map fst over))
+checkPools path reg def mods now stats = (diags, foldl' (flip HM.delete) stats (map fst bad))
   where
     ctx = PhysioContext
         { pcRegistry = reg, pcPhysiology = udPhysiology def
         , pcOverrides = emptyPhysioOverrides, pcNow = now, pcStats = stats
         , pcModifiers = mods, pcBlood = bloodViewOf stats 0 0, pcPain = 0 }
-    over = [ (okKey o, cap)
-           | s ← simulatedSystems reg def, o ← psOwns s, isNothing (okField o)
-           , Just v ← [HM.lookup (okKey o) stats]
-           , capped (okHealthy o)
-           , Right cap ← [evalHealthy ctx (okHealthy o)]
-           , effectiveStat now v (HM.lookupDefault [] (okKey o) mods) > cap + 1.0e-4 ]
-    capped r = case r of { HealthyConst _ → False; _ → True }
-    diags = [ diagAt (keyPath (keyPath path "stats") k)
-                  (InvalidValue ("at most its maximum, " <> tshow cap)) FieldRejected
-            | (k, cap) ← over ]
+    -- the rule physiology.setMode's explicit values are judged by
+    -- ('validateValues'), on the stated value's EFFECTIVE reading
+    bad = [ (okKey o, why)
+          | s ← simulatedSystems reg def, o ← psOwns s, isNothing (okField o)
+          , Just v ← [HM.lookup (okKey o) stats]
+          , Left why ← [validateValues ctx s
+                            [(okKey o, effectiveStat now v (HM.lookupDefault [] (okKey o) mods))]] ]
+    diags = [ diagAt (keyPath (keyPath path "stats") k) (InvalidValue why) FieldRejected
+            | (k, why) ← bad ]
 
 -- * Health
 
@@ -449,23 +438,21 @@ checkEquipmentKinds ∷ ItemManager → Maybe EquipmentClass → Text → UnitEn
 checkEquipmentKinds items mClass path u = case ueEquipment u of
     Omitted → ([], u)
     Authored m →
-        let bad = [ (slot, e, k, want)
+        -- the starting-equipment rule ('startingEquipmentCheck'); an
+        -- unknown definition is left to the item builder, which reports it
+        let bad = [ (slot, e, why)
                   | (slot, e) ← sortOn fst (HM.toList m)
-                  , Just idef ← [lookupItemDef (ieDefinition e) items]
-                  , let k = idKind idef
-                  , let want = HM.lookup slot slotKinds
-                  , want ≢ Just k ]
-            badSlots = HS.fromList [ s | (s, _, _, _) ← bad ]
+                  , isJust (lookupItemDef (ieDefinition e) items)
+                  , Left why ← [maybe (Left "this definition has no equipment class")
+                                      (\cls → startingEquipmentCheck items cls slot (ieDefinition e))
+                                      mClass] ]
+            badSlots = HS.fromList [ s | (s, _, _) ← bad ]
             diags = concat
-                [ diagAt sp (InvalidValue ("an item of kind " <> fromMaybe "?" want
-                                           <> " (this one is " <> k <> ")"))
-                         FieldRejected
-                  : descendants sp e
-                | (slot, e, k, want) ← bad
+                [ diagAt sp (InvalidValue why) FieldRejected : descendants sp e
+                | (slot, e, why) ← bad
                 , let sp = keyPath (keyPath path "equipment") slot ]
         in (diags, u { ueEquipment = Authored (HM.filterWithKey (\s _ → not (HS.member s badSlots)) m) })
   where
-    slotKinds = HM.fromList [ (esId s, esKind s) | Just cls ← [mClass], s ← ecSlots cls ]
     descendants sp e = concat
         [ diagAt cp (OwnerRejected sp) CascadeRejected : descendants' sp cp c
         | (i, c) ← zip [0 ..] (authoredOr [] (ieContents e))

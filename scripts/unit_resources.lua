@@ -361,11 +361,17 @@ end
 -- meter, kill or queued pose command. Returns the pose to establish
 -- ("collapsed", "crawling" or "upright"), or nil for a unit that is gone,
 -- dead or knocked down; the engine applies it to the unit's simulation state.
+-- A unit the injury pass would kill at once returns "lethal" and the cause
+-- instead, and is not installed.
 function unitResources.settleScenarioUnit(uid)
     local info = unit.getInfo(uid)
     if not info then return nil end
     local pose = unit.getPose(uid) or "standing"
     if pose == "dead" then return nil end
+    -- The lethality the injury pass kills by, over the gameplay-visible
+    -- wound view: a unit it would kill at once is not a scenario unit.
+    local cause = injuryTick.lethalCause(uid)
+    if cause then return "lethal", cause end
     reconcileStrength(uid, physiology.modes(uid))
     return injuryTick.injuryPose(uid, info, pose)
 end
