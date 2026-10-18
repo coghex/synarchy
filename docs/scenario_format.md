@@ -610,11 +610,18 @@ native authority, under the review's own "one shared authority it calls" clause
 
 **Death conditions.** A unit whose stated health already meets an existing death
 condition is rejected whole, with what it owns (`EntryRejected InvalidValue`). It is
-never built as a corpse. The conditions are:
+never built as a corpse. Each condition is judged by the authority that would apply
+it in gameplay, never by a restated threshold:
 
-- a wound of severity 1 or more on a vital part;
-- necrosis of 0.85 or more on a vital part (gangrene);
-- `blood ≤ 0` while blood is Simulated.
+- **Inflicted vital severity.** An inflicted severity of 1 or more on a vital
+  part, by the combat rule `Combat.Resolution.Common.isAlreadyDead`.
+- **Gangrene.** The wound tick's own `DiedNow` verdict over zero elapsed time.
+- **Gameplay lethality.** The rule the injury pass kills by,
+  `injuries.lethalCause`, over the gameplay-visible wound view
+  (`severity × (1 − heal)`). The paused-readiness step checks it. For example,
+  a heart stab of severity 0.8 healing backwards (`heal: -0.5`) reads 1.2 there
+  and is rejected.
+- **Blood.** `blood ≤ 0` while blood is Simulated.
 
 ### Defaults (D-5)
 
@@ -661,11 +668,18 @@ handler's fence applied to the same two writes.
   instance, its tags (`umTags`), its scenario reference (`umScenarioRefs`) and its
   simulation state.
 - **Item identities.** The item trees' references and tags then attach through
-  `Gameplay.Tags.Live.commitItemTreeAssignments`. If that refuses, the unit is
-  retired again in one step.
+  `Gameplay.Tags.Live.commitItemTreeAssignments`.
+- **Retirement.** If the attachment or the readiness step refuses, the unit is
+  retired by the unit-destroy command's own step
+  (`Unit.Thread.Command.Lifecycle.destroyedUnit`). Every item it held is
+  released by the epoch-guarded item-destruction cleanup (`withDestroyedItems`),
+  so no item tag or reference outlives it, and a retry of the same entry
+  installs.
 - **The result.** `UnitInstalled uid ref` is returned only after all of that.
   `UnitRejected diagnostics` and `UnitNotInstalled ref (PageNotAdmitting |
-  ReferenceHeld r | ItemsRefused ts | ReadinessFailed e)` leave nothing behind: no id is consumed, and
+  ReferenceHeld r | ItemsRefused ts | ReadinessFailed e)` leave nothing behind.
+  A gameplay-lethal answer from readiness is reported as `UnitRejected`, like the
+  native death checks. Either way, nothing is left behind: no id is consumed, and
   no manager-only unit, simulation-only unit, reference, tag or item remains.
 - **Faction.** The profile is `resolveSpawnFaction` over the definition's default
   tags with no spawn tag (the owner's decision), so a scenario acolyte has no
