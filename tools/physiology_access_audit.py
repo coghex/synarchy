@@ -315,6 +315,14 @@ BLOOD_FIELD_INVENTORY: dict[str, str] = {
     "src/World/Save/Physiology.hs":
         "the load gate: canonical rewrite of a Nominal field; the raw view "
         "for its context (reads nothing else)",
+    "src/Scenario/Units/Build.hs":
+        "scenario construction (#2710): the seed writer, by spawn's rule "
+        "(canonicalBlood, else the body-mass seed; an explicit value only "
+        "while blood resolves Simulated), the raw view of its seeding "
+        "context, and the wound tick's own Simulated-only collapse cut",
+    "src/Scenario/Units/Capture.hs":
+        "scenario capture (#2710): reads the stored field for serialization "
+        "only, and only while blood resolves Simulated",
 }
 BLOOD_FIELD_TOKENS = ("uiBlood", "bloodView", "bloodViewOf", "unitBloodView",
                       "instanceBloodView")

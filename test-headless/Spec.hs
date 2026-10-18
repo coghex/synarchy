@@ -145,6 +145,7 @@ import qualified Test.Headless.World.MapPyramid as MapPyramid
 import qualified Test.Headless.World.PagedMapArtifact as PagedMapArtifact
 import qualified Test.Headless.Scenario.Schema as ScenarioSchema
 import qualified Test.Headless.Scenario.Items as ScenarioItems
+import qualified Test.Headless.Scenario.Units as ScenarioUnits
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -656,6 +657,9 @@ restLane = do
     -- validation over scratch files, no engine, no world, no GPU.
     describe "Scenario.Schema" ScenarioSchema.spec
     describe "Scenario.Items" ScenarioItems.spec
+    -- #2710 (SCN-10). Own engine with the shipped acolyte; its
+    -- fresh-process case re-runs this binary as two child processes.
+    describe "Scenario.Units" ScenarioUnits.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
     -- #2278. Own engine: it registers an out-of-tree material into the
     -- ONE process-global material registry and creates two private w8

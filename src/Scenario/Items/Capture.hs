@@ -40,6 +40,7 @@ module Scenario.Items.Capture
     , CaptureState
     , emptyCaptureState
     , newCaptureState
+    , reserveDocumentId
     , ItemSig(..)
     , RefKey(..)
     , itemSig
@@ -149,6 +150,17 @@ explicitRefOf = T.concatMap f
 newCaptureState ∷ CaptureCtx → [Text] → [ItemInstance] → CaptureState
 newCaptureState ctx docIds roots =
     reserveMapped ctx roots emptyCaptureState { csForeign = HS.fromList docIds }
+
+-- | Claim a GENERATED id for another document entry (#2710: a unit that
+--   holds no scenario reference) after the items' references are
+--   reserved: the first free spelling of @base@ ('freshRef'), recorded as
+--   a tier-1 id so no later item name can take it. It never displaces a
+--   reserved item reference, which is what keeps tiers 2 and 3 a function
+--   of the references alone.
+reserveDocumentId ∷ Text → CaptureState → (Text, CaptureState)
+reserveDocumentId base st =
+    let name = freshRef st (sanitize base)
+    in (name, st { csForeign = HS.insert name (csForeign st) })
 
 -- | Name every referenced item in these trees (see 'newCaptureState').
 reserveMapped ∷ CaptureCtx → [ItemInstance] → CaptureState → CaptureState
