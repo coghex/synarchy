@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Capture the retained FINITE-arena save (#2708) on the post-change build.
+
+Run from the repository root of the worktree that contains the #2708 change:
+
+    cabal build all
+    python3 capture_finite_arena.py --port 9292 --out /tmp/finite_arena.synworld
+
+Boots one headless engine, creates the finite 20x10 arena page
+(world.initArena('finite_arena', 20, 10): X -10..9, Y -4..5), raises two
+corner tiles (9, 5) and (-10, -4), asks for a third edit one tile OUTSIDE
+the map (10, 0) -- which the engine must refuse, so it never reaches the
+edit overlay -- saves through the production path and copies the written
+world.synworld to --out. The engine is quit through engine.quit().
+"""
+import argparse, os, shutil, sys, time
+sys.path.insert(0, os.path.join(os.getcwd(), "tools"))
+from probelib import boot, send, quit_engine, poll_until
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--port", type=int, default=9292)
+ap.add_argument("--out", required=True)
+a = ap.parse_args()
+PAGE, SLOT = "finite_arena", "finite_arena_2708"
+EDITS = [(9, 5), (-10, -4)]
+OUTSIDE = (10, 0)
+
+proc = boot(a.port, log="/tmp/finite_arena_capture.log", label="finite arena")
+try:
+    send(a.port, f"world.initArena('{PAGE}', 20, 10); return 'ok'")
+    send(a.port, f"world.show('{PAGE}'); return 'ok'")
+    send(a.port, "return world.waitForInit(60)", timeout=70)
+    def terr(x, y):
+        raw = send(a.port, f"return world.getTerrainAt({x}, {y})").strip()
+        return raw.split()[0] if raw.split() else "nil"
+    for (x, y) in EDITS:
+        base = terr(x, y)
+        if base in ("nil", "null", ""):
+            sys.exit(f"edit tile ({x},{y}) has no terrain before the edit")
+        send(a.port, f"return world.addTile('{PAGE}', {x}, {y}, 1)")
+        if not poll_until(30, lambda x=x, y=y, b=int(float(base)): terr(x, y) not in ("nil", "null", "") and int(float(terr(x, y))) == b + 1):
+            sys.exit(f"edit at ({x},{y}) never landed")
+    send(a.port, f"return world.addTile('{PAGE}', {OUTSIDE[0]}, {OUTSIDE[1]}, 1)")
+    time.sleep(1)
+    if terr(*OUTSIDE) not in ("nil", "null", ""):
+        sys.exit("an edit outside the map made terrain")
+    time.sleep(2)
+    saved = send(a.port, f"return engine.saveWorld('{PAGE}', '{SLOT}')")
+    if saved.strip() != "true":
+        sys.exit(f"saveWorld returned {saved!r}")
+    src = os.path.join("saves", SLOT, "world.synworld")
+    if not poll_until(60, lambda: os.path.exists(src)):
+        sys.exit("save never appeared")
+    time.sleep(2)
+    shutil.copyfile(src, a.out)
+    print("captured", a.out, os.path.getsize(a.out), "bytes")
+finally:
+    quit_engine(a.port, proc)
+    shutil.rmtree(os.path.join("saves", SLOT), ignore_errors=True)

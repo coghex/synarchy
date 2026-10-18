@@ -197,6 +197,12 @@ and dig/construct slopes (`World.Load.Stage`'s `isArenaParams` branch), and
 arena is a usable save-test page. The 5×5 footprint is only the startup set:
 since #2707 chunks beyond it (`world.loadChunksInRegion`, the camera) come
 from the same authority, so expansion works and survives save and load.
+`world.initArena(pageId, width, height)` (#2708) makes a FINITE arena of that
+many tiles centred on zero (20×10 is X −10…9, Y −4…5); both dimensions or
+neither, each an integer in `[1, 100000]`, otherwise a Lua error and nothing
+is created. The bounds persist with the page (`world-pages` v15) and restore
+without any scenario file; `world.loadChunksInRegion` for a chunk wholly
+outside returns 0, and `world.getTerrainAt` answers nil outside the map.
 
 ## Subsystem probes
 
