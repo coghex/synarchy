@@ -231,15 +231,6 @@ unitCommitStaminaFn env = do
                     Left reason → pushRefusal reason
                     Right sc    → pushCommit sc
 
--- | @unit.getMaxStamina(uid) → number | nil@. A PURE read of the unit's
---   effective maximum stamina through the ONE maximum rule
---   ('Unit.Stats.maxStaminaOf', #2834) — what @stats.get(uid,
---   "max_stamina")@ answers, so Lua reads, combat cost, commit bounds and
---   seed targets cannot disagree. @nil@ for a missing unit and for a unit
---   with neither an explicit @max_stamina@ nor an @endurance@ stat (only
---   the statless bodyless definitions): combat's internal endurance-1.0
---   fallback is not a maximum Lua may see. Any caller may use it: it
---   writes nothing.
 -- | @unit.previewStamina(uid, amount)@ (#2710): exactly @unit.commitStamina@'s
 --   answer — the same arguments, refusals and report — computed by the same
 --   pure step ('commitStaminaIn') on a READ of the unit manager, which is never
@@ -266,6 +257,15 @@ unitPreviewStaminaFn env = do
                     Left reason → pushRefusal reason
                     Right sc    → pushCommit sc
 
+-- | @unit.getMaxStamina(uid) → number | nil@. A PURE read of the unit's
+--   effective maximum stamina through the ONE maximum rule
+--   ('Unit.Stats.maxStaminaOf', #2834) — what @stats.get(uid,
+--   "max_stamina")@ answers, so Lua reads, combat cost, commit bounds and
+--   seed targets cannot disagree. @nil@ for a missing unit and for a unit
+--   with neither an explicit @max_stamina@ nor an @endurance@ stat (only
+--   the statless bodyless definitions): combat's internal endurance-1.0
+--   fallback is not a maximum Lua may see. Any caller may use it: it
+--   writes nothing.
 unitGetMaxStaminaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetMaxStaminaFn env = do
     mUid ← readUnitIdArg 1
