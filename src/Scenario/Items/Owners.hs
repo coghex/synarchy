@@ -144,8 +144,8 @@ buildGroundItems env entries = do
 --   they are not the items' identity and nothing here records them as
 --   such.
 installGroundItems ∷ [GroundPlacement] → GroundItems → (GroundItems, [Int])
-installGroundItems ps g0 = foldl' step (g0, []) ps
+installGroundItems ps g0 = fmap reverse (foldl' step (g0, []) ps)
   where
     step (g, gids) p =
         let (g', gid) = spawnGroundItem (gpItem p) (gpX p) (gpY p) g
-        in (g', gids ⧺ [gid])
+        in (g', gid : gids)

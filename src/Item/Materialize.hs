@@ -30,12 +30,22 @@
 --     environment at all and every caller keeps allocating from the one
 --     'Engine.Core.State.freshItemInstanceId' counter it already used.
 --
+--   Since #2709 the same boundary also builds an EXPLICIT tree
+--   ('ItemSpec', 'materializeSpec'): the per-node form a scenario adapter
+--   (@Scenario.Items.Build@) needs, with three-state sharpness, empty
+--   weight, bulk and storage, exact (possibly empty or overloaded)
+--   contents, a private roll per named domain, and the dropped default
+--   entries reported as data. It is the same 'materializeNode', so there
+--   is still exactly one place an 'ItemInstance' is assembled, and the
+--   ordinary entry point ('materializeItem') draws, logs and allocates
+--   exactly as before.
+--
 --   The shared logger is a third explicit parameter, for the one thing
 --   this module reports: a CYCLIC definition graph (#1420). Authored
 --   default contents recurse by definition NAME, so a definition listing
 --   itself — or two listing each other — used to recurse forever and
 --   hang the minting thread with no error and no log line. See
---   'materializeEntries' for the rule and why it is scoped the way it
+--   'buildEntries' for the rule and why it is scoped the way it
 --   is.
 module Item.Materialize
     ( ItemOverrides(..)
