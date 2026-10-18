@@ -933,7 +933,9 @@ goldenRichPayloads =
       -- override map (8 bytes for an empty one).
       -- #2515 re-pinned: @units@ v3 carries each unit's faction
       -- profile (a tagged DTO) where v2 held one faction string.
-    , ("units",               (283,  "245a902fc3c9985d"))
+      -- #2710 re-pinned: @units@ v6 appends the page slice's scenario
+      -- reference list (8 bytes empty, ×2 pages).
+    , ("units",               (299,  "8fc1ace5031a401d"))
     , ("unit-sim",            (123,  "81797b8874157310"))
     , ("craft-bills",         (58,   "beec8f6ff4c58c26"))
     , ("power-nodes",         (58,   "beec8f6ff4c58c26"))
@@ -976,7 +978,9 @@ goldenFullPayloads =
     , ("buildings",           (138, "4f1aa91ae43ea249"))
       -- #2829 re-pinned: @units@ v4's override map (8 bytes, empty).
       -- #2515 re-pinned: @units@ v3's faction profile DTO.
-    , ("units",               (254, "02740f27c714dc9c"))
+      -- #2710 re-pinned: @units@ v6's empty scenario-reference list
+      -- (8 bytes, one page).
+    , ("units",               (262, "80d22640bf19881c"))
     , ("unit-sim",            (102, "2977ea9721e11313"))
     , ("craft-bills",         (125, "687f006dbc839e32"))
     , ("power-nodes",         (58,  "0cadd98f962a6b12"))

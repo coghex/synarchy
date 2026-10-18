@@ -326,11 +326,11 @@ spec = describe "Unit faction model" $ do
             map uisFaction (HM.elems (usnInstances back))
                 `shouldBe` [FactionProfileSnap inertUnitProfile]
 
-        it "the units component is at v5 (#2701; v4 #2829) and still \
-           \accepts v1 through v4" $
+        it "the units component is at v6 (#2710; v5 #2701; v4 #2829) and \
+           \still accepts v1 through v5" $
             [ rcInputVers c
               | c ← saveComponentRegistry
-              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2, 3, 4, 5]]
+              , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2, 3, 4, 5, 6]]
 
         it "a live profile survives the v3 component path and restore \
            \exactly" $ do

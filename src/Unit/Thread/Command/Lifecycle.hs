@@ -16,6 +16,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
@@ -35,7 +36,8 @@ import World.State.Types (pageWrapWorldSize)
 handleUnitDestroyCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
 handleUnitDestroyCommand env utsRef uid = do
     -- Single atomic modify removes the unit from instances AND clears
-    -- it from the selection set and its gameplay tags (#2701), so no
+    -- it from the selection set, its gameplay tags (#2701) and its
+    -- scenario reference (#2710), so no
     -- observer ever sees a "selected but dead" state or a tag on a unit
     -- that no longer exists. Shared tag names stay on every survivor.
     --
@@ -47,6 +49,7 @@ handleUnitDestroyCommand env utsRef uid = do
         (um { umInstances = HM.delete uid (umInstances um)
             , umSelected  = HS.delete uid (umSelected um)
             , umTags      = deleteCategoryTarget uid (umTags um)
+            , umScenarioRefs = Map.delete uid (umScenarioRefs um)
             }, ((), maybe HS.empty (itemForestIds . unitItems)
                           (HM.lookup uid (umInstances um))))
     atomicModifyIORef' utsRef $ \uts →
@@ -70,7 +73,8 @@ handleUnitClearAllCommand env utsRef = do
     withDestroyedItems (wsWorldManagerRef (toWorldSimCapability env)) $
       atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         let um' = um { umInstances = HM.empty, umSelected = HS.empty
-                     , umTags = emptyCategoryIndex }
+                     , umTags = emptyCategoryIndex
+                     , umScenarioRefs = Map.empty }
         in (um', ((), retiredUnitItemIds um um'))
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())

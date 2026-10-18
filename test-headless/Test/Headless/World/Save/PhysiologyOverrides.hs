@@ -87,7 +87,7 @@ pageWith ∷ WorldPageId → [(Word32, UnitInstanceSnapshot)] → PageSnapshot
 pageWith pid us = (minimalPage pid)
     { pgsUnits = UnitSnapshot
         { usnInstances = HM.fromList [ (UnitId n, u) | (n, u) ← us ]
-        , usnNextId = 10, usnTags = mempty }
+        , usnNextId = 10, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.fromList [ (UnitId n, minimalSimState)
                                      | (n, _) ← us ] }
 
@@ -182,16 +182,17 @@ v4WireSpec ∷ Spec
 v4WireSpec = describe "the units v4 wire (requirements 1 and 2)" $ do
 
     -- #2701 took units to v5 (each page slice carries its gameplay tag
-    -- assignments); the v4 instance shape these examples pin is unchanged
-    -- and is what the frozen v4 slice carries.
+    -- assignments) and #2710 to v6 (and its units' scenario references);
+    -- the v4 instance shape these examples pin is unchanged and is what
+    -- the frozen v4 and v5 slices carry.
     it "declares units v4 and accepts every earlier version through its \
        \own decoder" $ do
-        ccVersion unitsCodec `shouldBe` 5
-        ccInputVers unitsCodec `shouldBe` [1, 2, 3, 4, 5]
+        ccVersion unitsCodec `shouldBe` 6
+        ccInputVers unitsCodec `shouldBe` [1, 2, 3, 4, 5, 6]
 
     it "emits units v4 in an envelope" $
         unitsVersion [] (encodeSessionSnapshot (meta session) session [])
-            `shouldBe` Right 5
+            `shouldBe` Right 6
 
     it "round-trips empty and nonempty maps, both modes, several units \
        \and pages, exactly — not merely the effective modes" $
@@ -249,7 +250,7 @@ liveRestoreSpec = describe "capture and restore (requirement 1)" $ do
         -- default restated: still explicit intent, kept exactly.
         let species = HM.fromList [("hydration", PhysioSimulated)]
             snap = UnitSnapshot
-                (HM.fromList [(UnitId 1, u1), (UnitId 2, u2)]) 10 mempty
+                (HM.fromList [(UnitId 1, u1), (UnitId 2, u2)]) 10 mempty mempty
             (um, orphans) = restore page1 snap (defs species)
         orphans `shouldBe` []
         fmap uiPhysioOverrides (HM.lookup (UnitId 1) (umInstances um))
@@ -267,7 +268,7 @@ liveRestoreSpec = describe "capture and restore (requirement 1)" $ do
        \codec" $ do
         let species = HM.fromList [("salt", PhysioSimulated)]
             snapOf _ us = UnitSnapshot
-                (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10 mempty
+                (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10 mempty mempty
             (umA, _) = restore page1 (snapOf page1 [(1, u1), (2, u2)])
                            (defs species)
             (umB, _) = restore page2 (snapOf page2 [(3, u3)]) (defs species)
@@ -350,7 +351,7 @@ legacyWireSpec = describe "historical units shapes (requirement 2)" $ do
                     (HM.singleton (UnitId 1) (toUnitInstanceDTOv3 inst)) ])
         case decodeUnits 3 bytes of
             Left err → expectationFailure (show err)
-            Right _ → ccVersion unitsCodec `shouldBe` 5
+            Right _ → ccVersion unitsCodec `shouldBe` 6
 
     it "the B1 SessionV90 adapter yields EMPTY overrides" $ do
         let mainPage = WorldPageId "main_world"
@@ -426,7 +427,7 @@ rejectionsFor ∷ PhysiologyRegistry → [(Word32, UnitInstanceSnapshot)]
               → [PhysiologyLoadRejection]
 rejectionsFor reg us = physiologyLoadRejections reg defPhysiology
     [ (page1, UnitSnapshot
-          (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10 mempty) ]
+          (HM.fromList [ (UnitId n, u) | (n, u) ← us ]) 10 mempty mempty) ]
 
 rejectionSpec ∷ SpecWith PhysiologyRegistry
 rejectionSpec = describe "decoded-payload rejection (requirement 3)" $ do

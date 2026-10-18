@@ -466,7 +466,7 @@ spec = do
            \even with EVERY entity map empty" $ do
             let bare = (minimalPage page1)
                     { pgsBuildings = BuildingSnapshot HM.empty 1 mempty
-                    , pgsUnits     = UnitSnapshot HM.empty 1 mempty
+                    , pgsUnits     = UnitSnapshot HM.empty 1 mempty mempty
                     , pgsUnitSimStates = HM.empty }
                 globals = minimalGlobals
                     { sgNextBuildingId = 1, sgNextUnitId = 1 }
@@ -484,7 +484,7 @@ spec = do
            \envelope decode, attributed to core-session" $ do
             let bare = (minimalPage page1)
                     { pgsBuildings = BuildingSnapshot HM.empty 1 mempty
-                    , pgsUnits     = UnitSnapshot HM.empty 1 mempty
+                    , pgsUnits     = UnitSnapshot HM.empty 1 mempty mempty
                     , pgsUnitSimStates = HM.empty }
                 snap = (buildSessionSnapshot minimalGlobals [bare])
                            { snapNextBuildingId = 0 }

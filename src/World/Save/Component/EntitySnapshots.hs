@@ -84,6 +84,10 @@ module World.Save.Component.EntitySnapshots
     , ScarDTO(..)
     , toUnitInstanceDTO
     , fromUnitInstanceDTO
+    , PageUnitsDTOv5(..)
+    , UnitsDTOv5(..)
+    , migrateUnitsDTOv5
+    , unitScenarioRefErrors
     , PageUnitsDTOv4(..)
     , UnitsDTOv4(..)
     , migrateUnitsDTOv4
@@ -129,6 +133,8 @@ import World.Save.UnitFaction
 import World.Save.Component.Types
 import World.Save.Component.GameplayTags (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
 import World.Save.PageOrder (orderedPages)
+import qualified Data.Map.Strict as Map
+import Scenario.Items.Refs (itemRefTextError)
 
 -- buildings ---------------------------------------------------------
 
@@ -689,7 +695,7 @@ newtype UnitsDTOv3 = UnitsDTOv3 { ud3Pages ∷ [PageUnitsDTOv3] }
 migrateUnitsDTOv3 ∷ UnitsDTOv3 → UnitsDTO
 migrateUnitsDTOv3 (UnitsDTOv3 slices) = UnitsDTO
     [ PageUnitsDTO (pu3PageId s)
-          (HM.map migrateUnitInstanceDTOv3 (pu3Instances s)) []
+          (HM.map migrateUnitInstanceDTOv3 (pu3Instances s)) [] []
     | s ← slices ]
 
 -- | The FROZEN v2 unit instance (#1233 → #2515), preserved verbatim for
@@ -903,11 +909,52 @@ data PageUnitsDTO = PageUnitsDTO
     , puTags      ∷ !(TagAssignmentsDTO UnitId)
       -- ^ #2701 (v5): this page's units' general gameplay tag
       --   assignments; see 'pbTags'.
+    , puScenarioRefs ∷ ![(UnitId, Text)]
+      -- ^ #2710 (v6): the scenario reference each of this page's units
+      --   was constructed from, ascending by unit id
+      --   ('World.Save.Types.usnScenarioRefs'). Sparse.
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype UnitsDTO = UnitsDTO { udPages ∷ [PageUnitsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
+
+-- | The FROZEN v5 page slice (#2701 → #2710): the current slice without
+--   its scenario references. Never edited.
+data PageUnitsDTOv5 = PageUnitsDTOv5
+    { pu5PageId    ∷ !WorldPageId
+    , pu5Instances ∷ !(HM.HashMap UnitId UnitInstanceDTO)
+    , pu5Tags      ∷ !(TagAssignmentsDTO UnitId)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype UnitsDTOv5 = UnitsDTOv5 { ud5Pages ∷ [PageUnitsDTOv5] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+-- | v5 → v6: every instance and tag assignment crosses unchanged and the
+--   page carries NO scenario references (a v5 session was built by no
+--   scenario adapter).
+migrateUnitsDTOv5 ∷ UnitsDTOv5 → UnitsDTO
+migrateUnitsDTOv5 (UnitsDTOv5 slices) = UnitsDTO
+    [ PageUnitsDTO (pu5PageId s) (pu5Instances s) (pu5Tags s) [] | s ← slices ]
+
+-- | The structural errors of one page's wire reference list (#2710): an
+--   unadmissible reference text (the item references' own vocabulary
+--   and bound, 'Scenario.Items.Refs.itemRefTextError'), a unit listed
+--   twice, a reference two units claim, or a list out of ascending order.
+unitScenarioRefErrors ∷ [(UnitId, Text)] → [Text]
+unitScenarioRefErrors xs =
+    [ "unit " <> tshow (unUnitId u) <> ": " <> e
+    | (u, r) ← xs, Just e ← [itemRefTextError r] ]
+    ⧺ [ "unit " <> tshow (unUnitId u) <> " is listed twice"
+      | u ← dupes (map fst xs) ]
+    ⧺ [ "scenario reference '" <> r <> "' is claimed by more than one unit"
+      | r ← dupes (map snd xs) ]
+    ⧺ [ "scenario references are not in ascending unit order"
+      | map fst xs ≢ Map.keys (Map.fromList xs) ∧ null (dupes (map fst xs)) ]
+  where
+    dupes ∷ Ord β ⇒ [β] → [β]
+    dupes ys = Map.keys (Map.filter (> (1 ∷ Int)) (Map.fromListWith (+) [ (y, 1) | y ← ys ]))
 
 -- | The FROZEN v4 page slice (#2829 → #2701): the current slice without
 --   its tag assignments. Never edited. Its instances are the unchanged
@@ -921,11 +968,12 @@ newtype UnitsDTOv4 = UnitsDTOv4 { ud4Pages ∷ [PageUnitsDTOv4] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
 
--- | v4 → v5: every instance crosses unchanged and the page carries NO
---   gameplay tags (see 'migrateBuildingsDTOv2').
+-- | v4 → v6: every instance crosses unchanged and the page carries NO
+--   gameplay tags (see 'migrateBuildingsDTOv2') and no scenario
+--   references.
 migrateUnitsDTOv4 ∷ UnitsDTOv4 → UnitsDTO
 migrateUnitsDTOv4 (UnitsDTOv4 slices) = UnitsDTO
-    [ PageUnitsDTO (pu4PageId s) (pu4Instances s) [] | s ← slices ]
+    [ PageUnitsDTO (pu4PageId s) (pu4Instances s) [] [] | s ← slices ]
 
 -- | The FROZEN v1 page slice (#1233), carrying the frozen v1 instances.
 data PageUnitsDTOv1 = PageUnitsDTOv1
@@ -969,28 +1017,36 @@ migrateUnitsDTOv1 (UnitsDTOv1 slices) = UnitsDTOv3
 -- assignments. The outgoing v4 slice is frozen ('UnitsDTOv4') and crosses
 -- through 'migrateUnitsDTOv4'; 'migrateUnitsDTOv3' (and so v1/v2 through
 -- it) lands on v5 directly. Every older version arrives with NO tags.
--- Re-encoding emits v5 only.
+--
+-- v6 (#2710): each page slice carries its units' scenario references
+-- (the unit half of the scenario-id ↔ runtime-id mapping). The outgoing
+-- v5 slice is frozen ('UnitsDTOv5') and crosses through
+-- 'migrateUnitsDTOv5'; every older migration lands on v6 directly with
+-- NO references. Re-encoding emits v6 only.
 unitsCodec ∷ ComponentCodec UnitsDTO
 unitsCodec = componentCodec ComponentSpec
     { csComponent     = unitsComponentId
-    , csVersion       = 5
+    , csVersion       = 6
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → UnitsDTO
         [ PageUnitsDTO (pgsPageId p)
               (HM.map toUnitInstanceDTO (usnInstances (pgsUnits p)))
               (encodeTagAssignments (usnTags (pgsUnits p)))
+              (Map.toAscList (usnScenarioRefs (pgsUnits p)))
         | p ← orderedPages snap ]
     , csDecode        = id
     , csOlderVersions = [ atVersion 1 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv1)
                         , atVersion 2 (migrateUnitsDTOv3 ∘ migrateUnitsDTOv2)
                         , atVersion 3 migrateUnitsDTOv3
-                        , atVersion 4 migrateUnitsDTOv4 ]
+                        , atVersion 4 migrateUnitsDTOv4
+                        , atVersion 5 migrateUnitsDTOv5 ]
     , csValidate      = \(UnitsDTO slices) →
-        [ ComponentError unitsComponentId 5 ValidatePhase
+        [ ComponentError unitsComponentId 6 ValidatePhase
               ("page '" <> unWorldPageId (puPageId s) <> "': " <> msg)
         | s ← slices
-        , msg ← tagAssignmentErrors (\u → "unit " <> tshow (unUnitId u)) (puTags s) ]
+        , msg ← tagAssignmentErrors (\u → "unit " <> tshow (unUnitId u)) (puTags s)
+                ⧺ unitScenarioRefErrors (puScenarioRefs s) ]
     }
 
 applyUnits
@@ -1002,5 +1058,6 @@ applyUnits ver nextId (UnitsDTO slices) =
                         { usnInstances =
                             HM.map fromUnitInstanceDTO (puInstances s)
                         , usnNextId = nextId
-                        , usnTags   = decodeTagAssignments (puTags s) } })
+                        , usnTags   = decodeTagAssignments (puTags s)
+                        , usnScenarioRefs = Map.fromList (puScenarioRefs s) } })
         slices

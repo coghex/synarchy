@@ -72,7 +72,7 @@ minimalPage pid = PageSnapshot
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
@@ -232,7 +232,7 @@ spec = do
         it "accepts a unit sim state that DOES match a restored unit" $
             let units = UnitSnapshot
                     { usnInstances = HM.singleton (UnitId 1) (minimalUnitInstance [])
-                    , usnNextId = 2, usnTags = mempty }
+                    , usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
                 page = (minimalPage page1)
                     { pgsUnits = units
                     , pgsUnitSimStates = HM.singleton (UnitId 1) minimalSimState }
@@ -244,7 +244,7 @@ spec = do
             let units = UnitSnapshot
                     { usnInstances = HM.singleton (UnitId 1)
                         (minimalUnitInstance [minimalItem 5])
-                    , usnNextId = 2, usnTags = mempty }
+                    , usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
                 page = (minimalPage page1) { pgsUnits = units }
             in case capture minimalGlobals { sgNextItemId = 5 } [page] of
                 Left errs → errs `shouldContain` [ItemInstanceIdNotBelowAllocator 5]
@@ -254,7 +254,7 @@ spec = do
             let unitsWith iid = UnitSnapshot
                     { usnInstances = HM.singleton (UnitId 1)
                         (minimalUnitInstance [minimalItem iid])
-                    , usnNextId = 2, usnTags = mempty }
+                    , usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
                 p1 = (minimalPage page1) { pgsUnits = unitsWith 5 }
                 p2 = (minimalPage page2) { pgsUnits = unitsWith 5 }
             in case capture minimalGlobals
@@ -275,7 +275,7 @@ spec = do
         it "rejects a unit id at or above the unit allocator" $
             let units = UnitSnapshot
                     { usnInstances = HM.singleton (UnitId 4) (minimalUnitInstance [])
-                    , usnNextId = 4, usnTags = mempty }
+                    , usnNextId = 4, usnTags = mempty, usnScenarioRefs = mempty }
                 page = (minimalPage page1) { pgsUnits = units }
             in case capture minimalGlobals { sgNextUnitId = 4 } [page] of
                 Left errs → errs `shouldContain` [UnitAllocatorTooLow (UnitId 4)]
@@ -330,7 +330,7 @@ spec = do
             let staleBuildings = BuildingSnapshot
                     { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty }
                 staleUnits = UnitSnapshot
-                    { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty }
+                    { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty, usnScenarioRefs = mempty }
                 page = (minimalPage page1)
                     { pgsBuildings = staleBuildings, pgsUnits = staleUnits }
                 snapStale = buildSessionSnapshot

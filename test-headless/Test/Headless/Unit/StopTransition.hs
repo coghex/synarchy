@@ -283,7 +283,7 @@ pageWithSim ss = PageSnapshot
                                          , bsnNextId = 10, bsnTags = mempty }
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton testUnit owningUnit
-        , usnNextId = 10, usnTags = mempty }
+        , usnNextId = 10, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.singleton testUnit ss
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty

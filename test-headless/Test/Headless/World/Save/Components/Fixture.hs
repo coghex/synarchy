@@ -138,7 +138,7 @@ minimalPage pid = PageSnapshot
     -- components no longer carry an independent per-page copy — they
     -- refill it from the global on decode. minimalGlobals below uses 10.
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 10, bsnTags = mempty }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 10, usnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 10, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
@@ -262,7 +262,7 @@ richPage pid = (minimalPage pid)
         , bsnNextId = 10, bsnTags = mempty }
     , pgsUnits = UnitSnapshot
         { usnInstances = HM.singleton (UnitId 1) (minimalUnitInstance [])
-        , usnNextId = 10, usnTags = mempty }
+        , usnNextId = 10, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.singleton (UnitId 1) minimalSimState
     }
 

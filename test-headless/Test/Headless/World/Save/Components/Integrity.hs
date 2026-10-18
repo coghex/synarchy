@@ -93,9 +93,9 @@ spec = do
                     ((minimalBuildingInstance []) { bisDefName = defName })) 10 mempty
             withU defName = UnitSnapshot
                 (HM.singleton (UnitId 1)
-                    ((minimalUnitInstance []) { uisDefName = defName })) 10 mempty
+                    ((minimalUnitInstance []) { uisDefName = defName })) 10 mempty mempty
             emptyB = BuildingSnapshot HM.empty 10 mempty
-            emptyU = UnitSnapshot HM.empty 10 mempty
+            emptyU = UnitSnapshot HM.empty 10 mempty mempty
 
         it "accepts a save whose every building/unit def resolves" $
             missingDefReferences knownB knownU
@@ -230,7 +230,7 @@ spec = do
                 missing = missingItemDefReferences (HS.fromList ["bandage"])
                     (pageWith (minimalWorldPageSave page1)
                         { wpsUnits = UnitSnapshot
-                            (HM.singleton (UnitId 1) u) 10 mempty })
+                            (HM.singleton (UnitId 1) u) 10 mempty mempty })
             HS.fromList (map midrDefName missing)
                 `shouldBe` HS.fromList ["first_aid_kit", "ghost_helmet"]
 
@@ -451,7 +451,7 @@ spec = do
             immUnit imm = (minimalUnitInstance [])
                 { uisImmunities = HM.fromList imm }
             woundedUnit imm wounds = (immUnit imm) { uisWounds = wounds }
-            snapshotOf us = UnitSnapshot (HM.fromList us) 99 mempty
+            snapshotOf us = UnitSnapshot (HM.fromList us) 99 mempty mempty
             restore infMgr snap =
                 fromUnitSnapshot page1 immunityUnitDefs infMgr
                     emptyEquipmentClassManager emptyItemManager snap
@@ -694,7 +694,7 @@ containerCoveragePage = (minimalPage page1)
                 { uisEquipped =
                     HM.singleton "head" (nestedCoverItem 300 "equipped")
                 , uisAccessories = [nestedCoverItem 400 "accessory"] })
-        10 mempty
+        10 mempty mempty
     , pgsBuildings = BuildingSnapshot
         (HM.singleton (BuildingId 1)
             (minimalBuildingInstance [nestedCoverItem 500 "storage"])
@@ -749,7 +749,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsGroundItems  = emptyGroundItems
     , wpsSpoilPiles   = emptySpoilPiles
     , wpsBuildings    = BuildingSnapshot HM.empty 10 mempty
-    , wpsUnits        = UnitSnapshot HM.empty 10 mempty
+    , wpsUnits        = UnitSnapshot HM.empty 10 mempty mempty
     , wpsUnitSimStates = HM.empty
     , wpsFloraHarvests = emptyFloraHarvests
     , wpsChopDesignations = HM.empty

@@ -637,7 +637,7 @@ savedUnits = toUnitSnapshot stagedPageId emptyUnitManager
 --   dangle by construction); 'savedWithOwner' adds the unit the
 --   reference-edge example needs and is never staged.
 poisonedSave ∷ SaveData
-poisonedSave = poisonedSaveWith (UnitSnapshot HM.empty 0 mempty)
+poisonedSave = poisonedSaveWith (UnitSnapshot HM.empty 0 mempty mempty)
 
 savedWithOwner ∷ SaveData
 savedWithOwner = poisonedSaveWith savedUnits
