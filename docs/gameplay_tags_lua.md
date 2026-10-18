@@ -151,12 +151,23 @@ save.
   writer of the terrain they live in. The verb queues the edit and waits
   for the world thread's answer. When the world thread applies it, it
   checks again that the page is the same incarnation the verb resolved.
-  If the page was destroyed or re-initialised in between, or a load
-  replaced the session, the edit is refused (`nil, message`) and never
-  reaches the replacement.
+  The verb reads that incarnation before it derives anything from the
+  page, such as canonical coordinates. If the page was destroyed or
+  re-initialised at any point after that read, or a load replaced the
+  session, the edit is refused (`nil, message`) and never reaches the
+  replacement.
 
-Scripts never need to poll or wait. Saves are taken from the Lua thread,
-so an edit and a save never overlap.
+Scripts never need to poll or wait.
+
+**Saves and loads.** While a save or load is capturing the session,
+every edit verb is refused immediately with `nil, message`. That window
+runs from the moment the transaction begins until its snapshot is taken,
+and it includes the Lua save and load callbacks that run inside it. An
+edit there would race the snapshot, and a tile or plant edit would wait
+on a world thread that is parked for the capture. Reads and queries are
+not refused. Once the snapshot is taken, edits are accepted again. Lua
+is the only thread that begins a save or load, so none can begin while
+an edit verb is running.
 
 ## Queries
 
@@ -202,9 +213,10 @@ Decoding limits, each refused with a diagnostic and never by silently
 changing the expression:
 
 - **Depth.** At most 64 nested levels.
-- **Size.** At most 65 536 visited elements. Each node and each tag inside
-  `all`/`any`/`none` counts every time it is reached, so a table shared
-  between operands counts once per use.
+- **Size.** At most 65 536 visited elements. Each node, and each entry of
+  an `all`/`any`/`none` list, counts as it is reached, before repeats are
+  merged. A table shared between operands counts once per use. Decoding
+  stops at the bound, so an oversized list is never fully read.
 - **Cycles.** A table that contains itself, directly or through its
   operand list, is refused. Table identity is compared along the current
   path, so sharing one subexpression between two operands is fine.
