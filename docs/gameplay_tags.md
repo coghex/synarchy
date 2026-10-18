@@ -569,7 +569,7 @@ neither positive nor negative results.
 | A plot is harvested (`world.harvestFlora`'s annual clear, the only production plot removal) | the plot and its tags go in one step, and a plot replanted on the tile starts untagged |
 | A page is destroyed or re-initialised, or the session is replaced | the old page's stores go with its `WorldState`; a new page starts empty |
 
-**Owner decision (2026-10-17, via laz).** The binding spec addition says
+**Manager ruling (premise correction, 2026-10-17).** The binding spec addition says
 plot removal through the "crop plant invalidation" paths clears a plot's
 memberships. On master 11d325968 those paths (`World.Plant.Validate`)
 remove plant designations, which are orders to plant and not tag
