@@ -4,7 +4,7 @@
 --   legacy episodes) and T-S11-6 (the Nominal-mind consumable). The shipped
 --   Lua runs over the real registered @unit.*@ API; nothing is stubbed but the
 --   thought-record counter the examples read.
-module Test.Headless.Unit.PhysiologyBrainMental.Machine (spec) where
+module Test.Headless.Unit.PhysiologyBrainMental.Machine (spec, coffeeDef, pot) where
 
 import UPrelude
 import Test.Hspec

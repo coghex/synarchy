@@ -494,7 +494,7 @@ registrationSpec = describe "unit registration (requirements 2 and 5)" $ do
                             , ("cardio", PhysioSimulated)
                             , ("blood", PhysioSimulated)
                             , ("consciousness", PhysioSimulated)
-                            , ("mind", PhysioSimulated) ]
+                            , ("mind", PhysioNominal) ]        -- SD-23 (#2840)
                         , upEngagement = HM.empty }
 
         it "accepts entries without a profile, and a profile without \
@@ -561,8 +561,9 @@ shippedDefaults ∷ Text → HM.HashMap Text PhysioMode
 shippedDefaults name = HM.fromList $ case name of
     "acolyte"         → [ (s, PhysioSimulated) | s ← allSystems ]
     -- the `exempt` profile: every system Nominal but cardio, which #2754
-    -- kept live (S9, #2836)
-    "nomad_primitive" → [ (s, if s `elem` ["cardio", "blood", "consciousness", "mind"]
+    -- kept live (S9, #2836); its mind is Nominal like every non-rich profile's
+    -- (SD-23, #2840)
+    "nomad_primitive" → [ (s, if s `elem` ["cardio", "blood", "consciousness"]
                               then PhysioSimulated else PhysioNominal)
                         | s ← allSystems ]
     -- the `simple` profile (SD-10, #2833): the squirrel's salt is Nominal
@@ -572,14 +573,14 @@ shippedDefaults name = HM.fromList $ case name of
                         -- S8b (#2835): no go_to_sleep behavior, no sleep need
                         , ("exhaustion", PhysioSimulated), ("sleep", PhysioNominal)
                         , ("cardio", PhysioSimulated), ("blood", PhysioSimulated)
-                        , ("consciousness", PhysioSimulated), ("mind", PhysioSimulated) ]
+                        , ("consciousness", PhysioSimulated), ("mind", PhysioNominal) ]
     "bear_brown" →
         [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
         , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
         , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
         , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated)
         , ("blood", PhysioSimulated), ("consciousness", PhysioSimulated)
-        , ("mind", PhysioSimulated) ]
+        , ("mind", PhysioNominal) ]
     -- the mule has no stamina pool configuration: Nominal (S8-F1, #2834)
     "technomule" →
         [ ("hydration", PhysioNominal), ("salt", PhysioSimulated)
@@ -588,11 +589,13 @@ shippedDefaults name = HM.fromList $ case name of
         -- no fatigue or sleep-debt pool configuration either (#2835)
         , ("exhaustion", PhysioNominal), ("sleep", PhysioNominal)
         , ("cardio", PhysioSimulated), ("blood", PhysioSimulated)
-        , ("consciousness", PhysioSimulated), ("mind", PhysioSimulated) ]
+        , ("consciousness", PhysioSimulated), ("mind", PhysioNominal) ]
     _                 → []
-  where allSystems = [ "hydration", "salt", "thermo", "nutrition", "stamina"
-                     , "exhaustion", "sleep", "cardio", "blood"
-                     , "consciousness", "mind" ]
+
+allSystems ∷ [Text]
+allSystems = [ "hydration", "salt", "thermo", "nutrition", "stamina"
+             , "exhaustion", "sleep", "cardio", "blood"
+             , "consciousness", "mind" ]
 
 bodiedRoster, bodylessRoster ∷ [Text]
 bodiedRoster = [ "acolyte", "bear_brown", "nomad_primitive", "red_squirrel"
@@ -631,7 +634,7 @@ shippedRosterSpec = describe "the shipped roster (requirements 2 and 6)" $ do
             installScene eng defList
                 [ mkInstance (udName d) inputs | d ← defList ] 0 rngSeed
             forM_ (zip [1 ∷ Int ..] defList) $ \(i, d) →
-                forM_ ["hydration", "salt", "thermo", "nutrition", "stamina", "cardio", "blood"] $ \sys → do
+                forM_ allSystems $ \sys → do
                     got ← luaText eng ("return tostring(unit.getPhysioMode("
                                        <> tshow i <> ", '" <> sys <> "'))")
                     got `shouldBe`

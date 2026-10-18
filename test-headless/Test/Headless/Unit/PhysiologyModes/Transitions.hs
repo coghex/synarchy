@@ -374,7 +374,7 @@ writeBoundary = describe "the raw write boundary" $ do
 
     it "leaves the unowned keys writable in every mode" $
         withScene [nomad] $ \(_, ls) → do
-            luaText ls "return tostring(unit.setStat(1, 'caffeine', 0.3))"
+            luaText ls "return tostring(unit.setStat(1, 'perception', 0.3))"
                 `shouldReturn` "true"
             luaText ls "return tostring(unit.setStat(1, 'tissue_recovering', 1))"
                 `shouldReturn` "true"

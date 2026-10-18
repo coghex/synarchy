@@ -200,6 +200,7 @@ import qualified Test.Headless.Unit.PhysiologyCardioCirculationModes as Physiolo
 import qualified Test.Headless.Unit.PhysiologyExhaustionSleepModes as PhysiologyExhaustionSleepModes
 import qualified Test.Headless.Unit.PhysiologyModes as PhysiologyModes
 import qualified Test.Headless.Unit.PhysiologySpeciesProfiles as PhysiologySpeciesProfiles
+import qualified Test.Headless.Unit.PhysiologyMindSpeciesProfiles as PhysiologyMindSpeciesProfiles
 import qualified Test.Headless.Unit.PhysiologyStaminaModes as PhysiologyStaminaModes
 import qualified Test.Headless.Unit.SweatMassScaling as SweatMassScaling
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
@@ -1054,6 +1055,7 @@ restLane = do
     PhysiologyCardioCirculationModes.spec
     PhysiologyBloodModes.spec
     PhysiologyBrainMental.spec
+    PhysiologyMindSpeciesProfiles.spec
     -- Own engine per example (#2825): one shipped thermo.tick each.
     SweatMassScaling.spec
     describe "Load.Status" LoadStatus.spec

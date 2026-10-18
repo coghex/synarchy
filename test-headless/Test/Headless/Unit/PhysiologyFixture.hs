@@ -139,12 +139,12 @@ richPhysiology = UnitPhysiology True (Just "rich")
     HM.empty
 
 -- | The @exempt@ profile as a pure value: every system Nominal except
---   cardio and blood, which #2754 kept live (S9 #2836, S10 #2837), and, in
---   S11a (#2838), consciousness and mind: SD-23's Nominal mind is S11b's.
+--   cardio and blood, which #2754 kept live (S9 #2836, S10 #2837), and
+--   consciousness (S11a #2838); its mind is Nominal (SD-23, S11b #2840).
 exemptPhysiology ∷ UnitPhysiology
 exemptPhysiology = UnitPhysiology True (Just "exempt")
     (HM.fromList
-        [ (s, if s `elem` ["cardio", "blood", "consciousness", "mind"]
+        [ (s, if s `elem` ["cardio", "blood", "consciousness"]
                  then PhysioSimulated else PhysioNominal)
         | s ← ["thermo", "salt", "hydration", "nutrition", "stamina"
              , "exhaustion", "sleep", "cardio", "blood", "consciousness"

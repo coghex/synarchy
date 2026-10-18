@@ -10,7 +10,8 @@ model — to confirm:
      non-integrated formula — checked against the exact expected value)
      and, over a few ticks, drags mood down and emotional_pain up (the
      "ache lingers" asymmetric-drift psychological layer).
-  3. A species with no hunger/hydration config (bear_brown) computes all
+  3. A species with no hunger/hydration config (bear_brown, its mind pinned
+     Simulated since SD-23 made the default Nominal) computes all
      five values without error — the fracOf fallback (absent resource ⇒
      neutral, not penalized).
   4. THE REGRESSION GUARD this issue calls for: the unit stays standing
@@ -41,8 +42,8 @@ model — to confirm:
      (no drift — same normalization Unit.LineOfSight uses), and an
      otherwise-healthy unit with suppressed perception alone (no pain,
      no hunger/stamina deficit) still sees its mood target dragged down
-     by the awareness term over a few ticks. Uses bear_brown (no
-     equipment) rather than the acolyte: acolytes spawn wearing
+     by the awareness term over a few ticks. Uses bear_brown (mind pinned
+     Simulated, #2840; no equipment) rather than the acolyte: acolytes spawn wearing
      technogoggles (+perception buff, data/items/technogoggles.yaml),
      and unit.setStat only overwrites the BASE stat — getStat still
      returns base + active modifiers — so an equipped unit's effective
@@ -146,6 +147,25 @@ def bootstrap(port):
     send(port, "pcall(function() require('scripts.thoughts').tick = "
                "function() end end); return 'ok'")
     send(port, "require('scripts.movement_arena').buildCourse('flat'); return 'ok'")
+
+
+def pin_mind_simulated(port, uid):
+    """Pin ``uid``'s mind Simulated through the facade (#2840, S11b).
+
+    Since SD-23 a bear's mind is Nominal by default: its mood, emotional pain
+    and every timer read their healthy substitutes and brain.tick returns
+    early, so the cases below that exercise a bear's LIVE mood response (the
+    fracOf fallback and the awareness drift) would pass or fail for the wrong
+    reason. The pin is the owner-approved intent path: a stored per-unit
+    override, seeded through the atomic Nominal-to-Simulated transition. A
+    refused pin aborts the probe rather than letting a check run vacuously.
+    """
+    out = send(port, "local ok, why = require('scripts.physiology')"
+                     f".setMode({uid}, 'mind', 'simulated'); "
+                     "if not ok then return 'pin refused: ' .. tostring(why) end "
+                     "return 'ok'")
+    if out.strip().strip('"') != "ok":
+        raise RuntimeError(f"cannot pin uid {uid}'s mind Simulated: {out}")
 
 
 def summary(port, uid):
@@ -256,6 +276,10 @@ def _run(P: int, rep: probe_protocol.Reporter) -> int:
         # ---- 3. Species with no hunger/hydration config computes cleanly. ----
         bear = send(P, "local u=unit.spawn('bear_brown',5,0); return u")
         bear = int(float(bear))
+        # SD-23 (#2840): a bear's mind is Nominal by default, which returns
+        # before the fracOf mood-target fallback this check exists to
+        # exercise. Pin it Simulated through the facade first.
+        pin_mind_simulated(P, bear)
         sb = summary(P, bear)
         rep.note(f"  bear_brown (no hunger config) uid={bear}: {sb}")
         bear_ok = (sb.get("state") == "alert"
@@ -406,6 +430,8 @@ def _run(P: int, rep: probe_protocol.Reporter) -> int:
         # immediately (no tick needed — it's a live read), and mood should
         # drift down over a few ticks purely from the awareness term.
         aware_uid = int(float(send(P, "local u=unit.spawn('bear_brown',9,0); return u")))
+        # SD-23 (#2840): pin the mind Simulated, or mood has no drift to read.
+        pin_mind_simulated(P, aware_uid)
         send(P, f"unit.setStat({aware_uid},'perception',0.2); return 'ok'")
         aware_now = float(send(P,
             f"return require('scripts.brain').awareness({aware_uid})"))
