@@ -369,6 +369,53 @@ dropping the in-progress stamp.
   only defines their effect on load *validity*, which is: none, for
   visuals.
 
+### Arena pages: the base is reconstructed, and the foundation changed (#1718, #2707)
+
+An arena page's terrain is not persisted. A save stores the page's
+generation parameters (seed 0, the empty timeline and the 100000 world-size
+sentinel that mark it as an arena) and its ordered edit overlay, so every
+column no edit touched is RECONSTRUCTED on load from the page's recorded
+seed and the chunk coordinate by `World.Generate.Arena.generateArenaChunk`
+(`World.Load.Stage` rebuilds the 5×5 startup footprint; the camera loader
+and the queued-demand drain reach the same authority through
+`World.Thread.ChunkLoading.generateDemandedChunks` for everything beyond).
+Because the base is a function and not data, changing the function changes
+what an existing save reconstructs, and no component version or migration is
+involved: the wire shapes are untouched.
+
+#2707 made exactly such a change, deliberately and with the owner's
+approval (D-55, D-56). Every unedited arena column is now twelve granite
+cells under four loam cells, top at sea level, on every path. Before it,
+the startup footprint had that stack but the camera loader and eviction
+regeneration supplied ONE loam cell per column, so what a save reconstructed
+depended on which path had produced each chunk. Consequences for saves made
+by earlier builds:
+
+- They load unchanged and reconstruct EVERY chunk on the uniform
+  foundation, then replay their persisted edits. There is no legacy
+  shallow-expansion profile and no attempt to recover which path a chunk
+  once came from.
+- Subsurface material appears where the old path had a single cell, and
+  excavation outcomes below the old surface can differ. The former base is
+  NOT preserved exactly; this is an accepted behaviour change, not a defect.
+- The surface-vegetation variant of an untouched column is now drawn from
+  a generator derived from the seed and the chunk coordinate alone. Grass
+  variants may therefore differ from an earlier build's; that is permitted
+  (#2065) and no cross-revision golden pins them.
+- Loading, or reconstructing alone, never rewrites the save: the file's
+  bytes are identical after a load (`tools/multiworld_save_probe.py --arena`
+  hashes it). Explicit saves and autosaves publish as before.
+
+Evidence retained with the change: the fixture `z14-arena-legacy-shallow`
+(captured on the pre-change build; commit and commands in its manifest
+provenance and in `docs/pr-proofs/issue-2707-capture-legacy-arena.py.txt`),
+the hspec group `arena generation consistency` (which loads it and asserts
+the uniform foundation with both edits replayed), and the fresh-process
+round trip in `tools/multiworld_save_probe.py --arena`.
+`currentSaveVersion` was bumped to 107 as the worldgen-output bookkeeping
+marker `src/World/CLAUDE.md` requires; it does not gate on-disk
+compatibility.
+
 ## 5. Format-version policy
 
 - B1 (#759) landed the new tagged envelope (`World.Save.Envelope`) with

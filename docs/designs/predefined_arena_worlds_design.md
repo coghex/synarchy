@@ -89,6 +89,8 @@ on 2026-09-24 through source inspection; no new runtime experiments yet.
 - `src/World/Generate/Arena.hs:generateArenaChunks` creates the initial 5-by-5
   chunk loam-over-granite patch. Its recorded seed reconstructs that initial
   patch on load. This is the startup footprint, not the arena's total extent.
+  (Since #2707 it is only a batch wrapper over the single authority,
+  `generateArenaChunk seed coord`, which every path uses.)
 - `scripts/pause_menu.lua:buildMenuItems` already includes Settings, Exit to Menu,
   and Exit to Desktop. `onExitToMenu` runs session teardown and destroys all
   worlds; `onExitToDesktop` calls `engine.quit`. Preserve these established
@@ -108,18 +110,22 @@ on 2026-09-24 through source inspection; no new runtime experiments yet.
   `tools/run_probes.py` machinery supports batch scheduling and isolated resources;
   reuse it when integrating scenario-driven Python tests instead of a second runner.
 - `src/World/Thread/ChunkLoading.hs:updateChunkLoading` can generate more arena
-  terrain around the camera through `generateFlatChunk`. The arena uses a large
+  terrain around the camera (through `generateFlatChunk` when this was
+  written; through the unified authority since #2707). The arena uses a large
   `wgpWorldSize = 100000` sentinel and non-wrapping chunk identity. The owner
   describes this as the current infinite map; the implementation provides an
   expandable arena with finite numeric/loader limits. Earlier investigation
   incorrectly treated the initial 80-by-80 tile patch as a total arena limit.
-- The startup builder and camera builder differ: startup has layered loam over
-  granite and seeded grass variants, while `generateFlatChunk` has a single
-  loam layer and one grass variant. Reproducible baseline reconstruction needs
-  explicit handling of initial generation, later loading, and reload paths.
-- Explicit queued chunk requests currently reach `drainInitQueues`, which calls
-  `generateLoadedChunk` without the camera loader's arena branch. Preset loading
-  and automated scenario demand must use a consistent arena generation path.
+- The startup builder and camera builder differed when this was written:
+  startup had layered loam over granite and seeded grass variants, while
+  `generateFlatChunk` had a single loam layer and one grass variant.
+  Reproducible baseline reconstruction needed explicit handling of initial
+  generation, later loading, and reload paths. (Resolved by #2707: one
+  authority, `generateArenaChunk`, sixteen cells everywhere, per D-55/D-56.)
+- Explicit queued chunk requests reached `drainInitQueues`, which called
+  `generateLoadedChunk` without the camera loader's arena branch (fixed by
+  #2707: both loaders now go through `generateDemandedChunks`). Preset loading
+  and automated scenario demand use that consistent arena generation path.
 - `scripts/test_arena.lua:createArenaWorld` accepts no scenario selection;
   it calls `world.initArena` and installs textures.
 - `scripts/movement_arena.lua` already authors named terrain courses with
@@ -972,7 +978,9 @@ Source evidence at `e3c781c77bf3534e5ab1204f6e5ab073f53c5d37`:
 `World.Generate.Chunk.Columns.buildChunkColumns` constructs a limited vertical
 range from `exposeFrom` to the surface; it does not instantiate arbitrary
 underground depths. `ColumnTiles` explicitly stores material versus air inside
-that range. `generateFlatChunk` initially has one terrain cell per column.
+that range. `generateFlatChunk` had one terrain cell per column when this was
+written; since #2707 every arena chunk is built by `generateArenaChunk`, with
+sixteen cells per unedited column.
 Thus a loaded chunk does not imply every underground coordinate contains a
 known tile. This clarification applies to SCN-05's live target resolution,
 SCN-06's API, and SCN-11's terrain/tag construction, without changing their
