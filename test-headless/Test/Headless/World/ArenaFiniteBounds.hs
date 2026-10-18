@@ -446,9 +446,16 @@ restoreSpec = describe "staged restoration" $ do
             let ab = bounds 200 200
             (page, ss) ← stage env (saveDataOf (snapshotOf (Just ab) emptyWorldEdits))
             logger ← quietLog
+            _ ← Q.flushQueue (simQueue env)
             publishStagedSession env logger 2708 ss
             let ws = spWorldState page
                 pid = WorldPageId stagedName
+            -- restored simulation state: every startup chunk is seeded to the
+            -- sim with the FINITE topology (so the closed edge survives a load)
+            seeds ← Q.flushQueue (simQueue env)
+            let loaded = [ (c, topo) | SimChunkLoaded p _ topo c _ _ ← seeds, p ≡ pid ]
+            sort (map fst loaded) `shouldBe` sort arenaFootprint
+            map snd loaded `shouldBe` replicate (length arenaFootprint) (SimFiniteFlat ab)
             enqueueChunkRequest pid ws [ChunkCoord 5 0, ChunkCoord 7 0] `shouldReturn` 1
             lc ← awaitChunk ws (ChunkCoord 5 0)
             lc `shouldBe` generateArenaChunkIn (Just ab) 0 (ChunkCoord 5 0)

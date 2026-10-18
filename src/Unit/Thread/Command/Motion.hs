@@ -33,7 +33,7 @@ handleUnitMoveToCommand env utsRef uid tx ty speed hazard = do
   -- #2708: an order whose destination lies outside the unit's finite
   -- arena is refused whole, rather than installed and left to replan
   -- forever against terrain that does not exist.
-  ok ← if ok0 then motionPositionsAdmitted env "UnitMoveTo" uid
+  ok ← if ok0 then motionPositionsAdmitted env False "UnitMoveTo" uid
                        [("target", tx, ty)]
               else pure False
   when ok $ do
@@ -135,7 +135,7 @@ handleUnitJumpCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                       → Int → Int → IO ()
 handleUnitJumpCommand env utsRef uid tgx tgy = do
   -- #2708: a leap's landing tile must be inside the unit's finite arena.
-  landOk ← motionPositionsAdmitted env "UnitJump" uid
+  landOk ← motionPositionsAdmitted env True "UnitJump" uid
                [("target", fromIntegral tgx + 0.5, fromIntegral tgy + 0.5)]
   when landOk $ do
     now ← readIORef (wsGameTimeRef (toWorldSimCapability env))

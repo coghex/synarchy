@@ -176,7 +176,7 @@ handleUnitTeleportCommand env utsRef uid gx gy mGz = do
   ok0 ← motionPayloadOk env "UnitTeleport" [("gridX", gx), ("gridY", gy)] []
   -- #2708: direct positioning outside the unit's finite arena is refused,
   -- not grounded at a fallback z over terrain that does not exist.
-  ok ← if ok0 then motionPositionsAdmitted env "UnitTeleport" uid
+  ok ← if ok0 then motionPositionsAdmitted env True "UnitTeleport" uid
                        [("position", gx, gy)]
               else pure False
   when ok $ do

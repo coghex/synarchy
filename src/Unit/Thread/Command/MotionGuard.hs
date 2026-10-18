@@ -21,7 +21,7 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Unit.Command.Types (motionCoordinateInDomain, motionSpeedInDomain)
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
@@ -78,9 +78,9 @@ motionPayloadOk env what coords speeds =
 --   judged against that arena while another page is on screen. Positions
 --   are continuous; the tile is the one each coordinate floors to
 --   ('World.Arena.Bounds.arenaAdmitsPosition').
-motionPositionsAdmitted ∷ EngineEnv → Text → UnitId → [(Text, Float, Float)]
+motionPositionsAdmitted ∷ EngineEnv → Bool → Text → UnitId → [(Text, Float, Float)]
                         → IO Bool
-motionPositionsAdmitted env what uid positions = do
+motionPositionsAdmitted env loud what uid positions = do
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     mBounds ← case uiPage <$> HM.lookup uid (umInstances um) of
@@ -93,7 +93,11 @@ motionPositionsAdmitted env what uid positions = do
         [] → pure True
         ((field, x, y) : _) → do
             logger ← readIORef (loggerRef env)
-            logWarn logger CatThread $
+            -- An ORDER is probed against the edge by ordinary autonomous
+            -- movement (a wander target near the rim), so refusing one is
+            -- debug traffic; a spawn, a teleport or a leap outside is a
+            -- caller's mistake and warns.
+            (if loud then logWarn else logDebug) logger CatThread $
                 what <> ": " <> field <> " (" <> tshow x <> "," <> tshow y
                 <> ") is outside the finite arena the unit stands on"
                 <> " — command dropped"

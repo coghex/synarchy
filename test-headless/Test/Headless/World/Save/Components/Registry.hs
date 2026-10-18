@@ -963,7 +963,7 @@ goldenFullPayloads =
       -- 16: the remainder is per PAGE and this fixture has one.
       -- #2533: one persisted bed-repair policy byte for this one page.
       -- #2701 re-pinned: v14's empty location-tag list (8 bytes).
-    , ("world-pages",         (717, "f727338a4160a61a"))
+    , ("world-pages",         (718, "5842aded173a3e2e"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",  (110, "04ebe3ec1c71ce89"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and
