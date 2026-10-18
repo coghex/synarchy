@@ -471,15 +471,23 @@ reference already taken; the names depend on position only, never on instance id
 An item's existing reference is preserved verbatim at any admitted length; only a
 generated name (or the numeric suffix that resolves a clash) is shortened with a stable
 hash, and only when it would pass 512 characters.
-Every reference an item already holds is reserved before any name is chosen (start a
-capture with `newCaptureState` over every tree it will write, and `reserveNames` for
-the ids of the document's other entries, since all entries share one namespace),
-authored explicit ids first: an automatic id converts to its bracketless form only when no
-authored id already spells it, and is otherwise disambiguated (`-2`), so two distinct
-references never collapse onto one name. Ground rows are ordered by position,
-definition and structure, then by the reference (as held, so an automatic path and an
-explicit id that spells like it stay distinct) and tags each node carries, never by
-row id.
+**One naming rule, four tiers.** Scenario ids share one namespace, so a capture names
+items by priority, and a lower tier never displaces a higher one whatever order things
+are captured in: (1) the ids of the document's OTHER entries (units, buildings,
+locations, …); (2) an item's authored explicit reference, verbatim; (3) an item's
+automatic reference in its bracketless form; (4) a generated position-derived name.
+An item that cannot have its tier's spelling is written as that spelling plus `-2`,
+`-3`, …, the first nothing has taken; characters outside the id vocabulary in a
+generated name become `_`. `newCaptureState ctx documentIds trees` is the only way to
+start a whole capture: it takes the other entries' ids and EVERY tree of every owner
+together and names every referenced item up front, clean spellings first, then the
+displaced ones, each group ordered by raw reference. The names of tiers 2 and 3 are
+therefore a function of the set of references and ids alone: not of the owner, the list
+position, the ground row or the order owners are captured in. Only tier 4 depends on
+where an unreferenced item sits. Ground rows are ordered by a structural key compared
+with derived `Ord` (physical fields as float bit patterns, the reference as held with
+its kind, the tag set, the children), never by a rendered string or by row id, so two
+rows tie only when they export identically.
 
 ## Authoring examples
 
