@@ -11,6 +11,7 @@
 module Scenario.Items.Encode
     ( itemEntryValue
     , itemEntryFields
+    , floatValue
     ) where
 
 import UPrelude
@@ -18,6 +19,7 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import Scenario.Types
 import Gameplay.Tags.Types (gameplayTagText)
+import qualified Data.Scientific as Sci
 
 -- | One entry as a mapping, contents included recursively.
 itemEntryValue ∷ ItemEntry → A.Value
@@ -30,18 +32,18 @@ itemEntryFields e = concat
     [ [ ("id", A.toJSON (scenarioIdText (ieId e))) | ExplicitId _ ← [ieId e] ]
     , [ ("tags", A.toJSON (map gameplayTagText (ieTags e))) | not (null (ieTags e)) ]
     , [ ("definition", A.toJSON (ieDefinition e)) ]
-    , opt "fill" (ieFill e) A.toJSON
-    , opt "quality" (ieQuality e) A.toJSON
-    , opt "condition" (ieCondition e) A.toJSON
-    , opt "sharpness" (ieSharpness e) A.toJSON
-    , opt "weight" (ieWeight e) A.toJSON
-    , opt "bulk" (ieBulk e) (maybe A.Null A.toJSON)
+    , opt "fill" (ieFill e) floatValue
+    , opt "quality" (ieQuality e) floatValue
+    , opt "condition" (ieCondition e) floatValue
+    , opt "sharpness" (ieSharpness e) floatValue
+    , opt "weight" (ieWeight e) floatValue
+    , opt "bulk" (ieBulk e) (maybe A.Null floatValue)
     , opt "storage_capacity" (ieStorage e) $ \case
         Nothing → A.Null
-        Just (StorageCapacity w b) → A.object [("weight", A.toJSON w), ("bulk", A.toJSON b)]
+        Just (StorageCapacity w b) → A.object [("weight", floatValue w), ("bulk", floatValue b)]
     , opt "temperature" (ieTemperature e) $ \case
         AtAmbient → A.String "ambient"
-        TrackedTemp t → A.toJSON t
+        TrackedTemp t → floatValue t
     , opt "contents" (ieContents e) (A.toJSON ∘ map itemEntryValue)
     ]
   where
@@ -49,3 +51,13 @@ itemEntryFields e = concat
     opt k a f = case a of
         Omitted → []
         Authored v → [(K.fromText k, f v)]
+
+-- | A float as a number the decoder reads back to the SAME float. The
+--   decoder reads a number as a double and narrows it, so the shortest
+--   float digits are used when that round trip is exact (nearly always,
+--   and they read well), and the exact widening of the float otherwise.
+floatValue ∷ Float → A.Value
+floatValue f
+    | (realToFrac (Sci.toRealFloat short ∷ Double) ∷ Float) ≡ f = A.Number short
+    | otherwise = A.Number (Sci.fromFloatDigits (realToFrac f ∷ Double))
+  where short = Sci.fromFloatDigits f

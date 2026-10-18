@@ -30,7 +30,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Yaml as Y
 import Data.List (sort, sortOn, nub)
-import System.Random (mkStdGen, randomR)
+import System.Random (StdGen, mkStdGen, randomR)
 import qualified Data.Serialize as S
 
 import Building.Types (BuildingInstance(..), BuildingManager(..), BuildingId(..), emptyBuildingManager)
@@ -56,6 +56,7 @@ import Item.Types
 import Scenario.Items.Build
 import Scenario.Items.Capture
 import Scenario.Items.Encode
+import Scenario.Decode.Monad (pFloat)
 import Scenario.Items.Owners
 import Scenario.Items.Refs
 import Scenario.Schema (decodeScenarioBytes)
@@ -1144,7 +1145,7 @@ spec = describe "Scenario.Items" $ do
             [Just fresh] ← ibTrees ⊚ buildItemForest env2 [("x", bare (ExplicitId "tmp") "ring")]
             let ctx = ctxOf [ (iiInstanceId authoredRing, "scout.inventory.0") ] []
                 -- the unmapped ring is captured FIRST and proposes the authored id's name
-                st = reserveNames ["hold"] (newCaptureState ctx [authoredRing, fresh])
+                st = newCaptureState ctx ["hold"] [authoredRing, fresh]
                 (st1, first) = captureNodes ctx st [("scout.inventory.0", fresh)]
                 (_, second) = captureNodes ctx st1 [("elsewhere", authoredRing)]
             map ieId (capEntries first) `shouldBe` [ExplicitId "scout.inventory.0-2"]
@@ -1177,6 +1178,171 @@ spec = describe "Scenario.Items" $ do
             -- and the tags really did travel with the item that held them
             [ (ieId e, ieTags e) | (_, _, e) ← capture (lay [rb, ra]) ]
                 `shouldBe` [ (ExplicitId "ground.0", [tg "alpha"]), (ExplicitId "ground.1", [tg "beta"]) ]
+
+    describe "capture naming and ordering: generated adversarial cases" $ do
+
+        it "two items compare EQ in the ground order exactly when they export identically" $ do
+            -- a pool chosen to collide under any rendering: delimiter tags,
+            -- an automatic path against the explicit id that spells like it,
+            -- signed zeros
+            let refPool = [Nothing, Just "units[0].inventory[0]", Just "units.0.inventory.0"
+                          , Just "a,b", Just "a|b"]
+                tagPool = [ [], ["alpha,beta"], ["alpha", "beta"], ["alpha"], ["beta", "alpha"], ["a|b"] ]
+                fillPool = [0, -0.0, 0.5, 1]
+                mkInst (g0 ∷ Int) = do
+                    -- build one real instance, then describe it by (ref, tags)
+                    let (r, g1) = pickFrom refPool g0
+                        (tg1, g2) = pickFrom tagPool g1
+                        (f, g3) = pickFrom fillPool g2
+                        (d, g4) = pickFrom ["ring", "flask"] g3
+                        (kid, g5) = pickFrom [False, True] g4
+                    (env, _) ← newEnv defs 1
+                    let e = (bare (ExplicitId "n") d)
+                            { ieFill = if d ≡ "flask" then Authored f else Omitted
+                            , ieContents = Omitted }
+                    [Just inst] ← ibTrees ⊚ buildItemForest env [("p", e)]
+                    inst' ← if kid
+                        then do
+                            [Just k] ← ibTrees ⊚ buildItemForest env [("q", bare (ExplicitId "k") "ring")]
+                            pure inst { iiContents = [k { iiInstanceId = 77 }] }
+                        else pure inst
+                    pure (inst' { iiInstanceId = fromIntegral g5 + 1000 }, r, tg1, g5)
+            pairs ← forM [1 .. 400 ∷ Int] $ \n → do
+                (a, ra, ta, _) ← mkInst (n * 7919)
+                (b, rb, tb, _) ← mkInst (n * 104729 + 13)
+                let ctxFor i r tgs = CaptureCtx
+                        (\x → if x ≡ iiInstanceId i then r else Nothing)
+                        (\x → if x ≡ iiInstanceId i then Set.fromList (map tg tgs) else Set.empty)
+                    sa = itemSig (ctxFor a ra ta) a
+                    sb = itemSig (ctxFor b rb tb) b
+                    oracle i r tgs = show (phys i, r, sort (nub tgs), map phys (iiContents i))
+                pure ((sa ≡ sb), (oracle a ra ta ≡ oracle b rb tb))
+            -- the key ties exactly when the oracle (a rendering used ONLY here) does
+            [ p | p@(x, y) ← pairs, x ≢ y ] `shouldBe` []
+            -- and the generator really produced both outcomes
+            length (filter fst pairs) `shouldSatisfy` (> 0)
+            length (filter (not ∘ fst) pairs) `shouldSatisfy` (> 0)
+
+        it "capture names are unique, within the limit, never displace an authored or \
+           \document id, and are independent of owner order — over adversarial ids" $
+            forM_ [1 .. 400 ∷ Int] $ \seed → do
+                let longA = T.replicate maxItemRefLength "a"
+                    longB = T.replicate (maxItemRefLength - 1) "a" <> "b"
+                    longAuto = "units[0]." <> T.replicate (maxItemRefLength - 9) "x"
+                    explicitPool =
+                        [ "units.0.inventory.0", "units.0.inventory.0-2", "a.b", "a:b", "x-2", "x"
+                        , "ground.0", "scout.inventory.0", "scout.inventory.0-2", longA, longB
+                        , "units.0.inventory.1", "ground.1" ]
+                    autoPool =
+                        [ "units[0].inventory[0]", "units[0].inventory[1]", "ground_items[0]"
+                        , "units[1].equipment.main_hand", longAuto ]
+                    docIdPool = [ "scout", "units.0.inventory.0", "x", "ground.0", "hold"
+                                  , "units.0.inventory.1", "scout.inventory.0" , longA ]
+                    g0 = mkStdGen seed
+                    (nItems, g1) = randomR (3 ∷ Int, 9) g0
+                    (docIds0, g2) = subset docIdPool g1
+                    -- every mapped ref is unique; the pools may overlap each other
+                    (cands, g3) = shuffleWith g2 (map ((,) False) explicitPool ⧺ map ((,) True) autoPool)
+                    chosen = take nItems cands
+                    (unmappedN, g4) = randomR (0 ∷ Int, 3) g3
+                    (owners, _) = randomR (1 ∷ Int, 3) g4
+                -- document entries (units) other than items: their ids are tier 1
+                let docIds = [ f | f ← docIds0, f ∉ [ r | (False, r) ← chosen ] ] ⧺
+                              [ f | f ← docIds0, f ∈ [ r | (False, r) ← chosen ], seed `mod` 2 ≡ 0 ]
+                    -- (a docIds id equal to an authored item id is an invalid document;
+                    --  half the seeds include it anyway to prove the docIds id still wins)
+                (env, _) ← newEnv defs 1
+                b ← buildItemForest env
+                    ([ ("g[" <> tshow i <> "]", bare (if isAuto then AutoId r else ExplicitId r) "ring")
+                     | (i, (isAuto, r)) ← zip [0 ∷ Int ..] chosen ]
+                     ⧺ [ ("u[" <> tshow i <> "]", bare (ExplicitId (T.pack ("zz" <> show i))) "ring")
+                       | i ← [1 .. unmappedN] ])
+                -- bad (non-persistable) ids are rejected at build; keep the survivors
+                let items = catMaybes (ibTrees b)
+                    refs = [ (i, r) | (i, r) ← ibRefs b, r `elem` map snd chosen ]
+                    unmapped = [ x | x ← items, iiInstanceId x ∉ map fst refs ]
+                    ctx = ctxOf refs []
+                    authoredIds = [ (iiInstanceId x, r) | x ← items, Just r ← [lookup (iiInstanceId x) refs]
+                                  , not (refIsAutomatic r) ]
+                    run order =
+                        let st0 = newCaptureState ctx docIds items
+                            go _ [] = []
+                            go st (grp : rest) =
+                                let (st', c) = captureNodes ctx st
+                                        [ ("o" <> tshow k <> ".inventory." <> tshow j, x)
+                                        | (j, x) ← zip [0 ∷ Int ..] grp ]
+                                    k = length rest
+                                in zip (map iiInstanceId grp) (map (scenarioIdText ∘ ieId) (capEntries c)) ⧺ go st' rest
+                        in go st0 order
+                    groups = chunk owners items
+                    namesA = run groups
+                    namesB = run (reverse groups)
+                    allNames = map snd namesA
+                -- unique, bounded, persistable, and never a document entry's id
+                length (nub allNames) `shouldBe` length allNames
+                map T.length allNames `shouldSatisfy` all (≤ maxItemRefLength)
+                map itemRefTextError allNames `shouldSatisfy` all (≡ Nothing)
+                filter (`elem` docIds) allNames `shouldBe` []
+                -- an authored explicit id is never renamed unless a document entry has it
+                forM_ authoredIds $ \(i, r) →
+                    when (r ∉ docIds) $ lookup i namesA `shouldBe` Just r
+                -- a referenced item's name does not depend on the order owners are captured in
+                [ (r, T.take 30 <$> lookup i namesA, T.take 30 <$> lookup i namesB, map (T.take 30) docIds)
+                    | (i, r) ← refs, lookup i namesA ≢ lookup i namesB ] `shouldBe` []
+                -- the same capture twice gives the same names
+                run groups `shouldBe` namesA
+                unmapped `seq` pure ()
+                -- the document the names describe decodes with no collision at all
+                let uids = [ "zzz" <> tshow n | n ← [1 .. length docIds] ]
+                    placed = [ GroundPlacement (fromIntegral n) 0 x | (n, x) ← zip [0 ∷ Int ..] items ]
+                    (store, _) = installGroundItems placed emptyGroundItems
+                    (_, rows, _) = captureGroundItems ctx
+                        (newCaptureState ctx docIds items) store
+                    doc = A.object
+                        [ "version" A..= (1 ∷ Int)
+                        , "units" A..= [ A.object [ "id" A..= f, "definition" A..= ("acolyte" ∷ Text)
+                                                  , "x" A..= (0 ∷ Int), "y" A..= (0 ∷ Int) ]
+                                       | f ← docIds ]
+                        , "ground_items" A..= [ A.object (("x", floatValue x) : ("y", floatValue y) : itemEntryFields e)
+                                              | (x, y, e) ← rows ] ]
+                (decoded, ds) ← decodeDoc (Y.encode doc)
+                ds `shouldBe` []
+                length (scUnits decoded) `shouldBe` length docIds
+                length (scGroundItems decoded) `shouldBe` length items
+                uids `seq` pure ()
+                -- and the whole ground capture is independent of how the rows were laid down
+                let laidOut order = fst (installGroundItems [ GroundPlacement 1 1 x | x ← order ] emptyGroundItems)
+                    ctxT = ctx { ccTags = \i → case i `mod` 3 of
+                                    0 → Set.fromList [tg "alpha,beta"]
+                                    1 → Set.fromList [tg "alpha", tg "beta"]
+                                    _ → Set.empty }
+                    capturedRows order = let (_, rs, _) = captureGroundItems ctxT (newCaptureState ctxT docIds items) (laidOut order) in rs
+                    (shuffled, _) = shuffleWith (mkStdGen (seed * 31)) items
+                capturedRows (reverse items) `shouldBe` capturedRows items
+                capturedRows shuffled `shouldBe` capturedRows items
+
+        it "a name generated from an odd slot, definition or owner name is still a legal, \
+           \distinct id" $ do
+            (env, _) ← newEnv defs 0
+            b ← buildItemForest env
+                [ ("a", bare (ExplicitId "i1") "ring"), ("b", bare (ExplicitId "i2") "ring")
+                , ("c", bare (ExplicitId "i3") "ring") ]
+            let ctx = CaptureCtx (const Nothing) (const Set.empty)
+                bases = ["o.delivered.steel plate!.0", "o.delivered.steel_plate_.0", "ünï[x]/y"]
+                (_, cap) = captureNodes ctx (newCaptureState ctx [] (catMaybes (ibTrees b)))
+                    (zip bases (catMaybes (ibTrees b)))
+                names = map (scenarioIdText ∘ ieId) (capEntries cap)
+                legal c = (c ≥ 'a' ∧ c ≤ 'z') ∨ (c ≥ 'A' ∧ c ≤ 'Z') ∨ (c ≥ '0' ∧ c ≤ '9') ∨ c `elem` ("_-:." ∷ String)
+            all (T.all legal) names `shouldBe` True
+            length (nub names) `shouldBe` 3
+
+        it "every float survives encode and decode exactly" $ do
+            let gens = take 3000 (iterate (snd ∘ (randomR (0 ∷ Int, 1) )) (mkStdGen 5))
+                floats = [ realToFrac (fromIntegral n * 0.37 + 1 / fromIntegral (n + 1) ∷ Double) ∷ Float
+                         | n ← [1 .. 3000 ∷ Int] ]
+            gens `seq` pure ()
+            forM_ floats $ \f →
+                (pFloat (floatValue f)) `shouldBe` Right f
 
     describe "ordinary-save identity metadata" $ do
 
@@ -1230,6 +1396,30 @@ spec = describe "Scenario.Items" $ do
     fromRight' = either (error ∘ show) id
 
 -- * Small helpers
+
+-- | A deterministic pick from a non-empty pool, and the next seed.
+pickFrom ∷ [α] → Int → (α, Int)
+pickFrom xs g = let (i, g') = randomR (0, length xs - 1) (mkStdGen g)
+                in (xs !! i, fst (randomR (0, maxBound) g'))
+
+-- | A deterministic subset of a pool.
+subset ∷ [α] → StdGen → ([α], StdGen)
+subset [] g = ([], g)
+subset (x : xs) g = let (b, g') = randomR (False, True) g
+                        (rest, g'') = subset xs g'
+                    in (if b then x : rest else rest, g'')
+
+-- | A deterministic shuffle.
+shuffleWith ∷ StdGen → [α] → ([α], StdGen)
+shuffleWith g xs = let (keys, g') = foldr (\_ (ks, gg) → let (k, gg') = randomR (0 ∷ Int, maxBound) gg in (k : ks, gg')) ([], g) xs
+                   in (map snd (sortOn fst (zip keys xs)), g')
+
+-- | Split a list into at most @n@ contiguous groups.
+chunk ∷ Int → [α] → [[α]]
+chunk n xs = go xs
+  where size = max 1 ((length xs + n - 1) `div` n)
+        go [] = []
+        go ys = let (a, b) = splitAt size ys in a : go b
 
 -- | A bare unit holding the given inventory.
 unitWithInventory ∷ [ItemEntry] → UnitEntry
