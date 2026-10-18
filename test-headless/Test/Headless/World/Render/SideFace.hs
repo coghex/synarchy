@@ -281,6 +281,21 @@ preservedSideSpec = describe "waterSideFaceQuads leaves non-drops alone" $ do
         noLookup = const Nothing
         runIn fm tm = run fm tm noLookup noLookup
 
+    it "draws no face toward a column the map does not have (#2708)" $ do
+        -- a finite arena's edge: the neighbour's surface is the
+        -- beyond-the-world sentinel, inside this chunk and across a seam
+        let water = fluidMapWith [((5, 8), fluidCellAtZ Lake 10)]
+        length (runIn water (terrMapWith 10 [((6, 8), minBound), ((5, 9), minBound)]))
+            `shouldBe` 0
+        let edgeWater = fluidMapWith [((chunkSize - 1, 8), fluidCellAtZ Lake 10)]
+            absentNeighbour c
+                | c ≡ ChunkCoord 1 0 = Just (terrMapWith minBound [])
+                | otherwise          = Nothing
+            anyFluid c
+                | c ≡ ChunkCoord 1 0 = Just (fluidMapWith [])
+                | otherwise          = Nothing
+        length (run edgeWater flatTerr anyFluid absentNeighbour) `shouldBe` 0
+
     it "draws nothing for an equal-height wet neighbour" $
         length (runIn (fluidMapWith [ ((5, 8), fluidCellAtZ Lake 10)
                                     , ((6, 8), fluidCellAtZ Lake 10) ]) flatTerr)

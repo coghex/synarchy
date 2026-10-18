@@ -26,6 +26,8 @@ import Language.Semantic.Types (ConceptId(..))
 import Scenario.Bounds (TileBounds(..))
 import Scenario.Types (Footprint(..), TileRegion(..))
 import World.Arena.Bounds
+import World.Render (surfaceHeadroom, trackedSliceTarget)
+import World.Tile.Types (emptyWorldTileData, insertChunk)
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Constants (seaLevel)
 import World.Generate.Arena
@@ -78,6 +80,7 @@ spec = describe "the rectangle and its pure consumers" $ do
     generatorSpec
     apiSpec
     locationSpec
+    cameraTrackingSpec
 
 rectangleSpec ∷ Spec
 rectangleSpec = describe "dimensions to rectangle" $ do
@@ -357,3 +360,31 @@ ruin = LocationDef
     , ldMapIcon = Nothing
     , ldNaming = LocationNaming [ConceptId "KEEP"] [ConceptId "ASH"]
     }
+
+-- | Camera z-tracking over a finite arena's partial chunks (#2708). The
+--   edge chunks are resident WITH their outside padding, so the track
+--   reads real chunks whose absent columns hold 'minBound'.
+cameraTrackingSpec ∷ Spec
+cameraTrackingSpec = describe "camera z-tracking across a finite edge" $ do
+    let ab = bounds 20 10
+        (x0, x1, y0, y1) = rectOf ab
+        tileData = foldr (insertChunk . generateArenaChunkIn (Just ab) 0) emptyWorldTileData
+                         (arenaStartupChunks (Just ab))
+        target gx gy = trackedSliceTarget tileData
+                           (ChunkCoord (gx `div` chunkSize) (gy `div` chunkSize))
+                           (gx `mod` chunkSize, gy `mod` chunkSize)
+        inside gx gy = gx >= x0 && gx <= x1 && gy >= y0 && gy <= y1
+
+    it "follows the surface over every tile of the map" $
+        forM_ [ (gx, gy) | gx ← [x0 .. x1], gy ← [y0 .. y1] ] $ \(gx, gy) →
+            target gx gy `shouldBe` Just (seaLevel + surfaceHeadroom)
+
+    it "never sends the slice to the floor of the z domain: a column the map does not have leaves it alone" $
+        forM_ [ (gx, gy) | gx ← [x0 - 6 .. x1 + 6], gy ← [y0 - 6 .. y1 + 6] ] $ \(gx, gy) → do
+            -- a pan across the edge, sampled every tile, inside resident
+            -- partial chunks
+            target gx gy `shouldBe`
+                (if inside gx gy then Just (seaLevel + surfaceHeadroom) else Nothing)
+
+    it "has no answer at all for a chunk that is not resident" $
+        trackedSliceTarget tileData (ChunkCoord 40 40) (0, 0) `shouldBe` Nothing

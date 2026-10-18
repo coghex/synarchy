@@ -517,6 +517,9 @@ dumpTilesJSON layers registry worldSize climate td region =
                | ly ← [0..chunkSize-1]
                , lx ← [0..chunkSize-1]
                , let idx = ly * chunkSize + lx
+               -- #2708: a finite arena's partial chunk is resident with
+               -- columns the map does not have; they are not tiles.
+               , tileAvailable td (gx0 + lx) (gy0 + ly)
                ]
 
     tileToJSON lc gx gy idx =

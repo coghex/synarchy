@@ -54,10 +54,15 @@ worldGetChunkInfoFn wsc = do
                                     Lava  → (o,l,r,v+1)
                             ) (0∷Int,0∷Int,0∷Int,0∷Int) fluidMap
                         (nOcean, nLake, nRiver, nLava) = countFluids
-                        minSurf = VU.minimum surfMap
-                        maxSurf = VU.maximum surfMap
-                        minTerr = VU.minimum terrMap
-                        maxTerr = VU.maximum terrMap
+                        -- #2708: a finite arena's partial chunk holds
+                        -- absent columns ('minBound'), which are not terrain
+                        -- and must not read as its lowest surface.
+                        live v = let l = VU.filter (≢ minBound) v
+                                 in if VU.null l then v else l
+                        minSurf = VU.minimum (live surfMap)
+                        maxSurf = VU.maximum (live surfMap)
+                        minTerr = VU.minimum (live terrMap)
+                        maxTerr = VU.maximum (live terrMap)
                     Lua.newtable
                     Lua.pushboolean True
                     Lua.setfield (Lua.nth 2) "loaded"
