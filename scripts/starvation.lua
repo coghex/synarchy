@@ -27,6 +27,7 @@ local M = {}
 
 local clamp = require("scripts.lib.numeric").clamp
 local physiology = require("scripts.physiology")
+local effects = require("scripts.unit_effects")
 
 -- Fraction 0..1 of the calorie ENERGY STORE. nil (not a band member —
 -- callers all treat this as "unaffected") when the unit has no live
@@ -106,7 +107,7 @@ function M.refreshStrength(uid)
     local target = base * M.strengthMultiplier(uid)
     local current = unit.getStat(uid, "strength")
     if not current or math.abs(target - current) > 1e-4 then
-        unit.setStat(uid, "strength", target)
+        effects.setStat(uid, "strength", target)
     end
 end
 

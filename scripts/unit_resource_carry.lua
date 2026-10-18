@@ -65,6 +65,7 @@
 -- the units ever spawned, and a reused id cannot inherit one, because
 -- the stored value it names has to still be there for it to be used.
 local statBase = require("scripts.lib.stat_base")
+local effects = require("scripts.unit_effects")
 
 local M = {}
 
@@ -243,7 +244,7 @@ function M.integrate(uid, resourceName, current, amount, maxVal)
         M.forget(uid, resourceName)
         return unit.getStat(uid, resourceName)
     end
-    unit.setStat(uid, resourceName, base)
+    effects.setStat(uid, resourceName, base)
     -- Read back rather than predicting the rounding: this is the one
     -- value that is true by construction, and it is also what makes the
     -- residue below exact instead of a model of binary32.

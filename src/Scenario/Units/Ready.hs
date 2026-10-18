@@ -29,8 +29,8 @@ import Unit.Types (UnitId(..))
 settleFunction ∷ (Text, Text)
 settleFunction = ("scripts.unit_resources", "settleScenarioUnit")
 
-luaUnitReadiness ∷ Lua.State → UnitId → IO (Either Text Readiness)
-luaUnitReadiness st (UnitId n) = Lua.runWith st settle
+luaUnitReadiness ∷ Lua.State → UnitId → [Text] → IO (Either Text Readiness)
+luaUnitReadiness st (UnitId n) authored = Lua.runWith st settle
   where
   settle ∷ Lua.LuaE Lua.Exception (Either Text Readiness)
   settle = do
@@ -52,7 +52,11 @@ luaUnitReadiness st (UnitId n) = Lua.runWith st settle
             then finish (Left (modName <> "." <> fnName <> " is not a function"))
             else do
                 Lua.pushinteger (fromIntegral n)
-                called ← Lua.pcall 1 2 Nothing
+                Lua.newtable
+                forM_ (zip [1 ..] authored) $ \(i, k) → do
+                    Lua.pushstring (TE.encodeUtf8 k)
+                    Lua.rawseti (-2) i
+                called ← Lua.pcall 2 2 Nothing
                 if called ≢ Lua.OK then failure else do
                     answer ← textAt (-2)
                     detail ← textAt (-1)

@@ -29,6 +29,10 @@ from typing import Iterator, Optional
 RAW_UNIT_VERBS = {"getStat": "read", "getStatBase": "read", "setStat": "write"}
 RAW_STATS_VERBS = {"get": "read"}
 STATS_MODULE = "scripts.unit_stats"
+# The per-unit pass's effects seam (#2710): its verbs are the same raw writes
+# and mode verbs as the `unit.*` ones they forward to, so a call through it is
+# judged exactly like the direct call it replaced.
+EFFECTS_MODULE = "scripts.unit_effects"
 FACADE_MODULE = "scripts.physiology"
 # Facade calls that WRITE a system's own durable keys: the atomic batch seam
 # (#2838). physiology.creditBatch is a contribution (like credit/debit) and
@@ -216,6 +220,7 @@ def block_events(toks: list[Tok], aliases: set[str]) -> list[Event]:
     events: list[Event] = []
     stack: list[Frame] = []
     phys_aliases = physiology_aliases(toks)
+    eff_aliases = effects_aliases(toks)
     pending_do_owner = 0     # loop headers whose `do` is not a new block
     for i, t in enumerate(toks):
         if t.kind == "name":
@@ -269,6 +274,14 @@ def block_events(toks: list[Tok], aliases: set[str]) -> list[Event]:
                 elif tx == "unit" and nn.text in MUTATING_MODE_VERBS:
                     events.append(Event("mode-verb", i + 2, tuple(stack),
                                         f"unit.{nn.text}"))
+                elif tx in eff_aliases and nn.text in RAW_UNIT_VERBS \
+                        and n3 and n3.text == "(" and not _after_dot(toks, i):
+                    events.append(Event("raw", i + 2, tuple(stack),
+                                        f"effects.{nn.text}",
+                                        RAW_UNIT_VERBS[nn.text]))
+                elif tx in eff_aliases and nn.text in MUTATING_MODE_VERBS:
+                    events.append(Event("mode-verb", i + 2, tuple(stack),
+                                        f"unit.{nn.text}"))
                 elif tx in phys_aliases and nn.text in FACADE_WRITE_VERBS \
                         and n3 and n3.text == "(" and not _after_dot(toks, i):
                     # the facade's atomic batch seam (#2838): only the mind's
@@ -319,6 +332,18 @@ def _after_dot(toks: list[Tok], i: int) -> bool:
 
 _KEYWORDS = {"if", "while", "for", "function", "return", "and", "or", "not",
              "in", "until", "then", "do", "else", "elseif", "local"}
+
+
+def effects_aliases(toks: list[Tok]) -> set[str]:
+    """Every name bound to ``require("scripts.unit_effects")`` in the text."""
+    out: set[str] = set()
+    for i in range(len(toks) - 5):
+        if toks[i].text == "local" and toks[i + 1].kind == "name" \
+                and toks[i + 2].text == "=" and toks[i + 3].text == "require" \
+                and toks[i + 4].text == "(" and toks[i + 5].kind == "str" \
+                and toks[i + 5].text == EFFECTS_MODULE:
+            out.add(toks[i + 1].text)
+    return out
 
 
 def stats_aliases(toks: list[Tok]) -> set[str]:

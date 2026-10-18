@@ -168,7 +168,7 @@ function M.applyRegrowth(uid, activity, dt)
     -- spent, belong to the carry.
     carry.integrate(uid, "calories", store,
         -REGROWTH_RATE_KCAL_PER_SEC * dt, math.huge)
-    unit.recomputeBody(uid)
+    effects.recomputeBody(uid)
 end
 
 -----------------------------------------------------------
@@ -195,8 +195,8 @@ function M.tickDigestion(uid, dt)
                               stomach, room)
     if transfer <= 0 then return end
 
-    unit.setStat(uid, "hunger",   stomach - transfer)
-    unit.setStat(uid, "calories", math.min(maxCal,
+    effects.setStat(uid, "hunger",   stomach - transfer)
+    effects.setStat(uid, "calories", math.min(maxCal,
         store + transfer * DIGESTION_CONVERSION))
 end
 
@@ -283,10 +283,10 @@ function M.tickStarvation(uid, dt)
     local actualLeanDelta = lean - newLean
     local newBody = math.max(0, body - actualFatDelta - actualLeanDelta)
 
-    unit.setStat(uid, "fat_mass",  newFat)
-    unit.setStat(uid, "lean_mass", newLean)
-    unit.setStat(uid, "body_mass", newBody)
-    unit.recomputeBody(uid)
+    effects.setStat(uid, "fat_mass",  newFat)
+    effects.setStat(uid, "lean_mass", newLean)
+    effects.setStat(uid, "body_mass", newBody)
+    effects.recomputeBody(uid)
     -- True when this pass removed tissue: the caller records it (#2831,
     -- SD-18's tissue_recovering) so a later Nominal nutrition can rebuild it.
     return actualFatDelta > 0 or actualLeanDelta > 0

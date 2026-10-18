@@ -33,6 +33,9 @@ import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import GHC.Float (castFloatToWord32)
+import Item.Ground (GroundItems(..))
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Yaml as Y
@@ -380,6 +383,7 @@ allItems u = concatMap flat (uiInventory u ⧺ HM.elems (uiEquipment u) ⧺ uiAc
 spec ∷ Spec
 spec = describe "Scenario.Units" $ do
     freshProcessSpec
+    seamStaticSpec
     aroundAll setup $ do
         defaultsSpec
         overrideSpec
@@ -676,7 +680,8 @@ healthSpec = describe "health" $ do
                 (stat a "strength" / stat a "strength_body")
                     `shouldSatisfy` approx (stat (snd b) "strength" / stat (snd b) "strength_body")
 
-    it "over generated specs, a completed unit is exactly what the ordinary zero-time reconciliation makes of a spawned unit in the same state" $ \fx → do
+    it "over generated specs, readiness is a pure evaluation: an accepted unit keeps every authored value \
+       \bit for bit and gets the ordinary path's verdict; a rejected one leaves no trace" $ \fx → do
         let env = fxEnv fx
             pick xs g = let (i, g') = randomR (0, length xs - 1) g in (xs !! i, g')
             statPool =
@@ -688,12 +693,16 @@ healthSpec = describe "health" $ do
                 , "{part: l_leg, kind: fracture, severity: 0.9}"
                 , "{part: torso, kind: slash, severity: 0.3}"
                 , "{part: heart, kind: stab, severity: 0.8, heal: -0.5}"
-                , "{part: torso, kind: blunt, severity: 0.1}" ]
+                , "{part: torso, kind: blunt, severity: 0.1}"
+                , "{part: l_hand, kind: fracture, severity: 0.9}" ]
             bodyPool =
                 [ "", "frame_mass: 70, body_mass: 60, lean_mass: 10, fat_mass: 10"
                 , "frame_mass: 70, body_mass: 60, lean_mass: 14.3, fat_mass: 3"
-                , "frame_mass: 70, body_mass: 60, lean_mass: 20, fat_mass: 8" ]
+                , "frame_mass: 70, body_mass: 60, lean_mass: 20, fat_mass: 8"
+                , "frame_mass: 70, body_mass: 60, lean_mass: 20, fat_mass: 0" ]
             bloodPool = ["", ", blood: 0.5", ", blood: 1.5"]
+            loadoutPool =
+                [ "", ", equipment: {left_hand: {id: gen-dagger, tags: [blade], definition: steel_dagger}}" ]
             specOf seed =
                 let g0 = mkStdGen seed
                     (stats, g1) = foldl' (\(acc, g) (k, vs) →
@@ -703,29 +712,98 @@ healthSpec = describe "health" $ do
                                  ([], g0) statPool
                     (w, g2) = pick woundPool g1
                     (b, g3) = pick bodyPool g2
-                    (bl, _) = pick bloodPool g3
+                    (bl, g4) = pick bloodPool g3
+                    (lo, g5) = pick loadoutPool g4
+                    (cold, _) = randomR (0 ∷ Int, 3) g5
                     statText = intercalate' ", " (filter (not ∘ null) (b : stats))
-                in "  - {id: gen, definition: acolyte, x: 1, y: 1, stats: {" ⧺ statText ⧺ "}"
-                   ⧺ ", wounds: [" ⧺ w ⧺ "]" ⧺ bl ⧺ "}\n"
-        outcomes ← forM [1 .. 100 ∷ Int] $ \seed → do
+                in ( "  - {id: gen, tags: [gen-unit], definition: acolyte, x: 1, y: 1, stats: {" ⧺ statText ⧺ "}"
+                     ⧺ ", wounds: [" ⧺ w ⧺ "]" ⧺ bl ⧺ lo ⧺ "}\n"
+                   , cold ≡ 0 )
+            setCold c = void $ evalDebug (fxLua fx) $
+                "require('scripts.thermo').debugAmbient = " <> (if c then "-10" else "nil") <> "; return 'ok'"
+        outcomes ← forM [1 .. 160 ∷ Int] $ \seed → do
             ws ← resetScene env
-            (us, _) ← decodeUnits env (specOf seed)
+            let (doc, cold) = specOf seed
+            setCold cold
+            (us, _) ← decodeUnits env doc
             benv ← buildEnvOf env
             builds ← forM us (buildUnit benv "units[0]")
-            case [ (ub, b) | ub ← builds, Just b ← [ubUnit ub] ] of
+            r ← case [ (ub, b) | ub ← builds, Just b ← [ubUnit ub] ] of
                 [] → pure "native-rejected"
                 ((ub, b) : _) → do
                     epoch ← pageIncarnation ws
                     [c] ← installUnitBuilds (installRefsOf fx) pageP epoch [ub]
-                    scenario ← case c of
-                        UnitInstalled uid _ → Just ⊚ canonicalOf env uid
-                        UnitRejected _ → pure Nothing
+                    verdict ← case c of
+                        UnitInstalled uid _ → do
+                            u ← unitOf env uid
+                            -- pure: every authored value is bit-identical
+                            (seed, authoredState (buAuthoredStats b) u)
+                                `shouldBe` (seed, authoredState (buAuthoredStats b) (buInstance b))
+                            pure (Just (uiPose u, strengthRatio u))
+                        UnitRejected _ → do
+                            noTrace env seed ws
+                            pure Nothing
                         other → fail ("seed " ⧺ show seed ⧺ ": " ⧺ show other)
-                    ordinary ← ordinaryZeroTime fx ws (buInstance b)
-                    (seed, scenario) `shouldBe` (seed, ordinary)
-                    pure (maybe "rejected" (\(p, _, _, _) → p) scenario)
-        -- the generated specs really reach every outcome
-        nub' outcomes `shouldSatisfy` (\os → all (`elem` os) ["rejected", "standing", "collapsed", "crawling"])
+                    -- the ordinary verdict; a cold arena's frostbite is applied by the
+                    -- ordinary pass but, being no authored state, never by readiness,
+                    -- so the twin is only compared where it applies none
+                    unless cold $ do
+                        ordinary ← ordinaryZeroTime fx ws (buInstance b)
+                        (seed, verdict) `shouldBe`
+                            (seed, (\(p, st, _, _) → (p, strengthRatioOf st)) ⊚ ordinary)
+                    pure (maybe "rejected" fst verdict)
+            setCold False
+            pure (r, cold)
+        let os = map fst outcomes
+        -- the generated specs really reach every outcome, cold ones included
+        nub' os `shouldSatisfy` (\xs → all (`elem` xs) ["rejected", "standing", "collapsed", "crawling"])
+        length [ () | (o, True) ← outcomes, o ≢ "native-rejected" ] `shouldSatisfy` (> 10)
+
+    describe "readiness performs nothing (round-4 regressions)" $ do
+        it "a disabled hand holding a tagged, referenced dagger, with no stamina, is rejected without dropping it" $ \fx → do
+            let env = fxEnv fx
+                doc st = "  - {id: maimed, tags: [m-unit], definition: acolyte, x: 1, y: 1, stats: {stamina: " ⧺ st
+                         ⧺ "}, wounds: [{part: l_hand, kind: fracture, severity: 0.9}], \
+                           \equipment: {left_hand: {id: m-dagger, tags: [blade], definition: steel_dagger}}}\n"
+            ws ← resetScene env
+            us ← cleanUnits env (doc "0")
+            (cs, _) ← construct fx ws us
+            [ map sdEffect ds | UnitRejected ds ← cs ] `shouldBe` [[EntryRejected]]
+            noTrace env 0 ws
+            -- the same entry, alive, installs: nothing of the first attempt remains
+            us2 ← cleanUnits env (doc "3")
+            (cs2, _) ← construct fx ws us2
+            [ () | UnitInstalled _ _ ← cs2 ] `shouldBe` [()]
+            um ← readIORef (unitManagerRef env)
+            -- and even a lucid unit keeps its dagger until the first real pass
+            [ HM.member "left_hand" (uiEquipment u) | u ← HM.elems (umInstances um) ] `shouldBe` [True]
+            ground ← readIORef (wsGroundItemsRef ws)
+            HM.size (gisItems ground) `shouldBe` 0
+        it "an explicit body and wounds: [] are kept exactly in a cold arena, starving" $ \fx → do
+            let env = fxEnv fx
+            ws ← resetScene env
+            _ ← evalDebug (fxLua fx) "require('scripts.thermo').debugAmbient = -10; return 'ok'"
+            us ← cleanUnits env "  - {id: frozen, definition: acolyte, x: 1, y: 1, stats: {frame_mass: 70, \
+                                \body_mass: 60, lean_mass: 20, fat_mass: 1.5, calories: 0}, wounds: []}\n"
+            benv ← buildEnvOf env
+            [ub] ← forM us (buildUnit benv "units[0]")
+            Just b ← pure (ubUnit ub)
+            epoch ← pageIncarnation ws
+            [c] ← installUnitBuilds (installRefsOf fx) pageP epoch [ub]
+            _ ← evalDebug (fxLua fx) "require('scripts.thermo').debugAmbient = nil; return 'ok'"
+            [UnitInstalled uid _] ← pure [c]
+            u ← unitOf env uid
+            authoredState (buAuthoredStats b) u `shouldBe` authoredState (buAuthoredStats b) (buInstance b)
+            (stat u "fat_mass", stat u "body_mass", uiWounds u) `shouldBe` (1.5, 60, [])
+        it "a fat mass below its floor rejects the four masses, and the unit takes a seeded body (manager ruling)" $ \fx → do
+            let env = fxEnv fx
+            ws ← resetScene env
+            us ← cleanUnits env "  - {id: lean, definition: acolyte, x: 1, y: 1, stats: {frame_mass: 70, \
+                                \body_mass: 60, lean_mass: 20, fat_mass: 0}}\n"
+            (cs, ds) ← construct fx ws us
+            [ () | UnitInstalled _ _ ← cs ] `shouldBe` [()]
+            sort [ sdPath d | d ← ds, sdEffect d ≡ FieldRejected ] `shouldBe`
+                sort [ "units[0].stats." <> k | k ← ["frame_mass", "body_mass", "lean_mass", "fat_mass"] ]
 
     describe "a baseline the resource pass would collapse or kill at once" $ do
         it "low stamina is collapsed before completion" $ \fx → do
@@ -1165,13 +1243,13 @@ lifecycleSpec = describe "lifecycle" $ do
                 [ () | UnitInstalled _ _ ← cs2 ] `shouldBe` [()]
                 pure cs
         it "a failing readiness hook" $ \fx → do
-            cs ← failingWith (\_ → pure (Left "injected failure")) fx
+            cs ← failingWith (\_ _ → pure (Left "injected failure")) fx
             cs `shouldBe` [UnitNotInstalled "carrier" (ReadinessFailed "injected failure")]
         it "an unknown readiness pose" $ \fx → do
-            cs ← failingWith (\_ → pure (Right (ReadyPose (Just "flying")))) fx
+            cs ← failingWith (\_ _ → pure (Right (ReadyPose (Just "flying")))) fx
             cs `shouldBe` [UnitNotInstalled "carrier" (ReadinessFailed "unknown readiness pose 'flying'")]
         it "a gameplay-lethal answer is a rejection" $ \fx → do
-            cs ← failingWith (\_ → pure (Right (ReadyLethal "a ruptured heart"))) fx
+            cs ← failingWith (\_ _ → pure (Right (ReadyLethal "a ruptured heart"))) fx
             [ map sdEffect ds | UnitRejected ds ← cs ] `shouldBe` [[EntryRejected]]
         it "an item attachment the session refuses" $ \fx → do
             let env = fxEnv fx
@@ -1317,6 +1395,113 @@ persistenceSpec = describe "ordinary-save identity (D-52)" $ do
         snap ← either (fail ∘ show) pure (captureSessionSnapshot (globalsOn pA [pA] 1) [dangling])
         [ iePath e | e ← sessionIntegrityWarnings snap, ieCode e ≡ "dangling-reference" ]
             `shouldSatisfy` elem "units[page=a].scenario-refs[unit=5]"
+
+-- * The readiness seam
+
+-- | The pass modules a scenario unit's paused readiness runs
+--   (@unit_resources.reconcileUnit@ with the mind trio off), and the one
+--   delegate the seam calls for alerts. The mind trio (@brain@,
+--   @thoughts@, @mental_state@) is not run by readiness, so it is out of
+--   this check's scope.
+readinessModules ∷ [FilePath]
+readinessModules =
+    [ "unit_resources", "cardio", "thermo", "salts", "physiology"
+    , "unit_resource_upkeep", "unit_resource_energy", "unit_resource_tick"
+    , "unit_resource_carry", "unit_resource_regrowth", "unit_resource_injury"
+    , "unit_resource_failure", "starvation", "injuries", "unit_stats"
+    , "unit_resource_params", "unit_resource_config", "lib/stat_base" ]
+
+-- | Engine verbs those modules may call directly: reads, the two commit
+--   previews, and diagnostics.
+readOnlyVerbs ∷ [Text]
+readOnlyVerbs =
+    [ "unit.getStat", "unit.getWounds", "unit.getInfo", "unit.getPose"
+    , "unit.getPhysioMode", "unit.getActivity", "unit.readPhysio", "unit.getMaxSpeed"
+    , "unit.readPhysioBase", "unit.readBloodView", "unit.getScars", "unit.getPhysioDefault"
+    , "unit.getModifiers", "unit.getMaxStamina", "unit.getInsulation", "unit.getCurrentAnim"
+    , "unit.getCarryingWeight", "unit.getBlood", "unit.getAllStats", "unit.getAllIds"
+    , "unit.previewStamina", "unit.previewPhysio", "equipment.getLoadout"
+    , "world.getFluidAt", "world.getClimateAt", "world.getAmbientAt"
+    , "engine.logWarn", "engine.logDebug", "engine.logError", "engine.logInfo"
+    , "engine.getPhysiologyRegistry", "engine.gameTime" ]
+
+-- | The mutating verbs: callable ONLY from @scripts/unit_effects.lua@.
+mutatingVerbs ∷ [Text]
+mutatingVerbs =
+    [ "unit.setStat", "unit.recomputeBody", "unit.commitStamina", "unit.commitPhysio"
+    , "unit.frostbite", "unit.recoverStance", "unit.dropEquipmentToGround"
+    , "unit.applyCombatEngagement", "unit.setPhysioMode", "unit.clearPhysioMode"
+    , "unit.kill", "unit.collapse", "unit.crawl", "unit.revive"
+    , "engine.emitEventForUnit", "engine.emitEvent" ]
+
+-- | Every engine-namespace call in a Lua source, comments removed.
+engineCalls ∷ Text → [Text]
+engineCalls src =
+    [ ns <> "." <> verb
+    | line ← T.lines src
+    , let code = fst (T.breakOn "--" line)
+    , (ns, rest) ← namespaced code
+    , let verb = T.takeWhile (\c → c ≡ '_' ∨ c `elem` (['a' .. 'z'] ⧺ ['A' .. 'Z'] ⧺ ['0' .. '9'])) rest
+    , not (T.null verb)
+    , T.isPrefixOf "(" (T.drop (T.length verb) rest) ]
+  where
+    namespaced code = concat
+        [ [ (ns, T.drop (T.length ns + 1) piece)
+          | piece ← T.tails code
+          , T.isPrefixOf (ns <> ".") piece
+          , let before = T.dropEnd (T.length piece) code
+          , T.null before ∨ not (isIdent (T.last before)) ]
+        | ns ← ["unit", "engine", "equipment", "world", "item", "building"] ]
+    isIdent c = c ≡ '_' ∨ c ≡ '.' ∨ c `elem` (['a' .. 'z'] ⧺ ['A' .. 'Z'] ⧺ ['0' .. '9'])
+
+-- | The write barriers the pass modules install over the GLOBAL
+--   @unit.setStat@ (regrowth's and carry's remainder forgets): they wrap the
+--   verb rather than bypass it, and the seam's production @setStat@ calls the
+--   global, so it goes through them exactly as before; a recorded write
+--   reaches neither.
+writeBarriers ∷ [(FilePath, Text)]
+writeBarriers = [("unit_resource_regrowth", "local previous = unit.setStat")]
+
+-- | A line that binds an engine namespace, or one of its verbs, to a name
+--   (@local u = unit@, @local set = unit.setStat@) rather than calling it.
+aliasing ∷ Text → Bool
+aliasing l = case T.breakOn "=" l of
+    (_, rhs) | not (T.null rhs) →
+        let r = T.strip (T.drop 1 rhs)
+        in not ("=" `T.isPrefixOf` T.drop 1 rhs)
+           ∧ (r `elem` ["unit", "engine"]
+              ∨ any (\ns → (ns <> ".") `T.isPrefixOf` r ∧ T.all isVerbChar (T.drop (T.length ns + 1) r))
+                    ["unit", "engine"])
+    _ → False
+  where isVerbChar c = c ≡ '_' ∨ c `elem` (['a' .. 'z'] ⧺ ['A' .. 'Z'] ⧺ ['0' .. '9'])
+
+seamStaticSpec ∷ Spec
+seamStaticSpec = describe "the readiness seam (static)" $ do
+    it "no pass module calls a mutating engine verb except through scripts/unit_effects.lua, \
+       \and every verb they call is classified" $ do
+        found ← forM readinessModules $ \m → do
+            src ← TE.decodeUtf8 ⊚ BC.readFile ("scripts/" ⧺ m ⧺ ".lua")
+            pure (m, engineCalls src)
+        [ (m, v) | (m, vs) ← found, v ← vs, v `elem` mutatingVerbs ] `shouldBe` []
+        [ (m, v) | (m, vs) ← found, v ← vs, v `notElem` readOnlyVerbs ] `shouldBe` []
+        -- and no module captures a namespace or a verb in a local, which
+        -- would escape the check
+        aliases ← forM readinessModules $ \m → do
+            src ← TE.decodeUtf8 ⊚ BC.readFile ("scripts/" ⧺ m ⧺ ".lua")
+            pure [ (m, l) | l ← map (T.strip ∘ fst ∘ T.breakOn "--") (T.lines src)
+                          , aliasing l, (m, l) `notElem` writeBarriers ]
+        concat aliases `shouldBe` []
+        -- the alert delegate is reached only through the seam
+        direct ← forM readinessModules $ \m → do
+            src ← TE.decodeUtf8 ⊚ BC.readFile ("scripts/" ⧺ m ⧺ ".lua")
+            pure [ (m, l) | l ← map (fst ∘ T.breakOn "--") (T.lines src)
+                          , any (`T.isInfixOf` l) ["alerts.emitDeathAlert(", "alerts.checkSurvivalAlerts("] ]
+        concat direct `shouldBe` []
+    it "the seam's production effects are exactly the verbs it stands for" $ do
+        src ← TE.decodeUtf8 ⊚ BC.readFile "scripts/unit_effects.lua"
+        let calls = engineCalls src
+        forM_ [ v | v ← mutatingVerbs, v ≢ "engine.emitEvent" ] $ \v →
+            (v, v `elem` calls) `shouldBe` (v, True)
 
 -- * The fresh-process comparison
 
@@ -1550,6 +1735,43 @@ ordinaryZeroTime fx ws b = do
     takeAll env acc = Q.tryReadQueue (unitQueue env) ≫= \case
         Nothing → pure (reverse acc)
         Just c → takeAll env (c : acc)
+
+-- | The authored state a pure readiness must leave alone: every authorable
+--   stat (as bit patterns, absent ones included), and the health, skills,
+--   knowledge, modifiers and loadout. The pose is the one thing it decides.
+authoredState ∷ [Text] → UnitInstance
+              → ([(Text, Maybe Word32)], [Wound], [Scar], Word32, Word32, [(Text, Word32)]
+                , [(Text, Word32)], [(Text, Word32)], Text, [ItemInstance], [(Text, ItemInstance)]
+                , [ItemInstance])
+authoredState keys u =
+    ( [ (k, castFloatToWord32 ⊚ HM.lookup k (uiStats u)) | k ← keys ]
+    , uiWounds u, uiScars u, castFloatToWord32 (uiBlood u), castFloatToWord32 (uiImmuneResponse u)
+    , bits (uiImmunities u), bits (uiSkills u), bits (uiKnowledge u)
+    , tshow (sortOn fst (HM.toList (uiModifiers u)))
+    , uiInventory u, sortOn fst (HM.toList (uiEquipment u)), uiAccessories u )
+  where bits m = sortOn fst [ (k, castFloatToWord32 v) | (k, v) ← HM.toList m ]
+
+strengthRatio ∷ UnitInstance → Maybe Float
+strengthRatio u = strengthRatioOf (sort (HM.toList (uiStats u)))
+
+strengthRatioOf ∷ [(Text, Float)] → Maybe Float
+strengthRatioOf st = do
+    s ← lookup "strength" st
+    b ← lookup "strength_body" st
+    pure (fromIntegral (round (s / b * 1.0e4 ∷ Float) ∷ Int) / 1.0e4)
+
+-- | A rejected entry leaves nothing: no unit, reference or tag, no item tag
+--   or reference, and nothing on the page's ground.
+noTrace ∷ EngineEnv → Int → WorldState → IO ()
+noTrace env seed ws = do
+    um ← readIORef (unitManagerRef env)
+    (seed, HM.size (umInstances um), Map.size (umScenarioRefs um), nullCategoryIndex (umTags um))
+        `shouldBe` (seed, 0, 0, True)
+    wm ← readIORef (worldManagerRef env)
+    (seed, nullCategoryIndex (wmItemTags wm), nullItemRefs (wmItemScenarioRefs wm))
+        `shouldBe` (seed, True, True)
+    ground ← readIORef (wsGroundItemsRef ws)
+    (seed, HM.size (gisItems ground)) `shouldBe` (seed, 0)
 
 lazyStatNames ∷ [Text]
 lazyStatNames = ["strength", "agility", "endurance", "carrying_capacity"]

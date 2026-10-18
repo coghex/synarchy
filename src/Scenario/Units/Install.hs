@@ -82,9 +82,10 @@ data UnitInstallRefs = UnitInstallRefs
     , uirBuildings ∷ IORef BuildingManager
     , uirWorld     ∷ IORef WorldManager
     , uirLifecycle ∷ ∀ α. IO α → IO α
-    , uirReady     ∷ UnitId → IO (Either Text Readiness)
-      -- ^ The paused-readiness hook: settles the unit's Lua-owned derived
-      --   state and answers what to establish. 'Left' is the hook's error.
+    , uirReady     ∷ UnitId → [Text] → IO (Either Text Readiness)
+      -- ^ The paused-readiness hook: evaluates the unit's authored state
+      --   (whose authorable stat names it is given, so it never changes
+      --   them) and answers what to establish. 'Left' is the hook's error.
     }
 
 -- | What the paused-readiness hook answered.
@@ -159,7 +160,7 @@ installBuiltUnit refs page epoch b = do
                     retire uid
                     pure (Left (ItemsRefused targets))
                 Right () → do
-                    settled ← uirReady refs uid
+                    settled ← uirReady refs uid (buAuthoredStats b)
                     let failed why = do
                             retire uid
                             pure (Left why)

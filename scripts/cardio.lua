@@ -55,6 +55,7 @@ local O2_DANGER  = 0.70 ; local O2_FATAL = 0.40   -- hypoxia danger band
 local MOVING_RUN = { running = true, sprinting = true }
 
 local clamp = require("scripts.lib.numeric").clamp
+local effects = require("scripts.unit_effects")
 
 -- Store `target` as the EFFECTIVE value of an owned key: the base that lands
 -- on it under the key's retained modifiers. Nothing is written when no such
@@ -62,7 +63,7 @@ local clamp = require("scripts.lib.numeric").clamp
 -- zero), exactly as a transition's seed refuses.
 local function writeEffective(uid, key, target)
     local base = statBase.baseFor(uid, key, target)
-    if base ~= nil then unit.setStat(uid, key, base) end
+    if base ~= nil then effects.setStat(uid, key, base) end
 end
 
 -- Advance heart rate then blood oxygen one tick. Runs BEFORE every other

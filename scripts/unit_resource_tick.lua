@@ -169,7 +169,7 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
         -- A full tank is a fresh authorship of the pool, so any
         -- remainder held for the old one is void (#2633).
         carry.forget(uid, resourceName)
-        unit.setStat(uid, resourceName, maxVal)
+        effects.setStat(uid, resourceName, maxVal)
         return
     end
 
@@ -306,7 +306,7 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
 
     local next
     if isStamina then
-        local res, reason = unit.commitStamina(uid, amount)
+        local res, reason = effects.commitStamina(uid, amount)
         -- A refusal is a bug in this caller or a unit that vanished
         -- under it, and `nil, reason` on its own is invisible: the
         -- engine's callback isolation reports RAISED errors and

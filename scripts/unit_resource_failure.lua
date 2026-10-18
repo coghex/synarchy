@@ -96,7 +96,7 @@ function M.tickFailureMeters(uid, dt)
                 v = v - m.recover * dt                 -- compensates once treated
             end
             v = math.max(0, math.min(1, v))
-            unit.setStat(uid, m.stat, v)
+            effects.setStat(uid, m.stat, v)
             if v >= 1.0 then
                 effects.deathAlert(uid, injuries.deathCause(uid) or m.cause, "injury")
                 effects.kill(uid)

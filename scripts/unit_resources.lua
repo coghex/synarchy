@@ -350,7 +350,7 @@ end
 -- until the next physiology tick reapplies its current calorie band.
 function unitResources.onSaveLoaded(survUnitIds, _survBuildingIds)
     for _, uid in ipairs(survUnitIds or {}) do
-        unit.recomputeBody(uid)
+        effects.recomputeBody(uid)
         -- The load boundary (#2831, D-6): the engine has already normalized
         -- every unit's stored physiology before publishing it (legacy stored
         -- circulation, consciousness, concentration and state_of_mind are
@@ -365,22 +365,30 @@ end
 -- numbers are. Returns nil if the def isn't configured.
 unitResources.reconcileUnit = reconcileUnit
 
--- Paused readiness of a scenario-constructed unit (#2710, SCN-10). The
--- engine's construction adapter (Scenario.Units.Build) settles every native
--- value; this runs the per-unit reconciliation above ONCE at zero elapsed
--- time, with the unit's effects recorded instead of queued or announced
--- (unit_effects.record), so its baseline is exactly what the pipeline makes
--- of it: the strength discount is applied, and any death, collapse, crawl or
--- revival the authored state implies is answered now. Nothing advances: dt is
--- zero and the mind trio is skipped (see reconcileUnit). Returns
+-- Paused readiness of a scenario-constructed unit (#2710, SCN-10): a PURE
+-- evaluation of its authored state by the per-unit reconciliation above, run
+-- ONCE at zero elapsed time with the unit's effects recorded
+-- (unit_effects.record), so nothing it would do is performed during the pass.
+-- Afterwards only two things are applied: the recorded writes to stats the
+-- unit does NOT author (`authored` lists the ones it does; the strength
+-- discount and the failure meters are the derived writes this keeps), and
+-- the verdict the engine applies — a death rejects the unit, a pose is
+-- established. An authored value is never changed here. Nothing advances: dt
+-- is zero and the mind trio is skipped (see reconcileUnit). Returns
 -- "lethal", cause for a unit the pipeline would kill at once; else the last
 -- pose it would establish ("collapsed", "crawling", "standing"), or nil to
 -- keep the built pose. nil, nil for a unit that is gone or dead.
-function unitResources.settleScenarioUnit(uid)
+function unitResources.settleScenarioUnit(uid, authored)
     local info = unit.getInfo(uid)
     if not info or (unit.getPose(uid) or "standing") == "dead" then return nil end
     local r = effects.record(uid, function() reconcileUnit(uid, info, 0, { mind = false }) end)
     if r.dead then return "lethal", r.cause or "a lethal condition" end
+    local own = {}
+    for _, k in ipairs(authored or {}) do own[k] = true end
+    local keys = {}
+    for k in pairs(r.writes) do if not own[k] then keys[#keys + 1] = k end end
+    table.sort(keys)
+    for _, k in ipairs(keys) do effects.setStat(uid, k, r.writes[k]) end
     return r.pose
 end
 

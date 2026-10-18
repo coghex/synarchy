@@ -55,6 +55,7 @@
 -- resource-carry residues do: they are tiny, and a reused id cannot
 -- inherit one after that clear.
 local carry = require("scripts.unit_resource_carry")
+local effects = require("scripts.unit_effects")
 
 local M = {}
 
@@ -117,7 +118,7 @@ local function exactOf(row, key, current)
 end
 
 local function writeStat(uid, statName, value)
-    unit.setStat(uid, statName, value)
+    effects.setStat(uid, statName, value)
     local stored = unit.getStat(uid, statName)
     if stored == nil then return nil end
     return { stored = stored, residue = value - stored }

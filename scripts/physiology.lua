@@ -37,6 +37,7 @@
 -- contributions between, and mode changes of, systems.
 
 local stats = require("scripts.unit_stats")
+local effects = require("scripts.unit_effects")
 
 local physiology = {}
 
@@ -216,7 +217,7 @@ local RULES = {
 -- A receiver that holds no pool (Nominal, Unsupported) or a dead one takes
 -- nothing; anything else refused is a broken invariant and raises.
 local function commitStaminaContribution(uid, delta)
-    local res, reason = unit.commitStamina(uid, delta)
+    local res, reason = effects.commitStamina(uid, delta)
     if res == nil then
         if reason == "nominal" or reason == "unsupported" or reason == "dead"
            or reason == "no_such_unit" then
@@ -246,7 +247,7 @@ local function contributeEffective(uid, key, rule, amount)
     local target = math.min(cap, math.max(0, old + amount))
     local base = require("scripts.lib.stat_base").baseFor(uid, key, target)
     if base == nil then return 0 end
-    unit.setStat(uid, key, base)
+    effects.setStat(uid, key, base)
     local after = unit.readPhysio(uid, key)
     return after ~= nil and (after - old) or 0
 end
@@ -271,7 +272,7 @@ function physiology.credit(uid, key, amount)
     local new = old + amount
     if cap and new > cap then new = cap end
     if rule.floor and new < rule.floor then new = rule.floor end
-    unit.setStat(uid, key, new)
+    effects.setStat(uid, key, new)
     return new - old
 end
 
@@ -288,7 +289,7 @@ function physiology.debit(uid, key, amount)
     local new = old - amount
     local floor = rule.floor or 0
     if new < floor then new = floor end
-    unit.setStat(uid, key, new)
+    effects.setStat(uid, key, new)
     return old - new
 end
 
@@ -303,7 +304,7 @@ end
 -- and pools for the pass, so the caller reads the result and publishes no
 -- consequence of an event that did not commit.
 function physiology.commit(uid, batch)
-    local ok, reason = unit.commitPhysio(uid, batch)
+    local ok, reason = effects.commitPhysio(uid, batch)
     if ok == nil then
         local key = tostring(uid) .. ":" .. tostring(reason)
         if not reportedRefusal[key] then
@@ -434,7 +435,7 @@ end
 -- pending and Nominal and is logged ONCE per unit and reason; it is retried
 -- on every eligible pass and succeeds once the blocker is gone.
 function physiology.applyEngagement(uid)
-    local outcome, code = unit.applyCombatEngagement(uid)
+    local outcome, code = effects.applyCombatEngagement(uid)
     if outcome == "transitioned" then
         finish(uid, "stamina", true, "nominal", "simulated", nil)
     elseif outcome == "seedUnrepresentable" then
@@ -459,7 +460,7 @@ function physiology.setMode(uid, system, mode, values)
         local ok, why = parametersAvailable(uid, system)
         if not ok then return nil, why end
     end
-    local ok, changed, from, to = unit.setPhysioMode(uid, system, mode, values)
+    local ok, changed, from, to = effects.setPhysioMode(uid, system, mode, values)
     if not ok then return nil, changed end
     finish(uid, system, changed, from, to, values)
     return true, changed
@@ -473,7 +474,7 @@ function physiology.clearMode(uid, system)
         local ok, why = parametersAvailable(uid, system)
         if not ok then return nil, why end
     end
-    local ok, changed, from, to = unit.clearPhysioMode(uid, system)
+    local ok, changed, from, to = effects.clearPhysioMode(uid, system)
     if not ok then return nil, changed end
     finish(uid, system, changed, from, to, nil)
     return true, changed

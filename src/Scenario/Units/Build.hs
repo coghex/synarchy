@@ -56,7 +56,7 @@ module Scenario.Units.Build
 
 import UPrelude
 import Data.IORef (newIORef)
-import Data.List (sortOn)
+import Data.List (sort, sortOn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Set as Set
@@ -86,8 +86,8 @@ import Unit.Physiology.Transition (canonicalBlood, reconcileStoredKeys, validate
 import Unit.Physiology.Types
 import Unit.Sim.Types
 import Unit.Stats (effectiveStat)
-import Unit.Thread.Command.Body (bloodSeedFromStats, recomputeBodyDerivedStats,
-                                 seedBodyComposition)
+import Unit.Thread.Command.Body (bloodSeedFromStats, bodyViabilityFloors,
+                                 recomputeBodyDerivedStats, seedBodyComposition)
 import Unit.Thread.Command.Spawn (freshSimState, spawnModifierMap, startingEquipmentCheck)
 import Unit.Types
 import World.Page.Types (WorldPageId(..))
@@ -120,6 +120,9 @@ data BuiltUnit = BuiltUnit
     , buItems     ∷ !ItemBuild
       -- ^ the explicit collections' build: their reference mapping and
       --   tags (default-kit items carry neither)
+    , buAuthoredStats ∷ ![Text]
+      -- ^ the stat names a scenario authors for this definition (the field
+      --   table's 'AuthorableStat's): the values readiness never changes
     , buEncounter ∷ !(Maybe ScenarioId)
       -- ^ the location whose encounter roster the unit joins; installing
       --   the roster is the location adapter's (SCN-12)
@@ -247,7 +250,8 @@ buildWith env path u def z
                       { ubUnit = Just BuiltUnit
                           { buRef = ref, buPath = path, buInstance = inst
                           , buSimState = ss, buTags = Set.fromList (ueTags u)
-                          , buItems = built, buEncounter = ueEncounter u }
+                          , buItems = built, buEncounter = ueEncounter u
+                          , buAuthoredStats = sort [ k | (k, AuthorableStat) ← HM.toList (unitStatRules reg def) ] }
                       , ubDiagnostics = sortOn sdPath $
                           statDiags ⧺ woundDiags ⧺ eqDiags ⧺ ibDiagnostics built ⧺ notes
                           ⧺ modDiags ⧺ poolDiags ⧺ bloodDiags }
@@ -345,12 +349,21 @@ resolveStats reg def ref path explicit0 = (ruleDiags ⧺ valueDiags ⧺ groupDia
     -- body's seed inputs cannot be stated beside them
     statedMasses = [ k | k ← bodyMassStats, HM.member k valued ]
     massesOk = body ∧ length statedMasses ≡ length bodyMassStats ∧ massesCoherent
-    massesCoherent = HM.lookupDefault 0 "lean_mass" valued + HM.lookupDefault 0 "fat_mass" valued
-                     ≤ HM.lookupDefault 0 "body_mass" valued
+    -- the fat floor tickStarvation clamps a body up to on every pass, even
+    -- at zero elapsed time (the same frame fraction seeding keeps a fresh
+    -- body above, 'bodyViabilityFloors'): a capture can never hold less, so
+    -- an authored body below it is an invalid combination (manager ruling of
+    -- 2026-10-18 on the composition question: reject, never clamp)
+    massesCoherent =
+        HM.lookupDefault 0 "lean_mass" valued + HM.lookupDefault 0 "fat_mass" valued
+            ≤ HM.lookupDefault 0 "body_mass" valued
+        ∧ HM.lookupDefault 0 "fat_mass" valued
+            ≥ fst (bodyViabilityFloors (HM.lookupDefault 0 "frame_mass" valued))
     groupDiags =
         [ diagAt (statPath k)
             (InvalidValue "all four of frame_mass, body_mass, lean_mass and fat_mass, \
-                          \with lean_mass + fat_mass ≤ body_mass, or none")
+                          \with lean_mass + fat_mass ≤ body_mass and fat_mass at least \
+                          \its floor (0.02 × frame_mass), or none")
             FieldRejected
         | not massesOk, not (null statedMasses), k ← statedMasses ]
         ⧺ [ diagAt (statPath k)

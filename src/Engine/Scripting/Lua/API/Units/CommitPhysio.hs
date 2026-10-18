@@ -17,6 +17,7 @@
 --   the check and the write; one refused key refuses the whole batch.
 module Engine.Scripting.Lua.API.Units.CommitPhysio
     ( unitCommitPhysioFn
+    , unitPreviewPhysioFn
     , commitPhysioIn
     ) where
 
@@ -131,6 +132,30 @@ unitCommitPhysioFn env = do
                         atomicModifyIORef'
                             (ucUnitManagerRef (toUnitCombatCapability env))
                             (commitPhysioIn reg uid batch)
+                    case res of
+                        Left why → pushRefusal why
+                        Right () → Lua.pushboolean True ≫ pure 1
+
+-- | @unit.previewPhysio(uid, batch)@ (#2710): exactly @unit.commitPhysio@'s
+--   answer — the same argument checks, refusals and @true@ — computed by the
+--   same pure step ('commitPhysioIn') on a READ of the unit manager, which is
+--   never written. A scenario unit's paused readiness evaluates a batch with it
+--   ("scripts/unit_effects.lua") without committing anything.
+unitPreviewPhysioFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitPreviewPhysioFn env = do
+    mUid ← readUid
+    case mUid of
+        Nothing → pushRefusal "invalid_unit_id"
+        Just uid → do
+            parsed ← readBatch
+            case parsed of
+                Left why → pushRefusal why
+                Right batch → do
+                    res ← Lua.liftIO $ do
+                        reg ← readIORef (crPhysiologyRegistryRef
+                                  (toContentRegistriesCapability env))
+                        um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                        pure (snd (commitPhysioIn reg uid batch um))
                     case res of
                         Left why → pushRefusal why
                         Right () → Lua.pushboolean True ≫ pure 1

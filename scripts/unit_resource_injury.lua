@@ -41,7 +41,7 @@ function M.tickStance(uid, dt)
     local dex  = unit.getStat(uid, "dexterity") or 1.0
     local agi  = unit.getStat(uid, "agility") or 1.0
     local rate = STANCE_RECOVER_BASE + STANCE_RECOVER_PER_STAT * (dex + agi)
-    local newv, reason = unit.recoverStance(uid, rate * dt)
+    local newv, reason = effects.recoverStance(uid, rate * dt)
     -- A refusal is a bug in this caller or a unit that vanished under
     -- it, and `nil, reason` on its own is invisible: the engine's
     -- callback isolation reports RAISED errors and discards ordinary
@@ -86,7 +86,7 @@ local function dropDisabledHandWeapons(uid)
             if disabling then
                 local lo   = equipment.getLoadout(uid)
                 local held = lo and lo[slot]
-                if held and unit.dropEquipmentToGround(uid, slot) then
+                if held and effects.dropEquipmentToGround(uid, slot) then
                     local info = unit.getInfo(uid)
                     if info then
                         local gx, gy = alerts.unitCoords(info)

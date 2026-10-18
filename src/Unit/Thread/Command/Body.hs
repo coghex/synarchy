@@ -3,6 +3,7 @@ module Unit.Thread.Command.Body
     ( bloodSeedFromStats
     , injurySpeedMult
     , seedBodyComposition
+    , bodyViabilityFloors
     , recomputeBodyDerivedStats
     ) where
 
@@ -91,6 +92,13 @@ minLeanFrac     = 0.20
 spawnFatMargin  = 1.7
 spawnLeanMargin = 1.07
 
+-- | The viability floors of a body of this frame mass: (fat, lean), the
+--   frame fractions above. The floors 'seedBodyComposition' seats a fresh
+--   roll above, and the ones a scenario's explicit body must respect
+--   (#2710, "Scenario.Units.Build").
+bodyViabilityFloors ∷ Float → (Float, Float)
+bodyViabilityFloors frame = (minFatFrac * frame, minLeanFrac * frame)
+
 seedBodyComposition ∷ HM.HashMap Text Float → HM.HashMap Text Float
 seedBodyComposition rolled =
     case (HM.lookup "height" rolled, HM.lookup "bulk" rolled,
@@ -111,8 +119,7 @@ seedBodyComposition rolled =
                 -- every mass-derived quantity (blood = body·bloodMassRatio,
                 -- max_salt = body·k, BMR = 22·(body−fat)+…) sane. At human
                 -- bulk these reproduce the old 0.44h² / 4.4h² floors.
-                minFat    = minFatFrac  * bodyMass
-                minLean   = minLeanFrac * bodyMass
+                (minFat, minLean) = bodyViabilityFloors bodyMass
                 fatMass   = max (minFat  * spawnFatMargin)  fatMass0
                 leanMass  = max (minLean * spawnLeanMargin) leanMass0
                 -- frame_mass = the stable structural reference. body_mass
