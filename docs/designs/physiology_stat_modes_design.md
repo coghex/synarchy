@@ -1023,6 +1023,40 @@ attempt. All four profiles name stamina (`rich`, `reduced` and `simple`
 Simulated, `exempt` Nominal), because the loader refuses a profile that does
 not name every system. Bodyless definitions stay Unsupported.
 
+**Consciousness and mind columns, applied by S11b (#2840, SD-23).** The final
+species table gains its last two systems: consciousness is Simulated for every
+bodied species, and **mind is Simulated only for `acolyte`** (`rich`). The
+`reduced`, `simple` and `exempt` profiles now name `mind: nominal`, which is the
+whole content change: no species definition changed. So `bear_brown`,
+`red_squirrel`, `technomule` and `nomad_primitive` resolve consciousness
+Simulated and mind Nominal, and the bodyless `tiller`, `unknown_unit` and
+`white_tailed_deer` stay Unsupported for both.
+
+Intentional behavior change, as listed by the slice plan (S11.4): bears and
+squirrels stop having mental breaks; wildlife, the technomule and nomads stop
+having thoughts, breaks and euphoria; lash-out episodes from default profiles
+come only from acolytes. A Nominal mind reads mood 1, emotional pain, caffeine
+and every timer 0, `mental_state` STABLE and the break behavior WANDER; its
+`state_of_mind` is the live consciousness value; it draws no random number;
+`mental.forceBreak` is a no-op; incoming consumable credits are discarded
+(hydration still credits and the drink still succeeds); and caffeine
+contributes nothing to stamina regen. Consciousness is untouched: injury pain,
+low stamina, hypoxia, thermal and salt impairment and physiological collapse
+still act on a bear, squirrel, mule or nomad. An explicit per-unit
+Simulated-mind pin still works for every supported species.
+
+Content-change normalization (D-6 (b)): an UNPINNED bear, squirrel, technomule
+or nomad saved under the S11a all-Simulated default adopts the new default on
+load. Its eleven mind keys and any episode are scrubbed, one normalization note
+is logged per unit, a second pass and a re-save/reload repair nothing, and no
+episode effect or thought resumes. A pin is intent: a pinned-Simulated mind
+keeps its durable values and episode exactly (a complete episode untouched, a
+partial one repaired only in its absent keys) and a pinned-Nominal acolyte
+stays Nominal. Evidence: hspec `physiology mind species profiles` and the
+fresh-process cases in `tools/persistence_contract_probe.py`, whose first engine
+boots on a probe-local copy of the S11a registry so the legacy save is a real
+old-default save.
+
 Capture is out of scope (Non-goals). When it is designed, it uses
 `physiology.setMode` per unit. The override semantics (SD-7) and
 persistence (D-6) already cover it.

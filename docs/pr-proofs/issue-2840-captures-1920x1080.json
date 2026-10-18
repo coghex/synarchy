@@ -1,0 +1,48 @@
+{
+ "size": "1920x1080",
+ "units": {
+  "acolyte": 1,
+  "bear": 2,
+  "bear_delirious": 3,
+  "bear_injured": 4
+ },
+ "captures": [
+  {
+   "frame": "1920x1080_acolyte_status",
+   "note": "acolyte (Simulated mind), bottom of the Status tab (consciousness=1.000 concentration=1.000 state_of_mind=0.998 consciousness_mode=simulated mind_mode=simulated mind_pin=nil mental_state=0.0 mood=0.99813687801361 stored_mood=0.99813687801361)",
+   "selected": "1",
+   "offset": 11,
+   "rows": "29.0 / 29.4 | 8.2 / 8.3 | 12.1 / 18.0 kg"
+  },
+  {
+   "frame": "1920x1080_bear_status",
+   "note": "default bear (Nominal mind), bottom of the Status tab (consciousness=1.000 concentration=1.000 state_of_mind=1.000 consciousness_mode=simulated mind_mode=nominal mind_pin=nil mental_state=0.0 mood=1.0 stored_mood=nil)",
+   "selected": "2",
+   "offset": 11,
+   "rows": "Nominal | 18.4 / 18.9 | 0.0 / 142.4 kg"
+  },
+  {
+   "frame": "1920x1080_bear_delirious_status",
+   "note": "default bear, oxygen 0.59, bottom of the Status tab (consciousness=0.300 concentration=0.300 state_of_mind=0.300 consciousness_mode=simulated mind_mode=nominal mind_pin=nil mental_state=0.0 mood=1.0 stored_mood=nil)",
+   "selected": "3",
+   "offset": 12,
+   "rows": "18.3 / 19.1 | 0.0 / 94.1 kg | Delirious"
+  },
+  {
+   "frame": "1920x1080_bear_injured_status",
+   "note": "default bear, open torso wound, bottom of the Status tab (consciousness=1.000 concentration=0.977 state_of_mind=1.000 consciousness_mode=simulated mind_mode=nominal mind_pin=nil mental_state=0.0 mood=1.0 stored_mood=nil)",
+   "selected": "4",
+   "offset": 13,
+   "rows": "0.0 / 181.4 kg | Unconscious (\u2026 | Laceration"
+  },
+  {
+   "state": {
+    "acolyte": "consciousness=1.000 concentration=1.000 state_of_mind=0.973 consciousness_mode=simulated mind_mode=simulated mind_pin=nil mental_state=0.0 mood=0.97289425134659 stored_mood=0.97289425134659",
+    "bear": "consciousness=1.000 concentration=1.000 state_of_mind=1.000 consciousness_mode=simulated mind_mode=nominal mind_pin=nil mental_state=0.0 mood=1.0 stored_mood=nil",
+    "bear_delirious": "consciousness=0.300 concentration=0.300 state_of_mind=0.300 consciousness_mode=simulated mind_mode=nominal mind_pin=nil mental_state=0.0 mood=1.0 stored_mood=nil",
+    "bear_injured": "consciousness=1.000 concentration=0.980 state_of_mind=1.000 consciousness_mode=simulated mind_mode=nominal mind_pin=nil mental_state=0.0 mood=1.0 stored_mood=nil"
+   },
+   "refused_stress_batch": "nil|forbidden_key:mental_since"
+  }
+ ]
+}
