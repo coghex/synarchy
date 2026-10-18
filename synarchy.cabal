@@ -655,6 +655,7 @@ library
                      Scenario.Units.Defaults
                      Scenario.Units.Build
                      Scenario.Units.Install
+                     Scenario.Units.Ready
                      Scenario.Units.Capture
                      Scenario.Units.Encode
                      Scenario.Types

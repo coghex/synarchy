@@ -20,11 +20,22 @@
 --   state, tags, reference): a unit whose items could not take their
 --   identities is not a completed unit, and nothing of it remains.
 --
+--   __Paused readiness.__ Two derived states are Lua-owned and would
+--   otherwise change at the first gameplay pass: the locomotor pose a
+--   unit's injuries and consciousness demand, and the calorie-dependent
+--   strength discount. After the items attach, the commit runs the
+--   readiness hook ('uirReady'; in production 'Scenario.Units.Ready',
+--   which calls @unit_resources.settleScenarioUnit@ — the SAME producers
+--   the per-tick pass uses) and applies the pose it answers through the
+--   pose handlers the queued @UnitCollapse@ / @UnitCrawl@ commands run
+--   ("Unit.Thread.Command.Pose"), synchronously, so nothing is left
+--   queued. A hook that fails retires the unit like a refused attachment.
+--
 --   __Completion.__ 'UnitInstalled' is returned only once all of that has
 --   happened: the instance, its simulation state and every identity are
---   live, and no Lua hook is outstanding — construction already ran the
---   one pool-seeding authority ("Scenario.Units.Build"). Accepting a
---   request or allocating an id is never reported as completion.
+--   live, and the native and Lua-owned initialization is finished.
+--   Accepting a request or allocating an id is never reported as
+--   completion.
 --
 --   The commit takes the live references it writes as arguments
 --   ('UnitInstallRefs'), as "Gameplay.Tags.Live" does, so the caller
@@ -50,7 +61,9 @@ import Gameplay.Tags.Tag (ItemTarget)
 import Scenario.Items.Build (itemRefTargets, itemTagTargets)
 import Scenario.Types (ScenarioDiagnostic)
 import Scenario.Units.Build (BuiltUnit(..), UnitBuild(..))
-import Unit.Sim.Types (UnitThreadState(..))
+import Unit.Anim (poseTag)
+import Unit.Sim.Types (Pose(..), UnitSimState(..), UnitThreadState(..))
+import Unit.Thread.Command.Pose (handleUnitCollapseCommand, handleUnitCrawlCommand)
 import Unit.Types
 import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Residency (ChunkGeneration)
@@ -65,6 +78,11 @@ data UnitInstallRefs = UnitInstallRefs
     , uirBuildings ∷ IORef BuildingManager
     , uirWorld     ∷ IORef WorldManager
     , uirLifecycle ∷ ∀ α. IO α → IO α
+    , uirReady     ∷ UnitId → IO (Either Text (Maybe Text))
+      -- ^ The paused-readiness hook: settles the unit's Lua-owned derived
+      --   state and answers the locomotor pose to establish
+      --   (@"collapsed"@, @"crawling"@, @"upright"@), or 'Nothing' to keep
+      --   the built one. 'Left' is the hook's error.
     }
 
 data UnitInstallFailure
@@ -76,6 +94,9 @@ data UnitInstallFailure
     | ItemsRefused ![ItemTarget]
       -- ^ the unit's item trees could not take their references and
       --   tags; the unit was retired again
+    | ReadinessFailed !Text
+      -- ^ the paused-readiness hook failed or answered an unknown pose;
+      --   the unit was retired again
     deriving (Show, Eq)
 
 -- | The terminal result for one unit entry.
@@ -119,11 +140,32 @@ installBuiltUnit refs page epoch b = do
             attached ← commitItemTreeAssignments (uirUnits refs) (uirBuildings refs) (uirWorld refs)
                            (itemTagTargets (buItems b)) (itemRefTargets (buItems b))
             case attached of
-                Right () → pure (Right uid)
                 Left targets → do
                     retire uid
                     pure (Left (ItemsRefused targets))
+                Right () → do
+                    settled ← uirReady refs uid
+                    let failed why = do
+                            retire uid
+                            pure (Left (ReadinessFailed why))
+                    case settled of
+                        Left why → failed why
+                        Right Nothing → pure (Right uid)
+                        Right (Just "upright") → pure (Right uid)
+                        Right (Just "collapsed") → establish uid Collapsed handleUnitCollapseCommand
+                        Right (Just "crawling") → establish uid Crawling handleUnitCrawlCommand
+                        Right (Just other) → failed ("unknown readiness pose '" <> other <> "'")
   where
+    -- the queued pose command's own handler, run now, and the published
+    -- mirror the unit thread would write from it
+    establish uid pose handler = do
+        handler (uirSims refs) uid
+        uts ← readIORef (uirSims refs)
+        let simPose = maybe pose usPose (HM.lookup uid (utsSimStates uts))
+        atomicModifyIORef' (uirUnits refs) $ \um →
+            ( um { umInstances = HM.adjust (\i → i { uiPose = poseTag simPose }) uid (umInstances um) }
+            , () )
+        pure (Right uid)
     retire uid = uirLifecycle refs $ do
         atomicModifyIORef' (uirUnits refs) $ \um →
             ( um { umInstances = HM.delete uid (umInstances um)

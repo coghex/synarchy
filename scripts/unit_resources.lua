@@ -155,6 +155,14 @@ local function eachActivePool(defName, modes, visit)
     end
 end
 
+-- Calorie-store threshold effects (#806): re-derive "strength" from the
+-- fresh calorie fraction (scripts/starvation.lua), only while nutrition is
+-- Simulated. The per-pass call in tickPools and a scenario unit's paused
+-- readiness (#2710, settleScenarioUnit) share this one rule.
+local function reconcileStrength(uid, modes)
+    if modes.nutrition == "simulated" then starvation.refreshStrength(uid) end
+end
+
 local function hasSupportedSystem(modes)
     for _, mode in pairs(modes) do
         if mode ~= nil then return true end
@@ -193,7 +201,7 @@ local function tickPools(uid, info, modes, dt)
         -- the fresh calorie fraction every pass, independent of
         -- recomputeBody's own mass-change-only cadence (see
         -- scripts/starvation.lua).
-        starvation.refreshStrength(uid)
+        reconcileStrength(uid, modes)
     elseif modes.nutrition == "nominal" and pose ~= "dead" then
         -- No food system, so nothing digests or starves; a unit wasted below
         -- its spawn margin recovers toward its healthy tissue, outside any
@@ -343,6 +351,25 @@ end
 
 -- Exposed for debug console: inspect what a unit's drain/regen
 -- numbers are. Returns nil if the def isn't configured.
+-- Paused readiness of a scenario-constructed unit (#2710, SCN-10). The
+-- engine's construction adapter (Scenario.Units.Build) settles every native
+-- value; this settles the two Lua-owned derived states a gameplay pass would
+-- otherwise change at its first tick, through the SAME producers that pass
+-- uses: the calorie-dependent strength (reconcileStrength) and the
+-- locomotor pose its injuries and consciousness demand
+-- (unit_resource_injury.injuryPose). It advances nothing: no pool, drain,
+-- meter, kill or queued pose command. Returns the pose to establish
+-- ("collapsed", "crawling" or "upright"), or nil for a unit that is gone,
+-- dead or knocked down; the engine applies it to the unit's simulation state.
+function unitResources.settleScenarioUnit(uid)
+    local info = unit.getInfo(uid)
+    if not info then return nil end
+    local pose = unit.getPose(uid) or "standing"
+    if pose == "dead" then return nil end
+    reconcileStrength(uid, physiology.modes(uid))
+    return injuryTick.injuryPose(uid, info, pose)
+end
+
 function unitResources.getConfig(defName)
     return resourceConfig[defName]
 end

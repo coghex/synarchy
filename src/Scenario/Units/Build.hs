@@ -34,7 +34,11 @@
 --      whose missing-only rule leaves every explicit pool exactly as
 --      stated (the manager's premise ruling of 2026-10-18 on the review's
 --      resource-pool addition);
---   9. blood and the health-dependent pose.
+--   9. blood, and the blood-loss pose from the wound tick's own verdict
+--      over zero elapsed time ('Combat.Wounds.Tick.tickOneUnitWith'); the
+--      injury and consciousness pose and the calorie strength discount are
+--      Lua-owned and settled by the paused-readiness step
+--      ("Scenario.Units.Install").
 --
 --   __Explicit values are authoritative.__ A stated value, including 0 or
 --   an empty collection, is installed as stated. One that is invalid
@@ -59,7 +63,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import System.Random (mkStdGen)
 import Combat.Resolution.Common (painFor)
-import Combat.Wounds.Constants (unconsciousFraction)
+import Combat.Wounds.Tick (WoundTickOutcome(..), tickOneUnitWith)
+import Unit.Anim (poseTag)
 import Combat.Wounds.Infection (necrosisLethalVital)
 import Equipment.Types (EquipmentClass(..), EquipmentClassManager, EquipmentSlot(..),
                         lookupEquipmentClass)
@@ -205,8 +210,6 @@ buildWith env path u def z
                                (InvalidValue "no blood: this definition does not simulate blood")
                                FieldRejected
                          | isAuthored (ueBlood u), not bloodSim ]
-            maxBlood = HM.lookupDefault 70 "body_mass" stats1 * bloodMassRatio
-            collapsed = bloodSim ∧ blood0 < maxBlood * unconsciousFraction
             probe = baseInstance { uiWounds = wounds }
         case reconcileStoredKeys seedCtx of
             Left (sid, key, why) → pure $ UnitBuild Nothing
@@ -216,22 +219,34 @@ buildWith env path u def z
                            EntryRejected]
                  ⧺ cascadeUnitItems path u)
             Right (stats2, _) → do
-                let pose = if collapsed then Collapsed else Standing
-                    inst = baseInstance
+                let standing = baseInstance
                         { uiStats = stats2, uiModifiers = mods
                         , uiInventory = inv, uiEquipment = eq, uiAccessories = acc
-                        , uiWounds = wounds, uiBlood = blood0
-                        , uiPose = if collapsed then "collapsed" else "standing" }
+                        , uiWounds = wounds, uiBlood = blood0 }
+                    -- The wound tick's own verdict over ZERO elapsed time
+                    -- (nothing drains, heals or rolls): the one authority
+                    -- for a blood-loss collapse. Its unit is discarded.
+                    (_, verdict, _) = tickOneUnitWith reg (ubeNow env) def 0 (ubeInfections env)
+                                          Nothing (mkStdGen 0) standing False
+                    pose = case verdict of
+                        UnconsciousNow _ → Collapsed
+                        _ → Standing
+                    inst = standing { uiPose = poseTag pose }
                     ss = (spawnSimState (ueX u) (ueY u) z facing) { usPose = pose }
                     notes = map (noteDiag path) (invNotes ⧺ eqNotes ⧺ accNotes)
-                pure UnitBuild
-                    { ubUnit = Just BuiltUnit
-                        { buRef = ref, buPath = path, buInstance = inst
-                        , buSimState = ss, buTags = Set.fromList (ueTags u)
-                        , buItems = built, buEncounter = ueEncounter u }
-                    , ubDiagnostics = sortOn sdPath $
-                        statDiags ⧺ woundDiags ⧺ eqDiags ⧺ ibDiagnostics built ⧺ notes
-                        ⧺ modDiags ⧺ poolDiags ⧺ bloodDiags }
+                case verdict of
+                  PhysioInvariant why → pure $ UnitBuild Nothing
+                    (statDiags ⧺ woundDiags ⧺ poolDiags
+                     ⧺ [diagAt path (InvalidValue ("a coherent physiology: " <> why)) EntryRejected]
+                     ⧺ cascadeUnitItems path u)
+                  _ → pure UnitBuild
+                      { ubUnit = Just BuiltUnit
+                          { buRef = ref, buPath = path, buInstance = inst
+                          , buSimState = ss, buTags = Set.fromList (ueTags u)
+                          , buItems = built, buEncounter = ueEncounter u }
+                      , ubDiagnostics = sortOn sdPath $
+                          statDiags ⧺ woundDiags ⧺ eqDiags ⧺ ibDiagnostics built ⧺ notes
+                          ⧺ modDiags ⧺ poolDiags ⧺ bloodDiags }
   where
     ref = scenarioIdText (ueId u)
     reg = ubePhysiology env

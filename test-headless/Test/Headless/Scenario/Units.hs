@@ -75,6 +75,7 @@ import Scenario.Units.Catalog
 import Scenario.Units.Defaults (rollTemplatesFor)
 import Scenario.Units.Encode (unitEntryValue)
 import Scenario.Units.Install
+import Scenario.Units.Ready (luaUnitReadiness)
 import Structure.Types (emptyChunkStructures)
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
@@ -82,7 +83,11 @@ import Unit.Blood (bloodViewOf)
 import Unit.Sim.Types (Pose(..), UnitSimState(..), UnitThreadState(..))
 import Unit.Stats (effectiveStat)
 import Unit.Thread.Command.Body (injurySpeedMult)
+import Combat.Wounds (tickAllWounds)
+import Unit.Anim (poseTag)
+import Unit.Command.Types (SpawnProfile(..))
 import Unit.Thread.Command (processAllUnitCommands)
+import Unit.Thread.Command.Spawn (handleUnitSpawnCommand)
 import Unit.Thread.Command.Spawn (spawnModifierMap)
 import World.Save.Types (SaveMetadata, UnitSnapshot(..), toUnitSnapshot, fromUnitSnapshot)
 import World.Save.Snapshot (SessionGlobals(..), SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..), captureSessionSnapshot)
@@ -284,31 +289,34 @@ buildEnvOf env = do
         , ubeNow = now, ubePage = pageP
         , ubeSurfaceZ = \_ _ → Just terrainZ }
 
-installRefsOf ∷ EngineEnv → UnitInstallRefs
-installRefsOf env = UnitInstallRefs
+installRefsOf ∷ Fx → UnitInstallRefs
+installRefsOf fx = UnitInstallRefs
     { uirUnits = unitManagerRef env
     , uirSims = ucUtsRef (toUnitCombatCapability env)
     , uirBuildings = buildingManagerRef env
     , uirWorld = worldManagerRef env
-    , uirLifecycle = withPageLifecycle (toWorldSimCapability env) }
+    , uirLifecycle = withPageLifecycle (toWorldSimCapability env)
+    , uirReady = luaUnitReadiness (lbsLuaState (fxLua fx)) }
+  where env = fxEnv fx
 
 -- | Build every entry (document paths @units[i]@) and install the
 --   accepted ones on the current incarnation of 'pageP'.
-construct ∷ EngineEnv → WorldState → [UnitEntry] → IO ([UnitCompletion], [ScenarioDiagnostic])
-construct env ws entries = do
+construct ∷ Fx → WorldState → [UnitEntry] → IO ([UnitCompletion], [ScenarioDiagnostic])
+construct fx ws entries = do
+    let env = fxEnv fx
     benv ← buildEnvOf env
     builds ← forM (zip [0 ∷ Int ..] entries) $ \(i, e) →
         buildUnit benv ("units[" <> tshow i <> "]") e
     epoch ← pageIncarnation ws
-    cs ← installUnitBuilds (installRefsOf env) pageP epoch builds
+    cs ← installUnitBuilds (installRefsOf fx) pageP epoch builds
     pure (cs, concatMap ubDiagnostics builds)
 
 -- | Construct a document that must produce no diagnostic and install
 --   every unit.
-constructClean ∷ EngineEnv → WorldState → String → IO [UnitId]
-constructClean env ws yaml = do
-    us ← cleanUnits env yaml
-    (cs, ds) ← construct env ws us
+constructClean ∷ Fx → WorldState → String → IO [UnitId]
+constructClean fx ws yaml = do
+    us ← cleanUnits (fxEnv fx) yaml
+    (cs, ds) ← construct fx ws us
     ds `shouldBe` []
     forM cs $ \case
         UnitInstalled uid _ → pure uid
@@ -392,7 +400,7 @@ defaultsSpec = describe "omitted values" $ do
         ws ← resetScene env
         before ← statRNG env
         draws0 ← luaDraws fx
-        [uid] ← constructClean env ws "  - {id: scout, definition: acolyte, x: 2.5, y: 3.5}\n"
+        [uid] ← constructClean fx ws "  - {id: scout, definition: acolyte, x: 2.5, y: 3.5}\n"
         u ← unitOf env uid
         def ← defNamed env "acolyte"
         -- every stat template, the body composition and its derived values
@@ -421,7 +429,7 @@ defaultsSpec = describe "omitted values" $ do
     it "a lazy, bodyless unit resolves every template up front, so a later read draws nothing" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws ("  - {id: grazer, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1}\n")
+        [uid] ← constructClean fx ws ("  - {id: grazer, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1}\n")
         u ← unitOf env uid
         HM.keys (uiStats u) `shouldMatchList` ["strength", "agility", "endurance", "carrying_capacity"]
         uiBlood u `shouldBe` 0
@@ -437,7 +445,7 @@ defaultsSpec = describe "omitted values" $ do
         let env = fxEnv fx
             doc = "  - {id: a, definition: acolyte, x: 1, y: 1}\n  - {id: b, definition: acolyte, x: 2, y: 2}\n"
         ws ← resetScene env
-        [a1, b1] ← constructClean env ws doc
+        [a1, b1] ← constructClean fx ws doc
         ua1 ← unitOf env a1
         ub1 ← unitOf env b1
         -- perturb everything that must not matter, then build again
@@ -445,7 +453,7 @@ defaultsSpec = describe "omitted values" $ do
         replicateM_ 13 (void (freshItemInstanceId env))
         ws2 ← resetScene env
         modifyIORef' (unitManagerRef env) (\um → um { umNextId = umNextId um + 41 })
-        [bId, aId] ← constructClean env ws2
+        [bId, aId] ← constructClean fx ws2
             "  - {id: b, tags: [other], definition: acolyte, x: 2, y: 2}\n  - {id: a, tags: [edited], definition: acolyte, x: 1, y: 1}\n"
         ua2 ← unitOf env aId
         ub2 ← unitOf env bId
@@ -467,7 +475,7 @@ overrideSpec = describe "explicit values" $ do
         ws ← resetScene env
         [uid] ← withDefChange env "acolyte"
                     (\d → d { udStatTemplates = HM.insert "strength" (5.0, 0) (udStatTemplates d) }) $
-                    constructClean env ws "  - {id: s, definition: acolyte, x: 1, y: 1, stats: {strength_base: 1.2}}\n"
+                    constructClean fx ws "  - {id: s, definition: acolyte, x: 1, y: 1, stats: {strength_base: 1.2}}\n"
         u ← unitOf env uid
         stat u "strength_base" `shouldBe` 1.2
         let lm = stat u "lean_mass"
@@ -486,7 +494,7 @@ overrideSpec = describe "explicit values" $ do
         ws ← resetScene env
         [uid] ← withDefChange env lazyName
                     (\d → d { udStatTemplates = HM.insert "strength" (40, 0) (udStatTemplates d) }) $
-                    constructClean env ws ("  - {id: g, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1, stats: {strength: 12}}\n")
+                    constructClean fx ws ("  - {id: g, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1, stats: {strength: 12}}\n")
         u ← unitOf env uid
         stat u "strength" `shouldBe` 12
 
@@ -494,12 +502,12 @@ overrideSpec = describe "explicit values" $ do
         let env = fxEnv fx
             doc = "  - {id: g, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1, stats: {agility: 0.75}}\n"
         ws ← resetScene env
-        [u1] ← constructClean env ws doc
+        [u1] ← constructClean fx ws doc
         base ← unitOf env u1
         ws2 ← resetScene env
         [u2] ← withDefChange env lazyName
                    (\d → d { udStatTemplates = HM.insert "focus" (2.0, 1.0) (udStatTemplates d) }) $
-                   constructClean env ws2 doc
+                   constructClean fx ws2 doc
         grown ← unitOf env u2
         stat grown "agility" `shouldBe` 0.75
         stat grown "strength" `shouldBe` stat base "strength"
@@ -508,7 +516,7 @@ overrideSpec = describe "explicit values" $ do
     it "explicit zero values and explicit empty collections are authoritative" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws $ unlines
+        [uid] ← constructClean fx ws $ unlines
             [ "  - id: bare"
             , "    definition: acolyte"
             , "    x: 1"
@@ -544,7 +552,7 @@ bodyResourceSpec = describe "body composition and resources" $ do
         let env = fxEnv fx
             ls = fxLua fx
         ws ← resetScene env
-        [uid] ← constructClean env ws $ unlines
+        [uid] ← constructClean fx ws $ unlines
             [ "  - id: thin"
             , "    definition: acolyte"
             , "    x: 1"
@@ -581,7 +589,7 @@ bodyResourceSpec = describe "body composition and resources" $ do
     it "takes the spawn seed path from stated seed inputs alone" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws
+        [uid] ← constructClean fx ws
             "  - {id: seeded, definition: acolyte, x: 1, y: 1, stats: {height: 2.0, bulk: 1.0, bodyfat: 0.2}}\n"
         u ← unitOf env uid
         stat u "frame_mass" `shouldSatisfy` approx (22 * 2.0 * 2.0 * 1.0)
@@ -595,7 +603,7 @@ healthSpec = describe "health" $ do
     it "restores injured, treated, healing and infected wounds with their derived effects" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws $ unlines
+        [uid] ← constructClean fx ws $ unlines
             [ "  - id: hurt"
             , "    definition: acolyte"
             , "    x: 1"
@@ -630,19 +638,55 @@ healthSpec = describe "health" $ do
     it "a healed unit (wounds: []) has no injury effect" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws "  - {id: well, definition: acolyte, x: 1, y: 1, wounds: []}\n"
+        [uid] ← constructClean fx ws "  - {id: well, definition: acolyte, x: 1, y: 1, wounds: []}\n"
         u ← unitOf env uid
         def ← defNamed env "acolyte"
         injurySpeedMult (bloodViewOf (uiStats u) (uiBlood u) 0) (udBodyParts def) u `shouldBe` 1
         painFor u `shouldBe` 0
 
-    it "establishes a collapsed pose from blood below the unconscious threshold, without ticking" $ \fx → do
+    describe "the paused baseline is what the ordinary path reaches at its first pass" $ do
+        let cases =
+                [ ("a concussion knocks the unit out", "{part: head, kind: concussion, severity: 0.4}", "", "collapsed")
+                , ("a shattered leg leaves a lucid unit crawling", "{part: l_leg, kind: fracture, severity: 0.9}", "", "crawling")
+                , ("a bleeding unit below the unconscious threshold collapses", "{part: torso, kind: slash, severity: 0.3}", ", blood: 0.5", "collapsed")
+                , ("a starving unit already has its discounted strength", "{part: torso, kind: blunt, severity: 0.1}", ", stats: {calories: 0, hunger: 0}", "standing")
+                , ("a lightly hurt unit stands", "{part: torso, kind: blunt, severity: 0.1}", "", "standing") ]
+        forM_ cases $ \(name, wound, extra, wantPose) →
+            it name $ \fx → do
+                let env = fxEnv fx
+                ws ← resetScene env
+                [uid] ← constructClean fx ws $
+                    "  - {id: hurt, definition: acolyte, x: 1, y: 1, wounds: [" ⧺ wound ⧺ "]" ⧺ extra ⧺ "}\n"
+                a ← unitOf env uid
+                sa ← simOf env uid
+                -- complete before any pass: instance and simulation agree
+                (uiPose a, poseText (usPose sa)) `shouldBe` (wantPose, wantPose)
+                -- zero-time reconciliation leaves the baseline alone
+                _ ← evalDebug (fxLua fx) ("__starv.refreshStrength(" <> tshow (unUnitId uid) <> "); return 'ok'")
+                a' ← unitOf env uid
+                stat a' "strength" `shouldBe` stat a "strength"
+                -- the ordinary path: the same unit state spawned normally,
+                -- then one real wound tick and one real resource pass
+                b ← ordinaryTwin fx ws a
+                sb ← simOf env (fst b)
+                poseText (usPose sb) `shouldBe` wantPose
+                (stat a "strength" / stat a "strength_body")
+                    `shouldSatisfy` approx (stat (snd b) "strength" / stat (snd b) "strength_body")
+
+    it "a starving unit's strength survives capture and reconstruction while paused" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws "  - {id: pale, definition: acolyte, x: 1, y: 1, blood: 0.5}\n"
-        u ← unitOf env uid
-        ss ← simOf env uid
-        (uiPose u, usPose ss) `shouldBe` ("collapsed", Collapsed)
+        [uid] ← constructClean fx ws "  - {id: thin, definition: acolyte, x: 1, y: 1, stats: {calories: 0}}\n"
+        a ← unitOf env uid
+        stat a "strength" `shouldSatisfy` approx (0.5 * stat a "strength_body")
+        c ← captureAll env
+        (us', _) ← decodeUnitsBytes env (captureDocument c)
+        ws2 ← resetScene env
+        (cs, ds) ← construct fx ws2 us'
+        ds `shouldBe` []
+        [UnitInstalled uid2 _] ← pure cs
+        b ← unitOf env uid2
+        (stat b "strength", stat b "strength_body") `shouldBe` (stat a "strength", stat a "strength_body")
 
     it "rejects a unit whose stated health already meets a death condition, with what it owns" $ \fx → do
         let env = fxEnv fx
@@ -656,7 +700,7 @@ healthSpec = describe "health" $ do
             , "    inventory: [{id: c1, definition: canteen_steel_2l}]"
             , "  - {id: bled, definition: acolyte, x: 1, y: 1, blood: 0}" ]
         before ← readIORef (nextItemInstanceIdRef env)
-        (cs, ds) ← construct env ws us
+        (cs, ds) ← construct fx ws us
         um ← readIORef (unitManagerRef env)
         HM.size (umInstances um) `shouldBe` 0
         length [ () | UnitRejected _ ← cs ] `shouldBe` 2
@@ -673,7 +717,7 @@ loadoutSpec = describe "loadout and modifiers" $ do
     it "applies the definition's and every worn accessory's modifiers once, and reconstructs them once" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws $ unlines
+        [uid] ← constructClean fx ws $ unlines
             [ "  - id: geared"
             , "    definition: acolyte"
             , "    x: 1"
@@ -694,7 +738,7 @@ loadoutSpec = describe "loadout and modifiers" $ do
         -- reconstruct from the capture: the same modifiers, not doubled
         (us', _) ← decodeUnitsBytes env (captureDocument c)
         ws2 ← resetScene env
-        (cs, ds) ← construct env ws2 us'
+        (cs, ds) ← construct fx ws2 us'
         ds `shouldBe` []
         [UnitInstalled uid2 _] ← pure cs
         u2 ← unitOf env uid2
@@ -708,7 +752,7 @@ loadoutSpec = describe "loadout and modifiers" $ do
             ls = fxLua fx
         ws ← resetScene env
         let plates = concat [ "{definition: granite_chunk}, " | _ ← [1 ∷ Int .. 8] ]
-        [heavy, empty] ← constructClean env ws $ unlines
+        [heavy, empty] ← constructClean fx ws $ unlines
             [ "  - id: mule"
             , "    definition: acolyte"
             , "    x: 1"
@@ -735,7 +779,7 @@ loadoutSpec = describe "loadout and modifiers" $ do
             [] → expectationFailure "no inventory"
         -- ordinary gameplay still refuses the next insertion: the strict
         -- transfer policy judges the same effective capacity
-        [giver] ← constructClean env ws "  - {id: giver, definition: acolyte, x: 1, y: 1, inventory: [{definition: bandage}], equipment: {}, accessories: []}\n"
+        [giver] ← constructClean fx ws "  - {id: giver, definition: acolyte, x: 1, y: 1, inventory: [{definition: bandage}], equipment: {}, accessories: []}\n"
         g ← unitOf env giver
         -- scenario units take their definition's default tags and no
         -- controller (owner decision, docs/scenario_format.md); the
@@ -757,7 +801,7 @@ loadoutSpec = describe "loadout and modifiers" $ do
         let env = fxEnv fx
         ws ← resetScene env
         us ← cleanUnits env "  - {id: odd, definition: acolyte, x: 1, y: 1, equipment: {boots: {definition: steel_dagger}}}\n"
-        (cs, ds) ← construct env ws us
+        (cs, ds) ← construct fx ws us
         [UnitInstalled uid _] ← pure cs
         u ← unitOf env uid
         HM.member "boots" (uiEquipment u) `shouldBe` False
@@ -771,7 +815,7 @@ roundTripSpec = describe "capture" $ do
     it "construct → change → capture → YAML → reconstruct is equivalent, under new runtime ids" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid, _] ← constructClean env ws $ unlines
+        [uid, _] ← constructClean fx ws $ unlines
             [ "  - id: lead"
             , "    tags: [squad]"
             , "    definition: acolyte"
@@ -800,7 +844,7 @@ roundTripSpec = describe "capture" $ do
         ws2 ← resetScene env
         modifyIORef' (unitManagerRef env) (\um → um { umNextId = umNextId um + 100 })
         replicateM_ 31 (void (freshItemInstanceId env))
-        (cs, ds) ← construct env ws2 us'
+        (cs, ds) ← construct fx ws2 us'
         ds `shouldBe` []
         length [ () | UnitInstalled _ _ ← cs ] `shouldBe` 2
         c2 ← captureAll env
@@ -809,7 +853,7 @@ roundTripSpec = describe "capture" $ do
     it "captures a lazy unit's unresolved stats through the scenario fallback, leaving the live unit and gameplay RNG alone" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws ("  - {id: lz, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1}\n")
+        [uid] ← constructClean fx ws ("  - {id: lz, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1}\n")
         -- as an ordinary lazy spawn leaves it: nothing resolved yet
         modifyIORef' (unitManagerRef env) $ \um → um
             { umInstances = HM.adjust (\u → u { uiStats = HM.empty }) uid (umInstances um) }
@@ -824,7 +868,7 @@ roundTripSpec = describe "capture" $ do
         -- and the document builds the same values back
         (us', _) ← decodeUnitsBytes env (captureDocument c)
         ws2 ← resetScene env
-        (cs, ds) ← construct env ws2 us'
+        (cs, ds) ← construct fx ws2 us'
         ds `shouldBe` []
         [UnitInstalled uid2 _] ← pure cs
         u2 ← unitOf env uid2
@@ -833,7 +877,7 @@ roundTripSpec = describe "capture" $ do
     it "names units structurally, whatever order the manager holds them in" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        _ ← constructClean env ws "  - {definition: acolyte, x: 1, y: 1}\n  - {definition: acolyte, x: 2, y: 2}\n"
+        _ ← constructClean fx ws "  - {definition: acolyte, x: 1, y: 1}\n  - {definition: acolyte, x: 2, y: 2}\n"
         -- forget the references: these are units a scenario did not name
         modifyIORef' (unitManagerRef env) (\um → um { umScenarioRefs = Map.empty })
         c1 ← captureAll env
@@ -848,7 +892,7 @@ roundTripSpec = describe "capture" $ do
        \spelling, and do not depend on unit ids or manager order — over adversarial ids" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [tmplId] ← constructClean env ws
+        [tmplId] ← constructClean fx ws
             "  - {id: tmpl, definition: acolyte, x: 1, y: 1, inventory: [{definition: bandage}], equipment: {}, accessories: []}\n"
         tmpl ← unitOf env tmplId
         um0 ← readIORef (unitManagerRef env)
@@ -900,7 +944,7 @@ roundTripSpec = describe "capture" $ do
     it "every captured value survives YAML exactly — over random live states" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws "  - {id: r, definition: acolyte, x: 1, y: 1}\n"
+        [uid] ← constructClean fx ws "  - {id: r, definition: acolyte, x: 1, y: 1}\n"
         base ← unitOf env uid
         let parts = ["l_leg", "torso", "head", "r_arm"]
             kinds = ["slash", "stab", "fracture", "internal"]
@@ -961,7 +1005,7 @@ rejectionSpec = describe "diagnostics" $ do
             , ("units[2].wounds[0].part", EntryRejected)
             , ("units[2].equipment.jetpack", FieldRejected)
             , ("units[3].encounter", EntryRejected) ]
-        (cs, ds2) ← construct env ws us
+        (cs, ds2) ← construct fx ws us
         ds2 `shouldBe` []
         length [ () | UnitInstalled _ _ ← cs ] `shouldBe` 2
 
@@ -973,7 +1017,7 @@ rejectionSpec = describe "diagnostics" $ do
             , "  - {id: both, definition: acolyte, x: 1, y: 1, stats: {frame_mass: 70, body_mass: 60, lean_mass: 20,"
             , "     fat_mass: 8, bulk: 1.2}}"
             , "  - {id: over, definition: acolyte, x: 1, y: 1, stats: {hydration: 9999}}" ]
-        (cs, ds) ← construct env ws us
+        (cs, ds) ← construct fx ws us
         length [ () | UnitInstalled _ _ ← cs ] `shouldBe` 3
         map (\d → (sdPath d, sdEffect d)) ds `shouldMatchList`
             [ ("units[0].stats.body_mass", FieldRejected)
@@ -1007,7 +1051,7 @@ lifecycleSpec = describe "lifecycle" $ do
         modifyIORef' (worldManagerRef env) (\wm → wm { wmWorlds = [(pageP, ws2)] })
         epoch2 ← pageIncarnation ws2
         epoch2 `shouldNotBe` epoch
-        cs ← installUnitBuilds (installRefsOf env) pageP epoch [b]
+        cs ← installUnitBuilds (installRefsOf fx) pageP epoch [b]
         cs `shouldBe` [UnitNotInstalled "late" PageNotAdmitting]
         um ← readIORef (unitManagerRef env)
         (HM.size (umInstances um), Map.size (umScenarioRefs um)) `shouldBe` (0, 0)
@@ -1020,8 +1064,8 @@ lifecycleSpec = describe "lifecycle" $ do
         let env = fxEnv fx
         ws ← resetScene env
         us ← cleanUnits env "  - {id: twin, definition: acolyte, x: 1, y: 1}\n"
-        _ ← construct env ws us
-        (cs, _) ← construct env ws us
+        _ ← construct fx ws us
+        (cs, _) ← construct fx ws us
         cs `shouldBe` [UnitNotInstalled "twin" (ReferenceHeld "twin")]
         um ← readIORef (unitManagerRef env)
         HM.size (umInstances um) `shouldBe` 1
@@ -1029,7 +1073,7 @@ lifecycleSpec = describe "lifecycle" $ do
     it "a destroyed unit takes its reference and tags with it" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws "  - {id: doomed, tags: [t], definition: acolyte, x: 1, y: 1}\n"
+        [uid] ← constructClean fx ws "  - {id: doomed, tags: [t], definition: acolyte, x: 1, y: 1}\n"
         _ ← evalDebug (fxLua fx) ("unit.destroy(" <> tshow (unUnitId uid) <> "); return 'ok'")
         drainUnitQueue env
         um ← readIORef (unitManagerRef env)
@@ -1044,7 +1088,7 @@ persistenceSpec = describe "ordinary-save identity (D-52)" $ do
     it "a save → load through the real codec keeps each unit's reference, and a capture after it names the unit by it" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [kept, auto] ← constructClean env ws
+        [kept, auto] ← constructClean fx ws
             "  - {id: kept, definition: acolyte, x: 1, y: 1}\n  - {definition: acolyte, x: 2, y: 2}\n"
         um ← readIORef (unitManagerRef env)
         uts ← readIORef (ucUtsRef (toUnitCombatCapability env))
@@ -1077,7 +1121,7 @@ persistenceSpec = describe "ordinary-save identity (D-52)" $ do
     it "a restore keeps only the references of the units it produced" $ \fx → do
         let env = fxEnv fx
         ws ← resetScene env
-        [uid] ← constructClean env ws "  - {id: kept, definition: acolyte, x: 1, y: 1}\n"
+        [uid] ← constructClean fx ws "  - {id: kept, definition: acolyte, x: 1, y: 1}\n"
         um ← readIORef (unitManagerRef env)
         items ← itemsOf env
         inf ← readIORef (crInfectionManagerRef (toContentRegistriesCapability env))
@@ -1157,7 +1201,7 @@ childRun out perturbed fx = do
         modifyIORef' (unitManagerRef env) (\um → um { umNextId = umNextId um + 23 })
     before ← statRNG env
     draws ← luaDraws fx
-    _ ← constructClean env ws (freshDoc perturbed)
+    _ ← constructClean fx ws (freshDoc perturbed)
     c ← captureAll env
     after ← statRNG env
     draws' ← luaDraws fx
@@ -1259,6 +1303,38 @@ decodeUnitsBytes env bytes = do
     case decodeScenarioBytes cat bytes of
         ScenarioLoaded s ds → pure (scUnits s, ds)
         ScenarioFailed f → fail ("scenario failed: " ⧺ show f ⧺ "\n" ⧺ BC.unpack bytes)
+
+poseText ∷ Pose → Text
+poseText = poseTag
+
+-- | The ordinary path for a unit in @a@'s state: an acolyte spawned
+--   through the real spawn handler, given @a@'s stats, wounds and blood,
+--   then one real wound tick and one real resource pass (engine running),
+--   with every queued pose command applied. Answers the twin's id and
+--   final instance.
+ordinaryTwin ∷ Fx → WorldState → UnitInstance → IO (UnitId, UnitInstance)
+ordinaryTwin fx ws a = do
+    let env = fxEnv fx
+    um ← readIORef (unitManagerRef env)
+    let twin = UnitId (umNextId um + 500)
+    epoch ← pageIncarnation ws
+    acolyteTags ← udFactionTags ⊚ defNamed env "acolyte"
+    handleUnitSpawnCommand env (ucUtsRef (toUnitCombatCapability env)) twin "acolyte"
+        (uiGridX a + 2) (uiGridY a) terrainZ (resolveSpawnFaction acolyteTags Nothing) pageP epoch
+        SpawnStandard
+    modifyIORef' (unitManagerRef env) $ \m → m
+        { umInstances = HM.adjust (\b → b { uiStats = uiStats a, uiWounds = uiWounds a
+                                           , uiBlood = uiBlood a, uiModifiers = uiModifiers a })
+                                  twin (umInstances m) }
+    writeIORef (enginePausedRef env) False
+    tickAllWounds env 0.1
+    drainUnitQueue env
+    r ← evalDebug (fxLua fx) "__res.update(0.1); return 'ok'"
+    drainUnitQueue env
+    writeIORef (enginePausedRef env) True
+    r `shouldBe` "ok"
+    b ← unitOf env twin
+    pure (twin, b)
 
 -- | Run every queued unit command on this thread, as the unit thread
 --   would.
