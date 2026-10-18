@@ -2,7 +2,7 @@
 -- refining unit movement (pathing, climbs, falls, ramps), headless or in-GUI.
 -- Companion harness: tools/movement_probe.py.
 --
--- The arena starts as flat loam at z=0 (world.initArena). Course builders
+-- The arena starts as a flat loam surface at z=0 (world.initArena). Course builders
 -- sculpt it with the tile-edit Lua API:
 --   world.addTile(page,gx,gy,mat)        raise a column +1z (stacks = cliff/wall)
 --   world.deleteTile(page,gx,gy)         lower a column

@@ -18,7 +18,8 @@ def test_multiworld_save_launch():
         default_log="/tmp/mw_save_probe_A.log")
 
 
-def drive(rep, *, arena=False, missing_entry=False, missing_vegetation=False):
+def drive(rep, *, arena=False, missing_entry=False, missing_vegetation=False,
+          save_changed=False):
     launches = []
     def boot(port, **kwargs):
         launches.append(kwargs)
@@ -37,8 +38,11 @@ def drive(rep, *, arena=False, missing_entry=False, missing_vegetation=False):
         stack.enter_context(patch.object(probe, "boot", side_effect=boot))
         stack.enter_context(patch.object(probe, "get_identity", side_effect=identity))
         stack.enter_context(patch.object(probe, "populate_world", side_effect=[(1, 2), (3, 4)]))
-        stack.enter_context(patch.object(probe, "populate_arena", return_value=(3, 4, 0, [7] * 256)))
-        stack.enter_context(patch.object(probe, "read_arena_veg", return_value=None if missing_vegetation else [7] * 256))
+        stack.enter_context(patch.object(probe, "populate_arena", return_value=(3, 4, 0, [7] * 256, [9] * 256, 0)))
+        stack.enter_context(patch.object(probe, "expand_arena", return_value=True))
+        digests = iter(["before", "after" if save_changed else "before"])
+        stack.enter_context(patch.object(probe, "file_sha256", side_effect=lambda _p: next(digests)))
+        stack.enter_context(patch.object(probe, "read_arena_veg", side_effect=lambda _port, origin=None: None if missing_vegetation else ([9] * 256 if origin == probe.EXPANDED_VEG_CHUNK else [7] * 256)))
         stack.enter_context(patch.object(probe, "send", side_effect=send))
         stack.enter_context(patch.object(probe, "send_json", return_value=[] if missing_entry else [dict(name=probe.SAVE_PREFIX + "fixture", worldName=probe.MW_NAME, worldGloss=probe.MW_GLOSS)]))
         stack.enter_context(patch.object(probe, "id_list", side_effect=[[1], [2], [3], [4]]))
@@ -87,8 +91,43 @@ def test_multiworld_save_arena_descriptor_and_gap():
                        and outcomes["arena_vegetation_restored"] == "MISSING"
                        and outcomes["primary_identity_restored"] == "MISSING",
                        "unreadable arena vegetation leaves a missing suffix rather than an out-of-order event")
+        support.expect(all(outcomes[check] == "MISSING" for check in (
+                            "arena_expanded_readable", "arena_expanded_vegetation_restored",
+                            "arena_expanded_edit_restored", "arena_load_preserves_save_bytes")),
+                       "the expanded-arena checks stay a missing suffix when the central vegetation is unreadable")
         support.expect("secondary_name" not in outcomes and "arena_unnamed" in outcomes,
                        "arena descriptor declares its own conditional assertion sequence")
 
 
-TESTS = (test_multiworld_save_launch, test_multiworld_save_missing_save_entry, test_multiworld_save_arena_descriptor_and_gap)
+def test_multiworld_save_arena_expansion_checks():
+    """#2707: the expanded-chunk checks pass on a faithful run, and a load
+    that rewrote the save file fails exactly the byte-preservation check."""
+    import contextlib
+    import io
+    import tempfile
+    from pathlib import Path
+    def run(**kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "events"
+            descriptor = probe.descriptor(True)
+            rep = support.probe_protocol.Reporter(descriptor, events_path=str(path), engine_log_dir=tmp, rts_caps=3)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = drive(rep, arena=True, **kwargs)
+            finally:
+                rep.close()
+            _, outcomes = support.probe_protocol.parse_event_stream(path.read_text(), descriptor)
+            return rc, outcomes
+    rc, outcomes = run()
+    expanded = ("arena_expanded_readable", "arena_expanded_vegetation_restored",
+                "arena_expanded_edit_restored", "arena_load_preserves_save_bytes")
+    support.expect(rc == 0 and all(outcomes[check] == "PASS" for check in expanded),
+                   "every expanded-arena check passes on a faithful round trip")
+    rc, outcomes = run(save_changed=True)
+    support.expect(rc == 1 and outcomes["arena_load_preserves_save_bytes"] == "FAIL"
+                   and all(outcomes[check] == "PASS" for check in expanded[:3]),
+                   "a rewritten save file fails only the byte-preservation check")
+
+
+TESTS = (test_multiworld_save_launch, test_multiworld_save_missing_save_entry, test_multiworld_save_arena_descriptor_and_gap,
+         test_multiworld_save_arena_expansion_checks)

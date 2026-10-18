@@ -283,10 +283,11 @@ defaultWorldGenParams = WorldGenParams
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 
--- | Arena (test) worlds: flat chunks, no geological timeline. The
---   single authority for this predicate — chunk loading picks the
---   flat generator from it and the ore survey skips transient
---   generation on it.
+-- | Arena (test) worlds: a uniform sixteen-cell column base, no
+--   geological timeline. The single authority for this predicate —
+--   chunk demand picks the arena generator
+--   ('World.Thread.ChunkLoading.generateDemandedChunks') from it and the
+--   ore survey skips transient generation on it.
 isArenaParams ∷ WorldGenParams → Bool
 isArenaParams p = wgpGeoTimeline p ≡ emptyTimeline ∧ wgpSeed p ≡ 0
 

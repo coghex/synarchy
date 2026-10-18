@@ -50,7 +50,7 @@ import World.Load.Types (StagedPage(..), StagedSession(..))
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Flora.Designation (admitChunkFlora)
-import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
+import World.Generate.Arena (generateArenaChunks)
 import Item.Ground (GroundItem(..), sanitizeGroundItems)
 import Item.Types (ItemInstance(..))
 import World.Generate.Config
@@ -923,7 +923,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- them on load.
           let arenaChunks = map ( applyConstructSlopes cdesigs
                                 . applyDigSlopes desigs . replayEdits edits)
-                                (generateArenaChunks (arenaGenForSeed seed))
+                                (generateArenaChunks seed)
               chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
           -- Claimed before the generation is forced, then admitted with
           -- that same claim — the lifecycle and the owner-before-payloads

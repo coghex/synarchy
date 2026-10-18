@@ -21,7 +21,7 @@ import World.Chunk.Memory
 import World.Chunk.Types
 import World.Chunk.Admit
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Generate.Arena (generateFlatChunk)
+import World.Generate.Arena (generateArenaChunk)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState, emptyWorldManager)
@@ -47,7 +47,7 @@ params ∷ WorldGenParams
 params = defaultWorldGenParams { wgpWorldSize = 8, wgpSeed = 1 }
 
 depthChunk ∷ Int → LoadedChunk
-depthChunk n = (generateFlatChunk coord)
+depthChunk n = (generateArenaChunk 0 coord)
     { lcTiles = V.replicate 256 (ColumnTiles 0 (VU.replicate n 1)
                         (VU.replicate n 0) (VU.replicate n 0)) }
 

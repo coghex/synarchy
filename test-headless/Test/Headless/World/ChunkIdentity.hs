@@ -53,7 +53,7 @@ import World.Page.Types (WorldPageId(..))
 import Data.Maybe (mapMaybe)
 import World.State.Types (WorldState(..), LoadPhase(..), emptyWorldState)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData, lookupChunk)
-import World.Generate.Arena (generateFlatChunk)
+import World.Generate.Arena (generateArenaChunk)
 import World.Edit.Apply (replayEdits)
 import World.Fluid.Types (FluidType(..))
 import World.Fluid.Exact (exactSurfaceOfZ)
@@ -132,7 +132,7 @@ waitForNewGeneration env pid old timeoutSecs = go (timeoutSecs * 10)
 --   examples, so the payload is the cheapest real chunk available.
 seedTileData ∷ ChunkCoord → WorldTileData
 seedTileData coord = emptyWorldTileData
-    { wtdChunks = HM.singleton canonical (generateFlatChunk canonical) }
+    { wtdChunks = HM.singleton canonical (generateArenaChunk 0 canonical) }
   where canonical = canonicalChunkCoord (sizedParams seamWorldSize) coord
 
 -- | The global tile coords an edit carries, for the shift table below.
@@ -975,7 +975,7 @@ spec = describe "canonical chunk identity" $ do
         -- The regression itself: a freshly generated canonical chunk —
         -- exactly what the streaming loader produces on every reload —
         -- now replays them, and would not have before.
-        let fresh = generateFlatChunk canonCoord
+        let fresh = generateArenaChunk 0 canonCoord
         lcTiles (replayEdits normalized fresh) `shouldNotBe` lcTiles fresh
         lcTiles (replayEdits saved fresh) `shouldBe` lcTiles fresh
 

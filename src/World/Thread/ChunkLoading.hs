@@ -2,6 +2,7 @@
 module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
+    , generateDemandedChunks
     , admitChunksToSim
     , dispatchLocationStamps
     , locationStampsFor
@@ -26,7 +27,8 @@ import Engine.Graphics.Camera (Camera2D(..))
 import qualified Data.HashSet as HS
 import World.Types
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
-import World.Generate.Arena (generateFlatChunk)
+import World.Generate.Arena (generateArenaChunk)
+import World.Material (MaterialRegistry)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Chunk.Admit
     ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
@@ -56,6 +58,21 @@ import Sim.Topology (simTopologyForParams)
 --   utilize parallelism better during initial world generation.
 maxChunksPerTick ∷ Int
 maxChunksPerTick = 8
+
+-- | THE chunk-generation dispatch for demanded coordinates (#2707): the
+--   camera loader (which also regenerates evicted chunks) and the
+--   explicit\/queued demand drain both call this, so an arena page's
+--   demand reaches the single arena authority
+--   ('World.Generate.Arena.generateArenaChunk', from the page's recorded
+--   seed) on every path and NEVER enters the ordinary geological
+--   generator, whose input would be the arena's synthetic parameters.
+--   Ordinary pages generate in parallel exactly as before.
+generateDemandedChunks ∷ MaterialRegistry → FloraCatalog → WorldPageId
+                       → WorldGenParams → [ChunkCoord] → [LoadedChunk]
+generateDemandedChunks registry catalog pageId params coords
+    | isArenaParams params = map (generateArenaChunk (wgpSeed params)) coords
+    | otherwise = parMap rdeepseq
+        (generateLoadedChunk registry catalog pageId params) coords
 
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
@@ -123,15 +140,10 @@ updateChunkLoading env logger = do
                             claims ← claimChunkGeneration worldState pageId
                                                           params wanted
                             let batch = map claimedChunkCoord claims
-                            let isArena = isArenaParams params
                             when (not $ null batch) $ do
                                 let seed = wgpSeed params
-                                let !newChunks = if isArena
-                                        then map generateFlatChunk batch
-                                        else parMap rdeepseq
-                                            (generateLoadedChunk registry catalog
-                                                 pageId params)
-                                            batch
+                                let !newChunks = generateDemandedChunks
+                                        registry catalog pageId params batch
                                 -- Replay player edits onto the fresh chunks
                                 -- before inserting. Chunks evicted earlier
                                 -- in this session and now coming back will
@@ -466,10 +478,8 @@ drainInitQueues env logger = do
                         let toGen = map claimedChunkCoord claims
                         let seed = wgpSeed params
 
-                        let newChunks = parMap rdeepseq
-                                (generateLoadedChunk registry catalog
-                                     pageId params)
-                                toGen
+                        let newChunks = generateDemandedChunks
+                                registry catalog pageId params toGen
 
                         -- Replay player edits onto the fresh chunks
                         -- before inserting. On load, edits restored from

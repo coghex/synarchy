@@ -49,7 +49,7 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Flora.Designation (admitChunkFlora)
-import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
+import World.Generate.Arena (generateArenaChunks)
 import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Admit
@@ -703,7 +703,7 @@ handleWorldInitArenaCommand env logger pageId = do
     -- loaded arena page is rebuilt exactly like a fresh one — which needs
     -- the SAME generator on both sides (#1718), hence the recorded seed.
     let arenaZ    = seaLevel    -- z = 0 (surface)
-        allChunks = generateArenaChunks (arenaGenForSeed (wgpSeed arenaParams))
+        allChunks = generateArenaChunks (wgpSeed arenaParams)
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
     -- Write tile data. Arena chunks are residency too (#2001): same
@@ -718,17 +718,17 @@ handleWorldInitArenaCommand env logger pageId = do
         WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same
-    -- contract as the progressive loader). Tiny 5×5 arena, negligible cost.
+    -- contract as the progressive loader). Tiny 5×5 startup set, negligible cost.
     _ ← evaluate (force allChunks)
 
     writeIORef (wsGenParamsRef worldState) (Just arenaParams)
 
     -- Admit every generated arena chunk to the fluid simulation (#2232).
-    -- An arena page has no streaming loader at all — these chunks are the
-    -- page's whole residency and are published straight to wsTilesRef —
-    -- so without this every chunk stayed inert until an edit landed in
-    -- it, and fluid placed in one chunk could not flow into an unedited
-    -- neighbour. Same builder as the streaming loaders, one seed per
+    -- These startup chunks are published straight to wsTilesRef (the
+    -- camera and queue loaders admit any chunk beyond the footprint
+    -- through the same builder, 'admitChunksToSim'), so without this
+    -- every one stayed inert until an edit landed in it, and fluid
+    -- placed in one chunk could not flow into an unedited neighbour. Same builder as the streaming loaders, one seed per
     -- chunk, using the same 'arenaParams' the topology is derived from
     -- and this page's own incarnation epoch (#2477).
     --
@@ -752,7 +752,7 @@ handleWorldInitArenaCommand env logger pageId = do
     let totalChunks = length allChunks
     logInfo logger CatWorld $ "Test arena initialized: "
         <> tshow totalChunks
-        <> " flat loam chunks at z=" <> tshow arenaZ
+        <> " arena startup chunks (12 granite under 4 loam) at z=" <> tshow arenaZ
 
 handleWorldInitArenaDoneCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldInitArenaDoneCommand env logger pageId = do

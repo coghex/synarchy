@@ -84,6 +84,7 @@ import qualified Test.Headless.Unit.MedicAntibioticSupply as UnitMedicAntibiotic
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.ArenaSeed as ArenaSeed
+import qualified Test.Headless.World.ArenaGenerationConsistency as ArenaGenerationConsistency
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundMove as GroundMove
@@ -671,6 +672,11 @@ restLane = do
     -- the pure contract below.
     aroundAll withHeadlessEngine $
         describe "Arena base seeding (#1718)" ArenaSeed.engineSpec
+    -- Own engine (#2707): creates, edits and destroys its own arena
+    -- pages, drives the camera, and publishes a staged session at the
+    -- end, none of which the shared-worlds engine may see.
+    aroundAll withHeadlessEngine $
+        describe "arena generation consistency" ArenaGenerationConsistency.spec
     -- Own engine (#1246): writes a populated transfer-order store into a
     -- live page's WorldState and saves it, which the shared-worlds
     -- engine above must not see. Registered under the SAME describe as

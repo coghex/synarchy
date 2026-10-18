@@ -47,7 +47,7 @@ import qualified Data.HashMap.Strict as HM
 import Engine.Core.State (EngineEnv)
 import Test.Headless.Harness (sendWorldCommand, waitForWorldInit)
 import World.Types
-import World.Generate.Arena (arenaGenForSeed, generateArenaChunks)
+import World.Generate.Arena (generateArenaChunks)
 
 -- | Every column's TOP tile vegetation id, in column order — the 256
 --   values one arena chunk's surface actually renders, and the whole of
@@ -74,13 +74,13 @@ pureSpec =
             -- Not merely "the bases differ": the difference must be in
             -- the surface vegetation, which is the only thing the seed
             -- is allowed to vary.
-            map surfaceVeg (generateArenaChunks (arenaGenForSeed arenaSeed))
+            map surfaceVeg (generateArenaChunks arenaSeed)
                 `shouldNotBe`
-                map surfaceVeg (generateArenaChunks (arenaGenForSeed otherSeed))
+                map surfaceVeg (generateArenaChunks otherSeed)
 
         it "and disagree about nothing else — the topology is seed-blind" $ do
-            let a = generateArenaChunks (arenaGenForSeed arenaSeed)
-                b = generateArenaChunks (arenaGenForSeed otherSeed)
+            let a = generateArenaChunks arenaSeed
+                b = generateArenaChunks otherSeed
                 columns cs = [ col | c ← cs, col ← V.toList (lcTiles c) ]
             map lcCoord a `shouldBe` map lcCoord b
             map lcSurfaceMap a `shouldBe` map lcSurfaceMap b
@@ -90,7 +90,7 @@ pureSpec =
             map ctSlopes (columns a) `shouldBe` map ctSlopes (columns b)
 
         it "vegetation sits on the top tile only, 256 columns per chunk" $ do
-            let chunks = generateArenaChunks (arenaGenForSeed arenaSeed)
+            let chunks = generateArenaChunks arenaSeed
                 columns = [ col | c ← chunks, col ← V.toList (lcTiles c) ]
             map (length . surfaceVeg) chunks
                 `shouldBe` replicate (length chunks) 256
@@ -121,8 +121,7 @@ engineSpec =
             tiles ← readIORef (wsTilesRef ws)
             let rebuilt = HM.fromList
                     [ (lcCoord c, c)
-                    | c ← generateArenaChunks
-                              (arenaGenForSeed (wgpSeed params)) ]
+                    | c ← generateArenaChunks (wgpSeed params) ]
 
             HM.keys (wtdChunks tiles) `shouldMatchList` HM.keys rebuilt
             -- The whole base, not a sampled tile: with four vegetation
