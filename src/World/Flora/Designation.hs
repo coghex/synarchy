@@ -39,6 +39,7 @@ module World.Flora.Designation
 
 import UPrelude
 import Gameplay.Tags.Page (forgetDestroyedCells, forgetOccurrences)
+import Gameplay.Tags.PageLive (pageTagWrite)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
@@ -370,7 +371,9 @@ forgetFloraDroppedSince ws admitted final =
 --   path — an evicted plant still exists and keeps its state.
 replaceChunkForgettingFlora
     ∷ WorldState → LoadedChunk → LoadedChunk → IO ()
-replaceChunkForgettingFlora ws old new = do
+replaceChunkForgettingFlora ws old new = pageTagWrite ws $ do
+    -- #2705: one unit for tag readers, from the tile write to the last
+    -- tag cleanup ('Gameplay.Tags.Page.ptWriteSeq').
     atomicModifyIORef' (wsTilesRef ws) $ \w → (insertChunk new w, ())
     -- #2705: a tagged CELL this in-place change made air, or took out of
     -- its column's stored range, ceased to exist; its tags go. Every

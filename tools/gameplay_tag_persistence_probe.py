@@ -590,6 +590,7 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     proc = boot(port, log=os.path.join(tmp, "engineP1.log"),
                 args=["--resource-root", root], ready_timeout=180)
     far_chunk = None
+    far_row = None
     try:
         bootstrap_defs(port)
         send(port, f"world.init('{PLACE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}); return 'ok'")
@@ -620,6 +621,28 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
                f"near column {near_col}, near plant {near_plant}, plot tile {plot_col}")
         if None in (far_chunk, near_col, near_plant, plot_col):
             return
+        # A planted ROW CROP in the far chunk too: tilled, planted through
+        # the farm verb's WePlaceFlora edit, so readmission rebuilds it by
+        # the production replay of that edit.
+        row_col = find_in_chunks(port, [far_chunk], False, {far_col[0]})
+        far_row = None
+        if row_col:
+            (rx, ry), rz = row_col[0], row_col[1]
+            send(port, f"world.setVegAt('{PLACE}', {rx}, {ry}, {rz}, 77); return 'ok'")
+            deadline = time.time() + 20.0
+            while time.time() < deadline and send(port, f"return world.isPlantable({rx},{ry})").strip() != "true":
+                time.sleep(0.2)
+            send(port, f"return world.plantRowCropAt('{PLACE}', {rx}, {ry}, 'tomato_plant')")
+            deadline = time.time() + 20.0
+            while time.time() < deadline and far_row is None:
+                r = send(port, f"local f = world.getFloraAt({rx}, {ry}); "
+                               f"return tostring(f and f.instanceId)").strip('"')
+                far_row = ((rx, ry), as_int(r)) if as_int(r) else None
+                if far_row is None:
+                    time.sleep(0.2)
+        chk.ok(far_row is not None, f"a row crop was planted in the far chunk (got {far_row})")
+        if far_row is None:
+            return
         far, far_z = far_col[0], far_col[1]
         fpt, fpid = far_plant[0], far_plant[2]
         near = (near_col[0][0], near_col[0][1], near_col[1])
@@ -638,6 +661,7 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     if far_chunk is None:
         return
     fcx, fcy = far_chunk
+    (rpt, rpid) = far_row
     spec = {
         "tiles": [{"page": PLACE, "x": far[0], "y": far[1], "z": far_z, "tags": ["far_top", "shared"]},
                   # Not a target: air above the far column. Kept while its
@@ -647,13 +671,14 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
                   {"page": PLACE, "x": near[0], "y": near[1], "z": near[2], "tags": ["dug_away", "shared"]},
                   {"page": PLACE, "x": near[0], "y": near[1], "z": near[2] - 1, "tags": ["exposed"]}],
         "plants": [{"page": PLACE, "x": fpt[0], "y": fpt[1], "id": fpid, "tags": ["far_plant", "shared"]},
+                   {"page": PLACE, "x": rpt[0], "y": rpt[1], "id": rpid, "tags": ["far_row_crop"]},
                    {"page": PLACE, "x": npt[0], "y": npt[1], "id": npid, "tags": ["uprooted"]}],
         "plots": [{"page": PLACE, "x": plot[0], "y": plot[1], "tags": ["field"]},
                   {"page": PLACE, "x": plot[0] + 1, "y": plot[1] + 7, "tags": ["ghost"]}],
     }
     seed(chk, root, tmp, "place_base", "place_seeded", spec)
     seeded = place_tags(chk, tmp, root, "place_seeded")
-    chk.ok(len(seeded.get("tiles", {})) == 4 and len(seeded.get("plants", {})) == 2
+    chk.ok(len(seeded.get("tiles", {})) == 4 and len(seeded.get("plants", {})) == 3
            and len(seeded.get("plots", {})) == 2,
            f"the seeded save carries every cell, plant and plot assignment (got {seeded})")
     kept = {"tiles": {k: v for k, v in seeded.get("tiles", {}).items()},

@@ -86,6 +86,7 @@ module Gameplay.Tags.Live
     , liveItemTargets
     , onPage
     , PageView(..)
+    , capturePageViewWith
     , liveTileTargets
     , livePlantTargets
     , tileTagsIn
@@ -100,6 +101,7 @@ module Gameplay.Tags.Live
     ) where
 
 import UPrelude
+import Control.Concurrent (yield)
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
@@ -317,6 +319,27 @@ data PageView = PageView
     , pvTiles ∷ !WorldTileData
     }
 
+-- | One page's tags, plots and tiles as one coherent view (#2705), by the
+--   page's write sequence ('Gameplay.Tags.Page.ptWriteSeq'): the tags,
+--   then the plots and tiles, then the sequence again, retried until no
+--   world-thread transition that changes tiles and tags together was in
+--   flight or completed in between. @between@ runs between the tag read
+--   and the tile read on every attempt — the test seam for exactly the
+--   interleaving the sequence exists to catch; production passes
+--   @pure ()@.
+capturePageViewWith ∷ IO () → WorldState → IO PageView
+capturePageViewWith between ws = attempt
+  where
+    attempt = do
+        tags ← readIORef (wsPageTagsRef ws)
+        if odd (ptWriteSeq tags) then yield >> attempt else do
+            plots ← readIORef (wsCropPlotsRef ws)
+            between
+            tiles ← readIORef (wsTilesRef ws)
+            again ← ptWriteSeq ⊚ readIORef (wsPageTagsRef ws)
+            if again ≢ ptWriteSeq tags then yield >> attempt
+                                       else pure (PageView tags plots tiles)
+
 -- | The view's item index.
 ltvItems ∷ LiveTagView → CategoryIndex ItemTarget
 ltvItems = wmItemTags . ltvManager
@@ -330,11 +353,7 @@ captureLiveTagView umRef bmRef wmRef = do
     locs ← forM (wmWorlds wm) $ \(pid, ws) →
         fmap (\p → (pid, wgpLocationInstances p)) <$> readIORef (wsGenParamsRef ws)
     ground ← sessionGroundItems wm
-    pages ← forM (wmWorlds wm) $ \(pid, ws) → do
-        tags  ← readIORef (wsPageTagsRef ws)
-        plots ← readIORef (wsCropPlotsRef ws)
-        tiles ← readIORef (wsTilesRef ws)
-        pure (pid, PageView tags plots tiles)
+    pages ← forM (wmWorlds wm) $ \(pid, ws) → (pid,) ⊚ capturePageViewWith (pure ()) ws
     pure LiveTagView
         { ltvUnits = um, ltvBuildings = bm, ltvLocations = catMaybes locs
         , ltvManager = wm, ltvGround = ground, ltvPages = pages }

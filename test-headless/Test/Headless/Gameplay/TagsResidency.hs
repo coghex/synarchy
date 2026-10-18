@@ -64,7 +64,7 @@ import World.Chunk.Admit (pageIncarnation, releaseEvictedChunks)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Command.Types (TagEditReply(..))
-import World.Edit.Apply (applyEdit)
+import World.Edit.Apply (applyEdit, replayEdits)
 import World.Edit.Types (WorldEdit(..))
 import World.Flora.CropPlot (CropPlot, CropPlotOf(..))
 import World.Flora.Designation (forgetFloraInstances, replaceChunkForgettingFlora)
@@ -95,6 +95,10 @@ import World.Save.Snapshot.Adapter
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Thread.Command.Basic (handleWorldEditPageTagsCommand)
+import World.Thread (processAuthorizedSave)
+import World.Command.Types (WorldCommand(..))
+import qualified Engine.Core.Queue as Q
+import System.Timeout (timeout)
 import World.Tile.Types (WorldTileData(..), evictDistantChunksWithReport, insertChunk, lookupChunk)
 import World.Thread.Command.Init (registerPageIncarnation)
 
@@ -131,11 +135,13 @@ chunkB = ChunkCoord 1 0
 chunkC = ChunkCoord 0 3
 
 -- | A column in A, its tiles, and the cells everything below names.
-colTile, otherTile, plotTile, farTile ∷ (Int, Int)
+colTile, otherTile, plotTile, farTile, farRowTile, farPlotTile ∷ (Int, Int)
 colTile   = (3, 4)
 otherTile = (6, 9)
 plotTile  = (10, 2)
 farTile   = (3, 3 * 16 + 4)
+farRowTile  = (5, 3 * 16 + 4)
+farPlotTile = (8, 3 * 16 + 2)
 
 -- | A cell target on @page@ at a canonical tile and z.
 cell ∷ WorldPageId → (Int, Int) → Int → TileTarget
@@ -160,12 +166,13 @@ catalog = emptyFloraCatalog
 
 -- | Wild co-tenants (an oak and a berry bush on 'colTile'), a wild oak
 --   on 'otherTile', and a PLANTED row crop beside it.
-oakOcc, berryOcc, loneOak, rowCrop, farOak ∷ FloraInstanceId
+oakOcc, berryOcc, loneOak, rowCrop, farOak, farRow ∷ FloraInstanceId
 oakOcc   = generatedFloraInstanceId (unWorldPageId pageP) 3 4 "res_oak" 0
 berryOcc = generatedFloraInstanceId (unWorldPageId pageP) 3 4 "res_berry" 0
 loneOak  = generatedFloraInstanceId (unWorldPageId pageP) 6 9 "res_oak" 0
 rowCrop  = plantedFloraInstanceId 7
 farOak   = generatedFloraInstanceId (unWorldPageId pageP) 3 52 "res_oak" 0
+farRow   = plantedFloraInstanceId 11
 
 plant ∷ (Int, Int) → FloraId → FloraInstanceId → FloraInstance
 plant (gx, gy) fid iid = FloraInstance
@@ -193,7 +200,15 @@ floraA = [ plant colTile oakId oakOcc, plant colTile berryId berryOcc
 freshChunkA, freshChunkB, freshChunkC ∷ LoadedChunk
 freshChunkA = chunkWith chunkA floraA
 freshChunkB = chunkWith chunkB []
-freshChunkC = chunkWith chunkC [plant farTile oakId farOak]
+freshChunkC = chunkWith chunkC [plant farTile oakId farOak, plant farRowTile cropId farRow]
+
+-- | Chunk C as a fresh REGENERATION produces it: the wild oak only, with
+--   the planted row crop rebuilt by the production replay of its planting
+--   edit, exactly as the chunk pipeline admits a planted crop.
+replayedChunkC ∷ LoadedChunk
+replayedChunkC = replayEdits
+    (HM.singleton chunkC [WePlaceFloraWithId (fst farRowTile) (snd farRowTile) cropId 0 8 farRow])
+    (chunkWith chunkC [plant farTile oakId farOak])
 
 wheatPlot ∷ CropPlot
 wheatPlot = CropPlot cropId 0 1.0
@@ -207,7 +222,8 @@ newPage = do
         { wtdChunks = HM.fromList [ (chunkA, freshChunkA), (chunkB, freshChunkB)
                                   , (chunkC, freshChunkC) ]
         , wtdMaxChunks = 200 }
-    writeIORef (wsCropPlotsRef ws) (plotStoreFromPlots (HM.singleton plotTile wheatPlot))
+    writeIORef (wsCropPlotsRef ws)
+        (plotStoreFromPlots (HM.fromList [(plotTile, wheatPlot), (farPlotTile, wheatPlot)]))
     pure ws
 
 -- | The session: page P, and page Q with the very same layout, so equal
@@ -404,6 +420,21 @@ querySpec = describe "the live query universe" $ do
             agrees env (QComplement (tagged (tg "marked")))
             agrees env (tagged (tg "marked"))
 
+    it "a view never pairs a destroyed cell's tags with the cell recreated \
+       \between its tag read and its tile read" $ \env → do
+        (ws, _) ← resetScene env
+        tag env ws (TargetTile (cell pageP colTile 10)) ["old"]
+        once ← newIORef True
+        let destroyAndRecreate = do
+                first ← atomicModifyIORef' once (\b → (False, b))
+                when first $ do
+                    editChunkA ws (WeDeleteTile (fst colTile) (snd colTile))
+                    editChunkA ws (WeAddTile (fst colTile) (snd colTile) (MaterialId 1))
+        pv ← capturePageViewWith destroyAndRecreate ws
+        cellStatus (pvTiles pv) (cell pageP colTile 10) `shouldBe` CellSolid
+        categoryTagsOf (cell pageP colTile 10) (ptTiles (pvTags pv)) `shouldBe` Set.empty
+        readIORef once `shouldReturn` False
+
     it "the composed algebra and list/count/exists agree before and after \
        \a residency change" $ \env → do
         (ws, _) ← resetScene env
@@ -555,6 +586,20 @@ isolationSpec = describe "page and session isolation" $ do
             (AddTagsEdit (tags ["x"])) `shouldReturn` TagEditNoTarget
         query env (tagged (tg "x")) `shouldReturn` []
 
+    it "a tag request queued when a load publishes is answered, not left \
+       \waiting, and changes nothing" $ \env → do
+        (ws, _) ← resetScene env
+        epoch ← pageIncarnation ws
+        reply ← newEmptyMVar
+        Q.writeQueue (worldQueue env)
+            (WorldEditPageTags pageP epoch (TargetTile (cell pageP colTile 10))
+                               (AddTagsEdit (tags ["late"])) (TagEditReply reply))
+        Q.writeQueue (worldQueue env) (WorldLoadPublish 987654)
+        (logger, _) ← capturingLogger
+        processAuthorizedSave env logger
+        timeout 5000000 (takeMVar reply) `shouldReturn` Just TagEditNoTarget
+        query env (tagged (tg "late")) `shouldReturn` []
+
     it "a page replacement discards the old page's assignments, and an edit \
        \queued for the old incarnation never reaches the replacement" $ \env → do
         (wsP, _) ← resetScene env
@@ -618,6 +663,30 @@ sessionSpec = describe "whole-session save and load" $ do
         sort ⊚ query env (tagged (tg "saved"))
             `shouldReturn` sort [ TargetTile (cell pageP farTile 10), occ pageP farOak
                                 , plot pageP plotTile ]
+
+    it "the connected lifecycle: assign, evict, save while absent, restore, \
+       \readmit — every kind excluded while absent and queryable again" $ \env → do
+        (ws, _) ← resetScene env
+        (logger, _) ← capturingLogger
+        let targets = [ TargetTile (cell pageP farTile 10), occ pageP farOak
+                      , occ pageP farRow, plot pageP farPlotTile ]
+        forM_ targets $ \t → tag env ws t ["life"]
+        sort ⊚ query env (tagged (tg "life")) `shouldReturn` sort targets
+        evicted ← evictA ws
+        evicted `shouldSatisfy` (chunkC ∈)
+        query env (tagged (tg "life")) `shouldReturn` []
+        agrees env (tagged (tg "life"))
+        snap ← capturedSession env ⌦ throughCodec
+        let pt = pgsPageTags (pageOf snap pageP)
+        Map.keysSet (ptsOccurrences pt) `shouldBe` Set.fromList [farOak, farRow]
+        loadSession env logger snap
+        live ← readIORef (worldManagerRef env)
+        wsL ← maybe (fail "no page") pure (lookup pageP (wmWorlds live))
+        isNothing ⊚ (lookupChunk chunkC ⊚ readIORef (wsTilesRef wsL)) `shouldReturn` True
+        query env (tagged (tg "life")) `shouldReturn` []
+        readmit logger wsL replayedChunkC
+        sort ⊚ query env (tagged (tg "life")) `shouldReturn` sort targets
+        agrees env (tagged (tg "life"))
 
     it "a plot assignment naming no restored plot is a diagnostic and is \
        \dropped" $ \env → do

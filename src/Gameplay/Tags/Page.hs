@@ -109,10 +109,21 @@ data PageTags = PageTags
       --   says nothing about where the plant stands — exactly as a chop
       --   designation records its tile. Exactly the occurrence index's
       --   keys.
+    , ptWriteSeq ∷ !Word64
+      -- ^ The page's tag WRITE SEQUENCE: a seqlock over the pair this
+      --   store and the tile store form. A world-thread transition that
+      --   changes both — an in-place chunk edit and its cell cleanup, an
+      --   admission and its reconciliation — makes it odd before its
+      --   first write and even after its last ('pageTagWrite' in
+      --   "Gameplay.Tags.PageLive"); a reader takes the tags, then the
+      --   tiles, then the sequence again, and retries unless it saw the
+      --   same even value both times. So no view can pair the tags of a
+      --   cell destroyed and recreated in between with the replacement.
+      --   Transient: never saved.
     } deriving (Show, Eq)
 
 emptyPageTags ∷ PageTags
-emptyPageTags = PageTags emptyCategoryIndex emptyCategoryIndex Map.empty
+emptyPageTags = PageTags emptyCategoryIndex emptyCategoryIndex Map.empty 0
 
 -- | A page's groundcover plots and their tags, together (see the module
 --   haddock for why one ref).
@@ -389,7 +400,8 @@ restorePageTags page plots snap =
             { ptTiles = tiles
             , ptOccurrences = occs
             , ptOccurrenceTiles = Map.restrictKeys (ptsOccurrenceTiles snap)
-                                                  (Map.keysSet keptOcc) }
+                                                  (Map.keysSet keptOcc)
+            , ptWriteSeq = 0 }
         , rptPlotTags = plotIx
         , rptDroppedPlots = Map.keys droppedPlots
         , rptDroppedOccurrences = Map.keys droppedOcc
