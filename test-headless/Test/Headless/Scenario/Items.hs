@@ -1116,6 +1116,43 @@ spec = describe "Scenario.Items" $ do
                 ds2 `shouldBe` []
                 map (ieId ∘ giItem) (scGroundItems back) `shouldBe` [ExplicitId name]
 
+        it "ground containers whose children hold an automatic id and an explicit id \
+           \that spell alike keep their own identity however they were laid down" $ do
+            let box child = (bare (ExplicitId "box") "kit") { ieContents = Authored [child] }
+                mk start child = do
+                    (env, _) ← newEnv defs start
+                    b ← buildItemForest env [("g", box child)]
+                    [Just kit] ← pure (ibTrees b)
+                    pure (kit, ibRefs b)
+            (boxA, refsA) ← mk (0 ∷ Word64) (bare (AutoId "units[0].inventory[0]") "ring")
+            (boxB, refsB) ← mk 100 (bare (ExplicitId "units.0.inventory.0") "ring")
+            -- the containers themselves are unmapped; only their children carry references
+            let childRefs = [ (i, r) | (i, r) ← refsA ⧺ refsB, r ≢ "box" ]
+                ctx = CaptureCtx (\i → lookup i childRefs) (const Set.empty)
+                lay xs = fst (installGroundItems [ GroundPlacement 1 1 k | k ← xs ] emptyGroundItems)
+                capture g = let (_, rows, _) = captureGroundItems ctx emptyCaptureState g in rows
+            capture (lay [boxA, boxB]) `shouldBe` capture (lay [boxB, boxA])
+
+        it "a name minted for an item captured first never takes one a later owner's \
+           \authored id is entitled to, nor an id of another document entry" $ do
+            (env, _) ← newEnv defs 0
+            b ← buildItemForest env
+                [ ("units[0].inventory[0]", bare (ExplicitId "scout.inventory.0") "ring")
+                , ("buildings[0].storage[0]", bare (ExplicitId "hold.storage.0") "ring") ]
+            [Just authoredRing, _] ← pure (ibTrees b)
+            (env2, _) ← newEnv defs 900
+            [Just fresh] ← ibTrees ⊚ buildItemForest env2 [("x", bare (ExplicitId "tmp") "ring")]
+            let ctx = ctxOf [ (iiInstanceId authoredRing, "scout.inventory.0") ] []
+                -- the unmapped ring is captured FIRST and proposes the authored id's name
+                st = reserveNames ["hold"] (newCaptureState ctx [authoredRing, fresh])
+                (st1, first) = captureNodes ctx st [("scout.inventory.0", fresh)]
+                (_, second) = captureNodes ctx st1 [("elsewhere", authoredRing)]
+            map ieId (capEntries first) `shouldBe` [ExplicitId "scout.inventory.0-2"]
+            map ieId (capEntries second) `shouldBe` [ExplicitId "scout.inventory.0"]
+            -- and a document entry's id is not minted for an item either
+            let (_, third) = captureNodes ctx st [("hold", fresh)]
+            map ieId (capEntries third) `shouldBe` [ExplicitId "hold-2"]
+
         it "ground rows that differ only in tags or references keep their own \
            \identity however they were laid down" $ do
             let mk i d = do

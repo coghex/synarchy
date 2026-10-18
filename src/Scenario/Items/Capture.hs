@@ -39,6 +39,8 @@ module Scenario.Items.Capture
     ( CaptureCtx(..)
     , CaptureState
     , emptyCaptureState
+    , newCaptureState
+    , reserveNames
     , reserveMapped
     , captureNodes
     , Captured(..)
@@ -102,6 +104,22 @@ explicitRefOf = T.concatMap f
   where f '[' = "."
         f ']' = ""
         f c = T.singleton c
+
+-- | The state to start a whole capture with: every reference ANY tree it
+--   will capture already holds is reserved up front. Start here, over
+--   every owner's trees, so that no owner captured first can mint a name
+--   an item captured later is entitled to keep (the per-call
+--   reservations inside 'captureNodes' and the owner functions only see
+--   their own trees).
+newCaptureState ∷ CaptureCtx → [ItemInstance] → CaptureState
+newCaptureState ctx roots = reserveMapped ctx roots emptyCaptureState
+
+-- | Reserve names that belong to OTHER entries of the document being
+--   written (a unit's or building's id): scenario ids share one
+--   namespace, so a minted item name must never equal one.
+reserveNames ∷ [Text] → CaptureState → CaptureState
+reserveNames names (CaptureState m) =
+    CaptureState (foldl' (\acc n → HM.insertWith (\_ old → old) n 0 acc) m names)
 
 -- | Reserve the references the given trees ALREADY hold, before anything
 --   is captured, so a reference minted for an unmapped node can never
@@ -290,7 +308,7 @@ captureGroundItems ctx st0 g = (st1, zip3 xs ys (capEntries c), c)
         , tshow (iiCondition i), tshow (iiWeight i), tshow (iiSharpness i)
         , tshow (iiTemp i), tshow (iiBulk i)
         , tshow (fmap (\st → (isWeightCapacity st, isBulkCapacity st)) (iiStorage i)) ]
-        (spelling ⊚ ccRef ctx (iiInstanceId i))
+        (ccRef ctx (iiInstanceId i))
         (map gameplayTagText (Set.toAscList (ccTags ctx (iiInstanceId i))))
         (map structure (iiContents i))
     xs = map G.giX rows
@@ -299,7 +317,9 @@ captureGroundItems ctx st0 g = (st1, zip3 xs ys (capEntries c), c)
     (st1, c) = captureNodes ctx st0'
         [ ("ground." <> tshow (n ∷ Int), G.giInst r) | (n, r) ← zip [0 ..] rows ]
 
--- | One node of the ground-order key: physical fields, reference, tags
---   and children, each kept as its own element.
+-- | One node of the ground-order key: physical fields, the reference AS
+--   HELD (not its explicit-id spelling, which would tie an automatic path
+--   with an explicit id that spells like it), tags and children, each kept
+--   as its own element.
 data Sig = Sig [Text] (Maybe Text) [Text] [Sig]
     deriving (Eq, Ord)
