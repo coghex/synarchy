@@ -469,6 +469,7 @@ import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
 import qualified Test.Headless.Gameplay.TagsPersistence as GameplayTagsPersistence
 import qualified Test.Headless.Gameplay.TagsItems as GameplayTagsItems
 import qualified Test.Headless.Gameplay.TagsResidency as GameplayTagsResidency
+import qualified Test.Headless.Lua.GameplayTags as LuaGameplayTags
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -1384,6 +1385,9 @@ restLane = do
     GameplayTagsPersistence.spec
     GameplayTagsItems.spec
     GameplayTagsResidency.spec
+    -- #2706: the gameplayTags Lua namespace through real Lua calls,
+    -- with a pump thread playing the world thread.
+    LuaGameplayTags.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec
