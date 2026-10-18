@@ -3,8 +3,9 @@
 Status: the pure foundation (#2700, SCN-02 of epic #2698), and live
 ownership, lifecycle and persistence for units, buildings and locations
 (#2701, SCN-03; see [Live tags](#live-tags-units-buildings-and-locations)).
-Plants, items, tiles and Lua access are later work (see
-[Not yet integrated](#not-yet-integrated)).
+Physical items (#2703), terrain cells and plants (#2705), and Lua access
+through the `gameplayTags` namespace (#2706, SCN-06; see
+[Lua access](#lua-access)) followed.
 
 Gameplay tags are optional, many-to-many labels that scripts attach to
 units, buildings, locations, plants, physical items, and map tiles.
@@ -262,8 +263,8 @@ assembles one registry with `registryFromCategories`.
 
 ### Operations and synchronization
 
-`Gameplay.Tags.Live` is the internal Haskell API. It has no Lua
-binding; SCN-06 owns the public verbs.
+`Gameplay.Tags.Live` is the internal Haskell API. Scripts reach it
+through the `gameplayTags` namespace (see [Lua access](#lua-access)).
 
 - `mutateUnitTags`, `mutateBuildingTags` and `mutateLocationTags` apply
   a `TagEdit` (add, remove, replace, clear) as one `atomicModifyIORef'`
@@ -654,12 +655,36 @@ does not remove the plot, and no new plot removal rule was invented.
   while their chunk is absent, readmission, real digging and an
   autosave.
 
-## Not yet integrated
+## Lua access
 
-Later slices of epic #2698 still owe:
+Since #2706 (SCN-06) scripts reach every operation above through the
+`gameplayTags` namespace. The script-author reference is
+[gameplay_tags_lua.md](gameplay_tags_lua.md). It covers target
+encodings, page rules, completion, refusals, the expression grammar,
+ordering and the scalar modes.
 
-- **Lua access.** This includes argument decoding and result
-  marshalling. `count` and `exists` must return scalars, not lists.
+| Module | Owns |
+|---|---|
+| `Engine.Scripting.Lua.API.GameplayTags.Args` | strict decoding of targets, tag collections, expressions and query options |
+| `Engine.Scripting.Lua.API.GameplayTags` | the verbs, target resolution and result marshalling |
+| `Engine.Scripting.Lua.API.Register.GameplayTags` | installing the `gameplayTags` global |
 
-If any of these steps uncovers a new identity or behaviour choice, it
-goes to the owner before implementation.
+- **No new state.** The namespace holds no tag state. Each verb resolves
+  its target against the live page and calls the owner's own operation
+  from the sections above. It builds no Lua-side registry and no cache.
+- **Owners that apply the edit inside the call.** Units, buildings,
+  locations and items: the verb returns after the edit is applied.
+- **The owner that queues.** Tile and plant edits go through
+  `requestPageTagEdit`, which queues `WorldEditPageTags` on the world
+  thread. The verb waits for its answer, so a verb that returns `true`
+  has applied the edit. The world thread re-checks the page incarnation
+  when it applies the edit, so stale work never reaches a replacement
+  page. A load publish answers a queued edit `TagEditNoTarget`. Saves
+  and load publishes are driven from the Lua thread, so a waiting verb
+  can never hold up a save barrier.
+- **Reads and queries.** Each one captures one `LiveTagView` and
+  evaluates the whole expression with `runLiveTagQueryIn` over one page
+  (`onPage`). `count` and `exists` take the native result's size and
+  push no target.
+- **Gates.** Hspec `--match "Lua gameplay tags"`, and the extended
+  `tools/gameplay_tag_persistence_probe.py`.
