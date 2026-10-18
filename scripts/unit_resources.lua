@@ -47,6 +47,7 @@ local resourceTick    = require("scripts.unit_resource_tick")
 local resourceCarry   = require("scripts.unit_resource_carry")
 local regrowth        = require("scripts.unit_resource_regrowth")
 local injuryTick      = require("scripts.unit_resource_injury")
+local effects         = require("scripts.unit_effects")
 local failureMeters   = require("scripts.unit_resource_failure")
 local starvation      = require("scripts.starvation")
 
@@ -155,6 +156,14 @@ local function eachActivePool(defName, modes, visit)
     end
 end
 
+-- Calorie-store threshold effects (#806): re-derive "strength" from the
+-- fresh calorie fraction (scripts/starvation.lua), only while nutrition is
+-- Simulated. The per-pass call in tickPools and a scenario unit's paused
+-- readiness (#2710, settleScenarioUnit) share this one rule.
+local function reconcileStrength(uid, modes)
+    if modes.nutrition == "simulated" then starvation.refreshStrength(uid) end
+end
+
 local function hasSupportedSystem(modes)
     for _, mode in pairs(modes) do
         if mode ~= nil then return true end
@@ -193,7 +202,7 @@ local function tickPools(uid, info, modes, dt)
         -- the fresh calorie fraction every pass, independent of
         -- recomputeBody's own mass-change-only cadence (see
         -- scripts/starvation.lua).
-        starvation.refreshStrength(uid)
+        reconcileStrength(uid, modes)
     elseif modes.nutrition == "nominal" and pose ~= "dead" then
         -- No food system, so nothing digests or starves; a unit wasted below
         -- its spawn margin recovers toward its healthy tissue, outside any
@@ -216,7 +225,17 @@ end
 -- One unit's whole pass. Split from `update` so a fault in one unit (a
 -- violated physiology invariant a read raises) is reported and skipped
 -- instead of aborting the pass for every unit after it.
-local function tickUnit(uid, info, dt)
+--
+-- The ONE per-unit reconciliation (#2710): the tick runs it with its dt, and a
+-- scenario unit's paused readiness runs it with dt = 0 (settleScenarioUnit),
+-- so every death, collapse, crawl, revival and strength discount a unit's
+-- baseline implies comes from this pipeline and nowhere else. Its effects go
+-- through scripts/unit_effects.lua. opts.mind == false skips the mind trio
+-- (brain / thoughts / mental): over zero time they change no state, and
+-- thoughts rolls the gameplay random stream when a thought is due, which a
+-- baseline must never draw. Consciousness is derived on demand, so nothing
+-- the trio does decides a pose or a death.
+local function reconcileUnit(uid, info, dt, opts)
     local pose0 = unit.getPose(uid) or "standing"
     -- A corpse ticks NOTHING. Without this guard, a failure-meter death
     -- leaves the driving wound pinned on the corpse (the engine wound tick
@@ -257,17 +276,18 @@ local function tickUnit(uid, info, dt)
     -- keeps the unit down until lucid. brain.tick drifts the durable
     -- psychological values (mood / emotional_pain / caffeine) as ONE atomic
     -- batch, and only for a unit whose mind is Simulated.
-    brain.tick(uid, dt)
+    local withMind = not (opts and opts.mind == false)
+    if withMind then brain.tick(uid, dt) end
     -- Thoughts read this tick's freshly-drifted mood/pain and may nudge mood
     -- back (#351) — after brain.tick so next tick's drift treats any nudge as
     -- "prev", fading it naturally toward the physiological target. One atomic
     -- batch per thought.
-    thoughts.tick(uid, info, dt)
+    if withMind then thoughts.tick(uid, info, dt) end
     -- Mental states (#352): the threshold machine over the DERIVED
     -- state_of_mind, read when it runs, so the mood nudge a thought just made
     -- is already in it (there is no next-pass lag) — the stressed label plus
     -- break/euphoria episodes, each event one atomic batch.
-    mental.tick(uid, dt)
+    if withMind then mental.tick(uid, dt) end
     -- Injuries first: a lethal injury kills the unit (skip the rest of its
     -- tick); a disabling one collapses it.
     if not injuryTick.tickInjuries(uid, info, pose0)
@@ -296,7 +316,7 @@ function unitResources.update(dt)
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
-            local ok, err = pcall(tickUnit, uid, info, dt)
+            local ok, err = pcall(reconcileUnit, uid, info, dt)
             if not ok then
                 local key = tostring(uid) .. ":" .. tostring(err)
                 if not reported[key] then
@@ -330,7 +350,7 @@ end
 -- until the next physiology tick reapplies its current calorie band.
 function unitResources.onSaveLoaded(survUnitIds, _survBuildingIds)
     for _, uid in ipairs(survUnitIds or {}) do
-        unit.recomputeBody(uid)
+        effects.recomputeBody(uid)
         -- The load boundary (#2831, D-6): the engine has already normalized
         -- every unit's stored physiology before publishing it (legacy stored
         -- circulation, consciousness, concentration and state_of_mind are
@@ -343,6 +363,35 @@ end
 
 -- Exposed for debug console: inspect what a unit's drain/regen
 -- numbers are. Returns nil if the def isn't configured.
+unitResources.reconcileUnit = reconcileUnit
+
+-- Paused readiness of a scenario-constructed unit (#2710, SCN-10): a PURE
+-- evaluation of its authored state by the per-unit reconciliation above, run
+-- ONCE at zero elapsed time with the unit's effects recorded
+-- (unit_effects.record), so nothing it would do is performed during the pass.
+-- Afterwards only two things are applied: the recorded writes to stats the
+-- unit does NOT author (`authored` lists the ones it does; the strength
+-- discount and the failure meters are the derived writes this keeps), and
+-- the verdict the engine applies — a death rejects the unit, a pose is
+-- established. An authored value is never changed here. Nothing advances: dt
+-- is zero and the mind trio is skipped (see reconcileUnit). Returns
+-- "lethal", cause for a unit the pipeline would kill at once; else the last
+-- pose it would establish ("collapsed", "crawling", "standing"), or nil to
+-- keep the built pose. nil, nil for a unit that is gone or dead.
+function unitResources.settleScenarioUnit(uid, authored)
+    local info = unit.getInfo(uid)
+    if not info or (unit.getPose(uid) or "standing") == "dead" then return nil end
+    local r = effects.record(uid, function() reconcileUnit(uid, info, 0, { mind = false }) end)
+    if r.dead then return "lethal", r.cause or "a lethal condition" end
+    local own = {}
+    for _, k in ipairs(authored or {}) do own[k] = true end
+    local keys = {}
+    for k in pairs(r.writes) do if not own[k] then keys[#keys + 1] = k end end
+    table.sort(keys)
+    for _, k in ipairs(keys) do effects.setStat(uid, k, r.writes[k]) end
+    return r.pose
+end
+
 function unitResources.getConfig(defName)
     return resourceConfig[defName]
 end

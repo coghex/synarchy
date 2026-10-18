@@ -134,7 +134,11 @@ FACADE = "scripts/physiology.lua"
 
 # Files whose dynamic raw accessors ARE the generic API: the facade, and the
 # stats wrapper whose ``get`` the facade (and unowned callers) sit on.
-GENERIC_ACCESSORS = frozenset({FACADE, "scripts/unit_stats.lua"})
+# The per-unit pass's effects seam (#2710): a pure forwarder. Its own calls
+# are not judged; every call THROUGH it is, at the caller, as the direct verb
+# (scripts/physiology_access_lua.py's EFFECTS_MODULE).
+SEAM = "scripts/unit_effects.lua"
+GENERIC_ACCESSORS = frozenset({FACADE, "scripts/unit_stats.lua", SEAM})
 
 
 @dataclass(frozen=True)
@@ -315,6 +319,14 @@ BLOOD_FIELD_INVENTORY: dict[str, str] = {
     "src/World/Save/Physiology.hs":
         "the load gate: canonical rewrite of a Nominal field; the raw view "
         "for its context (reads nothing else)",
+    "src/Scenario/Units/Build.hs":
+        "scenario construction (#2710): the seed writer, by spawn's rule "
+        "(canonicalBlood, else the body-mass seed; an explicit value only "
+        "while blood resolves Simulated), the raw view of its seeding "
+        "context, and the wound tick's own Simulated-only collapse cut",
+    "src/Scenario/Units/Capture.hs":
+        "scenario capture (#2710): reads the stored field for serialization "
+        "only, and only while blood resolves Simulated",
 }
 BLOOD_FIELD_TOKENS = ("uiBlood", "bloodView", "bloodViewOf", "unitBloodView",
                       "instanceBloodView")
@@ -568,7 +580,7 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
 
     # Mutating mode verbs.
     for ch in chunks:
-        if ch.path == policy.facade:
+        if ch.path in (policy.facade, SEAM):
             continue
         for mv in ch.mode_verbs:
             if ch.path in policy.verb_callers.get(mv.verb, frozenset()):
@@ -608,7 +620,7 @@ def scan_corpus(files: dict[str, str], probe: Optional[tuple[str, str]],
 
     for sk in sorted(sites, key=lambda k: (k[0], k[1], k[2], k[3])):
         a, kinds, fb = sites[sk]["acc"], sites[sk]["kinds"], sites[sk]["fallback"]
-        if a.path == policy.facade or _owner_allows(policy, a.path, reg, a.key):
+        if a.path in (policy.facade, SEAM) or _owner_allows(policy, a.path, reg, a.key):
             continue
         fx = policy.probe_fixture
         if a.path == fx.file and a.verb == fx.verb and a.straight \

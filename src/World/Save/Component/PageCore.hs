@@ -1394,7 +1394,7 @@ blankPageSnapshot pid params =
         , pgsGroundItems  = emptyGroundItems
         , pgsSpoilPiles   = emptySpoilPiles
         , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 0, bsnTags = Map.empty }
-        , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 0, usnTags = Map.empty }
+        , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 0, usnTags = Map.empty, usnScenarioRefs = Map.empty }
         , pgsUnitSimStates = HM.empty
         , pgsFloraHarvests = emptyFloraHarvests
         , pgsChopDesignations = HM.empty

@@ -297,6 +297,10 @@ data ExpectedPage = ExpectedPage
     , epPowerNodes ∷ ![ExpectedPowerNode]
     , epFluidSnapshots ∷ !(Maybe ExpectedFluidSnapshots)
     , epGameplayTags ∷ !ExpectedPageTags
+    , epUnitScenarioRefs ∷ ![(Word32, Text)]
+      -- ^ #2710: the page's unit → scenario-reference mapping, ascending
+      --   by unit id. Absent before units v6 and read as NONE, which is
+      --   what every such payload restores.
     }
 
 -- | The same aggregates, read off a DECODED page. Kept beside the type
@@ -471,6 +475,8 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .:? "powerNodes" .!= []
         <*> o .:? "fluidSnapshots"
         <*> o .:? "gameplayTags" .!= noExpectedPageTags
+        <*> (o .:? "unitScenarioRefs" .!= [] ≫= mapM (Aeson.withObject "unitScenarioRef" $ \e →
+                (,) <$> e .: "id" <*> e .: "ref"))
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -733,6 +739,11 @@ manifestFixturesSpec =
                                     -- yields none.
                                     pageTagAggregate page
                                         `shouldBe` epGameplayTags ep
+
+                                    -- #2710: the unit scenario
+                                    -- references, compared the same way.
+                                    [ (unUnitId u, r) | (u, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
+                                        `shouldBe` epUnitScenarioRefs ep
 
                                     -- #2520: pinned exactly when the
                                     -- fixture declares it, so a v4

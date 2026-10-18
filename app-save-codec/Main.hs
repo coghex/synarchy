@@ -432,6 +432,12 @@ dumpPage (WorldPageId pid, page) = Aeson.object
     -- the Baselines reader treats as "this fixture pins nothing here"
     -- rather than as zero.
     , "fluidSnapshots" .= dumpFluidSnapshots page
+      -- #2710: the scenario reference each of the page's units was
+      -- constructed from, by unit id. Absent before units v6, which the
+      -- Baselines reader reads as "no references".
+    , "unitScenarioRefs" .=
+        [ Aeson.object [ "id" .= unUnitId u, "ref" .= r ]
+        | (u, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
       -- #2701: the page's authoritative general gameplay tag
       -- assignments, per category, with their target ids -- so losing,
       -- leaking or re-targeting one is observable. Absent from every
@@ -820,7 +826,10 @@ writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode
 --
 --   Items (#2703) carry no page: their assignments are session-scoped
 --   and keyed by item instance id, which must not be 0. An empty @tags@
---   list clears the target. Each category is optional.
+--   list clears the target. Each category is optional. A unit entry may
+--   also carry its scenario reference (#2710): a @"ref"@ sets it (the
+--   empty string clears it), and a unit entry with no @"tags"@ leaves
+--   the unit's tags alone.
 runSeedTags ∷ [String] → IO ()
 runSeedTags args = do
     (fixturePath, rest0) ← orUsageFailure (requireFlag "--fixture" args)
@@ -856,6 +865,17 @@ instance Aeson.FromJSON SeedEntry where
     parseJSON = Aeson.withObject "seed entry" $ \o →
         SeedEntry <$> o .: "page" <*> o .: "id" <*> o .: "tags"
 
+-- | One unit's seed (#2701, #2710): its complete tag set, its scenario
+--   reference, or both.
+data UnitSeedEntry = UnitSeedEntry
+    { useEntry ∷ !SeedEntry, useHasTags ∷ !Bool, useRef ∷ !(Maybe Text) }
+
+instance Aeson.FromJSON UnitSeedEntry where
+    parseJSON = Aeson.withObject "unit seed entry" $ \o → do
+        tags ← o .:? "tags"
+        e ← SeedEntry <$> o .: "page" <*> o .: "id" <*> pure (fromMaybe [] tags)
+        UnitSeedEntry e (isJust tags) <$> o .:? "ref"
+
 -- | One item's complete tag set (#2703): session-scoped, so no page.
 --   An entry may also carry the item's scenario reference (#2709): a
 --   @"ref"@ sets it (the empty string clears it), and an entry that
@@ -880,7 +900,7 @@ instance Aeson.FromJSON PlaceSeedEntry where
         <*> o .: "tags"
 
 data TagSeed = TagSeed
-    { tsUnitSeeds ∷ ![SeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
+    { tsUnitSeeds ∷ ![UnitSeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
     , tsLocationSeeds ∷ ![SeedEntry], tsItemSeeds ∷ ![ItemSeedEntry]
     , tsTileSeeds ∷ ![PlaceSeedEntry], tsPlantSeeds ∷ ![PlaceSeedEntry]
     , tsPlotSeeds ∷ ![PlaceSeedEntry] }
@@ -893,7 +913,7 @@ instance Aeson.FromJSON TagSeed where
 
 applyTagSeed ∷ TagSeed → SessionSnapshot → Either String SessionSnapshot
 applyTagSeed seed snap0 =
-    foldM (entry onUnit) snap0 (tsUnitSeeds seed)
+    foldM unitEntry snap0 (tsUnitSeeds seed)
         ≫= \s1 → foldM (entry onBuilding) s1 (tsBuildingSeeds seed)
         ≫= \s2 → foldM (entry onLocation) s2 (tsLocationSeeds seed)
         ≫= \s3 → foldM itemEntry s3 (tsItemSeeds seed)
@@ -943,6 +963,21 @@ applyTagSeed seed snap0 =
         page ← maybe (Left ("no page '" ⧺ T.unpack (sePage e) ⧺ "' in the save"))
                      Right (HM.lookup pid (snapPages snap))
         pure snap { snapPages = HM.insert pid (f (seId e) tags page) (snapPages snap) }
+    unitEntry snap u = do
+        withTags ← if useHasTags u then entry onUnit snap (useEntry u) else pure snap
+        case useRef u of
+            Nothing → pure withTags
+            Just r → do
+                let e = useEntry u
+                    pid = WorldPageId (sePage e)
+                    uid = UnitId (fromIntegral (seId e))
+                page ← maybe (Left ("no page '" ⧺ T.unpack (sePage e) ⧺ "' in the save"))
+                             Right (HM.lookup pid (snapPages withTags))
+                let refs = Map.delete uid (usnScenarioRefs (pgsUnits page))
+                    refs' = if T.null r then refs else Map.insert uid r refs
+                pure withTags { snapPages = HM.insert pid
+                    page { pgsUnits = (pgsUnits page) { usnScenarioRefs = refs' } }
+                    (snapPages withTags) }
     setRef i r refs
         | T.null r = restrictItemRefs (≢ i) refs
         | otherwise = itemRefsFromList (itemRefsToAscList (restrictItemRefs (≢ i) refs) ⧺ [(i, r)])

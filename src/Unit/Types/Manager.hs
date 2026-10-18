@@ -19,6 +19,7 @@ import Data.Serialize (Serialize)
 import Control.DeepSeq (NFData)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Index
     (CategoryIndex, emptyCategoryIndex, restrictCategoryIndex)
 import World.Page.Types (WorldPageId(..))
@@ -54,6 +55,16 @@ data UnitManager = UnitManager
       --   Every key names an instance in 'umInstances'. Persisted per
       --   page by the @units@ component; the reverse index is rebuilt.
       --   Mutated only through "Gameplay.Tags.Live".
+    , umScenarioRefs ∷ !(Map.Map UnitId Text)
+      -- ^ The scenario REFERENCE each unit was constructed from (#2710),
+      --   the durable half of the scenario-id ↔ unit-id mapping, so a
+      --   capture after a save and load still writes the id the unit
+      --   came in with. Sparse (a unit no scenario built has none) and
+      --   injective (no reference names two units); never a tag. Same
+      --   lifetime as 'umTags' and for the same reason: every transition
+      --   that removes an instance removes its reference in the SAME
+      --   atomic modify. Written only by "Scenario.Units.Install";
+      --   persisted per page by the @units@ component (v6).
     } deriving (Show, Eq)
 
 emptyUnitManager ∷ UnitManager
@@ -63,6 +74,7 @@ emptyUnitManager = UnitManager
     , umSelected  = HS.empty
     , umNextId    = 1
     , umTags      = emptyCategoryIndex
+    , umScenarioRefs = Map.empty
     }
 
 nextUnitId ∷ UnitManager → (UnitId, UnitManager)
@@ -92,9 +104,9 @@ nextUnitId um =
 --   The allocator is untouched on purpose: rewinding it would let the
 --   replacement reissue an id this very transition is retiring.
 --
---   The retired units' gameplay tags go in the same step (#2701), and
---   only theirs: a replacement unit admitted at or above the cutoff
---   keeps its own.
+--   The retired units' gameplay tags (#2701) and scenario references
+--   (#2710) go in the same step, and only theirs: a replacement unit
+--   admitted at or above the cutoff keeps its own.
 retirePageUnits ∷ WorldPageId → UnitId → UnitManager
                 → (UnitManager, HS.HashSet UnitId)
 retirePageUnits pageId cutoff um = (um', doomed)
@@ -107,6 +119,9 @@ retirePageUnits pageId cutoff um = (um', doomed)
              , umSelected  = HS.difference (umSelected um) doomed
              , umTags      = restrictCategoryIndex
                                  (\uid → not (HS.member uid doomed)) (umTags um)
+             , umScenarioRefs = Map.filterWithKey
+                                 (\uid _ → not (HS.member uid doomed))
+                                 (umScenarioRefs um)
              }
 
 -- | Instances belonging to any of the given world pages — the

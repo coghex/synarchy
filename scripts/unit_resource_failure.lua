@@ -11,6 +11,7 @@ local thermo   = require("scripts.thermo")
 local salts    = require("scripts.salts")
 local alerts   = require("scripts.unit_resource_alerts")
 local physiology = require("scripts.physiology")
+local effects  = require("scripts.unit_effects")
 
 local M = {}
 
@@ -95,10 +96,10 @@ function M.tickFailureMeters(uid, dt)
                 v = v - m.recover * dt                 -- compensates once treated
             end
             v = math.max(0, math.min(1, v))
-            unit.setStat(uid, m.stat, v)
+            effects.setStat(uid, m.stat, v)
             if v >= 1.0 then
-                alerts.emitDeathAlert(uid, injuries.deathCause(uid) or m.cause, "injury")
-                unit.kill(uid)
+                effects.deathAlert(uid, injuries.deathCause(uid) or m.cause, "injury")
+                effects.kill(uid)
                 return true
             end
         end

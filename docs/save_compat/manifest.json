@@ -3486,6 +3486,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z12-item-scenario-refs.expected.json"
         }
       ]
+    },
+    {
+      "id": "z13-unit-scenario-refs",
+      "description": "Scenario unit references (#2710) as the current build writes them: each page's unit \u2192 scenario-reference mapping in units v6, keyed by unit id, with an explicit id (scout, unit 1) and an automatic path id (units[1], unit 2) beside z12's item references and z9's unit tags on the same units. Seeded through synarchy-save-codec seed-tags because no public verb installs references yet (SCN-13 composes them). z12 and every older fixture are the empty-default (units v5 and older) counterparts.",
+      "declaredAt": "2026-10-18",
+      "declaredByIssue": 2710,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.EntitySnapshots.unitsCodec (current units v6, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 14,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z13-unit-scenario-refs",
+          "path": "test-headless/data/save-compat/z13-unit-scenario-refs.bin",
+          "kind": "complete-session",
+          "sha256": "2cc15df05b0502093944c130ae4335a6a4c7764b94db9b3b36307e9bf285f419",
+          "sizeBytes": 912826,
+          "provenance": "Derived from the tracked z12-item-scenario-refs fixture (itself derived from z11 and z9, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the unit scenario references {\"units\":[{\"page\":\"generated_page\",\"id\":1,\"ref\":\"scout\"},{\"page\":\"generated_page\",\"id\":2,\"ref\":\"units[1]\"}]} on the session, and re-encoded it through the same encoder an ordinary save uses, writing units v6; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z13-unit-scenario-refs.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

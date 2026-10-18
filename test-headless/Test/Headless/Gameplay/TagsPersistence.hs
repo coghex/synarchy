@@ -742,7 +742,7 @@ wireSpec = describe "the component wire" $ do
 
     it "refuses a malformed tag list in each component, naming it" $ \_ → do
         let page = WorldPageId "wire_page"
-            unitErrs w = ccValidate unitsCodec (UnitsDTO [PageUnitsDTO page HM.empty w])
+            unitErrs w = ccValidate unitsCodec (UnitsDTO [PageUnitsDTO page HM.empty w []])
             bldErrs w = ccValidate buildingsCodec
                 (BuildingsDTO [PageBuildingsDTO page HM.empty w])
         map cePhase (unitErrs [(UnitId 1, [""])]) `shouldBe` [ValidatePhase]

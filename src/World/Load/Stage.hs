@@ -355,7 +355,11 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       { umDefs = unitDefs, umInstances = mergedUnits
                       , umSelected = mempty, umNextId = nextUid
                       , umTags = unionDisjointCategories
-                                     (map (umTags . psrUnits) results) }
+                                     (map (umTags . psrUnits) results)
+                        -- #2710: unit ids are global, so the pages'
+                        -- reference maps are disjoint too.
+                      , umScenarioRefs = Map.unions
+                                     (map (umScenarioRefs . psrUnits) results) }
                   mCamera    = listToMaybe [ c | Just c ← map psrCamera results ]
                   -- #1670: keep the atlas paired with the id of the page
                   -- whose own zoom cache produced it. Only one staged
@@ -1214,12 +1218,24 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         -- #2701: the assignments the two restores just declined to
         -- attach, because nothing they produced carries that id.
         danglingUnitTags = danglingTagTargets liveUids (usnTags (wpsUnits wps))
+        -- #2710: the scenario references the unit restore declined, by
+        -- the same test.
+        danglingUnitRefs = [ uid | uid ← Map.keys (usnScenarioRefs (wpsUnits wps))
+                                 , not (HS.member uid liveUids) ]
         danglingBuildingTags = danglingTagTargets
             (HM.keysSet (bmInstances restoredBm)) (bsnTags (wpsBuildings wps))
 
     unless (null danglingUnitTags) $
         logInfo logger CatWorld $ danglingTagsMessage pid "unit"
             (map (tshow . unUnitId) danglingUnitTags)
+    unless (null danglingUnitRefs) $
+        logInfo logger CatWorld $
+            "Save load: page '" <> unWorldPageId pid
+            <> "': dropped scenario references on "
+            <> tshow (length danglingUnitRefs)
+            <> " unit id(s) that name no restored unit ("
+            <> T.intercalate ", " (map (tshow . unUnitId) danglingUnitRefs)
+            <> ")"
     unless (null danglingBuildingTags) $
         logInfo logger CatWorld $ danglingTagsMessage pid "building"
             (map (tshow . unBuildingId) danglingBuildingTags)

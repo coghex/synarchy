@@ -650,7 +650,8 @@ shippedRosterSpec = describe "the shipped roster (requirements 2 and 6)" $ do
 surfaceSpec ∷ Spec
 surfaceSpec = describe "the installed read surface (requirements 4 and 6)" $ do
 
-    it "installs the five read verbs, the two mutating verbs (#2831) and the atomic batch verb (#2838)" $
+    it "installs the five read verbs, the two mutating verbs (#2831), the atomic batch verb (#2838) \
+       \and its read-only preview (#2710)" $
         withPhysioEngine True $ \eng →
             luaText eng
                 "local names = {}; for k, v in pairs(unit) do \
@@ -658,7 +659,7 @@ surfaceSpec = describe "the installed read surface (requirements 4 and 6)" $ do
                 \table.sort(names); return table.concat(names, ',')"
                 `shouldReturn`
                 "clearPhysioMode,commitPhysio,getPhysioDefault,getPhysioMode,\
-                \getPhysioOverride,readPhysio,readPhysioBase,setPhysioMode"
+                \getPhysioOverride,previewPhysio,readPhysio,readPhysioBase,setPhysioMode"
 
     it "reaches the verbs from scripts/ only through the S5 facade (#2830), \
        \and the wound tick reads through the pure consumer view" $ do
@@ -1154,7 +1155,7 @@ writeSave ∷ String → UnitInstanceSnapshot → IO ()
 writeSave slot unit = do
     let page = (minimalPage page1)
             { pgsUnits = UnitSnapshot
-                (HM.singleton (UnitId 7) unit) 10 mempty
+                (HM.singleton (UnitId 7) unit) 10 mempty mempty
             , pgsUnitSimStates = HM.singleton (UnitId 7) minimalSimState }
     case captureSessionSnapshot minimalGlobals [page] of
         Left errs → expectationFailure ("fixture session invalid: " ⧺ show errs)

@@ -409,7 +409,7 @@ richPage = PageSnapshot
                                      , (BuildingId 2, richBuilding2) ]
         , bsnNextId = 3, bsnTags = mempty }
     , pgsUnits        = UnitSnapshot
-        { usnInstances = HM.singleton (UnitId 1) richUnit, usnNextId = 2, usnTags = mempty }
+        { usnInstances = HM.singleton (UnitId 1) richUnit, usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.singleton (UnitId 1) richSimState
       -- #1854: both maps are keyed by flora INSTANCE now, and the
       -- fixture uses one id from each namespace so the disjointness and
@@ -582,7 +582,7 @@ minimalPage2 = PageSnapshot
       -- (sgNextBuildingId), which every page's slice is rewritten to on
       -- assembly -- see 'World.Save.Snapshot.Adapter'.
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 3, bsnTags = mempty }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 2, usnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty

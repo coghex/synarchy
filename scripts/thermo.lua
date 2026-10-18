@@ -98,6 +98,7 @@ local FEVER_MAX_OFFSET = 3.5   -- ceiling (fever core ≈ 40.5°C)
 local MOVING = { walking = true, running = true, sprinting = true }
 
 local clamp = require("scripts.lib.numeric").clamp
+local effects = require("scripts.unit_effects")
 
 -- Sweat debit mass relationship (#2825). The two SWEAT_*_K constants are the
 -- absolute debits at the HUMAN_MASS reference; every other body pays them
@@ -218,7 +219,7 @@ function thermo.tick(uid, info, dt)
     local dTemp = (production - loss - sweat) * dt * inertia
     dTemp = clamp(dTemp, -MAX_DTEMP_PER_TICK, MAX_DTEMP_PER_TICK)
     core = clamp(core + dTemp, 15.0, 45.0)
-    unit.setStat(uid, "core_temp", core)
+    effects.setStat(uid, "core_temp", core)
 
     -- Minimal costs of thermoregulating.
     if shiver > 0 then
@@ -246,7 +247,7 @@ function thermo.tick(uid, info, dt)
         if drive > 0.001 then
             local nec = FROST_RATE * drive * dt
             for _, part in ipairs(FROST_PARTS) do
-                unit.frostbite(uid, part, nec)
+                effects.frostbite(uid, part, nec)
             end
         end
     end

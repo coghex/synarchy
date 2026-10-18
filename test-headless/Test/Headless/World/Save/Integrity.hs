@@ -134,7 +134,7 @@ minimalPage pid = PageSnapshot
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 100, bsnTags = mempty }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 100, usnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 100, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty
@@ -331,7 +331,7 @@ unitHolding iid = minimalUnit
 --   moving it into building 1, both on the SAME page as the order.
 wellFormedOrderPage ∷ WorldPageId → PageSnapshot
 wellFormedOrderPage pid = (minimalPage pid)
-    { pgsUnits = UnitSnapshot (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty
+    { pgsUnits = UnitSnapshot (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty mempty
     , pgsBuildings = BuildingSnapshot
         (HM.singleton (BuildingId 1) minimalBuilding) 100 mempty
     , pgsTransferOrders = orderWith (UnitId 1) (EndpointUnit (UnitId 1))
@@ -583,10 +583,10 @@ spec = do
         it "rejects the SAME UnitId existing on two different pages" $ do
             let p1 = (minimalPage page1)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 1) minimalUnit) 100 mempty }
+                        (HM.singleton (UnitId 1) minimalUnit) 100 mempty mempty }
                 p2 = (minimalPage page2)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 1) minimalUnit) 100 mempty }
+                        (HM.singleton (UnitId 1) minimalUnit) 100 mempty mempty }
                 snap = buildSnap page1 [p1, p2]
                 errs = sessionIntegrityErrors snap
             length (filter ((≡ "duplicate-identity") ∘ ieCode) errs)
@@ -627,7 +627,7 @@ spec = do
                     { pgsCraftBills = billWithClaimant (BillId 1) (UnitId 5) }
                 p2 = (minimalPage page2)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 5) minimalUnit) 100 mempty }
+                        (HM.singleton (UnitId 5) minimalUnit) 100 mempty mempty }
                 snap = buildSnap page1 [p1, p2]
             case sessionIntegrityErrors snap of
                 [e] → do
@@ -673,7 +673,7 @@ spec = do
             let uid = UnitId 5
                 p1 = (pageWithEncounter page1 uid)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton uid minimalUnit) 100 mempty }
+                        (HM.singleton uid minimalUnit) 100 mempty mempty }
                 snap = buildSnap page1 [p1]
             sessionIntegrityErrors snap `shouldBe` []
             sessionIntegrityWarnings snap `shouldBe` []
@@ -685,7 +685,7 @@ spec = do
                 p1 = pageWithEncounter page1 uid
                 p2 = (minimalPage page2)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton uid minimalUnit) 100 mempty }
+                        (HM.singleton uid minimalUnit) 100 mempty mempty }
                 snap = buildSnap page1 [p1, p2]
             case sessionIntegrityErrors snap of
                 [e] → do
@@ -755,7 +755,7 @@ spec = do
             let held = minimalUnit { uisInventory = [groundItemInstance 7003] }
                 p1 = (pageOwing page1 (owedItem 1 7003 False))
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 5) held) 100 mempty }
+                        (HM.singleton (UnitId 5) held) 100 mempty mempty }
                 snap = buildSnap page1 [p1]
             case sessionIntegrityErrors snap of
                 [e] → do
@@ -896,7 +896,7 @@ spec = do
             let held = minimalUnit { uisInventory = [groundItemInstance 7005] }
                 p1 = (pageOwing page1 (owedItem 1 7005 True))
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 5) held) 100 mempty }
+                        (HM.singleton (UnitId 5) held) 100 mempty mempty }
                 snap = buildSnap page1 [p1]
             sessionIntegrityErrors snap `shouldBe` []
             sessionIntegrityWarnings snap `shouldBe` []
@@ -959,10 +959,10 @@ spec = do
                     , pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1) minimalBuilding) 100 mempty
                     , pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 9) (unitHolding 500)) 100 mempty }
+                        (HM.singleton (UnitId 9) (unitHolding 500)) 100 mempty mempty }
                 p2 = (minimalPage page2)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 5) minimalUnit) 100 mempty }
+                        (HM.singleton (UnitId 5) minimalUnit) 100 mempty mempty }
             case sessionIntegrityErrors (buildSnap page1 [p1, p2]) of
                 [e] → do
                     ieCode e `shouldBe` "wrong-page"
@@ -978,7 +978,7 @@ spec = do
            \source)" $ do
             let p1 = (minimalPage page1)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty
+                        (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty mempty
                     , pgsTransferOrders = orderWith (UnitId 1)
                         (EndpointUnit (UnitId 1))
                         (EndpointBuilding (BuildingId 5)) 500 }
@@ -997,7 +997,7 @@ spec = do
            \different page" $ do
             let p1 = (minimalPage page1)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 1) minimalUnit) 100 mempty
+                        (HM.singleton (UnitId 1) minimalUnit) 100 mempty mempty
                     , pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1) minimalBuilding) 100 mempty
                     , pgsTransferOrders = orderWith (UnitId 1)
@@ -1005,7 +1005,7 @@ spec = do
                         (EndpointBuilding (BuildingId 1)) 500 }
                 p2 = (minimalPage page2)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 2) (unitHolding 500)) 100 mempty }
+                        (HM.singleton (UnitId 2) (unitHolding 500)) 100 mempty mempty }
             case sessionIntegrityErrors (buildSnap page1 [p1, p2]) of
                 [e] → do
                     ieCode e `shouldBe` "wrong-page"
@@ -1020,7 +1020,7 @@ spec = do
            \snapshot" $ do
             let p1 = (minimalPage page1)
                     { pgsUnits = UnitSnapshot
-                        (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty
+                        (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty mempty
                     , pgsTransferOrders = orderWith (UnitId 1)
                         (EndpointUnit (UnitId 1))
                         (EndpointBuilding (BuildingId 999)) 500 }
@@ -1034,7 +1034,7 @@ spec = do
             case sessionIntegrityWarnings (buildSnap page1
                     [ (minimalPage page1)
                         { pgsUnits = UnitSnapshot
-                            (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty
+                            (HM.singleton (UnitId 1) (unitHolding 500)) 100 mempty mempty
                         , pgsTransferOrders = orderWith (UnitId 1)
                             (EndpointUnit (UnitId 1))
                             (EndpointBuilding (BuildingId 999)) 500 } ]) of

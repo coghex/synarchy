@@ -71,6 +71,7 @@
 --   verbs take.
 module Engine.Scripting.Lua.API.Units.Stamina
   ( unitCommitStaminaFn
+  , unitPreviewStaminaFn
   , unitGetMaxStaminaFn
   , StaminaCommit(..)
   , commitStaminaIn
@@ -226,6 +227,32 @@ unitCommitStaminaFn env = do
                     atomicModifyIORef'
                         (ucUnitManagerRef (toUnitCombatCapability env))
                         (commitStaminaIn reg now uid amount)
+                case res of
+                    Left reason → pushRefusal reason
+                    Right sc    → pushCommit sc
+
+-- | @unit.previewStamina(uid, amount)@ (#2710): exactly @unit.commitStamina@'s
+--   answer — the same arguments, refusals and report — computed by the same
+--   pure step ('commitStaminaIn') on a READ of the unit manager, which is never
+--   written. A scenario unit's paused readiness evaluates its authored state
+--   with it ("scripts/unit_effects.lua"), so the pass's stamina thresholds read
+--   precisely what a commit would report without anything being committed.
+unitPreviewStaminaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitPreviewStaminaFn env = do
+    mUid ← readUnitIdArg 1
+    mAmt ← readAmountArg 2
+    case mUid of
+        Nothing  → pushRefusal "invalid_unit_id"
+        Just uid → case mAmt of
+            Nothing     → pushRefusal "invalid_amount"
+            Just amount → do
+                res ← Lua.liftIO $ do
+                    now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+                    reg ← readIORef
+                        (crPhysiologyRegistryRef
+                            (toContentRegistriesCapability env))
+                    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                    pure (snd (commitStaminaIn reg now uid amount um))
                 case res of
                     Left reason → pushRefusal reason
                     Right sc    → pushCommit sc

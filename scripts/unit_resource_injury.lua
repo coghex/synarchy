@@ -5,6 +5,7 @@
 local injuries = require("scripts.injuries")
 local brain    = require("scripts.brain")
 local alerts   = require("scripts.unit_resource_alerts")
+local effects  = require("scripts.unit_effects")
 
 local M = {}
 
@@ -40,7 +41,7 @@ function M.tickStance(uid, dt)
     local dex  = unit.getStat(uid, "dexterity") or 1.0
     local agi  = unit.getStat(uid, "agility") or 1.0
     local rate = STANCE_RECOVER_BASE + STANCE_RECOVER_PER_STAT * (dex + agi)
-    local newv, reason = unit.recoverStance(uid, rate * dt)
+    local newv, reason = effects.recoverStance(uid, rate * dt)
     -- A refusal is a bug in this caller or a unit that vanished under
     -- it, and `nil, reason` on its own is invisible: the engine's
     -- callback isolation reports RAISED errors and discards ordinary
@@ -85,17 +86,13 @@ local function dropDisabledHandWeapons(uid)
             if disabling then
                 local lo   = equipment.getLoadout(uid)
                 local held = lo and lo[slot]
-                if held and unit.dropEquipmentToGround(uid, slot) then
+                if held and effects.dropEquipmentToGround(uid, slot) then
                     local info = unit.getInfo(uid)
                     if info then
                         local gx, gy = alerts.unitCoords(info)
                         local msg = alerts.unitLabel(info) .. " drops "
                             .. (held.displayName or held.defName or "a weapon")
-                        if gx and gy then
-                            engine.emitEventForUnit("unit_event", msg, uid, gx, gy)
-                        else
-                            engine.emitEventForUnit("unit_event", msg, uid)
-                        end
+                        effects.unitEvent("unit_event", msg, uid, gx, gy)
                     end
                 end
             end
@@ -116,13 +113,38 @@ end
 --     gates on the same condition — until the injury heals enough.
 --
 -- Returns true if the unit died this tick (caller skips the rest).
+-- The locomotor pose a unit's injuries and consciousness demand, from its
+-- current pose: "collapsed" (knocked out, with the collapse hysteresis),
+-- "crawling" (lucid but its legs cannot carry it), or "upright". nil for a
+-- unit a fall has knocked down, whose getup timer owns its pose. PURE: it
+-- reads and decides, and the callers act — the per-tick injury pass below,
+-- and a scenario unit's paused readiness (#2710,
+-- unit_resources.settleScenarioUnit), so the two can never disagree.
+function M.injuryPose(uid, info, pose)
+    if info and info.knockedDown then return nil end
+    local knockedOut = injuries.isUnconscious(uid) or brain.isUnconscious(uid)
+    local canRise    = brain.canRise(uid) and injuries.concussionCanRise(uid)
+    if injuries.collapseWithHysteresis(pose, knockedOut, canRise) then
+        return "collapsed"
+    elseif injuries.cannotWalk(uid) then
+        return "crawling"
+    end
+    return "upright"
+end
+
+-- The lethality the injury pass kills by (injuries.lethalCause): its cause,
+-- or nil. Shared with a scenario unit's paused readiness (#2710).
+function M.lethalCause(uid)
+    return injuries.lethalCause(uid)
+end
+
 function M.tickInjuries(uid, info, pose)
     if pose == "dead" then return false end
 
-    local cause = injuries.lethalCause(uid)
+    local cause = M.lethalCause(uid)
     if cause then
-        alerts.emitDeathAlert(uid, cause, "injury")
-        unit.kill(uid)
+        effects.deathAlert(uid, cause, "injury")
+        effects.kill(uid)
         return true
     end
 
@@ -134,26 +156,24 @@ function M.tickInjuries(uid, info, pose)
     --   * unconscious (concussion)        → Collapsed (can't even crawl)
     --   * conscious but legs gone         → Crawling (drags itself along)
     --   * recovered enough to walk        → stand back up
-    if not (info and info.knockedDown) then
-        -- Collapse decision with hysteresis on the collapse↔crawl boundary.
+    local want = M.injuryPose(uid, info, pose)
+    if want then
+        -- Collapse decision (M.injuryPose) with hysteresis on the collapse↔crawl boundary.
         -- ENTERING collapse uses the bare knockout triggers; STAYING collapsed
         -- holds the unit down until BOTH inputs clear their rise band
         -- (consciousness ≥ RISE_AT via brain.canRise, concussion below
         -- CONCUSSION_RISE via injuries.concussionCanRise). Without this both
         -- directions pivot on the same threshold (0.15 / 0.35), so a unit
         -- jittering across it flaps collapsed↔crawling every tick (#304).
-        local knockedOut = injuries.isUnconscious(uid) or brain.isUnconscious(uid)
-        local canRise    = brain.canRise(uid) and injuries.concussionCanRise(uid)
-        local collapsed  = injuries.collapseWithHysteresis(pose, knockedOut, canRise)
-        if collapsed then
+        if want == "collapsed" then
             -- Out cold: from a concussion OR from physiological derangement
             -- (heat stroke / hypoxia / salt imbalance dropping consciousness).
-            if pose ~= "collapsed" then unit.collapse(uid) end
-        elseif injuries.cannotWalk(uid) then
+            if pose ~= "collapsed" then effects.collapse(uid) end
+        elseif want == "crawling" then
             -- Conscious + can't walk: crawl. Covers both dropping from
             -- standing AND rising out of a collapse once consciousness
             -- returns but the legs are still broken.
-            if pose ~= "crawling" then unit.crawl(uid) end
+            if pose ~= "crawling" then effects.crawl(uid) end
         elseif pose == "crawling" then
             -- Legs healed enough to walk — stand up (revive handles the
             -- Crawling→Standing snap; checkRevive handles Collapsed).
@@ -185,7 +205,7 @@ function M.tickInjuries(uid, info, pose)
             -- the unit through the branches above.
             local s = require("scripts.unit_ai").getState(uid)
             if not (s and (s.sleepPhase or s.sourcePhase)) then
-                unit.revive(uid)
+                effects.revive(uid)
             end
         end
     end

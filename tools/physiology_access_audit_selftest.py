@@ -370,6 +370,35 @@ def case_mutating_verb_leak_rejected():
         BASE["scripts/physiology.lua"] + 'unit.setPhysioMode(1, "salt", "nominal")\n'})
 
 
+def case_effects_seam_is_judged_at_the_caller():
+    # #2710: scripts/unit_effects.lua forwards to the unit.* verbs, so a call
+    # THROUGH it is judged as the direct call: a non-owner's write of an
+    # owned key, or a mode verb outside its callers, is still a finding.
+    seam = ('local M = {}\nfunction M.setStat(uid, key, value) return unit.setStat(uid, key, value) end\n'
+            'function M.commitStamina(uid, a) return unit.commitStamina(uid, a) end\n'
+            'function M.setPhysioMode(uid, s, m, v) return unit.setPhysioMode(uid, s, m, v) end\n'
+            'return M\n')
+    req = 'local effects = require("scripts.unit_effects")\n'
+    expect("a raw write through the seam outside the owner",
+           "raw write of owned key 'hydration'",
+           files={"scripts/unit_effects.lua": seam,
+                  "scripts/other.lua": req + 'effects.setStat(1, "hydration", 3)\n'})
+    expect("a mode verb through the seam outside its callers",
+           "mutating physiology verb unit.setPhysioMode",
+           files={"scripts/unit_effects.lua": seam,
+                  "scripts/other.lua": req + 'effects.setPhysioMode(1, "salt", "nominal")\n'})
+    expect("the stamina commit through the seam outside its callers",
+           "mutating physiology verb unit.commitStamina",
+           files={"scripts/unit_effects.lua": seam,
+                  "scripts/other.lua": req + 'effects.commitStamina(1, -1)\n'})
+    # the seam itself is a forwarder, and the facade may call through it
+    expect_clean("the seam alone is clean", files={"scripts/unit_effects.lua": seam})
+    expect_clean("the facade through the seam", files={
+        "scripts/unit_effects.lua": seam,
+        "scripts/physiology.lua": BASE["scripts/physiology.lua"] + req
+            + 'effects.setPhysioMode(1, "salt", "nominal")\n'})
+
+
 def case_stamina_engagement_and_atomic_commit_seams():
     # The SD-20 engagement application is facade-only (#2834).
     expect("applyCombatEngagement outside the facade",

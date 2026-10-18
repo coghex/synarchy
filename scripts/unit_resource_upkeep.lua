@@ -39,6 +39,7 @@
 local regrowth    = require("scripts.unit_resource_regrowth")
 local starvation  = require("scripts.starvation")
 local physiology  = require("scripts.physiology")
+local effects = require("scripts.unit_effects")
 
 local M = {}
 
@@ -93,7 +94,7 @@ end
 local function writeFlag(uid, on)
     local want = on and 1 or 0
     if (unit.getStat(uid, FLAG) or 0) ~= want then
-        unit.setStat(uid, FLAG, want)
+        effects.setStat(uid, FLAG, want)
     end
 end
 
@@ -139,7 +140,7 @@ local function recover(uid, activity, dt, t)
                                       t.fatTarget, t.leanTarget) then
         return
     end
-    unit.recomputeBody(uid)
+    effects.recomputeBody(uid)
 end
 
 -- The Nominal upkeep for one unit. Called every physiology pass for a living

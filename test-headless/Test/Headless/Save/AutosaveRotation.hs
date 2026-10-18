@@ -102,7 +102,7 @@ minimalPage = PageSnapshot
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty }
-    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty }
+    , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
     , pgsChopDesignations = HM.empty

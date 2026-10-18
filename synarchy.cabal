@@ -651,6 +651,13 @@ library
                      Scenario.Items.Owners
                      Scenario.Items.Capture
                      Scenario.Items.Encode
+                     Scenario.Units.Catalog
+                     Scenario.Units.Defaults
+                     Scenario.Units.Build
+                     Scenario.Units.Install
+                     Scenario.Units.Ready
+                     Scenario.Units.Capture
+                     Scenario.Units.Encode
                      Scenario.Types
                      Scenario.Bounds
                      Scenario.Decode.Monad
@@ -1981,6 +1988,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.GameplayTags.Scene
                    Test.Headless.Scenario.Schema
                    Test.Headless.Scenario.Items
+                   Test.Headless.Scenario.Units
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents

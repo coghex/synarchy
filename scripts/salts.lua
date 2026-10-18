@@ -95,6 +95,7 @@ local CRAMP_MIN_MULT = 0.40    -- worst-case movement speed ×
 
 local clamp = require("scripts.lib.numeric").clamp
 local physiology = require("scripts.physiology")
+local effects = require("scripts.unit_effects")
 
 function salts.maxSalt(uid)
     return (unit.getStat(uid, "body_mass") or 70.0) * SALT_PER_KG
@@ -152,8 +153,8 @@ function salts.tick(uid, dt)
     local virtualMeal = physiology.mode(uid, "nutrition") == "nominal"
         and s / mx < VIRTUAL_MEAL_POOL_FRAC
         and store < VIRTUAL_MEAL_RESERVE_FRAC * mx
-    unit.setStat(uid, "salt", s)
-    unit.setStat(uid, "salt_store", store)
+    effects.setStat(uid, "salt", s)
+    effects.setStat(uid, "salt_store", store)
     if virtualMeal then salts.mealSalt(uid) end
 end
 

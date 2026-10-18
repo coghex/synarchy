@@ -456,8 +456,9 @@ def test_pointer_reached_managers_parse_from_their_real_sources():
     # BuildingManager: bmDefs, bmInstances, bmNextId, bmSelected, plus
     # #2326's session-transient bmReservations and #2091's
     # session-transient bmDestructions, and #2701's bmTags. UnitManager
-    # gained #2701's umTags beside its original four.
-    expected_counts = {"UnitManager": 5, "BuildingManager": 7,
+    # gained #2701's umTags beside its original four, and #2710's
+    # umScenarioRefs.
+    expected_counts = {"UnitManager": 6, "BuildingManager": 7,
                        "UnitThreadState": 1}
     for label, relpath, pattern in POINTER_REACHED_MANAGERS:
         expect(relpath in record_sources,

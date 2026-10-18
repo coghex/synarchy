@@ -248,6 +248,7 @@ sessionIntegrityErrors snap = concat
     , containerProvenanceErrors snap
     , orderRefErrors snap
     , unitTagErrors, buildingTagErrors
+    , unitRefErrors, unitRefClaimErrors
     ]
   where
     pages = snapPages snap
@@ -268,6 +269,43 @@ sessionIntegrityErrors snap = concat
                          path RefUnit ScopeSamePage pid (unitPages uid)
                          (tshow (unUnitId uid)) ]
         ]
+
+    -- #2710: a page's unit scenario references are captured by the
+    -- same page filter as its instances, exactly like its tags.
+    unitRefErrors =
+        [ err
+        | (pid, page) ← HM.toList pages
+        , uid ← Map.keys (usnScenarioRefs (pgsUnits page))
+        , let path = "units[page=" <> unWorldPageId pid <> "].scenario-refs[unit="
+                     <> tshow (unUnitId uid) <> "]"
+        , Just err ← [ refEdgeError unitsComponentId (ccVersion unitsCodec)
+                         path RefUnit ScopeSamePage pid (unitPages uid)
+                         (tshow (unUnitId uid)) ]
+        ]
+
+    -- #2710: scenario ids share ONE session namespace, so a reference
+    -- two units hold — on two pages, since the codec refuses a page that
+    -- repeats one — would restore a mapping that names two units.
+    unitRefClaimErrors =
+        [ IntegrityError
+            { ieComponent = unitsComponentId, ieVersion = ccVersion unitsCodec
+            , iePath = "units[page=" <> unWorldPageId pid <> "].scenario-refs[unit="
+                       <> tshow (unUnitId uid) <> "]"
+            , ieRefKind = RefUnit, ieRefValue = tshow (unUnitId uid)
+            , ieExpectedScope = "one unit per scenario reference"
+            , ieActual = "reference '" <> r <> "' is held by "
+                         <> tshow (length holders) <> " units"
+            , ieCode = "duplicate-scenario-reference"
+            , ieMessage = "scenario reference '" <> r
+                <> "' names more than one unit in the session"
+            }
+        | (r, holders) ← Map.toList claims, length holders > 1
+        , (pid, uid) ← holders ]
+      where
+        claims = Map.fromListWith (flip (⧺))
+            [ (r, [(pid, uid)])
+            | (pid, page) ← L.sortOn fst (HM.toList pages)
+            , (uid, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
 
     buildingTagErrors =
         [ err
@@ -1336,6 +1374,17 @@ tagDanglingWarnings snap =
     , uid ← Map.keys (usnTags (pgsUnits page))
     , null (sessionPagesOf entitiesByPage (OrderRefUnit uid))
     , let v = tshow (unUnitId uid) ]
+    -- #2710: a unit scenario reference naming no unit, dropped exactly
+    -- like a dangling unit tag.
+    ⧺ [ (dangling unitsComponentId (ccVersion unitsCodec) RefUnit pid
+          ("units[page=" <> unWorldPageId pid <> "].scenario-refs[unit=" <> v <> "]")
+          ("unit '" <> v <> "'") v)
+          { ieMessage = "scenario reference on unit '" <> v
+              <> "' names no existing unit (dropped: a reference to nothing is not restored)" }
+      | (pid, page) ← HM.toList (snapPages snap)
+      , uid ← Map.keys (usnScenarioRefs (pgsUnits page))
+      , null (sessionPagesOf entitiesByPage (OrderRefUnit uid))
+      , let v = tshow (unUnitId uid) ]
     ⧺ [ dangling buildingsComponentId (ccVersion buildingsCodec) RefBuilding pid
           ("buildings[page=" <> unWorldPageId pid <> "].tags[building=" <> v <> "]")
           ("building '" <> v <> "'") v

@@ -778,6 +778,12 @@ data UnitSnapshot = UnitSnapshot
     , usnTags      ∷ !(Map.Map UnitId (Set.Set GameplayTag))
       -- ^ This page's units' authoritative gameplay tag assignments
       --   (#2701); see 'bsnTags', which this mirrors exactly.
+    , usnScenarioRefs ∷ !(Map.Map UnitId Text)
+      -- ^ #2710: the scenario reference each of this page's units was
+      --   constructed from ('Unit.Types.Manager.umScenarioRefs'),
+      --   captured by the same page filter as the instances and restored
+      --   only onto the instances a restore produced, exactly like
+      --   'usnTags'.
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Persistable snapshot of `UnitInstance`. Drops `uiTexture` +
@@ -860,6 +866,8 @@ toUnitSnapshot page um = UnitSnapshot
     , usnNextId    = umNextId um
     , usnTags      = Map.restrictKeys (categoryForward (umTags um))
                                       (Set.fromList (HM.keys onPage))
+    , usnScenarioRefs = Map.restrictKeys (umScenarioRefs um)
+                                         (Set.fromList (HM.keys onPage))
     }
   where onPage = unitsOnPage page (umInstances um)
 
@@ -1005,6 +1013,9 @@ fromUnitSnapshot page defs infMgr ecMgr itemMgr snap =
                   -- #2701: as 'fromBuildingSnapshot' does for buildings.
                 , umTags      = restoredTags (HS.fromList (map fst resolved))
                                              (usnTags snap)
+                  -- #2710: the scenario references follow the same rule.
+                , umScenarioRefs = Map.restrictKeys (usnScenarioRefs snap)
+                                       (Set.fromList (map fst resolved))
                 }
     in (um, orphans, unknownFactions, immScrub, eqOrphans)
 
