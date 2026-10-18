@@ -191,8 +191,9 @@ function testArena.createArenaWorld()
     engine.logInfo("Creating test arena world...")
 
     -- Queue the WorldInitArena command on the world thread.
-    -- This creates a WorldState with 25 flat loam chunks
-    -- and marks it LoadDone immediately.
+    -- This creates a WorldState with the 25-chunk startup footprint (12
+    -- granite under 4 loam per column) and marks it LoadDone immediately;
+    -- chunks beyond it are supplied on demand from the same generator.
     world.initArena(testArena.arenaWorldId)
 
     -- Send textures so the tiles render correctly.

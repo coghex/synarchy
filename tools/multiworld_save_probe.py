@@ -35,7 +35,7 @@ What it does:
 Arena pages (#365): loading a save containing a world.initArena page used
 to hang the world thread (the arena's synthetic gen params wedge the
 regenerate-from-params load path). Fixed by rebuilding arena pages through
-the shared flat builder on load; pass --arena to run this probe with an
+the single arena chunk authority on load; pass --arena to run this probe with an
 arena as the secondary page — it additionally asserts a pre-save
 world.addTile edit is replayed onto the rebuilt arena. The default run
 keeps two real generated worlds (the #219 gate) unchanged.
