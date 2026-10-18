@@ -637,7 +637,9 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
             while time.time() < deadline and far_row is None:
                 r = send(port, f"local f = world.getFloraAt({rx}, {ry}); "
                                f"return tostring(f and f.instanceId)").strip('"')
-                far_row = ((rx, ry), as_int(r)) if as_int(r) else None
+                # Exact integer parse: a planted id sets bit 62, beyond a
+                # float's 53-bit mantissa, so as_int's float() would round it.
+                far_row = ((rx, ry), int(r)) if r.isdigit() and int(r) else None
                 if far_row is None:
                     time.sleep(0.2)
         chk.ok(far_row is not None, f"a row crop was planted in the far chunk (got {far_row})")
