@@ -172,3 +172,12 @@ Roles, crafting and bills, power, farming, construction, position hold,
 transfers and the expedition verbs each have a section in
 `docs/engine_contracts.md`; the root `CLAUDE.md` §Domain contracts lists
 the rule to know on sight and the gate for each.
+
+**Gameplay tags (#2706).** Read
+[`docs/gameplay_tags_lua.md`](../docs/gameplay_tags_lua.md) before using
+the `gameplayTags` namespace. Tags are labels with no engine meaning, and
+they are separate from `faction`. Every verb answers a refusal as
+`nil, message`. Targets must be live and loaded, and a target missing from
+results may only be unloaded. Its examples are
+`scripts/gameplay_tag_examples.lua`; gate: hspec `--match "Lua gameplay
+tags"`.
