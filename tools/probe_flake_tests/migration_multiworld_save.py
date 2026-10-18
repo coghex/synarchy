@@ -18,6 +18,18 @@ def test_multiworld_save_launch():
         default_log="/tmp/mw_save_probe_A.log")
 
 
+FINITE_IDS = ("finite_rectangle_restored", "finite_edge_edits_restored",
+              "finite_unit_contained", "finite_fluid_closed",
+              "finite_expansion_refused", "finite_load_preserves_save_bytes")
+
+
+def finite_checks_pass(_port, _page, _state, chk, _save_file, _save_digest):
+    """Stand-in for the live finite-arena probe: every check it owns, in
+    its own order, reported as passing."""
+    for check_id in FINITE_IDS:
+        chk.ok(check_id, True, check_id)
+
+
 def drive(rep, *, arena=False, missing_entry=False, missing_vegetation=False,
           save_changed=False):
     launches = []
@@ -40,6 +52,10 @@ def drive(rep, *, arena=False, missing_entry=False, missing_vegetation=False,
         stack.enter_context(patch.object(probe, "populate_world", side_effect=[(1, 2), (3, 4)]))
         stack.enter_context(patch.object(probe, "populate_arena", return_value=(3, 4, 0, [7] * 256, [9] * 256, 0)))
         stack.enter_context(patch.object(probe, "expand_arena", return_value=True))
+        stack.enter_context(patch.object(probe, "populate_finite", return_value={
+            "rect": (-50, 49, -19, 20), "base": {}, "uid": 9, "wet": 2}))
+        stack.enter_context(patch.object(
+            probe, "check_finite_restored", side_effect=finite_checks_pass))
         digests = iter(["before", "after" if save_changed else "before"])
         stack.enter_context(patch.object(probe, "file_sha256", side_effect=lambda _p: next(digests)))
         stack.enter_context(patch.object(probe, "read_arena_veg", side_effect=lambda _port, origin=None: None if missing_vegetation else ([9] * 256 if origin == probe.EXPANDED_VEG_CHUNK else [7] * 256)))
@@ -120,7 +136,8 @@ def test_multiworld_save_arena_expansion_checks():
             return rc, outcomes
     rc, outcomes = run()
     expanded = ("arena_expanded_readable", "arena_expanded_vegetation_restored",
-                "arena_expanded_edit_restored", "arena_load_preserves_save_bytes")
+                "arena_expanded_edit_restored", "arena_load_preserves_save_bytes") \
+        + FINITE_IDS
     support.expect(rc == 0 and all(outcomes[check] == "PASS" for check in expanded),
                    "every expanded-arena check passes on a faithful round trip")
     rc, outcomes = run(save_changed=True)
@@ -129,5 +146,28 @@ def test_multiworld_save_arena_expansion_checks():
                    "a rewritten save file fails only the byte-preservation check")
 
 
+def test_multiworld_save_finite_arena_contract():
+    """#2708: the probe's finite-arena rectangle is the issue's formula, and
+    its probe points are exactly the corners, edge midpoints and their
+    outside neighbours — literals, not read back from the engine."""
+    support.expect(probe.finite_rect(20, 10) == (-10, 9, -4, 5), "20x10 rectangle")
+    support.expect(probe.finite_rect(21, 11) == (-10, 10, -5, 5), "21x11 rectangle")
+    support.expect(probe.finite_rect(1, 1) == (0, 0, 0, 0), "1x1 rectangle")
+    support.expect(probe.finite_rect(*probe.FINITE_SIZE) == (-50, 49, -19, 20),
+                   "the probe's 100x40 rectangle")
+    inside, outside = probe.finite_probe_points((-50, 49, -19, 20))
+    support.expect(inside == [(-50, -19), (49, -19), (-50, 20), (49, 20),
+                              (-50, 0), (49, 0), (-1, -19), (-1, 20)],
+                   "eight inside points")
+    support.expect(outside == [(-51, -20), (50, -20), (-51, 21), (50, 21),
+                               (-51, 0), (50, 0), (-1, -20), (-1, 21)],
+                   "eight outside points")
+    support.expect(all(i in probe.descriptor(True).ids for i in FINITE_IDS),
+                   "the arena descriptor declares every finite-arena check")
+    support.expect(not any(i in probe.descriptor(False).ids for i in FINITE_IDS),
+                   "the generated-world descriptor does not")
+
+
 TESTS = (test_multiworld_save_launch, test_multiworld_save_missing_save_entry, test_multiworld_save_arena_descriptor_and_gap,
-         test_multiworld_save_arena_expansion_checks)
+         test_multiworld_save_arena_expansion_checks,
+         test_multiworld_save_finite_arena_contract)

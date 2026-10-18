@@ -28,7 +28,7 @@ import Unit.Thread.Command.MotionGuard (motionPayloadOk, motionPositionsAdmitted
 import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import Gameplay.Tags.ItemLifecycle
     (withDestroyedItems, itemForestIds, unitItems, retiredUnitItemIds)
-import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
+import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupTileChunk)
 import World.Page.Types (WorldPageId(..))
 import World.Generate (globalToChunk)
 import World.Generate.Coordinates (canonicalTileFrame)
@@ -329,7 +329,7 @@ lookupTerrainTopZ env pageId gx gy = do
             td ← readIORef (wsTilesRef ws)
             let (chunkCoord, (lx, ly), _) =
                     canonicalTileFrame worldSize gx gy
-            return $ case lookupChunk chunkCoord td of
+            return $ case lookupTileChunk gx gy chunkCoord td of   -- #2708
                 Just lc → Just (lcTerrainSurfaceMap lc
                                     VU.! columnIndex lx ly)
                 Nothing → Nothing
@@ -341,7 +341,7 @@ lookupSurfaceZ env pageId gx gy = do
         Nothing → return Nothing
         Just ws → do
             td ← readIORef (wsTilesRef ws)
-            return $ case lookupChunk chunkCoord td of
+            return $ case lookupTileChunk gx gy chunkCoord td of   -- #2708
                 Just lc → Just (lcSurfaceMap lc VU.! columnIndex lx ly)
                 Nothing → Nothing
   where
