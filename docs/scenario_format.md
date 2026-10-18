@@ -542,9 +542,13 @@ definition's own defaults, with no override and no applied engagement.
 **Related fields are checked as a group, never by the order they are applied in.**
 
 - **Body masses.** State the four masses together, with
-  `lean_mass + fat_mass ≤ body_mass`, or state none of them. A partial or
-  incoherent set rejects each stated mass (`FieldRejected InvalidValue`), and the
-  unit takes the seed path.
+  `lean_mass + fat_mass ≤ body_mass` and `fat_mass` at least its floor
+  (`0.02 × frame_mass`, the floor every starvation pass clamps a body up to), or
+  state none of them. A partial or incoherent set rejects each stated mass
+  (`FieldRejected InvalidValue`), and the unit takes the seed path. A capture can
+  never hold fat below the floor, so an authored body below it is rejected, never
+  clamped (manager ruling, 2026-10-18). A lean mass at or below its own floor is a
+  death condition instead, and the unit is rejected whole.
 - **Seed inputs beside masses.** With a valid set of masses, a stated `bulk` or
   `bodyfat` is rejected: those fields only seed a fresh body.
 - **Pool limits.** A pool stated above its maximum (the healthy value of a pool
@@ -584,23 +588,42 @@ definition's own defaults, with no override and no applied engagement.
    body-mass seed. The blood-loss collapse is the wound tick's own verdict over
    zero elapsed time (`Combat.Wounds.Tick.tickOneUnitWith`, its unit discarded).
    Nothing drains, heals or rolls.
-10. **Paused readiness.** This step runs at install, before completion
-    (`Scenario.Units.Install.uirReady`; production `Scenario.Units.Ready`, on the
-    Lua thread). `unit_resources.settleScenarioUnit` runs the ONE per-unit
-    reconciliation the resource tick itself runs, `unitResources.reconcileUnit`,
-    once at zero elapsed time. It covers stance, cardio, the system ticks,
-    injuries and their lethality, failure meters, every pool's death,
-    kill-on-zero and collapse thresholds, starvation's muscle and fat floors,
-    the calorie strength discount, and revival.
+10. **Paused readiness: a pure evaluation of the authored state.** This step
+    runs at install, before completion (`Scenario.Units.Install.uirReady`;
+    production `Scenario.Units.Ready`, on the Lua thread).
+    `unit_resources.settleScenarioUnit` runs the ONE per-unit reconciliation
+    the resource tick itself runs, `unitResources.reconcileUnit`, once at zero
+    elapsed time. It covers stance, cardio, the system ticks, injuries and
+    their lethality, failure meters, every pool's death, kill-on-zero and
+    collapse thresholds, starvation's floors, the calorie strength discount,
+    and revival.
 
-    - **Recorded effects.** The pass's effects go through one seam,
-      `scripts/unit_effects.lua`. For this unit and this call they are recorded
-      rather than queued or announced: no engine command, no death or survival
-      alert, no event.
-    - **Death.** A death the pass would cause rejects the unit (`UnitRejected`,
-      `EntryRejected`). It is retired through the destroy step.
-    - **Pose.** The last pose the pass would establish is applied synchronously
-      with the `UnitCollapse` / `UnitCrawl` / `UnitRevive` handlers.
+    - **Every mutation goes through one seam.** `scripts/unit_effects.lua`
+      carries all of them: stat writes, body recomputes, the stamina and
+      physio commits, the mode verbs, frostbite, stance recovery, the
+      equipment drop, the combat engagement, the four pose verbs, alerts and
+      events. In production each one is the existing verb, so the tick is
+      unchanged.
+    - **Nothing is performed during the pass.** For this unit and this call,
+      the seam records instead of acting. Stat writes are recorded. The two
+      commits answer from read-only native previews, `unit.previewStamina` and
+      `unit.previewPhysio`, which run the commits' own pure steps without
+      publishing. Frostbite, the drop, stance recovery, the engagement and the
+      mode verbs are refused. Alerts and events are not emitted.
+    - **What happens afterwards.** Only two things are applied:
+      - the recorded writes to stats the unit does not author: the strength
+        discount and the failure meters;
+      - the verdict: a death rejects the unit, retired through the destroy
+        step; a pose is established with the `UnitCollapse` / `UnitCrawl` /
+        `UnitRevive` handlers.
+    - **Authored values are never changed by readiness.** Frostbite in a cold
+      arena and a disabled hand dropping its weapon happen at the first real
+      tick, as ordinary gameplay.
+    - **Static check.** A static check in the `Scenario.Units` group fails if a
+      readiness module calls a mutating engine verb other than through the
+      seam, calls an unclassified verb, or captures a namespace or verb in a
+      local. The physiology access audit judges a call through the seam as
+      the direct verb it forwards to.
     - **What it skips.** The mind trio (`brain`, `thoughts`, `mental`): over
       zero time it changes nothing, and `thoughts` would draw the gameplay
       random stream when a thought is due.
@@ -695,13 +718,21 @@ handler's fence applied to the same two writes.
 - **Encounters.** An `encounter` is returned on the build for the location adapter
   (SCN-12), which owns the roster.
 
-The completed unit is exactly what the ordinary path makes of an ordinarily spawned
-unit in the same state: the wound tick and `reconcileUnit` at zero elapsed time, with
-the queued commands applied. "Exactly" means the same death, pose, stats, blood and
-wounds. The Hspec group checks this over 100 generated specs, which mix exhausted,
-dehydrated and starved pools, low endurance, bodies at and below the muscle floor,
-and concussion, fracture, bleeding and worsening vital wounds. A queued kill counts
-as the death even when the same pass queues a collapse behind it.
+The Hspec group checks this over 160 generated specs. They mix exhausted, dehydrated
+and starved pools, low endurance, bodies at and below the muscle and fat floors, and
+concussion, fracture, bleeding, worsening vital and disabled-hand wounds, with and
+without a tagged, referenced dagger in the disabled hand, and with and without a
+cold arena. The checks:
+
+- **Accepted entries.** Every authored value is bit-identical after readiness; only
+  the pose may differ.
+- **Rejected entries.** They leave no unit, item, tag, reference or ground item.
+- **Verdicts.** Death, pose and strength discount match the ordinary path: an
+  ordinarily spawned unit in the same state, after the wound tick and
+  `reconcileUnit` at zero time, with the queued commands applied. A queued kill
+  counts as the death. The cold specs are left out of this comparison, because
+  the ordinary pass applies the environment's zero-time frostbite and readiness,
+  by design, never does.
 
 After completion, the paused hooks leave the baseline unchanged:
 
