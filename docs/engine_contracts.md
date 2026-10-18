@@ -2344,9 +2344,20 @@ every consumer relies on:
   `tools/persistence_contract_probe.py` and the access audit.
 * *`salt_conc`* is computed on every read (and inside salt's excretion) by one
   shared pure rule and never stored.
-* *Consciousness and mind (S11a, #2838).* Two systems, both registered
-  all-Simulated for every supported species in this slice (S11b applies the
-  SD-23 Nominal-mind defaults; a bodyless definition is Unsupported). 
+* *Consciousness and mind (S11a, #2838; SD-23 defaults S11b, #2840).* Two
+  systems. Consciousness is Simulated for every bodied species; **mind is
+  Simulated only for the acolyte** (the `rich` profile) and Nominal for the
+  bear, squirrel, technomule and nomad (the `reduced`, `simple` and `exempt`
+  profiles); a bodyless definition is Unsupported for both. The intentional
+  behavior change (#2840): bears and squirrels stop having mental breaks, and
+  wildlife, technomules and nomads stop having thoughts, breaks or euphoria
+  under their shipped defaults, so lash-out episodes from default profiles
+  come only from acolytes; a per-unit Simulated mind pin
+  (`physiology.setMode(uid, 'mind', 'simulated')`) still works for any
+  supported species and keeps its durable values and episode. A load
+  normalizes an UNPINNED unit whose effective mind became Nominal (D-6 (b),
+  one logged repair per unit, a second load repairs nothing) and leaves a
+  pinned-Simulated or pinned-Nominal mind exactly as saved. 
   `consciousness` owns nothing stored: it DERIVES `consciousness` and
   `concentration` on demand through `Unit.Physiology.Mind` (the worst of the
   temperature, oxygen and salt factors; that, scaled by normalized injury
@@ -2398,7 +2409,10 @@ every consumer relies on:
   `now` for `thought_next_at` (its first thought is eligible on its first
   pass), while the mode-change hook re-rolls it to `now + random x 30` on the
   gameplay stream only on an effective change. Gates: hspec `--match
-  "physiology brain and mental atomicity"`, `--match "Mental effectiveness"`,
+  "physiology mind species profiles"` (the SD-23 table through the real
+  definitions, default-Nominal suppression, T-S11-3/T-S11-6 with no override,
+  the nomad caffeine-regen control, changed-default load normalization),
+  `--match "physiology brain and mental atomicity"`, `--match "Mental effectiveness"`,
   the access audit (`physiology.commit` is callable only by `brain.lua`,
   `mental_state.lua` and `thoughts.lua`; `unit.commitPhysio` only by the
   facade), `tools/persistence_contract_probe.py` and the mental probes.

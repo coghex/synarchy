@@ -30,6 +30,10 @@ does not depend on that document.
 | `Gameplay.Tags.Query` | `TagQuery`, `TagFilter`, universes/results (`TargetSets`), evaluation |
 | `Gameplay.Tags.Live` | the internal edit, inspect and query operations over the live owners (#2701), physical items included (#2703) |
 | `Gameplay.Tags.ItemLifecycle` | forgetting physical-item tags when items actually cease to exist (#2703) |
+| `Gameplay.Tags.Edit` | `TagEdit` and `TagEditResult`, shared by every owner (re-exported by `Gameplay.Tags.Live`) |
+| `Gameplay.Tags.Page` | the page-owned tile, occurrence and plot stores and every pure transition over them (#2705) |
+| `Gameplay.Tags.PageLive` | the world-thread edits and admission reconciliation over a page's live stores (#2705) |
+| `Gameplay.Tags.Request` | asking the world thread for a tile or plant tag edit from any other thread (#2705) |
 
 The first five are pure. `Gameplay.Tags.Tag` and `Gameplay.Tags.Index`
 import no object identity, which is what lets the unit and building
@@ -491,13 +495,143 @@ refunds are new identities.
   ownership changes, consumption and ground destruction, fresh-process
   load and save, an autosave and an arena.
 
+## Live tags: terrain cells and plants
+
+Since #2705 (SCN-05) terrain cells and plants have live owners: the page
+that holds them. Following #2701's pattern, the state that owns the
+objects holds a `CategoryIndex`. No cell, flora instance or crop plot
+gains a field, and `EngineEnv` gains none.
+
+| Target | Typed key | Owner |
+|---|---|---|
+| A terrain cell | `TileTarget` (page, canonical `x`, `y`, `z`) | `WorldState.wsPageTagsRef` (`PageTags.ptTiles`) |
+| A wild plant or planted row crop | `PlantTarget` occurrence (page, `FloraInstanceId`) | `WorldState.wsPageTagsRef` (`PageTags.ptOccurrences`, with each tagged occurrence's recorded canonical tile in `ptOccurrenceTiles`) |
+| A groundcover crop plot | `PlantTarget` plot (page, canonical plot tile) | `WorldState.wsCropPlotsRef` (`CropPlotStore.cpsTags`, beside the plots) |
+
+The two `PlantTarget` forms are a typed distinction: a plot has no
+occurrence identity (its synthetic growth instance carries the reserved
+`floraInstanceIdNone`, which is never a key), so it is addressed through
+the plot map's own canonical tile key. Co-tenants of one tile are
+separate occurrences. Keys carry the page, so equal coordinates or
+occurrence counters on another page are independent.
+
+### Synchronization boundary
+
+- `wsPageTagsRef` is world-thread state. Every writer runs on the world
+  thread, which is also the only writer of the tile store its targets
+  live in: tag edits, cleanup after in-place chunk edits and flora
+  removal, admission reconciliation, and load staging. A check against
+  the tile store and the write that depends on it are therefore never
+  separated by a tile change. Another thread asks for an edit with
+  `requestPageTagEdit`, which queues `WorldEditPageTags` carrying the
+  page incarnation it resolved. A page destroyed or re-initialised since
+  then answers `TagEditNoTarget` and is untouched, so stale queued work
+  never reaches a replacement.
+- Plots are written from both the Lua and the world thread, so their
+  tags live in the plot store's own ref. A plot tag edit and a plot
+  removal are each one atomic step of that ref.
+- A query reads each page's tag stores before its tile store. An
+  assignment whose target the later tile read no longer holds is outside
+  the universe. Within a category the forward and reverse maps are one
+  value and always agree.
+
+### Live targets and the query universe
+
+A target is live only while it is resident:
+
+- a cell must be a stored, non-air cell of a resident chunk, which
+  includes cells below the surface;
+- an occurrence must be in a resident chunk;
+- a plot must exist and stand on a resident chunk.
+
+Air, depths outside a column's stored range, absent chunks, absent
+occurrences and tiles without a plot are refused (`TagEditNoTarget`).
+Nothing is generated or loaded to make them exist, and camera visibility
+and discovery play no part.
+
+The tile universe is every live cell, so a negative tile query returns
+every untagged resident cell, untruncated. `liveTagUniverseFor` and
+`runLiveTagQueryIn` build only the categories a query ranges over, so a
+query that does not touch tiles pays nothing for them. Assignments of
+evicted targets are kept but are never in a universe, so they appear in
+neither positive nor negative results.
+
+### Residency is not lifetime
+
+| Event | Effect on cell and plant tags |
+|---|---|
+| A chunk is evicted | nothing: the assignments are page state, kept without retaining the chunk, and invisible until the chunk is resident again |
+| A chunk is admitted (camera loader, queue drain, or a load's staged seeds), its edits replayed and its flora hydrated | the assignments it OWNS are reconciled against what it really holds: a cell that is not stored non-air, or a recorded occurrence the chunk no longer holds, is destroyed and forgotten, each removal logged by coordinate or id. Assignments owned by any other chunk are untouched. A missing chunk alone is never evidence of destruction |
+| A material, slope or vegetation change; growth, depletion, harvest or chop of a wild occurrence; a dead occurrence still standing | kept: the target still exists |
+| An in-place edit makes a cell air or takes it out of its column's stored range (`WeDeleteTile`, `WeSetCell` to air), through `replaceChunkForgettingFlora` | that cell's tags go. The cell it exposes keeps its own, and nothing transfers to it |
+| A cell is created at a coordinate whose earlier cell was removed | it inherits nothing: the removal already forgot that cell |
+| Flora removal: a dig sheds the plants rooted on a tile, or slope passes after admission shed them (`forgetFloraInstances`) | only the removed occurrences' tags go; co-tenants that remain keep theirs |
+| A plot is harvested (`world.harvestFlora`'s annual clear, the only production plot removal) | the plot and its tags go in one step, and a plot replanted on the tile starts untagged |
+| A page is destroyed or re-initialised, or the session is replaced | the old page's stores go with its `WorldState`; a new page starts empty |
+
+**Manager ruling (premise correction, 2026-10-17).** The binding spec addition says
+plot removal through the "crop plant invalidation" paths clears a plot's
+memberships. On master 11d325968 those paths (`World.Plant.Validate`)
+remove plant designations, which are orders to plant and not tag
+targets, and never remove plots. The rule is applied at the real
+production plot removal, the harvest delete. Terrain loss under a plot
+does not remove the plot, and no new plot removal rule was invented.
+
+### Persistence
+
+| Component | Version | Carries |
+|---|---|---|
+| `world-edits` | v5 | each page slice's `pedTileTags`, `pedOccurrenceTags`, `pedOccurrenceTiles` and `pedPlotTags` |
+
+- **Capture.** Assignments are saved beside the edits, the planted-id
+  cursor and the plots under the save barrier, through
+  `capturePageTags`. Targets whose chunks are absent are saved exactly
+  like resident ones.
+- **Migration.** `world-edits` v4 is frozen as
+  `PageEditsDTOv4`/`WorldEditsDTOv4`, and every older version migrates
+  to no assignments. `currentSaveVersion` is unchanged.
+- **Integrity.** A plot assignment naming no plot the page saved is a
+  `dangling-reference` warning (`RefCropPlot`), and staging drops it
+  with a log line. Cells and occurrences are not checked against
+  residency at load, because no chunk is resident during a load and an
+  absent target is still a target. The admission of the chunk that owns
+  each one reconciles it. An occurrence assignment with no recorded tile
+  could never be reconciled, so staging drops it.
+- **Restore.** `restorePageTags` rebuilds every reverse index before the
+  staged page can be queried. The staged seed chunks are reconciled like
+  any other admission. A load replaces the outgoing stores, and a
+  failure before publication leaves the old session's stores intact.
+- **Tooling.** The codec summary lists each page's `tiles`, `plants`
+  (with recorded tile) and `plots`. `seed-tags` accepts the same three
+  kinds.
+
+### Cell and plant gates
+
+- Hspec `--match "Gameplay.Tags.Residency"`:
+  - targets: multiple elevations of one column, seam aliases, air,
+    unstored depths, unloaded chunks and no implicit generation;
+  - the typed plant targets;
+  - the universe and query algebra, with list, count and exists in
+    agreement before and after eviction;
+  - eviction and readmission through the pipeline's own functions,
+    admission reconciliation and its logging;
+  - every destruction and replacement path above;
+  - page and incarnation isolation;
+  - a save made while a tagged chunk is evicted, the real codec round
+    trip, load install, reverse index rebuild, replacement and
+    pre-publication failure, the dangling plot, and v4 migration.
+- `--match "save migrations"`: the tracked `z11-tile-flora-tags`
+  fixture (nonempty cells and both occurrence namespaces, `world-edits`
+  v5) and every older fixture's empty default.
+- `tools/gameplay_tag_persistence_probe.py`'s place leg: real cells, a
+  wild occurrence and a wheat plot through a fresh-process save made
+  while their chunk is absent, readmission, real digging and an
+  autosave.
+
 ## Not yet integrated
 
 Later slices of epic #2698 still owe:
 
-- **Plants and tiles.** Their categories exist in the registry but have
-  no live owner yet (SCN-05). Their universes come from the flora tables
-  and loaded tile storage. Chunk eviction must not look like deletion.
 - **Lua access.** This includes argument decoding and result
   marshalling. `count` and `exists` must return scalars, not lists.
 
