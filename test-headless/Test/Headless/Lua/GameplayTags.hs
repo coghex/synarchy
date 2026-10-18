@@ -14,7 +14,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import qualified HsLua as Lua
 
 import Building.Types (BuildingId(..))
@@ -24,6 +24,10 @@ import Engine.Scripting.Lua.API.GameplayTags (TagMarshal(..), productionTagMarsh
 import Engine.Scripting.Lua.API.GameplayTags.Args (maxExpressionDepth)
 import Engine.Scripting.Lua.API.Register.GameplayTags (registerGameplayTagAPIWith)
 import Engine.Scripting.Lua.CallStats (newLuaCallStats)
+import Engine.Save.Barrier
+    ( SaveOwner(..), acknowledgeSave, beginSave, captureLocked, failSave, finishSave
+    , reachSnapshot, releaseCaptureLock )
+import System.Timeout (timeout)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -276,7 +280,7 @@ scalarSpec = describe "scalar modes" $
         let counting = TagMarshal $ \t → do
                 Lua.liftIO (modifyIORef' pushes (+ 1))
                 tmPushTarget productionTagMarshal t
-        Lua.runWith (lbsLuaState ls) (registerGameplayTagAPIWith counting stats env)
+        Lua.runWith (lbsLuaState ls) (registerGameplayTagAPIWith counting (pure ()) stats env)
         let eval = executeDebugLua (lbsLuaState ls)
         eval "gameplayTags.count({ tag = 'defender' }, { categories = 'unit' })" `shouldReturn` "3"
         eval "gameplayTags.exists({ tag = 'defender' }, { categories = 'unit' })" `shouldReturn` "true"
@@ -369,6 +373,70 @@ lifecycleSpec = describe "destruction, replacement and stale work" $ do
         run fx ("gameplayTags.add(" <> plantT pageP oakOcc <> ", 'stale')")
             `shouldReturn` "nil|gameplayTags.add: no such live target (it does not exist, or is not loaded)"
         run fx "gameplayTags.query({ tag = 'stale' })" `shouldReturn` "[]"
+
+    it "a page replaced between an edit's resolution and its application refuses the edit" $ \fx → do
+        resetScene fx
+        let env = fxEnv fx
+        fresh ← newPage False
+        armed ← newIORef True
+        hook ← newIORef (Just (registerPageIncarnation env pageP $ \m →
+                    m { wmWorlds = [ if p ≡ pageP then (p, fresh) else (p, w) | (p, w) ← wmWorlds m ] }))
+        -- The PRODUCTION verbs, with the page replaced in exactly the
+        -- window between resolving the target and enqueueing its edit.
+        let replaceOnce = do
+                go ← atomicModifyIORef' armed (False,)
+                when go $ readIORef hook ≫= sequence_
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env) (assetPoolRef env)
+                                   (nextObjectIdRef env) (inputStateRef env) (loggerRef env)
+        stats ← newLuaCallStats
+        Lua.runWith (lbsLuaState ls) (registerGameplayTagAPIWith productionTagMarshal replaceOnce stats env)
+        run fx ("gameplayTags.add(" <> tileT pageQ colTile 10 <> ", 'other_page')") `shouldReturn` "true"
+        executeDebugLua (lbsLuaState ls) ("gameplayTags.add(" <> tileT pageP colTile 10 <> ", 'stale')")
+            `shouldReturn` "null\t\"gameplayTags.add: no such live target (it does not exist, or is not loaded)\""
+        readIORef (wsPageTagsRef fresh) `shouldReturn` emptyPageTags
+        -- Re-armed: a plant edit resolved against the replacement is
+        -- refused when a second replacement lands in the same window.
+        fresh2 ← newPage False
+        writeIORef armed True
+        let replaceAgain = registerPageIncarnation env pageP $ \m →
+                m { wmWorlds = [ if p ≡ pageP then (p, fresh2) else (p, w) | (p, w) ← wmWorlds m ] }
+        writeIORef hook (Just replaceAgain)
+        executeDebugLua (lbsLuaState ls) ("gameplayTags.add(" <> plantT pageP oakOcc <> ", 'stale')")
+            `shouldReturn` "null\t\"gameplayTags.add: no such live target (it does not exist, or is not loaded)\""
+        readIORef (wsPageTagsRef fresh2) `shouldReturn` emptyPageTags
+        assignments fx `shouldReturn` [(cell pageQ colTile 10, tags ["other_page"])]
+
+    it "edits are refused, without waiting, while a save or load is capturing the session" $ \fx → do
+        resetScene fx
+        let barrier = saveBarrierRef (fxEnv fx)
+            refused = "nil|gameplayTags.add: a save or load is capturing the session; \
+                      \edit again once it completes"
+            edits = [ unitT 1, itemT 1, locationT pageP 1, tileT pageP colTile 10
+                    , plantT pageP oakOcc, plotT pageP plotTile ]
+            expectRefused = forM_ edits $ \t →
+                timeout 5000000 (run fx ("gameplayTags.add(" <> t <> ", 'during')"))
+                    `shouldReturn` Just refused
+        before ← assignments fx
+        n ← beginSave barrier (Set.fromList [SaveLua]) ≫= either (fail . T.unpack) pure
+        expectRefused
+        replicateM_ 3 (acknowledgeSave barrier n SaveLua)
+        reachSnapshot barrier n
+        captureLocked barrier `shouldReturn` True
+        expectRefused
+        -- Reads and queries are not refused.
+        run fx ("gameplayTags.tagsOf(" <> unitT 1 <> ")") `shouldReturn` "[]"
+        run fx "gameplayTags.count({ tag = 'during' })" `shouldReturn` "0"
+        assignments fx `shouldReturn` before
+        -- Encoding, after capture, accepts edits again.
+        releaseCaptureLock barrier n
+        forM_ edits $ \t → run fx ("gameplayTags.add(" <> t <> ", 'after')") `shouldReturn` "true"
+        finishSave barrier n
+        run fx ("gameplayTags.add(" <> unitT 2 <> ", 'after')") `shouldReturn` "true"
+        -- A transaction that fails before capture refuses until it fails.
+        m ← beginSave barrier (Set.fromList [SaveLua]) ≫= either (fail . T.unpack) pure
+        run fx ("gameplayTags.clear(" <> unitT 1 <> ")") ≫= (`shouldSatisfy` T.isPrefixOf "nil|gameplayTags.clear: a save or load")
+        failSave barrier m "test"
+        run fx ("gameplayTags.clear(" <> unitT 1 <> ")") `shouldReturn` "true"
 
     it "a completed edit is visible to the next read, from the same Lua chunk" $ \fx → do
         resetScene fx
@@ -474,6 +542,23 @@ refusalSpec = describe "refusals" $ do
                   \return __r(gameplayTags.count({ union = { leaf, { complement = leaf } } }, { categories = 'unit' }))"
             `shouldReturn` "4"
 
+    it "every tag occurrence in a filter is charged as it is reached, before deduplication" $ \fx → do
+        resetScene fx
+        let fill n v = "local t = {} for i = 1, " <> tshow (n ∷ Int) <> " do t[i] = " <> v <> " end; "
+            limit = "nil|gameplayTags.count: the expression visits more than 65536 elements"
+        -- One node plus 65535 copies is exactly the budget.
+        runRaw fx (fill 65535 "'x'" <> "return __r(gameplayTags.count({ all = t }, { categories = 'unit' }))")
+            `shouldReturn` "0"
+        runRaw fx (fill 65536 "'x'" <> "return __r(gameplayTags.count({ all = t }, { categories = 'unit' }))")
+            `shouldReturn` limit
+        runRaw fx (fill 100000 "'x'" <> "return __r(gameplayTags.count({ none = t }))") `shouldReturn` limit
+        runRaw fx (fill 70000 "'t' .. i" <> "return __r(gameplayTags.count({ any = t }))") `shouldReturn` limit
+        -- The traversal stops at the bound: an invalid element past it is
+        -- never reached, so the diagnostic is the budget, not the element.
+        runRaw fx (fill 70000 "'x'" <> "t[70000] = 5; return __r(gameplayTags.count({ any = t }))")
+            `shouldReturn` limit
+        run fx "gameplayTags.count({ any = { 'x', 'x' } }, { categories = 'unit' })" `shouldReturn` "0"
+
     it "nesting is bounded by depth and by visited elements, with a diagnostic" $ \fx → do
         resetScene fx
         let nest n = "local e = { tag = 'x' }; for i = 1, " <> tshow n
@@ -565,3 +650,4 @@ exampleSpec = describe "the documented examples" $
             `shouldReturn` "true"
         run fx "gameplayTags.query({ tag = 'meeting_point' })"
             `shouldReturn` renderList [cell pageP otherTile 10, cell pageP plotTile 10]
+

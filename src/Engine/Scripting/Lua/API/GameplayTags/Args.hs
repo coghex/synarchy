@@ -303,11 +303,17 @@ readTag idx = do
 -- | A tag collection: one tag string, or a list of them. Repeats are
 --   one tag; the empty list is the empty set.
 readTagSet ∷ Lua.StackIndex → Dec (Set.Set GameplayTag)
-readTagSet idx = do
+readTagSet = readTagSetWith (pure ())
+
+-- | 'readTagSet', running @each@ before EVERY input element is decoded —
+--   repeats included, and before deduplication — so a bound it enforces
+--   stops the traversal itself.
+readTagSetWith ∷ Dec () → Lua.StackIndex → Dec (Set.Set GameplayTag)
+readTagSetWith each idx = do
     ty ← lua (Lua.ltype idx)
     case ty of
-        Lua.TypeString → Set.singleton ⊚ readTag idx
-        Lua.TypeTable  → Set.fromList ⊚ readSequence "a tag list" idx (const readTag)
+        Lua.TypeString → each *> (Set.singleton ⊚ readTag idx)
+        Lua.TypeTable  → Set.fromList ⊚ readSequence "a tag list" idx (\_ i → each *> readTag i)
         _ → refuse ("tags must be a string or a list of strings, got " <> typeWord ty)
 
 -- * Expressions
@@ -387,12 +393,10 @@ expression budget path0 depth idx = do
         _ → refuse "an expression node takes exactly one of: tag, all/any/none, universe, \
                    \union, intersection, difference, complement"
 
--- | 'readTagSet', each tag spending one element of the budget.
+-- | 'readTagSet', each input element spending one element of the budget
+--   as it is reached.
 countedTagSet ∷ IORef Int → Lua.StackIndex → Dec (Set.Set GameplayTag)
-countedTagSet budget idx = do
-    ts ← readTagSet idx
-    forM_ (Set.toList ts) (const (spend budget))
-    pure ts
+countedTagSet budget = readTagSetWith (spend budget)
 
 -- * Query options
 

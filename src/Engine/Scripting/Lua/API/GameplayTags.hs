@@ -60,23 +60,30 @@ import Engine.Core.State (resolveActiveWorld)
 import Engine.Scripting.Lua.API.GameplayTags.Args
 import Gameplay.Tags.Live
 import Gameplay.Tags.Query (QueryResult, TagQuery, targetSetsToList, targetSetsSize)
-import Gameplay.Tags.Request (requestPageTagEdit)
+import Gameplay.Tags.Request (requestPageTagEditAt)
 import Gameplay.Tags.Types
 import Location.Instance (LocationInstanceId(..))
 import Unit.Types.Manager (UnitId(..), UnitManager)
-import World.Chunk.Residency (canonicalChunkCoord)
+import Engine.Save.Barrier (SaveBarrier, SavePhase(..), SaveStatus(..), readSaveStatus)
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration, canonicalChunkCoord)
 import World.Flora.Identity (floraInstanceIdToLua)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 
 -- * The owners a verb reaches
 
--- | The three owner handles, narrowed from the engine's capabilities by
---   the registrar.
+-- | The owner handles and the save barrier, narrowed from the engine's
+--   capabilities by the registrar.
 data TagApi = TagApi
-    { taUnits     ∷ IORef UnitManager
-    , taBuildings ∷ IORef BuildingManager
-    , taWorld     ∷ WorldSimCapability
+    { taUnits       ∷ IORef UnitManager
+    , taBuildings   ∷ IORef BuildingManager
+    , taWorld       ∷ WorldSimCapability
+    , taSaveBarrier ∷ SaveBarrier
+    , taAfterResolve ∷ IO ()
+      -- ^ Runs between an edit's target resolution and its application:
+      --   the test seam for a page replaced in exactly that window.
+      --   Production passes @pure ()@.
     }
 
 -- * The list-marshalling seam
@@ -162,47 +169,84 @@ resolvePage wm = \case
     Just p  → maybe (Left ("no live page '" <> unWorldPageId p <> "'")) (Right . (p,))
                     (lookup p (wmWorlds wm))
 
+-- | A resolved target, and for a page-owned one (cell, plant, plot) the
+--   page and the incarnation it was resolved against.
+data Resolved = Resolved !TagTarget !(Maybe (WorldPageId, ChunkGeneration))
+
+resolvedTarget ∷ Resolved → TagTarget
+resolvedTarget (Resolved t _) = t
+
 -- | The typed target a reference names on the live page: coordinates
 --   canonicalised exactly as each owner keys them (cells through the
 --   page's arena-aware chunk canonicalisation, plots through the plot
 --   map's wrap), so every seam alias names the one target.
-resolveTarget ∷ TagApi → TargetRef → IO (Either Text TagTarget)
+--
+--   A page-owned target's incarnation is read FIRST, before anything is
+--   derived from the page, and travels with the target to the world
+--   thread. A page replaced at any later point therefore refuses the
+--   edit: the canonicalisation can never be applied to a page it was not
+--   computed against.
+resolveTarget ∷ TagApi → TargetRef → IO (Either Text Resolved)
 resolveTarget api = \case
-    RefUnit n → pure (Right (TargetUnit (UnitId n)))
-    RefBuilding n → pure (Right (TargetBuilding (BuildingId n)))
-    RefItem n → pure (maybe (Left "an item id must be positive") (Right . TargetItem) (mkItemTarget n))
+    RefUnit n → plain (TargetUnit (UnitId n))
+    RefBuilding n → plain (TargetBuilding (BuildingId n))
+    RefItem n → pure (maybe (Left "an item id must be positive") (Right . (`Resolved` Nothing) . TargetItem)
+                            (mkItemTarget n))
     RefLocation mp lid → onPage' mp $ \p _ →
-        pure (Right (TargetLocation (LocationTarget p (LocationInstanceId lid))))
-    RefPlant mp fid → onPage' mp $ \p _ →
+        plain (TargetLocation (LocationTarget p (LocationInstanceId lid)))
+    RefPlant mp fid → pageOwned mp $ \p _ →
         pure (maybe (Left "not a flora occurrence id") (Right . TargetPlant) (mkPlantTarget p fid))
-    RefPlot mp x y → onPage' mp $ \p ws → do
+    RefPlot mp x y → pageOwned mp $ \p ws → do
         size ← pageWrapWorldSize ws
         pure (Right (TargetPlant (mkPlotTarget size p x y)))
-    RefTile mp x y z → onPage' mp $ \p ws → readIORef (wsGenParamsRef ws) ≫= \case
+    RefTile mp x y z → pageOwned mp $ \p ws → readIORef (wsGenParamsRef ws) ≫= \case
         Nothing → pure (Left ("page '" <> unWorldPageId p <> "' has no terrain"))
         Just params → pure (Right (TargetTile (mkTileTarget (canonicalChunkCoord params) p x y z)))
   where
+    plain t = pure (Right (Resolved t Nothing))
     onPage' mp k = do
         wm ← readIORef (wsWorldManagerRef (taWorld api))
         either (pure . Left) (uncurry k) (resolvePage wm mp)
+    pageOwned mp k = onPage' mp $ \p ws → do
+        epoch ← pageIncarnation ws
+        fmap (`Resolved` Just (p, epoch)) <$> k p ws
 
 noTarget ∷ Text
 noTarget = "no such live target (it does not exist, or is not loaded)"
 
 -- * Mutation
 
+-- | Refused while a save or load is capturing the session: from the
+--   moment the transaction begins until its snapshot is captured. Lua
+--   drives every save and load publish, and their Lua callbacks run
+--   inside that window while the world thread is parked, so a tile or
+--   plant edit waiting on the world thread would deadlock the
+--   transaction, and any other edit would race the snapshot. Encoding,
+--   after capture, is not refused. Lua is the only thread that begins a
+--   transaction, so none can begin between this check and the edit.
+captureRefusal ∷ Text
+captureRefusal = "a save or load is capturing the session; edit again once it completes"
+
+capturing ∷ SaveBarrier → IO Bool
+capturing barrier = flip fmap (readSaveStatus barrier) $ \case
+    Just s → ssOutcome s ≡ Nothing ∧ ssPhase s ∉ [SaveEncoding, SaveCaptureComplete, SaveFailed]
+    Nothing → False
+
 -- | Apply one edit through the target's own owner.
 applyEdit ∷ TagApi → (TargetRef, TagEdit) → IO (Either Text ())
-applyEdit api (ref, edit) = resolveTarget api ref ≫= \case
+applyEdit api (ref, edit) = capturing (taSaveBarrier api) ≫= \case
+  True → pure (Left captureRefusal)
+  False → resolveTarget api ref ≫= \case
     Left err → pure (Left err)
-    Right target → do
-        result ← case target of
-            TargetUnit u     → mutateUnitTags (taUnits api) u edit
-            TargetBuilding b → mutateBuildingTags (taBuildings api) b edit
-            TargetLocation l → mutateLocationTags wmRef l edit
-            TargetItem i     → mutateItemTags (taUnits api) (taBuildings api) wmRef Nothing i edit
-            TargetPlant _    → requestPageTagEdit (taWorld api) target edit
-            TargetTile _     → requestPageTagEdit (taWorld api) target edit
+    Right (Resolved target page) → do
+        taAfterResolve api
+        result ← case (target, page) of
+            (TargetUnit u, _)     → mutateUnitTags (taUnits api) u edit
+            (TargetBuilding b, _) → mutateBuildingTags (taBuildings api) b edit
+            (TargetLocation l, _) → mutateLocationTags wmRef l edit
+            (TargetItem i, _)     → mutateItemTags (taUnits api) (taBuildings api) wmRef Nothing i edit
+            (_, Just (p, epoch))  → requestPageTagEditAt (taWorld api) p epoch target edit
+            (_, Nothing)          → pure TagEditNoTarget
         pure $ case result of
             TagEditApplied  → Right ()
             TagEditNoTarget → Left noTarget
@@ -248,7 +292,7 @@ targetTagsIn v = \case
 inspect ∷ TagApi → TargetRef → IO (Either Text (Set.Set GameplayTag))
 inspect api ref = resolveTarget api ref ≫= \case
     Left err → pure (Left err)
-    Right target → do
+    Right (resolvedTarget → target) → do
         v ← capture api
         pure (maybe (Left noTarget) Right (targetTagsIn v target))
 

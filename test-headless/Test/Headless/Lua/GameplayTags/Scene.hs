@@ -24,6 +24,7 @@ module Test.Headless.Lua.GameplayTags.Scene
       Fx(..)
     , withFixture
     , resetScene
+    , newPage
     , armTagEditHook
       -- * Running Lua
     , run
@@ -324,8 +325,9 @@ ruinDef = LocationDef
     , ldNaming = LocationNaming
         { lnHeads = [ConceptId "KEEP"], lnModifiers = [ConceptId "ASH"] } }
 
--- | One page: three resident chunks, one plot, location 1, and (on P)
---   a ground item.
+-- | One page: three resident chunks, one plot, location 1, and (with
+--   @True@) a ground item. Also a replacement page whose terrain is live,
+--   so an edit that wrongly reached it would land.
 newPage ∷ Bool → IO WorldState
 newPage withGround = do
     ws ← emptyWorldState

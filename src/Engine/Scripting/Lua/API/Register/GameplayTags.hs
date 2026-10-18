@@ -3,15 +3,18 @@
 --   its own and deliberately separate from @faction@, whose tags are
 --   policy (#2551).
 --
---   'registerGameplayTagAPIWith' takes the list-marshalling seam so the
---   Hspec group can install the PRODUCTION verbs with a counting seam
---   and observe that @count@ and @exists@ never push a target.
+--   'registerGameplayTagAPIWith' takes the test seams, so the Hspec group
+--   can install the PRODUCTION verbs with a counting marshalling seam
+--   (observing that @count@ and @exists@ never push a target) and with a
+--   page replacement between an edit's resolution and its application.
 module Engine.Scripting.Lua.API.Register.GameplayTags
   ( registerGameplayTagAPI
   , registerGameplayTagAPIWith
   ) where
 
+import UPrelude
 import Engine.Core.Capability.Building (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv)
@@ -21,14 +24,19 @@ import Engine.Scripting.Lua.API.GameplayTags
 import qualified HsLua as Lua
 
 registerGameplayTagAPI ∷ LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception ()
-registerGameplayTagAPI = registerGameplayTagAPIWith productionTagMarshal
+registerGameplayTagAPI = registerGameplayTagAPIWith productionTagMarshal (pure ())
 
-registerGameplayTagAPIWith ∷ TagMarshal → LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception ()
-registerGameplayTagAPIWith marshal callStats env = do
+-- | The production verbs with their two test seams: the list marshalling
+--   and the window between an edit's resolution and its application.
+registerGameplayTagAPIWith ∷ TagMarshal → IO () → LuaCallStats → EngineEnv
+                           → Lua.LuaE Lua.Exception ()
+registerGameplayTagAPIWith marshal afterResolve callStats env = do
   let api = TagApi
-        { taUnits     = ucUnitManagerRef (toUnitCombatCapability env)
-        , taBuildings = bcBuildingManagerRef (toBuildingCapability env)
-        , taWorld     = toWorldSimCapability env }
+        { taUnits        = ucUnitManagerRef (toUnitCombatCapability env)
+        , taBuildings    = bcBuildingManagerRef (toBuildingCapability env)
+        , taWorld        = toWorldSimCapability env
+        , taSaveBarrier  = slSaveBarrierRef (toSaveLoadCapability env)
+        , taAfterResolve = afterResolve }
   Lua.newtable
 
   registerLuaFunction callStats "gameplayTags" "add"     (tagAddFn api)
