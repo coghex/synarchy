@@ -149,7 +149,8 @@ The bounds are inclusive and contain exactly `width × height` tiles:
 ## Identity, references and tags (D-29)
 
 - **Explicit id.** `id:` is an explicit scenario identity made of letters, digits,
-  `_`, `-`, `:` and `.`. Quote an id that YAML would read as another type: an
+  `_`, `-`, `:` and `.`, at most 512 characters (the longest reference an ordinary
+  save carries). Quote an id that YAML would read as another type: an
   unquoted `off`, `yes` or `1` is a boolean or a number, not an id. Capture writes one for every entry. A malformed `id` is a
   field rejection, and the entry falls back to its automatic id.
 - **Automatic id.** An entry with no `id` gets its document path as an automatic
@@ -358,7 +359,7 @@ current definition.
 | `bulk` | litres ≥ 0, or `null` | opt | Snapshot of the current definition's bulk | `null` = no recorded bulk | `iiBulk`; `null` is the runtime's honest absence (`Nothing`) on legacy instances, and fails closed in gameplay. |
 | `storage_capacity` | `{weight: kg ≥ 0, bulk: litres ≥ 0}`, or `null` | opt | Snapshot of the current definition's storage | `null` = no internal capacity | `iiStorage` (`ItemStorage`); `null` is explicit absence (non-storage items and legacy instances). |
 | `temperature` | `ambient` or °C ≥ −273.15 | opt | Ambient | `ambient` | `iiTemp` (`Nothing` = ambient). |
-| `contents` | list of items | opt | Definition default contents | `[]` = empty | `iiContents`. Any item may state `contents: []`. Only item containers (kits, toolboxes) may list items; a non-empty list on any other item is a field rejection that drops the listed items. Exact contents, with no capacity check (D-57). |
+| `contents` | list of items | opt | Definition default contents | `[]` = empty | `iiContents`. Any item may state `contents: []`. Only an item that can hold items may list items: one whose definition does (kits, toolboxes) or one that states its own `storage_capacity` (ordinary inserts key on the instance's storage, so a captured instance with storage lists what it holds). A non-empty list on any other item is a field rejection that drops the listed items. Exact contents, with no capacity check (D-57). |
 
 The item instance id (`iiInstanceId`) is allocated at construction and is never
 authorable. Carried and contained totals (`itemTotalWeight`) are derived.
@@ -418,9 +419,10 @@ initialization, not a relaxed transfer: `Item.Ownership` still refuses the next
 ordinary insertion into such a container (`OverTargetWeight`, `TargetNotStorage`,
 `CandidateNoBulk`, …) and the structural writer guards still hold. Omitted contents
 expand the definition's defaults; `contents: []` is exactly empty; a stated list
-replaces the defaults. An item whose definition holds no items (neither `storage`
-nor default contents) cannot own contents: the list is a `FieldRejected` and the
-listed items are `CascadeRejected` rather than promoted to a sibling or the ground.
+replaces the defaults. An item that cannot hold items (its definition has neither
+`storage` nor default contents, and the entry states no `storage_capacity` of its own)
+cannot own contents: the list is a `FieldRejected` and the listed items are
+`CascadeRejected` rather than promoted to a sibling or the ground.
 
 **Identities stay separate.** A scenario reference (`id:`) is the file's stable
 name; the instance id is allocated at construction; a ground-row id is a page-local
@@ -440,7 +442,11 @@ for an unknown entry and a log warning for a cycle.
 **Attachment is all or nothing.** The orchestration installs the owner first and then
 calls `Gameplay.Tags.Live.commitItemTreeAssignments` with `itemTagTargets` and
 `itemRefTargets`. Every target must be live; a reference another item holds, or a
-second reference for one item, refuses the whole commit.
+second reference for one item, refuses the whole commit, and so does a reference the
+save could not carry (empty, longer than 512 characters, or outside the id vocabulary).
+The reference check is repeated inside the atomic step against the manager being
+committed, so an attachment that lands between the check and the write makes the
+loser install nothing, tags included.
 
 **Durable identity (D-52).** `World.State.Types.wmItemScenarioRefs` is session state
 with the item tags' lifetime: it follows an item across every move, is forgotten with
@@ -461,8 +467,14 @@ modifies no inventory. An item built from reference `R` is captured as `R`; an
 automatic path id (`units[2].inventory[0]`) is captured in its explicit form
 (`units.2.inventory.0`). An unmapped item gets `<owner>.<collection>.<index>`
 (`scout.inventory.2`, `ground.0`), made unique with `-2`, `-3`, … against every
-reference already taken; the names depend on position only, never on instance ids,
-and ground rows are ordered by position, definition and structure, never row id.
+reference already taken; the names depend on position only, never on instance ids.
+A derived name is shortened with a stable hash when it would pass 512 characters.
+Every reference an item already holds is reserved before any name is chosen, authored
+explicit ids first: an automatic id converts to its bracketless form only when no
+authored id already spells it, and is otherwise disambiguated (`-2`), so two distinct
+references never collapse onto one name. Ground rows are ordered by position,
+definition and structure, then by the reference and tags each node carries, never by
+row id.
 
 ## Authoring examples
 
