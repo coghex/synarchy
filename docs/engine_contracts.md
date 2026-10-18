@@ -4052,6 +4052,24 @@ mutation-tested by loosening the fixture bound one unit past the guard
 and asserting the verdict flips, and whose structural writer guard holds
 the allowlist above.
 
+**Scenario unit construction is not a spawn (#2710).**
+`Scenario.Units.Build` constructs a unit through the existing authorities: the body
+(`seedBodyComposition` or `recomputeBodyDerivedStats`), `spawnModifierMap`,
+`reconcileStoredKeys`, the item materializer and the page-incarnation fence. It
+differs from `UnitSpawn` in four ways:
+
+- every omitted value comes from a private, identity-seeded generator and never
+  from `ucStatRNGRef` or Lua's stream;
+- explicit and default loadouts are never shed to capacity (D-57; the
+  `Spawn capacity shedding` group is ordinary spawn's evidence);
+- a stated health that meets a death condition is rejected, not built;
+- nothing becomes live until one fenced commit installs the instance, its tags,
+  its scenario reference and its sim state together.
+
+Ordinary spawning and both gameplay random streams are unchanged. See
+[scenario_format.md](scenario_format.md) §Unit construction and capture. Gate:
+hspec `--match "Scenario.Units"`.
+
 ## Debug ground-item Grab (#2489)
 
 The F8 `Grab` toggle owns left presses before designation tools, selection,

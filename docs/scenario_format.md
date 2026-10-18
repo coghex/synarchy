@@ -295,7 +295,7 @@ clearance notice are player and expedition progress, and are excluded by D-3.
 | `name` | string | opt | Deterministic draw from the name pool | `""` = unnamed | `uiName`. |
 | `facing` | compass direction (`south`, `north-east`, `sw`, …) | opt | `south` | — | `uiFacing` (`Unit.Direction.parseDirectionName`). |
 | `encounter` | location id | opt | Not an encounter occupant | — | **Required reference** when present: adds the unit to that location's encounter roster (`leOccupants`). |
-| `stats` | map `stat → number` | opt | Deterministic roll | `{}` = no overrides | `uiStats`. Unknown name → field rejected; a definition-derived stat → `DerivedValue`. |
+| `stats` | map `stat → number` | opt | Deterministic roll | `{}` = no overrides | `uiStats` (stored values). Unknown name → field rejected; a definition-derived stat → `DerivedValue`. Which keys are authorable is "Field ownership" under SCN-10 below. |
 | `skills` | map `skill → number` | opt | Deterministic roll | `{}` = no overrides | `uiSkills`. |
 | `knowledge` | map `knowledge → number ≥ 0` | opt | Deterministic roll | `{}` = knows nothing | `uiKnowledge`. When authored, it is the complete known set. |
 | `modifiers` | map `stat or skill → list of {source, delta, percent, remaining}` | opt | None | `{}` | `uiModifiers` (`StatModifier`). `source` is required (non-empty). `delta` and `percent` default to 0. `remaining` is game seconds after scenario start (> 0); omitted means permanent. |
@@ -489,6 +489,242 @@ with derived `Ord` (physical fields as float bit patterns, the reference as held
 its kind, the tag set, the children), never by a rendered string or by row id, so two
 rows tie only when they export identically.
 
+## Unit construction and capture (SCN-10, #2710)
+
+`Scenario.Units.*` turns the validated unit entries above into live units and back.
+It composes the item adapters (#2709) for the unit's loadout. It installs one unit at
+a time, and the session transaction (SCN-13) calls it for the scenario's units.
+
+| Module | Does |
+|---|---|
+| `Scenario.Units.Catalog` | The field table. `unitCatalogEntryOf` builds the decoder's `UnitCatalogEntry` from the live definition, the physiology registry and the equipment classes. The construction adapter and capture read the same rules (`unitStatRules`). |
+| `Scenario.Units.Defaults` | The deterministic fallback for every omitted value. |
+| `Scenario.Units.Build` | `buildUnit`: one entry becomes a complete `UnitInstance`, its `UnitSimState`, its item trees, and the reference and tag assignments to commit. It installs nothing. |
+| `Scenario.Units.Install` | `installBuiltUnit` / `installUnitBuilds`: the fenced commit, and the per-entry `UnitCompletion` result. |
+| `Scenario.Units.Capture` | `captureUnits`: reads a coherent snapshot of live units into entries, with every supported value stated. |
+| `Scenario.Units.Encode` | `unitEntryValue`: an entry as the key/value pairs the decoder reads, so `decode (encode e) ≡ e`. |
+
+### Field ownership
+
+Which `stats` keys a unit may state depends on its CURRENT definition
+(`Scenario.Units.Catalog.unitStatRules`). The rows are listed by definition kind.
+
+**A body-bearing definition** is an eager one: spawn seeds its body from `height`,
+`bulk` and `bodyfat`.
+
+| Stat | Rule | Meaning |
+|---|---|---|
+| Every stat template except `strength` | authorable | The unit's stored value. |
+| `strength_base` | authorable | The un-scaled strength potential. |
+| `strength` | **derived** | `strength_base × (lean_mass / 8.8·height²)^0.7` (`Unit.Thread.Command.Body`). |
+| `height`, `bulk`, `bodyfat` | authorable | The seed inputs of a fresh body. `bulk` and `bodyfat` are consumed by the seed and never stored. |
+| `frame_mass`, `body_mass`, `lean_mass`, `fat_mass` | authorable | The CURRENT body composition. |
+| `strength_body`, `max_hydration`, `max_hunger`, `max_calories`, `carrying_capacity` | **derived** | From the body. |
+
+**A lazy definition** has no body. Every stat template, `strength` included, is a
+plain authorable stat.
+
+**Physiology keys** are owned keys of a system that resolves Simulated for the
+definition's own defaults, with no override and no applied engagement.
+
+- **Authorable current values:** `hydration`, `hunger`, `calories`, `stamina`,
+  `exhaustion`, `sleep_pressure`, `core_temp`, `salt`, `salt_store`, `heart_rate`
+  and `blood_oxygen`. The stored base is stated.
+- **Not stated:** the `mind` system's keys, which are mental episode state and
+  timers. They take their system's own seed.
+- **Derived:** each Simulated system's derived keys (`salt_conc`, `circulation`,
+  `consciousness`, …).
+- **Not scenario values:** meters, the combat-engagement marker, and the keys of a
+  Nominal or Unsupported system.
+- **Blood** is the separate `blood` field. It may be stated only while the
+  definition's blood resolves Simulated.
+
+**Related fields are checked as a group, never by the order they are applied in.**
+
+- **Body masses.** State the four masses together, with
+  `lean_mass + fat_mass ≤ body_mass`, or state none of them. A partial or
+  incoherent set rejects each stated mass (`FieldRejected InvalidValue`), and the
+  unit takes the seed path.
+- **Seed inputs beside masses.** With a valid set of masses, a stated `bulk` or
+  `bodyfat` is rejected: those fields only seed a fresh body.
+- **Pool limits.** A pool stated above its maximum (the healthy value of a pool
+  sized by an input, for example `hydration ≤ max_hydration`) is rejected and then
+  seeded like an omission.
+
+### Initialization order
+
+`buildUnit` runs one fixed sequence. Each step reads only finished values:
+
+1. **Definition and z.** The definition, then the column `z`.
+2. **Stats.** Every omitted template is drawn from the unit's private generator,
+   and the explicit values are laid over the draws.
+3. **Body, once, through the body authority.**
+   - With explicit masses, the spawn seed and its viability margins are bypassed,
+     and `recomputeBodyDerivedStats` derives the rest. `strength_base` is present,
+     so nothing is promoted twice.
+   - Otherwise the spawn path runs (`seedBodyComposition`).
+4. **Identity values.** Skills, knowledge, name and facing.
+5. **Health.**
+   - Wounds, with `woundAt = start − age`, and scars.
+   - The immune response and immunities.
+   - An infection type is checked against the live `InfectionManager`.
+   - Then the death check (below).
+6. **Items.** The explicit collections go through `Scenario.Items.Owners`. An
+   omitted collection mints the definition's kit with the unit's private rolls.
+   Nothing is shed and nothing is topped up (D-57).
+7. **Modifiers.** They are built once, as spawn builds them
+   (`spawnModifierMap`): the definition's innate modifiers with every WORN
+   accessory's buffs at its current condition. Then the authored ones are added
+   (`smExpiry = start + remaining`).
+8. **Physiology.** The omitted pools go through
+   `Unit.Physiology.Transition.reconcileStoredKeys`, the one seeding authority that
+   spawn and load share. Its missing-only rule leaves every stated pool exactly as
+   stated.
+9. **Blood and pose.** Blood falls back to `canonicalBlood`, else the body-mass
+   seed. A unit whose Simulated blood is below the wound tick's unconscious
+   threshold is built `Collapsed`, without ticking.
+
+**Pools are seeded natively.** The trusted issue review called resource pools
+Lua-owned. Since the physiology epic (#2831, #2834, #2837), every pool belongs to a
+registry system. Spawn and load seed it natively, and the Lua tick raises on a
+missing Simulated pool rather than refilling it. The adapter therefore calls that
+native authority, under the review's own "one shared authority it calls" clause
+(manager ruling, 2026-10-18). Nothing Lua-owned is outstanding at completion.
+
+**Death conditions.** A unit whose stated health already meets an existing death
+condition is rejected whole, with what it owns (`EntryRejected InvalidValue`). It is
+never built as a corpse. The conditions are:
+
+- a wound of severity 1 or more on a vital part;
+- necrosis of 0.85 or more on a vital part (gangrene);
+- `blood ≤ 0` while blood is Simulated.
+
+### Defaults (D-5)
+
+Every omitted value comes from the definition, through a private generator per value.
+
+- **Seed.** FNV-1a over `"synarchy.scenario.unit/v1" 0x00 reference 0x00 domain`.
+  The reference is the unit's `scenarioIdText`.
+- **Domains:** `stat/<name>`, `body/<name>`, `skill/<name>`, `knowledge/<name>`,
+  `name`, and `<collection>/<slot>/<roll>` for the definition's kit.
+- **What never enters:** the gameplay stat RNG, Lua's `math.random`, an allocated
+  unit or item id, the tags, the unit's place in the file, and the build order.
+- **Consequences.** The same placed unit gets the same values in every process, and
+  stating one value never moves another.
+- **Lazy definitions** resolve every template at construction. A later read draws
+  nothing from the gameplay RNG.
+- **A stat added to a definition later** takes its fallback, and stated values are
+  kept.
+
+### Loadout and modifiers
+
+- **Omitted versus explicit.** An omitted `inventory`, `equipment` or
+  `accessories` is the definition's kit. An explicit one replaces exactly that
+  collection, including `[]` and `{}`.
+- **No second kit, no shedding.** Explicit contents never gain a second kit and
+  are never shed to fit capacity. The overloaded unit stays over capacity, and the
+  strict player-transfer policy still refuses its next insertion
+  (`receiver_full`).
+- **Equipment kinds.** An equipment item whose kind the slot does not accept is
+  `FieldRejected` with its contents, before anything is minted.
+- **Owner-supplied sources are rejected when authored.** An authored modifier whose
+  source the definition or a worn accessory already supplies is rejected
+  (`FieldRejected`), and so is a second modifier from one source on one stat. Such
+  an effect is rebuilt from its owner and is never stored twice.
+- **Slot equipment adds no modifiers.** Its effects are read from the equipped
+  instance where they apply.
+
+### Completion and lifecycle
+
+`installBuiltUnit` is one commit behind the page-incarnation fence, the spawn
+handler's fence applied to the same two writes.
+
+- **The commit.** It allocates the unit id. Then, inside the page-lifecycle lock
+  and after re-checking the page's incarnation, it installs four things: the
+  instance, its tags (`umTags`), its scenario reference (`umScenarioRefs`) and its
+  simulation state.
+- **Item identities.** The item trees' references and tags then attach through
+  `Gameplay.Tags.Live.commitItemTreeAssignments`. If that refuses, the unit is
+  retired again in one step.
+- **The result.** `UnitInstalled uid ref` is returned only after all of that.
+  `UnitRejected diagnostics` and `UnitNotInstalled ref (PageNotAdmitting |
+  ReferenceHeld r | ItemsRefused ts)` leave nothing behind: no id is consumed, and
+  no manager-only unit, simulation-only unit, reference, tag or item remains.
+- **Faction.** The profile is `resolveSpawnFaction` over the definition's default
+  tags with no spawn tag (the owner's decision), so a scenario acolyte has no
+  controller.
+- **Encounters.** An `encounter` is returned on the build for the location adapter
+  (SCN-12), which owns the roster.
+
+After completion, the paused hooks leave the baseline unchanged:
+
+- `unit.recomputeBody` and `unit_resources.onSaveLoaded`;
+- inspection, such as `unit.getStat` on a lazy unit.
+
+The first real resource tick makes ordinary changes and never refills a stated pool.
+
+### Capture
+
+Capture is a pure read of a coherent snapshot. It advances nothing, heals and refills
+nothing, rerolls no live stat, and draws no gameplay RNG.
+
+**What it writes.** Every value the field table supports, explicitly:
+
+- the stored stats;
+- every skill, and the complete known knowledge;
+- the wounds (`[]` for a healed unit), with `age = now − woundAt`, and the scars;
+- blood, while it is Simulated, and the immune state;
+- the current loadout through `Scenario.Items.Capture`. An emptied inventory is
+  `[]`.
+
+**Gaps and owned values.** A supported stat a lazy unit never resolved is written as
+its deterministic fallback for the captured identity, and the live unit is not
+touched. A modifier whose source the definition or a worn accessory supplies is
+not written, and neither is an expired one.
+
+**Excluded:**
+
+- orders, AI jobs, paths and transitions;
+- the pose, which is re-derived from health;
+- render handles;
+- the faction profile and physiology overrides;
+- meters and mental episode state;
+- encounter rosters, which belong to the location adapter;
+- dead units.
+
+**Names** follow the item capture's tier rule. Unit names are tier 1 for items, so a
+unit's reference is never displaced by an item's.
+
+- A unit built from `R` is captured as `R`, and an automatic path id `units[1]` as
+  `units.1`.
+- The referenced units are named before any item. Explicit references come before
+  automatic ones, then they are ordered by raw reference, and a displaced name
+  takes `-2`, `-3`, …
+- An unreferenced unit is named `units.<k>` by its place in a structural order:
+  `UnitSig`, a derived `Ord` over raw values with floats as bit patterns and item
+  signatures. It is never a rendered string and never a unit id, and it is reserved
+  after the items' references (`Scenario.Items.Capture.reserveDocumentId`).
+
+### Durable identity (D-52)
+
+`Unit.Types.Manager.umScenarioRefs` is the unit half of the scenario-id ↔ runtime-id
+mapping.
+
+- **Shape.** It is sparse and injective, and it is never a tag.
+- **Lifetime.** It shares `umTags`'s lifetime: every removal path clears it in the
+  same atomic modify.
+- **Persistence.** The `units` component v6 persists it per page (`puScenarioRefs`,
+  ascending by unit id). A v1–v5 payload carries none.
+- **Validation.**
+  - A malformed list fails `units` validation: an unadmissible text (the item
+    references' vocabulary and 512-character bound), a unit listed twice, a
+    reference claimed twice, or a list out of order.
+  - A reference held by units on two pages is a `duplicate-scenario-reference`
+    integrity error that refuses the load.
+  - One naming no restored unit is a `dangling-reference` warning, and the restore
+    drops it.
+- **Fixture.** `z13-unit-scenario-refs` is the v6 fixture.
+
 ## Authoring examples
 
 A minimal scenario on the expandable arena:
@@ -568,6 +804,27 @@ owner decided on 2026-10-02, relayed through the owner's assistant.
   `remaining` is seconds after scenario start.
 
 ## Fixture expectations and tests
+
+The `Scenario.Units` group (`test-headless/Test/Headless/Scenario/Units.hs`) covers unit
+construction, installation and capture against the real engine. It uses:
+
+- the shipped acolyte, plus a lazy, bodyless definition registered beside it;
+- the real decoder, body, physiology, item and modifier authorities;
+- the engine's own manager refs and page-lifecycle lock;
+- the production Lua hooks.
+
+Its fresh-process case re-runs the test binary twice as child processes. One is
+plain. The other lists the units in another order, edits every tag, and advances the
+gameplay stat RNG and both allocators first. The case compares the children's
+canonical captures, and both children's outputs are kept at
+`$TMPDIR/synarchy-scenario-units-fresh/{plain,perturbed}.json`:
+
+```sh
+cabal test synarchy-test-headless --test-options='--match "Scenario.Units"'
+# one child alone (writes the canonical JSON to OUT):
+SYNARCHY_SCENARIO_UNITS_CHILD='OUT|plain' \
+  "$(cabal list-bin synarchy-test-headless)" --match "Scenario.Units/fresh process/child entry"
+```
 
 The `Scenario.Items` group (`test-headless/Test/Headless/Scenario/Items.hs`) covers
 item construction and capture against the real materializer, owners, live attachment
