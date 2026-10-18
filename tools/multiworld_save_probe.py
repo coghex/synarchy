@@ -529,6 +529,13 @@ def populate_arena(port: int, page: str):
 
 FINITE_PAGE = "finite_world"
 FINITE_SIZE = (100, 40)
+# Every chunk the 100x40 map intersects: X -50..49 is chunks -4..3 and
+# Y -19..20 is chunks -2..1, 8 x 4 = 32. The startup set is the 5x5
+# footprint's overlap with them (cx -2..2, cy -2..1 = 20), so exactly 12
+# are left to demand — in a fresh process as much as in the creating one.
+FINITE_CHUNK_REGION = (-4, -2, 3, 1)
+FINITE_CHUNKS_TO_DEMAND = 12
+FINITE_OUTSIDE_CHUNKS = ((4, 0), (-5, 0), (0, 2), (0, -3), (9, 9))
 
 
 def finite_rect(width: int, height: int) -> tuple[int, int, int, int]:
@@ -592,6 +599,14 @@ def populate_finite(port: int, page: str) -> dict:
     send(port, f"world.show('{page}'); return 'ok'")
     wait_page_setup(port, page)
     send(port, "return world.waitForInit(60)", timeout=70)
+    # The startup set is only the footprint; the rest of the map loads on
+    # demand, and ONLY the rest of the map.
+    cx0, cy0, cx1, cy1 = FINITE_CHUNK_REGION
+    queued = as_int(send(port, f"return world.loadChunksInRegion({cx0},{cy0},{cx1},{cy1},'{page}')"))
+    if queued != FINITE_CHUNKS_TO_DEMAND:
+        sys.exit(f"FAIL: the remaining valid chunks of finite arena {page}: "
+                 f"{queued} queued, expected {FINITE_CHUNKS_TO_DEMAND}")
+    send(port, f"return world.waitForChunks(120, '{page}')", timeout=130)
     bad = [p for p in inside if terrain_at(port, *p) is None]
     bad += [p for p in outside if terrain_at(port, *p) is not None]
     if bad:
@@ -628,14 +643,11 @@ def populate_finite(port: int, page: str) -> dict:
     if wet_in <= 0 or wet_out != 0:
         sys.exit(f"FAIL: finite-arena water before the save: {wet_in} tile(s) "
                  f"inside, {wet_out} outside (expected some inside, none outside)")
-    # Expansion beyond the map queues nothing; the chunk the map does hold
-    # beyond the startup footprint loads.
-    refused = as_int(send(port, f"return world.loadChunksInRegion(4,0,4,0,'{page}')"))
-    held = as_int(send(port, f"return world.loadChunksInRegion(3,0,3,0,'{page}')"))
-    if refused != 0 or held != 1:
-        sys.exit(f"FAIL: expansion before the save: outside chunk queued {refused}, "
-                 f"chunk inside the map queued {held} (expected 0 and 1)")
-    send(port, f"return world.waitForChunks(60, '{page}')", timeout=70)
+    # Expansion beyond the map queues nothing.
+    refused = [as_int(send(port, f"return world.loadChunksInRegion({a},{b},{a},{b},'{page}')"))
+               for a, b in FINITE_OUTSIDE_CHUNKS]
+    if refused != [0] * len(FINITE_OUTSIDE_CHUNKS):
+        sys.exit(f"FAIL: expansion before the save queued chunks beyond the map: {refused}")
     print(f"{page}: finite {width}x{height} X={x0}..{x1} Y={y0}..{y1}  unit=#{uid}  "
           f"water inside={wet_in}")
     return {"rect": rect, "base": base, "uid": uid, "wet": wet_in}
@@ -649,7 +661,11 @@ def check_finite_restored(port: int, page: str, state: dict, chk,
     inside, outside = finite_probe_points(state["rect"])
     send(port, f"world.show('{page}'); return 'ok'")
     wait_active(port, page)
-    send(port, f"return world.waitForChunks(60, '{page}')", timeout=70)
+    # A fresh process holds only the startup set. Demanding the map's
+    # remaining valid chunks queues exactly the ones the map has.
+    cx0, cy0, cx1, cy1 = FINITE_CHUNK_REGION
+    queued = as_int(send(port, f"return world.loadChunksInRegion({cx0},{cy0},{cx1},{cy1},'{page}')"))
+    send(port, f"return world.waitForChunks(120, '{page}')", timeout=130)
     missing = [p for p in inside if terrain_at(port, *p) is None]
     extra = [p for p in outside if terrain_at(port, *p) is not None]
     chk.ok('finite_rectangle_restored', not missing and not extra,
@@ -680,13 +696,16 @@ def check_finite_restored(port: int, page: str, state: dict, chk,
            f"the edge water is still inside the map ({wet_in} tile(s)) and none "
            f"stands outside ({wet_out})")
     refused = [as_int(send(port, f"return world.loadChunksInRegion({a},{b},{a},{b},'{page}')"))
-               for a, b in ((4, 0), (-5, 0), (0, 3), (0, -3), (9, 9))]
+               for a, b in FINITE_OUTSIDE_CHUNKS]
     time.sleep(1.0)
     loaded = [send(port, f"local i = world.getChunkInfo({a}, {b}); return tostring(i.loaded)"
-                   ).strip('"') for a, b in ((4, 0), (-5, 0), (0, 3), (0, -3))]
-    chk.ok('finite_expansion_refused', refused == [0] * 5 and "true" not in loaded,
-           f"chunks beyond the map are refused, not queued ({refused}) and none "
-           f"is resident ({loaded})")
+                   ).strip('"') for a, b in FINITE_OUTSIDE_CHUNKS]
+    chk.ok('finite_expansion_refused',
+           queued == FINITE_CHUNKS_TO_DEMAND and refused == [0] * len(refused)
+           and "true" not in loaded,
+           f"the map's {FINITE_CHUNKS_TO_DEMAND} remaining chunks load on demand "
+           f"(queued {queued}); chunks beyond it are refused, not queued ({refused}) "
+           f"and none is resident ({loaded})")
     chk.ok('finite_load_preserves_save_bytes',
            file_sha256(save_file) == save_digest,
            "loading and probing the finite arena left the save file's bytes unchanged")

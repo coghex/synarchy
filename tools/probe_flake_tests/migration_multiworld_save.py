@@ -162,6 +162,10 @@ def test_multiworld_save_finite_arena_contract():
     support.expect(outside == [(-51, -20), (50, -20), (-51, 21), (50, 21),
                                (-51, 0), (50, 0), (-1, -20), (-1, 21)],
                    "eight outside points")
+    # 100x40: X -50..49 is chunks -4..3 (8), Y -19..20 is chunks -2..1 (4);
+    # the 5x5 startup footprint (-2..2) overlaps 5 x 4 of those 32.
+    support.expect(probe.FINITE_CHUNK_REGION == (-4, -2, 3, 1), "chunk region")
+    support.expect(probe.FINITE_CHUNKS_TO_DEMAND == 8 * 4 - 5 * 4, "chunks left to demand")
     support.expect(all(i in probe.descriptor(True).ids for i in FINITE_IDS),
                    "the arena descriptor declares every finite-arena check")
     support.expect(not any(i in probe.descriptor(False).ids for i in FINITE_IDS),
