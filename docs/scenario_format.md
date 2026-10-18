@@ -16,7 +16,10 @@ runtime behaviour is claimed from the schema tests.
 The schema is pure data. It adds no `EngineEnv` field, no manager or thread state,
 and no save-wire type. It therefore needs no persistence-inventory or capability
 change and no `currentSaveVersion` bump. The scenario format version is
-independent of ordinary save component versions (D-27, D-46).
+independent of ordinary save component versions (D-27, D-46). The one piece of
+scenario identity that must survive an ordinary save, the mapping from a
+constructed item to the reference it came from, is owned by item construction
+(SCN-09, [below](#item-construction-and-capture-scn-09-2709)), not by the schema.
 
 ## Loading contract
 
@@ -56,7 +59,9 @@ Each `ScenarioDiagnostic` carries three things:
   `MissingRequired`, `UnknownDefinition name`, `DuplicateId id`, `DerivedValue`,
   `EmptyTag`, `MissingReference id`, `WrongReferenceKind id`, `RejectedReference id`,
   `OwnerRejected path`, `AmbiguousBinding id`, `DefinitionMismatch definition`, `OutsideBounds`,
-  `FootprintOutsideBounds` or `ClippedTiles n`.
+  `FootprintOutsideBounds`, `ClippedTiles n` or `CyclicContents cycle`
+  (reported by item construction: a definition's default contents re-enter a
+  definition already being expanded, for example `a → b → a`).
 - **`sdEffect`**: what the rejection cost.
 
 | Effect | Meaning |
@@ -364,6 +369,101 @@ These are items lying in the world. A ground item takes every item field above
 plus `x` and `y` (numbers, tiles, required), the ground position (`giX`/`giY`).
 Its tile must be inside the map.
 
+## Item construction and capture (SCN-09, #2709)
+
+`Scenario.Items.*` turns the validated item entries above into real item trees and
+back. It is the item half of every owner; units (SCN-10), buildings and locations
+(SCN-12) and the session transaction (SCN-13) call it for the items they own.
+Nothing here installs an owner, so a rejected tree leaves no live reference.
+
+| Module | Does |
+|---|---|
+| `Scenario.Items.Build` | `buildItemForest`: checks each entry against the live definition, then mints the survivors through `Item.Materialize` (the one mint boundary). Returns the trees, the reference mapping, the tag assignments and the diagnostics. |
+| `Scenario.Items.Owners` | The shapes each owner holds: `buildUnitItems` (inventory, equipment by sorted slot, accessories), `buildBuildingItems` (storage, delivered materials grouped by definition), `buildGroundItems` and `installGroundItems` (ground rows). Each collection stays `Authored`: omitted means the owner's definition decides, `[]` means it holds nothing. |
+| `Scenario.Items.Capture` | `captureUnitItems`, `captureBuildingItems`, `captureGroundItems`: read coherent owner snapshots into entries with every supported value stated. |
+| `Scenario.Items.Encode` | `itemEntryValue`: an entry as the key/value pairs the decoder reads, so `decode (encode e) ≡ e`. File writing is SCN-14's. |
+| `Scenario.Items.Refs` | The durable item → reference mapping. |
+
+**Explicit values are authoritative; only omissions default.** A stated `0`, an empty
+`contents`, `bulk: null`, `storage_capacity: null` and `temperature: ambient` are
+applied verbatim: no clamp, no salvage wear (`item.spawnGround`'s wear is its own
+route), no re-roll. Resolve the derived total with `itemTotalWeight`; the `weight`
+field is the item's own empty weight only. Explicit ambient and an omitted
+temperature are the same state, `iiTemp = Nothing`, so the schema needs no separate
+flag. Omitted `bulk` and `storage_capacity` snapshot the CURRENT definition.
+
+**Invalid optional values are never repaired into a success.** The builder checks
+every stated value against the live definition before minting: a fill outside
+`[0, capacity]`, or non-zero on a non-container, a quality, condition or sharpness
+outside `[0, 100]`, a negative or non-finite weight, bulk or capacity, and a
+temperature below absolute zero each yield a `FieldRejected` `InvalidValue`
+diagnostic at `<entry path>.<field>`, and the field takes its omission value.
+(`Item.Materialize` still clamps a fill for the ordinary mint sites; the clamp is
+not reachable from scenario construction because the check runs first.)
+
+**Omitted values are reproducible (D-5).** Each node rolls its omitted quality and
+empty weight from a private generator seeded by FNV-1a over
+`"synarchy.scenario.item/v1" 0x00 reference 0x00 domain`, where the reference is the
+node's `scenarioIdText` and the domain is `quality`, `weight` or the derived label
+of a default-expanded child (`contents.<entry>.<copy>/<domain>`). Tags, the owner, the
+allocated instance ids, sibling order and the gameplay RNG never enter, and stating
+one value does not move another. Children a definition's default contents expand
+draw from their parent's stream, so a kit with omitted contents reproduces its
+bandages exactly.
+
+**Exact contents (D-57).** Contents are installed as stated, even when they exceed
+the container's capacities or the container states no capacity or bulk at all.
+Nothing spills, truncates, relocates or rejects for those reasons. This is
+initialization, not a relaxed transfer: `Item.Ownership` still refuses the next
+ordinary insertion into such a container (`OverTargetWeight`, `TargetNotStorage`,
+`CandidateNoBulk`, …) and the structural writer guards still hold. Omitted contents
+expand the definition's defaults; `contents: []` is exactly empty; a stated list
+replaces the defaults. An item whose definition holds no items (neither `storage`
+nor default contents) cannot own contents: the list is a `FieldRejected` and the
+listed items are `CascadeRejected` rather than promoted to a sibling or the ground.
+
+**Identities stay separate.** A scenario reference (`id:`) is the file's stable
+name; the instance id is allocated at construction; a ground-row id is a page-local
+slot. `ibRefs` maps the first two, only for nodes an entry named (default-expanded
+children carry none). A duplicate reference rejects every holder and what they own
+(`DuplicateId`). Tags ride the mapping to the same instance, and a rejected entry
+leaves no tag and no reference because nothing is minted for it.
+
+**Recoverable failures are data.** Unknown definitions are `EntryRejected`
+`UnknownDefinition`; every descendant of a rejected node is `CascadeRejected`
+`OwnerRejected <path>`. Default expansion reports an unknown entry as
+`UnknownDefinition` and a cycle as `CyclicContents` at the dropped entry's path
+(`units[0].inventory[0].contents[1]`); the node holding the back edge and its other
+children are kept. The ordinary mint sites keep their old behaviour: a silent drop
+for an unknown entry and a log warning for a cycle.
+
+**Attachment is all or nothing.** The orchestration installs the owner first and then
+calls `Gameplay.Tags.Live.commitItemTreeAssignments` with `itemTagTargets` and
+`itemRefTargets`. Every target must be live; a reference another item holds, or a
+second reference for one item, refuses the whole commit.
+
+**Durable identity (D-52).** `World.State.Types.wmItemScenarioRefs` is session state
+with the item tags' lifetime: it follows an item across every move, is forgotten with
+the item (`forgetItemTags`, one atomic step with the tags), and is persisted by
+`core-session` v3 (`csItemRefs`, ascending by instance id). A v1 or v2 save decodes
+with none. Load staging drops a reference whose item the saved or the restored
+session does not hold, with a `dangling-reference` warning at
+`core-session.item-refs[item=N]`. Loading an ordinary save never re-runs scenario
+defaulting.
+
+**Capture writes the item as it is.** Every entry states its fill, quality,
+condition, sharpness, own empty weight, bulk (or `null`), storage capacity (or
+`null`), temperature and current contents, so an emptied kit is `contents: []` and a
+partly used one lists what is left. Nothing from the original scenario overrides is
+reused, definition defaults are not consulted, and player observations, orders and
+progress are not item state. Capture mints nothing, draws no gameplay RNG and
+modifies no inventory. An item built from reference `R` is captured as `R`; an
+automatic path id (`units[2].inventory[0]`) is captured in its explicit form
+(`units.2.inventory.0`). An unmapped item gets `<owner>.<collection>.<index>`
+(`scout.inventory.2`, `ground.0`), made unique with `-2`, `-3`, … against every
+reference already taken; the names depend on position only, never on instance ids,
+and ground rows are ordered by position, definition and structure, never row id.
+
 ## Authoring examples
 
 A minimal scenario on the expandable arena:
@@ -443,6 +543,11 @@ owner decided on 2026-10-02, relayed through the owner's assistant.
   `remaining` is seconds after scenario start.
 
 ## Fixture expectations and tests
+
+The `Scenario.Items` group (`test-headless/Test/Headless/Scenario/Items.hs`) covers
+item construction and capture against the real materializer, owners, live attachment
+boundary, decoder and ownership policy; `Gameplay.Tags.Items` proves the references
+follow every move and die with every destruction the tags do.
 
 The `Scenario.Schema` Hspec group (`test-headless/Test/Headless/Scenario/Schema.hs`)
 needs no engine, world or GPU. It writes inline YAML fixtures to scratch files and

@@ -453,7 +453,7 @@ refunds are new identities.
 
 | Component | Version | Carries |
 |---|---|---|
-| `core-session` | v2 | `csItemTags`, the session's forward item assignments in the shared wire shape |
+| `core-session` | v3 | `csItemTags`, the session's forward item assignments in the shared wire shape (v2), and `csItemRefs`, the items' scenario references (v3, #2709) |
 
 - **Capture.** `World.Thread.Command.Save.WriteWorld` captures
   `sgItemTags` from the same manager read as the pages, so the
@@ -461,9 +461,17 @@ refunds are new identities.
   `captureSessionSnapshot` keeps only assignments for items in those
   captured trees, so a save can never carry a tag on a dead item, even
   one a teardown race left behind for a moment.
-- **Migration.** `core-session` v1 is frozen as `CoreSessionDTOv1` and
-  migrates explicitly to no assignments. `currentSaveVersion` is
+- **Migration.** `core-session` v1 and v2 are frozen as
+  `CoreSessionDTOv1` and `CoreSessionDTOv2` and migrate explicitly to no
+  assignments (and, from v2, no references). `currentSaveVersion` is
   unchanged.
+- **Scenario references (#2709).** The item → scenario-reference mapping
+  (`wmItemScenarioRefs`, [scenario_format.md](scenario_format.md)) is not a
+  tag and never feeds one, but it has the tags' lifetime: it is committed
+  with them through `commitItemTreeAssignments`, forgotten in the same
+  atomic step by `forgetItemTags`, captured from the same manager read,
+  scrubbed by the same two tests at staging, and reported by the same
+  integrity pass at `core-session.item-refs[item=N]`.
 - **Integrity.** An assignment naming no item that any page holds, in
   any owner and at any depth, is a `dangling-reference` warning
   attributed to `core-session`. Staging keeps an assignment only if its
@@ -475,9 +483,10 @@ refunds are new identities.
   so a remembered copy can neither duplicate a membership nor keep a
   destroyed target live. A failure before publication leaves the
   outgoing session and its item tags intact.
-- **Tooling.** The codec summary lists `itemTags` at session level, and
-  `seed-tags` accepts an `items` list (`{"id": N, "tags": [...]}`, no
-  page).
+- **Tooling.** The codec summary lists `itemTags` and `itemRefs` at
+  session level, and `seed-tags` accepts an `items` list (`{"id": N,
+  "tags": [...], "ref": "..."}`, no page; either key may be omitted, and
+  an empty `ref` clears it).
 
 ### Item gates
 
@@ -489,7 +498,9 @@ refunds are new identities.
   pre-publication failure and v1 migration. Both index directions are
   checked after each transition.
 - `--match "save migrations"`: the tracked `z10-item-tags` fixture
-  (nonempty, `core-session` v2) and every older fixture's empty default.
+  (nonempty, `core-session` v2), the `z12-item-scenario-refs` fixture
+  (nonempty references, `core-session` v3) and every older fixture's
+  empty default.
 - `tools/gameplay_tag_persistence_probe.py` (manual-only): item
   assignments across owner categories and nested contents, through
   ownership changes, consumption and ground destruction, fresh-process
