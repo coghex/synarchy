@@ -679,9 +679,16 @@ ordering and the scalar modes.
   thread. The verb waits for its answer, so a verb that returns `true`
   has applied the edit. The world thread re-checks the page incarnation
   when it applies the edit, so stale work never reaches a replacement
-  page. A load publish answers a queued edit `TagEditNoTarget`. Saves
-  and load publishes are driven from the Lua thread, so a waiting verb
-  can never hold up a save barrier.
+  page. The verb reads the incarnation before it canonicalises anything
+  against the page, and carries it to the world thread
+  (`requestPageTagEditAt`). A load publish answers a queued edit
+  `TagEditNoTarget`.
+- **Save barrier.** Every edit verb is refused while a save or load is
+  capturing, from the moment the transaction begins until its snapshot
+  is taken (the save-load capability's barrier). That window includes
+  the Lua callbacks, which run while the world thread is parked, so a
+  queued edit there would deadlock the transaction. Lua is the only
+  thread that begins a transaction.
 - **Reads and queries.** Each one captures one `LiveTagView` and
   evaluates the whole expression with `runLiveTagQueryIn` over one page
   (`onPage`). `count` and `exists` take the native result's size and
