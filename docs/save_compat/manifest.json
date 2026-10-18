@@ -3573,6 +3573,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z13-unit-scenario-refs.expected.json"
         }
       ]
+    },
+    {
+      "id": "z14-arena-legacy-shallow",
+      "description": "A LEGACY arena session (#2707): an arena page written by the build BEFORE the arena generation was unified (base 5450be9f5), whose chunk (3,0) outside the 5x5 footprint and whose footprint chunks were supplied by the old camera loader's one-loam-cell-per-column generator, with a persisted edit inside the footprint at (6,6) and one on the expanded chunk at (56,8). The save stores generation parameters and the edit overlay, never the base grid, so the format is unchanged and current: loading it reconstructs EVERY chunk on the uniform sixteen-cell foundation (12 granite under 4 loam) and replays the edits (owner decision D-56). The adoption itself is asserted by the headless group 'arena legacy fixture' and the resave/reload by tools/save_compat_migration_probe.py; the canonical summary here records decoded save state only.",
+      "declaredAt": "2026-10-18",
+      "declaredByIssue": 2707,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Load.Stage.stagePage (arena branch): the base is reconstructed from the recorded seed through World.Generate.Arena.generateArenaChunk and the saved edit overlay is replayed; no component version changes (current core-session v3, world-pages v14, world-edits v5, units v6)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 14,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z14-arena-legacy-shallow",
+          "path": "test-headless/data/save-compat/z14-arena-legacy-shallow.bin",
+          "kind": "complete-session",
+          "sha256": "aac6939dad6dc8f3cb79de083472bfb12f51a70e8f60ddf5cb2087af7c3400f6",
+          "sizeBytes": 177403,
+          "provenance": "Captured through the real production save path on the PRE-change build: base commit 5450be9f5 (master before #2707), `cabal build all`, then `python3 capture_legacy_arena.py --port 9291 --out test-headless/data/save-compat/z14-arena-legacy-shallow.bin` run from the repository root (script retained as docs/pr-proofs/issue-2707-capture-legacy-arena.py.txt). It boots one headless engine, world.initArena('legacy_arena'), expands the page with camera.goToTile(56, 8) (the camera loader is the only expansion path the old build supports; the old explicit-demand path crashes the world thread), raises tile (56, 8) on the expanded chunk, returns the camera to the origin (the footprint is re-supplied by the same shallow path), raises tile (6, 6), then engine.saveWorld. The metadata timestamp was normalized with synarchy-save-codec and its canonical summary derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z14-arena-legacy-shallow.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -408,6 +408,15 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:6:R '
         'world-edits:5:R world-pages:14:R',
+    # #2707: a LEGACY arena session (captured on the pre-unification
+    # build) -- the current format; the base is reconstructed on load.
+    "z14-arena-legacy-shallow.bin":
+        'buildings:3:R container-knowledge:2:o core-session:3:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:10:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:6:R '
+        'world-edits:5:R world-pages:14:R',
 }
 
 

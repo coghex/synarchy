@@ -38,6 +38,8 @@ import Test.Hspec
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import qualified Data.ByteString as BS
+import qualified Data.HashSet as HS
 import GHC.Clock (getMonotonicTimeNSec)
 import Data.List (nub, sort)
 import qualified Data.HashMap.Strict as HM
@@ -65,6 +67,7 @@ import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Material (MaterialId(..), matGranite, matLoam)
 import World.Save.Component.Page (blankPageSnapshot)
 import World.Save.Snapshot (LiveCameraSnapshot(..), PageSnapshot(..), SessionSnapshot(..))
+import World.Save.Envelope (decodeSessionEnvelope)
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Types
 import World.Vegetation (vegMediumGrass)
@@ -206,6 +209,7 @@ spec = do
         overlapSpec
         evictionSpec
         restoreSpec
+        legacySpec
 
 -- | The authority itself: the independent description, order
 --   independence, and what a seed is allowed to vary.
@@ -413,6 +417,82 @@ restoreSpec = describe "staged restore" $ do
             other ← awaitChunk ws (ChunkCoord (-5) 7)
             other `shouldBe` generateArenaChunk (wgpSeed params) (ChunkCoord (-5) 7)
 
+-- | A real LEGACY arena save: captured on the build that existed before
+--   the arena generation was unified (see the manifest provenance of
+--   @z14-arena-legacy-shallow@ for the exact commit and commands). Its
+--   chunks outside the footprint, and its footprint after a camera
+--   round trip, were one loam cell per column; the save keeps none of
+--   that, only the page's parameters and its edit overlay (an edit at
+--   (6, 6) inside the footprint and one at (56, 8) on the expanded chunk
+--   (3, 0)). Loading must reconstruct everything on the uniform
+--   foundation and replay both edits (owner decision D-56), without
+--   touching the file.
+legacySpec ∷ SpecWith EngineEnv
+legacySpec = describe "a legacy arena save" $ do
+
+    it "adopts the sixteen-cell foundation for every chunk and replays its edits on top" $ \env → do
+        bytes ← BS.readFile legacyFixture
+        snap ← decodeLegacy bytes
+        let pid = legacyPage
+            edit6 = globalToChunk 6 6
+            edit56 = globalToChunk 56 8
+        -- the fixture really does carry both edits, one outside the footprint
+        let edits = maybe emptyWorldEdits pgsEdits (HM.lookup pid (snapPages snap))
+        HM.member (fst edit6) edits `shouldBe` True
+        HM.member (fst edit56) edits `shouldBe` True
+        fst edit56 `elem` arenaFootprint `shouldBe` False
+        staged ← stageSnapshot env snap pid
+        tiles ← wtdChunks ⊚ readIORef (wsTilesRef (stagedWorldState staged))
+        sort (HM.keys tiles) `shouldBe` sort arenaFootprint
+        forM_ (HM.toList tiles) $ \(c, lc) → do
+            let base = generateArenaChunk 0 c
+                (_, (lx, ly)) = edit6
+                idx = ly * 16 + lx
+            if c ≡ fst edit6
+                then do
+                    -- the edit is replayed on the sixteen-cell base ...
+                    lcSurfaceMap lc VU.! idx `shouldBe` seaLevel + 1
+                    V.length (lcTiles lc) `shouldBe` 256
+                    -- ... and nothing else of the chunk changed
+                    [ i | i ← [0 .. 255], i ≢ idx, lcTiles lc V.! i ≢ lcTiles base V.! i ]
+                        `shouldBe` []
+                else do
+                    baseProperties c lc `shouldBe` []
+                    lc `shouldBe` base
+        -- the chunk the old build expanded to is reconstructed on demand,
+        -- with its edit replayed on the same foundation
+        logger ← quietLog
+        (`finally` writeIORef (enginePausedRef env) False) $ do
+            publishStagedSession env logger 7071 (stagedSession staged)
+            let ws = stagedWorldState staged
+                (_, (lx, ly)) = edit56
+                idx = ly * 16 + lx
+            queueChunks pid ws [fst edit56]
+            lc ← awaitChunk ws (fst edit56)
+            lcSurfaceMap lc VU.! idx `shouldBe` seaLevel + 1
+            [ i | i ← [0 .. 255], i ≢ idx
+                , lcTiles lc V.! i ≢ lcTiles (generateArenaChunk 0 (fst edit56)) V.! i ]
+                `shouldBe` []
+            -- every unedited column has the sixteen cells, not the legacy
+            -- single one; the edited column is those sixteen plus its edit
+            [ VU.length (ctMats col) | col ← V.toList (lcTiles lc) ]
+                `shouldBe` [ if i ≡ idx then 17 else 16 | i ← [0 .. 255 ∷ Int] ]
+        -- loading read the file; it never rewrote it
+        BS.readFile legacyFixture `shouldReturn` bytes
+
+legacyFixture ∷ FilePath
+legacyFixture = "test-headless/data/save-compat/z14-arena-legacy-shallow.bin"
+
+legacyPage ∷ WorldPageId
+legacyPage = WorldPageId "legacy_arena"
+
+decodeLegacy ∷ BS.ByteString → IO SessionSnapshot
+decodeLegacy bytes =
+    let names = HS.fromList ["unit_ai", "building_spawn"]
+    in case decodeSessionEnvelope names names bytes of
+        Left err → expectationFailure (T.unpack err) ≫ error "unreachable"
+        Right (_, snap, _, _) → pure snap
+
 -- * Staging helpers
 
 stagedName ∷ T.Text
@@ -452,6 +532,19 @@ stageArena env params edits = do
             , snapPortableKnowledge = emptyPortableKnowledge }
         saveData = snapshotToSaveData
             (SaveRequestMeta "arena_consistency" "2026-10-18T00:00:00.000000Z" False) snap
+    stageSaveData env logger pid saveData
+
+-- | Stage a decoded snapshot (a real save's content) through the
+--   production staging entry point.
+stageSnapshot ∷ EngineEnv → SessionSnapshot → WorldPageId → IO StagedArena
+stageSnapshot env snap pid = do
+    logger ← quietLog
+    stageSaveData env logger pid
+        (snapshotToSaveData
+            (SaveRequestMeta "arena_consistency" "2026-10-18T00:00:00.000000Z" False) snap)
+
+stageSaveData ∷ EngineEnv → LoggerState → WorldPageId → SaveData → IO StagedArena
+stageSaveData env logger pid saveData = do
     matReg ← readIORef (materialRegistryRef env)
     staged ← stageSession env logger saveData matReg ≫= \r → case r of
         Left e → expectationFailure (T.unpack (renderStageError e)) ≫ error "unreachable"

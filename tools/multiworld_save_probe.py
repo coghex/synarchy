@@ -40,6 +40,15 @@ arena as the secondary page — it additionally asserts a pre-save
 world.addTile edit is replayed onto the rebuilt arena. The default run
 keeps two real generated worlds (the #219 gate) unchanged.
 
+Arena expansion (#2707): the arena's 5x5 footprint is a startup set, not
+an extent, and an arena chunk is a pure function of the page's recorded
+seed and the chunk coordinate on EVERY path. --arena therefore also
+expands the page past the footprint with the explicit-demand verb
+(world.loadChunksInRegion), edits expanded terrain, saves, and after the
+fresh-process load expands again and compares an untouched expanded
+chunk's complete vegetation vector, the expanded edit, and the bytes of
+the save file (loading must not rewrite it).
+
 Arena base seeding (#1718): rebuilding is not restoring. The save stores
 generation parameters and the edit overlay, never the arena's base tile
 grid, so every surface tile no edit touched is REGENERATED on load from
@@ -121,6 +130,10 @@ CHECKS = [
     ('arena_edit_restored', 'arena edit restored'),
     ('arena_vegetation_readable', 'arena vegetation readable'),
     ('arena_vegetation_restored', 'arena vegetation restored'),
+    ('arena_expanded_readable', 'arena expanded chunk readable'),
+    ('arena_expanded_vegetation_restored', 'arena expanded vegetation restored'),
+    ('arena_expanded_edit_restored', 'arena expanded edit restored'),
+    ('arena_load_preserves_save_bytes', 'arena load preserves save bytes'),
     ('primary_identity_restored', 'primary identity restored'),
     ('arena_identity_restored', 'arena identity restored'),
     ('secondary_identity_restored', 'secondary identity restored'),
@@ -132,7 +145,9 @@ CHECKS = [
 ]
 def descriptor(arena=False):
     arena_only = {"arena_unnamed", "arena_edit_restored", "arena_vegetation_readable",
-                  "arena_vegetation_restored", "arena_identity_restored"}
+                  "arena_vegetation_restored", "arena_identity_restored",
+                  "arena_expanded_readable", "arena_expanded_vegetation_restored",
+                  "arena_expanded_edit_restored", "arena_load_preserves_save_bytes"}
     generated_only = {"secondary_name", "secondary_gloss_omitted",
                       "secondary_identity_restored"}
     excluded = generated_only if arena else arena_only
@@ -358,8 +373,18 @@ ARENA_EDIT_TILE = (6, 6)  # tile raised pre-save; must survive the reload
 # both sides of the round trip.
 ARENA_VEG_CHUNK = (16, 16)
 
+# Chunks OUTSIDE the 5x5 footprint (chunks -2..2), reached only through
+# expansion (#2707). EXPANDED_VEG_CHUNK (tiles x -64..-49, y 80..95) is
+# never edited, so its surface is pure generator output on both sides of
+# the round trip; EXPANDED_EDIT_TILE lies in chunk (3, 0) and carries a
+# persisted edit on expanded terrain.
+EXPANDED_VEG_CHUNK = (-64, 80)
+EXPANDED_EDIT_TILE = (56, 8)
+EXPANDED_CHUNK_REGIONS = ((3, 0, 3, 0), (-4, 5, -4, 5))
 
-def read_arena_veg(port: int) -> list[int] | None:
+
+def read_arena_veg(port: int, origin: tuple[int, int] | None = None
+                   ) -> list[int] | None:
     """The COMPLETE 256-position surface-vegetation vector of the active
     page's ARENA_VEG_CHUNK, in column order.
 
@@ -370,7 +395,7 @@ def read_arena_veg(port: int) -> list[int] | None:
     recorded as -1 rather than skipped, so a short or hole-punched read
     fails the comparison instead of silently shrinking it.
     """
-    x0, y0 = ARENA_VEG_CHUNK
+    x0, y0 = origin if origin is not None else ARENA_VEG_CHUNK
     lua = (
         "local t={} "
         f"for y={y0},{y0 + 15} do for x={x0},{x0 + 15} do "
@@ -383,7 +408,27 @@ def read_arena_veg(port: int) -> list[int] | None:
     return [as_int(str(v)) if not isinstance(v, int) else v for v in got]
 
 
-def populate_arena(port: int, page: str) -> tuple[int, int, int, list[int]]:
+def expand_arena(port: int) -> bool:
+    """Demand the chunks outside the footprint with the explicit verb a
+    script uses (world.loadChunksInRegion), and wait for them. The old
+    build handed arena parameters to the geological generator here and
+    crashed the world thread (#2707)."""
+    for cx0, cy0, cx1, cy1 in EXPANDED_CHUNK_REGIONS:
+        send(port, f"return world.loadChunksInRegion({cx0},{cy0},{cx1},{cy1})")
+    send(port, "return world.waitForChunks(120)", timeout=125)
+    ex, ey = EXPANDED_EDIT_TILE
+    vx, vy = EXPANDED_VEG_CHUNK
+    return all(as_int(send(port, f"local s = world.getTerrainAt({x}, {y}); return s"))
+               is not None for x, y in ((ex, ey), (vx, vy)))
+
+
+def file_sha256(path: str) -> str:
+    import hashlib
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def populate_arena(port: int, page: str):
     """world.initArena `page`, show it, spawn a unit + cargo-hold building
     on the flat ground, and raise one tile so the load path's edit replay
     is exercised. Returns (unitId, buildingId, editedTileZ, baseVegVector)
@@ -436,7 +481,27 @@ def populate_arena(port: int, page: str) -> tuple[int, int, int, list[int]]:
                  f"({'nil' if veg is None else f'{len(veg)} values'})")
     print(f"{page}: base vegetation captured "
           f"({len(veg)} tiles, ids {sorted(set(veg))})")
-    return uid, bid, base + 1, veg
+    # #2707: expand past the footprint, capture an untouched expanded
+    # chunk's whole vegetation vector, then persist an edit on expanded
+    # terrain.
+    if not expand_arena(port):
+        sys.exit(f"FAIL: could not expand arena {page} past its footprint")
+    xveg = read_arena_veg(port, EXPANDED_VEG_CHUNK)
+    if xveg is None or len(xveg) != 256 or -1 in xveg:
+        sys.exit(f"FAIL: could not read expanded arena vegetation on {page}")
+    xx, xy = EXPANDED_EDIT_TILE
+    xbase = as_int(send(port, f"local s = world.getTerrainAt({xx}, {xy}); return s"))
+    send(port, f"return world.addTile('{page}', {xx}, {xy}, 1)")
+    for _ in range(50):
+        cur = as_int(send(port, f"local s = world.getTerrainAt({xx}, {xy}); return s"))
+        if cur == xbase + 1:
+            break
+        time.sleep(0.1)
+    else:
+        sys.exit(f"FAIL: expanded-terrain addTile at ({xx},{xy}) never landed")
+    print(f"{page}: expanded to chunks {EXPANDED_CHUNK_REGIONS}; expanded vegetation "
+          f"captured ({len(xveg)} tiles); raised expanded tile ({xx},{xy}) to z={xbase + 1}")
+    return uid, bid, base + 1, veg, xveg, xbase + 1
 
 
 class Checks:
@@ -503,8 +568,10 @@ def _run(args, rep):
                                     name=f"  {MW_NAME}  ", gloss=MW_GLOSS)
         arena_z = None
         arena_veg = None
+        arena_xveg = None
+        arena_xz = None
         if args.arena:
-            u_sw, b_sw, arena_z, arena_veg = populate_arena(
+            u_sw, b_sw, arena_z, arena_veg, arena_xveg, arena_xz = populate_arena(
                 args.port, "second_world")
         else:
             u_sw, b_sw = populate_world(args.port, "second_world",
@@ -556,6 +623,9 @@ def _run(args, rep):
             print(f"FAIL: save file never appeared at {save_file}", file=sys.stderr)
             return 2
         print(f"saved -> {save_file} ({os.path.getsize(save_file)} bytes)")
+        # #2707: loading must not rewrite the save. Hash it now, while no
+        # engine is touching it, and again after engine B has loaded it.
+        save_digest = file_sha256(save_file)
 
         quit_engine(args.port, procA)
         procA = None
@@ -644,6 +714,30 @@ def _run(args, rep):
                 chk.ok('arena_vegetation_restored', after == arena_veg,
                        "arena base vegetation survives the save/load round "
                        f"trip unchanged ({differing}/256 tiles differ)")
+
+        if args.arena and arena_xveg is not None:
+            # #2707: a fresh process expands past the footprint again; the
+            # chunks come from the same authority as the ones saved from.
+            expanded_ok = expand_arena(args.port)
+            xafter = read_arena_veg(args.port, EXPANDED_VEG_CHUNK)
+            chk.ok('arena_expanded_readable', expanded_ok and isinstance(xafter, list)
+                   and len(xafter) == 256 and -1 not in xafter,
+                   "expanded arena chunks load after the fresh-process load "
+                   f"({'nil' if xafter is None else f'{len(xafter)} values'})")
+            if isinstance(xafter, list):
+                differing = sum(1 for a, b in zip(arena_xveg, xafter) if a != b)
+                chk.ok('arena_expanded_vegetation_restored', xafter == arena_xveg,
+                       "expanded arena base vegetation matches the saved session's "
+                       f"({differing}/256 tiles differ)")
+            xx, xy = EXPANDED_EDIT_TILE
+            xgot = as_int(send(args.port,
+                f"local s = world.getTerrainAt({xx}, {xy}); return s"))
+            chk.ok('arena_expanded_edit_restored', xgot == arena_xz,
+                   f"edit on expanded terrain at ({xx},{xy}) replayed after expansion "
+                   f"(z={xgot}, expected {arena_xz})")
+            chk.ok('arena_load_preserves_save_bytes',
+                   file_sha256(save_file) == save_digest,
+                   "loading and expanding left the save file's bytes unchanged")
 
         print("\n--- world identity restore checks (#707) ---")
         ident = get_identity(args.port, "main_world")
