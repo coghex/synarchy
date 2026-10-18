@@ -50,7 +50,7 @@ import World.Load.Types (StagedPage(..), StagedSession(..))
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Flora.Designation (admitChunkFlora)
-import World.Generate.Arena (generateArenaChunks)
+import World.Generate.Arena (generateArenaChunksIn, clipArenaChunk)
 import Item.Ground (GroundItem(..), sanitizeGroundItems)
 import Item.Types (ItemInstance(..))
 import World.Generate.Config
@@ -921,9 +921,19 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- untouched surface tile's grass variant is RECONSTRUCTED —
           -- generating it from any other value re-rolls every one of
           -- them on load.
-          let arenaChunks = map ( applyConstructSlopes cdesigs
-                                . applyDigSlopes desigs . replayEdits edits)
-                                (generateArenaChunks seed)
+          --
+          -- #2708: the page's bounds come from the SAME decoded params
+          -- (the world-pages component installed them there), so the
+          -- startup set, the replayed overlay and the published tile
+          -- data are all measured against one rectangle, established
+          -- BEFORE any chunk is built. An overlay edit outside it (a
+          -- damaged save) is clipped away rather than replayed into
+          -- terrain the map does not have.
+          let bounds = wgpArenaBounds params
+              arenaChunks = map ( applyConstructSlopes cdesigs
+                                . applyDigSlopes desigs
+                                . clipArenaChunk bounds . replayEdits edits)
+                                (generateArenaChunksIn bounds seed)
               chunkMap = HM.fromList [ (lcCoord c, c) | c ← arenaChunks ]
           -- Claimed before the generation is forced, then admitted with
           -- that same claim — the lifecycle and the owner-before-payloads
@@ -936,7 +946,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                                              (map lcCoord arenaChunks)
           _ ← evaluate (force arenaChunks)
           publishSeedChunks worldState arenaClaims
-              WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
+              WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100
+                            , wtdBounds = bounds }
           -- #2705: a seed is an admission too, so the restored tags its
           -- chunks own are reconciled against what they really hold.
           readIORef (wsTilesRef worldState)
@@ -1131,7 +1142,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           -- CANONICAL key, which is where every reader looks for it.
           publishSeedChunks worldState centreClaims
               WorldTileData { wtdChunks    = HM.singleton centerCoord centerChunk
-                            , wtdMaxChunks = 200 }
+                            , wtdMaxChunks = 200
+                            , wtdBounds    = Nothing }
           readIORef (wsTilesRef worldState)
               ≫= reconcileAdmittedPageTags logger worldState pid [centerChunk]
           let seeds = [ (centerCoord, lcFluidMap centerChunk

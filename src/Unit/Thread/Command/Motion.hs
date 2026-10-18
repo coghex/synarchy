@@ -21,15 +21,21 @@ import Unit.Physiology (unitBloodView)
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.Body (injurySpeedMult)
-import Unit.Thread.Command.MotionGuard (motionPayloadOk)
+import Unit.Thread.Command.MotionGuard (motionPayloadOk, motionPositionsAdmitted)
 import Unit.Thread.Command.Pose (isTransitioning)
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
 
 handleUnitMoveToCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                         → Float → Float → Float → MoveHazardPolicy → IO ()
 handleUnitMoveToCommand env utsRef uid tx ty speed hazard = do
-  ok ← motionPayloadOk env "UnitMoveTo" [("targetX", tx), ("targetY", ty)]
-                                        [("speed", speed)]
+  ok0 ← motionPayloadOk env "UnitMoveTo" [("targetX", tx), ("targetY", ty)]
+                                         [("speed", speed)]
+  -- #2708: an order whose destination lies outside the unit's finite
+  -- arena is refused whole, rather than installed and left to replan
+  -- forever against terrain that does not exist.
+  ok ← if ok0 then motionPositionsAdmitted env "UnitMoveTo" uid
+                       [("target", tx, ty)]
+              else pure False
   when ok $ do
     -- Apply the injury speed multiplier on receipt so EVERY move
     -- command — commanded, wander, attack-pursuit, retreat — gets
@@ -128,6 +134,10 @@ handleUnitSetMoveSpeedCommand env utsRef uid speed = do
 handleUnitJumpCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                       → Int → Int → IO ()
 handleUnitJumpCommand env utsRef uid tgx tgy = do
+  -- #2708: a leap's landing tile must be inside the unit's finite arena.
+  landOk ← motionPositionsAdmitted env "UnitJump" uid
+               [("target", fromIntegral tgx + 0.5, fromIntegral tgy + 0.5)]
+  when landOk $ do
     now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Reach = learned jumping skill blended with agility/strength stats

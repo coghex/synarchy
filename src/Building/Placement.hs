@@ -9,6 +9,7 @@ module Building.Placement
     , RemoteCheck(..)
     , remoteCheck
     , isRemote
+    , footprintOutsideArenaReason
     ) where
 
 import UPrelude
@@ -16,12 +17,17 @@ import qualified Data.Vector.Unboxed as VU
 import Building.Types
 import Building.Reservation
     (footprintClear, instanceTiles, occupancyConflictReason)
-import World.Tile.Types (WorldTileData, lookupChunk)
+import World.Tile.Types (WorldTileData, lookupChunk, tileAvailable)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.Generate.Coordinates (canonicalTileFrame)
 import Location.Instance (LocationInstances)
 import Location.Placement (placedLocationBounds, nearestLocationDistance)
 import Location.Bounds (AbsBounds(..), boundsIntersect, remotePortalThresholdTiles)
+
+-- | The refusal text for a footprint that crosses a finite arena's
+--   boundary (#2708).
+footprintOutsideArenaReason ∷ Text
+footprintOutsideArenaReason = "footprint crosses the finite arena boundary"
 
 data PlacementResult
     = Placeable
@@ -84,6 +90,13 @@ checkFlatGround bm wtd instances worldSize def gx gy =
                             (bdTileW def) (bdTileH def)
                             (instanceTiles worldSize (bmInstances bm))
     in case zs of
+        -- #2708: a building is indivisible on a finite arena. If ANY tile
+        -- of its footprint lies outside the rectangle it is refused
+        -- whole — checked before terrain, occupancy or location
+        -- rules, so nothing downstream (stamps, reservations, owned
+        -- contents) is ever applied for a placement that cannot stand.
+        _ | any (\(x, y) → not (tileAvailable wtd x y)) tiles →
+                NotPlaceable footprintOutsideArenaReason
         Nothing → NotPlaceable "chunk not loaded"
         Just (z0:rest)
             | any (≢ z0) rest → NotPlaceable "ground is uneven"
@@ -161,14 +174,18 @@ isRemote (RemoteDistance (Just d)) = d > remotePortalThresholdTiles
 --   the placement check's own flat-ground test is a separate question
 --   asked of a separate map.
 buildingAnchorZ ∷ Int → WorldTileData → Int → Int → Maybe Int
-buildingAnchorZ worldSize wtd gx gy =
+buildingAnchorZ worldSize wtd gx gy
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
         Just lc → Just (lcTerrainSurfaceMap lc VU.! columnIndex lx ly)
 
 lookupSurfaceZ ∷ Int → WorldTileData → (Int, Int) → Maybe Int
-lookupSurfaceZ worldSize wtd (gx, gy) =
+lookupSurfaceZ worldSize wtd (gx, gy)
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing

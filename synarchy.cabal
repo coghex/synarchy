@@ -841,6 +841,8 @@ library
                      World.Base
                      World.Constants
                      World.Command.Types
+                     World.Arena.Bounds
+                     World.Arena.Page
                      World.Chunk.Types
                      World.Chunk.Queue
                      World.Chunk.Residency

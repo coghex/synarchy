@@ -11,13 +11,23 @@
 --   'motionSpeedInDomain', not a second opinion written here.
 module Unit.Thread.Command.MotionGuard
     ( motionPayloadOk
+    , motionPositionsAdmitted
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Unit.Command.Types (motionCoordinateInDomain, motionSpeedInDomain)
+import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
+import World.Arena.Bounds (arenaAdmitsPosition)
+import World.Arena.Page (pageArenaBounds)
+import World.State.Types (WorldManager(..))
 
 -- | Whether a motion command's payload may be installed, warning once
 --   naming the first offending field when it may not.
@@ -54,4 +64,37 @@ motionPayloadOk env what coords speeds =
             logWarn logger CatThread $
                 what <> ": " <> field <> " is out of domain ("
                 <> tshow value <> ") — command dropped"
+            pure False
+
+-- | Whether every named position lies inside the finite arena of the page
+--   THIS unit stands on (#2708), warning once naming the first one that
+--   does not. A unit on an expandable arena, or on a page that is not an
+--   arena, admits everything; a unit the manager no longer holds names no
+--   page and so has no rectangle to judge by (its command is dropped by
+--   the handler's own lookup, as before).
+--
+--   The page is the unit's OWN, resolved through @wmWorlds@ — never the
+--   visible one — so an order for a unit on a hidden finite arena is
+--   judged against that arena while another page is on screen. Positions
+--   are continuous; the tile is the one each coordinate floors to
+--   ('World.Arena.Bounds.arenaAdmitsPosition').
+motionPositionsAdmitted ∷ EngineEnv → Text → UnitId → [(Text, Float, Float)]
+                        → IO Bool
+motionPositionsAdmitted env what uid positions = do
+    um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    mBounds ← case uiPage <$> HM.lookup uid (umInstances um) of
+        Nothing     → pure Nothing
+        Just pageId → case lookup pageId (wmWorlds mgr) of
+            Nothing → pure Nothing
+            Just ws → pageArenaBounds ws
+    case [ (field, x, y) | (field, x, y) ← positions
+                         , not (arenaAdmitsPosition mBounds x y) ] of
+        [] → pure True
+        ((field, x, y) : _) → do
+            logger ← readIORef (loggerRef env)
+            logWarn logger CatThread $
+                what <> ": " <> field <> " (" <> tshow x <> "," <> tshow y
+                <> ") is outside the finite arena the unit stands on"
+                <> " — command dropped"
             pure False

@@ -14,6 +14,7 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
+import World.Arena.Page (whenTileAdmitted)
 import World.Generate.Coordinates (canonicalTileFrameWith)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Edit.Types (WorldEdit(..), appendEdit)
@@ -48,7 +49,7 @@ handleFluidEdit env logger pageId rawGX rawGY fluidType exactSurface = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for set fluid: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Set fluid" ws rawGX rawGY $ do
             params ← readIORef (wsGenParamsRef ws)
             let canonicalize = maybe id canonicalChunkCoord params
                 (coord, _, (dx, dy)) = canonicalTileFrameWith canonicalize rawGX rawGY

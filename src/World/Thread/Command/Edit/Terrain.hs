@@ -21,6 +21,7 @@ import Engine.Core.State (EngineEnv, unitQueue)
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
+import World.Arena.Page (whenTileAdmitted)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
@@ -44,7 +45,7 @@ handleWorldDeleteTileCommand env logger pageId gx gy = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for delete tile: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Delete tile" ws gx gy $ do
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx = columnIndex lx ly
                 edit = WeDeleteTile gx gy
@@ -117,7 +118,7 @@ handleWorldAddTileCommand env logger pageId gx gy mat = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for add tile: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Add tile" ws gx gy $ do
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx  = columnIndex lx ly
                 edit = WeAddTile gx gy mat
@@ -184,7 +185,7 @@ handleWorldSetSlopeCommand env logger pageId gx gy z bits = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for set slope: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Set slope" ws gx gy $ do
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx  = columnIndex lx ly
                 edit = WeSetSlope gx gy z bits
@@ -239,7 +240,7 @@ handleWorldSetCellCommand env logger pageId gx gy z mat = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for set cell: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Set cell" ws gx gy $ do
             let (coord, (lx, ly)) = globalToChunk gx gy
                 idx  = columnIndex lx ly
                 edit = WeSetCell gx gy z mat

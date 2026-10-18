@@ -24,7 +24,7 @@ import Engine.Core.State (EngineEnv)
 import Gameplay.Tags.Index (deleteCategoryTarget, emptyCategoryIndex)
 import Unit.Types
 import Unit.Sim.Types
-import Unit.Thread.Command.MotionGuard (motionPayloadOk)
+import Unit.Thread.Command.MotionGuard (motionPayloadOk, motionPositionsAdmitted)
 import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import Gameplay.Tags.ItemLifecycle
     (withDestroyedItems, itemForestIds, unitItems, retiredUnitItemIds)
@@ -173,7 +173,12 @@ handleUnitClearPageCommand env utsRef pageId cutoff = do
 handleUnitTeleportCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                           → Float → Float → Maybe Int → IO ()
 handleUnitTeleportCommand env utsRef uid gx gy mGz = do
-  ok ← motionPayloadOk env "UnitTeleport" [("gridX", gx), ("gridY", gy)] []
+  ok0 ← motionPayloadOk env "UnitTeleport" [("gridX", gx), ("gridY", gy)] []
+  -- #2708: direct positioning outside the unit's finite arena is refused,
+  -- not grounded at a fallback z over terrain that does not exist.
+  ok ← if ok0 then motionPositionsAdmitted env "UnitTeleport" uid
+                       [("position", gx, gy)]
+              else pure False
   when ok $ do
     gz ← case mGz of
         Just z  → return z

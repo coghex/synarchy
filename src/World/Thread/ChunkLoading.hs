@@ -27,7 +27,8 @@ import Engine.Graphics.Camera (Camera2D(..))
 import qualified Data.HashSet as HS
 import World.Types
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
-import World.Generate.Arena (generateArenaChunk)
+import World.Arena.Bounds (boundedChunkCoords)
+import World.Generate.Arena (generateArenaChunkIn, clipArenaChunk)
 import World.Material (MaterialRegistry)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Chunk.Admit
@@ -70,7 +71,14 @@ maxChunksPerTick = 8
 generateDemandedChunks ∷ MaterialRegistry → FloraCatalog → WorldPageId
                        → WorldGenParams → [ChunkCoord] → [LoadedChunk]
 generateDemandedChunks registry catalog pageId params coords
-    | isArenaParams params = map (generateArenaChunk (wgpSeed params)) coords
+    | isArenaParams params =
+        -- #2708: on a finite arena only chunks that intersect the
+        -- rectangle exist. Every caller filters its demand BEFORE
+        -- claiming (so no claim is left pending); this filter is the
+        -- generator's own refusal to build a wholly-outside chunk.
+        let bounds = wgpArenaBounds params
+        in map (generateArenaChunkIn bounds (wgpSeed params))
+               (boundedChunkCoords bounds coords)
     | otherwise = parMap rdeepseq
         (generateLoadedChunk registry catalog pageId params) coords
 
@@ -121,7 +129,14 @@ updateChunkLoading env logger = do
                                     let v = cx + cy
                                         halfTiles = halfSize * chunkSize
                                     in abs (v * chunkSize) ≤ halfTiles
-                                validCoords = map canon $ filter inBoundsV neededCoords
+                                -- #2708: a finite arena never demands a
+                                -- chunk wholly outside its rectangle, so
+                                -- no claim is ever made for one and a
+                                -- camera moved off the map generates
+                                -- nothing (and does not move the map).
+                                validCoords = boundedChunkCoords
+                                    (wgpArenaBounds params)
+                                    (map canon $ filter inBoundsV neededCoords)
                             let (_toPromote, toGenerate) = partitionChunks validCoords tileData
                             let toGenerateSorted = sortOn (\(ChunkCoord cx cy) →
                                     abs (cx - ccx) + abs (cy - ccy)) toGenerate
@@ -159,7 +174,8 @@ updateChunkLoading env logger = do
                                 -- legacy migration is still outstanding.
                                 newChunks' ← admitChunkFloraBatch worldState
                                     catalog logger
-                                    (map (replayEdits edits) newChunks)
+                                    (map (clipArenaChunk (wgpArenaBounds params) . replayEdits edits)
+                                      newChunks)
                                 -- Built against the snapshot read at the
                                 -- top of this page's iteration, and
                                 -- committed below. That is exact rather
@@ -450,6 +466,17 @@ drainInitQueues env logger = do
                             -- bare 'wrapChunkCoordU', so an arena's sentinel
                             -- wgpWorldSize is identity on both sides.
                             batchCanon = nub (map (canonicalChunkCoord params) batch)
+                            -- #2708: nothing wholly outside a finite arena
+                            -- is ever generated. Every producer already
+                            -- filters its request, so this is the drain's
+                            -- own guarantee that a stray entry can never
+                            -- sit in the queue forever waiting for a chunk
+                            -- that cannot exist (it would pin the page in
+                            -- 'LoadPhase2'): it is DROPPED with the settled
+                            -- half below instead.
+                            bounds = wgpArenaBounds params
+                            admissible = boundedChunkCoords bounds batchCanon
+                            refused = filter (`notElem` admissible) batchCanon
                         -- Skip coords already in wsTilesRef. The camera-visible
                         -- loader (updateChunkLoading) loads chunks straight into
                         -- wsTilesRef without going through this queue, so a coord
@@ -464,7 +491,7 @@ drainInitQueues env logger = do
                         -- queue below.
                         td0 ← readIORef (wsTilesRef worldState)
                         let (alreadyLoaded, notLoaded) =
-                                partitionChunks batchCanon td0
+                                partitionChunks admissible td0
                         -- Claim before generating (#2001), exactly as the
                         -- camera loader above does. These keys are
                         -- REQUESTED on the owner (every producer of this
@@ -490,7 +517,8 @@ drainInitQueues env logger = do
                         cdesigs ← readIORef (wsConstructDesignationsRef worldState)
                         -- #1854 requirement 15 — see updateChunkLoading.
                         newChunks' ← admitChunkFloraBatch worldState catalog
-                            logger (map (replayEdits edits) newChunks)
+                            logger (map (clipArenaChunk (wgpArenaBounds params) . replayEdits edits)
+                                      newChunks)
 
                         -- Insert new chunks, then recompute slopes
                         -- for the new chunks + their existing neighbors,
@@ -589,7 +617,7 @@ drainInitQueues env logger = do
                         -- same thread within their own tick — so keeping it
                         -- retries next tick rather than spinning.
                         let settled = HS.fromList
-                                (alreadyLoaded ⧺ map lcCoord newChunks')
+                                (alreadyLoaded ⧺ map lcCoord newChunks' ⧺ refused)
                             settledAlias c =
                                 HS.member (canonicalChunkCoord params c) settled
                         atomicModifyIORef' (wsInitQueueRef worldState) $ \q →

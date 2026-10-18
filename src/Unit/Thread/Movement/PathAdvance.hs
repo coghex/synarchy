@@ -24,6 +24,8 @@ import Engine.Core.Capability.WorldSim
 import World.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
 import World.Tile.Types (WorldTileData(..))
+import World.Arena.Bounds
+    (ArenaBounds, arenaAdmitsPosition, clampPositionIntoArena)
 import Unit.Sim.Types
 import Unit.Pathing.Cost (stepCostUnder, lookupTerrainZ, isCliffStep
                          , isDamagingDrop
@@ -144,6 +146,50 @@ tickUnit ∷ PathingConfig → MaterialRegistry → Double → Double → MoveWo
          → UnitMoveStats
          → UnitSimState → UnitSimState
 tickUnit pc reg now dt mw stats us =
+    containInArena (mwBounds mw) us (tickUnitFree pc reg now dt mw stats us)
+
+-- | The finite-arena bounds of the page this mover's terrain came from
+--   (#2708): carried by the tile snapshot itself, so they are exactly
+--   the rectangle the planner and the stepper read the terrain through.
+mwBounds ∷ MoveWorld → Maybe ArenaBounds
+mwBounds mw = mwTiles mw ⌦ wtdBounds
+
+-- | The last line of defence for a finite arena (#2708): whatever the
+--   tick did — a long step, an arrival snap, a diagonal, a landing — a
+--   unit does not END it outside the rectangle. Path planning and the
+--   per-step cost already refuse outside tiles ('tileAvailable' behind
+--   every terrain read), but a fall-permitted arrival snap and a large
+--   elapsed-time step have never consulted the cost function, so the
+--   containment is stated here, once, over the finished tick rather than
+--   re-derived at each of those sites. A unit that would have left is
+--   held at the nearest point inside, its request dropped (it cannot be
+--   met), and — unless a pose transition owns its state — it stands
+--   idle. Unbounded pages, and units inside, are returned untouched.
+containInArena ∷ Maybe ArenaBounds → UnitSimState → UnitSimState → UnitSimState
+containInArena Nothing _ after = after
+containInArena mb@(Just ab) before after
+    | arenaAdmitsPosition mb x y = after
+    | otherwise =
+        let (cx, cy) = uncurry (clampPositionIntoArena ab) $
+                if isNaN x ∨ isInfinite x ∨ isNaN y ∨ isInfinite y
+                    then (usRealX before, usRealY before)
+                    else (x, y)
+        in after { usRealX     = cx
+                 , usRealY     = cy
+                 , usTarget    = Nothing
+                 , usLocalPath = []
+                 , usState     = case usState after of
+                                   t@(TransitioningTo _) → t
+                                   _                     → Idle
+                 }
+  where
+    x = usRealX after
+    y = usRealY after
+
+tickUnitFree ∷ PathingConfig → MaterialRegistry → Double → Double → MoveWorld
+             → UnitMoveStats
+             → UnitSimState → UnitSimState
+tickUnitFree pc reg now dt mw stats us =
     let us1 = handleGetUp now
             $ handleTransitionExpiry now
             $ handlePickupExpiry now

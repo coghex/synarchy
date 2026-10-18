@@ -53,7 +53,7 @@ import World.Chunk.Residency (canonicalChunkCoord)
 import World.Generate.Coordinates (canonicalTileFrameWith)
 import World.Generate.Types (WorldGenParams)
 import World.State.Types (WorldState(..))
-import World.Tile.Types (WorldTileData, lookupChunk)
+import World.Tile.Types (WorldTileData, lookupChunk, tileAvailable)
 
 -- | Select ground item @gid@ on @ws@, reporting whether it took.
 --
@@ -221,6 +221,8 @@ groundRestShift ∷ Maybe WorldGenParams  -- ^ the page's generation params
 groundRestShift mParams td rawTX rawTY = do
     let canon = maybe id canonicalChunkCoord mParams
         (coord, (lx, ly), shift) = canonicalTileFrameWith canon rawTX rawTY
+    -- #2708: no ground item rests outside a finite arena.
+    guard (tileAvailable td rawTX rawTY)
     lc ← lookupChunk coord td
     let idx = columnIndex lx ly
         tz  = lcTerrainSurfaceMap lc VU.! idx

@@ -26,6 +26,7 @@ import qualified Data.Aeson as A
 import qualified Data.Map.Strict as M
 import World.Chunk.Types (ChunkCoord(..))
 import Sim.Topology (SimTopology(..))
+import World.Arena.Bounds (arenaWidth, arenaHeight)
 import RiverRuntime.Harness.Adapter
 import RiverRuntime.Harness.Catalog (CharacterizationCase(..))
 import RiverRuntime.Harness.Compare
@@ -93,6 +94,12 @@ placementJson pl = A.object
         SimFlatTopology     → A.object [ "kind" .= ("flat" ∷ Text) ]
         SimCylindricalU w   → A.object [ "kind" .= ("cylindrical-u" ∷ Text)
                                        , "world_size" .= w ]
+        -- A finite arena is never a river-runtime placement (#2708): the
+        -- harness characterises generated worlds. Recorded as flat plus
+        -- its size so a future archive stays faithful rather than lying.
+        SimFiniteFlat ab    → A.object [ "kind" .= ("finite-flat" ∷ Text)
+                                       , "width" .= arenaWidth ab
+                                       , "height" .= arenaHeight ab ]
     , "tile_offset" .= [fst (plOffset pl), snd (plOffset pl)]
     ]
 

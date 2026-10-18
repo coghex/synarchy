@@ -25,6 +25,7 @@ import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 -- 'World.Command.Types', which is where they are stated — beside the
 -- 'WorldDigTile' constructor whose fields they describe.
 import World.Types
+import World.Arena.Page (whenTileAdmitted)
 import World.Generate.Coordinates (globalToChunk, canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
@@ -86,7 +87,7 @@ handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
           Nothing →
               logWarn logger CatWorld $
                   "World not found for dig tile: " <> unWorldPageId pageId
-          Just ws → do
+          Just ws → whenTileAdmitted logger "Dig tile" ws rawGX rawGY $ do
               -- #1175: the mine designation this consumes is stored under a
               -- CANONICAL key, so the tile is resolved into that frame before
               -- anything is looked up — a dig job coord restored from a

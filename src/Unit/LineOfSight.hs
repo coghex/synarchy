@@ -49,7 +49,7 @@ import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..),
                     WorldPageId)
 import World.Time.Types (preciseSunAngle)
 import World.Chunk.Types (LoadedChunk(..), columnIndex, wrapChunkCoordU)
-import World.Tile.Types (lookupChunk, WorldTileData(..))
+import World.Tile.Types (lookupChunk, tileAvailable, WorldTileData(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Time.Local (localSunAngle)
 
@@ -368,7 +368,11 @@ unblockedStep worldSize wtd ux uy gx gy eyeZ targetZ n i =
 --   arena / non-wrapping (@worldSize ≤ 0@) worlds, 'wrapChunkCoordU' is
 --   the identity, so this changes nothing.
 tileTerrainZ ∷ Int → WorldTileData → Int → Int → Maybe Int
-tileTerrainZ worldSize wtd gx gy =
+tileTerrainZ worldSize wtd gx gy
+    -- #2708: no terrain outside a finite arena, so nothing there blocks
+    -- (or is revealed through) a sightline.
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (coord, (lx, ly)) = globalToChunk gx gy
     in case lookupChunk (wrapChunkCoordU worldSize coord) wtd of
         Nothing → Nothing

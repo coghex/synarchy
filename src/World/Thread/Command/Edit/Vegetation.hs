@@ -18,6 +18,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Types
+import World.Arena.Page (whenTileAdmitted)
 import World.Generate.Coordinates (canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
@@ -38,7 +39,7 @@ handleWorldSetVegCommand wsc logger pageId rawGX rawGY z vegId = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for set veg: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Set vegetation" ws rawGX rawGY $ do
             -- #1175: the till AI reaches here with a designation job coord,
             -- which a pre-#1175 save can hold as a u-alias. Canonicalise so
             -- the edit lands in the chunk that stores the tile (and is
@@ -101,7 +102,7 @@ handleWorldPlantRowCropAtCommand wsc logger pageId rawGX rawGY cropName = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for plant row crop: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Plant row crop" ws rawGX rawGY $ do
             -- #1175: same as setVeg above — the farm AI's completion coord
             -- comes from a plant designation and may be a legacy alias.
             worldSize ← pageWrapWorldSize ws
