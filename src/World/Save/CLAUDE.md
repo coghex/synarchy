@@ -124,14 +124,15 @@ of the headless suite),
 save-test page. Loading a save containing one used to hang the world
 thread — the arena's synthetic gen params wedged the
 regenerate-from-params path — and #365 fixed it by rebuilding the page
-through the shared flat builder from its own recorded seed, then
-replaying the edit overlay and the dig/construct slopes
-(`World.Load.Stage`'s `isArenaParams` branch, `World.Generate.Arena`;
-#1718 settled which seed it rebuilds from). `multiworld_save_probe.py
---arena` is the standing regression for that restore path. That is the
-save/load restore path only, and nothing more: arena pages have their own
-limits elsewhere (requesting chunks outside the 5×5 footprint is a
-separate hazard — see `tools/construction_probe.py`), and because
+through the single arena authority (`generateArenaChunk`) from its own
+recorded seed, then replaying the edit overlay and the dig/construct
+slopes (`World.Load.Stage`'s `isArenaParams` branch, `World.Generate.Arena`;
+#1718 settled which seed it rebuilds from, #2707 unified the base: sixteen
+cells per unedited column on every path, so older arena saves reconstruct
+on the corrected base — `docs/persistence_contract.md` §4). `multiworld_save_probe.py
+--arena` is the standing regression for that restore path, including
+expansion past the 5×5 startup footprint, which is not an extent. That is
+the save/load restore path only, and nothing more, and because
 `--arena` swaps only the secondary page, an arena run never stands in for
 the default run's two generated worlds or for generated-world persistence
 coverage. The headless hspec harness cannot run `engine.saveWorld` end to
