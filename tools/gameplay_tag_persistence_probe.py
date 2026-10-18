@@ -28,13 +28,24 @@ survive), readmits it, destroys a tagged top cell and a tagged plant's
 tile through the real edit verb, and every later generation must carry
 exactly the survivors' assignments, including after an autosave.
 
-There is no public tag verb yet (SCN-06), so assignments are seeded the
-only way that exists: `exe:synarchy-save-codec seed-tags`, which decodes
-a real engine save through the real session codec, sets the assignments
-and re-encodes it through the same encoder an ordinary save uses. Every
-comparison reads the compiled codec's canonical summary
-(`dump_canonical_summary`, whose `gameplayTags` lists each page's
-assignments by target id), never Lua.
+#2706 adds the public `gameplayTags` Lua verbs, exercised through this
+same socket console (no second protocol). Every leg now also creates,
+changes, clears and queries assignments through them after a load:
+units, buildings, locations and items in the generated leg (and the
+autosave path), units, buildings, items and a terrain cell in the arena
+leg, and cells, wild and planted plants and a plot in the place leg,
+where the verbs must also REFUSE the far chunk's targets while it is
+absent and accept them once it is readmitted. Every later generation must
+carry exactly the script-made result, and a fresh process reads it back
+through the same verbs.
+
+The starting assignments, including the dangling and non-target ones no
+verb may create, are still seeded through `exe:synarchy-save-codec
+seed-tags`, which decodes a real engine save through the real session
+codec, sets the assignments and re-encodes it through the same encoder an
+ordinary save uses. Every on-disk comparison reads the compiled codec's
+canonical summary (`dump_canonical_summary`, whose `gameplayTags` lists
+each page's assignments by target id).
 
 Flow, all in one isolated resource root (no scenario file exists in it,
 which the probe asserts, so nothing here can come from scenario YAML):
@@ -390,6 +401,14 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     gone = {items["rationsA"], items["ground"], 99999}
     expected_items = {e["id"]: sorted(e["tags"]) for e in seeded["items"]
                       if e["id"] not in gone}
+    # #2706: engine B's script edits through the public verbs.
+    expected["units"][u1] = ["defender", "lua_unit"]
+    expected["units"][u2] = ["lua_replaced"]
+    expected["buildings"][bid] = ["depot", "lua_depot"]
+    expected["locations"][lid] = ["landmark", "lua_landmark"]
+    expected_items[items["pick"]] = sorted(["tool", "moved_to_unit", "lua_moved"])
+    expected_items[items["kit"]] = ["lua_kit"]
+    expected_items.pop(items["worn"])
 
     print("=== engine B: fresh process, load 'outgoing', load 'seeded' over it, save 'gen1' ===")
     log_b = os.path.join(tmp, "engineB.log")
@@ -410,6 +429,28 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         removed = send(port, f"return item.removeGround({row[0][2]})") if row else "no row"
         chk.ok(removed.strip() == "true",
                f"the tagged ground ration was destroyed (got {removed!r})")
+        # #2706: script-created and script-changed assignments in every
+        # category, through the public verbs, and queries over them.
+        gt_expect(chk, port, [
+            (f"gameplayTags.add({unit_t(u1)}, 'lua_unit')", "true"),
+            (f"gameplayTags.remove({unit_t(u1)}, 'meeting_point')", "true"),
+            (f"gameplayTags.replace({unit_t(u2)}, {{ 'lua_replaced' }})", "true"),
+            (f"gameplayTags.add({building_t(bid)}, {{ 'lua_depot', 'depot' }})", "true"),
+            (f"gameplayTags.add({location_t(PAGE, lid)}, 'lua_landmark')", "true"),
+            (f"gameplayTags.add({item_t(items['pick'])}, 'lua_moved')", "true"),
+            (f"gameplayTags.replace({item_t(items['kit'])}, 'lua_kit')", "true"),
+            (f"gameplayTags.clear({item_t(items['worn'])})", "true"),
+            (f"gameplayTags.add({unit_t(9999)}, 'ghost')", f"nil:gameplayTags.add: {NO_TARGET}"),
+            (f"gameplayTags.add({item_t(items['ground'])}, 'ghost')",
+             f"nil:gameplayTags.add: {NO_TARGET}"),
+            (f"gameplayTags.tagsOf({unit_t(u1)})", "defender;lua_unit"),
+            (f"gameplayTags.has({item_t(items['worn'])}, 'worn')", "false"),
+            ("gameplayTags.count({ tag = 'defender' }, { categories = 'unit' })", "1"),
+            ("gameplayTags.exists({ tag = 'meeting_point' })", "false"),
+            ("gameplayTags.query({ tag = 'lua_replaced' })", f"id={u2} kind=unit"),
+            ("gameplayTags.query({ all = { 'tool', 'lua_moved' } }, { categories = 'item' })",
+             f"id={items['pick']} kind=item"),
+        ])
         save_and_wait(chk, port, PAGE, "gen1")
     finally:
         quit_engine(port, proc)
@@ -453,6 +494,18 @@ def generated_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     try:
         bootstrap_defs(port)
         load_and_wait(chk, port, "autosave-1")
+        # #2706: the script-made assignments, read back through the
+        # public verbs by a fresh process.
+        gt_expect(chk, port, [
+            (f"gameplayTags.tagsOf({unit_t(u1)})", "defender;lua_unit"),
+            (f"gameplayTags.tagsOf({unit_t(u2)})", "lua_replaced"),
+            (f"gameplayTags.tagsOf({item_t(items['kit'])})", "lua_kit"),
+            (f"gameplayTags.tagsOf({item_t(items['worn'])})", ""),
+            ("gameplayTags.query({ tag = 'lua_landmark' })",
+             f"id={lid} kind=location page={PAGE}"),
+            ("gameplayTags.query({ tag = 'lua_depot' }, { categories = { 'unit', 'building' } })",
+             f"id={bid} kind=building"),
+        ])
         save_and_wait(chk, port, PAGE, "gen3")
     finally:
         quit_engine(port, proc)
@@ -498,6 +551,11 @@ def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     seed(chk, root, tmp, "arena0", "arena_seeded", spec)
     expected = spec_tags(spec, ARENA)
     expected_items = {e["id"]: sorted(e["tags"]) for e in spec["items"]}
+    # #2706: engine F's script edits through the public verbs.
+    expected["units"][uid] = sorted(expected["units"][uid] + ["lua_arena"])
+    expected["buildings"][bid] = sorted(expected["buildings"][bid] + ["lua_arena"])
+    expected_items[arena_items[0]] = sorted(expected_items[arena_items[0]] + ["lua_arena"])
+    cell = None
 
     prev = "arena_seeded"
     for letter, nxt in (("F", "arena1"), ("G", "arena2")):
@@ -507,6 +565,24 @@ def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         try:
             bootstrap_defs(port)
             load_and_wait(chk, port, prev)
+            if letter == "F":
+                tz = surface_terrain_z(port, 2, 2)
+                chk.ok(tz is not None, f"the arena has a terrain cell at (2, 2) (z {tz})")
+                cell = (2, 2, tz)
+                gt_expect(chk, port, [
+                    (f"gameplayTags.add({unit_t(uid)}, 'lua_arena')", "true"),
+                    (f"gameplayTags.add({building_t(bid)}, 'lua_arena')", "true"),
+                    (f"gameplayTags.add({item_t(arena_items[0])}, 'lua_arena')", "true"),
+                    (f"gameplayTags.add({tile_t(ARENA, *cell)}, 'lua_arena_cell')", "true"),
+                    (f"gameplayTags.add({tile_t(ARENA, 2, 2, tz + 40)}, 'air')",
+                     f"nil:gameplayTags.add: {NO_TARGET}"),
+                ])
+            gt_expect(chk, port, [
+                ("gameplayTags.query({ tag = 'lua_arena' })",
+                 f"id={uid} kind=unit;id={bid} kind=building;id={arena_items[0]} kind=item"),
+                ("gameplayTags.count({ tag = 'shared' })", str(2 + len(arena_items))),
+                (f"gameplayTags.tagsOf({tile_t(ARENA, *cell)})", "lua_arena_cell"),
+            ])
             save_and_wait(chk, port, ARENA, nxt)
         finally:
             quit_engine(port, proc)
@@ -518,23 +594,26 @@ def arena_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         chk.ok(got_items == expected_items,
                f"'{nxt}' carries exactly the arena's item assignments "
                f"(got {got_items}, expected {expected_items})")
+        got_cells = place_tags(chk, tmp, root, nxt, ARENA).get("tiles")
+        chk.ok(got_cells == {cell: ["lua_arena_cell"]},
+               f"'{nxt}' carries the script-tagged arena cell (got {got_cells})")
         prev = nxt
 
 
 PLACE = "tag_place"
 
 
-def place_tags(chk: Checks, tmp: str, root: str, slot: str) -> dict:
-    """The place page's cell / plant / plot assignments off the save:
+def place_tags(chk: Checks, tmp: str, root: str, slot: str, page: str = PLACE) -> dict:
+    """A page's cell / plant / plot assignments off the save:
     {"tiles": {(x, y, z): tags}, "plants": {id: (tile, tags)},
     "plots": {(x, y): tags}}."""
-    out = Path(tmp) / f"{slot}.place.json"
+    out = Path(tmp) / f"{slot}.{page}.place.json"
     ok, tail = dump_canonical_summary(Path(slot_path(root, slot)), out)
     chk.ok(ok, f"canonical summary of '{slot}'" + ("" if ok else f": {tail}"))
     if not ok:
         return {}
     for p in json.loads(out.read_text()).get("pages", []):
-        if p.get("pageId") == PLACE:
+        if p.get("pageId") == page:
             g = p.get("gameplayTags", {})
             return {
                 "tiles": {(e["x"], e["y"], e["z"]): sorted(e["tags"]) for e in g.get("tiles", [])},
@@ -542,7 +621,7 @@ def place_tags(chk: Checks, tmp: str, root: str, slot: str) -> dict:
                            for e in g.get("plants", [])},
                 "plots": {(e["x"], e["y"]): sorted(e["tags"]) for e in g.get("plots", [])},
             }
-    chk.ok(False, f"'{slot}' has no page '{PLACE}'")
+    chk.ok(False, f"'{slot}' has no page '{page}'")
     return {}
 
 
@@ -585,6 +664,59 @@ def live_query(port: int, tag: str) -> list:
     through the test-only debug.liveTagQuery verb (#2705)."""
     r = send(port, f"return table.concat(debug.liveTagQuery('{tag}'), ';')").strip().strip('"')
     return [t for t in r.split(";") if t]
+
+
+def gt_call(port: int, call: str) -> str:
+    """One public `gameplayTags` call through the socket console (#2706),
+    rendered flat: 'nil:<message>' for a refusal, the value for a
+    scalar, and a ';'-joined list for a table (a tag, or a target as its
+    sorted 'key=value' fields)."""
+    r = send(port, "local a, b = " + call + "; "
+                   "if a == nil then return 'nil:' .. tostring(b) end; "
+                   "if type(a) ~= 'table' then return tostring(a) end; "
+                   "local out = {} for _, v in ipairs(a) do "
+                   "if type(v) == 'table' then local ks = {} for k in pairs(v) do ks[#ks + 1] = k end "
+                   "table.sort(ks) local fs = {} for _, k in ipairs(ks) do "
+                   "fs[#fs + 1] = k .. '=' .. tostring(v[k]) end out[#out + 1] = table.concat(fs, ' ') "
+                   "else out[#out + 1] = tostring(v) end end return table.concat(out, ';')")
+    return r.strip().strip('"')
+
+
+def gt_expect(chk: Checks, port: int, calls: list) -> None:
+    for call, want in calls:
+        got = gt_call(port, call)
+        chk.ok(got == want, f"{call} -> {want!r} (got {got!r})")
+
+
+NO_TARGET = "no such live target (it does not exist, or is not loaded)"
+
+
+def unit_t(i) -> str:
+    return f"{{ kind = 'unit', id = {i} }}"
+
+
+def building_t(i) -> str:
+    return f"{{ kind = 'building', id = {i} }}"
+
+
+def item_t(i) -> str:
+    return f"{{ kind = 'item', id = {i} }}"
+
+
+def location_t(page: str, i) -> str:
+    return f"{{ kind = 'location', page = '{page}', id = {i} }}"
+
+
+def plant_t(page: str, i) -> str:
+    return f"{{ kind = 'plant', page = '{page}', id = {i} }}"
+
+
+def plot_t(page: str, x: int, y: int) -> str:
+    return f"{{ kind = 'plot', page = '{page}', x = {x}, y = {y} }}"
+
+
+def tile_t(page: str, x: int, y: int, z: int) -> str:
+    return f"{{ kind = 'tile', page = '{page}', x = {x}, y = {y}, z = {z} }}"
 
 
 def ring(r: int) -> list:
@@ -696,7 +828,18 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     after_dig = {"tiles": {k: v for k, v in kept["tiles"].items()
                            if "dug_away" not in v and "far_air" not in v},
                  "plants": {k: v for k, v in kept["plants"].items() if "uprooted" not in v[1]},
-                 "plots": kept["plots"]}
+                 "plots": dict(kept["plots"])}
+    # #2706: engine P3's script edits through the public verbs.
+    far_cell = (far[0], far[1], far_z)
+    if far_cell in after_dig["tiles"]:
+        after_dig["tiles"][far_cell] = ["far_top", "lua_far"]
+    for pid, extra, replace in ((fpid, ["lua_plant"], None), (rpid, None, ["far_row_crop", "lua_row"])):
+        if pid in after_dig["plants"]:
+            tile, ts = after_dig["plants"][pid]
+            after_dig["plants"][pid] = (tile, sorted(replace if replace else ts + extra))
+    if (plot[0], plot[1]) in after_dig["plots"]:
+        after_dig["plots"][(plot[0], plot[1])] = ["field", "lua_plot"]
+    far_t = tile_t(PLACE, far[0], far[1], far_z)
 
     print("=== engine P2: fresh process, load, save while the far chunk is ABSENT ===")
     log_p2 = os.path.join(tmp, "engineP2.log")
@@ -712,6 +855,18 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
             got = live_query(port, t)
             chk.ok(got == [], f"while the far chunk is absent, the live query for '{t}' "
                               f"returns nothing (got {got})")
+        # #2706: the public verbs refuse an absent chunk's targets, load
+        # nothing to serve them, and do not see their retained tags.
+        gt_expect(chk, port, [
+            (f"gameplayTags.add({far_t}, 'lua_far')", f"nil:gameplayTags.add: {NO_TARGET}"),
+            (f"gameplayTags.tagsOf({plant_t(PLACE, fpid)})", f"nil:gameplayTags.tagsOf: {NO_TARGET}"),
+            (f"gameplayTags.has({plant_t(PLACE, rpid)}, 'far_row_crop')",
+             f"nil:gameplayTags.has: {NO_TARGET}"),
+            ("gameplayTags.query({ tag = 'far_top' }, { categories = 'tile' })", ""),
+            ("gameplayTags.exists({ any = { 'far_plant', 'far_row_crop' } })", "false"),
+        ])
+        chk.ok(not chunk_loaded(port, fcx, fcy),
+               "the refused requests did not load the far chunk")
         save_and_wait(chk, port, PLACE, "place_gen1")
     finally:
         quit_engine(port, proc)
@@ -731,7 +886,7 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         load_and_wait(chk, port, "place_gen1")
         send(port, f"return world.loadChunksInRegion({fcx}, {fcy}, {fcx}, {fcy}, '{PLACE}')")
         # The near targets' chunks, which a fresh load need not hold.
-        for gx, gy in (near[:2], npt):
+        for gx, gy in (near[:2], npt, plot[:2]):
             cx, cy = gx // 16, gy // 16
             send(port, f"return world.loadChunksInRegion({cx}, {cy}, {cx}, {cy}, '{PLACE}')")
         send(port, "return world.waitForChunks(120)", timeout=125)
@@ -745,6 +900,24 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
             got = live_query(port, t)
             chk.ok(got == want, f"after readmission, the live query for '{t}' returns "
                                 f"{want} (got {got})")
+        # #2706: once readmitted, the public verbs edit and query the far
+        # targets, the plot and the near cells.
+        near_t = tile_t(PLACE, near[0], near[1], near[2])
+        gt_expect(chk, port, [
+            (f"gameplayTags.add({far_t}, 'lua_far')", "true"),
+            (f"gameplayTags.remove({far_t}, 'shared')", "true"),
+            (f"gameplayTags.add({plant_t(PLACE, fpid)}, 'lua_plant')", "true"),
+            (f"gameplayTags.replace({plant_t(PLACE, rpid)}, {{ 'far_row_crop', 'lua_row' }})", "true"),
+            (f"gameplayTags.add({plot_t(PLACE, plot[0], plot[1])}, 'lua_plot')", "true"),
+            (f"gameplayTags.tagsOf({far_t})", "far_top;lua_far"),
+            ("gameplayTags.query({ tag = 'shared' })",
+             f"id={fpid} kind=plant page={PLACE};"
+             f"kind=tile page={PLACE} x={near[0]} y={near[1]} z={near[2]}"),
+            ("gameplayTags.count({ tag = 'shared' })", "2"),
+            (f"gameplayTags.has({near_t}, 'dug_away')", "true"),
+            ("gameplayTags.query({ tag = 'lua_plot' })",
+             f"kind=plot page={PLACE} x={plot[0]} y={plot[1]}"),
+        ])
         for (gx, gy), want in ((near[:2], near[2] - 1), (npt, None)):
             before = surface_terrain_z(port, gx, gy)
             send(port, f"return world.deleteTile('{PLACE}', {gx}, {gy})")
@@ -773,6 +946,16 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
     try:
         bootstrap_defs(port)
         load_and_wait(chk, port, "autosave-1")
+        # #2706: read back through the public verbs once the far chunk is
+        # resident again.
+        send(port, f"return world.loadChunksInRegion({fcx}, {fcy}, {fcx}, {fcy}, '{PLACE}')")
+        send(port, "return world.waitForChunks(120)", timeout=125)
+        gt_expect(chk, port, [
+            (f"gameplayTags.tagsOf({far_t})", "far_top;lua_far"),
+            (f"gameplayTags.tagsOf({plant_t(PLACE, rpid)})", "far_row_crop;lua_row"),
+            ("gameplayTags.query({ tag = 'lua_plant' }, { categories = 'plant' })",
+             f"id={fpid} kind=plant page={PLACE}"),
+        ])
         save_and_wait(chk, port, PLACE, "place_gen3")
     finally:
         quit_engine(port, proc)
