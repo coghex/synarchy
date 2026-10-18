@@ -55,7 +55,8 @@
 --   Moves never touch the index; destruction is
 --   "Gameplay.Tags.ItemLifecycle"'s.
 --
---   Nothing here is reachable from Lua; the public verbs are SCN-06.
+--   Scripts reach these operations through the @gameplayTags@ namespace
+--   ("Engine.Scripting.Lua.API.GameplayTags", #2706).
 module Gameplay.Tags.Live
     ( -- * Edits
       TagEdit(..)

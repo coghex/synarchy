@@ -403,6 +403,7 @@ library
                      Engine.Scripting.Lua.API.Register.UI
                      Engine.Scripting.Lua.API.Register.Unit
                      Engine.Scripting.Lua.API.Register.Faction
+                     Engine.Scripting.Lua.API.Register.GameplayTags
                      Engine.Scripting.Lua.API.Register.Building
                      Engine.Scripting.Lua.API.Register.Designation
                      Engine.Scripting.Lua.API.Register.Equipment
@@ -444,6 +445,8 @@ library
                      Engine.Scripting.Lua.API.UI.Placement
                      Engine.Scripting.Lua.API.UI.Presentation
                      Engine.Scripting.Lua.API.Faction
+                     Engine.Scripting.Lua.API.GameplayTags
+                     Engine.Scripting.Lua.API.GameplayTags.Args
                      Engine.Scripting.Lua.API.Units
                      Engine.Scripting.Lua.API.Units.MotionArgs
                      Engine.Scripting.Lua.API.Units.Page
@@ -1969,6 +1972,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Gameplay.TagsPersistence
                    Test.Headless.Gameplay.TagsItems
                    Test.Headless.Gameplay.TagsResidency
+                   Test.Headless.Lua.GameplayTags
+                   Test.Headless.Lua.GameplayTags.Scene
                    Test.Headless.Scenario.Schema
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance

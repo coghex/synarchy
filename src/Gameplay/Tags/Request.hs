@@ -5,9 +5,11 @@
 --   which must run on the world thread (see "Gameplay.Tags.Page" for
 --   why). This resolves the target's page and incarnation, queues
 --   'World.Command.Types.WorldEditPageTags' and waits for the answer.
---   No Lua binding exists yet; the public verbs are SCN-06.
+--   The @gameplayTags@ Lua verbs (#2706) call it for every tile and plant
+--   edit, and wait for the answer.
 module Gameplay.Tags.Request
     ( requestPageTagEdit
+    , requestPageTagEditAt
     ) where
 
 import UPrelude
@@ -18,6 +20,8 @@ import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import Gameplay.Tags.Edit (TagEdit, TagEditResult(..))
 import Gameplay.Tags.Types
 import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
+import World.Page.Types (WorldPageId)
 import World.Command.Types (WorldCommand(..), TagEditReply(..))
 import World.State.Types (WorldManager(..))
 
@@ -34,12 +38,23 @@ requestPageTagEdit wsc target edit = case targetPage target of
             Nothing → pure TagEditNoTarget
             Just ws → do
                 epoch ← pageIncarnation ws
-                reply ← newEmptyMVar
-                Q.writeQueue (wsWorldQueue wsc)
-                    (WorldEditPageTags page epoch target edit (TagEditReply reply))
-                takeMVar reply
+                requestPageTagEditAt wsc page epoch target edit
   where
     targetPage = \case
         TargetTile t  → Just (tileTargetPage t)
         TargetPlant p → Just (plantTargetPage p)
         _             → Nothing
+
+-- | 'requestPageTagEdit' for a caller that already resolved the page and
+--   read its incarnation, BEFORE it derived anything else from that page
+--   (#2706: the Lua verbs canonicalise coordinates against the page they
+--   resolved). Carrying that epoch, rather than reading the page again
+--   here, is what makes a replacement in between refuse the edit instead
+--   of applying it to the replacement.
+requestPageTagEditAt ∷ WorldSimCapability → WorldPageId → ChunkGeneration → TagTarget
+                     → TagEdit → IO TagEditResult
+requestPageTagEditAt wsc page epoch target edit = do
+    reply ← newEmptyMVar
+    Q.writeQueue (wsWorldQueue wsc)
+        (WorldEditPageTags page epoch target edit (TagEditReply reply))
+    takeMVar reply
