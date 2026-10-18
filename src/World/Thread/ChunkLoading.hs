@@ -11,6 +11,7 @@ module World.Thread.ChunkLoading
 import UPrelude
 import Gameplay.Tags.PageLive (pageTagWrite, reconcileAdmittedPageTags)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Vector.Unboxed as VU
 import Data.List (nub, partition, sortOn)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Parallel.Strategies (parMap, rdeepseq)
@@ -27,7 +28,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import qualified Data.HashSet as HS
 import World.Types
 import World.Generate (generateLoadedChunk, cameraChunkCoord)
-import World.Arena.Bounds (boundedChunkCoords)
+import World.Arena.Bounds (arenaAdmitsTile, boundedChunkCoords)
 import World.Generate.Arena (generateArenaChunkIn, clipArenaChunk)
 import World.Material (MaterialRegistry)
 import World.Generate.Constants (chunkLoadRadius)
@@ -694,7 +695,26 @@ computeSideDecos seed newCoords wtd =
                 Just lc →
                     let decos = computeChunkSideDecos seed coord
                             (lcTerrainSurfaceMap lc) (lcFluidMap lc) neighborLookup
-                    in HM.insert coord (lc { lcSideDeco = decos }) acc
+                    in HM.insert coord (lc { lcSideDeco = keepInsideMap coord decos }) acc
                 Nothing → acc
             ) chunks newCoords
     in wtd { wtdChunks = updatedChunks }
+  where
+    -- #2708: a decoration is a cliff-face dressing, and the edge of a
+    -- finite arena is not a cliff the world dresses: no tile that is, or
+    -- touches, a column outside the rectangle carries one. (The absent
+    -- neighbour reads back as the 'minBound' sentinel, whose difference
+    -- from a negative surface overflows into a spurious cliff — this
+    -- states the rule rather than leaning on the arithmetic.) Startup
+    -- and restored chunks are never decorated, so this is also what keeps
+    -- every path agreeing at the edge.
+    keepInsideMap coord decos = case wtdBounds wtd of
+        Nothing → decos
+        Just ab →
+            let ChunkCoord cx cy = coord
+                touchesOutside i =
+                    let gx = cx * chunkSize + i `mod` chunkSize
+                        gy = cy * chunkSize + i `div` chunkSize
+                    in any (\(x, y) → not (arenaAdmitsTile (Just ab) x y))
+                           [(gx, gy), (gx + 1, gy), (gx - 1, gy), (gx, gy + 1), (gx, gy - 1)]
+            in VU.imap (\i d → if d ≢ 0 ∧ touchesOutside i then 0 else d) decos

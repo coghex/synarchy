@@ -1072,7 +1072,7 @@ currentPageCore = PageCoreDTO
                                           0xABCDEF0123456789 1))
                                Nothing)
     , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage
-                                (WorldPageId "legacy_page")), pcLocationTags = []
+                                (WorldPageId "legacy_page")), pcLocationTags = [], pcArenaBounds = Nothing
     }
 
 

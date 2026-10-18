@@ -252,7 +252,7 @@ boxAround (px, py) r = (px - r, py - r, px + r, py + r)
 tilesOf ∷ [LoadedChunk] → WorldTileData
 tilesOf lcs = WorldTileData
     { wtdChunks = HM.fromList [(lcCoord lc, lc) | lc ← lcs]
-    , wtdMaxChunks = 200 }
+    , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 flatChunk ∷ ChunkCoord
 flatChunk = ChunkCoord 0 0

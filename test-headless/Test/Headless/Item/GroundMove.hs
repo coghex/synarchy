@@ -206,6 +206,7 @@ fixtureTiles ∷ WorldTileData
 fixtureTiles = WorldTileData
     { wtdChunks = HM.fromList [(c, fixtureChunk c) | c ← loadedCoords]
     , wtdMaxChunks = 200
+    , wtdBounds = Nothing
     }
 
 -- * Fixture identities

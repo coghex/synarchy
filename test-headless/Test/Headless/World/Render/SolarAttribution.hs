@@ -173,6 +173,7 @@ fixtureTiles ∷ WorldTileData
 fixtureTiles = WorldTileData
     { wtdChunks    = HM.singleton (lcCoord fixtureChunk) fixtureChunk
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 -- | A zoom-map chunk entry at the world origin.
@@ -582,7 +583,7 @@ restoreSpec = describe "a restored multi-page session" $
                     , pcMapMode    = ZMDefault
                     , pcIdentity   = Nothing
                     , pcGeneratedId =
-                        Just (fixtureGeneratedWorldIdForPage pageId), pcLocationTags = []
+                        Just (fixtureGeneratedWorldIdForPage pageId), pcLocationTags = [], pcArenaBounds = Nothing
                     }
                 paramsFor n = defaultWorldGenParams { wgpWorldSize = n }
                 written = WorldPagesDTO

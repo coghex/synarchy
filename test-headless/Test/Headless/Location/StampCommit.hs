@@ -139,6 +139,7 @@ tilesFrom ∷ [ChunkCoord] → WorldTileData
 tilesFrom coords = WorldTileData
     { wtdChunks    = HM.fromList [ (c, flatChunkAt c) | c ← coords ]
     , wtdMaxChunks = max 1 (length coords)
+    , wtdBounds = Nothing
     }
 
 genParams ∷ WorldGenParams

@@ -394,7 +394,7 @@ engineSpec = beforeAll initEnv $
             (Just defaultWorldGenParams { wgpWorldSize = worldSize })
         writeIORef (wsTilesRef ws) WorldTileData
             { wtdChunks = HM.fromList [(stored, seamChunk)]
-            , wtdMaxChunks = 200 }
+            , wtdMaxChunks = 200, wtdBounds = Nothing }
         writeIORef (cameraRef env) (cameraAt facing rawTile)
         writeIORef (framebufferSizeRef env) (fbW, fbH)
         quads ← renderStructureQuads env ws facing zSlice effDepth 1.0

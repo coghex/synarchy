@@ -202,6 +202,7 @@ seamTiles veg flora = WorldTileData
         [ (innerChunk,  baseChunk innerChunk  veg (flora innerChunk))
         , (outerStored, baseChunk outerStored veg (flora outerStored)) ]
     , wtdMaxChunks = 200
+    , wtdBounds = Nothing
     }
 
 noFlora ∷ ChunkCoord → FloraChunkData

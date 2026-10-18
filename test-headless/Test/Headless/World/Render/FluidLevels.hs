@@ -288,7 +288,7 @@ debugEditSpec = describe "exact capture edit hook" $
                 lc = (generateArenaChunk 0 coord) { lcTerrainSurfaceMap = VU.replicate 256 (-4) }
             writeIORef (wsWorldManagerRef wsc) emptyWorldManager { wmWorlds = [(page, ws)] }
             writeIORef (wsGenParamsRef ws) (Just defaultWorldGenParams { wgpWorldSize = 64 })
-            writeIORef (wsTilesRef ws) (WorldTileData (HM.singleton coord lc) 1)
+            writeIORef (wsTilesRef ws) (WorldTileData (HM.singleton coord lc) 1 Nothing)
             Lua.run @Lua.Exception $ do
                 Lua.openlibs
                 Lua.pushHaskellFunction (setFluidSurfaceFn wsc)

@@ -161,11 +161,11 @@ fixtureChunk veg overrides =
 tilesWith ∷ Word8 → [((Int, Int), Word8)] → WorldTileData
 tilesWith veg overrides = WorldTileData
     { wtdChunks = HM.singleton storedChunk (fixtureChunk veg overrides)
-    , wtdMaxChunks = 200 }
+    , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | The same page with NO chunk resident at all — the unknown case.
 noTiles ∷ WorldTileData
-noTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+noTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | A registered @row_crop@, so admission's own species check passes
 --   and an example that is about the SOIL is really about the soil.

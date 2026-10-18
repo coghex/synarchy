@@ -390,7 +390,7 @@ stagedFloorAt (gx, gy) = fst $ stageStructurePlacement
     emptyStructureStage
 
 emptyTiles ∷ WorldTileData
-emptyTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+emptyTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 flatTiles ∷ WorldTileData
 flatTiles = surfaceAt zSlice
@@ -415,7 +415,7 @@ surfaceAt z =
                , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
                , lcMagma = Nothing, lcStructures = emptyChunkStructures
                }
-    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200 }
+    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 withPiece ∷ StructureSlot → (Int, Int) → WorldTileData → WorldTileData
 withPiece slot (gx, gy) td = td

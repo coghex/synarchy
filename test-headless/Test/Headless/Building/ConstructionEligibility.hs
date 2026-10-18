@@ -142,6 +142,7 @@ fixtureTiles = WorldTileData
         [ (c, flatChunk c) | c ← [ChunkCoord 0 0, ChunkCoord 1 0
                                  , ChunkCoord 0 1, ChunkCoord 1 1] ]
     , wtdMaxChunks = 4
+    , wtdBounds = Nothing
     }
 
 -- * Definitions

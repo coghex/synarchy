@@ -153,10 +153,14 @@ arenaDepth ∷ Int
 arenaDepth = arenaLoamLayers + arenaGraniteLayers
 
 -- | The column of a cell OUTSIDE a finite arena's rectangle (#2708): no
---   cells at all, starting at the foundation's floor. It is the engine's
---   existing "column dug away to nothing" shape, which every reader
---   already tolerates, so a partial chunk needs no new storage form; its
---   surface is 'absentSurfaceZ', below the floor. It can never change:
+--   cells at all. It is the engine's existing BEYOND-THE-WORLD shape — the
+--   one a generated world gives the tiles past its glacier rim — an empty,
+--   unrendered column whose terrain surface is the 'minBound' sentinel
+--   ('absentSurfaceZ'). Every pass that looks across a column boundary
+--   already special-cases that sentinel (slopes, edge strata, side
+--   decorations, fluid placement, ice, the magma overlay), so a partial
+--   chunk needs no new storage form and the padding is treated as what it
+--   is: absent, not a lower neighbouring column. It can never change:
 --   every authoritative mutation refuses an out-of-rectangle tile.
 absentColumn ∷ ColumnTiles
 absentColumn = ColumnTiles
@@ -200,9 +204,10 @@ clipArenaChunk mb@(Just ab) lc
                 (\(gx, gy, _) _ → arenaAdmitsTile mb gx gy) (lcStructures lc)
             }
 
--- | The surface z recorded for an absent column: one below its floor.
+-- | The surface z recorded for an absent column: the 'minBound' sentinel
+--   the generator already uses for tiles beyond the world's edge.
 absentSurfaceZ ∷ Int
-absentSurfaceZ = seaLevel - arenaDepth
+absentSurfaceZ = minBound
 
 -- | One column: index 0 is the bottom cell, index @arenaDepth - 1@ the
 --   top. @variant@ (0..3) selects the grass/moss sprite of the top cell

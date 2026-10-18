@@ -746,6 +746,7 @@ flatTiles ∷ WorldTileData
 flatTiles = WorldTileData
     { wtdChunks    = HM.singleton (lcCoord flatChunk) flatChunk
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 worldSizeChunks ∷ Int

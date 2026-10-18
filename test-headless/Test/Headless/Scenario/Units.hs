@@ -151,7 +151,7 @@ resetScene ∷ EngineEnv → IO WorldState
 resetScene env = do
     ws ← emptyWorldState
     writeIORef (wsTilesRef ws) WorldTileData
-        { wtdChunks = HM.singleton (ChunkCoord 0 0) flatChunk, wtdMaxChunks = 1 }
+        { wtdChunks = HM.singleton (ChunkCoord 0 0) flatChunk, wtdMaxChunks = 1, wtdBounds = Nothing }
     writeIORef (wsGenParamsRef ws) (Just defaultWorldGenParams { wgpWorldSize = 8 })
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(pageP, ws)], wmVisible = [pageP] }

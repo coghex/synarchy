@@ -161,7 +161,7 @@ flatChunkAt coord =
 loadedTiles ∷ WorldTileData
 loadedTiles = WorldTileData
     { wtdChunks    = HM.fromList [ (c, flatChunkAt c) | c ← coords ]
-    , wtdMaxChunks = max 1 (length coords) }
+    , wtdMaxChunks = max 1 (length coords), wtdBounds = Nothing }
   where
     coords = foldr insertUnique []
                    [ fst (globalToChunk gx gy) | (gx, gy) ← allScenarioTiles ]
@@ -901,7 +901,7 @@ designateWire ws tile =
 tilesAround ∷ (Int, Int) → WorldTileData
 tilesAround (x, y) = WorldTileData
     { wtdChunks = HM.fromList [ (c, flatChunkAt c) | c ← coords ]
-    , wtdMaxChunks = max 1 (length coords) }
+    , wtdMaxChunks = max 1 (length coords), wtdBounds = Nothing }
   where
     around = [ (x + dx, y + dy)
              | dx ← [-1 .. 1], dy ← [-1 .. 1] ]

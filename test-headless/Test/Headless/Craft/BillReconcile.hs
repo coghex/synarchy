@@ -190,6 +190,7 @@ flatTiles ∷ WorldTileData
 flatTiles = WorldTileData
     { wtdChunks    = HM.singleton (lcCoord flatChunk) flatChunk
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 -- | One PAUSED bill, mid-cycle (progress 0.4, 'cbWorking' True), held

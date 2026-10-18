@@ -1256,4 +1256,4 @@ flatTiles =
                , lcIceMap = emptyIceMap, lcFlora = emptyFloraChunkData
                , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
                , lcMagma = Nothing, lcStructures = emptyChunkStructures }
-    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200 }
+    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200, wtdBounds = Nothing }

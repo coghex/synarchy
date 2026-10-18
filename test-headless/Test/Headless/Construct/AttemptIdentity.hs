@@ -762,7 +762,7 @@ surfaceAt z =
                , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
                , lcMagma = Nothing, lcStructures = emptyChunkStructures
                }
-    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200 }
+    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- * Load reconciliation
 
@@ -946,7 +946,7 @@ isLeft' (Left _) = True
 isLeft' _        = False
 
 emptyTiles ∷ WorldTileData
-emptyTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+emptyTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | One page's activity slice carrying just the construction state, at
 --   the CURRENT wire shape.

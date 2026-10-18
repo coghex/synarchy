@@ -191,6 +191,17 @@ admitReaction registry gens td rr
                     Nothing → ReactionRefused (RefusedStale
                         ("chunk " <> tshow (sevChunk ev) <> " is not loaded"))
                     Just lc
+                        -- #2708: a derived reaction edit respects the
+                        -- finite arena exactly as a direct one does. The
+                        -- simulation never offers a cell outside the
+                        -- rectangle (its edge is closed), so this is the
+                        -- authoritative edge refusing what should be
+                        -- unreachable rather than writing stone there.
+                        | not (uncurry (tileAvailable td) (reactionEventTile ev)) →
+                            ReactionRefused (RefusedFaulty
+                                ("the cell at "
+                                 <> tshow (reactionEventTile ev)
+                                 <> " is outside the finite arena"))
                         | outOfColumnRange lc (sevIndex ev) →
                             ReactionRefused (RefusedFaulty
                                 ("the column at "

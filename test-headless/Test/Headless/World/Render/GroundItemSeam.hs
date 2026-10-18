@@ -94,6 +94,7 @@ tilesAt ∷ ChunkCoord → WorldTileData
 tilesAt coord = WorldTileData
     { wtdChunks = HM.fromList [(coord, solidChunk coord)]
     , wtdMaxChunks = 200
+    , wtdBounds = Nothing
     }
 
 bareItemDef ∷ ItemDef
@@ -204,7 +205,7 @@ spec = do
 
     it "is still Nothing when the chunk genuinely is not loaded" $
       -- The negative the raw lookup could not tell apart from an alias.
-      geometry (WorldTileData HM.empty 200) aliased `shouldBe` Nothing
+      geometry (WorldTileData HM.empty 200 Nothing) aliased `shouldBe` Nothing
 
   describe "away from the seam the wrap is the identity" $ do
     -- Chunk (16,-15) has u = 31 — inside the canonical range, so it is

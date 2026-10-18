@@ -338,5 +338,12 @@ reconcileQueuedPhaseLocked ws = do
         -- the invariant holds from either side rather than only from the
         -- one this happens to be called on. The load ENDED with an empty
         -- queue, so whatever is on it now is the whole of a new one.
-        (LoadDone, _)       → (LoadPhase2 remaining remaining, ())
+        -- Only when work IS present (#2708). A request that adds nothing —
+        -- every coordinate already resident or requested, or (on a finite
+        -- arena) wholly outside the map — leaves an empty queue under a
+        -- finished load, and reopening THAT as @LoadPhase2 0 0@ is a phase
+        -- the drain never settles back (it returns at once for an empty
+        -- queue), so @world.waitForInit@ would wait for ever on a request
+        -- that asked for nothing.
+        (LoadDone, n) | n > 0 → (LoadPhase2 remaining remaining, ())
         (other, _)          → (other, ())

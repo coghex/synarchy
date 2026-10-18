@@ -108,13 +108,13 @@ setupPages ∷ IO WorldManager
 setupPages = do
     wsA ← emptyWorldState
     writeIORef (wsTilesRef wsA)
-        (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1)
+        (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1 Nothing)
     writeIORef (wsTimeRef wsA) (preciseWorldTime (WorldTime 12 0))
     writeIORef (wsGenParamsRef wsA)
         (Just defaultWorldGenParams { wgpWorldSize = 4 })
     wsB ← emptyWorldState
     writeIORef (wsTilesRef wsB)
-        (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1)
+        (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1 Nothing)
     writeIORef (wsTimeRef wsB) (preciseWorldTime (WorldTime 12 0))
     writeIORef (wsGenParamsRef wsB)
         (Just defaultWorldGenParams { wgpWorldSize = 4 })

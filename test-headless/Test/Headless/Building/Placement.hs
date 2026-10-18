@@ -48,7 +48,7 @@
 --   every rejection here, proving the check needs neither a visited
 --   chunk nor placed geometry (the "unstamped but overlay-known
 --   location" acceptance case).
-module Test.Headless.Building.Placement (spec) where
+module Test.Headless.Building.Placement (spec, mkDef) where
 
 import UPrelude
 import Test.Hspec
@@ -139,6 +139,7 @@ worldWithChunks ∷ [LoadedChunk] → WorldTileData
 worldWithChunks chunks = WorldTileData
     { wtdChunks    = HM.fromList [ (lcCoord c, c) | c ← chunks ]
     , wtdMaxChunks = length chunks
+    , wtdBounds = Nothing
     }
 
 mkDef ∷ Bool → Int → Int → BuildingDef

@@ -159,6 +159,7 @@ tilesAt ∷ Int → WorldTileData
 tilesAt z = WorldTileData
     { wtdChunks    = HM.singleton (ChunkCoord 0 0) (flatChunkAt (ChunkCoord 0 0) z)
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 -- * Definitions

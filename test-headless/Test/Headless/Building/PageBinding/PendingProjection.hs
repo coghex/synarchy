@@ -256,7 +256,7 @@ pendingSpec =
         logger ← readIORef (loggerRef env)
         -- The visible-page counterpart of this is asserted below; a
         -- hidden page's replacement leaves the binding alone.
-        handleWorldInitArenaCommand env logger pageB
+        handleWorldInitArenaCommand env logger pageB Nothing
         mgr ← readIORef (worldManagerRef env)
         wmVisible mgr `shouldBe` [pageA]
         wmSelectionGen mgr `shouldBe` gen
@@ -283,7 +283,7 @@ pendingSpec =
         -- Re-initialising a non-head visible page, likewise.
         _ ← resetSceneBothVisible env
         gen2 ← selectionGen env
-        handleWorldInitArenaCommand env logger pageB
+        handleWorldInitArenaCommand env logger pageB Nothing
         selectionGen env `shouldReturn` gen2
         canPlaceAt ls shedName placeTile (Just (pageA, gen2))
             `shouldReturn` "true|nil|false"
@@ -390,7 +390,7 @@ pendingSpec =
         -- world.init/initArena REPLACE the page's WorldState while
         -- leaving wmVisible alone, so the page id still matches: only
         -- the generation can tell the binding apart from a live one.
-        handleWorldInitArenaCommand env logger pageA
+        handleWorldInitArenaCommand env logger pageA Nothing
         mgr ← readIORef (worldManagerRef env)
         wmVisible mgr `shouldBe` [pageA]
         wmSelectionGen mgr `shouldNotBe` gen
