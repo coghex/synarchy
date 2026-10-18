@@ -585,21 +585,29 @@ definition's own defaults, with no override and no applied engagement.
    zero elapsed time (`Combat.Wounds.Tick.tickOneUnitWith`, its unit discarded).
    Nothing drains, heals or rolls.
 10. **Paused readiness.** This step runs at install, before completion
-    (`Scenario.Units.Install.uirReady`; production `Scenario.Units.Ready`). It
-    covers the two Lua-owned derived states:
-    - the calorie strength discount;
-    - the pose that injuries and consciousness demand (concussion knock-out,
-      legs too broken to walk).
+    (`Scenario.Units.Install.uirReady`; production `Scenario.Units.Ready`, on the
+    Lua thread). `unit_resources.settleScenarioUnit` runs the ONE per-unit
+    reconciliation the resource tick itself runs, `unitResources.reconcileUnit`,
+    once at zero elapsed time. It covers stance, cardio, the system ticks,
+    injuries and their lethality, failure meters, every pool's death,
+    kill-on-zero and collapse thresholds, starvation's muscle and fat floors,
+    the calorie strength discount, and revival.
 
-    `unit_resources.settleScenarioUnit` computes both through the same
-    producers the per-tick pass uses: `reconcileStrength`, which calls
-    `starvation.refreshStrength`, and `unit_resource_injury.injuryPose`. The
-    answered pose is applied synchronously with the handlers the queued
-    `UnitCollapse` and `UnitCrawl` commands run. A failing hook retires the unit
-    (`ReadinessFailed`). The hook runs on the Lua thread and is idempotent. It
-    must run after any paused hook that resets strength:
-    `unit.recomputeBody`, like every ordinary load, re-derives `strength` from
-    the body.
+    - **Recorded effects.** The pass's effects go through one seam,
+      `scripts/unit_effects.lua`. For this unit and this call they are recorded
+      rather than queued or announced: no engine command, no death or survival
+      alert, no event.
+    - **Death.** A death the pass would cause rejects the unit (`UnitRejected`,
+      `EntryRejected`). It is retired through the destroy step.
+    - **Pose.** The last pose the pass would establish is applied synchronously
+      with the `UnitCollapse` / `UnitCrawl` / `UnitRevive` handlers.
+    - **What it skips.** The mind trio (`brain`, `thoughts`, `mental`): over
+      zero time it changes nothing, and `thoughts` would draw the gameplay
+      random stream when a thought is due.
+    - **Hook failure.** A failing hook retires the unit (`ReadinessFailed`).
+    - **Ordering.** The step is idempotent and must run after any paused hook
+      that resets strength: `unit.recomputeBody`, like every ordinary load,
+      re-derives `strength` from the body.
 
 **Pools are seeded natively.** The trusted issue review called resource pools
 Lua-owned. Since the physiology epic (#2831, #2834, #2837), every pool belongs to a
@@ -687,10 +695,13 @@ handler's fence applied to the same two writes.
 - **Encounters.** An `encounter` is returned on the build for the location adapter
   (SCN-12), which owns the roster.
 
-The completed unit is what the ordinary path reaches at its first pass: the same
-pose and the same strength discount as an ordinarily spawned unit in the same state
-after one real wound tick and one real resource pass. The Hspec group compares the
-two for a concussion, a shattered leg, a bleeding unit and a starving one.
+The completed unit is exactly what the ordinary path makes of an ordinarily spawned
+unit in the same state: the wound tick and `reconcileUnit` at zero elapsed time, with
+the queued commands applied. "Exactly" means the same death, pose, stats, blood and
+wounds. The Hspec group checks this over 100 generated specs, which mix exhausted,
+dehydrated and starved pools, low endurance, bodies at and below the muscle floor,
+and concussion, fracture, bleeding and worsening vital wounds. A queued kill counts
+as the death even when the same pass queues a collapse behind it.
 
 After completion, the paused hooks leave the baseline unchanged:
 
