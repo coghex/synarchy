@@ -471,11 +471,14 @@ reference already taken; the names depend on position only, never on instance id
 An item's existing reference is preserved verbatim at any admitted length; only a
 generated name (or the numeric suffix that resolves a clash) is shortened with a stable
 hash, and only when it would pass 512 characters.
-Every reference an item already holds is reserved before any name is chosen, authored
-explicit ids first: an automatic id converts to its bracketless form only when no
+Every reference an item already holds is reserved before any name is chosen (start a
+capture with `newCaptureState` over every tree it will write, and `reserveNames` for
+the ids of the document's other entries, since all entries share one namespace),
+authored explicit ids first: an automatic id converts to its bracketless form only when no
 authored id already spells it, and is otherwise disambiguated (`-2`), so two distinct
 references never collapse onto one name. Ground rows are ordered by position,
-definition and structure, then by the reference and tags each node carries, never by
+definition and structure, then by the reference (as held, so an automatic path and an
+explicit id that spells like it stay distinct) and tags each node carries, never by
 row id.
 
 ## Authoring examples
