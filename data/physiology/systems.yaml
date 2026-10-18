@@ -353,7 +353,7 @@ profiles:
     cardio: simulated
     blood: simulated
     consciousness: simulated
-    mind: simulated
+    mind: nominal
   simple:
     hydration: nominal
     salt: nominal
@@ -365,7 +365,7 @@ profiles:
     cardio: simulated
     blood: simulated
     consciousness: simulated
-    mind: simulated
+    mind: nominal
   exempt:
     hydration: nominal
     salt: nominal
@@ -377,4 +377,4 @@ profiles:
     cardio: simulated
     blood: simulated
     consciousness: simulated
-    mind: simulated
+    mind: nominal

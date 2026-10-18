@@ -323,20 +323,20 @@ shippedRegistrySpec = describe "the shipped registry (requirement 1)" $ do
             , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
             , ("sleep", PhysioSimulated), ("cardio", PhysioSimulated)
             , ("blood", PhysioSimulated), ("consciousness", PhysioSimulated)
-            , ("mind", PhysioSimulated) ])
+            , ("mind", PhysioNominal) ])
         modes "simple" `shouldBe` Just (m
             [ ("hydration", PhysioNominal), ("salt", PhysioNominal)
             , ("thermo", PhysioSimulated), ("nutrition", PhysioNominal)
             , ("stamina", PhysioSimulated), ("exhaustion", PhysioSimulated)
             , ("sleep", PhysioNominal), ("cardio", PhysioSimulated)
             , ("blood", PhysioSimulated), ("consciousness", PhysioSimulated)
-            , ("mind", PhysioSimulated) ])
+            , ("mind", PhysioNominal) ])
         -- exempt keeps #2754's outcome: everything Nominal but a LIVE cardio
         -- and live blood (S10 #2837, SD-22: the nomad's blood stays Simulated)
-        -- and, in S11a (#2838), consciousness and mind: the SD-23 Nominal mind
-        -- is S11b's, so every profile is all-Simulated for both new systems
+        -- and consciousness (S11a, #2838); its mind is Nominal like every
+        -- non-rich profile's (SD-23, S11b #2840)
         modes "exempt" `shouldBe` Just (m
-            [ (s, if s `elem` ["cardio", "blood", "consciousness", "mind"]
+            [ (s, if s `elem` ["cardio", "blood", "consciousness"]
                      then PhysioSimulated else PhysioNominal)
             | s ← systemIds ])
         map ppId (prProfiles reg) `shouldMatchList`

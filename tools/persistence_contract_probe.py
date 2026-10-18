@@ -102,6 +102,7 @@ from __future__ import annotations
 import argparse
 import glob
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -157,6 +158,56 @@ def make_isolated_root(base: str) -> str:
         target = os.path.join(root, family)
         if not os.path.exists(target):
             os.symlink(os.path.join(REPO, family), target)
+    os.makedirs(os.path.join(root, "saves"), exist_ok=True)
+    return root
+
+
+def make_legacy_root(base: str) -> str:
+    """A second throwaway resource root whose physiology registry is the
+    PRE-S11b content (#2840): the same files as the shipped ones, except that
+    ``systems.yaml`` puts the interim all-Simulated mind back into the
+    ``reduced``, ``simple`` and ``exempt`` profiles. An engine booted on it
+    spawns a bear, squirrel and nomad the way S11a did, so the save it writes
+    is a real old-default save (a Simulated mind and its episode) produced by
+    the engine itself, never by a raw write of a Nominal-owned key. Nothing
+    under the repository is edited: the modified registry is a copy in the
+    probe's own temporary directory (everything else is symlinked)."""
+    root = os.path.join(base, "legacy_root")
+    os.makedirs(os.path.join(root, "data", "physiology"), exist_ok=True)
+    for family in ("scripts", "assets", "config"):
+        target = os.path.join(root, family)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, family), target)
+    for entry in sorted(os.listdir(os.path.join(REPO, "data"))):
+        if entry == "physiology":
+            continue
+        target = os.path.join(root, "data", entry)
+        if not os.path.exists(target):
+            os.symlink(os.path.join(REPO, "data", entry), target)
+    for entry in sorted(os.listdir(os.path.join(REPO, "data", "physiology"))):
+        src = os.path.join(REPO, "data", "physiology", entry)
+        dst = os.path.join(root, "data", "physiology", entry)
+        if entry != "systems.yaml":
+            if not os.path.exists(dst):
+                os.symlink(src, dst)
+            continue
+        text = Path(src).read_text()
+        head, sep, profiles = text.partition("\nprofiles:\n")
+        assert sep, "systems.yaml has no profiles: block"
+        # a profile's last line is `    mind: <mode>`; put the S11a value back
+        # in every non-rich profile
+        out, count = [], 0
+        current = None
+        for line in profiles.splitlines():
+            m = re.match(r"^  (\w+):\s*$", line)
+            if m:
+                current = m.group(1)
+            if current in ("reduced", "simple", "exempt") and line.strip() == "mind: nominal":
+                line = line.replace("nominal", "simulated")
+                count += 1
+            out.append(line)
+        assert count == 3, f"expected to restore 3 profile mind rows, restored {count}"
+        Path(dst).write_text(head + sep + "\n".join(out) + "\n")
     os.makedirs(os.path.join(root, "saves"), exist_ok=True)
     return root
 
@@ -1021,7 +1072,10 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
     switch it back, save again; load again. The volume lives in the dedicated
     uiBlood field in every process: a shadow `blood` stat never appears."""
     print("=== blood engine N: partial volume + Nominal pin, save 'bl1' ===")
-    proc = engagement_boot(root, tmpdir, port, "N")
+    # Engine N runs on the PRE-S11b registry (#2840): its save is the real
+    # old-default save the changed-default load repair is proven against.
+    legacy = make_legacy_root(tmpdir)
+    proc = engagement_boot(legacy, tmpdir, port, "N")
     try:
         send(port, f"world.init('{BL_PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
                    f"'Blood Modes World', 'the S10 modes'); return 'ok'")
@@ -1042,8 +1096,10 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         # a second acolyte whose consciousness is pinned Nominal
         cons = as_int(send(port, "return unit.spawn('acolyte', 8, 8, nil, "
                                  "'player', nil, nil, 'standard')"))
-        uids = (bled, nomad, squirrel, deer, cons)
-        chk.ok(None not in uids and min(uids) >= 0, f"the five units spawned (got {uids})")
+        bear = as_int(send(port, "return unit.spawn('bear_brown', 9, 9, nil, "
+                                 "'player', nil, nil, 'standard')"))
+        uids = (bled, nomad, squirrel, deer, cons, bear)
+        chk.ok(None not in uids and min(uids) >= 0, f"the six units spawned (got {uids})")
         time.sleep(0.6)
 
         def all_standing() -> bool:
@@ -1102,15 +1158,20 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
         chk.ok(st["mode"] == "nominal" and st["cur"] == st["max"] and st["frac"] == 1.0
                and st["shadow"] is None,
                f"the Nominal nomad reads a full volume, fraction 1.0, no shadow (got {st})")
-        mind_saved = mind_setup(chk, port, bled, nomad, cons, deer)
+        mind_saved = mind_setup(chk, port, bled, nomad, squirrel, bear, cons, deer)
         save_and_wait(chk, port, BL_PAGE, "bl1")
         quit_engine(port, proc)
         proc = None
+        # hand the old-default save to the shipped-registry engines
+        shutil.copytree(os.path.join(legacy, "saves", "bl1"),
+                        os.path.join(root, "saves", "bl1"))
 
         print("=== blood engine O: load 'bl1', bleed the Nominal unit, switch, save 'bl2' ===")
         proc = engagement_boot(root, tmpdir, port, "O")
         engagement_load(chk, port, "bl1")
-        mind_loaded(chk, port, bled, nomad, cons, deer, mind_saved)
+        mind_loaded(chk, port, tmpdir, "O", bled, nomad, squirrel, bear, cons, deer,
+                    mind_saved)
+        mind_defaults(chk, port)
         st = blood_state(port, bled)
         chk.ok(partial["cur"] is not None and st["cur"] is not None
                and abs(st["cur"] - partial["cur"]) < 1e-3 and st["mode"] == "simulated"
@@ -1158,7 +1219,8 @@ def blood_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
                and saved["cur"] is not None and st["cur"] is not None
                and abs(st["cur"] - saved["cur"]) < 1e-3,
                f"the switched unit reloads Simulated, pinned, volume exact (got {st})")
-        mind_second(chk, port, bled, nomad, mind_switched)
+        mind_second(chk, port, tmpdir, "P", bled, nomad, squirrel, bear, mind_switched,
+                    mind_saved)
         quit_engine(port, proc)
         proc = None
     finally:
@@ -1197,20 +1259,43 @@ def mind_state(port: int, uid: int) -> dict:
     return out
 
 
-def mind_setup(chk: Checks, port: int, episode: int, mindpin: int, conspin: int,
-               deer: int) -> dict:
-    """Engine N (paused, every unit standing): the S11a defaults through real
-    spawns, a Simulated mind put MID-EPISODE with one atomic batch, a mind and
-    a consciousness pinned Nominal. Returns the mid-episode unit's state."""
-    # The shipped default is all-Simulated (S11b applies SD-23): both systems
-    # Simulated for every bodied species, Unsupported for the bodyless one;
-    # the mind keys are seeded, no derived key is stored.
-    for uid, want in ((episode, "simulated"), (mindpin, "simulated"),
+NORMALIZATION_LOG = "normalized physiology of unit"
+
+
+def normalization_lines(tmpdir: str, letter: str) -> list:
+    """The load's logged physiology repairs (one line per repaired unit) from an
+    engine's own log."""
+    try:
+        text = Path(os.path.join(tmpdir, f"engine{letter}.log")).read_text(errors="replace")
+    except OSError:
+        return []
+    return [ln for ln in text.splitlines() if NORMALIZATION_LOG in ln]
+
+
+def commit_episode(port: int, uid: int, behavior: int, state: int = 2) -> str:
+    return send(port, f"local now = engine.gameTime(); "
+                      f"local ok, why = unit.commitPhysio({uid}, {{ "
+                      f"mood = 0.31, emotional_pain = 0.2, caffeine = 0.4, "
+                      f"mental_state = {state}, mental_since = now - 10, "
+                      f"mental_until = now + 1000, mental_next_roll_at = now - 2, "
+                      f"mental_break_behavior = {behavior}, thought_next_at = now + 40 }}); "
+                      f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
+
+
+def mind_setup(chk: Checks, port: int, episode: int, nomad: int, squirrel: int,
+               bear: int, conspin: int, deer: int) -> dict:
+    """Engine N (the PRE-S11b registry; paused, every unit standing): the old
+    all-Simulated mind through real spawns, a mid-episode mind committed as one
+    atomic batch on each of an acolyte, a nomad, a squirrel and a bear whose
+    mind is PINNED Simulated, and an acolyte whose mind and consciousness are
+    pinned Nominal. Returns each episode unit's state."""
+    for uid, want in ((episode, "simulated"), (nomad, "simulated"),
+                      (squirrel, "simulated"), (bear, "simulated"),
                       (conspin, "simulated"), (deer, "nil")):
         st = mind_state(port, uid)
         chk.ok(st["mind"] == want and st["cons_mode"] == want,
-               f"unit {uid} resolves mind and consciousness {want} (got {st['mind']}, "
-               f"{st['cons_mode']})")
+               f"unit {uid} resolves the old mind and consciousness {want} (got "
+               f"{st['mind']}, {st['cons_mode']})")
         chk.ok(all(v is None for v in st["derived_stored"].values()),
                f"unit {uid} stores none of the derived brain values (got {st['derived_stored']})")
         seeded = all(v is not None for v in st["stored"].values())
@@ -1220,73 +1305,101 @@ def mind_setup(chk: Checks, port: int, episode: int, mindpin: int, conspin: int,
     refused = send(port, f"return tostring(unit.setStat({episode}, 'concentration', 0.5))").strip('"')
     chk.ok(refused == "false" and mind_state(port, episode)["derived_stored"]["concentration"] is None,
            f"a raw concentration write is refused and stores nothing (got {refused!r})")
-    committed = send(port, f"local now = engine.gameTime(); "
-                           f"local ok, why = unit.commitPhysio({episode}, {{ "
-                           f"mood = 0.31, emotional_pain = 0.2, caffeine = 0.4, "
-                           f"mental_state = 2, mental_since = now - 10, "
-                           f"mental_until = now + 1000, mental_next_roll_at = now - 2, "
-                           f"mental_break_behavior = 3, thought_next_at = now + 40 }}); "
-                           f"return tostring(ok) .. '|' .. tostring(why)").strip('"')
-    chk.ok(committed == "true|nil", f"the break episode commits as one batch (got {committed!r})")
-    episode_saved = mind_state(port, episode)
-    for uid, system in ((mindpin, "mind"), (conspin, "consciousness")):
-        pinned = send(port, f"local ok, ch = require('scripts.physiology')"
-                            f".setMode({uid}, '{system}', 'nominal'); "
-                            f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
-        chk.ok(pinned == "true|true", f"unit {uid}'s {system} is pinned Nominal (got {pinned!r})")
-    st = mind_state(port, mindpin)
-    chk.ok(st["mind"] == "nominal" and all(v is None for v in st["stored"].values())
-           and st["read"]["mood"] == 1.0 and st["read"]["mental_state"] == 0.0,
-           f"the Nominal mind holds none of its keys and reads mood 1, STABLE (got {st})")
+    # the bear's mind is PINNED Simulated: intent equal to the old default
+    pinned = send(port, f"local ok, ch = require('scripts.physiology')"
+                        f".setMode({bear}, 'mind', 'simulated'); "
+                        f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+    chk.ok(pinned.startswith("true|"), f"the bear's mind is pinned Simulated (got {pinned!r})")
+    chk.ok(mind_state(port, bear)["mind_pin"] == "simulated",
+           "the bear's Simulated pin is stored as an override")
+    for uid, behavior in ((episode, 3), (nomad, 1), (squirrel, 0), (bear, 3)):
+        committed = commit_episode(port, uid, behavior)
+        chk.ok(committed == "true|nil",
+               f"unit {uid}'s break episode commits as one batch (got {committed!r})")
+    saved = {uid: mind_state(port, uid) for uid in (episode, nomad, squirrel, bear)}
+    pinned = send(port, f"local ok, ch = require('scripts.physiology')"
+                        f".setMode({conspin}, 'mind', 'nominal'); "
+                        f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+    chk.ok(pinned == "true|true", f"unit {conspin}'s mind is pinned Nominal (got {pinned!r})")
+    pinned = send(port, f"local ok, ch = require('scripts.physiology')"
+                        f".setMode({conspin}, 'consciousness', 'nominal'); "
+                        f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
+    chk.ok(pinned == "true|true", f"unit {conspin}'s consciousness is pinned Nominal (got {pinned!r})")
     st = mind_state(port, conspin)
-    chk.ok(st["cons_mode"] == "nominal" and st["read"]["consciousness"] == 1.0
-           and st["read"]["concentration"] == 1.0,
-           f"the Nominal consciousness reads 1.0 and concentration 1.0 (got {st['read']})")
-    return episode_saved
+    chk.ok(st["mind"] == "nominal" and all(v is None for v in st["stored"].values())
+           and st["read"]["mood"] == 1.0 and st["read"]["mental_state"] == 0.0
+           and st["cons_mode"] == "nominal" and st["read"]["consciousness"] == 1.0,
+           f"the Nominal-pinned acolyte holds none of its mind keys and reads lucid (got {st})")
+    return saved
 
 
-def mind_loaded(chk: Checks, port: int, episode: int, mindpin: int, conspin: int,
-                deer: int, episode_saved: dict) -> None:
-    """Engine O, right after the load (paused, NO tick has run): every mind key
-    exact, the derived values already canonical for the loaded inputs, nothing
-    cached, the pins and the bodyless unit as saved."""
+def mind_loaded(chk: Checks, port: int, tmpdir: str, letter: str, episode: int,
+                nomad: int, squirrel: int, bear: int, conspin: int, deer: int,
+                saved: dict) -> None:
+    """Engine O (the SHIPPED registry), right after loading the old-default save
+    (paused, NO tick has run): the unpinned nomad and squirrel are normalized
+    to the new Nominal default (keys and episode gone, ONE logged repair each),
+    the pinned-Simulated bear and the acolyte keep every key exactly, the
+    pinned-Nominal acolyte and the bodyless unit are as saved."""
+    chk.ok(wait_for(port, lambda: len(normalization_lines(tmpdir, letter)) >= 2, 20.0),
+           "the load logged the changed-default repairs")
+    lines = normalization_lines(tmpdir, letter)
+    chk.ok(len(lines) == 2 and all("mind" in ln for ln in lines),
+           f"exactly two units were repaired, each logged once and naming the mind system "
+           f"(got {len(lines)}: {lines})")
+    for uid, label in ((nomad, "nomad"), (squirrel, "squirrel")):
+        st = mind_state(port, uid)
+        chk.ok(st["mind"] == "nominal" and st["mind_pin"] == "nil"
+               and all(v is None for v in st["stored"].values())
+               and st["read"]["mood"] == 1.0 and st["read"]["mental_state"] == 0.0
+               and st["cons_mode"] == "simulated",
+               f"the unpinned {label} loads Nominal, unpinned, holding none of its mind keys, "
+               f"reading mood 1 and STABLE, consciousness still Simulated (got {st})")
+        chk.ok(st["read"]["state_of_mind"] is not None and st["read"]["consciousness"] is not None
+               and abs(st["read"]["state_of_mind"] - st["read"]["consciousness"]) < 1e-3
+               and all(v is None for v in st["derived_stored"].values()),
+               f"the paused {label} reads state_of_mind = consciousness, nothing derived stored "
+               f"(got {st['read']})")
+    for uid, label in ((episode, "acolyte"), (bear, "pinned bear")):
+        st = mind_state(port, uid)
+        same = all(st["stored"][k] is not None and saved[uid]["stored"][k] is not None
+                   and abs(st["stored"][k] - saved[uid]["stored"][k]) < 1e-3
+                   for k in MIND_KEYS)
+        chk.ok(same and st["mind"] == "simulated",
+               f"the mid-episode {label} reloads every mind key exactly, Simulated "
+               f"(got {st['stored']}, saved {saved[uid]['stored']})")
+        chk.ok(all(v is None for v in st["derived_stored"].values()),
+               f"no derived value is stored for the {label} after the load")
+    st = mind_state(port, bear)
+    chk.ok(st["mind_pin"] == "simulated",
+           f"the bear keeps its Simulated pin across the default change (got {st['mind_pin']})")
     st = mind_state(port, episode)
-    same = all(st["stored"][k] is not None and episode_saved["stored"][k] is not None
-               and abs(st["stored"][k] - episode_saved["stored"][k]) < 1e-3
-               for k in MIND_KEYS)
-    chk.ok(same and st["mind"] == "simulated",
-           f"the mid-episode unit reloads every mind key exactly, Simulated "
-           f"(got {st['stored']}, saved {episode_saved['stored']})")
     wellbeing = 0.31 - 0.5 * 0.2
     chk.ok(st["read"]["state_of_mind"] is not None
            and abs(st["read"]["state_of_mind"] - min(st["read"]["consciousness"] or 1.0, wellbeing)) < 1e-3,
-           f"the paused unit reads the canonical derived state of mind from its loaded inputs "
+           f"the paused acolyte reads the canonical derived state of mind from its loaded inputs "
            f"(got {st['read']})")
-    chk.ok(all(v is None for v in st["derived_stored"].values()),
-           f"no derived value is stored after the load (got {st['derived_stored']})")
-    st = mind_state(port, mindpin)
-    chk.ok(st["mind"] == "nominal" and st["mind_pin"] == "nominal"
-           and all(v is None for v in st["stored"].values()),
-           f"the Nominal mind reloads Nominal with its pin and none of its keys (got {st})")
     st = mind_state(port, conspin)
-    chk.ok(st["cons_mode"] == "nominal" and st["cons_pin"] == "nominal"
+    chk.ok(st["mind"] == "nominal" and st["mind_pin"] == "nominal"
+           and st["cons_mode"] == "nominal" and st["cons_pin"] == "nominal"
+           and all(v is None for v in st["stored"].values())
            and st["read"]["consciousness"] == 1.0,
-           f"the Nominal consciousness reloads Nominal, pinned, reading 1.0 (got {st})")
+           f"the Nominal-pinned acolyte reloads Nominal with both pins, reading 1.0 (got {st})")
     st = mind_state(port, deer)
     chk.ok(st["mind"] == "nil" and st["read"]["consciousness"] is None
            and all(v is None for v in st["stored"].values()),
            f"the bodyless unit reloads Unsupported, reading nothing (got {st})")
 
 
-def mind_switch(chk: Checks, port: int, mindpin: int) -> dict:
-    """Engine O, paused, before the second save: the Nominal mind switched to
+def mind_switch(chk: Checks, port: int, nomad: int) -> dict:
+    """Engine O, paused, before the second save: the default-Nominal nomad pinned
     Simulated seeds every key in one transition (the thought clock re-rolled
-    within 30 s)."""
+    within 30 s) -- a genuine Nominal-to-Simulated pin on a shipped species."""
     switched = send(port, f"local ok, ch = require('scripts.physiology')"
-                          f".setMode({mindpin}, 'mind', 'simulated'); "
+                          f".setMode({nomad}, 'mind', 'simulated'); "
                           f"return tostring(ok) .. '|' .. tostring(ch)").strip('"')
-    chk.ok(switched == "true|true", f"the Nominal mind is switched to Simulated (got {switched!r})")
-    st = mind_state(port, mindpin)
+    chk.ok(switched == "true|true", f"the Nominal nomad's mind is pinned Simulated (got {switched!r})")
+    st = mind_state(port, nomad)
     now = lua_number(port, "engine.gameTime()")
     chk.ok(st["mind"] == "simulated" and st["mind_pin"] == "simulated"
            and st["stored"]["mental_state"] == 0.0 and st["stored"]["mental_since"] is not None
@@ -1294,25 +1407,71 @@ def mind_switch(chk: Checks, port: int, mindpin: int) -> dict:
            and st["stored"]["mental_break_behavior"] == 0.0
            and st["stored"]["thought_next_at"] is not None
            and now <= st["stored"]["thought_next_at"] <= now + 30.001,
-           f"the switch seeded every key (got {st['stored']}, now={now})")
-    return mind_state(port, mindpin)
+           f"the pin seeded every key (got {st['stored']}, now={now})")
+    return mind_state(port, nomad)
 
 
-def mind_second(chk: Checks, port: int, episode: int, mindpin: int,
-                switched_saved: dict) -> None:
-    """Engine P: the switched unit's seeds and the episode survive a second
-    generation exactly."""
-    st = mind_state(port, mindpin)
+def mind_defaults(chk: Checks, port: int) -> None:
+    """Engine O: the SD-23 defaults through FRESH spawns of the shipped
+    species (no override anywhere): only the acolyte holds mind keys; the
+    bear, squirrel, technomule and nomad hold none and resolve mind Nominal,
+    consciousness Simulated."""
+    spots = (("acolyte", 20, 20, "simulated"), ("bear_brown", 21, 21, "nominal"),
+             ("red_squirrel", 22, 22, "nominal"), ("technomule", 23, 23, "nominal"),
+             ("nomad_primitive", 24, 24, "nominal"))
+    spawned = []
+    for name, x, y, want in spots:
+        uid = as_int(send(port, f"return unit.spawn('{name}', {x}, {y}, nil, "
+                                f"'player', nil, nil, 'standard')"))
+        chk.ok(uid is not None and uid >= 0, f"a fresh {name} spawned (got {uid})")
+        spawned.append((name, uid, want))
+    for name, uid, want in spawned:
+        if uid is None:
+            continue
+        # the engine stays paused: wait for the spawn command to land
+        chk.ok(wait_for(port, lambda u=uid: send(
+                   port, f"return tostring(unit.getInfo({u}) ~= nil)").strip('"') == "true", 10.0),
+               f"the fresh {name} exists")
+        st = mind_state(port, uid)
+        has_keys = all(v is not None for v in st["stored"].values())
+        none_keys = all(v is None for v in st["stored"].values())
+        chk.ok(st["mind"] == want and st["mind_pin"] == "nil" and st["cons_mode"] == "simulated"
+               and (has_keys if want == "simulated" else none_keys)
+               and all(v is None for v in st["derived_stored"].values()),
+               f"a fresh {name} resolves mind {want}, consciousness simulated, unpinned, "
+               f"holding the mind keys exactly when Simulated (got {st['mind']}, "
+               f"{st['cons_mode']}, {st['stored']})")
+
+
+def mind_second(chk: Checks, port: int, tmpdir: str, letter: str, episode: int,
+                nomad: int, squirrel: int, bear: int, switched_saved: dict,
+                saved: dict) -> None:
+    """Engine P: a second generation repairs NOTHING, the pinned nomad's seeds
+    and the episodes survive exactly, and the normalized squirrel stays
+    Nominal."""
+    chk.ok(len(normalization_lines(tmpdir, letter)) == 0,
+           f"re-saving and reloading logs zero further repairs (got "
+           f"{normalization_lines(tmpdir, letter)})")
+    st = mind_state(port, nomad)
     same = all(st["stored"][k] is not None and switched_saved["stored"][k] is not None
                and abs(st["stored"][k] - switched_saved["stored"][k]) < 1e-3
                for k in MIND_KEYS)
     chk.ok(same and st["mind"] == "simulated" and st["mind_pin"] == "simulated",
-           f"the switched unit reloads Simulated, pinned, every seeded key exact "
+           f"the pinned nomad reloads Simulated, pinned, every seeded key exact "
            f"(got {st['stored']}, saved {switched_saved['stored']})")
-    st = mind_state(port, episode)
-    chk.ok(st["stored"]["mental_state"] == 2.0 and st["stored"]["mental_break_behavior"] == 3.0
-           and st["mind"] == "simulated",
-           f"the episode survives a second generation (got {st['stored']})")
+    st = mind_state(port, squirrel)
+    chk.ok(st["mind"] == "nominal" and all(v is None for v in st["stored"].values()),
+           f"the normalized squirrel stays Nominal holding none of its keys (got {st})")
+    for uid, label in ((episode, "acolyte"), (bear, "pinned bear")):
+        st = mind_state(port, uid)
+        # the unpaused stretch in engine O drifts mood and the clocks; the
+        # EPISODE (state, end, behavior) is what must survive exactly
+        episode_keys = ("mental_state", "mental_until", "mental_break_behavior")
+        same = all(st["stored"][k] is not None and saved[uid]["stored"][k] is not None
+                   and abs(st["stored"][k] - saved[uid]["stored"][k]) < 1e-3
+                   for k in episode_keys)
+        chk.ok(same and st["mind"] == "simulated" and st["stored"]["mental_state"] == 2.0,
+               f"the {label}'s episode survives a second generation exactly (got {st['stored']})")
 
 
 def main() -> int:
