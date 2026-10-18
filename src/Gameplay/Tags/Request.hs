@@ -5,7 +5,8 @@
 --   which must run on the world thread (see "Gameplay.Tags.Page" for
 --   why). This resolves the target's page and incarnation, queues
 --   'World.Command.Types.WorldEditPageTags' and waits for the answer.
---   No Lua binding exists yet; the public verbs are SCN-06.
+--   The @gameplayTags@ Lua verbs (#2706) call it for every tile and plant
+--   edit, and wait for the answer.
 module Gameplay.Tags.Request
     ( requestPageTagEdit
     ) where

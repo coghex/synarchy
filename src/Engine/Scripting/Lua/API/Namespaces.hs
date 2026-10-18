@@ -43,6 +43,7 @@ engineApiNamespaces =
     , "UI"                                        -- Register.UI
     , "unit"                                      -- Register.Unit
     , "faction"                                   -- Register.Faction
+    , "gameplayTags"                              -- Register.GameplayTags
     , "building"                                  -- Register.Building
     , "structure", "construction", "chop"         -- Register.Designation
     , "till", "plant"

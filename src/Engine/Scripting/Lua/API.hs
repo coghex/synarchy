@@ -19,6 +19,7 @@ import Engine.Scripting.Lua.API.Register.Input (registerInputAPI)
 import Engine.Scripting.Lua.API.Register.UI (registerUIAPI)
 import Engine.Scripting.Lua.API.Register.Unit (registerUnitAPI)
 import Engine.Scripting.Lua.API.Register.Faction (registerFactionAPI)
+import Engine.Scripting.Lua.API.Register.GameplayTags (registerGameplayTagAPI)
 import Engine.Scripting.Lua.API.Register.Building (registerBuildingAPI)
 import Engine.Scripting.Lua.API.Register.Designation (registerDesignationAPI)
 import Engine.Scripting.Lua.API.Register.Equipment (registerEquipmentAPI)
@@ -42,6 +43,7 @@ registerLuaAPI lst env backendState stateRef = do
     registerUIAPI callStats env
     registerUnitAPI callStats env
     registerFactionAPI callStats
+    registerGameplayTagAPI callStats env
     registerBuildingAPI callStats env
     registerDesignationAPI callStats env
     registerEquipmentAPI callStats env
