@@ -25,14 +25,18 @@ module Test.Headless.World.ArenaFiniteBounds (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
-import Control.Exception (finally)
+import Control.Exception (SomeException, finally, throwIO, try)
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import qualified Data.ByteString as BS
+import qualified Data.Text.Encoding as TE
+import qualified HsLua as Lua
+import Engine.Scripting.Lua.API.World.Lifecycle (worldInitArenaFn)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Data.Either (isRight)
 import Data.List (sort)
 import GHC.Clock (getMonotonicTimeNSec)
 import Building.Thread.Command (applyBuildingSpawn)
@@ -202,6 +206,7 @@ startupExpectation =
 
 productionSpec ∷ SpecWith EngineEnv
 productionSpec = describe "through the production paths" $ do
+    luaSpec
     startupSpec
     demandSpec
     evictionSpec
@@ -209,6 +214,73 @@ productionSpec = describe "through the production paths" $ do
     codecSpec
     mutationSpec
     objectSpec
+
+-- * The Lua entry
+
+describeArg ∷ LuaArg → String
+describeArg a = case a of
+    ArgText t → "text " <> T.unpack t
+    ArgNum n  → "num " <> show n
+    ArgNil    → "nil"
+    ArgBool b → "bool " <> show b
+
+-- | One argument of a @world.initArena@ call.
+data LuaArg = ArgText T.Text | ArgNum Double | ArgNil | ArgBool Bool
+
+-- | Call the REAL binding @world.initArena@ with these arguments;
+--   'Left' carries the Lua error it raised.
+callInitArena ∷ EngineEnv → [LuaArg] → IO (Either SomeException ())
+callInitArena env args = try $ Lua.run $ do
+    Lua.openlibs
+    Lua.pushHaskellFunction (worldInitArenaFn env)
+    forM_ args $ \a → case a of
+        ArgText t → Lua.pushstring (TE.encodeUtf8 t)
+        ArgNum n  → Lua.pushnumber (Lua.Number n)
+        ArgNil    → Lua.pushnil
+        ArgBool b → Lua.pushboolean b
+    -- a protected call, as a script's own call is: a raised Lua error
+    -- comes back as a status, never as a crashed state
+    st ← Lua.pcall (Lua.NumArgs (fromIntegral (length args))) (Lua.NumResults 0) Nothing
+    when (st /= Lua.OK) $ Lua.liftIO (throwIO (userError "lua error"))
+
+luaSpec ∷ SpecWith EngineEnv
+luaSpec = describe "world.initArena" $ do
+
+    it "creates a finite arena from two integer dimensions and an expandable one from none" $ \env → do
+        pid ← uniquePage "lua_finite"
+        open ← uniquePage "lua_open"
+        callInitArena env [ArgText (unWorldPageId pid), ArgNum 20, ArgNum 10] ≫= (`shouldSatisfy` isRight)
+        callInitArena env [ArgText (unWorldPageId open)] ≫= (`shouldSatisfy` isRight)
+        ws ← waitForWorldInit env pid 60
+        wo ← waitForWorldInit env open 60
+        ((wgpArenaBounds =≪) ⊚ readIORef (wsGenParamsRef ws)) `shouldReturn` Just (bounds 20 10)
+        ((wgpArenaBounds =≪) ⊚ readIORef (wsGenParamsRef wo)) `shouldReturn` Nothing
+        sendWorldCommand env (WorldDestroy pid)
+        sendWorldCommand env (WorldDestroy open)
+
+    it "refuses a size outside the domain, half a size, a non-integer and a non-number, creating nothing" $ \env → do
+        pid ← uniquePage "lua_refused"
+        let name = ArgText (unWorldPageId pid)
+            bad = [ [name, ArgNum 20]                       -- width alone
+                  , [name, ArgNil, ArgNum 10]               -- height alone
+                  , [name, ArgNum 0, ArgNum 5]
+                  , [name, ArgNum 5, ArgNum (-1)]
+                  , [name, ArgNum 100001, ArgNum 1]
+                  , [name, ArgNum 1, ArgNum 100001]
+                  , [name, ArgNum 1.5, ArgNum 3]
+                  , [name, ArgNum (0 / 0), ArgNum 3]
+                  , [name, ArgNum (1 / 0), ArgNum 3]
+                  , [name, ArgText "20", ArgNum 10]
+                  , [name, ArgBool True, ArgNum 10] ]
+        forM_ bad $ \args → do
+            r ← callInitArena env args
+            (either (const True) (const False) r, length args) `shouldBe` (True, length args)
+            unless (either (const True) (const False) r) $
+                expectationFailure ("accepted: " <> show (map describeArg args))
+        -- nothing was enqueued, so the page never appears
+        threadDelay 800000
+        mgr ← readIORef (worldManagerRef env)
+        isNothing (lookup pid (wmWorlds mgr)) `shouldBe` True
 
 -- * Startup
 

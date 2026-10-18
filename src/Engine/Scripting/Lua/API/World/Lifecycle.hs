@@ -647,7 +647,7 @@ arenaDimensionArg idx = do
             mNum ← Lua.tonumber idx
             pure $ case mNum of
                 Just (Lua.Number n)
-                    | n == fromIntegral (round n ∷ Int)
+                    | n ≡ fromIntegral (round n ∷ Int)
                     , abs n ≤ 1.0e15 → DimInt (round n)
                 _ → DimBad
         _ → pure DimBad
