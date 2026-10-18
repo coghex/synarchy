@@ -33,6 +33,7 @@
 module Test.Headless.World.Chop.TagPolicy (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (plotStoreFromPlots)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -511,7 +512,7 @@ plantPlot ∷ WorldState → FloraId → IO ()
 plantPlot ws species = do
     writeIORef (wsDateRef ws)
         (worldDateAddDays defaultCalendarConfig 100 defaultWorldDate)
-    writeIORef (wsCropPlotsRef ws)
+    writeIORef (wsCropPlotsRef ws) $ plotStoreFromPlots
         (HM.singleton foragedTile (CropPlot species 0 1.0))
 
 -- | The named fixture plant. A typo is a test-authoring error, not a

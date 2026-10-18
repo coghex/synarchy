@@ -3312,6 +3312,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z10-item-tags.expected.json"
         }
       ]
+    },
+    {
+      "id": "z11-tile-flora-tags",
+      "description": "Terrain-cell and flora-occurrence gameplay tags (#2705) as the current build writes them: nonempty per-page cell assignments by canonical (x, y, z) - two cells at different elevations of one column and one elsewhere, sharing a tag - and occurrence assignments in both identity namespaces (a generated id and a planted id) with their recorded tiles, in world-edits v5. Seeded through synarchy-save-codec seed-tags because no public tag verb exists yet (SCN-06). Plot tags carry no fixture assignment here because the source session holds no crop plot to tag; their nonempty round trip is pinned by Gameplay.Tags.Residency and tools/gameplay_tag_persistence_probe.py. z10 and every older fixture are the empty-default (world-edits v4 and older) counterparts.",
+      "declaredAt": "2026-10-17",
+      "declaredByIssue": 2705,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.PageEdits.worldEditsCodec (current world-edits v5, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 14,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z11-tile-flora-tags",
+          "path": "test-headless/data/save-compat/z11-tile-flora-tags.bin",
+          "kind": "complete-session",
+          "sha256": "67c070fe2c4a1ba65a6c8401f8458fe4acdeeb39d58b7743615fda7bb45b00ef",
+          "sizeBytes": 912644,
+          "provenance": "Derived from the tracked z10-item-tags fixture (itself derived from z9-gameplay-tags, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the page's terrain-cell and flora-occurrence gameplay-tag assignments {\"tiles\":[{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":10,\"tags\":[\"quarry\",\"shared\"]},{\"page\":\"generated_page\",\"x\":3,\"y\":4,\"z\":8,\"tags\":[\"deep\"]},{\"page\":\"generated_page\",\"x\":5,\"y\":1,\"z\":12,\"tags\":[\"shared\"]}], \"plants\":[{\"page\":\"generated_page\",\"x\":2,\"y\":2,\"id\":123456789,\"tags\":[\"landmark_tree\",\"shared\"]},{\"page\":\"generated_page\",\"x\":6,\"y\":3,\"id\":4611686018427387905,\"tags\":[\"sown\"]}]} on page generated_page, and re-encoded it through the same encoder an ordinary save uses, writing world-edits v5; then the metadata timestamp was normalized. The cell coordinates and occurrence ids are structurally valid targets the codec does not check against terrain (no chunk is resident in a save); a load keeps them until the admission of the chunk that owns each one reconciles it. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z11-tile-flora-tags.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -3,9 +3,12 @@ module World.Thread
     ( startWorldThread
     , worldTickWith
     , partitionAuthorized
+    , processAuthorizedSave
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (tryPutMVar)
+import Gameplay.Tags.Edit (TagEditResult(..))
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Data.List (partition)
@@ -31,7 +34,7 @@ import World.Thread.Time (tickWorldTime)
 import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
 import World.Thread.Destruction (pruneStructureDestructions)
-import World.Command.Types (WorldCommand(..))
+import World.Command.Types (WorldCommand(..), TagEditReply(..))
 import World.State.Types (settleSelectionProjection)
 import World.Types (WorldManager(..))
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
@@ -226,12 +229,17 @@ beginsSession _                     = False
 processAuthorizedSave ∷ EngineEnv → LoggerState → IO ()
 processAuthorizedSave env logger = do
     commands ← Q.flushQueue (wsWorldQueue (toWorldSimCapability env))
-    let (authorized, deferred) = partitionAuthorized commands
-        discarded = length commands - length authorized - length deferred
+    let (authorized, deferred, discardedCmds) = partitionAuthorizedFull commands
+        discarded = length discardedCmds
     when (discarded > 0) $
         logWarn logger CatWorld $
             "Load publish discarded " <> tshow discarded
             <> " stale WorldCommand(s) queued before the whole-session replacement"
+    -- #2705: a discarded command whose caller is WAITING for an answer
+    -- still gets one, or that caller would block for ever. A tag edit
+    -- queued against the outgoing session is answered as having found no
+    -- target — true of the session it named, which no longer exists.
+    forM_ discardedCmds answerDiscarded
     forM_ authorized $ \cmd → handleWorldCommand env logger cmd
                                >> settleSelection env
     forM_ deferred $ Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
@@ -267,9 +275,17 @@ settleSelection env = do
 -- for direct hspec coverage of the discard decision without needing a
 -- real queue/engine.
 partitionAuthorized ∷ [WorldCommand] → ([WorldCommand], [WorldCommand])
-partitionAuthorized commands
-    | any isLoadPublish authorized = (authorized, [])
-    | otherwise                    = (authorized, deferred)
+partitionAuthorized commands =
+    let (authorized, deferred, _) = partitionAuthorizedFull commands
+    in (authorized, deferred)
+
+-- | 'partitionAuthorized' with the DISCARDED commands named too (#2705),
+--   so a discarded command that carries a reply can still be answered.
+partitionAuthorizedFull
+    ∷ [WorldCommand] → ([WorldCommand], [WorldCommand], [WorldCommand])
+partitionAuthorizedFull commands
+    | any isLoadPublish authorized = (authorized, [], deferred)
+    | otherwise                    = (authorized, deferred, [])
   where
     (authorized, deferred) = partition isAuthorized commands
     isAuthorized (WorldSave _ _ _ _ _ _) = True
@@ -277,3 +293,11 @@ partitionAuthorized commands
     isAuthorized _                     = False
     isLoadPublish (WorldLoadPublish _) = True
     isLoadPublish _                    = False
+
+-- | Answer a command a load publish discarded, when its caller is waiting
+--   for the answer (#2705). Every other discarded command carries none.
+answerDiscarded ∷ WorldCommand → IO ()
+answerDiscarded = \case
+    WorldEditPageTags _ _ _ _ (TagEditReply reply) →
+        void (tryPutMVar reply TagEditNoTarget)
+    _ → pure ()

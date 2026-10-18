@@ -60,6 +60,9 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryAssignments)
 import Gameplay.Tags.Tag (gameplayTagText, itemTargetId)
+import Gameplay.Tags.Page (PageTagsSnapshot(..))
+import World.Flora.Identity (floraInstanceIdToLua)
+import Data.Int (Int64)
 import World.Save.Snapshot
     (SessionSnapshot(..), PageSnapshot(..), LiveCameraSnapshot(..))
 import Language.Etymology
@@ -231,16 +234,27 @@ data ExpectedPageTags = ExpectedPageTags
     { eptUnits     ∷ ![(Word32, [Text])]
     , eptBuildings ∷ ![(Word32, [Text])]
     , eptLocations ∷ ![(Int, [Text])]
+    , eptTiles     ∷ ![((Int, Int, Int), [Text])]
+      -- ^ #2705: cells, plants (occurrence id, recorded tile) and plots;
+      --   absent before world-edits v5 and read as none.
+    , eptPlants    ∷ ![(Int64, Maybe (Int, Int), [Text])]
+    , eptPlots     ∷ ![((Int, Int), [Text])]
     } deriving (Show, Eq)
 
 noExpectedPageTags ∷ ExpectedPageTags
-noExpectedPageTags = ExpectedPageTags [] [] []
+noExpectedPageTags = ExpectedPageTags [] [] [] [] [] []
 
 instance Aeson.FromJSON ExpectedPageTags where
     parseJSON = Aeson.withObject "gameplayTags" $ \o → ExpectedPageTags
         <$> (map unTagged ⊚ (o .:? "units" .!= []))
         <*> (map unTagged ⊚ (o .:? "buildings" .!= []))
         <*> (map unTagged ⊚ (o .:? "locations" .!= []))
+        <*> (o .:? "tiles" .!= [] ≫= mapM (Aeson.withObject "tile" $ \e →
+                (\x y z ts → ((x, y, z), ts)) <$> e .: "x" <*> e .: "y" <*> e .: "z" <*> e .: "tags"))
+        <*> (o .:? "plants" .!= [] ≫= mapM (Aeson.withObject "plant" $ \e →
+                (,,) <$> e .: "id" <*> e .:? "tile" <*> e .: "tags"))
+        <*> (o .:? "plots" .!= [] ≫= mapM (Aeson.withObject "plot" $ \e →
+                (\x y ts → ((x, y), ts)) <$> e .: "x" <*> e .: "y" <*> e .: "tags"))
 
 newtype ExpectedTagged k = ExpectedTagged { unTagged ∷ (k, [Text]) }
 
@@ -259,8 +273,13 @@ pageTagAggregate page = ExpectedPageTags
     , eptLocations = [ (unLocationInstanceId l, tagTexts ts)
                      | (l, ts) ← categoryAssignments
                          (lisTags (wgpLocationInstances (pgsGenParams page))) ]
+    , eptTiles = [ (k, tagTexts ts) | (k, ts) ← Map.toAscList (ptsTiles pt) ]
+    , eptPlants = [ (floraInstanceIdToLua fid, Map.lookup fid (ptsOccurrenceTiles pt), tagTexts ts)
+                  | (fid, ts) ← Map.toAscList (ptsOccurrences pt) ]
+    , eptPlots = [ (k, tagTexts ts) | (k, ts) ← Map.toAscList (ptsPlots pt) ]
     }
   where tagTexts = map gameplayTagText . Set.toAscList
+        pt = pgsPageTags page
 
 data ExpectedPage = ExpectedPage
     { epPageId ∷ !Text, epBuildingCount ∷ !Int, epUnitCount ∷ !Int

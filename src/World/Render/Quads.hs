@@ -9,6 +9,7 @@ module World.Render.Quads
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
@@ -92,7 +93,7 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
     worldDate ← readIORef (wsDateRef worldState)
     texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
     harvests ← readIORef (wsFloraHarvestsRef worldState)
-    cropPlots ← readIORef (wsCropPlotsRef worldState)
+    cropPlots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef worldState))
 
     let (fbW, fbH) = wcsFbSize snap
         facing = wcsFacing snap

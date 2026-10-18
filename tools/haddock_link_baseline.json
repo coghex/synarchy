@@ -382,14 +382,6 @@
       "link": "'UI.Tooltip.State.tickLocked'"
     },
     {
-      "path": "src/World/Load/Publish.hs",
-      "link": "'World.Thread.processAuthorizedSave'"
-    },
-    {
-      "path": "src/World/Load/Publish.hs",
-      "link": "'World.Thread.processAuthorizedSave'"
-    },
-    {
       "path": "src/World/Load/Stage.hs",
       "link": "'Engine.Scripting.Lua.API.Save.continueLoad'"
     },
@@ -460,10 +452,6 @@
     {
       "path": "src/World/State/Types.hs",
       "link": "'World.Thread.Command.applyOneWriteback'"
-    },
-    {
-      "path": "src/World/State/Types.hs",
-      "link": "'World.Thread.processAuthorizedSave'"
     },
     {
       "path": "src/World/Thread/Command/Edit/Sync.hs",

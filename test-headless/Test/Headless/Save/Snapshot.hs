@@ -9,6 +9,7 @@
 module Test.Headless.Save.Snapshot (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Unit.Faction.Membership (inertUnitProfile)
 import World.Save.UnitFaction (UnitFactionSnapshot(..))
 import Test.Hspec
@@ -83,6 +84,7 @@ minimalPage pid = PageSnapshot
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = HM.empty
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing

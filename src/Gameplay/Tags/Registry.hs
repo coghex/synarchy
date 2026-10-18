@@ -100,16 +100,17 @@ emptyTagRegistry = TagRegistry emptyCategoryIndex emptyCategoryIndex
                                emptyCategoryIndex emptyCategoryIndex
                                emptyCategoryIndex emptyCategoryIndex
 
--- | The registry a live query runs against: the four categories whose
---   authority lives with an owner — the unit and building managers,
---   each page's location table (#2701) and the session's item index
---   (#2703) — with plants and tiles, not yet integrated, left empty.
---   O(1); nothing is copied.
+-- | The registry a live query runs against: every category's authority
+--   lives with an owner — the unit and building managers, each page's
+--   location table (#2701), the session's item index (#2703), and each
+--   page's tile, occurrence and plot stores (#2705).
 registryFromCategories ∷ CategoryIndex UnitId → CategoryIndex BuildingId
                        → CategoryIndex LocationTarget → CategoryIndex ItemTarget
+                       → CategoryIndex PlantTarget → CategoryIndex TileTarget
                        → TagRegistry
-registryFromCategories u b l i = emptyTagRegistry
-    { trUnits = u, trBuildings = b, trLocations = l, trItems = i }
+registryFromCategories u b l i p t = emptyTagRegistry
+    { trUnits = u, trBuildings = b, trLocations = l, trItems = i
+    , trPlants = p, trTiles = t }
 
 -- | No assignments at all.
 nullTagRegistry ∷ TagRegistry → Bool

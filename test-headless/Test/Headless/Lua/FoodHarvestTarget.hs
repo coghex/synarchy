@@ -35,6 +35,7 @@
 module Test.Headless.Lua.FoodHarvestTarget (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..), plotStoreFromPlots)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
@@ -517,7 +518,7 @@ spec = describe "food harvest target identity" $ do
         it (pathName <> " still harvests a groundcover crop plot, which "
             <> "has no instance identity to name") $ \env → do
           ws ← resetScene env probeCatalog []
-          writeIORef (wsCropPlotsRef ws)
+          writeIORef (wsCropPlotsRef ws) $ plotStoreFromPlots
               (HM.singleton sharedTile (CropPlot berryId 0 1.0 ∷ CropPlotOf FloraId))
           ls ← newBareLuaBackend env
           loadAi ls
@@ -526,7 +527,7 @@ spec = describe "food harvest target identity" $ do
           -- An annual plot is CLEARED by its harvest rather than given a
           -- regrowth timer, so the absence of both is the whole answer.
           timerIds ws `shouldReturn` []
-          HM.null <$> readIORef (wsCropPlotsRef ws) `shouldReturn` True
+          HM.null . cpsPlots <$> readIORef (wsCropPlotsRef ws) `shouldReturn` True
 
       -- Requirement 4. The tagged coordinate verb chop uses is
       -- untouched, including on a tile the food search would have

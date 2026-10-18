@@ -2,6 +2,7 @@
 module World.Command.Types
     ( WorldTextureType(..)
     , WorldCommand(..)
+    , TagEditReply(..)
     , FluidWriteback(..)
     , FluidWritebackBatch(..)
     , FluidAckOutcome(..)
@@ -27,6 +28,8 @@ import World.Material (MaterialRegistry)
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId)
 import Item.Knowledge (PortableObservation)
+import Gameplay.Tags.Edit (TagEdit, TagEditResult)
+import Gameplay.Tags.Types (TagTarget)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -120,6 +123,13 @@ data FluidWritebackBatch =
                         ![FluidWriteback]
                         ![ReactionResult]
                         !(Maybe (MVar FluidAckOutcome))
+-- | Where a 'WorldEditPageTags' answers (#2705). A newtype only so the
+--   command can stay 'Show'.
+newtype TagEditReply = TagEditReply (MVar TagEditResult)
+
+instance Show TagEditReply where
+    show _ = "<tag edit reply>"
+
 instance Show FluidWritebackBatch where
     show (FluidWritebackBatch pid mGen ws rs _) =
         "FluidWritebackBatch(" <> show pid <> ", " <> show mGen <> ", "
@@ -498,6 +508,17 @@ data WorldCommand
         --   live per-chunk overlays AND strips all WeSetStructure/
         --   WeClearStructure edits from the log so they don't replay on
         --   eviction/reload. The authoritative "wipe all structures".
+    | WorldEditPageTags !WorldPageId !ChunkGeneration !TagTarget !TagEdit
+                        !TagEditReply
+        -- ^ #2705: one general gameplay tag edit on a terrain cell or a
+        --   plant of one page, answered on the MVar. Queued because the
+        --   world thread is the only writer of the tile store the edit
+        --   checks its target against, and of the page tag store it
+        --   writes ("Gameplay.Tags.Page"): run here, the check and the
+        --   write can never be separated by a tile change. Carries the
+        --   page incarnation the caller resolved; a page destroyed or
+        --   re-initialised since answers 'TagEditNoTarget' and is not
+        --   touched, so stale queued work can never reach a replacement.
     | WorldRecordPortableKnowledge !Word64 !Word64 !(Maybe PortableObservation)
         -- ^ #2512: fold ONE portable container's observation into
         --   'World.State.Types.wmPortableKnowledge' — @Just@ a measured

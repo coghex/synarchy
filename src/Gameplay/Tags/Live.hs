@@ -85,6 +85,14 @@ module Gameplay.Tags.Live
     , liveTagUniverse
     , liveItemTargets
     , onPage
+    , PageView(..)
+    , capturePageViewWith
+    , liveTileTargets
+    , livePlantTargets
+    , tileTagsIn
+    , plantTagsIn
+    , liveTagUniverseFor
+    , runLiveTagQueryIn
     , runLiveTagQuery
     , liveTagAssignments
       -- * Committing a new item tree's assignments
@@ -93,6 +101,7 @@ module Gameplay.Tags.Live
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (withMVar)
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
@@ -101,11 +110,14 @@ import Item.Ground (GroundItems)
 import Item.Types (ItemInstance(..))
 import Unit.Types.Instance (UnitInstance(..))
 import World.Item.Locate (sessionGroundItems, sessionItemInstances)
+import Gameplay.Tags.Page
+import World.Tile.Types (WorldTileData)
 import Building.Types (BuildingManager(..), BuildingId)
 import Gameplay.Tags.Index
 import Gameplay.Tags.Query (QueryUniverse, QueryResult, TagQuery, TargetSets(..), evaluateQuery)
 import Gameplay.Tags.Registry (TagRegistry, registryFromCategories, assignments)
 import Gameplay.Tags.Types
+import Gameplay.Tags.Edit
 import Location.Instance (LocationInstances(..), LocationInstanceId)
 import Unit.Types.Manager (UnitManager(..), UnitId)
 import World.Generate.Types (WorldGenParams(..))
@@ -113,32 +125,6 @@ import World.Page.Types (WorldPageId)
 import World.State.Types (WorldManager(..), WorldState(..))
 
 -- * Edits
-
--- | One edit to one target's tag set, with "Gameplay.Tags.Registry"'s
---   meanings: add and remove are set union and difference (repeats
---   idempotent, absent tags ignored), replace makes the set the
---   target's complete set, and clear (or replacing with the empty set)
---   removes the target's entry. Shared tag names stay on every other
---   target.
-data TagEdit
-    = AddTagsEdit     !(Set.Set GameplayTag)
-    | RemoveTagsEdit  !(Set.Set GameplayTag)
-    | ReplaceTagsEdit !(Set.Set GameplayTag)
-    | ClearTagsEdit
-    deriving (Show, Eq)
-
-applyTagEdit ∷ TagEdit → Set.Set GameplayTag → Set.Set GameplayTag
-applyTagEdit = \case
-    AddTagsEdit ts     → Set.union ts
-    RemoveTagsEdit ts  → (`Set.difference` ts)
-    ReplaceTagsEdit ts → const ts
-    ClearTagsEdit      → const Set.empty
-
--- | Whether an edit found its target. A missing target is not an error
---   to raise but a fact to report: it changes nothing, and in
---   particular never creates an assignment.
-data TagEditResult = TagEditApplied | TagEditNoTarget
-    deriving (Show, Eq)
 
 -- * Pure owner transitions
 
@@ -314,7 +300,40 @@ data LiveTagView = LiveTagView
       -- ^ The session owner as read, for its item index (#2703).
     , ltvGround    ∷ ![(WorldPageId, GroundItems)]
       -- ^ Every live page's ground items, in 'wmWorlds' order.
+    , ltvPages     ∷ ![(WorldPageId, PageView)]
+      -- ^ #2705: every live page's tile and plant tags with the
+      --   residency they are live against, in 'wmWorlds' order.
     }
+
+-- | One page's tile and plant tags as read (#2705). The tag stores are
+--   read BEFORE the tile store: every writer of all three is ordered by
+--   the world thread (the plot store additionally by its own atomic
+--   steps), so an assignment read here whose target the later tile read
+--   no longer holds is simply outside the universe, and a target the
+--   tile read holds but the earlier tag read did not tag is untagged at
+--   that earlier moment. Within a category the forward and reverse maps
+--   are one value and always agree.
+data PageView = PageView
+    { pvTags  ∷ !PageTags
+    , pvPlots ∷ !CropPlotStore
+    , pvTiles ∷ !WorldTileData
+    }
+
+-- | One page's tags, plots and tiles as one coherent view (#2705): read
+--   under the page lock ('World.State.Types.wsPageTagsLock'), which every
+--   world-thread transition that changes tiles and tags together holds
+--   for its whole duration, so the view pairs each cell's tags with the
+--   tile store they were validated against. @between@ runs between the
+--   tag read and the tile read, still under the lock: the test seam for
+--   exactly the interleaving the lock excludes. Production passes
+--   @pure ()@.
+capturePageViewWith ∷ IO () → WorldState → IO PageView
+capturePageViewWith between ws = withMVar (wsPageTagsLock ws) $ \() → do
+    tags  ← readIORef (wsPageTagsRef ws)
+    plots ← readIORef (wsCropPlotsRef ws)
+    between
+    tiles ← readIORef (wsTilesRef ws)
+    pure (PageView tags plots tiles)
 
 -- | The view's item index.
 ltvItems ∷ LiveTagView → CategoryIndex ItemTarget
@@ -329,9 +348,10 @@ captureLiveTagView umRef bmRef wmRef = do
     locs ← forM (wmWorlds wm) $ \(pid, ws) →
         fmap (\p → (pid, wgpLocationInstances p)) <$> readIORef (wsGenParamsRef ws)
     ground ← sessionGroundItems wm
+    pages ← forM (wmWorlds wm) $ \(pid, ws) → (pid,) ⊚ capturePageViewWith (pure ()) ws
     pure LiveTagView
         { ltvUnits = um, ltvBuildings = bm, ltvLocations = catMaybes locs
-        , ltvManager = wm, ltvGround = ground }
+        , ltvManager = wm, ltvGround = ground, ltvPages = pages }
 
 -- | The view's assignments as one queryable registry. O(1) for units
 --   and buildings; locations are lifted to page-qualified targets.
@@ -343,6 +363,9 @@ liveTagRegistry v = registryFromCategories
         [ mapCategoryKeysMonotonic (LocationTarget pid) (lisTags lis)
         | (pid, lis) ← ltvLocations v ])
     (ltvItems v)
+    (unionDisjointCategories
+        (concat [ [ptOccurrences (pvTags pv), cpsTags (pvPlots pv)] | (_, pv) ← ltvPages v ]))
+    (unionDisjointCategories [ ptTiles (pvTags pv) | (_, pv) ← ltvPages v ])
 
 -- | Every EXISTING target, tagged or not: the universe a query ranges
 --   over, so untagged objects appear in negative results.
@@ -354,7 +377,70 @@ liveTagUniverse v = mempty
         [ LocationTarget pid lid
         | (pid, lis) ← ltvLocations v, lid ← HM.keys (lisById lis) ]
     , tsItems     = liveItemTargets v
+    , tsPlants    = livePlantTargets v
+    , tsTiles     = liveTileTargets v
     }
+
+-- | Every LIVE cell (#2705): each resident chunk's stored, non-air
+--   cells, underground ones included. Never air, unstored depths or an
+--   absent chunk — and building it generates and loads nothing. As
+--   large as the resident terrain, by design: a negative tile query
+--   over the whole universe returns every untagged cell, untruncated.
+liveTileTargets ∷ LiveTagView → Set.Set TileTarget
+liveTileTargets v = Set.unions [ residentCells pid (pvTiles pv) | (pid, pv) ← ltvPages v ]
+
+-- | Every LIVE plant (#2705): each resident chunk's occurrences, and the
+--   plots standing on resident chunks.
+livePlantTargets ∷ LiveTagView → Set.Set PlantTarget
+livePlantTargets v = Set.unions
+    [ Set.union (residentOccurrences pid (pvTiles pv)) (residentPlots pid (pvTiles pv) (pvPlots pv))
+    | (pid, pv) ← ltvPages v ]
+
+-- | A live cell's tags; 'Nothing' when it is not a live cell.
+tileTagsIn ∷ LiveTagView → TileTarget → Maybe (Set.Set GameplayTag)
+tileTagsIn v t = do
+    pv ← lookup (tileTargetPage t) (ltvPages v)
+    guard (cellStatus (pvTiles pv) t ≡ CellSolid)
+    pure (categoryTagsOf t (ptTiles (pvTags pv)))
+
+-- | A live plant's tags (occurrence or plot); 'Nothing' when it is not
+--   live.
+plantTagsIn ∷ LiveTagView → PlantTarget → Maybe (Set.Set GameplayTag)
+plantTagsIn v t = do
+    pv ← lookup (plantTargetPage t) (ltvPages v)
+    if isPlotTarget t
+        then do
+            tile ← plantTargetPlotTile t
+            guard (HM.member tile (cpsPlots (pvPlots pv)) ∧ plotResident (pvTiles pv) tile)
+            pure (categoryTagsOf t (cpsTags (pvPlots pv)))
+        else do
+            fid ← plantTargetId t
+            _ ← occurrenceTile (pvTiles pv) fid
+            pure (categoryTagsOf t (ptOccurrences (pvTags pv)))
+
+-- | The universe restricted to these categories, building only those
+--   (#2705): the tile universe is as large as the resident terrain, so
+--   a query that does not range over tiles should not pay for it.
+liveTagUniverseFor ∷ [TagCategory] → LiveTagView → QueryUniverse
+liveTagUniverseFor cats v = mempty
+    { tsUnits     = when' UnitCategory (Set.fromList (HM.keys (umInstances (ltvUnits v))))
+    , tsBuildings = when' BuildingCategory (Set.fromList (HM.keys (bmInstances (ltvBuildings v))))
+    , tsLocations = when' LocationCategory $ Set.fromList
+        [ LocationTarget pid lid
+        | (pid, lis) ← ltvLocations v, lid ← HM.keys (lisById lis) ]
+    , tsItems     = when' ItemCategory (liveItemTargets v)
+    , tsPlants    = when' PlantCategory (livePlantTargets v)
+    , tsTiles     = when' TileCategory (liveTileTargets v)
+    }
+  where
+    when' ∷ TagCategory → Set.Set k → Set.Set k
+    when' c xs = if c ∈ cats then xs else Set.empty
+
+-- | 'runLiveTagQuery' over a universe of just these categories.
+runLiveTagQueryIn ∷ [TagCategory] → LiveTagView → (QueryUniverse → QueryUniverse)
+                  → TagQuery → QueryResult
+runLiveTagQueryIn cats v narrow =
+    evaluateQuery (liveTagRegistry v) (narrow (liveTagUniverseFor cats v))
 
 -- | Every live physical item in the session, by identity: what the
 --   canonical enumeration walks, never a remembered copy, a definition
@@ -382,6 +468,8 @@ onPage v page u = u
                                (tsBuildings u)
     , tsLocations = Set.filter ((≡ page) . ltPage) (tsLocations u)
     , tsItems = Set.intersection (tsItems u) (liveItemTargetsOn v page)
+    , tsPlants = Set.filter ((≡ page) . plantTargetPage) (tsPlants u)
+    , tsTiles = Set.filter ((≡ page) . tileTargetPage) (tsTiles u)
     }
 
 -- | Evaluate against one captured view. The caller narrows the

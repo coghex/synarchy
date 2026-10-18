@@ -56,6 +56,8 @@ module World.Save.Component.PageEdits
     , WorldEditsDTOv2(..)
     , PageEditsDTOv3(..)
     , WorldEditsDTOv3(..)
+    , PageEditsDTOv4(..)
+    , WorldEditsDTOv4(..)
       -- * The component
     , worldEditsCodec
     , validateWorldEdits
@@ -63,9 +65,14 @@ module World.Save.Component.PageEdits
     , migrateWorldEditsV1
     , migrateWorldEditsV2
     , migrateWorldEditsV3
+    , migrateWorldEditsV4
     ) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
+import Gameplay.Tags.Page (PageTagsSnapshot(..))
+import World.Save.Component.GameplayTags
+    (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import Data.Serialize (Serialize)
@@ -330,6 +337,31 @@ data PageEditsDTO = PageEditsDTO
       -- ^ #1854: this page's planted-flora id allocator cursor, saved
       --   beside the very edits whose ids it accounts for so the two
       --   can never be restored out of step.
+    , pedTileTags ∷ !(TagAssignmentsDTO (Int, Int, Int))
+      -- ^ #2705 (v5): general gameplay tags on this page's terrain
+      --   cells, by canonical @(x, y, z)@, forward only — saved beside
+      --   the terrain edits whose cells they name, whether or not those
+      --   cells' chunks are resident.
+    , pedOccurrenceTags ∷ !(TagAssignmentsDTO FloraInstanceId)
+      -- ^ #2705 (v5): tags on this page's flora occurrences (wild
+      --   plants, planted row crops), beside the planted-id cursor and
+      --   the planting edits that account for their identities.
+    , pedOccurrenceTiles ∷ ![(FloraInstanceId, (Int, Int))]
+      -- ^ #2705 (v5): the canonical tile each tagged occurrence stands
+      --   on, which bounds admission reconciliation by chunk ownership.
+    , pedPlotTags ∷ !(TagAssignmentsDTO (Int, Int))
+      -- ^ #2705 (v5): tags on this page's groundcover plots, by plot
+      --   tile. The plots themselves ride @world-activity@; both are
+      --   captured under the one save barrier.
+    } deriving (Show, Generic, Serialize)
+
+-- | The FROZEN @world-edits@ v4 page slice (#2705): the v4 shape
+--   verbatim — page id, edit log at the current 'WorldEditDTO' (whose
+--   shape v5 did not change), and the allocator cursor.
+data PageEditsDTOv4 = PageEditsDTOv4
+    { ped4PageId ∷ !WorldPageId
+    , ped4Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTO])
+    , ped4PlantedFloraCursor ∷ !Word64
     } deriving (Show, Generic, Serialize)
 
 -- | The FROZEN @world-edits@ v1 page slice: the page id and its edit
@@ -369,6 +401,11 @@ newtype WorldEditsDTOv1 = WorldEditsDTOv1 { wed1Pages ∷ [PageEditsDTOv1] }
 
 -- | The FROZEN @world-edits@ v2 component payload (#2243).
 newtype WorldEditsDTOv2 = WorldEditsDTOv2 { wed2Pages ∷ [PageEditsDTOv2] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN @world-edits@ v4 component payload (#2705).
+newtype WorldEditsDTOv4 = WorldEditsDTOv4 { wed4Pages ∷ [PageEditsDTOv4] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -420,11 +457,24 @@ migrateWorldEditsV2 (WorldEditsDTOv2 slices) = migrateWorldEditsV3 $
 --   whole-z surface onto the exact eighth-z plane, and the cursor
 --   crosses verbatim.
 migrateWorldEditsV3 ∷ WorldEditsDTOv3 → WorldEditsDTO
-migrateWorldEditsV3 (WorldEditsDTOv3 slices) = WorldEditsDTO
+migrateWorldEditsV3 (WorldEditsDTOv3 slices) = migrateWorldEditsV4 $ WorldEditsDTOv4
+    [ PageEditsDTOv4
+        { ped4PageId = ped3PageId s
+        , ped4Edits  = HM.map (map migrateWorldEditDTOv3) (ped3Edits s)
+        , ped4PlantedFloraCursor = ped3PlantedFloraCursor s
+        }
+    | s ← slices ]
+
+-- | v4 → v5 (#2705): everything crosses verbatim and the page carries NO
+--   tile, occurrence or plot tags — a v4 save predates them.
+migrateWorldEditsV4 ∷ WorldEditsDTOv4 → WorldEditsDTO
+migrateWorldEditsV4 (WorldEditsDTOv4 slices) = WorldEditsDTO
     [ PageEditsDTO
-        { pedPageId = ped3PageId s
-        , pedEdits  = HM.map (map migrateWorldEditDTOv3) (ped3Edits s)
-        , pedPlantedFloraCursor = ped3PlantedFloraCursor s
+        { pedPageId = ped4PageId s
+        , pedEdits  = ped4Edits s
+        , pedPlantedFloraCursor = ped4PlantedFloraCursor s
+        , pedTileTags = [], pedOccurrenceTags = [], pedOccurrenceTiles = []
+        , pedPlotTags = []
         }
     | s ← slices ]
 
@@ -438,7 +488,7 @@ migrateWorldEditsV3 (WorldEditsDTOv3 slices) = WorldEditsDTO
 --   from a disjoint namespace ("World.Flora.Identity") that this
 --   allocator does not own and can never collide with.
 validateWorldEdits ∷ WorldEditsDTO → [ComponentError]
-validateWorldEdits (WorldEditsDTO slices) =
+validateWorldEdits (WorldEditsDTO slices) = tagErrors ⧺
     [ ComponentError worldEditsComponentId 2 ValidatePhase
         ("page '" <> tshow (pedPageId s) <> "': planted flora id "
          <> tshow (floraInstanceIdToLua iid) <> " is not below the page's \
@@ -451,6 +501,28 @@ validateWorldEdits (WorldEditsDTO slices) =
     , plantedFloraCursorAbove [iid] > pedPlantedFloraCursor s
     ]
   where
+    -- #2705: every tag list is well formed (the shared wire's rules),
+    -- no occurrence is the reserved non-identity, and every tagged
+    -- occurrence has its tile recorded once.
+    tagErrors =
+        [ ComponentError worldEditsComponentId 5 ValidatePhase
+            ("page '" <> tshow (pedPageId s) <> "': " <> msg)
+        | s ← slices
+        , msg ← tagAssignmentErrors (\(x, y, z) → "cell " <> tshow (x, y, z)) (pedTileTags s)
+              ⧺ tagAssignmentErrors (\fid → "flora occurrence " <> tshow (floraInstanceIdToLua fid))
+                                    (pedOccurrenceTags s)
+              ⧺ tagAssignmentErrors (\t → "crop plot " <> tshow t) (pedPlotTags s)
+              ⧺ [ "gameplay tags name the reserved flora non-identity"
+                | any (isFloraInstanceIdNone . fst) (pedOccurrenceTags s) ]
+              ⧺ [ "flora occurrence " <> tshow (floraInstanceIdToLua fid)
+                    <> " carries gameplay tags but no recorded tile"
+                | (fid, _) ← pedOccurrenceTags s
+                , fid `notElem` map fst (pedOccurrenceTiles s) ]
+              ⧺ [ "flora occurrence " <> tshow (floraInstanceIdToLua fid)
+                    <> " has its tile recorded more than once"
+                | (fid, n) ← Map.toList (Map.fromListWith (+)
+                                [ (f, 1 ∷ Int) | (f, _) ← pedOccurrenceTiles s ])
+                , n > 1 ] ]
     -- Both identity-bearing planting forms, so the invariant keeps
     -- holding for a v2 payload's ids after #2243 renamed which
     -- constructor a CURRENT payload writes. The id-less 'WePlaceFloraD'
@@ -462,15 +534,24 @@ validateWorldEdits (WorldEditsDTO slices) =
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
 worldEditsCodec = componentCodec ComponentSpec
     { csComponent     = worldEditsComponentId
-    , csVersion       = 4
+      -- v5 (#2705): the page's tile, occurrence and plot gameplay tags.
+    , csVersion       = 5
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap → WorldEditsDTO
-        [ PageEditsDTO (pgsPageId p) (toEditsDTO (pgsEdits p))
-                       (pgsPlantedFloraCursor p)
+        [ let tags = pgsPageTags p
+          in PageEditsDTO
+            { pedPageId = pgsPageId p
+            , pedEdits = toEditsDTO (pgsEdits p)
+            , pedPlantedFloraCursor = pgsPlantedFloraCursor p
+            , pedTileTags = encodeTagAssignments (ptsTiles tags)
+            , pedOccurrenceTags = encodeTagAssignments (ptsOccurrences tags)
+            , pedOccurrenceTiles = Map.toAscList (ptsOccurrenceTiles tags)
+            , pedPlotTags = encodeTagAssignments (ptsPlots tags) }
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 3 migrateWorldEditsV3
+    , csOlderVersions = [ atVersion 4 migrateWorldEditsV4
+                        , atVersion 3 migrateWorldEditsV3
                         , atVersion 2 migrateWorldEditsV2
                         , atVersion 1 migrateWorldEditsV1 ]
     , csValidate      = validateWorldEdits
@@ -507,7 +588,12 @@ applyWorldEdits ver (WorldEditsDTO slices) =
             seed = if ver ≥ 2 then pedPlantedFloraCursor s
                               else firstPlantedFloraCursor
             (edits, cursor) = assignPlantedIds worldSize seed decoded
-        in p { pgsEdits = edits, pgsPlantedFloraCursor = cursor }
+        in p { pgsEdits = edits, pgsPlantedFloraCursor = cursor
+             , pgsPageTags = PageTagsSnapshot
+                 { ptsTiles = decodeTagAssignments (pedTileTags s)
+                 , ptsOccurrences = decodeTagAssignments (pedOccurrenceTags s)
+                 , ptsOccurrenceTiles = Map.fromList (pedOccurrenceTiles s)
+                 , ptsPlots = decodeTagAssignments (pedPlotTags s) } }
 
 -- | Give every id-LESS planting edit an identity, allocating from
 --   @seed@ upward, and return the log beside a cursor that sits strictly

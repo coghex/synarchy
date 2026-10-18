@@ -90,10 +90,12 @@ import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
     , transferOrdersComponentId, worldPagesComponentId, ccVersion
-    , coreSessionComponentId )
+    , coreSessionComponentId, worldEditsComponentId )
 import World.Save.Component.Page (worldPagesCodec)
 import World.Save.Component.EntitySnapshots (unitsCodec, buildingsCodec)
 import World.Save.Component.Session (coreSessionCodec)
+import World.Save.Component.PageEdits (worldEditsCodec)
+import Gameplay.Tags.Page (PageTagsSnapshot(..))
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryTargets)
@@ -1365,6 +1367,17 @@ tagDanglingWarnings snap =
       | t ← Map.keys (snapItemTags snap)
       , not (HS.member (itemTargetId t) liveItems)
       , let v = tshow (itemTargetId t) ]
+    -- #2705: a plot is page state, so a plot assignment naming no plot
+    -- the page saved is a tag on nothing. Cells and occurrences are NOT
+    -- checked here: their chunks need not be resident, and the admission
+    -- of the chunk that owns each one reconciles it.
+    ⧺ [ dangling worldEditsComponentId (ccVersion worldEditsCodec) RefCropPlot pid
+          ("world-edits[page=" <> unWorldPageId pid <> "].plot-tags[tile=" <> v <> "]")
+          ("crop plot at " <> v) v
+      | (pid, page) ← HM.toList (snapPages snap)
+      , tile ← Map.keys (ptsPlots (pgsPageTags page))
+      , not (HM.member tile (pgsCropPlots page))
+      , let v = tshow tile ]
   where
     liveItems = HS.fromList (allItemInstanceIds snap)
     entitiesByPage = snapshotPageEntities snap

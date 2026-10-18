@@ -204,6 +204,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsContainerKnowledge = pgsContainerKnowledge page
     , wpsTillDesignations = pgsTillDesignations page
     , wpsCropPlots    = pgsCropPlots page
+    , wpsPageTags     = pgsPageTags page
     , wpsPlantDesignations = pgsPlantDesignations page
     , wpsIdentity     = pgsIdentity page
     , wpsGeneratedId  = pgsGeneratedId page

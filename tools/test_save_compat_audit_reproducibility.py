@@ -108,12 +108,18 @@ _TAGGED_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z9-gameplay-tags.bin"
 #: #2703: the tracked fixture carrying nonempty physical-item tags
 #: (core-session v2).
 _ITEM_TAGGED_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z10-item-tags.bin"
+#: #2705: the tracked fixture carrying nonempty cell and flora tags
+#: (world-edits v5).
+_PLACE_TAGGED_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z11-tile-flora-tags.bin"
 
 #: One assignment per owned category, on z8's own page and ids.
 _TAG_SEED = ('{"units":[{"page":"generated_page","id":1,"tags":["defender"]}],'
              '"buildings":[],'
              '"locations":[{"page":"generated_page","id":1,"tags":["landmark"]}],'
-             '"items":[{"id":2,"tags":["food"]},{"id":3,"tags":["food","spare"]}]}')
+             '"items":[{"id":2,"tags":["food"]},{"id":3,"tags":["food","spare"]}],'
+             '"tiles":[{"page":"generated_page","x":1,"y":2,"z":7,"tags":["cell"]}],'
+             '"plants":[{"page":"generated_page","x":4,"y":4,"id":99,"tags":["tree"]}],'
+             '"plots":[{"page":"generated_page","x":5,"y":5,"tags":["field"]}]}')
 
 
 def _summary_tags(fixture: Path, out: Path) -> dict | None:
@@ -137,7 +143,8 @@ def test_seeded_tag_fixture_generation_is_reproducible() -> None:
           "canonical summary reads NO assignments off the pre-tag fixture and "
           "nonempty ones, with their target ids, off the seeded and tracked "
           "tagged fixtures")
-    for path in (_PRE_TAG_FIXTURE_PATH, _TAGGED_FIXTURE_PATH, _ITEM_TAGGED_FIXTURE_PATH):
+    for path in (_PRE_TAG_FIXTURE_PATH, _TAGGED_FIXTURE_PATH, _ITEM_TAGGED_FIXTURE_PATH,
+                 _PLACE_TAGGED_FIXTURE_PATH):
         if not path.exists():
             expect(False, f"expected the tracked fixture to exist at {path}")
             return
@@ -165,9 +172,17 @@ def test_seeded_tag_fixture_generation_is_reproducible() -> None:
         after = _summary_tags(variants[0], tmp / "after.json")
         tracked = _summary_tags(_TAGGED_FIXTURE_PATH, tmp / "tracked.json")
         tracked_items = _summary_tags(_ITEM_TAGGED_FIXTURE_PATH, tmp / "tracked_items.json")
-        if before is None or after is None or tracked is None or tracked_items is None:
+        tracked_places = _summary_tags(_PLACE_TAGGED_FIXTURE_PATH, tmp / "tracked_places.json")
+        if (before is None or after is None or tracked is None or tracked_items is None
+                or tracked_places is None):
             return
-        empty = {"units": [], "buildings": [], "locations": []}
+        tracked_places.pop("<items>")
+        place_page = tracked_places.get("generated_page", {})
+        expect(bool(place_page.get("tiles")) and bool(place_page.get("plants")),
+               f"expected the tracked tile/flora fixture to carry nonempty cell and "
+               f"occurrence assignments, got {place_page}")
+        empty = {"units": [], "buildings": [], "locations": [],
+                 "tiles": [], "plants": [], "plots": []}
         expect(before.pop("<items>") == [] and tracked.pop("<items>") == [],
                "expected the pre-tag and the core-session v1 tagged fixtures to "
                "read no item assignments")
@@ -182,7 +197,10 @@ def test_seeded_tag_fixture_generation_is_reproducible() -> None:
                f"expected the pre-tag fixture to read no assignments, got {before}")
         expect(after.get("generated_page") ==
                {"units": [{"id": 1, "tags": ["defender"]}], "buildings": [],
-                "locations": [{"id": 1, "tags": ["landmark"]}]},
+                "locations": [{"id": 1, "tags": ["landmark"]}],
+                "tiles": [{"x": 1, "y": 2, "z": 7, "tags": ["cell"]}],
+                "plants": [{"id": 99, "tile": [4, 4], "tags": ["tree"]}],
+                "plots": [{"x": 5, "y": 5, "tags": ["field"]}]},
                f"expected the seeded variant to carry exactly the seeded "
                f"assignments, got {after}")
         page = tracked.get("generated_page", {})

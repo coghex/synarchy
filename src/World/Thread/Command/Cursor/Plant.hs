@@ -26,6 +26,7 @@ module World.Thread.Command.Cursor.Plant
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (CropPlotStore(..))
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle)
@@ -68,7 +69,7 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
-            plots ← readIORef (wsCropPlotsRef worldState)
+            plots ← (cpsPlots ⊚ readIORef (wsCropPlotsRef worldState))
             worldSize ← pageWrapWorldSize worldState
             -- #1175: a plant designation is a single-tile point op, so
             -- the whole handler works in the canonical frame — the

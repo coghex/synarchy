@@ -53,6 +53,7 @@
 module Test.Headless.World.Save.Contract (spec) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -434,6 +435,7 @@ richPage = PageSnapshot
       -- round trip that mixed them up is visible.
     , pgsCropPlots    = HM.singleton (11, 12)
                             (CropPlot (FloraByName "wheat") 5 0.9)
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.singleton (13, 14)
                             (PlantDesignation 0 (FloraByName "wheat"))
     , pgsContainerKnowledge = richKnowledge
@@ -592,6 +594,7 @@ minimalPage2 = PageSnapshot
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
     , pgsCropPlots    = HM.empty
+    , pgsPageTags = emptyPageTagsSnapshot
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = customIdentity

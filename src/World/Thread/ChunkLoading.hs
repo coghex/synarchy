@@ -8,6 +8,7 @@ module World.Thread.ChunkLoading
     ) where
 
 import UPrelude
+import Gameplay.Tags.PageLive (pageTagWrite, reconcileAdmittedPageTags)
 import qualified Data.HashMap.Strict as HM
 import Data.List (nub, partition, sortOn)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
@@ -222,7 +223,12 @@ updateChunkLoading env logger = do
                                 admitResidentChunks worldState claims
                                 releaseEvictedChunks worldState pageId
                                                      params evicted
-                                atomicModifyIORef' (wsTilesRef worldState) $ \_ →
+                                -- #2705: the tile commit and the tag
+                                -- reconciliation below are one unit for
+                                -- tag readers (the page lock,
+                                -- 'World.State.Types.wsPageTagsLock').
+                                pageTagWrite worldState $ do
+                                 atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                                     (finalTd, ())
                                 -- #1854: the dig/construct corner-mask
                                 -- passes above run AFTER admission and
@@ -232,8 +238,13 @@ updateChunkLoading env logger = do
                                 -- time the transaction commits. Sweep the
                                 -- committed result rather than trusting
                                 -- the admitted chunks.
-                                forgetFloraDroppedSince worldState
+                                 forgetFloraDroppedSince worldState
                                     newChunks' finalTd
+                                -- #2705: and the general gameplay tags
+                                -- the admitted chunks own, against the
+                                -- same committed result.
+                                 reconcileAdmittedPageTags logger worldState
+                                    pageId newChunks' finalTd
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
@@ -490,34 +501,40 @@ drainInitQueues env logger = do
                         reconcileResidentChunks worldState pageId params
                                                 alreadyLoaded
 
-                        atomicModifyIORef' (wsTilesRef worldState) $ \td →
-                            let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
-                                coords = map lcCoord newChunks'
-                                td'' = recomputeNeighborSlopes seed
-                                         (wgpWorldSize params) registry
-                                         coords td'
-                                td2b  = patchEdgeStrata coords td''
-                                td'''' = computeSideDecos seed coords td2b
-                                -- Mid-dig slope overrides (after the slope
-                                -- recompute, which would erase them). Restore
-                                -- over EXACTLY the recomputed set — including
-                                -- wrapped-seam neighbours — not just raw
-                                -- neighbours.
-                                digCoords = slopeRecomputeAffected
-                                    (wgpWorldSize params) coords td'
-                                td5 = applyDigSlopesTd desigs digCoords td''''
-                                -- Construction corner-progress overrides
-                                -- (#96), same contract as dig slopes.
-                                td6 = applyConstructSlopesTd cdesigs
-                                        digCoords td5
-                            in (td6, ())
-                        -- #1854 — see updateChunkLoading's identical
-                        -- sweep: the corner-mask passes above shed a
-                        -- progressed tile's rooted flora after admission
-                        -- already resolved any pending legacy entry onto
-                        -- it.
-                        finalTd ← readIORef (wsTilesRef worldState)
-                        forgetFloraDroppedSince worldState newChunks' finalTd
+                        -- #2705: the tile commit and the tag reconciliation
+                        -- below are one unit for tag readers (the page lock,
+                        -- 'World.State.Types.wsPageTagsLock').
+                        pageTagWrite worldState $ do
+                         atomicModifyIORef' (wsTilesRef worldState) $ \td →
+                             let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'
+                                 coords = map lcCoord newChunks'
+                                 td'' = recomputeNeighborSlopes seed
+                                          (wgpWorldSize params) registry
+                                          coords td'
+                                 td2b  = patchEdgeStrata coords td''
+                                 td'''' = computeSideDecos seed coords td2b
+                                 -- Mid-dig slope overrides (after the slope
+                                 -- recompute, which would erase them). Restore
+                                 -- over EXACTLY the recomputed set — including
+                                 -- wrapped-seam neighbours — not just raw
+                                 -- neighbours.
+                                 digCoords = slopeRecomputeAffected
+                                     (wgpWorldSize params) coords td'
+                                 td5 = applyDigSlopesTd desigs digCoords td''''
+                                 -- Construction corner-progress overrides
+                                 -- (#96), same contract as dig slopes.
+                                 td6 = applyConstructSlopesTd cdesigs
+                                         digCoords td5
+                             in (td6, ())
+                         -- #1854 — see updateChunkLoading's identical
+                         -- sweep: the corner-mask passes above shed a
+                         -- progressed tile's rooted flora after admission
+                         -- already resolved any pending legacy entry onto
+                         -- it.
+                         finalTd ← readIORef (wsTilesRef worldState)
+                         forgetFloraDroppedSince worldState newChunks' finalTd
+                         reconcileAdmittedPageTags logger worldState pageId
+                                                   newChunks' finalTd
 
                         -- Notify the sim thread of the loaded chunks BEFORE
                         -- dropping the batch from the init queue. The dump

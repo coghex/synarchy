@@ -467,6 +467,7 @@ import qualified Test.Headless.Gameplay.Tags as GameplayTags
 import qualified Test.Headless.Gameplay.TagsMemory as GameplayTagsMemory
 import qualified Test.Headless.Gameplay.TagsPersistence as GameplayTagsPersistence
 import qualified Test.Headless.Gameplay.TagsItems as GameplayTagsItems
+import qualified Test.Headless.Gameplay.TagsResidency as GameplayTagsResidency
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -1380,6 +1381,7 @@ restLane = do
     -- world handlers plus a real stage and publish.
     GameplayTagsPersistence.spec
     GameplayTagsItems.spec
+    GameplayTagsResidency.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec

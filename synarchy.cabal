@@ -416,6 +416,7 @@ library
                      Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.LoadGate
+                     Engine.Scripting.Lua.API.TagQueryDebug
                      Engine.Scripting.Lua.API.QueueStats
                      Engine.Scripting.Lua.API.SceneStats
                      Engine.Scripting.Lua.API.Screenshot
@@ -636,6 +637,10 @@ library
                      Gameplay.Tags.Types
                      Gameplay.Tags.Live
                      Gameplay.Tags.ItemLifecycle
+                     Gameplay.Tags.Edit
+                     Gameplay.Tags.Page
+                     Gameplay.Tags.PageLive
+                     Gameplay.Tags.Request
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
                      Scenario.Types
@@ -1963,6 +1968,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Gameplay.TagsMemory
                    Test.Headless.Gameplay.TagsPersistence
                    Test.Headless.Gameplay.TagsItems
+                   Test.Headless.Gameplay.TagsResidency
                    Test.Headless.Scenario.Schema
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance

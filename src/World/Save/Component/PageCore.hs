@@ -105,6 +105,7 @@ module World.Save.Component.PageCore
     ) where
 
 import UPrelude
+import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.Vector as V
@@ -1420,5 +1421,6 @@ blankPageSnapshot pid params =
         , pgsTransferOrders = emptyTransferOrders
         , pgsTillDesignations = HM.empty
         , pgsCropPlots    = HM.empty
+        , pgsPageTags     = emptyPageTagsSnapshot
         , pgsPlantDesignations = HM.empty
         }

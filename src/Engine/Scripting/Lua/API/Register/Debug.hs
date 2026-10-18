@@ -16,11 +16,12 @@ import Engine.Scripting.Lua.API.ActionOutcome
 import Engine.Scripting.Lua.API.LoadGate
     (armLoadStageGateFn, releaseLoadStageGateFn, getLoadStageGateFn)
 import Engine.Scripting.Lua.API.QueueStats (getQueueStatsFn)
+import Engine.Scripting.Lua.API.TagQueryDebug (debugLiveTagQueryFn)
 import Engine.Scripting.Lua.API.SceneStats (getSceneStatsFn)
 import qualified HsLua as Lua
 
 -- | Populate the @debug@ global with engine debug verbs
---   (#643, #646, #907, #1181).
+--   (#643, #646, #907, #1181, #2705).
 --   openlibs already installed Lua's stock @debug@ stdlib table, so we
 --   add fields to it rather than replacing it — the stock functions
 --   (traceback etc.) stay available. Falls back to creating the table
@@ -43,6 +44,9 @@ registerDebugAPI callStats env = do
   registerLuaFunction callStats "debug" "armLoadStageGate" (armLoadStageGateFn env)
   registerLuaFunction callStats "debug" "releaseLoadStageGate" (releaseLoadStageGateFn env)
   registerLuaFunction callStats "debug" "getLoadStageGate" (getLoadStageGateFn env)
+  -- #2705: the live gameplay-tag query, read-only, for the persistence
+  -- probe's eviction and readmission checks.
+  registerLuaFunction callStats "debug" "liveTagQuery" (debugLiveTagQueryFn env)
   -- #1910: inter-thread queue telemetry. Read-only, world-free, and
   -- answerable on a bare headless boot, so a backlog can be observed
   -- from the moment the console comes up.
