@@ -91,10 +91,12 @@ legacyLua = T.unlines
 
 -- | A unit whose thermo, salt and cardio are Simulated (the three consciousness
 --   inputs are stored), hydration Nominal so the salt concentration is
---   exactly salt over its maximum, and the brain's own systems Simulated.
+--   exactly salt over its maximum, and the brain's own systems Simulated (the
+--   exempt tier's mind is Nominal since SD-23, #2840, so it is pinned).
 inputsUnit ∷ UnitSpec
 inputsUnit = (unitSpec 1 "acolyte" (Just "exempt"))
-    { usOverrides = [("thermo", PhysioSimulated), ("salt", PhysioSimulated)] }
+    { usOverrides = [ ("thermo", PhysioSimulated), ("salt", PhysioSimulated)
+                    , ("mind", PhysioSimulated) ] }
 
 setStatOf ∷ EngineEnv → Int → Text → Float → IO ()
 setStatOf env uid k v = modifyInstance env uid $ \i →
@@ -183,7 +185,8 @@ freshnessSpec ∷ Spec
 freshnessSpec = describe "a read is on demand, pure and exact" $ do
     it "follows a dependency change and a modifier's expiry at once, with no tick" $
         withScene [ (unitSpec 1 "acolyte" (Just "exempt"))
-                      { usStats = [("caffeine", 0.4)]
+                      { usOverrides = [("mind", PhysioSimulated)]
+                      , usStats = [("caffeine", 0.4)]
                       , usModifiers = [("caffeine", [StatModifier 0 "t" (Just 10) 1.0])] } ] $
             \(env, ls) → do
                 -- an active +100 % on caffeine doubles it: 0.8 -> + 0.15 x 0.8
@@ -227,7 +230,8 @@ containmentSpec ∷ Spec
 containmentSpec = describe "a non-finite input is a violated precondition, never a value" $
     it "refuses the derived read (a raise in Lua) and leaves the unit alone" $
         forM_ [("NaN", 0 / 0), ("+Infinity", 1 / 0), ("-Infinity", -1 / 0)] $ \(label, bad) →
-            withScene [unitSpec 1 "acolyte" (Just "exempt")] $ \(env, ls) → do
+            withScene [(unitSpec 1 "acolyte" (Just "exempt"))
+                          { usOverrides = [("mind", PhysioSimulated)] }] $ \(env, ls) → do
                 setStatOf env 1 "caffeine" bad
                 out ← luaText ls
                     "local ok = pcall(unit.readPhysio, 1, 'concentration'); \

@@ -45,11 +45,13 @@ machineKeys =
     , "mental_cooldown_until", "mental_high_since", "mental_break_behavior" ]
 
 -- | A unit whose brain and mind are the system under test: every survival
---   system Nominal (the exempt tier), a stamina fraction well under the cap
---   so the euphoria lift is visible in the concentration.
+--   system Nominal (the exempt tier) and the mind pinned Simulated (the exempt
+--   tier's default is Nominal since SD-23, #2840), a stamina fraction well
+--   under the cap so the euphoria lift is visible in the concentration.
 brainUnit ∷ UnitSpec
 brainUnit = (unitSpec 1 "acolyte" (Just "exempt"))
-    { usOverrides = [("stamina", PhysioSimulated)], usStats = [("stamina", 20)] }
+    { usOverrides = [("stamina", PhysioSimulated), ("mind", PhysioSimulated)]
+    , usStats = [("stamina", 20)] }
 
 -- | Recorders over the engine verbs the writers use: every commit's key set
 --   (sorted), every raw @setStat@ of a registry mind key, every thought

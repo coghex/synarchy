@@ -530,10 +530,25 @@ occurrence counters on another page are independent.
 - Plots are written from both the Lua and the world thread, so their
   tags live in the plot store's own ref. A plot tag edit and a plot
   removal are each one atomic step of that ref.
-- A query reads each page's tag stores before its tile store. An
-  assignment whose target the later tile read no longer holds is outside
-  the universe. Within a category the forward and reverse maps are one
-  value and always agree.
+- A query reads each page's tags, plots and tiles under the page lock
+  (`WorldState.wsPageTagsLock`, an `MVar ()`). Every world-thread
+  transition that changes the tile store and the tag store together
+  holds the same lock for its whole duration (`pageTagWrite`): an
+  in-place chunk edit with its cell cleanup, and an admission with its
+  reconciliation. So a view is wholly before or wholly after each such
+  transition, on any architecture, and can never pair a destroyed cell's
+  tags with a cell recreated at its coordinate. Occurrence ids are never
+  reused, so flora removal needs no lock: a removed occurrence is simply
+  not live. The helpers those transitions call update the tag store
+  without taking the lock again. Within a category the forward and
+  reverse maps are one value and always agree.
+- A tag edit queued when a load publishes is discarded with the rest of
+  the outgoing session's queued commands, and is answered
+  `TagEditNoTarget` so its caller does not wait for ever.
+- `debug.liveTagQuery(tag)` is a test-only, read-only verb that returns
+  the production live query's tile and plant targets for one tag. The
+  persistence probe uses it to show that retained assignments are not
+  live while their chunk is absent and are live again after readmission.
 
 ### Live targets and the query universe
 
@@ -569,7 +584,7 @@ neither positive nor negative results.
 | A plot is harvested (`world.harvestFlora`'s annual clear, the only production plot removal) | the plot and its tags go in one step, and a plot replanted on the tile starts untagged |
 | A page is destroyed or re-initialised, or the session is replaced | the old page's stores go with its `WorldState`; a new page starts empty |
 
-**Owner decision (2026-10-17, via laz).** The binding spec addition says
+**Manager ruling (premise correction, 2026-10-17).** The binding spec addition says
 plot removal through the "crop plant invalidation" paths clears a plot's
 memberships. On master 11d325968 those paths (`World.Plant.Validate`)
 remove plant designations, which are orders to plant and not tag

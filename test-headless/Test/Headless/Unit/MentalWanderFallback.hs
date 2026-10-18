@@ -85,8 +85,11 @@ behaviorFlee    = 1
 behaviorLashout = 3
 
 -- | What a spawned nomad stores in this slice: its cardio integrators at the
---   healthy reading and its Simulated mind seeded as a spawn would (the
---   `exempt` profile keeps cardio and, in S11a, the mind Simulated).
+--   healthy reading and its Simulated mind seeded as a spawn would. The
+--   `exempt` profile keeps cardio Simulated; its mind is Nominal by default
+--   since SD-23 (#2840), so these #2753 cases pin it Simulated ('mkNomad'):
+--   they exercise a break's wander, flee and lash-out legs, which only a
+--   Simulated mind has.
 healthyNomad ∷ HM.HashMap Text Float
 healthyNomad = HM.fromList
     ([("heart_rate", 70), ("blood_oxygen", 1)] ⧺ mindSeedStats)
@@ -106,7 +109,8 @@ mkNomad uid stats = UnitInstance
     , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
     , uiBlood = 5.0, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
     , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
+    , uiClimbDest = Nothing
+    , uiPhysioOverrides = HM.fromList [("mind", PhysioSimulated)], uiTrailState = Nothing
     }
 
 -- | Install one active page carrying the given nomads, at game time

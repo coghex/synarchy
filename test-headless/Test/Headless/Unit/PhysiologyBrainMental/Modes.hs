@@ -45,20 +45,23 @@ derivedKeys = ["consciousness", "concentration", "state_of_mind"]
 
 profileSpec ∷ Spec
 profileSpec = describe "profile coverage" $ do
-    it "puts consciousness and mind Simulated in every profile, and resolves a \
-       \bodyless definition Unsupported for both" $ do
+    it "puts consciousness Simulated in every profile and mind Simulated only in \
+       \rich (SD-23), and resolves a bodyless definition Unsupported for both" $ do
         reg ← readShippedPhysiologyRegistry
-        forM_ (prProfiles reg) $ \p →
-            forM_ ["consciousness", "mind"] $ \sid →
-                (ppId p, Map.lookup sid (ppModes p))
-                    `shouldBe` (ppId p, Just PhysioSimulated)
+        forM_ (prProfiles reg) $ \p → do
+            (ppId p, Map.lookup "consciousness" (ppModes p))
+                `shouldBe` (ppId p, Just PhysioSimulated)
+            (ppId p, Map.lookup "mind" (ppModes p))
+                `shouldBe` (ppId p, Just (if ppId p ≡ "rich" then PhysioSimulated
+                                          else PhysioNominal))
         forM_ ["consciousness", "mind"] $ \sid →
             fmap (\s → resolveMode s noUnitPhysiology False Nothing)
                  (registrySystem reg sid)
                 `shouldBe` Just ModeUnsupported
 
-    it "resolves both systems Simulated for every supported shipped species and \
-       \Unsupported for the bodyless ones, by the real resolver" $
+    it "resolves consciousness Simulated for every supported shipped species, mind \
+       \Simulated only for the acolyte, and both Unsupported for the bodyless ones, \
+       \by the real resolver" $
         withShipped $ \(env, _) → do
             reg ← readShippedPhysiologyRegistry
             defs ← shippedDefs env
@@ -66,8 +69,9 @@ profileSpec = describe "profile coverage" $ do
                 forM_ ["consciousness", "mind"] $ \sid → do
                     let got = fmap (\s → resolveMode s (udPhysiology def) False Nothing)
                                    (registrySystem reg sid)
-                        want | upBodyAuthored (udPhysiology def) = ModeSimulated
-                             | otherwise                         = ModeUnsupported
+                        want | not (upBodyAuthored (udPhysiology def)) = ModeUnsupported
+                             | sid ≡ "mind" ∧ name ≢ "acolyte"         = ModeNominal
+                             | otherwise                               = ModeSimulated
                     (name, sid, got) `shouldBe` (name, sid, Just want)
 
 -----------------------------------------------------------------------
@@ -131,7 +135,8 @@ healthySpec = describe "healthy standalone units over 600 seconds" $
     forM_ [("acolyte", "rich"), ("bear_brown", "reduced")] $ \(def, profile) →
         it (T.unpack def <> ": stays lucid, content and unbroken, with the existing \
                          \thought cadence and no retuning") $
-            withScene [ unitSpec 1 def (Just profile) ] $ \(env, ls) → do
+            withScene [ (unitSpec 1 def (Just profile))
+                          { usOverrides = [("mind", PhysioSimulated)] } ] $ \(env, ls) → do
                 _ ← luaText ls
                     "_G.__n = 0; local emit = thought.emit; \
                     \thought.emit = function(...) __n = __n + 1; return emit(...) end; \

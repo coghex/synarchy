@@ -68,20 +68,21 @@ body70 = bodyStats acolyteBody
 --   integrators at the healthy reading.
 bodyNominalStamina ∷ [(Text, Float)]
 bodyNominalStamina = filter ((≢ "stamina") ∘ fst) body70
-    ⧺ [("heart_rate", 70), ("blood_oxygen", 1)] ⧺ mindSeeds
+    ⧺ [("heart_rate", 70), ("blood_oxygen", 1)]
 
 -- | The Simulated keys a rich 70 kg acolyte is saved with.
 seeds70 ∷ [(Text, Float)]
 seeds70 =
     [ ("hydration", 42), ("hunger", 700), ("calories", 1400), ("salt", 70)
-    , ("salt_store", 140), ("core_temp", 37) ] ⧺ poolSeeds
+    , ("salt_store", 140), ("core_temp", 37) ] ⧺ poolSeeds ⧺ mindSeeds
 
 -- | The exhaustion and sleep pools (#2835) of an endurance-1 unit, whose
 --   Simulated systems save them at the full healthy value (endurance x 10),
---   and cardio's two integrators (#2836) at their healthy readings.
+--   and cardio's two integrators (#2836) at their healthy readings. The mind
+--   keys are NOT here: since SD-23 (#2840) only a rich unit saves them.
 poolSeeds ∷ [(Text, Float)]
 poolSeeds = [ ("exhaustion", 10), ("sleep_pressure", 10)
-            , ("heart_rate", 70), ("blood_oxygen", 1) ] ⧺ mindSeeds
+            , ("heart_rate", 70), ("blood_oxygen", 1) ]
 
 -- | The mind keys (#2838, S11a) a Simulated mind is saved with when the unit
 --   was seeded at game time 0: mood at its drift target (1.0 for a healthy
