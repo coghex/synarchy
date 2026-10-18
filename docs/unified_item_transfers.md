@@ -490,6 +490,21 @@ it is part of UIT-3, not optional cleanup.
 > (`:158`, `:155-156`) are historical: they locate the code the decision was
 > written against, not code that still exists.
 
+### Scenario construction is not a transfer (arena design D-57, #2709)
+
+Scenario construction (`Scenario.Items.Build`, epic #2698) restores the
+exact contents a scenario file states, even when they exceed a
+container's weight or bulk capacity or the container states none. That
+is initialization of a stated tree, not a move, so it never goes through
+the transfer policy or `Item.Ownership.insertInstance` and gains no
+transfer endpoint. Ordinary player and AI transfers are unchanged: they
+keep the same capacity checks, the same absence handling and the same
+`OwnershipRefusal` vocabulary, so the next move into an overloaded
+scenario container is refused with the reason it always gave. The
+exception is recorded in
+[engine_contracts.md](engine_contracts.md) §Nested ownership moves and
+the construction rules in [scenario_format.md](scenario_format.md).
+
 ## Open questions
 
 None currently blocking. Every decision above carries prior signoff from epic

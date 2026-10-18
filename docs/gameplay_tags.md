@@ -3,8 +3,9 @@
 Status: the pure foundation (#2700, SCN-02 of epic #2698), and live
 ownership, lifecycle and persistence for units, buildings and locations
 (#2701, SCN-03; see [Live tags](#live-tags-units-buildings-and-locations)).
-Plants, items, tiles and Lua access are later work (see
-[Not yet integrated](#not-yet-integrated)).
+Physical items (#2703), terrain cells and plants (#2705), and Lua access
+through the `gameplayTags` namespace (#2706, SCN-06; see
+[Lua access](#lua-access)) followed.
 
 Gameplay tags are optional, many-to-many labels that scripts attach to
 units, buildings, locations, plants, physical items, and map tiles.
@@ -262,8 +263,8 @@ assembles one registry with `registryFromCategories`.
 
 ### Operations and synchronization
 
-`Gameplay.Tags.Live` is the internal Haskell API. It has no Lua
-binding; SCN-06 owns the public verbs.
+`Gameplay.Tags.Live` is the internal Haskell API. Scripts reach it
+through the `gameplayTags` namespace (see [Lua access](#lua-access)).
 
 - `mutateUnitTags`, `mutateBuildingTags` and `mutateLocationTags` apply
   a `TagEdit` (add, remove, replace, clear) as one `atomicModifyIORef'`
@@ -453,7 +454,7 @@ refunds are new identities.
 
 | Component | Version | Carries |
 |---|---|---|
-| `core-session` | v2 | `csItemTags`, the session's forward item assignments in the shared wire shape |
+| `core-session` | v3 | `csItemTags`, the session's forward item assignments in the shared wire shape (v2), and `csItemRefs`, the items' scenario references (v3, #2709) |
 
 - **Capture.** `World.Thread.Command.Save.WriteWorld` captures
   `sgItemTags` from the same manager read as the pages, so the
@@ -461,9 +462,17 @@ refunds are new identities.
   `captureSessionSnapshot` keeps only assignments for items in those
   captured trees, so a save can never carry a tag on a dead item, even
   one a teardown race left behind for a moment.
-- **Migration.** `core-session` v1 is frozen as `CoreSessionDTOv1` and
-  migrates explicitly to no assignments. `currentSaveVersion` is
+- **Migration.** `core-session` v1 and v2 are frozen as
+  `CoreSessionDTOv1` and `CoreSessionDTOv2` and migrate explicitly to no
+  assignments (and, from v2, no references). `currentSaveVersion` is
   unchanged.
+- **Scenario references (#2709).** The item → scenario-reference mapping
+  (`wmItemScenarioRefs`, [scenario_format.md](scenario_format.md)) is not a
+  tag and never feeds one, but it has the tags' lifetime: it is committed
+  with them through `commitItemTreeAssignments`, forgotten in the same
+  atomic step by `forgetItemTags`, captured from the same manager read,
+  scrubbed by the same two tests at staging, and reported by the same
+  integrity pass at `core-session.item-refs[item=N]`.
 - **Integrity.** An assignment naming no item that any page holds, in
   any owner and at any depth, is a `dangling-reference` warning
   attributed to `core-session`. Staging keeps an assignment only if its
@@ -475,9 +484,10 @@ refunds are new identities.
   so a remembered copy can neither duplicate a membership nor keep a
   destroyed target live. A failure before publication leaves the
   outgoing session and its item tags intact.
-- **Tooling.** The codec summary lists `itemTags` at session level, and
-  `seed-tags` accepts an `items` list (`{"id": N, "tags": [...]}`, no
-  page).
+- **Tooling.** The codec summary lists `itemTags` and `itemRefs` at
+  session level, and `seed-tags` accepts an `items` list (`{"id": N,
+  "tags": [...], "ref": "..."}`, no page; either key may be omitted, and
+  an empty `ref` clears it).
 
 ### Item gates
 
@@ -489,7 +499,9 @@ refunds are new identities.
   pre-publication failure and v1 migration. Both index directions are
   checked after each transition.
 - `--match "save migrations"`: the tracked `z10-item-tags` fixture
-  (nonempty, `core-session` v2) and every older fixture's empty default.
+  (nonempty, `core-session` v2), the `z12-item-scenario-refs` fixture
+  (nonempty references, `core-session` v3) and every older fixture's
+  empty default.
 - `tools/gameplay_tag_persistence_probe.py` (manual-only): item
   assignments across owner categories and nested contents, through
   ownership changes, consumption and ground destruction, fresh-process
@@ -643,12 +655,36 @@ does not remove the plot, and no new plot removal rule was invented.
   while their chunk is absent, readmission, real digging and an
   autosave.
 
-## Not yet integrated
+## Lua access
 
-Later slices of epic #2698 still owe:
+Since #2706 (SCN-06) scripts reach every operation above through the
+`gameplayTags` namespace. The script-author reference is
+[gameplay_tags_lua.md](gameplay_tags_lua.md). It covers target
+encodings, page rules, completion, refusals, the expression grammar,
+ordering and the scalar modes.
 
-- **Lua access.** This includes argument decoding and result
-  marshalling. `count` and `exists` must return scalars, not lists.
+| Module | Owns |
+|---|---|
+| `Engine.Scripting.Lua.API.GameplayTags.Args` | strict decoding of targets, tag collections, expressions and query options |
+| `Engine.Scripting.Lua.API.GameplayTags` | the verbs, target resolution and result marshalling |
+| `Engine.Scripting.Lua.API.Register.GameplayTags` | installing the `gameplayTags` global |
 
-If any of these steps uncovers a new identity or behaviour choice, it
-goes to the owner before implementation.
+- **No new state.** The namespace holds no tag state. Each verb resolves
+  its target against the live page and calls the owner's own operation
+  from the sections above. It builds no Lua-side registry and no cache.
+- **Owners that apply the edit inside the call.** Units, buildings,
+  locations and items: the verb returns after the edit is applied.
+- **The owner that queues.** Tile and plant edits go through
+  `requestPageTagEdit`, which queues `WorldEditPageTags` on the world
+  thread. The verb waits for its answer, so a verb that returns `true`
+  has applied the edit. The world thread re-checks the page incarnation
+  when it applies the edit, so stale work never reaches a replacement
+  page. A load publish answers a queued edit `TagEditNoTarget`. Saves
+  and load publishes are driven from the Lua thread, so a waiting verb
+  can never hold up a save barrier.
+- **Reads and queries.** Each one captures one `LiveTagView` and
+  evaluates the whole expression with `runLiveTagQueryIn` over one page
+  (`onPage`). `count` and `exists` take the native result's size and
+  push no target.
+- **Gates.** Hspec `--match "Lua gameplay tags"`, and the extended
+  `tools/gameplay_tag_persistence_probe.py`.

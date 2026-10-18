@@ -3966,7 +3966,8 @@ PLC-9 are its first production callers.
 
 **Seven other writers exist, in six modules, and none is a move.**
 `Item.Materialize.materializeNode` MINTS a tree (#1418's one mint
-boundary), `World.Save.Component.PageActivity.fromItemInstanceDTO`
+boundary, which since #2709 also builds an explicit `ItemSpec` tree for
+scenario construction without a second writer), `World.Save.Component.PageActivity.fromItemInstanceDTO`
 REBUILDS one already materialized, `Item.Temperature.coolItem` RE-VALUES
 temperatures in place, the two medical draws
 (`Engine.Scripting.Lua.API.Units.Medical.consumeBandages` /
@@ -4030,6 +4031,19 @@ guarantee is against the corresponding post-removal snapshot and
 promises nothing about arbitrary intervening mutations. Ordinary
 remove-then-reinsert goes through `insertInstance` instead, needs an
 eligible parent, and appends.
+
+**Scenario construction is not a move (D-57, #2709).** A scenario item
+tree is built by `Scenario.Items.Build` through `materializeSpec`, which
+installs the stated contents exactly, including a container loaded past
+its `isWeightCapacity` or `isBulkCapacity` and a tree whose `iiStorage` or
+`iiBulk` is `Nothing`. Nothing in that path calls `insertInstance`, and
+the exception ends there: the next ordinary insertion into the same
+container is refused with the same `OwnershipRefusal` it always gave
+(`OverTargetWeight`, `OverTargetBulk`, `TargetNotStorage`,
+`CandidateNoBulk`), and the structural guards above need no new entries.
+Malformed individual values, cyclic or shared ownership and duplicate
+instance ids are still rejected by scenario validation, not admitted by
+this exception. See [scenario_format.md](scenario_format.md).
 
 Every refusal is enumerable (`allOwnershipRefusals`,
 `ownershipRefusalId`) so PLC-9's endpoints can surface it verbatim.
