@@ -36,7 +36,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 
 import Engine.Asset.Handle (TextureHandle(..))
@@ -99,6 +100,7 @@ import World.Thread (processAuthorizedSave)
 import World.Command.Types (WorldCommand(..))
 import qualified Engine.Core.Queue as Q
 import System.Timeout (timeout)
+import World.Save.Types (nameFloraReferences)
 import World.Tile.Types (WorldTileData(..), evictDistantChunksWithReport, insertChunk, lookupChunk)
 import World.Thread.Command.Init (registerPageIncarnation)
 
@@ -202,13 +204,16 @@ freshChunkA = chunkWith chunkA floraA
 freshChunkB = chunkWith chunkB []
 freshChunkC = chunkWith chunkC [plant farTile oakId farOak, plant farRowTile cropId farRow]
 
--- | Chunk C as a fresh REGENERATION produces it: the wild oak only, with
---   the planted row crop rebuilt by the production replay of its planting
---   edit, exactly as the chunk pipeline admits a planted crop.
-replayedChunkC ∷ LoadedChunk
-replayedChunkC = replayEdits
-    (HM.singleton chunkC [WePlaceFloraWithId (fst farRowTile) (snd farRowTile) cropId 0 8 farRow])
-    (chunkWith chunkC [plant farTile oakId farOak])
+-- | The planting edit the row crop in chunk C came from, as the live
+--   edit log holds it.
+plantFarRow ∷ WorldEdit
+plantFarRow = WePlaceFloraWithId (fst farRowTile) (snd farRowTile) cropId 0 8 farRow
+
+-- | Chunk C as a fresh REGENERATION produces it, before any replay: the
+--   wild oak only. The row crop comes back only by replaying a page's
+--   edit log over it.
+regeneratedChunkC ∷ LoadedChunk
+regeneratedChunkC = chunkWith chunkC [plant farTile oakId farOak]
 
 wheatPlot ∷ CropPlot
 wheatPlot = CropPlot cropId 0 1.0
@@ -420,20 +425,35 @@ querySpec = describe "the live query universe" $ do
             agrees env (QComplement (tagged (tg "marked")))
             agrees env (tagged (tg "marked"))
 
-    it "a view never pairs a destroyed cell's tags with the cell recreated \
-       \between its tag read and its tile read" $ \env → do
+    it "a writer that destroys and recreates a tagged cell on another \
+       \thread waits out a reader's whole tags-plots-tiles read" $ \env → do
         (ws, _) ← resetScene env
-        tag env ws (TargetTile (cell pageP colTile 10)) ["old"]
-        once ← newIORef True
-        let destroyAndRecreate = do
-                first ← atomicModifyIORef' once (\b → (False, b))
-                when first $ do
+        let c = cell pageP colTile 10
+        tag env ws (TargetTile c) ["old"]
+        started ← newEmptyMVar
+        done ← newEmptyMVar
+        blocked ← newIORef False
+        let writerDuringRead = do
+                _ ← forkIO $ do
+                    putMVar started ()
                     editChunkA ws (WeDeleteTile (fst colTile) (snd colTile))
                     editChunkA ws (WeAddTile (fst colTile) (snd colTile) (MaterialId 1))
-        pv ← capturePageViewWith destroyAndRecreate ws
-        cellStatus (pvTiles pv) (cell pageP colTile 10) `shouldBe` CellSolid
-        categoryTagsOf (cell pageP colTile 10) (ptTiles (pvTags pv)) `shouldBe` Set.empty
-        readIORef once `shouldReturn` False
+                    putMVar done ()
+                takeMVar started
+                -- The writer is running; it must not finish while this
+                -- read holds the page lock.
+                finished ← timeout 300000 (readMVar done)
+                writeIORef blocked (isNothing finished)
+        pv ← capturePageViewWith writerDuringRead ws
+        readIORef blocked `shouldReturn` True
+        -- Wholly before the transition: the original cell with its own tags.
+        cellStatus (pvTiles pv) c `shouldBe` CellSolid
+        categoryTagsOf c (ptTiles (pvTags pv)) `shouldBe` tags ["old"]
+        timeout 5000000 (takeMVar done) `shouldReturn` Just ()
+        -- Wholly after it: the recreated cell, with nothing carried over.
+        pv' ← capturePageViewWith (pure ()) ws
+        cellStatus (pvTiles pv') c `shouldBe` CellSolid
+        categoryTagsOf c (ptTiles (pvTags pv')) `shouldBe` Set.empty
 
     it "the composed algebra and list/count/exists agree before and after \
        \a residency change" $ \env → do
@@ -668,6 +688,11 @@ sessionSpec = describe "whole-session save and load" $ do
        \readmit — every kind excluded while absent and queryable again" $ \env → do
         (ws, _) ← resetScene env
         (logger, _) ← capturingLogger
+        -- The row crop's planting is in the page's edit log, so the save
+        -- carries it and the readmission below rebuilds the crop from the
+        -- RESTORED log, not from anything this test supplies.
+        writeIORef (wsEditsRef ws) (HM.singleton chunkC [plantFarRow])
+        writeIORef (wsPlantedFloraCursorRef ws) 12
         let targets = [ TargetTile (cell pageP farTile 10), occ pageP farOak
                       , occ pageP farRow, plot pageP farPlotTile ]
         forM_ targets $ \t → tag env ws t ["life"]
@@ -684,7 +709,9 @@ sessionSpec = describe "whole-session save and load" $ do
         wsL ← maybe (fail "no page") pure (lookup pageP (wmWorlds live))
         isNothing ⊚ (lookupChunk chunkC ⊚ readIORef (wsTilesRef wsL)) `shouldReturn` True
         query env (tagged (tg "life")) `shouldReturn` []
-        readmit logger wsL replayedChunkC
+        restored ← readIORef (wsEditsRef wsL)
+        map show (HM.lookupDefault [] chunkC restored) `shouldBe` [show plantFarRow]
+        readmit logger wsL (replayEdits restored regeneratedChunkC)
         sort ⊚ query env (tagged (tg "life")) `shouldReturn` sort targets
         agrees env (tagged (tg "life"))
 
@@ -748,8 +775,15 @@ capturedSession env = do
         ws ← maybe (fail "no page") pure (lookup pid (wmWorlds wm))
         pt ← readIORef (wsPageTagsRef ws)
         store ← readIORef (wsCropPlotsRef ws)
+        cursor ← readIORef (wsPlantedFloraCursorRef ws)
+        -- The edit log through the save's own naming step.
+        (edits, _, _) ← readIORef (wsEditsRef ws) ⌦ \es →
+            either (\e → fail ("naming refused: " <> show e)) pure
+                (nameFloraReferences catalog pid es HM.empty HM.empty)
         pure (blankPageSnapshot pid (withVolcanoCtx arenaParams))
             { pgsPageTags = capturePageTags pt store
+            , pgsEdits = edits
+            , pgsPlantedFloraCursor = cursor
             , pgsCropPlots = HM.map (\cp → cp { cpSpecies = FloraByName "res_wheat" })
                                     (cpsPlots store)
             , pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pid)

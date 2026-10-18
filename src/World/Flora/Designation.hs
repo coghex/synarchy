@@ -372,8 +372,8 @@ forgetFloraDroppedSince ws admitted final =
 replaceChunkForgettingFlora
     ∷ WorldState → LoadedChunk → LoadedChunk → IO ()
 replaceChunkForgettingFlora ws old new = pageTagWrite ws $ do
-    -- #2705: one unit for tag readers, from the tile write to the last
-    -- tag cleanup ('Gameplay.Tags.Page.ptWriteSeq').
+    -- #2705: under the page lock from the tile write to the last tag
+    -- cleanup ('World.State.Types.wsPageTagsLock').
     atomicModifyIORef' (wsTilesRef ws) $ \w → (insertChunk new w, ())
     -- #2705: a tagged CELL this in-place change made air, or took out of
     -- its column's stored range, ceased to exist; its tags go. Every

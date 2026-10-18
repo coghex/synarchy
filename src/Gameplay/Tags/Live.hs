@@ -101,7 +101,7 @@ module Gameplay.Tags.Live
     ) where
 
 import UPrelude
-import Control.Concurrent (yield)
+import Control.Concurrent.MVar (withMVar)
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Set as Set
@@ -319,26 +319,21 @@ data PageView = PageView
     , pvTiles ∷ !WorldTileData
     }
 
--- | One page's tags, plots and tiles as one coherent view (#2705), by the
---   page's write sequence ('Gameplay.Tags.Page.ptWriteSeq'): the tags,
---   then the plots and tiles, then the sequence again, retried until no
---   world-thread transition that changes tiles and tags together was in
---   flight or completed in between. @between@ runs between the tag read
---   and the tile read on every attempt — the test seam for exactly the
---   interleaving the sequence exists to catch; production passes
+-- | One page's tags, plots and tiles as one coherent view (#2705): read
+--   under the page lock ('World.State.Types.wsPageTagsLock'), which every
+--   world-thread transition that changes tiles and tags together holds
+--   for its whole duration, so the view pairs each cell's tags with the
+--   tile store they were validated against. @between@ runs between the
+--   tag read and the tile read, still under the lock: the test seam for
+--   exactly the interleaving the lock excludes. Production passes
 --   @pure ()@.
 capturePageViewWith ∷ IO () → WorldState → IO PageView
-capturePageViewWith between ws = attempt
-  where
-    attempt = do
-        tags ← readIORef (wsPageTagsRef ws)
-        if odd (ptWriteSeq tags) then yield >> attempt else do
-            plots ← readIORef (wsCropPlotsRef ws)
-            between
-            tiles ← readIORef (wsTilesRef ws)
-            again ← ptWriteSeq ⊚ readIORef (wsPageTagsRef ws)
-            if again ≢ ptWriteSeq tags then yield >> attempt
-                                       else pure (PageView tags plots tiles)
+capturePageViewWith between ws = withMVar (wsPageTagsLock ws) $ \() → do
+    tags  ← readIORef (wsPageTagsRef ws)
+    plots ← readIORef (wsCropPlotsRef ws)
+    between
+    tiles ← readIORef (wsTilesRef ws)
+    pure (PageView tags plots tiles)
 
 -- | The view's item index.
 ltvItems ∷ LiveTagView → CategoryIndex ItemTarget

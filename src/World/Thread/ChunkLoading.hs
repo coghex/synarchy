@@ -225,7 +225,8 @@ updateChunkLoading env logger = do
                                                      params evicted
                                 -- #2705: the tile commit and the tag
                                 -- reconciliation below are one unit for
-                                -- tag readers ('ptWriteSeq').
+                                -- tag readers (the page lock,
+                                -- 'World.State.Types.wsPageTagsLock').
                                 pageTagWrite worldState $ do
                                  atomicModifyIORef' (wsTilesRef worldState) $ \_ →
                                     (finalTd, ())
@@ -501,7 +502,8 @@ drainInitQueues env logger = do
                                                 alreadyLoaded
 
                         -- #2705: the tile commit and the tag reconciliation
-                        -- below are one unit for tag readers ('ptWriteSeq').
+                        -- below are one unit for tag readers (the page lock,
+                        -- 'World.State.Types.wsPageTagsLock').
                         pageTagWrite worldState $ do
                          atomicModifyIORef' (wsTilesRef worldState) $ \td →
                              let td' = foldl' (\acc lc → insertChunk lc acc) td newChunks'

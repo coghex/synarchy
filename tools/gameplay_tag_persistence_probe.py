@@ -580,6 +580,13 @@ def find_in_chunks(port: int, chunks: list, want_flora: bool, exclude: set):
     return (int(gx), int(gy)), int(tz), (int(iid) or None)
 
 
+def live_query(port: int, tag: str) -> list:
+    """The PRODUCTION live tag query's tile and plant targets for one tag,
+    through the test-only debug.liveTagQuery verb (#2705)."""
+    r = send(port, f"return table.concat(debug.liveTagQuery('{tag}'), ';')").strip().strip('"')
+    return [t for t in r.split(";") if t]
+
+
 def ring(r: int) -> list:
     return [(cx, cy) for cx in range(-r, r + 1) for cy in range(-r, r + 1)
             if max(abs(cx), abs(cy)) == r]
@@ -699,6 +706,12 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
         load_and_wait(chk, port, "place_seeded")
         absent = not chunk_loaded(port, fcx, fcy)
         chk.ok(absent, f"the far chunk {far_chunk} is absent from the tile store at save time")
+        # Retained, not live: while their chunk is absent the live query
+        # returns none of the far chunk's assignments.
+        for t in ("far_top", "far_plant", "far_row_crop"):
+            got = live_query(port, t)
+            chk.ok(got == [], f"while the far chunk is absent, the live query for '{t}' "
+                              f"returns nothing (got {got})")
         save_and_wait(chk, port, PLACE, "place_gen1")
     finally:
         quit_engine(port, proc)
@@ -723,6 +736,15 @@ def place_leg(chk: Checks, port: int, root: str, tmp: str) -> None:
             send(port, f"return world.loadChunksInRegion({cx}, {cy}, {cx}, {cy}, '{PLACE}')")
         send(port, "return world.waitForChunks(120)", timeout=125)
         chk.ok(chunk_loaded(port, fcx, fcy), f"the far chunk {far_chunk} was readmitted")
+        # Queryable again after readmission, each exactly its own target;
+        # the non-target air cell's assignment is gone.
+        for t, want in (("far_top", [f"tile:{PLACE}:{far[0]},{far[1]},{far_z}"]),
+                        ("far_plant", [f"plant:{PLACE}:{fpid}"]),
+                        ("far_row_crop", [f"plant:{PLACE}:{rpid}"]),
+                        ("far_air", [])):
+            got = live_query(port, t)
+            chk.ok(got == want, f"after readmission, the live query for '{t}' returns "
+                                f"{want} (got {got})")
         for (gx, gy), want in ((near[:2], near[2] - 1), (npt, None)):
             before = surface_terrain_z(port, gx, gy)
             send(port, f"return world.deleteTile('{PLACE}', {gx}, {gy})")

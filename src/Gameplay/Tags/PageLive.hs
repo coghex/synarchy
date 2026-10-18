@@ -17,13 +17,13 @@ module Gameplay.Tags.PageLive
     , mutatePageTargetTags
       -- * Admission
     , reconcileAdmittedPageTags
-      -- * The page write sequence
+      -- * The page lock
     , pageTagWrite
     ) where
 
 import UPrelude
 import qualified Data.Text as T
-import Control.Exception (finally)
+import Control.Concurrent.MVar (withMVar)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Log (LoggerState, LogCategory(..), logInfo)
 import Gameplay.Tags.Edit (TagEdit, TagEditResult(..))
@@ -94,16 +94,13 @@ reconcileAdmittedPageTags logger ws page admitted committed = do
         <> " flora occurrence(s) the admitted chunk no longer holds: "
         <> T.intercalate ", " (map (tshow . floraInstanceIdToLua) occs)
 
--- * The page write sequence
+-- * The page lock
 
 -- | Run a world-thread transition that changes this page's tile store
---   AND its tag store as one unit for readers: the write sequence is odd
---   from before the action's first write until after its last (see
---   'Gameplay.Tags.Page.ptWriteSeq'). Restored to even even if the
---   action throws, so no reader can wait for ever.
+--   AND its tag store under the page lock
+--   ('World.State.Types.wsPageTagsLock'), so a reader sees the pair
+--   either wholly before or wholly after it. The action must not take
+--   the lock again; the helpers it calls ('forgetFloraInstances' and the
+--   tag-store updates) are plain atomic updates that do not.
 pageTagWrite ∷ WorldState → IO α → IO α
-pageTagWrite ws act = do
-    bump
-    act `finally` bump
-  where
-    bump = atomicModifyIORef' (wsPageTagsRef ws) $ \pt → (pt { ptWriteSeq = ptWriteSeq pt + 1 }, ())
+pageTagWrite ws act = withMVar (wsPageTagsLock ws) (const act)

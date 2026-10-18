@@ -512,6 +512,16 @@ data WorldState = WorldState
       --   ("World.Flora.Designation"), admission reconciliation
       --   ("World.Thread.ChunkLoading") and load staging. Persisted by
       --   @world-edits@ v5.
+    , wsPageTagsLock ∷ MVar ()
+      -- ^ #2705: held across every world-thread transition that changes
+      --   this page's tile store AND its tag store together (an in-place
+      --   chunk edit with its cell cleanup, an admission with its
+      --   reconciliation: 'Gameplay.Tags.PageLive.pageTagWrite'), and by
+      --   a reader for the whole of its tags-plots-tiles read
+      --   ('Gameplay.Tags.Live.capturePageViewWith'). So no reader can
+      --   pair a destroyed cell's tags with a cell recreated at its
+      --   coordinate, on any architecture: the MVar orders the reads as
+      --   well as excluding the writer. Transient, never saved.
     , wsPlantDesignationsRef ∷ IORef PlantDesignations
       -- ^ Plant-designation set (#335): tile (gx, gy) → designation
       --   (surface z + chosen crop; see World.Plant.Types). Written by
@@ -637,6 +647,7 @@ emptyWorldState = do
     wsTillDesignationsRef ← newIORef HM.empty
     wsCropPlotsRef ← newIORef emptyCropPlotStore
     wsPageTagsRef ← newIORef emptyPageTags
+    wsPageTagsLock ← newMVar ()
     wsPlantDesignationsRef ← newIORef HM.empty
     wsBloodStoreRef ← newIORef (emptyBloodStore defaultBloodTextureCap)
     wsBloodTextureHandlesRef ← newIORef HM.empty
@@ -674,7 +685,7 @@ emptyWorldState = do
                         wsPowerNodesRef wsContainerKnowledgeRef
                         wsPendingContainerSeedsRef
                         wsTillDesignationsRef
-                        wsCropPlotsRef wsPageTagsRef wsPlantDesignationsRef
+                        wsCropPlotsRef wsPageTagsRef wsPageTagsLock wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
                         wsIdentityRef wsGeneratedIdRef
 
