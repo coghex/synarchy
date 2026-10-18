@@ -416,6 +416,49 @@ round trip in `tools/multiworld_save_probe.py --arena`.
 marker `src/World/CLAUDE.md` requires; it does not gate on-disk
 compatibility.
 
+### Finite arena bounds are page state (#2708)
+
+An arena page may carry exact, centred, nonwrapping dimensions
+(`world.initArena(pageId, width, height)`; omitted means the expandable
+arena above). The size is part of the page's generation state, not of any
+scenario: it is `World.Generate.Types.wgpArenaBounds` (`Maybe ArenaBounds`, a
+validated width × height), written by `world-pages` v15 as
+`pcArenaBounds` beside the page's gen params and restored by the same
+component. Nothing else persists it: the rectangle, the partial chunks and
+the closed fluid edge are all derived from it on load.
+
+- **Wire and validation.** The wire carries the two dimensions only.
+  Decode rebuilds the rectangle through `World.Arena.Bounds.mkArenaBounds`,
+  the one validator the Lua binding and the scenario adapters use, so a
+  stored rectangle cannot disagree with its size. A size outside the
+  dimension domain (each an integer in `[1, 100000]`), or bounds on a page
+  that is not an arena, is a `validatePages` failure (`wpBoundsErrors`);
+  nothing is clamped or invented.
+- **Legacy default.** `PageCoreDTOv14` (the pre-#2708 page core) is frozen
+  and `migrateWorldPagesV14` carries every field and leaves the page
+  EXPANDABLE. Every older arena save therefore loads as the expandable arena
+  it always was, on #2707's corrected foundation. Generated worlds carry no
+  bounds, before or after.
+- **Restoration order.** Staging installs the bounds on the page's params
+  before any chunk is built, builds only the startup chunks that intersect
+  the rectangle, replays the overlay (an overlay edit outside the rectangle,
+  possible only in a damaged save, is clipped away rather than replayed into
+  terrain the map does not have) and publishes tile data that carries the
+  rectangle (`wtdBounds`, a derived cache — see the state inventory). Both
+  ordinary saves and autosaves capture the live params, so both restore
+  identical bounds with no scenario file.
+- **Loading never rewrites the file**, exactly as for expandable arenas.
+
+Evidence retained with the change: the fixture `z15-arena-finite` (a
+20 × 10 arena with two corner edits, captured by
+`docs/pr-proofs/issue-2708-capture-finite-arena.py.txt`; its canonical summary
+records `arenaBounds`), the legacy `z14-arena-legacy-shallow` migrating to
+expandable, the hspec group `arena finite bounds` (real-codec round trips,
+staged restoration, the movement snapshot of a hidden page) and the
+fresh-process finite arena in `tools/multiworld_save_probe.py --arena`.
+`currentSaveVersion` was bumped to 108 as the worldgen-output bookkeeping
+marker; the bump does not replace the component migration above.
+
 ## 5. Format-version policy
 
 - B1 (#759) landed the new tagged envelope (`World.Save.Envelope`) with

@@ -58,6 +58,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Guaranteed significant contents and compound clearance (#917)](#guaranteed-significant-contents-and-compound-clearance-917)
 - [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
 - [Page incarnation: in-flight work across a reused page id (#2474)](#page-incarnation-in-flight-work-across-a-reused-page-id-2474)
+- [Finite arena bounds (#2708)](#finite-arena-bounds-2708)
 - [Entity teardown on destroy and same-id re-init (#2476)](#entity-teardown-on-destroy-and-same-id-re-init-2476)
 
 **Gameplay systems**
@@ -7609,3 +7610,100 @@ Validation: `cabal test synarchy-test-headless --test-options='--match Audio.'`,
 joins audio (one pre-Lua worker headless, two offscreen). Capability, persistence,
 config-write and source-distribution audits cover the ownership and resource
 inventories. The authoring guide's three YAML examples are parsed by Hspec.
+
+## Finite arena bounds (#2708)
+
+An arena page may be FINITE: exact, centred, nonwrapping dimensions given at
+creation, `world.initArena(pageId, width, height)`. Omitting both gives the
+expandable arena exactly as before; one without the other, a non-integer, or
+a size outside the schema's domain (each an integer in `[1, 100000]`) raises a
+Lua error and enqueues nothing. The command (`WorldInitArena pageId
+(Maybe ArenaBounds)`) carries a value already validated by
+`World.Arena.Bounds.mkArenaBounds`, which every other producer — the save
+decoder, the scenario adapters — also goes through.
+
+**The rectangle.** Inclusive engine tiles, from #2699's formula:
+`minX = -floor(w/2)`, `maxX = minX + w - 1`, `maxY = floor(h/2)`,
+`minY = maxY - h + 1`. 20×10 is X −10…9, Y −4…5; 21×11 is X −10…10, Y −5…5;
+1×1 is only (0, 0). Engine `(gx, gy)` IS the rectangle's `(X, Y)`; whether a
+presentation flips Y is a scenario adapter's business. A continuous position
+belongs to the tile each coordinate FLOORS to, the convention movement,
+surface lookups and the unit lifecycle already use (not #2699's
+nearest-integer reading, which is the scenario file's, not the engine's).
+The camera never translates the bounds and nothing clamps it.
+
+**Authority and carriers.** The authority is page state:
+`World.Generate.Types.wgpArenaBounds` — never derived from `isArenaParams` or
+the 100000 world-size sentinel (a finite arena remains an arena for every
+consumer of that predicate; the bounds are an additional filter). Three
+derived carriers exist so a reader holding only part of the page still
+judges the same rectangle: `WorldTileData.wtdBounds` (set where a page's
+tile data is installed — see `tileAvailable`, `lookupTileChunk`), the
+simulation's `SimFiniteFlat` topology (flat, plus the rectangle) and the
+`MoveWorld` snapshot a mover paths against. Bounds are recorded on the params
+and the tile data BEFORE the page is registered, and on a restored page
+before any chunk is built.
+
+**Partial chunks.** A chunk that only partly intersects the rectangle is
+admitted with the in-rectangle columns EXACTLY as the expandable arena
+builds them (the vegetation draw is made per column index regardless, so a
+valid cell never depends on the rectangle) and every other column ABSENT:
+the engine's existing beyond-the-world shape — an empty column whose terrain
+surface is the `minBound` sentinel, which slope, edge-strata, side-decoration
+and fluid passes already special-case. A chunk wholly outside is never
+generated, claimed or admitted: the camera loader, the explicit/queued demand
+producer (`enqueueChunkRequest`, before anything is registered on the
+residency owner) and the init-queue drain all filter with
+`boundedChunkCoords`, so a request outside the map returns 0 at once and
+leaves no pending claim. The startup set is the 5×5 footprint restricted to
+what intersects; the remaining valid chunks of a larger arena load on demand
+through the same authority, and the existing residency budgets are unchanged.
+No side decoration sits on a column that is or touches an absent one.
+
+**Availability.** `tileAvailable` / `lookupTileChunk` answer nothing outside
+the rectangle: path planning and the stepper (`lookupTerrainZ`, the slope,
+material and fluid reads), line of sight, building placement, construction
+planning, ground-object rest, picking, tile selection, spoil placement and
+the Lua tile/fluid queries all treat it as unavailable, the same `Nothing` an
+unloaded chunk gives.
+
+**Mutations.** Every authoritative mutation judges its TARGET page's own
+rectangle, visible or not, and refuses with a warning: tile add/delete/cell/
+slope edits, fluid placement (both verbs), vegetation and row-crop edits, dig,
+structure set (declined exactly like a chunk that is not resident, so the
+build attempt cancels) and clear, designations (mine, till, plant, construct),
+unit spawn/teleport/orders/leaps, ground-item spawn, and the derived stone of
+a fluid reaction. A refused operation writes no edit and creates no object or
+terrain, and nothing is relocated. Buildings are indivisible: any footprint
+tile outside refuses the placement (`canPlaceAt`) and, in
+`applyBuildingSpawn`, drops the spawn and releases its claim before any
+reservation, power node or owned contents exist. A location is the same
+through `Location.ArenaPlacement.allocateLocationInstanceIn`, which leaves the
+table untouched on refusal. Terrain and fluid PATCHES keep their in-bounds
+tiles: `World.Arena.Bounds.clipTiles` / `clipTileRegion` return the kept and
+rejected tiles for the warning, `footprintVerdict` names the crossing corners.
+
+**Units.** Orders, leaps, teleports and spawns outside refuse at the handler;
+`tickUnit` then states containment once over the finished tick — whatever a
+long step, an arrival snap, a diagonal, a leap or a fall did, a unit does not
+end a tick outside: it is held at the nearest inside point, its request
+dropped, idle unless a pose transition owns its state. The snapshot carries
+the rectangle even before its chunks load, so an empty terrain snapshot is
+never a fallback floor for the outside.
+
+**Fluid.** The finite edge is CLOSED, in-chunk and at seams: the gravity,
+lateral and waterfall phases and the seam pass offer a transfer only between
+LIVE cells (`simCellLive`, `simChunkLiveMask`), so an edge cell is neither
+poured into the lower absent column nor drained through it, and a neighbour
+that is not loaded is closed as it always was. The absent columns' terrain is
+never replaced by a wall height — writebacks copy `scsTerrain` into the world.
+
+**Persistence** is the `world-pages` v15 field `pcArenaBounds`
+([persistence contract](persistence_contract.md)); older arena saves load
+expandable. **Gates:** hspec `--match "arena finite bounds"` (rectangle table,
+domain, tiles/positions, partial chunks, generator, clipping, location
+allocation, closed fluid edges, unit containment, startup/camera/queue/
+eviction/restoration, real codec, mutations on a hidden page, placement and
+objects), `--match "arena generation consistency"`, `--match "sim chunk
+admission"`, `--match "persistence contract"`, and
+`tools/multiworld_save_probe.py --arena`.
