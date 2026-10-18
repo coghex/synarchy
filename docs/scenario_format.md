@@ -580,9 +580,26 @@ definition's own defaults, with no override and no applied engagement.
    `Unit.Physiology.Transition.reconcileStoredKeys`, the one seeding authority that
    spawn and load share. Its missing-only rule leaves every stated pool exactly as
    stated.
-9. **Blood and pose.** Blood falls back to `canonicalBlood`, else the body-mass
-   seed. A unit whose Simulated blood is below the wound tick's unconscious
-   threshold is built `Collapsed`, without ticking.
+9. **Blood and blood-loss pose.** Blood falls back to `canonicalBlood`, else the
+   body-mass seed. The blood-loss collapse is the wound tick's own verdict over
+   zero elapsed time (`Combat.Wounds.Tick.tickOneUnitWith`, its unit discarded).
+   Nothing drains, heals or rolls.
+10. **Paused readiness.** This step runs at install, before completion
+    (`Scenario.Units.Install.uirReady`; production `Scenario.Units.Ready`). It
+    covers the two Lua-owned derived states:
+    - the calorie strength discount;
+    - the pose that injuries and consciousness demand (concussion knock-out,
+      legs too broken to walk).
+
+    `unit_resources.settleScenarioUnit` computes both through the same
+    producers the per-tick pass uses: `reconcileStrength`, which calls
+    `starvation.refreshStrength`, and `unit_resource_injury.injuryPose`. The
+    answered pose is applied synchronously with the handlers the queued
+    `UnitCollapse` and `UnitCrawl` commands run. A failing hook retires the unit
+    (`ReadinessFailed`). The hook runs on the Lua thread and is idempotent. It
+    must run after any paused hook that resets strength:
+    `unit.recomputeBody`, like every ordinary load, re-derives `strength` from
+    the body.
 
 **Pools are seeded natively.** The trusted issue review called resource pools
 Lua-owned. Since the physiology epic (#2831, #2834, #2837), every pool belongs to a
@@ -648,13 +665,18 @@ handler's fence applied to the same two writes.
   retired again in one step.
 - **The result.** `UnitInstalled uid ref` is returned only after all of that.
   `UnitRejected diagnostics` and `UnitNotInstalled ref (PageNotAdmitting |
-  ReferenceHeld r | ItemsRefused ts)` leave nothing behind: no id is consumed, and
+  ReferenceHeld r | ItemsRefused ts | ReadinessFailed e)` leave nothing behind: no id is consumed, and
   no manager-only unit, simulation-only unit, reference, tag or item remains.
 - **Faction.** The profile is `resolveSpawnFaction` over the definition's default
   tags with no spawn tag (the owner's decision), so a scenario acolyte has no
   controller.
 - **Encounters.** An `encounter` is returned on the build for the location adapter
   (SCN-12), which owns the roster.
+
+The completed unit is what the ordinary path reaches at its first pass: the same
+pose and the same strength discount as an ordinarily spawned unit in the same state
+after one real wound tick and one real resource pass. The Hspec group compares the
+two for a concussion, a shattered leg, a bleeding unit and a starving one.
 
 After completion, the paused hooks leave the baseline unchanged:
 
