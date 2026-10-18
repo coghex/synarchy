@@ -20,16 +20,17 @@
 --   state, tags, reference): a unit whose items could not take their
 --   identities is not a completed unit, and nothing of it remains.
 --
---   __Paused readiness.__ Two derived states are Lua-owned and would
---   otherwise change at the first gameplay pass: the locomotor pose a
---   unit's injuries and consciousness demand, and the calorie-dependent
---   strength discount. After the items attach, the commit runs the
---   readiness hook ('uirReady'; in production 'Scenario.Units.Ready',
---   which calls @unit_resources.settleScenarioUnit@ — the SAME producers
---   the per-tick pass uses) and applies the pose it answers through the
---   pose handlers the queued @UnitCollapse@ / @UnitCrawl@ commands run
---   ("Unit.Thread.Command.Pose"), synchronously, so nothing is left
---   queued. A hook that fails retires the unit like a refused attachment.
+--   __Paused readiness.__ The Lua per-unit reconciliation decides deaths,
+--   collapses, crawls, revivals and the calorie strength discount. After
+--   the items attach, the commit runs the readiness hook ('uirReady'; in
+--   production 'Scenario.Units.Ready', which calls
+--   @unit_resources.settleScenarioUnit@: the SAME @reconcileUnit@ entry
+--   the tick runs, at zero elapsed time, with the unit's effects
+--   recorded). A death it would cause rejects the unit; the pose it would
+--   establish is applied through the handlers the queued @UnitCollapse@ /
+--   @UnitCrawl@ / @UnitRevive@ commands run ("Unit.Thread.Command.Pose"),
+--   synchronously, so nothing is left queued. A hook that fails retires
+--   the unit like a refused attachment.
 --
 --   __Completion.__ 'UnitInstalled' is returned only once all of that has
 --   happened: the instance, its simulation state and every identity are
@@ -65,7 +66,8 @@ import Unit.Anim (poseTag)
 import Unit.Sim.Types (Pose(..), UnitSimState(..), UnitThreadState(..))
 import Gameplay.Tags.ItemLifecycle (withDestroyedItems)
 import Unit.Thread.Command.Lifecycle (destroyedUnit)
-import Unit.Thread.Command.Pose (handleUnitCollapseCommand, handleUnitCrawlCommand)
+import Unit.Thread.Command.Pose
+    (handleUnitCollapseCommand, handleUnitCrawlCommand, handleUnitReviveCommand)
 import Unit.Types
 import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Residency (ChunkGeneration)
@@ -88,11 +90,11 @@ data UnitInstallRefs = UnitInstallRefs
 -- | What the paused-readiness hook answered.
 data Readiness
     = ReadyPose !(Maybe Text)
-      -- ^ the locomotor pose to establish (@"collapsed"@, @"crawling"@,
-      --   @"upright"@), or 'Nothing' to keep the built one
+      -- ^ the last pose the zero-time reconciliation would establish
+      --   (@"collapsed"@, @"crawling"@, @"standing"@ for a revival), or
+      --   'Nothing' to keep the built one
     | ReadyLethal !Text
-      -- ^ the gameplay injury pass would kill this unit now
-      --   (@injuries.lethalCause@); the cause
+      -- ^ the zero-time reconciliation would kill this unit now; the cause
     deriving (Show, Eq)
 
 data UnitInstallFailure
@@ -166,6 +168,7 @@ installBuiltUnit refs page epoch b = do
                         Right (ReadyLethal cause) → failed (AlreadyLethal cause)
                         Right (ReadyPose Nothing) → pure (Right uid)
                         Right (ReadyPose (Just "upright")) → pure (Right uid)
+                        Right (ReadyPose (Just "standing")) → establish uid Standing handleUnitReviveCommand
                         Right (ReadyPose (Just "collapsed")) → establish uid Collapsed handleUnitCollapseCommand
                         Right (ReadyPose (Just "crawling")) → establish uid Crawling handleUnitCrawlCommand
                         Right (ReadyPose (Just other)) →

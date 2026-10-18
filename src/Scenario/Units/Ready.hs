@@ -2,14 +2,13 @@
 --   SCN-10 of epic #2698): 'Scenario.Units.Install.uirReady' run against
 --   the Lua state.
 --
---   It calls @unit_resources.settleScenarioUnit(uid)@, which first applies
---   the gameplay lethality rule the injury pass kills by
---   (@injuries.lethalCause@, over the gameplay-visible wound view) and
---   then settles the two Lua-owned derived states through the producers
---   the per-tick pass itself uses — the calorie strength discount
---   (@reconcileStrength@ → @starvation.refreshStrength@) and the
---   locomotor pose (@unit_resource_injury.injuryPose@) — and answers what
---   to establish. Nothing is advanced and nothing is queued.
+--   It calls @unit_resources.settleScenarioUnit(uid)@, which runs the
+--   per-unit reconciliation the tick itself runs (@reconcileUnit@) once at
+--   zero elapsed time with the unit's effects recorded
+--   (@scripts/unit_effects.lua@): injuries, failure meters, every pool's
+--   death and collapse thresholds, starvation's floors, the strength
+--   discount and revival. It answers the death or the last pose that pass
+--   would cause. Nothing is advanced, queued or announced.
 --
 --   It runs Lua directly, so it must be called on the Lua thread (the
 --   thread that owns the state), as the session loader's paused

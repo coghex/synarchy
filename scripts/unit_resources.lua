@@ -47,6 +47,7 @@ local resourceTick    = require("scripts.unit_resource_tick")
 local resourceCarry   = require("scripts.unit_resource_carry")
 local regrowth        = require("scripts.unit_resource_regrowth")
 local injuryTick      = require("scripts.unit_resource_injury")
+local effects         = require("scripts.unit_effects")
 local failureMeters   = require("scripts.unit_resource_failure")
 local starvation      = require("scripts.starvation")
 
@@ -224,7 +225,17 @@ end
 -- One unit's whole pass. Split from `update` so a fault in one unit (a
 -- violated physiology invariant a read raises) is reported and skipped
 -- instead of aborting the pass for every unit after it.
-local function tickUnit(uid, info, dt)
+--
+-- The ONE per-unit reconciliation (#2710): the tick runs it with its dt, and a
+-- scenario unit's paused readiness runs it with dt = 0 (settleScenarioUnit),
+-- so every death, collapse, crawl, revival and strength discount a unit's
+-- baseline implies comes from this pipeline and nowhere else. Its effects go
+-- through scripts/unit_effects.lua. opts.mind == false skips the mind trio
+-- (brain / thoughts / mental): over zero time they change no state, and
+-- thoughts rolls the gameplay random stream when a thought is due, which a
+-- baseline must never draw. Consciousness is derived on demand, so nothing
+-- the trio does decides a pose or a death.
+local function reconcileUnit(uid, info, dt, opts)
     local pose0 = unit.getPose(uid) or "standing"
     -- A corpse ticks NOTHING. Without this guard, a failure-meter death
     -- leaves the driving wound pinned on the corpse (the engine wound tick
@@ -265,17 +276,18 @@ local function tickUnit(uid, info, dt)
     -- keeps the unit down until lucid. brain.tick drifts the durable
     -- psychological values (mood / emotional_pain / caffeine) as ONE atomic
     -- batch, and only for a unit whose mind is Simulated.
-    brain.tick(uid, dt)
+    local withMind = not (opts and opts.mind == false)
+    if withMind then brain.tick(uid, dt) end
     -- Thoughts read this tick's freshly-drifted mood/pain and may nudge mood
     -- back (#351) — after brain.tick so next tick's drift treats any nudge as
     -- "prev", fading it naturally toward the physiological target. One atomic
     -- batch per thought.
-    thoughts.tick(uid, info, dt)
+    if withMind then thoughts.tick(uid, info, dt) end
     -- Mental states (#352): the threshold machine over the DERIVED
     -- state_of_mind, read when it runs, so the mood nudge a thought just made
     -- is already in it (there is no next-pass lag) — the stressed label plus
     -- break/euphoria episodes, each event one atomic batch.
-    mental.tick(uid, dt)
+    if withMind then mental.tick(uid, dt) end
     -- Injuries first: a lethal injury kills the unit (skip the rest of its
     -- tick); a disabling one collapses it.
     if not injuryTick.tickInjuries(uid, info, pose0)
@@ -304,7 +316,7 @@ function unitResources.update(dt)
     for _, uid in ipairs(ids) do
         local info = unit.getInfo(uid)
         if info and info.defName then
-            local ok, err = pcall(tickUnit, uid, info, dt)
+            local ok, err = pcall(reconcileUnit, uid, info, dt)
             if not ok then
                 local key = tostring(uid) .. ":" .. tostring(err)
                 if not reported[key] then
@@ -351,29 +363,25 @@ end
 
 -- Exposed for debug console: inspect what a unit's drain/regen
 -- numbers are. Returns nil if the def isn't configured.
+unitResources.reconcileUnit = reconcileUnit
+
 -- Paused readiness of a scenario-constructed unit (#2710, SCN-10). The
 -- engine's construction adapter (Scenario.Units.Build) settles every native
--- value; this settles the two Lua-owned derived states a gameplay pass would
--- otherwise change at its first tick, through the SAME producers that pass
--- uses: the calorie-dependent strength (reconcileStrength) and the
--- locomotor pose its injuries and consciousness demand
--- (unit_resource_injury.injuryPose). It advances nothing: no pool, drain,
--- meter, kill or queued pose command. Returns the pose to establish
--- ("collapsed", "crawling" or "upright"), or nil for a unit that is gone,
--- dead or knocked down; the engine applies it to the unit's simulation state.
--- A unit the injury pass would kill at once returns "lethal" and the cause
--- instead, and is not installed.
+-- value; this runs the per-unit reconciliation above ONCE at zero elapsed
+-- time, with the unit's effects recorded instead of queued or announced
+-- (unit_effects.record), so its baseline is exactly what the pipeline makes
+-- of it: the strength discount is applied, and any death, collapse, crawl or
+-- revival the authored state implies is answered now. Nothing advances: dt is
+-- zero and the mind trio is skipped (see reconcileUnit). Returns
+-- "lethal", cause for a unit the pipeline would kill at once; else the last
+-- pose it would establish ("collapsed", "crawling", "standing"), or nil to
+-- keep the built pose. nil, nil for a unit that is gone or dead.
 function unitResources.settleScenarioUnit(uid)
     local info = unit.getInfo(uid)
-    if not info then return nil end
-    local pose = unit.getPose(uid) or "standing"
-    if pose == "dead" then return nil end
-    -- The lethality the injury pass kills by, over the gameplay-visible
-    -- wound view: a unit it would kill at once is not a scenario unit.
-    local cause = injuryTick.lethalCause(uid)
-    if cause then return "lethal", cause end
-    reconcileStrength(uid, physiology.modes(uid))
-    return injuryTick.injuryPose(uid, info, pose)
+    if not info or (unit.getPose(uid) or "standing") == "dead" then return nil end
+    local r = effects.record(uid, function() reconcileUnit(uid, info, 0, { mind = false }) end)
+    if r.dead then return "lethal", r.cause or "a lethal condition" end
+    return r.pose
 end
 
 function unitResources.getConfig(defName)

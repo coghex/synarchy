@@ -85,7 +85,8 @@ import Unit.Stats (effectiveStat)
 import Unit.Thread.Command.Body (injurySpeedMult)
 import Combat.Wounds (tickAllWounds)
 import Unit.Anim (poseTag)
-import Unit.Command.Types (SpawnProfile(..))
+import Unit.Command.Types (SpawnProfile(..), UnitCommand(..))
+import qualified Engine.Core.Queue as Q
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Command.Spawn (handleUnitSpawnCommand)
 import Unit.Thread.Command.Spawn (spawnModifierMap)
@@ -431,7 +432,9 @@ defaultsSpec = describe "omitted values" $ do
         ws ← resetScene env
         [uid] ← constructClean fx ws ("  - {id: grazer, definition: " ⧺ T.unpack lazyName ⧺ ", x: 1, y: 1}\n")
         u ← unitOf env uid
-        HM.keys (uiStats u) `shouldMatchList` ["strength", "agility", "endurance", "carrying_capacity"]
+        -- every template is resolved (the readiness pass also writes the
+        -- injury failure meters, which are not scenario values)
+        HM.keys (templateStats lazyStatNames u) `shouldMatchList` lazyStatNames
         uiBlood u `shouldBe` 0
         HM.member "body_mass" (uiStats u) `shouldBe` False
         before ← statRNG env
@@ -522,7 +525,7 @@ overrideSpec = describe "explicit values" $ do
             , "    x: 1"
             , "    y: 1"
             , "    name: \"\""
-            , "    stats: {reflexes: 0, toughness: 0, stamina: 0}"
+            , "    stats: {reflexes: 0, toughness: 0, exhaustion: 0}"
             , "    skills: {dagger: 0}"
             , "    knowledge: {}"
             , "    wounds: []"
@@ -533,7 +536,7 @@ overrideSpec = describe "explicit values" $ do
             , "    equipment: {}"
             , "    accessories: []" ]
         u ← unitOf env uid
-        (stat u "reflexes", stat u "toughness", stat u "stamina") `shouldBe` (0, 0, 0)
+        (stat u "reflexes", stat u "toughness", stat u "exhaustion") `shouldBe` (0, 0, 0)
         HM.lookup "dagger" (uiSkills u) `shouldBe` Just 0
         uiKnowledge u `shouldBe` HM.empty
         uiName u `shouldBe` ""
@@ -672,6 +675,81 @@ healthSpec = describe "health" $ do
                 poseText (usPose sb) `shouldBe` wantPose
                 (stat a "strength" / stat a "strength_body")
                     `shouldSatisfy` approx (stat (snd b) "strength" / stat (snd b) "strength_body")
+
+    it "over generated specs, a completed unit is exactly what the ordinary zero-time reconciliation makes of a spawned unit in the same state" $ \fx → do
+        let env = fxEnv fx
+            pick xs g = let (i, g') = randomR (0, length xs - 1) g in (xs !! i, g')
+            statPool =
+                [ ("stamina", ["0", "0.5", "3"]), ("endurance", ["0.2", "1"])
+                , ("hydration", ["0", "1", "20"]), ("calories", ["0", "100"]), ("hunger", ["0"])
+                , ("exhaustion", ["0", "5"]), ("sleep_pressure", ["0", "5"]) ]
+            woundPool =
+                [ "", "{part: head, kind: concussion, severity: 0.4}"
+                , "{part: l_leg, kind: fracture, severity: 0.9}"
+                , "{part: torso, kind: slash, severity: 0.3}"
+                , "{part: heart, kind: stab, severity: 0.8, heal: -0.5}"
+                , "{part: torso, kind: blunt, severity: 0.1}" ]
+            bodyPool =
+                [ "", "frame_mass: 70, body_mass: 60, lean_mass: 10, fat_mass: 10"
+                , "frame_mass: 70, body_mass: 60, lean_mass: 14.3, fat_mass: 3"
+                , "frame_mass: 70, body_mass: 60, lean_mass: 20, fat_mass: 8" ]
+            bloodPool = ["", ", blood: 0.5", ", blood: 1.5"]
+            specOf seed =
+                let g0 = mkStdGen seed
+                    (stats, g1) = foldl' (\(acc, g) (k, vs) →
+                                     let (keep, g') = randomR (0 ∷ Int, 2) g
+                                         (v, g'') = pick vs g'
+                                     in (if keep ≡ 0 then acc ⧺ [k ⧺ ": " ⧺ v] else acc, g''))
+                                 ([], g0) statPool
+                    (w, g2) = pick woundPool g1
+                    (b, g3) = pick bodyPool g2
+                    (bl, _) = pick bloodPool g3
+                    statText = intercalate' ", " (filter (not ∘ null) (b : stats))
+                in "  - {id: gen, definition: acolyte, x: 1, y: 1, stats: {" ⧺ statText ⧺ "}"
+                   ⧺ ", wounds: [" ⧺ w ⧺ "]" ⧺ bl ⧺ "}\n"
+        outcomes ← forM [1 .. 100 ∷ Int] $ \seed → do
+            ws ← resetScene env
+            (us, _) ← decodeUnits env (specOf seed)
+            benv ← buildEnvOf env
+            builds ← forM us (buildUnit benv "units[0]")
+            case [ (ub, b) | ub ← builds, Just b ← [ubUnit ub] ] of
+                [] → pure "native-rejected"
+                ((ub, b) : _) → do
+                    epoch ← pageIncarnation ws
+                    [c] ← installUnitBuilds (installRefsOf fx) pageP epoch [ub]
+                    scenario ← case c of
+                        UnitInstalled uid _ → Just ⊚ canonicalOf env uid
+                        UnitRejected _ → pure Nothing
+                        other → fail ("seed " ⧺ show seed ⧺ ": " ⧺ show other)
+                    ordinary ← ordinaryZeroTime fx ws (buInstance b)
+                    (seed, scenario) `shouldBe` (seed, ordinary)
+                    pure (maybe "rejected" (\(p, _, _, _) → p) scenario)
+        -- the generated specs really reach every outcome
+        nub' outcomes `shouldSatisfy` (\os → all (`elem` os) ["rejected", "standing", "collapsed", "crawling"])
+
+    describe "a baseline the resource pass would collapse or kill at once" $ do
+        it "low stamina is collapsed before completion" $ \fx → do
+            let env = fxEnv fx
+            ws ← resetScene env
+            [uid] ← constructClean fx ws "  - {id: tired, definition: acolyte, x: 1, y: 1, stats: {endurance: 1, stamina: 0.5}}\n"
+            u ← unitOf env uid
+            ss ← simOf env uid
+            (uiPose u, usPose ss) `shouldBe` ("collapsed", Collapsed)
+        forM_ [ ("no stamina is rejected", "stats: {stamina: 0}")
+              , ("lean mass below the muscle floor is rejected"
+                , "stats: {frame_mass: 70, body_mass: 60, lean_mass: 10, fat_mass: 10}") ] $ \(name, extra) →
+            it name $ \fx → do
+                let env = fxEnv fx
+                ws ← resetScene env
+                us ← cleanUnits env $ "  - {id: doomed, tags: [d-unit], definition: acolyte, x: 1, y: 1, "
+                    ⧺ extra ⧺ ", inventory: [{id: d-kit, tags: [d-item], definition: first_aid_kit}]}\n"
+                (cs, _) ← construct fx ws us
+                [ map sdEffect ds | UnitRejected ds ← cs ] `shouldBe` [[EntryRejected]]
+                um ← readIORef (unitManagerRef env)
+                (HM.size (umInstances um), Map.size (umScenarioRefs um), nullCategoryIndex (umTags um))
+                    `shouldBe` (0, 0, True)
+                wm ← readIORef (worldManagerRef env)
+                (nullCategoryIndex (wmItemTags wm), nullItemRefs (wmItemScenarioRefs wm)) `shouldBe` (True, True)
 
     it "a starving unit's strength survives capture and reconstruction while paused" $ \fx → do
         let env = fxEnv fx
@@ -865,6 +943,7 @@ roundTripSpec = describe "capture" $ do
         def ← defNamed env lazyName
         map ueStats (ucapEntries c) `shouldBe`
             [rollTemplatesFor' "lz" (udStatTemplates def)]
+        -- (the readiness pass's injury meters are not captured)
         -- and the document builds the same values back
         (us', _) ← decodeUnitsBytes env (captureDocument c)
         ws2 ← resetScene env
@@ -872,7 +951,7 @@ roundTripSpec = describe "capture" $ do
         ds `shouldBe` []
         [UnitInstalled uid2 _] ← pure cs
         u2 ← unitOf env uid2
-        uiStats u2 `shouldBe` rollTemplatesFor' "lz" (udStatTemplates def)
+        templateStats lazyStatNames u2 `shouldBe` rollTemplatesFor' "lz" (udStatTemplates def)
 
     it "names units structurally, whatever order the manager holds them in" $ \fx → do
         let env = fxEnv fx
@@ -1385,8 +1464,10 @@ poseText = poseTag
 ordinaryTwin ∷ Fx → WorldState → UnitInstance → IO (UnitId, UnitInstance)
 ordinaryTwin fx ws a = do
     let env = fxEnv fx
-    um ← readIORef (unitManagerRef env)
-    let twin = UnitId (umNextId um + 500)
+    -- a fresh id from the allocator, as unit.spawn takes one: ids are
+    -- never reused within a session, so no per-unit Lua cache of an
+    -- earlier unit can be inherited
+    twin ← atomicModifyIORef' (unitManagerRef env) $ \m → let (i, m') = nextUnitId m in (m', i)
     epoch ← pageIncarnation ws
     acolyteTags ← udFactionTags ⊚ defNamed env "acolyte"
     handleUnitSpawnCommand env (ucUtsRef (toUnitCombatCapability env)) twin "acolyte"
@@ -1405,6 +1486,81 @@ ordinaryTwin fx ws a = do
     r `shouldBe` "ok"
     b ← unitOf env twin
     pure (twin, b)
+
+-- | The scenario-visible state the comparison holds two units to: pose,
+--   stats, blood and wounds.
+canonicalOf ∷ EngineEnv → UnitId → IO (Text, [(Text, Float)], Float, [Wound])
+canonicalOf env uid = do
+    u ← unitOf env uid
+    pure (uiPose u, sort (HM.toList (uiStats u)), uiBlood u, uiWounds u)
+
+-- | The ordinary path at zero elapsed time: an acolyte spawned through the
+--   real spawn handler, given @b@'s native state (stats, wounds, blood,
+--   modifiers, skills and knowledge; not its items, whose ids are the
+--   scenario unit's), then the wound tick and the per-unit reconciliation
+--   (@unit_resources.reconcileUnit@, production effects) at dt 0, with
+--   every queued command applied and the pose mirror published after each.
+--   'Nothing' when that kills it.
+ordinaryZeroTime ∷ Fx → WorldState → UnitInstance
+                 → IO (Maybe (Text, [(Text, Float)], Float, [Wound]))
+ordinaryZeroTime fx ws b = do
+    let env = fxEnv fx
+    -- a fresh id from the allocator, as unit.spawn takes one: ids are
+    -- never reused within a session, so no per-unit Lua cache of an
+    -- earlier unit can be inherited
+    twin ← atomicModifyIORef' (unitManagerRef env) $ \m → let (i, m') = nextUnitId m in (m', i)
+    epoch ← pageIncarnation ws
+    acolyteTags ← udFactionTags ⊚ defNamed env "acolyte"
+    handleUnitSpawnCommand env (ucUtsRef (toUnitCombatCapability env)) twin "acolyte"
+        (uiGridX b + 3) (uiGridY b) terrainZ (resolveSpawnFaction acolyteTags Nothing) pageP epoch
+        SpawnStandard
+    modifyIORef' (unitManagerRef env) $ \m → m
+        { umInstances = HM.adjust (\t → t { uiStats = uiStats b, uiWounds = uiWounds b
+                                           , uiBlood = uiBlood b, uiModifiers = uiModifiers b
+                                           , uiSkills = uiSkills b, uiKnowledge = uiKnowledge b
+                                           , uiScars = uiScars b, uiImmuneResponse = uiImmuneResponse b
+                                           , uiImmunities = uiImmunities b })
+                                  twin (umInstances m) }
+    tickAllWounds env 0
+    killed1 ← applyQueued env twin
+    r ← evalDebug (fxLua fx) $ "local id = " <> tshow (unUnitId twin)
+        <> "; __res.reconcileUnit(id, unit.getInfo(id), 0, { mind = false }); return 'ok'"
+    r `shouldBe` "ok"
+    killed2 ← applyQueued env twin
+    -- A queued kill IS the death: the pass can queue a later resource's
+    -- collapse behind an earlier one's kill (pools iterate in table
+    -- order), and the collapse handler would repose the corpse.
+    out ← if killed1 ∨ killed2 then pure Nothing else Just ⊚ canonicalOf env twin
+    _ ← evalDebug (fxLua fx) ("unit.destroy(" <> tshow (unUnitId twin) <> "); return 'ok'")
+    drainUnitQueue env
+    pure out
+  where
+    -- the unit thread applies queued commands, then publishes the pose;
+    -- answers whether a kill for @who@ was among them
+    applyQueued env who = do
+        cmds ← takeAll env []
+        forM_ cmds (Q.writeQueue (unitQueue env))
+        drainUnitQueue env
+        uts ← readIORef (ucUtsRef (toUnitCombatCapability env))
+        modifyIORef' (unitManagerRef env) $ \m → m
+            { umInstances = HM.mapWithKey (\i u → maybe u (\ss → u { uiPose = poseTag (usPose ss) })
+                                                       (HM.lookup i (utsSimStates uts)))
+                                          (umInstances m) }
+        pure (any (\case { UnitKill u → u ≡ who; _ → False }) cmds)
+    takeAll env acc = Q.tryReadQueue (unitQueue env) ≫= \case
+        Nothing → pure (reverse acc)
+        Just c → takeAll env (c : acc)
+
+lazyStatNames ∷ [Text]
+lazyStatNames = ["strength", "agility", "endurance", "carrying_capacity"]
+
+templateStats ∷ [Text] → UnitInstance → HM.HashMap Text Float
+templateStats ks u = HM.filterWithKey (\k _ → k `elem` ks) (uiStats u)
+
+intercalate' ∷ String → [String] → String
+intercalate' _ [] = ""
+intercalate' _ [x] = x
+intercalate' sep (x : xs) = x ⧺ sep ⧺ intercalate' sep xs
 
 -- | Run every queued unit command on this thread, as the unit thread
 --   would.

@@ -7,6 +7,7 @@ local movementSpeed   = require("scripts.movement_speed")
 local injuries        = require("scripts.injuries")
 local brain           = require("scripts.brain")
 local alerts          = require("scripts.unit_resource_alerts")
+local effects  = require("scripts.unit_effects")
 local energy          = require("scripts.unit_resource_energy")
 local carry           = require("scripts.unit_resource_carry")
 local regrowth        = require("scripts.unit_resource_regrowth")
@@ -352,7 +353,7 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     -- (post-write) so the threshold check matches what the engine
     -- just stored.
     if resourceName == "calories" or resourceName == "hydration" then
-        alerts.checkSurvivalAlerts(uid, resourceName, next, maxVal, pose, nil)
+        effects.survivalAlert(uid, resourceName, next, maxVal, pose, nil)
     end
 
     -- Death triggers run BEFORE collapse so a unit that crosses the
@@ -375,17 +376,17 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
         if params.death_threshold and params.death_threshold > 0
            and (current / maxVal < params.death_threshold
                 or next / maxVal < params.death_threshold) then
-            alerts.emitDeathAlert(uid, alerts.deathCauseFor(resourceName))
+            effects.deathAlert(uid, alerts.deathCauseFor(resourceName))
             carry.forget(uid)
             regrowth.forget(uid)
-            unit.kill(uid)
+            effects.kill(uid)
             return
         end
         if params.kill_on_zero and (current <= 0 or next <= 0) then
-            alerts.emitDeathAlert(uid, alerts.deathCauseFor(resourceName))
+            effects.deathAlert(uid, alerts.deathCauseFor(resourceName))
             carry.forget(uid)
             regrowth.forget(uid)
-            unit.kill(uid)
+            effects.kill(uid)
             return
         end
     end
@@ -397,7 +398,7 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     if pose ~= "collapsed" and pose ~= "dead"
        and params.collapse_threshold and params.collapse_threshold > 0
        and next / maxVal < params.collapse_threshold then
-        unit.collapse(uid)
+        effects.collapse(uid)
     end
 
     -- Surplus regrowth (hunger only via params.surplus_regrowth).
@@ -493,7 +494,7 @@ function M.checkRevive(uid, defConfig)
             end
         end
     end
-    unit.revive(uid)
+    effects.revive(uid)
 end
 
 return M

@@ -5,6 +5,7 @@
 local injuries = require("scripts.injuries")
 local brain    = require("scripts.brain")
 local alerts   = require("scripts.unit_resource_alerts")
+local effects  = require("scripts.unit_effects")
 
 local M = {}
 
@@ -91,11 +92,7 @@ local function dropDisabledHandWeapons(uid)
                         local gx, gy = alerts.unitCoords(info)
                         local msg = alerts.unitLabel(info) .. " drops "
                             .. (held.displayName or held.defName or "a weapon")
-                        if gx and gy then
-                            engine.emitEventForUnit("unit_event", msg, uid, gx, gy)
-                        else
-                            engine.emitEventForUnit("unit_event", msg, uid)
-                        end
+                        effects.unitEvent("unit_event", msg, uid, gx, gy)
                     end
                 end
             end
@@ -146,8 +143,8 @@ function M.tickInjuries(uid, info, pose)
 
     local cause = M.lethalCause(uid)
     if cause then
-        alerts.emitDeathAlert(uid, cause, "injury")
-        unit.kill(uid)
+        effects.deathAlert(uid, cause, "injury")
+        effects.kill(uid)
         return true
     end
 
@@ -171,12 +168,12 @@ function M.tickInjuries(uid, info, pose)
         if want == "collapsed" then
             -- Out cold: from a concussion OR from physiological derangement
             -- (heat stroke / hypoxia / salt imbalance dropping consciousness).
-            if pose ~= "collapsed" then unit.collapse(uid) end
+            if pose ~= "collapsed" then effects.collapse(uid) end
         elseif want == "crawling" then
             -- Conscious + can't walk: crawl. Covers both dropping from
             -- standing AND rising out of a collapse once consciousness
             -- returns but the legs are still broken.
-            if pose ~= "crawling" then unit.crawl(uid) end
+            if pose ~= "crawling" then effects.crawl(uid) end
         elseif pose == "crawling" then
             -- Legs healed enough to walk — stand up (revive handles the
             -- Crawling→Standing snap; checkRevive handles Collapsed).
@@ -208,7 +205,7 @@ function M.tickInjuries(uid, info, pose)
             -- the unit through the branches above.
             local s = require("scripts.unit_ai").getState(uid)
             if not (s and (s.sleepPhase or s.sourcePhase)) then
-                unit.revive(uid)
+                effects.revive(uid)
             end
         end
     end

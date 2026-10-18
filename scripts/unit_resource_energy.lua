@@ -4,6 +4,7 @@
 local stats    = require("scripts.unit_stats")
 local alerts   = require("scripts.unit_resource_alerts")
 local regrowth = require("scripts.unit_resource_regrowth")
+local effects  = require("scripts.unit_effects")
 local carry    = require("scripts.unit_resource_carry")
 
 local M = {}
@@ -248,8 +249,8 @@ function M.tickStarvation(uid, dt)
     -- through Float32 storage and it can round back ABOVE minLean;
     -- without the tolerance a clamped unit is stuck alive forever.
     if lean <= minLean + M.LEAN_FLOOR_TOL then
-        alerts.emitDeathAlert(uid, "starvation")
-        unit.kill(uid)
+        effects.deathAlert(uid, "starvation")
+        effects.kill(uid)
         return
     end
 
