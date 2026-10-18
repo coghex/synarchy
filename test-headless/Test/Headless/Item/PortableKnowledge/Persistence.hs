@@ -78,6 +78,7 @@ knowledgeSnapshot = buildSessionSnapshot globals [page]
             { lcsOwnerPage = Just pkPageA, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
         , sgItemTags = mempty
+        , sgItemRefs = mempty
         , sgPortableKnowledge = allFourStates
         }
 

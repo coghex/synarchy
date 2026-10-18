@@ -794,7 +794,8 @@ capturedSession env = do
             , sgNextBuildingId = 1, sgNextUnitId = 1, sgActivePage = pageP
             , sgVisiblePages = [pageP]
             , sgLiveCamera = LiveCameraSnapshot (Just pageP) 0 0 1 FaceSouth
-            , sgItemTags = mempty, sgPortableKnowledge = emptyPortableKnowledge }
+            , sgItemTags = mempty, sgItemRefs = mempty
+            , sgPortableKnowledge = emptyPortableKnowledge }
             pages
 
 arenaParams ∷ WorldGenParams

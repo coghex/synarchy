@@ -18,6 +18,7 @@ import qualified Data.HashSet as HS
 import Gameplay.Tags.ItemLifecycle
     (forgetItemTags, groundItemIds, retiredUnitItemIds, retiredBuildingItemIds)
 import Gameplay.Tags.Index (emptyCategoryIndex)
+import Scenario.Items.Refs (emptyItemRefs)
 import Control.Concurrent.STM (atomically)
 import Engine.Audio.Transport (resetAudioSession)
 import Engine.Core.Capability.Audio (AudioCapability(..), toAudioCapability)
@@ -250,6 +251,7 @@ handleWorldDestroyAllCommand env logger = do
                , wmPortableKnowledge = emptyPortableKnowledge
                -- #2703: no item survives the teardown, so no item tag.
                , wmItemTags = emptyCategoryIndex
+               , wmItemScenarioRefs = emptyItemRefs
                -- …and in the SAME update, so no reader can see the
                -- cleared map under the departed session's epoch and
                -- conclude a queued observation for it is still current

@@ -445,6 +445,11 @@ data DiagnosticReason
     | OutsideBounds
     | FootprintOutsideBounds
     | ClippedTiles !Integer         -- ^ how many tiles were dropped
+    | CyclicContents !Text          -- ^ a definition's default contents
+                                    --   re-enter a definition already
+                                    --   being expanded; the closed cycle
+                                    --   (@a → b → a@) the dropped entry
+                                    --   would have closed (#2709)
     deriving (Show, Eq)
 
 -- | One recoverable problem. @sdPath@ is the document path of the

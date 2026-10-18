@@ -646,6 +646,11 @@ library
                      Gameplay.Tags.Request
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
+                     Scenario.Items.Refs
+                     Scenario.Items.Build
+                     Scenario.Items.Owners
+                     Scenario.Items.Capture
+                     Scenario.Items.Encode
                      Scenario.Types
                      Scenario.Bounds
                      Scenario.Decode.Monad
@@ -1975,6 +1980,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.GameplayTags
                    Test.Headless.Lua.GameplayTags.Scene
                    Test.Headless.Scenario.Schema
+                   Test.Headless.Scenario.Items
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents

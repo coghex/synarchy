@@ -90,6 +90,7 @@ module World.Save.Compat.SessionV90
 
 import UPrelude
 import qualified Data.Map.Strict as Map
+import Scenario.Items.Refs (emptyItemRefs)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -381,6 +382,7 @@ migrateSessionV90 meta sd = do
               -- 'World.Save.Component.assembleSnapshot' installs.
             , snapPortableKnowledge = emptyPortableKnowledge
             , snapItemTags = Map.empty
+            , snapItemRefs = emptyItemRefs
             }
         crossErrs = capComponentErrors $
             map snapErr (validateSessionSnapshot snap)

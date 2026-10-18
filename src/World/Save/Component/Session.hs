@@ -29,7 +29,9 @@ module World.Save.Component.Session
     , texPaletteCodec
     , CoreSessionDTO(..)
     , CoreSessionDTOv1(..)
+    , CoreSessionDTOv2(..)
     , migrateCoreSessionDTOv1
+    , migrateCoreSessionDTOv2
     , LiveCameraDTO(..)
     , TexPaletteDTO(..)
     , applyCoreSession
@@ -53,6 +55,7 @@ import World.Save.Component.GameplayTags
     (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
 import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Tag (itemTargetId, mkItemTarget)
+import Scenario.Items.Refs (itemRefsError, itemRefsToAscList, itemRefsFromList)
 
 -- core-session ------------------------------------------------------
 
@@ -65,7 +68,7 @@ data LiveCameraDTO = LiveCameraDTO
     , lcdFacing ∷ !CameraFacing
     } deriving (Show, Eq, Generic, Serialize)
 
--- | The current (v2) DTO for the @"core-session"@ component.
+-- | The current (v3) DTO for the @"core-session"@ component.
 data CoreSessionDTO = CoreSessionDTO
     { csGameTime       ∷ !Double
     , csNextItemId     ∷ !Word64
@@ -81,7 +84,43 @@ data CoreSessionDTO = CoreSessionDTO
       --   Session-scoped like the item allocator above it, because an
       --   item's identity is: it moves between pages and owners without
       --   changing. APPENDED, which is what makes v2 a distinct shape.
+    , csItemRefs       ∷ ![(Word64, Text)]
+      -- ^ #2709 (v3): the scenario reference each physical item was
+      --   constructed from ("Scenario.Items.Refs"), keyed by
+      --   'Item.Types.iiInstanceId', ascending by id, one reference per
+      --   item and one item per reference. Session-scoped beside the
+      --   tags for the same reason. APPENDED, which is what makes v3 a
+      --   distinct shape.
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN v2 @"core-session"@ DTO (#2703): the current one without
+--   its scenario references. Never edited.
+data CoreSessionDTOv2 = CoreSessionDTOv2
+    { cs2GameTime       ∷ !Double
+    , cs2NextItemId     ∷ !Word64
+    , cs2NextBuildingId ∷ !Word32
+    , cs2NextUnitId     ∷ !Word32
+    , cs2ActivePage     ∷ !WorldPageId
+    , cs2VisiblePages   ∷ ![WorldPageId]
+    , cs2LiveCamera     ∷ !LiveCameraDTO
+    , cs2ItemTags       ∷ !(TagAssignmentsDTO Word64)
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | v2 → v3: every global and every tag crosses unchanged and the
+--   session carries NO scenario references — a v2 save predates them,
+--   and nothing else may stand in for one.
+migrateCoreSessionDTOv2 ∷ CoreSessionDTOv2 → CoreSessionDTO
+migrateCoreSessionDTOv2 d = CoreSessionDTO
+    { csGameTime       = cs2GameTime d
+    , csNextItemId     = cs2NextItemId d
+    , csNextBuildingId = cs2NextBuildingId d
+    , csNextUnitId     = cs2NextUnitId d
+    , csActivePage     = cs2ActivePage d
+    , csVisiblePages   = cs2VisiblePages d
+    , csLiveCamera     = cs2LiveCamera d
+    , csItemTags       = cs2ItemTags d
+    , csItemRefs       = []
+    }
 
 -- | The FROZEN v1 @"core-session"@ DTO: the current one without its
 --   item tags. Never edited. Its camera is the unchanged 'LiveCameraDTO'
@@ -96,8 +135,8 @@ data CoreSessionDTOv1 = CoreSessionDTOv1
     , cs1LiveCamera     ∷ !LiveCameraDTO
     } deriving (Show, Eq, Generic, Serialize)
 
--- | v1 → v2: every global crosses unchanged and the session carries NO
---   item tags — a v1 save predates them, and nothing else (a faction
+-- | v1 → v3: every global crosses unchanged and the session carries NO
+--   item tags or scenario references — a v1 save predates them, and nothing else (a faction
 --   tag, a remembered copy) may stand in for them.
 migrateCoreSessionDTOv1 ∷ CoreSessionDTOv1 → CoreSessionDTO
 migrateCoreSessionDTOv1 d = CoreSessionDTO
@@ -109,23 +148,27 @@ migrateCoreSessionDTOv1 d = CoreSessionDTO
     , csVisiblePages   = cs1VisiblePages d
     , csLiveCamera     = cs1LiveCamera d
     , csItemTags       = []
+    , csItemRefs       = []
     }
 
 coreSessionCodec ∷ ComponentCodec CoreSessionDTO
 coreSessionCodec = componentCodec ComponentSpec
     { csComponent     = coreSessionComponentId
       -- v2 (#2703): the session's item tag assignments.
-    , csVersion       = 2
+      -- v3 (#2709): the items' scenario references.
+    , csVersion       = 3
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = encodeCore
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 migrateCoreSessionDTOv1 ]
+    , csOlderVersions = [ atVersion 1 migrateCoreSessionDTOv1
+                      , atVersion 2 migrateCoreSessionDTOv2 ]
     , csValidate      = \d →
-        [ ComponentError coreSessionComponentId 2 ValidatePhase msg
+        [ ComponentError coreSessionComponentId 3 ValidatePhase msg
         | msg ← tagAssignmentErrors (\i → "item " <> tshow i) (csItemTags d)
               ⧺ [ "gameplay tags name item instance id 0, which names no item"
-                | any ((≡ 0) . fst) (csItemTags d) ] ]
+                | any ((≡ 0) . fst) (csItemTags d) ]
+              ⧺ itemRefsError (csItemRefs d) ]
     }
   where
     encodeCore snap = CoreSessionDTO
@@ -138,6 +181,7 @@ coreSessionCodec = componentCodec ComponentSpec
         , csLiveCamera     = toCameraDTO (snapLiveCamera snap)
         , csItemTags       = encodeTagAssignments
             (Map.mapKeysMonotonic itemTargetId (snapItemTags snap))
+        , csItemRefs       = itemRefsToAscList (snapItemRefs snap)
         }
     toCameraDTO c = LiveCameraDTO
         { lcdOwner  = lcsOwnerPage c
@@ -169,6 +213,7 @@ applyCoreSession d snap = snap
         [ (t, ts)
         | (i, ts) ← Map.toList (decodeTagAssignments (csItemTags d))
         , Just t ← [mkItemTarget i] ]
+    , snapItemRefs = itemRefsFromList (csItemRefs d)
     }
 
 -- texture-palette ---------------------------------------------------

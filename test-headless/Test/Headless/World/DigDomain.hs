@@ -676,6 +676,7 @@ saveWith desigs = snapshotToSaveData
             (blankPageSnapshot fixturePage arenaParams)
                 { pgsMineDesignations = HM.fromList desigs }
         , snapItemTags = mempty
+        , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

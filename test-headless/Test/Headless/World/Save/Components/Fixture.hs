@@ -279,6 +279,7 @@ minimalGlobals = SessionGlobals
         { lcsOwnerPage = Just page1
         , lcsX = 7, lcsY = 8, lcsZoom = 3, lcsFacing = FaceEast }
     , sgItemTags = mempty
+    , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
     }
 

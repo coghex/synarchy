@@ -745,7 +745,14 @@ itemBody p o sid tags dn ic = do
                     b ← memberField FieldRejected sp "bulk" (pFloatMin 0) m
                     pure (maybe Omitted (Authored ∘ Just) (StorageCapacity <$> w <*> b))
     temp ← optField p "temperature" pTemp o
-    contents ← if icHoldsItems ic
+    -- An item holds items when its definition does, or when it states
+    -- an internal storage capacity of its own (#2709): ordinary inserts
+    -- key on the instance's storage, so a captured instance with storage
+    -- lists what it holds and must read back.
+    let statesStorage = case storage of
+            Authored (Just _) → True
+            _ → False
+    contents ← if icHoldsItems ic ∨ statesStorage
         then listField p "contents" o (decodeItem p)
         else case KM.lookup "contents" o of
             Nothing → pure Omitted

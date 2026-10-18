@@ -318,6 +318,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- name are one capture.
                                 , sgItemTags =
                                     categoryForward (wmItemTags mgr)
+                                -- #2709: the scenario references, off
+                                -- the same manager read as the tags.
+                                , sgItemRefs = wmItemScenarioRefs mgr
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do

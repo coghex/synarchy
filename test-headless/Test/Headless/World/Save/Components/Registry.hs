@@ -133,7 +133,8 @@ spec = do
         it "declares a stable id and its current version" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             -- #2703: v2 appends the session's item gameplay tags.
-            ccVersion coreSessionCodec `shouldBe` 2
+            -- #2709: v3 appends the items' scenario references.
+            ccVersion coreSessionCodec `shouldBe` 3
             ccVersion worldPagesCodec `shouldBe` 14
 
         it "rejects a NEWER unsupported version, naming the phase" $
@@ -882,7 +883,9 @@ goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
       -- #2703 re-pinned: @core-session@ v2 appends the session's item
       -- gameplay-tag list (8 bytes for an empty one).
-    [ ("core-session",        (93,   "70e926d18d60f18b"))
+      -- #2709 re-pinned again: @core-session@ v3 appends the empty
+      -- scenario-reference list (another 8 bytes).
+    [ ("core-session",        (101,  "e058e5b52e1650eb"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
       -- #2021 re-pinned: @world-pages@ v9 appended each page's optional
       -- generated-world id (17 bytes per page here — a present tag plus
@@ -947,7 +950,8 @@ goldenRichPayloads =
 goldenFullPayloads ∷ [(Text, (Int, Text))]
 goldenFullPayloads =
       -- #2703 re-pinned: core-session v2's empty item-tag list.
-    [ ("core-session",        (93,  "374686bb705a86da"))
+      -- #2709 re-pinned: core-session v3's empty scenario-reference list.
+    [ ("core-session",        (101, "2d512e16102c661a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
       -- #2021 re-pinned, same reason as goldenRichPayloads (one page
       -- here, so 17 bytes rather than 34). #917 left it unmoved for the

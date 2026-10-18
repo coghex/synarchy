@@ -62,6 +62,7 @@ import qualified Data.Aeson.KeyMap as KM
 import Control.Monad.State.Strict (State, runState)
 import Gameplay.Tags.Types (GameplayTag, mkGameplayTag)
 import Scenario.Bounds (TileBounds)
+import Scenario.Items.Refs (maxItemRefLength)
 import Scenario.Types
 
 -- * The decoder
@@ -303,11 +304,12 @@ pOneOf table v = do
 
 -- * Identity and tags
 
--- | An explicit id is non-empty and drawn from letters, digits and
---   @_ - : .@ — never @[@, so it cannot collide with an automatic
---   (path-shaped) id.
+-- | An explicit id is non-empty, at most 'maxItemRefLength' characters
+--   (the longest reference the ordinary save carries, #2709), and drawn
+--   from letters, digits and @_ - : .@ — never @[@, so it cannot collide
+--   with an automatic (path-shaped) id.
 explicitIdOk ∷ Text → Bool
-explicitIdOk t = not (T.null t) ∧ T.all ok t
+explicitIdOk t = not (T.null t) ∧ T.length t ≤ maxItemRefLength ∧ T.all ok t
   where ok c = (c ≥ 'a' ∧ c ≤ 'z') ∨ (c ≥ 'A' ∧ c ≤ 'Z')
              ∨ (c ≥ '0' ∧ c ≤ '9') ∨ c `elem` ("_-:." ∷ String)
 

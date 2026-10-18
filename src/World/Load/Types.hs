@@ -30,6 +30,7 @@ import Building.Types (BuildingManager)
 import Item.Knowledge (PortableKnowledge)
 import Gameplay.Tags.Index (CategoryIndex)
 import Gameplay.Tags.Tag (ItemTarget)
+import Scenario.Items.Refs (ItemRefs)
 import Unit.Types (UnitManager, UnitId)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
@@ -103,6 +104,11 @@ data StagedSession = StagedSession
       --   against this replacement session's own live item enumeration
       --   and with the reverse index rebuilt, ready to install as
       --   'World.State.Types.wmItemTags'.
+    , ssItemRefs ∷ !ItemRefs
+      -- ^ #2709: the restored item → scenario-reference mapping,
+      --   scrubbed against this replacement session's own live items
+      --   like 'ssItemTags', ready to install as
+      --   'World.State.Types.wmItemScenarioRefs'.
     , ssPortableKnowledge ∷ !PortableKnowledge
       -- ^ #2512: the session-wide portable-container memory, already
       --   SCRUBBED against this replacement session's own complete live

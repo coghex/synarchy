@@ -662,6 +662,7 @@ poisonedSaveWith units = snapshotToSaveData
                 , pgsTransferOrders = savedOrders
                 , pgsUnits          = units })
         , snapItemTags = mempty
+        , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

@@ -634,6 +634,7 @@ saveWith params = snapshotToSaveData
         , snapPages          = HM.singleton stagedPageId
             (blankPageSnapshot stagedPageId params { wgpSeed = 0 })
         , snapItemTags = mempty
+        , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

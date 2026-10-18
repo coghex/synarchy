@@ -117,6 +117,7 @@ import Gameplay.Tags.Index
     ( unionDisjointCategories, categoryTargets, restrictCategoryIndex
     , categoryFromAssignments )
 import Gameplay.Tags.Tag (itemTargetId)
+import Scenario.Items.Refs (itemRefsToAscList, restrictItemRefs)
 import qualified Data.Map.Strict as Map
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
 import qualified Data.Set as Set
@@ -421,6 +422,20 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                   staleItemTags = filter (not . liveTag) (Map.keys savedItemTags)
                   stagedItemTags = categoryFromAssignments
                       [ (t, ts) | (t, ts) ← Map.toList savedItemTags, liveTag t ]
+                  -- #2709: the scenario references on the same two
+                  -- tests, for the same reasons: a refund minted during
+                  -- staging must not inherit a dead item's reference.
+                  savedItemRefs = sdItemRefs saveData
+                  liveRef i = HS.member i savedItemIds ∧ HS.member i stagedLiveItemIds
+                  staleItemRefs = [ i | (i, _) ← itemRefsToAscList savedItemRefs, not (liveRef i) ]
+                  stagedItemRefs = restrictItemRefs liveRef savedItemRefs
+              unless (null staleItemRefs) $
+                  logInfo logger CatWorld $
+                      "Save load: dropped scenario references on "
+                      <> tshow (length staleItemRefs)
+                      <> " item id(s) that name no existing item ("
+                      <> T.intercalate ", " (map tshow staleItemRefs)
+                      <> ")"
               unless (null staleItemTags) $
                   logInfo logger CatWorld $
                       "Save load: dropped gameplay tags on "
@@ -462,6 +477,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssReconcile     = loadReconcileContextFrom
                                             (knownEntitiesFromSaveData saveData)
                       , ssItemTags = stagedItemTags
+                      , ssItemRefs = stagedItemRefs
                       , ssPortableKnowledge = stagedPortableKnowledge
                       , ssMaterialRegistry = registry
                       }

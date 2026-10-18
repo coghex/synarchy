@@ -57,6 +57,7 @@ import Gameplay.Tags.Live
 import Gameplay.Tags.Query
 import Gameplay.Tags.Registry (registryInvariantViolations)
 import Gameplay.Tags.Types
+import Scenario.Items.Refs (insertItemRefs, itemRefsFromList, itemRefsToAscList, lookupItemRef)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Item.Knowledge (emptyPortableKnowledge)
 import Item.Ownership
@@ -294,6 +295,16 @@ tagScene env = do
     forM_ [rationA, rationB, rationRoot] $ \i →
         editItem env i (AddTagsEdit (tags ["food"])) ⌦ (`shouldBe` TagEditApplied)
     editItem env barA (AddTagsEdit (tags ["metal"])) ⌦ (`shouldBe` TagEditApplied)
+    -- #2709: every scene item also carries a scenario reference, so each
+    -- move, consumption and destruction below proves the reference
+    -- follows (or dies with) its item exactly as the tags do.
+    commitItemTreeAssignments (unitManagerRef env) (buildingManagerRef env)
+        (worldManagerRef env) [] [ (it' i, sceneRef i) | i ← sceneIds ]
+        ⌦ (`shouldBe` Right ())
+
+-- | The scenario reference 'tagScene' gives an item.
+sceneRef ∷ Word64 → Text
+sceneRef i = "ref-" <> tshow i
 
 -- * The one internal API, over the live refs
 
@@ -333,6 +344,11 @@ coherent env expected = do
     registryInvariantViolations (liveTagRegistry v) `shouldBe` []
     let ix = wmItemTags (ltvManager v)
     categoryTargets ix `shouldSatisfy` (`Set.isSubsetOf` liveItemTargets v)
+    -- #2709: a scenario reference never outlives its item
+    let refs = wmItemScenarioRefs (ltvManager v)
+    forM_ (itemRefsToAscList refs) $ \(i, r) → do
+        Set.member (it' i) (liveItemTargets v) `shouldBe` True
+        r `shouldBe` sceneRef i
     forM_ expected $ \(i, ts) → do
         itemTagsIn v (it' i) `shouldBe` Just (tags ts)
         forM_ ts $ \t → indexMembers (tg t) ix `shouldSatisfy` Set.member (it' i)
@@ -347,8 +363,12 @@ sceneTags i
 
 -- | Every scene item except these still carries its scene tags.
 survivorsKeep ∷ EngineEnv → [Word64] → IO ()
-survivorsKeep env gone =
+survivorsKeep env gone = do
     coherent env [ (i, sceneTags i) | i ← sceneIds, i ∉ gone ]
+    -- #2709: and every survivor still has ITS reference
+    v ← view env
+    forM_ [ i | i ← sceneIds, i ∉ gone ] $ \i →
+        lookupItemRef i (wmItemScenarioRefs (ltvManager v)) `shouldBe` Just (sceneRef i)
 
 -- | Gone from the live universe AND from both indexes.
 goneEverywhere ∷ EngineEnv → [Word64] → IO ()
@@ -358,6 +378,7 @@ goneEverywhere env gone = do
     forM_ gone $ \i → do
         itemTagsIn v (it' i) `shouldBe` Nothing
         categoryTagsOf (it' i) ix `shouldBe` Set.empty
+        lookupItemRef i (wmItemScenarioRefs (ltvManager v)) `shouldBe` Nothing
         forM_ (sceneTags i) $ \t →
             indexMembers (tg t) ix `shouldSatisfy` (not . Set.member (it' i))
 
@@ -903,6 +924,10 @@ sessionSpec = describe "whole-session save and load" $ do
         Map.size (snapItemTags snap) `shouldBe` length sceneIds - 2
         back ← throughCodec snap
         snapItemTags back `shouldBe` snapItemTags snap
+        -- #2709: the scenario references ride the same capture and codec
+        snapItemRefs snap `shouldBe` wmItemScenarioRefs wm
+        length (itemRefsToAscList (snapItemRefs snap)) `shouldBe` length sceneIds
+        snapItemRefs back `shouldBe` snapItemRefs snap
 
     it "a load replaces the outgoing item tags and rebuilds both indexes" $
         \(env, _) → do
@@ -914,6 +939,62 @@ sessionSpec = describe "whole-session save and load" $ do
             loadSession env logger snap
             queryItems env (tagged (tg "outgoing")) `shouldReturn` []
             survivorsKeep env []
+
+    it "a load installs the saved scenario references and replaces the \
+       \outgoing ones" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        snap ← capturedSession env ⌦ throughCodec
+        -- an outgoing reference on an item the restored session also holds
+        atomicModifyIORef' (worldManagerRef env) $ \m →
+            (m { wmItemScenarioRefs = itemRefsFromList [(barB, "outgoing")] }, ())
+        (logger, _) ← capturingLogger
+        loadSession env logger snap
+        wm ← readIORef (worldManagerRef env)
+        itemRefsToAscList (wmItemScenarioRefs wm)
+            `shouldBe` [ (i, sceneRef i) | i ← sort sceneIds ]
+        survivorsKeep env []
+
+    it "a dangling scenario reference is a diagnostic and is dropped at \
+       \restore" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        snap0 ← capturedSession env
+        let snap = snap0 { snapItemRefs = insertItemRefs [(4242, "ghost-ref")]
+                                                         (snapItemRefs snap0) }
+        [ ieRefValue e | e ← sessionIntegrityWarnings snap, ieCode e ≡ "dangling-reference"
+                       , "core-session.item-refs" `T.isPrefixOf` iePath e ]
+            `shouldBe` ["4242"]
+        (logger, entries) ← capturingLogger
+        loadSession env logger snap
+        msgs ← map leMessage ⊚ entries
+        msgs `shouldSatisfy` any ("dropped scenario references on 1 item id" `T.isInfixOf`)
+        wm ← readIORef (worldManagerRef env)
+        lookupItemRef 4242 (wmItemScenarioRefs wm) `shouldBe` Nothing
+        survivorsKeep env []
+
+    it "a dangling scenario reference at the saved allocator cursor never \
+       \reaches the item a staging refund mints with that id" $ \(env, _) → do
+        resetScene env
+        tagScene env
+        snap0 ← capturedSession env
+        let cursor = snapNextItemId snap0
+            ghost = (newConstructDesignation 0
+                        (CtStructure (StructurePiece "no_such_pack" "floor" Nothing))
+                        (ConstructAttemptId 7))
+                        { cdPayment = CpPaid (mkMaterialReceipt [("steel_bar", 1)]) }
+            snap = snap0
+                { snapItemRefs = insertItemRefs [(cursor, "ghost-ref")] (snapItemRefs snap0)
+                , snapPages = HM.adjust
+                    (\page → page { pgsConstructDesignations = HM.singleton (5, 5) ghost
+                                  , pgsConstructNextAttempt = ConstructAttemptId 8 })
+                    pageP (snapPages snap0) }
+        (logger, _) ← capturingLogger
+        loadSession env logger snap
+        Just _ ← groundGidOf env cursor
+        wm ← readIORef (worldManagerRef env)
+        lookupItemRef cursor (wmItemScenarioRefs wm) `shouldBe` Nothing
+        survivorsKeep env []
 
     it "a dangling item assignment is a diagnostic and is dropped at \
        \restore" $ \(env, _) → do
@@ -991,6 +1072,7 @@ sessionSpec = describe "whole-session save and load" $ do
         , snapVisiblePages = [], snapLiveCamera = LiveCameraSnapshot Nothing 0 0 1 FaceSouth
         , snapPages = HM.empty
         , snapItemTags = Map.singleton (it' 1) (tags ["stale"])
+        , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge }
 
 -- * Session helpers
@@ -1020,6 +1102,7 @@ capturedSession env = do
             , sgVisiblePages = [pageP]
             , sgLiveCamera = LiveCameraSnapshot (Just pageP) 0 0 1 FaceSouth
             , sgItemTags = categoryForward (wmItemTags wm)
+            , sgItemRefs = wmItemScenarioRefs wm
             , sgPortableKnowledge = emptyPortableKnowledge }
             pages
 

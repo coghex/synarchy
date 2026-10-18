@@ -662,6 +662,7 @@ sessionWith stored = SessionSnapshot
             , pgsTimeRemainder = stored
             }
     , snapItemTags = mempty
+    , snapItemRefs = mempty
     , snapPortableKnowledge = emptyPortableKnowledge
     }
 

@@ -30,12 +30,22 @@
 --     environment at all and every caller keeps allocating from the one
 --     'Engine.Core.State.freshItemInstanceId' counter it already used.
 --
+--   Since #2709 the same boundary also builds an EXPLICIT tree
+--   ('ItemSpec', 'materializeSpec'): the per-node form a scenario adapter
+--   (@Scenario.Items.Build@) needs, with three-state sharpness, empty
+--   weight, bulk and storage, exact (possibly empty or overloaded)
+--   contents, a private roll per named domain, and the dropped default
+--   entries reported as data. It is the same 'materializeNode', so there
+--   is still exactly one place an 'ItemInstance' is assembled, and the
+--   ordinary entry point ('materializeItem') draws, logs and allocates
+--   exactly as before.
+--
 --   The shared logger is a third explicit parameter, for the one thing
 --   this module reports: a CYCLIC definition graph (#1420). Authored
 --   default contents recurse by definition NAME, so a definition listing
 --   itself — or two listing each other — used to recurse forever and
 --   hang the minting thread with no error and no log line. See
---   'materializeEntries' for the rule and why it is scoped the way it
+--   'buildEntries' for the rule and why it is scoped the way it
 --   is.
 module Item.Materialize
     ( ItemOverrides(..)
@@ -44,6 +54,12 @@ module Item.Materialize
     , pristineCondition
     , pristineSharpness
     , materializeItem
+      -- * Explicit construction trees (#2709)
+    , ItemSpec(..)
+    , itemSpec
+    , DefaultContentIssue(..)
+    , DefaultContentNote(..)
+    , materializeSpec
     ) where
 
 import UPrelude
@@ -52,9 +68,10 @@ import qualified Data.Text as T
 import System.Random (StdGen)
 import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Item.Roll (rollItemSpec, rollItemWeight)
+import Data.IORef (newIORef)
 import Item.Types
     ( ItemContainer(..), ItemContentEntry(..), ItemDef(..)
-    , ItemInstance(..), ItemManager, lookupItemDef )
+    , ItemInstance(..), ItemManager, ItemStorage, lookupItemDef )
 
 -- | The caller-supplied values one mint site contributes. Every field is
 --   ROOT-SCOPED (#1418 requirement 5): it applies to the instance the
@@ -123,62 +140,194 @@ materializeItem
     → ItemOverrides
     → Text
     → IO (Maybe ItemInstance)
-materializeItem itemMgr logger rngRef allocId ovr name =
-    materializeNode itemMgr logger rngRef allocId [] ovr Nothing name
+materializeItem itemMgr logger rngRef allocId ovr name = do
+    (inst, notes) ← materializeNode itemMgr allocId rngRef []
+        (nodeOf name ovr) { niKids = KidsDefault }
+    forM_ notes $ \n → case dcnIssue n of
+        DefaultCyclic closed → warnCycle logger closed
+        DefaultUnknownDefinition _ → pure ()
+    return inst
 
--- | The shared root\/child body. @mEntries@ is the child list to
---   materialise: 'Nothing' means "this node did not author one, so use
---   the definition's own 'idDefaultContents'".
+-- * Explicit construction trees (#2709)
+
+-- | One node of an EXPLICIT construction tree: everything a scenario
+--   adapter (or any caller that must reproduce a stated tree) can say
+--   about one physical item. 'materializeItem' keeps its root-scoped
+--   'ItemOverrides' for the production mint sites; this is the
+--   per-node form, so a value stated on a parent can never leak into a
+--   child.
 --
---   @expanding@ is the cycle ancestry (#1420): the definition names
---   whose OWN 'idDefaultContents' are being expanded on the path to
---   here, outermost first. It grows by exactly the name of each node
---   that delegates to its definition, which is the only step that can
---   revisit a definition, and is what 'materializeEntries' tests a
---   delegating child against.
+--   Every field is three-state where the runtime field can be absent:
+--
+--   * 'Nothing' — OMITTED: the definition (or the node's private roll)
+--     supplies it;
+--   * @'Just' v@ — an explicit value, used VERBATIM (no clamp, no draw);
+--   * for the two 'Maybe' runtime fields, @'Just' 'Nothing'@ is
+--     explicit ABSENCE ('iiBulk', 'iiStorage' = 'Nothing', the honest
+--     pre-#1233 state), which is not the same thing as omitted.
+--
+--   Fill is NOT validated here: 'resolveDefaultFill' still clamps, so a
+--   caller that must reject an out-of-range fill instead of repairing it
+--   checks it against the definition before building the spec.
+data ItemSpec = ItemSpec
+    { spDef       ∷ !Text
+    , spOverrides ∷ !ItemOverrides
+      -- ^ fill, quality, condition, temperature (the existing four)
+    , spSharpness ∷ !(Maybe Float)
+    , spWeight    ∷ !(Maybe Float)
+      -- ^ this instance's own EMPTY weight ('iiWeight')
+    , spBulk      ∷ !(Maybe (Maybe Float))
+    , spStorage   ∷ !(Maybe (Maybe ItemStorage))
+    , spContents  ∷ !(Maybe [ItemSpec])
+      -- ^ 'Nothing' = the definition's own default contents; @Just []@
+      --   = exactly empty; @Just xs@ REPLACES the defaults with
+      --   exactly these nodes, in order.
+    , spPath      ∷ !Text
+      -- ^ where this node sits in its caller's document, for
+      --   'DefaultContentNote' paths. Never an identity.
+    , spRolls     ∷ !(Maybe (Text → StdGen))
+      -- ^ A private generator per named roll domain (@"quality"@,
+      --   @"weight"@, and the derived labels of default-expanded
+      --   children). 'Nothing' draws from the shared generator the
+      --   caller passed, as every production site does. Giving each
+      --   domain its OWN generator is what makes one omitted value
+      --   independent of whether a sibling field was stated.
+    }
+
+-- | A node with nothing stated: every value from the definition.
+itemSpec ∷ Text → ItemSpec
+itemSpec name = ItemSpec
+    { spDef = name, spOverrides = pristineItem, spSharpness = Nothing
+    , spWeight = Nothing, spBulk = Nothing, spStorage = Nothing
+    , spContents = Nothing, spPath = "", spRolls = Nothing }
+
+-- | What went wrong while expanding DEFAULT contents. These are the
+--   two cases 'materializeItem' drops with (at most) a log line; an
+--   explicit-tree caller needs them as data (#2709 requirement 6).
+data DefaultContentIssue
+    = DefaultUnknownDefinition !Text
+      -- ^ the entry names a definition that is not registered
+    | DefaultCyclic ![Text]
+      -- ^ the closed cycle the dropped entry would re-enter: the
+      --   ancestry from the repeated definition onwards, then the
+      --   repeated name again
+    deriving (Show, Eq)
+
+data DefaultContentNote = DefaultContentNote
+    { dcnPath  ∷ !Text   -- ^ the 'spPath'-relative path of the dropped entry
+    , dcnIssue ∷ !DefaultContentIssue
+    } deriving (Show, Eq)
+
+-- | Mint one explicit tree. The result is the instance (every node of
+--   which has a fresh id from the allocator) and the default-content
+--   entries that were dropped on the way, in encounter order. A node
+--   whose definition is unknown yields 'Nothing' and consumes no id.
+--
+--   The generator is only the FALLBACK for nodes without 'spRolls'; a
+--   scenario caller gives every node its own and passes a throwaway.
+materializeSpec
+    ∷ ItemManager → IORef StdGen → IO Word64 → ItemSpec
+    → IO (Maybe ItemInstance, [DefaultContentNote])
+materializeSpec itemMgr rngRef allocId = materializeNode itemMgr allocId rngRef [] ∘ specNode
+
+-- | How a node's children are produced.
+data Kids
+    = KidsDefault                   -- ^ the definition's 'idDefaultContents'
+    | KidsEntries ![ItemContentEntry] -- ^ authored entries (counts, fills)
+    | KidsSpecs ![ItemSpec]         -- ^ exact nodes
+
+-- | The internal node: an 'ItemSpec' whose children may also be
+--   definition-authored entries.
+data NodeIn = NodeIn
+    { niDef      ∷ !Text
+    , niOvr      ∷ !ItemOverrides
+    , niSharp    ∷ !(Maybe Float)
+    , niWeight   ∷ !(Maybe Float)
+    , niBulk     ∷ !(Maybe (Maybe Float))
+    , niStorage  ∷ !(Maybe (Maybe ItemStorage))
+    , niKids     ∷ !Kids
+    , niPath     ∷ !Text
+    , niRolls    ∷ !(Maybe (Text → StdGen))
+    }
+
+nodeOf ∷ Text → ItemOverrides → NodeIn
+nodeOf name ovr = NodeIn
+    { niDef = name, niOvr = ovr, niSharp = Nothing, niWeight = Nothing
+    , niBulk = Nothing, niStorage = Nothing, niKids = KidsDefault
+    , niPath = "", niRolls = Nothing }
+
+specNode ∷ ItemSpec → NodeIn
+specNode s = NodeIn
+    { niDef = spDef s, niOvr = spOverrides s, niSharp = spSharpness s
+    , niWeight = spWeight s, niBulk = spBulk s, niStorage = spStorage s
+    , niKids = maybe KidsDefault KidsSpecs (spContents s)
+    , niPath = spPath s, niRolls = spRolls s }
+
+-- | The shared root\/child body. @expanding@ is the cycle ancestry
+--   (#1420): the definition names whose OWN 'idDefaultContents' are
+--   being expanded on the path to here, outermost first. It grows by
+--   exactly the name of each node that delegates to its definition,
+--   which is the only step that can revisit a definition, and is what
+--   'buildEntries' tests a delegating child against.
 materializeNode
-    ∷ ItemManager → LoggerState → IORef StdGen → IO Word64 → [Text]
-    → ItemOverrides → Maybe [ItemContentEntry] → Text
-    → IO (Maybe ItemInstance)
-materializeNode itemMgr logger rngRef allocId expanding ovr mEntries name =
-    case lookupItemDef name itemMgr of
-        Nothing  → return Nothing
+    ∷ ItemManager → IO Word64 → IORef StdGen → [Text] → NodeIn
+    → IO (Maybe ItemInstance, [DefaultContentNote])
+materializeNode itemMgr allocId rngRef expanding node =
+    case lookupItemDef (niDef node) itemMgr of
+        Nothing  → return
+            ( Nothing
+            , [DefaultContentNote (niPath node)
+                   (DefaultUnknownDefinition (niDef node))] )
         Just def → do
+            let ovr = niOvr node
+                drawFrom domain = case niRolls node of
+                    Nothing → return rngRef
+                    Just g  → newIORef (g domain)
             qual ← case ovQuality ovr of
                 Just q  → return q
-                Nothing → rollItemSpec (idQualitySpec def) rngRef
-            wght ← rollItemWeight def rngRef
-            let (entries, expanding') = case mEntries of
-                    Just es → (es, expanding)
-                    Nothing → (idDefaultContents def, expanding ⧺ [name])
-            contents ← materializeEntries itemMgr logger rngRef allocId
-                            expanding' entries
+                Nothing → drawFrom "quality" ≫= rollItemSpec (idQualitySpec def)
+            wght ← case niWeight node of
+                Just w  → return w
+                Nothing → drawFrom "weight" ≫= rollItemWeight def
+            let expanding' = case niKids node of
+                    KidsDefault → expanding ⧺ [niDef node]
+                    _           → expanding
+            (contents, notes) ← case niKids node of
+                KidsSpecs ss → do
+                    rs ← mapM (materializeNode itemMgr allocId rngRef expanding' ∘ specNode) ss
+                    return (catMaybes (map fst rs), concatMap snd rs)
+                KidsDefault →
+                    buildEntries itemMgr allocId rngRef expanding' node
+                        (idDefaultContents def)
+                KidsEntries es →
+                    buildEntries itemMgr allocId rngRef expanding' node es
             iid ← allocId
-            return $ Just ItemInstance
-                { iiDefName     = name
+            return $ (\inst → (Just inst, notes)) ItemInstance
+                { iiDefName     = niDef node
                 , iiCurrentFill = resolveDefaultFill def (ovFill ovr)
                 , iiQuality     = qual
                 , iiCondition   = fromMaybe pristineCondition (ovCondition ovr)
                 , iiWeight      = wght
-                , iiSharpness   = pristineSharpness
+                , iiSharpness   = fromMaybe pristineSharpness (niSharp node)
                 , iiContents    = contents
                 , iiInstanceId  = iid
                 , iiTemp        = ovTemp ovr
                   -- #1233: the physical values are SNAPSHOTTED from the
                   -- definition here, exactly like iiWeight above, so a
                   -- later content edit never re-values this instance.
-                , iiBulk        = Just (idBulk def)
-                , iiStorage     = idStorage def
+                , iiBulk        = fromMaybe (Just (idBulk def)) (niBulk node)
+                , iiStorage     = fromMaybe (idStorage def) (niStorage node)
                 }
 
 -- | Materialise an authored content list. Each entry contributes
 --   @count@ INDEPENDENT subtrees (never one tree referenced twice); a
 --   non-positive count contributes none, and an entry naming an unknown
---   definition is silently dropped — the same skip the hand-written
---   sites did, so a typo in one line of a kit's loadout never costs the
---   kit.
+--   definition is dropped — the same skip the hand-written sites did, so
+--   a typo in one line of a kit's loadout never costs the kit. The drop
+--   is REPORTED as a 'DefaultUnknownDefinition' note ('materializeItem'
+--   keeps it silent, as before; a scenario caller surfaces it).
 --
---   A CYCLIC entry (#1420) is dropped the same way, with a warning: an
+--   A CYCLIC entry (#1420) is dropped the same way, with a note: an
 --   entry that DELEGATES to its child definition (no authored
 --   @contents:@ of its own) and names a definition already being
 --   expanded on this path would re-enter that definition's defaults and
@@ -201,22 +350,32 @@ materializeNode itemMgr logger rngRef allocId expanding ovr mEntries name =
 --     cycle, and blocking it would drop contents an author explicitly
 --     wrote.
 --
---   The warning is emitted ONCE per rejected entry, here at the point of
---   detection: no unwinding frame or caller re-reports it, and a @count@
---   of ten repetitions of one bad entry is still one authoring mistake.
-materializeEntries
-    ∷ ItemManager → LoggerState → IORef StdGen → IO Word64 → [Text]
-    → [ItemContentEntry] → IO [ItemInstance]
-materializeEntries itemMgr logger rngRef allocId expanding entries =
-    catMaybes ∘ concat ⊚ mapM one entries
+--   The note is emitted ONCE per rejected entry, here at the point of
+--   detection: a @count@ of ten repetitions of one bad entry is still
+--   one authoring mistake.
+buildEntries
+    ∷ ItemManager → IO Word64 → IORef StdGen → [Text] → NodeIn
+    → [ItemContentEntry] → IO ([ItemInstance], [DefaultContentNote])
+buildEntries itemMgr allocId rngRef expanding parent entries = do
+    rs ← mapM (uncurry one) (zip [0 ∷ Int ..] entries)
+    return (concatMap fst rs, concatMap snd rs)
   where
-    one e = case cycleThrough e of
-        Just seg → do
-            warnCycle logger seg (iceItem e)
-            return []
-        Nothing → replicateM (max 0 (iceCount e)) $
-            materializeNode itemMgr logger rngRef allocId expanding
-                (filledItem (iceFill e)) (iceContents e) (iceItem e)
+    one ix e =
+        let path = niPath parent <> ".contents[" <> tshow ix <> "]"
+        in case cycleThrough e of
+            Just seg → return
+                ([], [DefaultContentNote path (DefaultCyclic (seg ⧺ [iceItem e]))])
+            Nothing → do
+                rs ← forM [0 .. max 0 (iceCount e) - 1] $ \rep →
+                    materializeNode itemMgr allocId rngRef expanding
+                        (childNode ix rep path e)
+                return (catMaybes (map fst rs), concatMap snd rs)
+    childNode ix rep path e = (nodeOf (iceItem e) (filledItem (iceFill e)))
+        { niKids = maybe KidsDefault KidsEntries (iceContents e)
+        , niPath = path
+        , niRolls = fmap (\g d → g ("contents." <> tshow ix <> "." <> tshow rep
+                                   <> "/" <> d)) (niRolls parent)
+        }
     -- The closed cycle segment this entry would re-enter, if any: the
     -- ancestry from the repeated definition onwards. The acyclic prefix
     -- that merely LED here is dropped — it is not part of the cycle.
@@ -226,16 +385,17 @@ materializeEntries itemMgr logger rngRef allocId expanding entries =
             []  → Nothing
             seg → Just seg
 
--- | Report one cyclic default-contents entry. @seg@ is the ancestry
---   from the repeated definition onwards, so @seg ⧺ [name]@ closes the
---   loop and names every definition taking part in it.
-warnCycle ∷ LoggerState → [Text] → Text → IO ()
-warnCycle logger seg name =
+-- | Report one cyclic default-contents entry. @closed@ is the ancestry
+--   from the repeated definition onwards with the repeated name added
+--   again, so it names every definition taking part in the loop.
+warnCycle ∷ LoggerState → [Text] → IO ()
+warnCycle logger closed =
     logWarn logger CatAsset $
         "Item default contents: cyclic contents graph "
-        <> T.intercalate " → " (map quoted (seg ⧺ [name]))
-        <> " — dropping the repeated " <> quoted name <> " entry"
+        <> T.intercalate " → " (map quoted closed)
+        <> " — dropping the repeated " <> quoted (lastOr closed) <> " entry"
   where quoted t = "'" <> t <> "'"
+        lastOr = foldl' (\_ x → x) ""
 
 -- | The fill a fresh instance holds: an explicit caller\/entry fill
 --   wins, else the container's authored @default_fill@ (a quinoa sack

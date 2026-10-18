@@ -62,6 +62,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.HashSet as HS
 import qualified Data.Set as Set
 import Gameplay.Tags.Tag (GameplayTag, ItemTarget, itemTargetId)
+import Scenario.Items.Refs (ItemRefs, restrictItemRefs)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -106,6 +107,10 @@ data SessionGlobals = SessionGlobals
       -- ^ #2703: the session's physical-item gameplay tag assignments,
       --   forward only, read off the SAME manager snapshot as the pages
       --   ('World.State.Types.wmItemTags').
+    , sgItemRefs ∷ !ItemRefs
+      -- ^ #2709: the scenario reference each physical item was built
+      --   from ('World.State.Types.wmItemScenarioRefs'), read off the
+      --   same manager snapshot as 'sgItemTags'.
     , sgPortableKnowledge ∷ !PortableKnowledge
       -- ^ #2512: what the player remembers about each PORTABLE
       --   container, read once from 'World.State.Types.wmPortableKnowledge'.
@@ -258,6 +263,11 @@ data SessionSnapshot = SessionSnapshot
       --   (the reverse index is rebuilt). Persisted by @core-session@
       --   v2. An assignment naming no live item is a dangling-reference
       --   diagnostic and is dropped by load staging.
+    , snapItemRefs ∷ !ItemRefs
+      -- ^ #2709: the session-wide physical-item → scenario-reference
+      --   mapping ("Scenario.Items.Refs"), keyed by
+      --   'Item.Types.iiInstanceId'. Persisted by @core-session@ v3,
+      --   with the same dangling rule as 'snapItemTags'.
     , snapPortableKnowledge ∷ !PortableKnowledge
       -- ^ #2512: the session-wide portable-container memory, keyed by
       --   'Item.Types.iiInstanceId'. Like 'snapPages' it is a whole-
@@ -314,6 +324,7 @@ buildSessionSnapshot globals pages = SessionSnapshot
     , snapLiveCamera     = sgLiveCamera globals
     , snapPages          = HM.fromList [ (pgsPageId p, p) | p ← pages ]
     , snapItemTags = sgItemTags globals
+    , snapItemRefs = sgItemRefs globals
     , snapPortableKnowledge = sgPortableKnowledge globals
     }
 
@@ -540,6 +551,8 @@ captureSessionSnapshot globals pages =
         captured = HS.fromList (allItemInstanceIds built)
         snap = built { snapItemTags = Map.filterWithKey
                           (\t _ → HS.member (itemTargetId t) captured)
-                          (snapItemTags built) }
+                          (snapItemTags built)
+                    , snapItemRefs = restrictItemRefs
+                          (`HS.member` captured) (snapItemRefs built) }
         errs = duplicatePageIdErrors pages ⧺ validateSessionSnapshot snap
     in if null errs then Right snap else Left errs

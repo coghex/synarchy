@@ -149,6 +149,7 @@ minimalGlobals = SessionGlobals
         , lcsX = 10, lcsY = 20, lcsZoom = 2, lcsFacing = FaceSouth
         }
     , sgItemTags = mempty
+    , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
     }
 

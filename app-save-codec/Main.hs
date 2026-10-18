@@ -116,6 +116,7 @@ import Gameplay.Tags.Page (PageTagsSnapshot(..))
 import Data.Int (Int64)
 import World.Flora.Identity (floraInstanceIdToLua, floraInstanceIdFromLua)
 import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag, itemTargetId, mkItemTarget)
+import Scenario.Items.Refs (itemRefsFromList, itemRefsToAscList, restrictItemRefs)
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
 import World.Generate.Types (WorldGenParams(..))
 import World.Save.Envelope.Types (EnvelopeError(..))
@@ -285,6 +286,12 @@ canonicalSummary meta snap luaComponentCount isMigrated = Aeson.object
         [ Aeson.object [ "id" .= itemTargetId t
                        , "tags" .= map gameplayTagText (Set.toAscList ts) ]
         | (t, ts) ← Map.toAscList (snapItemTags snap) ]
+      -- #2709: the items' scenario references, keyed by item instance
+      -- id. Absent before core-session v3, which the Baselines reader
+      -- reads as "no references".
+    , "itemRefs" .=
+        [ Aeson.object [ "id" .= i, "ref" .= r ]
+        | (i, r) ← itemRefsToAscList (snapItemRefs snap) ]
     , "isMigratedLegacyBaseline" .= isMigrated
     ]
   where
@@ -850,11 +857,15 @@ instance Aeson.FromJSON SeedEntry where
         SeedEntry <$> o .: "page" <*> o .: "id" <*> o .: "tags"
 
 -- | One item's complete tag set (#2703): session-scoped, so no page.
-data ItemSeedEntry = ItemSeedEntry { iseId ∷ !Word64, iseTags ∷ ![Text] }
+--   An entry may also carry the item's scenario reference (#2709): a
+--   @"ref"@ sets it (the empty string clears it), and an entry that
+--   names only a @"ref"@ leaves the item's tags alone.
+data ItemSeedEntry = ItemSeedEntry
+    { iseId ∷ !Word64, iseTags ∷ !(Maybe [Text]), iseRef ∷ !(Maybe Text) }
 
 instance Aeson.FromJSON ItemSeedEntry where
     parseJSON = Aeson.withObject "item seed entry" $ \o →
-        ItemSeedEntry <$> o .: "id" <*> o .: "tags"
+        ItemSeedEntry <$> o .: "id" <*> o .:? "tags" <*> o .:? "ref"
 
 -- | One page-local cell, occurrence or plot seed (#2705). Cells and
 --   plots name a canonical tile (@z@ only for a cell); an occurrence
@@ -915,9 +926,15 @@ applyTagSeed seed snap0 =
     itemEntry snap e = do
         t ← maybe (Left "item instance id 0 names no item") Right
                   (mkItemTarget (iseId e))
-        tags ← maybe (Left ("empty tag for item " ⧺ show (iseId e)))
-                     (Right . Set.fromList) (traverse mkGameplayTag (iseTags e))
-        pure snap { snapItemTags = setOrClear t tags (snapItemTags snap) }
+        withTags ← case iseTags e of
+            Nothing → pure snap
+            Just names → do
+                tags ← maybe (Left ("empty tag for item " ⧺ show (iseId e)))
+                             (Right . Set.fromList) (traverse mkGameplayTag names)
+                pure snap { snapItemTags = setOrClear t tags (snapItemTags snap) }
+        pure $ case iseRef e of
+            Nothing → withTags
+            Just r → withTags { snapItemRefs = setRef (iseId e) r (snapItemRefs withTags) }
     entry f snap e = do
         tags ← maybe (Left ("empty tag for " ⧺ T.unpack (sePage e) ⧺ "/"
                             ⧺ show (seId e)))
@@ -926,6 +943,9 @@ applyTagSeed seed snap0 =
         page ← maybe (Left ("no page '" ⧺ T.unpack (sePage e) ⧺ "' in the save"))
                      Right (HM.lookup pid (snapPages snap))
         pure snap { snapPages = HM.insert pid (f (seId e) tags page) (snapPages snap) }
+    setRef i r refs
+        | T.null r = restrictItemRefs (≢ i) refs
+        | otherwise = itemRefsFromList (itemRefsToAscList (restrictItemRefs (≢ i) refs) ⧺ [(i, r)])
     setOrClear k ts m | Set.null ts = Map.delete k m
                       | otherwise   = Map.insert k ts m
     onUnit i ts page = page { pgsUnits = (pgsUnits page)
