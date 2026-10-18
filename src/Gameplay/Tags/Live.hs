@@ -98,6 +98,8 @@ module Gameplay.Tags.Live
       -- * Committing a new item tree's assignments
     , commitItemTreeTags
     , commitItemTreeTagsWith
+    , commitItemTreeAssignments
+    , commitItemTreeAssignmentsWith
     ) where
 
 import UPrelude
@@ -117,6 +119,7 @@ import Gameplay.Tags.Index
 import Gameplay.Tags.Query (QueryUniverse, QueryResult, TagQuery, TargetSets(..), evaluateQuery)
 import Gameplay.Tags.Registry (TagRegistry, registryFromCategories, assignments)
 import Gameplay.Tags.Types
+import Scenario.Items.Refs (insertItemRefs, itemRefsToAscList, lookupItemRef)
 import Gameplay.Tags.Edit
 import Location.Instance (LocationInstances(..), LocationInstanceId)
 import Unit.Types.Manager (UnitManager(..), UnitId)
@@ -248,7 +251,7 @@ mutateItemTagsWith seam umRef bmRef wmRef scope t edit =
         if not (Set.member t (maybe id (\p → (`Set.intersection` liveItemTargetsOn v p)) scope
                                        (liveItemTargets v)))
             then Left TagEditNoTarget
-            else Right (modifyCategoryTags (applyTagEdit edit) t, TagEditApplied))
+            else Right (onItemTags (modifyCategoryTags (applyTagEdit edit) t), TagEditApplied))
 
 -- | The shared discipline of every item-index WRITE: read the session
 --   epoch and the destruction generation, capture a view, decide, and
@@ -257,7 +260,7 @@ mutateItemTagsWith seam umRef bmRef wmRef scope t edit =
 --   was replaced or the retries ran out; the decision's own refusal
 --   otherwise.
 guardedItemWrite ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager → IORef WorldManager
-                 → (LiveTagView → Either α (CategoryIndex ItemTarget → CategoryIndex ItemTarget, α))
+                 → (LiveTagView → Either α (WorldManager → WorldManager, α))
                  → IO (Maybe α)
 guardedItemWrite seam umRef bmRef wmRef decide = do
     -- The session is pinned ONCE for the whole operation: a retry that
@@ -278,7 +281,7 @@ guardedItemWrite seam umRef bmRef wmRef decide = do
                 outcome ← atomicModifyIORef' wmRef $ \mgr →
                     if wmSessionEpoch mgr ≢ epoch0 then (mgr, WriteReplaced)
                     else if wmItemDestroyGen mgr ≢ wmItemDestroyGen m0 then (mgr, WriteRaced)
-                    else (mgr { wmItemTags = change (wmItemTags mgr) }, WriteDone)
+                    else (change mgr, WriteDone)
                 case outcome of
                     WriteDone     → pure (Just answer)
                     WriteReplaced → pure Nothing
@@ -505,10 +508,57 @@ commitItemTreeTags = commitItemTreeTagsWith noItemWriteSeam
 commitItemTreeTagsWith ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager → IORef WorldManager
                        → [(ItemTarget, Set.Set GameplayTag)] → IO (Either [ItemTarget] ())
 commitItemTreeTagsWith seam umRef bmRef wmRef assigned =
-    fromMaybe (Left (map fst assigned)) ⊚ guardedItemWrite seam umRef bmRef wmRef (\v →
+    commitItemTreeAssignmentsWith seam umRef bmRef wmRef assigned []
+
+-- | 'commitItemTreeTags' for a tree that also carries SCENARIO
+--   REFERENCES (#2709, "Scenario.Items.Refs"): the tags and the
+--   reference of every target are installed in the SAME atomic step
+--   under the SAME liveness check, so an accepted tree is never half
+--   attached and a rejected one leaves neither. A target may appear in
+--   either list or both; an item with a reference but no tags is the
+--   common case. A reference an item or another item already holds is
+--   not overwritten or duplicated ('insertItemRefs').
+commitItemTreeAssignments ∷ IORef UnitManager → IORef BuildingManager → IORef WorldManager
+                          → [(ItemTarget, Set.Set GameplayTag)] → [(ItemTarget, Text)]
+                          → IO (Either [ItemTarget] ())
+commitItemTreeAssignments = commitItemTreeAssignmentsWith noItemWriteSeam
+
+-- | 'commitItemTreeAssignments' with the same test seam as
+--   'mutateItemTagsWith'.
+commitItemTreeAssignmentsWith ∷ ItemWriteSeam → IORef UnitManager → IORef BuildingManager
+                              → IORef WorldManager
+                              → [(ItemTarget, Set.Set GameplayTag)] → [(ItemTarget, Text)]
+                              → IO (Either [ItemTarget] ())
+commitItemTreeAssignmentsWith seam umRef bmRef wmRef assigned refs =
+    fromMaybe (Left (map fst assigned ⧺ map fst refs)) ⊚ guardedItemWrite seam umRef bmRef wmRef (\v →
         let liveSet = liveItemTargets v
-            missing = [ t | (t, _) ← assigned, not (Set.member t liveSet) ]
+            missing = [ t | t ← map fst assigned ⧺ map fst refs, not (Set.member t liveSet) ]
+            held = wmItemScenarioRefs (ltvManager v)
+            heldRefs = map snd (itemRefsToAscList held)
+            -- A reference is one item's and an item has one reference.
+            -- Re-attaching the SAME pair is fine (an idempotent
+            -- retry); anything else refuses the whole commit rather
+            -- than silently keeping one side.
+            clashes =
+                [ t | (t, r) ← refs
+                , let i = itemTargetId t
+                , case lookupItemRef i held of
+                    Just r0 → r0 ≢ r
+                    Nothing → r `elem` heldRefs ]
+                ⧺ [ t | (t, r) ← refs
+                  , length [ () | (t', r') ← refs, r' ≡ r, t' ≢ t ] > 0 ]
+                ⧺ [ t | (t, r) ← refs
+                  , length [ () | (t', r') ← refs, t' ≡ t, r' ≢ r ] > 0 ]
         in if not (null missing) then Left (Left missing)
-           else Right ( \ix → foldl' (\acc (t, ts) → modifyCategoryTags (Set.union ts) t acc)
-                                      ix assigned
+           else if not (null clashes) then Left (Left clashes)
+           else Right ( \mgr → mgr
+                          { wmItemTags = foldl' (\acc (t, ts) → modifyCategoryTags (Set.union ts) t acc)
+                                                (wmItemTags mgr) assigned
+                          , wmItemScenarioRefs = insertItemRefs
+                                [ (itemTargetId t, r) | (t, r) ← refs ]
+                                (wmItemScenarioRefs mgr) }
                       , Right () ))
+
+-- | Lift an item-tag index change to the whole manager.
+onItemTags ∷ (CategoryIndex ItemTarget → CategoryIndex ItemTarget) → WorldManager → WorldManager
+onItemTags f mgr = mgr { wmItemTags = f (wmItemTags mgr) }

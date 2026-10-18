@@ -100,6 +100,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryTargets)
 import Gameplay.Tags.Tag (itemTargetId)
+import Scenario.Items.Refs (itemRefsToAscList)
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
@@ -1367,6 +1368,21 @@ tagDanglingWarnings snap =
       | t ← Map.keys (snapItemTags snap)
       , not (HS.member (itemTargetId t) liveItems)
       , let v = tshow (itemTargetId t) ]
+    -- #2709: a scenario reference naming no item any page holds.
+    ⧺ [ IntegrityError
+          { ieComponent = coreSessionComponentId
+          , ieVersion = ccVersion coreSessionCodec
+          , iePath = "core-session.item-refs[item=" <> v <> "]"
+          , ieRefKind = RefItemInstance, ieRefValue = v
+          , ieExpectedScope = "session (any page, any owner)"
+          , ieActual = "absent from the session"
+          , ieCode = "dangling-reference"
+          , ieMessage = "scenario reference on item '" <> v
+              <> "' names no existing item (dropped: a reference to nothing is not restored)"
+          }
+      | (i, _) ← itemRefsToAscList (snapItemRefs snap)
+      , not (HS.member i liveItems)
+      , let v = tshow i ]
     -- #2705: a plot is page state, so a plot assignment naming no plot
     -- the page saved is a tag on nothing. Cells and occurrences are NOT
     -- checked here: their chunks need not be resident, and the admission

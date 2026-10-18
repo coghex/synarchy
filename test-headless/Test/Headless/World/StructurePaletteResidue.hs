@@ -367,6 +367,7 @@ encodedPalettePaths env = do
                 { lcsOwnerPage = Just visiblePage
                 , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceNorth }
             , sgItemTags = mempty
+            , sgItemRefs = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
             }
         pages = [ blankPageSnapshot visiblePage genParams ]

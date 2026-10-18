@@ -139,6 +139,7 @@ snapshotToSaveData req snap = SaveData
       -- global, so unlike the camera and the two id allocators below it
       -- there is no legacy per-page slot to fabricate a copy into.
     , sdItemTags           = snapItemTags snap
+    , sdItemRefs           = snapItemRefs snap
     , sdPortableKnowledge  = snapPortableKnowledge snap
     }
 

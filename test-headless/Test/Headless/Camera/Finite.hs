@@ -365,6 +365,7 @@ saveWith (x, y, zoom) = snapshotToSaveData
             (blankPageSnapshot stagedPageId arenaParams)
                 { pgsTimeHour = sentinelHour }
         , snapItemTags = mempty
+        , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
         }
 

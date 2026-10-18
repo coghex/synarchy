@@ -500,6 +500,7 @@ capturedSession env = do
             , sgVisiblePages = [incPage]
             , sgLiveCamera = LiveCameraSnapshot (Just incPage) 0 0 1 FaceSouth
             , sgItemTags = mempty
+            , sgItemRefs = mempty
             , sgPortableKnowledge = emptyPortableKnowledge }
             pages
 

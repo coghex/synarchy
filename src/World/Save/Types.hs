@@ -82,6 +82,7 @@ import qualified Data.Set as Set
 import Data.Hashable (Hashable)
 import Gameplay.Tags.Index (CategoryIndex, categoryForward, categoryFromAssignments)
 import Gameplay.Tags.Tag (GameplayTag, ItemTarget)
+import Scenario.Items.Refs (ItemRefs)
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
@@ -591,6 +592,11 @@ data SaveData = SaveData
         --   against the restored session's live items by
         --   "World.Load.Stage" and installed on
         --   'World.State.Types.wmItemTags' by "World.Load.Publish".
+    , sdItemRefs ∷ !ItemRefs
+        -- ^ #2709: the session's item → scenario-reference mapping
+        --   ('World.Save.Snapshot.snapItemRefs'), scrubbed and installed
+        --   on 'World.State.Types.wmItemScenarioRefs' exactly like
+        --   'sdItemTags'.
     , sdPortableKnowledge ∷ !PortableKnowledge
         -- ^ #2512: what the player remembers about each PORTABLE
         --   container, keyed by 'Item.Types.iiInstanceId'. A GLOBAL

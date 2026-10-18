@@ -65,6 +65,7 @@ import Building.Knowledge (ContainerKnowledge, emptyContainerKnowledge)
 import Power.Types (PowerNodes, emptyPowerNodes)
 import Gameplay.Tags.Index (CategoryIndex, emptyCategoryIndex)
 import Gameplay.Tags.Tag (ItemTarget)
+import Scenario.Items.Refs (ItemRefs, emptyItemRefs)
 import Blood.Types (BloodStore, BloodTextureId, emptyBloodStore, defaultBloodTextureCap)
 import Engine.Asset.Handle (TextureHandle)
 import World.Spoil.Types (SpoilPiles, emptySpoilPiles)
@@ -962,6 +963,23 @@ data WorldManager = WorldManager
       --   destruction. PERSISTED by @core-session@ v2 and installed by
       --   "World.Load.Publish" as part of the replacement manager; Exit-
       --   to-Menu empties it with the page set.
+    , wmItemScenarioRefs ∷ !ItemRefs
+      -- ^ The scenario REFERENCE each physical item was constructed
+      --   from (#2709), keyed by 'Item.Types.iiInstanceId' — the
+      --   durable half of the scenario-id ↔ instance-id mapping
+      --   ("Scenario.Items.Refs"), so a capture after a save and load
+      --   still writes the reference the item came in with instead of a
+      --   freshly invented one. Sparse (an item no scenario built has
+      --   none), never a tag, a ground-row id or a definition.
+      --
+      --   Lifetime and writers are exactly 'wmItemTags'': session-
+      --   scoped, so it follows an item across every move; written only
+      --   by "Gameplay.Tags.Live"'s item-tree attachment boundary, which
+      --   checks the items are live; forgotten with the item's tags by
+      --   "Gameplay.Tags.ItemLifecycle.forgetItemTags" in the same
+      --   atomic step. PERSISTED by @core-session@ v3 and installed by
+      --   "World.Load.Publish"; Exit-to-Menu empties it with the page
+      --   set.
     , wmItemDestroyGen ∷ !Word64
       -- ^ How many item-destruction forgets this manager has applied
       --   (#2703): "Gameplay.Tags.ItemLifecycle.forgetItemTags" bumps it
@@ -988,6 +1006,7 @@ emptyWorldManager = WorldManager
     , wmSessionEpoch = 0
     , wmPortableKnowledge = emptyPortableKnowledge
     , wmItemTags = emptyCategoryIndex
+    , wmItemScenarioRefs = emptyItemRefs
     , wmItemDestroyGen = 0
     }
 

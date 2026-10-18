@@ -3399,6 +3399,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z11-tile-flora-tags.expected.json"
         }
       ]
+    },
+    {
+      "id": "z12-item-scenario-refs",
+      "description": "Scenario item references (#2709) as the current build writes them: the session's item \u2192 scenario-reference mapping in core-session v3, keyed by item instance id, with explicit ids (ration-a, comms.radio, second.unit.ration) and an automatic path id (units[1].equipment.main_hand) beside the physical-item gameplay tags of z10 on the same items. Seeded through synarchy-save-codec seed-tags because no public verb installs references yet (SCN-13 composes them). z11 and every older fixture are the empty-default (core-session v2 and older) counterparts.",
+      "declaredAt": "2026-10-18",
+      "declaredByIssue": 2709,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.Session.coreSessionCodec (current core-session v3, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 14,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z12-item-scenario-refs",
+          "path": "test-headless/data/save-compat/z12-item-scenario-refs.bin",
+          "kind": "complete-session",
+          "sha256": "6186f32c4124e39bf72b744792892ee84877c2b40fc438ccc56629c54acfa6a7",
+          "sizeBytes": 912781,
+          "provenance": "Derived from the tracked z11-tile-flora-tags fixture (itself derived from z9-gameplay-tags, generated through the real headless engine and engine.saveWorld; see their provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, set the item scenario references {\"items\":[{\"id\":2,\"ref\":\"ration-a\"},{\"id\":7,\"ref\":\"comms.radio\"},{\"id\":15,\"ref\":\"second.unit.ration\"},{\"id\":21,\"ref\":\"units[1].equipment.main_hand\"}]} on the session, and re-encoded it through the same encoder an ordinary save uses, writing core-session v3; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z12-item-scenario-refs.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

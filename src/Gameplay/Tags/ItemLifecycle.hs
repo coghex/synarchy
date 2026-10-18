@@ -68,6 +68,7 @@ import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Unit.Types.Manager (UnitManager(..), UnitId)
 import Gameplay.Tags.Index (emptyCategoryIndex, restrictCategoryIndex)
 import Gameplay.Tags.Tag (itemTargetId)
+import Scenario.Items.Refs (restrictItemRefs, emptyItemRefs)
 import Item.Types (ItemInstance(..))
 import Unit.Types.Instance (UnitInstance(..))
 import World.State.Types (WorldManager(..), WorldState(..))
@@ -139,7 +140,10 @@ itemTagEpoch wmRef = wmSessionEpoch ⊚ readIORef wmRef
 
 -- | Remove every assignment naming one of these ids, from both
 --   indexes, in one atomic step; a no-op for an empty set, an untagged
---   id or a replaced session.
+--   id or a replaced session. The same step forgets the items'
+--   scenario references (#2709, 'World.State.Types.wmItemScenarioRefs'):
+--   the reference is as mortal as the tags, and sharing the step is
+--   what keeps the two from ever disagreeing about which items exist.
 forgetItemTags ∷ IORef WorldManager → Word64 → HS.HashSet Word64 → IO ()
 forgetItemTags wmRef epoch ids
     | HS.null ids = pure ()
@@ -149,15 +153,20 @@ forgetItemTags wmRef epoch ids
             else ( mgr { wmItemTags = restrictCategoryIndex
                            (\t → not (HS.member (itemTargetId t) ids))
                            (wmItemTags mgr)
+                       , wmItemScenarioRefs = restrictItemRefs
+                           (\i → not (HS.member i ids))
+                           (wmItemScenarioRefs mgr)
                          -- Bumped even when none of the ids was tagged:
                          -- an edit that located one of them before this
                          -- removal must not commit after it.
                        , wmItemDestroyGen = wmItemDestroyGen mgr + 1 }
                  , () )
 
--- | Session teardown: no item survives it, so no assignment does.
+-- | Session teardown: no item survives it, so no assignment or
+--   scenario reference does.
 forgetAllItemTags ∷ WorldManager → WorldManager
-forgetAllItemTags mgr = mgr { wmItemTags = emptyCategoryIndex }
+forgetAllItemTags mgr = mgr { wmItemTags = emptyCategoryIndex
+                            , wmItemScenarioRefs = emptyItemRefs }
 
 -- * One-owner consumption steps
 

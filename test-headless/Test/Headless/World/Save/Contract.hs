@@ -643,6 +643,7 @@ richGlobals = SessionGlobals
         { lcsOwnerPage = Just page1, lcsX = 12.5, lcsY = 7.5, lcsZoom = 3
         , lcsFacing = FaceEast }
     , sgItemTags = mempty
+    , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
     }
 

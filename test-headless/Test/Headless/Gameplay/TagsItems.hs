@@ -991,6 +991,7 @@ sessionSpec = describe "whole-session save and load" $ do
         , snapVisiblePages = [], snapLiveCamera = LiveCameraSnapshot Nothing 0 0 1 FaceSouth
         , snapPages = HM.empty
         , snapItemTags = Map.singleton (it' 1) (tags ["stale"])
+        , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge }
 
 -- * Session helpers
@@ -1020,6 +1021,7 @@ capturedSession env = do
             , sgVisiblePages = [pageP]
             , sgLiveCamera = LiveCameraSnapshot (Just pageP) 0 0 1 FaceSouth
             , sgItemTags = categoryForward (wmItemTags wm)
+            , sgItemRefs = wmItemScenarioRefs wm
             , sgPortableKnowledge = emptyPortableKnowledge }
             pages
 

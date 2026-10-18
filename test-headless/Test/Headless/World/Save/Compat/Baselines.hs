@@ -60,6 +60,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryAssignments)
 import Gameplay.Tags.Tag (gameplayTagText, itemTargetId)
+import Scenario.Items.Refs (itemRefsToAscList)
 import Gameplay.Tags.Page (PageTagsSnapshot(..))
 import World.Flora.Identity (floraInstanceIdToLua)
 import Data.Int (Int64)
@@ -511,6 +512,10 @@ data ExpectedSummary = ExpectedSummary
       -- ^ #2703: the session's item gameplay-tag assignments, ascending
       --   by item id. Absent before core-session v2 and read as NONE,
       --   which is what every such payload restores.
+    , esItemRefs ∷ ![(Word64, Text)]
+      -- ^ #2709: the session's item → scenario-reference mapping,
+      --   ascending by item id. Absent before core-session v3 and read
+      --   as NONE, which is what every such payload restores.
     , esIsMigratedLegacyBaseline ∷ !Bool
     }
 
@@ -522,6 +527,8 @@ instance Aeson.FromJSON ExpectedSummary where
         <*> o .: "pages" <*> o .: "luaComponentCount"
         <*> o .:? "portableKnowledge" .!= []
         <*> (map unTagged ⊚ (o .:? "itemTags" .!= []))
+        <*> (o .:? "itemRefs" .!= [] ≫= mapM (Aeson.withObject "itemRef" $ \e →
+                (,) <$> e .: "id" <*> e .: "ref"))
         <*> o .: "isMigratedLegacyBaseline"
 
 decodeJSONFile ∷ Aeson.FromJSON a ⇒ FilePath → IO (Either String a)
@@ -652,6 +659,12 @@ manifestFixturesSpec =
                         [ (itemTargetId t, map gameplayTagText (Set.toAscList ts))
                           | (t, ts) ← Map.toAscList (snapItemTags snap) ]
                             `shouldBe` esItemTags expected
+
+                        -- #2709: the scenario references, compared the
+                        -- same way: a v3 fixture proves them through
+                        -- decode, every older one proves none.
+                        itemRefsToAscList (snapItemRefs snap)
+                            `shouldBe` esItemRefs expected
 
                         snapGameTime snap `shouldBe` esGameTime expected
                         snapNextItemId snap `shouldBe` esNextItemId expected

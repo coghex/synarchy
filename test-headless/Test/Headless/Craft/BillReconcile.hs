@@ -273,6 +273,7 @@ stagedSessionWith bills = do
         , ssReconcile     = emptyLoadReconcileContext
         , ssMaterialRegistry = emptyMaterialRegistry
         , ssItemTags = emptyCategoryIndex
+        , ssItemRefs = mempty
         , ssPortableKnowledge = emptyPortableKnowledge
         }
 
