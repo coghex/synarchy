@@ -2,6 +2,7 @@
 module World.Render
     ( updateWorldTiles
     , surfaceHeadroom
+    , trackedSliceTarget
     ) where
 
 import UPrelude
@@ -47,6 +48,20 @@ import World.Render.StructureDestruction
 
 surfaceHeadroom ∷ Int
 surfaceHeadroom = 25
+
+-- | The z-slice camera z-tracking aims for over a column, or 'Nothing'
+--   to leave the camera's slice alone. A finite arena's partial chunk is
+--   resident WITH its outside padding (#2708), whose surface is the
+--   beyond-the-world sentinel 'minBound': reading it as terrain would
+--   send the slice to @minBound + headroom@ and blank the whole arena
+--   the moment the pan crossed the edge. Camera MOVEMENT is not clamped;
+--   only the tracking declines to follow an absent column.
+trackedSliceTarget ∷ WorldTileData → ChunkCoord → (Int, Int) → Maybe Int
+trackedSliceTarget tileData chunkCoord (lx, ly) = case lookupChunk chunkCoord tileData of
+    Nothing → Nothing
+    Just lc →
+        let surfElev = lcSurfaceMap lc VU.! columnIndex lx ly
+        in if surfElev ≡ minBound then Nothing else Just (surfElev + surfaceHeadroom)
 
 -- * Top-Level Entry Point
 
@@ -293,12 +308,12 @@ updateWorldTiles env = do
                     -- there is to canonicalise.
                     (chunkCoord, (lx, ly), _) =
                         canonicalTileFrame worldSize' gx gy
-                case lookupChunk chunkCoord tileData of
-                    Just lc → do
-                        let surfElev = (lcSurfaceMap lc) VU.! columnIndex lx ly
-                            targetZ = surfElev + surfaceHeadroom
+                case trackedSliceTarget tileData chunkCoord (lx, ly) of
+                    Just targetZ →
                         atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
                             (cam { camZSlice = targetZ }, ())
+                    -- no resident chunk, or a column the map does not
+                    -- have (#2708): keep the slice the camera has
                     Nothing → return ()
             Nothing → return ()
 

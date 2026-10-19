@@ -199,7 +199,7 @@ processAllCommands env logger = do
 --   (see 'World.State.Types.wmSessionTeardown').
 beginsSession ∷ WorldCommand → Bool
 beginsSession (WorldInit _ _ _ _ _) = True
-beginsSession (WorldInitArena _)    = True
+beginsSession (WorldInitArena _ _)  = True
 beginsSession _                     = False
 
 -- | The capture lock admits only its queued WorldSave / WorldLoadPublish

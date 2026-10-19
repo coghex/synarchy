@@ -244,7 +244,7 @@ resetScene env cat insts = do
     ws ← emptyWorldState
     writeIORef (wsTilesRef ws) WorldTileData
         { wtdChunks = HM.singleton homeChunk (chunkWith insts)
-        , wtdMaxChunks = 200 }
+        , wtdMaxChunks = 200, wtdBounds = Nothing }
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
     writeIORef (floraCatalogRef env) cat
@@ -477,7 +477,7 @@ spec = describe "food harvest target identity" $ do
           writeIORef (wsTilesRef ws) WorldTileData
               { wtdChunks = HM.singleton homeChunk
                     (chunkWith [instanceAt sharedTile oakId 0])
-              , wtdMaxChunks = 200 }
+              , wtdMaxChunks = 200, wtdBounds = Nothing }
           _ ← runOk ls "NEEDS.forageExecute(1, S, PARAMS); return 'ok'"
           -- No wood yield, and the surviving oak carries no timer: the
           -- refusal touched nothing at all.
@@ -502,7 +502,7 @@ spec = describe "food harvest target identity" $ do
           writeIORef (wsTilesRef ws) WorldTileData
               { wtdChunks = HM.singleton homeChunk
                     (chunkWith [instanceAt sharedTile oakId 0])
-              , wtdMaxChunks = 200 }
+              , wtdMaxChunks = 200, wtdBounds = Nothing }
           -- The completing tick, with no scan in front of it.
           _ ← runOk ls "HARVEST.execute(1, S, PARAMS); return 'ok'"
           groundNames ws `shouldReturn` []

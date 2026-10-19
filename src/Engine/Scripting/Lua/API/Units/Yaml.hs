@@ -43,7 +43,7 @@ import Engine.Asset.YamlNames (loadNamePool)
 import System.FilePath (takeDirectory, (</>), (<.>))
 import Unit.Types
 import Unit.Direction (Direction(..), parseDirectionName)
-import World.Types (WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
+import World.Types (WorldState(..), LoadedChunk(..), columnIndex, lookupTileChunk)
 import World.Generate (globalToChunk)
 import Engine.Scripting.Lua.API.Units.List (unknownUnitTexture)
 import Unit.Faction.Catalogue
@@ -423,7 +423,9 @@ surfaceZInWorld ∷ WorldState → Int → Int → IO (Maybe Int)
 surfaceZInWorld ws gx gy = do
     let (chunkCoord, (lx, ly)) = globalToChunk gx gy
     td ← readIORef (wsTilesRef ws)
-    pure $ case lookupChunk chunkCoord td of
+    -- #2708: no surface outside a finite arena (the absent column's
+    -- 'minBound' would otherwise be answered as a height).
+    pure $ case lookupTileChunk gx gy chunkCoord td of
         Just lc → Just ((lcSurfaceMap lc) VU.! columnIndex lx ly)
         Nothing → Nothing
 

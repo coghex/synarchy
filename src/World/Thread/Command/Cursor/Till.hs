@@ -73,7 +73,9 @@ handleWorldDesignateTillCommand env logger pageId gx1 gy1 gx2 gy2 = do
             -- resolves the chunk that stores the tile. Identity inland.
             let tillableAt gx gy = do
                     let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
-                    lc ← lookupChunk coord tileData
+                    -- #2708: never outside a finite arena's rectangle.
+                    lc ← if tileAvailable tileData gx gy
+                            then lookupChunk coord tileData else Nothing
                     let idx = columnIndex lx ly
                         z     = lcSurfaceMap lc VU.! idx
                         fluid = lcFluidMap lc V.! idx

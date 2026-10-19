@@ -94,7 +94,7 @@ combatScene specs act = withScene specs $ \sc@(env, _) → do
     wm ← readIORef (worldManagerRef env)
     forM_ (wmWorlds wm) $ \(_, ws) → do
         writeIORef (wsTilesRef ws)
-            (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1)
+            (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1 Nothing)
         writeIORef (wsTimeRef ws) (preciseWorldTime (WorldTime 12 0))
         writeIORef (wsGenParamsRef ws)
             (Just defaultWorldGenParams { wgpWorldSize = 4 })

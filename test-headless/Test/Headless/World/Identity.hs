@@ -518,7 +518,7 @@ spec = do
         -- along in its save (arena pages save/load fine — #365 — but
         -- would only add noise to the mapping assertions above).
         it "an arena page is unnamed" $ \env → do
-            sendWorldCommand env (WorldInitArena (WorldPageId "id_arena"))
+            sendWorldCommand env (WorldInitArena (WorldPageId "id_arena") Nothing)
             ws ← waitForWorldInit env (WorldPageId "id_arena") 60
             ident ← readIORef (wsIdentityRef ws)
             ident `shouldBe` Nothing

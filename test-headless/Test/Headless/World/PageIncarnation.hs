@@ -295,7 +295,7 @@ flatTiles =
     let chunks = [flatChunkAt (ChunkCoord 0 0), flatChunkAt (ChunkCoord 1 0)]
     in WorldTileData
         { wtdChunks    = HM.fromList [(lcCoord c, c) | c ← chunks]
-        , wtdMaxChunks = length chunks }
+        , wtdMaxChunks = length chunks, wtdBounds = Nothing }
 
 -- * Scene
 
@@ -560,7 +560,7 @@ destroyPage env page = do
 initArenaPage ∷ EngineEnv → WorldPageId → IO ()
 initArenaPage env page = do
     logger ← readIORef (loggerRef env)
-    handleWorldInitArenaCommand env logger page
+    handleWorldInitArenaCommand env logger page Nothing
 
 -- | A real, cheap @w8@ world init — the codebase's own convention for a
 --   headless page that must come from the production generator rather

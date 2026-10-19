@@ -172,6 +172,7 @@ tilesFrom ∷ [LoadedChunk] → WorldTileData
 tilesFrom chunks = WorldTileData
     { wtdChunks    = HM.fromList [ (lcCoord c, c) | c ← chunks ]
     , wtdMaxChunks = max 1 (length chunks)
+    , wtdBounds = Nothing
     }
 
 loadedTiles ∷ WorldTileData

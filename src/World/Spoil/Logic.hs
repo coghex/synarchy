@@ -20,7 +20,7 @@ import World.Generate.Coordinates (globalToChunk)
 import World.Material.Id (MaterialId(..))
 import World.Mine.Types (MineDesignations)
 import World.Spoil.Types (SpoilPiles, spoilCapacity)
-import World.Tile.Types (WorldTileData, lookupChunk)
+import World.Tile.Types (WorldTileData, lookupChunk, tileAvailable)
 
 -- | May spoil land on this tile? Loaded chunk, not designated for
 --   mining (that includes the dig tile itself), dry, and within TWO
@@ -31,6 +31,10 @@ import World.Tile.Types (WorldTileData, lookupChunk)
 spoilTileOk ∷ WorldTileData → MineDesignations → Int → (Int, Int) → Bool
 spoilTileOk td desigs digZ (tx, ty) =
     not (HM.member (tx, ty) desigs) ∧
+    -- #2708: spoil never lands outside a finite arena. Checked first
+    -- because an absent column's 'minBound' surface would overflow the
+    -- distance test below into a spurious "within two z".
+    tileAvailable td tx ty ∧
     case lookupChunk coord td of
         Nothing → False
         Just lc →

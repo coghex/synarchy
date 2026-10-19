@@ -59,6 +59,8 @@ import Item.Types (ItemDef(..), ItemInstance(..)
 import World.Types (WorldManager(..))
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Admit (pageIncarnation)
+import World.Arena.Bounds (arenaAdmitsPosition)
+import World.Arena.Page (pageArenaBounds)
 import Engine.Core.Capability.WorldSim (withPageLifecycle)
 import World.Chunk.Residency (ChunkGeneration)
 
@@ -117,11 +119,25 @@ handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
         Nothing → pure False
         Just ws → (≢ epoch) ⊚ pageIncarnation ws
     seamAfterEpochCheck seams
+    -- #2708: judged against the TARGET page's own rectangle, visible or
+    -- not. A spawn outside a finite arena creates nothing: no unit, no
+    -- sim state, no physiology seed, and no relocation to a tile that
+    -- does fit.
+    outsideArena ← case mPage of
+        Nothing → pure False
+        Just ws → (\mb → not (arenaAdmitsPosition mb gx gy)) <$> pageArenaBounds ws
     case HM.lookup defName (umDefs um) of
         _ | worldGone → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatThread
                 "UnitSpawn: dropping spawn for a destroyed world (teardown)"
+        _ | outsideArena → do
+            logger ← readIORef (loggerRef env)
+            logWarn logger CatThread $
+                "UnitSpawn: refused '" <> defName <> "' at ("
+                <> tshow gx <> "," <> tshow gy
+                <> "): outside the finite arena of page "
+                <> unWorldPageId pageId
         _ | replaced → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatThread $

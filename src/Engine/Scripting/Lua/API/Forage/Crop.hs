@@ -77,7 +77,7 @@ worldPlantCropAtFn wsc = do
                             gx = rawGX + dgx
                             gy = rawGY + dgy
                             idx = ly * chunkSize + lx
-                        case lookupChunk coord tileData of
+                        case lookupTileChunk gx gy coord tileData of
                             Nothing → pure False
                             Just lc → do
                                 let col = lcTiles lc V.! idx

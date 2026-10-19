@@ -121,7 +121,11 @@ itemGeometry tileData im texSizes facing zSlice worldSize gi = do
     itemDef ← HM.lookup (iiDefName (giInst gi)) (imDefs im)
     let idx = columnIndex lx ly
         tz  = lcTerrainSurfaceMap lc VU.! idx
-        col = lcTiles lc V.! idx
+    -- #2708: a column the finite arena does not have carries no terrain
+    -- to rest on (items are refused there at spawn; this is the draw's
+    -- own refusal for a stale one).
+    _ ← if tz ≡ minBound then Nothing else Just ()
+    let col = lcTiles lc V.! idx
         si  = tz - ctStartZ col
         slopeMask = if si ≥ 0 ∧ si < VU.length (ctSlopes col)
                     then ctSlopes col VU.! si

@@ -75,8 +75,19 @@ waterSideFaceQuads ctx coord
     -- straight to HM.lookup used to miss on a LOADED neighbour, and the
     -- silent Nothing read here as "not loaded" — so water side faces
     -- vanished along the seam.
+    --
+    --   #2708: a neighbour column the map does not have (a finite arena's
+    --   edge: surface 'minBound') is not a drop either — there is no
+    --   terrain down to which a face could fall, and 'minBound' fed to
+    --   the exact-surface arithmetic is not a height. Treated like an
+    --   unknown neighbour: no face.
     neighborCell ∷ Int → Int → Maybe (Maybe FluidCell, Int)
-    neighborCell nx ny
+    neighborCell nx ny = case neighborCellRaw nx ny of
+        Just (_, nTerrZ) | nTerrZ ≡ minBound → Nothing
+        r                                    → r
+
+    neighborCellRaw ∷ Int → Int → Maybe (Maybe FluidCell, Int)
+    neighborCellRaw nx ny
         | nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize =
             let nIdx = columnIndex nx ny
             in Just (fluidMap V.! nIdx, terrainSurfMap VU.! nIdx)

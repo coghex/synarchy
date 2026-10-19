@@ -768,7 +768,7 @@ installPage fx worldSize spec = do
         { wtdChunks = HM.fromList
             [ (c, fixtureChunk worldSize c (pgMaterialAt spec))
             | c ← chunksFor worldSize (relevantTiles worldSize spec) ]
-        , wtdMaxChunks = 400 }
+        , wtdMaxChunks = 400, wtdBounds = Nothing }
     writeIORef (materialRegistryRef (fxEnv fx)) fixtureRegistry
     writeIORef (worldManagerRef (fxEnv fx)) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }

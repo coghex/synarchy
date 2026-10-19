@@ -69,7 +69,10 @@ handleWorldDesignateMineCommand env logger pageId gx1 gy1 gx2 gy2 = do
             -- the tile instead of missing at the seam. Identity inland.
             let surfaceZAt gx gy = do
                     let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
-                    lc ← lookupChunk coord tileData
+                    -- #2708: a tile outside a finite arena is never
+                    -- designated (it is a clipped, not a partial, tile).
+                    lc ← if tileAvailable tileData gx gy
+                            then lookupChunk coord tileData else Nothing
                     pure (lcSurfaceMap lc VU.! columnIndex lx ly)
                 -- Gen-time slope at the tile's surface: tiles that are
                 -- already sloped start with the lowered corners pre-dug

@@ -208,7 +208,9 @@ handleWorldSelectTileByCoordCommand wsc _logger pageId gx gy mz = do
         Just worldState → do
             tileData ← readIORef (wsTilesRef worldState)
             let (chunkCoord, (lx, ly)) = globalToChunk gx gy
-            case lookupChunk chunkCoord tileData of
+            case (if tileAvailable tileData gx gy
+                    then lookupChunk chunkCoord tileData else Nothing) of
+                -- #2708: a tile outside a finite arena cannot be selected.
                 Nothing → pure ()
                 Just lc → do
                     -- Use the live-picked z when supplied; otherwise

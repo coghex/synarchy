@@ -50,7 +50,7 @@ worldGetTerrainAtFn wsc = do
                         Just ws → Just <$> readIORef (wsTilesRef ws)
                         Nothing → pure Nothing
                 Nothing → getWorldTileData wsc
-            case mTd ⌦ lookupChunk coord of
+            case mTd ⌦ lookupTileChunk gx gy coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -80,7 +80,7 @@ worldGetSlopeAtFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd ⌦ lookupChunk coord of
+            case mTd ⌦ lookupTileChunk gx gy coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -112,7 +112,7 @@ worldGetVegAtFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd ⌦ lookupChunk coord of
+            case mTd ⌦ lookupTileChunk gx gy coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -147,7 +147,7 @@ worldIsPlantableFn wsc = do
                 (coord, (lx, ly)) = globalToChunk gx gy
                 idx = ly * chunkSize + lx
             mTd ← Lua.liftIO $ getWorldTileData wsc
-            case mTd ⌦ lookupChunk coord of
+            case mTd ⌦ lookupTileChunk gx gy coord of
                 Nothing → do
                     Lua.pushnil
                     return 1
@@ -208,7 +208,7 @@ worldGetMaterialAtFn wsc = do
                     let (coord, (lx, ly), _) =
                             canonicalTileFrame worldSize rawGX rawGY
                         idx = ly * chunkSize + lx
-                    case lookupChunk coord td of
+                    case lookupTileChunk rawGX rawGY coord td of
                         Nothing → Lua.pushnil ≫ return 1
                         Just lc → do
                             let col = lcTiles lc V.! idx
@@ -263,7 +263,7 @@ worldGetIceAtFn wsc = do
                             canonicalTileFrame worldSize
                                 (fromIntegral gx') (fromIntegral gy')
                         idx = ly * chunkSize + lx
-                    case lookupChunk coord td of
+                    case lookupTileChunk (fromIntegral gx') (fromIntegral gy') coord td of
                         Nothing → Lua.pushnil ≫ return 1
                         Just lc → case lcIceMap lc V.! idx of
                             Nothing → Lua.pushnil ≫ return 1

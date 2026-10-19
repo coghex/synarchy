@@ -201,7 +201,7 @@ queuedWorldOrder env = do
     pure (map commandTag pending)
 
 commandTag ∷ WorldCommand → Text
-commandTag (WorldInitArena _)     = "InitArena"
+commandTag (WorldInitArena _ _)   = "InitArena"
 commandTag (WorldInitArenaDone _) = "InitArenaDone"
 commandTag other                  = T.takeWhile (≢ ' ') (tshow other)
 
@@ -344,7 +344,7 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         -- queue markers do not order the reset against it. Without the
         -- fence this tick would give the next session a page while the
         -- outgoing clock is still live.
-        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
+        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage Nothing)
         runWorldTick env
         registeredPages env `shouldReturn` []
         queuedWorld env     `shouldReturn` 1
@@ -366,7 +366,7 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         withHeadlessEngineNoWorld $ \env → do
         _ ← installSession env
         destroyAll env
-        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
+        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage Nothing)
         Q.writeQueue (worldQueue env) (WorldInitArenaDone arenaPage)
         before ← Q.queueStats (worldQueue env)
         runWorldTick env
@@ -410,7 +410,7 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         destroyAll env
         destroyAll env
         teardownsPending env `shouldReturn` 2
-        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
+        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage Nothing)
 
         -- One unit tick completes exactly ONE boundary: the drain stops
         -- at the first marker it takes, leaving the second pair queued.

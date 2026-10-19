@@ -159,7 +159,7 @@ setup env = do
     flushB ← Q.flushQueue (simQueue env)
 
     -- The arena page.
-    sendWorldCommand env (WorldInitArena arenaPageId)
+    sendWorldCommand env (WorldInitArena arenaPageId Nothing)
     aws ← waitForWorldInit env arenaPageId 120
     settle aws
     flushC ← Q.flushQueue (simQueue env)

@@ -21,6 +21,7 @@ import World.Construct.Revalidate
     (ConstructScope(..), revalidateConstructDesignations)
 import Engine.Core.Log (logWarn, LogCategory(..), LoggerState)
 import World.Types
+import World.Arena.Page (pageArenaBounds, tileAdmittedOnPage, whenTileAdmitted, outsideArenaText)
 import World.Generate.Coordinates (globalToChunk)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Edit.Apply (applyEdit)
@@ -70,6 +71,22 @@ handleWorldSetStructureCommand env logger pageId gx gy slotTag texId faceId z to
             logWarn logger CatWorld $
                 "World not found for set structure: " <> unWorldPageId pageId
         Just ws → do
+          inside ← tileAdmittedOnPage ws gx gy
+          if not inside
+            then do
+              -- #2708: outside a finite arena the placement is DECLINED,
+              -- exactly as for a chunk that is not resident: the attempt
+              -- joins the declined set (so its completion cancels instead
+              -- of paying for a piece that does not exist) and no edit is
+              -- written.
+              atomicModifyIORef' (wsStructureStageRef ws) $ \st →
+                  ( recordDeclinedAttempt tok
+                      (dropStagedAttempt (gx, gy, slotTag) tok st)
+                  , () )
+              mb ← pageArenaBounds ws
+              logWarn logger CatWorld $
+                  "Set structure refused: " <> outsideArenaText mb gx gy
+            else do
             let (coord, _) = globalToChunk gx gy
                 edit = WeSetStructure gx gy slotTag texId faceId z
             td ← readIORef (wsTilesRef ws)
@@ -135,7 +152,7 @@ handleWorldClearStructureCommand env logger pageId gx gy slotTag = do
         Nothing →
             logWarn logger CatWorld $
                 "World not found for clear structure: " <> unWorldPageId pageId
-        Just ws → do
+        Just ws → whenTileAdmitted logger "Clear structure" ws gx gy $ do
             let (coord, _) = globalToChunk gx gy
                 edit = WeClearStructure gx gy slotTag
             atomicModifyIORef' (wsEditsRef ws) $ \es →

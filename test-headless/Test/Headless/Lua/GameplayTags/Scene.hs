@@ -339,7 +339,7 @@ newPage withGround = do
     writeIORef (wsTilesRef ws) WorldTileData
         { wtdChunks = HM.fromList [ (chunkA, freshChunkA), (chunkB, freshChunkB)
                                   , (chunkC, freshChunkC) ]
-        , wtdMaxChunks = 200 }
+        , wtdMaxChunks = 200, wtdBounds = Nothing }
     writeIORef (wsCropPlotsRef ws) (plotStoreFromPlots (HM.fromList [(plotTile, wheatPlot)]))
     when withGround $ atomicModifyIORef' (wsGroundItemsRef ws) $ \gis →
         (fst (spawnGroundItem (mkItem "ration" bigItem 0.5) 5.5 5.5 gis), ())

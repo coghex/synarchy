@@ -118,6 +118,7 @@ import World.Flora.Identity (floraInstanceIdToLua, floraInstanceIdFromLua)
 import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag, itemTargetId, mkItemTarget)
 import Scenario.Items.Refs (itemRefsFromList, itemRefsToAscList, restrictItemRefs)
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
+import World.Arena.Bounds (arenaHeight, arenaWidth)
 import World.Generate.Types (WorldGenParams(..))
 import World.Save.Envelope.Types (EnvelopeError(..))
 import World.Save.Component.Types (luaComponentPrefix)
@@ -382,6 +383,14 @@ dumpPage (WorldPageId pid, page) = Aeson.object
     , "dateYear" .= pgsDateYear page, "dateMonth" .= pgsDateMonth page
     , "dateDay" .= pgsDateDay page
     , "mapMode" .= T.pack (show (pgsMapMode page))
+      -- #2708: the page's finite-arena size, or null for an expandable
+      -- arena and a generated world. Absent from every summary
+      -- generated before world-pages v15, which the Baselines reader
+      -- reads as "no bounds": what every migrated older payload
+      -- restores.
+    , "arenaBounds" .= fmap (\ab → Aeson.object
+        [ "width" .= arenaWidth ab, "height" .= arenaHeight ab ])
+        (wgpArenaBounds (pgsGenParams page))
     , "buildings" .= map dumpBuilding
         (sortOn (unBuildingId ∘ fst)
            (HM.toList (bsnInstances (pgsBuildings page))))

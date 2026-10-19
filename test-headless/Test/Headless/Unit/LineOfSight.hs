@@ -74,7 +74,7 @@ wallChunk flatZ wallZ =
 
 wtdWith ∷ LoadedChunk → WorldTileData
 wtdWith lc = WorldTileData
-    { wtdChunks = HM.singleton (ChunkCoord 0 0) lc, wtdMaxChunks = 1 }
+    { wtdChunks = HM.singleton (ChunkCoord 0 0) lc, wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- ---- Minimal unit fixture: only the fields Unit.LineOfSight reads
 --      (uiPage, uiGridX/Y/Z, uiFacing, uiStats) matter for these specs;

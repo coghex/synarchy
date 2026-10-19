@@ -101,6 +101,7 @@ fixtureTiles ∷ WorldTileData
 fixtureTiles = WorldTileData
     { wtdChunks = HM.singleton (ChunkCoord 0 0) fixtureChunk
     , wtdMaxChunks = 4
+    , wtdBounds = Nothing
     }
 
 -- * Independent expectations

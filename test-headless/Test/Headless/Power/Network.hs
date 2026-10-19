@@ -126,7 +126,7 @@ pageWith resident log' =
     ( WorldTileData
         { wtdChunks = HM.fromList
             [ (coord, replayEdits log' (blankChunk coord)) | coord ← resident ]
-        , wtdMaxChunks = 200 }
+        , wtdMaxChunks = 200, wtdBounds = Nothing }
     , log' )
 
 -- | The same wire set seen with @resident@ chunks loaded.

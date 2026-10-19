@@ -63,6 +63,7 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Types (WorldTileData(..), LoadedChunk(..), columnIndex, lookupChunk)
+import World.Tile.Types (tileAvailable)
 import World.Chunk.Types (ColumnTiles(..))
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Material (MaterialRegistry, MaterialId(..), getMaterialProps, mpMoveCost)
@@ -281,7 +282,12 @@ fluidPenalty pc (Just Lake)   = Just (pcLakePenalty pc)
 -- | Read the terrain surface z at a global tile coord.
 --   Returns `Nothing` if the containing chunk isn't loaded.
 lookupTerrainZ ∷ WorldTileData → Int → Int → Maybe Int
-lookupTerrainZ wtd gx gy =
+lookupTerrainZ wtd gx gy
+    -- #2708: outside a finite arena there is no terrain to read; the
+    -- answer is the same 'Nothing' an unloaded chunk gives, so every
+    -- planner and stepper refuses the tile through this one test.
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (chunkCoord, (lx, ly)) = globalToChunk gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
@@ -295,7 +301,12 @@ lookupTerrainZ wtd gx gy =
 --   Returns Nothing if the chunk is unloaded or z is out of the
 --   column's stored range.
 lookupSlopeAt ∷ WorldTileData → Int → Int → Int → Maybe Word8
-lookupSlopeAt wtd gx gy z =
+lookupSlopeAt wtd gx gy z
+    -- #2708: outside a finite arena there is no terrain to read; the
+    -- answer is the same 'Nothing' an unloaded chunk gives, so every
+    -- planner and stepper refuses the tile through this one test.
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (chunkCoord, (lx, ly)) = globalToChunk gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
@@ -312,7 +323,12 @@ lookupSlopeAt wtd gx gy z =
 --   the dump reports as @matId@. Returns Nothing if the chunk is
 --   unloaded or the column is empty.
 lookupSurfaceMaterial ∷ WorldTileData → Int → Int → Maybe Word8
-lookupSurfaceMaterial wtd gx gy =
+lookupSurfaceMaterial wtd gx gy
+    -- #2708: outside a finite arena there is no terrain to read; the
+    -- answer is the same 'Nothing' an unloaded chunk gives, so every
+    -- planner and stepper refuses the tile through this one test.
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (chunkCoord, (lx, ly)) = globalToChunk gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
@@ -472,7 +488,12 @@ isCliffStep wtd (sgx, sgy) (dgx, dgy) srcZ dstZ
 --   can pair with `lookupTerrainZ` (which returns `Nothing` only for
 --   unloaded chunks).
 lookupFluidType ∷ WorldTileData → Int → Int → Maybe FluidType
-lookupFluidType wtd gx gy =
+lookupFluidType wtd gx gy
+    -- #2708: outside a finite arena there is no terrain to read; the
+    -- answer is the same 'Nothing' an unloaded chunk gives, so every
+    -- planner and stepper refuses the tile through this one test.
+    | not (tileAvailable wtd gx gy) = Nothing
+    | otherwise =
     let (chunkCoord, (lx, ly)) = globalToChunk gx gy
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing

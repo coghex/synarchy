@@ -86,7 +86,9 @@ handleWorldDesignatePlantCommand env logger pageId gx gy cropName = do
                         , isPlantableCropCategory (fwCategory wg) → Just fid
                     _ → Nothing
                 tileZ = do
-                    lc ← lookupChunk coord tileData
+                    -- #2708: never outside a finite arena's rectangle.
+                    lc ← if tileAvailable tileData cgx cgy
+                            then lookupChunk coord tileData else Nothing
                     let z   = lcSurfaceMap lc VU.! idx
                         col = lcTiles lc V.! idx
                         i   = z - ctStartZ col

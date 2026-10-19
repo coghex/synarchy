@@ -328,7 +328,7 @@ sendTileInfo env worldState _mParams gx gy z = do
     materials ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
 
     let (coord, (lx, ly)) = globalToChunk gx gy
-        mChunk = lookupChunk coord tileData
+        mChunk = lookupTileChunk gx gy coord tileData   -- #2708
         colIdx = columnIndex lx ly
 
     let (matText, surfText, fluidText) = case mChunk of

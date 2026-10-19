@@ -947,7 +947,7 @@ tileDataWith structures = WorldTileData
         | lc ← [ chunkAt homeChunkCoord structures
                , chunkAt (ChunkCoord 4 3) emptyChunkStructures
                , chunkAt (ChunkCoord 3 4) emptyChunkStructures ] ]
-    , wtdMaxChunks = 200 }
+    , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 chunkAt ∷ ChunkCoord → ChunkStructures → LoadedChunk
 chunkAt coord structures =

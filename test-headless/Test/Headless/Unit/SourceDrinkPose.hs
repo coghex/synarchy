@@ -192,7 +192,7 @@ bankChunk wet =
 tilesWith ∷ Bool → WorldTileData
 tilesWith wet = WorldTileData
     { wtdChunks = HM.singleton (ChunkCoord 0 0) (bankChunk wet)
-    , wtdMaxChunks = 1 }
+    , wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- | Install (or replace) the one visible page. Called again mid-example
 --   to dry the lake up under a drinking unit.

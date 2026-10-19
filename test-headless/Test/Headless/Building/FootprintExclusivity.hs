@@ -205,7 +205,7 @@ flatTiles =
                  , flatChunkAt (ChunkCoord 3 0), flatChunkAt (ChunkCoord 0 4) ]
     in WorldTileData
         { wtdChunks    = HM.fromList [ (lcCoord c, c) | c ← chunks ]
-        , wtdMaxChunks = length chunks }
+        , wtdMaxChunks = length chunks, wtdBounds = Nothing }
 
 -- * Scene
 

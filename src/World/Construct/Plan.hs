@@ -68,7 +68,7 @@ import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructDesignations, StructurePiece(..) )
 import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
-import World.Tile.Types (WorldTileData, lookupChunk)
+import World.Tile.Types (WorldTileData, lookupChunk, tileAvailable)
 
 -- | What the resolver says about one candidate tile. Exactly the four
 --   outcomes DTV-11 renders from (requirement 5).
@@ -211,7 +211,10 @@ structureFinalGridZ piece surfaceZ mFloorZ = case spKind piece of
 --   #1175: canonicalised, so a tile named by an anchor-local alias
 --   resolves the chunk that actually STORES it. Identity inland.
 planSurfaceZAt ∷ Int → WorldTileData → (Int, Int) → Maybe Int
-planSurfaceZAt worldSize tileData (gx, gy) =
+planSurfaceZAt worldSize tileData (gx, gy)
+    -- #2708: outside a finite arena there is no surface to plan against.
+    | not (tileAvailable tileData gx gy) = Nothing
+    | otherwise =
     let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
     in (\lc → lcSurfaceMap lc VU.! columnIndex lx ly) <$> lookupChunk coord tileData
 

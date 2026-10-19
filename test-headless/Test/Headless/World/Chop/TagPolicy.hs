@@ -271,7 +271,7 @@ tilesWith insts =
             , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
             , lcMagma = Nothing, lcStructures = emptyChunkStructures }
     in WorldTileData { wtdChunks = HM.fromList [(fixtureChunk, lc)]
-                     , wtdMaxChunks = 200 }
+                     , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | A fresh page holding exactly these plants, made the active world.
 --   The date is left at the epoch, so the growth clock reads

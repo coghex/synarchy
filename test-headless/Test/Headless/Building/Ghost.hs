@@ -1195,7 +1195,7 @@ scene env = do
 
 fixtureTiles ∷ WorldTileData
 fixtureTiles = WorldTileData
-    { wtdChunks = HM.singleton (ChunkCoord 0 0) chunk, wtdMaxChunks = 1 }
+    { wtdChunks = HM.singleton (ChunkCoord 0 0) chunk, wtdMaxChunks = 1, wtdBounds = Nothing }
   where
     area = chunkSize * chunkSize
     solid = ColumnTiles { ctStartZ = 0

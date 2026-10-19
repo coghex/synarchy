@@ -71,6 +71,7 @@ import Language.Etymology
 import Language.Semantic.Types (Catalogue)
 import Language.Semantic.Catalogue ( conceptCataloguePath
                                    , conceptOrdinalPath, loadCatalogue )
+import World.Arena.Bounds (arenaHeight, arenaWidth)
 import World.Generate.Types (WorldGenParams(..))
 import World.River.Naming (RiverName(..), riverNamesToList, emptyRiverNames)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
@@ -301,6 +302,10 @@ data ExpectedPage = ExpectedPage
       -- ^ #2710: the page's unit → scenario-reference mapping, ascending
       --   by unit id. Absent before units v6 and read as NONE, which is
       --   what every such payload restores.
+    , epArenaBounds ∷ !(Maybe (Int, Int))
+      -- ^ #2708: the page's finite-arena (width, height). Absent before
+      --   world-pages v15 and read as NONE (expandable), which is what
+      --   every migrated older payload restores.
     }
 
 -- | The same aggregates, read off a DECODED page. Kept beside the type
@@ -477,6 +482,8 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .:? "gameplayTags" .!= noExpectedPageTags
         <*> (o .:? "unitScenarioRefs" .!= [] ≫= mapM (Aeson.withObject "unitScenarioRef" $ \e →
                 (,) <$> e .: "id" <*> e .: "ref"))
+        <*> (o .:? "arenaBounds" ≫= traverse (Aeson.withObject "arenaBounds" $ \e →
+                (,) <$> e .: "width" <*> e .: "height"))
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -744,6 +751,16 @@ manifestFixturesSpec =
                                     -- references, compared the same way.
                                     [ (unUnitId u, r) | (u, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
                                         `shouldBe` epUnitScenarioRefs ep
+
+                                    -- #2708: the finite-arena size,
+                                    -- compared exactly, so a finite
+                                    -- fixture proves its rectangle
+                                    -- survives decode and every older
+                                    -- one proves its migration is
+                                    -- expandable.
+                                    (\ab → (arenaWidth ab, arenaHeight ab))
+                                        <$> wgpArenaBounds (pgsGenParams page)
+                                        `shouldBe` epArenaBounds ep
 
                                     -- #2520: pinned exactly when the
                                     -- fixture declares it, so a v4

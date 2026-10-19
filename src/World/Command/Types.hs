@@ -19,6 +19,7 @@ import qualified Data.Vector.Unboxed as VU
 import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import Location.Instance (LocationInstanceId, LocationLifecycle)
+import World.Arena.Bounds (ArenaBounds)
 import Structure.Types (StructureStageToken(..), StructureCommitWindow(..))
 import World.Chunk.Residency (ChunkGeneration)
 import World.Chunk.Types (ChunkCoord(..))
@@ -141,7 +142,11 @@ data WorldCommand
         --   page's optional player-facing identity (#707) — display
         --   name + gloss, already normalized via 'mkWorldIdentity'.
         --   'Nothing' creates an unnamed page (every pre-#707 caller).
-    | WorldInitArena WorldPageId
+    | WorldInitArena WorldPageId (Maybe ArenaBounds)
+        -- ^ pageId and the page's optional FINITE size (#2708): 'Nothing'
+        --   is the expandable arena. The bounds are already validated
+        --   ('World.Arena.Bounds.mkArenaBounds'); nothing downstream
+        --   re-parses dimensions.
     | WorldInitArenaDone WorldPageId
     | WorldShow WorldPageId
     | WorldHide WorldPageId

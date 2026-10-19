@@ -76,7 +76,7 @@ zChunk f =
 
 worldWith ∷ LoadedChunk → WorldTileData
 worldWith lc = WorldTileData
-    { wtdChunks = HM.singleton (ChunkCoord 0 0) lc, wtdMaxChunks = 1 }
+    { wtdChunks = HM.singleton (ChunkCoord 0 0) lc, wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- | A north–south ridge: everything at x ≤ 7 sits on a plateau at
 --   @high@, everything east of it lies at @low@. Crossing x = 7 → x = 8

@@ -125,7 +125,7 @@ fixtureTiles =
             , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
             , lcMagma = Nothing, lcStructures = emptyChunkStructures }
     in WorldTileData { wtdChunks = HM.fromList [(fixtureChunk, lc)]
-                     , wtdMaxChunks = 200 }
+                     , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | A well-formed PLANTED-namespace id that names no resident plant.
 strayId ∷ FloraInstanceId
