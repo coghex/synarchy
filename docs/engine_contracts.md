@@ -3325,6 +3325,36 @@ array because its cardinality is what makes the clearance predicate
 vacuous. A container confers nothing, so "carries no slots" and "carries
 an empty list" are the same fact.
 
+**Picking a pending shell up (#2522, PLC-16; D-3, D-23, D-27, D-28).**
+A ground row says whether its item is a pending shell — `pending`,
+answered from the slot alone by `groundShellPending`, the same lookup
+the realization uses, and WITHOUT realizing anything — and also names
+the `page` it was read from and the `gridZ` the item rests at
+(`World.Render.GroundItemQuads.groundItemRestZ`, the draw's own rule;
+absent while the column is unloaded: ground items still store no z).
+`item.hitTestAt` returns the hit page as a second value. The ground menu
+offers "Pick up" through the shared assignment rule (§Player transfers)
+with the no-selection fallback, only when the row's page is the hit's,
+and dispatches `unitAi.commandPickup(uid, gid, pageId)`, which refuses —
+silently, as a caller error — a carrier that is not on that page.
+`commandPickup` SKIPS the command-time capacity gate for a pending
+shell only, since its row weight is the empty shell's; a realized crate
+and every other item keep both gates. On arrival the executor calls
+`item.realizeGround(gid, carrierPage)` — the carrier's page, never the
+active one — records `item.observeContainerWeight(instanceId)` (weight
+only; contents stay unrevealed and an existing contents stamp is not
+refreshed), re-reads the REALIZED row through
+`item.getGroundForUnit`, and runs the ordinary arrival gate against the
+realized weight: the exact tree lifts, or the realized crate stays on
+the ground with the usual over-capacity warning. A realization refusal
+(D-23) moves nothing, observes nothing, leaves the shell pending, warns
+naming the carrier and the crate, and retires the order. The persisted
+`pickupOrder` shape, `unit_ai_save.lua`'s schema, the stall budget and
+the page-ownership rules are unchanged. Gate: hspec
+`--match "pickup order page ownership"` (its #2522 block), plus
+`tools/expedition_retrieval_probe.py`, which drives `commandPickup` end
+to end.
+
 **The wire.** `world-pages` v12 appends `lidContainers` to
 `LocationInstanceDTO`; v11 is frozen as `PageCoreDTOv11` /
 `WorldGenParamsDTOv8` / `LocationInstancesDTOv6` / `LocationInstanceDTOv6`
@@ -3793,6 +3823,30 @@ and both reach `checkTransfer`/`commitTransfer`. The player-facing
 IMMEDIATE paths retired with #1249 must not come back — the Store /
 Retrieve gestures replaced them and NEITHER requires adjacency; only
 the PLAYER paths retired, the verbs stay registered for the AI (D-7).
+
+**WHICH unit acts is ONE rule (D-8, #2522).**
+`transfer_session.resolveSource` assigns the unit for Transfer (both
+menus), Retrieve and Pick up: candidates are player-commandable and able
+to run the gesture's own AI action, filtered BEFORE ranking; ranking is
+squared distance to the target in THREE dimensions — floored,
+wrap-localized x/y (`world.localizeTile`, in the TARGET page's seam
+frame via its page argument, never the visible page's) plus the
+candidate's `gridZ` against the target's own `gridZ` — and an exact tie
+goes to the lowest uid, never selection order. A dead unit is never a
+candidate (it keeps its faction and actions but executes no order). Distance is to the TARGET, not absolute
+elevation. Every production caller supplies a real target height:
+`unit.transferEndpointInfo` reports `gridZ` (a unit's `uiGridZ`, a
+building's `biGridZ`), and a ground row reports the terrain height the
+item rests at (see §Pending container shells); a target with no `gridZ`
+ranks on x/y alone. The no-selection FALLBACK is opt-in
+(`opts.fallback`) and only Pick up passes it: an EMPTY selection then
+assigns the nearest eligible unit living on the target's own page
+(`unit.getAllIds(pageId)`), while a nonempty selection is the candidate
+set even when none of it is eligible, and a selected unit on another
+page is never eligible. Transfer and Retrieve stay selection-only.
+Gates: hspec `--match "Transfer context menu"` (Transfer and Retrieve,
+flat and non-flat, through their real endpoint projections) and
+`--match "pickup order page ownership"` (Pick up).
 
 **Contents are REMEMBERED, never live (D-2).** A container window
 renders the player's last observation. Exactly four things reveal
@@ -7870,3 +7924,72 @@ The invariants, each held by a test of the `Scenario.World` group:
 `--match "crop plant invalidation"`, `--match "persistence contract"`,
 `--match "arena finite bounds"`; `tools/enum_append_only_audit.py` and
 `tools/save_compat_audit.py`.
+
+## Scenario placement: structures, buildings and real locations (#2712)
+
+The adapters that materialize and recapture a scenario's placed content
+(`Scenario.Placement.*`; field-level contract in
+[scenario_format.md](scenario_format.md#placement-construction-and-capture-scn-12-2712)).
+The invariants, each held by a test of the `Scenario.Placement` group:
+
+- **Owners, not restatements.** A building is judged by `Building.Placement.canPlaceAt`
+  and committed through `reserveFootprint` / `commitFootprint`; a location is an
+  instance of `Location.Instance` written only through the table's own owner
+  functions (`allocateLocationInstanceAtIn`, `registerLocationSignificantSpawn`,
+  `registerLocationContainerSpawn`, `realizeLocationContainerSlot`,
+  `setLocationScenarioRef`); structure pieces are `WeSetStructure` edits through
+  the ordinary replay; item trees take their references and tags through
+  `commitItemTreeAssignments`. A rule the owner enforces binds the scenario path
+  too, and no adapter writes a manager field the owner does not.
+- **A scenario location is an instance, never an overlay entry.** The stamper is
+  driven by `wgpLocationOverlay`; a scenario location stays out of it, so
+  nothing re-stamps its geometry or re-spawns its contents. The commit sets the
+  anchor chunk's `wgpLocationStamped`, and `liContentsSpawned` is set exactly
+  when every significant slot is bound (the only state a decoded table may hold
+  with the flag set). A chunk is never an identity: two instances may share one
+  and a footprint may span several.
+- **The whole footprint, exactly.** A building, a structure piece and a location
+  are accepted only if their whole footprint is inside the finite map
+  (`World.Arena.Bounds`), partial chunks included; a rejection leaves no
+  instance, id, reservation, power node, edit, tag or reference, and unrelated
+  valid entries survive. A rejected owner rejects what it owns (`OwnerRejected`),
+  and an optional reference to a rejected target drops only the binding
+  (`RejectedReference`).
+- **Private, deterministic defaults.** Construction draws from no gameplay stream:
+  every default (progress, level, spawn counter, encounter) is a pure function of
+  the document, so other RNG or allocator histories give the same page.
+  A scenario building's spawn counter is stored as `0`, never `-1`: the
+  building-spawn sequencer neither seeds nor spawns a unit.
+- **The roster is exactly what joins.** An encounter's rolled count is the number
+  of units installed with `encounter` naming the location; zero is an empty ruin;
+  a unit joining a definition with no encounter is rejected at decode.
+- **Pending versus realized.** A bound container slot names its physical shell. A
+  pending slot keeps its loot profile and nothing is drawn; a realized slot is
+  latched and its profile discarded. Capture reads the table as it is and never
+  opens or rolls a shell. Player progress (discovery, activation, clearance,
+  expedition history, orders, bills, claims) is never imported or captured.
+- **Replacement, then durable absence.** A materialization replaces the page's
+  structure edits and location table (keeping the id allocator); the durable edit
+  log and the table are the authority, so a removed ruin's geometry and an
+  explicitly empty content set stay absent across eviction, readmission and
+  repeated initialization.
+- **Art identity by pair.** A placed piece's art identity is its (sprite,
+  facemap) pair: capture resolves it through `Structure.ArtCatalog.placedArtPairs`,
+  never from the sprite path alone (wall cap variants and variants that inherit
+  the default's sprite share paths).
+- **Identity in ordinary saves.** `buildings` v4 and `world-pages` v16 carry the
+  scenario-id mappings (`bmScenarioRefs`, `lisScenarioRefs`) with frozen previous
+  versions, migrations, integrity checks and inventory rows; a capture of a page
+  restored by the real envelope and load stage equals the original, with no source
+  YAML.
+
+**Gates:** hspec `--match "Scenario.Placement"`, `--match "Scenario.Schema"`
+(format v3), `--match "Location instance identity"`, `--match "location stamp
+completion"`, `--match "location stamp commit gating"`, `--match "Location
+significant contents"`, `--match "Location container shells"`, `--match
+"Power.Network"`, `--match "Page incarnation entity teardown"`, `--match
+"persistence reference integrity"`, `--match "save components"`, `--match "save
+migrations"`; `tools/persistence_inventory_audit.py`,
+`tools/engine_env_capability_audit.py`, `tools/save_compat_audit.py`,
+`tools/enum_append_only_audit.py`, `tools/haskell_module_budget.py`,
+`tools/lua_module_budget.py` and `tools/unicode_operator_audit.py`.

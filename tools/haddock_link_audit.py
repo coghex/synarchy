@@ -91,6 +91,7 @@ import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -509,6 +510,11 @@ class Index:
     #: module instead.
     definitions: dict[str, set[str]]
 
+    @cached_property
+    def record_scopes(self) -> dict[str, dict[str, set[tuple[str, str]]]]:
+        """Record entities in scope, with declaring-module/type identities."""
+        return _record_scopes(self)
+
 
 def build_index(repo_root: Path) -> Index:
     modules: dict[str, ModuleFacts] = {}
@@ -527,48 +533,105 @@ def build_index(repo_root: Path) -> Index:
     return Index(modules, definitions)
 
 
-def _names_type(index: Index, module: str, type_name: str,
-                seen: frozenset[str] = frozenset()) -> bool:
-    """Does `module` make `type_name` available to an importer?"""
-    if module in seen:
-        return False
-    facts = index.modules.get(module)
-    if facts is None or not facts.has_export_list:
-        return True
-    if type_name in facts.exported_names:
-        return True
-    return any(re_export != module
-               and _names_type(index, re_export, type_name, seen | {module})
-               for re_export in facts.reexported_modules)
+# Each type name and selector carries the identity of its declaring record.
+# This index is independent of the tree-wide definition-name candidate pool.
+RecordSurface = dict[str, set[tuple[str, str]]]
 
 
-def open_type_fields(index: Index, module: str, type_name: str,
-                     seen: frozenset[str] = frozenset()) -> set[str]:
-    """The fields `module`'s `T(..)` export actually stands for.
+def _record_scopes(index: Index) -> dict[str, RecordSurface]:
+    """Resolve record scope by a monotone fixed point over import/export edges.
 
-    Resolved by following how `T` reached `module`, never by the
-    tree-wide union of every type with that name: `Alpha`'s
-    `Config(..)` must not be satisfied by an unrelated `Other.Config`'s
-    fields. `module` itself first, then the modules it imports that
-    make `T` available, recursively -- which is exactly the path that
-    put `T` in scope. `Unit.Types` exports `UnitManager(..)` for a
-    record declared in `Unit.Types.Manager`, and every such export in
-    this tree resolves within two hops."""
-    if module in seen:
-        return set()
-    facts = index.modules.get(module)
-    if facts is None:
-        return set()
-    local = facts.record_fields.get(type_name)
-    if local:
-        return set(local)
-    fields: set[str] = set()
-    for spec in facts.imports:
-        if spec.module in index.modules and _names_type(
-                index, spec.module, type_name):
-            fields |= open_type_fields(index, spec.module, type_name,
-                                       seen | {module})
-    return fields
+    Type identity and selector availability travel independently: importing
+    `Alpha (T)` and `qualified Alpha (secret)` can supply `T(..)` together.
+    Both routes retain identity, so an unrelated Other.secret cannot stand
+    in for Alpha.T's field. A fixed point handles cycles without repeatedly
+    traversing the tree for every link; the result is cached on this index.
+    """
+    local: dict[str, RecordSurface] = {}
+    for module, facts in index.modules.items():
+        surface: RecordSurface = {}
+        for typ, fields in facts.record_fields.items():
+            for name in {typ} | fields:
+                surface.setdefault(name, set()).add((module, typ))
+        local[module] = surface
+    exports: dict[str, RecordSurface] = {module: {} for module in local}
+    type_exports: dict[str, RecordSurface] = {}
+
+    def include(target: RecordSurface, source: RecordSurface) -> None:
+        for name, origins in source.items():
+            if origins:
+                target.setdefault(name, set()).update(origins)
+
+    def imported(spec: ImportSpec) -> RecordSurface:
+        source = exports.get(spec.module, {})
+        if spec.names is None:
+            return source
+        result: RecordSurface = {}
+        for name, origins in source.items():
+            listed = set(origins) if name in spec.names else set()
+            if name[:1].islower() or name.startswith("_"):
+                for typ in spec.open_types:
+                    listed |= origins & type_exports.get(
+                        spec.module, {}).get(typ, set())
+            retained = origins - listed if spec.hiding else listed
+            if retained:
+                result[name] = retained
+        return result
+
+    # Resolve types first: hiding T(..) depends on a complete type identity
+    # surface. Letting fields circulate before that surface is known could
+    # leave a forbidden field alive through a cycle of re-exports.
+    for field_phase in (False, True):
+        exports = {module: {} for module in local}
+        while True:
+            scopes: dict[str, RecordSurface] = {}
+            updated: dict[str, RecordSurface] = {}
+            for module, facts in index.modules.items():
+                scope: RecordSurface = {}
+                own = {name: origins for name, origins in local[module].items()
+                       if field_phase or name[:1].isupper()}
+                include(scope, own)
+                imports = [(spec, imported(spec)) for spec in facts.imports]
+                for spec, surface in imports:
+                    include(scope, {name: origins for name, origins in surface.items()
+                                    # A bare T needs unqualified type scope;
+                                    # T(..) may include qualified-only selectors.
+                                    if (not spec.qualified or not name[:1].isupper())
+                                    and (not name[:1].isupper()
+                                         or name not in local[module])})
+                scopes[module] = scope
+                if not facts.has_export_list:
+                    updated[module] = own
+                    continue
+                exported = {name: set(scope[name]) for name in facts.exported_names
+                            if name in scope}
+                for typ in facts.exported_open_types:
+                    identities = scope.get(typ, set())
+                    include(exported, {name: origins & identities
+                                       for name, origins in scope.items()})
+                for reexport in facts.reexported_modules:
+                    if reexport == module:
+                        include(exported, own)
+                    else:
+                        for spec, surface in imports:
+                            if spec.export_name == reexport and not spec.qualified:
+                                include(exported, surface)
+                updated[module] = exported
+            if updated == exports:
+                break
+            exports = updated
+        if not field_phase:
+            type_exports = exports
+    return scopes
+
+
+def open_type_fields(index: Index, module: str, type_name: str) -> set[str]:
+    """In-scope fields of this module's T, including qualified selectors."""
+    scope = index.record_scopes.get(module, {})
+    origins = scope.get(type_name, set())
+    candidates = {field for owner, typ in origins
+                  for field in index.modules[owner].record_fields[typ]}
+    return {field for field in candidates if origins & scope.get(field, set())}
 
 
 def import_supplies(index: Index, spec: ImportSpec, symbol: str) -> bool:

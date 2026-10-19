@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Derive the z17-scenario-placement fixture (#2712) from the real adapters.
+
+Run from the repository root with the worktree built (`cabal build all`):
+
+  python3 issue-2712-make-z17.py.txt
+
+The page is built by the `Scenario.Placement` group's `retained save-compat
+fixture` example: a finite 20x10 arena 'finite_arena' receives a scenario
+(a damaged-variant floor and a wall on one tile, a charged battery and a crate
+holding a steel bar, a ruin_small location with its significant item bound)
+through the REAL adapters (Scenario.Placement.*, Scenario.Items.*) on a live
+headless engine, and is saved through the real envelope encoder
+(encodeSessionSnapshot) with the metadata and Lua components of the donor
+save z16-scenario-world. Then the metadata timestamp is normalized, the
+canonical summary is dumped from the real decoded SessionSnapshot, and the
+baseline is registered.
+"""
+import json, os, subprocess, sys
+from pathlib import Path
+sys.path.insert(0, "tools")
+import save_compat_audit_codec as codec
+
+ROOT = Path.cwd()
+out = ROOT / "test-headless/data/save-compat/z17-scenario-placement.bin"
+env = dict(os.environ, SYNARCHY_WRITE_PLACEMENT_FIXTURE=str(out))
+r = subprocess.run(["cabal-3.16.1.0", "test", "synarchy-test-headless",
+                    "--test-options=--match \"Scenario.Placement/retained save-compat fixture\""],
+                   cwd=ROOT, env=env, capture_output=True, text=True)
+assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+ok, tail = codec.normalize_fixture_timestamp(out)
+assert ok, tail
+summary = Path("test-headless/data/save-compat/z17-scenario-placement.expected.json")
+ok, tail = codec.dump_canonical_summary(out, summary)
+assert ok, tail
+print("wrote", out, out.stat().st_size, "bytes; summary", summary)
+
+manifest = json.load(open(ROOT / "docs/save_compat/manifest.json"))
+z16 = [b for b in manifest["baselines"] if b["id"] == "z16-scenario-world"][0]
+bump = {"buildings": 4, "world-pages": 16}
+components = [dict(c, version=bump.get(c["id"], c["version"])) for c in z16["components"]]
+desc = ("A scenario placement session (#2712) as the current build writes it: a finite 20x10 arena page "
+        "'finite_arena' carrying placed scenario content with its scenario-identity mappings populated — "
+        "buildings v4 holds each building's scenario reference (a charged battery 'battery' and a crate "
+        "'crate' holding a steel bar) and world-pages v16 holds the placed location's reference (a "
+        "ruin_small instance 'ruin' at its authored anchor with its significant item bound, built as a "
+        "real instance rather than an overlay entry), beside the damaged-variant floor and wall edits, the "
+        "bound items' references in core-session, and the battery's charged power node. z16 and every "
+        "older fixture are the no-reference (buildings v3 / world-pages v15 and older) counterparts.")
+prov = ("Built by the Scenario.Placement hspec group's 'retained save-compat fixture' example on a live "
+        "headless engine: a finite 20x10 arena page received the scenario through the real adapters "
+        "(Scenario.Placement.*, Scenario.Items.*, the real building, location-instance, structure and item "
+        "owners) and was snapshotted with the owners' own snapshot functions and encoded through the same "
+        "encodeSessionSnapshot an ordinary save uses; the donor save z16-scenario-world supplied the "
+        "session metadata and the Lua components the page does not own (retained as "
+        "docs/pr-proofs/issue-2712-make-z17.py.txt). Then the metadata timestamp was normalized. Its "
+        "canonical summary was derived directly from the real decoded SessionSnapshot "
+        "(dump_canonical_summary), not hand-transcribed.")
+cmd = ["python3", "tools/save_compat_audit.py", "--add-baseline",
+       "--baseline-id", "z17-scenario-placement", "--fixture-id", "z17-scenario-placement",
+       "--path", "test-headless/data/save-compat/z17-scenario-placement.bin",
+       "--kind", "complete-session", "--summary", str(summary),
+       "--provenance", prov, "--description", desc,
+       "--migration-target", "current",
+       "--migrated-by", "current build: World.Save.Component.EntitySnapshots.buildingsCodec (v4) and World.Save.Component.PageCore.worldPagesCodec (v16) decode the scenario references; no migration (this IS the current format)",
+       "--components", json.dumps(components),
+       "--declared-at", "2026-10-19", "--declared-by-issue", "2712"]
+r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+print(r.returncode, r.stdout[-800:], r.stderr[-800:])
