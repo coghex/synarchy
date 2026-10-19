@@ -5386,6 +5386,78 @@ before attributing a failure to a change.
 
 No new state field, worker, RNG draw, or save change is involved.
 
+## Ambient climb admission (#2866)
+
+A climb that slips converts into a fall
+(`Unit.Thread.Movement.Climb`'s `rollClimbSlips` → `convertSlippedClimb`).
+So an `avoid_falls` (`FallProhibited`) request is protected from CLIMBS as
+well as from damaging drops. It takes a cliff ascent only when both of the
+following hold. Both are owner decisions on #2866:
+
+- **Height cap.** The ascent is at most ONE z-level, measured as the full
+  destination-minus-source terrain delta, mantle included. A taller cliff
+  is refused whatever the unit's ability.
+- **Per-unit slip bound.** The ascent's whole-climb slip probability is at
+  or below the unit's acceptable risk; the bound is inclusive.
+  - The probability is `P = 1 − (1 − slipChancePerZ)^rise`. This is the
+    same formula, from the same per-z chance, that `rollClimbSlips` rolls
+    against.
+  - The acceptable risk is
+    `T = clamp(0.20 − 0.2375 · (a − 0.6), 0.01, 0.20)`, where
+    `a = (intelligence + perception) / 2` and an absent stat reads 1.0.
+  - So limits differ by physical ability (skill, dexterity × strength,
+    mass) and by awareness.
+  - A smart, perceptive unit refuses climbs it would likely fail, and even
+    the most careful one accepts a climb at or below 1 % risk.
+
+**Where it lives.** The rule is `Unit.Pathing.ClimbRisk`. The planners
+consult it through ONE place: `stepCostUnder` takes a `MoveHazard`, the
+request's persisted policy paired with the mover's `ClimbAbility`.
+`PathAdvance` rebuilds that pairing from the mover's stats every tick and
+never stores it. A protected step whose `isCliffStep` ascent is
+inadmissible is impassable, exactly like a damaging drop, so the rule
+reaches every path a protected request can cross a tile boundary by:
+
+- the greedy stepper;
+- every local-A* expansion and replan;
+- the protected arrival snap;
+- a cached waypoint's crossing, re-judged against the mover as it is now;
+- each continued segment within a tick;
+- a diagonal step. Every cliff ascent on both of its graze routes must
+  also be admissible, the same conservative rule the drop check uses.
+
+When a climb is refused, A* seeks an admissible detour. With none, the
+request terminates as before, so the ambient AI resamples.
+
+**What it leaves alone.**
+- Walkable ramps (`isCliffStep` False), level ground and descents.
+- Every `allow_falls` request: player commands, survival, medic, flee,
+  panic and mental-state movement.
+- The physical slip chance, climb XP and fall damage. Admission draws no
+  RNG.
+- A climb that has already started: its slip resolution is unchanged.
+- The serialized `MoveHazardPolicy`: there is no new constructor and no
+  save change. A restored protected target is judged on its next crossing.
+
+**Gates.** The Hspec describe `climb admission for protected movement
+(#2866)`, inside `wander hazard policy`
+(`test-headless/Test/Headless/Unit/Pathing/Hazard.hs`), covers:
+- the threshold's clamp endpoints and interior values;
+- inclusive `P ≤ T`, at an awareness found to put `T` exactly on the risk;
+- different abilities and awareness on identical terrain;
+- a refused two-level climb, ramps and diagonals;
+- the A* ramp detour and no-route termination;
+- tick-level climbs, refusals and termination;
+- cached-route re-judging and the arrival snap;
+- the real `unitMoveStatsOf` stat wiring;
+- `allow_falls` controls throughout.
+
+The `stepCostUnder at the configured fall boundary` case "blocks a
+protected cliff ascent taller than one level, however able the climber"
+replaces #1217's former "never blocks an ascent". Live evidence comes from
+the probes above (`tools/movement_probe.py` and
+`tools/wander_hazard_probe.py`).
+
 ---
 
 ---
