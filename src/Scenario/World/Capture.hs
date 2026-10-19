@@ -64,7 +64,7 @@ import World.Arena.Bounds (ArenaBounds, arenaAdmitsTile)
 import World.Chunk.Types
     ( ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize, columnIndex )
 import World.Edit.Apply (replayEdits)
-import World.Edit.Types (WorldEdits)
+import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Flora.CropPlot (CropPlots, CropPlotOf(..))
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.Identity (FloraInstanceId, isPlantedFloraInstanceId)
@@ -119,7 +119,7 @@ captureWorldContent reserved snap =
             | ((x, y), c) ← M.toAscList namedTiles
             , let spec = tcSpec c
             , let tags = tagsOf (x, y, tsSurfaceZ spec)
-            , not (isBaseShape spec) ∨ not (Set.null tags) ]
+            , not (isBaseShape spec) ∨ tcOverride c ∨ not (Set.null tags) ]
         unnamed = M.size tiles - M.size namedTiles
         hollow = length (hollowTiles snap chunks)
         (terrainEntries, names1) = foldl' nameTerrain ([], reserved)
@@ -196,6 +196,11 @@ firstTile ts = case ts of
 data TileCol = TileCol
     { tcSpec  ∷ !TileSpec
     , tcFluid ∷ !(Maybe FluidCell)
+    , tcOverride ∷ !Bool
+      -- ^ the durable log holds a slope override for this column's top cell.
+      --   It is scenario state whatever its value: an explicit flat on a
+      --   base-shaped tile keeps admission from deriving a ramp there, so a
+      --   capture that dropped the tile would change the geometry.
     }
 
 -- | Every chunk the snapshot names, as it IS: resident chunks as held,
@@ -219,12 +224,14 @@ columnsOf snap chunks =
             [ ((gx, gy), c)
             | (coord, lc) ← M.toAscList chunks
             , let authored = authoredChunk snap coord
+            , let overrides = Set.fromList
+                    [ (x, y, z) | WeSetSlope x y z _ ← HM.lookupDefault [] coord (snapEdits snap) ]
             , ly ← [0 .. chunkSize - 1], lx ← [0 .. chunkSize - 1]
             , let (gx, gy) = chunkToGlobal coord lx ly
             , arenaAdmitsTile (snapBounds snap) gx gy
-            , Just c ← [columnOf lc authored (columnIndex lx ly)] ]
+            , Just c ← [columnOf lc authored overrides (gx, gy) (columnIndex lx ly)] ]
         extra = M.fromList
-            [ ((x, y), TileCol baseTileSpec Nothing)
+            [ ((x, y), TileCol baseTileSpec Nothing False)
             | (x, y, _) ← M.keys (snapTileTags snap)
             , arenaAdmitsTile (snapBounds snap) x y
             , not (M.member (fst (globalToChunk x y)) chunks) ]
@@ -239,7 +246,7 @@ hollowTiles snap chunks =
     , ly ← [0 .. chunkSize - 1], lx ← [0 .. chunkSize - 1]
     , let (gx, gy) = chunkToGlobal coord lx ly
     , arenaAdmitsTile (snapBounds snap) gx gy
-    , isNothing (columnOf lc Nothing (columnIndex lx ly)) ]
+    , isNothing (columnOf lc Nothing Set.empty (gx, gy) (columnIndex lx ly)) ]
 
 -- | The chunk as the DURABLE LOG alone builds it — the arena base with the
 --   edits replayed, no derived pass — or 'Nothing' for a chunk the log never
@@ -256,8 +263,9 @@ authoredChunk snap c
 --   DERIVED bits — the border-strip recompute after an admission, mid-dig
 --   masks — which are not scenario state, and which depend on which
 --   neighbours happen to be resident.
-columnOf ∷ LoadedChunk → Maybe LoadedChunk → Int → Maybe TileCol
-columnOf lc authored idx =
+columnOf ∷ LoadedChunk → Maybe LoadedChunk → Set.Set (Int, Int, Int) → (Int, Int) → Int
+         → Maybe TileCol
+columnOf lc authored overrides (gx, gy) idx =
     let col = lcTiles lc V.! idx
         top = lcTerrainSurfaceMap lc VU.! idx
         i = top - ctStartZ col
@@ -271,7 +279,8 @@ columnOf lc authored idx =
         then Nothing
         else Just TileCol
             { tcSpec = TileSpec top (MaterialId (ctMats col VU.! i)) authoredSlope
-            , tcFluid = lcFluidMap lc V.! idx }
+            , tcFluid = lcFluidMap lc V.! idx
+            , tcOverride = Set.member (gx, gy, top) overrides }
 
 -- * Flora
 

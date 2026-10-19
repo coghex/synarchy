@@ -49,6 +49,7 @@ import Gameplay.Tags.Page
     ( CropPlotStore(..), PageTags(..), PageTagsSnapshot(..), capturePageTags )
 import Gameplay.Tags.Types (plotTargetFromStored, tileTargetFromStored, mkPlantTarget)
 import Scenario.Types
+import Scenario.World.Build (editTile)
 import Scenario.World.Capture
 import Scenario.World.Install
 import Scenario.World.Types
@@ -589,17 +590,48 @@ spec = describe "on a live arena page (through the world thread)" $ do
         mapM slopeAt [(47, 47), (47, 40), (47, 41), (47, 42)]
             `shouldReturn` [Just 0, Just 5, Just 0, Just 0]
 
+    it "keeps an explicit flat override on a base-shaped tile through capture, materialize and readmission" $ \env → do
+        let b = Just (bounds 40 40)
+            home = ChunkCoord 0 0
+            flatTile = terrainPatch "flat" (RegionTiles [(15, 8)]) "loam" baseTopZ (Authored 0) []
+            pitTile = terrainPatch "pit" (RegionTiles [(16, 8)]) "granite" (baseTopZ - 1) (Authored 0) []
+            slopeAt ws t = fmap (\(_, _, sl, _) → sl) ⊚ liveColumn ws t
+            evictAndReadmit pid ws = do
+                params ← fromMaybe (error "params") ⊚ readIORef (wsGenParamsRef ws)
+                atomicModifyIORef' (wsTilesRef ws) $ \td → (td { wtdChunks = HM.delete home (wtdChunks td) }, ())
+                releaseEvictedChunks ws pid params [home]
+                _ ← enqueueChunkRequest pid ws [home]
+                waitForChunksAt ws home 30 `shouldReturn` True
+        (pid, ws) ← freshArena env "world_flat1" 40 40
+        _ ← install env pid ws (request [flatTile, pitTile] [] [])
+        evictAndReadmit pid ws
+        slopeAt ws (15, 8) `shouldReturn` Just 0               -- the authored flat survives readmission
+        cw ← captureWorldContent Set.empty ⊚ liveSnapshot env ws b 0
+        concatMap (\p → case tpRegion p of RegionTiles ts → ts; RegionRect x0 y0 x1 y1 → [ (x, y) | y ← [y0 .. y1], x ← [x0 .. x1] ]) (cwTerrain cw)
+            `shouldSatisfy` elem (15, 8)
+        -- materialize the capture on a fresh page: the override is a durable edit again
+        (pid2, ws2) ← freshArena env "world_flat2" 40 40
+        _ ← install env pid2 ws2 (ScenarioWorldRequest
+                (withPaths "terrain" (cwTerrain cw)) (withPaths "fluids" (cwFluids cw))
+                (withPaths "flora" (cwFlora cw)))
+        evictAndReadmit pid2 ws2
+        slopeAt ws2 (15, 8) `shouldReturn` Just 0
+        captureWorldContent Set.empty ⊚ liveSnapshot env ws2 b 0 ≫= (`shouldBe` cw)
+
     it "property: random edit sequences admitted after neighbour admission and after eviction equal the in-memory replay" $ \env → do
         -- random sequences of set-slope (zero included), set-cell, dig (delete) and refill (add) on and around
         -- the border tiles of resident chunk (2,2), applied the way live edits are (chunk + log, in order)
-        forM_ [1 .. 20 ∷ Int] $ \seed → do
+        forM_ [1 .. 60 ∷ Int] $ \seed → do
             (pid, ws) ← freshArena env ("world_prop" <> T.pack (show seed)) 120 120
             let home = ChunkCoord 2 2
                 b = Just (bounds 120 120)
                 ops = randomEdits seed
             forM_ ops $ \e → do
-                atomicModifyIORef' (wsEditsRef ws) $ \ls → (appendEdit home e ls, ())
-                atomicModifyIORef' (wsTilesRef ws) $ \td → case lookupChunk home td of
+                -- each edit goes to the chunk that owns its tile: the resident home chunk, or the
+                -- not-yet-admitted neighbour's log (replayed when it is admitted)
+                let owner = fst (uncurry globalToChunk (editTile e))
+                atomicModifyIORef' (wsEditsRef ws) $ \ls → (appendEdit owner e ls, ())
+                atomicModifyIORef' (wsTilesRef ws) $ \td → case lookupChunk owner td of
                     Just lc → (insertChunk (applyEdit e lc) td, ())
                     Nothing → (td, ())
             let agrees label = do
@@ -622,12 +654,45 @@ spec = describe "on a live arena page (through the world thread)" $ do
             _ ← enqueueChunkRequest pid ws [home]
             waitForChunksAt ws home 30 `shouldReturn` True
             agrees "after eviction and readmission"
+            -- the full round trip: capture the live page, materialize into a FRESH page, admit the
+            -- neighbours, evict and readmit, and compare with the original and with a second capture
+            edits ← readIORef (wsEditsRef ws)
+            let ownedTops =
+                    [ (x, y, z) | WeSetSlope x y z _ ← ops ]
+            cw ← captureWorldContent Set.empty ⊚ liveSnapshot env ws b 0
+            cwDiagnostics cw `shouldBe` []
+            (pidB, wsB) ← freshArena env ("world_propb" <> T.pack (show seed)) 120 120
+            _ ← install env pidB wsB (ScenarioWorldRequest
+                    (withPaths "terrain" (cwTerrain cw)) (withPaths "fluids" (cwFluids cw))
+                    (withPaths "flora" (cwFlora cw)))
+            forM_ [ChunkCoord 3 2, ChunkCoord 2 3, ChunkCoord 3 3] $ \c → do
+                _ ← enqueueChunkRequest pidB wsB [c]
+                waitForChunksAt wsB c 30 `shouldReturn` True
+            paramsB ← fromMaybe (error "params") ⊚ readIORef (wsGenParamsRef wsB)
+            atomicModifyIORef' (wsTilesRef wsB) $ \td → (td { wtdChunks = HM.delete home (wtdChunks td) }, ())
+            releaseEvictedChunks wsB pidB paramsB [home]
+            _ ← enqueueChunkRequest pidB wsB [home]
+            waitForChunksAt wsB home 30 `shouldReturn` True
+            forM_ [home, ChunkCoord 3 2] $ \cc → do
+                orig ← awaitChunk ws cc
+                copy ← awaitChunk wsB cc
+                let tilesOf = [ chunkToGlobal cc lx ly | ly ← [0 .. 15], lx ← [0 .. 15] ]
+                    surface lc = [ (t, (\(tz, m, _, _) → (tz, m)) (columnAt lc t)) | t ← tilesOf ]
+                    -- the slope of every tile whose top cell the log owns an override for
+                    owned lc = [ (t, (\(_, _, sl, _) → sl) (columnAt lc t))
+                               | t@(x, y) ← tilesOf
+                               , let (tz, _, _, _) = columnAt orig t
+                               , (x, y, tz) `elem` ownedTops ]
+                (cc, surface copy) `shouldBe` (cc, surface orig)
+                (cc, owned copy) `shouldBe` (cc, owned orig)
+            captureWorldContent Set.empty ⊚ liveSnapshot env wsB b 0 ≫= (`shouldBe` cw)
+            edits `shouldSatisfy` (not ∘ HM.null)
       where
         gen0 seed = mkStdGen (seed * 7919)
         randomEdits seed =
-            let (n, g1) = randomR (2, 9 ∷ Int) (gen0 seed)
+            let (n, g1) = randomR (3, 12 ∷ Int) (gen0 seed)
             in take n (unfoldr (Just ∘ nextOp) g1)
-        tiles = [(47, 34), (47, 47), (40, 47), (32, 40), (33, 33), (36, 36), (47, 40)]
+        tiles = [(47, 34), (47, 47), (40, 47), (32, 40), (33, 33), (36, 36), (47, 40), (46, 34), (46, 40), (47, 41), (46, 47), (40, 46), (48, 34), (48, 40), (48, 41), (48, 47)]
         nextOp g =
             let (ti, g1) = randomR (0, length tiles - 1) g
                 (x, y) = tiles !! ti
