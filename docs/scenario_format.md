@@ -101,7 +101,8 @@ expect. An unexpected one fails setup (D-15).
   rejected or wrong-kind item, to an item of a definition other than the one that
   slot requires (`DefinitionMismatch`), or to an item that another binding also claims
   (`AmbiguousBinding`, which drops every claimant), drops only that binding. The slot
-  stays unbound, which is the ordinary not-yet-spawned state.
+  stays unbound in the decoded value; what construction does with an unbound slot is
+  in [Locations](#locations).
 - **Unrelated entries** always survive.
 
 ## Coordinates and bounds (D-9, D-19, D-21)
@@ -1189,17 +1190,30 @@ load is SCN-13's; the `Scenario.Placement` tests drive this order end to end.
   ordinary roll of zero is. A unit that joins a definition with no encounter entry is
   rejected at decode (`NoEncounter`, owner decision 4).
 - **Completion state is rebuilt.** A fresh instance is `LifecycleUnknown` with its
-  clearance notice seated. Its content-spawn flag (`liContentsSpawned`) is set exactly
-  when every significant slot is bound, the only state a saved table may hold with the
-  flag set, and the anchor chunk's geometry marker (`wgpLocationStamped`) is set by the
-  commit; neither the stamper nor `spawnContents` can then add a second copy. A paused
+  clearance notice seated. A scenario states the world's physical content, so the
+  guaranteed items it does not bind are not owed: an unbound significant slot is dropped
+  (a scenario location never enters the overlay, so nothing would ever fill it and the
+  location could never clear), and the content-spawn flag (`liContentsSpawned`) is then
+  set because every remaining slot is bound, the only state a saved table may hold with
+  the flag set. The anchor chunk's geometry marker (`wgpLocationStamped`) is set by the
+  commit; neither the stamper nor `spawnContents` can add a second copy. A paused
   initialization advances nothing and realizes no pending loot.
 - **Bindings.** `significant_items` and `containers` are optional references resolved
   against what installed; a missing, rejected or wrong-definition target drops only
-  that binding (`RejectedReference` / `DefinitionMismatch`) and the slot stays unbound.
-  Every write goes through the instance owner's own functions, so every rule a decoded
-  table must satisfy binds this path too.
-- **Capture.** The table is read as it is: tags, slot bindings, and each container slot
+  that binding (`RejectedReference` / `DefinitionMismatch`); the physical item stays
+  where it is. Ownership is judged as the save's integrity rules judge it: a significant
+  item that lies on the ground as its own root is bound untaken, one held anywhere else
+  (a pack, a building's storage, inside another item) is bound as taken, and a PENDING
+  container shell that is not such a ground item is refused (`InvalidValue`) because
+  play can never reach it; a realized shell may be anywhere. Every write goes through
+  the instance owner's own functions, so every rule a decoded table must satisfy binds
+  this path too.
+- **Capture.** Every referenced unit, building and location is named together,
+  document-wide (`nameDocumentRefs`: an automatic reference such as `buildings[0]` is
+  written in its bracketless form `buildings.0`, a clash takes the first free `-2`, `-3`,
+  … and another entry's id outranks an item's reference), and every item reference is
+  reserved up front, so identities are stable across captures and never illegal ids. The
+  table is read as it is: tags, slot bindings, and each container slot
   as pending (with its profile) or realized. Occupants write `encounter` on their unit
   entry. Capture order is items, buildings, locations, units, structures.
 
