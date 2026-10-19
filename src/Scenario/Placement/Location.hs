@@ -289,20 +289,31 @@ resolveLocationInstalls registry joins items accepted =
 --   of the footprint (the entry's fixed offset from the anchor when it has
 --   one, else a stable hash of the location's reference, the content and
 --   the slot or roll) under an automatic reference (@ground_items[n]@,
---   continuing after the @existing@ ground items), so it is as unique as a
+--   the first one no surviving ground item holds), so it is as unique as a
 --   path and is captured thereafter as an ordinary explicit ground item;
 --   capture states every key, so a recapture never expands again. Returns
 --   the locations with their keys filled in and the ground items to add;
 --   rejected locations are not passed here, so they expand nothing.
 expandLocationDefaults
-    ∷ LocationRegistry → LootTableRegistry → Int → [(Text, LocationEntry)]
+    ∷ LocationRegistry → LootTableRegistry → [GroundItemEntry] → [(Text, LocationEntry)]
     → ([(Text, LocationEntry)], [GroundItemEntry])
 expandLocationDefaults registry loot existing entries =
-    let (_, outRev, groundRev) = foldl' step (existing, [], []) entries
+    let (_, outRev, groundRev) = foldl' step (taken0, [], []) entries
     in (reverse outRev, reverse groundRev)
   where
-    step (n, outAcc, gAcc) (path, e) = case lookupLocation (leDefinition e) registry of
-        Nothing → (n, (path, e) : outAcc, gAcc)
+    -- every reference the surviving ground items already hold (an
+    -- automatic one keeps the position it was DECODED at, which an earlier
+    -- rejected sibling leaves a gap in), nested trees included
+    taken0 = Set.fromList (concatMap (nodeIds ∘ giItem) existing)
+    nodeIds i = scenarioIdText (ieId i) : concatMap nodeIds (authoredOr [] (ieContents i))
+    -- the first @ground_items[k]@ nothing holds, counting from the number of
+    -- items that exist
+    fresh taken = head' [ r | k ← [length existing ..]
+                            , let r = indexPath "ground_items" k, not (Set.member r taken) ]
+    head' (x : _) = x
+    head' [] = ""
+    step (taken, outAcc, gAcc) (path, e) = case lookupLocation (leDefinition e) registry of
+        Nothing → (taken, (path, e) : outAcc, gAcc)
         Just def →
             let sigWanted = case leSignificant e of
                     Omitted → [ ("significant", slot, lconId c, c)
@@ -316,9 +327,12 @@ expandLocationDefaults registry loot existing entries =
                     Authored False → []
                     _ → incidentalWanted e def
                 wanted = sigWanted ⧺ conWanted ⧺ incWanted
-                made = [ (fam, slot, iid, defaultGround e def fam slot d c iid)
-                       | (k, (fam, slot, d, c)) ← zip [n ..] wanted
-                       , let iid = AutoId (indexPath "ground_items" k) ]
+                (taken', madeRev) = foldl' (\(tk, acc) (fam, slot, d, c) →
+                        let r = fresh tk
+                            iid = AutoId r
+                        in (Set.insert r tk, (fam, slot, iid, defaultGround e def fam slot d c iid) : acc))
+                    (taken, []) wanted
+                made = reverse madeRev
                 sigB = HM.fromList [ (slot, i) | ("significant", slot, i, _) ← made ]
                 conB = HM.fromList [ (slot, ContainerBinding i Omitted Omitted) | ("container", slot, i, _) ← made ]
                 e' = e { leSignificant = case leSignificant e of
@@ -328,7 +342,7 @@ expandLocationDefaults registry loot existing entries =
                                 Omitted → Authored conB
                                 a → a
                        , leIncidental = Authored False }
-            in (n + length made, (path, e') : outAcc, reverse [ g | (_, _, _, g) ← made ] ⧺ gAcc)
+            in (taken', (path, e') : outAcc, reverse [ g | (_, _, _, g) ← made ] ⧺ gAcc)
     -- the definition's incidental entries, in content order: a fixed item
     -- entry places its @count@ items, a loot-table entry makes its @rolls@
     -- draws (an unknown table or an empty one yields nothing, as it does

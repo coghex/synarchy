@@ -626,6 +626,23 @@ defaultsSpec = describe "definition-provided content: omitted versus stated" $ d
         _ ← materialize fx pid2 ws2 arena40 s1
         groundDefs ws2 `shouldReturn` []
 
+    it "gives generated references that no surviving item holds, even after a rejected earlier sibling" $ \fx → do
+        (pid, ws) ← scene fx
+        -- ground_items[0] is rejected at decode; the id-less survivor keeps
+        -- the position it was decoded at (ground_items[1]), which a count of
+        -- the survivors would hand to the reward as well
+        (sc, ds) ← decodeDocument (fxEnv fx) $ doc
+            [ "locations:", "  - {id: ruin, definition: ruin_small, x: 10, y: 10, incidental_content: false}"
+            , "ground_items:"
+            , "  - {definition: no_such_item, x: 1.5, y: 1.5}"
+            , "  - {definition: steel_bar, x: 2.5, y: 2.5}" ]
+        map sdPath ds `shouldBe` ["ground_items[0].definition"]
+        mz ← materialize fx pid ws arena40 sc
+        mzDiagnostics mz `shouldBe` []
+        sort ⊚ groundDefs ws `shouldReturn` ["processing_unit", "steel_bar"]
+        [inst] ← instancesToList ⊚ pageLocations ws
+        map (isJust ∘ lsiInstanceId) (liSignificant inst) `shouldBe` [True]
+
     it "constructs the pending shells an omitted container map owes, unopened, and nothing for a rejected location" $ \fx → do
         (pid, ws) ← scene fx
         sc ← clean fx $ doc

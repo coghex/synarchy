@@ -169,7 +169,7 @@ materialize fx pid ws ab sc = do
     ucs ← installUnitBuilds urefs pid epoch (map snd ubs)
     -- the definition-provided guaranteed content a location omits is
     -- constructed once, from the accepted locations only
-    let (acceptedLocs, defaultGround) = expandLocationDefaults locs loot (length (scGroundItems sc)) (lvAccepted lv)
+    let (acceptedLocs, defaultGround) = expandLocationDefaults locs loot (scGroundItems sc) (lvAccepted lv)
     (placements, gbuild) ← buildGroundItems itemEnv (scGroundItems sc ⧺ defaultGround)
     let (store, _) = installGroundItems [ p | Just p ← placements ] G.emptyGroundItems
     -- a materialization establishes the page's baseline: its ground is replaced
