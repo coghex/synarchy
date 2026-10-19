@@ -1210,8 +1210,9 @@ load is SCN-13's; the `Scenario.Placement` tests drive this order end to end.
   entry's 1-based position and the roll number, never gameplay RNG. Every constructed item
   is a ground item at a deterministic private tile of the footprint (the entry's fixed
   offset from the anchor when it has one, else a stable hash of the location's reference
-  and the slot or roll) under an automatic reference `ground_items[n]` continuing after
-  the stated ground items. Definition-provided buildings are never constructed (owner
+  and the slot or roll) under an automatic reference `ground_items[n]` — the first index no
+  surviving ground item (nested trees included) already holds, so a rejected earlier
+  sibling's gap is never reused by two items. Definition-provided buildings are never constructed (owner
   decision 3) and units follow the encounter rule (owner decision 4). A rejected location
   constructs nothing. When a key is PRESENT, even as `{}` or `false`, it is exactly what is
   stated: an unbound significant slot is dropped (nothing would ever fill it, and the

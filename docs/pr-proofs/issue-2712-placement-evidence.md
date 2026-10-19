@@ -17,7 +17,7 @@ Production profile, `cabal-3.16.1.0`. Every group executed a nonzero number of e
 
 | Group (`--match`) | Examples |
 |---|---|
-| `Scenario.Placement` | 70 |
+| `Scenario.Placement` | 71 |
 | `Scenario.Schema` | 48 |
 | `Scenario.Items` | 52 |
 | `Scenario.Units` | 52 |
@@ -49,7 +49,7 @@ Audits: `persistence_inventory_audit`, `enum_append_only_audit`, `engine_env_cap
 
 ## Mutation checks
 
-Nineteen mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
+Twenty mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
 mutant counts only if the group fails by an assertion (a compile error is not a kill).
 
 | Mutant | Killed by |
@@ -73,6 +73,7 @@ mutant counts only if the group fails by an assertion (a compile error is not a 
 | a stated empty map still expanding | defaults: stated empty stays empty; containers; naming |
 | the loot roll keyed on the wrong entry index | matrix: omitted content equals the ordinary rolls |
 | `incidental_content: false` still expanding | matrix / defaults: stated empty |
+| generated references allocated by survivor count | defaults: a rejected earlier ground-item sibling |
 
 ## Retained fixture
 
