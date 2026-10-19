@@ -340,9 +340,10 @@ membership and relationships.
 |---|---|---|---|---|
 | `definition` | location definition id | req | — | `liDefId`. |
 | `x`, `y` | integer tile anchor | req | — | `liAnchor`; footprint (`liBounds`) from the definition. |
-| `significant_items` | map `slot → item id` | opt | All slots unbound | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. Slot keys are plain decimals (`"1"`, never `"01"`), so two keys cannot name one slot. The target must be an item of the definition that slot requires (`lsiItemDefName`); a mismatch drops the binding with `DefinitionMismatch`. |
+| `significant_items` | map `slot → item id` | opt | Constructed: every slot gets the definition's own guaranteed item (see [Locations](#locations)); `{}` = none owed | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. Slot keys are plain decimals (`"1"`, never `"01"`), so two keys cannot name one slot. The target must be an item of the definition that slot requires (`lsiItemDefName`); a mismatch drops the binding with `DefinitionMismatch`. |
 
-| `containers` | map `slot → {item, realized, profile}` (format v3) | opt | All slots unbound | Binds container slot `n` (1-based, numbered over the definition's `container` entries alone) to a physical shell. `item` is an optional item reference to an item of the definition that slot mints (a mismatch drops the binding with `DefinitionMismatch`, an unrejected target that did not survive with `RejectedReference`). `realized` is optional and defaults to `false`: a PENDING slot keeps its loot profile (`profile`, else the definition's) and nothing is drawn, a REALIZED slot is latched with its profile discarded, its contents being exactly the stated tree. `profile` is allowed only on a pending slot. Capture never opens a shell and never rolls loot. |
+| `containers` | map `slot → {item, realized, profile}` (format v3) | opt | Constructed: every slot gets its pending shell (see [Locations](#locations)); `{}` = no shell bound | Binds container slot `n` (1-based, numbered over the definition's `container` entries alone) to a physical shell. `item` is an optional item reference to an item of the definition that slot mints (a mismatch drops the binding with `DefinitionMismatch`, an unrejected target that did not survive with `RejectedReference`). `realized` is optional and defaults to `false`: a PENDING slot keeps its loot profile (`profile`, else the definition's) and nothing is drawn, a REALIZED slot is latched with its profile discarded, its contents being exactly the stated tree. `profile` is allowed only on a pending slot. Capture never opens a shell and never rolls loot. |
+| `incidental_content` | boolean (format v3) | opt | Constructed: the definition's fixed non-significant items and loot-table rolls (see [Locations](#locations)) | `false` = none owed: whatever lies in the location is the document's own `ground_items[]`. `true` is the same as omitted. |
 
 Derived or excluded: display name, gloss and etymology are derived. The encounter's
 roster is exactly the units that join it by `encounter` (see
@@ -1190,14 +1191,34 @@ load is SCN-13's; the `Scenario.Placement` tests drive this order end to end.
   ordinary roll of zero is. A unit that joins a definition with no encounter entry is
   rejected at decode (`NoEncounter`, owner decision 4).
 - **Completion state is rebuilt.** A fresh instance is `LifecycleUnknown` with its
-  clearance notice seated. A scenario states the world's physical content, so the
-  guaranteed items it does not bind are not owed: an unbound significant slot is dropped
-  (a scenario location never enters the overlay, so nothing would ever fill it and the
-  location could never clear), and the content-spawn flag (`liContentsSpawned`) is then
+  clearance notice seated, computed LAST against the final instance (a location already
+  satisfied when initialization completes — nothing owed and no living occupant, or every
+  owed item already taken — starts with the notice spent, so discovering it announces
+  nothing). The anchor chunk's geometry marker (`wgpLocationStamped`) is set by the
+  commit, and a scenario location never enters the overlay, so neither the stamper nor
+  `spawnContents` can add a copy. A paused initialization advances nothing and realizes
+  no pending loot.
+- **Omitted versus stated content.** `significant_items`, `containers` and
+  `incidental_content` are tri-state (manager ruling, 2026-10-19: omitted keys expand ALL
+  definition-provided non-unit content). When a key is OMITTED, the definition-provided
+  content it governs is constructed once: each significant slot gets a default item of the
+  slot's definition (`significant_items`); each container slot its pending shell, with
+  the definition's profile and nothing drawn (`containers`); every fixed non-significant
+  item entry is placed and every `loot_table` entry rolled (`incidental_content`). Rolls
+  use PRIVATE scenario randomness — the very draw an ordinary placement makes
+  (`rollLootTableFor`) over a context folded from the location's scenario reference, the
+  entry's 1-based position and the roll number, never gameplay RNG. Every constructed item
+  is a ground item at a deterministic private tile of the footprint (the entry's fixed
+  offset from the anchor when it has one, else a stable hash of the location's reference
+  and the slot or roll) under an automatic reference `ground_items[n]` continuing after
+  the stated ground items. Definition-provided buildings are never constructed (owner
+  decision 3) and units follow the encounter rule (owner decision 4). A rejected location
+  constructs nothing. When a key is PRESENT, even as `{}` or `false`, it is exactly what is
+  stated: an unbound significant slot is dropped (nothing would ever fill it, and the
+  location could never clear), after which the content-spawn flag (`liContentsSpawned`) is
   set because every remaining slot is bound, the only state a saved table may hold with
-  the flag set. The anchor chunk's geometry marker (`wgpLocationStamped`) is set by the
-  commit; neither the stamper nor `spawnContents` can add a second copy. A paused
-  initialization advances nothing and realizes no pending loot.
+  the flag set; an unbound shell slot stays unbound. Capture writes all three keys, so a
+  recapture never expands again and gains no second copy.
 - **Bindings.** `significant_items` and `containers` are optional references resolved
   against what installed; a missing, rejected or wrong-definition target drops only
   that binding (`RejectedReference` / `DefinitionMismatch`); the physical item stays

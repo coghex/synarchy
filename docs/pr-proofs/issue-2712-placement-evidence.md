@@ -17,7 +17,7 @@ Production profile, `cabal-3.16.1.0`. Every group executed a nonzero number of e
 
 | Group (`--match`) | Examples |
 |---|---|
-| `Scenario.Placement` | 52 |
+| `Scenario.Placement` | 70 |
 | `Scenario.Schema` | 48 |
 | `Scenario.Items` | 52 |
 | `Scenario.Units` | 52 |
@@ -49,7 +49,7 @@ Audits: `persistence_inventory_audit`, `enum_append_only_audit`, `engine_env_cap
 
 ## Mutation checks
 
-Fourteen mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
+Nineteen mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
 mutant counts only if the group fails by an assertion (a compile error is not a kill).
 
 | Mutant | Killed by |
@@ -68,6 +68,11 @@ mutant counts only if the group fails by an assertion (a compile error is not a 
 | a pending shell's ownership unchecked | bindings: held / nested pending shells refused |
 | unbound significant obligations kept | locations: empty ruin; rejected-reference bindings; clearance never stranded |
 | a significant item held off the ground not latched taken | bindings: stored significant item passes integrity |
+| the clearance notice seated before bindings | initial clearance notice: empty ruin / taken-at-birth |
+| omitted guaranteed content not constructed | defaults: omitted construction; recapture adds no copy |
+| a stated empty map still expanding | defaults: stated empty stays empty; containers; naming |
+| the loot roll keyed on the wrong entry index | matrix: omitted content equals the ordinary rolls |
+| `incidental_content: false` still expanding | matrix / defaults: stated empty |
 
 ## Retained fixture
 
