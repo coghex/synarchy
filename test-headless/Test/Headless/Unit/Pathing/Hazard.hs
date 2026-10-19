@@ -49,6 +49,15 @@ import Unit.Thread.Movement.PathAdvance
     , maxProtectedStep, arrivalTolerance, maxWaypointContinuations)
 import Unit.Thread.Movement.Types
     (UnitMoveStats(..), defaultMoveStats, vectorToDirection)
+import Unit.Pathing.ClimbRisk
+import Unit.Thread.Movement (unitMoveStatsOf)
+import Unit.Types
+    (UnitInstance(..), UnitDef(..), emptyPhysioOverrides)
+import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveLegacyFaction)
+import Engine.Asset.Handle (TextureHandle(..))
+import qualified Data.Map.Strict as Map
+import GHC.Float (castFloatToWord32, castWord32ToFloat)
 
 -- ---------------------------------------------------------------------
 -- Terrain fixtures
@@ -216,6 +225,108 @@ moverAt (x, y) z mt = UnitSimState
 stats ∷ UnitMoveStats
 stats = defaultMoveStats
 
+-- | The hazards of a protected and of a fall-permitted request made by
+--   the baseline 'stats' mover (#2866: the cost function and A* take the
+--   mover's climb ability with the request's policy).
+prot, perm ∷ MoveHazard
+prot = moveHazardFor FallProhibited stats
+perm = moveHazardFor FallPermitted stats
+
+-- | Movers of differing ability for the climb-admission cases (#2866).
+--   Baseline 'stats': per-z slip 0.075 (skill 0, dex 1, str 1, 70 kg),
+--   awareness 1.0, so its acceptable risk is 0.105 and a one-level climb
+--   (P = 0.075) is admitted.
+careful, heavy, reckless, skilledCareful ∷ UnitMoveStats
+-- | Awareness 1.4: acceptable risk at the 1 % floor, so the baseline
+--   body's 7.5 % climb is refused.
+careful = stats { umsIntelligence = 1.4, umsPerception = 1.4 }
+-- | 140 kg: per-z slip 0.15, above the baseline awareness' 0.105.
+heavy = stats { umsBodyMass = 140 }
+-- | The SAME 140 kg body with awareness 0.5: acceptable risk 0.20, so it
+--   takes the climb the aware 'heavy' refuses.
+reckless = heavy { umsIntelligence = 0.5, umsPerception = 0.5 }
+-- | Skill 95 clamps the per-z slip to its 0.001 floor, under even the
+--   1 % threshold of awareness 1.4.
+skilledCareful = careful { umsClimbing = 95 }
+
+protFor ∷ UnitMoveStats → MoveHazard
+protFor = moveHazardFor FallProhibited
+
+-- | A plateau at z = 6 (x ≤ 7) above low ground at z = 5, whose ONLY
+--   walkable way up is a ramp at row y = 10: the plateau tile (7, 10)
+--   carries the slope bit pointing east at its low neighbour. Every
+--   other crossing is a one-level cliff. Columns are real 'ColumnTiles'
+--   so 'isCliffStep' can read the slope bit.
+rampedCliffWorld ∷ WorldTileData
+rampedCliffWorld =
+    let area = chunkSize * chunkSize
+        zAt lx = if lx ≤ 7 then 6 else 5
+        cols = V.generate area $ \i →
+            let lx = i `mod` chunkSize
+                ly = i `div` chunkSize
+                slope = if lx ≡ 7 ∧ ly ≡ 10 then 2 else 0
+            in ColumnTiles { ctStartZ = zAt lx
+                           , ctMats   = VU.singleton 1
+                           , ctSlopes = VU.singleton slope
+                           , ctVeg    = VU.singleton 0 }
+    in worldWith (zChunk (\(lx, _) → zAt lx)) { lcTiles = cols }
+
+-- | A diagonal from (7, 3) to (8, 4) between two z = 10 tiles whose graze
+--   tile (8, 3) is at @via@: the direct step is level, so only the climb
+--   ONTO the graze tile can matter.
+climbCornerWorld ∷ Int → WorldTileData
+climbCornerWorld via = worldWith $ zChunk $ \(lx, ly) →
+    if lx ≥ 8 ∧ ly ≤ 3 then via else 10
+
+isClimbing ∷ UnitSimState → Bool
+isClimbing us = usState us ≡ TransitioningTo Climbing
+
+-- | 'runTicks' for a mover with explicit stats.
+runTicksAs ∷ UnitMoveStats → MoveWorld → Int → UnitSimState → [UnitSimState]
+runTicksAs st mw n us0 = go n 0 us0 []
+  where
+    go 0 _ us acc = reverse (us : acc)
+    go k t us acc =
+        let t'  = t + 0.1
+            us' = tickUnit pc reg t' 0.1 mw st us
+        in go (k - 1 ∷ Int) t' us' (us : acc)
+
+-- | Every edge of a planned route (from @src@ through each waypoint) is
+--   one the mover may take as far as climbing goes.
+routeAdmissible ∷ MoveHazard → WorldTileData → (Int, Int) → [(Int, Int)] → Bool
+routeAdmissible h wtd src path =
+    and [ case (lookupTerrainZ wtd ax ay, lookupTerrainZ wtd bx by) of
+            (Just za, Just zb) → climbAdmissibleFor h wtd a b za zb
+            _                  → False
+        | (a@(ax, ay), b@(bx, by)) ← zip (src : path) path ]
+
+-- | A unit instance carrying exactly these stats, for the stat wiring.
+statInstance ∷ [(Text, Float)] → UnitInstance
+statInstance sts = UnitInstance
+    { uiDefName = "acolyte", uiName = "", uiPage = pageA
+    , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
+    , uiBaseWidth = 0, uiGridX = 10, uiGridY = 10
+    , uiGridZ = 0, uiRealZ = 0, uiFacing = DirS
+    , uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
+    , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
+    , uiStats = HM.fromList sts
+    , uiModifiers = HM.empty, uiSkills = HM.empty
+    , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
+    , uiAccessories = []
+    , uiFaction = resolveLegacyFaction [] FactionPlayer
+    , uiWounds = [], uiScars = [], uiImmuneResponse = 0
+    , uiImmunities = HM.empty, uiBlood = 70 * 0.075
+    , uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
+    , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
+    , uiClimbDest = Nothing, uiPhysioOverrides = emptyPhysioOverrides, uiTrailState = Nothing
+    }
+
+-- | Float neighbours of @x@, @k@ ulps either side.
+ulpsAround ∷ Int → Float → [Float]
+ulpsAround k x =
+    let w = fromIntegral (castFloatToWord32 x) ∷ Int
+    in [ castWord32ToFloat (fromIntegral (w + d)) | d ← [negate k .. k] ]
+
 -- | 'moverAt' already following a local path.
 moverOn ∷ (Float, Float) → Int → MoveTarget → [(Float, Float)]
         → UnitSimState
@@ -267,11 +378,11 @@ spec = do
         it "rejects a step whose drop reaches fall_trigger_drop" $
             -- x = 7 → x = 8 crosses the ridge: a 4-z drop, default
             -- trigger 2.
-            stepCostUnder FallProhibited pc reg (ridgeWorld 10 6) (7, 3) (8, 3)
+            stepCostUnder prot pc reg (ridgeWorld 10 6) (7, 3) (8, 3)
                 `shouldBe` Nothing
 
         it "allows the same step when falls are permitted" $
-            case stepCostUnder FallPermitted pc reg (ridgeWorld 10 6) (7, 3) (8, 3) of
+            case stepCostUnder perm pc reg (ridgeWorld 10 6) (7, 3) (8, 3) of
                 Nothing → expectationFailure "fall-permitted step was rejected"
                 Just c  → c `shouldSatisfy` (> 0)
 
@@ -279,37 +390,44 @@ spec = do
             -- A 1-z drop against the shipped trigger of 2 is an ordinary
             -- walk-off, protected or not.
             let w = ridgeWorld 10 9
-            stepCostUnder FallProhibited pc reg w (7, 3) (8, 3)
-                `shouldBe` stepCostUnder FallPermitted pc reg w (7, 3) (8, 3)
-            stepCostUnder FallProhibited pc reg w (7, 3) (8, 3)
+            stepCostUnder prot pc reg w (7, 3) (8, 3)
+                `shouldBe` stepCostUnder perm pc reg w (7, 3) (8, 3)
+            stepCostUnder prot pc reg w (7, 3) (8, 3)
                 `shouldSatisfy` isJust
 
         it "rejects a drop exactly AT the trigger" $
-            stepCostUnder FallProhibited pc reg (ridgeWorld 10 8) (7, 3) (8, 3)
+            stepCostUnder prot pc reg (ridgeWorld 10 8) (7, 3) (8, 3)
                 `shouldBe` Nothing
 
         it "keys on the CONFIGURED trigger, not the shipped default" $ do
             -- The same single-z drop the shipped default allows is a
             -- damaging fall once fall_trigger_drop is 1.
             let w = ridgeWorld 10 9
-            stepCostUnder FallProhibited pcTrigger1 reg w (7, 3) (8, 3)
+            stepCostUnder prot pcTrigger1 reg w (7, 3) (8, 3)
                 `shouldBe` Nothing
-            stepCostUnder FallPermitted pcTrigger1 reg w (7, 3) (8, 3)
+            stepCostUnder perm pcTrigger1 reg w (7, 3) (8, 3)
                 `shouldSatisfy` isJust
 
-        it "never blocks an ascent, however steep" $
-            -- Protection is about damaging DROPS only; climbing the same
-            -- ridge from below stays priced, not forbidden.
-            stepCostUnder FallProhibited pc reg (ridgeWorld 10 6) (8, 3) (7, 3)
+        it "blocks a protected cliff ascent taller than one level, however able the climber (#2866)" $ do
+            -- #1217 left ascents alone; #2866 caps an ambient climb at one
+            -- z-level. Climbing the 4-z ridge from below is refused even
+            -- for the most skilled, steadiest climber...
+            stepCostUnder (moveHazardFor FallProhibited skilledCareful) pc reg
+                          (ridgeWorld 10 6) (8, 3) (7, 3)
+                `shouldBe` Nothing
+            stepCostUnder prot pc reg (ridgeWorld 10 6) (8, 3) (7, 3)
+                `shouldBe` Nothing
+            -- ...and stays priced, not forbidden, when falls are permitted.
+            stepCostUnder perm pc reg (ridgeWorld 10 6) (8, 3) (7, 3)
                 `shouldSatisfy` isJust
 
         it "rejects a protected DIAGONAL whose graze tile is a drop ONTO" $ do
             -- (7,3) → (8,4) descends only 1 z, but the step's continuous
             -- path clips (8,3), which is 4 z DOWN from the source.
-            stepCostUnder FallProhibited pc reg (cornerWorldVia 6) (7, 3) (8, 4)
+            stepCostUnder prot pc reg (cornerWorldVia 6) (7, 3) (8, 4)
                 `shouldBe` Nothing
             -- The same diagonal stays priced, not forbidden, by default.
-            stepCostUnder FallPermitted pc reg (cornerWorldVia 6) (7, 3) (8, 4)
+            stepCostUnder perm pc reg (cornerWorldVia 6) (7, 3) (8, 4)
                 `shouldSatisfy` isJust
 
         it "rejects a protected DIAGONAL whose graze tile is a drop OFF" $ do
@@ -317,17 +435,17 @@ spec = do
             -- 1 z ABOVE the source, so both the direct descent (10 → 9)
             -- and the descent onto it (10 → 11) look harmless — while the
             -- real 2-z drop is 11 → 9, on the way OFF it.
-            stepCostUnder FallProhibited pc reg (cornerWorldVia 11) (7, 3) (8, 4)
+            stepCostUnder prot pc reg (cornerWorldVia 11) (7, 3) (8, 4)
                 `shouldBe` Nothing
-            stepCostUnder FallPermitted pc reg (cornerWorldVia 11) (7, 3) (8, 4)
+            stepCostUnder perm pc reg (cornerWorldVia 11) (7, 3) (8, 4)
                 `shouldSatisfy` isJust
 
         it "allows a protected DIAGONAL whose graze tiles are both clean" $ do
             -- Both two-step routes descend 1 z at most, so the diagonal is
             -- ordinary movement — the rule refuses hazards, not diagonals.
-            stepCostUnder FallProhibited pc reg (cornerWorldVia 10) (7, 3) (8, 4)
+            stepCostUnder prot pc reg (cornerWorldVia 10) (7, 3) (8, 4)
                 `shouldSatisfy` isJust
-            stepCostUnder FallProhibited pc reg flatWorld (2, 2) (3, 3)
+            stepCostUnder prot pc reg flatWorld (2, 2) (3, 3)
                 `shouldSatisfy` isJust
 
         it "isDamagingDrop is the one classification both sides use" $ do
@@ -345,7 +463,7 @@ spec = do
                         | sx ← [5 .. 9], sy ← [2 .. 4]
                         , dx ← [5 .. 9], dy ← [2 .. 4]
                         , (sx, sy) ≢ (dx, dy) ]
-            map (\(a, b) → stepCostUnder FallPermitted pc reg w a b) steps
+            map (\(a, b) → stepCostUnder perm pc reg w a b) steps
                 `shouldBe` map (\(a, b) → stepCost pc reg w a b) steps
 
     describe "localAStarUnder" $ do
@@ -353,25 +471,25 @@ spec = do
             -- Unsafe-only route: the plateau ends at x = 7 and the target
             -- is at x = 11, four z below. A protected search must not
             -- reach it.
-            let path = localAStarUnder FallProhibited pc reg (ridgeWorld 10 6)
+            let path = localAStarUnder prot pc reg (ridgeWorld 10 6)
                                        (5, 3) (11, 3) defaultMaxRadius
             path `shouldSatisfy` all (\(x, _) → x ≤ 7)
             last' path `shouldNotBe` Just (11, 3)
 
         it "still routes there when falls are permitted" $
-            localAStarUnder FallPermitted pc reg (ridgeWorld 10 6)
+            localAStarUnder perm pc reg (ridgeWorld 10 6)
                             (5, 3) (11, 3) defaultMaxRadius
                 `shouldSatisfy` elem (11, 3)
 
         it "leaves the unprotected route untouched (default == today)" $ do
             let w = ridgeWorld 10 6
-            localAStarUnder FallPermitted pc reg w (5, 3) (11, 3) defaultMaxRadius
+            localAStarUnder perm pc reg w (5, 3) (11, 3) defaultMaxRadius
                 `shouldBe` localAStar pc reg w (5, 3) (11, 3) defaultMaxRadius
 
         it "routes normally on safe ground under either policy" $ do
-            localAStarUnder FallProhibited pc reg flatWorld (2, 2) (6, 2) defaultMaxRadius
+            localAStarUnder prot pc reg flatWorld (2, 2) (6, 2) defaultMaxRadius
                 `shouldBe` localAStar pc reg flatWorld (2, 2) (6, 2) defaultMaxRadius
-            localAStarUnder FallProhibited pc reg flatWorld (2, 2) (6, 2) defaultMaxRadius
+            localAStarUnder prot pc reg flatWorld (2, 2) (6, 2) defaultMaxRadius
                 `shouldSatisfy` elem (6, 2)
 
     describe "the movement tick" $ do
@@ -603,6 +721,182 @@ spec = do
             body ← readScript "scripts/unit_ai_needs.lua"
             body `shouldSatisfy` T.isInfixOf "M.wanderExecute"
             body `shouldSatisfy` T.isInfixOf "M.ambientWanderExecute"
+
+    describe "climb admission for protected movement (#2866)" $ do
+        describe "the acceptable-risk threshold T = clamp(0.20 − 0.2375 (a − 0.6), 0.01, 0.20)" $ do
+            it "is 20 % at awareness 0.6 and below, the clamp's upper end" $ do
+                slipRiskThreshold 0.6 `shouldSatisfy` (\t → abs (t - 0.20) < 1e-6)
+                slipRiskThreshold 0.0 `shouldBe` 0.20
+                slipRiskThreshold (-3) `shouldBe` 0.20
+            it "is 1 % at awareness 1.4 and above, the clamp's floor" $ do
+                slipRiskThreshold 1.4 `shouldSatisfy` (\t → abs (t - 0.01) < 1e-6)
+                slipRiskThreshold 2.0 `shouldBe` 0.01
+                slipRiskThreshold 50 `shouldBe` 0.01
+            it "follows the formula between them" $
+                forM_ [(0.8, 0.1525), (1.0, 0.105), (1.2, 0.0575), (0.7, 0.17625), (1.3, 0.03375)] $
+                    \(a, t) → (a, slipRiskThreshold a) `shouldSatisfy` (\(_, v) → abs (v - t) < 1e-6)
+            it "never rises with awareness" $ do
+                let as = [0, 0.05 .. 2.0] ∷ [Float]
+                    ts = map slipRiskThreshold as
+                and (zipWith (≥) ts (drop 1 ts)) `shouldBe` True
+            it "admits nothing for a non-finite awareness (fail closed)" $ do
+                ambientClimbAdmissible (ClimbAbility 0.001 (0 / 0)) 1 `shouldBe` False
+                ambientClimbAdmissible (ClimbAbility 0.001 (1 / 0)) 1 `shouldBe` False
+
+        describe "the risk judged is the physical slip roll's own" $ do
+            it "a one-level climb's probability is the per-z chance" $
+                climbSlipProbability 0.075 1 `shouldSatisfy` (\p → abs (p - 0.075) < 1e-6)
+            it "a taller climb compounds it as 1 − (1 − p)^rise" $
+                climbSlipProbability 0.1 3 `shouldSatisfy` (\p → abs (p - (1 - 0.9 ^ (3 ∷ Int))) < 1e-6)
+            it "the ability reads the same per-z chance and (intelligence + perception) / 2" $ do
+                climbAbilityOf stats `shouldBe` ClimbAbility (slipChancePerZ stats) 1.0
+                caAwareness (climbAbilityOf (stats { umsIntelligence = 1.2, umsPerception = 0.8 }))
+                    `shouldBe` 1.0
+                caSlipPerZ (climbAbilityOf heavy) `shouldSatisfy` (\p → abs (p - 0.15) < 1e-6)
+
+        describe "the admission rule" $ do
+            it "admits a climb whose risk EQUALS the threshold (P ≤ T is inclusive)" $ do
+                -- Find an awareness whose threshold is exactly the risk of
+                -- a 1/8 per-z chance, then step just past it.
+                let p = 0.125
+                    risk = climbSlipProbability p 1
+                    aStar = 0.6 + (0.20 - risk) / 0.2375
+                    exact = [ a | a ← ulpsAround 4000 aStar, slipRiskThreshold a ≡ risk ]
+                case exact of
+                    [] → expectationFailure "no awareness puts T exactly on the risk"
+                    (a : _) → do
+                        ambientClimbAdmissible (ClimbAbility p a) 1 `shouldBe` True
+                        let above = [ b | b ← ulpsAround 4000 a, slipRiskThreshold b < risk ]
+                        case above of
+                            [] → expectationFailure "no awareness puts T below the risk"
+                            (b : _) → ambientClimbAdmissible (ClimbAbility p b) 1 `shouldBe` False
+            it "refuses any climb above one level, however low its risk" $ do
+                ambientClimbAdmissible (ClimbAbility 0.001 0) 2 `shouldBe` False
+                ambientClimbAdmissible (ClimbAbility 0.001 0) 1 `shouldBe` True
+                maxAmbientClimbRise `shouldBe` 1
+
+        describe "at the cost layer" $ do
+            let oneLevel = ridgeWorld 10 9
+                up = ((8, 3), (7, 3))
+                costAs h w = stepCostUnder h pc reg w (fst up) (snd up)
+            it "differs by ability on identical terrain" $ do
+                costAs (protFor stats) oneLevel `shouldSatisfy` isJust      -- 7.5 % ≤ 10.5 %
+                costAs (protFor careful) oneLevel `shouldBe` Nothing        -- 7.5 % > 1 %
+                costAs (protFor heavy) oneLevel `shouldBe` Nothing          -- 15 % > 10.5 %
+                costAs (protFor reckless) oneLevel `shouldSatisfy` isJust   -- 15 % ≤ 20 %
+                costAs (protFor skilledCareful) oneLevel `shouldSatisfy` isJust
+            it "prices an admitted climb exactly as a fall-permitted one" $
+                costAs (protFor stats) oneLevel `shouldBe` costAs perm oneLevel
+            it "refuses a two-level climb even with negligible risk" $ do
+                costAs (protFor skilledCareful) (ridgeWorld 10 8) `shouldBe` Nothing
+                costAs (moveHazardFor FallPermitted skilledCareful) (ridgeWorld 10 8)
+                    `shouldSatisfy` isJust
+            it "leaves a fall-permitted climb alone whatever the mover" $
+                forM_ [careful, heavy, skilledCareful] $ \st →
+                    costAs (moveHazardFor FallPermitted st) oneLevel `shouldSatisfy` isJust
+            it "never touches a walkable ramp" $ do
+                let ramp = stepCostUnder (protFor careful) pc reg rampedCliffWorld (8, 10) (7, 10)
+                ramp `shouldSatisfy` isJust
+                ramp `shouldBe` stepCostUnder perm pc reg rampedCliffWorld (8, 10) (7, 10)
+                -- ...while the cliff beside it is refused to the same mover.
+                stepCostUnder (protFor careful) pc reg rampedCliffWorld (8, 9) (7, 9)
+                    `shouldBe` Nothing
+            it "leaves descents and level ground as they were" $ do
+                stepCostUnder (protFor careful) pc reg oneLevel (7, 3) (8, 3)
+                    `shouldBe` stepCostUnder perm pc reg oneLevel (7, 3) (8, 3)
+                stepCostUnder (protFor careful) pc reg flatWorld (2, 2) (3, 2)
+                    `shouldBe` stepCostUnder perm pc reg flatWorld (2, 2) (3, 2)
+            it "judges a DIAGONAL climb onto the cliff" $ do
+                stepCostUnder (protFor careful) pc reg oneLevel (8, 4) (7, 3) `shouldBe` Nothing
+                stepCostUnder (protFor stats) pc reg oneLevel (8, 4) (7, 3) `shouldSatisfy` isJust
+            it "refuses a protected diagonal whose graze tile is a climb the mover may not take" $ do
+                -- The direct step is level; the graze tile is one up.
+                let w = climbCornerWorld 11
+                stepCostUnder (protFor careful) pc reg w (7, 3) (8, 4) `shouldBe` Nothing
+                stepCostUnder (protFor stats) pc reg w (7, 3) (8, 4) `shouldSatisfy` isJust
+                stepCostUnder (moveHazardFor FallPermitted careful) pc reg w (7, 3) (8, 4)
+                    `shouldSatisfy` isJust
+
+        describe "in local A*" $ do
+            it "detours by the ramp a careful mover can walk" $ do
+                let path = localAStarUnder (protFor careful) pc reg rampedCliffWorld
+                                           (9, 3) (5, 3) defaultMaxRadius
+                last' path `shouldBe` Just (5, 3)
+                path `shouldSatisfy` elem (7, 10)
+                routeAdmissible (protFor careful) rampedCliffWorld (9, 3) path `shouldBe` True
+            it "finds no route up when there is no admissible way" $ do
+                let path = localAStarUnder (protFor careful) pc reg (ridgeWorld 10 9)
+                                           (9, 3) (5, 3) defaultMaxRadius
+                path `shouldSatisfy` all (\(x, _) → x ≥ 8)
+            it "routes the same terrain freely when falls are permitted" $
+                localAStarUnder (moveHazardFor FallPermitted careful) pc reg (ridgeWorld 10 9)
+                                (9, 3) (5, 3) defaultMaxRadius
+                    `shouldSatisfy` elem (5, 3)
+
+        describe "in the movement tick" $ do
+            let below = moverAt (8.5, 3.5) 9 (MoveTarget 5.5 3.5 1.0 FallProhibited)
+                belowP = moverAt (8.5, 3.5) 9 (MoveTarget 5.5 3.5 1.0 FallPermitted)
+                ridgeMw = ownPageWorld (ridgeWorld 10 9)
+            it "climbs a one-level cliff the mover may take" $
+                runTicksAs stats ridgeMw 60 below `shouldSatisfy` any isClimbing
+            it "never starts a climb it may not take, and terminates with no other way up" $ do
+                let states = runTicksAs careful ridgeMw 200 below
+                states `shouldSatisfy` not . any isClimbing
+                map usGridZ states `shouldSatisfy` all (≡ 9)
+                usTarget (last states) `shouldBe` Nothing
+            it "still climbs it when falls are permitted" $
+                runTicksAs careful ridgeMw 60 belowP `shouldSatisfy` any isClimbing
+            it "never climbs two levels, however able" $ do
+                let tall = ownPageWorld (ridgeWorld 10 8)
+                    us = moverAt (8.5, 3.5) 8 (MoveTarget 5.5 3.5 1.0 FallProhibited)
+                    states = runTicksAs skilledCareful tall 200 us
+                states `shouldSatisfy` not . any isClimbing
+                usTarget (last states) `shouldBe` Nothing
+                runTicksAs skilledCareful tall 60
+                    (moverAt (8.5, 3.5) 8 (MoveTarget 5.5 3.5 1.0 FallPermitted))
+                    `shouldSatisfy` any isClimbing
+            it "walks round by the ramp instead of climbing" $ do
+                let us = moverAt (9.5, 3.5) 5 (MoveTarget 5.5 3.5 1.0 FallProhibited)
+                    states = runTicksAs careful (ownPageWorld rampedCliffWorld) 600 us
+                states `shouldSatisfy` not . any isClimbing
+                usTarget (last states) `shouldBe` Nothing
+                (usRealX (last states), usRealY (last states)) `shouldBe` (5.5, 3.5)
+                usGridZ (last states) `shouldBe` 6
+            it "re-judges a cached route against the mover as it is now" $ do
+                -- A route the baseline mover may take, executed by a mover
+                -- whose limit refuses its climb: no climb is started.
+                let path = localAStarUnder (protFor stats) pc reg (ridgeWorld 10 9)
+                                           (8, 3) (5, 3) defaultMaxRadius
+                    wps = [ (fromIntegral x + 0.5, fromIntegral y + 0.5) | (x, y) ← path ]
+                    us = moverOn (8.5, 3.5) 9 (MoveTarget 5.5 3.5 1.0 FallProhibited) wps
+                path `shouldSatisfy` elem (7, 3)
+                runTicksAs careful ridgeMw 200 us `shouldSatisfy` not . any isClimbing
+                runTicksAs stats ridgeMw 60 us `shouldSatisfy` any isClimbing
+            it "never SNAPS onto a cliff top the mover may not climb" $ do
+                let atFoot = moverAt (8.05, 3.5) 9 (MoveTarget 7.96 3.5 1.0 FallProhibited)
+                    us' = tickUnit pc reg 0.1 0.1 ridgeMw careful atFoot
+                usRealX us' `shouldSatisfy` (≥ 8.0)
+                usGridZ us' `shouldBe` 9
+                usTarget us' `shouldBe` Nothing
+            it "never takes a DIAGONAL climb it may not take" $ do
+                let us = moverAt (8.5, 4.5) 9 (MoveTarget 7.5 3.5 1.0 FallProhibited)
+                    states = runTicksAs careful ridgeMw 200 us
+                states `shouldSatisfy` not . any isClimbing
+                map usGridZ states `shouldSatisfy` all (≡ 9)
+
+        describe "the real movement-stat wiring" $ do
+            it "reads intelligence and perception from the unit's stats" $ do
+                let st = unitMoveStatsOf HM.empty
+                            (Just (statInstance [("intelligence", 1.3), ("perception", 0.9)]))
+                (umsIntelligence st, umsPerception st) `shouldBe` (1.3, 0.9)
+                caAwareness (climbAbilityOf st) `shouldSatisfy` (\a → abs (a - 1.1) < 1e-6)
+            it "reads an absent stat as the baseline 1.0" $ do
+                let st = unitMoveStatsOf HM.empty (Just (statInstance []))
+                (umsIntelligence st, umsPerception st) `shouldBe` (1.0, 1.0)
+                let none = unitMoveStatsOf (HM.empty ∷ HM.HashMap Text UnitDef) Nothing
+                (umsIntelligence none, umsPerception none, umsBodyMass none)
+                    `shouldBe` (umsIntelligence defaultMoveStats, umsPerception defaultMoveStats
+                               , umsBodyMass defaultMoveStats)
 
   describe "Movement carries residual time across waypoints" $ do
 

@@ -17,12 +17,17 @@
 -- otherwise, so every pre-existing pathing caller keeps its exact
 -- current semantics.
 --
--- The policy governs DESCENTS only. An ascent is never blocked by it —
--- a protected route may still climb, and a climb that SLIPS
+-- The policy also governs CLIFF ASCENTS (#2866). A climb that slips
 -- ("Unit.Thread.Movement.Climb"'s @rollClimbSlips@ →
--- @convertSlippedClimb@) still converts into a fall. That is a climbing
--- accident, not a route the planner chose over a damaging drop, and it
--- is deliberately left alone here.
+-- @convertSlippedClimb@) converts into a fall, so a protected route
+-- takes a cliff ascent only within the rules of "Unit.Pathing.ClimbRisk":
+-- never more than one z-level, and only at or below the mover's own
+-- acceptable slip risk. Those rules depend on the MOVER, so the cost
+-- function and A* take a 'MoveHazard' — this request's policy paired with
+-- the mover's 'ClimbAbility', rebuilt from its stats every tick and never
+-- stored. Walkable ramps, descents below the trigger, and every
+-- fall-permitted request are untouched. A climb that already started is
+-- not re-judged: its slip resolution is the climb mechanics', unchanged.
 --
 -- APPEND-ONLY: this enum derives 'Serialize' through 'Generic', so it is
 -- positional by constructor tag and rides into saves via
@@ -35,12 +40,18 @@ module Unit.Pathing.Hazard
     , defaultMoveHazardPolicy
     , parseMoveHazardPolicy
     , moveHazardPolicyToken
+      -- * The per-mover hazard the planners consult (#2866)
+    , MoveHazard(..)
+    , moveHazardFor
+    , isProtected
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import qualified Data.Text as T
+import Unit.Pathing.ClimbRisk (ClimbAbility, climbAbilityOf)
+import Unit.Thread.Movement.Types (UnitMoveStats)
 
 -- | May this movement request's route include a damaging drop?
 data MoveHazardPolicy
@@ -53,7 +64,8 @@ data MoveHazardPolicy
     | FallProhibited
       -- ^ Ambient, zero-stakes movement (#1217): a step the cost model
       --   classifies as a real fall is IMPASSABLE, in the greedy stepper
-      --   and in every local-A* expansion alike. A request that cannot
+      --   and in every local-A* expansion alike — and so is a cliff
+      --   ascent this mover may not take (#2866, "Unit.Pathing.ClimbRisk"). A request that cannot
       --   make safe progress terminates so the ambient AI resamples a
       --   different destination later, rather than idling on an
       --   unreachable target that replans forever.
@@ -80,3 +92,21 @@ parseMoveHazardPolicy t = case T.toLower (T.strip t) of
     "allow_falls" → Just FallPermitted
     "avoid_falls" → Just FallProhibited
     _             → Nothing
+
+-- | What the cost function and A* consult for one mover's request: the
+--   request's policy and the mover's climb ability. Derived per tick
+--   from the persisted policy and the mover's current stats; never
+--   serialized, so a changed stat governs the next crossing.
+data MoveHazard = MoveHazard
+    { mhPolicy ∷ !MoveHazardPolicy
+    , mhClimb  ∷ !ClimbAbility
+    } deriving (Show, Eq)
+
+-- | The hazard of a request with this policy, made by a mover with these
+--   stats.
+moveHazardFor ∷ MoveHazardPolicy → UnitMoveStats → MoveHazard
+moveHazardFor p s = MoveHazard { mhPolicy = p, mhClimb = climbAbilityOf s }
+
+-- | Is this request hazard-protected ('FallProhibited')?
+isProtected ∷ MoveHazard → Bool
+isProtected h = mhPolicy h ≡ FallProhibited

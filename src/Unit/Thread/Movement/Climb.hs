@@ -26,6 +26,7 @@ import Unit.Thread.Movement.Types
     (UnitMoveStats(..), baselineUnitHeight, vectorToDirection)
 import Unit.Thread.Movement.Fall (fallDuration)
 import Unit.Thread.Movement.Timers (chainStepDuration)
+import Unit.Pathing.ClimbRisk (slipChancePerZ, climbSlipProbability)
 
 -- | Metres of body height needed to mantle one full z-level. A unit's
 --   climb "reach" (z-levels it can pull up onto without wall-climbing) is
@@ -40,28 +41,6 @@ heightPerClimbZ = baselineUnitHeight
 -- | How many z-levels the unit can mantle (pull up onto) given its height.
 climbReachZ ∷ UnitMoveStats → Float
 climbReachZ s = max 0.1 (umsHeight s / heightPerClimbZ)
-
--- | Per-z-level slip chance. Probability rises sharply with body
---   weight relative to strength × dexterity, and drops sharply with
---   climbing skill (squared so high skill effectively eliminates
---   slips). Clamped so even a perfect climber has a non-zero risk
---   and a terrible one isn't guaranteed to fall every z.
---
---     base        = 0.05
---     skill_mod   = (1 - skill/100)²
---     control_mod = clamp(1.5 / (dex × str), 0.1, 5)
---     weight_mod  = max(1, mass/70)
---     per_z       = base × skill_mod × control_mod × weight_mod
---     clamp [0.001, 0.5]
-slipChancePerZ ∷ UnitMoveStats → Float
-slipChancePerZ s =
-    let base       = 0.05
-        skillMod   = (1 - umsClimbing s / 100.0) ** 2
-        dxs        = max 0.05 (umsDexterity s * umsStrength s)
-        controlMod = max 0.1 (min 5.0 (1.5 / dxs))
-        weightMod  = max 1.0 (umsBodyMass s / 70.0)
-        raw        = base * skillMod * controlMod * weightMod
-    in max 0.001 (min 0.5 raw)
 
 -- | For each unit that just started a climb this tick (usClimbStartTime
 --   == Just now, usClimbSlipAt still Nothing), roll the slip dice. If
@@ -102,7 +81,10 @@ rollClimbSlips env now statsFor sim = do
             perZ    = slipChancePerZ stats
             -- Pr(no slip over the whole climb) = (1 - perZ)^dz.
             -- So Pr(at least one slip) = 1 - (1 - perZ)^dz.
-            failProb = 1 - (1 - perZ) ** fromIntegral dz
+            -- The ONE formula, shared with the ambient admission rule
+            -- ("Unit.Pathing.ClimbRisk"), so the risk a protected mover
+            -- refuses is exactly the risk this roll would have run.
+            failProb = climbSlipProbability perZ dz
             (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rng
         in if roll ≥ failProb
             then (rng1, accMap)

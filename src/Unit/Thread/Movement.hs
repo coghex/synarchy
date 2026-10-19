@@ -24,6 +24,7 @@
 module Unit.Thread.Movement
     ( tickAllMovement
     , UnitMoveStats(..)
+    , unitMoveStatsOf
     , startJump
     , jumpMaxTiles
     , maxJumpHeight
@@ -98,25 +99,7 @@ tickAllMovement dt env utsRef = do
     -- mover ever sees, so nobody paths against another page's heightmap.
     let worldFor mInst snaps = moveWorldFor snaps (uiPage <$> mInst)
         statsFor uid   = statsForInst (HM.lookup uid (umInstances um))
-        statsForInst mInst = case mInst of
-            Just inst →
-                -- Gait threshold (absolute tiles/s) from the unit's def:
-                -- run_threshold × max_speed. No def → leave it effectively
-                -- infinite so the unit never auto-runs.
-                let (maxSp, runFrac) = case HM.lookup (uiDefName inst) (umDefs um) of
-                        Just d  → (udMaxSpeed d, udRunThreshold d)
-                        Nothing → (1.0e9, 0.6)
-                in UnitMoveStats
-                { umsBodyMass  = HM.lookupDefault 70.0 "body_mass"  (uiStats  inst)
-                , umsToughness = HM.lookupDefault 1.0  "toughness"  (uiStats  inst)
-                , umsClimbing  = HM.lookupDefault 0.0  "climbing"   (uiSkills inst)
-                , umsDexterity = HM.lookupDefault 1.0  "dexterity"  (uiStats  inst)
-                , umsStrength  = HM.lookupDefault 1.0  "strength"   (uiStats  inst)
-                , umsRunThreshold = runFrac * maxSp
-                , umsHeight    = HM.lookupDefault baselineUnitHeight
-                                                       "height"     (uiStats  inst)
-                }
-            Nothing → defaultMoveStats
+        statsForInst = unitMoveStatsOf (umDefs um)
     uts ← readIORef utsRef
     let simStates  = utsSimStates uts
     -- Terrain comes from each mover's OWN page (#1593), so the batch
@@ -399,3 +382,31 @@ tickAllMovement dt env utsRef = do
                           (\uid ss → setFall uid (clearPendingClimbXP ss))
                           simStates'''
     writeIORef utsRef (uts { utsSimStates = simStates'''' })
+
+-- | One mover's movement stats, from its instance and its definition:
+--   the snapshot every pure movement function reads, climb physics and
+--   the ambient climb admission (#2866) alike. Absent stats read the
+--   baseline (1.0, or the documented default); a mover with no instance
+--   gets 'defaultMoveStats'.
+unitMoveStatsOf ∷ HM.HashMap Text UnitDef → Maybe UnitInstance → UnitMoveStats
+unitMoveStatsOf defs mInst = case mInst of
+    Just inst →
+        -- Gait threshold (absolute tiles/s) from the unit's def:
+        -- run_threshold × max_speed. No def → leave it effectively
+        -- infinite so the unit never auto-runs.
+        let (maxSp, runFrac) = case HM.lookup (uiDefName inst) defs of
+                Just d  → (udMaxSpeed d, udRunThreshold d)
+                Nothing → (1.0e9, 0.6)
+        in UnitMoveStats
+        { umsBodyMass  = HM.lookupDefault 70.0 "body_mass"  (uiStats  inst)
+        , umsToughness = HM.lookupDefault 1.0  "toughness"  (uiStats  inst)
+        , umsClimbing  = HM.lookupDefault 0.0  "climbing"   (uiSkills inst)
+        , umsDexterity = HM.lookupDefault 1.0  "dexterity"  (uiStats  inst)
+        , umsStrength  = HM.lookupDefault 1.0  "strength"   (uiStats  inst)
+        , umsRunThreshold = runFrac * maxSp
+        , umsHeight    = HM.lookupDefault baselineUnitHeight
+                                               "height"     (uiStats  inst)
+        , umsIntelligence = HM.lookupDefault 1.0 "intelligence" (uiStats inst)
+        , umsPerception   = HM.lookupDefault 1.0 "perception"   (uiStats inst)
+        }
+    Nothing → defaultMoveStats

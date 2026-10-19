@@ -33,6 +33,11 @@ data UnitMoveStats = UnitMoveStats
     , umsHeight    ∷ !Float   -- ^ body height (metres). Drives climb reach:
                                --   how much of a cliff the unit mantles in the
                                --   pullup vs has to wall-climb first.
+    , umsIntelligence ∷ !Float -- ^ stat (1.0 = baseline). With perception,
+                               --   the awareness that sets how much climb
+                               --   risk an ambient move accepts (#2866,
+                               --   "Unit.Pathing.ClimbRisk").
+    , umsPerception ∷ !Float  -- ^ stat (1.0 = baseline); see umsIntelligence
     }
 
 -- | Baseline human body height in metres — the default when a unit
@@ -49,6 +54,8 @@ defaultMoveStats = UnitMoveStats
     , umsStrength  = 1.0
     , umsRunThreshold = 1.0e9  -- no def → never auto-run (sentinel high)
     , umsHeight    = baselineUnitHeight
+    , umsIntelligence = 1.0
+    , umsPerception   = 1.0
     }
 
 -- | Free-fall gravity in z-levels/s². Derived from the shared physics

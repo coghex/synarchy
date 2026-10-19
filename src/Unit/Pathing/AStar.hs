@@ -19,8 +19,7 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet        as HS
 import qualified Data.Set            as Set
-import Unit.Pathing.Cost (stepCostUnder, PathingConfig)
-import Unit.Pathing.Hazard (MoveHazardPolicy(..), defaultMoveHazardPolicy)
+import Unit.Pathing.Cost (stepCostUnder, PathingConfig, MoveHazard, unprotected)
 import World.Tile.Types (WorldTileData)
 import World.Material (MaterialRegistry)
 
@@ -38,17 +37,18 @@ defaultMaxRadius = 16
 --   * Returns `[]` if `src == dst` or if no neighbor of src is
 --     passable.
 localAStar ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
-localAStar = localAStarUnder defaultMoveHazardPolicy
+localAStar = localAStarUnder unprotected
 
--- | 'localAStar' under an explicit per-request hazard policy (#1217).
---   The policy reaches the search only through `stepCostUnder`, so a
---   'FallProhibited' expansion rejects a damaging drop exactly the way
---   the greedy stepper does — no waypoint over a cliff can be installed,
+-- | 'localAStar' under an explicit per-request hazard (#1217, #2866).
+--   The hazard reaches the search only through `stepCostUnder`, so a
+--   'FallProhibited' expansion rejects a damaging drop, and a cliff
+--   ascent the mover may not take, exactly the way the greedy stepper
+--   does — no waypoint over a cliff can be installed,
 --   and a replan can't route around the stepper's own refusal. When no
 --   safe route exists the search still returns its usual partial path to
 --   the closest SAFELY reached tile (or `[]`), which is what lets the
 --   caller terminate an ambient request instead of retrying forever.
-localAStarUnder ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
+localAStarUnder ∷ MoveHazard → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → [(Int, Int)]
 localAStarUnder policy pc reg wtd src dst maxRadius
     | src ≡ dst = []
     | otherwise =
@@ -82,7 +82,7 @@ data AS = AS
 
 -- | Drive the A* loop. Recurses until dst is closed, the open set
 --   empties, or the node budget runs out.
-run ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → Int → AS → AS
+run ∷ MoveHazard → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → Int → AS → AS
 run policy pc reg wtd src dst maxR budget st
     | HS.size (asClosed st) ≥ budget = st
     | otherwise = case Set.minView (asOpen st) of
@@ -100,7 +100,7 @@ run policy pc reg wtd src dst maxR budget st
                 in  run policy pc reg wtd src dst maxR budget st2
 
 -- | Relax all 8 neighbors of `cur`.
-expand ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → (Int, Int) → AS → AS
+expand ∷ MoveHazard → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Int → (Int, Int) → AS → AS
 expand policy pc reg wtd src dst maxR cur st0 =
     foldl' (relax policy pc reg wtd src dst maxR cur) st0 (neighbors cur)
 
@@ -109,7 +109,7 @@ expand policy pc reg wtd src dst maxR cur st0 =
 --   * Track the best-h-so-far so we can return a partial path on
 --     failure to reach dst.
 relax
-    ∷ MoveHazardPolicy
+    ∷ MoveHazard
     → PathingConfig
     → MaterialRegistry
     → WorldTileData

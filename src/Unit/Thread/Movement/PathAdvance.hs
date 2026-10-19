@@ -28,7 +28,7 @@ import World.Arena.Bounds
     (ArenaBounds, arenaAdmitsPosition, clampPositionIntoArena)
 import Unit.Sim.Types
 import Unit.Pathing.Cost (stepCostUnder, lookupTerrainZ, isCliffStep
-                         , isDamagingDrop
+                         , isDamagingDrop, moveHazardFor
                          , materialFactor, materialDetour
                          , slopeGrade, slopeSpeedFactor, PathingConfig(..))
 import Unit.Pathing.AStar (localAStarUnder, defaultMaxRadius)
@@ -407,11 +407,15 @@ advanceSegment pc reg now dtLeft mw stats us mt (gx, gy) isFirst allowance =
         -- does everywhere else a protected request touches it.
         srcTile = (floor (usRealX us), floor (usRealY us))
         goalTile = (floor gx, floor gy) ∷ (Int, Int)
+        --
+        -- The mover's own hazard (#2866) — its policy AND its climb
+        -- ability, from this tick's stats — so a snap onto a cliff top the
+        -- unit may not climb is refused exactly like a step onto it.
         snapBlocked = mtHazard mt ≡ FallProhibited
                     ∧ srcTile ≢ goalTile
                     ∧ isNothing (do wtd ← mWtd
-                                    stepCostUnder FallProhibited pc reg wtd
-                                                  srcTile goalTile)
+                                    stepCostUnder (moveHazardFor (mtHazard mt) stats)
+                                                  pc reg wtd srcTile goalTile)
         -- `usMoveGrade` feeds the Lua stamina drain, so it must name the
         -- grade the unit actually EXERTED against. A single-segment tick
         -- keeps its pre-#2473 behavior exactly — the grade is stamped
@@ -425,7 +429,7 @@ advanceSegment pc reg now dtLeft mw stats us mt (gx, gy) isFirst allowance =
         -- can't make safe progress either, it terminates the request (see
         -- `replan`) so the ambient AI resamples. Either way the tick
         -- stops consuming here.
-        blockedSnap = (replan pc reg onStall mt mw srcTile, Nothing)
+        blockedSnap = (replan pc reg stats onStall mt mw srcTile, Nothing)
         arrived = arriveAtSubGoal stats us mt (gx, gy) mWtd
         -- Hand the caller what is left, unless the arrival ENDED the
         -- request (final target reached) — there is nothing further to
@@ -625,8 +629,12 @@ moveToward pc reg now stats us mt mw dx dy dist step =
                 -- The request's own hazard policy (#1217) reaches the
                 -- greedy stepper and A* through the SAME cost function,
                 -- so a protected route can't lose its protection by
-                -- being planned one way rather than the other.
-                Just wtd → stepCostUnder (mtHazard mt) pc reg wtd srcTile dstTile
+                -- being planned one way rather than the other. It carries
+                -- the mover's climb ability from THIS tick's stats
+                -- (#2866), so every crossing — a cached waypoint's
+                -- included — is judged against the unit as it is now.
+                Just wtd → stepCostUnder (moveHazardFor (mtHazard mt) stats)
+                                         pc reg wtd srcTile dstTile
                 -- No world snapshot: a fall-permitted move doesn't block
                 -- (its historical behavior). A protected move can't get
                 -- here — tickUnit abandons an unverified snapshot before
@@ -676,9 +684,9 @@ moveToward pc reg now stats us mt mw dx dy dist step =
             _ → Nothing
     in case mCost of
         Nothing →
-            (replan pc reg us mt mw srcTile, Diverted)
+            (replan pc reg stats us mt mw srcTile, Diverted)
         Just c | not followingPath ∧ (c > pcReplanCostThreshold pc ∨ matEdge) →
-            (replan pc reg us mt mw srcTile, Diverted)
+            (replan pc reg stats us mt mw srcTile, Diverted)
         Just _ → case (mCliff, mFall) of
             (Just (srcZ, dstZ), _) →
                 -- Face the CLIFF, not the unit's walking sub-step.
@@ -746,16 +754,18 @@ gaitForPose _ stats mt   = gaitFor stats mt
 replan
     ∷ PathingConfig
     → MaterialRegistry
+    → UnitMoveStats
     → UnitSimState
     → MoveTarget
     → MoveWorld
     → (Int, Int)
     → UnitSimState
-replan pc reg us mt mw srcTile =
+replan pc reg stats us mt mw srcTile =
     let finalTile = (floor (mtTargetX mt), floor (mtTargetY mt))
         tilePath = case mwTiles mw of
-            Just wtd → localAStarUnder (mtHazard mt) pc reg wtd srcTile
-                                       finalTile defaultMaxRadius
+            Just wtd → localAStarUnder (moveHazardFor (mtHazard mt) stats)
+                                       pc reg wtd srcTile finalTile
+                                       defaultMaxRadius
             Nothing  → []
         wps = map tileCenter tilePath
     in if null wps

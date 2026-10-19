@@ -617,6 +617,7 @@ library
                      Unit.Medical.Reach
                      Unit.Pathing.Config
                      Unit.Pathing.Hazard
+                     Unit.Pathing.ClimbRisk
                      Unit.Pathing.Cost
                      Unit.Pathing.AStar
                      Unit.Physics
