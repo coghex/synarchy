@@ -5568,7 +5568,12 @@ rebuild that ran the same commands (such as `cabal test`) does too. A
 selected custom build directory is certified by its own plan. Source
 edits are not inputs, so an edited module is scanned as it now reads.
 `--cabal-regression`, run after the build in the same places, proves the
-capture on a tiny real-Cabal package. CPP modules stay allowed; their
+capture on a tiny real-Cabal package. Nothing it builds needs GHC's
+profiling libraries: profiling is local-only (#2870), so its profiling
+case runs only under `--cabal-regression --with-profiling`, a local check
+that needs those libraries and that neither CI nor `make ci` passes
+(`--self-test` fails if either entry point builds with profiling). CPP
+modules stay allowed; their
 directives, splices, macros and headers are expanded as the build
 expands them, and comments and
 string literals, MultilineStrings included, are ignored. A missing
