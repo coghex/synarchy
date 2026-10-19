@@ -1000,6 +1000,15 @@ jobs:
           python3 tools/ci_cache_report.py --self-test
           python3 tools/ci_lane_report.py --self-test
 
+      # The synarchy-deps publisher (#2864) runs only in deps-image.yml, on
+      # master pushes, where nothing would notice its decisions regressing
+      # until an image went missing or was overwritten. These tests pin its
+      # write-once and moving-tag rules, its refusal of every pull request,
+      # the Docker-free consumer path and that workflow's wiring, over an
+      # in-process fake registry: no network, no Docker, about a second.
+      - name: Dependency image publisher tests
+        run: python3 tools/test_ci_deps_image.py
+
       - name: Test audit
         run: python3 tools/test_audit.py
 
