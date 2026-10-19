@@ -1799,6 +1799,8 @@ allow. It is not a promise that every slice has equal cost.
 - **Out of scope:** Changing expedition gameplay or #2640's specification, new building/location art.
 - **Open questions:** None at the agreed product-policy level. If concrete field ownership or integration reveals a new material choice, stop and ask before implementing it; D-52's redesign stop remains binding.
 
+- **Delivered (#2712).** `Scenario.Placement.{Catalog,Structure,Building,Location,Install,Encode}` construct and recapture structure pieces, buildings and real placed locations through the runtime's own owners: whole-footprint validation against the finite map before any mutation, buildings through `canPlaceAt` and the reservation owners with their power node and charge, locations as real `LocationInstance`s at the authored anchor (never overlay entries) with an encounter roster that is exactly the units that join, significant and pending/realized container bindings through the instance owner's functions, one world-thread commit, and a capture that never opens a shell or imports player progress. The owner chose scenario format v3 on 2026-10-19 (`structures[].variant`, `locations[].containers`, identity v2 → v3 migration), scenario buildings stored with `biSpawnRemaining = 0`, and the encounter-roster rule; `buildings` v4 and `world-pages` v16 carry the scenario-id mappings. Contract: [scenario_format.md](../scenario_format.md#placement-construction-and-capture-scn-12-2712), [engine_contracts.md](../engine_contracts.md#scenario-placement-structures-buildings-and-real-locations-2712).
+
 ### SCN-13. Load scenarios through one paused session transaction
 
 - **Outcome:** A shared engine service loads the usable scenario subset and reports an honest terminal result.

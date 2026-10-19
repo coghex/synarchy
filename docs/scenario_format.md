@@ -1,10 +1,10 @@
-# Scenario file format (v1, v2)
+# Scenario file format (v1, v2, v3)
 
 Scenarios are reusable testing-arena setups (epic #2698). An author writes one as
 YAML, and later the arena captures one from a running session (SCN-14). This
 document is the authoring guide and contract for format version 1, defined by #2699
 (SCN-01), and for version 2, which #2711 (SCN-11) added to give flora's physical
-state a home (see [Flora, format v2](#flora-format-v2)). The decoder and validator live in `src/Scenario/`. The design rationale
+state a home (see [Flora, format v2](#flora-format-v2)), and for version 3, which #2712 (SCN-12) added so that structure pieces can name a pack variant and a location can bind its container shells (see [Placement construction and capture](#placement-construction-and-capture-scn-12-2712)). The decoder and validator live in `src/Scenario/`. The design rationale
 is in [designs/predefined_arena_worlds_design.md](designs/predefined_arena_worlds_design.md),
 in SCN-01 and the decisions it cites.
 
@@ -311,9 +311,12 @@ that names a v2 field still reports it as `UnknownField`.
 | `pack` | structure pack name | req | — | `data/structure_packs/<pack>.yaml`. |
 | `piece` | `floor`, `ceiling`, `wall_ne`, `wall_nw`, `wall_se`, `wall_sw`, `post_n`, `post_e`, `post_s`, `post_w`, `wire` | req | — | `Structure.Types.StructureSlot`; the pack must supply that piece kind. |
 | `x`, `y` | integer tile | req | — | Tile position. |
-| `z` | integer | opt | Column surface | Piece z (`WeSetStructure`). |
+| `z` | integer | opt | Derived level (see [Structure pieces](#structure-pieces)) | Piece z (`WeSetStructure`). |
+| `variant` | pack variant name (format v3) | opt | The pack's default art | The pack's named art variant (`damaged`, `weathered`, `broken`, `ruined`, …) the piece is drawn with. The name is validated against the registered pack at decode time. Wall cap and wire connection variants are derived, never authored. |
 
-Derived: texture and facemap palette ids, and wire connection variants.
+Derived: texture and facemap palette ids, and wire connection variants. `tags` are
+accepted and dropped with a `FieldRejected` diagnostic: a structure piece has no
+gameplay-tag owner.
 
 ### `buildings[]`
 
@@ -338,11 +341,13 @@ membership and relationships.
 | `x`, `y` | integer tile anchor | req | — | `liAnchor`; footprint (`liBounds`) from the definition. |
 | `significant_items` | map `slot → item id` | opt | All slots unbound | Binds `liSignificant` slot `n` (1-based, at most the definition's count) to that item's physical identity. This is an optional reference. Slot keys are plain decimals (`"1"`, never `"01"`), so two keys cannot name one slot. The target must be an item of the definition that slot requires (`lsiItemDefName`); a mismatch drops the binding with `DefinitionMismatch`. |
 
-Derived or excluded: display name, gloss and etymology are derived. Encounter roll
-and roster are derived from definition and identity; units join by `encounter`.
-Container slots are derived from the definition. The location instance id is
-allocated. Lifecycle and discovery, encounter progress, the taken latch and the
-clearance notice are player and expedition progress, and are excluded by D-3.
+| `containers` | map `slot → {item, realized, profile}` (format v3) | opt | All slots unbound | Binds container slot `n` (1-based, numbered over the definition's `container` entries alone) to a physical shell. `item` is an optional item reference to an item of the definition that slot mints (a mismatch drops the binding with `DefinitionMismatch`, an unrejected target that did not survive with `RejectedReference`). `realized` is optional and defaults to `false`: a PENDING slot keeps its loot profile (`profile`, else the definition's) and nothing is drawn, a REALIZED slot is latched with its profile discarded, its contents being exactly the stated tree. `profile` is allowed only on a pending slot. Capture never opens a shell and never rolls loot. |
+
+Derived or excluded: display name, gloss and etymology are derived. The encounter's
+roster is exactly the units that join it by `encounter` (see
+[Locations](#locations)); the instance id is allocated. Lifecycle and discovery,
+encounter progress, the taken latch and the clearance notice are player and
+expedition progress, and are excluded by D-3.
 
 ### `units[]`
 
@@ -922,7 +927,9 @@ ground_items:
   is the first such step: `flora[]` gained `offset_u`, `offset_v`, `variant` and
   `regrowth`, the v1 → v2 migration is the identity, and a version-1 document keeps
   its closed vocabulary (the decoder gates the new fields on the declared source
-  version).
+  version). Version 3 (#2712) is the second: `structures[]` gained `variant`,
+  `locations[]` gained `containers`, the v2 → v3 migration is the identity, and a
+  version-1 or version-2 document keeps its vocabulary.
 - **Definition changes.** Removed definitions follow the ordinary rejection rules.
   Explicit values are never reset. Stats added to a definition later take their
   deterministic defaults.
@@ -957,6 +964,27 @@ representation by species category with no selector; one appended durable edit
 constructor (`WeSetFloraState`, `world-edits` v6); base width stays derived. The same
 decision confirmed that every authored occurrence uses the existing planted allocator
 and that no flora or terrain scenario references are persisted.
+
+## Owner decisions recorded for v3
+
+The #2712 design raised four decisions the issue left open. The owner decided on
+2026-10-19, relayed by the project manager, approving each recommendation as
+written. Each is recorded with the owner's own words.
+
+1. **"v3 as proposed (Recommended)".** An additive format v3 with an identity
+   v2 → v3 migration and frozen v1 and v2 fixtures. `locations[].containers` maps a
+   slot to `{item, realized (default false), profile (pending only)}`, under the
+   same optional-reference rules as `significant_items` (a binding that cannot hold
+   drops only itself). Capture never opens or rolls a shell.
+2. **"Add structures[].variant (Recommended)".** An optional pack variant name in the
+   same v3; omitted means the pack's default art.
+3. **"No extra units (Recommended)".** Every scenario building is stored with
+   `biSpawnRemaining = 0`; scenario units come only from `units[]`. Requirement 7
+   of the issue wins over the trusted spec amendment's roster expansion.
+4. **"Confirm (Recommended)".** Encounter occupants are exactly the units that join
+   by `encounter`; zero joined units is an empty ruin; a unit that joins a
+   definition with no encounter entry is rejected with a diagnostic
+   (`NoEncounter`).
 
 ## World content construction and capture (SCN-11, #2711)
 
@@ -1069,6 +1097,126 @@ payload verbatim. Crop plots and regrowth timers already persist in `world-activ
 cursor and the tile, occurrence and plot tags in `world-edits`. The `z16-scenario-world` fixture pins the
 whole set. See [persistence_state_inventory.md](persistence_state_inventory.md).
 
+## Placement construction and capture (SCN-12, #2712)
+
+`Scenario.Placement.*` constructs and recaptures the structure pieces, buildings and
+real placed locations a scenario states, through the runtime's own owners. Each adapter
+is pure up to one commit.
+
+| Module | Role |
+|---|---|
+| `Scenario.Placement.Catalog` | The decoder's catalog of building definitions, location definitions (with their container slots, loot profiles and encounter), pack variants. |
+| `Scenario.Placement.Structure` | `buildStructures` / `captureStructures`: pieces to `WeSetStructure` edits and back. |
+| `Scenario.Placement.Building` | `buildBuildings`, `installBuildingBuilds`, `captureBuildings`. |
+| `Scenario.Placement.Location` | `validateLocations`, `resolveLocationInstalls`, `applyLocationInstalls`, `captureLocations`. |
+| `Scenario.Placement.Install` | `requestPlacementInstall` / the world-thread commit (`WorldInstallScenarioPlacement`). |
+| `Scenario.Placement.Encode` | The YAML values of the three entry families. |
+
+The orchestration order is fixed by the dependencies: buildings are judged against the
+real terrain; locations are validated, and the units that would join a rejected
+location are excluded before they are built; units and ground items are installed;
+the locations are resolved against what actually installed, and the structures and
+locations are committed on the world thread in one request. Composing the product
+load is SCN-13's; the `Scenario.Placement` tests drive this order end to end.
+
+### Structure pieces
+
+- **Levels.** An omitted `z` is derived from the column's terrain surface: floor, wall
+  and wire at `surface + 1`, ceiling at `surface + 2`, and a post at the level of the
+  floor on its tile, else `surface + 1`. Every captured piece states its level.
+- **Finite bounds.** A piece whose tile is outside the finite map is rejected
+  (`EntryRejected`). The same tile and slot stated twice keeps the later entry and
+  reports the replaced one.
+- **Commit.** The materialization establishes the page's structure baseline: it
+  replaces every structure edit on the page, interns the art paths in the palette only
+  once the page admits the request, rebuilds each resident chunk's overlay through
+  the ordinary replay, clears the staged write-ahead cache and revalidates
+  construction designations. A removed ruin's geometry stays absent after chunk
+  eviction and readmission because the durable edit log is the authority.
+- **Capture.** A placed piece stores palette ids and a level, so its art identity is
+  the (sprite, facemap) pair they resolve to. Capture inverts that exactly:
+  `Structure.ArtCatalog.placedArtPairs` enumerates every pair the registered packs can
+  place, and a piece resolves to the pack and variant that places its pair for its
+  slot's kind. Art that renders identically under several claimants (a variant that
+  inherits the default's sprite and facemap) resolves to the default when it is one of
+  them, otherwise to the least pack and variant, so the document is one fixed
+  spelling of the same rendering. A sprite no registered pack places for that slot is
+  reported and the piece skipped. Variant facemaps are registered by
+  `structure.registerPackArt` (`variantFaces`), since a variant's facemap is not
+  otherwise in the art catalog.
+
+### Buildings
+
+- **Footprint.** The whole footprint is judged by `Building.Placement.canPlaceAt`
+  against the real terrain, with the finite-map rectangle enforced including partial
+  chunks, and against the buildings already accepted from the same document (a
+  rejected building leaves no trace in the occupancy later entries are judged
+  against). A starting building (`bdIsStarting`) is rejected only inside a placed
+  location's bounds.
+- **Level.** A building stands on the ground: an explicit `z` that differs from the
+  terrain surface at the anchor is dropped with `FieldRejected`.
+- **State.** `build_progress`, `materials_delivered`, `storage` (nested, explicitly
+  empty and overloaded trees alike) and `power_charge` are restored exactly. Every
+  scenario building is stored with `biSpawnRemaining = 0`, never the `-1` "seed the
+  roster" sentinel, so the building-spawn sequencer neither seeds nor spawns a unit;
+  scenario units come only from `units[]` (owner decision 3).
+- **Rejection.** A rejected building leaves no instance, no reservation, no power
+  node, no tag and no reference. Its owned items are rejected with it
+  (`OwnerRejected` / `CascadeRejected`), and an optional reference to one drops with
+  `RejectedReference`.
+- **Commit.** Under the page-lifecycle lock and the page's incarnation fence: the
+  footprint is reserved and committed, the instance, tags and scenario reference are
+  written in one modification of the building manager, the power node is minted with
+  its charge, and the item trees take their references and tags. A failure retires
+  the building again.
+- **Capture.** A building built from a reference is captured as it; any other is named
+  `buildings.<definition>.<x>.<y>`. `power_charge` is read from the node.
+
+### Locations
+
+- **A location is an instance.** Each accepted entry adds one
+  `Location.Instance.LocationInstance` at the authored anchor tile. Two instances may
+  share a chunk and a footprint may span several. Scenario locations never enter the
+  world-generation overlay, so the stamper's every-load dispatch cannot re-stamp or
+  re-spawn them; the geometry and contents are the scenario's own `structures[]` and
+  `units[]`, `buildings[]` and `ground_items[]`.
+- **Finite bounds.** The whole footprint (`liBounds` around the anchor) must be inside
+  the finite map. A rejected location leaves no instance and no id, and every unit
+  whose `encounter` names it is rejected with it.
+- **Encounter.** The roster is exactly the units installed with `encounter` naming the
+  location: its rolled count is the number of joined units, its roster is complete,
+  and nothing is rolled or spawned. Zero joined units is an empty ruin, cleared as an
+  ordinary roll of zero is. A unit that joins a definition with no encounter entry is
+  rejected at decode (`NoEncounter`, owner decision 4).
+- **Completion state is rebuilt.** A fresh instance is `LifecycleUnknown` with its
+  clearance notice seated. Its content-spawn flag (`liContentsSpawned`) is set exactly
+  when every significant slot is bound, the only state a saved table may hold with the
+  flag set, and the anchor chunk's geometry marker (`wgpLocationStamped`) is set by the
+  commit; neither the stamper nor `spawnContents` can then add a second copy. A paused
+  initialization advances nothing and realizes no pending loot.
+- **Bindings.** `significant_items` and `containers` are optional references resolved
+  against what installed; a missing, rejected or wrong-definition target drops only
+  that binding (`RejectedReference` / `DefinitionMismatch`) and the slot stays unbound.
+  Every write goes through the instance owner's own functions, so every rule a decoded
+  table must satisfy binds this path too.
+- **Capture.** The table is read as it is: tags, slot bindings, and each container slot
+  as pending (with its profile) or realized. Occupants write `encounter` on their unit
+  entry. Capture order is items, buildings, locations, units, structures.
+
+### Persistence
+
+Scenario identity survives an ordinary save in two existing components, each with a
+frozen previous-version type and a migration: `buildings` v4 carries
+`bmScenarioRefs` (`pbScenarioRefs`) and `world-pages` v16 carries the location
+references (`pcLocationScenarioRefs`, rebuilt into `lisScenarioRefs`). Integrity
+refuses a reference two buildings or two locations hold, and a building and a
+location reference that collide, and warns about a building reference that names
+no building. The
+`Scenario.Placement` group saves a materialized page through the real envelope,
+decodes and stages it, and a capture of the restored state equals the original
+without the source document. See
+[persistence_state_inventory.md](persistence_state_inventory.md).
+
 ## Fixture expectations and tests
 
 The `Scenario.Units` group (`test-headless/Test/Headless/Scenario/Units.hs`) covers unit
@@ -1090,6 +1238,19 @@ cabal test synarchy-test-headless --test-options='--match "Scenario.Units"'
 # one child alone (writes the canonical JSON to OUT):
 SYNARCHY_SCENARIO_UNITS_CHILD='OUT|plain' \
   "$(cabal list-bin synarchy-test-headless)" --match "Scenario.Units/fresh process/child entry"
+```
+
+The `Scenario.Placement` group (`test-headless/Test/Headless/Scenario/Placement.hs`)
+needs no GPU. It boots a headless engine with a running world thread, loads the
+shipped items, units, buildings, loot tables and profiles, the `ruin_small` location
+and the `dungeon_1` pack (through the real `scripts/structures.lua`), creates real
+finite arena pages, and drives materialize, capture, YAML encode and decode, and an
+ordinary save and stage. Its property examples draw seeded layouts and compare them
+against an oracle written from the map rectangle alone. Mutation checks of the
+adapters are recorded with the PR.
+
+```sh
+cabal test synarchy-test-headless --test-options='--match "Scenario.Placement"'
 ```
 
 The `Scenario.Items` group (`test-headless/Test/Headless/Scenario/Items.hs`) covers
