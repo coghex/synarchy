@@ -18,6 +18,7 @@ import qualified Data.ByteString.Char8 as BC
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import qualified Data.Text as T
 import Item.Ground (GroundItems(..))
 import Scenario.Items.Refs (itemRefsToAscList)
@@ -25,7 +26,7 @@ import System.Random (StdGen, mkStdGen, randomR)
 import Building.Types
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
-import Gameplay.Tags.Index (emptyCategoryIndex)
+import Gameplay.Tags.Index (categoryTagsOf, emptyCategoryIndex)
 import Scenario.Items.Refs (emptyItemRefs)
 import Unit.Sim.Types (UnitThreadState(..))
 import Unit.Types (UnitManager(..))
@@ -34,8 +35,10 @@ import Location.ArenaPlacement (allocateLocationInstanceAtIn)
 import Location.Types (lookupLocation)
 import Unit.Types (UnitId(..))
 import Power.Types (nodeForBuilding, PowerNode(..))
+import Scenario.Placement.Building (BuildingCompletion(..), BuildingInstallFailure(..))
 import Scenario.Types
 import qualified Test.Headless.Scenario.Placement.Art as Art
+import qualified Test.Headless.Scenario.Placement.Persistence as Persistence
 import Test.Headless.Scenario.Placement.Fixtures
 import Test.Headless.Scenario.Placement.Glue
 import World.Arena.Bounds (ArenaBounds, mkArenaBounds)
@@ -50,6 +53,7 @@ import World.Tile.Types (WorldTileData(..))
 spec ∷ Spec
 spec = do
   Art.spec
+  Persistence.spec
   aroundAll (\act → withFx (\fx → registerFixtures fx ≫ act fx)) $ do
     buildingSpec
     structureSpec
@@ -650,6 +654,36 @@ storageSpec = describe "building contents" $ do
         (pid3, ws3) ← scene fx
         _ ← materialize fx pid3 ws3 arena40 s2
         docOf ⊚ capturePage fx pid3 ws3 arena40 `shouldReturn` docOf c1
+
+    it "retires a building whose item references cannot be held, leaving nothing of it behind" $ \fx → do
+        (pid1, ws1) ← scene fx
+        first ← clean fx $ doc
+            [ "buildings:"
+            , "  - {id: crate1, definition: cargo_hold_S, x: 0, y: 0, storage: [{id: bars, definition: steel_bar}]}" ]
+        mzDiagnostics ⊚ materialize fx pid1 ws1 arena40 first `shouldReturn` []
+        -- a second page in the same session: scenario references are unique
+        -- per session, so "bars" is already held and the commit of the item
+        -- trees is refused after the footprint was committed
+        (pid2, ws2) ← newArena (fxEnv fx) "placement_second" 40 40
+        second ← clean fx $ doc
+            [ "buildings:"
+            , "  - id: crate2"
+            , "    tags: [doomed]"
+            , "    definition: cargo_hold_S"
+            , "    x: 2"
+            , "    y: 0"
+            , "    storage: [{id: bars, definition: steel_bar}]" ]
+        mz ← materialize fx pid2 ws2 arena40 second
+        [ case c of BuildingNotInstalled r (BuildingItemsRefused _) → Just r; _ → Nothing | c ← mzBuildings mz ]
+            `shouldBe` [Just "crate2"]
+        bm ← readIORef (buildingManagerRef (fxEnv fx))
+        Map.elems (bmScenarioRefs bm) `shouldBe` ["crate1"]
+        (HM.size (bmInstances bm), HM.size (bmReservations bm)) `shouldBe` (1, 0)
+        categoryTagsOf' bm `shouldBe` []
+        ds ← pure (mzDiagnostics mz)
+        ds `shouldBe` []
+  where
+    categoryTagsOf' bm = [ () | b ← HM.keys (bmInstances bm), not (Set.null (categoryTagsOf b (bmTags bm))) ]
 
 -- * Ordinary saves
 

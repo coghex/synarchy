@@ -343,9 +343,11 @@ sessionIntegrityErrors snap = concat
         , let v = tshow (unLocationInstanceId lid) ]
 
     -- #2712: scenario ids share ONE session namespace across units,
-    -- buildings and locations, so a reference held by two entries of two
-    -- different families would restore a mapping that names two runtime
-    -- objects. (One family: 'unitRefClaimErrors' and the codecs.)
+    -- buildings and locations, so a reference held by two different
+    -- objects would restore a mapping that names two runtime objects. Two
+    -- units are 'unitRefClaimErrors''; this reports every other pair — two
+    -- families, or two buildings or two locations on different pages (one
+    -- page's list is the codec's own check).
     crossFamilyRefClaimErrors =
         [ IntegrityError
             { ieComponent = comp, ieVersion = ver
@@ -358,26 +360,31 @@ sessionIntegrityErrors snap = concat
                 <> "' names more than one unit, building or location in the session"
             }
         | (r, holders) ← Map.toList claims
-        , length (L.nub (map fst holders)) > 1
-        , (_, (comp, ver, path, kind, v)) ← holders ]
+        , contested holders
+        , (_, _, (comp, ver, path, kind, v)) ← holders ]
       where
-        claims ∷ Map.Map Text [(Text, (ComponentId, Word32, Text, RefKind, Text))]
+        -- (family, page, where it is held)
+        claims ∷ Map.Map Text [(Text, WorldPageId, (ComponentId, Word32, Text, RefKind, Text))]
         claims = Map.fromListWith (flip (⧺)) $
-            [ (r, [("unit", ( unitsComponentId, ccVersion unitsCodec
-                            , "units[page=" <> unWorldPageId pid <> "].scenario-refs[unit=" <> tshow (unUnitId uid) <> "]"
-                            , RefUnit, tshow (unUnitId uid) ))])
+            [ (r, [("unit", pid, ( unitsComponentId, ccVersion unitsCodec
+                                 , "units[page=" <> unWorldPageId pid <> "].scenario-refs[unit=" <> tshow (unUnitId uid) <> "]"
+                                 , RefUnit, tshow (unUnitId uid) ))])
             | (pid, page) ← L.sortOn fst (HM.toList pages)
             , (uid, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
-            ⧺ [ (r, [("building", ( buildingsComponentId, ccVersion buildingsCodec
-                                  , "buildings[page=" <> unWorldPageId pid <> "].scenario-refs[building=" <> tshow (unBuildingId bid) <> "]"
-                                  , RefBuilding, tshow (unBuildingId bid) ))])
+            ⧺ [ (r, [("building", pid, ( buildingsComponentId, ccVersion buildingsCodec
+                                       , "buildings[page=" <> unWorldPageId pid <> "].scenario-refs[building=" <> tshow (unBuildingId bid) <> "]"
+                                       , RefBuilding, tshow (unBuildingId bid) ))])
               | (pid, page) ← L.sortOn fst (HM.toList pages)
               , (bid, r) ← Map.toAscList (bsnScenarioRefs (pgsBuildings page)) ]
-            ⧺ [ (r, [("location", ( worldPagesComponentId, worldPagesVersion
-                                  , "world-pages[page=" <> unWorldPageId pid <> "].scenario-refs[location=" <> tshow (unLocationInstanceId lid) <> "]"
-                                  , RefLocationInstance, tshow (unLocationInstanceId lid) ))])
+            ⧺ [ (r, [("location", pid, ( worldPagesComponentId, worldPagesVersion
+                                       , "world-pages[page=" <> unWorldPageId pid <> "].scenario-refs[location=" <> tshow (unLocationInstanceId lid) <> "]"
+                                       , RefLocationInstance, tshow (unLocationInstanceId lid) ))])
               | (pid, page) ← L.sortOn fst (HM.toList pages)
               , (lid, r) ← Map.toAscList (lisScenarioRefs (wgpLocationInstances (pgsGenParams page))) ]
+        contested holders =
+            length (L.nub [ f | (f, _, _) ← holders ]) > 1
+            ∨ or [ length (L.nub [ pg | (f', pg, _) ← holders, f' ≡ f ]) > 1
+                 | f ← ["building", "location"] ]
 
     buildingTagErrors =
         [ err

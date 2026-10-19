@@ -2019,6 +2019,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Placement
                    Test.Headless.Scenario.Placement.Art
                    Test.Headless.Scenario.Placement.Fixtures
+                   Test.Headless.Scenario.Placement.Persistence
                    Test.Headless.Scenario.Placement.Glue
                    Test.Headless.Scenario.World
                    Test.Headless.Scenario.World.Fixtures
