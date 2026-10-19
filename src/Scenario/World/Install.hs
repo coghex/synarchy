@@ -55,12 +55,14 @@ import qualified Data.Set as Set
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import Engine.Core.Log (LoggerState)
+import Gameplay.Tags.Edit (TagEdit(..), TagEditResult(..))
 import Gameplay.Tags.Index (categoryTargets, modifyCategoryTags, emptyCategoryIndex)
 import Gameplay.Tags.Page
 import Gameplay.Tags.PageLive (pageTagWrite)
 import Gameplay.Tags.Types
     ( mkPlantTarget, plotTargetFromStored, tileTargetFromStored
     , tileTargetX, tileTargetY )
+import Scenario.Types (DiagnosticReason(..), DiagnosticEffect(..), ScenarioDiagnostic(..))
 import Scenario.World.Build
 import Scenario.World.Types
 import World.Chunk.Admit (pageIncarnation)
@@ -77,7 +79,7 @@ import World.Material (materialIdByName)
 import World.Page.Types (WorldPageId)
 import World.State.Types
 import World.Thread.Command.Edit.Sync (syncEditToSim)
-import World.Tile.Types (WorldTileData(..))
+import World.Tile.Types (WorldTileData(..), lookupChunk)
 import World.Time.Types (defaultCalendarConfig, worldAbsoluteDay)
 
 -- | Whether an edit belongs to the structure adapters, which a
@@ -188,36 +190,60 @@ installWorldContent wsc _logger page ws request = do
     -- regrowth timers: the new plants' timers beside whatever survived
     atomicModifyIORef' (wsFloraHarvestsRef ws) $ \hs →
         (foldl' (\m (iid, secs) → HM.insert iid secs m) hs (wcHarvests content), ())
-    installTags ws page content
+    tagDiags ← installTags ws page content
     bumpQuadCacheGen ws
     writeIORef (wsZoomQuadCacheRef ws) Nothing
     writeIORef (wsBgQuadCacheRef ws) Nothing
     pure WorldInstallResult
         { wirRefs = wcRefs content
-        , wirDiagnostics = wcDiagnostics content
+        , wirDiagnostics = wcDiagnostics content ⧺ tagDiags
         , wirChunks = map lcCoord resident }
 
--- | Record the content's memberships, under the page lock, together.
-installTags ∷ WorldState → WorldPageId → WorldContent → IO ()
+-- | Record the content's memberships, under the page lock, together, and
+--   answer the targets the owner refused.
+--
+--   A target in a RESIDENT chunk goes through the owner's own edit
+--   ('Gameplay.Tags.Page.editTileTags' / 'editOccurrenceTags' /
+--   'editPlotTags'), which writes only a live cell, a resident occurrence
+--   or a plot that stands on a resident chunk — a refusal is a diagnostic,
+--   never an invented membership. A target in a chunk that is NOT resident
+--   cannot be checked against a tile store that does not hold it: the
+--   owner keeps such assignments ("Gameplay.Tags.Page", residency is not
+--   lifetime), and the build proved the cell or plant will exist, so it is
+--   recorded directly and the admission of its chunk reconciles it.
+installTags ∷ WorldState → WorldPageId → WorldContent → IO [ScenarioDiagnostic]
 installTags ws page content = pageTagWrite ws $ do
-    atomicModifyIORef' (wsPageTagsRef ws) $ \pt →
-        let tiles = foldl'
-                (\ix ((x, y, z), tags) →
-                    modifyCategoryTags (applyTagEdit' tags)
-                        (tileTargetFromStored page x y z) ix)
-                (ptTiles pt) (wcTileTags content)
-            (occ, occTiles) = foldl'
-                (\(ix, m) (iid, tile, tags) → case mkPlantTarget page iid of
-                    Nothing → (ix, m)
-                    Just t → ( modifyCategoryTags (applyTagEdit' tags) t ix
-                             , Map.insert iid tile m ))
-                (ptOccurrences pt, ptOccurrenceTiles pt) (wcOccurrenceTags content)
-        in (pt { ptTiles = tiles, ptOccurrences = occ, ptOccurrenceTiles = occTiles }, ())
-    atomicModifyIORef' (wsCropPlotsRef ws) $ \store →
-        ( store { cpsTags = foldl'
-                    (\ix ((x, y), tags) →
-                        modifyCategoryTags (applyTagEdit' tags)
-                            (plotTargetFromStored page x y) ix)
-                    (cpsTags store) (wcPlotTags content) }
-        , () )
-  where applyTagEdit' tags = Set.union tags
+    td ← readIORef (wsTilesRef ws)
+    let resident (x, y) = isJust (lookupChunk (fst (globalToChunk x y)) td)
+        refusal what = ScenarioDiagnostic ("tags." <> what)
+            (InvalidValue "the target is not a live object of its page") FieldRejected
+    tileRefused ← atomicModifyIORef' (wsPageTagsRef ws) $ \pt0 →
+        foldl' (\(pt, bad) ((x, y, z), tags) →
+            let t = tileTargetFromStored page x y z
+            in if resident (x, y)
+                then case editTileTags td t (AddTagsEdit tags) pt of
+                    (pt', TagEditApplied) → (pt', bad)
+                    (pt', TagEditNoTarget) → (pt', refusal (tshow (x, y, z)) : bad)
+                else (pt { ptTiles = modifyCategoryTags (Set.union tags) t (ptTiles pt) }, bad))
+            (pt0, []) (wcTileTags content)
+    occRefused ← atomicModifyIORef' (wsPageTagsRef ws) $ \pt0 →
+        foldl' (\(pt, bad) (iid, tile, tags) → case mkPlantTarget page iid of
+            Nothing → (pt, bad)
+            Just t
+                | resident tile → case editOccurrenceTags td t (AddTagsEdit tags) pt of
+                    (pt', TagEditApplied) → (pt', bad)
+                    (pt', TagEditNoTarget) → (pt', refusal (tshow tile) : bad)
+                | otherwise → ( pt { ptOccurrences = modifyCategoryTags (Set.union tags) t (ptOccurrences pt)
+                                   , ptOccurrenceTiles = Map.insert iid tile (ptOccurrenceTiles pt) }
+                              , bad ))
+            (pt0, []) (wcOccurrenceTags content)
+    plotRefused ← atomicModifyIORef' (wsCropPlotsRef ws) $ \store0 →
+        foldl' (\(store, bad) (tile@(x, y), tags) →
+            let t = plotTargetFromStored page x y
+            in if resident tile
+                then case editPlotTags td t (AddTagsEdit tags) store of
+                    (store', TagEditApplied) → (store', bad)
+                    (store', TagEditNoTarget) → (store', refusal (tshow tile) : bad)
+                else (store { cpsTags = modifyCategoryTags (Set.union tags) t (cpsTags store) }, bad))
+            (store0, []) (wcPlotTags content)
+    pure (reverse (tileRefused ⧺ occRefused ⧺ plotRefused))

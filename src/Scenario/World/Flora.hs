@@ -85,7 +85,7 @@ import World.Arena.Bounds (ArenaBounds, arenaAdmitsTile)
 import World.Edit.Types (WorldEdit(..))
 import World.Flora.CropPlot
     (CropPlot, newCropPlot, cropPlotElapsedDays, cropPlotInstance)
-import World.Flora.Growth (growthRate)
+import World.Flora.Growth (floraTotalAge, floraTotalAgeAt, growthRate)
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdNone, floraInstanceSalt, nextPlantedFloraCursor)
 import World.Flora.Placement (mkInstance, speciesMaxAge)
@@ -246,7 +246,7 @@ buildFlora env entries =
                     , fiOffU = authoredOr (fiOffU proto) (feOffsetU e)
                     , fiOffV = authoredOr (fiOffV proto) (feOffsetV e)
                     , fiZ = top
-                    , fiAge = baselineForAge rate day age
+                    , fiAge = baselineForAge health day age
                     , fiHealth = health
                     , fiVariant = authoredOr (fiVariant proto) (feVariant e)
                     , fiBaseWidth = baseWidth
@@ -270,12 +270,12 @@ buildFlora env entries =
 --   nearest) is the answer; the value it derives IS on the grid, and
 --   asking for that value again is exact.
 baselineForAge ∷ Float → Int → Float → Float
-baselineForAge rate day age =
-    let dr = fromIntegral (max 0 day) * rate
+baselineForAge health day age =
+    let dr = fromIntegral (max 0 day) * growthRate health
         b0 = age - dr
         up = take 8 (iterate nextUp b0)
         down = take 8 (iterate nextDown b0)
-    in fromMaybe b0 (find (\b → b + dr ≡ age) (up ⧺ down))
+    in fromMaybe b0 (find (\b → floraTotalAgeAt b health day ≡ age) (up ⧺ down))
 
 nextUp ∷ Float → Float
 nextUp f
@@ -296,8 +296,7 @@ nextDown = negate ∘ nextUp ∘ negate
 --   'baselineForAge' and the same hash-derived lifespan, reproduces the
 --   generation, the dead window and the phase exactly.
 derivedOccurrenceAge ∷ Int → FloraInstance → Float
-derivedOccurrenceAge day fi =
-    fiAge fi + fromIntegral (max 0 day) * growthRate (fiHealth fi)
+derivedOccurrenceAge = floraTotalAge
 
 -- | The planted day that gives a crop plot the authored age: its age is
 --   @elapsedDays · rate@, so the elapsed days are @age / rate@ rounded
@@ -309,6 +308,4 @@ plotPlantedDay day rate age = day - max 0 (round (age / rate))
 --   wrap, through the plot owner's own growth adapter
 --   ('cropPlotInstance', 'cropPlotElapsedDays'): @elapsedDays · rate@.
 derivedPlotAge ∷ Int → CropPlot → Float
-derivedPlotAge day plot =
-    let fi = cropPlotInstance plot
-    in fiAge fi + fromIntegral (cropPlotElapsedDays day plot) * growthRate (fiHealth fi)
+derivedPlotAge day plot = floraTotalAge (cropPlotElapsedDays day plot) (cropPlotInstance plot)

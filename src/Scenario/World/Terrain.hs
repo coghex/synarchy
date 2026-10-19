@@ -80,7 +80,8 @@ import World.Arena.Bounds (ArenaBounds, clipTileRegion)
 import World.Constants (seaLevel)
 import World.Edit.Types (WorldEdit(..))
 import World.Fluid.Exact (exactSurfaceOfZ)
-import World.Fluid.Types (FluidType(..))
+import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive)
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Generate.Arena (arenaGraniteLayers, arenaLoamLayers)
 import World.Material (matAir, matLoam)
 import World.Material.Id (MaterialId(..))
@@ -298,11 +299,13 @@ fluidKindOfType t = case t of
     Lava  → FluidLava
 
 -- | The deepest fluid column the active simulation can hold, in exact
---   units over the terrain top: 'Sim.Fluid.Types.fluidCellToActive' stores
---   a cell's volume in a 'Word16' and CLAMPS beyond it, so a deeper
+--   units over the terrain top — READ OFF the owner, not restated: the
+--   volume 'Sim.Fluid.Types.fluidCellToActive' keeps for a cell as deep as
+--   an Int can say, which is where its 'Word16' clamp bites, so a deeper
 --   authored plane would be accepted and then silently lose fluid.
 maxFluidDepthUnits ∷ Integer
-maxFluidDepthUnits = toInteger (maxBound ∷ Word16)
+maxFluidDepthUnits =
+    maybe 0 (toInteger ∘ afcVolume) (fluidCellToActive 0 (FluidCell Lake maxBound))
 
 -- | Build the fluid of @patches@ over the terrain whose tile specs are
 --   @terrain@ (an untouched tile is the base column).

@@ -7,6 +7,8 @@ module Test.Headless.Scenario.World.Live (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (threadDelay)
+import Control.Exception (finally)
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
@@ -20,7 +22,10 @@ import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (LogConfig(..), LogBackend(..), initLogger, defaultLogConfig)
-import Engine.Graphics.Camera (CameraFacing(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import World.Grid (gridToWorld)
+import World.Flora.Growth (floraGrowth)
+import World.Render.FloraDraws (findTopSolid)
 import Item.Knowledge (emptyPortableKnowledge)
 import Sim.Chunk (applyChunkEdit)
 import Sim.Command.Types (SimCommand(..))
@@ -497,3 +502,94 @@ spec = describe "on a live arena page (through the world thread)" $ do
         fmap (\(_, _, sl, _) → sl) ⊚ liveColumn ws (48, 48) ≫= (`shouldBe` Just 5)
         -- and the neighbour's border was recomputed too
         fmap (\(_, _, sl, _) → sl) ⊚ liveColumn ws (47, 47) ≫= (`shouldBe` Just 5)
+
+    it "survives the world thread's OWN eviction and readmission: materialize, evict, readmit, capture and compare through the real paths" $ \env →
+        withVisibleArena env 200 200 $ \pid ws → do
+            let b = Just (bounds 200 200)
+                home = ChunkCoord 0 0
+                away = ChunkCoord (-5) (-5)       -- a full 5×5 window of valid chunks (−7…−3)
+                ramp = (terrainPatch "ramp" (RegionTiles [(15, 15)]) "loam" 0 (Authored 5) [tag "ramp"])   -- a chunk-edge tile
+                dead = (floraEntry "dead" "beet" 6 6) { feAge = Authored 365, feHealth = Authored 1 }   -- an Annual: dead window
+            _ ← install env pid ws
+                    (request [pad, pit, ramp] [pond] [oak, beet, wheat, dead])
+            -- the page's clock runs, so a regrowth timer only ever counts DOWN between
+            -- two reads; everything else must read the same
+            let steady cw = cw { cwFlora = [ e { feRegrowth = fmap (const 0) (feRegrowth e) } | e ← cwFlora cw ] }
+                capture = captureWorldContent Set.empty ⊚ liveSnapshot env ws b 0
+            before ← capture
+            growthBefore ← map (\o → (fiSpecies o, floraGrowth (speciesOf (fiSpecies o)) 0 o)) ⊚ liveOccurrences ws
+            -- evict: the camera loader spends its budget on the far window
+            atomicModifyIORef' (wsTilesRef ws) $ \td → (td { wtdMaxChunks = 25 }, ())
+            goToChunk env away
+            _ ← awaitChunk ws away
+            waitUntil 30 (isNothing ⊚ residentChunk ws home) `shouldReturn` True
+            -- gone from the tile store, yet the durable log reads as the same scenario
+            (steady ⊚ capture) ≫= (`shouldBe` steady before)
+            -- readmit through the real drain
+            goToChunk env home
+            _ ← awaitChunk ws home
+            after ← capture
+            cwTerrain after `shouldBe` cwTerrain before
+            cwFluids after `shouldBe` cwFluids before
+            cwDiagnostics after `shouldBe` cwDiagnostics before
+            map (\e → e { feRegrowth = Omitted }) (cwFlora after) `shouldBe` map (\e → e { feRegrowth = Omitted }) (cwFlora before)
+            forM_ (zip (cwFlora before) (cwFlora after)) $ \(x, y) →
+                case (feRegrowth x, feRegrowth y) of
+                    (Authored a, Authored c) → (c ≤ a) `shouldBe` True
+                    (a, c)                   → a `shouldBe` c
+            -- through the owners the runtime reads
+            -- (the pad's border column holds a DERIVED slope bit now — the runtime recomputes
+            -- border slopes on admission, depending on which neighbours are resident — which
+            -- is exactly why capture reads only the AUTHORED slope)
+            fmap (\(t, m, _, _) → (t, m)) ⊚ liveColumn ws (0, 0) ≫= (`shouldBe` Just (3, Just (unMaterialId matGranite)))
+            liveColumn ws (15, 15) ≫= (`shouldSatisfy` maybe False (\(_, _, sl, _) → sl ≡ 5))   -- the slope survived the admission recompute
+            liveFluid ws (6, 5) `shouldReturn` Just (FluidCell Lake 35)
+            os ← liveOccurrences ws
+            map (\o → (fiSpecies o, floraGrowth (speciesOf (fiSpecies o)) 0 o)) os `shouldMatchList` growthBefore
+            -- every plant stands where the renderer and picker put it
+            forM_ os $ \o → do
+                mc ← chunkAtTile ws (fromIntegral (fiTileX o), fromIntegral (fiTileY o))
+                let col = lcTiles (fromMaybe (error "resident") mc) V.! columnIndex (fromIntegral (fiTileX o)) (fromIntegral (fiTileY o))
+                findTopSolid col `shouldBe` fiZ o
+            tags ← readIORef (wsPageTagsRef ws)
+            categoryTagsOf (tileTargetFromStored pid 0 0 3) (ptTiles tags) `shouldBe` Set.fromList [tag "pad"]
+            HM.size ⊚ readIORef (wsFloraHarvestsRef ws) ≫= (`shouldBe` 1)
+
+-- | A finite arena page that is VISIBLE (the camera loader serves visible pages).
+withVisibleArena ∷ EngineEnv → Int → Int → (WorldPageId → WorldState → IO α) → IO α
+withVisibleArena env w h act = do
+    pid ← uniquePage "world_visible"
+    writeIORef (floraCatalogRef env) catalog
+    logger ← readIORef (loggerRef env)
+    loadPopulatedMaterialRegistry logger "data/materials" ≫= writeIORef (materialRegistryRef env)
+    sendWorldCommand env (WorldInitArena pid (Just (bounds w h)))
+    ws ← waitForWorldInit env pid 60
+    sendWorldCommand env (WorldInitArenaDone pid)
+    visible ← waitUntil 30 (elem pid ∘ wmVisible ⊚ readIORef (worldManagerRef env))
+    unless visible $ expectationFailure "the arena never became visible"
+    goToChunk env (ChunkCoord 0 0)
+    act pid ws `finally` do
+        sendWorldCommand env (WorldDestroy pid)
+        goToChunk env (ChunkCoord 0 0)
+
+waitUntil ∷ Int → IO Bool → IO Bool
+waitUntil secs cond = go (secs * 20)
+  where go k | k ≤ 0 = pure False
+             | otherwise = cond ≫= \ok → if ok then pure True
+                                         else threadDelay 50000 ≫ go (k - 1 ∷ Int)
+
+-- | Point the camera at the middle of a chunk.
+goToChunk ∷ EngineEnv → ChunkCoord → IO ()
+goToChunk env (ChunkCoord cx cy) = do
+    facing ← camFacing ⊚ readIORef (cameraRef env)
+    let (wx, wy) = gridToWorld facing (cx * 16 + 8) (cy * 16 + 8)
+    atomicModifyIORef' (cameraRef env) $ \cam → (cam { camPosition = (wx, wy), camZoom = 0.5 }, ())
+
+residentChunk ∷ WorldState → ChunkCoord → IO (Maybe LoadedChunk)
+residentChunk ws c = lookupChunk c ⊚ readIORef (wsTilesRef ws)
+
+awaitChunk ∷ WorldState → ChunkCoord → IO LoadedChunk
+awaitChunk ws c = do
+    ok ← waitForChunksAt ws c 60
+    unless ok $ expectationFailure ("chunk never became resident: " ⧺ show c)
+    residentChunk ws c ≫= maybe (expectationFailure "chunk vanished" ≫ error "unreachable") pure

@@ -29,7 +29,7 @@ import World.Chunk.Types
     ( ChunkCoord(..), LoadedChunk(..), columnIndex )
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays)
-import World.Flora.Growth (FloraGrowth(..), floraGrowth, growthRate)
+import World.Flora.Growth (FloraGrowth(..), floraGrowth, floraTotalAgeAt, growthRate)
 import World.Flora.Identity
     ( firstPlantedFloraCursor, isPlantedFloraInstanceId
     , nextPlantedFloraCursor )
@@ -308,7 +308,7 @@ floraSpec = describe "flora" $ do
                     then derived `shouldBe` age
                     else abs (derived - age) `shouldSatisfy` (≤ slack)
                 -- the derived value is ON the grid: asking for it again is exact
-                baselineForAge rate day derived + dr `shouldBe` derived
+                floraTotalAgeAt (baselineForAge health day derived) health day `shouldBe` derived
 
     it "keeps an explicit zero authoritative: no default fills it, no regrowth timer runs" $ do
         let e = (floraEntry "z" "oak" 0 0)

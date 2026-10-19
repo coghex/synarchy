@@ -33,6 +33,8 @@ module World.Flora.Growth
     ( -- * Derived growth state
       FloraGrowth(..)
     , floraGrowth
+    , floraTotalAge
+    , floraTotalAgeAt
     , growthRate
     , instanceLifespan
     , deadWindowDays
@@ -115,11 +117,24 @@ instanceHashFrac fi =
         h3 = h2 `xor` (h2 `shiftR` 13)
     in fromIntegral (h3 ⌃ 0xFFFF) / 65535.0
 
+-- | An instance's TOTAL growth in game days at an absolute world day: the
+--   stored baseline plus the days since the epoch at the health-scaled
+--   rate. THE one spelling of the formula — the lifecycle below starts
+--   from it, and a scenario's capture and construction
+--   ('Scenario.World.Flora') export and invert exactly this value — so the
+--   growth owner and its inverse cannot drift apart.
+floraTotalAge ∷ Int → FloraInstance → Float
+floraTotalAge absDay fi = floraTotalAgeAt (fiAge fi) (fiHealth fi) absDay
+
+-- | 'floraTotalAge' for a baseline and a health, without an instance.
+floraTotalAgeAt ∷ Float → Float → Int → Float
+floraTotalAgeAt baseline health absDay =
+    baseline + fromIntegral (max 0 absDay) * growthRate health
+
 -- | Derive an instance's growth state at an absolute world day.
 floraGrowth ∷ FloraSpecies → Int → FloraInstance → FloraGrowth
 floraGrowth sp absDay fi =
-    let total = fiAge fi
-              + fromIntegral (max 0 absDay) * growthRate (fiHealth fi)
+    let total = floraTotalAge absDay fi
     in case instanceLifespan sp fi of
         Nothing → FloraGrowth total 0 False
         Just lifespan →

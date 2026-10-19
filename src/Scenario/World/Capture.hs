@@ -216,10 +216,11 @@ columnsOf snap chunks =
     let visited = M.fromList
             [ ((gx, gy), c)
             | (coord, lc) ← M.toAscList chunks
+            , let authored = authoredChunk snap coord
             , ly ← [0 .. chunkSize - 1], lx ← [0 .. chunkSize - 1]
             , let (gx, gy) = chunkToGlobal coord lx ly
             , arenaAdmitsTile (snapBounds snap) gx gy
-            , Just c ← [columnOf lc (columnIndex lx ly)] ]
+            , Just c ← [columnOf lc authored (columnIndex lx ly)] ]
         extra = M.fromList
             [ ((x, y), TileCol baseTileSpec Nothing)
             | (x, y, _) ← M.keys (snapTileTags snap)
@@ -236,17 +237,38 @@ hollowTiles snap chunks =
     , ly ← [0 .. chunkSize - 1], lx ← [0 .. chunkSize - 1]
     , let (gx, gy) = chunkToGlobal coord lx ly
     , arenaAdmitsTile (snapBounds snap) gx gy
-    , isNothing (columnOf lc (columnIndex lx ly)) ]
+    , isNothing (columnOf lc Nothing (columnIndex lx ly)) ]
 
-columnOf ∷ LoadedChunk → Int → Maybe TileCol
-columnOf lc idx =
+-- | The chunk as the DURABLE LOG alone builds it — the arena base with the
+--   edits replayed, no derived pass — or 'Nothing' for a chunk the log never
+--   names (the unedited base). It is where a column's AUTHORED slope is read.
+authoredChunk ∷ WorldSnapshot → ChunkCoord → Maybe LoadedChunk
+authoredChunk snap c
+    | HM.member c (snapEdits snap) =
+        Just (clipArenaChunk (snapBounds snap)
+                (replayEdits (snapEdits snap) (generateArenaChunkIn (snapBounds snap) (snapSeed snap) c)))
+    | otherwise = Nothing
+
+-- | One column. Its slope is the AUTHORED one (the recorded @WeSetSlope@ of
+--   its top cell, else flat): the slope a live chunk holds also carries
+--   DERIVED bits — the border-strip recompute after an admission, mid-dig
+--   masks — which are not scenario state, and which depend on which
+--   neighbours happen to be resident.
+columnOf ∷ LoadedChunk → Maybe LoadedChunk → Int → Maybe TileCol
+columnOf lc authored idx =
     let col = lcTiles lc V.! idx
         top = lcTerrainSurfaceMap lc VU.! idx
         i = top - ctStartZ col
+        authoredSlope = case authored of
+            Nothing → 0
+            Just a →
+                let acol = lcTiles a V.! idx
+                    ai = top - ctStartZ acol
+                in if ai ≥ 0 ∧ ai < VU.length (ctSlopes acol) then ctSlopes acol VU.! ai else 0
     in if i < 0 ∨ i ≥ VU.length (ctMats col) ∨ ctMats col VU.! i ≡ 0
         then Nothing
         else Just TileCol
-            { tcSpec = TileSpec top (MaterialId (ctMats col VU.! i)) (ctSlopes col VU.! i)
+            { tcSpec = TileSpec top (MaterialId (ctMats col VU.! i)) authoredSlope
             , tcFluid = lcFluidMap lc V.! idx }
 
 -- * Flora
