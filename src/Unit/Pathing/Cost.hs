@@ -54,6 +54,10 @@ module Unit.Pathing.Cost
     -- * Per-request hazard policy (re-exported from "Unit.Pathing.Hazard")
     , MoveHazardPolicy(..)
     , defaultMoveHazardPolicy
+    , MoveHazard(..)
+    , moveHazardFor
+    , unprotected
+    , climbAdmissibleFor
     -- * Tunables (loaded from config/pathing.yaml; see "Unit.Pathing.Config")
     , PathingConfig(..)
     , defaultPathingConfig
@@ -70,7 +74,10 @@ import World.Material (MaterialRegistry, MaterialId(..), getMaterialProps, mpMov
 import World.Generate (globalToChunk)
 import Unit.Pathing.Config (PathingConfig(..), defaultPathingConfig)
 import Unit.Pathing.Hazard
-    (MoveHazardPolicy(..), defaultMoveHazardPolicy)
+    (MoveHazardPolicy(..), defaultMoveHazardPolicy, MoveHazard(..)
+    , moveHazardFor, isProtected)
+import Unit.Pathing.ClimbRisk (ambientClimbAdmissible)
+import Unit.Thread.Movement.Types (defaultMoveStats)
 
 -- * Cost function
 
@@ -88,9 +95,15 @@ import Unit.Pathing.Hazard
 --   enforces the "movement clamped to loaded chunks" rule
 --   bottom-up.
 stepCost ∷ PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
-stepCost = stepCostUnder defaultMoveHazardPolicy
+stepCost = stepCostUnder unprotected
 
--- | 'stepCost' under an explicit per-request hazard policy (#1217).
+-- | The hazard of a request that does not ask for protection: the
+--   default policy. A fall-permitted request never consults the mover's
+--   climb ability, so which ability rides along is immaterial.
+unprotected ∷ MoveHazard
+unprotected = moveHazardFor defaultMoveHazardPolicy defaultMoveStats
+
+-- | 'stepCost' under an explicit per-request hazard (#1217, #2866).
 --
 --   Under 'FallProhibited' a step whose descent the cost model itself
 --   classifies as a real fall ('isDamagingDrop') is IMPASSABLE — the
@@ -100,8 +113,13 @@ stepCost = stepCostUnder defaultMoveHazardPolicy
 --   @pcFallTriggerDrop@ stays allowed, and 'FallPermitted' is
 --   byte-for-byte the pre-#1217 function, so no existing caller's cost
 --   semantics or determinism change.
-stepCostUnder ∷ MoveHazardPolicy → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
-stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
+--
+--   A protected step that is a CLIFF ASCENT ('isCliffStep') the mover may
+--   not take ('climbAdmissibleFor': more than one z-level, or above its
+--   acceptable slip risk) is impassable the same way (#2866). A walkable
+--   ramp is not a cliff, so it never meets the rule.
+stepCostUnder ∷ MoveHazard → PathingConfig → MaterialRegistry → WorldTileData → (Int, Int) → (Int, Int) → Maybe Float
+stepCostUnder hazard pc reg wtd (sgx, sgy) (dgx, dgy) = do
     srcZ <- lookupTerrainZ wtd sgx sgy
     dstZ <- lookupTerrainZ wtd dgx dgy
     let fluidAtDst = lookupFluidType wtd dgx dgy
@@ -122,7 +140,15 @@ stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
         -- may not include a damaging drop at all. Keyed on the SAME
         -- classification the `fall` term below uses, so the policy and
         -- the cost model can never disagree about what a real fall is.
-        fallBlocked = policy ≡ FallProhibited ∧ isDamagingDrop pc srcZ dstZ
+        protected = isProtected hazard
+        fallBlocked = protected ∧ isDamagingDrop pc srcZ dstZ
+        -- Per-mover climb admission (#2866): a protected route takes a
+        -- cliff ascent only within the height cap and the mover's own
+        -- acceptable slip risk. Keyed on 'isCliffStep', the SAME test
+        -- that decides whether the mover would start a climb here.
+        climbOk a b za zb = climbAdmissibleFor hazard wtd a b za zb
+        climbBlocked = protected
+                     ∧ not (climbOk (sgx, sgy) (dgx, dgy) srcZ dstZ)
         -- A DIAGONAL step's continuous path really does pass through ONE
         -- of the two axis-neighbours it grazes, even though the mover's
         -- z only ever moves from src to dst — and WHICH one depends on
@@ -141,12 +167,19 @@ stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
         -- nothing outside 'FallProhibited'. The no-corner-cutting rule
         -- above has already rejected an UNLOADED neighbour, so a missing
         -- z here needs no case of its own.
+        --
+        -- The same holds for a climb (#2866): a protected diagonal is
+        -- allowed only when every cliff ascent on either two-step route
+        -- is one this mover may take. Conservative the same way — it can
+        -- only refuse a diagonal.
         grazeIsDamaging (gx, gy) = case lookupTerrainZ wtd gx gy of
             Nothing → False
             Just gz → isDamagingDrop pc srcZ gz ∨ isDamagingDrop pc gz dstZ
-        diagonalDropBlocked = isDiagonal ∧ policy ≡ FallProhibited
+                      ∨ not (climbOk (sgx, sgy) (gx, gy) srcZ gz)
+                      ∨ not (climbOk (gx, gy) (dgx, dgy) gz dstZ)
+        diagonalDropBlocked = isDiagonal ∧ protected
                             ∧ any grazeIsDamaging [(dgx, sgy), (sgx, dgy)]
-    if cornerBlocked ∨ fallBlocked ∨ diagonalDropBlocked
+    if cornerBlocked ∨ fallBlocked ∨ climbBlocked ∨ diagonalDropBlocked
       then Nothing
       else
         let dx     = fromIntegral (dgx - sgx) ∷ Float
@@ -175,6 +208,20 @@ stepCostUnder policy pc reg wtd (sgx, sgy) (dgx, dgy) = do
                      then pcFallFactor pc ** fromIntegral (negate dz)
                      else 0
         in pure $! clampStepCost (horizD + climb + fall + fluidCost)
+
+-- | May this request's mover take the step from @src@ to @dst@ as far as
+--   climbing goes (#2866)? Always for a fall-permitted request, and for
+--   any step that is not a cliff ascent ('isCliffStep': walkable ramps,
+--   level ground and descents). A protected request's cliff ascent is
+--   admitted only by "Unit.Pathing.ClimbRisk"'s 'ambientClimbAdmissible',
+--   judged on the full terrain delta @dstZ − srcZ@.
+climbAdmissibleFor
+    ∷ MoveHazard → WorldTileData
+    → (Int, Int) → (Int, Int) → Int → Int → Bool
+climbAdmissibleFor hazard wtd src dst srcZ dstZ
+    | not (isProtected hazard)               = True
+    | not (isCliffStep wtd src dst srcZ dstZ) = True
+    | otherwise = ambientClimbAdmissible (mhClimb hazard) (dstZ - srcZ)
 
 -- | Does descending from @srcZ@ to @dstZ@ count as a DAMAGING DROP —
 --   a real fall rather than a free walk-off? True iff the drop reaches

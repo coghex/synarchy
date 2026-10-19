@@ -5,9 +5,14 @@
 -- hazard-policy token, and "avoid_falls" makes a step the pathing cost
 -- model classifies as a real fall (drop >= fall_trigger_drop) impassable
 -- for that request — in the greedy stepper and in every local-A* replan
--- alike. A request that can make no safe progress terminates, so the AI
--- resamples a different destination on a later tick instead of idling on
--- an unreachable one.
+-- alike. Since #2866 it covers CLIMBS too, because a climb that slips is a
+-- fall: an avoid_falls request never climbs a cliff more than one z-level
+-- high, and takes a one-level cliff only when the unit's own slip risk is
+-- at or below what its awareness ((intelligence + perception) / 2)
+-- accepts (Unit.Pathing.ClimbRisk). Walkable ramps are unaffected. A
+-- request that can make no safe progress terminates, so the AI resamples
+-- a different destination on a later tick instead of idling on an
+-- unreachable one.
 --
 -- This module exists so the aimless movers share ONE mechanism rather
 -- than each spelling the token themselves: acolyte/technomule `wander`

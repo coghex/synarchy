@@ -304,7 +304,7 @@ spec = do
                 let wtd = worldWith $ customChunk $ \(lx, _) →
                         let z = if lx < 8 then 4 else 60
                         in (z, Nothing)
-                    costWith f = stepCostUnder defaultMoveHazardPolicy
+                    costWith f = stepCostUnder unprotected
                                      (pc { pcClimbFactor = f }) reg wtd (7, 5) (8, 5)
                 costWith (-10.0)  `shouldBe` Just 0
                 costWith (-1 / 0) `shouldBe` Just maxStepCostValue
