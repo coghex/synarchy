@@ -1053,7 +1053,9 @@ resident, and mid-dig masks), which are not scenario state; capture reads the sl
 the durable log records for the column's top cell (`WeSetSlope`), else flat. Tags on a cell below the surface, a
 column whose top material has no registered name, and a column with no solid cell are
 outside the vocabulary and come back as diagnostics (`terrain.tags`, `terrain.material`,
-`terrain.columns`) rather than being written wrongly. Entries are written under
+`terrain.columns`) rather than being written wrongly. A tile is captured when its shape differs from the base, when it carries tags, OR when the
+durable log holds a slope override for its top cell — an explicit flat on a base-shaped tile
+included, since without it admission would derive a ramp there. Entries are written under
 generated explicit ids that depend only on the content (family, values, tile, and an
 ordinal among same-species, same-tile siblings, ranked by the whole exported entry — species, tile, z, offsets, variant, health, age, regrowth and tags — as raw values under one derived `Ord`, so no input order can change the result), made unique against the ids of
 the document's other entries.
