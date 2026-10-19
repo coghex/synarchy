@@ -272,7 +272,7 @@ captureFlora snap chunks used0 =
                                                                        (snapOccTags snap))
                 , feSpecies = fsName sp, feX = x, feY = y
                 , feZ = Authored (fiZ fi)
-                , feAge = Authored (derivedOccurrenceAge sp day fi)
+                , feAge = Authored (derivedOccurrenceAge day fi)
                 , feHealth = Authored (fiHealth fi)
                 , feOffsetU = Authored (fiOffU fi), feOffsetV = Authored (fiOffV fi)
                 , feVariant = Authored (fiVariant fi)
@@ -291,7 +291,7 @@ captureFlora snap chunks used0 =
                 , feTags = Set.toAscList (M.findWithDefault Set.empty (x, y) (snapPlotTags snap))
                 , feSpecies = fsName sp, feX = x, feY = y
                 , feZ = Omitted
-                , feAge = Authored (derivedPlotAge sp day cp)
+                , feAge = Authored (derivedPlotAge day cp)
                 , feHealth = Authored (cpHealth cp)
                 , feOffsetU = Omitted, feOffsetV = Omitted, feVariant = Omitted
                 , feRegrowth = Omitted } )

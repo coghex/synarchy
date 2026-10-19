@@ -8,6 +8,7 @@ module Test.Headless.Scenario.World.Live (spec) where
 import UPrelude
 import Test.Hspec
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
@@ -287,7 +288,8 @@ spec = describe "on a live arena page (through the world thread)" $ do
         msgs ← Q.flushQueue (wsSimQueue wsc)
         td ← readIORef (wsTilesRef ws)
         let edited = [ (c, g, fm, tm) | SimChunkEdited p _ _ c g fm tm ← msgs, p ≡ pid ]
-        map (\(c, _, _, _) → c) edited `shouldBe` [ChunkCoord 1 0]
+        -- every resident chunk is re-seeded (replacement reaches chunks the log never named)
+        sort (map (\(c, _, _, _) → c) edited) `shouldBe` sort (HM.keys (wtdChunks td))
         -- the passive chunk and the sim's re-seed are the same exact map
         forM_ edited $ \(c, _, fm, tm) → do
             let lc = fromMaybe (error "resident") (lookupChunk c td)
@@ -320,7 +322,7 @@ spec = describe "on a live arena page (through the world thread)" $ do
         r ← install env pid ws
                 (request [far] [fluidPatch "farPond" (RegionTiles [(51, 50)]) FluidLake 20] [farOak])
         wirDiagnostics r `shouldBe` []
-        wirChunks r `shouldBe` []                  -- nothing resident was rebuilt
+        wirChunks r `shouldSatisfy` (ChunkCoord 3 3 `notElem`)   -- the chunk that is not resident was not rebuilt
         edits ← readIORef (wsEditsRef ws)
         HM.member (ChunkCoord 3 3) edits `shouldBe` True
         tags ← readIORef (wsPageTagsRef ws)
@@ -452,3 +454,46 @@ spec = describe "on a live arena page (through the world thread)" $ do
         readIORef (wsTilesRef ws) ≫= reconcileAdmittedPageTags logger ws pid [fresh]
         readIORef (wsPageTagsRef ws) `shouldReturn` stored
         captureWorldContent Set.empty ⊚ liveSnapshot env ws b 0 ≫= (`shouldBe` before)
+
+    it "replaces fluid the simulation carried into a chunk the log never named" $ \env → do
+        (pid, ws) ← freshArena env "world_flow" 40 40
+        _ ← install env pid ws (request [] [] [])
+        -- a writeback put water into chunk (0,0), which has no log entry of its own
+        atomicModifyIORef' (wsTilesRef ws) $ \td →
+            let lc = fromMaybe (error "resident") (lookupChunk (ChunkCoord 0 0) td)
+                lc' = lc { lcFluidMap = lcFluidMap lc V.// [(columnIndex 3 3, Just (FluidCell Lake 35))] }
+            in (insertChunk lc' td, ())
+        liveFluid ws (3, 3) `shouldReturn` Just (FluidCell Lake 35)
+        _ ← install env pid ws (request [] [] [])
+        liveFluid ws (3, 3) `shouldReturn` Nothing
+
+    it "judges tagged cells in a chunk that is not resident against the replacement: a deleted cell's tags are not inherited" $ \env → do
+        (pid, ws) ← freshArena env "world_deadtag" 120 120
+        let far tags = terrainPatch "far" (RegionTiles [(50, 50)]) "granite" 2 Omitted tags
+            tagsAt = readIORef (wsPageTagsRef ws)
+                ≫= \t → pure (categoryTagsOf (tileTargetFromStored pid 50 50 2) (ptTiles t))
+        _ ← install env pid ws (request [far [tag "far"]] [] [])
+        tagsAt ≫= (`shouldBe` Set.fromList [tag "far"])
+        -- the SAME cell again, untagged: it survives the replacement, so it keeps its tags
+        _ ← install env pid ws (request [far []] [] [])
+        tagsAt ≫= (`shouldBe` Set.fromList [tag "far"])
+        -- removed, then recreated before the chunk was ever admitted: a new cell inherits nothing
+        _ ← install env pid ws (request [] [] [])
+        tagsAt ≫= (`shouldBe` Set.empty)
+        _ ← install env pid ws (request [far []] [] [])
+        tagsAt ≫= (`shouldBe` Set.empty)
+
+    it "keeps an authored slope through the real chunk admission, on a new chunk and on its resident neighbour" $ \env → do
+        (pid, ws) ← freshArena env "world_slope" 120 120
+        let ramp x y = terrainPatch "ramp" (RegionTiles [(x, y)]) "loam" 0 (Authored 5) []
+        -- (48,48) is local (0,0) of chunk (3,3), (47,47) is local (15,15) of resident chunk (2,2)
+        _ ← install env pid ws (request [ramp 48 48, (ramp 47 47) { tpId = ex "ramp2" }] [] [])
+        liveColumn ws (47, 47) `shouldReturn` Just (0, Just (unMaterialId matLoam), 5, 0)
+        isNothing ⊚ lookupChunk (ChunkCoord 3 3) ⊚ readIORef (wsTilesRef ws) ≫= (`shouldBe` True)
+        n ← enqueueChunkRequest pid ws [ChunkCoord 3 3]
+        n `shouldBe` 1
+        waitForChunksAt ws (ChunkCoord 3 3) 30 `shouldReturn` True
+        -- the admitted chunk's border strip was recomputed from terrain: the override survived it
+        fmap (\(_, _, sl, _) → sl) ⊚ liveColumn ws (48, 48) ≫= (`shouldBe` Just 5)
+        -- and the neighbour's border was recomputed too
+        fmap (\(_, _, sl, _) → sl) ⊚ liveColumn ws (47, 47) ≫= (`shouldBe` Just 5)

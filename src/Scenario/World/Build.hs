@@ -27,7 +27,8 @@ import Scenario.World.Flora
 import Scenario.World.Terrain
 import Scenario.World.Types (WorldRefs(..))
 import World.Arena.Bounds (ArenaBounds)
-import World.Edit.Types (WorldEdit(..), WorldEdits, appendEdit, emptyWorldEdits)
+import qualified Data.HashMap.Strict as HM
+import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Flora.CropPlot (CropPlot)
 import World.Flora.Identity (FloraInstanceId)
 import World.Flora.Types (FloraCatalog)
@@ -95,12 +96,17 @@ buildWorldContent env terrain fluids flora =
         , wcDiagnostics = tbDiagnostics tb ⧺ fbDiagnostics fb ⧺ flbDiagnostics lb
         }
 
--- | Lay edits into the per-chunk log, preserving their order.
+-- | Lay edits into the per-chunk log, preserving their order. Built by
+--   consing onto per-chunk lists and reversing once: 'appendEdit' appends
+--   at the END of a chunk's list, which is quadratic over the tens of
+--   thousands of edits a tall raised region puts in one chunk.
 groupEditsByChunk ∷ [WorldEdit] → WorldEdits
-groupEditsByChunk = foldl' (\acc e → let (gx, gy) = editTile e
-                                         (coord, _) = globalToChunk gx gy
-                                     in appendEdit coord e acc)
-                           emptyWorldEdits
+groupEditsByChunk es =
+    HM.map reverse $ foldl' (\acc e →
+        let (gx, gy) = editTile e
+            (coord, _) = globalToChunk gx gy
+        in HM.insertWith (\_ old → e : old) coord [e] acc)
+        HM.empty es
 
 -- | The tile an edit addresses.
 editTile ∷ WorldEdit → (Int, Int)

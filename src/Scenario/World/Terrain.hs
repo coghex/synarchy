@@ -64,6 +64,7 @@ module Scenario.World.Terrain
     , BuiltFluidPatch(..)
     , FluidBuild(..)
     , buildFluids
+    , maxFluidDepthUnits
     , fluidTypeOfKind
     , fluidKindOfType
     ) where
@@ -296,6 +297,13 @@ fluidKindOfType t = case t of
     River → FluidRiver
     Lava  → FluidLava
 
+-- | The deepest fluid column the active simulation can hold, in exact
+--   units over the terrain top: 'Sim.Fluid.Types.fluidCellToActive' stores
+--   a cell's volume in a 'Word16' and CLAMPS beyond it, so a deeper
+--   authored plane would be accepted and then silently lose fluid.
+maxFluidDepthUnits ∷ Integer
+maxFluidDepthUnits = toInteger (maxBound ∷ Word16)
+
 -- | Build the fluid of @patches@ over the terrain whose tile specs are
 --   @terrain@ (an untouched tile is the base column).
 buildFluids ∷ Maybe ArenaBounds → M.Map (Int, Int) TileSpec
@@ -328,8 +336,20 @@ buildFluids bounds terrain patches =
         }
   where
     keyedPath p k = p <> "." <> k
+    -- the deepest admitted tile decides: Integer arithmetic, so a plane near
+    -- the top of the Int range cannot overflow the comparison
+    depthOk path p r@(tiles, _, _) =
+        let depthAt t = toInteger (fpSurfaceEighths p)
+                          - toInteger (exactSurfaceOfZ (maybe baseTopZ tsSurfaceZ (M.lookup t terrain)))
+            deepest = maximum (0 : map depthAt tiles)
+        in if deepest > maxFluidDepthUnits
+            then Left [diagAt path (InvalidValue
+                    ("a fluid at most " <> tshow maxFluidDepthUnits <> " units deep (the "
+                     <> "simulation's volume range): this one reaches " <> tshow deepest))
+                    EntryRejected]
+            else Right r
     step (final, acc, diags, used) (path, p) =
-        case admit path bounds (fpRegion p) used of
+        case admit path bounds (fpRegion p) used ⌦ depthOk path p of
             Left ds → (final, acc, reverse ds ⧺ diags, used)
             Right (tiles, ds, n) →
                 let ft = fluidTypeOfKind (fpKind p)

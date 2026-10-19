@@ -171,10 +171,12 @@ data FloraEntry = FloraEntry
     , feY       ∷ !Int
     , feZ       ∷ !(Authored Int)
     , feAge     ∷ !(Authored Float)
-      -- ^ CURRENT age in game days at the scenario's initialized clock.
-      --   Not the stored placement baseline: construction converts it
+      -- ^ The plant's TOTAL growth in game days at the scenario's
+      --   initialized clock — @fiAge + day · growthRate(health)@, before
+      --   the lifecycle wraps it into a generation and a dead window. Not
+      --   the stored placement baseline: construction converts it
       --   (@baseline = age − day · growthRate(health)@) and capture
-      --   exports the derived value (#2711).
+      --   exports the derived total (#2711).
     , feHealth  ∷ !(Authored Float)     -- ^ 0..1
     , feOffsetU ∷ !(Authored Float)
       -- ^ sub-tile U offset, @[-0.5, 0.5]@ (format v2); omitted = a

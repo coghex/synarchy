@@ -44,7 +44,7 @@ import World.Slope (recomputeNeighborSlopes
                     , chunkNeighbors)
 import World.SideFace.Compute (computeChunkSideDecos)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
-import World.Edit.Apply (replayEdits)
+import World.Edit.Apply (replayEdits, applySlopeEditsTd)
 import World.Flora.Designation
     (admitChunkFloraBatch, forgetFloraDroppedSince)
 import World.Mine.Apply (applyDigSlopesTd)
@@ -238,7 +238,13 @@ updateChunkLoading env logger = do
                                     -- silently lost.
                                     digCoords = slopeRecomputeAffected
                                         (wgpWorldSize params) changed td''
-                                    td6 = applyDigSlopesTd desigs digCoords td'''''
+                                    -- Authored slopes (WeSetSlope, e.g. a
+                                    -- scenario ramp on a chunk-edge tile) are
+                                    -- overrides the recompute would erase
+                                    -- too: restore them first, then the
+                                    -- derived-state passes over them.
+                                    td5a = applySlopeEditsTd edits digCoords td'''''
+                                    td6 = applyDigSlopesTd desigs digCoords td5a
                                     -- Construction corner-progress
                                     -- overrides (#96): same derived-
                                     -- state contract as dig slopes.
@@ -559,7 +565,10 @@ drainInitQueues env logger = do
                                  -- neighbours.
                                  digCoords = slopeRecomputeAffected
                                      (wgpWorldSize params) coords td'
-                                 td5 = applyDigSlopesTd desigs digCoords td''''
+                                 -- Authored slopes (WeSetSlope) are
+                                 -- overrides the recompute erases too.
+                                 td4a = applySlopeEditsTd edits digCoords td''''
+                                 td5 = applyDigSlopesTd desigs digCoords td4a
                                  -- Construction corner-progress overrides
                                  -- (#96), same contract as dig slopes.
                                  td6 = applyConstructSlopesTd cdesigs

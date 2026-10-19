@@ -32,6 +32,18 @@
 --   derives @age = elapsedDays · rate@, so its authored age lands on
 --   the nearest whole elapsed day (the plot owner's own resolution).
 --
+--   __Age is TOTAL growth.__ The schema's @age@ is the growth the plant has
+--   accumulated at the initialized clock — @fiAge + day · rate@ — before
+--   the lifecycle wraps it into a generation and a dead window
+--   ("World.Flora.Growth"): the value is the plant's, not a display age,
+--   so a dead plant exports as dead and a reseeded one as its generation.
+--
+--   __Where a plant stands.__ On the column's top solid cell. The render
+--   and pick resolvers place a plant there whatever its @fiZ@ says, so an
+--   authored @z@ other than that top has no representation: it is a field
+--   rejection and the plant takes the top. An authored @z@ equal to it is
+--   accepted.
+--
 --   __Defaults.__ An omitted age, offset or variant is what the world
 --   generator's own producer ('World.Flora.Placement.mkInstance') makes
 --   from a private hash of the scenario id — never gameplay randomness,
@@ -73,7 +85,7 @@ import World.Arena.Bounds (ArenaBounds, arenaAdmitsTile)
 import World.Edit.Types (WorldEdit(..))
 import World.Flora.CropPlot
     (CropPlot, newCropPlot, cropPlotElapsedDays, cropPlotInstance)
-import World.Flora.Growth (FloraGrowth(..), floraGrowth, growthRate)
+import World.Flora.Growth (growthRate)
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdNone, floraInstanceSalt, nextPlantedFloraCursor)
 import World.Flora.Placement (mkInstance, speciesMaxAge)
@@ -216,6 +228,12 @@ buildFlora env entries =
             let harvestable = isJust (fsHarvest sp)
                 regrowthNote = [ note "regrowth" "only a harvestable species has a regrowth timer"
                                | isAuthored (feRegrowth e), not harvestable ]
+                    -- a plant stands on the column's top solid cell: the render
+                    -- and pick resolvers place it there whatever fiZ says, so a
+                    -- different z has no representation
+                    ⧺ [ note "z" ("a plant stands on the column's top solid cell (z "
+                                  <> tshow top <> ")")
+                      | Authored z ← [feZ e], z ≢ top ]
                 regrowth = case feRegrowth e of
                     Authored r | harvestable → r
                     _                        → 0
@@ -227,7 +245,7 @@ buildFlora env entries =
                     , fiTileY = fromIntegral ly
                     , fiOffU = authoredOr (fiOffU proto) (feOffsetU e)
                     , fiOffV = authoredOr (fiOffV proto) (feOffsetV e)
-                    , fiZ = authoredOr top (feZ e)
+                    , fiZ = top
                     , fiAge = baselineForAge rate day age
                     , fiHealth = health
                     , fiVariant = authoredOr (fiVariant proto) (feVariant e)
@@ -269,10 +287,17 @@ nextUp f
 nextDown ∷ Float → Float
 nextDown = negate ∘ nextUp ∘ negate
 
--- | The current age (game days) a stored occurrence derives at @day@ —
---   what capture exports.
-derivedOccurrenceAge ∷ FloraSpecies → Int → FloraInstance → Float
-derivedOccurrenceAge sp day fi = fgAge (floraGrowth sp day fi)
+-- | The age (game days) a stored occurrence has at @day@ — what capture
+--   exports: the TOTAL growth @fiAge + day · rate@, the exact expression
+--   "World.Flora.Growth".'floraGrowth' starts from, BEFORE the lifecycle
+--   wraps it into a generation and a dead window. Exporting the wrapped
+--   display age instead would lose the lifecycle state — a dead plant
+--   would come back as a living one — whereas the total, run back through
+--   'baselineForAge' and the same hash-derived lifespan, reproduces the
+--   generation, the dead window and the phase exactly.
+derivedOccurrenceAge ∷ Int → FloraInstance → Float
+derivedOccurrenceAge day fi =
+    fiAge fi + fromIntegral (max 0 day) * growthRate (fiHealth fi)
 
 -- | The planted day that gives a crop plot the authored age: its age is
 --   @elapsedDays · rate@, so the elapsed days are @age / rate@ rounded
@@ -280,8 +305,10 @@ derivedOccurrenceAge sp day fi = fgAge (floraGrowth sp day fi)
 plotPlantedDay ∷ Int → Float → Float → Int
 plotPlantedDay day rate age = day - max 0 (round (age / rate))
 
--- | The current age a crop plot derives at @day@, through the plot
---   owner's own growth adapter ('cropPlotInstance', 'cropPlotElapsedDays').
-derivedPlotAge ∷ FloraSpecies → Int → CropPlot → Float
-derivedPlotAge sp day plot =
-    fgAge (floraGrowth sp (cropPlotElapsedDays day plot) (cropPlotInstance plot))
+-- | The age a crop plot has at @day@ — total growth, before the lifecycle
+--   wrap, through the plot owner's own growth adapter
+--   ('cropPlotInstance', 'cropPlotElapsedDays'): @elapsedDays · rate@.
+derivedPlotAge ∷ Int → CropPlot → Float
+derivedPlotAge day plot =
+    let fi = cropPlotInstance plot
+    in fiAge fi + fromIntegral (cropPlotElapsedDays day plot) * growthRate (fiHealth fi)

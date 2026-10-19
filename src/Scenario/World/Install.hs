@@ -49,15 +49,18 @@ import UPrelude
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import Engine.Core.Log (LoggerState)
-import Gameplay.Tags.Index (modifyCategoryTags, emptyCategoryIndex)
+import Gameplay.Tags.Index (categoryTargets, modifyCategoryTags, emptyCategoryIndex)
 import Gameplay.Tags.Page
 import Gameplay.Tags.PageLive (pageTagWrite)
-import Gameplay.Tags.Types (mkPlantTarget, plotTargetFromStored, tileTargetFromStored)
+import Gameplay.Tags.Types
+    ( mkPlantTarget, plotTargetFromStored, tileTargetFromStored
+    , tileTargetX, tileTargetY )
 import Scenario.World.Build
 import Scenario.World.Types
 import World.Chunk.Admit (pageIncarnation)
@@ -68,12 +71,13 @@ import World.Edit.Apply (replayEdits)
 import World.Edit.Types (WorldEdit(..), WorldEdits)
 import World.Flora.Designation (forgetFloraInstances, replaceChunkForgettingFlora)
 import World.Generate.Arena (clipArenaChunk, generateArenaChunkIn)
+import World.Generate.Coordinates (globalToChunk)
 import World.Generate.Types (WorldGenParams(..), isArenaParams)
 import World.Material (materialIdByName)
 import World.Page.Types (WorldPageId)
 import World.State.Types
 import World.Thread.Command.Edit.Sync (syncEditToSim)
-import World.Tile.Types (lookupChunk)
+import World.Tile.Types (WorldTileData(..))
 import World.Time.Types (defaultCalendarConfig, worldAbsoluteDay)
 
 -- | Whether an edit belongs to the structure adapters, which a
@@ -145,21 +149,36 @@ installWorldContent wsc _logger page ws request = do
                                     (swrFlora request)
     oldEdits ← readIORef (wsEditsRef ws)
     let newEdits = replaceOwnedEdits oldEdits (wcEdits content)
-        touched = Set.fromList (HM.keys oldEdits ⧺ HM.keys (wcEdits content))
+        rebuild c = clipArenaChunk bounds (replayEdits newEdits (generateArenaChunkIn bounds seed c))
     -- the durable state first, so a chunk rebuilt below replays the new log
     writeIORef (wsEditsRef ws) newEdits
     atomicModifyIORef' (wsPlantedFloraCursorRef ws) $ \c → (max c (wcCursor content), ())
     atomicModifyIORef' (wsCropPlotsRef ws) $ \_ →
         ( CropPlotStore (HM.fromList (wcCropPlots content)) emptyCategoryIndex, () )
-    -- every resident chunk the old or new content touched is rebuilt by
-    -- the same reconstruction an admission performs
+    -- EVERY resident chunk is rebuilt by the same reconstruction an
+    -- admission performs, not only the ones the old or new log names: the
+    -- simulation's writebacks put fluid into a chunk with no log entry of
+    -- its own, and replacing the baseline must clear that too. (A chunk
+    -- that is not resident is rebuilt by its own admission.)
     td ← readIORef (wsTilesRef ws)
-    let resident = [ lc | c ← Set.toAscList touched, Just lc ← [lookupChunk c td] ]
+    let resident = HM.elems (wtdChunks td)
     forM_ resident $ \old → do
-        let rebuilt = clipArenaChunk bounds
-                (replayEdits newEdits (generateArenaChunkIn bounds seed (lcCoord old)))
+        let rebuilt = rebuild (lcCoord old)
         replaceChunkForgettingFlora ws old rebuilt
         syncEditToSim wsc page ws rebuilt
+    -- A tagged cell in a chunk that is NOT resident is judged against the
+    -- replacement geometry too: one the replacement no longer has loses its
+    -- tags now, rather than letting a cell created there later inherit them
+    -- before the chunk's own admission could reconcile it. A cell that
+    -- survives keeps its tags (D-37).
+    pt0 ← readIORef (wsPageTagsRef ws)
+    let residentCoords = HS.fromList (HM.keys (wtdChunks td))
+        taggedElsewhere = Set.toAscList $ Set.fromList
+            [ c | t ← Set.toList (categoryTargets (ptTiles pt0))
+                , let c = fst (globalToChunk (tileTargetX t) (tileTargetY t))
+                , not (HS.member c residentCoords) ]
+    pageTagWrite ws $ atomicModifyIORef' (wsPageTagsRef ws) $ \pt →
+        (foldl' (\acc c → fst (forgetDestroyedCells (rebuild c) acc)) pt taggedElsewhere, ())
     -- Every plant the REPLACED content placed is gone, resident or not: its
     -- regrowth timer, tags and designation go with it. A resident chunk's
     -- swap already forgot its own; a plant in a chunk that is not resident

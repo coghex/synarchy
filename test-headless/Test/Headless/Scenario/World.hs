@@ -225,6 +225,14 @@ fluidSpec = describe "fluid" $ do
         wetCell lc (0, 0) `shouldBe` Just (FluidCell Ocean 24)
         wetCell lc (1, 0) `shouldBe` Nothing
 
+    it "rejects a fluid deeper than the simulation's volume range, with overflow-safe arithmetic" $ do
+        let c = content Nothing 0 []
+                [ fluidPatch "abyss" (RegionTiles [(0, 0)]) FluidLake (fromIntegral maxFluidDepthUnits + 1)
+                , fluidPatch "edge" (RegionTiles [(1, 0)]) FluidLake (fromIntegral maxFluidDepthUnits)
+                , fluidPatch "huge" (RegionTiles [(2, 0)]) FluidLake maxBound ] []
+        effects (wcDiagnostics c) `shouldBe` [("fluids[0]", EntryRejected), ("fluids[2]", EntryRejected)]
+        [ (x, y) | es ← HM.elems (wcEdits c), WeSetFluidSnapshot x y _ _ ← es ] `shouldBe` [(1, 0)]
+
     it "clears a dug tile explicitly, so the replay cannot reveal groundwater the scenario does not state" $ do
         let c = content Nothing 0
                 [ terrainPatch "pit" (RegionRect 0 0 1 0) "sand" (-4) Omitted [] ] [] []
@@ -278,7 +286,7 @@ floraSpec = describe "flora" $ do
         isPlantedFloraInstanceId (fiInstanceId o) `shouldBe` True
         fiInstanceId o `shouldBe` fst (nextPlantedFloraCursor firstPlantedFloraCursor)
         -- the CURRENT age at the initialized clock is the authored one
-        derivedOccurrenceAge sp 400 o `shouldBe` 120
+        derivedOccurrenceAge 400 o `shouldBe` 120
         fgAge (floraGrowth sp 400 o) `shouldBe` 120
         -- ...and it grows from there at the health-scaled rate
         fgAge (floraGrowth sp 410 o) `shouldBe` 120 + 10 * growthRate 0.5
@@ -294,7 +302,7 @@ floraSpec = describe "flora" $ do
                     o = sole (occurrencesIn Nothing (wcEdits (content Nothing day [] [] [e])))
                     rate = growthRate health
                     dr = fromIntegral day * rate
-                    derived = derivedOccurrenceAge (speciesOf oakId) day o
+                    derived = derivedOccurrenceAge day o
                     slack = 2.5e-7 * (1 + abs (fiAge o) + abs dr)
                 if day ≡ 0
                     then derived `shouldBe` age
@@ -309,7 +317,7 @@ floraSpec = describe "flora" $ do
             c = content Nothing 50 [] [] [e]
             o = sole (occurrencesIn Nothing (wcEdits c))
         (fiOffU o, fiOffV o, fiVariant o, fiHealth o) `shouldBe` (0, 0, 0, 0)
-        derivedOccurrenceAge (speciesOf oakId) 50 o `shouldBe` 0
+        derivedOccurrenceAge 50 o `shouldBe` 0
         wcHarvests c `shouldBe` []
 
     it "fills an omission from a private hash of the scenario id: stable per id, different between ids" $ do
@@ -333,6 +341,31 @@ floraSpec = describe "flora" $ do
         map (\o → (fiTileX o, fiTileY o)) os `shouldBe` replicate 3 (5, 5)
         map snd (wrOccurrences (wcRefs c)) `shouldMatchList` map fiInstanceId os
 
+    it "keeps a mortal plant's lifecycle through the age conversion: a dead plant stays dead, a reseeded one keeps its generation" $
+        forM_ [ (365, True, 0), (430, False, 1), (780, True, 1), (10, False, 0) ] $ \(age, dead, gen) → do
+            -- the Annual 'beet' lives 360 days and spends 60 dead before it reseeds
+            let e = (floraEntry "m" "beet" 2 2) { feAge = Authored age, feHealth = Authored 1 }
+                c = content Nothing 100 [] [] [e]
+                o = sole (occurrencesIn Nothing (wcEdits c))
+                g = floraGrowth (speciesOf (FloraId 3)) 100 o
+                cw = captureWorldContent Set.empty (snapshotOf Nothing 100 c False)
+                c' = buildWorldContent (envAt Nothing 100 firstPlantedFloraCursor) []  []
+                        (withPaths "flora" (cwFlora cw))
+                o' = sole (occurrencesIn Nothing (wcEdits c'))
+            (fgDead g, fgGeneration g) `shouldBe` (dead, gen)
+            -- capture exports the TOTAL growth, and the plant survives its own round trip
+            map feAge (cwFlora cw) `shouldBe` [Authored age]
+            floraGrowth (speciesOf (FloraId 3)) 100 o' `shouldBe` g
+
+    it "rejects an authored z other than the column's top: a plant stands there whatever its z says" $ do
+        let c = content Nothing 0
+                [terrainPatch "hill" (RegionTiles [(1, 1)]) "granite" 3 Omitted []] []
+                [ (floraEntry "off" "oak" 1 1) { feZ = Authored 5 }
+                , (floraEntry "on" "oak" 1 1) { feZ = Authored 3 } ]
+            os = occurrencesIn Nothing (wcEdits c)
+        effects (wcDiagnostics c) `shouldBe` [("flora[0].z", FieldRejected)]
+        map fiZ os `shouldBe` [3, 3]
+
     it "stands a plant on its tile's FINAL terrain top by default" $ do
         let c = content Nothing 0
                 [terrainPatch "hill" (RegionTiles [(1, 1)]) "granite" 3 Omitted []] []
@@ -344,7 +377,6 @@ floraSpec = describe "flora" $ do
         let e = (floraEntry "w" "wheat" 6 6)
                 { feTags = [tag "field"], feAge = Authored 10, feHealth = Authored 1 }
             c = content Nothing 100 [] [] [e]
-            sp = speciesOf wheatId
         wcDiagnostics c `shouldBe` []
         occurrencesIn Nothing (wcEdits c) `shouldBe` []
         case wcCropPlots c of
@@ -352,7 +384,7 @@ floraSpec = describe "flora" $ do
                 cpSpecies plot `shouldBe` wheatId
                 cpPlantedDay plot `shouldBe` 90
                 cropPlotElapsedDays 100 plot `shouldBe` 10
-                derivedPlotAge sp 100 plot `shouldBe` 10
+                derivedPlotAge 100 plot `shouldBe` 10
                 cpHealth plot `shouldBe` 1
             other → expectationFailure ("expected one plot, got " ⧺ show other)
         wcPlotTags c `shouldBe` [((6, 6), Set.fromList [tag "field"])]

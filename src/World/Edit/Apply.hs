@@ -14,13 +14,15 @@
 module World.Edit.Apply
     ( applyEdit
     , replayEdits
+    , applySlopeEditsTd
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
+import World.Chunk.Types (ChunkCoord, LoadedChunk(..), ColumnTiles(..), columnIndex)
+import World.Tile.Types (WorldTileData(..))
 import Structure.Types (StructurePieceData(..))
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
@@ -332,6 +334,28 @@ replayEdits ∷ WorldEdits → LoadedChunk → LoadedChunk
 replayEdits edits lc = case HM.lookup (lcCoord lc) edits of
     Nothing → lc
     Just es → foldl (flip applyEdit) lc es
+
+-- | Re-apply every recorded 'WeSetSlope' of the listed (resident) chunks.
+--
+--   An authored slope is an OVERRIDE of the derived one, and the chunk
+--   admission pipeline rebuilds the derived slopes of a just-admitted
+--   chunk's border strip, and of its loaded neighbours', from terrain
+--   ('World.Slope.recomputeNeighborSlopes') — which erases the override
+--   (#2711: a scenario terrain patch's ramp on a chunk-edge tile, found
+--   when the chunk was demanded). Like the dig and construction slope
+--   passes it MUST therefore run after that recompute, over exactly the
+--   set the recompute touched. Idempotent, and an edit whose cell is no
+--   longer in its column changes nothing, exactly as in 'replayEdits'.
+applySlopeEditsTd ∷ WorldEdits → [ChunkCoord] → WorldTileData → WorldTileData
+applySlopeEditsTd edits coords td = foldl' step td coords
+  where
+    step acc c = case (HM.lookup c (wtdChunks acc), HM.lookup c edits) of
+        (Just lc, Just es) →
+            let lc' = foldl' (\l e → case e of
+                                         WeSetSlope{} → applyEdit e l
+                                         _            → l) lc es
+            in acc { wtdChunks = HM.insert c lc' (wtdChunks acc) }
+        _ → acc
 
 -- Helpers ---------------------------------------------------------
 
