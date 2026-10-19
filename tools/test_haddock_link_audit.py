@@ -248,6 +248,92 @@ data Gadget = Gadget
 """)
 
 
+RECORD_ALPHA = """\
+module Alpha ( T(..) ) where
+data T = T { secret ∷ Int, public ∷ Int }
+"""
+
+
+def _expect_record_fields(imports: str, fields: set[str], *,
+                          links: tuple[str, ...] = ("secret", "public"),
+                          **sources: str) -> None:
+    """Drive main with an empty baseline and check each link AND exit status."""
+    with contextlib.ExitStack() as stack:
+        root = _root(stack, Alpha=RECORD_ALPHA, Beta=f"""\
+module Beta ( T(..) ) where
+{imports}
+-- | {', '.join(f"'Beta.{field}'" for field in links)}.
+""", **sources)
+        code, out = _run(root)
+    expect(code == (0 if set(links) <= fields else 1),
+           f"{imports}: unexpected exit {code}: {out!r}")
+    for field in links:
+        expect((f"'Beta.{field}'" not in out) == (field in fields),
+               f"{imports}: wrong availability of {field}: {out!r}")
+
+
+def test_open_type_import_restrictions() -> None:
+    """#2770 and its canonical review's seven required fixtures."""
+    cases = [
+        ("import Alpha (T)", set(), {}),
+        ("import Alpha hiding (secret)", {"public"}, {}),
+        ("import Alpha (T(..))", {"secret", "public"}, {}),
+        ("import Mid (T(..))", set(),
+         {"Mid": "module Mid (T) where\nimport Alpha (T(..))\n"}),
+        ("import Alpha (T)\nimport qualified Alpha as A (secret)",
+         {"secret"}, {}),
+        ("import Alpha (T)\nimport Alpha hiding (T(..))", set(), {}),
+        ("import Alpha (T)\nimport Other (secret)", set(),
+         {"Other": "module Other (T(..)) where\n"
+                   "data T = T { secret ∷ Int }\n"}),
+    ]
+    for imports, fields, sources in cases:
+        _expect_record_fields(imports, fields, links=("secret",), **sources)
+
+
+def test_open_type_field_availability_composes_by_intersection() -> None:
+    """Bounded property: each hop can only restrict the SAME record's fields.
+
+    Exhaust all two-field export subsets and import subsets, in selected
+    and hiding forms, with both unqualified and qualified selector scope.
+    T arrives by a separate route; an imported namesake adds no fields.
+    The expected sets are independent of the production resolver.
+    """
+    universe = {"secret", "public"}
+    subsets = [set(), {"secret"}, {"public"}, universe]
+    for exported in subsets:
+        export_entry = ("T(" + ", ".join(sorted(exported)) + ")"
+                        if exported else "T")
+        for selected in subsets:
+            for hiding in (False, True):
+                listed = universe - selected if hiding else selected
+                clause = ("hiding " if hiding else "") + (
+                    "(" + ", ".join(sorted(listed)) + ")")
+                for qualifier in ("", "qualified "):
+                    _expect_record_fields(
+                        "import Alpha (T)\n"
+                        f"import {qualifier}Mid as M {clause}\n"
+                        "import Other (secret, public)",
+                        exported & selected,
+                        Mid=f"module Mid ({export_entry}) where\n"
+                            "import Bridge (T(..))\n",
+                        Bridge="module Bridge (module A) where\n"
+                               "import Alpha as A (T(..))\n",
+                        Other="module Other (T(..)) where\n"
+                              "data T = T { secret ∷ Int, public ∷ Int }\n")
+
+
+def test_open_type_reexport_cycles_preserve_restrictions() -> None:
+    """A cycle cannot create a route around hiding T(..)."""
+    for clause, expected in (("(T(..))", {"secret", "public"}),
+                             ("hiding (T(..))", set())):
+        _expect_record_fields(
+            "import Alpha (T)\nimport Mid", expected,
+            Mid="module Mid (module A, module Loop) where\n"
+                f"import Alpha as A {clause}\nimport Loop\n",
+            Loop="module Loop (module Mid) where\nimport Mid\n")
+
+
 def test_documented_record_field_is_reported() -> None:
     """The false negative this pins: an indented comment between two
     fields used to END the declaration block, so every field after it
@@ -1104,6 +1190,9 @@ TESTS = [
     test_unexported_record_field_is_reported,
     test_open_type_export_does_not_borrow_a_namesake_type,
     test_open_type_export_follows_its_own_import,
+    test_open_type_import_restrictions,
+    test_open_type_field_availability_composes_by_intersection,
+    test_open_type_reexport_cycles_preserve_restrictions,
     test_documented_record_field_is_reported,
     test_field_group_after_a_comment_still_resolves,
     test_app_tree_is_scanned,
