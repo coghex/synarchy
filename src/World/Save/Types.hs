@@ -653,6 +653,11 @@ data BuildingSnapshot = BuildingSnapshot
       --   'bsnInstances' and under the same save barrier. Every set is
       --   nonempty. The reverse index is never captured; restore
       --   rebuilds it.
+    , bsnScenarioRefs ∷ !(Map.Map BuildingId Text)
+      -- ^ #2712: the scenario reference each of this page's buildings was
+      --   constructed from ('Building.Types.bmScenarioRefs'), captured by
+      --   the same page filter as the instances and restored only onto the
+      --   instances a restore produced, exactly like 'bsnTags'.
     } deriving (Show, Eq, Serialize, Generic)
 
 -- | Persistable snapshot of `BuildingInstance`. Drops `biTexture`
@@ -688,6 +693,8 @@ toBuildingSnapshot page bm = BuildingSnapshot
     , bsnNextId    = bmNextId bm
     , bsnTags      = Map.restrictKeys (categoryForward (bmTags bm))
                                       (Set.fromList (HM.keys onPage))
+    , bsnScenarioRefs = Map.restrictKeys (bmScenarioRefs bm)
+                                         (Set.fromList (HM.keys onPage))
     }
   where onPage = buildingsOnPage page (bmInstances bm)
 
@@ -747,6 +754,9 @@ fromBuildingSnapshot page defs snap =
                   -- building this restore did not produce is dropped
                   -- ('danglingTagTargets' reports it).
                 , bmTags = restoredTags (HS.fromList (map fst resolved)) (bsnTags snap)
+                  -- #2712: the scenario references follow the same rule.
+                , bmScenarioRefs = Map.restrictKeys (bsnScenarioRefs snap)
+                                       (Set.fromList (map fst resolved))
                 }
     in (bm, orphans)
 

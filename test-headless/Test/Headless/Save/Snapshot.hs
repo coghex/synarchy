@@ -71,7 +71,7 @@ minimalPage pid = PageSnapshot
     , pgsConstructNextAttempt = firstConstructAttemptId
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
-    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty }
+    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty, bsnScenarioRefs = mempty }
     , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests
@@ -178,7 +178,7 @@ spec = do
             let building1 = BuildingSnapshot
                     { bsnInstances = HM.singleton (BuildingId 1)
                                          (minimalBuildingInstance [])
-                    , bsnNextId = 2, bsnTags = mempty }
+                    , bsnNextId = 2, bsnTags = mempty, bsnScenarioRefs = mempty }
                 pageWithBuilding = (minimalPage page1) { pgsBuildings = building1 }
                 snap = buildSessionSnapshot minimalGlobals [pageWithBuilding]
                 -- A "later mutation" of the same live data -- a
@@ -266,7 +266,7 @@ spec = do
             let buildings = BuildingSnapshot
                     { bsnInstances = HM.singleton (BuildingId 3)
                         (minimalBuildingInstance [])
-                    , bsnNextId = 3, bsnTags = mempty }
+                    , bsnNextId = 3, bsnTags = mempty, bsnScenarioRefs = mempty }
                 page = (minimalPage page1) { pgsBuildings = buildings }
             in case capture minimalGlobals { sgNextBuildingId = 3 } [page] of
                 Left errs → errs `shouldContain` [BuildingAllocatorTooLow (BuildingId 3)]
@@ -328,7 +328,7 @@ spec = do
            \counter below the validated session-wide allocator must not \
            \silently persist a lower, id-reuse-permitting value)" $ do
             let staleBuildings = BuildingSnapshot
-                    { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty }
+                    { bsnInstances = HM.empty, bsnNextId = 1, bsnTags = mempty, bsnScenarioRefs = mempty }
                 staleUnits = UnitSnapshot
                     { usnInstances = HM.empty, usnNextId = 1, usnTags = mempty, usnScenarioRefs = mempty }
                 page = (minimalPage page1)

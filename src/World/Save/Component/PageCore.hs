@@ -82,6 +82,8 @@ module World.Save.Component.PageCore
     , WorldPagesDTOv12(..)
     , PageCoreDTOv13(..)
     , WorldPagesDTOv13(..)
+    , PageCoreDTOv15(..)
+    , WorldPagesDTOv15(..)
     , PageCoreDTOv14(..)
     , WorldPagesDTOv14(..)
     , ArenaBoundsDTO(..)
@@ -108,6 +110,8 @@ module World.Save.Component.PageCore
     , migrateWorldPagesV12
     , migrateWorldPagesV13
     , migrateWorldPagesV14
+    , migrateWorldPagesV15
+    , locationScenarioRefErrors
     ) where
 
 import UPrelude
@@ -148,6 +152,7 @@ import Location.Instance
 import Gameplay.Tags.Index (categoryForward, categoryFromAssignments)
 import World.Save.Component.GameplayTags (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
 import qualified Data.Map.Strict as Map
+import Scenario.Items.Refs (itemRefTextError)
 import World.Generate.Types (WorldGenParams(..), isArenaParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
@@ -354,6 +359,14 @@ data PageCoreDTO = PageCoreDTO
       --   rectangle can never disagree with its own size, and the one
       --   validator ('World.Arena.Bounds.mkArenaBounds') judges both
       --   fresh input and restored state.
+    , pcLocationScenarioRefs ∷ ![(LocationInstanceId, Text)]
+      -- ^ #2712 (v16): the scenario reference each of this page's locations
+      --   was constructed from ('Location.Instance.lisScenarioRefs'),
+      --   ascending by the page-local instance id. Sparse. Beside the gen
+      --   params rather than inside 'WorldGenParamsDTO', the same placement
+      --   as 'pcLocationTags', so that DTO — shared by many component
+      --   versions — is unchanged; APPENDED, which is what makes v16 a
+      --   distinct wire shape. Hence 'PageCoreDTOv15' below.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTO = WorldPagesDTO { wpdPages ∷ [PageCoreDTO] }
@@ -375,6 +388,73 @@ toArenaBoundsDTO ab = ArenaBoundsDTO (arenaWidth ab) (arenaHeight ab)
 --   load.
 fromArenaBoundsDTO ∷ ArenaBoundsDTO → Either ArenaBoundsError ArenaBounds
 fromArenaBoundsDTO (ArenaBoundsDTO w h) = mkArenaBounds w h
+
+-- | The FROZEN v15 wire shape (#2708 → #2712): the current page without
+--   its location scenario references. Never edited. Its gen params, tags
+--   and arena size are the unchanged DTOs v15 and v16 share.
+data PageCoreDTOv15 = PageCoreDTOv15
+    { pc15PageId ∷ !WorldPageId
+    , pc15GenParams ∷ !WorldGenParamsDTO
+    , pc15CameraX ∷ !Float
+    , pc15CameraY ∷ !Float
+    , pc15TimeHour ∷ !Int
+    , pc15TimeMinute ∷ !Int
+    , pc15TimeRemainder ∷ !Double
+    , pc15DateYear ∷ !Int
+    , pc15DateMonth ∷ !Int
+    , pc15DateDay ∷ !Int
+    , pc15MapMode ∷ !ZoomMapMode
+    , pc15Identity ∷ !(Maybe WorldIdentityDTO)
+    , pc15GeneratedId ∷ !(Maybe GeneratedWorldId)
+    , pc15LocationTags ∷ !(TagAssignmentsDTO LocationInstanceId)
+    , pc15ArenaBounds ∷ !(Maybe ArenaBoundsDTO)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv15 = WorldPagesDTOv15 { wpd15Pages ∷ [PageCoreDTOv15] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | v15 → v16: every field crosses unchanged and the page carries NO
+--   location scenario references (a v15 session was built by no scenario
+--   adapter).
+migrateWorldPagesV15 ∷ WorldPagesDTOv15 → WorldPages
+migrateWorldPagesV15 (WorldPagesDTOv15 ps) = basePageSnapshots $ WorldPagesDTO $ map current ps
+  where
+    current p = PageCoreDTO
+        { pcPageId = pc15PageId p
+        , pcGenParams = pc15GenParams p
+        , pcCameraX = pc15CameraX p
+        , pcCameraY = pc15CameraY p
+        , pcTimeHour = pc15TimeHour p
+        , pcTimeMinute = pc15TimeMinute p
+        , pcTimeRemainder = pc15TimeRemainder p
+        , pcDateYear = pc15DateYear p
+        , pcDateMonth = pc15DateMonth p
+        , pcDateDay = pc15DateDay p
+        , pcMapMode = pc15MapMode p
+        , pcIdentity = pc15Identity p
+        , pcGeneratedId = pc15GeneratedId p
+        , pcLocationTags = pc15LocationTags p
+        , pcArenaBounds = pc15ArenaBounds p
+        , pcLocationScenarioRefs = []
+        }
+
+-- | The structural errors of one page's wire location-reference list
+--   (#2712): an unadmissible reference text, a location listed twice, a
+--   reference two locations claim, or a list out of ascending order.
+locationScenarioRefErrors ∷ [(LocationInstanceId, Text)] → [Text]
+locationScenarioRefErrors xs =
+    [ "location " <> tshow (unLocationInstanceId l) <> ": " <> e
+    | (l, r) ← xs, Just e ← [itemRefTextError r] ]
+    ⧺ [ "location " <> tshow (unLocationInstanceId l) <> " is listed twice"
+      | l ← dupes (map fst xs) ]
+    ⧺ [ "scenario reference '" <> r <> "' is claimed by more than one location"
+      | r ← dupes (map snd xs) ]
+    ⧺ [ "location scenario references are not in ascending instance order"
+      | map fst xs ≢ Map.keys (Map.fromList xs) ∧ null (dupes (map fst xs)) ]
+  where
+    dupes ∷ Ord β ⇒ [β] → [β]
+    dupes ys = Map.keys (Map.filter (> (1 ∷ Int)) (Map.fromListWith (+) [ (y, 1) | y ← ys ]))
 
 -- | The FROZEN v14 wire shape (#2701 → #2708): the current page without
 --   its finite-arena size. Never edited. Its gen params and location
@@ -424,6 +504,7 @@ migrateWorldPagesV14 (WorldPagesDTOv14 ps) = basePageSnapshots $ WorldPagesDTO $
         , pcGeneratedId = pc14GeneratedId p
         , pcLocationTags = pc14LocationTags p
         , pcArenaBounds = Nothing
+        , pcLocationScenarioRefs = []
         }
 
 -- | The FROZEN v13 wire shape (#2533 → #2701): the current page without
@@ -474,6 +555,7 @@ migrateWorldPagesV13 (WorldPagesDTOv13 ps) = basePageSnapshots $ WorldPagesDTO $
         , pcGeneratedId = pc13GeneratedId p
         , pcLocationTags = []
         , pcArenaBounds = Nothing
+        , pcLocationScenarioRefs = []
         }
 
 -- | Install a decoded finite-arena size on the page's params (#2708). A
@@ -495,6 +577,16 @@ withLocationTags wire params =
     let lis = wgpLocationInstances params
     in params { wgpLocationInstances = lis
         { lisTags = categoryFromAssignments (Map.toList (decodeTagAssignments wire)) } }
+
+-- | Install decoded scenario references on the page's own location table.
+--   Like the tags, a reference naming a location the table does not hold is
+--   kept here (a decode is faithful) and is the integrity graph's to
+--   report.
+withLocationScenarioRefs ∷ [(LocationInstanceId, Text)] → WorldGenParams → WorldGenParams
+withLocationScenarioRefs [] params = params
+withLocationScenarioRefs refs params =
+    let lis = wgpLocationInstances params
+    in params { wgpLocationInstances = lis { lisScenarioRefs = Map.fromList refs } }
 
 -- | The FROZEN v1 wire shape, preserved verbatim for decode-only
 --   backward compatibility: identical to 'PageCoreDTO' except that its
@@ -776,7 +868,7 @@ data WorldPages = WorldPages
 --   "world-pages stamps its errors with the version it WRITES", which
 --   asserts @ccVersion worldPagesCodec ≡ worldPagesVersion@.
 worldPagesVersion ∷ Word32
-worldPagesVersion = 15
+worldPagesVersion = 16
 
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
@@ -784,13 +876,14 @@ worldPagesCodec = componentCodec ComponentSpec
       -- A literal, not 'worldPagesVersion': the save-compat audit parses
       -- this field statically. The example named on that constant is
       -- what keeps the two from drifting.
-    , csVersion       = 15
+    , csVersion       = 16
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 14 migrateWorldPagesV14
+    , csOlderVersions = [ atVersion 15 migrateWorldPagesV15
+                        , atVersion 14 migrateWorldPagesV14
                         , atVersion 13 migrateWorldPagesV13
                         , atVersion 12 migrateWorldPagesV12
                         , atVersion 11 migrateWorldPagesV11
@@ -831,6 +924,9 @@ worldPagesCodec = componentCodec ComponentSpec
           -- #2708: the page's finite-arena size, written straight through
           -- from the live params (the DTO above deliberately omits it).
         , pcArenaBounds = toArenaBoundsDTO <$> wgpArenaBounds (pgsGenParams p)
+          -- #2712: the page's own location table's scenario references.
+        , pcLocationScenarioRefs =
+            Map.toAscList (lisScenarioRefs (wgpLocationInstances (pgsGenParams p)))
         }
 
 -- | Component-local invariant (requirement 3): the page-set authority
@@ -932,13 +1028,15 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         | p ← ps
         , msg ← tagAssignmentErrors
                   (\l → "location " <> tshow (unLocationInstanceId l))
-                  (pcLocationTags p) ]
+                  (pcLocationTags p)
+        ⧺ locationScenarioRefErrors (pcLocationScenarioRefs p) ]
     }
   where
     toBase p = (blankPageSnapshot (pcPageId p)
                     (withArenaBounds (pcArenaBounds p)
-                      (withLocationTags (pcLocationTags p)
-                        (fromWorldGenParamsDTO (pcGenParams p)))))
+                      (withLocationScenarioRefs (pcLocationScenarioRefs p)
+                        (withLocationTags (pcLocationTags p)
+                          (fromWorldGenParamsDTO (pcGenParams p))))))
         { pgsCameraX    = pcCameraX p
         , pgsCameraY    = pcCameraY p
         , pgsTimeHour   = pcTimeHour p
@@ -993,6 +1091,7 @@ migrateWorldPagesV12 (WorldPagesDTOv12 ps) = migrateWholeRiverSurfaces $
         , pcGeneratedId = pc12GeneratedId p
         , pcLocationTags = []
         , pcArenaBounds = Nothing
+        , pcLocationScenarioRefs = []
         }
 
 -- | Each historical dispatch calls this ONCE, including the V1 entry used
@@ -1531,7 +1630,7 @@ blankPageSnapshot pid params =
         , pgsConstructNextAttempt  = firstConstructAttemptId
         , pgsGroundItems  = emptyGroundItems
         , pgsSpoilPiles   = emptySpoilPiles
-        , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 0, bsnTags = Map.empty }
+        , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 0, bsnTags = Map.empty, bsnScenarioRefs = Map.empty }
         , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 0, usnTags = Map.empty, usnScenarioRefs = Map.empty }
         , pgsUnitSimStates = HM.empty
         , pgsFloraHarvests = emptyFloraHarvests

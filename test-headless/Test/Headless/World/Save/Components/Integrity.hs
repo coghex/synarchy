@@ -90,11 +90,11 @@ spec = do
             knownU = HS.fromList ["test_unit"]
             withB defName = BuildingSnapshot
                 (HM.singleton (BuildingId 1)
-                    ((minimalBuildingInstance []) { bisDefName = defName })) 10 mempty
+                    ((minimalBuildingInstance []) { bisDefName = defName })) 10 mempty mempty
             withU defName = UnitSnapshot
                 (HM.singleton (UnitId 1)
                     ((minimalUnitInstance []) { uisDefName = defName })) 10 mempty mempty
-            emptyB = BuildingSnapshot HM.empty 10 mempty
+            emptyB = BuildingSnapshot HM.empty 10 mempty mempty
             emptyU = UnitSnapshot HM.empty 10 mempty mempty
 
         it "accepts a save whose every building/unit def resolves" $
@@ -150,7 +150,7 @@ spec = do
                     { pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1)
                             ((minimalBuildingInstance [nestedTooHigh])))
-                        10 mempty }
+                        10 mempty mempty }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextItemId = 1000 } [badPage]
             validateSessionSnapshot snap
@@ -170,7 +170,7 @@ spec = do
                     { pgsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1)
                             (minimalBuildingInstance [dupNested]))
-                        10 mempty }
+                        10 mempty mempty }
                 snap = buildSessionSnapshot
                          minimalGlobals { sgNextItemId = 1000 } [badPage]
             validateSessionSnapshot snap
@@ -198,7 +198,7 @@ spec = do
                 (pageWith (minimalWorldPageSave page1)
                     { wpsBuildings = BuildingSnapshot
                         (HM.singleton (BuildingId 1)
-                            (minimalBuildingInstance [richItem])) 10 mempty })
+                            (minimalBuildingInstance [richItem])) 10 mempty mempty })
                 `shouldBe` []
 
         it "flags a NESTED item (inside a kit-in-kit) whose def is \
@@ -208,7 +208,7 @@ spec = do
                     (pageWith (minimalWorldPageSave page1)
                         { wpsBuildings = BuildingSnapshot
                             (HM.singleton (BuildingId 1)
-                                (minimalBuildingInstance [richItem])) 10 mempty })
+                                (minimalBuildingInstance [richItem])) 10 mempty mempty })
             map midrDefName missing `shouldBe` ["mini_kit"]
 
         it "flags an unregistered ground item" $ do
@@ -248,7 +248,7 @@ spec = do
                         { lisNextId = 2
                         , lisById = HM.singleton (LocationInstanceId 1)
                             (significantOwner entries)
-                        , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex } } })]
+                        , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex } } })]
 
         it "accepts an obligation whose stored item def still resolves" $
             missingSignificantItemReferences
@@ -700,7 +700,7 @@ containerCoveragePage = (minimalPage page1)
             (minimalBuildingInstance [nestedCoverItem 500 "storage"])
                 { bisMaterialsDelivered =
                     HM.singleton "wood" [nestedCoverItem 600 "delivered"] })
-        10 mempty
+        10 mempty mempty
     }
 
 containerCoverageSnapshot ∷ SessionSnapshot
@@ -748,7 +748,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsConstructDesignations = HM.empty
     , wpsGroundItems  = emptyGroundItems
     , wpsSpoilPiles   = emptySpoilPiles
-    , wpsBuildings    = BuildingSnapshot HM.empty 10 mempty
+    , wpsBuildings    = BuildingSnapshot HM.empty 10 mempty mempty
     , wpsUnits        = UnitSnapshot HM.empty 10 mempty mempty
     , wpsUnitSimStates = HM.empty
     , wpsFloraHarvests = emptyFloraHarvests

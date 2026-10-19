@@ -40,6 +40,7 @@ module Scenario.Types
     , StructurePiece(..)
     , BuildingEntry(..)
     , LocationEntry(..)
+    , ContainerBinding(..)
     , UnitEntry(..)
     , ModifierSpec(..)
     , WoundSpec(..)
@@ -200,6 +201,10 @@ data StructurePiece = StructurePiece
     , spX     ∷ !Int
     , spY     ∷ !Int
     , spZ     ∷ !(Authored Int)
+    , spVariant ∷ !(Authored Text)
+      -- ^ format v3: a named pack variant of the art (@damaged@, …);
+      --   omitted = the pack's default art. Wall cap and wire connection
+      --   variants are derived, never authored.
     } deriving (Show, Eq)
 
 data BuildingEntry = BuildingEntry
@@ -232,6 +237,25 @@ data LocationEntry = LocationEntry
     , leX           ∷ !Int
     , leY           ∷ !Int
     , leSignificant ∷ !(HM.HashMap Int ScenarioId)
+    , leContainers  ∷ !(HM.HashMap Int ContainerBinding)
+      -- ^ format v3: slot → the physical container item bound to that
+      --   pending or realized container slot. An OPTIONAL reference, like
+      --   'leSignificant': a binding that cannot hold is dropped and the
+      --   slot stays unbound.
+    } deriving (Show, Eq)
+
+-- | One container-slot binding (format v3).
+data ContainerBinding = ContainerBinding
+    { cbItem     ∷ !ScenarioId
+      -- ^ the item entry (anywhere in the document: ground, storage,
+      --   inventory) whose physical identity is the slot's shell
+    , cbRealized ∷ !(Authored Bool)
+      -- ^ omitted = pending (@false@). A realized slot has been opened:
+      --   its item holds its exact stated contents and the slot's loot
+      --   profile is discarded.
+    , cbProfile  ∷ !(Authored Text)
+      -- ^ the loot profile a PENDING slot realizes from; omitted = the
+      --   definition's. Meaningless (and rejected) on a realized slot.
     } deriving (Show, Eq)
 
 data UnitEntry = UnitEntry
@@ -409,6 +433,15 @@ data LocationCatalogEntry = LocationCatalogEntry
     , lcSignificantSlots ∷ ![Text]
       -- ^ the item definition each guaranteed significant slot must hold,
       --   slot 1 first ('Location.Instance.lsiItemDefName')
+    , lcContainerSlots ∷ ![Text]
+      -- ^ the container item definition each pending container slot mints
+      --   from, slot 1 first ('Location.Instance.lcsItemDefName')
+    , lcContainerProfiles ∷ ![Text]
+      -- ^ the loot profile each container slot names by default, in the
+      --   same order
+    , lcHasEncounter ∷ !Bool
+      -- ^ the definition authors a ranged encounter entry, so units may
+      --   join its roster by @encounter@
     } deriving (Show, Eq)
 
 -- | Everything validation needs to know about the current definitions.
@@ -426,12 +459,16 @@ data ScenarioCatalog = ScenarioCatalog
       --   post, wire)
     , catInfections     ∷ !(HS.HashSet Text)
     , catKnowledge      ∷ !(HS.HashSet Text)
+    , catLootProfiles   ∷ !(HS.HashSet Text)
+      -- ^ the loot profile ids a container slot may name
+    , catPackVariants   ∷ !(HM.HashMap Text (HS.HashSet Text))
+      -- ^ pack name → the variant names its art declares
     } deriving (Show, Eq)
 
 emptyScenarioCatalog ∷ ScenarioCatalog
 emptyScenarioCatalog = ScenarioCatalog
     HM.empty HM.empty HM.empty HM.empty HS.empty HS.empty HM.empty HS.empty
-    HS.empty
+    HS.empty HS.empty HM.empty
 
 -- * Diagnostics and outcome
 
@@ -466,6 +503,9 @@ data DiagnosticReason
                                     --   being expanded; the closed cycle
                                     --   (@a → b → a@) the dropped entry
                                     --   would have closed (#2709)
+    | NoEncounter !Text             -- ^ a unit joins the encounter of a
+                                    --   location whose definition has none
+                                    --   (#2712)
     deriving (Show, Eq)
 
 -- | One recoverable problem. @sdPath@ is the document path of the

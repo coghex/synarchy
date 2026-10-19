@@ -82,6 +82,10 @@ data UnitCaptureCtx = UnitCaptureCtx
     , uccUnitTags   ∷ UnitId → Set.Set GameplayTag
       -- ^ 'Unit.Types.Manager.umTags'
     , uccItemCtx    ∷ !CaptureCtx
+    , uccEncounterOf ∷ UnitId → Maybe ScenarioId
+      -- ^ the explicit id of the location whose encounter roster the unit
+      --   belongs to ('Scenario.Placement.Location', #2712), which owns
+      --   the roster; 'const Nothing' for a document with no locations
     }
 
 data UnitsCapture = UnitsCapture
@@ -204,7 +208,7 @@ captureOne ctx st0 uid name u d = (st1, entry, capRefs (ucCaptured itemsC))
         , ueDefinition = uiDefName u
         , ueX = uiGridX u, ueY = uiGridY u, ueZ = Authored (uiGridZ u)
         , ueName = Authored (uiName u), ueFacing = Authored (uiFacing u)
-        , ueEncounter = Nothing
+        , ueEncounter = uccEncounterOf ctx uid
         , ueStats = stats
         , ueSkills = HM.filterWithKey (\k _ → HM.member k (udSkillTemplates d)) (uiSkills u)
         , ueKnowledge = Authored (uiKnowledge u)

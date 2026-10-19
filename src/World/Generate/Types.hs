@@ -16,6 +16,7 @@ import Data.Serialize (Serialize(..))
 import Data.Hashable (Hashable)
 import qualified Data.HashSet as HS
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
 import World.Plate.Types (TectonicPlate(..))
 import World.Time.Types
     ( CalendarConfig(..)
@@ -259,6 +260,7 @@ instance Serialize WorldGenParams where
                 { lisNextId        = locNextId
                 , lisById          = locById
                 , lisPendingLegacy = Nothing
+                , lisScenarioRefs  = Map.empty
                 , lisTags          = categoryFromAssignments locTags
                 }
             , wgpLocationStamped  = locStamped

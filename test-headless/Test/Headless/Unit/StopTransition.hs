@@ -280,7 +280,7 @@ pageWithSim ss = PageSnapshot
     , pgsGroundItems  = emptyGroundItems
     , pgsSpoilPiles   = emptySpoilPiles
     , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty
-                                         , bsnNextId = 10, bsnTags = mempty }
+                                         , bsnNextId = 10, bsnTags = mempty, bsnScenarioRefs = mempty }
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton testUnit owningUnit
         , usnNextId = 10, usnTags = mempty, usnScenarioRefs = mempty }

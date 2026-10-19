@@ -12,6 +12,7 @@ module Test.Headless.World.Save.Components.Registry
     (spec) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import Control.Exception (ErrorCall(..), evaluate)
@@ -136,7 +137,9 @@ spec = do
             -- #2709: v3 appends the items' scenario references.
             ccVersion coreSessionCodec `shouldBe` 3
             -- #2708: v15 appends each page's finite-arena size.
-            ccVersion worldPagesCodec `shouldBe` 15
+            -- #2712: v16 appends each page's location scenario references,
+            -- and @buildings@ v4 its buildings'.
+            ccVersion worldPagesCodec `shouldBe` 16
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -319,7 +322,7 @@ spec = do
                             , liSignificant     = []
                             , liContainers      = []
                             , liClearEventEmitted = False }
-                    , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex } }
+                    , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex } }
             -- One box per carrier, all inverted on x, so a failure names
             -- which version leaked rather than which coordinate did.
             invertedX = AbsBounds 10 6 6 10
@@ -530,7 +533,7 @@ spec = do
                             { lisNextId        = 2
                             , lisById          = HM.singleton
                                 (LocationInstanceId 1) (significantOwner entries)
-                            , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex } }) }
+                            , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex } }) }
                 sizeOf page = case captureSessionSnapshot minimalGlobals [page] of
                     Left errs → error ("fixture invalid: " <> show errs)
                     Right s   → sum [ BS.length (rcEncode c s)
@@ -614,13 +617,13 @@ spec = do
                     "unsupported schema version (reader supports v1, v2, v3)")
 
         it "reports an unsupported version identically for a \
-           \FIFTEEN-version reader" $
-            decodeErrorOf worldPagesCodec 16 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 16
+           \SIXTEEN-version reader" $
+            decodeErrorOf worldPagesCodec 17 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 17
                     DecodePhase
                     "unsupported schema version \
                     \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
-                    \v10, v11, v12, v13, v14, v15)")
+                    \v10, v11, v12, v13, v14, v15, v16)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -912,7 +915,7 @@ goldenRichPayloads =
       -- worldgen parameters (two pages in this fixture).
       -- #2701 re-pinned: v14 appends each page's location gameplay-tag
       -- list to the page core (8 bytes for an empty one, ×2 pages).
-    , ("world-pages",         (1376, "811f44ebd3a3c01a"))
+    , ("world-pages",         (1392, "003f3277cce0b03a"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
       -- FloraInstanceId to every WePlaceFlora entry, of which this
@@ -929,7 +932,7 @@ goldenRichPayloads =
     , ("world-activity",      (242,  "d5f6a72687031136"))
       -- #2701 re-pinned: @buildings@ v3 and @units@ v5 each append the
       -- page slice's gameplay-tag list (8 bytes empty, ×2 pages).
-    , ("buildings",           (167,  "08ff30c20e235bc2"))
+    , ("buildings",           (183,  "eeec9c956f3a0402"))
       -- #2829 re-pinned: @units@ v4 appends each unit's physiology
       -- override map (8 bytes for an empty one).
       -- #2515 re-pinned: @units@ v3 carries each unit's faction
@@ -963,7 +966,8 @@ goldenFullPayloads =
       -- 16: the remainder is per PAGE and this fixture has one.
       -- #2533: one persisted bed-repair policy byte for this one page.
       -- #2701 re-pinned: v14's empty location-tag list (8 bytes).
-    , ("world-pages",         (718, "5842aded173a3e2e"))
+      -- #2712 re-pinned: v16's empty location scenario-reference list (8).
+    , ("world-pages",         (726, "7e6ddbb2ad6d4fee"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",  (110, "04ebe3ec1c71ce89"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and
@@ -976,7 +980,7 @@ goldenFullPayloads =
     , ("world-activity",      (378, "401b1ef21412a4ee"))
       -- #2701 re-pinned: @buildings@ v3 / @units@ v5's empty page tag
       -- list (8 bytes each, one page).
-    , ("buildings",           (138, "4f1aa91ae43ea249"))
+    , ("buildings",           (146, "93fb8ed2e3230569"))
       -- #2829 re-pinned: @units@ v4's override map (8 bytes, empty).
       -- #2515 re-pinned: @units@ v3's faction profile DTO.
       -- #2710 re-pinned: @units@ v6's empty scenario-reference list

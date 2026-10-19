@@ -351,7 +351,8 @@ captureAll env = do
             { uccDefs = umDefs um, uccItems = items, uccPhysiology = reg, uccNow = now
             , uccUnitRef = \u → Map.lookup u (umScenarioRefs um)
             , uccUnitTags = \u → categoryTagsOf u (umTags um)
-            , uccItemCtx = itemCtx }
+            , uccItemCtx = itemCtx
+            , uccEncounterOf = const Nothing }
     pure (captureUnits ctx [] (sortOn fst (HM.toList (umInstances um))))
 
 -- | The captured entries as one YAML document the decoder reads.
@@ -1077,7 +1078,8 @@ roundTripSpec = describe "capture" $ do
                     { uccDefs = umDefs um0, uccItems = items, uccPhysiology = reg, uccNow = startTime
                     , uccUnitRef = \u → join (lookup u [ (i, r) | (i, (r, _, _)) ← zip ids units ])
                     , uccUnitTags = const Set.empty
-                    , uccItemCtx = CaptureCtx { ccRef = (`Map.lookup` itemRefMap), ccTags = const Set.empty } }
+                    , uccItemCtx = CaptureCtx { ccRef = (`Map.lookup` itemRefMap), ccTags = const Set.empty }
+                    , uccEncounterOf = const Nothing }
                     docIds [ (i, u) | (i, (_, _, u)) ← zip ids units ]
                 idsA = map UnitId [1 .. fromIntegral n]
                 (idsB, _) = shuffleWith (mkStdGen (seed * 7)) (map UnitId [50 .. 49 + fromIntegral n])

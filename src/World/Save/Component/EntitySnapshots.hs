@@ -67,6 +67,10 @@ module World.Save.Component.EntitySnapshots
     , BuildingInstanceDTO(..)
     , toBuildingInstanceDTO
     , fromBuildingInstanceDTO
+    , PageBuildingsDTOv3(..)
+    , BuildingsDTOv3(..)
+    , migrateBuildingsDTOv3
+    , buildingScenarioRefErrors
     , PageBuildingsDTOv2(..)
     , BuildingsDTOv2(..)
     , migrateBuildingsDTOv2
@@ -268,11 +272,55 @@ data PageBuildingsDTO = PageBuildingsDTO
       --   assignments, forward only, in the shared wire shape
       --   ("World.Save.Component.GameplayTags"). APPENDED, which is what
       --   makes v3 a distinct wire shape.
+    , pbScenarioRefs ∷ ![(BuildingId, Text)]
+      -- ^ #2712 (v4): the scenario reference each of this page's
+      --   buildings was constructed from, ascending by building id
+      --   ('World.Save.Types.bsnScenarioRefs'). Sparse. APPENDED, which is
+      --   what makes v4 a distinct wire shape.
     } deriving (Show, Eq, Generic, Serialize)
 
 newtype BuildingsDTO = BuildingsDTO { bdPages ∷ [PageBuildingsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Eq, Serialize)
+
+-- | The FROZEN v3 page slice (#2701 → #2712): the current slice without
+--   its scenario references. Never edited. Its instances are the
+--   unchanged 'BuildingInstanceDTO' v2 through v4 share.
+data PageBuildingsDTOv3 = PageBuildingsDTOv3
+    { pb3PageId    ∷ !WorldPageId
+    , pb3Instances ∷ !(HM.HashMap BuildingId BuildingInstanceDTO)
+    , pb3Tags      ∷ !(TagAssignmentsDTO BuildingId)
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype BuildingsDTOv3 = BuildingsDTOv3 { bd3Pages ∷ [PageBuildingsDTOv3] }
+    deriving stock (Generic)
+    deriving newtype (Show, Eq, Serialize)
+
+-- | v3 → v4: every instance and tag assignment crosses unchanged and the
+--   page carries NO scenario references (a v3 session was built by no
+--   scenario adapter).
+migrateBuildingsDTOv3 ∷ BuildingsDTOv3 → BuildingsDTO
+migrateBuildingsDTOv3 (BuildingsDTOv3 slices) = BuildingsDTO
+    [ PageBuildingsDTO (pb3PageId s) (pb3Instances s) (pb3Tags s) [] | s ← slices ]
+
+-- | The structural errors of one page's wire reference list (#2712): an
+--   unadmissible reference text (the item references' own vocabulary and
+--   bound, 'Scenario.Items.Refs.itemRefTextError'), a building listed
+--   twice, a reference two buildings claim, or a list out of ascending
+--   order.
+buildingScenarioRefErrors ∷ [(BuildingId, Text)] → [Text]
+buildingScenarioRefErrors xs =
+    [ "building " <> tshow (unBuildingId b) <> ": " <> e
+    | (b, r) ← xs, Just e ← [itemRefTextError r] ]
+    ⧺ [ "building " <> tshow (unBuildingId b) <> " is listed twice"
+      | b ← dupes (map fst xs) ]
+    ⧺ [ "scenario reference '" <> r <> "' is claimed by more than one building"
+      | r ← dupes (map snd xs) ]
+    ⧺ [ "scenario references are not in ascending building order"
+      | map fst xs ≢ Map.keys (Map.fromList xs) ∧ null (dupes (map fst xs)) ]
+  where
+    dupes ∷ Ord β ⇒ [β] → [β]
+    dupes ys = Map.keys (Map.filter (> (1 ∷ Int)) (Map.fromListWith (+) [ (y, 1) | y ← ys ]))
 
 -- | The FROZEN v2 page slice (#1233 → #2701): the current slice without
 --   its tag assignments. Never edited. Its instances are the unchanged
@@ -294,7 +342,7 @@ newtype BuildingsDTOv2 = BuildingsDTOv2 { bd2Pages ∷ [PageBuildingsDTOv2] }
 --   tags included) may stand in for them.
 migrateBuildingsDTOv2 ∷ BuildingsDTOv2 → BuildingsDTO
 migrateBuildingsDTOv2 (BuildingsDTOv2 slices) = BuildingsDTO
-    [ PageBuildingsDTO (pb2PageId s) (pb2Instances s) [] | s ← slices ]
+    [ PageBuildingsDTO (pb2PageId s) (pb2Instances s) [] [] | s ← slices ]
 
 -- | The FROZEN v2 page slice (#2515), carrying the frozen v2 instances.
 data PageUnitsDTOv2 = PageUnitsDTOv2
@@ -328,7 +376,7 @@ newtype BuildingsDTOv1 = BuildingsDTOv1 { bd1Pages ∷ [PageBuildingsDTOv1] }
 migrateBuildingsDTOv1 ∷ BuildingsDTOv1 → BuildingsDTO
 migrateBuildingsDTOv1 (BuildingsDTOv1 slices) = BuildingsDTO
     [ PageBuildingsDTO (pb1PageId s)
-          (HM.map migrateBuildingInstanceDTOv1 (pb1Instances s)) []
+          (HM.map migrateBuildingInstanceDTOv1 (pb1Instances s)) [] []
     | s ← slices ]
 
 -- Depends on @"core-session"@ too: assembly refills each page's
@@ -341,26 +389,35 @@ migrateBuildingsDTOv1 (BuildingsDTOv1 slices) = BuildingsDTO
 --
 -- v3 (#2701): each page slice carries its buildings' general gameplay
 -- tag assignments. v1 and v2 each migrate explicitly to v3 with none.
+--
+-- v4 (#2712): each page slice carries its buildings' scenario references
+-- (the building half of the scenario-id ↔ runtime-id mapping). The
+-- outgoing v3 slice is frozen ('BuildingsDTOv3') and crosses through
+-- 'migrateBuildingsDTOv3'; v1 and v2 migrate to v4 directly with NO
+-- references. Re-encoding emits v4 only.
 buildingsCodec ∷ ComponentCodec BuildingsDTO
 buildingsCodec = componentCodec ComponentSpec
     { csComponent     = buildingsComponentId
-    , csVersion       = 3
+    , csVersion       = 4
     , csRequired      = True
     , csDeps          = [worldPagesComponentId, coreSessionComponentId]
     , csEncode        = \snap → BuildingsDTO
         [ PageBuildingsDTO (pgsPageId p)
               (HM.map toBuildingInstanceDTO (bsnInstances (pgsBuildings p)))
               (encodeTagAssignments (bsnTags (pgsBuildings p)))
+              (Map.toAscList (bsnScenarioRefs (pgsBuildings p)))
         | p ← orderedPages snap ]
     , csDecode        = id
     , csOlderVersions = [ atVersion 1 migrateBuildingsDTOv1
-                        , atVersion 2 migrateBuildingsDTOv2 ]
+                        , atVersion 2 migrateBuildingsDTOv2
+                        , atVersion 3 migrateBuildingsDTOv3 ]
     , csValidate      = \(BuildingsDTO slices) →
-        [ ComponentError buildingsComponentId 3 ValidatePhase
+        [ ComponentError buildingsComponentId 4 ValidatePhase
               ("page '" <> unWorldPageId (pbPageId s) <> "': " <> msg)
         | s ← slices
         , msg ← tagAssignmentErrors (\b → "building " <> tshow (unBuildingId b))
-                              (pbTags s) ]
+                              (pbTags s)
+                ⧺ buildingScenarioRefErrors (pbScenarioRefs s) ]
     }
 
 -- | Reconstruct each page's 'BuildingSnapshot' from its instance slice,
@@ -378,7 +435,8 @@ applyBuildings ver nextId (BuildingsDTO slices) =
                         { bsnInstances =
                             HM.map fromBuildingInstanceDTO (pbInstances s)
                         , bsnNextId = nextId
-                        , bsnTags   = decodeTagAssignments (pbTags s) } })
+                        , bsnTags   = decodeTagAssignments (pbTags s)
+                        , bsnScenarioRefs = Map.fromList (pbScenarioRefs s) } })
         slices
 
 -- units -------------------------------------------------------------

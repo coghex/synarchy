@@ -53,6 +53,7 @@
 module Test.Headless.World.Save.Contract (spec) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
@@ -407,7 +408,7 @@ richPage = PageSnapshot
     , pgsBuildings    = BuildingSnapshot
         { bsnInstances = HM.fromList [ (BuildingId 1, richBuilding)
                                      , (BuildingId 2, richBuilding2) ]
-        , bsnNextId = 3, bsnTags = mempty }
+        , bsnNextId = 3, bsnTags = mempty, bsnScenarioRefs = mempty }
     , pgsUnits        = UnitSnapshot
         { usnInstances = HM.singleton (UnitId 1) richUnit, usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.singleton (UnitId 1) richSimState
@@ -536,7 +537,7 @@ richLocationInstances = LocationInstances
             , liClearEventEmitted = False
             })
         ]
-    , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex
+    , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The rich page's river names (#1102): two rivers named in the page's
@@ -581,7 +582,7 @@ minimalPage2 = PageSnapshot
       -- bsnNextId mirrors the session-global building allocator
       -- (sgNextBuildingId), which every page's slice is rewritten to on
       -- assembly -- see 'World.Save.Snapshot.Adapter'.
-    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 3, bsnTags = mempty }
+    , pgsBuildings    = BuildingSnapshot { bsnInstances = HM.empty, bsnNextId = 3, bsnTags = mempty, bsnScenarioRefs = mempty }
     , pgsUnits        = UnitSnapshot { usnInstances = HM.empty, usnNextId = 2, usnTags = mempty, usnScenarioRefs = mempty }
     , pgsUnitSimStates = HM.empty
     , pgsFloraHarvests = emptyFloraHarvests

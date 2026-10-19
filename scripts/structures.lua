@@ -250,6 +250,36 @@ local function appendVariantArt(out, h, variant)
     end
 end
 
+-- One variant's EFFECTIVE facemaps (#2712), appended to `out`: the facemap
+-- every art slot of the variant is placed with — the variant's own
+-- override where the pack declares one, else the facemap it inherits from
+-- the default art (`handles(variant)` has already resolved which). A
+-- placed piece is a (sprite, facemap) pair and `variants` carries only the
+-- sprite, so the engine needs this half to place exactly the pair this
+-- placer would. Pieces carry one facemap; a wall carries the four cap
+-- facemaps of each edge.
+local function appendVariantFaces(out, h, variant)
+    if not variant then return end
+    for _, k in ipairs(PIECE_KINDS) do
+        local p = h[k]
+        if p and p.facePath then
+            out[#out + 1] = { kind = k, variant = variant,
+                              facemap = p.facePath, faceHandle = p.face }
+        end
+    end
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        if w then
+            for _, c in ipairs(WALL_CAPS) do
+                if w.facePath[c] then
+                    out[#out + 1] = { kind = "wall", edge = e, caps = c, variant = variant,
+                                      facemap = w.facePath[c], faceHandle = w.face[c] }
+                end
+            end
+        end
+    end
+end
+
 -- One variant's destruction entries (#2491), appended to `out`. Same
 -- shape and the same `~= nil` rule as the construction half above, plus
 -- the clip's own `fps`, which is forwarded exactly as authored so the
@@ -322,16 +352,18 @@ local function registerPackArtCatalog(h, variantHandles)
     for _, name in ipairs(names) do
         appendConstruction(construction, variantHandles[name], name)
     end
-    local destruction, variants = {}, {}
+    local destruction, variants, variantFaces = {}, {}, {}
     appendDestruction(destruction, h, nil)
     for _, name in ipairs(names) do
         appendDestruction(destruction, variantHandles[name], name)
         appendVariantArt(variants, variantHandles[name], name)
+        appendVariantFaces(variantFaces, variantHandles[name], name)
     end
     structure.registerPackArt{ pack = M.pack, kinds = kinds, art = art,
                                construction = construction,
                                destruction = destruction,
-                               variants = variants }
+                               variants = variants,
+                               variantFaces = variantFaces }
 end
 
 -- Register every variant's wall art up front. A wall replayed from a save

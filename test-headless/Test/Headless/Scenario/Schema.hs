@@ -53,18 +53,23 @@ catalog = emptyScenarioCatalog
         , ("knife", ItemCatalogEntry Nothing False)
         , ("bandage", ItemCatalogEntry Nothing False)
         , ("steel_plate", ItemCatalogEntry Nothing False)
-        , ("first_aid_kit", ItemCatalogEntry Nothing True) ]
+        , ("first_aid_kit", ItemCatalogEntry Nothing True)
+        , ("crate", ItemCatalogEntry Nothing True) ]
     , catBuildings = HM.fromList
         [ ("cargo_hold", BuildingCatalogEntry (Footprint 0 0 1 1) 10
                             (HS.fromList ["steel_plate"]) Nothing)
         , ("battery", BuildingCatalogEntry (Footprint 0 0 0 0) 5 HS.empty (Just 100)) ]
     , catLocations = HM.fromList
-        [ ("ruin", LocationCatalogEntry (Footprint (-2) (-2) 2 2) ["knife", "knife"])
-        , ("vault", LocationCatalogEntry (Footprint 0 0 0 0) ["canteen"]) ]
+        [ ("ruin", LocationCatalogEntry (Footprint (-2) (-2) 2 2) ["knife", "knife"] [] [] True)
+        , ("vault", LocationCatalogEntry (Footprint 0 0 0 0) ["canteen"] [] [] False)
+        , ("crypt", LocationCatalogEntry (Footprint 0 0 1 1) [] ["crate", "crate"]
+                        ["ruin_loot", "ruin_loot"] False) ]
     , catFlora = HS.fromList ["pine"]
     , catMaterials = HS.fromList ["granite", "loam"]
     , catStructurePacks = HM.fromList
         [ ("dungeon_1", HS.fromList ["floor", "ceiling", "wall", "post"]) ]
+    , catPackVariants = HM.fromList [("dungeon_1", HS.fromList ["damaged"])]
+    , catLootProfiles = HS.fromList ["ruin_loot", "fine_loot"]
     , catInfections = HS.fromList ["staph"]
     , catKnowledge = HS.fromList ["bleed_control", "basic_cuisine"]
     }
@@ -228,7 +233,7 @@ fullExpected = Scenario
         [ FloraEntry (ex "tree-1") [] "pine" (-3) 2 (Authored 4) (Authored 120)
                      (Authored 0.75) Omitted Omitted Omitted Omitted ]
     , scStructures =
-        [ StructurePiece (ex "wall-1") [] "dungeon_1" "wall_ne" 0 0 (Authored 4) ]
+        [ StructurePiece (ex "wall-1") [] "dungeon_1" "wall_ne" 0 0 (Authored 4) Omitted ]
     , scBuildings =
         [ BuildingEntry (ex "hold") [] "cargo_hold" 4 1 (Authored 4)
             (Authored [ (item (ex "stored-canteen") "canteen") { ieFill = Authored 0 } ])
@@ -239,7 +244,7 @@ fullExpected = Scenario
             Omitted (Authored 40) ]
     , scLocations =
         [ LocationEntry (ex "ruin-1") [] "ruin" (-5) 2
-            (HM.fromList [(1, ex "relic")]) ]
+            (HM.fromList [(1, ex "relic")]) HM.empty ]
     , scUnits =
         [ (unit (ex "scout") 0.5 (-1.25))
             { ueTags = [tag "escort", tag "scout"]
@@ -392,6 +397,7 @@ spec = do
     failureSpec
     preservationSpec
     formatV2Spec
+    formatV3Spec
 
 boundsSpec ∷ Spec
 boundsSpec = describe "finite map bounds" $ do
@@ -673,7 +679,7 @@ referenceSpec = describe "identities and references" $ do
             , d "units[0].inventory[0]" (OwnerRejected "units[0]") CascadeRejected
             ]
         scLocations s `shouldBe`
-            [ LocationEntry (ex r) [] "ruin" 0 0 HM.empty | r ← ["ruin-a", "ruin-b", "ruin-c"] ]
+            [ LocationEntry (ex r) [] "ruin" 0 0 HM.empty HM.empty | r ← ["ruin-a", "ruin-b", "ruin-c"] ]
         map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "shared"]
     it "binds a significant slot only to an item of the slot's definition" $ do
         (s, ds) ← loaded =≪ load (unlines
@@ -688,8 +694,8 @@ referenceSpec = describe "identities and references" $ do
         ds `shouldBe`
             [ d "locations[1].significant_items.1" (DefinitionMismatch "canteen") FieldRejected ]
         scLocations s `shouldBe`
-            [ LocationEntry (ex "vault-a") [] "vault" 0 0 (HM.fromList [(1, ex "flask")])
-            , LocationEntry (ex "vault-b") [] "vault" 1 0 HM.empty ]
+            [ LocationEntry (ex "vault-a") [] "vault" 0 0 (HM.fromList [(1, ex "flask")]) HM.empty
+            , LocationEntry (ex "vault-b") [] "vault" 1 0 HM.empty HM.empty ]
         map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "flask", ex "blade"]
     it "keeps the ids of items rejected by slot or material checks" $ do
         (s, ds) ← loaded =≪ load (unlines
@@ -830,8 +836,8 @@ failureSpec = describe "unsuccessful loads" $ do
         f ← failed =≪ load "version: 1.5\n"
         f `shouldSatisfy` \case ScenarioVersionMalformed _ → True; _ → False
     it "refuses unsupported versions without interpreting the content" $ do
-        (failed =≪ load "version: 3\nunits: [{definition: acolyte, x: 0, y: 0}]\n")
-            `shouldReturn` ScenarioVersionUnsupported 3
+        (failed =≪ load "version: 4\nunits: [{definition: acolyte, x: 0, y: 0}]\n")
+            `shouldReturn` ScenarioVersionUnsupported 4
         (failed =≪ load "version: 0\n") `shouldReturn` ScenarioVersionUnsupported 0
     it "migrates a v1 document in memory before validating it" $ do
         let toV2 o = Right (KM.insert "version" (A.Number 2) o)
@@ -907,4 +913,101 @@ formatV2Spec = describe "format v2: flora physical fields" $ do
         (s, ds) ← loaded =≪ load fullV1
         ds `shouldBe` []
         s `shouldBe` fullExpected
-        currentScenarioVersion `shouldBe` 2
+        currentScenarioVersion `shouldBe` 3
+
+-- * Format v3 (#2712): structure variant and container-slot bindings
+
+formatV3Spec ∷ Spec
+formatV3Spec = describe "format v3: structure variants and container bindings" $ do
+    let structure fields = unlines
+            [ "version: 3", "structures:"
+            , "  - {id: w, pack: dungeon_1, piece: wall_ne, x: 0, y: 0" ⧺ fields ⧺ "}" ]
+        crypt locFields extra = unlines
+            ([ "version: 3", "locations:"
+             , "  - {id: c, definition: crypt, x: 0, y: 0" ⧺ locFields ⧺ "}"
+             , "ground_items:"
+             , "  - {id: s1, definition: crate, x: 0, y: 0}"
+             , "  - {id: s2, definition: crate, x: 1, y: 0}"
+             , "  - {id: knife-1, definition: knife, x: 1, y: 1}" ] ⧺ lines extra)
+        slots = ", containers: {\"1\": {item: s1}, \"2\": {item: s2, realized: true}}"
+    it "reads a structure's variant, omitted until authored" $ do
+        (s, ds) ← loaded =≪ load (structure ", variant: damaged")
+        ds `shouldBe` []
+        map spVariant (scStructures s) `shouldBe` [Authored "damaged"]
+        (bare, _) ← loaded =≪ load (structure "")
+        map spVariant (scStructures bare) `shouldBe` [Omitted]
+    it "rejects an unknown variant of the pack as that field alone" $ do
+        (s, ds) ← loaded =≪ load (structure ", variant: ghost")
+        ds `shouldBe` [d "structures[0].variant" (UnknownDefinition "dungeon_1:ghost") FieldRejected]
+        map spVariant (scStructures s) `shouldBe` [Omitted]
+        length (scStructures s) `shouldBe` 1
+    it "reads container bindings: pending by default, realized only when stated" $ do
+        (s, ds) ← loaded =≪ load (crypt slots "")
+        ds `shouldBe` []
+        map leContainers (scLocations s) `shouldBe`
+            [ HM.fromList [ (1, ContainerBinding (ex "s1") Omitted Omitted)
+                          , (2, ContainerBinding (ex "s2") (Authored True) Omitted) ] ]
+    it "reads an explicit pending flag and profile, and keeps explicit false authoritative" $ do
+        (s, ds) ← loaded =≪ load (crypt
+            ", containers: {\"1\": {item: s1, realized: false, profile: fine_loot}}" "")
+        ds `shouldBe` []
+        map (HM.lookup 1 ∘ leContainers) (scLocations s) `shouldBe`
+            [Just (ContainerBinding (ex "s1") (Authored False) (Authored "fine_loot"))]
+    it "rejects an unknown profile, and a profile on a realized slot, as that field alone" $ do
+        (s, ds) ← loaded =≪ load (crypt
+            ", containers: {\"1\": {item: s1, profile: nope}, \"2\": {item: s2, realized: true, profile: fine_loot}}" "")
+        ds `shouldBe`
+            [ d "locations[0].containers.1.profile" (UnknownDefinition "nope") FieldRejected
+            , d "locations[0].containers.2.profile"
+                (InvalidValue "no profile: a realized slot has discarded it") FieldRejected ]
+        map (fmap cbProfile ∘ HM.lookup 1 ∘ leContainers) (scLocations s) `shouldBe` [Just Omitted]
+    it "rejects a slot outside the definition's, and a non-plain key" $ do
+        (_, ds) ← loaded =≪ load (crypt
+            ", containers: {\"3\": {item: s1}, \"01\": {item: s2}}" "")
+        map sdPath ds `shouldBe` ["locations[0].containers.01", "locations[0].containers.3"]
+        map sdEffect ds `shouldBe` [FieldRejected, FieldRejected]
+    it "drops only a binding to an item of another definition, a missing or a doubly claimed one" $ do
+        (s, ds) ← loaded =≪ load (crypt
+            ", containers: {\"1\": {item: knife-1}, \"2\": {item: ghost}}" "")
+        ds `shouldHaveDiagnostics`
+            [ d "locations[0].containers.1.item" (DefinitionMismatch "crate") FieldRejected
+            , d "locations[0].containers.2.item" (MissingReference "ghost") FieldRejected ]
+        map leContainers (scLocations s) `shouldBe` [HM.empty]
+        (s2, ds2) ← loaded =≪ load (crypt
+            ", containers: {\"1\": {item: s1}, \"2\": {item: s1}}" "")
+        ds2 `shouldHaveDiagnostics`
+            [ d "locations[0].containers.1.item" (AmbiguousBinding "s1") FieldRejected
+            , d "locations[0].containers.2.item" (AmbiguousBinding "s1") FieldRejected ]
+        map leContainers (scLocations s2) `shouldBe` [HM.empty]
+    it "rejects a unit joining the encounter of a location whose definition has none" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 3", "locations:"
+            , "  - {id: v, definition: vault, x: 0, y: 0}"
+            , "  - {id: r, definition: ruin, x: 10, y: 10}"
+            , "units:"
+            , "  - {id: a, definition: acolyte, x: 0, y: 0, encounter: v}"
+            , "  - {id: b, definition: acolyte, x: 1, y: 1, encounter: r}" ])
+        ds `shouldBe` [d "units[0].encounter" (NoEncounter "vault") EntryRejected]
+        map ueId (scUnits s) `shouldBe` [ex "b"]
+        map leId (scLocations s) `shouldBe` [ex "v", ex "r"]
+    it "keeps the older vocabularies closed by source version" $ do
+        (s2, ds2) ← loaded =≪ load (crypt slots "" ⧺ "") 
+        ds2 `shouldBe` []
+        forM_ [1, 2 ∷ Int] $ \v → do
+            (s, ds) ← loaded =≪ load
+                ("version: " ⧺ show v ⧺ "\nlocations:\n  - {id: c, definition: crypt, x: 0, y: 0, containers: {\"1\": {item: s1}}}\n"
+                 ⧺ "structures:\n  - {id: w, pack: dungeon_1, piece: wall_ne, x: 0, y: 0, variant: damaged}\n"
+                 ⧺ "ground_items:\n  - {id: s1, definition: crate, x: 0, y: 0}\n")
+            map sdPath ds `shouldMatchList` ["structures[0].variant", "locations[0].containers"]
+            map sdReason ds `shouldBe` [UnknownField, UnknownField]
+            scSourceVersion s `shouldBe` v
+            map leContainers (scLocations s) `shouldBe` [HM.empty]
+            map spVariant (scStructures s) `shouldBe` [Omitted]
+        length (scLocations s2) `shouldBe` 1
+    it "is the identity migration: a v2 document reads the same through the v3 build" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 2", "structures:"
+            , "  - {id: w, pack: dungeon_1, piece: wall_ne, x: 0, y: 0, z: 3}" ])
+        ds `shouldBe` []
+        map spVariant (scStructures s) `shouldBe` [Omitted]
+        scSourceVersion s `shouldBe` 2

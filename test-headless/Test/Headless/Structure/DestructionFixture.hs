@@ -169,6 +169,7 @@ wreckOverriddenNoClip = AppearanceKey (Just damagedVariant) ApPost
 wreckRegistration ∷ PackArtRegistration
 wreckRegistration = fixtureRegistration
     { parDestruction = declaredWrecks [KFloor, KCeiling, KPost, KWall]
+    , parVariantFaces = []
     , parVariants    = wreckVariantArt }
 
 wreckWireRegistration ∷ PackArtRegistration

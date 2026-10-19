@@ -652,6 +652,13 @@ library
                      Scenario.Items.Owners
                      Scenario.Items.Capture
                      Scenario.Items.Encode
+                     Scenario.Placement.Catalog
+                     Scenario.Placement.Structure
+                     Scenario.Placement.Building
+                     Scenario.Placement.Location
+                     Scenario.Placement.Types
+                     Scenario.Placement.Install
+                     Scenario.Placement.Encode
                      Scenario.Units.Catalog
                      Scenario.Units.Defaults
                      Scenario.World.Build
@@ -2009,6 +2016,10 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Schema
                    Test.Headless.Scenario.Items
                    Test.Headless.Scenario.Units
+                   Test.Headless.Scenario.Placement
+                   Test.Headless.Scenario.Placement.Art
+                   Test.Headless.Scenario.Placement.Fixtures
+                   Test.Headless.Scenario.Placement.Glue
                    Test.Headless.Scenario.World
                    Test.Headless.Scenario.World.Fixtures
                    Test.Headless.Scenario.World.Live

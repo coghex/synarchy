@@ -17,6 +17,8 @@ module Building.Types
     , nextBuildingId
     , retirePageBuildings
     , currentActivity
+    , buildingAppearDuration
+    , removeBuildingQuietly
     , materialsSatisfied
     , footprintDist
     , footprintDistAt
@@ -397,6 +399,17 @@ data BuildingManager = BuildingManager
       --   building. Persisted per page by the @buildings@ component;
       --   the reverse index is rebuilt. Mutated only through
       --   "Gameplay.Tags.Live".
+    , bmScenarioRefs ∷ !(Map.Map BuildingId Text)
+      -- ^ The scenario REFERENCE each building was constructed from
+      --   (#2712), the durable half of the scenario-id ↔ building-id
+      --   mapping, so a capture after a save and load still writes the id
+      --   the building came in with. Sparse (a building no scenario built
+      --   has none) and injective (no reference names two buildings);
+      --   never a tag. Same lifetime as 'bmTags' and for the same reason:
+      --   every transition that removes an instance removes its reference
+      --   in the SAME atomic modify. Every key names an instance in
+      --   'bmInstances'. Written only by "Scenario.Placement.Building";
+      --   persisted per page by the @buildings@ component (v4).
     } deriving (Show, Eq)
 
 emptyBuildingManager ∷ BuildingManager
@@ -408,6 +421,7 @@ emptyBuildingManager = BuildingManager
     , bmReservations = HM.empty
     , bmDestructions = HM.empty
     , bmTags         = emptyCategoryIndex
+    , bmScenarioRefs = Map.empty
     }
 
 nextBuildingId ∷ BuildingManager → (BuildingId, BuildingManager)
@@ -456,6 +470,9 @@ retirePageBuildings pageId cutoff bm = bm
           keep                             → keep
     , bmTags = restrictCategoryIndex (\bid → not (HM.member bid retired))
                                      (bmTags bm)
+      -- #2712: the retired buildings' scenario references, same set.
+    , bmScenarioRefs = Map.filterWithKey (\bid _ → not (HM.member bid retired))
+                                         (bmScenarioRefs bm)
     }
   where
     retired = HM.filterWithKey
@@ -562,14 +579,36 @@ currentActivity now inst def
         if biBuildProgress inst < bdBuildWork def then Constructing else Built
     | otherwise =
         let elapsed = now - biSpawnedAt inst
-            appearDuration = case Map.lookup RoleAppearance (bdRoleAnims def) of
-                Nothing       → 0
-                Just animName → case HM.lookup animName (bdAnimations def) of
-                    Nothing  → 0
-                    Just a   →
-                        let maxN = buildingAnimMaxFrames a
-                            fps  = banFps a
-                        in if fps > 0 ∧ maxN > 0
-                           then fromIntegral maxN / realToFrac fps ∷ Double
-                           else 0
-        in if elapsed < appearDuration then Appearing else Built
+        in if elapsed < buildingAppearDuration def then Appearing else Built
+
+-- | How long a zero-work definition's declared appearance plays, in game
+--   seconds (0 for a definition with no appearance animation). The one
+--   reading 'currentActivity' and a scenario's completed building share
+--   (#2712): a building materialized as complete is stamped so that this
+--   much time has already elapsed since it was placed.
+buildingAppearDuration ∷ BuildingDef → Double
+buildingAppearDuration def =
+    case Map.lookup RoleAppearance (bdRoleAnims def) of
+        Nothing       → 0
+        Just animName → case HM.lookup animName (bdAnimations def) of
+            Nothing  → 0
+            Just a   →
+                let maxN = buildingAnimMaxFrames a
+                    fps  = banFps a
+                in if fps > 0 ∧ maxN > 0
+                   then fromIntegral maxN / realToFrac fps ∷ Double
+                   else 0
+
+-- | Remove one building and everything the manager holds BY IT, with no
+--   destruction presentation and no demolition side effect (#2712): the
+--   instance, the selection when it names it, its gameplay tags and its
+--   scenario reference — the manager half of retiring a building whose
+--   completion failed after it was committed. 'BuildingDestroy' is the
+--   gameplay demolition and keeps its presentation.
+removeBuildingQuietly ∷ BuildingId → BuildingManager → BuildingManager
+removeBuildingQuietly bid bm = bm
+    { bmInstances = HM.delete bid (bmInstances bm)
+    , bmSelected = if bmSelected bm ≡ Just bid then Nothing else bmSelected bm
+    , bmTags = restrictCategoryIndex (≢ bid) (bmTags bm)
+    , bmScenarioRefs = Map.delete bid (bmScenarioRefs bm)
+    }

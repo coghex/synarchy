@@ -220,8 +220,12 @@ structureRegisterPackArtFn env = do
                     -- pack with no variants declares none.
                     eVars ← optionalArrayField pack "variants"
                                 "variant art" (readVariantArt pack)
+                    -- #2712: the effective facemap of each variant slot,
+                    -- optional like the variant inventory it extends.
+                    eVarFaces ← optionalArrayField pack "variantFaces"
+                                    "variant facemaps" (readVariantFace pack)
                     pure (PackArtRegistration pack <$> eKinds <*> eArt
-                            <*> eFrames <*> eVars <*> eWreck
+                            <*> eFrames <*> eVarFaces <*> eVars <*> eWreck
                             <*> pure HM.empty)
 
     -- Push spec[name], read it as a dense array, pop. A non-table field
@@ -464,6 +468,49 @@ structureRegisterPackArtFn env = do
                                 else role <> " (construction frames "
                                        <> tshow i <> ")")
 
+    -- #2712: one VARIANT art slot's effective facemap. The selectors are
+    -- an art SLOT's, exactly as an @art@ entry's are (a wall names its
+    -- edge AND its cap code), and `variant` is MANDATORY.
+    readVariantFace ∷ Text → Int
+                    → Lua.LuaE Lua.Exception
+                          (Either ArtFault ((Text, ArtKey), ArtAsset))
+    readVariantFace pack i = do
+        mKind    ← fieldString (-1) "kind"
+        mEdge    ← fieldString (-1) "edge"
+        mCaps    ← fieldString (-1) "caps"
+        mShape   ← fieldString (-1) "shape"
+        mVariant ← fieldString (-1) "variant"
+        mFace    ← fieldString (-1) "facemap"
+        mFaceH   ← fieldHandle (-1) "faceHandle"
+        pure $ case mKind ⌦ pieceKindFromText of
+            Nothing → Left $ faceFault Nothing ""
+                "the entry names no recognised piece kind"
+            Just kind → case artKeyFor kind mEdge mCaps mShape of
+                Nothing → Left $ faceFault (Just kind) ""
+                    "the entry's edge/caps/shape selectors do not name one \
+                    \of this kind's art slots"
+                Just key → case mVariant of
+                    Nothing → Left $ faceFault (Just kind) ""
+                        "the entry names no `variant`"
+                    Just variant →
+                        let role = artKeyRole key <> " variant '" <> variant <> "' facemap"
+                            need ∷ Text → Maybe α → Either ArtFault α
+                            need what = maybe
+                                (Left (faceFault (Just kind) (role <> " " <> what)
+                                         ("the entry has no `" <> what <> "`")))
+                                Right
+                        in do face  ← need "facemap"    mFace
+                              when (escapingPath face) $
+                                  Left (escapeFault pack role face)
+                              faceH ← need "faceHandle" mFaceH
+                              pure ((variant, key), ArtAsset face faceH)
+      where
+        faceFault mKind role =
+            fault pack mKind
+                  (if role ≡ "" then "variant facemap " <> tshow i
+                                else role <> " (variant facemap "
+                                       <> tshow i <> ")")
+
     -- #2491: one VARIANT appearance and the sprite it is placed with.
     -- The selectors are the appearance's, exactly as a lifecycle entry's
     -- are, and `variant` is MANDATORY — the default art travels in
@@ -685,6 +732,7 @@ declaredAssets reg =
       | (_, ds) ← parDestruction reg
       , a ← dsStatic ds : V.toList (dsFrames ds) ]
     ⧺ map snd (parVariants reg)
+    ⧺ map snd (parVariantFaces reg)
 
 -- | Measure every image a declared sequence's dimension check needs:
 --   the appearance's static sprite and the sequence's LAST frame.

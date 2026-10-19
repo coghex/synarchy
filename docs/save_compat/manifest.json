@@ -3874,6 +3874,113 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z16-scenario-world.expected.json"
         }
       ]
+    },
+    {
+      "id": "z17-scenario-placement",
+      "description": "A scenario placement session (#2712) as the current build writes it: a finite 20x10 arena page 'finite_arena' carrying placed scenario content with its scenario-identity mappings populated \u2014 buildings v4 holds each building's scenario reference (a charged battery 'battery' and a crate 'crate' holding a steel bar) and world-pages v16 holds the placed location's reference (a ruin_small instance 'ruin' at its authored anchor with its significant item bound, built as a real instance rather than an overlay entry), beside the damaged-variant floor and wall edits, the bound items' references in core-session, and the battery's charged power node. z16 and every older fixture are the no-reference (buildings v3 / world-pages v15 and older) counterparts.",
+      "declaredAt": "2026-10-19",
+      "declaredByIssue": 2712,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current build: World.Save.Component.EntitySnapshots.buildingsCodec (v4) and World.Save.Component.PageCore.worldPagesCodec (v16) decode the scenario references; no migration (this IS the current format)",
+      "components": [
+        {
+          "id": "buildings",
+          "required": true,
+          "version": 4
+        },
+        {
+          "id": "container-knowledge",
+          "required": false,
+          "version": 2
+        },
+        {
+          "id": "core-session",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "craft-bills",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "lua.building_spawn",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "lua.unit_ai",
+          "required": true,
+          "version": 10
+        },
+        {
+          "id": "metadata",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "portable-knowledge",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "power-nodes",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "texture-palette",
+          "required": true,
+          "version": 1
+        },
+        {
+          "id": "transfer-orders",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "unit-sim",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "units",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-activity",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-edits",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-pages",
+          "required": true,
+          "version": 16
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z17-scenario-placement",
+          "path": "test-headless/data/save-compat/z17-scenario-placement.bin",
+          "kind": "complete-session",
+          "sha256": "b56db1e73b05700ac5af4e2329b643beb001a4aa73e2f6faf3e83b6fa4c1a8c9",
+          "sizeBytes": 3402,
+          "provenance": "Built by the Scenario.Placement hspec group's 'retained save-compat fixture' example on a live headless engine: a finite 20x10 arena page received the scenario through the real adapters (Scenario.Placement.*, Scenario.Items.*, the real building, location-instance, structure and item owners) and was snapshotted with the owners' own snapshot functions and encoded through the same encodeSessionSnapshot an ordinary save uses; the donor save z16-scenario-world supplied the session metadata and the Lua components the page does not own (retained as docs/pr-proofs/issue-2712-make-z17.py.txt). Then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z17-scenario-placement.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

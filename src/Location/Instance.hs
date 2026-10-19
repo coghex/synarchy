@@ -81,6 +81,14 @@ module Location.Instance
     , emptyLocationInstances
     , newLocationInstance
     , newLocationInstanceWithSeed
+      -- * Scenario placement (#2712)
+    , newLocationInstanceAt
+    , locationInstanceGeometryAt
+    , locationDefHasEncounter
+    , scenarioEncounter
+    , withInitialClearFeedback
+    , setLocationScenarioRef
+    , setLocationContainerProfile
       -- * Checked geometry construction
     , LocationGeometryError(..)
     , locationGeometryErrorText
@@ -132,6 +140,7 @@ import qualified Data.Text as T
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import Location.Bounds
     ( AbsBounds(..), LocationGeometryFailure(..), narrowTileCoordinate
     , translateBoundsChecked )
@@ -617,6 +626,16 @@ data LocationInstances = LocationInstances
       --   the location registry needed to resolve bounds\/labels is
       --   actually available. 'Nothing' everywhere else: at placement
       --   time, after a v2 decode, and after resolution.
+    , lisScenarioRefs  ∷ !(Map.Map LocationInstanceId Text)
+      -- ^ The scenario REFERENCE each location was constructed from
+      --   (#2712), the durable half of the scenario-id ↔ location-id
+      --   mapping, so a capture after a save and load still writes the id
+      --   the location came in with. Sparse (a location no scenario built
+      --   has none) and injective (no reference names two locations); never
+      --   a tag. Keyed by the page-local id, so each page's table owns its
+      --   own; every key names an instance in 'lisById'. Written only by
+      --   "Scenario.Placement.Location"; persisted by the @world-pages@
+      --   component (v16) beside the table.
     , lisTags          ∷ !(CategoryIndex LocationInstanceId)
       -- ^ The AUTHORITATIVE general gameplay tag assignments of this
       --   page's locations (#2701), both indexes, sparse. Keyed by the
@@ -644,6 +663,7 @@ emptyLocationInstances = LocationInstances
     { lisNextId        = firstLocationInstanceId
     , lisById          = HM.empty
     , lisPendingLegacy = Nothing
+    , lisScenarioRefs  = Map.empty
     , lisTags          = emptyCategoryIndex
     }
 
@@ -817,6 +837,114 @@ encounterFromDef seed iid def = case
                 , leCleared            = rolled ≡ 0
                 }
 
+-- * Scenario placement (#2712) -----------------------------------------
+
+-- | Placed geometry for an EXPLICIT anchor tile — a scenario places a
+--   location where the document says, not at a chunk's centre. The same
+--   checked arithmetic as 'locationInstanceGeometry': every component is
+--   computed in 'Integer' and narrowed only when all are representable, so
+--   an unrepresentable placement yields a 'LocationGeometryError' and no
+--   instance. The error names the chunk the anchor falls in.
+locationInstanceGeometryAt
+    ∷ (Int, Int) → LocationDef
+    → Either LocationGeometryError ((Int, Int), AbsBounds)
+locationInstanceGeometryAt (ax, ay) def =
+    case translateBoundsChecked (toInteger ax, toInteger ay) (ldBounds def) of
+        Left f    → Left (LocationGeometryError (ldId def) (anchorChunk (ax, ay))
+                              (lgfComponent f) (lgfValue f))
+        Right box → Right ((ax, ay), box)
+
+-- | The chunk hosting an anchor tile ('liChunk': where the anchor is, never
+--   the identity).
+anchorChunk ∷ (Int, Int) → ChunkCoord
+anchorChunk (ax, ay) = ChunkCoord (ax `div` chunkSize) (ay `div` chunkSize)
+
+-- | A fresh, undiscovered instance at an explicit anchor tile, built from
+--   the same fields and rules as 'newLocationInstanceWithSeed' (stored
+--   geometry, the name rendered once, the obligations and container slots
+--   from the definition, the clearance notice seated) except that the
+--   anchor is the given tile.
+newLocationInstanceAt
+    ∷ Word64 → Maybe LocationNamer → LocationInstanceId → (Int, Int) → LocationDef
+    → Either LocationGeometryError LocationInstance
+newLocationInstanceAt seed namer iid anchor def = do
+    (anchor', box) ← locationInstanceGeometryAt anchor def
+    let (name, gloss, ety) = nameLocationInstance namer def
+                                 (unLocationInstanceId iid)
+    pure $ withInitialClearFeedback LocationInstance
+        { liId              = iid
+        , liDefId           = ldId def
+        , liChunk           = anchorChunk anchor'
+        , liAnchor          = anchor'
+        , liBounds          = box
+        , liDisplayName     = name
+        , liGloss           = gloss
+        , liEtymology       = ety
+        , liLifecycle       = LifecycleUnknown
+        , liContentsSpawned = False
+        , liEncounter       = encounterFromDef seed iid def
+        , liSignificant     = significantItemsFromDef def
+        , liContainers      = containerSlotsFromDef def
+        , liClearEventEmitted = False
+        }
+
+-- | Does the definition author an encounter — a ranged unit-content entry,
+--   the only kind the YAML boundary accepts ('encounterFromDef')?
+locationDefHasEncounter ∷ LocationDef → Bool
+locationDefHasEncounter def =
+    not (null [ () | c ← ldContents def, isJust (lconCountRange c) ])
+
+-- | The encounter a SCENARIO states for an instance: exactly the units that
+--   join its roster (@leRolledCount@ is their number, so nothing is rolled
+--   and no implicit occupant exists), each with its home tile, the roster
+--   complete. The clearance policy is the definition's own. 'Nothing' for a
+--   definition that authors no encounter, which has nothing to join.
+--   Zero occupants is a zero-roll ruin: cleared exactly as 'encounterFromDef'
+--   rolls a zero.
+scenarioEncounter ∷ LocationDef → [(UnitId, (Float, Float))] → Maybe LocationEncounter
+scenarioEncounter def occupants = case
+    [ lconClearance c | c ← ldContents def, isJust (lconCountRange c) ] of
+        []         → Nothing
+        (policy:_) → Just LocationEncounter
+            { leRolledCount        = length occupants
+            , leOccupants          =
+                [ LocationEncounterOccupant uid home False False
+                | (uid, home) ← occupants ]
+            , leRosterComplete     = True
+            , leDeathOnlyClearance = policy ≡ Just "death_only"
+            , leActivated          = False
+            , leEpisodeActive      = False
+            , leAggressionAnnounced = False
+            , leDisengageAnnounced  = False
+            , leCleared            = null occupants
+            }
+
+-- | Set the loot profile a still-PENDING container slot realizes from
+--   (#2712: a scenario states it, where an ordinary placement takes the
+--   definition's). 'Nothing' — and nothing written — for an unknown
+--   instance or slot, a realized slot (D-3: realization discarded the
+--   profile for good), or an entry the decode rules would refuse.
+setLocationContainerProfile
+    ∷ LocationInstanceId → Int → Text → LocationInstances → Maybe LocationInstances
+setLocationContainerProfile iid slot profile lis = do
+    inst ← lookupLocationInstance iid lis
+    entry ← find ((≡ slot) . lcsSlot) (liContainers inst)
+    guard (not (lcsRealized entry))
+    let entry' = entry { lcsProfile = Just profile }
+    guard (null (containerSlotEntryErrors entry'))
+    pure $ adjustLocationInstance iid (\i → i
+        { liContainers = [ if lcsSlot e ≡ slot then entry' else e | e ← liContainers i ] }) lis
+
+-- | Record the scenario reference a location was constructed from. 'Nothing'
+--   — and nothing written — for an unknown instance or a reference another
+--   instance already holds (the mapping is injective).
+setLocationScenarioRef
+    ∷ LocationInstanceId → Text → LocationInstances → Maybe LocationInstances
+setLocationScenarioRef iid ref lis = do
+    _ ← lookupLocationInstance iid lis
+    guard (ref `notElem` Map.elems (Map.delete iid (lisScenarioRefs lis)))
+    pure lis { lisScenarioRefs = Map.insert iid ref (lisScenarioRefs lis) }
+
 -- * Queries ----------------------------------------------------------
 
 -- | Every instance, ordered by id — a canonical total order, never
@@ -886,6 +1014,7 @@ buildLocationInstancesWithSeed seed namer registry overlay = do
         { lisNextId        = firstLocationInstanceId + length entries
         , lisById          = HM.fromList [ (liId i, i) | Just i ← built ]
         , lisPendingLegacy = Nothing
+        , lisScenarioRefs  = Map.empty
         , lisTags          = emptyCategoryIndex
         }
   where

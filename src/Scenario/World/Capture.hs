@@ -46,6 +46,11 @@ module Scenario.World.Capture
     , captureWorldContent
     , EntryKey(..)
     , entryKey
+    , chunkStates
+    , chunkStatesOf
+    , rebuiltChunk
+    , placementTiles
+    , uniqueName
     ) where
 
 import UPrelude
@@ -73,6 +78,7 @@ import World.Generate.Arena (clipArenaChunk, generateArenaChunkIn)
 import World.Generate.Coordinates (chunkToGlobal, globalToChunk)
 import World.Material (MaterialProps(..), MaterialRegistry, getMaterialProps, isKnownMaterial)
 import World.Material.Id (MaterialId(..))
+import World.Tile.Types (WorldTileData(..), lookupChunk)
 import World.Fluid.Exact (exactSurfaceOfZ)
 import World.Fluid.Types (FluidCell(..))
 import Scenario.World.Flora (derivedOccurrenceAge, derivedPlotAge)
@@ -206,15 +212,40 @@ data TileCol = TileCol
 -- | Every chunk the snapshot names, as it IS: resident chunks as held,
 --   the rest rebuilt from the base and the durable log.
 chunkStates ∷ WorldSnapshot → M.Map ChunkCoord LoadedChunk
-chunkStates snap =
-    let resident = M.fromList [ (lcCoord lc, lc) | lc ← snapResident snap ]
-        logged = [ c | c ← HM.keys (snapEdits snap), not (M.member c resident) ]
-        rebuilt = M.fromList
-            [ (c, clipArenaChunk (snapBounds snap)
-                      (replayEdits (snapEdits snap)
-                          (generateArenaChunkIn (snapBounds snap) (snapSeed snap) c)))
-            | c ← logged ]
+chunkStates snap = chunkStatesOf (snapBounds snap) (snapSeed snap) (snapEdits snap) (snapResident snap)
+
+-- | 'chunkStates' over its parts, for a capture that reads a page's chunks
+--   without the rest of a 'WorldSnapshot' (structure capture, #2712): the
+--   resident chunks as held, every other chunk the durable log names
+--   rebuilt from the arena base and the replayed log.
+chunkStatesOf ∷ Maybe ArenaBounds → Word64 → WorldEdits → [LoadedChunk]
+              → M.Map ChunkCoord LoadedChunk
+chunkStatesOf bounds seed edits residentChunks =
+    let resident = M.fromList [ (lcCoord lc, lc) | lc ← residentChunks ]
+        logged = [ c | c ← HM.keys edits, not (M.member c resident) ]
+        rebuilt = M.fromList [ (c, rebuiltChunk bounds seed edits c) | c ← logged ]
     in M.union resident rebuilt
+
+-- | A chunk as an admission rebuilds it: the arena base from the page's
+--   seed and bounds, the durable log replayed over it, the rectangle
+--   re-asserted. The one reading of a page's terrain for a chunk that is
+--   not resident.
+rebuiltChunk ∷ Maybe ArenaBounds → Word64 → WorldEdits → ChunkCoord → LoadedChunk
+rebuiltChunk bounds seed edits c =
+    clipArenaChunk bounds (replayEdits edits (generateArenaChunkIn bounds seed c))
+
+-- | The page's terrain for the given tiles (#2712): the resident store,
+--   plus every chunk those tiles fall in that is not resident, rebuilt
+--   ('rebuiltChunk'), carrying the page's bounds. What a footprint check
+--   reads, so a building near a partial or evicted chunk is judged against
+--   the same ground an admission would build.
+placementTiles ∷ Maybe ArenaBounds → Word64 → WorldEdits → WorldTileData → [(Int, Int)]
+               → WorldTileData
+placementTiles bounds seed edits td tiles =
+    let needed = Set.fromList [ fst (globalToChunk x y) | (x, y) ← tiles ]
+        missing = [ c | c ← Set.toList needed, isNothing (lookupChunk c td) ]
+        extra = HM.fromList [ (c, rebuiltChunk bounds seed edits c) | c ← missing ]
+    in td { wtdChunks = HM.union (wtdChunks td) extra, wtdBounds = bounds }
 
 -- | The shape of every PRESENT column of every visited chunk, plus the
 --   unedited column for a tagged tile no visited chunk holds.

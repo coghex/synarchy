@@ -297,7 +297,7 @@ knowledgePage pid =
     (blankPageSnapshot pid (defaultWorldGenParams { wgpSeed = 7 }))
         { pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pid)
         , pgsBuildings = BuildingSnapshot
-            { bsnInstances = HM.empty, bsnNextId = 9, bsnTags = mempty }
+            { bsnInstances = HM.empty, bsnNextId = 9, bsnTags = mempty, bsnScenarioRefs = mempty }
         , pgsUnits = (pgsUnits (blankPageSnapshot pid defaultWorldGenParams))
         , pgsContainerKnowledge = ContainerKnowledge $ HM.fromList
             [ (BuildingId 5, ContainerRecord [] 0 900.0)

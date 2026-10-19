@@ -350,7 +350,11 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , bmReservations = HM.empty
                       , bmDestructions = HM.empty
                       , bmTags = unionDisjointCategories
-                                     (map (bmTags . psrBuildings) results) }
+                                     (map (bmTags . psrBuildings) results)
+                        -- #2712: building ids are global, so the pages'
+                        -- reference maps are disjoint too.
+                      , bmScenarioRefs = Map.unions
+                                     (map (bmScenarioRefs . psrBuildings) results) }
                   finalUnits = UnitManager
                       { umDefs = unitDefs, umInstances = mergedUnits
                       , umSelected = mempty, umNextId = nextUid

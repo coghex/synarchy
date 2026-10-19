@@ -23,6 +23,7 @@ import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapabi
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), withPageLifecycle)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Map.Strict as Map
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
@@ -142,7 +143,9 @@ handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
                 , bmSelected     = cleared
                 , bmDestructions = effects
                   -- #2701: its gameplay tags leave with the instance.
-                , bmTags         = deleteCategoryTarget bid (bmTags bm) }
+                , bmTags         = deleteCategoryTarget bid (bmTags bm)
+                  -- #2712: and its scenario reference.
+                , bmScenarioRefs = Map.delete bid (bmScenarioRefs bm) }
            , ( either Just (const Nothing) captured
              , maybe HS.empty (itemForestIds . buildingItems)
                      (HM.lookup bid (bmInstances bm)) ) )
@@ -182,7 +185,8 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
         -- session that is being torn down and can never commit.
         let bm' = clearReservations bm
                 { bmInstances = HM.empty, bmSelected = Nothing
-                , bmDestructions = HM.empty, bmTags = emptyCategoryIndex }
+                , bmDestructions = HM.empty, bmTags = emptyCategoryIndex
+                , bmScenarioRefs = Map.empty }
         in (bm', ((), retiredBuildingItemIds bm bm'))
     forgetAllContainers (wsWorldManagerRef sim)
 
