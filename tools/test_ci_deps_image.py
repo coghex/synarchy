@@ -14,9 +14,14 @@ What is pinned
   reuses A and moves `master` back; a run of the same identity that
   published during this run's build is kept, not overwritten; a retry
   after a failed moving-tag update recovers it; registry errors are not
-  absence; an older run never moves `master` past a newer non-docs commit,
-  while docs-only commits after it do not stop it; pull requests (fork
-  and same-repository), other refs and other repositories write nothing.
+  absence; an older run never moves `master` back past a newer plan, while
+  code- and docs-only commits after it use its identity without resolving
+  the tip; pull requests (fork and same-repository), other refs and other
+  repositories write nothing.
+  `master` names the identity of master's tip: the review's interleaving
+  (A checks, B publishes and moves, A writes) and its mirror end on B, a
+  push during a decision is repaired by the re-check, and a reconcile that
+  replaced a cancelled newer one still reaches the newer plan.
 * Anonymous access: both tags' manifests and blobs, and the private case.
 * Docker-free consumption: layer order, whiteouts and opaque directories,
   links, prefix confinement, path and symlink escapes, digest checks, the
@@ -24,8 +29,10 @@ What is pinned
 * Consumer compatibility: matching plans from another directory, and
   mismatching ones (a changed unit, another compiler).
 * Wiring: deps-image.yml runs only for master pushes of this repository
-  (checked with the parity audit's own scheduling model), keys its lock on
-  the identity, grants packages: write to the publishing job alone; the
+  (checked with the parity audit's own scheduling model), keys the publish
+  lock on the identity and the `master` lock on nothing (one fixed group,
+  held by the only job that writes `master`), grants packages: write only
+  to those two jobs; the
   Dockerfile's apt list, toolchain versions and plan inputs match the CI
   image and the repository.
 """
@@ -84,6 +91,7 @@ class FakeRegistry:
         self.lock = threading.Lock()
         self.scheme = "http"
         self.refresh_tokens: set[str] = set()
+        self.manifest_puts: list[tuple[str, str]] = []
         handler = self._handler()
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -277,6 +285,7 @@ class FakeRegistry:
                     with registry.lock:
                         repo["manifests"][ref] = (body, media)
                         repo["manifests"][sha(body)] = (body, media)
+                        registry.manifest_puts.append((ref, sha(body)))
                     return self._send(201, headers={"Docker-Content-Digest": sha(body),
                                                     "Location": f"/v2/{name}/manifests/{sha(body)}"})
                 return self._send(405)
@@ -530,114 +539,129 @@ class FakeDocker:
 
 
 class FakeGit:
-    """A linear master history; `docs` names the docs-only commits."""
+    """A linear master history. `plans` maps the commits that set a plan
+    (and so change the plan inputs) to its plan.json bytes; every other
+    commit inherits its parent's plan. `edits` are commits that change a
+    plan input without changing the resolved plan. `on_tip[n]` runs just
+    before the n-th `master_tip()` call returns (1-based): a push landing
+    at exactly that moment."""
 
-    def __init__(self, history, docs=()):
+    def __init__(self, history, plans=None, edits=()):
         self.history = list(history)
-        self.docs = set(docs)
+        self.plans = dict(plans or {})
+        self.edits = set(edits)
+        self.on_tip: dict[int, object] = {}
+        self.tip_calls = 0
+
+    def push(self, commit, plan=None, edit=False):
+        self.history.append(commit)
+        if plan is not None:
+            self.plans[commit] = plan
+        if edit:
+            self.edits.add(commit)
+
+    def plan_of(self, commit):
+        for candidate in reversed(self.history[:self.history.index(commit) + 1]):
+            if candidate in self.plans:
+                return self.plans[candidate]
+        raise AssertionError(f"no plan for {commit}")
 
     def master_tip(self):
+        self.tip_calls += 1
+        hook = self.on_tip.pop(self.tip_calls, None)
+        if hook:
+            hook()
         return self.history[-1]
 
     def is_ancestor(self, older, newer):
         return older in self.history and newer in self.history and \
             self.history.index(older) <= self.history.index(newer)
 
-    def docs_only_between(self, older, newer):
+    def plan_inputs_changed(self, older, newer):
         span = self.history[self.history.index(older) + 1:self.history.index(newer) + 1]
-        return all(commit in self.docs for commit in span)
+        return any(commit in self.plans or commit in self.edits for commit in span)
+
+
+class HookedRegistry(deps.Registry):
+    """A credentialed client that runs `before_put` (once) just before its
+    next manifest PUT: the moment between a reconcile's decision and its
+    write."""
+
+    before_put = None
+
+    def put_manifest(self, reference, body, media_type):
+        hook, self.before_put = self.before_put, None
+        if hook:
+            hook()
+        return super().put_manifest(reference, body, media_type)
+
+
+PLAN_A = make_plan()
+PLAN_B = make_plan(units=[unit("zlib", "0.7.1.2", "ddd")])
+PLAN_C = make_plan(units=[unit("vulkan", "3.26.7", "eee")])
+
+
+def tag_of(plan):
+    return deps.plan_identity(plan, OS_2404).tag
 
 
 class PublishTests(unittest.TestCase):
+    """The per-identity job: the immutable tag, written at most once."""
+
     def setUp(self):
         self.fake = FakeRegistry()
         self.fake.repo(deps.REPOSITORY)["public"] = True
         self.docker = FakeDocker(self.fake)
-        self.git = FakeGit(["c1"])
         self.logs: list[str] = []
 
     def tearDown(self):
         self.fake.close()
 
-    def clients(self):
-        return (deps.Registry(self.fake.url, credentials=self.fake.credentials),
-                deps.Registry(self.fake.url))
-
     def run_publish(self, commit, plan=None, event="push", ref="refs/heads/master",
                     repository="coghex/synarchy"):
-        plan_bytes = plan or make_plan()
-        identity = deps.plan_identity(plan_bytes, OS_2404)
-        registry, anonymous = self.clients()
-        return deps.publish(registry=registry, anonymous=anonymous, docker=self.docker,
-                            git=self.git, event=event, ref=ref, repository=repository,
+        identity = deps.plan_identity(plan or PLAN_A, OS_2404)
+        return deps.publish(registry=deps.Registry(self.fake.url,
+                                                   credentials=self.fake.credentials),
+                            anonymous=deps.Registry(self.fake.url), docker=self.docker,
+                            event=event, ref=ref, repository=repository,
                             tag=identity.tag, plan_sha256=identity.plan_sha256,
                             base_image="ubuntu@sha256:" + "1" * 64, revision=commit,
                             build_url="https://example/run", log=self.logs.append)
 
-    def master(self):
-        return self.fake.digest_of(deps.REPOSITORY, deps.MOVING_TAG)
-
-    def test_new_identity_publishes_once_and_moves_master(self):
+    def test_new_identity_publishes_once_and_leaves_master_alone(self):
         result = self.run_publish("c1")
-        self.assertTrue(result.built and result.pushed and result.moved)
-        self.assertEqual(self.master(), result.digest)
-        self.assertEqual(len(self.docker.builds), 1)
+        self.assertTrue(result.built and result.pushed)
+        self.assertEqual(self.fake.digest_of(deps.REPOSITORY, result.tag), result.digest)
+        self.assertIsNone(self.fake.digest_of(deps.REPOSITORY, deps.MOVING_TAG))
+        self.assertNotIn(deps.MOVING_TAG, [tag for tag, _ in self.fake.manifest_puts])
         self.assertEqual(self.docker.builds[0][1]["EXPECTED_PLAN_SHA256"],
                          result.tag.rsplit("-", 1)[1])
         labels = self.docker.builds[0][2]
         self.assertEqual(labels["org.opencontainers.image.revision"], "c1")
         self.assertEqual(labels["org.opencontainers.image.base.digest"], "sha256:" + "1" * 64)
-        self.assertEqual(len(result.anonymous), 2)
+        self.assertEqual(len(result.anonymous), 1)
 
     def test_unchanged_identity_publishes_nothing(self):
         first = self.run_publish("c1")
-        self.git.history.append("c2")
         before = len(self.fake.writes())
         second = self.run_publish("c2")
-        self.assertFalse(second.built or second.pushed or second.moved)
+        self.assertFalse(second.built or second.pushed)
         self.assertEqual(second.digest, first.digest)
         self.assertEqual(len(self.docker.builds), 1)
         self.assertEqual(len(self.fake.writes()), before)
 
-    def test_rollback_reuses_a_and_moves_master_back(self):
-        plan_a, plan_b = make_plan(), make_plan(units=[unit("zlib", "0.7.1.2", "ddd")])
-        a = self.run_publish("c1", plan_a)
-        self.git.history.append("c2")
-        b = self.run_publish("c2", plan_b)
-        self.assertEqual(self.master(), b.digest)
-        self.git.history.append("c3")
-        again = self.run_publish("c3", plan_a)
-        self.assertFalse(again.built)
-        self.assertTrue(again.moved)
-        self.assertEqual(again.digest, a.digest)
-        self.assertEqual(self.master(), a.digest)
-        self.assertEqual(len(self.docker.builds), 2)
-
     def test_concurrent_run_publishing_first_is_kept(self):
-        identity = deps.plan_identity(make_plan(), OS_2404)
+        tag = tag_of(PLAN_A)
         layer = make_layer([("usr/local/cabal/store/other-run", "file", "x", 0o644)])
         winner = []
-
-        def other_run_finishes_first():
-            winner.append(self.fake.put_image(deps.REPOSITORY, identity.tag, [layer]))
-
-        self.docker.on_build = other_run_finishes_first
+        self.docker.on_build = lambda: winner.append(
+            self.fake.put_image(deps.REPOSITORY, tag, [layer]))
         result = self.run_publish("c1")
         self.assertTrue(result.built)
         self.assertFalse(result.pushed)
         self.assertEqual(result.digest, winner[0])
-        self.assertEqual(self.fake.digest_of(deps.REPOSITORY, identity.tag), winner[0])
+        self.assertEqual(self.fake.digest_of(deps.REPOSITORY, tag), winner[0])
         self.assertIn("kept its image", " ".join(result.notes))
-
-    def test_retry_recovers_a_failed_moving_tag_update(self):
-        self.fake.fault("PUT", r"/manifests/master$", 500)
-        with self.assertRaises(deps.RegistryError):
-            self.run_publish("c1")
-        self.assertIsNone(self.master())
-        retry = self.run_publish("c1")
-        self.assertFalse(retry.built)
-        self.assertTrue(retry.moved)
-        self.assertEqual(self.master(), retry.digest)
 
     def test_registry_errors_are_not_absence(self):
         for status, codes in ((500, ()), (429, ("TOOMANYREQUESTS",)), (404, ()),
@@ -653,34 +677,8 @@ class PublishTests(unittest.TestCase):
         registry = deps.Registry(self.fake.url, credentials=self.fake.credentials)
         self.assertFalse(registry.manifest("anything").present)
 
-    def test_older_run_never_moves_master_back(self):
-        plan_a, plan_b = make_plan(), make_plan(units=[unit("zlib", "0.7.1.2", "ddd")])
-        self.git = FakeGit(["c1", "c2"])
-        newer = self.run_publish("c2", plan_a)
-        older = self.run_publish("c1", plan_b)
-        self.assertTrue(older.pushed)
-        self.assertFalse(older.moved)
-        self.assertEqual(self.master(), newer.digest)
-
-    def test_docs_only_commits_after_do_not_block_the_move(self):
-        self.git = FakeGit(["c1", "d1", "d2"], docs={"d1", "d2"})
-        result = self.run_publish("c1")
-        self.assertTrue(result.moved)
-        self.assertIn("docs-only", result.move_reason)
-
-    def test_rewritten_master_is_left_alone(self):
-        self.git = FakeGit(["x1", "x2"])
-        result = self.run_publish("c1")
-        self.assertTrue(result.pushed)
-        self.assertFalse(result.moved)
-
     def test_pull_requests_and_other_refs_write_nothing(self):
-        cases = (("pull_request", "refs/pull/7/merge", "coghex/synarchy"),
-                 ("pull_request_target", "refs/heads/master", "coghex/synarchy"),
-                 ("push", "refs/heads/feature", "coghex/synarchy"),
-                 ("push", "refs/heads/master", "someone/synarchy"),
-                 ("workflow_dispatch", "refs/heads/master", "coghex/synarchy"))
-        for event, ref, repository in cases:
+        for event, ref, repository in REFUSED_EVENTS:
             with self.assertRaises(deps.Refused, msg=event):
                 self.run_publish("c1", event=event, ref=ref, repository=repository)
         self.assertEqual(self.fake.requests, [])
@@ -693,14 +691,344 @@ class PublishTests(unittest.TestCase):
 
     def test_cli_refuses_a_pull_request_before_any_request(self):
         import contextlib
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            code = deps.main(["publish", "--tag", "t", "--plan-sha256", "p", "--base-image", "b",
-                              "--event", "pull_request", "--ref", "refs/pull/1/merge",
-                              "--repository", "coghex/synarchy", "--sha", "c1",
-                              "--registry-url", self.fake.url])
-        self.assertIn("pull requests never do", err.getvalue())
-        self.assertEqual(code, 3)
+        for command in (["publish", "--plan-sha256", "p"], ["reconcile-master"]):
+            self.fake.requests.clear()
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                code = deps.main(command + [
+                    "--tag", "t", "--base-image", "b", "--event", "pull_request",
+                    "--ref", "refs/pull/1/merge", "--repository", "coghex/synarchy",
+                    "--sha", "c1", "--registry-url", self.fake.url])
+            self.assertIn("pull requests never do", err.getvalue(), command[0])
+            self.assertEqual(code, 3, command[0])
+            self.assertEqual(self.fake.requests, [], command[0])
+
+
+REFUSED_EVENTS = (("pull_request", "refs/pull/7/merge", "coghex/synarchy"),
+                  ("pull_request_target", "refs/heads/master", "coghex/synarchy"),
+                  ("push", "refs/heads/feature", "coghex/synarchy"),
+                  ("push", "refs/heads/master", "someone/synarchy"),
+                  ("workflow_dispatch", "refs/heads/master", "coghex/synarchy"))
+
+
+class MasterTests(unittest.TestCase):
+    """The cross-identity job: `master` names the identity of master's tip.
+
+    Each test drives whole runs (publish, then reconcile) the way the
+    workflow does. Reconciles that the lock serializes are simply called
+    in sequence; the interleaving tests inject one run INSIDE another's
+    reconcile, which the lock prevents, to show the result still converges
+    on the newest plan."""
+
+    def setUp(self):
+        self.fake = FakeRegistry()
+        self.fake.repo(deps.REPOSITORY)["public"] = True
+        self.docker = FakeDocker(self.fake)
+        self.git = FakeGit(["c1"], plans={"c1": PLAN_A})
+        self.resolved: list[str] = []
+        self.logs: list[str] = []
+
+    def tearDown(self):
+        self.fake.close()
+
+    def resolve_tip(self, commit):
+        self.resolved.append(commit)
+        return tag_of(self.git.plan_of(commit))
+
+    def publish(self, commit):
+        identity = deps.plan_identity(self.git.plan_of(commit), OS_2404)
+        return deps.publish(registry=deps.Registry(self.fake.url,
+                                                   credentials=self.fake.credentials),
+                            anonymous=deps.Registry(self.fake.url), docker=self.docker,
+                            event="push", ref="refs/heads/master",
+                            repository="coghex/synarchy", tag=identity.tag,
+                            plan_sha256=identity.plan_sha256,
+                            base_image="ubuntu@sha256:" + "1" * 64, revision=commit,
+                            build_url="https://example/run", log=self.logs.append)
+
+    def reconcile(self, commit, registry=None, event="push", ref="refs/heads/master",
+                  repository="coghex/synarchy"):
+        return deps.reconcile_master(
+            registry=registry or deps.Registry(self.fake.url,
+                                               credentials=self.fake.credentials),
+            anonymous=deps.Registry(self.fake.url), git=self.git,
+            resolve_tip=self.resolve_tip, event=event, ref=ref, repository=repository,
+            tag=tag_of(self.git.plan_of(commit)), revision=commit, log=self.logs.append)
+
+    def full_run(self, commit):
+        """A whole run of `commit`: the publish job, then the reconcile."""
+        self.publish(commit)
+        return self.reconcile(commit)
+
+    def master(self):
+        return self.fake.digest_of(deps.REPOSITORY, deps.MOVING_TAG)
+
+    def digest(self, plan):
+        return self.fake.digest_of(deps.REPOSITORY, tag_of(plan))
+
+    def master_history(self):
+        return [digest for tag, digest in self.fake.manifest_puts if tag == deps.MOVING_TAG]
+
+    # -- single runs ---------------------------------------------------------
+    def test_new_identity_moves_master(self):
+        result = self.full_run("c1")
+        self.assertTrue(result.moved)
+        self.assertEqual(self.master(), self.digest(PLAN_A))
+        self.assertEqual(result.target, tag_of(PLAN_A))
+        self.assertEqual(len(result.anonymous), 1)
+        self.assertEqual(self.resolved, [])
+
+    def test_unchanged_identity_writes_nothing(self):
+        self.full_run("c1")
+        self.git.push("c2")
+        before = len(self.fake.writes())
+        result = self.full_run("c2")
+        self.assertFalse(result.moved)
+        self.assertEqual(len(self.fake.writes()), before)
+        self.assertEqual(len(self.docker.builds), 1)
+
+    def test_rollback_reuses_a_and_moves_master_back(self):
+        self.full_run("c1")
+        self.git.push("c2", PLAN_B)
+        self.full_run("c2")
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+        self.git.push("c3", PLAN_A)
+        again = self.full_run("c3")
+        self.assertTrue(again.moved)
+        self.assertEqual(self.master(), self.digest(PLAN_A))
+        self.assertEqual(len(self.docker.builds), 2)
+
+    def test_code_and_docs_only_commits_after_use_own_identity(self):
+        self.git = FakeGit(["c1", "code1", "docs1"], plans={"c1": PLAN_A})
+        result = self.full_run("c1")
+        self.assertTrue(result.moved)
+        self.assertIn("no plan input changed", result.reason)
+        self.assertEqual(self.resolved, [])
+
+    def test_edited_inputs_with_the_same_plan_resolve_to_own_identity(self):
+        self.git = FakeGit(["c1", "e1"], plans={"c1": PLAN_A}, edits={"e1"})
+        result = self.full_run("c1")
+        self.assertEqual(self.resolved, ["e1"])
+        self.assertTrue(result.moved)
+        self.assertEqual(self.master(), self.digest(PLAN_A))
+
+    def test_rewritten_master_follows_the_new_tip(self):
+        self.git = FakeGit(["c1"], plans={"c1": PLAN_A})
+        self.publish("c1")
+        self.git = FakeGit(["x1"], plans={"x1": PLAN_B})
+        self.publish("x1")
+        self.git.plans["c1"] = PLAN_A
+        result = deps.reconcile_master(
+            registry=deps.Registry(self.fake.url, credentials=self.fake.credentials),
+            anonymous=deps.Registry(self.fake.url), git=self.git,
+            resolve_tip=self.resolve_tip, event="push", ref="refs/heads/master",
+            repository="coghex/synarchy", tag=tag_of(PLAN_A), revision="c1",
+            log=self.logs.append)
+        self.assertEqual(self.resolved, ["x1"])
+        self.assertEqual(result.target, tag_of(PLAN_B))
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+
+    def test_retry_recovers_a_failed_moving_tag_update(self):
+        self.publish("c1")
+        self.fake.fault("PUT", r"/manifests/master$", 500)
+        with self.assertRaises(deps.RegistryError):
+            self.reconcile("c1")
+        self.assertIsNone(self.master())
+        retry = self.reconcile("c1")
+        self.assertTrue(retry.moved)
+        self.assertEqual(self.master(), self.digest(PLAN_A))
+
+    def test_unpublished_own_identity_is_refused(self):
+        with self.assertRaisesRegex(deps.DepsImageError, "not published"):
+            self.reconcile("c1")
+        self.assertEqual(self.master_history(), [])
+
+    def test_failed_tip_resolution_writes_nothing(self):
+        self.publish("c1")
+        self.git.push("c2", PLAN_B)
+
+        def broken(commit):
+            raise deps.DepsImageError("docker build failed (1)")
+
+        self.resolve_tip = broken
+        with self.assertRaisesRegex(deps.DepsImageError, "docker build"):
+            self.reconcile("c1")
+        self.assertEqual(self.master_history(), [])
+
+    def test_refused_events_write_nothing(self):
+        self.publish("c1")
+        self.fake.requests.clear()
+        for event, ref, repository in REFUSED_EVENTS:
+            with self.assertRaises(deps.Refused, msg=event):
+                self.reconcile("c1", event=event, ref=ref, repository=repository)
         self.assertEqual(self.fake.requests, [])
+
+    # -- runs the lock serializes ---------------------------------------------
+    def test_older_reconcile_after_a_newer_one_keeps_the_newer_plan(self):
+        self.publish("c1")
+        self.git.push("c2", PLAN_B)
+        self.full_run("c2")
+        older = self.reconcile("c1")
+        self.assertFalse(older.moved)
+        self.assertEqual(older.target, tag_of(PLAN_B))
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+        self.assertNotIn(self.digest(PLAN_A), self.master_history())
+
+    def test_older_reconcile_before_the_newer_plan_is_published_leaves_master(self):
+        self.full_run("c1")
+        first = self.master()
+        self.git.push("c2", PLAN_B)
+        self.git.push("c3")
+        older = self.reconcile("c1")
+        self.assertFalse(older.moved)
+        self.assertIn("not published yet", older.reason)
+        self.assertEqual(self.master(), first)
+        newer = self.full_run("c3")
+        self.assertTrue(newer.moved)
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+
+    def test_a_cancelled_newer_reconcile_is_done_by_the_one_that_replaced_it(self):
+        # c2's reconcile was pending when c1's (older, slower) queued, so
+        # GitHub cancelled it; c1's runs instead and must still reach B.
+        self.publish("c1")
+        self.git.push("c2", PLAN_B)
+        self.publish("c2")
+        older = self.reconcile("c1")
+        self.assertTrue(older.moved)
+        self.assertEqual(self.resolved, ["c2"])
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+        self.assertEqual(self.master_history(), [self.digest(PLAN_B)])
+
+    # -- interleavings the lock rules out; the result still converges --------
+    def test_a_checks_b_publishes_and_moves_a_puts_ends_on_b(self):
+        # The review's race: A decides while c1 is the tip, B lands, publishes
+        # and moves master, then A writes. A's re-check sees the new tip and
+        # repairs master to B's identity.
+        self.publish("c1")
+        registry = HookedRegistry(self.fake.url, credentials=self.fake.credentials)
+
+        def b_lands_and_finishes():
+            self.git.push("c2", PLAN_B)
+            self.full_run("c2")
+            self.assertEqual(self.master(), self.digest(PLAN_B))
+
+        registry.before_put = b_lands_and_finishes
+        a = self.reconcile("c1", registry=registry)
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+        self.assertEqual(a.target, tag_of(PLAN_B))
+        self.assertIn("advanced", " ".join(a.notes))
+        self.assertEqual(self.master_history()[-1], self.digest(PLAN_B))
+
+    def test_mirror_b_checks_a_reconciles_b_puts_ends_on_b(self):
+        # The mirror: newer B decides, older A's whole reconcile runs before
+        # B's write. A targets the tip (B), not its own plan, so master never
+        # names A once B is published.
+        self.publish("c1")
+        self.git.push("c2", PLAN_B)
+        self.publish("c2")
+        registry = HookedRegistry(self.fake.url, credentials=self.fake.credentials)
+        inner = []
+        registry.before_put = lambda: inner.append(self.reconcile("c1"))
+        b = self.reconcile("c2", registry=registry)
+        self.assertEqual(inner[0].target, tag_of(PLAN_B))
+        self.assertEqual(b.target, tag_of(PLAN_B))
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+        self.assertNotIn(self.digest(PLAN_A), self.master_history())
+
+    def test_a_push_during_the_decision_is_repaired_by_the_re_check(self):
+        # B lands (and publishes) right after A read the tip: A writes its
+        # own plan, re-reads the tip, and repairs master to B.
+        self.publish("c1")
+
+        def b_lands():
+            self.git.push("c2", PLAN_B)
+            self.publish("c2")
+
+        self.git.on_tip[2] = b_lands
+        a = self.reconcile("c1")
+        self.assertEqual(self.master_history(), [self.digest(PLAN_A), self.digest(PLAN_B)])
+        self.assertEqual(self.master(), self.digest(PLAN_B))
+        self.assertTrue(a.moved)
+
+    def test_master_that_keeps_advancing_stops_after_the_round_limit(self):
+        self.publish("c1")
+        # Each round reads the tip twice (decide, re-check); a new plan lands
+        # on every re-check, so every round finds master advanced again.
+        plans = iter([PLAN_B, PLAN_C, PLAN_A, PLAN_B])
+        for round_ in range(1, deps.RECONCILE_ROUNDS + 1):
+            def lands(round_=round_, plan=next(plans)):
+                self.git.push(f"n{round_}", plan)
+                self.publish(f"n{round_}")
+            self.git.on_tip[2 * round_] = lands
+        a = self.reconcile("c1")
+        self.assertIn("kept advancing", " ".join(a.notes))
+        self.assertEqual(len(self.master_history()), deps.RECONCILE_ROUNDS)
+        # The newest push's own reconcile (queued behind the lock) finishes it.
+        newest = self.reconcile(self.git.history[-1])
+        self.assertEqual(newest.target, tag_of(self.git.plan_of(self.git.history[-1])))
+        self.assertEqual(self.master(), self.digest(self.git.plan_of(self.git.history[-1])))
+
+
+class RealGitTests(unittest.TestCase):
+    """`Git`'s plan-input diff and tip worktree against real git, in a
+    scratch repository: which paths count as plan inputs decides whether a
+    reconcile may use its own identity for master's tip."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q", "-b", "master")
+        self.write("cabal.project", "packages: .\n")
+        self.write("synarchy.cabal", "name: synarchy\n")
+        self.write(".github/deps/Dockerfile", "FROM scratch\n")
+        self.write("docs/a.md", "a\n")
+        self.write("src/A.hs", "module A where\n")
+        self.base = self.commit("base")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t",
+                               "-c", "user.email=t@t", *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def write(self, rel, text):
+        path = self.repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def commit(self, message):
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def test_which_paths_are_plan_inputs(self):
+        git = deps.Git(str(self.repo))
+        cases = (("docs/a.md", False), ("src/A.hs", False), ("lib/sub.cabal", False),
+                 ("synarchy.cabal", True), ("cabal.project", True),
+                 ("cabal.project.freeze", True), (".github/deps/Dockerfile", True))
+        for rel, expected in cases:
+            before = self.git("rev-parse", "HEAD")
+            self.write(rel, f"changed {rel}\n")
+            after = self.commit(rel)
+            self.assertEqual(git.plan_inputs_changed(before, after), expected, rel)
+        self.assertTrue(git.plan_inputs_changed(self.base, after))
+        self.assertTrue(git.plan_inputs_changed(self.base, "0" * 40), "an error counts as a change")
+
+    def test_tip_worktree_is_added_and_removed(self):
+        git = deps.Git(str(self.repo))
+        self.write("synarchy.cabal", "name: synarchy\nversion: 2\n")
+        tip = self.commit("tip")
+        tree = Path(self.tmp.name) / "tree"
+        git.worktree(self.base, str(tree))
+        self.assertEqual((tree / "synarchy.cabal").read_text(), "name: synarchy\n")
+        git.remove_worktree(str(tree))
+        self.assertFalse(tree.exists())
+        self.assertNotIn(str(tree), self.git("worktree", "list"))
+        with self.assertRaises(deps.DepsImageError):
+            git.worktree("0" * 40, str(tree))
+        self.assertEqual(tip, self.git("rev-parse", "HEAD"))
 
 
 # ---------------------------------------------------------------------------
@@ -876,16 +1204,20 @@ class WiringTests(unittest.TestCase):
             ("a push to another branch", {"github.ref": "refs/heads/other"}, False),
             ("a fork's own master push", {"github.repository": "fork/synarchy"}, False),
             ("a cancelled run", {"cancelled": True}, False))
-        for job in ("deps-plan", "deps-image"):
+        for job in ("deps-plan", "deps-image", "deps-master"):
             condition = self.workflow["jobs"][job]["if"]
             for label, override, expected in scenarios:
                 context = dict(base, **override)
                 self.assertEqual(self.job_would_run(condition, context), expected,
                                  f"{job} on {label}")
-        image_if = self.workflow["jobs"]["deps-image"]["if"]
-        self.assertFalse(self.job_would_run(image_if, dict(
-            base, **{"needs.deps-plan.outputs.tag": ""})), "docs-only push")
-        self.assertFalse(self.job_would_run(image_if, dict(base, ancestors_succeeded=False)))
+        for job in ("deps-image", "deps-master"):
+            condition = self.workflow["jobs"][job]["if"]
+            self.assertFalse(self.job_would_run(condition, dict(
+                base, **{"needs.deps-plan.outputs.tag": ""})), f"{job} on a docs-only push")
+            # No status function: GitHub's implicit success() over the needed
+            # jobs, so a failed publish never reaches the master job.
+            self.assertFalse(self.job_would_run(condition, dict(
+                base, ancestors_succeeded=False)), f"{job} after a failed need")
 
     def test_lock_permissions_and_commands(self):
         jobs = self.workflow["jobs"]
@@ -906,6 +1238,36 @@ class WiringTests(unittest.TestCase):
                          "--event '${{ github.event_name }}'", "--ref '${{ github.ref }}'",
                          "--repository '${{ github.repository }}'", "--sha '${{ github.sha }}'"):
             self.assertIn(fragment, publish)
+
+    def test_master_is_written_only_under_one_lock_for_every_identity(self):
+        # The review's race (#2874): per-identity groups do not serialize two
+        # identities, so the moving tag needs a lock of its own, FIXED (no
+        # expression), with no cancellation of a running holder, and held by
+        # the only job that writes it.
+        jobs = self.workflow["jobs"]
+        master = jobs["deps-master"]
+        self.assertEqual(master["concurrency"], {
+            "group": deps.MASTER_LOCK_GROUP, "cancel-in-progress": False})
+        self.assertNotIn("${{", master["concurrency"]["group"])
+        self.assertNotEqual(master["concurrency"]["group"],
+                            jobs["deps-image"]["concurrency"]["group"])
+        self.assertEqual(set(master["needs"]), {"deps-plan", "deps-image"})
+        self.assertEqual(master["permissions"], {"contents": "read", "packages": "write"})
+        checkout = master["steps"][0]
+        self.assertTrue(checkout["uses"].startswith("actions/checkout@"))
+        self.assertEqual(checkout.get("with"), {"fetch-depth": 0},
+                         "the decision needs master's history and a tip worktree")
+        runs = {name: " ".join(s.get("run", "") for s in job["steps"])
+                for name, job in jobs.items()}
+        writers = [name for name, text in runs.items() if "reconcile-master" in text]
+        self.assertEqual(writers, ["deps-master"])
+        self.assertNotIn("ci_deps_image.py publish", runs["deps-master"])
+        for fragment in ("python3 tools/ci_deps_image.py reconcile-master",
+                         "--tag '${{ needs.deps-plan.outputs.tag }}'",
+                         "--base-image '${{ needs.deps-plan.outputs.base_image }}'",
+                         "--event '${{ github.event_name }}'", "--ref '${{ github.ref }}'",
+                         "--repository '${{ github.repository }}'", "--sha '${{ github.sha }}'"):
+            self.assertIn(fragment, runs["deps-master"])
 
     def test_dockerfile_matches_the_ci_image_and_the_repository(self):
         mine, ci = DOCKERFILE.read_text(), CI_DOCKERFILE.read_text()

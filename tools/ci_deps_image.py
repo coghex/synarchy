@@ -21,8 +21,8 @@ exactly once; a seen one is never rebuilt or overwritten, so it keeps its
 original provenance; `master` names master's current identity, so an
 A -> B -> A rollback reuses A and moves `master` back to it.
 
-Publication rules (`publish`)
------------------------------
+Publication rules (`publish`, `reconcile-master`)
+-------------------------------------------------
 * Only a push to `refs/heads/master` of coghex/synarchy writes anything.
   Every other event is refused before the first registry request,
   same-repository pull requests included.
@@ -30,17 +30,32 @@ Publication rules (`publish`)
   NAME_UNKNOWN. Anything else (rate limit, 5xx, denied, an unparsable 404)
   fails the job instead of guessing, because a wrong "absent" would rebuild
   and overwrite a published tag.
-* The workflow serializes runs of one identity with a job-level
-  `concurrency:` group keyed on the tag (ci-image.yml's pattern), and this
-  tool re-checks absence immediately before pushing: a tag another run
-  published while this one built is kept, not overwritten.
-* `master` moves only when this run's commit is still master's tip, or
-  every commit after it is docs-only (tools/ci_docs_fast_path.py), so an
-  older run or a re-run never moves it back past a newer plan. A run whose
-  image already exists still reconciles `master`, which is how a failed
-  moving-tag update recovers: re-run the job, or let the next push do it.
-* Both tags are then fetched WITHOUT credentials: manifests, config and
-  every layer blob. A package that is not public fails the job.
+* `publish` pushes the immutable tag only. The workflow serializes runs of
+  one identity with a job-level `concurrency:` group keyed on the tag
+  (ci-image.yml's pattern), and this tool re-checks absence immediately
+  before pushing: a tag another run published while this one built is
+  kept, not overwritten.
+* `reconcile-master` is the only writer of `master`. It runs in a
+  separate job whose `concurrency:` group, MASTER_LOCK_GROUP, is ONE fixed
+  group for every identity, so a run's decision and its write are one
+  section that no other run's reconcile can interleave. (Per-identity
+  groups do not serialize different identities, which let an older run's
+  decision go stale before its write.)
+* It points `master` at the identity of master's TIP, not of this run's
+  commit: this run's own tag when the tip is this commit or a descendant
+  with byte-identical plan inputs (PLAN_INPUT_PATHSPECS; covers docs-only
+  and code-only commits), otherwise the tip's own plan, resolved from a
+  worktree of the tip. So an older run never moves `master` back past a
+  newer plan, an A -> B -> A rollback moves it back to A, and whichever
+  reconcile executes last reconciles for the newest tip. That is why
+  GitHub cancelling a PENDING reconcile when a later one queues (a group
+  keeps one pending job) loses nothing. A tip whose identity is not
+  published yet is left to that commit's run, whose reconcile queues only
+  after it publishes. When master advances during the write, the target is
+  decided again and repaired. A failed update recovers on a re-run or on
+  the next push's reconcile.
+* Every tag written is then fetched WITHOUT credentials: manifests,
+  config and every layer blob. A package that is not public fails the job.
 
 Consumption (`fetch`, `check`)
 ------------------------------
@@ -614,28 +629,48 @@ def publication_refusal(event: str, ref: str, repository: str) -> Optional[str]:
     return None
 
 
+#: What the identity depends on, as git pathspecs (top-level `cabal.project*`
+#: and `*.cabal`, and the image recipe): plan.json is resolved from exactly
+#: these files inside the recipe's toolchain stage. Two commits whose plan
+#: inputs are byte-identical resolve the same identity, the same assumption
+#: the docs-only fast path makes about a documentation change.
+PLAN_INPUT_PATHSPECS = (":(glob)cabal.project*", ":(glob)*.cabal", DOCKERFILE)
+
+#: The workflow's one cross-identity lock (deps-image.yml's `deps-master`
+#: job). Every `master` decision and write happens under it.
+MASTER_LOCK_GROUP = "synarchy-deps-master"
+
+
 @dataclasses.dataclass(frozen=True)
-class MoveDecision:
-    move: bool
+class MasterTarget:
+    """Which identity `master` should name for master's tip, and how that
+    was established: `own` (this run's identity covers the tip) or `tip`
+    (the tip's plan was resolved, so its identity must be looked up)."""
+    source: str
     reason: str
 
 
-def moving_tag_decision(own: str, tip: str, own_is_ancestor: bool,
-                        later_docs_only: Optional[bool]) -> MoveDecision:
-    """Whether this run's identity is master's current plan.
+def master_target(own: str, tip: str, own_is_ancestor: bool,
+                  inputs_changed: Optional[bool]) -> MasterTarget:
+    """How to find the identity of master's tip from this run's commit.
 
-    A newer commit that is not docs-only may have selected another plan;
-    its own run owns the moving tag, and moving it here could undo that."""
+    This run's identity covers the tip when its commit is the tip, or an
+    ancestor of it with byte-identical plan inputs (later commits changed
+    only code, docs or anything else the plan is not resolved from).
+    Otherwise the tip's own plan must be resolved: deciding by this run's
+    commit alone would let an older run move `master` back past a newer
+    plan, and leaving `master` alone could lose the newer run's update if
+    GitHub cancelled its pending reconcile in the shared lock."""
     if own == tip:
-        return MoveDecision(True, "this run's commit is master's tip")
+        return MasterTarget("own", "this run's commit is master's tip")
+    if own_is_ancestor and inputs_changed is False:
+        return MasterTarget("own", f"no plan input changed between {own[:12]} "
+                                   f"and master's tip {tip[:12]}")
     if not own_is_ancestor:
-        return MoveDecision(False, f"{own[:12]} is not an ancestor of master's tip "
-                                   f"{tip[:12]}; leaving {MOVING_TAG} alone")
-    if later_docs_only:
-        return MoveDecision(True, f"every commit after {own[:12]} up to "
-                                  f"{tip[:12]} is docs-only")
-    return MoveDecision(False, f"master moved on to {tip[:12]}, which is not "
-                               "docs-only; that run reconciles the moving tag")
+        return MasterTarget("tip", f"{own[:12]} is not an ancestor of master's tip "
+                                   f"{tip[:12]}; resolving the tip's plan")
+    return MasterTarget("tip", f"plan inputs changed between {own[:12]} and "
+                               f"master's tip {tip[:12]}; resolving the tip's plan")
 
 
 class Git:
@@ -656,27 +691,30 @@ class Git:
     def is_ancestor(self, older: str, newer: str) -> bool:
         return self._git("merge-base", "--is-ancestor", older, newer).returncode == 0
 
-    def docs_only_between(self, older: str, newer: str) -> bool:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import ci_docs_fast_path  # the CI fast path's own selector
+    def plan_inputs_changed(self, older: str, newer: str) -> bool:
+        """Whether any plan input differs between two commits. An error
+        counts as a change, which only costs a resolution of the tip."""
+        diff = self._git("diff", "--name-only", older, newer, "--", *PLAN_INPUT_PATHSPECS)
+        return diff.returncode != 0 or bool(diff.stdout.strip())
 
-        diff = self._git("diff", "--no-renames", "--name-status", older, newer)
-        if diff.returncode != 0:
-            return False
-        try:
-            return ci_docs_fast_path.is_docs_only(
-                ci_docs_fast_path.parse_name_status(diff.stdout))
-        except ValueError:
-            return False
+    def worktree(self, commit: str, path: str) -> None:
+        added = self._git("worktree", "add", "--detach", path, commit)
+        if added.returncode != 0:
+            raise DepsImageError(f"git worktree add {commit[:12]} failed: "
+                                 f"{added.stderr.strip()}")
+
+    def remove_worktree(self, path: str) -> None:
+        self._git("worktree", "remove", "--force", path)
 
 
-def decide_moving_tag(git: Git, own: str) -> MoveDecision:
+def decide_master_target(git: Git, own: str) -> tuple[str, MasterTarget]:
+    """Master's tip now, and how to find the identity it should name."""
     tip = git.master_tip()
     if tip == own:
-        return moving_tag_decision(own, tip, True, None)
+        return tip, master_target(own, tip, True, None)
     ancestor = git.is_ancestor(own, tip)
-    return moving_tag_decision(own, tip, ancestor,
-                               git.docs_only_between(own, tip) if ancestor else None)
+    return tip, master_target(own, tip, ancestor,
+                              git.plan_inputs_changed(own, tip) if ancestor else None)
 
 
 class Docker:
@@ -714,7 +752,8 @@ class Docker:
     def build(self, target: str, build_args: dict[str, str],
               labels: Optional[dict[str, str]] = None,
               tag: Optional[str] = None, output: Optional[str] = None) -> None:
-        args = ["build", "--file", DOCKERFILE, "--target", target]
+        args = ["build", "--file", os.path.join(self.context, DOCKERFILE),
+                "--target", target]
         for key, value in build_args.items():
             args += ["--build-arg", f"{key}={value}"]
         for key, value in (labels or {}).items():
@@ -778,18 +817,19 @@ class PublishResult:
     digest: str
     built: bool
     pushed: bool
-    moved: bool
-    move_reason: str
     anonymous: list[str]
     notes: list[str]
 
 
-def publish(*, registry: Registry, anonymous: Registry, docker: Docker, git: Git,
+def publish(*, registry: Registry, anonymous: Registry, docker: Docker,
             event: str, ref: str, repository: str, tag: str, plan_sha256: str,
             base_image: str, revision: str, build_url: str, checkout: str = ".",
             now: Callable[[], str] = lambda: datetime.datetime.now(
                 datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             log: Callable[[str], None] = print) -> PublishResult:
+    """Push this run's immutable identity tag at most once. `master` is not
+    touched here: `reconcile_master` moves it, under the cross-identity
+    lock, after this succeeds."""
     refusal = publication_refusal(event, ref, repository)
     if refusal:
         raise Refused(refusal)
@@ -822,33 +862,115 @@ def publish(*, registry: Registry, anonymous: Registry, docker: Docker, git: Git
         state = registry.manifest(tag)
         if not state.present:
             raise RegistryError(f"{tag} is still absent after the push")
-    decision = decide_moving_tag(git, revision)
-    log(f"{MOVING_TAG}: {'move' if decision.move else 'leave'} ({decision.reason})")
-    moved = False
-    if decision.move:
-        current = registry.manifest(MOVING_TAG)
-        if current.present and current.digest == state.digest:
-            log(f"{MOVING_TAG} already names {state.digest}")
-        else:
-            registry.put_manifest(MOVING_TAG, state.body, state.media_type)
-            check = registry.manifest(MOVING_TAG)
-            if check.digest != state.digest:
-                raise RegistryError(f"{MOVING_TAG} reads back {check.digest}, not {state.digest}")
-            moved = True
-        after = git.master_tip()
-        if after != revision and not (git.is_ancestor(revision, after)
-                                      and git.docs_only_between(revision, after)):
-            notes.append(f"master advanced to {after[:12]} during the update; "
-                         "that commit's run reconciles the moving tag")
-            log(notes[-1])
-    current_master = registry.manifest(MOVING_TAG)
-    tags = [tag] + ([MOVING_TAG] if current_master.present
-                    and current_master.digest == state.digest else [])
-    report = verify_anonymous(anonymous, tags)
+    report = verify_anonymous(anonymous, [tag])
     for line in report:
         log(line)
-    return PublishResult(tag, state.digest, built, pushed, moved, decision.reason,
-                         report, notes)
+    return PublishResult(tag, state.digest, built, pushed, report, notes)
+
+
+@dataclasses.dataclass
+class ReconcileResult:
+    tip: str
+    target: str
+    digest: str
+    moved: bool
+    reason: str
+    anonymous: list[str]
+    notes: list[str]
+
+
+#: Re-decisions after master advanced during one reconcile. Each later push
+#: has its own reconcile queued behind the lock, so stopping is safe.
+RECONCILE_ROUNDS = 3
+
+
+def reconcile_master(*, registry: Registry, anonymous: Registry, git: Git,
+                     resolve_tip: Callable[[str], str], event: str, ref: str,
+                     repository: str, tag: str, revision: str,
+                     rounds: int = RECONCILE_ROUNDS,
+                     log: Callable[[str], None] = print) -> ReconcileResult:
+    """Point `master` at the identity of master's tip. Runs under the
+    workflow's cross-identity lock (MASTER_LOCK_GROUP), so the decision and
+    the write below are one section no other run's reconcile interleaves.
+
+    The target is the tip's identity, not this run's: this run's own tag
+    when it covers the tip (`master_target`), otherwise the tip's plan
+    resolved by `resolve_tip`. So an older run never moves `master` back
+    past a newer plan, and whichever run's reconcile executes last
+    reconciles for the newest tip, which is what makes it safe for GitHub
+    to cancel a pending reconcile when a later one queues. A tip whose
+    identity is not published yet is left to the tip's own run, whose
+    reconcile queues only after it publishes. After writing, master's tip
+    is read again; if it advanced, the target is decided again (at most
+    `rounds` times), so a write made just before a push is repaired here
+    rather than left for the next run."""
+    refusal = publication_refusal(event, ref, repository)
+    if refusal:
+        raise Refused(refusal)
+    own = registry.manifest(tag)
+    if not own.present:
+        raise DepsImageError(f"{tag} is not published; the publish job must "
+                             "succeed before master is reconciled")
+    notes: list[str] = []
+    moved = False
+    target_tag, target_state, reason, tip = tag, own, "", revision
+    for round_ in range(1, rounds + 1):
+        tip, how = decide_master_target(git, revision)
+        target_tag = tag if how.source == "own" else resolve_tip(tip)
+        reason = how.reason
+        log(f"{MOVING_TAG}: target for master's tip {tip[:12]} is {target_tag} ({reason})")
+        target_state = own if target_tag == tag else registry.manifest(target_tag)
+        if not target_state.present:
+            reason = (f"master's tip {tip[:12]} resolves to {target_tag}, which is "
+                      "not published yet; that commit's run publishes it and "
+                      "reconciles master after this")
+            log(f"{MOVING_TAG}: left alone ({reason})")
+            break
+        current = registry.manifest(MOVING_TAG)
+        if current.present and current.digest == target_state.digest:
+            log(f"{MOVING_TAG} already names {target_state.digest}")
+        else:
+            registry.put_manifest(MOVING_TAG, target_state.body, target_state.media_type)
+            check = registry.manifest(MOVING_TAG)
+            if check.digest != target_state.digest:
+                raise RegistryError(f"{MOVING_TAG} reads back {check.digest}, "
+                                    f"not {target_state.digest}")
+            moved = True
+            log(f"{MOVING_TAG} -> {target_tag} ({target_state.digest})")
+        after = git.master_tip()
+        if after == tip:
+            break
+        notes.append(f"master advanced from {tip[:12]} to {after[:12]} during "
+                     "the update; deciding again")
+        log(notes[-1])
+    else:
+        notes.append(f"master kept advancing for {rounds} rounds; the newer "
+                     "runs' reconciles, queued behind this lock, continue it")
+        log(notes[-1])
+    current_master = registry.manifest(MOVING_TAG)
+    report = verify_anonymous(anonymous, [MOVING_TAG]) if current_master.present else []
+    for line in report:
+        log(line)
+    return ReconcileResult(tip, target_tag, target_state.digest if target_state.present else "",
+                           moved, reason, report, notes)
+
+
+def resolve_tip_identity(git: Git, docker_factory: Callable[[str], "Docker"],
+                         base_image: str, commit: str) -> str:
+    """The identity tag of `commit`'s own dependency plan, resolved exactly
+    as the plan job resolves it, from a temporary worktree of that commit."""
+    with tempfile.TemporaryDirectory(prefix="synarchy-deps-tip-") as scratch:
+        tree = os.path.join(scratch, "tree")
+        git.worktree(commit, tree)
+        try:
+            out = os.path.join(scratch, "plan")
+            docker_factory(tree).build("plan-export", build_args(base_image), output=out)
+            identity = plan_identity(Path(out, "plan.json").read_bytes(),
+                                     Path(out, "os-release").read_text())
+        finally:
+            git.remove_worktree(tree)
+    require_publishing_platform(identity)
+    return identity.tag
 
 
 # ---------------------------------------------------------------------------
@@ -1109,17 +1231,22 @@ def _credentials() -> Optional[tuple[str, str]]:
     return (user, token) if user and token else None
 
 
-def _cmd_publish(args: argparse.Namespace) -> int:
+def _registry_clients(args: argparse.Namespace, what: str) -> tuple[Registry, Registry]:
     refusal = publication_refusal(args.event, args.ref, args.repository)
     if refusal:
         raise Refused(refusal)
     credentials = _credentials()
     if credentials is None:
-        raise DepsImageError("GHCR_USERNAME and GHCR_TOKEN must be set to publish")
+        raise DepsImageError(f"GHCR_USERNAME and GHCR_TOKEN must be set to {what}")
+    return (Registry(args.registry_url, credentials=credentials),
+            Registry(args.registry_url))
+
+
+def _cmd_publish(args: argparse.Namespace) -> int:
+    registry, anonymous = _registry_clients(args, "publish")
     result = publish(
-        registry=Registry(args.registry_url, credentials=credentials),
-        anonymous=Registry(args.registry_url), docker=Docker(args.context),
-        git=Git(args.context), event=args.event, ref=args.ref,
+        registry=registry, anonymous=anonymous, docker=Docker(args.context),
+        event=args.event, ref=args.ref,
         repository=args.repository, tag=args.tag, plan_sha256=args.plan_sha256,
         base_image=args.base_image, revision=args.sha, build_url=args.build_url,
         checkout=args.context)
@@ -1127,8 +1254,25 @@ def _cmd_publish(args: argparse.Namespace) -> int:
         with open(args.github_summary, "a", encoding="utf-8") as out:
             out.write(f"### synarchy-deps\n\n- identity `{result.tag}` -> `{result.digest}`\n"
                       f"- {'built and pushed' if result.pushed else 'already published'}\n"
+                      + "".join(f"- {line}\n" for line in result.anonymous + result.notes))
+    return 0
+
+
+def _cmd_reconcile_master(args: argparse.Namespace) -> int:
+    registry, anonymous = _registry_clients(args, f"move {MOVING_TAG}")
+    git = Git(args.context)
+    result = reconcile_master(
+        registry=registry, anonymous=anonymous, git=git,
+        resolve_tip=lambda commit: resolve_tip_identity(
+            git, Docker, args.base_image, commit),
+        event=args.event, ref=args.ref, repository=args.repository,
+        tag=args.tag, revision=args.sha)
+    if args.github_summary:
+        with open(args.github_summary, "a", encoding="utf-8") as out:
+            out.write(f"### synarchy-deps `{MOVING_TAG}`\n\n"
+                      f"- master's tip `{result.tip[:12]}` -> `{result.target}`\n"
                       f"- `{MOVING_TAG}`: {'moved' if result.moved else 'unchanged'} "
-                      f"({result.move_reason})\n"
+                      f"({result.reason})\n"
                       + "".join(f"- {line}\n" for line in result.anonymous + result.notes))
     return 0
 
@@ -1198,7 +1342,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     plan.add_argument("--github-output")
     plan.set_defaults(func=_cmd_plan)
 
-    pub = sub.add_parser("publish", help="publish (once) and reconcile the moving tag")
+    pub = sub.add_parser("publish", help="publish this run's immutable tag (once)")
     for name in ("tag", "plan-sha256", "base-image", "event", "ref", "repository", "sha"):
         pub.add_argument(f"--{name}", required=True)
     pub.add_argument("--build-url", default="")
@@ -1206,6 +1350,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     pub.add_argument("--registry-url", default=f"https://{REGISTRY}")
     pub.add_argument("--github-summary")
     pub.set_defaults(func=_cmd_publish)
+
+    rec = sub.add_parser("reconcile-master",
+                         help=f"point {MOVING_TAG} at master's tip's identity "
+                              f"(under the {MASTER_LOCK_GROUP} lock)")
+    for name in ("tag", "base-image", "event", "ref", "repository", "sha"):
+        rec.add_argument(f"--{name}", required=True)
+    rec.add_argument("--context", default=".")
+    rec.add_argument("--registry-url", default=f"https://{REGISTRY}")
+    rec.add_argument("--github-summary")
+    rec.set_defaults(func=_cmd_reconcile_master)
 
     meta = sub.add_parser("store-metadata", help="(image build) check the store, write metadata")
     for name in ("plan", "expect-plan-sha256", "dry-run", "os-release", "output"):

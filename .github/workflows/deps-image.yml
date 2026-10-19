@@ -19,24 +19,34 @@
 #     unit IDs hash the system pkg-config versions of vulkan and zlib, so
 #     only a 24.04-built store is reused in full on the 24.04 sandboxes.
 #
-# Two jobs, because the lock must be keyed on the identity and the
-# identity exists only once the plan is resolved:
+# Three jobs, because each lock needs its own key:
 #   deps-plan   resolves the plan inside the image recipe's own toolchain
 #               stage at a fixed workspace and prints its identity tag
 #               `ubuntu24.04-x86_64-ghc9.12.2-<sha256 of plan.json>`.
 #               Skipped work on a docs-only push (tools/ci_docs_fast_path.py),
 #               which cannot change the plan.
-#   deps-image  serialized per identity; publishes the immutable tag at
+#   deps-image  serialized PER IDENTITY; publishes the immutable tag at
 #               most once (confirmed absence only, re-checked right before
-#               the push), moves `master` when this commit is still master's
-#               current plan, and proves both tags are readable without
-#               credentials. An unchanged identity costs the plan job and a
-#               registry check, never a rebuild.
+#               the push) and proves it readable without credentials. An
+#               unchanged identity costs the plan job and a registry check,
+#               never a rebuild. It never touches `master`.
+#   deps-master serialized across ALL identities by one fixed group; the
+#               only writer of `master`. Under that lock it decides which
+#               identity master's TIP needs (this run's, when no plan input
+#               changed since this commit; otherwise the tip's own plan,
+#               resolved here) and writes it, so no other run's decision can
+#               go stale between its check and its write. (Per-identity
+#               groups alone let an older run check, a newer run move
+#               `master`, and the older run then overwrite it.)
 #
-# A job waiting on the lock is cancelled only if an even newer run of the
-# SAME identity queues behind it (GitHub keeps one pending job per group);
-# that newer run then does the same work, so nothing is lost but the
-# cancelled job's own line in this workflow's history.
+# GitHub keeps one PENDING job per concurrency group and cancels an older
+# pending one when another queues. In deps-image that is a run of the same
+# identity, which then does the same work. In deps-master the job that
+# replaces it runs later and, like every reconcile, targets master's tip
+# as it is then, not its own commit, so the cancelled job's update is not
+# lost: the tip's identity is published before that commit's reconcile
+# queues, so any reconcile that runs after it reaches the same target.
+# Only the cancelled job's own line in this workflow's history is lost.
 name: Dependency image
 
 on:
@@ -108,11 +118,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      # Full history: the moving-tag rule compares this commit with
-      # master's tip at the moment of the update.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -135,4 +141,42 @@ jobs:
           --repository '${{ github.repository }}'
           --sha '${{ github.sha }}'
           --build-url '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          --github-summary "$GITHUB_STEP_SUMMARY"
+
+  deps-master:
+    needs: [deps-plan, deps-image]
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/master'
+      && github.repository == 'coghex/synarchy'
+      && needs.deps-plan.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # ONE group for every identity (see the header): every decision about
+    # `master` and its write happen inside it. Never keyed on the identity.
+    concurrency:
+      group: synarchy-deps-master
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # Full history: the decision compares this commit with master's tip,
+      # and resolving the tip's plan checks out a worktree of it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Point master at master's current dependency image
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 tools/ci_deps_image.py reconcile-master
+          --tag '${{ needs.deps-plan.outputs.tag }}'
+          --base-image '${{ needs.deps-plan.outputs.base_image }}'
+          --event '${{ github.event_name }}'
+          --ref '${{ github.ref }}'
+          --repository '${{ github.repository }}'
+          --sha '${{ github.sha }}'
           --github-summary "$GITHUB_STEP_SUMMARY"
