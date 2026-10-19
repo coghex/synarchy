@@ -3325,6 +3325,36 @@ array because its cardinality is what makes the clearance predicate
 vacuous. A container confers nothing, so "carries no slots" and "carries
 an empty list" are the same fact.
 
+**Picking a pending shell up (#2522, PLC-16; D-3, D-23, D-27, D-28).**
+A ground row says whether its item is a pending shell — `pending`,
+answered from the slot alone by `groundShellPending`, the same lookup
+the realization uses, and WITHOUT realizing anything — and also names
+the `page` it was read from and the `gridZ` the item rests at
+(`World.Render.GroundItemQuads.groundItemRestZ`, the draw's own rule;
+absent while the column is unloaded: ground items still store no z).
+`item.hitTestAt` returns the hit page as a second value. The ground menu
+offers "Pick up" through the shared assignment rule (§Player transfers)
+with the no-selection fallback, only when the row's page is the hit's,
+and dispatches `unitAi.commandPickup(uid, gid, pageId)`, which refuses —
+silently, as a caller error — a carrier that is not on that page.
+`commandPickup` SKIPS the command-time capacity gate for a pending
+shell only, since its row weight is the empty shell's; a realized crate
+and every other item keep both gates. On arrival the executor calls
+`item.realizeGround(gid, carrierPage)` — the carrier's page, never the
+active one — records `item.observeContainerWeight(instanceId)` (weight
+only; contents stay unrevealed and an existing contents stamp is not
+refreshed), re-reads the REALIZED row through
+`item.getGroundForUnit`, and runs the ordinary arrival gate against the
+realized weight: the exact tree lifts, or the realized crate stays on
+the ground with the usual over-capacity warning. A realization refusal
+(D-23) moves nothing, observes nothing, leaves the shell pending, warns
+naming the carrier and the crate, and retires the order. The persisted
+`pickupOrder` shape, `unit_ai_save.lua`'s schema, the stall budget and
+the page-ownership rules are unchanged. Gate: hspec
+`--match "pickup order page ownership"` (its #2522 block), plus
+`tools/expedition_retrieval_probe.py`, which drives `commandPickup` end
+to end.
+
 **The wire.** `world-pages` v12 appends `lidContainers` to
 `LocationInstanceDTO`; v11 is frozen as `PageCoreDTOv11` /
 `WorldGenParamsDTOv8` / `LocationInstancesDTOv6` / `LocationInstanceDTOv6`
@@ -3793,6 +3823,28 @@ and both reach `checkTransfer`/`commitTransfer`. The player-facing
 IMMEDIATE paths retired with #1249 must not come back — the Store /
 Retrieve gestures replaced them and NEITHER requires adjacency; only
 the PLAYER paths retired, the verbs stay registered for the AI (D-7).
+
+**WHICH unit acts is ONE rule (D-8, #2522).**
+`transfer_session.resolveSource` assigns the unit for Transfer (both
+menus), Retrieve and Pick up: candidates are player-commandable and able
+to run the gesture's own AI action, filtered BEFORE ranking; ranking is
+squared distance to the target in THREE dimensions — floored,
+wrap-localized x/y (`world.localizeTile`) plus the candidate's `gridZ`
+against the target's own `gridZ` — and an exact tie goes to the lowest
+uid, never selection order. Distance is to the TARGET, not absolute
+elevation. Every production caller supplies a real target height:
+`unit.transferEndpointInfo` reports `gridZ` (a unit's `uiGridZ`, a
+building's `biGridZ`), and a ground row reports the terrain height the
+item rests at (see §Pending container shells); a target with no `gridZ`
+ranks on x/y alone. The no-selection FALLBACK is opt-in
+(`opts.fallback`) and only Pick up passes it: an EMPTY selection then
+assigns the nearest eligible unit living on the target's own page
+(`unit.getAllIds(pageId)`), while a nonempty selection is the candidate
+set even when none of it is eligible, and a selected unit on another
+page is never eligible. Transfer and Retrieve stay selection-only.
+Gates: hspec `--match "Transfer context menu"` (Transfer and Retrieve,
+flat and non-flat, through their real endpoint projections) and
+`--match "pickup order page ownership"` (Pick up).
 
 **Contents are REMEMBERED, never live (D-2).** A container window
 renders the player's last observation. Exactly four things reveal

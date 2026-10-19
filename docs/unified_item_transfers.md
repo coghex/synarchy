@@ -147,7 +147,8 @@ decisions below, and the ledger above as the processing cursor.
 - **B1's single-unit rule is gone** ([#1239], UIT-3A).
   `scripts/transfer_session.lua`'s `M.resolveSource` implements D-8's
   nearest-of-N: a multi-unit selection is allowed, the nearest eligible
-  candidate to the endpoint's own `gridX`/`gridY` becomes the source, exact
+  candidate to the endpoint's own `gridX`/`gridY` (and, since #2522, its
+  `gridZ` — see D-8's amendment) becomes the source, exact
   distance ties break on lowest uid, and distance is measured in the target's
   local u-alias frame (`world.localizeTile`, #1175). Zero eligible candidates
   still omits "Transfer" rather than disabling it. The comments that asserted
@@ -393,6 +394,18 @@ they can steer a walk or reach a verb.
 
 Multiple selected units are allowed; the nearest goes. Exact distance ties break
 on lowest uid so two equidistant acolytes cannot race.
+
+**Amended by #2522 (PLC-16): the distance is three-dimensional.** "Nearest" is
+squared distance to the target over floored, wrap-localized x/y AND z — the
+candidate's `gridZ` against the target's own (`unit.transferEndpointInfo`'s
+`gridZ` for a unit or building, the terrain height a ground item rests at). It
+is distance to the target, never absolute elevation: under an elevated target
+the lowest unit is the farthest. The same `transfer_session.resolveSource` now
+assigns "Pick up" too (`docs/portable_loot_containers.md` D-8, D-28), with an
+opt-in no-selection fallback that only Pick up uses — an empty selection
+assigns the nearest eligible unit on the target's page; a nonempty selection
+with no eligible member assigns nobody. Transfer and Retrieve stay
+selection-only.
 
 ### D-9. One container window per nesting level
 
