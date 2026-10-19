@@ -44,6 +44,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -52,7 +53,7 @@ import threading
 import unittest
 import urllib.parse
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parent
@@ -1125,6 +1126,145 @@ class FetchTests(unittest.TestCase):
         self.assertTrue(deps.is_within("/tmp/r", "/tmp/r"))
         self.assertFalse(deps.is_within("/tmp/r", "/tmp/rx"))
         self.assertFalse(deps.is_within("/tmp/r", "/etc"))
+
+    # -- confinement to the prefixes (#2874 re-review) ------------------------
+    # The outside target is a SIBLING of the prefixes inside the temporary
+    # root (`usr/local/victim`), so it is within the root: exactly where the
+    # old root-containment check, which is vacuous for the default root `/`,
+    # accepted it.
+
+    def victim(self):
+        victim = self.root / "usr/local/victim"
+        (victim / "sub").mkdir(parents=True)
+        (victim / "keep").write_text("keep")
+        (victim / "sub" / "keep").write_text("keep")
+        (victim / "secret").write_text("secret")
+        (victim / "d").mkdir(mode=0o755)
+        return victim
+
+    def snapshot(self, directory):
+        return sorted((str(p.relative_to(directory)), p.is_dir(),
+                       p.stat().st_mode & 0o777) for p in directory.rglob("*"))
+
+    def assert_refused(self, layers, victim, needle="symlink"):
+        before = self.snapshot(victim)
+        self.publish(layers)
+        with self.assertRaisesRegex(deps.DepsImageError, needle):
+            self.fetch()
+        self.assertEqual(self.snapshot(victim), before, "the outside directory changed")
+
+    ESCAPE = make_layer([("usr/local/cabal/esc", "symlink", "../victim", 0o777)])
+
+    def test_write_through_a_prefix_symlink_to_a_sibling_is_refused(self):
+        victim = self.victim()
+        for target in ("../victim", None):
+            link = make_layer([("usr/local/cabal/esc", "symlink",
+                                target or str(victim), 0o777)])
+            self.assert_refused([link, make_layer([
+                ("usr/local/cabal/esc/pwn", "file", "x", 0o644)])], victim)
+            shutil.rmtree(self.root / "usr/local/cabal")
+        self.assertFalse((victim / "pwn").exists())
+
+    def test_a_refused_entry_creates_no_directory_through_the_symlink(self):
+        victim = self.victim()
+        self.assert_refused([self.ESCAPE, make_layer([
+            ("usr/local/cabal/esc/newdir/deeper/file", "file", "x", 0o644)])], victim)
+        self.assertFalse((victim / "newdir").exists())
+
+    def test_whiteout_through_a_prefix_symlink_is_refused(self):
+        victim = self.victim()
+        self.assert_refused([self.ESCAPE, make_layer([
+            ("usr/local/cabal/esc/.wh.keep", "file", "", 0o644)])], victim)
+        self.assertTrue((victim / "keep").exists())
+
+    def test_opaque_whiteout_through_a_prefix_symlink_is_refused(self):
+        victim = self.victim()
+        self.assert_refused([self.ESCAPE, make_layer([
+            ("usr/local/cabal/esc/sub/.wh..wh..opq", "file", "", 0o644)])], victim)
+        self.assertTrue((victim / "sub" / "keep").exists())
+
+    def test_hard_link_source_through_a_prefix_symlink_is_refused(self):
+        victim = self.victim()
+        self.assert_refused([self.ESCAPE, make_layer([
+            ("usr/local/cabal/h", "hardlink", "usr/local/cabal/esc/secret", 0o644)])],
+            victim)
+        self.assertFalse((self.root / "usr/local/cabal/h").exists())
+
+    def test_directory_mode_never_follows_a_later_symlink_above_it(self):
+        victim = self.victim()
+        self.assert_refused([make_layer([
+            ("usr/local/cabal/x", "dir", None, 0o755),
+            ("usr/local/cabal/x/d", "dir", None, 0o700),
+            ("usr/local/cabal/x", "symlink", "../victim", 0o777)])], victim,
+            "never followed|replaced")
+        self.assertEqual((victim / "d").stat().st_mode & 0o777, 0o755)
+
+    def test_symlink_inside_a_prefix_is_never_followed_even_to_the_prefix(self):
+        self.publish([make_layer([("usr/local/cabal/real", "dir", None, 0o755),
+                                  ("usr/local/cabal/alias", "symlink", "real", 0o777)]),
+                      make_layer([("usr/local/cabal/alias/f", "file", "x", 0o644)])])
+        with self.assertRaisesRegex(deps.DepsImageError, "never followed"):
+            self.fetch()
+        self.assertFalse((self.root / "usr/local/cabal/real/f").exists())
+
+    def test_a_prefix_root_delivered_as_a_symlink_is_refused(self):
+        victim = self.victim()
+        for kind, payload in (("symlink", "victim"), ("file", "x")):
+            self.assert_refused([make_layer([
+                ("usr/local/cabal", kind, payload, 0o777),
+                ("usr/local/cabal/x", "file", "x", 0o644)])], victim, "prefix root")
+            self.assertFalse(os.path.lexists(self.root / "usr/local/cabal"))
+
+    def test_a_host_prefix_that_is_a_symlink_is_refused_for_every_branch(self):
+        # Whiteouts naming the prefix's ancestors (opaque and plain) and a
+        # plain entry: none may act through a prefix that redirects.
+        victim = self.victim()
+        (self.root / "usr/local/cabal").symlink_to("victim")
+        for entries in ([("usr/local/.wh..wh..opq", "file", "", 0o644)],
+                        [("usr/.wh.local", "file", "", 0o644)],
+                        [("usr/local/.wh.cabal", "file", "", 0o644)],
+                        [("usr/local/cabal/keep", "file", "overwritten", 0o644)]):
+            self.publish([make_layer(entries)])
+            with self.assertRaisesRegex(deps.DepsImageError, "symlink", msg=entries[0][0]):
+                self.fetch(allow_existing=True)
+            self.assertEqual((victim / "keep").read_text(), "keep", entries[0][0])
+            self.assertTrue((self.root / "usr/local/cabal").is_symlink())
+
+    def test_ancestor_whiteouts_still_clear_real_prefixes(self):
+        self.publish([make_layer([("usr/local/cabal/a", "file", "a", 0o644),
+                                  ("usr/local/.ghcup/b", "file", "b", 0o644)]),
+                      make_layer([("usr/local/.wh..wh..opq", "file", "", 0o644)])])
+        self.fetch()
+        self.assertEqual(list((self.root / "usr/local/cabal").iterdir()), [])
+        self.assertEqual(list((self.root / "usr/local/.ghcup").iterdir()), [])
+        self.publish([make_layer([("usr/local/cabal/a", "file", "a", 0o644)]),
+                      make_layer([("usr/.wh.local", "file", "", 0o644)])])
+        self.fetch(allow_existing=True)
+        self.assertFalse(os.path.lexists(self.root / "usr/local/cabal"))
+
+    def test_containment_is_to_the_resolved_prefixes_not_the_root(self):
+        # The check itself, with the default root `/` (read-only: resolving
+        # paths writes nothing): every absolute path is within `/`, so only
+        # the resolved prefixes can confine.
+        real = deps.resolved_prefixes(Path("/")).values()
+        self.assertTrue(deps.is_within("/", "/tmp/elsewhere"))
+        for path, inside in (("/usr/local/cabal", True), ("/usr/local/cabal/store/x", True),
+                             ("/usr/local/.ghcup/bin", True), ("/usr/local", False),
+                             ("/usr/local/cabalx", False), ("/usr/local/victim", False),
+                             ("/tmp/elsewhere", False), ("/etc/passwd", False), ("/", False)):
+            self.assertEqual(deps.within_prefixes(real, path), inside, path)
+
+    def test_a_host_ancestor_redirected_after_resolution_is_refused(self):
+        # Resolution happens once per layer; if the directories above a
+        # prefix change afterwards, the parent re-check still confines.
+        confinement = deps.Confinement(self.root)
+        elsewhere = self.root / "elsewhere"
+        (elsewhere / "cabal").mkdir(parents=True)
+        (self.root / "usr").mkdir()
+        (self.root / "usr/local").symlink_to(elsewhere)
+        with self.assertRaisesRegex(deps.DepsImageError, "outside its prefix"):
+            confinement.locate(PurePosixPath("usr/local/cabal/x"), create=True)
+        self.assertEqual(list((elsewhere / "cabal").iterdir()), [])
 
     def test_tampered_blob_fails_its_digest(self):
         layer = make_layer([("usr/local/cabal/x", "file", "x", 0o644)])

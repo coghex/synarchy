@@ -62,7 +62,11 @@ Consumption (`fetch`, `check`)
 `fetch` installs the toolchain and store through the registry API, with no
 Docker: it applies the image's layers in order, honouring whiteouts, but
 writes only `usr/local/.ghcup` and `usr/local/cabal`, so the host's own
-operating system is never touched. `check` compares a checkout's resolved
+operating system is never touched. Every write and whiteout must resolve
+inside one of those two prefixes as resolved under the root (not merely
+inside the root, which is vacuous for the default `/`); symlinks in the
+image are written as links but never followed, so a path through one, or a
+prefix that is a symlink, makes it refuse the layer (`Confinement`). `check` compares a checkout's resolved
 plan with the image's metadata by compiler, platform and non-local unit
 IDs, which do not contain local paths, unlike plan.json's raw hash.
 
@@ -1006,16 +1010,97 @@ def is_within(real_root: str, real_path: str) -> bool:
     return os.path.commonpath([real_root, real_path]) == real_root
 
 
-def _safe_parent(root: Path, relative: PurePosixPath) -> Path:
-    """The host directory an entry is written into, after checking that no
-    symlink extracted earlier redirects it outside the root."""
-    parent = root.joinpath(*relative.parts[:-1]) if len(relative.parts) > 1 else root
-    parent.mkdir(parents=True, exist_ok=True)
-    real_parent = os.path.realpath(parent)
-    if not is_within(os.path.realpath(root), real_parent):
-        raise DepsImageError(f"layer entry {relative} would be written outside the root "
-                             f"through a symlink ({real_parent})")
-    return parent
+def resolved_prefixes(root: Path, prefixes: tuple[str, ...] = CONSUMER_PREFIXES
+                      ) -> dict[str, str]:
+    """Where each prefix really is under `root`, resolved before anything
+    is written. Directories above a prefix (`/usr/local`, say) belong to the
+    host and are taken as the host configured them; the prefix itself must
+    not be a symlink, because a prefix that redirects elsewhere would carry
+    every entry with it."""
+    real_root = os.path.realpath(root)
+    resolved = {}
+    for prefix in prefixes:
+        host = root.joinpath(*PurePosixPath(prefix).parts)
+        if host.is_symlink():
+            raise DepsImageError(f"{host} is a symlink; a prefix is never followed. "
+                                 "Start from empty, real prefix directories.")
+        real = os.path.realpath(host)
+        if not is_within(real_root, real):
+            raise DepsImageError(f"{host} resolves to {real}, outside {real_root}")
+        resolved[prefix] = real
+    return resolved
+
+
+def within_prefixes(real_prefixes: Iterable[str], real_path: str) -> bool:
+    """Whether a resolved path is one of the resolved prefixes or below one.
+    This, not containment in the root, is the confinement rule: with the
+    default root `/`, every absolute path is within the root."""
+    return any(is_within(prefix, real_path) for prefix in real_prefixes)
+
+
+class Confinement:
+    """Where one layer's entries may land: inside the prefixes, through real
+    directories only.
+
+    Symlinks in the image are written as links (leaves) but never followed.
+    An entry or whiteout whose path passes through a symlink at any
+    directory component inside a prefix, or a prefix root that is or would
+    become a symlink, is refused: a layer extracted from a real filesystem
+    never addresses a path through a symlink, so only a hostile or broken
+    layer does. Whatever was checked, the parent is resolved once more
+    before any write and must lie inside its own resolved prefix."""
+
+    def __init__(self, root: Path, prefixes: tuple[str, ...] = CONSUMER_PREFIXES):
+        self.root = root
+        self.prefixes = tuple(prefixes)
+        self.real = resolved_prefixes(root, self.prefixes)
+
+    def prefix_of(self, relative: PurePosixPath) -> str:
+        for prefix in self.prefixes:
+            if relative == PurePosixPath(prefix) or PurePosixPath(prefix) in relative.parents:
+                return prefix
+        raise DepsImageError(f"{relative} is outside {', '.join(self.prefixes)}")
+
+    def locate(self, relative: PurePosixPath, create: bool = False) -> Path:
+        """The host path of `relative`, which lies in a prefix. Every
+        existing directory component from the prefix root down to the
+        entry's parent must be a real directory; nothing is created until
+        that holds. With `create`, the missing ones are then made one at a
+        time, never through a symlink."""
+        prefix = self.prefix_of(relative)
+        prefix_parts = PurePosixPath(prefix).parts
+        host_prefix = self.root.joinpath(*prefix_parts)
+        below = relative.parts[len(prefix_parts):]
+        current = host_prefix
+        for part in (None,) + tuple(below[:-1]):
+            current = current if part is None else current / part
+            if current.is_symlink():
+                raise DepsImageError(
+                    f"layer path {relative} passes through the symlink {current}; "
+                    "symlinks are never followed")
+            if os.path.lexists(current) and not current.is_dir():
+                raise DepsImageError(f"layer path {relative}: {current} is not a directory")
+        leaf = host_prefix.joinpath(*below)
+        self._check_parent(prefix, relative, leaf.parent, bool(below))
+        if create:
+            host_prefix.parent.mkdir(parents=True, exist_ok=True)
+            current = host_prefix
+            for part in (None,) + tuple(below[:-1]) if below else ():
+                current = current if part is None else current / part
+                if not os.path.lexists(current):
+                    os.mkdir(current)
+            self._check_parent(prefix, relative, leaf.parent, bool(below))
+        return leaf
+
+    def _check_parent(self, prefix: str, relative: PurePosixPath, parent: Path,
+                      inside: bool) -> None:
+        real_parent = os.path.realpath(parent)
+        expected = self.real[prefix]
+        ok = (within_prefixes([expected], real_parent) if inside
+              else real_parent == os.path.dirname(expected))
+        if not ok:
+            raise DepsImageError(f"layer path {relative} would be written in {real_parent}, "
+                                 f"outside its prefix {expected}")
 
 
 def apply_layer(layer: Path, root: Path,
@@ -1025,7 +1110,10 @@ def apply_layer(layer: Path, root: Path,
     Whiteouts first (they delete what LOWER layers wrote), then the
     entries; directory modes and times last, so writing into a directory
     does not disturb them. Device nodes and entries outside the prefixes
-    are not written. Returns the number of entries written."""
+    are not written. Every path, whiteouts included, goes through
+    `Confinement`. Returns the number of entries written."""
+    confinement = Confinement(root, prefixes)
+    prefix_paths = {PurePosixPath(prefix) for prefix in prefixes}
     with tarfile.open(layer, "r:*") as archive:
         members = archive.getmembers()
         for member in members:
@@ -1034,34 +1122,32 @@ def apply_layer(layer: Path, root: Path,
             if base == ".wh..wh..opq":
                 directory = path.parent
                 targets = ([directory] if _under(directory, prefixes)
-                           else [PurePosixPath(p) for p in _ancestor_of_prefix(directory, prefixes)]
-                           + [PurePosixPath(p) for p in prefixes if PurePosixPath(p) == directory])
+                           else [PurePosixPath(p) for p in _ancestor_of_prefix(directory, prefixes)])
                 for target in targets:
-                    host = root.joinpath(*target.parts)
+                    host = confinement.locate(target)
+                    # A symlink here is replaced by this layer's directory
+                    # entry; it is never followed to clear its target.
                     if host.is_dir() and not host.is_symlink():
                         for child in list(host.iterdir()):
                             _remove(child)
             elif base.startswith(".wh."):
                 victim = path.parent / base[len(".wh."):]
-                if _under(victim, prefixes) or _ancestor_of_prefix(victim, prefixes):
-                    host = root.joinpath(*victim.parts)
-                    if _under(victim, prefixes):
-                        _safe_parent(root, victim)
-                        if os.path.lexists(host):
-                            _remove(host)
-                    else:
-                        for prefix in _ancestor_of_prefix(victim, prefixes):
-                            prefixed = root.joinpath(*PurePosixPath(prefix).parts)
-                            if os.path.lexists(prefixed):
-                                _remove(prefixed)
+                victims = ([victim] if _under(victim, prefixes)
+                           else [PurePosixPath(p) for p in _ancestor_of_prefix(victim, prefixes)])
+                for target in victims:
+                    host = confinement.locate(target)
+                    if os.path.lexists(host):
+                        _remove(host)
         written = 0
-        directories: list[tuple[Path, tarfile.TarInfo]] = []
+        directories: list[tuple[PurePosixPath, Path, tarfile.TarInfo]] = []
         for member in members:
             path = _member_path(member.name)
             if path.name.startswith(".wh.") or not _under(path, prefixes):
                 continue
-            parent = _safe_parent(root, path)
-            host = parent / path.name
+            if path in prefix_paths and not member.isdir():
+                raise DepsImageError(f"layer entry {path} is a prefix root but not a "
+                                     "directory; a prefix is never a symlink or a file")
+            host = confinement.locate(path, create=True)
             mode = member.mode & 0o1777
             if member.isdir():
                 # A symlink in the way is replaced, never followed: setting
@@ -1069,7 +1155,7 @@ def apply_layer(layer: Path, root: Path,
                 if os.path.lexists(host) and (host.is_symlink() or not host.is_dir()):
                     _remove(host)
                 host.mkdir(exist_ok=True)
-                directories.append((host, member))
+                directories.append((path, host, member))
             elif member.issym():
                 if os.path.lexists(host):
                     _remove(host)
@@ -1079,9 +1165,10 @@ def apply_layer(layer: Path, root: Path,
                 source = _member_path(member.linkname)
                 if not _under(source, prefixes):
                     raise DepsImageError(f"hard link {path} -> {source} leaves the prefixes")
+                source_host = confinement.locate(source)
                 if os.path.lexists(host):
                     _remove(host)
-                os.link(root.joinpath(*source.parts), host, follow_symlinks=False)
+                os.link(source_host, host, follow_symlinks=False)
             elif member.isreg():
                 if os.path.lexists(host):
                     _remove(host)
@@ -1094,8 +1181,10 @@ def apply_layer(layer: Path, root: Path,
             else:
                 raise DepsImageError(f"layer entry {path} is a device or FIFO; refusing")
             written += 1
-        for host, member in reversed(directories):
-            if host.is_symlink():
+        for path, host, member in reversed(directories):
+            # Located again: a later entry may have replaced a directory
+            # above this one with a symlink.
+            if confinement.locate(path) != host or host.is_symlink():
                 raise DepsImageError(f"directory {host} was replaced by a symlink")
             os.chmod(host, member.mode & 0o1777)
             os.utime(host, (member.mtime, member.mtime))
