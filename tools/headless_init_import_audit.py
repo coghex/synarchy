@@ -123,7 +123,11 @@ runs every lexical and CPP fixture through `ghc` on PATH or
 (run after the project build, in `test-and-audits` and
 tools/ci-local.sh) builds a tiny Custom package through the repository's
 own hook and wrapper with the pinned cabal-install and Setup Cabal,
-offline, and records and scans it (`cabal_regression`). Source formats other than plain Haskell (`.lhs`,
+offline, and records and scans it (`cabal_regression`). Nothing it builds
+needs GHC's profiling libraries: its profiling case is opt-in
+(`--cabal-regression --with-profiling`), a local check that CI and
+tools/ci-local.sh never run, because profiling is local-only (#2870).
+Source formats other than plain Haskell (`.lhs`,
 `.hsig`, Cabal's `.hsc`/`.x`/`.y`), custom preprocessors (`-F -pgmF`) and
 quasiquote contents are out of scope.
 
@@ -136,6 +140,8 @@ Usage:
       -- build synarchy-test-headless -v0     # right after the suite build
   python3 tools/headless_init_import_audit.py --builddir dist-newstyle  # gate
   python3 tools/headless_init_import_audit.py --cabal-regression
+  python3 tools/headless_init_import_audit.py --cabal-regression \\
+      --with-profiling   # local only: needs GHC's profiling libraries
   python3 tools/headless_init_import_audit.py --self-test  # fixture suite
 """
 from __future__ import annotations
@@ -2545,14 +2551,22 @@ CABAL_REGRESSION_STEPS = (
     "a record missing its replays fails the gate (#2648 review 9)",
     "a same-version compiler program with changed bytes fails the gate "
     "(#2648 review 9), and restoring its bytes passes",
-    "RTS options and a profiling build's own options reach the replay",
+    "RTS options passed through ghc-options reach the replay",
     "a byte-identical cache restored beneath re-stamped configuration "
     "files verifies and records",
     "a failed build publishes nothing and cannot be recorded",
     "a configured compiler symlink retargeted to another same-version "
     "program fails both the scan and a re-record without a rebuild, and "
     "restoring its target restores detection (#2648 review 10)",
+    "a profiling build's own options reach the replay (opt-in: "
+    "--with-profiling, needs GHC's profiling libraries; never run by CI or "
+    "tools/ci-local.sh, #2870)",
 )
+#: The opt-in profiling case. Profiling is local-only (#2870): no CI check
+#: may need GHC's profiling libraries, so `--cabal-regression` skips this
+#: case unless `--with-profiling` asks for it. Step 10 keeps the
+#: profiling-free half of what it used to check together with it.
+PROFILING_STEP = len(CABAL_REGRESSION_STEPS) - 1
 
 _TINY_CABAL = """cabal-version: 3.0
 name: synarchy
@@ -2618,13 +2632,16 @@ def _cabal_paths(cabal: str) -> tuple[str, str]:
     return store, cache
 
 
-def cabal_regression() -> tuple[list[str], int]:
+def cabal_regression(with_profiling: bool = False) -> tuple[list[str], int]:
     """Record and scan a tiny Custom package shaped like this one, built
     through the repository's own BuildSupport/GhcCapture.hs and wrapper
     by the pinned cabal-install and Setup Cabal, offline. Run after the
     project build (test-and-audits, tools/ci-local.sh), whose store holds
-    that Cabal. Returns failures and the case count."""
+    that Cabal. Nothing it builds needs GHC's profiling libraries unless
+    `with_profiling` adds the opt-in PROFILING_STEP, a local check CI never
+    runs (#2870). Returns failures and the number of cases run."""
     failures: list[str] = []
+    total = len(CABAL_REGRESSION_STEPS) - (0 if with_profiling else 1)
     ghc = ghc_command(REPO_ROOT)
     version = _compiler_version(ghc)
     cabal = cabal_command()
@@ -2732,7 +2749,7 @@ def cabal_regression() -> tuple[list[str], int]:
             # 0. The local order.
             if not (build("build", "all") and build("build", suite)
                     and build("build", "synarchy-test-graphical")):
-                return failures, len(CABAL_REGRESSION_STEPS)
+                return failures, total
             expect_recorded(0, record(DEFAULT_BUILDDIR, suite))
             expect(0, scan(), set())
             build("test", suite)
@@ -2848,20 +2865,36 @@ def cabal_regression() -> tuple[list[str], int]:
                 expect(13, scan(), banned)
                 expect_recorded(13, record(DEFAULT_BUILDDIR, suite, linked))
                 expect(13, scan(), banned)
-            # 10. RTS options and the profiling way's own options.
+            # 10. RTS options passed through ghc-options. A plain build:
+            # the profiling half of what this case used to check together
+            # with it is the opt-in PROFILING_STEP below (#2870).
             project.write_text(project.read_text(encoding="utf-8")
                                + "  ghc-options: +RTS -A16m -RTS\n",
                                encoding="utf-8")
-            if build("build", suite, "--enable-profiling"):
-                expect_recorded(10, record(DEFAULT_BUILDDIR, suite,
-                                             "--enable-profiling"))
+            if build("build", suite):
+                expect_recorded(10, record(DEFAULT_BUILDDIR, suite))
+                ways = outcome(lambda: configured_settings(root))
+                ok = (not isinstance(ways, AuditError) and len(ways) == 1
+                      and "-prof" not in ways[0].args
+                      and ways[0].args[-3:] == ("+RTS", "-A16m", "-RTS"))
+                expect(10, ok, True)
+                expect(10, scan(), set())
+            # 14. The profiling way's own options, opt-in (#2870): it needs
+            # GHC's profiling libraries, which no CI check may require.
+            if with_profiling and not build("build", suite, "--enable-profiling"):
+                failures.append(f"CABAL {CABAL_REGRESSION_STEPS[PROFILING_STEP]}: "
+                                "the profiling build failed; does this GHC "
+                                "have its profiling libraries?")
+            elif with_profiling:
+                expect_recorded(PROFILING_STEP, record(
+                    DEFAULT_BUILDDIR, suite, "--enable-profiling"))
                 ways = outcome(lambda: configured_settings(root))
                 ok = (not isinstance(ways, AuditError) and len(ways) == 1
                       and "-prof" in ways[0].args
                       and "-optP-DPROF_WAY" in ways[0].args
                       and ways[0].args[-3:] == ("+RTS", "-A16m", "-RTS"))
-                expect(10, ok, True)
-                expect(10, scan(), banned)
+                expect(PROFILING_STEP, ok, True)
+                expect(PROFILING_STEP, scan(), banned)
             project.write_text("packages: .\nimport: conf/native.project\n"
                                "package synarchy\n  build-info: True\n",
                                encoding="utf-8")
@@ -2896,19 +2929,21 @@ def cabal_regression() -> tuple[list[str], int]:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-    return failures, len(CABAL_REGRESSION_STEPS)
+    return failures, total
 
 
-def run_cabal_regression() -> int:
-    failures, total = cabal_regression()
+def run_cabal_regression(with_profiling: bool = False) -> int:
+    failures, total = cabal_regression(with_profiling)
+    skipped = ("" if with_profiling else
+               "; the opt-in profiling case was not run (--with-profiling)")
     if failures:
         print(f"headless_init_import_audit cabal regression: {len(failures)} "
-              f"failure(s) over {total} steps:")
+              f"failure(s) over {total} steps{skipped}:")
         for failure in failures:
             print(f"  {failure}")
         return 1
     print(f"headless_init_import_audit cabal regression: all {total} steps "
-          f"passed (cabal-install and Setup Cabal {CABAL_PIN}).")
+          f"passed (cabal-install and Setup Cabal {CABAL_PIN}){skipped}.")
     return 0
 
 
@@ -3009,6 +3044,26 @@ ORDER_MUTATIONS = (
 )
 
 
+# Profiling is local-only (#2870): no command either entry point runs may
+# build with profiling or ask for the opt-in profiling regression case,
+# because nothing that runs the CI checks may need GHC's profiling
+# libraries. Comment lines never count.
+_PROFILING_REQUEST = re.compile(
+    r"--enable-(library-|executable-)?profiling|--with-profiling"
+    r"|(^|\s)(-f|--flags[= ])\s*[+]?profile(\s|$)|(^|\s)-fprof(-\S*)?(\s|$)"
+    r"|(^|\s)-prof(\s|$)|\bprofiling:\s*true")
+
+
+def profiling_failures(name: str, text: str) -> list[str]:
+    """Lines of entry point `name` (its text) that build with profiling or
+    run the opt-in profiling regression case."""
+    return [f"{name}: `{line.strip()}` needs GHC's profiling libraries; "
+            "profiling is local-only (#2870)"
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+            and _PROFILING_REQUEST.search(line.lower())]
+
+
 def self_test() -> int:
     failures: list[str] = []
     ghc = ghc_command(REPO_ROOT)
@@ -3019,6 +3074,11 @@ def self_test() -> int:
         for label, mutate in ORDER_MUTATIONS:
             if not gate_order_failures(name, mutate(text)):
                 failures.append(f"ORDER {name}: {label} was accepted")
+        failures += [f"PROFILING {f}" for f in profiling_failures(name, text)]
+        for extra in (_REGRESSION_COMMAND + " --with-profiling",
+                      "cabal build synarchy-test-headless --enable-profiling -v0"):
+            if not profiling_failures(name, text + f"\n{extra}\n"):
+                failures.append(f"PROFILING {name}: `{extra}` was accepted")
     for label, output, source, origins, cpp_ran in MAP_FIXTURES:
         pre = map_output(output, source)
         if list(pre.origins) != origins or pre.cpp_ran != cpp_ran:
@@ -3089,7 +3149,7 @@ def self_test() -> int:
         if not reason.strip():
             failures.append(f"EXEMPTION {rel} carries no reason")
     total = (CAPTURE_CASES + len(MAP_FIXTURES) + 2
-             + len(GATE_ORDER) * (1 + len(ORDER_MUTATIONS))
+             + len(GATE_ORDER) * (1 + len(ORDER_MUTATIONS) + 3)
              + len(DETECTED_FIXTURES) + len(CLEAN_FIXTURES)
              + len(REASON_FIXTURES) + len(REPORTED_FIXTURES)
              + len(TREE_FIXTURES) + len(EXEMPTION_FIXTURES))
@@ -3115,6 +3175,10 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--record", action="store_true",
                       help="bind the build's captured commands; pass the "
                            "build's own cabal arguments after `--`")
+    parser.add_argument("--with-profiling", action="store_true",
+                        help="with --cabal-regression: also run the opt-in "
+                             "profiling case, a LOCAL check that needs GHC's "
+                             "profiling libraries; CI never passes it (#2870)")
     parser.add_argument("--builddir", default=DEFAULT_BUILDDIR,
                         help="the build directory the suite was built in")
     parser.add_argument("cabal_args", nargs=argparse.REMAINDER,
@@ -3125,11 +3189,13 @@ def main(argv: list[str] | None = None) -> int:
         else args.cabal_args
     if cabal_args and not args.record:
         parser.error("cabal arguments are only taken with --record")
+    if args.with_profiling and not args.cabal_regression:
+        parser.error("--with-profiling is only taken with --cabal-regression")
     try:
         if args.self_test:
             return self_test()
         if args.cabal_regression:
-            return run_cabal_regression()
+            return run_cabal_regression(args.with_profiling)
         if args.record:
             stamp = record_settings(REPO_ROOT, args.builddir, cabal_args)
             print(f"Recorded the headless suite's build settings in {stamp}.")
