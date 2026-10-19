@@ -30,6 +30,7 @@ import App.Cli (parseDump, defaultLayers, parseArg, parseRegion
                , BootModeSelection(..), selectBootMode, bootModeSelectionName
                , CliError, cliErrorMessage)
 import App.ResourceRoot (applyResourceRoot)
+import App.Usage (helpRequested, usageText, incompatibleFlagTable)
 import App.Graphical (runGraphical)
 import App.Headless (runHeadless)
 import App.Offscreen (runOffscreen)
@@ -48,6 +49,13 @@ main = do
 #endif
 
   args ← getArgs
+  -- `--help`/`-h` (#2863) answers before EVERYTHING that can fail, start
+  -- or write: resource-root resolution, mode selection, flag
+  -- validation and boot. Help therefore works from any directory and
+  -- with any other argv, and never reaches the engine initialization
+  -- that writes the local config files. (No glob here: this module goes
+  -- through CPP, which would read a slash-star as a C comment.)
+  when (helpRequested args) $ putStr usageText >> exitSuccess
   callerDirectory ← getCurrentDirectory
   -- Resolve + chdir into the runtime resource root before ANY dispatch
   -- (#636): scripts/, assets/, data/, config/ are all loaded by
@@ -266,30 +274,11 @@ orExitCli = either report pure
         hPutStrLn stderr (cliErrorMessage err)
         exitWith (ExitFailure 1)
 
--- | Every ancillary (non-mode-selecting) flag Main parses, paired with
---   the boot mode(s) that actually honour it (CH-58) — everything else
---   silently discards it today. Detected by syntactic occurrence of the
---   flag token in argv, not by whether the flag's own value parses: a
---   malformed @--seed nonsense@ given to headless must still be rejected
---   here rather than quietly vanishing into 'parseArg's @Nothing@.
-incompatibleFlagTable ∷ [(String, [BootModeSelection])]
-incompatibleFlagTable =
-    [ ("--seed",      [SelectDump])
-    , ("--worldSize", [SelectDump])
-    , ("--plates",    [SelectDump])
-    , ("--ages",      [SelectDump])
-    , ("--region",    [SelectDump])
-    , ("--size",      [SelectOffscreen])
-    , ("--seeds",     [SelectLanguageReport])
-    , ("--arena",     [SelectHeadless, SelectGraphical, SelectOffscreen])
-    , ("--port",      [SelectHeadless, SelectGraphical, SelectOffscreen
-                      , SelectPreview])
-    ]
-
 -- | Exit 1 before any normalization warning or boot dispatch if argv
---   carries a flag from 'incompatibleFlagTable' that the selected boot
---   mode does not honour (CH-58) — the same pre-boot-rejection shape
---   this file already uses for a bare/unknown @--preview@ target.
+--   carries a flag from 'App.Usage.incompatibleFlagTable' that the
+--   selected boot mode does not honour (CH-58) — the same
+--   pre-boot-rejection shape this file already uses for a bare/unknown
+--   @--preview@ target.
 rejectIncompatibleFlags ∷ BootModeSelection → [String] → IO ()
 rejectIncompatibleFlags bootMode args = case violations of
     []               → pure ()
