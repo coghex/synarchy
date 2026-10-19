@@ -7992,9 +7992,12 @@ The invariants, each held by a test of the `Scenario.Placement` group:
 - **A scenario location is an instance, never an overlay entry.** The stamper is
   driven by `wgpLocationOverlay`; a scenario location stays out of it, so
   nothing re-stamps its geometry or re-spawns its contents. The commit sets the
-  anchor chunk's `wgpLocationStamped`, and `liContentsSpawned` is set exactly
-  when every significant slot is bound (the only state a decoded table may hold
-  with the flag set). A chunk is never an identity: two instances may share one
+  anchor chunk's `wgpLocationStamped`; an unbound significant slot is dropped
+  (`dropUnboundSignificantSlots`: nothing would ever fill it) and
+  `liContentsSpawned` is then set, because every remaining slot is bound (the
+  only state a decoded table may hold with the flag set). A significant item
+  held off the ground binds as taken and a pending shell must be an outer
+  ground item, the save's own provenance rules. A chunk is never an identity: two instances may share one
   and a footprint may span several.
 - **The whole footprint, exactly.** A building, a structure piece and a location
   are accepted only if their whole footprint is inside the finite map
