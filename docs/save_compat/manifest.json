@@ -3871,7 +3871,7 @@
           "sha256": "89aa1928ac06f5bc0c3bbce6d3a749f5495a3fa2f0764353cd873736cc680b7f",
           "sizeBytes": 20300,
           "provenance": "Derived from the tracked z15-arena-finite fixture (generated through the real headless engine and engine.saveWorld on the #2708 build; see its provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, appended the planting and WeSetFloraState edits, the crop plot, the regrowth timer and the tag assignments named by the spec (retained as docs/pr-proofs/issue-2711-make-z16.py.txt) to page finite_arena, raised the page's planted-id cursor above the seeded ids, and re-encoded it through the same encoder an ordinary save uses, writing world-edits v6; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2711-scenario-world/test-headless/data/save-compat/z16-scenario-world.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z16-scenario-world.expected.json"
         }
       ]
     }
