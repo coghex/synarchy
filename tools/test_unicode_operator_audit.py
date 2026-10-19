@@ -16,6 +16,7 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,7 @@ from unicode_operator_audit import (  # type: ignore
     NONCANONICAL_TOKENS, ALL_REPLACEMENTS,
     GLSL_QUASIQUOTE_FILE, EQ_INSTANCE_FILE, MONAD_INSTANCE_FILE,
     WHOLE_FILE_EXEMPT, haskell_code_only,
+    find_shader_ascii_violations, shader_quasiquote_spans, scan_tree,
 )
 
 import selftestlib  # noqa: E402
@@ -613,7 +615,10 @@ def test_noncanonical_inequality_is_not_exempt_in_uprelude():
 
 def test_noncanonical_inequality_in_glsl_quasiquote_is_exempt():
     # GLSL source is not Haskell -- and the surrounding Haskell in the
-    # same file is still held to the rule.
+    # same file is still held to the rule. The exemption is from the
+    # OPERATOR rule only: the shader ASCII rule (#2862) reports the same
+    # `≠` separately, pinned by
+    # `test_operator_and_shader_ascii_rules_compose_on_one_file` below.
     text = (
         "shaderCode = [frag|\n"
         "    // a ≠ b in a GLSL comment\n"
@@ -639,6 +644,187 @@ def test_ascii_and_noncanonical_violations_report_in_source_order():
     expect([(x.line, x.token) for x in v] == [(1, "≠"), (2, "=="), (3, "≠")],
            f"violations are reported in source order across both "
            f"detection paths (got {[(x.line, x.token) for x in v]})")
+
+
+# ----- Embedded shader sources are ASCII (#2862) ---------------------------
+# `compileShaderQ` writes each shader to a temporary file in the locale's
+# encoding, so a non-ASCII character anywhere in a quasiquote body --
+# a GLSL comment included -- fails the build under `LANG=C`.
+
+_EM_DASH = "\u2014"
+_SHADER_QUOTERS = ("vert", "frag", "glsl")
+
+
+def _shader_hits(violations) -> list[tuple[int, str]]:
+    return [(v.line, v.char) for v in violations]
+
+
+def test_non_ascii_in_each_shader_quoter_is_flagged():
+    for quoter in _SHADER_QUOTERS:
+        text = (
+            f"shaderCode = [{quoter}|\n"
+            "    #version 450\n"
+            f"    // a dash {_EM_DASH} in a GLSL comment\n"
+            "|]\n"
+        )
+        v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+        expect(_shader_hits(v) == [(3, _EM_DASH)],
+               f"an em dash inside [{quoter}|...|] is flagged once on line 3 "
+               f"(got {[str(x) for x in v]})")
+        expect(v != [] and v[0].path == GLSL_QUASIQUOTE_FILE
+               and str(v[0]).startswith(f"{GLSL_QUASIQUOTE_FILE}:3: ")
+               and "U+2014" in str(v[0]),
+               f"the report names the file, the line and the code point "
+               f"(got {[str(x) for x in v]})")
+
+
+def test_same_character_in_a_haskell_comment_passes():
+    # The out-of-scope half: Haskell comments, Unicode operators and
+    # code outside the quasiquote keep their Unicode (#1005 / #1494).
+    text = (
+        f"-- | A Haskell comment with a dash {_EM_DASH} and an arrow \u2192\n"
+        f"{{- a block comment {_EM_DASH} too -}}\n"
+        "shaderCode \u2237 BS.ByteString\n"
+        "shaderCode = [frag|\n"
+        "    // plain ASCII -- and -> and 90 deg\n"
+        "|]\n"
+        f"msg = \"a string {_EM_DASH} outside any shader\"\n"
+    )
+    v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(v == [], f"non-ASCII outside the quasiquote is not this rule's "
+           f"business (got {[str(x) for x in v]})")
+
+
+def test_shader_ascii_reports_every_block_with_its_own_lines():
+    text = (
+        "a = $(compileShaderQ Nothing \"vert\" Nothing [glsl|\n"   # 1
+        "    // Handle\u2192slot\n"                                   # 2
+        "|])\n"                                                       # 3
+        f"-- Haskell prose {_EM_DASH} between the blocks\n"          # 4
+        "b = [vert|\n"                                                # 5
+        "    void main() {}\n"                                        # 6
+        "|]\n"                                                        # 7
+        "c = [frag|\n"                                                # 8
+        "    // 90\u00b0 then\n"                                      # 9
+        f"    // two {_EM_DASH} on {_EM_DASH} one line\n"            # 10
+        "|]\n"                                                        # 11
+    )
+    v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_shader_hits(v) == [(2, "\u2192"), (9, "\u00b0"),
+                               (10, _EM_DASH), (10, _EM_DASH)],
+           f"every character in every block is reported on its own line, "
+           f"in source order, and the clean block and the prose between "
+           f"report nothing (got {_shader_hits(v)})")
+
+
+def test_shader_ascii_applies_to_any_source_file():
+    # Unlike the operator rule's GLSL exemption, which is keyed to
+    # ShaderCode.hs, a shader is a shader wherever it is spliced.
+    path = "src/Engine/Graphics/Vulkan/Other/Shaders.hs"
+    text = (
+        "module Engine.Graphics.Vulkan.Other.Shaders where\n"
+        "\n"
+        "s = [frag|\n"
+        f"    // {_EM_DASH}\n"
+        "|]\n"
+    )
+    v = find_shader_ascii_violations(text, path)
+    expect(_shader_hits(v) == [(4, _EM_DASH)] and v[0].path == path,
+           f"a shader quasiquote outside ShaderCode.hs is checked and "
+           f"reported under its own path (got {[str(x) for x in v]})")
+
+
+def test_quasiquote_shaped_text_in_comments_and_strings_opens_nothing():
+    # ShaderCode.hs's own import comment quotes the delimiters, with an
+    # ellipsis and an em dash after them. Read as a real opener it would
+    # flag Haskell prose; a string literal is the same trap.
+    text = (
+        "-- The plain `[vert|`/`[frag|` quoters cannot interpolate, so\n"
+        "-- `$(compileShaderQ \u2026 [glsl| \u2026 |])` splices `${name}` "
+        f"{_EM_DASH} which\n"
+        f"{{- block prose: [frag| {_EM_DASH} |] -}}\n"
+        f"msg = \"[glsl| {_EM_DASH} |]\"\n"
+        f"other = 1 -- {_EM_DASH} not reached by any shader\n"
+    )
+    v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(v == [], f"quasiquote-shaped text in comments and strings opens "
+           f"no shader span (got {[str(x) for x in v]})")
+    expect(shader_quasiquote_spans(text) == [],
+           f"and no span is found at all (got {shader_quasiquote_spans(text)})")
+
+
+def test_shader_body_closes_at_the_first_raw_closer():
+    # The body is raw text to GHC: a quote or `--` in a GLSL comment must
+    # neither hide the closer nor keep the span open past it, and the
+    # Haskell after the closer is code again -- both for this rule and
+    # for the operator rule's masking.
+    text = (
+        "s = [frag|\n"
+        "    // the \"quoted word and i-- in a comment\n"
+        f"    // {_EM_DASH}\n"
+        "|]\n"
+        f"-- {_EM_DASH} Haskell prose after the shader\n"
+        "go x y = x == y\n"
+    )
+    v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_shader_hits(v) == [(3, _EM_DASH)],
+           f"only the shader's own em dash is flagged (got {_shader_hits(v)})")
+    ops = find_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect([(x.line, x.token) for x in ops] == [(6, "==")],
+           f"the operator rule still masks the shader and still flags the "
+           f"Haskell after it (got {[str(x) for x in ops]})")
+
+
+def test_unclosed_shader_quasiquote_runs_to_end_of_file():
+    text = "s = [frag|\n    // no closer\n" + f"    // {_EM_DASH}\n"
+    v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_shader_hits(v) == [(3, _EM_DASH)],
+           f"an unclosed quasiquote is still shader text to end of file "
+           f"(got {_shader_hits(v)})")
+
+
+def test_operator_and_shader_ascii_rules_compose_on_one_file():
+    # The operator rule's GLSL exemption still stands, and the shader
+    # ASCII rule reads only what that exemption skips.
+    text = (
+        "shaderCode = [frag|\n"
+        "    if (a == b) { x = 1; } // a \u2260 b\n"
+        "|]\n"
+        "\n"
+        "otherCode x y = x \u2260 y\n"
+    )
+    ops = find_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect([(x.line, x.token) for x in ops] == [(5, "\u2260")],
+           f"the operator rule exempts the shader but flags the Haskell "
+           f"(got {[str(x) for x in ops]})")
+    v = find_shader_ascii_violations(text, GLSL_QUASIQUOTE_FILE)
+    expect(_shader_hits(v) == [(2, "\u2260")],
+           f"the shader ASCII rule flags the shader's `\u2260` and not the "
+           f"Haskell one (got {_shader_hits(v)})")
+
+
+def test_scan_tree_reports_shader_violations_by_file_and_line():
+    # End to end over a synthetic tree, so the wiring from the file walk
+    # to the report is pinned, not just the pure function.
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        files = {
+            GLSL_QUASIQUOTE_FILE: f"a = [vert|\n// {_EM_DASH}\n|]\n",
+            "src/Other/Shader.hs":
+                f"-- {_EM_DASH}\nb = [glsl|\n\n// 90\u00b0\n|]\n",
+            "src/Clean.hs": f"-- {_EM_DASH}\nc \u2237 Int\nc = 1\n",
+        }
+        for rel, body in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(body, encoding="utf-8")
+        ops, shaders = scan_tree(root)
+        expect(ops == [], f"no operator violations in the fixture (got {ops})")
+        expect(sorted((v.path, v.line, v.char) for v in shaders) == [
+                   (GLSL_QUASIQUOTE_FILE, 2, _EM_DASH),
+                   ("src/Other/Shader.hs", 4, "\u00b0")],
+               f"scan_tree reports each shader violation under its file and "
+               f"line, and nothing from the clean file "
+               f"(got {[str(v) for v in shaders]})")
 
 
 def main() -> int:
@@ -692,6 +878,15 @@ def main() -> int:
         test_multiline_string_masks_its_whole_body_when_enabled,
         test_multiline_string_closes_at_the_first_unescaped_triple_quote,
         test_triple_quote_keeps_its_plain_haskell_reading_by_default,
+        test_non_ascii_in_each_shader_quoter_is_flagged,
+        test_same_character_in_a_haskell_comment_passes,
+        test_shader_ascii_reports_every_block_with_its_own_lines,
+        test_shader_ascii_applies_to_any_source_file,
+        test_quasiquote_shaped_text_in_comments_and_strings_opens_nothing,
+        test_shader_body_closes_at_the_first_raw_closer,
+        test_unclosed_shader_quasiquote_runs_to_end_of_file,
+        test_operator_and_shader_ascii_rules_compose_on_one_file,
+        test_scan_tree_reports_shader_violations_by_file_and_line,
     ]:
         fn()
     if FAILURES:
