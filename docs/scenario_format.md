@@ -218,7 +218,7 @@ strings, default `[]`).
 | `tiles` | list of `[x, y]` integer pairs | req (exactly one of `rect` / `tiles`) | — | A malformed tile drops that tile, duplicates collapse, and an empty result rejects the patch. |
 | `material` | material definition name | req | — | Column material (`World.Edit.Types` `WeSetCell`/`WeAddTile`); unknown → entry rejected. |
 | `surface_z` | integer z | req | — | Top solid cell of every column in the patch. |
-| `slope` | integer `[0, 15]` | opt | `0` (flat) | Ramp bitmask, bits N/E/S/W (`WeSetSlope`). |
+| `slope` | integer `[0, 15]` | opt | `0` (flat) | Ramp bitmask, bits N/E/S/W (`WeSetSlope`). Always recorded as an override, flat included: the engine derives border slopes from terrain and neighbour residency, and an omitted slope means flat, not "derived". |
 
 Dependent values to reconstruct: column surface maps, vegetation placement and fluid
 neighbour state (SCN-11). These are derived, not authorable. Construction and capture
@@ -977,9 +977,10 @@ states. It is pure up to one commit.
   in the named material with the authored slope. Relative to the arena's unedited
   column (sixteen cells, loam over granite, top at sea level) that is a raised pad of
   the material, a column dug down to the surface with the top cell set, or the top
-  cell replaced. The cells the base column already has stay. A column that already is
-  the stated one produces no edit and keeps the base's grass; any column an edit
-  changes carries no surface vegetation (vegetation is derived).
+  cell replaced. The cells the base column already has stay. A column that already has
+  the stated shape produces no shape edit and keeps the base's grass (its slope
+  override is still recorded); any column a shape edit changes carries no surface
+  vegetation (vegetation is derived).
 - **Overlap.** Patches apply in authored order and a later one replaces the column
   state of every tile it covers. Edits are built from each tile's FINAL state, so an
   earlier patch's relative raise never stacks under a later one.
@@ -1026,10 +1027,12 @@ rebuilds them (arena base, replayed log, rectangle re-asserted) and swapped in t
 `replaceChunkForgettingFlora`; a non-resident chunk gets only the log and is rebuilt by
 its own admission. A tagged cell in a chunk that is not resident is judged against the
 replacement geometry at once: a cell the replacement no longer has loses its tags (a
-cell created there later inherits nothing), one that survives keeps them. Authored
-slopes (`WeSetSlope`) are restored after the admission pass that recomputes border slopes
-from terrain (`applySlopeEditsTd`), so a ramp on a chunk-edge tile survives the chunk's
-admission and a neighbour's.
+cell created there later inherits nothing), one that survives keeps them. Slope
+overrides (`WeSetSlope`, flat included) are restored after the admission pass that
+recomputes border slopes from terrain (`applySlopeEditsTd`): the EFFECTIVE value of each
+named cell is read off a replay of the whole log over the loader's own base — so a later
+cell write, or a delete and refill, that cleared a slope is respected — and a ramp or an
+explicit flat on a chunk-edge tile survives the chunk's admission and a neighbour's.
 
 ### Capture
 

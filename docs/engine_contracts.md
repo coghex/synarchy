@@ -7853,10 +7853,12 @@ The invariants, each held by a test of the `Scenario.World` group:
   never scenario state.
 - **Authored edits survive the admission passes.** The chunk-admission pipeline
   rebuilds derived slopes on a just-admitted chunk's border strip and on its
-  loaded neighbours' (`recomputeNeighborSlopes`); recorded `WeSetSlope` edits are
-  restored right after it (`applySlopeEditsTd`, before the dig and construction
-  passes), so a scenario ramp on a chunk-edge tile survives both. A new derived pass
-  over admitted chunks must restore the authored overrides it clobbers.
+  loaded neighbours' (`recomputeNeighborSlopes`); slope overrides are restored right
+  after it (`applySlopeEditsTd`, before the dig and construction passes) at their
+  EFFECTIVE value — read off a replay of the whole log over the loader's own base,
+  so a later `WeSetCell` or a delete-and-refill that cleared a slope is respected —
+  and every patch tile records one, flat included. A new derived pass over admitted
+  chunks must restore the authored overrides it clobbers the same way.
 - **Capture is a pure read** of one coherent snapshot, visits only chunks the log
   or the resident set names, treats non-residency as non-deletion, and writes
   content-derived generated ids made unique against the document's other ids.
