@@ -47,7 +47,7 @@ ok, tail = codec.seed_fixture_tags(src, spec_path, out)
 assert ok, tail
 ok, tail = codec.normalize_fixture_timestamp(out)
 assert ok, tail
-summary = ROOT / "test-headless/data/save-compat/z16-scenario-world.expected.json"
+summary = Path("test-headless/data/save-compat/z16-scenario-world.expected.json"
 ok, tail = codec.dump_canonical_summary(out, summary)
 assert ok, tail
 print("wrote", out, out.stat().st_size, "bytes; summary", summary)
