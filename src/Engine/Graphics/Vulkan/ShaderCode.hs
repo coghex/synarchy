@@ -32,6 +32,11 @@ import Engine.Graphics.Vulkan.Uniform.Layout (uboGlslBlock)
 -- name the SAME cap, and the UBO member is declared from this value too.
 import Engine.Graphics.Solar (maxSolarPages)
 
+-- Every shader body below stays pure ASCII, comments included:
+-- `compileShaderQ` writes it to a temporary file in the build locale's
+-- encoding, so a single em dash fails `cabal build` under `LANG=C`.
+-- Guarded by tools/unicode_operator_audit.py (#2862).
+
 -- | Font vertex shader (instanced rendering, world camera / NDC)
 fontVertexShaderCode ∷ BS.ByteString
 fontVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
@@ -121,7 +126,7 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
         // Longitude-local day/night (#483): take the tile's world u
         // and offset the global sun angle by its fraction of a full
         // trip around the world cylinder (u = gx - gy). Raw world
-        // coords, NOT screen-space — rotating the camera must not
+        // coords, NOT screen-space -- rotating the camera must not
         // re-light the world.
         //
         // #2019 widened inWorldUV to an ivec2 of whole signed 32-bit
@@ -132,18 +137,18 @@ bindlessVertexShaderCode = $(compileShaderQ Nothing "vert" Nothing [glsl|
         // Deliberately NOT wrapped (no fract()) before interpolation:
         // a quad whose corners straddle the wrap point (e.g. u values
         // giving 0.99 and 0.01) would otherwise interpolate through
-        // 0.5 — a false noon band across what should read as smooth
+        // 0.5 -- a false noon band across what should read as smooth
         // midnight. The unwrapped phase is smooth and continuous
         // everywhere (no per-vertex discontinuity to interpolate
         // across), and every consumer of fragSunAngle downstream
         // (this fragment shader's sin/cos and computeAmbientLight) is
         // built from sin()/cos(), which are exactly periodic for any
-        // real input — so no fract() is needed anywhere in the pipeline.
+        // real input -- so no fract() is needed anywhere in the pipeline.
         int worldU = inWorldUV.x;
         // Per-page attribution (#1869): several world pages can be
         // visible at once, each advancing on its own clock and
         // generated at its own size. inSolarPage names which one owns
-        // this vertex — 0 means none (UI and generic scene sprites,
+        // this vertex -- 0 means none (UI and generic scene sprites,
         // which keep the single global pair they have always used),
         // n > 0 selects ubo.solarPages[n - 1]. The index is clamped
         // rather than trusted: the table has a fixed length on both
@@ -179,7 +184,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
     layout(location = 3) in float fragBrightness;
     layout(location = 4) in flat int fragFaceMapIndex;
     // Longitude-local day/night (#483): UNWRAPPED phase (no fract() on
-    // the vertex side — see bindlessVertexShaderCode). Interpolated
+    // the vertex side -- see bindlessVertexShaderCode). Interpolated
     // across the primitive, then wrapped/lit here per-fragment so a
     // quad straddling the wrap point reads as smooth midnight instead
     // of a false noon band.
@@ -190,10 +195,10 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
 
     layout(set = 1, binding = 0) uniform sampler2D textures[${maxBindlessTextures}];
 
-    // Ambient-light curve (#483) — GLSL port of Engine.Loop.Frame's
+    // Ambient-light curve (#483) -- GLSL port of Engine.Loop.Frame's
     // computeAmbientLight. Evaluated here (fragment-side, per-pixel)
     // from the per-fragment interpolated LOCAL sun angle, built
-    // entirely from sin() — exactly periodic for any real input, so
+    // entirely from sin() -- exactly periodic for any real input, so
     // it's correct whether or not fragSunAngle has been reduced to
     // [0,1).
     float computeAmbientLight(float sunAngle) {
@@ -206,7 +211,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         }
     }
 
-    // Handle→slot table (#286). Vertices carry a STABLE texture-handle id;
+    // Handle->slot table (#286). Vertices carry a STABLE texture-handle id;
     // this maps it to the live bindless slot at draw time, so cached
     // geometry can never encode a stale/recycled slot. HANDLE_TABLE_SIZE
     // is interpolated from 'handleSlotTableSize', the single definition
@@ -230,7 +235,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         // Selection outline: bit 0 of renderFlags.
         // For each fragment, sample the 4 cardinal neighbor texels (one
         // texture-pixel away). If this fragment is transparent AND any
-        // neighbor is opaque, this is an edge — emit pure white.
+        // neighbor is opaque, this is an edge -- emit pure white.
         // Otherwise fall through to normal shading.
         if ((fragRenderFlags & 1u) != 0u) {
             vec2 texSize = vec2(textureSize(textures[nonuniformEXT(texSlot)], 0));
@@ -247,7 +252,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         }
 
         // Face map: a handle resolving to slot 0 (unregistered) falls back
-        // to the default face map — the old 'lookupFmSlot' rule, now here.
+        // to the default face map -- the old 'lookupFmSlot' rule, now here.
         int fmSlot = resolveSlot(fragFaceMapIndex);
         if (fmSlot == 0) fmSlot = fragDefaultFaceMapSlot;
         vec4 faceMapSample = texture(textures[nonuniformEXT(fmSlot)], fragTexCoord);
@@ -266,7 +271,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         // Swizzle face map channels based on camera rotation.
         // The face map is baked: R=right, G=top, B=left (relative to FaceSouth).
         // When we rotate the camera, the "right" side of the tile becomes
-        // a different side. For 90° rotations of an iso diamond,
+        // a different side. For 90-degree rotations of an iso diamond,
         // left and right simply swap on odd rotations.
         int facing = int(fragCameraFacing + 0.5);
         vec3 w;
@@ -279,7 +284,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         }
         
         // Sun direction rotated by camera facing
-        // Each 90° CW rotation shifts apparent sun direction by +PI/2
+        // Each 90-degree CW rotation shifts apparent sun direction by +PI/2
         float facingOffset = float(facing) * 1.5707963;
         float baseAngle = fragSunAngle * 6.28318530718;
         float sunHeight = sin(baseAngle);
@@ -302,7 +307,7 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         // Lifecycle alpha: bit 1 of renderFlags (#2488).
         // A structure construction frame reuses the FINISHED piece's
         // face map for lighting, but a half-built wall's pixels do not
-        // share the finished wall's silhouette — so its own texture
+        // share the finished wall's silhouette -- so its own texture
         // alpha is authoritative and the face map's is ignored. The RGB
         // path above is untouched, including the zero-sum fall-through
         // to top light, so a frame pixel over unpainted face-map RGB is
@@ -358,7 +363,7 @@ bindlessUIFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
 
     layout(set = 1, binding = 0) uniform sampler2D textures[${maxBindlessTextures}];
 
-    // Handle→slot table (#286) — same buffer the world fragment shader
+    // Handle->slot table (#286) -- same buffer the world fragment shader
     // reads; fragTexIndex carries a stable texture-handle id. Both sizes
     // are interpolated from Texture.Limits, the single definition.
     const int HANDLE_TABLE_SIZE = ${handleSlotTableSize};

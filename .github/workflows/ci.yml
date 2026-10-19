@@ -1097,7 +1097,12 @@ jobs:
       # way outside the guard's explicit, construct-scoped exemption
       # list (src/UPrelude.hs's ASCII definitions, ShaderCode.hs's
       # quasiquoted GLSL, and the Eq/Monad instance method names that
-      # must stay ASCII). ≠ stays legal in comment prose.
+      # must stay ASCII). ≠ stays legal in comment prose. The same
+      # guard also fails if a non-ASCII character appears inside an
+      # embedded shader source ([vert|/[frag|/[glsl| quasiquote, any
+      # file, comments included), because compileShaderQ writes it in
+      # the locale's encoding and a non-UTF-8 locale breaks the build
+      # (#2862).
       - name: Unicode operator audit
         run: |
           python3 tools/test_unicode_operator_audit.py

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Guard: two spelling rules on `src/` + `app/` Haskell source, both
-outside a short, explicit exemption list.
+"""Guard: three spelling rules on `src/` + `app/` Haskell source, the
+first two outside a short, explicit exemption list.
 
 1. (#1005) The five ASCII operators normalised to Unicode must not
    reappear. Every fixity matches its ASCII counterpart exactly
@@ -20,6 +20,16 @@ outside a short, explicit exemption list.
    which the scanner below already excludes -- and is forbidden only as
    an operator.
 
+3. (#2862) Every embedded shader source -- the body of a `[vert|...|]`,
+   `[frag|...|]` or `[glsl|...|]` quasiquote, in any audited file -- is
+   pure ASCII, comments included. `compileShaderQ` (vulkan-utils)
+   writes each shader to a temporary file in the process locale's
+   encoding before running glslang, so one em dash in a GLSL `//`
+   comment fails `cabal build` under `LANG=C`. This is the inverse of
+   rules 1 and 2's GLSL exemption: those rules skip shader text because
+   it is not Haskell; this one reads ONLY shader text. Haskell comments
+   and code outside the quasiquotes keep their Unicode.
+
 Rule 2 needs its own detection path: `_SYMBOL_RUN`'s character class is
 ASCII by construction, so `≠` is never lexed as a candidate token and a
 tree spelled entirely `≠` would audit clean.
@@ -33,7 +43,8 @@ false hit here would rewrite content this guard must never touch.
 Usage:
   python3 tools/unicode_operator_audit.py
 Exit codes: 0 = clean tree, 1 = a forbidden ASCII operator reappeared,
-or inequality was spelled `≠`, outside the exemption list below.
+or inequality was spelled `≠`, outside the exemption list below, or a
+non-ASCII character appeared inside an embedded shader source.
 """
 from __future__ import annotations
 
@@ -165,7 +176,10 @@ CONSTRUCT_EXEMPTIONS = {
         "definition -- the method name must stay ASCII `>>=`.",
 }
 
-_GLSL_QUASIQUOTE_SPAN = re.compile(r"\[(?:vert|frag|glsl)\|.*?\|\]", re.DOTALL)
+# A shader quasiquote's OPENER only; `shader_quasiquote_spans` finds the
+# closer itself, because the body is raw text to GHC and must not be
+# lexed as Haskell on the way to it.
+_SHADER_QUASIQUOTE_OPEN = re.compile(r"\[(?:vert|frag|glsl)\|")
 # Capture group 1 is the exempt token itself, so the exemption is the
 # ONE method-name occurrence, not the rest of its line -- a second
 # forbidden operator riding the same line (e.g. inside the method body)
@@ -195,6 +209,21 @@ class Violation:
         return (f"{self.path}:{self.line}: forbidden operator "
                 f"'{self.token}' (use '{ALL_REPLACEMENTS[self.token]}' "
                 f"instead)")
+
+
+@dataclass(frozen=True)
+class ShaderAsciiViolation:
+    """Rule 3 (#2862): one non-ASCII character inside a shader quasiquote."""
+    path: str
+    line: int
+    char: str
+
+    def __str__(self) -> str:
+        return (f"{self.path}:{self.line}: non-ASCII character "
+                f"U+{ord(self.char):04X} {self.char!r} in an embedded shader "
+                f"source (compileShaderQ cannot encode it under a non-UTF-8 "
+                f"locale; spell it in ASCII, e.g. '--' for a dash, '->' for "
+                f"an arrow, 'deg' for a degree sign)")
 
 
 def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
@@ -500,6 +529,43 @@ def _code_only(text: str, multiline_strings: bool = False) -> str:
     return _mask_spans(text, non_code_spans)
 
 
+def shader_quasiquote_spans(text: str) -> list[tuple[int, int]]:
+    """The `[start, end)` span of every `[vert|`/`[frag|`/`[glsl|`
+    quasiquote in `text`, delimiters included.
+
+    An opener counts only in genuine code, so prose or a string that
+    merely quotes one (ShaderCode.hs's own import comment does) opens
+    nothing. The body is raw text to GHC, ending at the first `|]`
+    whatever lies between, so the closer is found in the raw text rather
+    than the lexed one: a quote or `--` in a GLSL comment cannot move
+    it. Lexing then resumes after the closer, where GHC is back in code.
+    An unclosed quasiquote runs to end of file."""
+    spans: list[tuple[int, int]] = []
+    if _SHADER_QUASIQUOTE_OPEN.search(text) is None:
+        return spans  # the common case: no candidate opener at all
+    pos = 0
+    while True:
+        m = _SHADER_QUASIQUOTE_OPEN.search(_code_only(text[pos:]))
+        if m is None:
+            return spans
+        start = pos + m.start()
+        close = text.find("|]", pos + m.end())
+        end = len(text) if close < 0 else close + 2
+        spans.append((start, end))
+        pos = end
+
+
+def find_shader_ascii_violations(text: str, rel_path: str
+                                 ) -> list[ShaderAsciiViolation]:
+    """Rule 3 (#2862): every non-ASCII character inside an embedded
+    shader source in `text`, in any file. Haskell outside the
+    quasiquotes is not this rule's business."""
+    return [ShaderAsciiViolation(rel_path, _line_of(text, i), text[i])
+            for start, end in shader_quasiquote_spans(text)
+            for i in range(start, end)
+            if not text[i].isascii()]
+
+
 def find_violations(text: str, rel_path: str) -> list[Violation]:
     """Every forbidden-operator occurrence in `text` (the source of the
     file at repo-relative `rel_path`) outside a comment, a string
@@ -510,8 +576,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         # comment that happens to CONTAIN `[frag|`/`|]`-shaped text must
         # never be mistaken for a real quasiquote boundary and mask
         # real Haskell code in between.
-        spans = [m.span() for m in _GLSL_QUASIQUOTE_SPAN.finditer(_code_only(text))]
-        scan_text = _mask_spans(text, spans)
+        scan_text = _mask_spans(text, shader_quasiquote_spans(text))
 
     # Same rationale as the GLSL case: hunt for the instance header/
     # method-head text only in genuine code, so a comment that merely
@@ -548,18 +613,22 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
             for pos, tok in sorted(hits)]
 
 
-def scan_tree(repo_root: Path) -> list[Violation]:
+def scan_tree(repo_root: Path
+              ) -> tuple[list[Violation], list[ShaderAsciiViolation]]:
+    """`(operator violations, shader ASCII violations)` over the tree."""
     files = sorted(repo_root.glob("src/**/*.hs")) + sorted(repo_root.glob("app/**/*.hs"))
     violations: list[Violation] = []
+    shader_violations: list[ShaderAsciiViolation] = []
     for path in files:
         rel = path.relative_to(repo_root).as_posix()
         text = path.read_text(encoding="utf-8")
         violations.extend(find_violations(text, rel))
-    return violations
+        shader_violations.extend(find_shader_ascii_violations(text, rel))
+    return violations, shader_violations
 
 
 def main() -> int:
-    violations = scan_tree(REPO_ROOT)
+    violations, shader_violations = scan_tree(REPO_ROOT)
     if violations:
         print(f"{len(violations)} forbidden operator occurrence(s) "
               f"(ASCII spellings and/or noncanonical `≠`):")
@@ -568,9 +637,18 @@ def main() -> int:
         print("\nExempt by design:")
         for path, reason in {**WHOLE_FILE_EXEMPT, **CONSTRUCT_EXEMPTIONS}.items():
             print(f"  {path}: {reason}")
+    if shader_violations:
+        if violations:
+            print()
+        print(f"{len(shader_violations)} non-ASCII character(s) inside "
+              f"embedded shader sources (#2862):")
+        for v in shader_violations:
+            print(f"  {v}")
+    if violations or shader_violations:
         return 1
     print("No forbidden ASCII operators and no noncanonical `≠` found "
-          "outside the exemption list.")
+          "outside the exemption list, and every embedded shader source "
+          "is ASCII.")
     return 0
 
 
