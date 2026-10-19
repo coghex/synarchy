@@ -357,8 +357,12 @@ installBuildingBuilds refs page epoch = mapM one
 data BuildingCaptureCtx = BuildingCaptureCtx
     { bccDefs     ∷ !(HM.HashMap Text BuildingDef)
     , bccNodes    ∷ BuildingId → Maybe PowerNode
-    , bccRef      ∷ BuildingId → Maybe Text
-      -- ^ 'Building.Types.bmScenarioRefs'
+    , bccNameOf   ∷ BuildingId → Maybe Text
+      -- ^ the FINAL explicit id of a referenced building, decided for the
+      --   whole document by 'Scenario.Items.Capture.nameDocumentRefs' over
+      --   'Building.Types.bmScenarioRefs' (a reference is an automatic path
+      --   such as @buildings[0]@ until it is named: it is never written
+      --   as an id verbatim); a building with none is named here
     , bccTags     ∷ BuildingId → Set.Set GameplayTag
       -- ^ 'Building.Types.bmTags'
     , bccItemCtx  ∷ !CaptureCtx
@@ -395,7 +399,7 @@ captureBuildings ctx st0 buildings0 = BuildingsCapture
     (stEnd, doneRev) = foldl' one (st0, []) ordered
     done = reverse doneRev
     one (st, acc) (bid, b, _) =
-        let (name, st1) = case bccRef ctx bid of
+        let (name, st1) = case bccNameOf ctx bid of
                 Just r → (r, st)
                 Nothing → reserveDocumentId
                     ("buildings." <> biDefName b <> "." <> tshow (biAnchorX b) <> "." <> tshow (biAnchorY b)) st

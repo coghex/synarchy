@@ -46,6 +46,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), columnIndex)
 import World.Tile.Types (lookupChunk)
 import World.Generate.Types (WorldGenParams(..))
+import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
+import World.Thread.ChunkLoading (locationStampsFor)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
 import World.Tile.Types (WorldTileData(..))
@@ -62,6 +64,7 @@ spec = do
     referenceSpec
     lifecycleSpec
     ownerSpec
+    bindingSpec
     storageSpec
     saveSpec
     fixtureSpec
@@ -302,7 +305,11 @@ locationSpec = describe "locations" $ do
         fmap (length ∘ leOccupants) (liEncounter inst) `shouldBe` Just 0
         -- the anchor chunk's geometry marker; no implicit spawn can follow
         stampedChunks ws `shouldReturn` HS.singleton (ChunkCoord 0 0)
-        liContentsSpawned inst `shouldBe` False
+        -- nothing is owed: the guaranteed item the definition would spawn is
+        -- not part of this scenario's physical baseline, so the obligation is
+        -- dropped (nothing would ever fill it) and the contents are complete
+        (liSignificant inst, liContentsSpawned inst) `shouldBe` ([], True)
+        locationClearanceSatisfied inst `shouldBe` True
         Map.lookup (liId inst) (lisScenarioRefs lis) `shouldBe` Just "empty"
 
     it "fills an occupied ruin from the units that join it and the items it binds" $ \fx → do
@@ -346,6 +353,43 @@ locationSpec = describe "locations" $ do
         lis ← pageLocations ws
         map liAnchor (instancesToList lis) `shouldBe` [(17, 0)]
         concatMap (maybe [] (pure ∘ length ∘ leOccupants) ∘ liEncounter) (instancesToList lis) `shouldBe` [1]
+
+    it "names omitted ids and colliding spellings document-wide, so a recapture keeps every identity" $ \fx → do
+        (pid, ws) ← scene fx
+        -- the first building and the location carry no id (automatic
+        -- references buildings[0] / locations[0]); an explicit building id
+        -- and a ground item take the spellings their bracketless forms
+        -- would want; a unit without an id takes units.0
+        sc ← clean fx $ doc
+            [ "buildings:"
+            , "  - {definition: high_voltage_battery, x: 4, y: 4}"
+            , "  - {id: buildings.0, definition: solar_panel, x: 5, y: 4}"
+            , "locations:"
+            , "  - {definition: ruin_small, x: 0, y: 0}"
+            , "units:"
+            , "  - {definition: nomad_primitive, x: 9.5, y: 9.5}"
+            , "ground_items:"
+            , "  - {id: locations.0, definition: steel_bar, x: 1.5, y: 1.5}" ]
+        mzDiagnostics ⊚ materialize fx pid ws arena40 sc `shouldReturn` []
+        c1 ← capturePage fx pid ws arena40
+        let ids = map scenarioIdText
+        ids (map beId (cpBuildings c1)) `shouldBe` ["buildings.0-2", "buildings.0"]
+        -- another entry's id (tier 1) outranks an item's reference: the
+        -- location keeps locations.0 and the item takes the next free name
+        ids (map leId (cpLocations c1)) `shouldBe` ["locations.0"]
+        ids [ ieId e | (_, _, e) ← cpGround c1 ] `shouldBe` ["locations.0-2"]
+        ids (map ueId (cpUnits c1)) `shouldBe` ["units.0"]
+        -- every id is legal (the document decodes clean) and the identities
+        -- survive two further cycles
+        (s1, _) ← roundTrip fx c1
+        (pid2, ws2) ← scene fx
+        _ ← materialize fx pid2 ws2 arena40 s1
+        c2 ← capturePage fx pid2 ws2 arena40
+        docOf c2 `shouldBe` docOf c1
+        (s2, _) ← roundTrip fx c2
+        (pid3, ws3) ← scene fx
+        _ ← materialize fx pid3 ws3 arena40 s2
+        docOf ⊚ capturePage fx pid3 ws3 arena40 `shouldReturn` docOf c1
 
 -- * Round trips
 
@@ -445,8 +489,7 @@ referenceSpec = describe "optional references" $ do
         [(p, r, e)] ← pure [ (sdPath d, sdReason d, sdEffect d) | d ← mzDiagnostics mz, sdPath d ≡ "locations[0].significant_items.1" ]
         (p, r, e) `shouldBe` ("locations[0].significant_items.1", RejectedReference "boxed", FieldRejected)
         [inst] ← instancesToList ⊚ pageLocations ws
-        map lsiInstanceId (liSignificant inst) `shouldBe` [Nothing]
-        liContentsSpawned inst `shouldBe` False
+        (liSignificant inst, liContentsSpawned inst) `shouldBe` ([], True)
 
     it "drops a binding to an item of the wrong definition" $ \fx → do
         (pid, ws) ← scene fx
@@ -459,7 +502,7 @@ referenceSpec = describe "optional references" $ do
         map (\d → (sdPath d, sdReason d)) (ds ⧺ mzDiagnostics mz)
             `shouldSatisfy` any ((≡ "locations[0].significant_items.1") ∘ fst)
         [inst] ← instancesToList ⊚ pageLocations ws
-        map lsiInstanceId (liSignificant inst) `shouldBe` [Nothing]
+        (liSignificant inst, liContentsSpawned inst) `shouldBe` ([], True)
 
     it "rejects an unknown definition, and a unit joining a location with no encounter" $ \fx → do
         (_, ds) ← decodeDocument (fxEnv fx) $ doc
@@ -515,6 +558,87 @@ lifecycleSpec = describe "lifecycle" $ do
         (cpStructures c3, cpLocations c3) `shouldBe` ([], [])
         pageLocations ws ≫= (`shouldBe` []) ∘ instancesToList
         stampedChunks ws `shouldReturn` HS.empty
+
+-- | Ownership and completion of location bindings, through the save
+--   boundary's own integrity rules.
+bindingSpec ∷ SpecWith Fx
+bindingSpec = describe "location bindings: ownership and completion" $ do
+
+    it "derives a taken significant item for one held in storage, refuses a pending shell that is not on the ground, and accepts a held realized shell" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc
+            [ "buildings:"
+            , "  - id: chest"
+            , "    definition: cargo_hold_S"
+            , "    x: 3"
+            , "    y: 3"
+            , "    storage:"
+            , "      - {id: held, definition: processing_unit}"
+            , "      - {id: boxStored, definition: field_toolbox}"
+            , "      - {id: boxRealized, definition: field_toolbox}"
+            , "locations:"
+            , "  - {id: crypt, definition: crypt_fx, x: 0, y: 0, significant_items: {1: held}, containers: {1: {item: boxStored}, 2: {item: boxRealized, realized: true}}}" ]
+        mz ← materialize fx pid ws arena40 sc
+        [ (sdPath d, sdEffect d) | d ← mzDiagnostics mz ]
+            `shouldBe` [("locations[0].containers.1.item", FieldRejected)]
+        [inst] ← instancesToList ⊚ pageLocations ws
+        -- the held item is bound and latched taken: the one valid state off the ground
+        [ (lsiTaken e, isJust (lsiInstanceId e)) | e ← liSignificant inst ] `shouldBe` [(True, True)]
+        [ (lcsSlot c, lcsRealized c, isJust (lcsInstanceId c)) | c ← sortOn lcsSlot (liContainers inst) ]
+            `shouldBe` [(1, False, False), (2, True, True)]
+        liContentsSpawned inst `shouldBe` True
+        -- and the page passes the ordinary save's integrity rules
+        snap ← sessionSnapshotOf fx pid ws
+        [ (ieCode e, iePath e) | e ← sessionIntegrityErrors snap ] `shouldBe` []
+
+    it "refuses a pending shell nested inside a ground item, keeping the physical item" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc
+            [ "locations:"
+            , "  - {id: crypt, definition: crypt_fx, x: 0, y: 0, containers: {1: {item: inner}}}"
+            , "ground_items:"
+            , "  - {id: outer, definition: field_toolbox, x: 0.5, y: 0.5, contents: [{id: inner, definition: field_toolbox}]}" ]
+        mz ← materialize fx pid ws arena40 sc
+        map sdPath (mzDiagnostics mz) `shouldBe` ["locations[0].containers.1.item"]
+        [inst] ← instancesToList ⊚ pageLocations ws
+        [ isJust (lcsInstanceId c) | c ← liContainers inst ] `shouldBe` [False, False]
+        gi ← readIORef (wsGroundItemsRef ws)
+        HM.size (gisItems gi) `shouldBe` 1
+        snap ← sessionSnapshotOf fx pid ws
+        sessionIntegrityErrors snap `shouldBe` []
+
+    it "never strands an obligation: clearance follows the accepted occupants, a taken item and a readmission dispatches nothing" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc
+            [ "locations:"
+            , "  - {id: bound, definition: ruin_small, x: -10, y: 0, significant_items: {1: gem}}"
+            , "  - {id: unbound, definition: ruin_small, x: 10, y: 0}"
+            , "units:"
+            , "  - {id: n1, definition: nomad_primitive, x: -10.5, y: 0.5, encounter: bound}"
+            , "  - {id: n2, definition: nomad_primitive, x: 10.5, y: 0.5, encounter: unbound}"
+            , "ground_items:"
+            , "  - {id: gem, definition: processing_unit, x: -9.5, y: 0.5}" ]
+        mzDiagnostics ⊚ materialize fx pid ws arena40 sc `shouldReturn` []
+        lis ← pageLocations ws
+        let at x = head' [ i | i ← instancesToList lis, fst (liAnchor i) ≡ x ]
+            head' (y : _) = y
+            head' [] = error "no such location"
+            defeated i = i { liEncounter = fmap (\e → e { leCleared = True }) (liEncounter i) }
+            unboundI = at 10
+            boundI = at (-10)
+        -- the location with no bound item owes nothing: its occupants alone decide
+        (liSignificant unboundI, locationClearanceSatisfied unboundI) `shouldBe` ([], False)
+        locationClearanceSatisfied (defeated unboundI) `shouldBe` True
+        -- the bound one also waits for its item, until a pickup latches it
+        locationClearanceSatisfied (defeated boundI) `shouldBe` False
+        Just gemId ← pure (listToMaybe [ g | e ← liSignificant boundI, Just g ← [lsiInstanceId e] ])
+        Just latched ← pure (latchLocationSignificantTaken gemId lis)
+        fmap (locationClearanceSatisfied ∘ defeated) (lookupLocationInstance (liId boundI) latched) `shouldBe` Just True
+        -- readmitting the anchor chunks dispatches no stamp and no content spawn
+        params ← maybe (fail "no generation parameters") pure =≪ readIORef (wsGenParamsRef ws)
+        resident ← HM.elems ∘ wtdChunks ⊚ readIORef (wsTilesRef ws)
+        length resident `shouldSatisfy` (> 0)
+        locationStampsFor params resident `shouldBe` []
 
 -- * Properties
 

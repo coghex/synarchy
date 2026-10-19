@@ -42,11 +42,14 @@
 --   __Completion state is rebuilt, never copied.__ A fresh instance starts
 --   'Location.Instance.LifecycleUnknown' with its clearance notice seated;
 --   discovery, activation and clearance are player progress and are not
---   scenario state. Its content-spawn flag is set exactly when every
---   significant slot is bound (the only state a saved table may hold with
---   the flag set), so neither the stamper's every-load dispatch nor
---   @spawnContents@ can add a second copy of anything — and the anchor
---   chunk's geometry marker is set by the commit.
+--   scenario state. A scenario states the world's physical content, so
+--   the guaranteed items it does not bind are not owed: an unbound
+--   significant slot is dropped (nothing would ever fill it, and it would
+--   keep the location unclearable for ever), and the content-spawn flag is
+--   then set because every remaining slot is bound (the only state a saved
+--   table may hold with the flag set). Neither the stamper's every-load
+--   dispatch nor @spawnContents@ can add a second copy of anything — and
+--   the anchor chunk's geometry marker is set by the commit.
 --
 --   __Containers.__ A bound slot names the physical shell. A PENDING slot
 --   keeps its loot profile (the stated one, else the definition's) and
@@ -70,6 +73,7 @@ module Scenario.Placement.Location
       -- * Capture
     , LocationCaptureCtx(..)
     , LocationsCapture(..)
+    , locationNames
     , captureLocations
     ) where
 
@@ -178,6 +182,12 @@ data UnitJoin = UnitJoin
 data ItemBinding = ItemBinding
     { ibId  ∷ !Word64
     , ibDef ∷ !Text
+    , ibOuterGround ∷ !Bool
+      -- ^ the item lies on the page's ground as its own root (not in a
+      --   unit's pack, a building's storage or inside another item) — the
+      --   only place an UNTAKEN significant item or a PENDING shell may be
+      --   (the ordinary-save integrity rules), so the only ownership a
+      --   pending binding accepts
     } deriving (Show, Eq)
 
 -- | One location ready to commit, its references resolved.
@@ -195,9 +205,12 @@ data LocationInstall = LocationInstall
 -- | Resolve each accepted location's references against what is actually
 --   installed. A binding whose item is not installed (its owner or the
 --   item itself was rejected) is dropped with a @RejectedReference@
---   diagnostic and the slot stays unbound — the ordinary not-yet-spawned
---   state; an installed item of the wrong definition is dropped with
---   @DefinitionMismatch@.
+--   diagnostic and the slot is left unbound (commit then drops an
+--   obligation nothing discharges, 'dropUnboundSignificantSlots'); an
+--   installed item of the wrong definition is dropped with
+--   @DefinitionMismatch@; a PENDING shell that does not lie on the ground
+--   as its own root is dropped (@ibOuterGround@) with the item left where
+--   it is. A significant item held anywhere but the ground binds as taken.
 resolveLocationInstalls
     ∷ LocationRegistry → [UnitJoin] → Map.Map Text ItemBinding → [(Text, LocationEntry)]
     → ([LocationInstall], [ScenarioDiagnostic])
@@ -217,8 +230,19 @@ resolveLocationInstalls registry joins items accepted =
                    | (slot, b) ← sortOn fst (HM.toList (leContainers e)) ]
             bindCon slot b =
                 let p = keyPath (keyPath (keyPath path "containers") (tshow slot)) "item"
+                    realized = authoredOr False (cbRealized b)
                 in case bind p (drop (slot - 1) conDefs) (cbItem b) of
                     Left d → Left d
+                    -- a PENDING shell must be an outer ground item: one in
+                    -- storage or inside another item is unreachable by
+                    -- play (the pickup boundary realizes a shell before it
+                    -- moves it), and the save refuses it. The physical
+                    -- item stays; only the binding is dropped. A realized
+                    -- shell may be anywhere.
+                    Right (ib, _) | not realized ∧ not (ibOuterGround ib) →
+                        Left (ScenarioDiagnostic p
+                            (InvalidValue "an item lying on the ground (a pending container shell cannot be in storage, a pack or another item)")
+                            FieldRejected)
                     Right (ib, _) → Right (slot, ib
                         , authoredOr False (cbRealized b)
                         , case cbProfile b of Authored pr → Just pr; Omitted → Nothing
@@ -271,7 +295,7 @@ applyLocationInstalls env installs lis0 = (lisEnd, reverse refsRev, diagsEnd)
                     let lis2 = adjustLocationInstance iid (withRoster def i) lis1
                         (lis3, sigDiags) = foldl' (bindSig iid) (lis2, []) (liiSignificant i)
                         (lis4, conDiags) = foldl' (bindCon iid) (lis3, []) (liiContainers i)
-                        lis5 = adjustLocationInstance iid sealContents lis4
+                        lis5 = adjustLocationInstance iid sealContents (dropUnboundSignificantSlots iid lis4)
                         lis6 = lis5 { lisTags = if null (leTags e) then lisTags lis5
                                                 else setCategoryTags iid (Set.fromList (leTags e)) (lisTags lis5) }
                         lis7 = fromMaybe lis6 (setLocationScenarioRef iid (scenarioIdText (leId e)) lis6)
@@ -282,13 +306,20 @@ applyLocationInstalls env installs lis0 = (lisEnd, reverse refsRev, diagsEnd)
     withRoster def i inst = withInitialClearFeedback
         inst { liEncounter = scenarioEncounter def (liiOccupants i) }
 
-    -- complete exactly when nothing is owed: every significant slot bound
+    -- complete exactly when nothing is owed: an obligation nothing
+    -- discharges is dropped first ('dropUnboundSignificantSlots'), so every
+    -- slot left is bound
     sealContents inst = inst
         { liContentsSpawned = all (isJust ∘ lsiInstanceId) (liSignificant inst) }
 
+    -- a significant item lying on the ground is owed and untaken; one held
+    -- anywhere else (a pack, storage, inside another item) has been taken
+    -- from the ruin, which is the one valid state for it (an untaken item
+    -- off the ground fails the save's integrity rules)
     bindSig iid (lis, ds) (slot, ib, p) =
         case registerLocationSignificantSpawn iid slot (ibDef ib) (ibId ib) lis of
-            Just lis' → (lis', ds)
+            Just lis' → (if ibOuterGround ib then lis'
+                         else fromMaybe lis' (latchLocationSignificantTaken (ibId ib) lis'), ds)
             Nothing → (lis, ds ⧺ [ ScenarioDiagnostic p
                 (InvalidValue "an item this slot can hold (unowned, of its definition)") FieldRejected ])
 
@@ -310,6 +341,11 @@ applyLocationInstalls env installs lis0 = (lisEnd, reverse refsRev, diagsEnd)
 --   live reference lookups taken at the same instant.
 data LocationCaptureCtx = LocationCaptureCtx
     { lccDefs    ∷ !LocationRegistry
+    , lccNameOf  ∷ LocationInstanceId → Maybe Text
+      -- ^ the FINAL explicit id of a referenced location, decided for the
+      --   whole document by 'Scenario.Items.Capture.nameDocumentRefs' over
+      --   'Location.Instance.lisScenarioRefs'; a location with none is
+      --   named here
     , lccItemRef ∷ Word64 → Maybe Text
       -- ^ the explicit id an installed item is captured under
     }
@@ -327,46 +363,64 @@ data LocationsCapture = LocationsCapture
     , lcapState      ∷ !CaptureState
     }
 
--- | Capture the page's locations.
+-- | The instances capture writes, in its structural order: an anchor tile
+--   is not unique (two instances may share one), so ties fall to the
+--   stored geometry and then the allocation order — raw values, never a
+--   rendered name.
+capturedInstances ∷ LocationCaptureCtx → LocationInstances → [LocationInstance]
+capturedInstances ctx lis = sortOn key known
+  where
+    known = [ i | i ← instancesToList lis, isJust (lookupLocation (liDefId i) (lccDefs ctx)) ]
+    key i = (liAnchor i, liDefId i, bounds' i, unLocationInstanceId (liId i))
+    bounds' i = let b = liBounds i in (abMinX b, abMinY b, abMaxX b, abMaxY b)
+
+-- | The explicit id every captured location is written under, decided
+--   BEFORE anything is captured so the units that join a roster can name
+--   it: a referenced location takes the name the caller decided for it
+--   ('lccNameOf', document-wide); any other is named from its definition
+--   and anchor, the first free spelling ('reserveDocumentId'). The state
+--   is returned for the owners captured after.
+locationNames ∷ LocationCaptureCtx → CaptureState → LocationInstances
+              → (CaptureState, Map.Map LocationInstanceId Text)
+locationNames ctx st0 lis = (stEnd, Map.fromList namesRev)
+  where
+    (stEnd, namesRev) = foldl' one (st0, []) (capturedInstances ctx lis)
+    one (st, acc) inst = case lccNameOf ctx (liId inst) of
+        Just r → (st, (liId inst, r) : acc)
+        Nothing →
+            let (n, st') = reserveDocumentId
+                    ("locations." <> liDefId inst <> "." <> tshow (fst (liAnchor inst))
+                       <> "." <> tshow (snd (liAnchor inst))) st
+            in (st', (liId inst, n) : acc)
+
+-- | Capture the page's locations. Names come from 'locationNames' (given
+--   the same context and the same state it is idempotent for every
+--   location the context names), so a caller that needed them earlier
+--   gets the identical ones here.
 captureLocations ∷ LocationCaptureCtx → CaptureState → LocationInstances → LocationsCapture
 captureLocations ctx st0 lis = LocationsCapture
     { lcapEntries = map (\(_, e) → e) done
     , lcapRefs = [ (liId inst, scenarioIdText (leId e)) | (inst, e) ← done ]
     , lcapOccupantOf = [ (leoUnitId o, leId e)
                        | (inst, e) ← done, Just enc ← [liEncounter inst], o ← leOccupants enc ]
-    , lcapSkipped = [ liId i | i ← instances, isNothing (lookupLocation (liDefId i) (lccDefs ctx)) ]
+    , lcapSkipped = [ liId i | i ← instancesToList lis, isNothing (lookupLocation (liDefId i) (lccDefs ctx)) ]
     , lcapState = stEnd }
   where
-    instances = instancesToList lis
-    known = [ i | i ← instances, isJust (lookupLocation (liDefId i) (lccDefs ctx)) ]
-    -- an anchor tile is not unique (two instances may share one), so ties
-    -- fall to the stored geometry and then the allocation order — raw
-    -- values, never a rendered name
-    ordered = sortOn (\i → (liAnchor i, liDefId i, liBounds' i, unLocationInstanceId (liId i))) known
-    liBounds' i = let b = liBounds i in (abMinX b, abMinY b, abMaxX b, abMaxY b)
-    (stEnd, doneRev) = foldl' one (st0, []) ordered
-    done = reverse doneRev
-    one (st, acc) inst =
-        let (name, st1) = case Map.lookup (liId inst) (lisScenarioRefs lis) of
-                Just r → (r, st)
-                Nothing → reserveDocumentId
-                    ("locations." <> liDefId inst <> "." <> tshow (fst (liAnchor inst))
-                       <> "." <> tshow (snd (liAnchor inst))) st
-            tags = categoryTagsAt (liId inst)
-            entry = LocationEntry
-                { leId = ExplicitId name
-                , leTags = tags
-                , leDefinition = liDefId inst
-                , leX = fst (liAnchor inst), leY = snd (liAnchor inst)
-                , leSignificant = HM.fromList
-                    [ (lsiSlot s, ExplicitId r)
-                    | s ← liSignificant inst, Just iid ← [lsiInstanceId s]
-                    , Just r ← [lccItemRef ctx iid] ]
-                , leContainers = HM.fromList
-                    [ (lcsSlot c, ContainerBinding (ExplicitId r)
-                          (Authored (lcsRealized c))
-                          (maybe Omitted Authored (if lcsRealized c then Nothing else lcsProfile c)))
-                    | c ← liContainers inst, Just iid ← [lcsInstanceId c]
-                    , Just r ← [lccItemRef ctx iid] ] }
-        in (st1, (inst, entry) : acc)
-    categoryTagsAt iid = Set.toAscList (Map.findWithDefault Set.empty iid (categoryForward (lisTags lis)))
+    (stEnd, names) = locationNames ctx st0 lis
+    done = [ (inst, entry inst name)
+           | inst ← capturedInstances ctx lis, Just name ← [Map.lookup (liId inst) names] ]
+    entry inst name = LocationEntry
+        { leId = ExplicitId name
+        , leTags = Set.toAscList (Map.findWithDefault Set.empty (liId inst) (categoryForward (lisTags lis)))
+        , leDefinition = liDefId inst
+        , leX = fst (liAnchor inst), leY = snd (liAnchor inst)
+        , leSignificant = HM.fromList
+            [ (lsiSlot s, ExplicitId r)
+            | s ← liSignificant inst, Just iid ← [lsiInstanceId s]
+            , Just r ← [lccItemRef ctx iid] ]
+        , leContainers = HM.fromList
+            [ (lcsSlot c, ContainerBinding (ExplicitId r)
+                  (Authored (lcsRealized c))
+                  (maybe Omitted Authored (if lcsRealized c then Nothing else lcsProfile c)))
+            | c ← liContainers inst, Just iid ← [lcsInstanceId c]
+            , Just r ← [lccItemRef ctx iid] ] }

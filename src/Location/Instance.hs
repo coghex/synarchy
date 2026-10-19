@@ -88,6 +88,7 @@ module Location.Instance
     , scenarioEncounter
     , withInitialClearFeedback
     , setLocationScenarioRef
+    , dropUnboundSignificantSlots
     , setLocationContainerProfile
       -- * Checked geometry construction
     , LocationGeometryError(..)
@@ -934,6 +935,18 @@ setLocationContainerProfile iid slot profile lis = do
     guard (null (containerSlotEntryErrors entry'))
     pure $ adjustLocationInstance iid (\i → i
         { liContainers = [ if lcsSlot e ≡ slot then entry' else e | e ← liContainers i ] }) lis
+
+-- | Drop the significant obligations nothing discharges (#2712). A
+--   scenario states the physical content of a world: a location built
+--   from one owes only the guaranteed items it actually binds, because a
+--   scenario location never enters the world-generation overlay, so no
+--   content spawn will ever fill a slot left empty — and an obligation
+--   that can never be filled would keep the location unclearable for
+--   ever. Slots keep their numbers (the address an item bound later
+--   registers against); only the unbound entries go.
+dropUnboundSignificantSlots ∷ LocationInstanceId → LocationInstances → LocationInstances
+dropUnboundSignificantSlots iid = adjustLocationInstance iid (\i → i
+    { liSignificant = filter (isJust ∘ lsiInstanceId) (liSignificant i) })
 
 -- | Record the scenario reference a location was constructed from. 'Nothing'
 --   — and nothing written — for an unknown instance or a reference another

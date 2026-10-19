@@ -22,6 +22,7 @@ module Test.Headless.Scenario.Placement.Glue
     , CaptureSources(..)
     , capturePageFrom
     , saveAndStage
+    , sessionSnapshotOf
     , savedEnvelopeFrom
     , capturedYaml
     , roundTrip
@@ -59,7 +60,7 @@ import Item.Types (ItemInstance(..))
 import Location.Instance
 import Scenario.Items.Build (ItemBuild(..), ItemBuildEnv(..), itemRefTargets, itemTagTargets)
 import Scenario.Items.Capture
-    ( CaptureCtx(..), Captured(..), captureGroundItems, emptyCaptureState )
+    ( CaptureCtx(..), Captured(..), DocKey(..), captureGroundItems, nameDocumentRefs, newCaptureState )
 import Scenario.Items.Encode (itemEntryFields, floatValue)
 import Scenario.Items.Owners (buildGroundItems, installGroundItems)
 import Scenario.Items.Refs (lookupItemRef)
@@ -177,11 +178,11 @@ materialize fx pid ws ab sc = do
             , Just loc ← [ueEncounter e] ]
         usRealHome e = (ueX e, ueY e)
         bindings = Map.fromList $
-            [ (r, ItemBinding i (iiDefName n))
+            [ (r, ItemBinding i (iiDefName n) (iiInstanceId n ≡ iiInstanceId root))
             | (placement, tree) ← zip placements (ibTrees gbuild)
             , Just _ ← [placement], Just root ← [tree], n ← flatNodes root
             , (i, r) ← ibRefs gbuild, i ≡ iiInstanceId n ]
-            ⧺ [ (r, ItemBinding i (iiDefName n))
+            ⧺ [ (r, ItemBinding i (iiDefName n) False)
               | BuildingBuild (Just b) _ ← bbs
               , BuildingInstalled _ ref ← bcs, ref ≡ bbRef b
               , Just root ← ibTrees (bbItems b), n ← flatNodes root
@@ -266,23 +267,46 @@ capturePageFrom fx src ab = do
             , ccTags = \i → maybe Set.empty (\t → categoryTagsOf t (csItemTags src)) (mkItemTarget i) }
         pageUnits = sortOn fst [ (u, i) | (u, i) ← HM.toList (umInstances um), uiPage i ≡ pid ]
         pageBuildings = sortOn fst [ (b, i) | (b, i) ← HM.toList (bmInstances bm), biPage i ≡ pid ]
-        (st1, groundRows, gcap) = captureGroundItems itemCtx emptyCaptureState ground
-        bcap = captureBuildings BuildingCaptureCtx
-            { bccDefs = defsB
-            , bccNodes = \b → nodeForBuilding b nodes
-            , bccRef = \b → Map.lookup b (bmScenarioRefs bm)
-            , bccTags = \b → categoryTagsOf b (bmTags bm)
-            , bccItemCtx = itemCtx } st1 pageBuildings
-        itemRefs = capRefs gcap ⧺ bcapItems bcap
-        lcap = captureLocations LocationCaptureCtx
-            { lccDefs = locs, lccItemRef = \i → lookup i itemRefs } (bcapState bcap) lis
+        -- scenario ids share ONE namespace: every referenced unit, building
+        -- and location is named together, before anything is captured
+        docNames = nameDocumentRefs HS.empty $
+            [ (DocUnit u, r) | (u, _) ← pageUnits, Just r ← [Map.lookup u (umScenarioRefs um)] ]
+            ⧺ [ (DocBuilding b, r) | (b, _) ← pageBuildings, Just r ← [Map.lookup b (bmScenarioRefs bm)] ]
+            ⧺ [ (DocLocation l, r) | (l, r) ← Map.toList (lisScenarioRefs lis) ]
+        groundTrees = map G.giInst (HM.elems (gisItems ground))
+        buildingTrees = concat [ biStorage b ⧺ concat (HM.elems (biMaterialsDelivered b)) | (_, b) ← pageBuildings ]
+        unitItemTrees = concatMap (unitTrees ∘ snd) pageUnits
+        -- every item reference in the document is named up front too
+        stNames = newCaptureState itemCtx (Map.elems docNames) (groundTrees ⧺ buildingTrees ⧺ unitItemTrees)
+        lctx = LocationCaptureCtx
+            { lccDefs = locs, lccItemRef = const Nothing
+            , lccNameOf = \l → Map.lookup (DocLocation l) docNames }
+        (_, locNameMap) = locationNames lctx stNames lis
+        foreignIds = Map.elems docNames ⧺ Map.elems locNameMap
         ucap = captureUnits UnitCaptureCtx
             { uccDefs = umDefs um, uccItems = items, uccPhysiology = reg, uccNow = now
             , uccUnitRef = \u → Map.lookup u (umScenarioRefs um)
             , uccUnitTags = \u → categoryTagsOf u (umTags um)
             , uccItemCtx = itemCtx
-            , uccEncounterOf = \u → lookup u (lcapOccupantOf lcap) }
-            [] pageUnits
+            , uccOtherTrees = groundTrees ⧺ buildingTrees
+            , uccPreNamed = \u → Map.lookup (DocUnit u) docNames
+            , uccEncounterOf = \u → lookup u occupantNames }
+            foreignIds pageUnits
+        occupantNames =
+            [ (leoUnitId o, ExplicitId n)
+            | inst ← instancesToList lis, Just n ← [Map.lookup (liId inst) locNameMap]
+            , Just enc ← [liEncounter inst], o ← leOccupants enc ]
+        bcap = captureBuildings BuildingCaptureCtx
+            { bccDefs = defsB
+            , bccNodes = \b → nodeForBuilding b nodes
+            , bccNameOf = \b → Map.lookup (DocBuilding b) docNames
+            , bccTags = \b → categoryTagsOf b (bmTags bm)
+            , bccItemCtx = itemCtx } (ucapState ucap) pageBuildings
+        (gst, groundRows, gcap) = captureGroundItems itemCtx (bcapState bcap) ground
+        itemRefs = capRefs gcap ⧺ bcapItems bcap ⧺ ucapItems ucap
+        lcap = captureLocations lctx { lccItemRef = \i → lookup i itemRefs
+                                     , lccNameOf = \l → Map.lookup l locNameMap }
+                                gst lis
         chunks = chunkStatesOf (Just ab) seed edits (HM.elems (wtdChunks td))
         taken = Set.fromList (map (scenarioIdText ∘ beId) (bcapEntries bcap)
                              ⧺ map (scenarioIdText ∘ leId) (lcapEntries lcap)
