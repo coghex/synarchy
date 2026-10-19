@@ -423,6 +423,7 @@ import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
 import qualified Test.Headless.Item.PortableKnowledge as PortableKnowledge
 import qualified Test.Headless.Item.NestedContents as NestedContents
 import qualified Test.Headless.Item.PortableWindow as PortableWindow
+import qualified Test.Headless.Item.OpenOrder as ItemOpenOrder
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.SignificantContents as LocationSignificantContents
 import qualified Test.Headless.Location.ContainerShells as LocationContainerShells
@@ -799,6 +800,9 @@ restLane = do
     -- synthetic page set, an item registry and the real HUD, and it
     -- drives real world ticks to drain the observation queue.
     PortableWindow.spec
+    -- #2528: the Open order on a ground container, against the same kind
+    -- of private engine with the real HUD (its own per example).
+    ItemOpenOrder.spec
     -- Own engine for the same reason (#1206): the demolition gate
     -- installs its own two-page world manager and drives the real
     -- building-command drain, which would disturb the shared engine.

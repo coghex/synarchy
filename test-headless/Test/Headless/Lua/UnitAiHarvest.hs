@@ -972,13 +972,14 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- unrelated bump (v7, #1737's ground-repair provenance;
                 -- v8, #1844's construct-job attempt identity; v9,
                 -- #1845's staked-building reference; v10, #2642's
-                -- treatment-claim order) updates it here
+                -- treatment-claim order; v11, #2528's Open order)
+                -- updates it here
                 -- rather than being mistaken for one this action
                 -- caused. The real guarantee is the payload-shape
                 -- assertions below.
-                , "assert(spec.version == 10,"
+                , "assert(spec.version == 11,"
                 , "  'auto-harvest must contribute no version move; the '"
-                , "  .. 'component is at v10, got '"
+                , "  .. 'component is at v11, got '"
                 , "  .. tostring(spec.version))"
                 , "local snap = spec.snapshot()"
                 , "local row = snap[1]"

@@ -3876,6 +3876,113 @@
       ]
     },
     {
+      "id": "x1-open-order-pending",
+      "description": "The #2528 shape (lua.unit_ai v11): a unit carries a PENDING player Open order (aiState.openOrder = { gid, issuedAt } with the stall accounting it accrues: stalledFor, bestDist), whose gid is a typed ground_item reference to a REAL ground item six tiles away on the same page, so the integrity graph resolves it. The order is installed directly in the live aiState with the sim paused -- no shipped item definition declares storage: yet (PLC-10 owns the wooden crate), so unitAi.commandOpen has nothing it would accept -- and then rides unit_ai_save.lua's ordinary snapshot and the production codec. A v1-v10 payload has no such order, which is the correct v11 value: no Open order could have been pending.",
+      "declaredAt": "(fill in: YYYY-MM-DD)",
+      "declaredByIssue": 2528,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "buildings",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "container-knowledge",
+          "required": false,
+          "version": 2
+        },
+        {
+          "id": "core-session",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "craft-bills",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "lua.building_spawn",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "lua.unit_ai",
+          "required": true,
+          "version": 11
+        },
+        {
+          "id": "metadata",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "portable-knowledge",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "power-nodes",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "texture-palette",
+          "required": true,
+          "version": 1
+        },
+        {
+          "id": "transfer-orders",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "unit-sim",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "units",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-activity",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-edits",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-pages",
+          "required": true,
+          "version": 15
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "x1-open-order-pending",
+          "path": "test-headless/data/save-compat/x1-open-order-pending.bin",
+          "kind": "complete-session",
+          "sha256": "46b74dcaf1cb1fb617a20084292a2649c38d7893a1f130c1eb7f071602d872d0",
+          "sizeBytes": 909180,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return item.spawnGround('field_toolbox', 6, 0) ~= nil; engine.setPaused(true); local g; for _, r in ipairs(item.listGround() or {}) do if r.defName == 'field_toolbox' then g = r.id end end; if g == nil then return false end; local c = require('scripts.unit_ai_core'); local s = c.ensureState({uid}); s.openOrder = { gid = g, issuedAt = engine.gameTime(), stalledFor = 1.5, bestDist = 6.0 }; return true, settled 1.0s and held until `(function() local s = require('scripts.unit_ai_core').aiState[1]; return s ~= nil and s.openOrder ~= nil and s.openOrder.gid ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/x1-open-order-pending.expected.json"
+        }
+      ]
+    },
+    {
       "id": "z17-scenario-placement",
       "description": "A scenario placement session (#2712) as the current build writes it: a finite 20x10 arena page 'finite_arena' carrying placed scenario content with its scenario-identity mappings populated \u2014 buildings v4 holds each building's scenario reference (a charged battery 'battery' and a crate 'crate' holding a steel bar) and world-pages v16 holds the placed location's reference (a ruin_small instance 'ruin' at its authored anchor with its significant item bound, built as a real instance rather than an overlay entry), beside the damaged-variant floor and wall edits, the bound items' references in core-session, and the battery's charged power node. z16 and every older fixture are the no-reference (buildings v3 / world-pages v15 and older) counterparts.",
       "declaredAt": "2026-10-19",
@@ -3975,8 +4082,8 @@
           "id": "z17-scenario-placement",
           "path": "test-headless/data/save-compat/z17-scenario-placement.bin",
           "kind": "complete-session",
-          "sha256": "b56db1e73b05700ac5af4e2329b643beb001a4aa73e2f6faf3e83b6fa4c1a8c9",
-          "sizeBytes": 3402,
+          "sha256": "59a063f0b736811b3b3984e52c813ff3e407c4bc11fc8402b9814697e4ad6431",
+          "sizeBytes": 3619,
           "provenance": "Built by the Scenario.Placement hspec group's 'retained save-compat fixture' example on a live headless engine: a finite 20x10 arena page received the scenario through the real adapters (Scenario.Placement.*, Scenario.Items.*, the real building, location-instance, structure and item owners) and was snapshotted with the owners' own snapshot functions and encoded through the same encodeSessionSnapshot an ordinary save uses; the donor save z16-scenario-world supplied the session metadata and the Lua components the page does not own (retained as docs/pr-proofs/issue-2712-make-z17.py.txt). Then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
           "expectedCanonicalSummary": "test-headless/data/save-compat/z17-scenario-placement.expected.json"
         }

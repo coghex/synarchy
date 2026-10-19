@@ -179,6 +179,60 @@ pickupPrelude = lns
     , "end"
     ]
 
+-- | The Open order's half (#2528): @openUtility@ reached through the
+--   real @scripts/unit_ai_open.lua@, on the pickup prelude's terms. The
+--   one ground row is an item-container, and @unit.getInfo@ answers a
+--   name so the stall-out report can be seen naming the unit.
+openPrelude ∷ Text
+openPrelude = lns
+    [ "package.loaded['scripts.unit_ai'] = {}"
+    , "NOW = 0"
+    , "POS = { gridX = 0, gridY = 0, name = 'Nael' }"
+    , "GROUND = { { id = 7, defName = 'crate', x = 40, y = 0, weight = 9,"
+    , "             hasStorage = true, instanceId = 70 } }"
+    , "EVENTS = {}"
+    , "engine = { gameTime = function() return NOW end,"
+    , "           logWarn = function() end, logInfo = function() end,"
+    , "           emitEventForUnit = function(cat, msg)"
+    , "             EVENTS[#EVENTS + 1] = { cat = cat, msg = msg } end }"
+    , "unit = { getInfo = function() return POS end }"
+    , "item = { getGroundForUnit = function(_, gid)"
+    , "           for _, g in ipairs(GROUND) do"
+    , "             if g.id == gid then return g, true end end"
+    , "           return nil, true end,"
+    , "         listDefs = function() return"
+    , "           { { name = 'crate', displayName = 'Supply Crate',"
+    , "               weight = 9 } } end }"
+    , "local open = require('scripts.unit_ai_open')"
+    , "local openUtility = open.action.utility"
+    , "local stall = require('scripts.unit_ai_stall')"
+    , "local PARAMS = { open_timeout = 30, pickup_utility = 7.5 }"
+    , "local s = { openOrder = { gid = 7, issuedAt = 0 },"
+    , "            currentAction = nil }"
+    , "local STEP = 1.0"
+    , "local function place(x, y) POS.gridX, POS.gridY = x, y end"
+    , "local function tick(seconds, action)"
+    , "  local left = seconds"
+    , "  while left > 1e-9 and s.openOrder do"
+    , "    local dt = math.min(STEP, left)"
+    , "    NOW = NOW + dt"
+    , "    s.currentAction = action"
+    , "    openUtility(1, s, PARAMS)"
+    , "    left = left - dt"
+    , "  end"
+    , "end"
+    , "local function skip(seconds) NOW = NOW + seconds end"
+    , "local function shortCircuit(seconds)"
+    , "  local left = seconds"
+    , "  while left > 1e-9 do"
+    , "    local dt = math.min(STEP, left)"
+    , "    NOW = NOW + dt"
+    , "    stall.suspendOrders(s)"
+    , "    left = left - dt"
+    , "  end"
+    , "end"
+    ]
+
 -- | The commanded-move ACTION itself, reached through the real
 --   @scripts/unit_ai_combat.lua@ — the one place a commanded task is
 --   handed to @unit.moveTo@, and therefore the one place the stall
@@ -763,6 +817,64 @@ spec = describe "commanded order stall budget" $ do
                 , "tick(10, 'pickup_ground')"
                 , "assert(s.pickupOrder == nil,"
                 , "  'and the budget then runs from the approach')"
+                ]
+
+    describe "the same accounting governs openOrder (#2528)" $ do
+        it "survives interruptions longer than open_timeout and still \
+           \expires on eligible non-progress, reporting that it couldn't \
+           \reach the container, naming the unit and the container" $
+            runsOk $ lns
+                [ openPrelude
+                , "tick(5, 'open_ground')"
+                , "tick(120, 'eat_from_inventory')"
+                , "assert(s.openOrder, 'an interruption must not expire it')"
+                , "skip(600)"
+                , "tick(1, 'open_ground')"
+                , "assert(s.openOrder, 'nor a gap with no sample at all')"
+                , "assert(#EVENTS == 0, 'and neither reports a failure')"
+                , "local before = s.openOrder.stalledFor"
+                , "tick(40, 'open_ground')"
+                , "assert(s.openOrder == nil, 'eligible non-progress expires it')"
+                , "assert(#EVENTS == 1 and EVENTS[1].cat == 'unit_warning',"
+                , "  'one player-visible failure report')"
+                , "assert(EVENTS[1].msg:find(\"Couldn't reach container to open\", 1, true)"
+                , "  and EVENTS[1].msg:find('Nael', 1, true)"
+                , "  and EVENTS[1].msg:find('Supply Crate', 1, true),"
+                , "  'naming the unit and the container: ' .. EVENTS[1].msg)"
+                , "assert(before >= 4 and before < 5,"
+                , "  'the budget ACCUMULATED across the interruptions: ' .. before)"
+                ]
+
+        it "is not charged for a SHORT no-tick interruption (below \
+           \MAX_CHARGED_INTERVAL): suspendOrders drops the order's \
+           \sampling stamp without refunding what it already spent" $
+            runsOk $ lns
+                [ openPrelude
+                , "tick(29, 'open_ground')"
+                , "local spent = s.openOrder.stalledFor"
+                , "shortCircuit(2)"
+                , "assert(s.openOrder.stallSeenAt == nil,"
+                , "  'the shared suspension boundary clears the stamp')"
+                , "assert(s.openOrder.stalledFor == spent, 'and refunds nothing')"
+                , "tick(2, 'open_ground')"
+                , "assert(s.openOrder, 'a 2 s swallowed span costs nothing')"
+                , "tick(5, 'open_ground')"
+                , "assert(s.openOrder == nil, 'the remaining budget still runs out')"
+                ]
+
+        it "resets on a closest approach only while its own action is \
+           \eligible" $
+            runsOk $ lns
+                [ openPrelude
+                , "tick(20, 'open_ground')"
+                , "local spent = s.openOrder.stalledFor"
+                , "place(20, 0)"
+                , "tick(5, 'eat_from_inventory')"
+                , "assert(s.openOrder.stalledFor == spent and s.openOrder.bestDist == 40,"
+                , "  'an interrupted approach neither refunds nor records')"
+                , "tick(3, 'open_ground')"
+                , "assert(s.openOrder.bestDist < 21 and s.openOrder.stalledFor < 3,"
+                , "  'the resumed order records the approach and starts over')"
                 ]
 
     describe "the accounting rides the existing lua.unit_ai component" $ do

@@ -17,7 +17,7 @@ Production profile, `cabal-3.16.1.0`. Every group executed a nonzero number of e
 
 | Group (`--match`) | Examples |
 |---|---|
-| `Scenario.Placement` | 48 |
+| `Scenario.Placement` | 70 |
 | `Scenario.Schema` | 48 |
 | `Scenario.Items` | 52 |
 | `Scenario.Units` | 52 |
@@ -49,7 +49,7 @@ Audits: `persistence_inventory_audit`, `enum_append_only_audit`, `engine_env_cap
 
 ## Mutation checks
 
-Ten mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
+Nineteen mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
 mutant counts only if the group fails by an assertion (a compile error is not a kill).
 
 | Mutant | Killed by |
@@ -64,6 +64,15 @@ mutant counts only if the group fails by an assertion (a compile error is not a 
 | a building or location reference held on two pages not flagged by integrity | scenario identity: two buildings / two locations on different pages |
 | a restore keeps the references of buildings it did not produce | scenario identity: a restore keeps only the references of the buildings it produced |
 | a retired building stays in the manager | buildings: retires a building whose item references cannot be held |
+| references written as ids verbatim (no bracketless conversion / collision handling) | capture: names omitted ids and colliding spellings document-wide |
+| a pending shell's ownership unchecked | bindings: held / nested pending shells refused |
+| unbound significant obligations kept | locations: empty ruin; rejected-reference bindings; clearance never stranded |
+| a significant item held off the ground not latched taken | bindings: stored significant item passes integrity |
+| the clearance notice seated before bindings | initial clearance notice: empty ruin / taken-at-birth |
+| omitted guaranteed content not constructed | defaults: omitted construction; recapture adds no copy |
+| a stated empty map still expanding | defaults: stated empty stays empty; containers; naming |
+| the loot roll keyed on the wrong entry index | matrix: omitted content equals the ordinary rolls |
+| `incidental_content: false` still expanding | matrix / defaults: stated empty |
 
 ## Retained fixture
 

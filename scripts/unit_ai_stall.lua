@@ -1,8 +1,9 @@
 -- Order stall accounting for player-issued orders (#1291).
 --
--- All three order timers -- TASK_TIMEOUT_SEC for a commanded move
+-- All four order timers -- TASK_TIMEOUT_SEC for a commanded move
 -- (below), unit_ai_pickup.lua's pickup_timeout for a commanded pickup,
--- and unit_ai_transfer.lua's transfer_order_timeout for a queued
+-- unit_ai_open.lua's open_timeout for a commanded Open (#2528), and
+-- unit_ai_transfer.lua's transfer_order_timeout for a queued
 -- transfer order (#1247) -- are STALL timers, not total-trip budgets
 -- (#920): they answer "is this unit getting anywhere?", never "how
 -- long has this trip taken". scripts/unit_ai_hold.lua's walk back to a
@@ -69,8 +70,8 @@
 -- thought tick, jitter included) and far below either budget
 -- (30 s / 60 s), so a genuinely stalled order still expires.
 --
--- All three of those order timers REPORT the abandonment they decide
--- on (#1769). pickup_timeout and transfer_order_timeout always did,
+-- All four of those order timers REPORT the abandonment they decide
+-- on (#1769). pickup_timeout, open_timeout and transfer_order_timeout do,
 -- in their own modules and unchanged by that issue; TASK_TIMEOUT_SEC's
 -- expiry did not, and the report maintainTask now emits below closes
 -- the one gap -- see that branch for the case it covers and the
@@ -231,6 +232,7 @@ function M.suspendOrders(s, uid)
     if not s then return end
     if s.commandedTask  then s.commandedTask.stallSeenAt  = nil end
     if s.pickupOrder    then s.pickupOrder.stallSeenAt    = nil end
+    if s.openOrder      then s.openOrder.stallSeenAt      = nil end
     if s.transferOrder  then s.transferOrder.stallSeenAt  = nil end
     -- A position hold's walk back to its anchor (#1216) is charged
     -- against the same budget by the same rules, so it takes the same

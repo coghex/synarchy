@@ -454,18 +454,18 @@ local config = {
                                      -- craft (#265; diminishing via
                                      -- applySkillXP, like the others)
         -- Ground-item pickup (player order via right-click → Pick up).
-        -- An explicit pickup is a player order peer to a move order, so
-        -- it sits just ABOVE follow_command (7.0): commandMove and
-        -- commandPickup set independent fields without clearing each
-        -- other, so when both are pending the more-specific pickup must
-        -- win the arbitration rather than time out behind the move (#306).
-        -- 7.5 is just above follow_command (7.0) — a peer player order
-        -- that wins the move-vs-pickup tie — but BELOW combat/treatment
-        -- (≥8.0) and dire survival, so a fight or a fresh wound still
-        -- interrupts it. Capacity is checked at the moment of pickup.
+        -- A player order peer to a move order: commandMove and
+        -- commandPickup set independent fields, so when both are pending
+        -- the more-specific pickup must win (#306) -- 7.5, just above
+        -- follow_command (7.0) but BELOW combat/treatment (≥8.0) and dire
+        -- survival, so a fight or a fresh wound still interrupts it.
+        -- The Open order (#2528) scores the same utility and has its own
+        -- arrival range and stall budget, defaulting to pickup's.
         pickup_utility       = 7.5,
         pickup_arrival_tiles = 1.2,
         pickup_timeout       = 30.0,
+        open_arrival_tiles   = 1.2,
+        open_timeout         = 30.0,
         -- Medic auto-treat (treat_ally, Phase D). A unit that KNOWS
         -- bleed-control (knowledge × intelligence = its capability)
         -- rushes to bandage a bleeding ally, fetching the first-aid

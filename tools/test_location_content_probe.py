@@ -235,9 +235,10 @@ LOG_ASSERTION_SITES = 3
 #: …and #2505's container owner added the fifteen PASS lines and
 #: twenty-three failure records of the pending-shell scenario, and
 #: #2510's realization scenario took that owner to twenty-two and
-#: thirty-three.
-TOTAL_PASS_DIAGNOSTICS = 73
-TOTAL_FAILURE_RECORDS = 108
+#: thirty-three, and #2528's Open order (pending through the save,
+#: resumed after the load) to twenty-five and forty.
+TOTAL_PASS_DIAGNOSTICS = 76
+TOTAL_FAILURE_RECORDS = 115
 
 #: The values `run` used to accumulate in local variables across its
 #: phases (#2095's cross-scenario handoff). Each is now a field of the
@@ -249,7 +250,8 @@ HANDOFF_FIELDS = (
     "saved_naming", "saved_crate", "named", "crate_slots", "crate_shells",
     "crate_slot_name", "crate_pending_trees", "crate_realized_trees",
     "crate_pristine_slot_name", "saved_crate_pristine", "crate_ground_shell", "crate_held_shell", "crate_holder_uid",
-    "crate_order_trees",
+    "crate_order_trees", "crate_open_uid", "crate_open_shell",
+    "crate_open_gid",
 )
 
 

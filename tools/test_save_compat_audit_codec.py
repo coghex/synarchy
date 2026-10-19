@@ -435,6 +435,15 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:6:R '
         'world-edits:6:R world-pages:15:R',
+    # #2528: lua.unit_ai v11, the first fixture carrying a pending player
+    # Open order. Otherwise z16's set exactly.
+    "x1-open-order-pending.bin":
+        'buildings:3:R container-knowledge:2:o core-session:3:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:11:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:6:R '
+        'world-edits:6:R world-pages:15:R',
     # #2712: a scenario placement session at the CURRENT buildings (v4) and
     # world-pages (v16), the two that carry the scenario-identity mappings.
     "z17-scenario-placement.bin":

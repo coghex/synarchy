@@ -162,8 +162,19 @@ function M.register(aiState)
         -- ordinal, not a reference, so unit_ai_ref_schema.lua declares
         -- nothing for it; the reconcile drops the whole treatClaim
         -- table, serial included, when its `patient` edge dangles.
-        version = 10,
-        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 },
+        -- v11 (issue #2528): a unit may carry a pending player Open
+        -- order (aiState[uid].openOrder = { gid, issuedAt } plus the
+        -- stall pair and closest approach it accrues, exactly as
+        -- pickupOrder does). Durable player intent, so it survives a
+        -- save. A v1-v10 payload predates the order and decodes with it
+        -- ABSENT, which is the honest reading: no such order could have
+        -- been pending. openOrder.gid is a per-page ground-item id,
+        -- declared in unit_ai_ref_schema.lua as a typed `ground_item`
+        -- edge, so the wire wrap, the tag validator and the post-load
+        -- scrub (an order whose crate no longer resolves on the owning
+        -- unit's page is dropped) all cover it by construction.
+        version = 11,
+        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -172,7 +183,7 @@ function M.register(aiState)
         -- carries -- "unit"/"building" (AI_UNIT_REF_FIELDS/
         -- AI_BUILDING_REF_FIELDS, claim/job bid/patient/uid fields),
         -- "craft_bill" (craftJob.billId), and "ground_item"
-        -- (pickupOrder/forageTarget/forageLoot/harvestLoot). Each maps
+        -- (pickupOrder/openOrder/forageTarget/forageLoot/harvestLoot). Each maps
         -- to the Haskell component that owns that entity kind:
         -- units/buildings/craft-bills directly, and ground items via
         -- world-activity ("designations/flora/crops/ground/spoil" --
@@ -259,6 +270,10 @@ function M.register(aiState)
             -- payload cannot say. The resumed job re-stakes, and the
             -- engine's own occupancy refusal is what stops that
             -- double-building (version field, above).
+            --
+            -- v9 -> v10 (#2642) and v10 -> v11 (#2528) are identity for
+            -- that same reason: an absent treatClaim.serial and an absent
+            -- openOrder are exactly what those older bytes mean.
             --
             -- #2055's runtime-default normalization is deliberately NOT
             -- here either. One of the three defaults reads the CLOCK,

@@ -104,13 +104,13 @@ local chop          = require("scripts.unit_ai_chop")
 require("scripts.unit_ai_farm")
 local repairMod     = require("scripts.unit_ai_repair")
 local pickup        = require("scripts.unit_ai_pickup")
+local openOrder     = require("scripts.unit_ai_open") -- Open (#2528)
 local transfer      = require("scripts.unit_ai_transfer")
 local medic         = require("scripts.unit_ai_medic")
 local sleepGoal     = require("scripts.unit_ai_sleep")
 local mentalAi      = require("scripts.unit_ai_mental")
--- Per-unit location knowledge (#915): the experiential layer beside the
--- player-wide cartographic discovery state. Own submodule because
--- unit_ai_core.lua is at its line budget.
+-- Per-unit location knowledge (#915), beside the player-wide discovery
+-- state; own submodule because unit_ai_core.lua is at its line budget.
 local locations     = require("scripts.unit_ai_locations")
 -- Persistent save-component registration (issue #761), over
 -- unit_ai_ref_schema.lua's REF_SCHEMA -- the one declaration the wire
@@ -207,7 +207,7 @@ unitAi.registerActions("acolyte", {
     { name = "auto_harvest", utility = unitAi.harvest.utility, execute = unitAi.harvest.execute, onExit = unitAi.harvest.onExit },
     { name = "repair_job", utility = repairMod.utility, execute = repairMod.execute, onExit = repairMod.onExit },
     { name = "pickup_ground", utility = pickup.pickupUtility, execute = pickup.pickupExecute },
-    transfer.action, transfer.escortAction,
+    openOrder.action, transfer.action, transfer.escortAction,
 })
 
 -- Technomule: player pack unit. Stands by the colony's materials
