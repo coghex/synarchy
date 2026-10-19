@@ -7826,7 +7826,7 @@ The invariants, each held by a test of the `Scenario.World` group:
   structure pieces (`WeSetStructure` / `WeClearStructure`) and their relative
   order. Applying the same content twice, or capture → materialize → capture,
   leaves the page and the captured document unchanged.
-- **The one reconstruction.** A resident chunk is rebuilt as an admission
+- **The one reconstruction.** EVERY resident chunk is rebuilt as an admission
   rebuilds it (arena base from the recorded seed and bounds, the new log
   replayed, the rectangle re-asserted) and swapped in through
   `replaceChunkForgettingFlora`, then re-seeded into the simulation through
@@ -7844,6 +7844,12 @@ The invariants, each held by a test of the `Scenario.World` group:
   `WeSetFloraState` (`world-edits` v6) is the durable home of offsets, variant,
   health, z and the baseline; a crop plot stores a planted day. Chop state is
   never scenario state.
+- **Authored edits survive the admission passes.** The chunk-admission pipeline
+  rebuilds derived slopes on a just-admitted chunk's border strip and on its
+  loaded neighbours' (`recomputeNeighborSlopes`); recorded `WeSetSlope` edits are
+  restored right after it (`applySlopeEditsTd`, before the dig and construction
+  passes), so a scenario ramp on a chunk-edge tile survives both. A new derived pass
+  over admitted chunks must restore the authored overrides it clobbers.
 - **Capture is a pure read** of one coherent snapshot, visits only chunks the log
   or the resident set names, treats non-residency as non-deletion, and writes
   content-derived generated ids made unique against the document's other ids.
