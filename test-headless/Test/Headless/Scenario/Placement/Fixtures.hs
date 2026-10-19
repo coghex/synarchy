@@ -24,6 +24,7 @@ module Test.Headless.Scenario.Placement.Fixtures
     , itemsOf
     , addLocationDef
     , cryptDef
+    , lootTables
     , quietDef
     ) where
 
@@ -56,6 +57,7 @@ import Location.Bounds (RelBounds(..))
 import Location.Types
     ( LocationContent(..), LocationDef(..), LocationRegistry, registerLocation )
 import LootProfile.Types (LootProfileRegistry)
+import LootTable.Types (LootTableRegistry)
 import Scenario.Items.Build (itemCatalogOf)
 import Scenario.Placement.Catalog (withPlacementCatalog)
 import Scenario.Schema (decodeScenarioBytes)
@@ -144,6 +146,9 @@ itemsOf env = readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapabil
 locationRegistry ∷ EngineEnv → IO LocationRegistry
 locationRegistry env = readIORef (crLocationDefsRef (toContentRegistriesCapability env))
 
+lootTables ∷ EngineEnv → IO LootTableRegistry
+lootTables env = readIORef (crLootTableRegistryRef (toContentRegistriesCapability env))
+
 lootProfiles ∷ EngineEnv → IO LootProfileRegistry
 lootProfiles env = readIORef (crLootProfileRegistryRef (toContentRegistriesCapability env))
 
@@ -215,11 +220,17 @@ cryptDef ruin = ruin
     { ldId = "crypt_fx", ldLabel = "Crypt", ldBounds = RelBounds 0 0 1 1
     , ldContents = take 1 (filter ((≡ "unit") ∘ lconKind) (ldContents ruin))
         ⧺ take 1 (filter lconSignificant (ldContents ruin))
-        ⧺ [ shell, shell ] }
+        ⧺ [ shell, shell ]
+        ⧺ [ fixedBars, (head' (filter ((≡ "loot_table") ∘ lconKind) (ldContents ruin))) { lconRolls = 3 } ] }
   where
     base = case ldContents ruin of
         c : _ → c
         [] → error "ruin_small has no contents"
+    head' (x : _) = x
+    head' [] = error "ruin_small has no loot table entry"
+    fixedBars = base { lconKind = "item", lconId = "steel_bar", lconCount = 2, lconPosition = Nothing
+                     , lconFaction = Nothing, lconRolls = 1, lconCountRange = Nothing
+                     , lconClearance = Nothing, lconSignificant = False, lconProfile = Nothing }
     shell = base { lconKind = "container", lconId = "field_toolbox"
                  , lconCount = 1, lconPosition = Nothing, lconFaction = Nothing
                  , lconRolls = 1, lconCountRange = Nothing, lconClearance = Nothing

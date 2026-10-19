@@ -42,12 +42,14 @@
 --   __Completion state is rebuilt, never copied.__ A fresh instance starts
 --   'Location.Instance.LifecycleUnknown' with its clearance notice seated;
 --   discovery, activation and clearance are player progress and are not
---   scenario state. A scenario states the world's physical content, so
---   the guaranteed items it does not bind are not owed: an unbound
---   significant slot is dropped (nothing would ever fill it, and it would
---   keep the location unclearable for ever), and the content-spawn flag is
---   then set because every remaining slot is bound (the only state a saved
---   table may hold with the flag set). Neither the stamper's every-load
+--   scenario state, and the notice is seated LAST, against the final
+--   instance. Guaranteed content is OMITTED (constructed once from the
+--   definition, 'expandLocationDefaults') or STATED (exactly what the entry
+--   binds, even when empty): for a stated map an unbound significant slot is
+--   dropped (nothing would ever fill it, and it would keep the location
+--   unclearable for ever), and the content-spawn flag is then set because
+--   every remaining slot is bound (the only state a saved table may hold
+--   with the flag set). Neither the stamper's every-load
 --   dispatch nor @spawnContents@ can add a second copy of anything — and
 --   the anchor chunk's geometry marker is set by the commit.
 --
@@ -63,6 +65,7 @@ module Scenario.Placement.Location
     , LocationValidation(..)
     , validateLocations
     , rejectUnitsOfRejectedLocations
+    , expandLocationDefaults
       -- * Binding
     , UnitJoin(..)
     , ItemBinding(..)
@@ -87,9 +90,12 @@ import Location.ArenaPlacement
     ( LocationPlacementError(..), allocateLocationInstanceAtIn
     , locationPlacementErrorText )
 import Location.Instance
-import Location.Bounds (AbsBounds(..))
+import Location.Bounds (AbsBounds(..), RelBounds(..))
+import Scenario.Items.Refs (stableHash64)
 import Location.Naming (LocationNamer)
-import Location.Types (LocationRegistry, lookupLocation)
+import Location.Types (LocationContent(..), LocationDef(..), LocationRegistry, lookupLocation)
+import LootTable.Roll (LootRollContext(..), rollLootTableFor)
+import LootTable.Types (LootTableRegistry, lookupLootTable)
 import Scenario.Decode.Monad (indexPath, keyPath)
 import Scenario.Items.Capture (CaptureState, reserveDocumentId)
 import Scenario.Types
@@ -225,9 +231,9 @@ resolveLocationInstalls registry joins items accepted =
             occupants = [ (ujUnit j, ujHome j) | j ← joins, ujLocation j ≡ leId e ]
             sigs = [ bind (keyPath (keyPath path "significant_items") (tshow slot))
                           (drop (slot - 1) sigDefs) ref
-                   | (slot, ref) ← sortOn fst (HM.toList (leSignificant e)) ]
+                   | (slot, ref) ← sortOn fst (HM.toList (authoredOr HM.empty (leSignificant e))) ]
             cons = [ bindCon slot b
-                   | (slot, b) ← sortOn fst (HM.toList (leContainers e)) ]
+                   | (slot, b) ← sortOn fst (HM.toList (authoredOr HM.empty (leContainers e))) ]
             bindCon slot b =
                 let p = keyPath (keyPath (keyPath path "containers") (tshow slot)) "item"
                     realized = authoredOr False (cbRealized b)
@@ -247,7 +253,7 @@ resolveLocationInstalls registry joins items accepted =
                         , authoredOr False (cbRealized b)
                         , case cbProfile b of Authored pr → Just pr; Omitted → Nothing
                         , p)
-            okSigs = [ (slot, ib, p) | ((slot, _), Right (ib, p)) ← zip (sortOn fst (HM.toList (leSignificant e))) sigs ]
+            okSigs = [ (slot, ib, p) | ((slot, _), Right (ib, p)) ← zip (sortOn fst (HM.toList (authoredOr HM.empty (leSignificant e)))) sigs ]
             okCons = [ c | Right c ← cons ]
         in ( LocationInstall path e occupants okSigs okCons
            , [ d | Left d ← sigs ] ⧺ [ d | Left d ← cons ] )
@@ -258,6 +264,107 @@ resolveLocationInstalls registry joins items accepted =
             (want : _) | ibDef ib ≢ want →
                 Left (ScenarioDiagnostic p (DefinitionMismatch want) FieldRejected)
             _ → Right (ib, p)
+
+-- * Default expansion
+
+-- | Construct the definition-provided NON-UNIT content a scenario OMITS
+--   (requirement 5; units are the encounter rule, buildings are never
+--   constructed from a definition). Per accepted location:
+--
+--   * @significant_items@ omitted: every significant slot gets its own
+--     default item of the slot's definition;
+--   * @containers@ omitted: every container slot gets its pending shell
+--     (the definition's profile stays the slot's; nothing is drawn);
+--   * @incidental_content@ omitted (or @true@): every fixed non-significant
+--     item entry is placed, and every @loot_table@ entry is rolled, with
+--     PRIVATE scenario randomness — 'rollLootTableFor' (the very draw an
+--     ordinary placement makes) over a context folded from the location's
+--     scenario reference, the entry's positional index and the roll number,
+--     never gameplay RNG.
+--
+--   A key that is PRESENT — even @{}@ or @false@ — is exactly what is
+--   stated and expands nothing.
+--
+--   Each constructed item is a ground item at a deterministic private tile
+--   of the footprint (the entry's fixed offset from the anchor when it has
+--   one, else a stable hash of the location's reference, the content and
+--   the slot or roll) under an automatic reference (@ground_items[n]@,
+--   continuing after the @existing@ ground items), so it is as unique as a
+--   path and is captured thereafter as an ordinary explicit ground item;
+--   capture states every key, so a recapture never expands again. Returns
+--   the locations with their keys filled in and the ground items to add;
+--   rejected locations are not passed here, so they expand nothing.
+expandLocationDefaults
+    ∷ LocationRegistry → LootTableRegistry → Int → [(Text, LocationEntry)]
+    → ([(Text, LocationEntry)], [GroundItemEntry])
+expandLocationDefaults registry loot existing entries =
+    let (_, outRev, groundRev) = foldl' step (existing, [], []) entries
+    in (reverse outRev, reverse groundRev)
+  where
+    step (n, outAcc, gAcc) (path, e) = case lookupLocation (leDefinition e) registry of
+        Nothing → (n, (path, e) : outAcc, gAcc)
+        Just def →
+            let sigWanted = case leSignificant e of
+                    Omitted → [ ("significant", slot, lconId c, c)
+                              | (slot, c) ← zip [1 ∷ Int ..] (significantContentsFromDef def) ]
+                    Authored _ → []
+                conWanted = case leContainers e of
+                    Omitted → [ ("container", slot, lconId c, c)
+                              | (slot, (c, _)) ← zip [1 ∷ Int ..] (containerContentsFromDef def) ]
+                    Authored _ → []
+                incWanted = case leIncidental e of
+                    Authored False → []
+                    _ → incidentalWanted e def
+                wanted = sigWanted ⧺ conWanted ⧺ incWanted
+                made = [ (fam, slot, iid, defaultGround e def fam slot d c iid)
+                       | (k, (fam, slot, d, c)) ← zip [n ..] wanted
+                       , let iid = AutoId (indexPath "ground_items" k) ]
+                sigB = HM.fromList [ (slot, i) | ("significant", slot, i, _) ← made ]
+                conB = HM.fromList [ (slot, ContainerBinding i Omitted Omitted) | ("container", slot, i, _) ← made ]
+                e' = e { leSignificant = case leSignificant e of
+                                Omitted → Authored sigB
+                                a → a
+                       , leContainers = case leContainers e of
+                                Omitted → Authored conB
+                                a → a
+                       , leIncidental = Authored False }
+            in (n + length made, (path, e') : outAcc, reverse [ g | (_, _, _, g) ← made ] ⧺ gAcc)
+    -- the definition's incidental entries, in content order: a fixed item
+    -- entry places its @count@ items, a loot-table entry makes its @rolls@
+    -- draws (an unknown table or an empty one yields nothing, as it does
+    -- for an ordinary placement)
+    incidentalWanted e def = concat
+        [ case lconKind c of
+            "item" | not (lconSignificant c) →
+                [ ("item" <> tshow ix, k, lconId c, c) | k ← [1 .. lconCount c] ]
+            "loot_table" →
+                [ ("loot" <> tshow ix, r, d, c)
+                | r ← [1 .. lconRolls c]
+                , Just t ← [lookupLootTable (lconId c) loot]
+                , Just d ← [rollLootTableFor t (LootRollContext
+                      { lrcWorldSeed = 0
+                      , lrcInstanceId = fromIntegral (stableHash64 (scenarioIdText (leId e)))
+                      , lrcEntryIndex = ix
+                      , lrcRollIndex = r })] ]
+            _ → []
+        | (ix, c) ← zip [1 ∷ Int ..] (ldContents def) ]
+    defaultGround e def fam slot defName content iid = GroundItemEntry
+        { giX = fromIntegral tx + 0.5, giY = fromIntegral ty + 0.5
+        , giItem = ItemEntry
+            { ieId = iid, ieTags = [], ieDefinition = defName
+            , ieFill = Omitted, ieQuality = Omitted, ieCondition = Omitted
+            , ieSharpness = Omitted, ieWeight = Omitted, ieBulk = Omitted
+            , ieStorage = Omitted, ieTemperature = Omitted, ieContents = Omitted } }
+      where
+        RelBounds x0 y0 x1 y1 = ldBounds def
+        (tx, ty) = case lconPosition content of
+            Just (dx, dy) → (leX e + dx, leY e + dy)
+            Nothing →
+                let w = x1 - x0 + 1
+                    h = y1 - y0 + 1
+                    k = fromIntegral (stableHash64 (scenarioIdText (leId e) <> "#" <> fam <> "#" <> tshow slot))
+                          `mod` (max 1 (w * h)) ∷ Int
+                in (leX e + x0 + k `mod` max 1 w, leY e + y0 + k `div` max 1 w)
 
 -- * Commit
 
@@ -295,16 +402,17 @@ applyLocationInstalls env installs lis0 = (lisEnd, reverse refsRev, diagsEnd)
                     let lis2 = adjustLocationInstance iid (withRoster def i) lis1
                         (lis3, sigDiags) = foldl' (bindSig iid) (lis2, []) (liiSignificant i)
                         (lis4, conDiags) = foldl' (bindCon iid) (lis3, []) (liiContainers i)
-                        lis5 = adjustLocationInstance iid sealContents (dropUnboundSignificantSlots iid lis4)
+                        lis5 = adjustLocationInstance iid (withInitialClearFeedback ∘ sealContents)
+                                           (dropUnboundSignificantSlots iid lis4)
                         lis6 = lis5 { lisTags = if null (leTags e) then lisTags lis5
                                                 else setCategoryTags iid (Set.fromList (leTags e)) (lisTags lis5) }
                         lis7 = fromMaybe lis6 (setLocationScenarioRef iid (scenarioIdText (leId e)) lis6)
                     in Right (iid, lis7, sigDiags ⧺ conDiags)
 
-    -- the stated roster replaces the constructor's roll, and the clearance
-    -- notice is seated against the instance's real, final state
-    withRoster def i inst = withInitialClearFeedback
-        inst { liEncounter = scenarioEncounter def (liiOccupants i) }
+    -- the stated roster replaces the constructor's roll; the clearance
+    -- notice is seated LAST, against the instance's real, final state (a
+    -- dropped obligation or a taken item can satisfy clearance at birth)
+    withRoster def i inst = inst { liEncounter = scenarioEncounter def (liiOccupants i) }
 
     -- complete exactly when nothing is owed: an obligation nothing
     -- discharges is dropped first ('dropUnboundSignificantSlots'), so every
@@ -414,11 +522,12 @@ captureLocations ctx st0 lis = LocationsCapture
         , leTags = Set.toAscList (Map.findWithDefault Set.empty (liId inst) (categoryForward (lisTags lis)))
         , leDefinition = liDefId inst
         , leX = fst (liAnchor inst), leY = snd (liAnchor inst)
-        , leSignificant = HM.fromList
+        , leSignificant = Authored $ HM.fromList
             [ (lsiSlot s, ExplicitId r)
             | s ← liSignificant inst, Just iid ← [lsiInstanceId s]
             , Just r ← [lccItemRef ctx iid] ]
-        , leContainers = HM.fromList
+        , leIncidental = Authored False
+        , leContainers = Authored $ HM.fromList
             [ (lcsSlot c, ContainerBinding (ExplicitId r)
                   (Authored (lcsRealized c))
                   (maybe Omitted Authored (if lcsRealized c then Nothing else lcsProfile c)))

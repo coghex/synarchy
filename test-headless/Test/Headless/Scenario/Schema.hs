@@ -244,7 +244,7 @@ fullExpected = Scenario
             Omitted (Authored 40) ]
     , scLocations =
         [ LocationEntry (ex "ruin-1") [] "ruin" (-5) 2
-            (HM.fromList [(1, ex "relic")]) HM.empty ]
+            (Authored (HM.fromList [(1, ex "relic")])) Omitted Omitted ]
     , scUnits =
         [ (unit (ex "scout") 0.5 (-1.25))
             { ueTags = [tag "escort", tag "scout"]
@@ -679,7 +679,7 @@ referenceSpec = describe "identities and references" $ do
             , d "units[0].inventory[0]" (OwnerRejected "units[0]") CascadeRejected
             ]
         scLocations s `shouldBe`
-            [ LocationEntry (ex r) [] "ruin" 0 0 HM.empty HM.empty | r ← ["ruin-a", "ruin-b", "ruin-c"] ]
+            [ LocationEntry (ex r) [] "ruin" 0 0 (Authored HM.empty) Omitted Omitted | r ← ["ruin-a", "ruin-b", "ruin-c"] ]
         map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "shared"]
     it "binds a significant slot only to an item of the slot's definition" $ do
         (s, ds) ← loaded =≪ load (unlines
@@ -694,8 +694,8 @@ referenceSpec = describe "identities and references" $ do
         ds `shouldBe`
             [ d "locations[1].significant_items.1" (DefinitionMismatch "canteen") FieldRejected ]
         scLocations s `shouldBe`
-            [ LocationEntry (ex "vault-a") [] "vault" 0 0 (HM.fromList [(1, ex "flask")]) HM.empty
-            , LocationEntry (ex "vault-b") [] "vault" 1 0 HM.empty HM.empty ]
+            [ LocationEntry (ex "vault-a") [] "vault" 0 0 (Authored (HM.fromList [(1, ex "flask")])) Omitted Omitted
+            , LocationEntry (ex "vault-b") [] "vault" 1 0 (Authored HM.empty) Omitted Omitted ]
         map (ieId ∘ giItem) (scGroundItems s) `shouldBe` [ex "flask", ex "blade"]
     it "keeps the ids of items rejected by slot or material checks" $ do
         (s, ds) ← loaded =≪ load (unlines
@@ -720,7 +720,7 @@ referenceSpec = describe "identities and references" $ do
                 (InvalidValue "a significant-item slot in [1, 2], written plainly") FieldRejected
             , d "units[0].equipment.cape" UnknownField FieldRejected
             ]
-        map leSignificant (scLocations s) `shouldBe` [HM.empty, HM.empty]
+        map leSignificant (scLocations s) `shouldBe` [Authored HM.empty, Authored HM.empty]
     it "resolves references independently of declaration order" $ do
         let locs = [ "locations:"
                    , "  - {id: ruin-1, definition: ruin, x: 0, y: 0,"
@@ -741,7 +741,7 @@ referenceSpec = describe "identities and references" $ do
         byId (scUnits backward) `shouldBe` byId (scUnits forward)
         map ueEncounter (scUnits forward) `shouldBe` [Just (ex "ruin-1"), Just (ex "ruin-1")]
         scLocations backward `shouldBe` scLocations forward
-        map leSignificant (scLocations forward) `shouldBe` [HM.fromList [(2, ex "relic")]]
+        map leSignificant (scLocations forward) `shouldBe` [Authored (HM.fromList [(2, ex "relic")])]
 
 overrideSpec ∷ Spec
 overrideSpec = describe "explicit overrides across definition changes" $ do
@@ -945,13 +945,13 @@ formatV3Spec = describe "format v3: structure variants and container bindings" $
         (s, ds) ← loaded =≪ load (crypt slots "")
         ds `shouldBe` []
         map leContainers (scLocations s) `shouldBe`
-            [ HM.fromList [ (1, ContainerBinding (ex "s1") Omitted Omitted)
-                          , (2, ContainerBinding (ex "s2") (Authored True) Omitted) ] ]
+            [ Authored (HM.fromList [ (1, ContainerBinding (ex "s1") Omitted Omitted)
+                                    , (2, ContainerBinding (ex "s2") (Authored True) Omitted) ]) ]
     it "reads an explicit pending flag and profile, and keeps explicit false authoritative" $ do
         (s, ds) ← loaded =≪ load (crypt
             ", containers: {\"1\": {item: s1, realized: false, profile: fine_loot}}" "")
         ds `shouldBe` []
-        map (HM.lookup 1 ∘ leContainers) (scLocations s) `shouldBe`
+        map (HM.lookup 1 ∘ authoredOr HM.empty ∘ leContainers) (scLocations s) `shouldBe`
             [Just (ContainerBinding (ex "s1") (Authored False) (Authored "fine_loot"))]
     it "rejects an unknown profile, and a profile on a realized slot, as that field alone" $ do
         (s, ds) ← loaded =≪ load (crypt
@@ -960,7 +960,7 @@ formatV3Spec = describe "format v3: structure variants and container bindings" $
             [ d "locations[0].containers.1.profile" (UnknownDefinition "nope") FieldRejected
             , d "locations[0].containers.2.profile"
                 (InvalidValue "no profile: a realized slot has discarded it") FieldRejected ]
-        map (fmap cbProfile ∘ HM.lookup 1 ∘ leContainers) (scLocations s) `shouldBe` [Just Omitted]
+        map (fmap cbProfile ∘ HM.lookup 1 ∘ authoredOr HM.empty ∘ leContainers) (scLocations s) `shouldBe` [Just Omitted]
     it "rejects a slot outside the definition's, and a non-plain key" $ do
         (_, ds) ← loaded =≪ load (crypt
             ", containers: {\"3\": {item: s1}, \"01\": {item: s2}}" "")
@@ -972,13 +972,13 @@ formatV3Spec = describe "format v3: structure variants and container bindings" $
         ds `shouldHaveDiagnostics`
             [ d "locations[0].containers.1.item" (DefinitionMismatch "crate") FieldRejected
             , d "locations[0].containers.2.item" (MissingReference "ghost") FieldRejected ]
-        map leContainers (scLocations s) `shouldBe` [HM.empty]
+        map leContainers (scLocations s) `shouldBe` [Authored HM.empty]
         (s2, ds2) ← loaded =≪ load (crypt
             ", containers: {\"1\": {item: s1}, \"2\": {item: s1}}" "")
         ds2 `shouldHaveDiagnostics`
             [ d "locations[0].containers.1.item" (AmbiguousBinding "s1") FieldRejected
             , d "locations[0].containers.2.item" (AmbiguousBinding "s1") FieldRejected ]
-        map leContainers (scLocations s2) `shouldBe` [HM.empty]
+        map leContainers (scLocations s2) `shouldBe` [Authored HM.empty]
     it "rejects a unit joining the encounter of a location whose definition has none" $ do
         (s, ds) ← loaded =≪ load (unlines
             [ "version: 3", "locations:"
@@ -990,6 +990,14 @@ formatV3Spec = describe "format v3: structure variants and container bindings" $
         ds `shouldBe` [d "units[0].encounter" (NoEncounter "vault") EntryRejected]
         map ueId (scUnits s) `shouldBe` [ex "b"]
         map leId (scLocations s) `shouldBe` [ex "v", ex "r"]
+    it "distinguishes an omitted binding map from a stated empty one" $ do
+        (s, ds) ← loaded =≪ load (unlines
+            [ "version: 3", "locations:"
+            , "  - {id: a, definition: crypt, x: 0, y: 0}"
+            , "  - {id: b, definition: crypt, x: 5, y: 0, significant_items: {}, containers: {}}" ])
+        ds `shouldBe` []
+        map (\l → (leSignificant l, leContainers l)) (scLocations s)
+            `shouldBe` [(Omitted, Omitted), (Authored HM.empty, Authored HM.empty)]
     it "keeps the older vocabularies closed by source version" $ do
         (s2, ds2) ← loaded =≪ load (crypt slots "" ⧺ "") 
         ds2 `shouldBe` []
@@ -1001,7 +1009,7 @@ formatV3Spec = describe "format v3: structure variants and container bindings" $
             map sdPath ds `shouldMatchList` ["structures[0].variant", "locations[0].containers"]
             map sdReason ds `shouldBe` [UnknownField, UnknownField]
             scSourceVersion s `shouldBe` v
-            map leContainers (scLocations s) `shouldBe` [HM.empty]
+            map leContainers (scLocations s) `shouldBe` [Omitted]
             map spVariant (scStructures s) `shouldBe` [Omitted]
         length (scLocations s2) `shouldBe` 1
     it "is the identity migration: a v2 document reads the same through the v3 build" $ do

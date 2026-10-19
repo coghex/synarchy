@@ -44,14 +44,13 @@ locationEntryValue l = A.object $ concat
     [ idField (leId l), tagsField (leTags l)
     , [ ("definition", A.toJSON (leDefinition l))
       , ("x", A.toJSON (leX l)), ("y", A.toJSON (leY l)) ]
-    , [ ("significant_items"
-        , A.object [ (K.fromText (tshow slot), A.toJSON (scenarioIdText r))
-                   | (slot, r) ← sortOn fst (HM.toList (leSignificant l)) ])
-      | not (HM.null (leSignificant l)) ]
-    , [ ("containers"
-        , A.object [ (K.fromText (tshow slot), binding b)
-                   | (slot, b) ← sortOn fst (HM.toList (leContainers l)) ])
-      | not (HM.null (leContainers l)) ] ]
+    , opt "significant_items" (leSignificant l) $ \m →
+        A.object [ (K.fromText (tshow slot), A.toJSON (scenarioIdText r))
+                 | (slot, r) ← sortOn fst (HM.toList m) ]
+    , opt "containers" (leContainers l) $ \m →
+        A.object [ (K.fromText (tshow slot), binding b)
+                 | (slot, b) ← sortOn fst (HM.toList m) ]
+    , opt "incidental_content" (leIncidental l) A.toJSON ]
   where
     binding b = A.object $
         [ ("item", A.toJSON (scenarioIdText (cbItem b))) ]

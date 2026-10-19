@@ -236,8 +236,19 @@ data LocationEntry = LocationEntry
     , leDefinition  ∷ !Text
     , leX           ∷ !Int
     , leY           ∷ !Int
-    , leSignificant ∷ !(HM.HashMap Int ScenarioId)
-    , leContainers  ∷ !(HM.HashMap Int ContainerBinding)
+    , leSignificant ∷ !(Authored (HM.HashMap Int ScenarioId))
+      -- ^ 'Omitted' asks for the definition's own guaranteed items
+      --   (constructed once, 'Scenario.Placement.Location.expandLocationDefaults');
+      --   'Authored' — even empty — is exactly what is stated
+    , leContainers  ∷ !(Authored (HM.HashMap Int ContainerBinding))
+      -- ^ the same omitted / stated distinction, for the definition's
+      --   pending container shells
+    , leIncidental  ∷ !(Authored Bool)
+      -- ^ format v3 @incidental_content@: 'Omitted' (or @true@) constructs
+      --   the definition's incidental non-unit content once (fixed
+      --   non-significant items and loot-table rolls, rolled from private
+      --   scenario randomness); @false@ states that none is owed — what
+      --   lies in the location is the document's own @ground_items@
       -- ^ format v3: slot → the physical container item bound to that
       --   pending or realized container slot. An OPTIONAL reference, like
       --   'leSignificant': a binding that cannot hold is dropped and the

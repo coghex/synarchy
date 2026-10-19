@@ -89,6 +89,8 @@ module Location.Instance
     , withInitialClearFeedback
     , setLocationScenarioRef
     , dropUnboundSignificantSlots
+    , significantContentsFromDef
+    , containerContentsFromDef
     , setLocationContainerProfile
       -- * Checked geometry construction
     , LocationGeometryError(..)
@@ -352,13 +354,20 @@ significantItemsFromDef def =
         , lsiInstanceId  = Nothing
         , lsiTaken       = False
         }
-    | (slot, c) ← zip [1 ..]
-        [ c
-        | c ← ldContents def
-        , lconSignificant c
-        , lconKind c ≡ "item"
-        , _ ← [1 .. lconCount c] ]
+    | (slot, c) ← zip [1 ..] (significantContentsFromDef def)
     ]
+
+-- | The content entry behind each significant slot, in slot order (an
+--   entry authoring @count: n@ appears n times): what a constructor that
+--   builds the definition's own guaranteed items needs beside the slot
+--   ('significantItemsFromDef' is derived from it, so they cannot drift).
+significantContentsFromDef ∷ LocationDef → [LocationContent]
+significantContentsFromDef def =
+    [ c
+    | c ← ldContents def
+    , lconSignificant c
+    , lconKind c ≡ "item"
+    , _ ← [1 .. lconCount c] ]
 
 -- * Pending container shells (#2505) ---------------------------------
 
@@ -440,13 +449,18 @@ containerSlotsFromDef def =
         , lcsInstanceId  = Nothing
         , lcsRealized    = False
         }
-    | (slot, (c, profile)) ← zip [1 ..]
-        [ (c, profile)
-        | c ← ldContents def
-        , lconKind c ≡ "container"
-        , Just profile ← [lconProfile c]
-        , _ ← [1 .. lconCount c] ]
+    | (slot, (c, profile)) ← zip [1 ..] (containerContentsFromDef def)
     ]
+
+-- | The content entry (and loot profile) behind each container slot, in
+--   slot order; 'containerSlotsFromDef' is derived from it.
+containerContentsFromDef ∷ LocationDef → [(LocationContent, Text)]
+containerContentsFromDef def =
+    [ (c, profile)
+    | c ← ldContents def
+    , lconKind c ≡ "container"
+    , Just profile ← [lconProfile c]
+    , _ ← [1 .. lconCount c] ]
 
 -- | The ENCOUNTER half of the clearance predicate: 'Nothing' when the
 --   instance authors no encounter at all, @Just satisfied@ otherwise.

@@ -122,6 +122,7 @@ materialize fx pid ws ab sc = do
     now ← readIORef (gameTimeRef env)
     defsB ← bmDefsOf env
     locs ← locationRegistry env
+    loot ← lootTables env
     params ← readIORef (wsGenParamsRef ws)
     let seed = maybe 0 wgpSeed params
         worldSize = maybe 0 wgpWorldSize params
@@ -166,9 +167,13 @@ materialize fx pid ws ab sc = do
             , uirLifecycle = withPageLifecycle (toWorldSimCapability env)
             , uirReady = luaUnitReadiness (lbsLuaState (fxLua fx)) }
     ucs ← installUnitBuilds urefs pid epoch (map snd ubs)
-    (placements, gbuild) ← buildGroundItems itemEnv (scGroundItems sc)
+    -- the definition-provided guaranteed content a location omits is
+    -- constructed once, from the accepted locations only
+    let (acceptedLocs, defaultGround) = expandLocationDefaults locs loot (length (scGroundItems sc)) (lvAccepted lv)
+    (placements, gbuild) ← buildGroundItems itemEnv (scGroundItems sc ⧺ defaultGround)
     let (store, _) = installGroundItems [ p | Just p ← placements ] G.emptyGroundItems
-    atomicModifyIORef' (wsGroundItemsRef ws) (\g → (mergeGround g store, ()))
+    -- a materialization establishes the page's baseline: its ground is replaced
+    atomicModifyIORef' (wsGroundItemsRef ws) (const (store, ()))
     _ ← commitItemTreeAssignments (unitManagerRef env) (buildingManagerRef env) (worldManagerRef env)
             (itemTagTargets gbuild) (itemRefTargets gbuild)
     -- 4. locations resolved and everything committed on the world thread
@@ -187,7 +192,7 @@ materialize fx pid ws ab sc = do
               , BuildingInstalled _ ref ← bcs, ref ≡ bbRef b
               , Just root ← ibTrees (bbItems b), n ← flatNodes root
               , (i, r) ← ibRefs (bbItems b), i ≡ iiInstanceId n ]
-        (installs, resolveDiags) = resolveLocationInstalls locs joins bindings (lvAccepted lv)
+        (installs, resolveDiags) = resolveLocationInstalls locs joins bindings acceptedLocs
     outcome ← requestPlacementInstall (toWorldSimCapability env) pid epoch
         ScenarioPlacementRequest
             { sprStructures = Just [ (indexPath' "structures" i, p) | (i, p) ← zip [0 ∷ Int ..] (scStructures sc) ]
@@ -202,8 +207,6 @@ materialize fx pid ws ab sc = do
   where
     flatNodes i = i : concatMap flatNodes (iiContents i)
     indexPath' k i = k <> "[" <> T.pack (show i) <> "]"
-    mergeGround old new = old { gisItems = HM.union (gisItems old) (gisItems new)
-                              , gisNextId = max (gisNextId old) (gisNextId new) }
 
 -- | A captured page.
 data Captured' = Captured'

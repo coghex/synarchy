@@ -21,6 +21,8 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Item.Ground (GroundItems(..))
+import qualified Item.Ground as G
+import Item.Types (ItemInstance(..))
 import Scenario.Items.Refs (itemRefsToAscList)
 import System.Random (StdGen, mkStdGen, randomR)
 import Building.Types
@@ -45,6 +47,10 @@ import World.Arena.Bounds (ArenaBounds, mkArenaBounds)
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), columnIndex)
 import World.Tile.Types (lookupChunk)
+import Location.Types (LocationContent(..), LocationDef(..))
+import LootTable.Roll (LootRollContext(..), rollLootTableFor)
+import LootTable.Types (lookupLootTable)
+import Scenario.Items.Refs (stableHash64)
 import World.Generate.Types (WorldGenParams(..))
 import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
 import World.Thread.ChunkLoading (locationStampsFor)
@@ -64,6 +70,9 @@ spec = do
     referenceSpec
     lifecycleSpec
     ownerSpec
+    defaultsSpec
+    noticeSpec
+    matrixSpec
     bindingSpec
     storageSpec
     saveSpec
@@ -295,7 +304,7 @@ locationSpec = describe "locations" $ do
 
     it "makes an empty ruin a real instance at its anchor with a zero roster and no overlay entry" $ \fx → do
         (pid, ws) ← scene fx
-        sc ← clean fx $ doc ["locations:", ruin "empty" 10 10]
+        sc ← clean fx $ doc ["locations:", "  - {id: empty, definition: ruin_small, x: 10, y: 10, significant_items: {}}"]
         mz ← materialize fx pid ws arena40 sc
         mzDiagnostics mz `shouldBe` []
         lis ← pageLocations ws
@@ -365,7 +374,7 @@ locationSpec = describe "locations" $ do
             , "  - {definition: high_voltage_battery, x: 4, y: 4}"
             , "  - {id: buildings.0, definition: solar_panel, x: 5, y: 4}"
             , "locations:"
-            , "  - {definition: ruin_small, x: 0, y: 0}"
+            , "  - {definition: ruin_small, x: 0, y: 0, significant_items: {}, incidental_content: false}"
             , "units:"
             , "  - {definition: nomad_primitive, x: 9.5, y: 9.5}"
             , "ground_items:"
@@ -421,7 +430,7 @@ roundTripSpec = describe "capture" $ do
 cryptDoc ∷ String → String
 cryptDoc containers = doc
     [ "locations:"
-    , "  - {id: crypt, definition: crypt_fx, x: 0, y: 0, significant_items: {1: key}, containers: " ⧺ containers ⧺ "}"
+    , "  - {id: crypt, definition: crypt_fx, x: 0, y: 0, significant_items: {1: key}, incidental_content: false, containers: " ⧺ containers ⧺ "}"
     , "ground_items:"
     , "  - {id: key, definition: processing_unit, x: 0.5, y: 0.5}"
     , "  - {id: box1, definition: field_toolbox, x: 0.5, y: 1.5}"
@@ -461,7 +470,7 @@ containerSpec = describe "containers" $ do
         _ ← materialize fx pid ws arena40 sc
         c1 ← capturePage fx pid ws arena40
         map leContainers (cpLocations c1) `shouldSatisfy` \cs → case cs of
-            [m] → HM.keys m == [1, 2] || HM.keys m == [2, 1]
+            [Authored m] → sort (HM.keys m) == [1, 2]
             _ → False
         (s1, _) ← roundTrip fx c1
         (pid2, ws2) ← scene fx
@@ -559,6 +568,185 @@ lifecycleSpec = describe "lifecycle" $ do
         pageLocations ws ≫= (`shouldBe` []) ∘ instancesToList
         stampedChunks ws `shouldReturn` HS.empty
 
+-- | Omitted versus stated guaranteed content (requirement 5).
+defaultsSpec ∷ SpecWith Fx
+defaultsSpec = describe "definition-provided content: omitted versus stated" $ do
+
+    let groundDefs ws = map (iiDefName ∘ G.giInst) ∘ HM.elems ∘ gisItems <$> readIORef (wsGroundItemsRef ws)
+
+    it "constructs the guaranteed item an omitted binding map owes, once, bound and untaken, at a deterministic tile" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc ["locations:", "  - {id: ruin, definition: ruin_small, x: 10, y: 10, incidental_content: false}"]
+        mzDiagnostics ⊚ materialize fx pid ws arena40 sc `shouldReturn` []
+        [inst] ← instancesToList ⊚ pageLocations ws
+        [ (lsiItemDefName e, isJust (lsiInstanceId e), lsiTaken e) | e ← liSignificant inst ]
+            `shouldBe` [("processing_unit", True, False)]
+        liContentsSpawned inst `shouldBe` True
+        groundDefs ws `shouldReturn` ["processing_unit"]
+        gi ← readIORef (wsGroundItemsRef ws)
+        -- inside the footprint (anchor 10,10 with bounds +-2)
+        [ (floor (G.giX g) ∷ Int, floor (G.giY g) ∷ Int) | g ← HM.elems (gisItems gi) ]
+            `shouldSatisfy` all (\(x, y) → x ≥ 8 ∧ x ≤ 12 ∧ y ≥ 8 ∧ y ≤ 12)
+        -- another history and page: the same tile
+        replicateM_ 31 (atomicModifyIORef' (statRNGRef (fxEnv fx)) (\g → let (_, g') = randomR (0 ∷ Int, 9) g in (g', ())))
+        (pid2, ws2) ← scene fx
+        _ ← materialize fx pid2 ws2 arena40 sc
+        gi2 ← readIORef (wsGroundItemsRef ws2)
+        sort [ (G.giX g, G.giY g) | g ← HM.elems (gisItems gi2) ] `shouldBe` sort [ (G.giX g, G.giY g) | g ← HM.elems (gisItems gi) ]
+
+    it "recaptures the construction as stated content, so a further cycle adds no second copy" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc ["locations:", "  - {id: ruin, definition: ruin_small, x: 10, y: 10}"]
+        _ ← materialize fx pid ws arena40 sc
+        c1 ← capturePage fx pid ws arena40
+        -- the guaranteed item and the two rolled finds, all stated now
+        length (cpGround c1) `shouldBe` 3
+        map leSignificant (cpLocations c1) `shouldSatisfy` \ms → case ms of [Authored m] → HM.size m ≡ 1; _ → False
+        map leIncidental (cpLocations c1) `shouldBe` [Authored False]
+        (s1, _) ← roundTrip fx c1
+        (pid2, ws2) ← scene fx
+        _ ← materialize fx pid2 ws2 arena40 s1
+        c2 ← capturePage fx pid2 ws2 arena40
+        docOf c2 `shouldBe` docOf c1
+        (s2, _) ← roundTrip fx c2
+        (pid3, ws3) ← scene fx
+        _ ← materialize fx pid3 ws3 arena40 s2
+        docOf ⊚ capturePage fx pid3 ws3 arena40 `shouldReturn` docOf c1
+        length ⊚ groundDefs ws3 `shouldReturn` 3
+
+    it "keeps a stated empty map empty, and stays empty through a recapture" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc ["locations:", "  - {id: bare, definition: ruin_small, x: 10, y: 10, significant_items: {}, incidental_content: false}"]
+        _ ← materialize fx pid ws arena40 sc
+        groundDefs ws `shouldReturn` []
+        c1 ← capturePage fx pid ws arena40
+        map leSignificant (cpLocations c1) `shouldBe` [Authored HM.empty]
+        (s1, _) ← roundTrip fx c1
+        (pid2, ws2) ← scene fx
+        _ ← materialize fx pid2 ws2 arena40 s1
+        groundDefs ws2 `shouldReturn` []
+
+    it "constructs the pending shells an omitted container map owes, unopened, and nothing for a rejected location" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc
+            [ "locations:"
+            , "  - {id: ok, definition: crypt_fx, x: 0, y: 0, significant_items: {}, incidental_content: false}"
+            , "  - {id: outside, definition: crypt_fx, x: 30, y: 0}" ]
+        mz ← materialize fx pid ws arena40 sc
+        map sdPath (mzDiagnostics mz) `shouldBe` ["locations[1]"]
+        groundDefs ws ≫= (`shouldBe` ["field_toolbox", "field_toolbox"])
+        [inst] ← instancesToList ⊚ pageLocations ws
+        [ (lcsRealized c, isJust (lcsInstanceId c), lcsProfile c) | c ← sortOn lcsSlot (liContainers inst) ]
+            `shouldBe` [ (False, True, Just "ruin_industrial_salvage"), (False, True, Just "ruin_industrial_salvage") ]
+        -- unopened: no shell holds anything the loot profile would have rolled
+        -- (a toolbox's own starting kit is the item definition's, not loot)
+        gi ← readIORef (wsGroundItemsRef ws)
+        let held = [ iiDefName c | g ← HM.elems (gisItems gi), c ← iiContents (G.giInst g) ]
+        filter (`elem` ["steel_bar", "electric_motor", "steel_hardware"]) held `shouldBe` []
+
+-- | Each definition x omitted / stated-empty / bound / rejected, against an
+--   expectation computed from the definition and the SAME private rolls an
+--   ordinary placement makes ('rollLootTableFor' over the scenario-folded
+--   context), independent of the construction code.
+matrixSpec ∷ SpecWith Fx
+matrixSpec = describe "definition x omitted / stated empty / bound / rejected" $
+    forM_ ["ruin_small", "crypt_fx", "quiet_fx"] $ \defName → describe (T.unpack defName) $ do
+
+        let groundNames ws = sort ∘ map (iiDefName ∘ G.giInst) ∘ HM.elems ∘ gisItems <$> readIORef (wsGroundItemsRef ws)
+            expectedFor fx = do
+                def' ← locationRegistry (fxEnv fx) ≫= \r → maybe (fail "no definition") pure (lookupLocation defName r)
+                tables ← lootTables (fxEnv fx)
+                let sig = map lconId (significantContentsFromDef def')
+                    shells = map (lconId ∘ fst) (containerContentsFromDef def')
+                    fixed = concat [ replicate (lconCount c) (lconId c)
+                                   | c ← ldContents def', lconKind c ≡ "item", not (lconSignificant c) ]
+                    rolled = [ d | (ix, c) ← zip [1 ∷ Int ..] (ldContents def'), lconKind c ≡ "loot_table"
+                                 , r ← [1 .. lconRolls c], Just t ← [lookupLootTable (lconId c) tables]
+                                 , Just d ← [rollLootTableFor t (LootRollContext 0 (fromIntegral (stableHash64 "m")) ix r)] ]
+                pure (sort sig, sort shells, sort fixed, sort rolled)
+            entry extra = "  - {id: m, definition: " ⧺ T.unpack defName ⧺ ", x: 0, y: 0" ⧺ extra ⧺ "}"
+
+        it "omitted: constructs exactly the definition's non-unit content, once, with the ordinary rolls" $ \fx → do
+            (pid, ws) ← scene fx
+            sc ← clean fx (doc ["locations:", entry ""])
+            mzDiagnostics ⊚ materialize fx pid ws arena40 sc `shouldReturn` []
+            (sig, shells, fixed, rolled) ← expectedFor fx
+            groundNames ws `shouldReturn` sort (sig ⧺ shells ⧺ fixed ⧺ rolled)
+            -- the rolled finds are the pinned draw, not a coincidence of the table
+            length rolled `shouldSatisfy` (> 0)
+
+        it "stated empty: constructs nothing, and a recapture stays empty" $ \fx → do
+            (pid, ws) ← scene fx
+            sc ← clean fx (doc ["locations:", entry ", significant_items: {}, containers: {}, incidental_content: false"])
+            _ ← materialize fx pid ws arena40 sc
+            groundNames ws `shouldReturn` []
+            c1 ← capturePage fx pid ws arena40
+            (s1, _) ← roundTrip fx c1
+            (pid2, ws2) ← scene fx
+            _ ← materialize fx pid2 ws2 arena40 s1
+            groundNames ws2 `shouldReturn` []
+
+        it "bound: only the stated items exist, bound as stated" $ \fx → do
+            (pid, ws) ← scene fx
+            sc ← clean fx $ doc
+                [ "locations:", entry ", significant_items: {1: gem}, containers: {}, incidental_content: false"
+                , "ground_items:", "  - {id: gem, definition: processing_unit, x: 0.5, y: 0.5}" ]
+            mzDiagnostics ⊚ materialize fx pid ws arena40 sc `shouldReturn` []
+            groundNames ws `shouldReturn` ["processing_unit"]
+            [inst] ← instancesToList ⊚ pageLocations ws
+            map (isJust ∘ lsiInstanceId) (liSignificant inst) `shouldBe` [True]
+
+        it "rejected: a location outside the map constructs nothing" $ \fx → do
+            (pid, ws) ← scene fx
+            sc ← clean fx (doc ["locations:", "  - {id: m, definition: " ⧺ T.unpack defName ⧺ ", x: 30, y: 0}"])
+            mz ← materialize fx pid ws arena40 sc
+            map sdPath (mzDiagnostics mz) `shouldBe` ["locations[0]"]
+            groundNames ws `shouldReturn` []
+
+-- | The clearance notice is seated against the FINAL instance: a location
+--   already satisfied when initialization completes (nothing owed and no
+--   living occupant, or every owed item already taken) starts with it
+--   spent, so discovering it announces nothing; one that is not satisfied
+--   announces exactly once when it later is.
+noticeSpec ∷ SpecWith Fx
+noticeSpec = describe "initial clearance notice" $ do
+
+    let discovered inst = inst { liLifecycle = locationDiscoveryLifecycle inst }
+        eventOwed lis inst = isJust (resolveLocationClearance (liId inst) (adjustLocationInstance (liId inst) (const (discovered inst)) lis))
+
+    it "is spent for an empty ruin, so first discovery emits no clearance event" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc ["locations:", "  - {id: bare, definition: ruin_small, x: 10, y: 10, significant_items: {}}"]
+        _ ← materialize fx pid ws arena40 sc
+        lis ← pageLocations ws
+        [inst] ← pure (instancesToList lis)
+        locationClearanceSatisfied inst `shouldBe` True
+        liClearEventEmitted inst `shouldBe` True
+        eventOwed lis inst `shouldBe` False
+
+    it "is spent when the owed item was bound already taken, and unspent while an item is still owed" $ \fx → do
+        (pid, ws) ← scene fx
+        sc ← clean fx $ doc
+            [ "buildings:"
+            , "  - {id: chest, definition: cargo_hold_S, x: 3, y: 3, storage: [{id: held, definition: processing_unit}]}"
+            , "locations:"
+            , "  - {id: taken, definition: ruin_small, x: -10, y: 0, significant_items: {1: held}}"
+            , "  - {id: owing, definition: ruin_small, x: 10, y: 0}" ]
+        mzDiagnostics ⊚ materialize fx pid ws arena40 sc `shouldReturn` []
+        lis ← pageLocations ws
+        let at x = case [ i | i ← instancesToList lis, fst (liAnchor i) ≡ x ] of
+                (i : _) → i
+                [] → error "no such location"
+            takenI = at (-10)
+            owingI = at 10
+        (liClearEventEmitted takenI, eventOwed lis takenI) `shouldBe` (True, False)
+        (liClearEventEmitted owingI, locationClearanceSatisfied owingI) `shouldBe` (False, False)
+        -- once the owed item is picked up, discovery owes exactly one event
+        Just gemId ← pure (listToMaybe [ g | e ← liSignificant owingI, Just g ← [lsiInstanceId e] ])
+        Just latched ← pure (latchLocationSignificantTaken gemId lis)
+        fmap (\i → (locationClearanceSatisfied i, eventOwed latched i)) (lookupLocationInstance (liId owingI) latched)
+            `shouldBe` Just (True, True)
+
 -- | Ownership and completion of location bindings, through the save
 --   boundary's own integrity rules.
 bindingSpec ∷ SpecWith Fx
@@ -595,7 +783,7 @@ bindingSpec = describe "location bindings: ownership and completion" $ do
         (pid, ws) ← scene fx
         sc ← clean fx $ doc
             [ "locations:"
-            , "  - {id: crypt, definition: crypt_fx, x: 0, y: 0, containers: {1: {item: inner}}}"
+            , "  - {id: crypt, definition: crypt_fx, x: 0, y: 0, significant_items: {}, incidental_content: false, containers: {1: {item: inner}}}"
             , "ground_items:"
             , "  - {id: outer, definition: field_toolbox, x: 0.5, y: 0.5, contents: [{id: inner, definition: field_toolbox}]}" ]
         mz ← materialize fx pid ws arena40 sc
@@ -612,7 +800,7 @@ bindingSpec = describe "location bindings: ownership and completion" $ do
         sc ← clean fx $ doc
             [ "locations:"
             , "  - {id: bound, definition: ruin_small, x: -10, y: 0, significant_items: {1: gem}}"
-            , "  - {id: unbound, definition: ruin_small, x: 10, y: 0}"
+            , "  - {id: unbound, definition: ruin_small, x: 10, y: 0, significant_items: {}}"
             , "units:"
             , "  - {id: n1, definition: nomad_primitive, x: -10.5, y: 0.5, encounter: bound}"
             , "  - {id: n2, definition: nomad_primitive, x: 10.5, y: 0.5, encounter: unbound}"

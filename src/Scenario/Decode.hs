@@ -443,7 +443,7 @@ decodeMaterial owner mats ip v = do
 -- | A location. @containers@ is format v3's (see 'decodeStructure').
 decodeLocation ∷ Int → Text → A.Value → Dec (Maybe LocationEntry)
 decodeLocation sourceVersion = entry NodeLocation Nothing
-    (["definition", "x", "y", "significant_items"] ⧺ [ "containers" | sourceVersion ≥ 3 ]) [] $
+    (["definition", "x", "y", "significant_items"] ⧺ [ k | sourceVersion ≥ 3, k ← ["containers", "incidental_content"] ]) [] $
     \p o sid tags → do
         cat ← catalog
         def ← definition p "definition" o (\n → HM.lookup n (catLocations cat))
@@ -481,9 +481,11 @@ decodeLocation sourceVersion = entry NodeLocation Nothing
                             Right slot → decodeContainerBinding cat lc slot fp v
                     else pure Omitted
                 let cs = authoredOr [] containers
+                incidental ← if sourceVersion ≥ 3 then optField p "incidental_content" pBool o else pure Omitted
                 pure ( LocationEntry sid tags dn xv yv
-                         (HM.fromList [ (slot, ExplicitId t) | (_, (slot, t, _)) ← bs ])
-                         (HM.fromList [ (slot, b) | (_, (slot, b, _)) ← cs ])
+                         (fmap (\xs → HM.fromList [ (slot, ExplicitId t) | (_, (slot, t, _)) ← xs ]) bindings)
+                         (fmap (\xs → HM.fromList [ (slot, b) | (_, (slot, b, _)) ← xs ]) containers)
+                         incidental
                      , []
                      , [ (fp, t, NodeItem, slotDefinition lc slot)
                        | (_, (slot, t, fp)) ← bs ]
