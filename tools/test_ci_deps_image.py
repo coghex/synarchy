@@ -65,6 +65,7 @@ import ci_deps_image as deps  # noqa: E402
 
 MEDIA_MANIFEST = "application/vnd.docker.distribution.manifest.v2+json"
 MEDIA_LAYER = "application/vnd.docker.image.rootfs.diff.tar.gzip"
+MEDIA_INDEX = "application/vnd.oci.image.index.v1+json"
 MEDIA_CONFIG = "application/vnd.docker.container.image.v1+json"
 
 
@@ -1321,6 +1322,247 @@ def apt_lists(text: str) -> list[list[str]]:
         lists.append(sorted(word for word in re.findall(r"^\s+([a-z0-9][a-z0-9.+-]*)\s*\\?$",
                                                         block, re.M)))
     return lists
+
+
+class ScriptedRegistry:
+    """A registry that says exactly what a test scripts, honest or not: a
+    manifest or blob for any reference, with any headers, and a log of every
+    request. Used through `Registry(transport=...)`."""
+    BASE = "https://registry.test"
+
+    def __init__(self):
+        self.manifests = {}       # reference -> (body, headers)
+        self.blobs = {}           # digest -> bytes
+        self.requests = []
+
+    def serve_manifest(self, reference, body, header=True, content_type=MEDIA_MANIFEST):
+        headers = {"Content-Type": content_type}
+        if header is True:
+            headers["Docker-Content-Digest"] = sha(body)
+        elif header:
+            headers["Docker-Content-Digest"] = header
+        self.manifests[reference] = (body, headers)
+
+    def registry(self):
+        return deps.Registry(self.BASE, transport=self)
+
+    def __call__(self, method, url, headers, data=None, sink=None):
+        self.requests.append((method, url))
+        path = url[len(self.BASE) + len("/v2/" + deps.REPOSITORY + "/"):]
+        if path.startswith("manifests/"):
+            entry = self.manifests.get(path[len("manifests/"):])
+            if entry is None:
+                return deps.Response(404, {}, json.dumps(
+                    {"errors": [{"code": "MANIFEST_UNKNOWN"}]}).encode())
+            return deps.Response(200, dict(entry[1]), entry[0])
+        if path.startswith("blobs/"):
+            blob = self.blobs.get(path[len("blobs/"):])
+            if blob is None:
+                return deps.Response(404, {}, b"")
+            if sink is not None:
+                sink(blob)
+                return deps.Response(200, {}, b"")
+            return deps.Response(200, {}, blob)
+        return deps.Response(404, {}, b"")
+
+    def tag_requests(self, tag):
+        return [r for r in self.requests if r[1].endswith("/manifests/" + tag)]
+
+
+def image_world(layers=None, tag="master", index=True):
+    """An honest image (and, when asked, an index over it) in a
+    ScriptedRegistry; returns (world, layer blobs, image manifest body,
+    index body or None)."""
+    world = ScriptedRegistry()
+    layers = layers or [make_layer([("usr/local/cabal/x", "file", "x", 0o644)])]
+    config = json.dumps({"architecture": "amd64", "os": "linux",
+                         "config": {"Labels": {}}}).encode()
+    world.blobs[sha(config)] = config
+    for blob in layers:
+        world.blobs[sha(blob)] = blob
+    image = json.dumps({"schemaVersion": 2, "mediaType": MEDIA_MANIFEST,
+                        "config": {"mediaType": MEDIA_CONFIG, "size": len(config),
+                                   "digest": sha(config)},
+                        "layers": [{"mediaType": MEDIA_LAYER, "size": len(b), "digest": sha(b)}
+                                   for b in layers]}).encode()
+    world.serve_manifest(sha(image), image)
+    top = None
+    if index:
+        top = json.dumps({"schemaVersion": 2, "mediaType": MEDIA_INDEX, "manifests": [
+            {"mediaType": MEDIA_MANIFEST, "size": len(image), "digest": sha(image),
+             "platform": {"os": "linux", "architecture": "amd64"}}]}).encode()
+        world.serve_manifest(tag, top, content_type=MEDIA_INDEX)
+    else:
+        world.serve_manifest(tag, image)
+    return world, layers, image, top
+
+
+class HostileRegistryTests(unittest.TestCase):
+    """Integrity is verified against the identity that was REQUESTED, never
+    against the registry's own claim (#2874): a digest pin must be exactly
+    what the body hashes to, a child an index selects must match the digest
+    AND size the index declared, a blob its descriptor's digest and size, a
+    Docker-Content-Digest header must agree but is never the authority, and
+    a tag is resolved once."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "root"
+        self.root.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def fetch(self, world, reference="master"):
+        return deps.fetch(world.registry(), reference, self.root, log=lambda _line: None)
+
+    def installed(self):
+        return list(self.root.rglob("*"))
+
+    def refuse(self, world, reference="master", needle=""):
+        with self.assertRaisesRegex(deps.DepsImageError, needle):
+            self.fetch(world, reference)
+        self.assertEqual(self.installed(), [], "something was installed from a refused image")
+
+    def test_the_honest_registry_installs(self):
+        world, _, image, top = image_world()
+        self.assertEqual(self.fetch(world)["digest"], sha(image))
+        self.assertTrue((self.root / "usr/local/cabal/x").exists())
+
+    def test_a_digest_pin_whose_body_hashes_to_another_digest_is_refused(self):
+        # the reviewer's reproduction: image B, with B's own matching header,
+        # served for a request pinned to A
+        world, _, image_a, _ = image_world(index=False)
+        other, _, image_b, _ = image_world(
+            [make_layer([("usr/local/cabal/evil", "file", "pwn", 0o644)])], index=False)
+        for header in (True, False, sha(image_a), "garbage"):
+            world.serve_manifest(sha(image_a), image_b, header=header if header is not True
+                                 else sha(image_b))
+            with self.subTest(header=header):
+                self.refuse(world, sha(image_a), "hashes to|digest header")
+        self.assertFalse(any("evil" in str(p) for p in self.installed()))
+
+    def test_a_header_that_disagrees_with_the_body_is_refused_and_an_absent_one_is_fine(self):
+        world, _, image, _ = image_world(index=False)
+        world.serve_manifest("master", image, header=sha(b"something else"))
+        self.refuse(world, "master", "digest header")
+        world.serve_manifest("master", image, header=False)       # absent
+        self.assertEqual(self.fetch(world)["digest"], sha(image))
+
+    def test_an_index_child_swapped_for_another_manifest_is_refused(self):
+        world, _, image, top = image_world()
+        _, _, evil, _ = image_world([make_layer([("usr/local/cabal/evil", "file", "x", 0o644)])],
+                                    index=False)
+        for header in (True, False):
+            world.serve_manifest(sha(image), evil, header=sha(evil) if header else False)
+            with self.subTest(header=header):
+                self.refuse(world, "master", "hashes to")
+        self.assertFalse(any("evil" in str(p) for p in self.installed()))
+
+    def test_an_index_child_with_the_wrong_or_missing_declared_size_is_refused(self):
+        world, _, image, _ = image_world()
+        for size in (len(image) + 1, len(image) - 1, 0, None, "12", True, -1):
+            entry = {"mediaType": MEDIA_MANIFEST, "digest": sha(image),
+                     "platform": {"os": "linux", "architecture": "amd64"}}
+            if size is not None:
+                entry["size"] = size
+            top = json.dumps({"schemaVersion": 2, "mediaType": MEDIA_INDEX,
+                              "manifests": [entry]}).encode()
+            world.serve_manifest("master", top, content_type=MEDIA_INDEX)
+            with self.subTest(size=size):
+                self.refuse(world, "master", "size|declared")
+
+    def test_a_layer_swapped_for_other_bytes_is_refused_before_anything_is_applied(self):
+        world, layers, _, _ = image_world()
+        same_length = layers[0][:-1] + bytes([layers[0][-1] ^ 0xFF])
+        other = make_layer([("usr/local/cabal/evil", "file", "pwn", 0o644)])
+        for swapped, needle in ((same_length, "digest check"), (other, "declared")):
+            world.blobs[sha(layers[0])] = swapped
+            with self.subTest(needle=needle):
+                self.refuse(world, "master", needle)
+                self.assertFalse((self.root / "usr").exists())
+
+    def test_layer_and_config_sizes_must_match_their_descriptors(self):
+        world, layers, image, _ = image_world(index=False)
+        document = json.loads(image)
+        for field, getter in (("layer", lambda d: d["layers"][0]), ("config", lambda d: d["config"])):
+            for delta in (1, -1):
+                broken = json.loads(image)
+                getter(broken)["size"] += delta
+                world.serve_manifest("master", json.dumps(broken).encode())
+                with self.subTest(field=field, delta=delta):
+                    self.refuse(world, "master", "declared")
+            missing = json.loads(image)
+            del getter(missing)["size"]
+            world.serve_manifest("master", json.dumps(missing).encode())
+            with self.subTest(field=field, delta="missing"):
+                self.refuse(world, "master", "size")
+        self.assertEqual(document["layers"][0]["size"], len(layers[0]))
+
+    def test_an_endless_blob_is_cut_off_at_its_declared_size(self):
+        world, layers, _, _ = image_world()
+        world.blobs[sha(layers[0])] = layers[0] + b"\0" * 4096
+        self.refuse(world, "master", "longer than its declared")
+
+    def test_a_tag_is_resolved_once_and_verify_uses_that_resolution(self):
+        world, _, image, top = image_world()
+        self.fetch(world)
+        self.assertEqual(len(world.tag_requests("master")), 1)
+        report = deps.verify_anonymous(world.registry(), ["master"])
+        self.assertEqual(len(world.tag_requests("master")), 2)       # one more, ONE per call
+        self.assertIn(sha(top), report[0])
+
+    def test_registry_supplied_digests_are_never_put_in_a_url_unchecked(self):
+        world, _, image, _ = image_world()
+        for bad in ("../../etc/passwd", "sha256:" + "A" * 64, "sha512:" + "a" * 128,
+                    "sha256:abc", "sha256:" + "a" * 64 + "/../x", 5, None):
+            top = json.dumps({"schemaVersion": 2, "mediaType": MEDIA_INDEX, "manifests": [
+                {"mediaType": MEDIA_MANIFEST, "size": 1, "digest": bad,
+                 "platform": {"os": "linux", "architecture": "amd64"}}]}).encode()
+            world.serve_manifest("master", top, content_type=MEDIA_INDEX)
+            before = len(world.requests)
+            with self.subTest(digest=bad):
+                with self.assertRaises(deps.DepsImageError):
+                    self.fetch(world)
+                self.assertTrue(all(".." not in url and "passwd" not in url
+                                    for _, url in world.requests[before:]))
+
+    def test_a_token_realm_on_another_origin_gets_no_credentials(self):
+        sent = []
+
+        def transport(method, url, headers, data=None, sink=None):
+            sent.append((url, dict(headers)))
+            if url.startswith("https://registry.test/"):
+                return deps.Response(401, {"WWW-Authenticate":
+                                           'Bearer realm="https://evil.test/token",service="x"'}, b"")
+            return deps.Response(200, {}, b"{}")
+
+        registry = deps.Registry("https://registry.test", transport=transport,
+                                 credentials=("bot", "s3cret"))
+        with self.assertRaisesRegex(deps.RegistryError, "own origin"):
+            registry.manifest("master")
+        self.assertTrue(all(not url.startswith("https://evil.test") for url, _ in sent))
+        self.assertTrue(all("Authorization" not in h for _, h in sent))
+
+    def test_a_blob_redirect_to_another_scheme_is_refused(self):
+        world, layers, _, _ = image_world()
+        base = world.__call__
+
+        def redirecting(method, url, headers, data=None, sink=None):
+            if "/blobs/" in url and url.startswith(world.BASE):
+                return deps.Response(302, {"Location": "file:///etc/passwd"}, b"")
+            return base(method, url, headers, data=data, sink=sink)
+
+        registry = deps.Registry(world.BASE, transport=redirecting)
+        with self.assertRaisesRegex(deps.RegistryError, "redirects"):
+            registry.download_blob(sha(layers[0]), lambda _c: None, len(layers[0]))
+
+    def test_an_oversized_json_body_is_refused_before_it_is_parsed(self):
+        class Body:
+            def read(self, n):
+                return b"x" * n
+        with self.assertRaisesRegex(deps.RegistryError, "exceeds"):
+            deps._bounded(Body())
 
 
 class HostileArchiveTests(unittest.TestCase):

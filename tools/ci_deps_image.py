@@ -71,7 +71,14 @@ descriptor (`Jail`): every archive-supplied name is decoded to plain
 components (never empty, `.`, `..` or containing a separator, after every
 decoding step), and every create, remove, link and chmod is a `dir_fd` call
 resolved component by component with `O_NOFOLLOW` from a prefix opened once,
-so there is no path to re-resolve and no check-then-use gap. `check` compares a checkout's resolved
+so there is no path to re-resolve and no check-then-use gap. Everything
+fetched is verified against the identity REQUESTED of it, never only the
+registry's own header: a digest pin against the body's sha256, each child an
+index selects against the digest and size the index declared, each blob
+against its descriptor's digest and size, a `Docker-Content-Digest` header
+must agree but is never the authority, and a tag is resolved once. A token
+realm must be the registry's own origin, and a blob redirect an http(s) URL of
+the registry's scheme. `check` compares a checkout's resolved
 plan with the image's metadata by compiler, platform and non-local unit
 IDs, which do not contain local paths, unlike plan.json's raw hash.
 
@@ -397,6 +404,39 @@ class Response:
         return ""
 
 
+#: Manifests, configs, token and error bodies are small JSON; a registry
+#: that sends more than this is refused before it is parsed (the OCI
+#: distribution spec asks registries to cap manifests at 4 MiB).
+MAX_JSON_BODY = 4 << 20
+
+DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def sha256_digest(body: bytes) -> str:
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def require_digest(value: object, what: str) -> str:
+    """A well-formed sha256 digest, and nothing else: it is placed in URL
+    paths and compared against computed digests, so a registry-supplied
+    value is never used before it passes here."""
+    if not isinstance(value, str) or not DIGEST_PATTERN.fullmatch(value):
+        raise RegistryError(f"{what} is not a sha256 digest: {value!r}")
+    return value
+
+
+def descriptor(entry: object, what: str) -> tuple[str, int]:
+    """The (digest, size) of an OCI descriptor. Both are required: the
+    digest and size a manifest or index DECLARES are what the thing it
+    points at must be verified against."""
+    if not isinstance(entry, dict):
+        raise RegistryError(f"{what} is not a descriptor")
+    size = entry.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+        raise RegistryError(f"{what} declares no valid size: {size!r}")
+    return require_digest(entry.get("digest"), f"{what} digest"), size
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):  # noqa: D401
         return None
@@ -414,7 +454,7 @@ def http_request(method: str, url: str, headers: dict[str, str],
     try:
         response = _OPENER.open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
-        return Response(error.code, dict(error.headers.items()), error.read())
+        return Response(error.code, dict(error.headers.items()), _bounded(error))
     except (urllib.error.URLError, OSError) as error:
         raise RegistryError(f"{method} {url}: {error}") from error
     with response:
@@ -425,7 +465,14 @@ def http_request(method: str, url: str, headers: dict[str, str],
                     break
                 sink(chunk)
             return Response(response.status, dict(response.headers.items()), b"")
-        return Response(response.status, dict(response.headers.items()), response.read())
+        return Response(response.status, dict(response.headers.items()), _bounded(response))
+
+
+def _bounded(response) -> bytes:
+    body = response.read(MAX_JSON_BODY + 1)
+    if len(body) > MAX_JSON_BODY:
+        raise RegistryError(f"response body exceeds {MAX_JSON_BODY} bytes; refused")
+    return body
 
 
 def error_codes(body: bytes) -> set[str]:
@@ -461,11 +508,22 @@ class Registry:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/v2/{self.repository}/{path}"
 
+    @staticmethod
+    def _origin(url: str) -> tuple[str, str, int]:
+        parts = urllib.parse.urlsplit(url)
+        default = {"https": 443, "http": 80}.get(parts.scheme, 0)
+        return parts.scheme, (parts.hostname or "").lower(), parts.port or default
+
     def _fetch_token(self, challenge: str) -> None:
         params = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
         realm = params.pop("realm", "")
         if not challenge.lower().startswith("bearer") or not realm:
             raise RegistryError(f"unsupported auth challenge {challenge!r}")
+        # The realm is registry-supplied, and the request to it carries the
+        # push credentials: it must be the registry's own origin.
+        if self._origin(realm) != self._origin(self.base_url):
+            raise RegistryError(f"token realm {realm!r} is not the registry's own origin; "
+                                "credentials are not sent elsewhere")
         if self.credentials is not None:
             params["scope"] = f"repository:{self.repository}:pull,push"
         headers = {}
@@ -508,11 +566,29 @@ class Registry:
             return response
         return response
 
-    def manifest(self, reference: str) -> ManifestState:
-        """Confirmed presence or confirmed absence; anything else raises."""
+    def manifest(self, reference: str, expect_size: Optional[int] = None) -> ManifestState:
+        """Confirmed presence or confirmed absence; anything else raises.
+
+        Integrity is against the REQUESTED identity, never the registry's
+        own claim: a digest reference (`sha256:...`) must be exactly what the
+        body hashes to, a declared `expect_size` must be its length, and a
+        `Docker-Content-Digest` header, where present, must agree with the
+        body too but is never the authority. A tag has no identity to check
+        against: the caller pins the digest it resolved to and verifies
+        everything after it against that."""
+        if ":" in reference:
+            require_digest(reference, "manifest reference")
         response = self.request("GET", f"manifests/{reference}", {"Accept": ACCEPT})
         if response.status == 200:
-            digest = "sha256:" + hashlib.sha256(response.body).hexdigest()
+            digest = sha256_digest(response.body)
+            if ":" in reference and digest != reference:
+                raise RegistryError(
+                    f"manifest {reference}: the registry returned a body that hashes "
+                    f"to {digest}")
+            if expect_size is not None and len(response.body) != expect_size:
+                raise RegistryError(
+                    f"manifest {reference} is {len(response.body)} bytes, but "
+                    f"{expect_size} were declared")
             claimed = response.header("Docker-Content-Digest")
             if claimed and claimed != digest:
                 raise RegistryError(
@@ -540,11 +616,17 @@ class Registry:
             raise RegistryError(
                 f"PUT manifest {reference} answered {response.status} "
                 f"{', '.join(sorted(error_codes(response.body)))}")
-        return "sha256:" + hashlib.sha256(body).hexdigest()
+        digest = sha256_digest(body)
+        claimed = response.header("Docker-Content-Digest")
+        if claimed and claimed != digest:
+            raise RegistryError(f"PUT manifest {reference}: the registry reports "
+                                f"{claimed}, but the body is {digest}")
+        return digest
 
     def blob_accessible(self, digest: str) -> bool:
         """HEAD a blob without following ghcr's redirect to its CDN: a
         redirect or 200 means the registry grants access; 401/403 does not."""
+        require_digest(digest, "blob")
         response = self.request("HEAD", f"blobs/{digest}")
         if response.status in (200, 301, 302, 303, 307, 308):
             return True
@@ -552,13 +634,23 @@ class Registry:
             return False
         raise RegistryError(f"HEAD blob {digest} answered {response.status}")
 
-    def download_blob(self, digest: str, sink: Callable[[bytes], None]) -> None:
+    def download_blob(self, digest: str, sink: Callable[[bytes], None],
+                      size: Optional[int] = None) -> None:
         """Stream a blob to `sink`, following one redirect WITHOUT the
         registry's Authorization header (the CDN URL is pre-signed), and
-        verify its digest."""
+        verify what arrived against the REQUESTED digest and, when the
+        descriptor declared one, its size. A stream longer than the declared
+        size is cut off as soon as it exceeds it. The sink has seen the bytes
+        by the time this returns, so a caller uses them only after it does."""
+        require_digest(digest, "blob")
         hasher = hashlib.sha256()
+        received = 0
 
         def both(chunk: bytes) -> None:
+            nonlocal received
+            received += len(chunk)
+            if size is not None and received > size:
+                raise RegistryError(f"blob {digest} is longer than its declared {size} bytes")
             hasher.update(chunk)
             sink(chunk)
 
@@ -566,34 +658,88 @@ class Registry:
         if response.status in (301, 302, 303, 307, 308):
             location = urllib.parse.urljoin(self._url(f"blobs/{digest}"),
                                             response.header("Location"))
+            if urllib.parse.urlsplit(location).scheme != self._origin(self.base_url)[0]:
+                raise RegistryError(f"blob {digest} redirects to {location!r}, which is not "
+                                    f"a {self._origin(self.base_url)[0]} URL; refused")
             response = self.transport("GET", location, {}, sink=both)
         if response.status != 200:
             raise RegistryError(f"GET blob {digest} answered {response.status}")
+        if size is not None and received != size:
+            raise RegistryError(f"blob {digest} is {received} bytes, but {size} were declared")
         if "sha256:" + hasher.hexdigest() != digest:
             raise RegistryError(f"blob {digest} failed its digest check")
 
-    def blob_bytes(self, digest: str) -> bytes:
+    def blob_bytes(self, digest: str, size: Optional[int] = None) -> bytes:
         chunks: list[bytes] = []
-        self.download_blob(digest, chunks.append)
+        self.download_blob(digest, chunks.append, size)
         return b"".join(chunks)
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedImage:
+    """What a reference resolved to, each step verified: `top` is the
+    manifest the reference named (an index, for a multi-platform image),
+    `image` the linux/amd64 image manifest, `document` its parsed body."""
+    top: ManifestState
+    image: ManifestState
+    document: dict
+
+
+#: An index may name an index; no real image nests deeper, and a hostile one
+#: must not recurse without bound.
+MAX_INDEX_DEPTH = 3
+
+
+def resolve_image(registry: Registry, reference: str, _depth: int = 0,
+                  _expect: Optional[tuple[str, int]] = None) -> ResolvedImage:
+    """The linux/amd64 image manifest behind a tag or digest.
+
+    Every hop is verified against the identity that was REQUESTED of it: a
+    digest reference against its own body, and each child an index selects
+    against the digest AND size the index declared. A tag is resolved once
+    and the digest it resolved to is what the rest is verified against."""
+    if _depth > MAX_INDEX_DEPTH:
+        raise DepsImageError(f"{reference}: image index nests too deeply")
+    state = registry.manifest(_expect[0] if _expect else reference,
+                              expect_size=_expect[1] if _expect else None)
+    if not state.present:
+        raise DepsImageError(f"{registry.repository}:{reference} does not exist")
+    try:
+        document = json.loads(state.body)
+    except ValueError as error:
+        raise RegistryError(f"manifest {reference} is not JSON") from error
+    if not isinstance(document, dict):
+        raise RegistryError(f"manifest {reference} is not a JSON object")
+    media = document.get("mediaType") or state.media_type
+    if media in INDEX_TYPES:
+        for entry in document.get("manifests", []):
+            platform = entry.get("platform", {}) if isinstance(entry, dict) else {}
+            if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
+                child = resolve_image(registry, reference, _depth + 1,
+                                      _expect=descriptor(entry, f"{reference}: index entry"))
+                return ResolvedImage(state if _depth == 0 else child.top, child.image,
+                                     child.document)
+        raise DepsImageError(f"{reference} has no linux/amd64 image")
+    if media not in MANIFEST_TYPES:
+        raise DepsImageError(f"{reference} has unsupported media type {media!r}")
+    image_blobs(document, reference)           # malformed descriptors fail here
+    return ResolvedImage(state, state, document)
+
+
+def image_blobs(document: dict, reference: str = "image"
+                ) -> tuple[tuple[str, int], list[tuple[str, int]]]:
+    """The (digest, size) of an image manifest's config and each layer,
+    every one required and well-formed."""
+    config = descriptor(document.get("config"), f"{reference}: config")
+    layers = [descriptor(layer, f"{reference}: layer {index}")
+              for index, layer in enumerate(document.get("layers") or [], 1)]
+    return config, layers
 
 
 def image_manifest(registry: Registry, reference: str) -> tuple[ManifestState, dict]:
     """The linux/amd64 image manifest behind a tag or digest."""
-    state = registry.manifest(reference)
-    if not state.present:
-        raise DepsImageError(f"{registry.repository}:{reference} does not exist")
-    document = json.loads(state.body)
-    media = document.get("mediaType") or state.media_type
-    if media in INDEX_TYPES:
-        for entry in document.get("manifests", []):
-            platform = entry.get("platform", {})
-            if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
-                return image_manifest(registry, entry["digest"])
-        raise DepsImageError(f"{reference} has no linux/amd64 image")
-    if media not in MANIFEST_TYPES:
-        raise DepsImageError(f"{reference} has unsupported media type {media!r}")
-    return state, document
+    resolved = resolve_image(registry, reference)
+    return resolved.image, resolved.document
 
 
 def verify_anonymous(registry: Registry, tags: Iterable[str]) -> list[str]:
@@ -602,9 +748,10 @@ def verify_anonymous(registry: Registry, tags: Iterable[str]) -> list[str]:
     report = []
     for tag in tags:
         try:
-            state, document = image_manifest(registry, tag)
-            blobs = [document["config"]["digest"]] + [
-                layer["digest"] for layer in document.get("layers", [])]
+            resolved = resolve_image(registry, tag)
+            state = resolved.image
+            config, layers = image_blobs(resolved.document, tag)
+            blobs = [config[0]] + [digest for digest, _size in layers]
             denied = [blob for blob in blobs if not registry.blob_accessible(blob)]
         except NotAnonymous as error:
             raise NotAnonymous(
@@ -616,7 +763,7 @@ def verify_anonymous(registry: Registry, tags: Iterable[str]) -> list[str]:
             raise NotAnonymous(
                 f"{tag}: {len(denied)} blob(s) refuse anonymous access, "
                 f"first {denied[0]}")
-        top = registry.manifest(tag).digest
+        top = resolved.top.digest       # the digest this tag resolved to, not a second fetch
         named = top if top == state.digest else f"{top} (linux/amd64 {state.digest})"
         report.append(f"{tag} -> {named}: manifests and {len(blobs)} "
                       "blob(s) readable without credentials")
@@ -1450,19 +1597,28 @@ def fetch(registry: Registry, reference: str, root: Path,
             "refusing to unpack over existing " + ", ".join(
                 str(root / p) for p in occupied)
             + "; start from empty prefixes (or pass --allow-existing)")
-    state, document = image_manifest(registry, reference)
-    config = json.loads(registry.blob_bytes(document["config"]["digest"]))
-    if config.get("os") != "linux" or config.get("architecture") != "amd64":
+    resolved = resolve_image(registry, reference)
+    state, document = resolved.image, resolved.document
+    (config_digest, config_size), layer_descriptors = image_blobs(document, reference)
+    try:
+        config = json.loads(registry.blob_bytes(config_digest, config_size))
+    except ValueError as error:
+        raise RegistryError("the image config is not JSON") from error
+    if (not isinstance(config, dict) or config.get("os") != "linux"
+            or config.get("architecture") != "amd64"):
         raise DepsImageError("the image is not linux/amd64")
-    log(f"{reference} -> {state.digest}")
+    # a tag is resolved exactly once, here: from now on every fetch is by the
+    # digest it resolved to, and each is verified against that identity
+    log(f"{reference} -> {resolved.top.digest}"
+        + ("" if resolved.top.digest == state.digest else f" (linux/amd64 {state.digest})"))
     with tempfile.TemporaryDirectory(prefix="synarchy-deps-") as scratch:
-        for index, layer in enumerate(document.get("layers", []), 1):
+        for index, (layer_digest, layer_size) in enumerate(layer_descriptors, 1):
             path = Path(scratch) / "layer"
             with open(path, "wb") as out:
-                registry.download_blob(layer["digest"], out.write)
+                registry.download_blob(layer_digest, out.write, layer_size)
             count = apply_layer(path, root, prefixes)
             path.unlink()
-            log(f"layer {index}/{len(document['layers'])} {layer['digest'][:19]}: "
+            log(f"layer {index}/{len(layer_descriptors)} {layer_digest[:19]}: "
                 f"{count} entries under {', '.join(prefixes)}")
     labels = (config.get("config") or {}).get("Labels") or {}
     return {"digest": state.digest, "labels": labels}
