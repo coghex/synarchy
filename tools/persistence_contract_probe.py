@@ -109,7 +109,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import (boot, quit_engine, send, send_json, wait_load_published,
+from probelib import (boot, pause_ai, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files, prepare_decoder
 from save_compat_audit import dump_canonical_summary
@@ -125,10 +125,12 @@ PAGE = "contract_page"
 # prove a load replaces the whole session rather than merging into it.
 GHOST_PAGE = "contract_preload_ghost"
 
-# The AI/stats script stack the loading screen would load in a real GUI
-# session -- headless boots skip the loading screen entirely (CLAUDE.md),
-# so any probe driving unit_ai (commandAttack/getState) must load these
-# itself. Mirrors probelib.AI_STACK exactly.
+# The AI/stats script stack the generic scenario (engines A-D) drives. A
+# headless boot already runs scripts/init_loader.lua, which loads
+# unit_resources, unit_ai and building_spawn itself; engine.loadScript
+# dedups by path and keeps the first load's interval, so these calls return
+# init_loader's instances (unit_stats is the one they actually load) rather
+# than starting second ones. Mirrors probelib.AI_STACK exactly.
 AI_SCRIPTS = (
     ("scripts/unit_stats.lua", 0.1),
     ("scripts/unit_resources.lua", 0.2),
@@ -517,8 +519,13 @@ def assert_nondefault_map_mode(chk: Checks, tmpdir: str, save_path: str, page: s
 # ── S8a (#2834): the SD-20 combat engagement across fresh processes ─────────
 
 ENG_PAGE = "engagement_page"
-# The engagement scenario needs no AI: units must never act on their own,
-# so only the stat and resource scripts a physiology pass needs are loaded.
+# The engagement, exhaustion/sleep, cardio and blood scenarios (engines E-P)
+# need no AI: units must never act on their own. A headless boot's
+# scripts/init_loader.lua has already loaded unit_resources AND unit_ai, so
+# engagement_boot PAUSES that unit_ai (probelib.pause_ai, #2865) -- left
+# running, a fixture acolyte's survival or medic errand can walk it off this
+# seed's summit to its death mid-fixture. These loads add unit_stats; the
+# unit_resources one dedups to init_loader's instance and its 0.1 s interval.
 ENG_SCRIPTS = (
     ("scripts/unit_stats.lua", 0.1),
     ("scripts/unit_resources.lua", 0.2),
@@ -570,10 +577,20 @@ def ensure_chunks(port: int) -> None:
 
 
 def engagement_boot(root: str, tmpdir: str, port: int, letter: str):
+    """Boot one of engines E-P with the unit AI paused before anything spawns.
+
+    The boot owns the process until it returns it: a setup step that fails
+    (pause_ai raises ProbeSetupError) stops this engine before propagating,
+    because the callers' cleanup only starts once they hold the process."""
     proc = boot_probe(root, port, os.path.join(tmpdir, f"engine{letter}.log"))
-    bootstrap_defs(port)
-    for path, delay in ENG_SCRIPTS:
-        send(port, f"engine.loadScript('{path}', {delay}); return 'ok'")
+    try:
+        bootstrap_defs(port)
+        for path, delay in ENG_SCRIPTS:
+            send(port, f"engine.loadScript('{path}', {delay}); return 'ok'")
+        pause_ai(port)
+    except BaseException:
+        quit_engine(port, proc)
+        raise
     return proc
 
 
