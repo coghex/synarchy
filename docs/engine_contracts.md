@@ -139,7 +139,8 @@ audits running on a docs-only change.
 The set: warning-clean (`-Werror`) build of library/exe + both test
 suites, the headless hspec suite, `test_audit.py`,
 `test_determinism.py`, the Lua/Haskell module-budget guards, the Lua
-duplicate-function audit, the Unicode-operator audit, the haddock link
+duplicate-function audit, the Unicode-operator audit (which also keeps
+every embedded shader quasiquote ASCII, #2862), the haddock link
 audit (`test_haddock_link_audit.py` then the bare audit, #2292 — no
 qualified `'Module.function'` haddock link outside its generated
 baseline), the Lua
