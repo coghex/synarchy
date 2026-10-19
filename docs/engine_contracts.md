@@ -7698,6 +7698,15 @@ poured into the lower absent column nor drained through it, and a neighbour
 that is not loaded is closed as it always was. The absent columns' terrain is
 never replaced by a wall height — writebacks copy `scsTerrain` into the world.
 
+**Readers of resident padding.** A partial chunk is resident WITH its absent
+columns (surface `minBound`, empty cells), so any reader that walks a chunk or
+a neighbour column must treat `minBound` as "not a tile", never as a height:
+camera z-tracking keeps the camera's slice over one (`trackedSliceTarget`; pan
+itself is never clamped), `waterSideFaceQuads` draws no face toward one, the
+chunk-info min/max, the tile dump (`tileAvailable`), the mine-drag preview and
+the ground-item draw skip them. A new reader of `lcSurfaceMap` /
+`lcTerrainSurfaceMap` joins this list, with a test across a resident edge.
+
 **Persistence** is the `world-pages` v15 field `pcArenaBounds`
 ([persistence contract](persistence_contract.md)); older arena saves load
 expandable. **Gates:** hspec `--match "arena finite bounds"` (rectangle table,
