@@ -23,8 +23,20 @@ it applies to and is validated before every mode.
 | `--arena` | `--headless`, `--offscreen`, graphical |
 | `--port` | `--headless`, `--offscreen`, `--preview`, graphical |
 
-The rejection table lives in `app/Main.hs`'s `incompatibleFlagTable`;
-`tools/preview_cli_probe.py` is the no-boot gate covering it.
+The rejection table is `incompatibleFlagTable`, a projection of
+`App.Usage.flagSpecs`; `tools/preview_cli_probe.py` is the no-boot gate
+covering it.
+
+**`--help` / `-h` (#2863)** print `App.Usage.usageText` to stdout and
+exit 0. Main checks them first, before resource-root resolution, mode
+selection, flag validation and boot, so help works from any directory
+and beside any other argv, and writes nothing. Only those two exact
+tokens count; every other unrecognized argument is still ignored. The
+usage text is generated from the same definitions Main uses: add a flag
+to `flagSpecs` (value format, summary, honouring modes) and it is both
+rejected in other modes and listed by `--help`; a new boot mode is a
+compile error in `App.Usage.modeUsage` until described. Gates: hspec
+`--match "App.Usage"`, `tools/preview_cli_probe.py` check 11.
 
 **A present-but-malformed value is an error, not a default (#1191).** In
 a mode that honours it, a non-numeric
