@@ -238,17 +238,33 @@ worldPickChunkFn env = do
 --   pre-check). Resolves against the VISIBLE page's world size, like
 --   @pickTile@; identity away from the seam, in arena / non-wrapping
 --   worlds, and when no world is up.
+--
+--   An optional fifth argument, a page-id STRING (#2522), resolves
+--   against THAT page's world size instead, exactly as
+--   @world.getWrapWidth(pageId)@ reads it: a caller ranking positions on
+--   a named page (the shared assignment rule) must not have its seam
+--   frame change with whichever page happens to be visible. A named page
+--   that does not exist is identity, never a fallback to the visible
+--   one, since pages may have different wrap sizes.
 worldLocalizeTileFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldLocalizeTileFn env = do
     mAX ← Lua.tonumber 1
     mAY ← Lua.tonumber 2
     mGX ← Lua.tonumber 3
     mGY ← Lua.tonumber 4
+    pageTy ← Lua.ltype 5
+    mPage ← case pageTy of
+        Lua.TypeString → fmap TE.decodeUtf8Lenient <$> Lua.tostring 5
+        _              → pure Nothing
     case (mAX, mAY, mGX, mGY) of
         (Just ax, Just ay, Just gx, Just gy) → do
             manager ← Lua.liftIO $ readIORef
                 (wsWorldManagerRef (toWorldSimCapability env))
-            worldSize ← case visiblePageState manager of
+            mWs ← case mPage of
+                Just pid → Lua.liftIO $
+                    worldStateByPage (toWorldSimCapability env) pid
+                Nothing  → pure (visiblePageState manager)
+            worldSize ← case mWs of
                 Just ws → Lua.liftIO $ pageWrapWorldSize ws
                 Nothing → pure 0
             let (lx, ly) = localizeTileToAnchor worldSize

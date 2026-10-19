@@ -3355,6 +3355,44 @@ the page-ownership rules are unchanged. Gate: hspec
 `tools/expedition_retrieval_probe.py`, which drives `commandPickup` end
 to end.
 
+**Opening a container where it lies (#2528, PLC-18; D-8, D-9, D-25,
+D-27).** The ground menu offers "Open" on any item whose definition
+declares `storage:` (the row's `hasStorage`), assigned through the shared
+rule (§Player transfers) for the `open_ground` action with the
+no-selection fallback, exactly as "Pick up"; it is omitted when no unit is
+eligible, and like every player order it first ends a held Mode A session
+for that unit (`transfer_session.notePlayerOrder`, called by the menu,
+never by `unitAi.commandOpen` itself). `commandOpen(uid, gid[, pageId])`
+accepts only an item-container on the unit's OWN page (and on `pageId`
+when given), refusing anything else silently with no order, hold or
+schedule changed; it clears a position hold on acceptance, stores
+`s.openOrder = { gid, issuedAt }` and checks no weight. The
+`open_ground` action (`scripts/unit_ai_open.lua`, registered beside
+`pickup_ground`, the same utility) walks to within
+`open_arrival_tiles` (default 1.2) and keeps the pickup order's page
+rules: a gid the carrier's page no longer holds retires the order quietly,
+an unresolvable page leaves it standing. On arrival it calls ONE result
+boundary, `unit_ai_open.resolveOpen` — the single place locks, traps or
+perception checks will run; today it answers success. Success realizes a
+pending shell on the carrier's page (`item.realizeGround(gid, page)`),
+records ONE contents observation by the crate's instance id
+(`item.observeContainerContents`: contents and weight, both stamped with
+the observation time — a repeat Open refreshes both and rerolls nothing),
+emits a `unit_event` naming unit and crate, and pushes the crate's
+`portableItem` base level (`item_contents_panel.openForGround`), which
+shows the committed knowledge once the queued observation lands. A
+realization refusal (D-23), and an observation the engine refuses, report
+a `unit_warning` naming unit and crate and record nothing. Nothing moves
+the crate. `openOrder` persists in `lua.unit_ai` v11 (a v1–v10 payload
+decodes with it absent) with its `gid` a typed `ground_item` edge in
+`unit_ai_ref_schema.lua`, so the post-load reconcile scrubs an order whose
+crate is gone from the owning unit's page. Gates: hspec
+`--match "Open order"` / `"the Open order (#2528)"` (filed under "Nested
+item contents"), `"commanded order stall budget"`, `"unit_ai save
+component"`, `"unit_ai post-load reconciliation"`, and
+`tools/location_content_probe.py`'s Open scenario, the only place a
+pending order rides a real save and resumes after a fresh-process load.
+
 **The wire.** `world-pages` v12 appends `lidContainers` to
 `LocationInstanceDTO`; v11 is frozen as `PageCoreDTOv11` /
 `WorldGenParamsDTOv8` / `LocationInstancesDTOv6` / `LocationInstanceDTOv6`
@@ -3839,7 +3877,7 @@ elevation. Every production caller supplies a real target height:
 building's `biGridZ`), and a ground row reports the terrain height the
 item rests at (see §Pending container shells); a target with no `gridZ`
 ranks on x/y alone. The no-selection FALLBACK is opt-in
-(`opts.fallback`) and only Pick up passes it: an EMPTY selection then
+(`opts.fallback`) and only Pick up and Open (#2528) pass it: an EMPTY selection then
 assigns the nearest eligible unit living on the target's own page
 (`unit.getAllIds(pageId)`), while a nonempty selection is the candidate
 set even when none of it is eligible, and a selected unit on another
@@ -4461,6 +4499,16 @@ from v1 is still an accepted input); a v1–v4 order carries the old
 absolute `progressAt` and is seeded from it on its first tick. The
 position-hold walk home (#1216) is charged against the same budget, so
 an unreachable anchor expires instead of re-pathing forever.
+
+Four order timers share these rules: the commanded move
+(`TASK_TIMEOUT_SEC`), the pickup (`pickup_timeout`), the queued transfer
+(`transfer_order_timeout`) and, since #2528, the player `Open` order
+(`open_timeout`, default pickup's 30 s). The Open order rides the same
+`suspendOrders` boundary, so a collapse, an engine animation or a mental
+break drops its sampling stamp without refunding what it already spent,
+and it resets only on a closest approach its own `open_ground` action
+makes. Gate: the same hspec group's "the same accounting governs
+openOrder (#2528)" block.
 
 ---
 

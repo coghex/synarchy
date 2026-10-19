@@ -93,6 +93,7 @@ import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.GroundSelection as GroundSelection
 import qualified Test.Headless.Lua.FoodHarvestTarget as LuaFoodHarvestTarget
 import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
+import qualified Test.Headless.Lua.UnitAiPickupPending as LuaUnitAiPickupPending
 import qualified Test.Headless.Lua.UnitAiRepairGround as LuaUnitAiRepairGround
 import qualified Test.Headless.Item.Temperature as ItemTemp
 import qualified Test.Headless.Item.BuffYaml as ItemBuffYaml
@@ -823,6 +824,12 @@ restLane = do
     -- carrier and its target sit on live, non-active page B, and drives
     -- the production scripts/unit_ai_pickup.lua over it.
     aroundAll withHeadlessEngine LuaUnitAiPickupPage.spec
+    -- #2522: Pick up under the shared assignment rule and pending
+    -- container shells through the order. Its OWN engine per example,
+    -- for the reason PortableKnowledge.LuaApi has one: it installs page
+    -- sets, item and loot registries, and drives real world ticks to
+    -- drain the weight observation.
+    LuaUnitAiPickupPending.spec
     -- Own engine for the same reason (#2553): the food-harvest identity
     -- gate installs its own single-page world manager carrying two
     -- co-tenant plants on ONE tile, rewrites the flora catalog, item

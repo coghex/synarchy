@@ -401,8 +401,8 @@ candidate's `gridZ` against the target's own (`unit.transferEndpointInfo`'s
 `gridZ` for a unit or building, the terrain height a ground item rests at). It
 is distance to the target, never absolute elevation: under an elevated target
 the lowest unit is the farthest. The same `transfer_session.resolveSource` now
-assigns "Pick up" too (`docs/portable_loot_containers.md` D-8, D-28), with an
-opt-in no-selection fallback that only Pick up uses — an empty selection
+assigns "Pick up" and, since #2528, "Open" too (`docs/portable_loot_containers.md`
+D-8, D-28), with an opt-in no-selection fallback that only those two verbs use — an empty selection
 assigns the nearest eligible unit on the target's page; a nonempty selection
 with no eligible member assigns nobody. Transfer and Retrieve stay
 selection-only.

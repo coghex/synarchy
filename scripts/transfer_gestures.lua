@@ -256,8 +256,8 @@ function M.retrieveEntries(endpoint, row)
     if type(endpoint) ~= "table" then return {} end
     local session = require("scripts.transfer_session")
     local excludeUid = endpoint.kind == "unit" and endpoint.id or nil
-    -- Ranked against the endpoint's OWN reported tile, which is the
-    -- point the resolver measures to.
+    -- Ranked against the endpoint's OWN reported tile and z level
+    -- (#2522), which is the point the resolver measures to.
     local target = unit.transferEndpointInfo(endpoint)
     -- Capability filters BEFORE ranking (#2030), which is the whole
     -- reason the shared rule takes the action rather than being asked

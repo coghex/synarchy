@@ -64,9 +64,29 @@ prettifyDefName = T.unwords . map capWord . T.words . T.map underToSpace
                  then toEnum (fromEnum c - 32)
                  else c
 
+-- | @unit.getAllIds([pageId])@ (#2522): with no argument, the ACTIVE
+--   page's units, exactly as before. With a page id string, the units
+--   living on THAT page ('uiPage'), whether or not it is the active one
+--   — the explicit-page form a caller needs when it already knows which
+--   world it is asking about and must not trust that the active page is
+--   still that world by the time it asks. An unknown page answers an
+--   empty array; any other argument type also answers an empty array
+--   rather than silently falling back to the active page.
 unitGetAllIdsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetAllIdsFn env = do
-    ids ← Lua.liftIO $ HM.keys <$> activeUnits env
+    argTy ← Lua.ltype 1
+    pageArg ← case argTy of
+        Lua.TypeNone   → pure (Right Nothing)
+        Lua.TypeNil    → pure (Right Nothing)
+        Lua.TypeString → Right ∘ fmap (WorldPageId ∘ TE.decodeUtf8Lenient)
+                             <$> Lua.tostring 1
+        _              → pure (Left ())
+    ids ← Lua.liftIO $ case pageArg of
+        Right Nothing    → HM.keys <$> activeUnits env
+        Right (Just pid) → do
+            um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            pure (HM.keys (unitsOnPage pid (umInstances um)))
+        Left ()          → pure []
     Lua.newtable
     forM_ (zip [1 ∷ Int ..] ids) $ \(i, uid) → do
         Lua.pushinteger (fromIntegral (unUnitId uid))

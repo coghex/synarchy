@@ -2086,6 +2086,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiReconcile
                    Test.Headless.Lua.FoodHarvestTarget
                    Test.Headless.Lua.UnitAiPickupPage
+                   Test.Headless.Lua.UnitAiPickupPending
                    Test.Headless.Lua.UnitAiRepairGround
                    Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.BuildingSpawnSentinel

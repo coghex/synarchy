@@ -50,8 +50,10 @@ import World.Arena.Bounds (arenaAdmitsPosition)
 import World.Arena.Page (pageArenaBounds)
 import Engine.Core.Log.Types (LogCategory(..))
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
-import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
-import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
+import Engine.Core.State
+    (EngineEnv, activeWorldPageFrom, activeWorldStateFrom, freshItemInstanceId)
+import Engine.Scripting.Lua.API.Units.Page
+    (unitOwningPage, unitOwningWorldState)
 import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Item.Materialize (ItemOverrides(..), materializeItem, pristineItem)
 import Item.Roll (GroundConditionBase, mkGroundConditionBase
@@ -63,7 +65,8 @@ import World.Cursor.Types (CursorState(..))
 import World.GroundItems
     (groundRestShift, moveGroundItemOnPage, takeGroundItemOnPage)
 import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
-                   , WorldGenParams(..), wmWorlds)
+                   , WorldGenParams(..), WorldTileData, wmWorlds)
+import World.Render.GroundItemQuads (groundItemRestZ)
 import World.Weather.Ambient (ambientTempAt)
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
@@ -542,11 +545,28 @@ worldSpawnLocationContainerFn env = do
 --   * @kind@ — the DEF's equipment-slot kind, defaulted to @"misc"@
 --     when the def is unknown, exactly as @unit.getInventory@ defaults
 --     it, so a row is never missing the field a predicate branches on.
-pushGroundRow ∷ ItemManager → Int → GroundItem
+--
+--   Three fields describe the item IN its page rather than the instance
+--   alone (#2522), which is why the builder is handed that page's
+--   'GroundRowPage' and not just the ground map:
+--
+--   * @page@ — the id of the page the row was read from, so a caller
+--     can carry an explicit page through a later operation instead of
+--     trusting whatever the active page is by then;
+--   * @pending@ — whether the item is a bound container shell whose
+--     cargo has not been realized yet, answered by 'groundShellPending',
+--     the same classification 'realizeGroundOnPage' acts on, and
+--     WITHOUT realizing anything;
+--   * @gridZ@ — the terrain-surface z the item currently rests at,
+--     derived from the live terrain by 'groundItemRestZ' (the draw's own
+--     rule: ground items store no z). Absent when that column is not
+--     loaded, rather than a guessed number.
+pushGroundRow ∷ ItemManager → GroundRowPage → Int → GroundItem
               → Lua.LuaE Lua.Exception ()
-pushGroundRow im gid gi = do
+pushGroundRow im rowPage gid gi = do
     let inst = giInst gi
         mDef = lookupItemDef (iiDefName inst) im
+        WorldPageId pageText = grpPage rowPage
     Lua.newtable
     Lua.pushinteger (fromIntegral gid)
     Lua.setfield (Lua.nth 2) "id"
@@ -621,17 +641,49 @@ pushGroundRow im gid gi = do
     -- holding nothing.
     Lua.pushstring (TE.encodeUtf8 (itemContentsSig inst))
     Lua.setfield (Lua.nth 2) "contentsKey"
+    Lua.pushstring (TE.encodeUtf8 pageText)
+    Lua.setfield (Lua.nth 2) "page"
+    Lua.pushboolean (groundShellPending (grpParams rowPage) inst)
+    Lua.setfield (Lua.nth 2) "pending"
+    forM_ (groundItemRestZ (grpWorldSize rowPage) (grpTiles rowPage) gi) $
+        \z → do
+            Lua.pushinteger (fromIntegral z)
+            Lua.setfield (Lua.nth 2) "gridZ"
+
+-- | What a ground row needs to know about the page its item lies on
+--   (#2522): the page's id, its generation params (whose placed
+--   locations say whether a shell is still pending) and its live tiles
+--   (which say where the item rests). Read once per query, so every row
+--   one listing produces describes the same instant of one page.
+data GroundRowPage = GroundRowPage
+    { grpPage      ∷ !WorldPageId
+    , grpParams    ∷ !(Maybe WorldGenParams)
+    , grpTiles     ∷ !WorldTileData
+    , grpWorldSize ∷ !Int
+      -- ^ the wrap width the draw canonicalises against, defaulted the
+      --   way 'World.Render.GroundItemQuads' defaults it
+    }
+
+groundRowPage ∷ WorldPageId → WorldState → IO GroundRowPage
+groundRowPage pid ws = do
+    mParams ← readIORef (wsGenParamsRef ws)
+    tiles   ← readIORef (wsTilesRef ws)
+    pure GroundRowPage
+        { grpPage = pid, grpParams = mParams, grpTiles = tiles
+        , grpWorldSize = maybe 128 wgpWorldSize mParams }
 
 -- | item.listGround() → array of {id, instanceId, defName, displayName,
 --   kind, x, y, fill, quality, qualityTier, condition, sharpness,
---   hasStorage, weight, contentsKey}.
+--   hasStorage, weight, contentsKey, page, pending, gridZ}.
 --   `weight` is the live total mass (itemTotalWeight: empty weight +
 --   fill + nested contents), not the static def weight. `qualityTier`
 --   (#345) is present only when the def declares a quality spec;
 --   `condition`, `sharpness` (#1737), `kind`, `hasStorage` (#2527 —
 --   the def's own @storage:@ declaration, which nothing else on the row
 --   implies) and `contentsKey` (#2510 — the ids-masked contents
---   signature @unit.getInventory@ also reports) are always present.
+--   signature @unit.getInventory@ also reports) are always present, as
+--   are @page@ and @pending@ (#2522); @gridZ@ (#2522) is present only
+--   while the item's column is loaded. See 'pushGroundRow'.
 --
 --   ACTIVE-page scoped, deliberately: this is the UI's listing, and
 --   the UI only ever shows the world the player is looking at. A
@@ -640,17 +692,18 @@ pushGroundRow im gid gi = do
 --   off-page unit names a different item entirely (#1666).
 itemListGroundFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemListGroundFn env = do
-    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
+    mWs ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
     im  ← Lua.liftIO $ readReadOnlyRef
         (crvItemManagerRef (toContentRegistriesViewCapability env))
     case mWs of
         Nothing → Lua.pushnil >> return 1
-        Just ws → do
+        Just (pid, ws) → do
             gis ← Lua.liftIO $ readIORef (wsGroundItemsRef ws)
+            rowPage ← Lua.liftIO $ groundRowPage pid ws
             Lua.newtable
             forM_ (zip [1 ∷ Int ..] (HM.toList (gisItems gis))) $
                 \(i, (gid, gi)) → do
-                    pushGroundRow im gid gi
+                    pushGroundRow im rowPage gid gi
                     Lua.rawseti (Lua.nth 2) (fromIntegral i)
             return 1
 
@@ -694,16 +747,18 @@ itemGetGroundForUnitFn env = do
     case (uidArg, gidArg) of
         (Just u, Just g) → do
             mWs ← Lua.liftIO $
-                unitOwningWorldState env (UnitId (fromIntegral u))
+                unitOwningPage env (UnitId (fromIntegral u))
             case mWs of
                 Nothing → unresolved
-                Just ws → do
+                Just (pid, ws) → do
                     gis ← Lua.liftIO $ readIORef (wsGroundItemsRef ws)
                     im  ← Lua.liftIO $ readReadOnlyRef
                         (crvItemManagerRef (toContentRegistriesViewCapability env))
                     case HM.lookup (fromIntegral g) (gisItems gis) of
                         Nothing → Lua.pushnil
-                        Just gi → pushGroundRow im (fromIntegral g) gi
+                        Just gi → do
+                            rowPage ← Lua.liftIO $ groundRowPage pid ws
+                            pushGroundRow im rowPage (fromIntegral g) gi
                     Lua.pushboolean True
                     return 2
         _ → unresolved
@@ -1034,6 +1089,31 @@ data GroundRealization
       --   already been logged
     deriving (Show, Eq)
 
+-- | The container slot that claims a ground instance on a page whose
+--   generation params are @mParams@, by the instance's durable
+--   'iiInstanceId' (#2510). The ONE lookup both the realization below
+--   and the ground row's @pending@ field ('groundShellPending') go
+--   through, so a row can never report a shell pending that the
+--   realization would call "not pending", or the reverse.
+shellSlotOn ∷ Maybe WorldGenParams → ItemInstance
+            → Maybe (WorldGenParams, LocationInstance, LocationContainerSlot)
+shellSlotOn mParams shell = do
+    p ← mParams
+    (inst, slot) ← containerSlotForShell (iiInstanceId shell)
+                       (wgpLocationInstances p)
+    pure (p, inst, slot)
+
+-- | Is this ground instance a bound container shell whose cargo has not
+--   been realized yet (#2522)? Answered from the slot alone — nothing is
+--   drawn and nothing is written — which is what lets the pickup command
+--   tell a pending shell from a realized one without realizing it. A
+--   shell whose realization would refuse (D-23) is still pending: it
+--   stays pending until a realization actually completes.
+groundShellPending ∷ Maybe WorldGenParams → ItemInstance → Bool
+groundShellPending mParams shell = case shellSlotOn mParams shell of
+    Just (_, _, slot) → not (lcsRealized slot)
+    Nothing           → False
+
 -- | THE pending → realized transition for one ground item on one page
 --   (#2510, epic #1231 PLC-15; design D-3, D-17, D-22, D-23).
 --
@@ -1081,12 +1161,7 @@ realizeGroundOnPage env ws gid = do
         Just gi → do
             mParams ← readIORef (wsGenParamsRef ws)
             let shell = giInst gi
-                owner = do
-                    p ← mParams
-                    (inst, slot) ← containerSlotForShell (iiInstanceId shell)
-                                       (wgpLocationInstances p)
-                    pure (p, inst, slot)
-            case owner of
+            case shellSlotOn mParams shell of
                 Nothing → pure GroundNotPending
                 Just (p, inst, slot)
                     | lcsRealized slot → pure GroundAlreadyRealized

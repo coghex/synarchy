@@ -16,9 +16,10 @@ import UPrelude
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, activeWorldStateFrom)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom, activeWorldStateFrom)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import World.Cursor.Types (CursorState(..))
@@ -29,28 +30,36 @@ import Engine.Scene.Types (SortableQuad(..))
 import World.Render.GroundItemQuads (hitTestGroundItemAt
                                     , renderGroundItemQuads)
 import World.GroundItems (selectGroundItemOnPage)
-import World.Types (WorldState(..))
+import World.Types (WorldPageId(..), WorldState(..))
 import Item.Ground (GroundItems(..))
 
--- | item.hitTestAt(px, py) → gid | nil — topmost ground item whose
+-- | item.hitTestAt(px, py) → gid, page | nil — topmost ground item whose
 --   sprite contains the window-pixel point (unit.hitTestAt analog).
+--
+--   The second value (#2522) is the id of the page the hit was tested
+--   on. A gid is page-local and the active page can move between two
+--   calls, so a caller that pairs this gid with a row from another query
+--   compares the row's own @page@ against this one instead of assuming
+--   both read the same world.
 itemHitTestAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemHitTestAtFn env = do
     xArg ← Lua.tonumber 1
     yArg ← Lua.tonumber 2
     case (xArg, yArg) of
         (Just (Lua.Number x), Just (Lua.Number y)) → do
-            mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
+            mWs ← Lua.liftIO $ activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Nothing → Lua.pushnil >> return 1
-                Just ws → do
+                Just (WorldPageId pid, ws) → do
                     mGid ← Lua.liftIO $
                         hitTestGroundItemAt env ws (realToFrac x)
                                                    (realToFrac y)
                     case mGid of
-                        Just gid → Lua.pushinteger (fromIntegral gid)
-                        Nothing  → Lua.pushnil
-                    return 1
+                        Just gid → do
+                            Lua.pushinteger (fromIntegral gid)
+                            Lua.pushstring (TE.encodeUtf8 pid)
+                            return 2
+                        Nothing  → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
 -- item.select(gid) / item.deselect() / item.getSelected() — the

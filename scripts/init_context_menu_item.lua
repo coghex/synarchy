@@ -7,16 +7,18 @@
 local M = {}
 
 -- Right-click on a ground item → context menu. Info always; "Contents"
--- for an item-container (#2527); and, with units selected, Pick up /
--- Move here. Pick up dispatches the NEAREST selected unit; capacity is
--- checked at the moment of pickup (it can change en route).
+-- for an item-container (#2527); "Pick up" whenever the shared
+-- assignment rule finds a carrier (#2522); and, with units selected,
+-- "Move here". Capacity is checked by the pickup order itself, at
+-- command time and again at the moment of pickup (it can change en
+-- route).
 --
 -- The ground row is resolved ONCE up front because two entries need it
 -- and one of them — "Contents" — is offered with no unit selected at
 -- all: a crate's window is the player looking at what they remember,
 -- not a unit interaction.
 function M.tryItemMenu(x, y)
-    local gid = item.hitTestAt(x, y)
+    local gid, hitPage = item.hitTestAt(x, y)
     if not gid then return false end
 
     local fbW, fbH = engine.getFramebufferSize()
@@ -78,40 +80,58 @@ function M.tryItemMenu(x, y)
     end
 
     local selUids = unit.getSelected() or {}
-    if #selUids > 0 then
-        if ipos then
+
+    -- "Pick up" (#2522): the carrier is whoever the arc-wide assignment
+    -- rule picks (transfer_session.resolveSource, D-8 / D-28) -- nearest
+    -- to the item in three dimensions, lowest uid on an exact tie,
+    -- player-commandable and able to run pickup_ground, filtered BEFORE
+    -- ranking -- with the no-selection fallback switched on:
+    --
+    --   * a nonempty selection is the candidate set, and when none of it
+    --     is eligible the entry is omitted (no reaching past the
+    --     player's choice for an unselected unit);
+    --   * an empty selection assigns the nearest eligible player unit on
+    --     the item's own page;
+    --   * no eligible unit at all omits the entry.
+    --
+    -- The target names its page explicitly. The row's own `page` must be
+    -- the page the hit was tested on (a gid is page-local, and the two
+    -- queries each read whatever page was active when they ran); the
+    -- resolver then ranks only units on that page, and the order is
+    -- dispatched with it, so a carrier on any other page is refused
+    -- rather than handed a same-numbered id from a different world.
+    -- The height ranked against is the terrain the item rests on.
+    if ipos and ipos.page ~= nil and ipos.page == hitPage then
+        local transferSession = require("scripts.transfer_session")
+        local target = { gridX = ipos.x, gridY = ipos.y,
+                         gridZ = ipos.gridZ, page = ipos.page }
+        local carrier = transferSession.resolveSource(selUids, nil, target,
+            "pickup_ground", { fallback = true })
+        if carrier then
             local unitAi = require("scripts.unit_ai")
-            local transferSession = require("scripts.transfer_session")
+            local page = ipos.page
             table.insert(menuItems, {
                 label = "Pick up",
                 callback = function()
-                    local best, bestUid = math.huge, nil
-                    for _, uid in ipairs(selUids) do
-                        local info = unit.getInfo(uid)
-                        if info then
-                            local d = (info.gridX - ipos.x) ^ 2
-                                    + (info.gridY - ipos.y) ^ 2
-                            if d < best then
-                                best, bestUid = d, uid
-                            end
-                        end
-                    end
-                    if bestUid then
-                        -- #1254, as on Attack above: a player order to
-                        -- a held unit ends the Mode A session first.
-                        transferSession.notePlayerOrder(bestUid)
-                        unitAi.commandPickup(bestUid, gid)
-                    end
-                end })
-            table.insert(menuItems, {
-                label = "Move here",
-                callback = function()
-                    for _, uid in ipairs(selUids) do
-                        transferSession.notePlayerOrder(uid)
-                        unitAi.commandMove(uid, ipos.x, ipos.y)
-                    end
+                    -- #1254, as on Attack: a player order to a held
+                    -- unit ends the Mode A session first.
+                    transferSession.notePlayerOrder(carrier)
+                    unitAi.commandPickup(carrier, gid, page)
                 end })
         end
+    end
+
+    if #selUids > 0 and ipos then
+        local unitAi = require("scripts.unit_ai")
+        local transferSession = require("scripts.transfer_session")
+        table.insert(menuItems, {
+            label = "Move here",
+            callback = function()
+                for _, uid in ipairs(selUids) do
+                    transferSession.notePlayerOrder(uid)
+                    unitAi.commandMove(uid, ipos.x, ipos.y)
+                end
+            end })
     end
     contextMenu.show(menuItems, mx, my)
     return true

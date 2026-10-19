@@ -17,6 +17,7 @@ module World.Render.GroundItemQuads
     , renderGroundItemQuadsScanned
     , hitTestGroundItemAt
     , itemGeometry
+    , groundItemRestZ
     ) where
 
 import UPrelude
@@ -113,18 +114,11 @@ itemGeometry tileData im texSizes facing zSlice worldSize gi = do
     -- is unchanged by it. Identity away from the seam.
     let rawTX = floor (giX gi) ∷ Int
         rawTY = floor (giY gi) ∷ Int
-        (chunkCoord, (lx, ly), (dgx, dgy)) =
-            canonicalTileFrame worldSize rawTX rawTY
+        (_, _, (dgx, dgy)) = canonicalTileFrame worldSize rawTX rawTY
         tx = rawTX + dgx
         ty = rawTY + dgy
-    lc ← HM.lookup chunkCoord (wtdChunks tileData)
+    (lc, idx, tz) ← restColumn worldSize tileData gi
     itemDef ← HM.lookup (iiDefName (giInst gi)) (imDefs im)
-    let idx = columnIndex lx ly
-        tz  = lcTerrainSurfaceMap lc VU.! idx
-    -- #2708: a column the finite arena does not have carries no terrain
-    -- to rest on (items are refused there at spawn; this is the draw's
-    -- own refusal for a stale one).
-    _ ← if tz ≡ minBound then Nothing else Just ()
     let col = lcTiles lc V.! idx
         si  = tz - ctStartZ col
         slopeMask = if si ≥ 0 ∧ si < VU.length (ctSlopes col)
@@ -166,6 +160,36 @@ itemGeometry tileData im texSizes facing zSlice worldSize gi = do
         drawY = rawY - heightOffset + subY
               + tileHalfDiamondHeight - quadH + nudge
     pure (tz, texHandle, drawX, drawY, quadW, quadH, underwaterDepth)
+
+-- | The loaded column a ground item rests on, its index, and the
+--   terrain-surface z it rests at — THE resting-height rule, shared by
+--   the draw ('itemGeometry') and by every reader that needs a ground
+--   item's elevation ('groundItemRestZ'), so the height a caller ranks
+--   against is the height the player sees the item drawn at.
+--
+--   Canonicalises the whole tile frame first (#1135; see
+--   'itemGeometry'). Nothing when the chunk is not loaded, and for a
+--   column the finite arena does not have (#2708: it carries no
+--   terrain to rest on — items are refused there at spawn, and this is
+--   the readers' own refusal for a stale one).
+restColumn ∷ Int → WorldTileData → GroundItem → Maybe (LoadedChunk, Int, Int)
+restColumn worldSize tileData gi = do
+    let (chunkCoord, (lx, ly), _) =
+            canonicalTileFrame worldSize (floor (giX gi)) (floor (giY gi))
+    lc ← HM.lookup chunkCoord (wtdChunks tileData)
+    let idx = columnIndex lx ly
+        tz  = lcTerrainSurfaceMap lc VU.! idx
+    if tz ≡ minBound then Nothing else Just (lc, idx, tz)
+
+-- | The terrain-surface z a ground item currently rests at (#2522), or
+--   Nothing when its column is not loaded. Ground items deliberately
+--   store no z ("Item.Ground"); this derives it from the CURRENT
+--   terrain exactly as the draw does, so it can never go stale either.
+--   The whole-tile surface the item sits on, not the slope-lowered draw
+--   offset within it.
+groundItemRestZ ∷ Int → WorldTileData → GroundItem → Maybe Int
+groundItemRestZ worldSize tileData gi =
+    (\(_, _, tz) → tz) <$> restColumn worldSize tileData gi
 
 renderGroundItemQuads ∷ EngineEnv → WorldState → Float
                       → IO (V.Vector SortableQuad)
