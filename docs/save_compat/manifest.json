@@ -3874,6 +3874,113 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z16-scenario-world.expected.json"
         }
       ]
+    },
+    {
+      "id": "x1-open-order-pending",
+      "description": "The #2528 shape (lua.unit_ai v11): a unit carries a PENDING player Open order (aiState.openOrder = { gid, issuedAt } with the stall accounting it accrues: stalledFor, bestDist), whose gid is a typed ground_item reference to a REAL ground item six tiles away on the same page, so the integrity graph resolves it. The order is installed directly in the live aiState with the sim paused -- no shipped item definition declares storage: yet (PLC-10 owns the wooden crate), so unitAi.commandOpen has nothing it would accept -- and then rides unit_ai_save.lua's ordinary snapshot and the production codec. A v1-v10 payload has no such order, which is the correct v11 value: no Open order could have been pending.",
+      "declaredAt": "(fill in: YYYY-MM-DD)",
+      "declaredByIssue": 2528,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "buildings",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "container-knowledge",
+          "required": false,
+          "version": 2
+        },
+        {
+          "id": "core-session",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "craft-bills",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "lua.building_spawn",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "lua.unit_ai",
+          "required": true,
+          "version": 11
+        },
+        {
+          "id": "metadata",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "portable-knowledge",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "power-nodes",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "texture-palette",
+          "required": true,
+          "version": 1
+        },
+        {
+          "id": "transfer-orders",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "unit-sim",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "units",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-activity",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-edits",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-pages",
+          "required": true,
+          "version": 15
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "x1-open-order-pending",
+          "path": "test-headless/data/save-compat/x1-open-order-pending.bin",
+          "kind": "complete-session",
+          "sha256": "46b74dcaf1cb1fb617a20084292a2649c38d7893a1f130c1eb7f071602d872d0",
+          "sizeBytes": 909180,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then return item.spawnGround('field_toolbox', 6, 0) ~= nil; engine.setPaused(true); local g; for _, r in ipairs(item.listGround() or {}) do if r.defName == 'field_toolbox' then g = r.id end end; if g == nil then return false end; local c = require('scripts.unit_ai_core'); local s = c.ensureState({uid}); s.openOrder = { gid = g, issuedAt = engine.gameTime(), stalledFor = 1.5, bestDist = 6.0 }; return true, settled 1.0s and held until `(function() local s = require('scripts.unit_ai_core').aiState[1]; return s ~= nil and s.openOrder ~= nil and s.openOrder.gid ~= nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/x1-open-order-pending.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

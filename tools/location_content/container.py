@@ -568,7 +568,8 @@ def check_shell_survived_reload(args, state, failures: list[str]) -> None:
     # processes must reproduce.
     pending = [s for s in shells
                if s["instance"] not in (state.crate_ground_shell,
-                                        state.crate_held_shell)]
+                                        state.crate_held_shell,
+                                        state.crate_open_shell)]
     target = pending[0]
     before = _ground_tree(args.port, target["gid"])
     answer = _realize(args.port, target["gid"])
@@ -752,3 +753,120 @@ def check_missing_profile_refuses_load(args, state, art,
         failures.append(
             "the refusal should be recorded at LoadContentValidated "
             f"(got {phase!r})")
+
+
+def give_open_order(args, state, failures: list[str]) -> None:
+    """(#2528, PLC-18) A player Open order on a still-PENDING crate,
+    left PENDING for the save the façade takes next, so the order itself
+    rides lua.unit_ai v11 through the real codec and a real disk write.
+
+    The sim is paused first and stays paused through that save, so the
+    opener -- spawned standing on its crate -- cannot finish the order
+    before it is written: the round trip is of an order still waiting to
+    run, which is the only thing a save of an order is for."""
+    send(args.port, "engine.setPaused(true); return 'ok'")
+    skip = (state.crate_ground_shell, state.crate_held_shell)
+    rows = _decode_rows(send(
+        args.port,
+        "local out = {} "
+        "for _, g in ipairs(item.listGround() or {}) do "
+        "  if g.defName == 'probe_pending_crate' and g.pending then "
+        "    out[#out + 1] = { gid = g.id, instance = g.instanceId, "
+        "                      x = g.x, y = g.y, page = g.page } "
+        "  end "
+        "end "
+        "return out", timeout=20.0))
+    rows = sorted((r for r in rows if r.get("instance") not in skip),
+                  key=lambda r: r["gid"], reverse=True)
+    if not rows:
+        failures.append("no still-pending crate left to give an Open order on")
+        return
+    target = rows[0]
+    uid = send(args.port,
+               f"return unit.spawn('acolyte', {target['x']}, {target['y']}, "
+               f"nil, 'player', '{CRATE_PAGE}')").strip().strip('"')
+    try:
+        uid = int(float(uid))
+    except (TypeError, ValueError):
+        failures.append(f"could not spawn the opener: {uid!r}")
+        return
+    accepted = send(
+        args.port,
+        f"return require('scripts.unit_ai').commandOpen({uid}, "
+        f"{target['gid']}, '{CRATE_PAGE}')").strip()
+    stored = send(
+        args.port,
+        f"local s = require('scripts.unit_ai_core').aiState[{uid}] "
+        "return tostring(s and s.openOrder and s.openOrder.gid)"
+        ).strip().strip('"')
+    if accepted == "true" and stored == str(target["gid"]):
+        state.crate_open_uid = uid
+        state.crate_open_shell = target["instance"]
+        state.crate_open_gid = target["gid"]
+        print("PASS: a player Open order on a PENDING crate was accepted and "
+              "is pending for the save")
+    else:
+        failures.append(
+            f"commandOpen should accept a pending crate: answered "
+            f"{accepted!r}, stored order gid {stored!r}")
+
+
+def check_open_resumed(args, state, failures: list[str]) -> None:
+    """(#2528) The Open order came back from save -> quit -> fresh
+    process -> load still pending, naming the same crate -- and, once the
+    loaded session is unpaused, the resumed AI completes it: the crate
+    realizes exactly where it lies, the player knows its contents, and
+    nothing moved it."""
+    uid, gid, shell = (state.crate_open_uid, state.crate_open_gid,
+                       state.crate_open_shell)
+    if uid < 0:
+        return
+    stored = send(
+        args.port,
+        f"local s = require('scripts.unit_ai_core').aiState[{uid}] "
+        "return tostring(s and s.openOrder and s.openOrder.gid)"
+        ).strip().strip('"')
+    if stored != str(gid):
+        failures.append(
+            f"the Open order did not survive the load: unit {uid} carries "
+            f"order gid {stored!r}, expected {gid}")
+        return
+    print("PASS: the pending Open order survived save -> quit -> fresh "
+          "process -> load (lua.unit_ai v11)")
+    before = [s for s in _shell_rows(args.port, "probe_pending_crate")
+              if s["instance"] == shell]
+    send(args.port, "engine.setPaused(false); return 'ok'")
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        left = send(
+            args.port,
+            f"local s = require('scripts.unit_ai_core').aiState[{uid}] "
+            "return tostring(s and s.openOrder ~= nil)").strip().strip('"')
+        if left == "false":
+            break
+        time.sleep(0.5)
+    send(args.port, "engine.setPaused(true); return 'ok'")
+    after = [s for s in _shell_rows(args.port, "probe_pending_crate")
+             if s["instance"] == shell]
+    slot = _slots_by_shell(args.port).get(shell, {})
+    known = send(
+        args.port,
+        f"local k = item.getContainerKnowledge({shell}) "
+        "return tostring(k and k.state) .. ',' .. "
+        "tostring(k and k.revealedAt ~= nil and k.weighedAt ~= nil)"
+        ).strip().strip('"')
+    if left != "false":
+        failures.append("the resumed Open order never completed after the "
+                        "load was unpaused")
+    elif not (before and after and after[0]["gid"] == before[0]["gid"]
+              and slot.get("realized")):
+        failures.append(
+            f"the resumed Open should realize the crate in place: before "
+            f"{before}, after {after}, slot {slot}")
+    elif not known.startswith("known,true") and not known.startswith("empty,true"):
+        failures.append(f"the resumed Open recorded no contents knowledge: "
+                        f"{known!r}")
+    else:
+        print("PASS: the resumed Open order completed after the load -- the "
+              "crate realized where it lies and its contents became player "
+              "knowledge")

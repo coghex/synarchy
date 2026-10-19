@@ -45,6 +45,7 @@ local ACTION_DISPLAY = {
     chop_designation   = "Chopping",
     forage             = "Foraging",
     pickup_ground      = "Picking up",
+    open_ground        = "Opening",
     repair_job         = "Repairing",
     treat_ally         = "Treating ally",
     engage             = "Engaging",

@@ -8,7 +8,8 @@ local M = {}
 
 -- Right-click on a ground item → context menu. Info always; "Contents"
 -- for an item-container (#2527); "Pick up" whenever the shared
--- assignment rule finds a carrier (#2522); and, with units selected,
+-- assignment rule finds a carrier (#2522), and "Open" on an
+-- item-container when it finds an opener (#2528); and, with units selected,
 -- "Move here". Capacity is checked by the pickup order itself, at
 -- command time and again at the moment of pickup (it can change en
 -- route).
@@ -101,23 +102,34 @@ function M.tryItemMenu(x, y)
     -- dispatched with it, so a carrier on any other page is refused
     -- rather than handed a same-numbered id from a different world.
     -- The height ranked against is the terrain the item rests on.
+    --
+    -- "Open" (#2528, PLC-18) is the same gesture shape for an
+    -- item-container (the definition's own `storage:`, as "Contents"
+    -- above): the unit the rule assigns for `open_ground` walks to the
+    -- crate, and its arrival records what is inside and opens the
+    -- window. Unlike "Contents" it is a unit interaction, so it is
+    -- omitted whenever no unit is eligible.
     if ipos and ipos.page ~= nil and ipos.page == hitPage then
         local transferSession = require("scripts.transfer_session")
         local target = { gridX = ipos.x, gridY = ipos.y,
                          gridZ = ipos.gridZ, page = ipos.page }
-        local carrier = transferSession.resolveSource(selUids, nil, target,
-            "pickup_ground", { fallback = true })
-        if carrier then
-            local unitAi = require("scripts.unit_ai")
-            local page = ipos.page
+        local page = ipos.page
+        local function playerOrder(label, action, command)
+            local carrier = transferSession.resolveSource(selUids, nil,
+                target, action, { fallback = true })
+            if not carrier then return end
             table.insert(menuItems, {
-                label = "Pick up",
+                label = label,
                 callback = function()
                     -- #1254, as on Attack: a player order to a held
                     -- unit ends the Mode A session first.
                     transferSession.notePlayerOrder(carrier)
-                    unitAi.commandPickup(carrier, gid, page)
+                    require("scripts.unit_ai")[command](carrier, gid, page)
                 end })
+        end
+        playerOrder("Pick up", "pickup_ground", "commandPickup")
+        if ipos.hasStorage == true then
+            playerOrder("Open", "open_ground", "commandOpen")
         end
     end
 

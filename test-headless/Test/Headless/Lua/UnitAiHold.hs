@@ -425,11 +425,12 @@ spec = describe "position hold after a completed move order" $ do
                 -- moved on since (v7, #1737's ground-sourced repair
                 -- provenance; v8, #1844's construct-job attempt
                 -- identity; v9, #1845's staked-building reference;
-                -- v10, #2642's treatment-claim order).
+                -- v10, #2642's treatment-claim order; v11, #2528's
+                -- pending Open order).
                 -- What this gate owns is that the CURRENT version still
                 -- round-trips a hold, so it pins the current number
                 -- rather than the one #1216 shipped.
-                , "assert(spec.version == 10, 'the component is at v10: '"
+                , "assert(spec.version == 11, 'the component is at v11: '"
                 , "  .. tostring(spec.version))"
                 , "aiState[1] = { currentAction = 'hold_position',"
                 , "  holdAnchor = { x = 12, y = -3, stalledFor = 4.5,"

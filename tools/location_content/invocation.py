@@ -452,6 +452,12 @@ class ScenarioState:
     crate_ground_shell: int = -1
     crate_held_shell: int = -1
     crate_holder_uid: int = -1
+    #: #2528: the opener, its crate's instance and ground ids, given a
+    #: player Open order the crate world saves while it is pending, so the
+    #: reload phase can find the order again and watch it complete.
+    crate_open_uid: int = -1
+    crate_open_shell: int = -1
+    crate_open_gid: int = -1
     #: The first visit order's realized trees, which the second must
     #: reproduce exactly.
     crate_order_trees: dict[str, str] = field(default_factory=dict)

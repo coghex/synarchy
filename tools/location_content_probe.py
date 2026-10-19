@@ -459,6 +459,7 @@ def run(args, art: RunArtifacts, token: str) -> int:
                 args.port, container.CRATE_PAGE, slot_pristine, failures,
                 log=art.engine_log)
             container.check_realize(args, state, failures)
+            container.give_open_order(args, state, failures)
             # Process 10 reads this fixture from a FRESH process, so the
             # save must be COMPLETE -- not merely accepted -- before that
             # process boots (#1620).
@@ -491,6 +492,7 @@ def run(args, art: RunArtifacts, token: str) -> int:
             send(args.port, f"world.show('{container.CRATE_PAGE}'); return 'ok'")
             time.sleep(1.0)
             container.check_shell_survived_reload(args, state, failures)
+            container.check_open_resumed(args, state, failures)
         except _PhaseAborted:
             pass
         finally:
