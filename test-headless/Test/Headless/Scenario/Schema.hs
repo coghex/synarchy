@@ -226,7 +226,7 @@ fullExpected = Scenario
         [ FluidPatch (ex "pond") [] (RegionTiles [(1, 1), (2, 1)]) FluidLake 36 ]
     , scFlora =
         [ FloraEntry (ex "tree-1") [] "pine" (-3) 2 (Authored 4) (Authored 120)
-                     (Authored 0.75) ]
+                     (Authored 0.75) Omitted Omitted Omitted Omitted ]
     , scStructures =
         [ StructurePiece (ex "wall-1") [] "dungeon_1" "wall_ne" 0 0 (Authored 4) ]
     , scBuildings =
@@ -391,6 +391,7 @@ spec = do
     contentBoundsSpec
     failureSpec
     preservationSpec
+    formatV2Spec
 
 boundsSpec ∷ Spec
 boundsSpec = describe "finite map bounds" $ do
@@ -829,8 +830,8 @@ failureSpec = describe "unsuccessful loads" $ do
         f ← failed =≪ load "version: 1.5\n"
         f `shouldSatisfy` \case ScenarioVersionMalformed _ → True; _ → False
     it "refuses unsupported versions without interpreting the content" $ do
-        (failed =≪ load "version: 2\nunits: [{definition: acolyte, x: 0, y: 0}]\n")
-            `shouldReturn` ScenarioVersionUnsupported 2
+        (failed =≪ load "version: 3\nunits: [{definition: acolyte, x: 0, y: 0}]\n")
+            `shouldReturn` ScenarioVersionUnsupported 3
         (failed =≪ load "version: 0\n") `shouldReturn` ScenarioVersionUnsupported 0
     it "migrates a v1 document in memory before validating it" $ do
         let toV2 o = Right (KM.insert "version" (A.Number 2) o)
@@ -862,3 +863,48 @@ preservationSpec = describe "source preservation" $
             _ ← run path
             after ← BS.readFile path
             after `shouldBe` before
+
+-- * Format v2 (#2711): the physical flora fields
+
+formatV2Spec ∷ Spec
+formatV2Spec = describe "format v2: flora physical fields" $ do
+    let flora fields = unlines
+            [ "version: 2", "flora:"
+            , "  - {id: p, species: pine, x: 1, y: 2" ⧺ fields ⧺ "}" ]
+        one fields = do
+            (s, ds) ← loaded =≪ load (flora fields)
+            pure (scFlora s, ds)
+    it "reads offsets, variant and regrowth, each omitted until authored" $ do
+        (fs, ds) ← one ", offset_u: -0.25, offset_v: 0.5, variant: 3, regrowth: 90"
+        ds `shouldBe` []
+        fs `shouldBe` [FloraEntry (ex "p") [] "pine" 1 2 Omitted Omitted Omitted
+                          (Authored (-0.25)) (Authored 0.5) (Authored 3) (Authored 90)]
+        (bare, _) ← one ""
+        map (\e → (feOffsetU e, feOffsetV e, feVariant e, feRegrowth e)) bare
+            `shouldBe` [(Omitted, Omitted, Omitted, Omitted)]
+    it "keeps explicit zeros authoritative" $ do
+        (fs, _) ← one ", offset_u: 0, offset_v: 0, variant: 0, regrowth: 0"
+        map (\e → (feOffsetU e, feOffsetV e, feVariant e, feRegrowth e)) fs
+            `shouldBe` [(Authored 0, Authored 0, Authored 0, Authored 0)]
+    it "rejects an out-of-domain value as that field alone" $ do
+        forM_ [ (", offset_u: 0.75", "flora[0].offset_u")
+              , (", offset_v: -0.51", "flora[0].offset_v")
+              , (", variant: 4", "flora[0].variant")
+              , (", variant: 1.5", "flora[0].variant")
+              , (", regrowth: -1", "flora[0].regrowth")
+              , (", regrowth: .inf", "flora[0].regrowth") ] $ \(f, path) → do
+            (fs, ds) ← one f
+            map sdPath ds `shouldBe` [path]
+            map sdEffect ds `shouldBe` [FieldRejected]
+            length fs `shouldBe` 1
+    it "keeps a version-1 vocabulary closed: the same field is unknown there" $ do
+        (s, ds) ← loaded =≪ load
+            "version: 1\nflora:\n  - {id: p, species: pine, x: 1, y: 2, variant: 2}\n"
+        ds `shouldBe` [d "flora[0].variant" UnknownField FieldRejected]
+        scSourceVersion s `shouldBe` 1
+        map feVariant (scFlora s) `shouldBe` [Omitted]
+    it "is the identity migration: a v1 document reads the same through the v2 build" $ do
+        (s, ds) ← loaded =≪ load fullV1
+        ds `shouldBe` []
+        s `shouldBe` fullExpected
+        currentScenarioVersion `shouldBe` 2

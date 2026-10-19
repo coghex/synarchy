@@ -32,7 +32,7 @@ import World.Fluid.Exact
     , exactSurfaceFloorZ, exactTopLevel, exactVolumeOverTerrain )
 import World.Save.Component.PageEdits
     ( WorldEditDTO(..), WorldEditDTOv1(..), WorldEditDTOv2(..)
-    , WorldEditDTOv3(..)
+    , WorldEditDTOv3(..), WorldEditDTOv4(..)
     , PageEditsDTO(..), PageEditsDTOv1(..), PageEditsDTOv2(..)
     , PageEditsDTOv3(..), WorldEditsDTO(..), WorldEditsDTOv1(..)
     , WorldEditsDTOv2(..), WorldEditsDTOv3(..), PageEditsDTOv4(..), WorldEditsDTOv4(..)
@@ -634,8 +634,9 @@ saveSpec = describe "world-edits v4: exact fluid surfaces (#2520)" $ do
 
     it "is at its current version and still accepts every older one" $ do
         -- #2705: v5 appended the page's tile, occurrence and plot tags.
-        ccVersion worldEditsCodec `shouldBe` 5
-        ccInputVers worldEditsCodec `shouldBe` [1, 2, 3, 4, 5]
+        -- #2711: v6 appended WeSetFloraStateD to the edit sum.
+        ccVersion worldEditsCodec `shouldBe` 6
+        ccInputVers worldEditsCodec `shouldBe` [1, 2, 3, 4, 5, 6]
 
     it "migrates a v1 snapshot's whole z to exactly z * 8" $
         fmap snapshotsOf (decodeAt 1 v1Payload)
@@ -660,10 +661,10 @@ saveSpec = describe "world-edits v4: exact fluid surfaces (#2520)" $ do
         -- One unit, seven units, and a PARTIAL Ocean cell: the three
         -- shapes a rounding writeback or a second rescale would destroy.
         let exact =
-                [ WeSetFluidSnapshotD 1 1 Lake  (exactSurfaceOfZ 6 + 1)
-                , WeSetFluidSnapshotD 2 2 River (exactSurfaceOfZ 6 + 7)
-                , WeSetFluidSnapshotD 3 3 Ocean (exactSurfaceOfZ 0 + 3)
-                , WeSetFluidSnapshotD 4 4 Lake  (exactSurfaceOfZ (-2) + 5) ]
+                [ WeSetFluidSnapshotDv4 1 1 Lake  (exactSurfaceOfZ 6 + 1)
+                , WeSetFluidSnapshotDv4 2 2 River (exactSurfaceOfZ 6 + 7)
+                , WeSetFluidSnapshotDv4 3 3 Ocean (exactSurfaceOfZ 0 + 3)
+                , WeSetFluidSnapshotDv4 4 4 Lake  (exactSurfaceOfZ (-2) + 5) ]
             -- #2705: v4 bytes are the FROZEN v4 shape.
             payload = S.encode (WorldEditsDTOv4
                 [ PageEditsDTOv4 pageId (HM.singleton coord exact)

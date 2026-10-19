@@ -110,6 +110,7 @@ zoomVisibleEditTile e = case e of
     WeClearFluidSnapshot gx gy     → Just (gx, gy)
     WePlaceFloraWithId{}           → Nothing
     WePlaceFloraRef{}              → Nothing
+    WeSetFloraState{}              → Nothing
 
 -- | What the LIVE chunk holds at each of the given local cells, as zoom
 --   tile overrides.

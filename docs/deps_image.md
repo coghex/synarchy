@@ -62,7 +62,11 @@ layers' whiteout and opaque-directory markers within them, so the result
 is the image's final content for those two directories. Nothing else of
 the image is written. In particular, its Ubuntu base never replaces the
 host's operating system. `fetch` refuses to unpack over non-empty
-prefixes. Options: `--ref` takes another tag or `@sha256:` digest, and
+prefixes. Symlinks in the image are written as links but never followed.
+Every write and whiteout must land inside the resolved
+`/usr/local/.ghcup` or `/usr/local/cabal`. `fetch` refuses the image,
+before writing or creating anything through the link, if a path passes
+through a symlink or a prefix is (or would become) a symlink. Options: `--ref` takes another tag or `@sha256:` digest, and
 `--root DIR` unpacks under another root. Unpacking elsewhere is only
 useful for inspection, because GHC's install records its absolute prefix.
 

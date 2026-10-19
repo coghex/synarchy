@@ -35,6 +35,7 @@ import World.Thread.ChunkLoading (updateChunkLoading, drainInitQueues)
 import World.Thread.Command (handleWorldCommand)
 import World.Thread.Destruction (pruneStructureDestructions)
 import World.Command.Types (WorldCommand(..), TagEditReply(..))
+import Scenario.World.Types (WorldInstallOutcome(..), WorldInstallReply(..))
 import World.State.Types (settleSelectionProjection)
 import World.Types (WorldManager(..))
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
@@ -300,4 +301,6 @@ answerDiscarded ∷ WorldCommand → IO ()
 answerDiscarded = \case
     WorldEditPageTags _ _ _ _ (TagEditReply reply) →
         void (tryPutMVar reply TagEditNoTarget)
+    WorldInstallScenarioContent _ _ _ (WorldInstallReply reply) →
+        void (tryPutMVar reply WorldInstallNotAdmitted)
     _ → pure ()

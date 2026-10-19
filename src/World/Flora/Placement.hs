@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict #-}
 module World.Flora.Placement
     ( computeChunkFlora
+    , mkInstance
+    , speciesMaxAge
     , speciesFitnessDetail
     , FitnessFactor(..)
     ) where

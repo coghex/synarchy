@@ -44,7 +44,7 @@ import Scenario.Validate (Analysis(..), analyseNodes)
 
 -- | The scenario format version this build writes and decodes natively.
 currentScenarioVersion ∷ Int
-currentScenarioVersion = 1
+currentScenarioVersion = 2
 
 -- | A format: its current version, and the migration that lifts a
 --   document from version @k@ to @k + 1@, for every released @k@ below
@@ -54,10 +54,12 @@ data ScenarioFormat = ScenarioFormat
     , sfMigrations ∷ ![(Int, A.Object → Either Text A.Object)]
     }
 
--- | The shipped format: v1 is current and the first release, so there
---   is nothing to migrate yet.
+-- | The shipped format: v2 is current. v1 → v2 is the identity: v2 only
+--   ADDED optional @flora[]@ fields (#2711), so every v1 document is
+--   already a valid v2 one, and the decoder keeps v1's vocabulary closed
+--   by the document's declared source version.
 scenarioFormat ∷ ScenarioFormat
-scenarioFormat = ScenarioFormat currentScenarioVersion []
+scenarioFormat = ScenarioFormat currentScenarioVersion [(1, Right)]
 
 loadScenarioFile ∷ ScenarioCatalog → FilePath → IO ScenarioOutcome
 loadScenarioFile = loadScenarioFileWith scenarioFormat
