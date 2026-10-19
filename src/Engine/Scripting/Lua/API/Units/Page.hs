@@ -24,6 +24,7 @@
 --   policy ('Unit.Transfer') independently refuses cross-page endpoints.
 module Engine.Scripting.Lua.API.Units.Page
     ( unitOwningWorldState
+    , unitOwningPage
     ) where
 
 import UPrelude
@@ -34,7 +35,7 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.State (EngineEnv)
 import Unit.Types (UnitId)
 import World.Page.Resolve (resolveUnitPage)
-import World.Types (WorldState)
+import World.Types (WorldPageId, WorldState)
 
 -- | The live 'WorldState' of the page a unit is ON, or 'Nothing' when
 --   the unit does not exist or its page has no live world.
@@ -51,6 +52,14 @@ unitOwningWorldState env uid =
     -- drop, a craft bill or an inventory move leave a durable row on
     -- the replacement naming a unit its teardown has already removed.
     -- See "World.Page.Resolve".
-    fmap snd ⊚ resolveUnitPage (wsWorldManagerRef (toWorldSimCapability env))
-                               (ucUnitManagerRef (toUnitCombatCapability env))
-                               uid
+    fmap snd ⊚ unitOwningPage env uid
+
+-- | 'unitOwningWorldState' together with the id of the page it
+--   resolved (#2522), for a reader that must REPORT which page it
+--   answered from — a ground row naming its own page — rather than
+--   only use it. The same ordered resolution, so the two can never
+--   name different pages for one unit.
+unitOwningPage ∷ EngineEnv → UnitId → IO (Maybe (WorldPageId, WorldState))
+unitOwningPage env =
+    resolveUnitPage (wsWorldManagerRef (toWorldSimCapability env))
+                    (ucUnitManagerRef (toUnitCombatCapability env))

@@ -350,6 +350,35 @@ selectStub ∷ [Int] → Text
 selectStub uids = "unit.getSelected = function() return {"
     <> T.intercalate "," (map tshow uids) <> "} end; "
 
+-- | Put the hold at z @holdZ@ and the named units at a position and z
+--   (#2522's three-dimensional cases).
+elevate ∷ EngineEnv → Int → [(UnitId, (Float, Float), Int)] → IO ()
+elevate env holdZ placed = do
+    atomicModifyIORef' (buildingManagerRef env) $ \bm →
+        ( bm { bmInstances = HM.adjust (\b → b { biGridZ = holdZ })
+                                 farHold (bmInstances bm) }, () )
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        ( um { umInstances = foldr
+                 (\(uid, (x, y), z) → HM.adjust
+                     (\u → u { uiGridX = x, uiGridY = y, uiGridZ = z
+                             , uiRealZ = fromIntegral z }) uid)
+                 (umInstances um) placed }, () )
+
+-- | Open the REAL building menu on the hold and answer the source its
+--   Transfer row would create a session for ("none" when there is no
+--   such row). Session creation itself is replaced by a recorder: what
+--   is under test is which unit the menu resolved, not the session.
+transferSourceVia ∷ LuaBackendState → IO Text
+transferSourceVia ls = T.filter (≢ '"') <$> evalOk ls (luaLines
+    [ "building.hitTestAt = function() return 7 end;"
+    , "local ts = require('scripts.transfer_session');"
+    , "_G.__src = nil;"
+    , "ts.create = function(src) _G.__src = src end;"
+    , "_G.__captured = nil;"
+    , "require('scripts.init_context_menu').tryBuildingMenu(1, 1);"
+    , "if not _G.__fire(_G.__captured, 'Transfer') then return 'none' end;"
+    , "return tostring(_G.__src)" ])
+
 -- * Spec
 
 spec ∷ Spec
@@ -743,6 +772,56 @@ spec = aroundAll withSharedFixture $
             -- order really is stored rather than refused one layer down.
             o ← evalOk ls "return _G.__orders(4)"
             o `shouldBe` "\"unit:4>building:7[401]\""
+
+    -- #2522: the shared rule ranks in THREE dimensions. Driven through
+    -- both production callers' own projections — the building menu's
+    -- unit.transferEndpointInfo row and the container window's — with
+    -- the live hold and live units, so the target height is the
+    -- engine's biGridZ and each candidate's is its own uiGridZ. Unit 2
+    -- stands one tile from the hold's anchor but ten levels below it;
+    -- the technomule stands three tiles off at the hold's own level.
+    describe "the three-dimensional assignment rule (#2522)" $ do
+
+        it "Transfer to an ELEVATED hold picks the unit nearest in three \
+           \dimensions" $ \(env, ls) → do
+            resetFixture env ls
+            elevate env 10 [(retrieverUid, (40, 41), 0), (technomuleUid, (43, 40), 10)]
+            _ ← evalOk ls (selectStub [2, 6])
+            transferSourceVia ls `shouldReturn` "6"
+
+        it "Retrieve from an ELEVATED hold picks the unit nearest in three \
+           \dimensions" $ \(env, ls) → do
+            resetFixture env ls
+            elevate env 10 [(retrieverUid, (40, 41), 0), (technomuleUid, (43, 40), 10)]
+            _ ← evalOk ls (selectStub [2, 6])
+            _ ← evalOk ls (openEndpoint "building" 7)
+            fired ← evalOk ls
+                "return _G.__fire(_G.__windowMenu('crowbar'), 'Retrieve 1')"
+            fired `shouldBe` "true"
+            evalOk ls "return _G.__orders(6) .. '/' .. _G.__orders(2)"
+                `shouldReturn` "\"building:7>unit:6[210]/\""
+
+        it "on FLAT ground both rank exactly as before: the nearer unit on \
+           \x/y wins" $ \(env, ls) → do
+            resetFixture env ls
+            elevate env 0 [(retrieverUid, (40, 41), 0), (technomuleUid, (43, 40), 0)]
+            _ ← evalOk ls (selectStub [2, 6])
+            transferSourceVia ls `shouldReturn` "2"
+            _ ← evalOk ls (openEndpoint "building" 7)
+            _ ← evalOk ls
+                "return _G.__fire(_G.__windowMenu('crowbar'), 'Retrieve 1')"
+            evalOk ls "return _G.__orders(2) .. '/' .. _G.__orders(6)"
+                `shouldReturn` "\"building:7>unit:2[210]/\""
+
+        it "both stay SELECTION-ONLY: with nothing selected neither is \
+           \offered, though eligible units stand on the page" $ \(env, ls) → do
+            resetFixture env ls
+            elevate env 10 [(retrieverUid, (40, 41), 0), (technomuleUid, (43, 40), 10)]
+            _ ← evalOk ls (selectStub [])
+            transferSourceVia ls `shouldReturn` "none"
+            _ ← evalOk ls (openEndpoint "building" 7)
+            evalOk ls "return tostring(_G.__windowMenu('crowbar'))"
+                `shouldReturn` "\"nil\""
 
     describe "Gesture-wide invariants" $ do
 
