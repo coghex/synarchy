@@ -13,6 +13,7 @@ module Test.Headless.Scenario.World (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.List (permutations)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
@@ -599,8 +600,33 @@ captureSpec = describe "capture" $ do
             cw2 = roundTrip cw1
             cw3 = roundTrip cw2
         map (\e → (scenarioIdText (feId e), feTags e, feRegrowth e)) (cwFlora cw1) `shouldBe`
-            [ ("flora.oak.4.4.1", [tag "a"], Authored 30)
-            , ("flora.oak.4.4.2", [tag "a"], Authored 90)
-            , ("flora.oak.4.4.3", [tag "b"], Authored 20) ]
+            [ ("flora.oak.4.4.1", [tag "b"], Authored 20)
+            , ("flora.oak.4.4.2", [tag "a"], Authored 30)
+            , ("flora.oak.4.4.3", [tag "a"], Authored 90) ]
         cw2 `shouldBe` cw1
         cw3 `shouldBe` cw1
+
+    it "property: same-tile siblings differing in any one exported field capture identically in every authored order" $ do
+        let base i = (floraEntry i "oak" 4 4)
+                { feTags = [tag "a"], feRegrowth = Authored 30, feAge = Authored 50, feHealth = Authored 1
+                , feOffsetU = Authored 0, feOffsetV = Authored 0, feVariant = Authored 1, feZ = Authored 0 }
+            siblings =
+                [ (base "p") { feTags = [tag "b"] }
+                , (base "q") { feRegrowth = Authored 90 }
+                , (base "r") { feHealth = Authored 0.5 }
+                , (base "s") { feVariant = Authored 2 }
+                , (base "t") { feOffsetU = Authored 0.25 }
+                , (base "u") { feAge = Authored 70 }
+                , base "v" ]
+            capturedIn order =
+                let c = content Nothing 10 [] [] order
+                in captureWorldContent Set.empty (snapshotOf Nothing 10 c False)
+            reference = capturedIn siblings
+            orders = take 120 (permutations siblings)
+        length (cwFlora reference) `shouldBe` 7
+        -- generated names are distinct, and every authored order recaptures to the same document
+        length (Set.fromList (map (scenarioIdText ∘ feId) (cwFlora reference))) `shouldBe` 7
+        forM_ orders $ \o → capturedIn o `shouldBe` reference
+        -- and the key itself never ties distinct entries
+        length (Set.fromList (map entryKey (cwFlora reference))) `shouldBe` 7
+        -- 5040 orders would be exhaustive; the first 120 permutations vary every sibling's position

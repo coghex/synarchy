@@ -44,6 +44,8 @@ module Scenario.World.Capture
     ( WorldSnapshot(..)
     , CapturedWorld(..)
     , captureWorldContent
+    , EntryKey(..)
+    , entryKey
     ) where
 
 import UPrelude
@@ -286,10 +288,9 @@ captureFlora snap chunks used0 =
             , let (x, y) = chunkToGlobal coord (fromIntegral (fiTileX fi)) (fromIntegral (fiTileY fi))
             , arenaAdmitsTile (snapBounds snap) x y
             , Just sp ← [lookupSpecies (fiSpecies fi) cat] ]
-        occEntry ((x, y), fi, sp) =
-            ( (fsName sp, (x, y), rankKey snap fi)
-            , \name → FloraEntry
-                { feId = ExplicitId name
+        occEntry ((x, y), fi, sp) = keyed $
+                FloraEntry
+                { feId = ExplicitId ""
                 , feTags = Set.toAscList (M.findWithDefault Set.empty (fiInstanceId fi)
                                                                        (snapOccTags snap))
                 , feSpecies = fsName sp, feX = x, feY = y
@@ -300,52 +301,68 @@ captureFlora snap chunks used0 =
                 , feVariant = Authored (fiVariant fi)
                 , feRegrowth = if isJust (fsHarvest sp)
                     then Authored (HM.lookupDefault 0 (fiInstanceId fi) (snapHarvests snap))
-                    else Omitted } )
+                    else Omitted }
         plots =
             [ ((x, y), cp, sp)
             | ((x, y), cp) ← M.toAscList (M.fromList (HM.toList (snapCropPlots snap)))
             , arenaAdmitsTile (snapBounds snap) x y
             , Just sp ← [lookupSpecies (cpSpecies cp) cat] ]
-        plotEntry ((x, y), cp, sp) =
-            ( (fsName sp, (x, y), ((0, 0, 0, 0, 0, 0, [], 0) ∷ RankKey))
-            , \name → FloraEntry
-                { feId = ExplicitId name
+        plotEntry ((x, y), cp, sp) = keyed $
+                FloraEntry
+                { feId = ExplicitId ""
                 , feTags = Set.toAscList (M.findWithDefault Set.empty (x, y) (snapPlotTags snap))
                 , feSpecies = fsName sp, feX = x, feY = y
                 , feZ = Omitted
                 , feAge = Authored (derivedPlotAge day cp)
                 , feHealth = Authored (cpHealth cp)
                 , feOffsetU = Omitted, feOffsetV = Omitted, feVariant = Omitted
-                , feRegrowth = Omitted } )
+                , feRegrowth = Omitted }
+        -- the entry's whole exported structure ranks it, so nothing is left to
+        -- the chunk list's order (which reconstruction reverses)
+        keyed e = (entryKey e, \name → e { feId = ExplicitId name })
         all' = sortOn fst (map occEntry occurrences ⧺ map plotEntry plots)
         (entries, _) = foldl' step ([], used0) (zip [0 ∷ Int ..] all')
         -- an ordinal among entries equal in (species, tile): their rank
         -- in the sorted order of the group
         ordinals = M.fromListWith (flip (⧺)) [ (key3 k, [i]) | (i, (k, _)) ← zip [0 ∷ Int ..] all' ]
-        key3 (a, b, _) = (a, b)
+        key3 k = (ekSpecies k, ekTile k)
         ordinalOf i k = case M.lookup (key3 k) ordinals of
             Just is | length is > 1 → Just (length (takeWhile (< i) is) + 1)
             _ → Nothing
-        step (acc, usedNames) (i, (k@(spName, (x, y), _), mk)) =
-            let base = "flora." <> spName <> "." <> tshow x <> "." <> tshow y
+        step (acc, usedNames) (i, (k, mk)) =
+            let (x, y) = ekTile k
+                base = "flora." <> ekSpecies k <> "." <> tshow x <> "." <> tshow y
                        <> maybe "" (\n → "." <> tshow n) (ordinalOf i k)
                 (name, used') = uniqueName usedNames base
             in (mk name : acc, used')
     in reverse entries
 
--- | The ranking of occurrences that share a species and a tile: raw
---   values under the derived 'Ord', never a rendered form.
-type RankKey = (Int, Float, Float, Word8, Float, Float, [GameplayTag], Float)
+-- | The ranking of an exported flora entry: its WHOLE structure — every
+--   value a recapture writes — as raw values under the derived 'Ord', never a
+--   rendered form and never a partial key. Two entries tie only when they are
+--   identical, and identical entries are interchangeable under any generated
+--   name, so no input order can change the capture.
+data EntryKey = EntryKey
+    { ekSpecies  ∷ !Text
+    , ekTile     ∷ !(Int, Int)
+    , ekZ        ∷ !(Maybe Int)
+    , ekOffU     ∷ !(Maybe Float)
+    , ekOffV     ∷ !(Maybe Float)
+    , ekVariant  ∷ !(Maybe Word8)
+    , ekHealth   ∷ !(Maybe Float)
+    , ekAge      ∷ !(Maybe Float)
+    , ekRegrowth ∷ !(Maybe Float)
+    , ekTags     ∷ ![GameplayTag]
+    } deriving (Eq, Ord, Show)
 
--- | Every value the entry will export, raw, so two plants that differ in
---   anything a recapture writes never tie — a tie would leave their
---   relative order to the chunk's list order, which reconstruction
---   reverses, and swap their generated names on every round trip.
-rankKey ∷ WorldSnapshot → FloraInstance → RankKey
-rankKey snap fi =
-    ( fiZ fi, fiOffU fi, fiOffV fi, fiVariant fi, fiHealth fi, fiAge fi
-    , Set.toAscList (M.findWithDefault Set.empty (fiInstanceId fi) (snapOccTags snap))
-    , HM.lookupDefault 0 (fiInstanceId fi) (snapHarvests snap) )
+entryKey ∷ FloraEntry → EntryKey
+entryKey e = EntryKey
+    { ekSpecies = feSpecies e, ekTile = (feX e, feY e)
+    , ekZ = a (feZ e), ekOffU = a (feOffsetU e), ekOffV = a (feOffsetV e)
+    , ekVariant = a (feVariant e), ekHealth = a (feHealth e), ekAge = a (feAge e)
+    , ekRegrowth = a (feRegrowth e), ekTags = feTags e }
+  where a Omitted      = Nothing
+        a (Authored x) = Just x
 
 -- * Names and regions
 

@@ -59,7 +59,11 @@ import World.Chunk.Admit (pageIncarnation, releaseEvictedChunks)
 import World.Edit.Apply (replayEdits)
 import World.Generate.Arena (clipArenaChunk, generateArenaChunkIn)
 import Gameplay.Tags.PageLive (reconcileAdmittedPageTags)
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), columnIndex)
+import World.Chunk.Types (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), columnIndex)
+import qualified Data.Vector.Unboxed as VU
+import Data.List (unfoldr)
+import System.Random (mkStdGen, randomR)
+import Scenario.World.Terrain (baseTopZ)
 import World.Command.Types (WorldCommand(..))
 import World.Chop.Types (newChopDesignation)
 import World.Edit.Apply (applyEdit)
@@ -584,6 +588,79 @@ spec = describe "on a live arena page (through the world thread)" $ do
         -- explicit flat (not the derived bit), the effective override, and both later edits respected
         mapM slopeAt [(47, 47), (47, 40), (47, 41), (47, 42)]
             `shouldReturn` [Just 0, Just 5, Just 0, Just 0]
+
+    it "property: random edit sequences admitted after neighbour admission and after eviction equal the in-memory replay" $ \env → do
+        -- random sequences of set-slope (zero included), set-cell, dig (delete) and refill (add) on and around
+        -- the border tiles of resident chunk (2,2), applied the way live edits are (chunk + log, in order)
+        forM_ [1 .. 20 ∷ Int] $ \seed → do
+            (pid, ws) ← freshArena env ("world_prop" <> T.pack (show seed)) 120 120
+            let home = ChunkCoord 2 2
+                b = Just (bounds 120 120)
+                ops = randomEdits seed
+            forM_ ops $ \e → do
+                atomicModifyIORef' (wsEditsRef ws) $ \ls → (appendEdit home e ls, ())
+                atomicModifyIORef' (wsTilesRef ws) $ \td → case lookupChunk home td of
+                    Just lc → (insertChunk (applyEdit e lc) td, ())
+                    Nothing → (td, ())
+            let agrees label = do
+                    edits ← readIORef (wsEditsRef ws)
+                    live ← awaitChunk ws home
+                    let replay = chunkOf b edits home
+                        named = Set.fromList [ (x, y, z) | WeSetSlope x y z _ ← ops ]
+                    (label, sameShape live replay) `shouldBe` (label, [])
+                    (label, slopesAt named live replay) `shouldBe` (label, [])
+            agrees "before admission"
+            -- a neighbour's admission recomputes this chunk's border strip
+            forM_ [ChunkCoord 3 2, ChunkCoord 2 3, ChunkCoord 3 3] $ \c → do
+                _ ← enqueueChunkRequest pid ws [c]
+                waitForChunksAt ws c 30 `shouldReturn` True
+            agrees "after neighbour admission"
+            -- evict the chunk through the pipeline's own release, then demand it back
+            params ← fromMaybe (error "params") ⊚ readIORef (wsGenParamsRef ws)
+            atomicModifyIORef' (wsTilesRef ws) $ \td → (td { wtdChunks = HM.delete home (wtdChunks td) }, ())
+            releaseEvictedChunks ws pid params [home]
+            _ ← enqueueChunkRequest pid ws [home]
+            waitForChunksAt ws home 30 `shouldReturn` True
+            agrees "after eviction and readmission"
+      where
+        gen0 seed = mkStdGen (seed * 7919)
+        randomEdits seed =
+            let (n, g1) = randomR (2, 9 ∷ Int) (gen0 seed)
+            in take n (unfoldr (Just ∘ nextOp) g1)
+        tiles = [(47, 34), (47, 47), (40, 47), (32, 40), (33, 33), (36, 36), (47, 40)]
+        nextOp g =
+            let (ti, g1) = randomR (0, length tiles - 1) g
+                (x, y) = tiles !! ti
+                (kind, g2) = randomR (0, 4 ∷ Int) g1
+                (dz, g3) = randomR (-1, 1 ∷ Int) g2
+                z = baseTopZ + dz
+                (bi, g4) = randomR (0, 4 ∷ Int) g3
+                bits = [0, 0, 1, 5, 15] !! bi
+                (mi, g5) = randomR (0, 1 ∷ Int) g4
+                mat = [matGranite, matSand] !! mi
+                edit = case kind of
+                    0 → WeSetSlope x y z bits
+                    1 → WeSetSlope x y z 0
+                    2 → WeSetCell x y z mat
+                    3 → WeDeleteTile x y
+                    _ → WeAddTile x y mat
+            in (edit, g5)
+        columns lc = [ (columnIndex lx ly, lcTiles lc V.! columnIndex lx ly) | lx ← [0 .. 15], ly ← [0 .. 15] ]
+        -- the physical shape: every column's start, materials and surface
+        sameShape live replay =
+            [ (idx, "shape")
+            | ((idx, a), (_, c)) ← zip (columns live) (columns replay)
+            , ctStartZ a ≢ ctStartZ c ∨ ctMats a ≢ ctMats c
+              ∨ lcTerrainSurfaceMap live VU.! idx ≢ lcTerrainSurfaceMap replay VU.! idx ]
+        -- the slope of each cell any set-slope names: the replay's value
+        slopesAt named live replay =
+            [ (x, y, z)
+            | (x, y, z) ← Set.toList named
+            , let (_, (lx, ly)) = globalToChunk x y
+                  idx = columnIndex lx ly
+                  at' lc = let col = lcTiles lc V.! idx; i = z - ctStartZ col
+                           in if i ≥ 0 ∧ i < VU.length (ctSlopes col) then Just (ctSlopes col VU.! i) else Nothing
+            , at' live ≢ at' replay ]
 
 -- | A finite arena page that is VISIBLE (the camera loader serves visible pages).
 withVisibleArena ∷ EngineEnv → Int → Int → (WorldPageId → WorldState → IO α) → IO α
