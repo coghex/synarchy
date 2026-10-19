@@ -150,17 +150,19 @@ newPage profile = do
 --   position and z, with a carrying capacity.
 data Carrier = Carrier
     { cUid ∷ Int, cPage ∷ WorldPageId, cFaction ∷ Faction
-    , cDef ∷ Text, cAt ∷ (Float, Float), cZ ∷ Int, cCap ∷ Float }
+    , cDef ∷ Text, cAt ∷ (Float, Float), cZ ∷ Int, cCap ∷ Float
+    , cPose ∷ Text }
 
 carrier ∷ Int → WorldPageId → (Float, Float) → Int → Float → Carrier
-carrier u p at z cap = Carrier u p FactionPlayer "acolyte" at z cap
+carrier u p at z cap = Carrier u p FactionPlayer "acolyte" at z cap "standing"
 
 asUnit ∷ Carrier → UnitInstance
 asUnit c = (mkUnitOfFaction (cFaction c) (cPage c) [] HM.empty [])
     { uiDefName = cDef c, uiName = "Unit" <> tshow (cUid c)
     , uiGridX = fst (cAt c), uiGridY = snd (cAt c)
     , uiGridZ = cZ c, uiRealZ = fromIntegral (cZ c)
-    , uiStats = HM.singleton "carrying_capacity" (cCap c) }
+    , uiStats = HM.singleton "carrying_capacity" (cCap c)
+    , uiPose = cPose c }
 
 logOnlyCategory ∷ Text → CategoryCfg
 logOnlyCategory cid = CategoryCfg
@@ -410,6 +412,53 @@ spec = describe "pickup order page ownership — the shared assignment rule \
             -- Unit 3 stands exactly on page B's same-numbered shell.
             unq <$> resolveFor b pageA [3, 7] `shouldReturn` "7"
             unq <$> resolveFor b pageA [3] `shouldReturn` "nil"
+
+        it "never assigns a DEAD unit: a nearer corpse loses to a living \
+           \carrier, and a page of corpses assigns nobody" $ \b → do
+            ws ← newPage "fixture_salvage"
+            scene b [(pageA, ws)]
+                [ (carrier 1 pageA shellAt shellZ 100) { cPose = "dead" }
+                , carrier 6 pageA (12, 8) shellZ 100 ]
+            loadModules b
+            unq <$> resolveFor b pageA [] `shouldReturn` "6"
+            unq <$> resolveFor b pageA [1, 6] `shouldReturn` "6"
+            unq <$> openMenu b [] `shouldReturn` "true"
+            _ ← luaRun b "_G.__rows['Pick up'](); return 'ok'"
+            orderOf b 6 `shouldReturn` "0"
+            orderOf b 1 `shouldReturn` "nil"
+            -- Only corpses on the page: nobody, and no Pick up row.
+            ws2 ← newPage "fixture_salvage"
+            scene b [(pageA, ws2)]
+                [ (carrier 1 pageA shellAt shellZ 100) { cPose = "dead" } ]
+            unq <$> resolveFor b pageA [] `shouldReturn` "nil"
+            unq <$> openMenu b [] `shouldReturn` "false"
+
+        it "ranks in the TARGET page's seam frame whichever page is \
+           \visible" $ \b → do
+            -- Page B wraps at world size 64; page A (visible) has no
+            -- gen params, so ITS frame is the identity. Candidate 1 is
+            -- physically adjacent to the target across B's seam;
+            -- candidate 2 is ten tiles off in raw coordinates.
+            wsA ← emptyWorldState
+            wsB ← emptyWorldState
+            writeIORef (wsGenParamsRef wsB)
+                (Just (paramsWith emptyLocationInstances) { wgpWorldSize = 64 })
+            writeIORef (worldManagerRef (bnEnv b)) emptyWorldManager
+                { wmWorlds = [(pageA, wsA), (pageB, wsB)], wmVisible = [pageA] }
+            writeIORef (unitManagerRef (bnEnv b)) emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 1, asUnit (carrier 1 pageB (-256, 256) 0 100))
+                    , (UnitId 2, asUnit (carrier 2 pageB (245, -245) 0 100)) ]
+                , umNextId = 3 }
+            loadModules b
+            let resolveSeam = unq <$> luaRun b (luaLines
+                    [ "local t = { gridX = 255, gridY = -255, gridZ = 0,"
+                    , "            page = '" <> unWorldPageId pageB <> "' };"
+                    , "return tostring(SESSION.resolveSource({}, nil, t,"
+                    , "  'pickup_ground', { fallback = true }))" ])
+            resolveSeam `shouldReturn` "1"
+            activate b pageB
+            resolveSeam `shouldReturn` "1"
 
         it "answers nil for a nonempty selection with no eligible member, \
            \even with an eligible unselected unit standing by" $ \b → do

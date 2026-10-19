@@ -462,6 +462,12 @@ end
 -- work rather than settled intent). A multi-unit selection is allowed
 -- and the nearest eligible unit goes.
 --
+-- A DEAD unit is never a candidate (#2522): `unit.getAllIds` and a
+-- selection can both still name a corpse, which keeps its faction and
+-- its species' actions but will never execute an order (unit_ai.lua
+-- suspends every order for the dead pose), so a nearer corpse must not
+-- win the assignment.
+--
 -- A candidate is a selected unit that is player-commandable (the same
 -- faction.isPlayerCommandable gate the "Attack" entry already uses --
 -- and, since A2, the same gate the engine's own unit-endpoint
@@ -483,7 +489,10 @@ end
 -- never absolute elevation: under an elevated target the lowest unit
 -- is the farthest one. The z term applies only when both sides report
 -- a z; a target with no gridZ ranks on x/y alone, exactly as before.
--- x/y are measured in the
+-- x/y are measured in the TARGET PAGE's seam frame when the target
+-- names its page (#2522: `world.localizeTile`'s page argument), so the
+-- ranking cannot change with whichever page happens to be visible, and
+-- otherwise in the
 -- TARGET's local u-alias frame via world.localizeTile (#1175's
 -- selection-gate rule): a candidate physically adjacent across the wrap
 -- seam measures a whole world away in canonical coords and would
@@ -564,6 +573,7 @@ function M.resolveSource(selectedUids, excludeUid, target, requiredAction, opts)
             local info = unit.getInfo(uid)
             local fac = info and unit.getFaction(uid)
             if info and info.gridX and info.gridY and fac
+               and unit.getPose(uid) ~= "dead"
                and faction.isPlayerCommandable(fac)
                and (not pageScoped or info.page == targetPage)
                and (requiredAction == nil
@@ -572,7 +582,8 @@ function M.resolveSource(selectedUids, excludeUid, target, requiredAction, opts)
                 if tx and ty then
                     local cx = math.floor(info.gridX)
                     local cy = math.floor(info.gridY)
-                    local lx, ly = world.localizeTile(tx, ty, cx, cy)
+                    local lx, ly = world.localizeTile(tx, ty, cx, cy,
+                                                      targetPage)
                     if not (lx and ly) then lx, ly = cx, cy end
                     d = (lx - tx) * (lx - tx) + (ly - ty) * (ly - ty)
                 end
