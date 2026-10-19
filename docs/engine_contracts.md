@@ -178,7 +178,11 @@ reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`),
 `ci_lane_report.py --self-test` (#2748 — the headless-lane time report's
 rendering, the `ci.yml` lane-step wiring, and a failing lane's propagation
-through the log capture), and the parity audit itself.
+through the log capture), `test_ci_deps_image.py` (#2864 — the
+synarchy-deps publisher's write-once and moving-tag decisions, its
+refusal of pull requests, the Docker-free consumer path and the
+`deps-image.yml`/`.github/deps/Dockerfile` wiring, over an in-process fake
+registry), and the parity audit itself.
 
 **The haddock link audit (#2292)** is the newest member, and is owned
 by `ci.yml`'s `static-audits` worker — the engine-free half #2272 split
