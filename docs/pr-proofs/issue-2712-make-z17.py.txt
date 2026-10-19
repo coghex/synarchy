@@ -12,7 +12,7 @@ holding a steel bar, a ruin_small location with its significant item bound)
 through the REAL adapters (Scenario.Placement.*, Scenario.Items.*) on a live
 headless engine, and is saved through the real envelope encoder
 (encodeSessionSnapshot) with the metadata and Lua components of the donor
-save z16-scenario-world. Then the metadata timestamp is normalized, the
+save z16-scenario-world (lua.unit_ai v10 is carried from it: an accepted older input version). Then the metadata timestamp is normalized, the
 canonical summary is dumped from the real decoded SessionSnapshot, and the
 baseline is registered.
 """
