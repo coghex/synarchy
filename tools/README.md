@@ -336,6 +336,28 @@ self-test fails. The suite also checks its own fixtures' shape — a
 source whose line breaks were escaped away is vacuous rather than
 failing — and that check is itself probed.
 
+## Dependency image (`ci_deps_image.py`, #2864)
+
+`.github/workflows/deps-image.yml` publishes `ghcr.io/coghex/synarchy-deps`.
+The image is Ubuntu 24.04 with GHC/cabal at `/usr/local/.ghcup`, the
+Hackage index snapshot, and the compiled Cabal store for master's dependency
+plan at `/usr/local/cabal/store`, so a fresh 24.04 machine builds only
+synarchy. Consumers: [docs/deps_image.md](../docs/deps_image.md).
+
+| Subcommand | Who runs it |
+|---|---|
+| `plan` | the workflow: resolves the plan in the recipe's toolchain stage at the fixed workspace `/src/synarchy`; prints the identity tag `ubuntu24.04-x86_64-ghc9.12.2-<sha256 of plan.json>` |
+| `publish` | the workflow's per-identity `deps-image` job: write-once push of an unseen identity and its anonymous-access check; never touches `master`; refuses anything but a master push of coghex/synarchy |
+| `reconcile-master` | the workflow's `deps-master` job, the only writer of `master`, under the one `synarchy-deps-master` lock shared by every identity: points `master` at the identity of master's tip (this run's own when no plan input changed since its commit, otherwise the tip's plan resolved from a worktree), re-checks the tip after writing, then checks anonymous access |
+| `store-metadata`, `verify-image` | the image build and its pre-push check |
+| `fetch` | consumers: Docker-free install of `/usr/local/.ghcup` and `/usr/local/cabal` through the registry API |
+| `check` | consumers: compares `dist-newstyle/cache/plan.json` with the image's metadata by compiler, platform and non-local unit IDs |
+
+`python3 tools/test_ci_deps_image.py` tests the publication decisions, the
+consumer path and the workflow/Dockerfile wiring against an in-process fake
+registry (no network, no Docker). `static-audits` and `ci-local.sh` both run
+it.
+
 ## World generation tools
 
 Scripts for auditing, checking determinism, and regression-testing the
