@@ -976,9 +976,11 @@ states. It is pure up to one commit.
   state of every tile it covers. Edits are built from each tile's FINAL state, so an
   earlier patch's relative raise never stacks under a later one.
 - **Limits.** `surface_z` must lie in `[sea level − 15, sea level + 256]` (a column
-  cannot grow downward below its sixteenth cell), and a family may ask for at most
-  1,048,576 tiles; a patch beyond either is rejected whole with a diagnostic. `air`
-  is not a terrain material: excavation is a lower `surface_z`.
+  cannot grow downward below its sixteenth cell); a family may ask for at most
+  1,048,576 tiles; and the terrain may change at most 4,194,304 cells in all (a tile
+  costs one plus the z it raises or digs, so a tall raise over a wide region is bounded
+  too). A patch beyond any limit is rejected whole with a diagnostic. `air` is not a
+  terrain material: excavation is a lower `surface_z`.
 - **Bounds.** Regions are clipped tile by tile against the page's own bounds
   (`World.Arena.Bounds.clipTileRegion`, partial chunks included): the admitted tiles
   are kept with one `TilesClipped` diagnostic; a patch with none is rejected.
@@ -999,11 +1001,16 @@ reaches the simulation through the page's own `SimChunkEdited` re-seed
 
 ### Commit and replacement
 
-`installWorldContent` runs on the world thread, after checking the page incarnation.
+`installWorldContent` runs on the world thread, after checking the page incarnation
+and that the page is an ARENA page (a generated world's chunks are not rebuilt from the
+arena base, so a materialization would destroy them: the answer is
+`WorldInstallNotArena` and nothing changes).
 A materialization REPLACES the page's terrain, fluid, plant-occurrence and crop-plot
 state — in the edit log every entry except structure pieces (`WeSetStructure` /
 `WeClearStructure`), which keep their relative order — so a second materialization or a
-recapture accumulates nothing. Resident chunks are rebuilt exactly as an admission
+recapture accumulates nothing. Every plant the replaced content placed is forgotten
+(regrowth timer, tags, chop designation), resident or not. It assumes a quiescent page:
+ground items, units and spoil already standing there are not repositioned. Resident chunks are rebuilt exactly as an admission
 rebuilds them (arena base, replayed log, rectangle re-asserted) and swapped in through
 `replaceChunkForgettingFlora`; a non-resident chunk gets only the log and is rebuilt by
 its own admission.
@@ -1019,8 +1026,10 @@ plant whose timer ran out). A column equal to the base is not a patch unless it 
 tags; a wet cell whose plane does not rise above its terrain top is dry; an occurrence
 outside the planted id namespace is generated flora the world regenerates, not an
 authored one. A non-resident chunk is read by regenerating the base and replaying its
-durable edits — non-residency is never deletion. Tags on a cell below the surface are
-outside the vocabulary and come back as a diagnostic. Entries are written under
+durable edits — non-residency is never deletion. Tags on a cell below the surface, a
+column whose top material has no registered name, and a column with no solid cell are
+outside the vocabulary and come back as diagnostics (`terrain.tags`, `terrain.material`,
+`terrain.columns`) rather than being written wrongly. Entries are written under
 generated explicit ids that depend only on the content (family, values, tile, and an
 ordinal among equal siblings ranked by the raw values), made unique against the ids of
 the document's other entries.
