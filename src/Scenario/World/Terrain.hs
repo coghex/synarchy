@@ -60,6 +60,8 @@ module Scenario.World.Terrain
     , buildTerrain
     , tileSpecEdits
     , baseTileSpec
+    , tileShape
+    , isBaseShape
       -- * Fluid
     , BuiltFluidPatch(..)
     , FluidBuild(..)
@@ -134,11 +136,23 @@ data TileSpec = TileSpec
     { tsSurfaceZ ∷ !Int
     , tsMaterial ∷ !MaterialId
     , tsSlope    ∷ !Word8
+      -- ^ always recorded as an OVERRIDE, flat included: the schema's omitted
+      --   slope is @0@ (flat), and the chunk admission's border-slope
+      --   recompute would otherwise replace even an authored flat with a
+      --   derived ramp bit that depends on which neighbours are resident
     } deriving (Show, Eq)
 
 -- | The unedited column's own spec.
 baseTileSpec ∷ TileSpec
 baseTileSpec = TileSpec baseTopZ baseTopMaterial 0
+
+-- | A spec's physical shape — surface, material, slope value.
+tileShape ∷ TileSpec → (Int, MaterialId, Word8)
+tileShape (TileSpec z m s) = (z, m, s)
+
+-- | Is this the unedited column's shape?
+isBaseShape ∷ TileSpec → Bool
+isBaseShape spec = tileShape spec ≡ tileShape baseTileSpec
 
 -- | One accepted terrain patch: its admitted tiles and the cell its tags
 --   label on each of them.
@@ -252,15 +266,15 @@ regionTiles (RegionTiles ts) = dedupe ts
             | Set.member t seen = go seen rest
             | otherwise         = t : go (Set.insert t seen) rest
 
--- | The edits that take an unedited column to @spec@ (none when it
---   already is that column).
+-- | The edits that take an unedited column to @spec@: its shape (none when
+--   the column already has it) and its slope override — always, flat
+--   included.
 tileSpecEdits ∷ Int → Int → TileSpec → [WorldEdit]
-tileSpecEdits gx gy spec@(TileSpec s m slope)
-    | spec ≡ baseTileSpec = []
-    | otherwise =
-        shape ⧺ [ WeSetSlope gx gy s slope | slope ≢ 0 ]
+tileSpecEdits gx gy (TileSpec s m slope) =
+    shape ⧺ [WeSetSlope gx gy s slope]
   where
     shape
+        | s ≡ baseTopZ ∧ m ≡ baseTopMaterial = []     -- already this column: keeps its grass
         | s > baseTopZ = replicate (s - baseTopZ) (WeAddTile gx gy m)
         | s ≡ baseTopZ = [WeSetCell gx gy s m]
         | otherwise    = replicate (baseTopZ - s) (WeDeleteTile gx gy)
@@ -324,7 +338,7 @@ buildFluids bounds terrain patches =
         -- explicitly rather than left to that reveal.
         clears = [ WeClearFluidSnapshot x y
                  | (t@(x, y), spec) ← M.toAscList terrain
-                 , spec ≢ baseTileSpec, not (M.member t wet) ]
+                 , not (isBaseShape spec), not (M.member t wet) ]
         edits = clears
             ⧺ [ WeSetFluidSnapshot x y ft e | ((x, y), (ft, e)) ← M.toAscList wet ]
         tagDiags = [ diagAt (keyedPath path "tags")

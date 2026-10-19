@@ -93,11 +93,24 @@ terrainSpec = describe "terrain" $ do
         veg `shouldBe` baseVeg
         veg `shouldSatisfy` (> 0)
 
-    it "produces no edit for a column that already is the stated one, and keeps its grass" $ do
+    it "records every patch tile's slope as an override: authored, zero, or the schema's omitted flat" $ do
         let c = content Nothing 0
-                [terrainPatch "same" (RegionRect 0 0 3 3) "loam" 0 (Authored 0) []] [] []
-        wcEdits c `shouldBe` HM.empty
+                [ terrainPatch "flat" (RegionTiles [(0, 0)]) "granite" 2 (Authored 0) []
+                , terrainPatch "ramp" (RegionTiles [(1, 0)]) "granite" 2 (Authored 5) []
+                , terrainPatch "unset" (RegionTiles [(2, 0)]) "granite" 2 Omitted []
+                , terrainPatch "baseflat" (RegionTiles [(3, 0)]) "loam" 0 (Authored 0) [] ] [] []
+            slopeEdits = [ (x, bits) | es ← HM.elems (wcEdits c), WeSetSlope x _ _ bits ← es ]
+        slopeEdits `shouldMatchList` [(0, 0), (1, 5), (2, 0), (3, 0)]
+
+    it "produces no shape edit for a column that already is the stated one, and keeps its grass" $ do
+        let c = content Nothing 0
+                [terrainPatch "same" (RegionTiles [(0, 0)]) "loam" 0 Omitted []] [] []
         wcDiagnostics c `shouldBe` []
+        -- only the slope override (flat): the cell, and so its grass, is untouched
+        concat (HM.elems (wcEdits c)) `shouldBe` [WeSetSlope 0 0 0 0]
+        let (_, _, _, veg) = at Nothing (wcEdits c) (0, 0)
+            (_, _, _, baseVeg) = columnAt (generateArenaChunkIn Nothing seed (ChunkCoord 0 0)) (0, 0)
+        veg `shouldBe` baseVeg
 
     it "reaches negative coordinates and distinct z cells in the right chunks" $ do
         let c = content Nothing 0
@@ -572,3 +585,22 @@ captureSpec = describe "capture" $ do
         map tpSurfaceZ (cwTerrain cw) `shouldBe` [2]
         effects (cwDiagnostics cw) `shouldBe`
             [ ("terrain.columns", FieldRejected), ("terrain.material", FieldRejected) ]
+
+    it "names same-tile siblings stably through repeated round trips, ranking by the complete exported state" $ do
+        let twin tags regrowth i = (floraEntry i "oak" 4 4)
+                { feTags = tags, feRegrowth = Authored regrowth, feAge = Authored 50, feHealth = Authored 1
+                , feOffsetU = Authored 0, feOffsetV = Authored 0, feVariant = Authored 1, feZ = Authored 0 }
+            first = content Nothing 10 [] []
+                [ twin [tag "b"] 20 "p", twin [tag "a"] 90 "q", twin [tag "a"] 30 "r" ]
+            roundTrip cw = let (t, f, l) = pathsOf cw
+                               c' = buildWorldContent (envAt Nothing 10 firstPlantedFloraCursor) t f l
+                           in captureWorldContent Set.empty (snapshotOf Nothing 10 c' False)
+            cw1 = captureWorldContent Set.empty (snapshotOf Nothing 10 first False)
+            cw2 = roundTrip cw1
+            cw3 = roundTrip cw2
+        map (\e → (scenarioIdText (feId e), feTags e, feRegrowth e)) (cwFlora cw1) `shouldBe`
+            [ ("flora.oak.4.4.1", [tag "a"], Authored 30)
+            , ("flora.oak.4.4.2", [tag "a"], Authored 90)
+            , ("flora.oak.4.4.3", [tag "b"], Authored 20) ]
+        cw2 `shouldBe` cw1
+        cw3 `shouldBe` cw1

@@ -62,6 +62,7 @@ import Gameplay.Tags.PageLive (reconcileAdmittedPageTags)
 import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), columnIndex)
 import World.Command.Types (WorldCommand(..))
 import World.Chop.Types (newChopDesignation)
+import World.Edit.Apply (applyEdit)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Flora.Designation (setChopDesignations)
 import World.Flora.Types
@@ -493,7 +494,8 @@ spec = describe "on a live arena page (through the world thread)" $ do
         let ramp x y = terrainPatch "ramp" (RegionTiles [(x, y)]) "loam" 0 (Authored 5) []
         -- (48,48) is local (0,0) of chunk (3,3), (47,47) is local (15,15) of resident chunk (2,2)
         _ ← install env pid ws (request [ramp 48 48, (ramp 47 47) { tpId = ex "ramp2" }] [] [])
-        liveColumn ws (47, 47) `shouldReturn` Just (0, Just (unMaterialId matLoam), 5, 0)
+        -- (a ramp on the base shape is only a slope override: the cell, and its grass, is untouched)
+        fmap (\(t, m, sl, _) → (t, m, sl)) ⊚ liveColumn ws (47, 47) ≫= (`shouldBe` Just (0, Just (unMaterialId matLoam), 5))
         isNothing ⊚ lookupChunk (ChunkCoord 3 3) ⊚ readIORef (wsTilesRef ws) ≫= (`shouldBe` True)
         n ← enqueueChunkRequest pid ws [ChunkCoord 3 3]
         n `shouldBe` 1
@@ -554,6 +556,34 @@ spec = describe "on a live arena page (through the world thread)" $ do
             tags ← readIORef (wsPageTagsRef ws)
             categoryTagsOf (tileTargetFromStored pid 0 0 3) (ptTiles tags) `shouldBe` Set.fromList [tag "pad"]
             HM.size ⊚ readIORef (wsFloraHarvestsRef ws) ≫= (`shouldBe` 1)
+
+    it "keeps an explicit flat slope through admission, and honours later edits when restoring authored slopes" $ \env → do
+        (pid, ws) ← freshArena env "world_slope2" 120 120
+        -- an explicit FLAT on a raised chunk-border tile (47,47) = local (15,15) of resident chunk (2,2)
+        _ ← install env pid ws
+                (request [terrainPatch "flat" (RegionTiles [(47, 47)]) "granite" 3 (Authored 0) []] [] [])
+        -- hand-authored histories on three more border tiles of the same chunk, applied the way
+        -- every live edit is: to the chunk and to the log, in order
+        let granite = matGranite
+            histories =
+                [ [WeSetSlope 47 40 0 5]                                                  -- stays
+                , [WeSetSlope 47 41 0 5, WeSetCell 47 41 0 granite]                       -- cleared by a later cell write
+                , [WeSetSlope 47 42 0 5, WeDeleteTile 47 42, WeAddTile 47 42 granite] ]   -- delete and refill
+            slopeAt t = fmap (\(_, _, sl, _) → sl) ⊚ liveColumn ws t
+        forM_ (concat histories) $ \e → do
+            atomicModifyIORef' (wsEditsRef ws) $ \ls → (appendEdit (ChunkCoord 2 2) e ls, ())
+            atomicModifyIORef' (wsTilesRef ws) $ \td → case lookupChunk (ChunkCoord 2 2) td of
+                Just lc → (insertChunk (applyEdit e lc) td, ())
+                Nothing → (td, ())
+        mapM slopeAt [(47, 47), (47, 40), (47, 41), (47, 42)]
+            `shouldReturn` [Just 0, Just 5, Just 0, Just 0]
+        -- the neighbouring chunk's admission recomputes this chunk's border strip
+        n ← enqueueChunkRequest pid ws [ChunkCoord 3 2]
+        n `shouldBe` 1
+        waitForChunksAt ws (ChunkCoord 3 2) 30 `shouldReturn` True
+        -- explicit flat (not the derived bit), the effective override, and both later edits respected
+        mapM slopeAt [(47, 47), (47, 40), (47, 41), (47, 42)]
+            `shouldReturn` [Just 0, Just 5, Just 0, Just 0]
 
 -- | A finite arena page that is VISIBLE (the camera loader serves visible pages).
 withVisibleArena ∷ EngineEnv → Int → Int → (WorldPageId → WorldState → IO α) → IO α

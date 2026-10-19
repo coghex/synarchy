@@ -83,6 +83,15 @@ generateDemandedChunks registry catalog pageId params coords
     | otherwise = parMap rdeepseq
         (generateLoadedChunk registry catalog pageId params) coords
 
+-- | One chunk as the loader generates it, before any edit is replayed: the
+--   base the effective authored slopes are read against
+--   ('World.Edit.Apply.applySlopeEditsTd'). 'Nothing' for a coordinate the
+--   page never generates (outside a finite arena).
+regenerateChunk ∷ MaterialRegistry → FloraCatalog → WorldPageId → WorldGenParams
+                → ChunkCoord → Maybe LoadedChunk
+regenerateChunk registry catalog pageId params c =
+    listToMaybe (generateDemandedChunks registry catalog pageId params [c])
+
 updateChunkLoading ∷ EngineEnv → LoggerState → IO ()
 updateChunkLoading env logger = do
     camera ← readIORef (rvCameraRef (toRenderViewCapability env))
@@ -243,7 +252,7 @@ updateChunkLoading env logger = do
                                     -- overrides the recompute would erase
                                     -- too: restore them first, then the
                                     -- derived-state passes over them.
-                                    td5a = applySlopeEditsTd edits digCoords td'''''
+                                    td5a = applySlopeEditsTd (regenerateChunk registry catalog pageId params) edits digCoords td'''''
                                     td6 = applyDigSlopesTd desigs digCoords td5a
                                     -- Construction corner-progress
                                     -- overrides (#96): same derived-
@@ -567,7 +576,7 @@ drainInitQueues env logger = do
                                      (wgpWorldSize params) coords td'
                                  -- Authored slopes (WeSetSlope) are
                                  -- overrides the recompute erases too.
-                                 td4a = applySlopeEditsTd edits digCoords td''''
+                                 td4a = applySlopeEditsTd (regenerateChunk registry catalog pageId params) edits digCoords td''''
                                  td5 = applyDigSlopesTd desigs digCoords td4a
                                  -- Construction corner-progress overrides
                                  -- (#96), same contract as dig slopes.

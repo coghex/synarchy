@@ -117,7 +117,7 @@ captureWorldContent reserved snap =
             | ((x, y), c) ← M.toAscList namedTiles
             , let spec = tcSpec c
             , let tags = tagsOf (x, y, tsSurfaceZ spec)
-            , spec ≢ baseTileSpec ∨ not (Set.null tags) ]
+            , not (isBaseShape spec) ∨ not (Set.null tags) ]
         unnamed = M.size tiles - M.size namedTiles
         hollow = length (hollowTiles snap chunks)
         (terrainEntries, names1) = foldl' nameTerrain ([], reserved)
@@ -287,7 +287,7 @@ captureFlora snap chunks used0 =
             , arenaAdmitsTile (snapBounds snap) x y
             , Just sp ← [lookupSpecies (fiSpecies fi) cat] ]
         occEntry ((x, y), fi, sp) =
-            ( (fsName sp, (x, y), rankKey fi)
+            ( (fsName sp, (x, y), rankKey snap fi)
             , \name → FloraEntry
                 { feId = ExplicitId name
                 , feTags = Set.toAscList (M.findWithDefault Set.empty (fiInstanceId fi)
@@ -307,7 +307,7 @@ captureFlora snap chunks used0 =
             , arenaAdmitsTile (snapBounds snap) x y
             , Just sp ← [lookupSpecies (cpSpecies cp) cat] ]
         plotEntry ((x, y), cp, sp) =
-            ( (fsName sp, (x, y), ((0, 0, 0, 0, 0, 0) ∷ RankKey))
+            ( (fsName sp, (x, y), ((0, 0, 0, 0, 0, 0, [], 0) ∷ RankKey))
             , \name → FloraEntry
                 { feId = ExplicitId name
                 , feTags = Set.toAscList (M.findWithDefault Set.empty (x, y) (snapPlotTags snap))
@@ -335,10 +335,17 @@ captureFlora snap chunks used0 =
 
 -- | The ranking of occurrences that share a species and a tile: raw
 --   values under the derived 'Ord', never a rendered form.
-type RankKey = (Int, Float, Float, Word8, Float, Float)
+type RankKey = (Int, Float, Float, Word8, Float, Float, [GameplayTag], Float)
 
-rankKey ∷ FloraInstance → RankKey
-rankKey fi = (fiZ fi, fiOffU fi, fiOffV fi, fiVariant fi, fiHealth fi, fiAge fi)
+-- | Every value the entry will export, raw, so two plants that differ in
+--   anything a recapture writes never tie — a tie would leave their
+--   relative order to the chunk's list order, which reconstruction
+--   reverses, and swap their generated names on every round trip.
+rankKey ∷ WorldSnapshot → FloraInstance → RankKey
+rankKey snap fi =
+    ( fiZ fi, fiOffU fi, fiOffV fi, fiVariant fi, fiHealth fi, fiAge fi
+    , Set.toAscList (M.findWithDefault Set.empty (fiInstanceId fi) (snapOccTags snap))
+    , HM.lookupDefault 0 (fiInstanceId fi) (snapHarvests snap) )
 
 -- * Names and regions
 
