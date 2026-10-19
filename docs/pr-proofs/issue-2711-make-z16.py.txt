@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Derive the z16-scenario-world fixture (#2711) from z15-arena-finite.
+
+Seeds one page's physical plant state through synarchy-save-codec
+seed-tags: planting + state edits for a white_oak (offsets, variant,
+health 0.5, an age baseline) and a tomato_plant, a wheat crop plot, an
+oak regrowth timer, and tile/plant/plot tags. Run from the repository
+root with the worktree built (`cabal build all`).
+"""
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, "tools")
+import save_compat_audit_codec as codec
+
+ROOT = Path.cwd()
+src = ROOT / "test-headless/data/save-compat/z15-arena-finite.bin"
+out = ROOT / "test-headless/data/save-compat/z16-scenario-world.bin"
+OAK = 4611686018427387905      # planted id, cursor 1
+TOMATO = 4611686018427387906   # planted id, cursor 2
+spec = {
+    "plantings": [
+        {"page": "finite_arena", "x": 1, "y": 1, "species": "white_oak", "id": OAK,
+         "plantedDay": 0, "baseWidth": 16},
+        {"page": "finite_arena", "x": 3, "y": 2, "species": "tomato_plant", "id": TOMATO,
+         "plantedDay": 0, "baseWidth": 12},
+    ],
+    "floraStates": [
+        {"page": "finite_arena", "x": 1, "y": 1, "id": OAK, "z": 3, "offU": -0.25,
+         "offV": 0.125, "variant": 2, "health": 0.5, "age": -280.0},
+        {"page": "finite_arena", "x": 3, "y": 2, "id": TOMATO, "z": 0, "offU": 0.0,
+         "offV": 0.0, "variant": 1, "health": 1.0, "age": -400.5},
+    ],
+    "cropPlots": [
+        {"page": "finite_arena", "x": 6, "y": 2, "species": "wheat", "plantedDay": 90,
+         "health": 1.0},
+    ],
+    "harvests": [
+        {"page": "finite_arena", "id": OAK, "seconds": 90.0},
+    ],
+    "tiles": [{"page": "finite_arena", "x": 1, "y": 1, "z": 0, "tags": ["grove", "shared"]}],
+    "plants": [{"page": "finite_arena", "x": 1, "y": 1, "id": OAK, "tags": ["grove"]}],
+    "plots": [{"page": "finite_arena", "x": 6, "y": 2, "tags": ["field"]}],
+}
+spec_path = Path(os.environ.get("TMPDIR", "/tmp")) / "z16.seed.json"
+spec_path.write_text(json.dumps(spec))
+ok, tail = codec.seed_fixture_tags(src, spec_path, out)
+assert ok, tail
+ok, tail = codec.normalize_fixture_timestamp(out)
+assert ok, tail
+summary = ROOT / "test-headless/data/save-compat/z16-scenario-world.expected.json"
+ok, tail = codec.dump_canonical_summary(out, summary)
+assert ok, tail
+print("wrote", out, out.stat().st_size, "bytes; summary", summary)
+
+import subprocess, hashlib
+manifest = json.load(open(ROOT / "docs/save_compat/manifest.json"))
+z15 = [b for b in manifest["baselines"] if b["id"] == "z15-arena-finite"][0]
+components = [dict(c, version=6) if c["id"] == "world-edits" else c for c in z15["components"]]
+desc = ("A scenario world-content session (#2711) as the current build writes it: the finite 20x10 "
+        "arena page 'finite_arena' of z15 carrying a page's PHYSICAL PLANT STATE in world-edits v6 — "
+        "a white_oak and a tomato_plant as named planting edits (planted-id namespace) each followed "
+        "by a WeSetFloraState edit that records the offsets, visual variant, health (0.5 for the oak) and "
+        "the stored age baseline the planting edit cannot (it replays offsets 0, health 1, variant 0), a "
+        "wheat crop plot, an oak regrowth timer (game seconds remaining), the planted-id cursor above both "
+        "ids, and tile / occurrence / plot gameplay tags. Seeded through synarchy-save-codec seed-tags because "
+        "no public verb installs scenario content yet (SCN-13 composes it). z15 and every older fixture are "
+        "the no-state (world-edits v5 and older) counterparts.")
+prov = ("Derived from the tracked z15-arena-finite fixture (generated through the real headless engine and "
+        "engine.saveWorld on the #2708 build; see its provenance) by synarchy-save-codec seed-tags, which "
+        "decoded the whole session through the real decoder, appended the planting and WeSetFloraState edits, "
+        "the crop plot, the regrowth timer and the tag assignments named by the spec (retained as "
+        "docs/pr-proofs/issue-2711-make-z16.py.txt) to page finite_arena, raised the page's planted-id cursor "
+        "above the seeded ids, and re-encoded it through the same encoder an ordinary save uses, writing "
+        "world-edits v6; then the metadata timestamp was normalized. Its canonical summary was derived "
+        "directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.")
+cmd = ["python3", "tools/save_compat_audit.py", "--add-baseline",
+       "--baseline-id", "z16-scenario-world", "--fixture-id", "z16-scenario-world",
+       "--path", "test-headless/data/save-compat/z16-scenario-world.bin",
+       "--kind", "complete-session", "--summary", str(summary),
+       "--provenance", prov, "--description", desc,
+       "--migration-target", "current",
+       "--migrated-by", "current build: World.Save.Component.PageEdits.worldEditsCodec (v6) decodes WeSetFloraStateD; no migration (this IS the current format)",
+       "--components", json.dumps(components),
+       "--declared-at", "2026-10-19", "--declared-by-issue", "2711"]
+r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+print(r.returncode, r.stdout[-600:], r.stderr[-600:])

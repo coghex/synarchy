@@ -1785,6 +1785,8 @@ allow. It is not a promise that every slice has equal cost.
 - **Out of scope:** New flora mortality/condition mechanics, new hydrology generation, location placement.
 - **Open questions:** None at the agreed product-policy level. If concrete field ownership or integration reveals a new material choice, stop and ask before implementing it; D-52's redesign stop remains binding.
 
+- **Delivered (#2711).** `Scenario.World.{Terrain,Flora,Build,Install,Capture}` construct and recapture the supported physical baseline: durable terrain/fluid edits from final tile state with tile-level clipping and explicit dry clears, flora by species category (occurrence or crop plot) through the existing planted allocator, and a pure capture of a coherent snapshot that reads non-resident chunks from the durable log. The owner chose scenario format v2 on 2026-10-19 (`flora[]` gains `offset_u`, `offset_v`, `variant`, `regrowth`; identity migration; v1 vocabulary kept closed by source version) and `world-edits` v6 appends `WeSetFloraState`. Contract: [scenario_format.md](../scenario_format.md#world-content-construction-and-capture-scn-11-2711).
+
 ### SCN-12. Materialize and capture buildings and real locations
 
 - **Outcome:** Authored structures and locations have real runtime identity, contents and valid dependent references.

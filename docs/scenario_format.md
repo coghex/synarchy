@@ -1,9 +1,10 @@
-# Scenario file format (v1)
+# Scenario file format (v1, v2)
 
 Scenarios are reusable testing-arena setups (epic #2698). An author writes one as
 YAML, and later the arena captures one from a running session (SCN-14). This
 document is the authoring guide and contract for format version 1, defined by #2699
-(SCN-01). The decoder and validator live in `src/Scenario/`. The design rationale
+(SCN-01), and for version 2, which #2711 (SCN-11) added to give flora's physical
+state a home (see [Flora, format v2](#flora-format-v2)). The decoder and validator live in `src/Scenario/`. The design rationale
 is in [designs/predefined_arena_worlds_design.md](designs/predefined_arena_worlds_design.md),
 in SCN-01 and the decisions it cites.
 
@@ -220,7 +221,8 @@ strings, default `[]`).
 | `slope` | integer `[0, 15]` | opt | `0` (flat) | Ramp bitmask, bits N/E/S/W (`WeSetSlope`). |
 
 Dependent values to reconstruct: column surface maps, vegetation placement and fluid
-neighbour state (SCN-11). These are derived, not authorable.
+neighbour state (SCN-11). These are derived, not authorable. Construction and capture
+rules: [World content construction and capture](#world-content-construction-and-capture-scn-11-2711).
 
 ### `fluids[]` — fluid patches
 
@@ -236,14 +238,63 @@ Derived: the per-cell fluid depth below the surface and active-simulation state.
 
 | YAML | Type | Opt | Omitted | Runtime owner / construction |
 |---|---|---|---|---|
-| `species` | flora species name | req | — | `FloraSpecies` by name (`World.Flora.Reference`). |
+| `species` | flora species name | req | — | `FloraSpecies` by name (`World.Flora.Reference`). Its category decides the representation (see below). |
 | `x`, `y` | integer tile | req | — | Tile position. |
-| `z` | integer | opt | Column surface | `fiZ`. |
-| `age` | number ≥ 0, game days | opt | Deterministic default | `fiAge`. |
-| `health` | number `[0, 1]` | opt | Full health | `fiHealth`. |
+| `z` | integer | opt | Column surface (the tile's final terrain top) | `fiZ`. A crop plot has no z: an authored value other than the surface is a field rejection. |
+| `age` | number ≥ 0, **game days** | opt | Deterministic default | The CURRENT age at the scenario's initialized clock (not the stored baseline; see [the time basis](#flora-format-v2)). |
+| `health` | number `[0, 1]` | opt | Full health (`1`) | `fiHealth` / `cpHealth`; scales the growth rate. |
+| `offset_u`, `offset_v` | number `[-0.5, 0.5]`, tiles (**v2**) | opt | Deterministic hash of the scenario id | `fiOffU`, `fiOffV`. Not applicable to a crop plot. |
+| `variant` | integer `[0, 3]` (**v2**) | opt | Deterministic hash of the scenario id | `fiVariant`. Not applicable to a crop plot. |
+| `regrowth` | number ≥ 0, **game seconds** (**v2**) | opt | Harvestable now | Remaining regrowth, `World.Flora.Harvest.FloraHarvests`. Only a harvestable occurrence accepts it; `0` is an explicit "harvestable now". Not applicable to a crop plot (its harvest deletes the plot). |
 
-Derived: sub-tile offsets, visual variant, base width, phase and stage textures,
-and the flora instance id (allocated at construction).
+Derived: base width (the species' footprint), phase and stage textures, and the flora
+instance id (allocated at construction from the page's existing planted allocator).
+
+<a id="flora-format-v2"></a>
+#### Flora, format v2
+
+Format version 2 (#2711, the owner's choice "Format v2 (Recommended)" on 2026-10-19)
+adds four optional `flora[]` fields — `offset_u`, `offset_v`, `variant`, `regrowth` —
+because the physical plant state a capture must write and a materialization must
+restore (D-12) includes values v1 called derived. The change is additive. The v1 → v2
+migration step is the identity, the v1 fixture texts stay frozen, and the decoder keeps
+v1's vocabulary closed by the document's **declared source version**: a version-1 file
+that names a v2 field still reports it as `UnknownField`.
+
+- **Representation follows the species.** A groundcover crop species
+  (`worldGen.category: groundcover_crop`) becomes a tile-keyed crop plot
+  (`World.Flora.CropPlot`); every other species becomes an occurrence — a wild plant
+  or a planted row crop — with its own `FloraInstanceId`. There is no selector field.
+  One crop plot per tile: a second one is rejected as an entry. Several occurrences may
+  share a tile.
+- **Identity.** An occurrence takes its id from the page's EXISTING planted allocator
+  (`wpsPlantedFloraCursor`) in the authored order of the accepted entries, and the
+  advanced cursor is committed with it. No scenario reference for a plant or a terrain
+  patch is persisted: nothing references them, capture names them structurally, and
+  ordinary saves carry the plants themselves.
+- **Time basis — units are part of the contract.** `age` is **game days**, and it is
+  the age the plant has *at the initialized clock*. Growth derives as
+  `age(day) = fiAge + day · growthRate(health)` (`World.Flora.Growth`), so construction
+  stores the baseline `fiAge = age − day · rate` (searched to the last bit so the
+  derived value is the authored one whenever the float grid at that clock can say it
+  — always at day 0 — and its nearest neighbour otherwise; a derived value is on the
+  grid and round-trips exactly), and capture exports the *derived* current age, never
+  `fiAge` or the planted day. A crop plot stores a planted **day** and derives
+  `age = elapsedDays · rate`, so its age lands on the nearest whole elapsed day.
+  `regrowth` is **game seconds remaining**, counted down by the existing regrowth tick;
+  it needs no clock conversion. The scenario file has no clock of its own (see the v1
+  owner decisions).
+- **Defaults.** An omitted `age`, `offset_u`, `offset_v` or `variant` is what the world
+  generator's own producer (`World.Flora.Placement.mkInstance`) makes from a private
+  hash of the scenario id — never gameplay randomness, never an allocation number.
+  An omitted `health` is full health; an omitted `regrowth` is "harvestable now".
+  Authored values, zero included, are authoritative.
+- **Rejections.** An unknown species, an out-of-bounds plant (never relocated), or a
+  second crop plot on a tile rejects the entry. An out-of-domain value, a field that
+  does not apply to a crop plot, and `regrowth` on a species with no harvest block
+  reject only that field.
+- **Chop state is not scenario state.** Construction leaves `wpsChopDesignations` empty
+  and every constructed instance's `fiChopDesignated` clear; capture ignores both.
 
 ### `structures[]` — structure pieces
 
@@ -859,7 +910,11 @@ ground_items:
     nothing is constructed.
 - **What bumps the version.** Any change to the v1 vocabulary or its meaning ships as
   a new version with a migration, and the v1 fixtures stay as evidence. This includes
-  adding a field: an older build reports a new field as unknown.
+  adding a field: an older build reports a new field as unknown. Version 2 (#2711)
+  is the first such step: `flora[]` gained `offset_u`, `offset_v`, `variant` and
+  `regrowth`, the v1 → v2 migration is the identity, and a version-1 document keeps
+  its closed vocabulary (the decoder gates the new fields on the declared source
+  version).
 - **Definition changes.** Removed definitions follow the ordinary rejection rules.
   Explicit values are never reset. Stats added to a definition later take their
   deterministic defaults.
@@ -880,6 +935,104 @@ owner decided on 2026-10-02, relayed through the owner's assistant.
 - **13:57:53Z.** Game-time stamps are relative and the file has no scenario clock.
   Wound and scar `age` are seconds before scenario start. A timed modifier's
   `remaining` is seconds after scenario start.
+
+## Owner decisions recorded for v2
+
+The #2711 design found that the v1 schema could not express the physical plant state
+its adapters must restore (sub-tile offsets, visual variant, harvest regrowth), and
+that adding it is a format decision. The owner decided on 2026-10-19, directly in the
+manager pane: **"Format v2 (Recommended)"**, approving the proposal as written —
+an additive format v2 with an identity v1 → v2 migration and frozen v1 fixtures;
+optional `offset_u`, `offset_v`, `variant` and `regrowth` on `flora[]`; omitted offsets
+and variant a deterministic hash of the scenario id; a unit and clock-basis table;
+representation by species category with no selector; one appended durable edit
+constructor (`WeSetFloraState`, `world-edits` v6); base width stays derived. The same
+decision confirmed that every authored occurrence uses the existing planted allocator
+and that no flora or terrain scenario references are persisted.
+
+## World content construction and capture (SCN-11, #2711)
+
+`Scenario.World.*` constructs and recaptures the terrain, fluid and flora a scenario
+states. It is pure up to one commit.
+
+| Module | Role |
+|---|---|
+| `Scenario.World.Terrain` | `buildTerrain`, `buildFluids`: patches to durable edits. |
+| `Scenario.World.Flora` | `buildFlora`: occurrences, crop plots, regrowth timers, planted ids. |
+| `Scenario.World.Build` | `buildWorldContent`: the three families, their per-chunk edit log, tag memberships and the scenario-id → runtime-target mapping (`WorldRefs`). |
+| `Scenario.World.Install` | `requestWorldInstall` / the world-thread commit (`WorldInstallScenarioContent`). |
+| `Scenario.World.Capture` | `captureWorldContent`: a coherent snapshot back to `terrain[]`, `fluids[]`, `flora[]`. |
+
+### Terrain
+
+- A patch gives every admitted tile a column whose **top solid cell** is `surface_z`
+  in the named material with the authored slope. Relative to the arena's unedited
+  column (sixteen cells, loam over granite, top at sea level) that is a raised pad of
+  the material, a column dug down to the surface with the top cell set, or the top
+  cell replaced. The cells the base column already has stay. A column that already is
+  the stated one produces no edit and keeps the base's grass; any column an edit
+  changes carries no surface vegetation (vegetation is derived).
+- **Overlap.** Patches apply in authored order and a later one replaces the column
+  state of every tile it covers. Edits are built from each tile's FINAL state, so an
+  earlier patch's relative raise never stacks under a later one.
+- **Limits.** `surface_z` must lie in `[sea level − 15, sea level + 256]` (a column
+  cannot grow downward below its sixteenth cell), and a family may ask for at most
+  1,048,576 tiles; a patch beyond either is rejected whole with a diagnostic. `air`
+  is not a terrain material: excavation is a lower `surface_z`.
+- **Bounds.** Regions are clipped tile by tile against the page's own bounds
+  (`World.Arena.Bounds.clipTileRegion`, partial chunks included): the admitted tiles
+  are kept with one `TilesClipped` diagnostic; a patch with none is rejected.
+- **Tags.** A terrain patch's tags label the surviving top cell `(x, y, surface_z)` of
+  each tile, recorded after the cell is known to exist; a tag whose cell a later
+  patch lowered is reported, never invented.
+
+### Fluid
+
+A tile is wet when the patch's exact plane is above the tile's **final** terrain top
+(`exactSurface > 8 · top`), and records an exact `WeSetFluidSnapshot` — never rounded
+to a z or a full cell. A tile the terrain changed that no patch wets is cleared
+EXPLICITLY (`WeClearFluidSnapshot`): the replay of a dug column at or below the water
+table would otherwise reveal groundwater, and an authored absence is authoritative.
+A fluid patch has no tag owner, so its `tags` are rejected as a field. Authored fluid
+reaches the simulation through the page's own `SimChunkEdited` re-seed
+(`syncEditToSim`); nothing advances the simulation, and the finite edge stays closed.
+
+### Commit and replacement
+
+`installWorldContent` runs on the world thread, after checking the page incarnation.
+A materialization REPLACES the page's terrain, fluid, plant-occurrence and crop-plot
+state — in the edit log every entry except structure pieces (`WeSetStructure` /
+`WeClearStructure`), which keep their relative order — so a second materialization or a
+recapture accumulates nothing. Resident chunks are rebuilt exactly as an admission
+rebuilds them (arena base, replayed log, rectangle re-asserted) and swapped in through
+`replaceChunkForgettingFlora`; a non-resident chunk gets only the log and is rebuilt by
+its own admission.
+
+### Capture
+
+Capture reads one coherent snapshot (the page's live edit log, resident chunks, crop
+plots, regrowth timers, tag assignments) with no engine handle. It writes every
+supported current value explicitly: a column's top (surface z, material, slope), each
+wet tile's kind and exact eighth-z plane, and each plant's species, tile, z, derived
+current age, health, offsets, variant and regrowth (an explicit `0` for a harvestable
+plant whose timer ran out). A column equal to the base is not a patch unless it carries
+tags; a wet cell whose plane does not rise above its terrain top is dry; an occurrence
+outside the planted id namespace is generated flora the world regenerates, not an
+authored one. A non-resident chunk is read by regenerating the base and replaying its
+durable edits — non-residency is never deletion. Tags on a cell below the surface are
+outside the vocabulary and come back as a diagnostic. Entries are written under
+generated explicit ids that depend only on the content (family, values, tile, and an
+ordinal among equal siblings ranked by the raw values), made unique against the ids of
+the document's other entries.
+
+### Persistence
+
+`world-edits` v6 appends one edit constructor, `WeSetFloraState` (tile, plant id, z,
+offsets, variant, health, stored age baseline), written after the planting edit
+(`WePlaceFloraRef` on disk) it follows; `migrateWorldEditsV5` crosses every older
+payload verbatim. Crop plots and regrowth timers already persist in `world-activity`; the planted-id
+cursor and the tile, occurrence and plot tags in `world-edits`. The `z16-scenario-world` fixture pins the
+whole set. See [persistence_state_inventory.md](persistence_state_inventory.md).
 
 ## Fixture expectations and tests
 
