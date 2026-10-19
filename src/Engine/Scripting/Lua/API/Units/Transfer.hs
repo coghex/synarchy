@@ -821,7 +821,7 @@ pushArrayField key vals = do
     Lua.setfield (-2) key
 
 -- | @unit.transferEndpointInfo({ kind = …, id = … })@ →
---   @{ eligible, displayName, page, gridX, gridY, tileW, tileH,
+--   @{ eligible, displayName, page, gridX, gridY, gridZ, tileW, tileH,
 --      capacity, storedWeight, contents }@ | nil.
 --
 --   @gridX@\/@gridY@ and @tileW@\/@tileH@ are the two halves of the ONE
@@ -831,6 +831,14 @@ pushArrayField key vals = do
 --   is or how big it is. A unit reports a 1x1 rect; a multi-tile
 --   building reports its real footprint, which is why anchor-to-anchor
 --   distance would strand a walker beside the far end of one (#1250).
+--
+--   @gridZ@ (#2522) is the endpoint's own z level — a unit's @uiGridZ@,
+--   exactly what @unit.getInfo@ reports as @gridZ@, and a building's
+--   @biGridZ@, exactly what @building.getInfo@ reports — so the shared
+--   assignment rule (@transfer_session.resolveSource@) ranks candidates
+--   against where the endpoint really stands in three dimensions. It is
+--   read off the same live snapshot as the rest of the row and plays no
+--   part in eligibility or reach.
 --
 --   Answers for EITHER endpoint kind, in either role: the eligibility
 --   rule is role-independent (a unit is player-commandable, a building
@@ -872,6 +880,9 @@ pushEndpointInfo ls ep view = do
     Lua.setfield (-2) "gridX"
     Lua.pushinteger (fromIntegral gy)
     Lua.setfield (-2) "gridY"
+    forM_ (endpointGridZ ls ep) $ \gz → do
+        Lua.pushinteger (fromIntegral gz)
+        Lua.setfield (-2) "gridZ"
     Lua.pushinteger (fromIntegral tw)
     Lua.setfield (-2) "tileW"
     Lua.pushinteger (fromIntegral th)
@@ -887,6 +898,16 @@ pushEndpointInfo ls ep view = do
         Lua.rawseti (-2) (fromIntegral (i ∷ Int))
     Lua.setfield (-2) "contents"
     return 1
+
+-- | An endpoint's z level (#2522), off the same live snapshot the view
+--   was projected from. 'Nothing' only for an endpoint that does not
+--   resolve, which 'endpointView' has already refused by the time the
+--   row is pushed.
+endpointGridZ ∷ LiveState → TransferEndpoint → Maybe Int
+endpointGridZ ls (EndpointUnit uid) =
+    uiGridZ <$> HM.lookup uid (umInstances (lsUnits ls))
+endpointGridZ ls (EndpointBuilding bid) =
+    biGridZ <$> HM.lookup bid (bmInstances (lsBuildings ls))
 
 endpointDisplayName ∷ LiveState → TransferEndpoint → Maybe Text
 endpointDisplayName ls (EndpointBuilding bid) = do

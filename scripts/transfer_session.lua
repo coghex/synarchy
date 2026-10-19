@@ -474,9 +474,16 @@ end
 -- wiring then OMITS "Transfer" entirely rather than showing a disabled
 -- row.
 --
--- Ranking is by squared-Euclidean grid distance to `target`
--- (`unit.transferEndpointInfo`'s own gridX/gridY, so the ranked point
--- is exactly the endpoint the session will name), measured in the
+-- Ranking is by squared-Euclidean grid distance to `target` in THREE
+-- dimensions (#2522, D-8): x/y are `unit.transferEndpointInfo`'s own
+-- gridX/gridY, so the ranked point is exactly the endpoint the session
+-- will name, and the z term is the candidate's `unit.getInfo` gridZ
+-- against the target's own gridZ (an endpoint's z level, or the
+-- terrain height a ground item rests at). Distance is to the TARGET,
+-- never absolute elevation: under an elevated target the lowest unit
+-- is the farthest one. The z term applies only when both sides report
+-- a z; a target with no gridZ ranks on x/y alone, exactly as before.
+-- x/y are measured in the
 -- TARGET's local u-alias frame via world.localizeTile (#1175's
 -- selection-gate rule): a candidate physically adjacent across the wrap
 -- seam measures a whole world away in canonical coords and would
@@ -499,9 +506,8 @@ end
 -- An exact distance tie breaks on the LOWEST uid (D-8), never on
 -- selection order -- unit.getSelected() converts a HashSet, so its
 -- order is not contractual and two equidistant acolytes would otherwise
--- race. This is deliberately NOT the "Pick up" precedent
--- (init_context_menu.lua, #920), whose `d < best` lets the first unit in
--- selection order win a tie; that gap is out of scope here.
+-- race. "Pick up" used to keep its own first-wins loop; since #2522 it
+-- resolves through here like every other gesture.
 --
 -- `target` may be nil or carry no coords (nothing to rank against),
 -- in which case every candidate is equidistant and the lowest-uid
@@ -522,18 +528,44 @@ end
 -- order pending for ever. The argument stays optional because a caller
 -- with no capability question -- one resolving a unit for something
 -- every species can do -- still has none to ask.
-function M.resolveSource(selectedUids, excludeUid, target, requiredAction)
+--
+-- `opts.fallback` (optional, #2522) is the no-selection fallback, and it
+-- is opt-in: Transfer and Retrieve never pass it and stay
+-- selection-only. With it, an EMPTY `selectedUids` is replaced by every
+-- unit living on the target's own page (`unit.getAllIds(target.page)`,
+-- the explicit-page listing, never the active page), and the same
+-- filters and ranking then pick the nearest eligible one. It applies
+-- ONLY to an empty selection: a nonempty selection is the candidate set
+-- even when filtering leaves none of it eligible, and that answers nil
+-- rather than reaching past the player's choice for an unselected unit
+-- (D-28).
+--
+-- A fallback-enabled call is page-qualified throughout: it needs
+-- `target.page` (nil without one -- there is no page to ask), and a
+-- SELECTED candidate that is not on that page is ineligible too, since
+-- whatever the caller dispatches next names the target by an id that
+-- only means something on its own page.
+function M.resolveSource(selectedUids, excludeUid, target, requiredAction, opts)
     if not selectedUids then return nil end
+    local pageScoped = opts ~= nil and opts.fallback == true
+    local targetPage = target and target.page
+    if pageScoped and targetPage == nil then return nil end
+    local candidates = selectedUids
+    if pageScoped and #selectedUids == 0 then
+        candidates = unit.getAllIds(targetPage) or {}
+    end
     local aiActions = require("scripts.unit_ai_actions")
     local tx = target and target.gridX and math.floor(target.gridX)
     local ty = target and target.gridY and math.floor(target.gridY)
+    local tz = target and target.gridZ and math.floor(target.gridZ)
     local best, bestUid = nil, nil
-    for _, uid in ipairs(selectedUids) do
+    for _, uid in ipairs(candidates) do
         if excludeUid == nil or uid ~= excludeUid then
             local info = unit.getInfo(uid)
             local fac = info and unit.getFaction(uid)
             if info and info.gridX and info.gridY and fac
                and faction.isPlayerCommandable(fac)
+               and (not pageScoped or info.page == targetPage)
                and (requiredAction == nil
                     or aiActions.unitHas(uid, requiredAction)) then
                 local d = 0
@@ -543,6 +575,10 @@ function M.resolveSource(selectedUids, excludeUid, target, requiredAction)
                     local lx, ly = world.localizeTile(tx, ty, cx, cy)
                     if not (lx and ly) then lx, ly = cx, cy end
                     d = (lx - tx) * (lx - tx) + (ly - ty) * (ly - ty)
+                end
+                if tz and info.gridZ then
+                    local dz = math.floor(info.gridZ) - tz
+                    d = d + dz * dz
                 end
                 if bestUid == nil or d < best
                    or (d == best and uid < bestUid) then

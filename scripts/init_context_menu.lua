@@ -39,8 +39,8 @@ function M.tryBuildingMenu(x, y)
     -- allowed, exact ties break on lowest uid), and returns nil only
     -- when the selection holds no eligible candidate at all -- which
     -- omits the entry rather than showing a disabled row. The endpoint
-    -- query runs FIRST here because its gridX/gridY is the point
-    -- candidates are ranked against. Since #1250 "eligible" also means
+    -- query runs FIRST here because its gridX/gridY/gridZ is the
+    -- point candidates are ranked against (#2522). Since #1250 "eligible" also means
     -- the species can actually RUN the escort, so a debug-spawned bear
     -- in the selection is skipped here rather than becoming a session
     -- that never walks.
@@ -188,8 +188,8 @@ function M.tryUnitMenu(x, y)
     -- picks the NEAREST player-commandable unit out of the rest of the
     -- selection (D-8; exact ties break on lowest uid). A selection that
     -- holds only the target still yields no candidate, so no row. The
-    -- endpoint query runs FIRST because its gridX/gridY is the point
-    -- candidates are ranked against.
+    -- endpoint query runs FIRST because its gridX/gridY/gridZ is the
+    -- point candidates are ranked against (#2522).
     do
         local transferSession = require("scripts.transfer_session")
         local endpointInfo =

@@ -17,6 +17,22 @@
 -- nested container contents included) against the ground instance's
 -- live total weight.
 --
+-- The one exception is a PENDING container shell (#2505, #2522): a
+-- location crate whose cargo has not been drawn yet. Its row's weight
+-- is the empty shell's, a number that will not be true once its
+-- contents exist, so the COMMAND-time gate is skipped for it -- and
+-- only for it: the row's `pending` flag says so without realizing
+-- anything, and a realized crate or any other item keeps both gates.
+-- On ARRIVAL the executor realizes the shell first
+-- (item.realizeGround, explicitly on the carrier's own page), records
+-- that the player has now hefted it (item.observeContainerWeight, by
+-- its stable instance id), re-reads the realized row, and only then
+-- runs the ordinary arrival gate against the realized weight: the crate
+-- either lifts, exact tree and all, or stays on the ground with the
+-- usual over-capacity warning. A realization that refuses (D-23) moves
+-- nothing, records nothing, warns naming the carrier and the crate, and
+-- retires the order.
+--
 -- EVERY phase of an order resolves its ground entry on the CARRIER'S
 -- OWN page (#1666). Ground-item ids are per-page allocators, so the
 -- same number names a different item on every page; item.pickupGround
@@ -118,6 +134,44 @@ local function reportOverCapacity(uid, g, total, maxW)
         unitLabel(uid), itemLabel(g.defName), total, maxW))
 end
 
+-- The arrival step for a PENDING shell (#2522): realize it, observe its
+-- weight, and hand back the REALIZED row for the ordinary arrival gate.
+-- Returns nil when the order is finished (or must wait) instead.
+--
+-- Every step names the carrier's own page or the crate's own instance:
+-- the realization is asked of `page` explicitly (never the active page,
+-- which may hold a different item under the same gid), the realized row
+-- is re-read through the carrier's owning-page lookup, and the weight
+-- observation is keyed by the stable instanceId rather than the
+-- page-local gid. Realization is exactly-once in the engine, so a
+-- repeated call can neither reroll the cargo nor -- the order having
+-- been retired -- repeat a warning.
+local function realizeOnArrival(uid, s, gid, g, page)
+    if page == nil then return nil end   -- no page to ask: hold the order
+    local answer = item.realizeGround(gid, page)
+    if not answer then
+        local again, resolved = pickupGroundEntry(uid, gid)
+        if again and again.pending == true then
+            -- D-23: the cargo could not be drawn. The shell stays on the
+            -- ground, still pending; nothing was moved or observed.
+            reportFailure(uid, string.format(
+                "%s can't pick up %s — its contents could not be determined",
+                unitLabel(uid), itemLabel(g.defName)))
+            s.pickupOrder = nil
+        elseif resolved and not again then
+            s.pickupOrder = nil          -- gone from the carrier's page
+        end
+        return nil
+    end
+    local realized, resolved = pickupGroundEntry(uid, gid)
+    if not realized then
+        if resolved then s.pickupOrder = nil end
+        return nil
+    end
+    item.observeContainerWeight(realized.instanceId)
+    return realized
+end
+
 local function pickupUtility(uid, s, params)
     local order = s.pickupOrder
     if not order then return -math.huge end
@@ -196,8 +250,13 @@ local function pickupExecute(uid, s, params)
     end
 
     unit.stop(uid)
+    if g.pending == true then
+        g = realizeOnArrival(uid, s, order.gid, g, info.page)
+        if not g then return end
+    end
     -- Capacity check at the moment of truth ("walk, then refuse") — the
-    -- load can have changed since the command-time gate below cleared it.
+    -- load can have changed since the command-time gate below cleared it,
+    -- and a pending shell's weight only becomes true here.
     local over, total, maxW = capacityCheck(uid, g)
     if over then
         engine.logWarn("pickup_ground: unit " .. tostring(uid)
@@ -238,10 +297,25 @@ end
 -- stored, any position hold stays exactly as it was (#1216), and
 -- nextActionAt is left alone.
 --
+-- `pageId` (optional, #2522) is the page the CALLER resolved `gid` on
+-- -- the ground menu passes the page its target row came from. When
+-- given, the carrier must be standing on that page: otherwise the id
+-- names some other world's item, and the order is refused as the same
+-- kind of caller error, silently and with nothing written.
+--
 -- Capacity (#920): a retrieval that cannot fit is rejected here, before
--- any travel, with a player-visible warning.
-function unitAi.commandPickup(uid, gid)
+-- any travel, with a player-visible warning -- except for a PENDING
+-- container shell, whose weight is not known until it is realized on
+-- arrival (see the header).
+function unitAi.commandPickup(uid, gid, pageId)
     local g, resolved = pickupGroundEntry(uid, gid)
+    if g and pageId ~= nil and g.page ~= pageId then
+        engine.logWarn("commandPickup: ground item " .. tostring(gid)
+            .. " was named on page " .. tostring(pageId) .. " but unit "
+            .. tostring(uid) .. " is on page " .. tostring(g.page)
+            .. " — order refused")
+        return false
+    end
     if not g then
         engine.logWarn("commandPickup: ground item " .. tostring(gid)
             .. " is not on unit " .. tostring(uid) .. "'s own page"
@@ -249,10 +323,12 @@ function unitAi.commandPickup(uid, gid)
             .. " — order refused")
         return false
     end
-    local over, total, maxW = capacityCheck(uid, g)
-    if over then
-        reportOverCapacity(uid, g, total, maxW)
-        return false
+    if g.pending ~= true then
+        local over, total, maxW = capacityCheck(uid, g)
+        if over then
+            reportOverCapacity(uid, g, total, maxW)
+            return false
+        end
     end
     local s = ensureState(uid)
     -- #1216: an ACCEPTED player order supersedes a position hold. Past
