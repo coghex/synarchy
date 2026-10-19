@@ -1055,7 +1055,7 @@ column whose top material has no registered name, and a column with no solid cel
 outside the vocabulary and come back as diagnostics (`terrain.tags`, `terrain.material`,
 `terrain.columns`) rather than being written wrongly. Entries are written under
 generated explicit ids that depend only on the content (family, values, tile, and an
-ordinal among equal siblings ranked by the raw values), made unique against the ids of
+ordinal among same-species, same-tile siblings, ranked by the whole exported entry — species, tile, z, offsets, variant, health, age, regrowth and tags — as raw values under one derived `Ord`, so no input order can change the result), made unique against the ids of
 the document's other entries.
 
 ### Persistence
