@@ -106,6 +106,10 @@ local REF_SCHEMA = {
       kind = "building", absentOk = true, drop = "constructJob" },
     { holder = "table", field = "pickupOrder", sub = "gid",
       kind = "ground_item" },
+    -- #2528: the Open order's crate, on exactly pickupOrder's terms --
+    -- a per-page id resolved on the OWNING unit's page, zero included.
+    { holder = "table", field = "openOrder", sub = "gid",
+      kind = "ground_item" },
     { holder = "table", field = "forageTarget", sub = "gid",
       kind = "ground_item", when = isGroundForageTarget },
     { holder = "list", field = "forageLoot", kind = "ground_item",

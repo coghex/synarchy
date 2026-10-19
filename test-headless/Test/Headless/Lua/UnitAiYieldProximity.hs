@@ -1083,7 +1083,7 @@ spec = describe "harvest collection proximity" $ do
                 , "local aiState = {}"
                 , "unitAiSave.register(aiState)"
                 , "local spec = saveModules.registry.unit_ai"
-                , "assert(spec.version == 10,"
+                , "assert(spec.version == 11,"
                 , "  'the retained-yield approach must move no component '"
                 , "  .. 'version; got ' .. tostring(spec.version))"
                 , "aiState[1] = { currentAction = 'auto_harvest',"
