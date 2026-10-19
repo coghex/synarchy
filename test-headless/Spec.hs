@@ -382,6 +382,7 @@ import qualified Test.Headless.App.DumpSettleWait as DumpSettleWait
 import qualified Test.Headless.World.FluidDiagnostics as FluidDiagnostics
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
+import qualified Test.Headless.App.Usage as AppUsage
 import qualified Test.Headless.Camera.Finite as CameraFinite
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.GotoLoad as GotoLoad
@@ -1365,6 +1366,7 @@ restLane = do
     -- #2535: exact fluid units/level in the dump, cursor and getAreaFluid.
     FluidDiagnostics.spec
     AppResourceRoot.spec
+    AppUsage.spec
     describe "App.Preview.Config" PreviewConfig.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec

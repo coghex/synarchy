@@ -10,7 +10,8 @@ PRs directly instead of waiting for a manual, needs-gpu dev-machine run
 
 It started as the --preview contract (#886), which is still checks 1-8,
 and now covers the whole argv-to-dispatch layer: mode compatibility
-(#1012/CH-58, check 9) and handled-value validation (#1191, check 10).
+(#1012/CH-58, check 9), handled-value validation (#1191, check 10) and
+--help (#2863, check 11).
 The filename predates that widening.
 
 Checks:
@@ -45,7 +46,7 @@ Checks:
      PACK, so a malformed or symlinked manifest also rejects pre-boot,
      naming the file. Valid targets are deliberately NOT booted here
      (that would open a real GLFW window — see tools/preview_probe.py).
-  9. Mode-specific flags (CH-58, #1012): a flag from app/Main.hs's
+  9. Mode-specific flags (CH-58, #1012): a flag from app/App/Usage.hs's
      incompatibleFlagTable given to a boot mode that doesn't honour it
      (e.g. --seed with --headless, --port with --dump, --seeds with
      --dump) exits 1 before any engine/window/server starts, naming
@@ -90,6 +91,18 @@ Checks:
      separately-maintained length, and a real dump is what proves the
      selected set is unchanged — a strip one character too long would
      still have parsed SOME selection.
+ 11. --help / -h (#2863) print the usage text on stdout, nothing on
+     stderr, and exit 0 — from a valid resource root, from a directory
+     with no resources, with an invalid SYNARCHY_ROOT, with a malformed
+     --resource-root (bare, empty, nonexistent, or with help as its
+     operand), and alongside malformed or mode-incompatible flags, help
+     before and after them. Every case prints the SAME text. The real
+     executable runs (by absolute path) in isolated temporary
+     directories, one of them a resource root with a copy of the
+     tracked config/ that a boot's legacy-config migration would write
+     beside; afterwards those trees must be unchanged entry for entry,
+     content and mtime included. The usage text's coverage of every
+     mode and flag is hspec `--match "App.Usage"`.
 
 Usage:
   python3 tools/preview_cli_probe.py
@@ -99,10 +112,13 @@ Exit 0 = all checks passed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import probe_engine
 
@@ -353,7 +369,7 @@ def check_grouped_item_targets() -> bool:
 
 
 # (argv beyond the incompatible flag itself, the rejected flag, the
-# selected boot mode) — one row per app/Main.hs's incompatibleFlagTable
+# selected boot mode) — one row per app/App/Usage.hs's incompatibleFlagTable
 # entry (CH-58, #1012). Every case rejects pre-boot, so none of these
 # ever bind a port or touch the GPU.
 INCOMPATIBLE_FLAG_CASES = [
@@ -674,6 +690,167 @@ def check_audio_targets() -> bool:
     return all(results)
 
 
+# --help / -h (#2863). (label, cwd key, argv, SYNARCHY_ROOT key or None).
+# The cwd key is "root" (an isolated, valid resource root carrying a copy
+# of the tracked config/, so a boot WOULD run the legacy-config
+# migration and write config/*.local.yaml there) or "bare" (a directory
+# holding no resource family at all). The SYNARCHY_ROOT key "missing"
+# names a nonexistent directory; None leaves the variable unset. Every
+# argv here would, without help, fail resource-root resolution, fail
+# mode compatibility or value validation, or boot a mode — help has to
+# answer before all of them, identically, wherever it appears.
+HELP_CASES = [
+    ("--help in a valid resource root (no mode: was a graphical boot)",
+     "root", ["--help"], None),
+    ("-h in a valid resource root", "root", ["-h"], None),
+    ("--help from a directory without resources", "bare", ["--help"], None),
+    ("-h from a directory without resources", "bare", ["-h"], None),
+    ("--help with an invalid SYNARCHY_ROOT", "bare", ["--help"], "missing"),
+    ("-h with an invalid SYNARCHY_ROOT", "bare", ["-h"], "missing"),
+    ("bare trailing --resource-root after --help", "bare",
+     ["--help", "--resource-root"], None),
+    ("help as the --resource-root operand", "bare",
+     ["--resource-root", "-h"], None),
+    ("empty --resource-root operand before -h", "bare",
+     ["--resource-root", "", "-h"], None),
+    ("nonexistent --resource-root after --help", "bare",
+     ["--help", "--resource-root", "/nonexistent/synarchy-2863"], None),
+    ("malformed --dump= selection before --help", "bare",
+     ["--dump=bogus_layer", "--help"], "missing"),
+    ("malformed --seed after -h", "root",
+     ["-h", "--dump", "--seed", "not-a-number"], None),
+    ("mode-incompatible --seed with --headless, then --help", "root",
+     ["--headless", "--seed", "42", "--help"], None),
+    ("non-positive --size with --offscreen, then -h", "root",
+     ["--offscreen", "--size", "0x0", "-h"], None),
+    ("--port with -h as its operand", "root",
+     ["--headless", "--port", "-h"], None),
+    ("bare --preview before --help", "root", ["--preview", "--help"], None),
+    ("--language-report without --seeds, then -h", "bare",
+     ["--language-report", "-h"], None),
+    ("both spellings together", "bare", ["-h", "--help"], None),
+]
+
+# What every help invocation's stdout must name: each boot mode's
+# selector token and each mode's diagnostic name. The full flag
+# coverage is hspec `--match "App.Usage"`; this pins that the
+# executable prints that text at all.
+HELP_MUST_NAME = ["--language-report", "--dump", "--preview", "--offscreen",
+                  "--headless", "language-report:", "dump:", "preview:",
+                  "offscreen:", "headless:", "graphical:", "--resource-root",
+                  "--help", "-h"]
+
+
+def snapshot_tree(top: str) -> dict:
+    """Every path under `top` with its type, size, mtime and content hash.
+
+    Comparing two of these detects a new entry, a removed one, and a
+    rewrite of an existing file in place (content or mtime), which is
+    what "writes no file" has to rule out — not just new
+    config/*.local.yaml or cache/ entries.
+    """
+    entries = {}
+    for dirpath, dirnames, filenames in os.walk(top):
+        for name in dirnames + filenames:
+            path = os.path.join(dirpath, name)
+            st = os.lstat(path)
+            rel = os.path.relpath(path, top)
+            digest = None
+            if os.path.isfile(path) and not os.path.islink(path):
+                with open(path, "rb") as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+            entries[rel] = (st.st_mode, st.st_size, st.st_mtime_ns, digest)
+    return entries
+
+
+def check_help() -> bool:
+    """#2863: --help/-h print usage and exit 0 without booting.
+
+    Runs the real executable (an absolute path, so it can start from
+    directories that are not this checkout) in isolated temporary
+    locations, and asserts the trees it could have written to are
+    byte-for-byte and mtime-for-mtime unchanged afterwards.
+    """
+    print("11. --help / -h (#2863): usage on stdout, exit 0, nothing on "
+          "stderr, no file written — before resource-root resolution, mode "
+          "selection and flag validation")
+    try:
+        exe = probe_engine.prepare_executable(probe_engine.REPO_ROOT)
+    except probe_engine.EngineExecutableError as e:
+        return check("help: executable", False, str(e))
+    # A regression here is a graphical boot. Without a display server it
+    # dies at window creation (after engine init has written config/);
+    # removing these keeps a Linux regression from opening a window.
+    base_env = {k: v for k, v in os.environ.items()
+                if k not in ("DISPLAY", "WAYLAND_DISPLAY", "SYNARCHY_ROOT")}
+    results = []
+    with tempfile.TemporaryDirectory(prefix="synarchy-help-2863-") as work:
+        root = os.path.join(work, "root")
+        bare = os.path.join(work, "bare")
+        os.mkdir(bare)
+        os.mkdir(root)
+        for family in ("scripts", "assets", "data"):
+            os.mkdir(os.path.join(root, family))
+        shutil.copytree(os.path.join(probe_engine.REPO_ROOT, "config"),
+                        os.path.join(root, "config"))
+        dirs = {"root": root, "bare": bare}
+        roots = {"missing": os.path.join(work, "no-such-root")}
+        before = snapshot_tree(work)
+        baseline = None
+        for label, cwd_key, argv, root_key in HELP_CASES:
+            env = dict(base_env)
+            if root_key is not None:
+                env["SYNARCHY_ROOT"] = roots[root_key]
+            try:
+                r = subprocess.run([exe, *argv], cwd=dirs[cwd_key], env=env,
+                                   capture_output=True, text=True,
+                                   timeout=15.0)
+            except subprocess.TimeoutExpired:
+                results.append(check(f"help: {label}", False,
+                                     "did not exit within 15s — help fell "
+                                     "through to a real boot"))
+                continue
+            problems = []
+            if r.returncode != 0:
+                problems.append(f"exit status {r.returncode} (want 0)")
+            if r.stderr:
+                problems.append(f"stderr not empty: {r.stderr.strip()[:120]!r}")
+            if baseline is None:
+                missing = [w for w in HELP_MUST_NAME if w not in r.stdout]
+                if missing:
+                    problems.append(f"usage never names {missing}")
+                else:
+                    baseline = r.stdout
+            elif r.stdout != baseline:
+                problems.append("stdout differs from the first case's usage")
+            results.append(check(f"help: {label} {argv}",
+                                 not problems, "; ".join(problems)))
+        after = snapshot_tree(work)
+        created = sorted(set(after) - set(before))
+        removed = sorted(set(before) - set(after))
+        changed = sorted(p for p in set(before) & set(after)
+                         if before[p] != after[p])
+        local_yaml = [p for p in created
+                      if p.startswith(os.path.join("root", "config"))
+                      and p.endswith(".local.yaml")]
+        results.append(check(
+            "help: no config/*.local.yaml or cache/ written",
+            not local_yaml and not any(
+                p.split(os.sep)[1:2] == ["cache"] for p in created),
+            f"created={created[:8]}"))
+        results.append(check(
+            "help: isolated directories unchanged (no entry created, "
+            "removed or modified)",
+            not (created or removed or changed),
+            f"created={created[:8]} removed={removed[:8]} "
+            f"changed={changed[:8]}"))
+        if baseline is not None:
+            print("    usage text:")
+            for line in baseline.splitlines():
+                print(f"    | {line}")
+    return all(results)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     # Every registered probe accepts --port (#723) so tools/run_probes.py
@@ -702,6 +879,7 @@ def main() -> int:
     results.append(check_mode_priority_over_value())
     results.append(check_omission_still_defaults())
     results.append(check_dump_layer_selection())
+    results.append(check_help())
 
     passed = all(results)
     print(f"\n  {'PASS' if passed else 'FAIL'}: no-boot CLI contract"

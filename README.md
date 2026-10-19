@@ -14,6 +14,8 @@ Vulkan to run. Vulkan SDK, glslang, and validation layers to develop, plus GHC (
 
 `cabal run synarchy` to run the game. `ENGINE_DEBUG=Vulkan,Graphics,etc...` for debug output from those subsystems.
 
+`synarchy --help` (or `-h`) lists every boot mode and flag, with each flag's value format and the modes that accept it, then exits without booting anything (`cabal run synarchy -- --help`).
+
 The engine also has a **headless mode** (no window, no GPU) for scripted world generation, automated testing, and agent workflows — see the Debug Console section below and `CLAUDE.md` for the full headless API (world generation, unit/combat queries, save/load, dump mode).
 
 ### Resource root (running from outside the repo)

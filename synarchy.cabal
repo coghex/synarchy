@@ -1310,6 +1310,7 @@ executable synarchy
                  , App.Preview.Config
                  , App.LanguageReport
                  , App.ResourceRoot
+                 , App.Usage
     default-extensions: FlexibleInstances
     other-extensions: Strict
                     , StrictData
@@ -1499,13 +1500,15 @@ test-suite synarchy-test-graphical
 test-suite synarchy-test-headless
     import: warnings, lang, build-policy
     type: exitcode-stdio-1.0
-    -- `app` is here for four pure policies that live in the executable
+    -- `app` is here for five pure policies that live in the executable
     -- rather than the library: App.Cli's parser (#1191),
     -- App.Preview.Config's hidden-window policy, App.ResourceRoot's
-    -- root precedence (#1949), and App.Dump's fast-settle wait (#2334).
+    -- root precedence (#1949), App.Dump's fast-settle wait (#2334), and
+    -- App.Usage's --help text and flag table (#2863).
     -- Their app-local imports stay within this set (App.Dump reaches
     -- only App.Boot and App.Exception, neither of which imports
-    -- another app module), so compiling them into this suite tests
+    -- another app module; App.Usage reaches only App.Cli and
+    -- App.ResourceRoot), so compiling them into this suite tests
     -- their policy without booting a process. `test-headless` stays
     -- FIRST so main-is resolves to test-headless/Spec.hs, not
     -- app/Main.hs.
@@ -1527,6 +1530,7 @@ test-suite synarchy-test-headless
                    App.Exception
                    App.Preview.Config
                    App.ResourceRoot
+                   App.Usage
                    Test.Headless.UPrelude
                    Test.Headless.Lanes
                    Test.Headless.LaneSelection
@@ -1932,6 +1936,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig
                    Test.Headless.App.ResourceRoot
+                   Test.Headless.App.Usage
                    Test.Headless.Core.LogCategoryEnv
                    Test.Headless.Core.FixtureLogging
                    Test.Headless.Core.LogMonad

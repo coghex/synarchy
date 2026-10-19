@@ -24,6 +24,7 @@
 --   in.
 module App.ResourceRoot
   ( applyResourceRoot
+  , resourceRootFlag
   , RootDecision(..)
   , decideResourceRoot
   ) where
@@ -42,6 +43,12 @@ import App.Cli (parseStrArg)
 --   runtime resource families the engine loads by relative path.
 resourceFamilies ∷ [FilePath]
 resourceFamilies = ["scripts", "assets", "data", "config"]
+
+-- | The flag token that selects an explicit root. Exported so @--help@
+--   ('App.Usage.usageText') names the same token this module parses
+--   (#2863).
+resourceRootFlag ∷ String
+resourceRootFlag = "--resource-root"
 
 -- | What argv and @SYNARCHY_ROOT@ between them select, before any
 --   filesystem is consulted. The two error constructors are the two
@@ -72,13 +79,13 @@ data RootDecision
 --   for a specific root (#1949, the same present-but-malformed policy
 --   #1191 gave the numeric and selector flags).
 decideResourceRoot ∷ [String] → Maybe String → RootDecision
-decideResourceRoot args mEnv = case parseStrArg "--resource-root" args of
+decideResourceRoot args mEnv = case parseStrArg resourceRootFlag args of
     -- 'parseStrArg' is deliberately lenient — it answers a bare
     -- trailing flag with the same 'Nothing' as absence — so the
     -- presence of the token in argv is what separates the two here.
-    Nothing | "--resource-root" `elem` args → RootFlagMissingValue
+    Nothing | resourceRootFlag `elem` args → RootFlagMissingValue
     Just "" → RootFlagEmptyValue
-    Just p  → RootExplicit p "--resource-root"
+    Just p  → RootExplicit p resourceRootFlag
     Nothing → case mEnv of
       Just p | not (null p) → RootExplicit p "SYNARCHY_ROOT"
       _                     → RootCurrentDirectory
