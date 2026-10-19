@@ -608,7 +608,7 @@ does not remove the plot, and no new plot removal rule was invented.
 
 | Component | Version | Carries |
 |---|---|---|
-| `world-edits` | v5 | each page slice's `pedTileTags`, `pedOccurrenceTags`, `pedOccurrenceTiles` and `pedPlotTags` |
+| `world-edits` | v6 | each page slice's `pedTileTags`, `pedOccurrenceTags`, `pedOccurrenceTiles` and `pedPlotTags` (v5, #2705); v6 (#2711) appends `WeSetFloraState` to the edit sum and changes no tag field |
 
 - **Capture.** Assignments are saved beside the edits, the planted-id
   cursor and the plots under the save barrier, through

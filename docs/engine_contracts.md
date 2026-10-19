@@ -59,6 +59,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
 - [Page incarnation: in-flight work across a reused page id (#2474)](#page-incarnation-in-flight-work-across-a-reused-page-id-2474)
 - [Finite arena bounds (#2708)](#finite-arena-bounds-2708)
+- [Scenario world content: terrain, fluid and flora (#2711)](#scenario-world-content-terrain-fluid-and-flora-2711)
 - [Entity teardown on destroy and same-id re-init (#2476)](#entity-teardown-on-destroy-and-same-id-re-init-2476)
 
 **Gameplay systems**
@@ -7798,3 +7799,50 @@ eviction/restoration, real codec, mutations on a hidden page, placement and
 objects), `--match "arena generation consistency"`, `--match "sim chunk
 admission"`, `--match "persistence contract"`, and
 `tools/multiworld_save_probe.py --arena`.
+
+## Scenario world content: terrain, fluid and flora (#2711)
+
+The adapters that materialize and recapture a scenario's physical baseline
+(`Scenario.World.*`; field-level contract in
+[scenario_format.md](scenario_format.md#world-content-construction-and-capture-scn-11-2711)).
+The invariants, each held by a test of the `Scenario.World` group:
+
+- **One commit, on the world thread.** `installWorldContent` runs from the
+  `WorldInstallScenarioContent` command after checking the page incarnation (a
+  replaced page answers `WorldInstallNotAdmitted`, untouched). It is the only
+  writer of the tile store and the page's tag store, so a check and the write
+  that depends on it are never separated by a tile change.
+- **Replacement, never accumulation.** A materialization replaces the page's
+  terrain, fluid, plant-occurrence and crop-plot state; in the edit log it keeps
+  structure pieces (`WeSetStructure` / `WeClearStructure`) and their relative
+  order. Applying the same content twice, or capture → materialize → capture,
+  leaves the page and the captured document unchanged.
+- **The one reconstruction.** A resident chunk is rebuilt as an admission
+  rebuilds it (arena base from the recorded seed and bounds, the new log
+  replayed, the rectangle re-asserted) and swapped in through
+  `replaceChunkForgettingFlora`, then re-seeded into the simulation through
+  `syncEditToSim`. A non-resident chunk gets only the log. Nothing steps the
+  simulation or settles the authored fluid away; a finite edge stays closed.
+- **Exact fluid and explicit absence.** A tile is wet iff the authored exact
+  plane is above its FINAL terrain top, recorded as `WeSetFluidSnapshot`;
+  a terrain-changed tile that stays dry is cleared (`WeClearFluidSnapshot`)
+  because the replay of a dug column at or below the water table reveals
+  groundwater. Capture reads a wet cell with no volume as dry.
+- **Plants.** Representation follows the species (groundcover → crop plot,
+  otherwise an occurrence). Occurrence ids come from the page's planted allocator
+  and the advanced cursor commits with them. `age` is the CURRENT age: the stored
+  baseline is `age − day · rate`, and capture exports the derived value.
+  `WeSetFloraState` (`world-edits` v6) is the durable home of offsets, variant,
+  health, z and the baseline; a crop plot stores a planted day. Chop state is
+  never scenario state.
+- **Capture is a pure read** of one coherent snapshot, visits only chunks the log
+  or the resident set names, treats non-residency as non-deletion, and writes
+  content-derived generated ids made unique against the document's other ids.
+
+**Gates:** hspec `--match "Scenario.World"`, `--match "Scenario.Schema"`
+(format v2), `--match "save components"`, `--match "save migrations"`
+(`z16-scenario-world`), `--match "Gameplay.Tags"`, `--match "Sim.Fluid.Exact"`,
+`--match "sim chunk admission"`, `--match "flora instance persistence"`,
+`--match "crop plant invalidation"`, `--match "persistence contract"`,
+`--match "arena finite bounds"`; `tools/enum_append_only_audit.py` and
+`tools/save_compat_audit.py`.
