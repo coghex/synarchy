@@ -250,7 +250,7 @@ worldGetPlantSuitabilityFn wsc = do
                     Just ws → do
                         tileData ← readIORef (wsTilesRef ws)
                         mParams ← readIORef (wsGenParamsRef ws)
-                        case (lookupChunk coord tileData, mParams) of
+                        case (lookupTileChunk gx gy coord tileData, mParams) of
                             (Just lc, Just params) → do
                                 cat ← readIORef (wsFloraCatalogRef wsc)
                                 let col = lcTiles lc V.! idx

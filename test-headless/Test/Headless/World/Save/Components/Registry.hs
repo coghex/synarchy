@@ -135,7 +135,8 @@ spec = do
             -- #2703: v2 appends the session's item gameplay tags.
             -- #2709: v3 appends the items' scenario references.
             ccVersion coreSessionCodec `shouldBe` 3
-            ccVersion worldPagesCodec `shouldBe` 14
+            -- #2708: v15 appends each page's finite-arena size.
+            ccVersion worldPagesCodec `shouldBe` 15
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -613,13 +614,13 @@ spec = do
                     "unsupported schema version (reader supports v1, v2, v3)")
 
         it "reports an unsupported version identically for a \
-           \FOURTEEN-version reader" $
-            decodeErrorOf worldPagesCodec 15 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 15
+           \FIFTEEN-version reader" $
+            decodeErrorOf worldPagesCodec 16 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 16
                     DecodePhase
                     "unsupported schema version \
                     \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
-                    \v10, v11, v12, v13, v14)")
+                    \v10, v11, v12, v13, v14, v15)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -911,7 +912,7 @@ goldenRichPayloads =
       -- worldgen parameters (two pages in this fixture).
       -- #2701 re-pinned: v14 appends each page's location gameplay-tag
       -- list to the page core (8 bytes for an empty one, ×2 pages).
-    , ("world-pages",         (1374, "9099195d121585cc"))
+    , ("world-pages",         (1376, "811f44ebd3a3c01a"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
       -- FloraInstanceId to every WePlaceFlora entry, of which this
@@ -962,7 +963,7 @@ goldenFullPayloads =
       -- 16: the remainder is per PAGE and this fixture has one.
       -- #2533: one persisted bed-repair policy byte for this one page.
       -- #2701 re-pinned: v14's empty location-tag list (8 bytes).
-    , ("world-pages",         (717, "f727338a4160a61a"))
+    , ("world-pages",         (718, "5842aded173a3e2e"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",  (110, "04ebe3ec1c71ce89"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and

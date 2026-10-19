@@ -422,7 +422,7 @@ pageCore pid = PageCoreDTO
     , pcTimeRemainder = 0
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
     , pcIdentity = Nothing
-    , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage pid), pcLocationTags = [] }
+    , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage pid), pcLocationTags = [], pcArenaBounds = Nothing }
 
 isLeft ∷ Either a b → Bool
 isLeft (Left _) = True

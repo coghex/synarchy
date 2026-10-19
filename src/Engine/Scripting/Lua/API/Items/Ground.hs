@@ -46,6 +46,8 @@ import qualified HsLua as Lua
 import GHC.Float (double2Float)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Log (logWarn)
+import World.Arena.Bounds (arenaAdmitsPosition)
+import World.Arena.Page (pageArenaBounds)
 import Engine.Core.Log.Types (LogCategory(..))
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
@@ -265,6 +267,19 @@ spawnSalvageOnPage
     → Maybe Float → Maybe Float → Maybe GroundConditionBase → Maybe Float
     → IO (Maybe (Int, ItemInstance))
 spawnSalvageOnPage env ws iDef name x y mFill mQuality base mTemp = do
+  -- #2708: an object is never created outside its page's finite arena —
+  -- not relocated, not clamped: refused with a warning, before anything
+  -- is rolled or materialized.
+  mBounds ← pageArenaBounds ws
+  if not (arenaAdmitsPosition mBounds x y)
+    then do
+        logger0 ← readIORef (ccLoggerRef (toCoreCapability env))
+        logWarn logger0 CatWorld $
+            "item.spawnGround refused '" <> name <> "': ("
+            <> tshow x <> "," <> tshow y
+            <> ") is outside the page's finite arena"
+        pure Nothing
+    else do
     im ← readReadOnlyRef
         (crvItemManagerRef (toContentRegistriesViewCapability env))
     let rng = ucStatRNGRef (toUnitCombatCapability env)

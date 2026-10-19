@@ -138,4 +138,5 @@ fromWorldGenParamsDTO d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = fromRiverNamesDTO (gpRiverNames d)
     , wgpExactRiverBeds          = gpExactRiverBeds d
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }

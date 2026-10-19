@@ -49,7 +49,8 @@ import World.Types
 import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk)
 import World.Flora.Designation (admitChunkFlora)
-import World.Generate.Arena (generateArenaChunks)
+import World.Arena.Bounds (ArenaBounds, arenaWidth, arenaHeight)
+import World.Generate.Arena (generateArenaChunksIn)
 import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Admit
@@ -563,7 +564,8 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     centerChunk ← admitChunkFlora worldState catalog logger centerChunkRaw
     publishSeedChunks worldState centreClaims
         WorldTileData { wtdChunks = HM.singleton centerCoord centerChunk
-                      , wtdMaxChunks = 200 }
+                      , wtdMaxChunks = 200
+                      , wtdBounds = Nothing }
 
     -- Stamp any placed location on the synchronously-generated centre
     -- chunk (#89). It is written straight to wsTilesRef and excluded from
@@ -663,11 +665,39 @@ resolvePageNamer logger identity = case wiLanguage =≪ identity of
                     pure Nothing
                 Right namer → pure (Just namer)
 
-handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
-handleWorldInitArenaCommand env logger pageId = do
+-- | Create an arena page. @bounds@ (#2708) is the optional VALIDATED
+--   finite size ('World.Arena.Bounds.mkArenaBounds'); 'Nothing' is the
+--   expandable arena every caller got before it existed. It is recorded
+--   in the page's generation params and its tile data BEFORE the page is
+--   registered, so nothing that can observe the page — the render
+--   pipeline, a movement snapshot, a Lua query — ever sees it without
+--   its rectangle.
+handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId
+                            → Maybe ArenaBounds → IO ()
+handleWorldInitArenaCommand env logger pageId bounds = do
     logInfo logger CatWorld $ "Initializing test arena: " <> unWorldPageId pageId
+        <> maybe " (expandable)"
+               (\ab → " (finite " <> tshow (arenaWidth ab) <> "x"
+                       <> tshow (arenaHeight ab) <> ")") bounds
 
     worldState ← emptyWorldState
+
+    -- Minimal WorldGenParams so the render pipeline doesn't bail on
+    -- Nothing. Built BEFORE the chunks (#1718) because the base is
+    -- generated from the seed recorded here, not the other way round:
+    -- 'isArenaParams' recognises an arena by an empty timeline and
+    -- wgpSeed 0, so 0 stays the canonical arena seed and the base has to
+    -- be the base that seed produces. Built before the page is even
+    -- registered (#2708), together with the tile data's copy of the
+    -- bounds: params and tile data carry the rectangle from the moment
+    -- the page exists.
+    let arenaParams = defaultWorldGenParams
+            { wgpSeed        = 0
+            , wgpWorldSize   = 100000 -- arena is very big
+            , wgpArenaBounds = bounds
+            }
+    writeIORef (wsGenParamsRef worldState) (Just arenaParams)
+    writeIORef (wsTilesRef worldState) emptyWorldTileData { wtdBounds = bounds }
 
     -- #2476: register early so textures sent after this command are
     -- routed correctly — and, exactly as 'handleWorldInitCommand' does
@@ -688,22 +718,12 @@ handleWorldInitArenaCommand env logger pageId = do
             { wmWorlds = (pageId, worldState)
                        : filter ((≢ pageId) . fst) (wmWorlds mgr) }
 
-    -- Minimal WorldGenParams so the render pipeline doesn't bail on
-    -- Nothing. Built BEFORE the chunks (#1718) because the base is
-    -- generated from the seed recorded here, not the other way round:
-    -- 'isArenaParams' recognises an arena by an empty timeline and
-    -- wgpSeed 0, so 0 stays the canonical arena seed and the base has to
-    -- be the base that seed produces.
-    let arenaParams = defaultWorldGenParams
-            { wgpSeed      = 0
-            , wgpWorldSize = 100000 -- arena is very big
-            }
 
     -- Arena chunk set: shared with the save-load restore path (#365) so a
     -- loaded arena page is rebuilt exactly like a fresh one — which needs
     -- the SAME generator on both sides (#1718), hence the recorded seed.
     let arenaZ    = seaLevel    -- z = 0 (surface)
-        allChunks = generateArenaChunks (wgpSeed arenaParams)
+        allChunks = generateArenaChunksIn bounds (wgpSeed arenaParams)
         chunkMap  = HM.fromList [ (lcCoord c, c) | c ← allChunks ]
 
     -- Write tile data. Arena chunks are residency too (#2001): same
@@ -715,13 +735,12 @@ handleWorldInitArenaCommand env logger pageId = do
     arenaClaims ← claimChunkGeneration worldState pageId arenaParams
                                        (map lcCoord allChunks)
     publishSeedChunks worldState arenaClaims
-        WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100 }
+        WorldTileData { wtdChunks = chunkMap, wtdMaxChunks = 100
+                      , wtdBounds = bounds }
 
     -- Force the arena chunks to NF so the LoadDone below is honest (same
     -- contract as the progressive loader). Tiny 5×5 startup set, negligible cost.
     _ ← evaluate (force allChunks)
-
-    writeIORef (wsGenParamsRef worldState) (Just arenaParams)
 
     -- Admit every generated arena chunk to the fluid simulation (#2232).
     -- These startup chunks are published straight to wsTilesRef (the

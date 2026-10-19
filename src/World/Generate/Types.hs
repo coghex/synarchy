@@ -38,6 +38,7 @@ import Location.Instance (LocationInstances(..), emptyLocationInstances)
 import Gameplay.Tags.Index (categoryAssignments, categoryFromAssignments)
 import World.River.Naming (RiverNames, emptyRiverNames)
 import World.Chunk.Types (ChunkCoord)
+import World.Arena.Bounds (ArenaBounds)
 
 -- | Pure, serializable world generation parameters.
 --   Same params + same ChunkCoord = same Chunk, always.
@@ -144,12 +145,29 @@ data WorldGenParams = WorldGenParams
       -- ^ Persisted generation policy (#2533): repair only river beds after
       -- historical terrain smoothing. False for migrated worlds, whose
       -- stored beds must remain untouched.
+    , wgpArenaBounds ∷ !(Maybe ArenaBounds)
+      -- ^ The page's optional FINITE-ARENA bounds (#2708): 'Nothing' is
+      --   the expandable, nonwrapping arena (and what every generated
+      --   world carries — the field is meaningless there). Page-owned
+      --   generation state, never derived from 'isArenaParams' or the
+      --   @wgpWorldSize@ sentinel: a finite arena remains an arena for
+      --   every consumer of that predicate, and the bounds are an
+      --   additional filter. See "World.Arena.Bounds".
+      --
+      --   Persisted, but NOT by this module's 'Serialize' instance nor by
+      --   'World.Save.Component.WorldGenCurrent.WorldGenParamsDTO': it
+      --   rides @world-pages@ beside the params
+      --   ('World.Save.Component.PageCore.pcArenaBounds'), the way a
+      --   page's location tags do, so the params DTO — shared by many
+      --   component versions — is unchanged.
     , wgpVolcanoCtx ∷ !VolcanoCtx
       -- ^ Pure-function lava system context. Transient: NOT serialized;
       --   rebuilt from gtFeatures + wgpSeed + wgpWorldSize on load.
     } deriving (Show, Eq, Generic, NFData)
 
--- | Manual Serialize: every field except @wgpVolcanoCtx@, plus the
+-- | Manual Serialize: every field except @wgpVolcanoCtx@ and
+--   @wgpArenaBounds@ (#2708: the bounds are page-core state, see the
+--   field), plus the
 --   equally transient 'Location.Instance.lisPendingLegacy' inside
 --   @wgpLocationInstances@ (the instance table is written as its
 --   allocator + map + forward gameplay-tag assignments (#2701), so a
@@ -246,6 +264,7 @@ instance Serialize WorldGenParams where
             , wgpLocationStamped  = locStamped
             , wgpRiverNames       = riverNames
             , wgpExactRiverBeds   = exactRiverBeds
+            , wgpArenaBounds      = Nothing
             , wgpVolcanoCtx       = vc
             }
 
@@ -280,6 +299,7 @@ defaultWorldGenParams = WorldGenParams
     , wgpLocationStamped = HS.empty
     , wgpRiverNames = emptyRiverNames
     , wgpExactRiverBeds = True
+    , wgpArenaBounds = Nothing
     , wgpVolcanoCtx = emptyVolcanoCtx
     }
 

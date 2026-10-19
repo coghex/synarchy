@@ -82,6 +82,11 @@ module World.Save.Component.PageCore
     , WorldPagesDTOv12(..)
     , PageCoreDTOv13(..)
     , WorldPagesDTOv13(..)
+    , PageCoreDTOv14(..)
+    , WorldPagesDTOv14(..)
+    , ArenaBoundsDTO(..)
+    , toArenaBoundsDTO
+    , fromArenaBoundsDTO
       -- * The component
     , worldPagesVersion
     , WorldPages(..)
@@ -102,6 +107,7 @@ module World.Save.Component.PageCore
     , migrateWorldPagesV11
     , migrateWorldPagesV12
     , migrateWorldPagesV13
+    , migrateWorldPagesV14
     ) where
 
 import UPrelude
@@ -118,6 +124,9 @@ import GHC.Generics (Generic)
 import Craft.Bills (emptyCraftBills)
 import Unit.Transfer.Orders (emptyTransferOrders)
 import Building.Knowledge (emptyContainerKnowledge)
+import World.Arena.Bounds
+    (ArenaBounds, ArenaBoundsError, arenaBoundsErrorText, arenaHeight
+    , arenaWidth, mkArenaBounds)
 import Power.Types (emptyPowerNodes)
 import World.Save.Component.WorldGen
     ( WorldGenParamsDTO(..), toWorldGenParamsDTO, fromWorldGenParamsDTO
@@ -139,7 +148,7 @@ import Location.Instance
 import Gameplay.Tags.Index (categoryForward, categoryFromAssignments)
 import World.Save.Component.GameplayTags (TagAssignmentsDTO, encodeTagAssignments, decodeTagAssignments, tagAssignmentErrors)
 import qualified Data.Map.Strict as Map
-import World.Generate.Types (WorldGenParams(..))
+import World.Generate.Types (WorldGenParams(..), isArenaParams)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
 import Language.Generated.Types
@@ -332,11 +341,90 @@ data PageCoreDTO = PageCoreDTO
       --   params rather than inside 'WorldGenParamsDTO', so the location
       --   table's own DTO is unchanged; APPENDED, which is what makes
       --   v14 a distinct wire shape. Hence 'PageCoreDTOv13' below.
+    , pcArenaBounds ∷ !(Maybe ArenaBoundsDTO)
+      -- ^ #2708 (v15): this page's FINITE-arena size, or 'Nothing' for an
+      --   expandable arena and for every generated world. Beside the gen
+      --   params rather than inside 'WorldGenParamsDTO' — the same
+      --   placement as 'pcLocationTags' — so that DTO, shared by many
+      --   component versions, is unchanged; APPENDED, which is what makes
+      --   v15 a distinct wire shape. Hence 'PageCoreDTOv14' below.
+      --
+      --   The wire carries the two dimensions, not the derived rectangle:
+      --   the rectangle is recomputed (checked) on decode, so a stored
+      --   rectangle can never disagree with its own size, and the one
+      --   validator ('World.Arena.Bounds.mkArenaBounds') judges both
+      --   fresh input and restored state.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldPagesDTO = WorldPagesDTO { wpdPages ∷ [PageCoreDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
+
+-- | The frozen wire shape of a finite arena's size (#2708).
+data ArenaBoundsDTO = ArenaBoundsDTO
+    { abdWidth  ∷ !Int
+    , abdHeight ∷ !Int
+    } deriving (Show, Eq, Generic, Serialize)
+
+toArenaBoundsDTO ∷ ArenaBounds → ArenaBoundsDTO
+toArenaBoundsDTO ab = ArenaBoundsDTO (arenaWidth ab) (arenaHeight ab)
+
+-- | Restore a stored size through the one validator. A size outside the
+--   dimension domain (a damaged or hand-built save) is refused rather
+--   than clamped: the caller records it and 'validatePages' fails the
+--   load.
+fromArenaBoundsDTO ∷ ArenaBoundsDTO → Either ArenaBoundsError ArenaBounds
+fromArenaBoundsDTO (ArenaBoundsDTO w h) = mkArenaBounds w h
+
+-- | The FROZEN v14 wire shape (#2701 → #2708): the current page without
+--   its finite-arena size. Never edited. Its gen params and location
+--   tags are the unchanged 'WorldGenParamsDTO' and wire tag assignments
+--   that v14 and v15 share.
+data PageCoreDTOv14 = PageCoreDTOv14
+    { pc14PageId ∷ !WorldPageId
+    , pc14GenParams ∷ !WorldGenParamsDTO
+    , pc14CameraX ∷ !Float
+    , pc14CameraY ∷ !Float
+    , pc14TimeHour ∷ !Int
+    , pc14TimeMinute ∷ !Int
+    , pc14TimeRemainder ∷ !Double
+    , pc14DateYear ∷ !Int
+    , pc14DateMonth ∷ !Int
+    , pc14DateDay ∷ !Int
+    , pc14MapMode ∷ !ZoomMapMode
+    , pc14Identity ∷ !(Maybe WorldIdentityDTO)
+    , pc14GeneratedId ∷ !(Maybe GeneratedWorldId)
+    , pc14LocationTags ∷ !(TagAssignmentsDTO LocationInstanceId)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv14 = WorldPagesDTOv14 { wpd14Pages ∷ [PageCoreDTOv14] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | v14 → v15: every field crosses unchanged and the page is EXPANDABLE
+--   (a v14 save predates finite arenas). An arena saved before #2708
+--   therefore loads as the expandable arena it always was; its base is
+--   reconstructed on #2707's corrected foundation like any other.
+migrateWorldPagesV14 ∷ WorldPagesDTOv14 → WorldPages
+migrateWorldPagesV14 (WorldPagesDTOv14 ps) = basePageSnapshots $ WorldPagesDTO $ map current ps
+  where
+    current p = PageCoreDTO
+        { pcPageId = pc14PageId p
+        , pcGenParams = pc14GenParams p
+        , pcCameraX = pc14CameraX p
+        , pcCameraY = pc14CameraY p
+        , pcTimeHour = pc14TimeHour p
+        , pcTimeMinute = pc14TimeMinute p
+        , pcTimeRemainder = pc14TimeRemainder p
+        , pcDateYear = pc14DateYear p
+        , pcDateMonth = pc14DateMonth p
+        , pcDateDay = pc14DateDay p
+        , pcMapMode = pc14MapMode p
+        , pcIdentity = pc14Identity p
+        , pcGeneratedId = pc14GeneratedId p
+        , pcLocationTags = pc14LocationTags p
+        , pcArenaBounds = Nothing
+        }
 
 -- | The FROZEN v13 wire shape (#2533 → #2701): the current page without
 --   its location tags. Never edited. Its gen params are the unchanged
@@ -385,7 +473,17 @@ migrateWorldPagesV13 (WorldPagesDTOv13 ps) = basePageSnapshots $ WorldPagesDTO $
         , pcIdentity = pc13Identity p
         , pcGeneratedId = pc13GeneratedId p
         , pcLocationTags = []
+        , pcArenaBounds = Nothing
         }
+
+-- | Install a decoded finite-arena size on the page's params (#2708). A
+--   size the validator refuses leaves the page expandable here; the
+--   refusal itself is recorded in 'wpBoundsErrors' and fails the load.
+withArenaBounds ∷ Maybe ArenaBoundsDTO → WorldGenParams → WorldGenParams
+withArenaBounds Nothing params = params
+withArenaBounds (Just dto) params = case fromArenaBoundsDTO dto of
+    Right ab → params { wgpArenaBounds = Just ab }
+    Left _   → params
 
 -- | Install decoded location tags on the page's own location table.
 --   The table is the authority for which locations exist; a tag naming
@@ -612,6 +710,13 @@ newtype WorldPagesDTOv8 = WorldPagesDTOv8 { wpd8Pages ∷ [PageCoreDTOv8] }
 data WorldPages = WorldPages
     { wpPageIds ∷ ![WorldPageId]
     , wpBase    ∷ !(HM.HashMap WorldPageId PageSnapshot)
+    , wpBoundsErrors ∷ ![Text]
+      -- ^ #2708: every stored finite-arena size outside the dimension
+      --   domain, rendered and named by page. The live value cannot hold
+      --   one ('World.Arena.Bounds.ArenaBounds' is validated at
+      --   construction), so the decode records it here and keeps the page
+      --   EXPANDABLE rather than invent a size; 'validatePages' then
+      --   refuses the payload. Empty for every migrated pre-v15 payload.
     , wpTagErrors ∷ ![Text]
       -- ^ #2701: every malformed location gameplay-tag entry the decode
       --   found (an empty tag, an empty or repeated tag list, a location
@@ -671,7 +776,7 @@ data WorldPages = WorldPages
 --   "world-pages stamps its errors with the version it WRITES", which
 --   asserts @ccVersion worldPagesCodec ≡ worldPagesVersion@.
 worldPagesVersion ∷ Word32
-worldPagesVersion = 14
+worldPagesVersion = 15
 
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
@@ -679,13 +784,14 @@ worldPagesCodec = componentCodec ComponentSpec
       -- A literal, not 'worldPagesVersion': the save-compat audit parses
       -- this field statically. The example named on that constant is
       -- what keeps the two from drifting.
-    , csVersion       = 14
+    , csVersion       = 15
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 13 migrateWorldPagesV13
+    , csOlderVersions = [ atVersion 14 migrateWorldPagesV14
+                        , atVersion 13 migrateWorldPagesV13
                         , atVersion 12 migrateWorldPagesV12
                         , atVersion 11 migrateWorldPagesV11
                         , atVersion 10 migrateWorldPagesV10
@@ -722,6 +828,9 @@ worldPagesCodec = componentCodec ComponentSpec
           -- #2701: the page's own location table's forward assignments.
         , pcLocationTags = encodeTagAssignments $ categoryForward $
             lisTags (wgpLocationInstances (pgsGenParams p))
+          -- #2708: the page's finite-arena size, written straight through
+          -- from the live params (the DTO above deliberately omits it).
+        , pcArenaBounds = toArenaBoundsDTO <$> wgpArenaBounds (pgsGenParams p)
         }
 
 -- | Component-local invariant (requirement 3): the page-set authority
@@ -735,6 +844,16 @@ validatePages wp
     | otherwise =
         -- #2701: a malformed location-tag entry refuses the payload.
         map err (wpTagErrors wp)
+        -- #2708: a stored finite size outside the dimension domain.
+        ⧺ map err (wpBoundsErrors wp)
+        -- #2708: finite bounds belong to ARENA pages only. A generated
+        -- world carrying a size is a damaged save, and bounds there would
+        -- silently close its edges.
+        ⧺ [ err ("page '" <> unWorldPageId (pgsPageId p)
+                 <> "' carries finite-arena bounds but is not an arena page")
+          | p ← HM.elems (wpBase wp)
+          , isJust (wgpArenaBounds (pgsGenParams p))
+          , not (isArenaParams (pgsGenParams p)) ]
         ⧺ [ err ("duplicate page id " <> tshow pid)
         | (pid, n) ← HM.toList
                       (HM.fromListWith (+) [ (p, 1 ∷ Int) | p ← wpPageIds wp ])
@@ -802,6 +921,12 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
       -- #2701: every malformed location-tag entry, named by page. The
       -- decode below keeps what is well formed; 'validatePages' refuses
       -- the payload over these.
+    , wpBoundsErrors =
+        [ "page '" <> unWorldPageId (pcPageId p) <> "': "
+          <> arenaBoundsErrorText e
+        | p ← ps
+        , Just dto ← [pcArenaBounds p]
+        , Left e ← [fromArenaBoundsDTO dto] ]
     , wpTagErrors =
         [ "page '" <> unWorldPageId (pcPageId p) <> "': " <> msg
         | p ← ps
@@ -811,8 +936,9 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
     }
   where
     toBase p = (blankPageSnapshot (pcPageId p)
-                    (withLocationTags (pcLocationTags p)
-                        (fromWorldGenParamsDTO (pcGenParams p))))
+                    (withArenaBounds (pcArenaBounds p)
+                      (withLocationTags (pcLocationTags p)
+                        (fromWorldGenParamsDTO (pcGenParams p)))))
         { pgsCameraX    = pcCameraX p
         , pgsCameraY    = pcCameraY p
         , pgsTimeHour   = pcTimeHour p
@@ -866,6 +992,7 @@ migrateWorldPagesV12 (WorldPagesDTOv12 ps) = migrateWholeRiverSurfaces $
         , pcIdentity = pc12Identity p
         , pcGeneratedId = pc12GeneratedId p
         , pcLocationTags = []
+        , pcArenaBounds = Nothing
         }
 
 -- | Each historical dispatch calls this ONCE, including the V1 entry used
@@ -909,6 +1036,7 @@ migrateWorldPagesV8 (WorldPagesDTOv8 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc8PageId ps
     , wpBase    = HM.fromList [ (pc8PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -979,6 +1107,7 @@ migrateWorldPagesV9 (WorldPagesDTOv9 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc9PageId ps
     , wpBase    = HM.fromList [ (pc9PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1050,6 +1179,7 @@ migrateWorldPagesV10 (WorldPagesDTOv10 ps) = migrateWholeRiverSurfaces $ WorldPa
     { wpPageIds = map pc10PageId ps
     , wpBase    = HM.fromList [ (pc10PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1123,6 +1253,7 @@ migrateWorldPagesV11 (WorldPagesDTOv11 ps) = migrateWholeRiverSurfaces $ WorldPa
     { wpPageIds = map pc11PageId ps
     , wpBase    = HM.fromList [ (pc11PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = True
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1150,6 +1281,7 @@ migrateWorldPagesV7 (WorldPagesDTOv7 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc7PageId ps
     , wpBase    = HM.fromList [ (pc7PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1183,6 +1315,7 @@ migrateWorldPagesV6 (WorldPagesDTOv6 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc6PageId ps
     , wpBase    = HM.fromList [ (pc6PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1216,6 +1349,7 @@ migrateWorldPagesV5 (WorldPagesDTOv5 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc5PageId ps
     , wpBase    = HM.fromList [ (pc5PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1249,6 +1383,7 @@ migrateWorldPagesV4 (WorldPagesDTOv4 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc4PageId ps
     , wpBase    = HM.fromList [ (pc4PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1279,6 +1414,7 @@ migrateWorldPagesV3 (WorldPagesDTOv3 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc3PageId ps
     , wpBase    = HM.fromList [ (pc3PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1308,6 +1444,7 @@ migrateWorldPagesV2 (WorldPagesDTOv2 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc2PageId ps
     , wpBase    = HM.fromList [ (pc2PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where
@@ -1343,6 +1480,7 @@ migrateWorldPagesV1 (WorldPagesDTOv1 ps) = migrateWholeRiverSurfaces $ WorldPage
     { wpPageIds = map pc1PageId ps
     , wpBase    = HM.fromList [ (pc1PageId p, toBase p) | p ← ps ]
     , wpIdsFromPayload = False
+    , wpBoundsErrors = []
     , wpTagErrors = []
     }
   where

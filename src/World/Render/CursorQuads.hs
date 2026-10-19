@@ -520,7 +520,10 @@ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
         surfaceZAt gx gy = do
             let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
             lc ← HM.lookup chunkCoord (wtdChunks tileData)
-            pure (lcSurfaceMap lc VU.! columnIndex lx ly)
+            let z = lcSurfaceMap lc VU.! columnIndex lx ly
+            -- #2708: an absent column (beyond a finite arena's edge) is not
+            -- a tile a drag can mark.
+            if z ≡ minBound then Nothing else pure z
         -- The hover pick comes back canonical, so a seam-crossing drag
         -- would otherwise span the whole world here exactly as it would
         -- at commit. Re-express it against the anchor first.

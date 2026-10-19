@@ -81,6 +81,7 @@ worldWith ∷ LoadedChunk → WorldTileData
 worldWith lc = WorldTileData
     { wtdChunks    = HM.singleton (ChunkCoord 0 0) lc
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 -- A flat chunk whose every column is a single surface tile at z, tagged

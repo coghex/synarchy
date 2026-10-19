@@ -174,7 +174,7 @@ chunkWith insts =
 tilesWith ∷ [FloraInstance] → WorldTileData
 tilesWith insts = WorldTileData
     { wtdChunks = HM.singleton homeChunk (chunkWith insts)
-    , wtdMaxChunks = 200 }
+    , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | A fresh page carrying the given flora and nothing else, registered
 --   as the engine's active world.
@@ -195,7 +195,7 @@ resetPageEmpty ∷ EngineEnv → IO WorldState
 resetPageEmpty env = do
     ws ← resetPage env []
     writeIORef (wsTilesRef ws)
-        WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+        WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200, wtdBounds = Nothing }
     pure ws
 
 loadedInstances ∷ WorldState → IO [FloraInstance]
@@ -844,7 +844,7 @@ engineSpec = beforeAll setup $ do
       writeIORef (wsFloraHarvestsRef ws) (HM.singleton berryIid 60)
       admitted ← admitChunkFlora ws probeCatalog logger (chunkWith coTenants)
       writeIORef (wsTilesRef ws)
-          WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+          WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200, wtdBounds = Nothing }
       readIORef (wsTilesRef ws) ⌦ forgetFloraDroppedSince ws [admitted]
       HM.keys <$> readIORef (wsChopDesignationsRef ws) `shouldReturn` [oakIid]
       HM.keys <$> readIORef (wsFloraHarvestsRef ws) `shouldReturn` [berryIid]

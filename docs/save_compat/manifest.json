@@ -3660,6 +3660,113 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z14-arena-legacy-shallow.expected.json"
         }
       ]
+    },
+    {
+      "id": "z15-arena-finite",
+      "description": "A FINITE arena session (#2708): the 20x10 arena page 'finite_arena' (X -10..9, Y -4..5), saved by the build that introduced the world-pages v15 'pcArenaBounds' field, with two persisted edits on its corner tiles (9,5) and (-10,-4). The save records the page's validated size beside its generation parameters and the edit overlay, never the base grid or the derived rectangle: loading reconstructs only the chunks that intersect the rectangle (partial chunks carry absent columns outside it) and replays the edits, with no scenario file. The page comes back finite; every older arena fixture (z14-arena-legacy-shallow) comes back expandable.",
+      "declaredAt": "2026-10-18",
+      "declaredByIssue": 2708,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current build: World.Save.Component.PageCore.worldPagesCodec (v15) decodes pcArenaBounds through World.Arena.Bounds.mkArenaBounds; World.Load.Stage.stagePage (arena branch) rebuilds the startup set from World.Generate.Arena.generateArenaChunksIn; no migration (this IS the current format)",
+      "components": [
+        {
+          "id": "buildings",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "container-knowledge",
+          "required": false,
+          "version": 2
+        },
+        {
+          "id": "core-session",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "craft-bills",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "lua.building_spawn",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "lua.unit_ai",
+          "required": true,
+          "version": 10
+        },
+        {
+          "id": "metadata",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "portable-knowledge",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "power-nodes",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "texture-palette",
+          "required": true,
+          "version": 1
+        },
+        {
+          "id": "transfer-orders",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "unit-sim",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "units",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-activity",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-edits",
+          "required": true,
+          "version": 5
+        },
+        {
+          "id": "world-pages",
+          "required": true,
+          "version": 15
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z15-arena-finite",
+          "path": "test-headless/data/save-compat/z15-arena-finite.bin",
+          "kind": "complete-session",
+          "sha256": "dcec965d144901008dd92d686d72ebb364e685b6154a9a28c9cc9f1ec9cf4148",
+          "sizeBytes": 19884,
+          "provenance": "Captured through the real production save path on the #2708 build: base commit 6f305b1b4 plus the #2708 change, 'cabal build all', then 'python3 capture_finite_arena.py --port 9292 --out finite_arena.synworld' run from the repository root (script retained as docs/pr-proofs/issue-2708-capture-finite-arena.py.txt). It boots one headless engine, world.initArena('finite_arena', 20, 10), raises tiles (9,5) and (-10,-4), requests an edit one tile outside the map at (10,0) (refused, so it never reaches the overlay), then engine.saveWorld. The metadata timestamp was normalized with synarchy-save-codec (save_compat_audit_codec.normalize_fixture_timestamp) and the canonical summary derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z15-arena-finite.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -52,6 +52,7 @@ import UPrelude
 import Control.Concurrent.MVar (withMVar)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Data.HashSet as HS
+import World.Arena.Bounds (boundedChunkCoords)
 import World.Chunk.Admit (registerChunkDemand)
 import World.Chunk.Residency (canonicalChunkCoord)
 import World.Chunk.Types (ChunkCoord(..))
@@ -163,7 +164,14 @@ enqueueChunkRequest pid ws coords = do
         Nothing → pure 0
         Just params → do
           withMVar (wsInitQueueLock ws) $ \_ → do
-            needed ← registerChunkDemand ws pid params coords
+            -- #2708: a finite arena has no chunk wholly outside its
+            -- rectangle, so a request for one is REFUSED here, before
+            -- anything is registered on the residency owner. Nothing is
+            -- left requested, claimed or queued for terrain that cannot
+            -- exist, so the call terminates at once and nothing waits on
+            -- it; the count it returns is the physical chunks accepted.
+            needed ← registerChunkDemand ws pid params
+                         (boundedChunkCoords (wgpArenaBounds params) coords)
             count ← atomicModifyIORef' (wsInitQueueRef ws) $ \q →
                 (q ⧺ needed, length needed)
             -- Appending work does not complete any, so a request made
@@ -330,5 +338,12 @@ reconcileQueuedPhaseLocked ws = do
         -- the invariant holds from either side rather than only from the
         -- one this happens to be called on. The load ENDED with an empty
         -- queue, so whatever is on it now is the whole of a new one.
-        (LoadDone, _)       → (LoadPhase2 remaining remaining, ())
+        -- Only when work IS present (#2708). A request that adds nothing —
+        -- every coordinate already resident or requested, or (on a finite
+        -- arena) wholly outside the map — leaves an empty queue under a
+        -- finished load, and reopening THAT as @LoadPhase2 0 0@ is a phase
+        -- the drain never settles back (it returns at once for an empty
+        -- queue), so @world.waitForInit@ would wait for ever on a request
+        -- that asked for nothing.
+        (LoadDone, n) | n > 0 → (LoadPhase2 remaining remaining, ())
         (other, _)          → (other, ())

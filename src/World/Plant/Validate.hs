@@ -79,7 +79,7 @@ plantSoilState ∷ Int              -- ^ page wrap world size, in chunks
 plantSoilState worldSize td (gx, gy) =
     let (coord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
         idx = columnIndex lx ly
-    in case lookupChunk coord td of
+    in case lookupTileChunk gx gy coord td of   -- #2708
         Nothing → PlantSoilUnknown
         Just lc →
             let z   = lcSurfaceMap lc VU.! idx

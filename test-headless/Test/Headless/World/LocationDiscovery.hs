@@ -174,7 +174,7 @@ wtdWith = wtdAt (ChunkCoord 0 0)
 wtdAt ∷ ChunkCoord → LoadedChunk → WorldTileData
 wtdAt coord lc = WorldTileData
     { wtdChunks = HM.singleton coord (lc { lcCoord = coord })
-    , wtdMaxChunks = 1 }
+    , wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- | A fresh page carrying loc1's overlay, registered as the sole
 --   (visible) page in a hand-built WorldManager.

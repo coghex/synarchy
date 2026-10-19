@@ -310,7 +310,7 @@ stagedFloorAt (gx, gy) = fst $ stageStructurePlacement
 -- * Synthetic geography
 
 emptyTiles ∷ WorldTileData
-emptyTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200 }
+emptyTiles = WorldTileData { wtdChunks = HM.empty, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 flatTiles ∷ WorldTileData
 flatTiles =
@@ -332,7 +332,7 @@ flatTiles =
                , lcSideDeco = VU.empty, lcWaterTableMap = VU.empty
                , lcMagma = Nothing, lcStructures = emptyChunkStructures
                }
-    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200 }
+    in WorldTileData { wtdChunks = HM.singleton coord lc, wtdMaxChunks = 200, wtdBounds = Nothing }
 
 -- | The same geography with one piece PLACED in the committed overlay.
 withPiece ∷ StructureSlot → (Int, Int) → WorldTileData → WorldTileData

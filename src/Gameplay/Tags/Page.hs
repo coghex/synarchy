@@ -313,7 +313,7 @@ ownsTile ∷ LoadedChunk → (Int, Int) → Bool
 ownsTile lc (gx, gy) = fst (globalToChunk gx gy) ≡ lcCoord lc
 
 singleChunk ∷ LoadedChunk → WorldTileData
-singleChunk lc = WorldTileData { wtdChunks = HM.singleton (lcCoord lc) lc, wtdMaxChunks = 1 }
+singleChunk lc = WorldTileData { wtdChunks = HM.singleton (lcCoord lc) lc, wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- * Persistence
 

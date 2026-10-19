@@ -29,6 +29,9 @@ import qualified Engine.Core.Queue as Q
 import World.Generate.Types (WorldGenParams(..))
 import World.State.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
+import World.Arena.Bounds (footprintWithin)
+import World.Arena.Page (pageArenaBounds)
+import Scenario.Types (Footprint(..))
 import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Residency (ChunkGeneration)
 import Building.Types
@@ -276,11 +279,30 @@ applyBuildingSpawnWith afterEpochCheck logger sim reg bld bid defName gx gy gz
         Nothing → pure False
         Just ws → (≢ epoch) ⊚ pageIncarnation ws
     afterEpochCheck
+    -- #2708: a building is indivisible on a finite arena. Judged here,
+    -- the one body both the unbound drain and the page-bound commit run,
+    -- against the TARGET page's own rectangle (visible or not): if any
+    -- part of the complete footprint lies outside, nothing is inserted,
+    -- and the claim the admission took is retired like every other
+    -- refusal's — no reservation, no power node, no owned contents.
+    footprintOutside ← case (mPage, HM.lookup defName (bmDefs bm)) of
+        (Just ws, Just def) → do
+            mb ← pageArenaBounds ws
+            pure (not (footprintWithin mb (gx, gy)
+                  (Footprint 0 0 (bdTileW def - 1) (bdTileH def - 1))))
+        _ → pure False
     case HM.lookup defName (bmDefs bm) of
         -- #2326: every path that drops the spawn retires what that
         -- request left behind — its footprint claim, and any power node
         -- already allocated against the id it was promised.
         _ | worldGone → dropRequest
+        _ | footprintOutside → do
+            dropRequest
+            logWarn logger CatThread $
+                "BuildingSpawn: refused '" <> defName <> "' at "
+                <> tshow gx <> "," <> tshow gy <> " on "
+                <> unWorldPageId pageId <> ": its footprint "
+                <> "crosses the finite arena boundary"
         _ | replaced → do
             dropRequest
             logDebug logger CatThread $

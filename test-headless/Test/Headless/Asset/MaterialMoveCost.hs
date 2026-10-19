@@ -310,7 +310,7 @@ worldOfMaterial mid =
             , lcStructures        = emptyChunkStructures
             }
     in WorldTileData { wtdChunks = HM.singleton (ChunkCoord 0 0) lc
-                     , wtdMaxChunks = 1 }
+                     , wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- | One material entry, with only the mandatory fields plus the
 --   @move_cost@ under test.

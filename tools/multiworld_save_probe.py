@@ -49,6 +49,17 @@ fresh-process load expands again and compares an untouched expanded
 chunk's complete vegetation vector, the expanded edit, and the bytes of
 the save file (loading must not rewrite it).
 
+Finite arena (#2708): --arena also creates a THIRD page, a finite 100x40
+arena (world.initArena(page, 100, 40): X -50..49, Y -19..20), raises its four
+corner tiles, puts a unit on a corner, a lake tile on each of two edges, and
+saves. After the fresh-process load it checks, with no scenario file
+anywhere: the rectangle (every corner and edge midpoint has terrain, the
+tile beyond each has none), the four edge edits, that a unit ordered off
+the map is still on it, that the water is still inside and none stands
+outside, that asking for chunks beyond the map queues nothing (and one the
+map does hold still loads), and that loading left the save file's bytes
+untouched. The expandable-arena assertions above are unchanged.
+
 Arena base seeding (#1718): rebuilding is not restoring. The save stores
 generation parameters and the edit overlay, never the arena's base tile
 grid, so every surface tile no edit touched is REGENERATED on load from
@@ -134,6 +145,12 @@ CHECKS = [
     ('arena_expanded_vegetation_restored', 'arena expanded vegetation restored'),
     ('arena_expanded_edit_restored', 'arena expanded edit restored'),
     ('arena_load_preserves_save_bytes', 'arena load preserves save bytes'),
+    ('finite_rectangle_restored', 'finite rectangle restored'),
+    ('finite_edge_edits_restored', 'finite edge edits restored'),
+    ('finite_unit_contained', 'finite unit contained'),
+    ('finite_fluid_closed', 'finite fluid closed'),
+    ('finite_expansion_refused', 'finite expansion refused'),
+    ('finite_load_preserves_save_bytes', 'finite load preserves save bytes'),
     ('primary_identity_restored', 'primary identity restored'),
     ('arena_identity_restored', 'arena identity restored'),
     ('secondary_identity_restored', 'secondary identity restored'),
@@ -147,7 +164,10 @@ def descriptor(arena=False):
     arena_only = {"arena_unnamed", "arena_edit_restored", "arena_vegetation_readable",
                   "arena_vegetation_restored", "arena_identity_restored",
                   "arena_expanded_readable", "arena_expanded_vegetation_restored",
-                  "arena_expanded_edit_restored", "arena_load_preserves_save_bytes"}
+                  "arena_expanded_edit_restored", "arena_load_preserves_save_bytes",
+                  "finite_rectangle_restored", "finite_edge_edits_restored",
+                  "finite_unit_contained", "finite_fluid_closed",
+                  "finite_expansion_refused", "finite_load_preserves_save_bytes"}
     generated_only = {"secondary_name", "secondary_gloss_omitted",
                       "secondary_identity_restored"}
     excluded = generated_only if arena else arena_only
@@ -504,6 +524,193 @@ def populate_arena(port: int, page: str):
     return uid, bid, base + 1, veg, xveg, xbase + 1
 
 
+
+# --- finite arena (#2708) ----------------------------------------------
+
+FINITE_PAGE = "finite_world"
+FINITE_SIZE = (100, 40)
+# Every chunk the 100x40 map intersects: X -50..49 is chunks -4..3 and
+# Y -19..20 is chunks -2..1, 8 x 4 = 32. The startup set is the 5x5
+# footprint's overlap with them (cx -2..2, cy -2..1 = 20), so exactly 12
+# are left to demand — in a fresh process as much as in the creating one.
+FINITE_CHUNK_REGION = (-4, -2, 3, 1)
+FINITE_CHUNKS_TO_DEMAND = 12
+FINITE_OUTSIDE_CHUNKS = ((4, 0), (-5, 0), (0, 2), (0, -3), (9, 9))
+
+
+def finite_rect(width: int, height: int) -> tuple[int, int, int, int]:
+    """(minX, maxX, minY, maxY) of a finite arena, from the issue's own
+    formula: minX = -floor(w/2), maxX = minX + w - 1, maxY = floor(h/2),
+    minY = maxY - h + 1. Written here, not read from the engine."""
+    min_x = -(width // 2)
+    max_y = height // 2
+    return (min_x, min_x + width - 1, max_y - height + 1, max_y)
+
+
+def finite_probe_points(rect: tuple[int, int, int, int]):
+    """(inside, outside): the four corners and four edge midpoints, and the
+    tile one step beyond each (a corner steps out diagonally)."""
+    x0, x1, y0, y1 = rect
+    mx, my = (x0 + x1) // 2, (y0 + y1) // 2
+    inside = [(x0, y0), (x1, y0), (x0, y1), (x1, y1),
+              (x0, my), (x1, my), (mx, y0), (mx, y1)]
+    outside = [(x0 - 1, y0 - 1), (x1 + 1, y0 - 1), (x0 - 1, y1 + 1),
+               (x1 + 1, y1 + 1), (x0 - 1, my), (x1 + 1, my),
+               (mx, y0 - 1), (mx, y1 + 1)]
+    return inside, outside
+
+
+def terrain_at(port: int, x: int, y: int) -> int | None:
+    return as_int(send(port, f"local s = world.getTerrainAt({x}, {y}); return s"))
+
+
+def wet_counts(port: int, rect: tuple[int, int, int, int]) -> tuple[int, int]:
+    """(wet tiles inside the rectangle, wet tiles in the 2-tile ring just
+    outside it) on the active page, counted in ONE console call."""
+    x0, x1, y0, y1 = rect
+    lua = (
+        "local inside, outside = 0, 0 "
+        f"for y={y0 - 2},{y1 + 2} do for x={x0 - 2},{x1 + 2} do "
+        "local f = world.getFluidAt(x, y) "
+        "if f ~= nil then "
+        f"if x >= {x0} and x <= {x1} and y >= {y0} and y <= {y1} "
+        "then inside = inside + 1 else outside = outside + 1 end end end end "
+        "return inside .. ',' .. outside"
+    )
+    raw = send(port, lua, timeout=20.0).strip('"')
+    try:
+        a, b = raw.split(",")
+        return int(a), int(b)
+    except ValueError:
+        return -1, -1
+
+
+def populate_finite(port: int, page: str) -> dict:
+    """Create the finite arena `page`, check its rectangle, raise the four
+    corners, stand a unit on a corner, put water on two edges and let it
+    settle. Returns the state the post-load checks compare against. Exits
+    the probe on a setup failure: the post-load assertions mean nothing if
+    the pre-save world was not what they assume."""
+    width, height = FINITE_SIZE
+    rect = finite_rect(width, height)
+    x0, x1, y0, y1 = rect
+    inside, outside = finite_probe_points(rect)
+    send(port, f"world.initArena('{page}', {width}, {height}); return 'ok'")
+    send(port, f"world.show('{page}'); return 'ok'")
+    wait_page_setup(port, page)
+    send(port, "return world.waitForInit(60)", timeout=70)
+    # The startup set is only the footprint; the rest of the map loads on
+    # demand, and ONLY the rest of the map.
+    cx0, cy0, cx1, cy1 = FINITE_CHUNK_REGION
+    queued = as_int(send(port, f"return world.loadChunksInRegion({cx0},{cy0},{cx1},{cy1},'{page}')"))
+    if queued != FINITE_CHUNKS_TO_DEMAND:
+        sys.exit(f"FAIL: the remaining valid chunks of finite arena {page}: "
+                 f"{queued} queued, expected {FINITE_CHUNKS_TO_DEMAND}")
+    send(port, f"return world.waitForChunks(120, '{page}')", timeout=130)
+    bad = [p for p in inside if terrain_at(port, *p) is None]
+    bad += [p for p in outside if terrain_at(port, *p) is not None]
+    if bad:
+        sys.exit(f"FAIL: finite arena {page} rectangle is not {rect} before the "
+                 f"save (wrong at {bad})")
+    corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
+    base = {c: terrain_at(port, *c) for c in corners}
+    for (x, y) in corners:
+        send(port, f"return world.addTile('{page}', {x}, {y}, 1)")
+    for (x, y) in corners:
+        if not poll_until(10.0, lambda x=x, y=y: terrain_at(port, x, y) == base[(x, y)] + 1,
+                          interval=0.1):
+            sys.exit(f"FAIL: finite-arena edge edit at ({x},{y}) never landed")
+    # An edit outside the map must change nothing and leave no terrain.
+    ox, oy = x1 + 1, y1 + 1
+    send(port, f"return world.addTile('{page}', {ox}, {oy}, 1)")
+    time.sleep(0.5)
+    if terrain_at(port, ox, oy) is not None:
+        sys.exit(f"FAIL: an edit at ({ox},{oy}), outside the map, made terrain")
+    uid = as_int(send(port, f"return unit.spawn('acolyte', {x1}, {y1}, 'player')"))
+    if uid is None or uid < 0:
+        sys.exit(f"FAIL: unit.spawn rejected on finite arena {page}")
+    # A spawn outside the map must create nothing.
+    ghost = as_int(send(port, f"return unit.spawn('acolyte', {x1 + 3}, {y1}, 'player')"))
+    time.sleep(0.5)
+    if ghost is not None and ghost >= 0 and send(port, f"return unit.exists({ghost})") == "true":
+        sys.exit(f"FAIL: a unit was created outside the finite arena (#{ghost})")
+    # Water on two edges; the closed edge keeps all of it in the map.
+    my = (y0 + y1) // 2
+    for (x, y) in ((x1, my), (x0, my)):
+        send(port, f"return world.setFluidTile('{page}', {x}, {y}, 'water')")
+    time.sleep(4.0)
+    wet_in, wet_out = wet_counts(port, rect)
+    if wet_in <= 0 or wet_out != 0:
+        sys.exit(f"FAIL: finite-arena water before the save: {wet_in} tile(s) "
+                 f"inside, {wet_out} outside (expected some inside, none outside)")
+    # Expansion beyond the map queues nothing.
+    refused = [as_int(send(port, f"return world.loadChunksInRegion({a},{b},{a},{b},'{page}')"))
+               for a, b in FINITE_OUTSIDE_CHUNKS]
+    if refused != [0] * len(FINITE_OUTSIDE_CHUNKS):
+        sys.exit(f"FAIL: expansion before the save queued chunks beyond the map: {refused}")
+    print(f"{page}: finite {width}x{height} X={x0}..{x1} Y={y0}..{y1}  unit=#{uid}  "
+          f"water inside={wet_in}")
+    return {"rect": rect, "base": base, "uid": uid, "wet": wet_in}
+
+
+def check_finite_restored(port: int, page: str, state: dict, chk,
+                          save_file: str, save_digest: str) -> None:
+    """Everything a fresh process must say about the finite arena, with no
+    scenario file consulted (none exists)."""
+    x0, x1, y0, y1 = state["rect"]
+    inside, outside = finite_probe_points(state["rect"])
+    send(port, f"world.show('{page}'); return 'ok'")
+    wait_active(port, page)
+    # A fresh process holds only the startup set. Demanding the map's
+    # remaining valid chunks queues exactly the ones the map has.
+    cx0, cy0, cx1, cy1 = FINITE_CHUNK_REGION
+    queued = as_int(send(port, f"return world.loadChunksInRegion({cx0},{cy0},{cx1},{cy1},'{page}')"))
+    send(port, f"return world.waitForChunks(120, '{page}')", timeout=130)
+    missing = [p for p in inside if terrain_at(port, *p) is None]
+    extra = [p for p in outside if terrain_at(port, *p) is not None]
+    chk.ok('finite_rectangle_restored', not missing and not extra,
+           f"restored rectangle X={x0}..{x1} Y={y0}..{y1}: missing {missing}, "
+           f"terrain outside at {extra}")
+    wrong = {c: terrain_at(port, *c) for c in state["base"]
+             if terrain_at(port, *c) != state["base"][c] + 1}
+    chk.ok('finite_edge_edits_restored', not wrong,
+           f"the four corner edits were replayed (wrong: {wrong})")
+    uid = state["uid"]
+    alive = send(port, f"return unit.exists({uid})") == "true"
+    # Order the unit off the map and give the movement tick time to act.
+    send(port, f"return unit.moveTo({uid}, {x1 + 6}.5, {y1 + 6}.5, 3)")
+    time.sleep(3.0)
+    pos = send(port, f"local x, y = unit.getPos({uid}); return tostring(x) .. ',' .. tostring(y)"
+               ).strip('"')
+    try:
+        px, py = (float(v) for v in pos.split(","))
+        contained = x0 <= px < x1 + 1 and y0 <= py < y1 + 1
+    except ValueError:
+        px = py = None
+        contained = False
+    chk.ok('finite_unit_contained', alive and contained,
+           f"the unit survived the load and stays on the map when ordered off it "
+           f"(alive={alive}, position=({px},{py}))")
+    wet_in, wet_out = wet_counts(port, state["rect"])
+    chk.ok('finite_fluid_closed', wet_in > 0 and wet_out == 0,
+           f"the edge water is still inside the map ({wet_in} tile(s)) and none "
+           f"stands outside ({wet_out})")
+    refused = [as_int(send(port, f"return world.loadChunksInRegion({a},{b},{a},{b},'{page}')"))
+               for a, b in FINITE_OUTSIDE_CHUNKS]
+    time.sleep(1.0)
+    loaded = [send(port, f"local i = world.getChunkInfo({a}, {b}); return tostring(i.loaded)"
+                   ).strip('"') for a, b in FINITE_OUTSIDE_CHUNKS]
+    chk.ok('finite_expansion_refused',
+           queued == FINITE_CHUNKS_TO_DEMAND and refused == [0] * len(refused)
+           and "true" not in loaded,
+           f"the map's {FINITE_CHUNKS_TO_DEMAND} remaining chunks load on demand "
+           f"(queued {queued}); chunks beyond it are refused, not queued ({refused}) "
+           f"and none is resident ({loaded})")
+    chk.ok('finite_load_preserves_save_bytes',
+           file_sha256(save_file) == save_digest,
+           "loading and probing the finite arena left the save file's bytes unchanged")
+
+
 class Checks:
     def __init__(self, rep) -> None:
         self.rep = rep
@@ -570,9 +777,11 @@ def _run(args, rep):
         arena_veg = None
         arena_xveg = None
         arena_xz = None
+        finite_state = None
         if args.arena:
             u_sw, b_sw, arena_z, arena_veg, arena_xveg, arena_xz = populate_arena(
                 args.port, "second_world")
+            finite_state = populate_finite(args.port, FINITE_PAGE)
         else:
             u_sw, b_sw = populate_world(args.port, "second_world",
                                         args.seed2, args.size, args.plates,
@@ -599,6 +808,8 @@ def _run(args, rep):
         # Leave only main_world visible so the post-load show toggles are
         # clean (see module docstring). Then save with main_world primary.
         send(args.port, "world.hide('second_world'); return 'ok'")
+        if finite_state is not None:
+            send(args.port, f"world.hide('{FINITE_PAGE}'); return 'ok'")
         send(args.port, "world.show('main_world'); return 'ok'")
         wait_active(args.port, "main_world")
         # Settle: spawn commands run on the unit/building threads.
@@ -738,6 +949,11 @@ def _run(args, rep):
             chk.ok('arena_load_preserves_save_bytes',
                    file_sha256(save_file) == save_digest,
                    "loading and expanding left the save file's bytes unchanged")
+
+        if args.arena and finite_state is not None:
+            print("\n--- finite arena restore checks (#2708) ---")
+            check_finite_restored(args.port, FINITE_PAGE, finite_state, chk,
+                                  save_file, save_digest)
 
         print("\n--- world identity restore checks (#707) ---")
         ident = get_identity(args.port, "main_world")

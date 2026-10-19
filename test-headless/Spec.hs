@@ -85,6 +85,7 @@ import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.ArenaSeed as ArenaSeed
 import qualified Test.Headless.World.ArenaGenerationConsistency as ArenaGenerationConsistency
+import qualified Test.Headless.World.ArenaFiniteBounds as ArenaFiniteBounds
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundMove as GroundMove
@@ -677,6 +678,10 @@ restLane = do
     -- end, none of which the shared-worlds engine may see.
     aroundAll withHeadlessEngine $
         describe "arena generation consistency" ArenaGenerationConsistency.spec
+    -- Own engine (#2708): creates finite arenas, hides and destroys them,
+    -- drives the camera and publishes a staged session; its pure halves
+    -- (rectangle, closed fluid edges, unit ticks) need no engine at all.
+    describe "arena finite bounds" ArenaFiniteBounds.spec
     -- Own engine (#1246): writes a populated transfer-order store into a
     -- live page's WorldState and saves it, which the shared-worlds
     -- engine above must not see. Registered under the SAME describe as

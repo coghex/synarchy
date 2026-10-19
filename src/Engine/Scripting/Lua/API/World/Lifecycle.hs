@@ -40,6 +40,7 @@ import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
 import Engine.Scripting.Lua.Types
     (LuaMsg(..), LuaBackendState(..), LanguageCache(..))
 import World.Types
+import World.Arena.Bounds (ArenaBounds, mkArenaBounds, arenaBoundsErrorText)
 import Language.Generated.Types
     ( LanguageProvenance(..), GeneratorVersion(..), LangSeed(..)
     , GeneratorError(..), generatorErrorText, currentGeneratorVersion
@@ -600,17 +601,69 @@ readCatalogueForSuggestions catPath ordPath = do
     describe why = "concept catalogue " <> T.pack catPath
         <> " could not be loaded, so no name can be suggested: " <> why
 
--- | world.initArena(pageId) — create flat test arena, no geology
+-- | world.initArena([pageId [, width, height]]) — create a flat test
+--   arena, no geology.
+--
+--   With no dimensions the arena is EXPANDABLE, exactly as before
+--   (#2708): the one-argument and no-argument forms are unchanged. With
+--   BOTH @width@ and @height@ it is a FINITE arena of that many tiles
+--   centred on zero ("World.Arena.Bounds"). The dimensions go through
+--   'mkArenaBounds', the one validator the save decoder and the scenario
+--   adapters use, so a value outside the schema's domain (each an
+--   integer in [1, 100000]) raises a Lua error and enqueues NOTHING. One
+--   dimension without the other, a non-integer, and a non-number are
+--   refused the same way: a size is never guessed.
 worldInitArenaFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldInitArenaFn env = do
     pageIdArg ← Lua.tostring 1
     let pageId = case pageIdArg of
             Just bs → WorldPageId (TE.decodeUtf8Lenient bs)
             Nothing → WorldPageId "test_arena"    -- default when called with no args
-    -- A re-init REPLACES an existing page's state, so it counts as a
-    -- selection change too (#1602).
-    Lua.liftIO $ enqueueSelectionChange env (WorldInitArena pageId)
-    return 0
+    wArg ← arenaDimensionArg 2
+    hArg ← arenaDimensionArg 3
+    case arenaBoundsFromArgs wArg hArg of
+        Left why → do
+            Lua.pushstring (TE.encodeUtf8 ("world.initArena: " <> why))
+            Lua.error
+        Right bounds → do
+            -- A re-init REPLACES an existing page's state, so it counts
+            -- as a selection change too (#1602).
+            Lua.liftIO $ enqueueSelectionChange env
+                (WorldInitArena pageId bounds)
+            return 0
+
+-- | What argument @idx@ of @world.initArena@ held: absent (none or nil),
+--   an integer, or something that is not one.
+data ArenaDimensionArg = DimAbsent | DimInt !Int | DimBad
+
+arenaDimensionArg ∷ Lua.StackIndex → Lua.LuaE Lua.Exception ArenaDimensionArg
+arenaDimensionArg idx = do
+    ty ← Lua.ltype idx
+    case ty of
+        Lua.TypeNone   → pure DimAbsent
+        Lua.TypeNil    → pure DimAbsent
+        Lua.TypeNumber → do
+            -- Lua numbers are doubles: an integral, in-range value only.
+            mNum ← Lua.tonumber idx
+            pure $ case mNum of
+                Just (Lua.Number n)
+                    | n ≡ fromIntegral (round n ∷ Int)
+                    , abs n ≤ 1.0e15 → DimInt (round n)
+                _ → DimBad
+        _ → pure DimBad
+
+-- | The bounds the dimension arguments name: both absent is expandable,
+--   both present and valid is finite, anything else is refused with the
+--   reason a caller can act on.
+arenaBoundsFromArgs ∷ ArenaDimensionArg → ArenaDimensionArg
+                    → Either Text (Maybe ArenaBounds)
+arenaBoundsFromArgs DimAbsent DimAbsent = Right Nothing
+arenaBoundsFromArgs (DimInt w) (DimInt h) =
+    either (Left . arenaBoundsErrorText) (Right . Just) (mkArenaBounds w h)
+arenaBoundsFromArgs DimAbsent _ = Left "width and height must be given together"
+arenaBoundsFromArgs _ DimAbsent = Left "width and height must be given together"
+arenaBoundsFromArgs _ _ =
+    Left "width and height must each be an integer number of tiles"
 
 -- | world.initArenaDone(pageId) — signal that all arena textures have been sent
 worldInitArenaDoneFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
@@ -706,7 +759,7 @@ selectionRequestEffect cmd mgr = case cmd of
     -- so they matter exactly when the page being replaced is the head.
     -- They also REGISTER it, which a later queued show depends on.
     WorldInit pid _ _ _ _      → registering pid
-    WorldInitArena pid         → registering pid
+    WorldInitArena pid _       → registering pid
     WorldLoadPublish{}         → (True, ([], []))
     _                          → unchanged
   where

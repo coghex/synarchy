@@ -108,7 +108,7 @@ setUp env tiles (camGX, camGY) = do
     writeIORef (framebufferSizeRef env) (800, 600)
 
 loadedTiles ∷ WorldTileData
-loadedTiles = WorldTileData (HM.fromList [(stored, solidChunk)]) 200
+loadedTiles = WorldTileData (HM.fromList [(stored, solidChunk)]) 200 Nothing
 
 spec ∷ Spec
 spec = beforeAll initEnv $
@@ -136,7 +136,7 @@ spec = beforeAll initEnv $
     it "leaves the z-slice alone when the chunk genuinely is not loaded" $ \env → do
       -- The negative the raw lookup could not tell apart from an alias
       -- miss: nothing loaded, so tracking has nothing to retarget to.
-      setUp env (WorldTileData HM.empty 200) rawTile
+      setUp env (WorldTileData HM.empty 200 Nothing) rawTile
       _ ← updateWorldTiles env
       cam ← readIORef (cameraRef env)
       camZSlice cam `shouldBe` 0

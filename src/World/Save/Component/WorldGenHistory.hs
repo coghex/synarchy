@@ -176,6 +176,7 @@ fromWorldGenParamsDTOv9 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = fromRiverNamesDTO (gp9RiverNames d)
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#916 worldgen params (@world-pages@ v7) ----------------
@@ -265,6 +266,7 @@ fromWorldGenParamsDTOv6 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = fromRiverNamesDTO (gp6RiverNames d)
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#2505 worldgen params (@world-pages@ v10 and v11) -------
@@ -359,6 +361,7 @@ fromWorldGenParamsDTOv8 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames               = fromRiverNamesDTO (gp8RiverNames d)
     , wgpExactRiverBeds           = False
     , wgpVolcanoCtx               = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#917 worldgen params (@world-pages@ v8 and v9) ---------
@@ -450,6 +453,7 @@ fromWorldGenParamsDTOv7 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames               = fromRiverNamesDTO (gp7RiverNames d)
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 
@@ -555,6 +559,7 @@ fromWorldGenParamsDTOv5 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = fromRiverNamesDTO (gp5RiverNames d)
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#1104 worldgen params (@world-pages@ v5) ----------------
@@ -657,6 +662,7 @@ fromWorldGenParamsDTOv4 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = fromRiverNamesDTOv1 (gp4RiverNames d)
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#1102 worldgen params (@world-pages@ v4) ----------------
@@ -757,6 +763,7 @@ fromWorldGenParamsDTOv3 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = emptyRiverNames
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#1101 worldgen params (@world-pages@ v2 / v3) -----------
@@ -855,6 +862,7 @@ fromWorldGenParamsDTOv2 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = emptyRiverNames
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- Frozen pre-#911 worldgen params (@world-pages@ v1) ------------------
@@ -929,6 +937,7 @@ fromWorldGenParamsDTOv1 d = withVolcanoCtx WorldGenParams
     , wgpRiverNames              = emptyRiverNames
     , wgpExactRiverBeds          = False
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    , wgpArenaBounds              = Nothing
     }
 
 -- | Encode a live record into the FROZEN v1 shape. Production NEVER

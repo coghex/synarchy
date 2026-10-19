@@ -31,7 +31,13 @@
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "unit simulation page ownership"'@.
-module Test.Headless.Unit.SimPageOwnership (spec) where
+module Test.Headless.Unit.SimPageOwnership
+    ( spec
+      -- * Fixtures other gates reuse (#2708's finite-arena movement)
+    , minimalDef
+    , mkUnit
+    , baseSimState
+    ) where
 
 import UPrelude
 import Test.Hspec
@@ -147,7 +153,7 @@ flatChunkAt z =
 tilesAt ∷ Int → WorldTileData
 tilesAt z = WorldTileData
     { wtdChunks = HM.singleton (ChunkCoord 0 0) (flatChunkAt z)
-    , wtdMaxChunks = 1 }
+    , wtdMaxChunks = 1, wtdBounds = Nothing }
 
 -- | Generation parameters whose ONLY interesting content is the global
 --   mean temperature. The climate grid is left empty, so

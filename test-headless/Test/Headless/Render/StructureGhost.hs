@@ -708,7 +708,7 @@ chunkAt coord structures =
 tileDataWith ∷ [LoadedChunk] → WorldTileData
 tileDataWith chunks = WorldTileData
     { wtdChunks = HM.fromList [ (lcCoord lc, lc) | lc ← chunks ]
-    , wtdMaxChunks = 200 }
+    , wtdMaxChunks = 200, wtdBounds = Nothing }
 
 cameraAt ∷ CameraFacing → (Int, Int) → Camera2D
 cameraAt facing (gx, gy) =

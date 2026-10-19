@@ -103,6 +103,7 @@ worldWith ∷ LoadedChunk → WorldTileData
 worldWith lc = WorldTileData
     { wtdChunks    = HM.singleton (ChunkCoord 0 0) lc
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 -- Tolerant float comparison for tests

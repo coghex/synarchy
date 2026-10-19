@@ -204,6 +204,7 @@ tilesFrom ∷ [LoadedChunk] → WorldTileData
 tilesFrom chunks = WorldTileData
     { wtdChunks    = HM.fromList [ (lcCoord c, c) | c ← chunks ]
     , wtdMaxChunks = length chunks
+    , wtdBounds = Nothing
     }
 
 -- | Page A: two chunks in a row. Page B: those two PLUS the row below,

@@ -25,7 +25,7 @@ import Sim.Fluid.Types
 import Sim.Fluid.Reaction
     (CellSite(..), SolidificationEvent, TransferOutcome(..)
     , applyTransfer, dedupeEvents)
-import Sim.Topology (SimTopology, simSeamNeighbor)
+import Sim.Topology (SimTopology, simSeamNeighbor, simChunkLiveMask)
 
 -- | Ticks at equilibrium before a chunk is deactivated.
 equilThreshold ∷ Int
@@ -48,13 +48,14 @@ simulateActiveTick sws =
            -- An inactive world still carries whatever it has already
            -- emitted: the event history is output, not scratch.
            then sws
-           else let ticked = HM.mapWithKey (simulateActiveChunk chunks) activeChunks
+           else let topo = swsTopology sws
+                    ticked = HM.mapWithKey (simulateActiveChunk topo chunks) activeChunks
                     phased = HM.map (\(scs, ch, _) → (scs, ch)) ticked
                     -- Chunk-key order, so a tick's events (and therefore
                     -- the dedupe below) do not depend on hash iteration.
                     chunkEvents = concatMap (\(_, _, evs) → evs)
                         (map snd (sortOn fst (HM.toList ticked)))
-                    (results, seamEvents) = reconcileSeams (swsTopology sws) phased
+                    (results, seamEvents) = reconcileSeams topo phased
                     dirty = HM.foldlWithKey' (\acc cc (_, changed) →
                         if changed then HS.insert cc acc else acc
                         ) (swsDirtyChunks sws) results
@@ -105,11 +106,12 @@ siteIn cc terrainV idx = CellSite { csChunk   = cc
 
 -- | Simulate one tick for a single active chunk. The chunk's own stored
 --   key names any solidification event its phases emit (#2481).
-simulateActiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
+simulateActiveChunk ∷ SimTopology → HM.HashMap ChunkCoord SimChunkState
                     → ChunkCoord → SimChunkState
                     → (SimChunkState, Bool, [SolidificationEvent])
-simulateActiveChunk _allChunks coord scs =
+simulateActiveChunk topo _allChunks coord scs =
     let terrainV = scsTerrain scs
+        live = liveCells (simChunkLiveMask topo coord)
         (newActive, newDeco, changed, events, touched) = runST $ do
             mv ← V.thaw (scsActiveFluid scs)
             decoMv ← VU.thaw (scsSideDeco scs)
@@ -124,13 +126,13 @@ simulateActiveChunk _allChunks coord scs =
             touchedMv ← MVU.replicate (V.length (scsActiveFluid scs)) False
 
             -- Phase A: Gravity (downhill flow)
-            phaseGravity coord mv terrainV touchedMv changedRef eventsRef
+            phaseGravity coord live mv terrainV touchedMv changedRef eventsRef
 
             -- Phase B: Lateral pressure equalization
-            phaseLateral coord mv terrainV touchedMv changedRef eventsRef
+            phaseLateral coord live mv terrainV touchedMv changedRef eventsRef
 
             -- Phase C: Waterfall detection + downward transfer
-            phaseWaterfall coord mv decoMv terrainV touchedMv changedRef
+            phaseWaterfall coord live mv decoMv terrainV touchedMv changedRef
                            eventsRef
 
             -- Phase D: Dry-out (remove zero-volume cells)
@@ -281,10 +283,20 @@ reconcileSeams topo results
                 -- its outcome must not depend on hash iteration order.
                 forM_ (sortOn fst (HM.toList results)) $ \(coord, (scsA, _)) →
                     forM_ [ (simSeamNeighbor topo 1 0 coord, eastEdgePairs)
-                          , (simSeamNeighbor topo 0 1 coord, southEdgePairs) ] $ \(nbr, pairs) →
+                          , (simSeamNeighbor topo 0 1 coord, southEdgePairs) ] $ \(nbr, pairs0) →
                         case HM.lookup nbr results of
                             Nothing → pure ()
                             Just (scsB, _) → do
+                                -- A finite arena's closed edge (#2708):
+                                -- a seam pair is a pair of LIVE cells or
+                                -- it does not exist. A partial chunk's
+                                -- absent columns are neither a lower
+                                -- neighbour nor an empty sink, so no pair
+                                -- touching one is ever offered a flow.
+                                let liveA = liveCells (simChunkLiveMask topo coord)
+                                    liveB = liveCells (simChunkLiveMask topo nbr)
+                                    pairs = [ p | p@(ia, ib) ← pairs0
+                                                , liveA ia, liveB ib ]
                                 let mA = mgrids HM.! coord
                                     mB = mgrids HM.! nbr
                                     aA = marrivals HM.! coord
@@ -343,16 +355,17 @@ reconcileSeams topo results
 --   bare terrain top. The difference is already in fluid units, so the
 --   quarter-pressure request divides it without re-scaling.
 phaseGravity ∷ ChunkCoord
+             → (Int → Bool)
              → MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
              → MVU.MVector s Bool
              → STRef s Bool
              → STRef s [SolidificationEvent]
              → ST s ()
-phaseGravity coord mv terrainV touchedMv changedRef eventsRef = do
+phaseGravity coord live mv terrainV touchedMv changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
-    forM_ [0 .. sz - 1] $ \idx → do
+    forM_ (filter live [0 .. sz - 1]) $ \idx → do
         let cell = snap V.! idx
         case cell of
             Nothing → pure ()
@@ -364,6 +377,7 @@ phaseGravity coord mv terrainV touchedMv changedRef eventsRef = do
                     nbrs = cardinalNeighbors lx ly
                     transfers = mapMaybe (\(nx, ny) →
                         if nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
+                           ∧ live (ny * chunkSize + nx)
                         then let nIdx = ny * chunkSize + nx
                                  nTerrZ = terrainV VU.! nIdx
                              in if nTerrZ < terrZ
@@ -408,16 +422,17 @@ phaseGravity coord mv terrainV touchedMv changedRef eventsRef = do
 -- * Phase B: Lateral pressure equalization
 
 phaseLateral ∷ ChunkCoord
+             → (Int → Bool)
              → MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
              → MVU.MVector s Bool
              → STRef s Bool
              → STRef s [SolidificationEvent]
              → ST s ()
-phaseLateral coord mv terrainV touchedMv changedRef eventsRef = do
+phaseLateral coord live mv terrainV touchedMv changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
-    forM_ [0 .. sz - 1] $ \idx → do
+    forM_ (filter live [0 .. sz - 1]) $ \idx → do
         let cell = snap V.! idx
         case cell of
             Nothing → pure ()
@@ -443,7 +458,8 @@ phaseLateral coord mv terrainV touchedMv changedRef eventsRef = do
                 -- this loop's own spending — is what emptied the source.
                 spentRef ← newSTRef (0 ∷ Int)
                 forM_ nbrs $ \(nx, ny) →
-                    when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
+                    when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
+                          ∧ live (ny * chunkSize + nx)) $ do
                         let nIdx = ny * chunkSize + nx
                             nTerrZ = terrainV VU.! nIdx
                         when (nTerrZ ≡ terrZ) $ do
@@ -503,6 +519,7 @@ phaseLateral coord mv terrainV touchedMv changedRef eventsRef = do
 --   painted for it either, since the marker still follows a successful
 --   transfer and nothing else.
 phaseWaterfall ∷ ChunkCoord
+               → (Int → Bool)
                → MV.MVector s (Maybe ActiveFluidCell)
                → MVU.MVector s Word8
                → VU.Vector Int
@@ -510,10 +527,10 @@ phaseWaterfall ∷ ChunkCoord
                → STRef s Bool
                → STRef s [SolidificationEvent]
                → ST s ()
-phaseWaterfall coord mv decoMv terrainV touchedMv changedRef eventsRef = do
+phaseWaterfall coord live mv decoMv terrainV touchedMv changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
-    forM_ [0 .. sz - 1] $ \idx → do
+    forM_ (filter live [0 .. sz - 1]) $ \idx → do
         let cell = snap V.! idx
         case cell of
             Nothing → pure ()
@@ -526,6 +543,7 @@ phaseWaterfall coord mv decoMv terrainV touchedMv changedRef eventsRef = do
                     avail = fromIntegral (afcVolume afc) ∷ Int
                     falls = mapMaybe (\(dirBit, (nx, ny)) →
                         if nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize
+                           ∧ live (ny * chunkSize + nx)
                         then let nIdx = ny * chunkSize + nx
                                  nTerrZ = terrainV VU.! nIdx
                                  drop' = terrZ - nTerrZ
@@ -590,6 +608,14 @@ phaseDryOut mv changedRef = do
                 MV.write mv idx Nothing
                 writeSTRef changedRef True
             _ → pure ()
+
+-- | The per-cell liveness test of one chunk (#2708): every cell on an
+--   unbounded page or a wholly-inside chunk, the in-rectangle columns of
+--   a partial one. A source cell is gated by the same test as the
+--   destination, so even a stray volume in an absent column cannot move.
+liveCells ∷ Maybe (VU.Vector Bool) → Int → Bool
+liveCells Nothing     = const True
+liveCells (Just mask) = \i → mask VU.! i
 
 cardinalNeighbors ∷ Int → Int → [(Int, Int)]
 cardinalNeighbors lx ly =

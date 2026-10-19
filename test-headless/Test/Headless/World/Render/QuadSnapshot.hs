@@ -137,6 +137,7 @@ fixtureTiles ∷ WorldTileData
 fixtureTiles = WorldTileData
     { wtdChunks    = HM.singleton (lcCoord fixtureChunk) fixtureChunk
     , wtdMaxChunks = 1
+    , wtdBounds = Nothing
     }
 
 genParams ∷ WorldGenParams

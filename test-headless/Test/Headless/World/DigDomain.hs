@@ -187,6 +187,7 @@ fixtureTiles ∷ WorldTileData
 fixtureTiles = WorldTileData
     { wtdChunks = HM.singleton (ChunkCoord 0 0) (fixtureChunk (ChunkCoord 0 0))
     , wtdMaxChunks = 200
+    , wtdBounds = Nothing
     }
 
 -- | An arena-shaped page: seed 0 and an empty timeline, which is

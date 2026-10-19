@@ -52,7 +52,7 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
-import World.Tile.Types (WorldTileData(..))
+import World.Tile.Types (WorldTileData(..), tileAvailable)
 import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
 import World.Grid (worldToGrid, worldToGridF, tileSideHeight, tileHeight)
 import World.Generate.Coordinates (canonicalTileFrame)
@@ -133,7 +133,10 @@ pickWorldTile facing zoom zSlice camX camY fbW fbH winW winH
             gy = rawGY + dgy
             hoverPos = ( rawHX + fromIntegral dgx
                        , rawHY + fromIntegral dgy )
-        in case HM.lookup chunkCoord (wtdChunks tileData) of
+        -- #2708: a tile outside a finite arena is never picked, whatever
+        -- its padding column holds.
+        in case (if tileAvailable tileData gx gy
+                   then HM.lookup chunkCoord (wtdChunks tileData) else Nothing) of
             Nothing → tryZ (z - 1)
             Just lc →
                 let idx = columnIndex lx ly

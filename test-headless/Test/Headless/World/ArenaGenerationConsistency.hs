@@ -144,7 +144,7 @@ withArena env act = do
     -- earlier example's teardown from being mistaken for this page's.
     n ← getMonotonicTimeNSec
     let pid = WorldPageId (T.pack ("arena_consistency_" <> show n))
-    sendWorldCommand env (WorldInitArena pid)
+    sendWorldCommand env (WorldInitArena pid Nothing)
     ws ← waitForWorldInit env pid 60
     sendWorldCommand env (WorldInitArenaDone pid)
     visible ← waitUntil 30 $ do

@@ -95,6 +95,7 @@ tilesAt ∷ ChunkCoord → WorldTileData
 tilesAt coord = WorldTileData
     { wtdChunks = HM.fromList [(coord, solidChunk coord)]
     , wtdMaxChunks = 200
+    , wtdBounds = Nothing
     }
 
 -- | A deliberately generous viewport. @zoom@ has to exceed the half-world
@@ -216,7 +217,7 @@ spec = do
 
     it "still reports no tile when the chunk genuinely is not loaded" $
       -- The negative the raw lookup could not tell an alias apart from.
-      pickAt facing (WorldTileData HM.empty 200) aliasTile
+      pickAt facing (WorldTileData HM.empty 200 Nothing) aliasTile
         `shouldBe` Nothing
 
   describe "a degenerate viewport is still rejected" $

@@ -103,7 +103,7 @@ engineSpec =
         it "the chunk map world init wrote equals the one rebuilt from \
            \that page's own wgpSeed" $ \env → do
             let pid = WorldPageId "id_arena_seed_1718"
-            sendWorldCommand env (WorldInitArena pid)
+            sendWorldCommand env (WorldInitArena pid Nothing)
             ws ← waitForWorldInit env pid 60
 
             mParams ← readIORef (wsGenParamsRef ws)
