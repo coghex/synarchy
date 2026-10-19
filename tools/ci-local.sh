@@ -756,6 +756,13 @@ python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
 python3 tools/ci_lane_report.py --self-test
 
+# The synarchy-deps publisher's decisions, Docker-free consumer path and
+# .github/workflows/deps-image.yml wiring (#2864). The publisher itself runs
+# only on master pushes; this is everything about it that can be checked
+# without a registry: an in-process fake stands in, no network, no Docker.
+step "dependency image publisher tests"
+python3 tools/test_ci_deps_image.py
+
 # #2303: only pure fixture and arithmetic checks, never the measurement.
 step "map-page codec measurement self-test"
 python3 tools/test_map_page_codec_measure.py
