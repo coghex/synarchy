@@ -17,7 +17,7 @@ Production profile, `cabal-3.16.1.0`. Every group executed a nonzero number of e
 
 | Group (`--match`) | Examples |
 |---|---|
-| `Scenario.Placement` | 37 |
+| `Scenario.Placement` | 48 |
 | `Scenario.Schema` | 48 |
 | `Scenario.Items` | 52 |
 | `Scenario.Units` | 52 |
@@ -49,7 +49,7 @@ Audits: `persistence_inventory_audit`, `enum_append_only_audit`, `engine_env_cap
 
 ## Mutation checks
 
-Each mutant was applied to the source, the `Scenario.Placement` group run, and the source restored. A
+Ten mutants of the placement adapters and the persistence rules; each was applied to the source, the `Scenario.Placement` group run, and the source restored. A
 mutant counts only if the group fails by an assertion (a compile error is not a kill).
 
 | Mutant | Killed by |
@@ -61,6 +61,9 @@ mutant counts only if the group fails by an assertion (a compile error is not a 
 | location bounds ignored (`Nothing` for the arena) | locations: whole footprint outside the map |
 | variant dropped on capture | structures: derived levels and variants |
 | power node charge ignored (`charge * 0`) | buildings: partly charged battery |
+| a building or location reference held on two pages not flagged by integrity | scenario identity: two buildings / two locations on different pages |
+| a restore keeps the references of buildings it did not produce | scenario identity: a restore keeps only the references of the buildings it produced |
+| a retired building stays in the manager | buildings: retires a building whose item references cannot be held |
 
 ## Retained fixture
 
