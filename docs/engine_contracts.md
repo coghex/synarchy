@@ -7832,6 +7832,13 @@ The invariants, each held by a test of the `Scenario.World` group:
   `replaceChunkForgettingFlora`, then re-seeded into the simulation through
   `syncEditToSim`. A non-resident chunk gets only the log. Nothing steps the
   simulation or settles the authored fluid away; a finite edge stays closed.
+- **Owners, not restatements.** Every limit and formula comes from the runtime's
+  own owner: the growth total and its inverse are `floraTotalAge` /
+  `floraTotalAgeAt` (`World.Flora.Growth`), the deepest representable fluid column
+  is read off `fluidCellToActive`'s clamp, a resident tag target is written through
+  `editTileTags` / `editOccurrenceTags` / `editPlotTags` (a refusal is a
+  diagnostic), and capture reads slopes from the durable log because a live chunk's
+  border slopes are derived and depend on neighbour residency.
 - **Exact fluid and explicit absence.** A tile is wet iff the authored exact
   plane is above its FINAL terrain top, recorded as `WeSetFluidSnapshot`;
   a terrain-changed tile that stays dry is cleared (`WeClearFluidSnapshot`)

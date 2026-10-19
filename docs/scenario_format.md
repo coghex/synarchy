@@ -296,6 +296,11 @@ that names a v2 field still reports it as `UnknownField`.
   second crop plot on a tile rejects the entry. An out-of-domain value, a field that
   does not apply to a crop plot, and `regrowth` on a species with no harvest block
   reject only that field.
+- **Placed directly.** A plant is a physical baseline, so it is placed through the
+  planting edit primitives themselves (`WePlaceFloraWithId` + `WeSetFloraState`) — no
+  planting designation, no tilled-soil requirement and no climate or soil suitability
+  check, which belong to the farming and worldgen paths. Its default z is the column's
+  top solid cell, where the render and pick resolvers put it.
 - **Chop state is not scenario state.** Construction leaves `wpsChopDesignations` empty
   and every constructed instance's `fiChopDesignated` clear; capture ignores both.
 
@@ -1029,15 +1034,20 @@ admission and a neighbour's.
 ### Capture
 
 Capture reads one coherent snapshot (the page's live edit log, resident chunks, crop
-plots, regrowth timers, tag assignments) with no engine handle. It writes every
-supported current value explicitly: a column's top (surface z, material, slope), each
+plots, regrowth timers, tag assignments) with no engine handle; the caller takes it after
+the save barrier has reconciled the simulation with the world, so it never mixes a newer
+simulation grid with stale chunks. It writes every
+supported current value explicitly: a column's top (surface z, material, AUTHORED slope), each
 wet tile's kind and exact eighth-z plane, and each plant's species, tile, z, derived
 total age (see the time basis), health, offsets, variant and regrowth (an explicit `0` for a harvestable
 plant whose timer ran out). A column equal to the base is not a patch unless it carries
 tags; a wet cell whose plane does not rise above its terrain top is dry; an occurrence
 outside the planted id namespace is generated flora the world regenerates, not an
 authored one. A non-resident chunk is read by regenerating the base and replaying its
-durable edits — non-residency is never deletion. Tags on a cell below the surface, a
+durable edits — non-residency is never deletion. **Slopes: authored only.** A live chunk's slope also carries DERIVED bits (the
+border-strip recompute after an admission, which depends on which neighbours are
+resident, and mid-dig masks), which are not scenario state; capture reads the slope
+the durable log records for the column's top cell (`WeSetSlope`), else flat. Tags on a cell below the surface, a
 column whose top material has no registered name, and a column with no solid cell are
 outside the vocabulary and come back as diagnostics (`terrain.tags`, `terrain.material`,
 `terrain.columns`) rather than being written wrongly. Entries are written under
