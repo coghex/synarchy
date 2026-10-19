@@ -1366,6 +1366,118 @@ def test_the_build_resource_is_named_once() -> None:
            "and it is the same resource every probe already declares")
 
 
+# ---------------------------------------------------------------------
+# pause_ai (#2865): only the exact success sentinel counts
+# ---------------------------------------------------------------------
+def pause_ai_with(reply: str):
+    """pause_ai against a one-shot console giving ``reply``: (id, error)."""
+    with FakeConsole(reply) as console:
+        try:
+            return probelib.pause_ai(console.port, timeout=5.0), None
+        except probelib.ProbeSetupError as err:
+            return None, err
+
+
+def test_pause_ai_returns_the_paused_script_id() -> None:
+    print("\n-- pause_ai returns the id the success sentinel names")
+    sid, err = pause_ai_with('"pause_ai:paused:17"')
+    expect(err is None and sid == 17,
+           f"a success reply should yield id 17 (got {sid!r}, {err!r})")
+
+
+def test_pause_ai_refuses_every_other_reply() -> None:
+    print("\n-- pause_ai raises, never returns, for a missing id, a Lua error or a malformed reply")
+    for reply, why in (('"pause_ai:no_loader"', "no init_loader module"),
+                       ('"pause_ai:no_id:nil"', "init_loader loaded no unit_ai"),
+                       ('"pause_ai:error:attempt to call a nil value"', "the chunk raised"),
+                       ("[string \"debug\"]:1: unexpected symbol", "a console error reply"),
+                       ('"pause_ai:paused:"', "a truncated sentinel"),
+                       ('"pause_ai:paused:17x"', "a malformed id"),
+                       ('"ok"', "an unrelated reply"),
+                       ('""', "an empty reply")):
+        sid, err = pause_ai_with(reply)
+        expect(sid is None and isinstance(err, probelib.ProbeSetupError),
+               f"{why}: expected ProbeSetupError (got id {sid!r}, error {err!r})")
+        if err is not None:
+            expect("not paused (reply " in str(err),
+                   f"{why}: the diagnostic names the failure and quotes the reply (got {err})")
+
+
+def test_pause_ai_chunk_reports_each_failure_as_a_reply() -> None:
+    print("\n-- the Lua chunk turns each failure into a reply instead of a silent no-op")
+    lua = probelib._PAUSE_AI_LUA
+    for needle, why in (("pcall(", "a raised error is caught and reported"),
+                        ("'pause_ai:no_loader'", "a missing init_loader is reported"),
+                        ("'pause_ai:no_id:'", "a missing unit_ai id is reported"),
+                        ("math.type(id) ~= 'integer'", "a non-integer id is refused before pauseScript"),
+                        ("engine.pauseScript(id)", "the AI script is what gets paused"),
+                        ("L.scriptId('unit_ai')", "the id comes from init_loader's own export")):
+        expect(needle in lua, f"{why} ({needle!r} missing)")
+    expect(lua.index("math.type(id)") < lua.index("engine.pauseScript(id)"),
+           "the id is checked BEFORE pauseScript, which ignores unknown ids")
+
+
+def test_a_failed_ai_pause_stops_the_engine_it_booted() -> None:
+    print("\n-- persistence_contract_probe.engagement_boot stops its engine when pause_ai fails")
+    import persistence_contract_probe as pcp  # type: ignore
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    quits: list = []
+    saved = {k: getattr(pcp, k) for k in ("boot_probe", "bootstrap_defs", "send",
+                                          "pause_ai", "quit_engine")}
+
+    def fail_pause(_port):
+        raise probelib.ProbeSetupError("pause_ai: the unit_ai script was not paused (reply 'x')")
+
+    def record_quit(port, p=None, **_kw):
+        quits.append((port, p))
+        p.kill()
+        p.wait(timeout=10)
+
+    pcp.boot_probe = lambda root, port, log: proc
+    pcp.bootstrap_defs = lambda port: None
+    pcp.send = lambda port, lua, **_kw: "ok"
+    pcp.pause_ai = fail_pause
+    pcp.quit_engine = record_quit
+    raised = None
+    try:
+        try:
+            pcp.engagement_boot("root", "tmp", 9461, "N")
+        except probelib.ProbeSetupError as err:
+            raised = err
+        expect(raised is not None, "the setup failure propagates to the caller")
+        expect(quits == [(9461, proc)],
+               f"the engine just booted is stopped first, exactly once (got {quits})")
+        expect(proc.poll() is not None, "and its process is gone")
+    finally:
+        for k, v in saved.items():
+            setattr(pcp, k, v)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_a_successful_boot_pauses_the_ai_after_its_scripts() -> None:
+    print("\n-- engagement_boot pauses the AI after loading its scripts, and keeps the engine")
+    import persistence_contract_probe as pcp  # type: ignore
+    calls: list = []
+    saved = {k: getattr(pcp, k) for k in ("boot_probe", "bootstrap_defs", "send",
+                                          "pause_ai", "quit_engine")}
+    sentinel = object()
+    pcp.boot_probe = lambda root, port, log: (calls.append("boot"), sentinel)[1]
+    pcp.bootstrap_defs = lambda port: calls.append("defs")
+    pcp.send = lambda port, lua, **_kw: (calls.append("load"), "ok")[1]
+    pcp.pause_ai = lambda port: (calls.append("pause_ai"), 3)[1]
+    pcp.quit_engine = lambda *a, **k: calls.append("quit")
+    try:
+        got = pcp.engagement_boot("root", "tmp", 9462, "E")
+        expect(got is sentinel, "the booted engine is returned")
+        expect(calls == ["boot", "defs"] + ["load"] * len(pcp.ENG_SCRIPTS) + ["pause_ai"],
+               f"boot, definitions, scripts, then the AI pause, and no quit (got {calls})")
+    finally:
+        for k, v in saved.items():
+            setattr(pcp, k, v)
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_valid_json_decodes()
@@ -1402,6 +1514,11 @@ def main() -> int:
     test_an_engine_that_fails_after_preparation_is_still_a_boot_failure()
     test_the_runner_path_prepares_nothing()
     test_the_build_resource_is_named_once()
+    test_pause_ai_returns_the_paused_script_id()
+    test_pause_ai_refuses_every_other_reply()
+    test_pause_ai_chunk_reports_each_failure_as_a_reply()
+    test_a_failed_ai_pause_stops_the_engine_it_booted()
+    test_a_successful_boot_pauses_the_ai_after_its_scripts()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

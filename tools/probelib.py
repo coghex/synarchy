@@ -29,6 +29,7 @@ Design notes / gotchas handled here so probes don't each rediscover them:
 from __future__ import annotations
 
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -503,6 +504,52 @@ def load_ai_stack(port: int, scripts=AI_STACK) -> None:
     """Load the unit stat/resource/AI Lua stack (headless has no loading screen)."""
     for path, z in scripts:
         send(port, f"engine.loadScript('{path}', {z}); return 'ok'")
+
+
+class ProbeSetupError(RuntimeError):
+    """A probe's engine setup step did not take effect; the probe must abort."""
+
+
+#: The one reply ``pause_ai``'s chunk gives when the pause was issued.
+_PAUSE_AI_OK = re.compile(r"^pause_ai:paused:(\d+)$")
+
+#: Pause the AI script ``scripts/init_loader.lua`` loaded. The chunk reports
+#: every way it can fail as a reply, because ``engine.pauseScript`` itself
+#: returns nothing and silently ignores an unknown id.
+_PAUSE_AI_LUA = (
+    "local ok, r = pcall(function() "
+    "local L = package.loaded['scripts.init_loader']; "
+    "if type(L) ~= 'table' or type(L.scriptId) ~= 'function' then return 'pause_ai:no_loader' end; "
+    "local id = L.scriptId('unit_ai'); "
+    "if math.type(id) ~= 'integer' then return 'pause_ai:no_id:' .. tostring(id) end; "
+    "engine.pauseScript(id); "
+    "return 'pause_ai:paused:' .. id end); "
+    "if not ok then return 'pause_ai:error:' .. tostring(r) end; "
+    "return r"
+)
+
+
+def pause_ai(port: int, timeout: float = 10.0) -> int:
+    """Pause the session's autonomous unit AI and return its script id (#2865).
+
+    Every headless boot runs ``scripts/init_loader.lua``, which loads
+    ``scripts/unit_ai.lua``: without this, a probe's fixture units decide and
+    walk on their own whenever the session is unpaused -- a survival or medic
+    errand may take a damaging drop, so a unit can fall to its death mid-
+    fixture (docs/deflake_diagnoses/persistence_contract_blood_20261018T234500Z.md).
+    A paused script's timed update never runs, so no AI decision and no AI
+    ``unit.moveTo`` is issued; its save registration and broadcast handlers
+    are untouched.
+
+    Raises ``ProbeSetupError`` -- never returns quietly -- when the loader or
+    its id is missing, the chunk raised, or the reply is anything other than
+    the exact success sentinel (an empty, truncated or console-error reply).
+    """
+    reply = send(port, _PAUSE_AI_LUA, timeout=timeout)
+    m = _PAUSE_AI_OK.match(reply.strip())
+    if m is None:
+        raise ProbeSetupError(f"pause_ai: the unit_ai script was not paused (reply {reply!r})")
+    return int(m.group(1))
 
 
 def clear_find_water(port: int, uid: int, seconds: float = 10.0) -> bool:
