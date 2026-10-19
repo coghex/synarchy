@@ -1108,8 +1108,13 @@ The producers today are `location_embark_probe.py`,
 `location_stamp_idempotent_probe.py`, `location_content_probe.py`,
 `location_overlay_probe.py`, `portal_location_probe.py`,
 `portal_ghost_probe.py`, `offscreen_probe.py`,
-`scene_primitives_probe.py` and `persistence_contract_sweep.py`. The
-sweep is the one that is not a probe reporting its own terminal failure:
+`scene_primitives_probe.py`, `persistence_contract_sweep.py`,
+`item_list_widget_probe_checks.py` and
+`unified_transfer_probe_support.py`. Since #2802 the last two are the
+check recorders behind the item-list and unified-transfer probes, so every
+failed check of either is retained by name; the unified-transfer record's
+detail leads with the stage the check is attributed to (`[stage] label`),
+because the record format has no stage field. The sweep is the one that is not a probe reporting its own terminal failure:
 since #2060 its `Checks.ok` records every failed check under the producer
 name `persistence_contract_sweep`, which keeps a sweep-own assertion
 distinguishable from the cross-referenced probes it runs. That list is

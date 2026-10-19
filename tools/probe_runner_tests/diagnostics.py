@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Durable progress and failure records (#1768, #1982) (#2130).
 
-Eleven groups over `probe_runner_diagnostics`, the protocol that
+Sixteen groups over `probe_runner_diagnostics`, the protocol that
 survives a probe the runner had to kill:
 
   progress records round-trip, stay out of the verdict shape, derive the
@@ -13,7 +13,10 @@ survives a probe the runner had to kill:
   outside the ordinary tail and through the parallel presentation;
   no probe #1982 repaired still reports a terminal failure only to
   stderr;
-  a probe's setup exit is recorded and recoverable.
+  a probe's setup exit is recorded and recoverable;
+  the item-list and unified-transfer probes' REAL check recorders emit a
+  record per failed check (unified-transfer under the stage the check is
+  attributed to), through the sequential and `--jobs` presentations (#2802).
 
 `ProgressStub`, the record parsers and `REPAIRED_PROBES` are this
 family's own; `progress_lines` is shared, because the scheduler's
@@ -22,6 +25,7 @@ conflict cases count the same lines.
 from __future__ import annotations
 
 import re
+import subprocess  # noqa: F401 - the direct-run annotation
 import sys
 import time
 from pathlib import Path
@@ -655,6 +659,278 @@ def test_a_probes_setup_exit_is_recorded_and_recoverable() -> None:
            f"with its detail (got {derived!r})")
 
 
+# --------------------------------------------------------------------------
+# The item-list and unified-transfer producers (#2802)
+#
+# Each of these probes printed a failed check once and ended with only a
+# count, so the default 25-line tail kept the check only by luck. The cases
+# below drive each probe's REAL check recorder -- not a synthetic stand-in
+# for it -- from a throwaway driver script through the actual runner, so the
+# producer, the record format and the failure presentation are all the real
+# ones and none can drift from the others unnoticed.
+# --------------------------------------------------------------------------
+SENTINEL = "sentinel: the very first line of this run"
+
+#: Both the sequential and the `--jobs` presentation get the same drivers.
+DRIVER_HEAD = (
+    "import argparse, sys\n"
+    "ap = argparse.ArgumentParser()\n"
+    "ap.add_argument('--port', type=int, default=0)\n"
+    "ap.parse_known_args()\n"
+    f"sys.path.insert(0, {TOOLS_DIR!r})\n"
+    f"print({SENTINEL!r})\n"
+)
+
+
+def add_driver(tree: Tree, name: str, body: str) -> str:
+    """Register a throwaway probe whose body drives a REAL producer."""
+    script = f"{name}_probe.py"
+    # One line per attempt, so a retry is provable from the file.
+    attempts = (f"open({str(tree.root / (name + '.attempts'))!r}, 'a')"
+                ".write('1\\n')\n")
+    (tree.root / "tools" / script).write_text(DRIVER_HEAD + attempts + body)
+    tree.probes.append((name, script, f"driver for {name}"))
+    return script
+
+
+def item_list_driver(*, failing: int, later: int, setup: bool) -> str:
+    """The item-list probe's real `check`/`probe_result`, `failing` times red."""
+    return (
+        "import item_list_widget_probe_checks as checks\n"
+        "checks.check('scenario: a graded check that passes', True)\n"
+        + ("checks.check('setup: the escort stands a few tiles from its "
+           "target', False, 'it spawned 9 tiles away')\n" if setup else "")
+        + f"for i in range({failing}):\n"
+          "    checks.check(f'graded check {i:02d}', False, "
+          "f'got {i} want {i + 1}')\n"
+        + f"for i in range({later}):\n"
+          "    print(f'later ordinary line {i}')\n"
+          "sys.exit(checks.probe_result())\n")
+
+
+def unified_transfer_driver(*, failing: int, later: int, red: bool) -> str:
+    """The unified-transfer probe's real `Checks` and teardown oracle."""
+    return (
+        "import os, tempfile\n"
+        "import unified_transfer_probe_support as support\n"
+        "chk = support.Checks()\n"
+        "chk.enter('setup', 'fixtures')\n"
+        "chk.ok(True, 'setup: a passing fixture check')\n"
+        + ("chk.ok(False, 'setup: no conforming site', 'seed 42 had none')\n"
+           if red else "")
+        + "chk.enter('modeB', 'legs')\n"
+        + f"for i in range({failing}):\n"
+          "    chk.ok(False, f'modeB leg {i:02d}', f'want {i}')\n"
+          "chk.enter('modeA', 'sessions')\n"
+        + ("chk.ok(False, 'modeA session read', 'got None')\n"
+           if red else "chk.ok(True, 'modeA session read')\n")
+        + "with tempfile.TemporaryDirectory() as scratch:\n"
+          "    log = os.path.join(scratch, 'engine.log')\n"
+          "    with open(log, 'w') as handle:\n"
+        + ("        handle.write('integrity diagnostic: dangling ref\\n')\n"
+           if red else "        handle.write('all quiet\\n')\n")
+        # The teardown path: the current stage is modeA, the boundary is
+        # `save`, and the failure must be retained under `save`.
+        + "    support.check_boundary_log(chk, 'save', 'engine A', log, None)\n"
+          "chk.enter('load', 'fresh process')\n"
+        + ("chk.ok(False, 'load: the save stage produced nothing to "
+           "reload')\n" if red else "chk.ok(True, 'load: ok')\n")
+        + f"for i in range({later}):\n"
+          "    print(f'later ordinary line {i}')\n"
+          "print('\\nFINGERPRINT', chk.outcomes(), flush=True)\n"
+          "chk.report()\n"
+          "sys.exit(0 if chk.failed == 0 else 1)\n")
+
+
+def run_driver_directly(tree: Tree, script: str) -> "subprocess.CompletedProcess":
+    import subprocess
+    return subprocess.run([sys.executable, str(tree.root / "tools" / script)],
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_item_list_failed_checks_survive_the_default_tail() -> None:
+    print("\n-- every failed item-list check reaches the default report, "
+          "though 30 failed and 60 later lines followed")
+    tree = Tree()
+    try:
+        failing = 30
+        add_driver(tree, "item_list",
+                   item_list_driver(failing=failing, later=60, setup=True))
+        rc, out = main_with(tree, [])
+        expect(rc == 1, f"the failing run still fails (exit {rc})")
+        expect(f"{failing + 1} recorded failure(s)" in out,
+               f"all {failing + 1} failed checks are counted:\n{out}")
+        for i in range(failing):
+            line = f"graded check {i:02d} — got {i} want {i + 1}"
+            expect(out.count(line) == 1,
+                   f"{line!r} is named exactly once:\n{out}")
+        expect("SETUP FAILURE: setup: the escort stands a few tiles from "
+               "its target — it spawned 9 tiles away" in out,
+               f"the setup label and vocabulary stay identifiable:\n{out}")
+        expect("FAIL: setup:" not in out.replace("SETUP FAILURE: setup:", ""),
+               f"and no setup failure is reported as a graded one:\n{out}")
+        expect(SENTINEL not in out and "later ordinary line 0\n" not in out,
+               f"the complete capture is NOT dumped:\n{out}")
+        expect("later ordinary line 59" in out,
+               f"while the ordinary tail is preserved:\n{out}")
+        expect(probe_runner_diagnostics.FAILURE_MARKER not in out,
+               f"and no raw record is reprinted:\n{out}")
+
+        # More failures than --tail lines, and NOTHING after them: the
+        # displaced case is the count alone, and it is still every one.
+        tree2 = Tree()
+        try:
+            add_driver(tree2, "item_list",
+                       item_list_driver(failing=40, later=0, setup=False))
+            rc2, out2 = main_with(tree2, [])
+            expect(rc2 == 1, f"40 failures still fail the run (exit {rc2})")
+            expect("40 recorded failure(s)" in out2,
+                   f"all 40 are counted though --tail is 25:\n{out2}")
+            expect(all(f"graded check {i:02d} — got" in out2
+                       for i in range(40)),
+                   f"and every one is named:\n{out2}")
+        finally:
+            tree2.cleanup()
+    finally:
+        tree.cleanup()
+
+
+def test_unified_transfer_failed_checks_survive_the_default_tail() -> None:
+    print("\n-- every failed unified-transfer check reaches the default "
+          "report under the stage it is attributed to")
+    tree = Tree()
+    try:
+        failing = 30
+        add_driver(tree, "unified",
+                   unified_transfer_driver(failing=failing, later=60,
+                                           red=True))
+        rc, out = main_with(tree, [])
+        expect(rc == 1, f"the failing run still fails (exit {rc})")
+        # 1 setup + 30 modeB + 1 modeA + 1 boundary-log (save) + 1 load.
+        total = failing + 4
+        expect(f"{total} recorded failure(s)" in out,
+               f"all {total} failed checks are counted:\n{out}")
+        for i in range(failing):
+            line = f"FAIL: [modeB] modeB leg {i:02d} (want {i})"
+            expect(out.count(line) == 1,
+                   f"{line!r} is named exactly once:\n{out}")
+        expect("SETUP FAILURE: [setup] setup: no conforming site "
+               "(seed 42 had none)" in out,
+               f"a setup-stage failure keeps the setup vocabulary:\n{out}")
+        expect("FAIL: [modeA] modeA session read (got None)" in out,
+               f"a later stage's failure is attributed to it:\n{out}")
+        # The ok_at case: the current stage when the oracle ran was modeA.
+        expect("FAIL: [save] engine A: no unexpected persistence integrity "
+               "diagnostic at this boundary (1 in " in out,
+               f"a teardown-path ok_at failure is retained under its "
+               f"TARGET stage, not the current one:\n{out}")
+        expect("[modeA] engine A: no unexpected" not in out,
+               f"and never under the stage that happened to be current:\n{out}")
+        expect("FAIL: [load] load: the save stage produced nothing"
+               in out, f"the load stage is attributed too:\n{out}")
+        expect(SENTINEL not in out and "later ordinary line 0\n" not in out,
+               f"the complete capture is NOT dumped:\n{out}")
+        expect("FINGERPRINT" in out
+               and "--- FAIL: the unified transfer system broke at stage "
+                   "'setup'" in out,
+               f"and the fingerprint and stage report are unchanged:\n{out}")
+        expect(probe_runner_diagnostics.FAILURE_MARKER not in out,
+               f"and no raw record is reprinted:\n{out}")
+    finally:
+        tree.cleanup()
+
+
+def test_the_new_producers_survive_the_parallel_presentation() -> None:
+    print("\n-- both probes' failed checks reach the --jobs failure block "
+          "from the FINAL attempt")
+    tree = Tree()
+    try:
+        add_driver(tree, "item_list",
+                   item_list_driver(failing=30, later=60, setup=True))
+        add_driver(tree, "unified",
+                   unified_transfer_driver(failing=30, later=60, red=True))
+        rc, out = main_with(tree, ["--jobs", "2", "--retries", "1"])
+        expect(rc == 1, f"the failing probes still fail the run (exit {rc})")
+
+        item = out.split("--- item_list_probe.py (FAIL) ---")[-1]
+        item = item.split("--- unified_probe.py (FAIL) ---")[0]
+        expect("31 recorded failure(s)" in item,
+               f"the item-list block carries every record:\n{out}")
+        expect(all(f"graded check {i:02d} — got" in item for i in range(30)),
+               f"and names each of them:\n{out}")
+        expect("SETUP FAILURE: setup: the escort stands" in item,
+               f"with the setup vocabulary:\n{out}")
+
+        unified = out.split("--- unified_probe.py (FAIL) ---")[-1]
+        unified = unified.split("--- item_list_probe.py (FAIL) ---")[0]
+        expect("34 recorded failure(s)" in unified,
+               f"the unified-transfer block carries every record:\n{out}")
+        expect(all(f"FAIL: [modeB] modeB leg {i:02d} (want {i})" in unified
+                   for i in range(30)),
+               f"and names each, with its stage:\n{out}")
+        expect("FAIL: [save] engine A: no unexpected" in unified
+               and "SETUP FAILURE: [setup]" in unified,
+               f"including the ok_at stage and the setup kind:\n{out}")
+        for name in ("item_list", "unified"):
+            tried = (tree.root / f"{name}.attempts").read_text().split()
+            expect(len(tried) == 2,
+                   f"{name} really was retried ({tried!r})")
+        expect(SENTINEL not in out
+               and probe_runner_diagnostics.FAILURE_MARKER not in out,
+               f"nothing is dumped and no raw record reprinted:\n{out}")
+    finally:
+        tree.cleanup()
+
+
+def test_the_real_unified_transfer_catch_all_is_retained() -> None:
+    print("\n-- the unified-transfer probe's own `main` catch-all (an engine "
+          "that dies at boot) is retained, with the exit status unchanged")
+    tree = Tree()
+    try:
+        add_driver(tree, "boot", (
+            "import unified_transfer_probe as probe\n"
+            "def die(*args, **kwargs):\n"
+            "    raise SystemExit(3)\n"
+            "probe.boot_offscreen = die\n"
+            "sys.exit(probe.main())\n"))
+        # Pad the capture so only the record can carry the failure.
+        rc, out = main_with(tree, [])
+        expect(rc == 1, f"the run fails (exit {rc})")
+        expect("SETUP FAILURE: [setup] the engine could not be started, or "
+               "died, during stage 'setup' (SystemExit: 3)" in out,
+               f"the real main's SystemExit catch-all is retained under "
+               f"its stage:\n{out}")
+        expect("1 recorded failure(s)" in out,
+               f"as exactly one record:\n{out}")
+    finally:
+        tree.cleanup()
+
+
+def test_a_passing_run_of_either_producer_gains_no_records() -> None:
+    print("\n-- a passing run acquires no failure records, and the exit "
+          "status stays 0")
+    tree = Tree()
+    try:
+        scripts = (
+            add_driver(tree, "item_list",
+                       item_list_driver(failing=0, later=3, setup=False)),
+            add_driver(tree, "unified",
+                       unified_transfer_driver(failing=0, later=3, red=False)))
+        for script in scripts:
+            done = run_driver_directly(tree, script)
+            expect(done.returncode == 0,
+                   f"{script} passes (exit {done.returncode}):\n"
+                   f"{done.stdout}{done.stderr}")
+            expect(probe_runner_diagnostics.FAILURE_MARKER not in done.stdout,
+                   f"and emits no failure record:\n{done.stdout}")
+        rc, out = main_with(tree, [])
+        expect(rc == 0, f"through the runner too (exit {rc}):\n{out}")
+        expect("recorded failure(s)" not in out,
+               f"with no failure block:\n{out}")
+    finally:
+        tree.cleanup()
+
+
 #: The paragraph in `tools/README.md` that inventories the producers of
 #: durable failure records, anchored on its opening words.
 README_PRODUCER_ANCHOR = "The producers today are"
@@ -742,5 +1018,10 @@ TESTS = (
     test_failed_checks_survive_the_parallel_presentation,
     test_no_repaired_probe_still_reports_a_failure_to_stderr,
     test_a_probes_setup_exit_is_recorded_and_recoverable,
+    test_item_list_failed_checks_survive_the_default_tail,
+    test_unified_transfer_failed_checks_survive_the_default_tail,
+    test_the_new_producers_survive_the_parallel_presentation,
+    test_the_real_unified_transfer_catch_all_is_retained,
+    test_a_passing_run_of_either_producer_gains_no_records,
     test_the_readme_names_every_failure_record_producer,
 )

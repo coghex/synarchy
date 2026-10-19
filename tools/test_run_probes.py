@@ -7,7 +7,7 @@ every group, in the order this suite has always run them, the same
 assertions, the same failure accounting and the same final summary.
 
 What this module holds is only that -- selection, ordered aggregation and
-reporting. It carries no test body and names no test group. The 81 groups
+reporting. It carries no test body and names no test group. The 91 groups
 live with six owners, five of them mirroring the production owners #2074
 split `run_probes.py` into, so the suite divides exactly where the code
 under test does:
@@ -27,7 +27,9 @@ under test does:
   `scheduler`    20  aggregate exits, conflict scheduling, #2275's
                      longest-expected-first dispatch, retries, Ctrl-C,
                      and the synthetic fixtures' own validation;
-  `diagnostics`  11  the durable progress and failure record protocols.
+  `diagnostics`  16  the durable progress and failure record protocols,
+                     including the item-list and unified-transfer
+                     producers' real check recorders (#2802).
 
 Each owner declares its own ordered `TESTS` under
 `tools/probe_runner_tests/`, and `support` there holds what two or more of
@@ -112,14 +114,15 @@ FAMILIES = {
 #: would still pass after a registry entry was deleted.
 NON_OWNER_MODULES = {"__init__", "support"}
 
-#: The group count each family carries: 2 + 16 + 23 + 14 + 20 + 11 = 86.
+#: The group count each family carries: 2 + 16 + 23 + 14 + 20 + 16 = 91.
 #: The issue pinned 1 + 13 + 20 + 14 + 14 + 11 = 73 at 837792c; #2035
 #: landed `test_a_failing_readme_audit_fails_this_gate` beside the audit
 #: it extracted, which is why `readme` is 2; #2275 added two
 #: expected-duration groups to `registry` and five dispatch-order groups
 #: to `scheduler`; and #2274 added three save-codec preflight groups to
 #: `resources`, one overlap group to `scheduler` and one declaration
-#: group to `registry`. A FLOOR, not an exact count, so a legitimately added
+#: group to `registry`; #2802 added five producer groups to `diagnostics`.
+#: A FLOOR, not an exact count, so a legitimately added
 #: group joins without an edit here; a family declaring FEWER is a
 #: truncation and is refused. Raising it alongside an addition is what
 #: keeps the floor able to catch that addition's own later loss.
@@ -129,7 +132,7 @@ MINIMUM_GROUPS = {
     "resources": 23,
     "lifecycle": 14,
     "scheduler": 20,
-    "diagnostics": 11,
+    "diagnostics": 16,
 }
 
 #: The aggregate's order, as which family fragment runs when. Twenty-two
