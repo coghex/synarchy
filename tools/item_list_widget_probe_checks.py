@@ -3,7 +3,7 @@
 `tools/item_list_widget_probe.py` (#2046).
 
 The lowest layer of the split: it imports no sibling module and no
-engine surface, and owns the one piece of state the whole run shares —
+engine surface (only the runner's leaf failure-record protocol), and owns the one piece of state the whole run shares —
 the failure accumulator every scenario writes through `check` and the
 facade reads back through `probe_result`.
 
@@ -24,7 +24,25 @@ module's implementation detail.
 """
 from __future__ import annotations
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from probe_runner_diagnostics import FailureEmitter
+
 failures = 0
+
+# Every failed check is ALSO a durable failure record (#2802), so the
+# runner's default `--tail` presentation names it however much output
+# followed. Constructed at module scope: the elapsed offset each record
+# carries is measured from the probe's own start.
+FAILURE = FailureEmitter("item_list_widget_probe")
+
+# A scenario that cannot establish its fixture labels its check with this
+# prefix (#1911). The record keeps the full label in its detail AND uses
+# the `setup` kind, so a fixture failure stays distinguishable from a
+# graded one in the retained output.
+SETUP_LABEL_PREFIX = "setup:"
 
 
 def probe_result() -> int:
@@ -45,6 +63,11 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
           + (f" — {detail}" if detail and not ok else ""))
     failures += not ok
+    if not ok:
+        # Only a FAILED check emits: a passing run gains no output.
+        record = FAILURE.setup if name.startswith(SETUP_LABEL_PREFIX) \
+            else FAILURE.check
+        record(name + (f" — {detail}" if detail else ""))
     return ok
 
 

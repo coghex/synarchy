@@ -21,10 +21,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import boot
+from probe_runner_diagnostics import FailureEmitter
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SLOT = "probe_unified_transfer"
+
+# The producer name its durable failure records carry (#2802).
+FAILURE_PRODUCER = "unified_transfer_probe"
 
 # --------------------------------------------------------------------------
 # Persistence integrity oracle (#1487)
@@ -198,9 +202,19 @@ class SetupError(RuntimeError):
 # --------------------------------------------------------------------------
 class Checks:
     """Every check is attributed to one of the eight STAGES, so a failure
-    says WHICH part of the system broke instead of only that it did."""
+    says WHICH part of the system broke instead of only that it did.
 
-    def __init__(self) -> None:
+    Every FAILED check is also a durable failure record (#2802). `failure`
+    is a parameter, as in the persistence sweep's `Checks` (#2060), so the
+    engine-free tests can drive the real emitter; omitting it constructs
+    this probe's own. The record's detail carries the stage the check is
+    ATTRIBUTED to (`[stage] label (detail)`), because the record wire
+    format has no stage field, and a check recorded against the `setup`
+    stage uses the `setup` kind."""
+
+    def __init__(self, failure: FailureEmitter | None = None) -> None:
+        self.failure = (FailureEmitter(FAILURE_PRODUCER)
+                        if failure is None else failure)
         self.failed = 0
         self.stage = STAGES[0]
         self.by_stage: dict[str, list[int]] = {s: [0, 0] for s in STAGES}
@@ -226,6 +240,13 @@ class Checks:
               + (f"  ({detail})" if detail and not cond else ""), flush=True)
         if not cond:
             self.failed += 1
+            # `self.stage` is already the attributed stage here: `ok_at`
+            # sets it to its target before delegating, so a teardown-path
+            # boundary-log failure is retained under save/load.
+            record = (self.failure.setup if self.stage == "setup"
+                      else self.failure.check)
+            record(f"[{self.stage}] {label}"
+                   + (f" ({detail})" if detail else ""))
         return cond
 
     def ok_at(self, stage: str, cond: bool, label: str,
