@@ -43,8 +43,10 @@ import http.server
 import io
 import json
 import os
+import random
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -1254,17 +1256,22 @@ class FetchTests(unittest.TestCase):
                              ("/tmp/elsewhere", False), ("/etc/passwd", False), ("/", False)):
             self.assertEqual(deps.within_prefixes(real, path), inside, path)
 
-    def test_a_host_ancestor_redirected_after_resolution_is_refused(self):
-        # Resolution happens once per layer; if the directories above a
-        # prefix change afterwards, the parent re-check still confines.
-        confinement = deps.Confinement(self.root)
+    def test_a_host_ancestor_redirected_after_the_prefix_is_open_changes_nothing(self):
+        # The prefix is opened once and everything is resolved from that
+        # descriptor, so a host directory above it swapped for a symlink
+        # afterwards cannot redirect a later write.
         elsewhere = self.root / "elsewhere"
         (elsewhere / "cabal").mkdir(parents=True)
-        (self.root / "usr").mkdir()
-        (self.root / "usr/local").symlink_to(elsewhere)
-        with self.assertRaisesRegex(deps.DepsImageError, "outside its prefix"):
-            confinement.locate(PurePosixPath("usr/local/cabal/x"), create=True)
+        with deps.Jail(self.root) as jail:
+            self.assertIsNotNone(jail.prefix_fd("usr/local/cabal", True))
+            real = self.root / "usr/local"
+            real.rename(self.root / "usr/local-moved")
+            real.symlink_to(elsewhere)
+            parent, name = jail.parent_of(("usr", "local", "cabal", "x"), True)
+            os.close(os.open(name, os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=parent))
+            os.close(parent)
         self.assertEqual(list((elsewhere / "cabal").iterdir()), [])
+        self.assertTrue((self.root / "usr/local-moved/cabal/x").exists())
 
     def test_tampered_blob_fails_its_digest(self):
         layer = make_layer([("usr/local/cabal/x", "file", "x", 0o644)])
@@ -1314,6 +1321,193 @@ def apt_lists(text: str) -> list[list[str]]:
         lists.append(sorted(word for word in re.findall(r"^\s+([a-z0-9][a-z0-9.+-]*)\s*\\?$",
                                                         block, re.M)))
     return lists
+
+
+class HostileArchiveTests(unittest.TestCase):
+    """Whatever a layer names, nothing outside the two prefixes is created,
+    modified, replaced or deleted (#2874: the third tar-extraction
+    confinement finding, so the class, not one case). The fixture puts
+    canaries where every escape lands: siblings of the prefixes inside the
+    root, the root's parent, and a directory outside the root reached by an
+    absolute path."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.scratch = tempfile.TemporaryDirectory()      # the layers, apart from the fixture
+        self.base = Path(self.tmp.name)
+        self.root = self.base / "root"
+        self.outside = self.base / "outside"
+        self.build_fixture()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        self.scratch.cleanup()
+
+    def build_fixture(self):
+        for directory in (self.root / "usr/local/victim/sub", self.root / "usr/local/cabalx",
+                          self.root / "etc", self.root / "usr/bin", self.outside / "sub"):
+            directory.mkdir(parents=True)
+        for path in (self.root / "usr/local/victim/keep", self.root / "usr/local/victim/sub/keep",
+                     self.root / "usr/local/cabalx/keep", self.root / "etc/passwd",
+                     self.root / "usr/bin/tool", self.outside / "keep",
+                     self.outside / "sub/keep", self.base / "sibling"):
+            path.write_text("keep")
+        os.link(self.root / "etc/passwd", self.root / "etc/passwd-hard")
+        (self.root / "usr/local/victim/link").symlink_to("keep")
+        (self.root / "usr/local/victim/sub").chmod(0o755)
+
+    def outside_state(self):
+        """Everything not inside a prefix: type, mode, content, mtime, link
+        count and target. The two host directories above the prefixes are
+        compared by mode only (creating a prefix legitimately touches their
+        times)."""
+        prefixes = (self.root / "usr/local/cabal", self.root / "usr/local/.ghcup")
+        state = {}
+        for path in sorted(self.base.rglob("*")):
+            if any(path == prefix or prefix in path.parents for prefix in prefixes):
+                continue
+            info = path.lstat()
+            entry = [stat.S_IFMT(info.st_mode), info.st_mode & 0o7777]
+            if path in (self.root / "usr", self.root / "usr/local"):
+                entry.append(sorted(c.name for c in path.iterdir()
+                                    if c.name not in ("cabal", ".ghcup")))
+            else:
+                entry += [info.st_nlink, int(info.st_mtime)]
+                if stat.S_ISREG(info.st_mode):
+                    entry.append(path.read_bytes())
+                elif stat.S_ISLNK(info.st_mode):
+                    entry.append(os.readlink(path))
+            state[str(path.relative_to(self.base))] = entry
+        return state
+
+    def apply(self, *layers):
+        """Apply layers in order; a refusal is fine, anything else is not."""
+        for index, layer in enumerate(layers):
+            path = Path(self.scratch.name) / f"layer{index}.tar.gz"
+            path.write_bytes(layer)
+            try:
+                deps.apply_layer(path, self.root)
+            except deps.DepsImageError:
+                break
+
+    def assert_contained(self, *layers, msg=""):
+        before = self.outside_state()
+        self.apply(*layers)
+        after = self.outside_state()
+        self.assertEqual(after, before, msg or "something outside the prefixes changed")
+
+    def test_the_decoded_whiteout_traversal_the_reviewer_reproduced(self):
+        self.assert_contained(make_layer([("usr/local/cabal/.wh...", "file", "", 0o644)]))
+        self.assertTrue((self.root / "usr/local/victim/keep").exists())
+
+    def test_whiteouts_of_dot_dotdot_and_empty_are_refused(self):
+        # with the prefixes present, where a decoded `..` would reach `usr/local`
+        path = Path(self.scratch.name) / "base.tar.gz"
+        path.write_bytes(make_layer([("usr/local/cabal/a", "file", "a", 0o644),
+                                     ("usr/local/.ghcup/b", "file", "b", 0o644)]))
+        deps.apply_layer(path, self.root)
+        for name in ("usr/local/cabal/.wh..", "usr/local/cabal/.wh...", "usr/local/cabal/.wh.",
+                     "usr/local/.wh...", "usr/.wh..", ".wh.."):
+            with self.subTest(name=name):
+                path = Path(self.scratch.name) / "layer.tar.gz"
+                path.write_bytes(make_layer([(name, "file", "", 0o644)]))
+                with self.assertRaises(deps.DepsImageError):
+                    deps.apply_layer(path, self.root)
+                self.assertTrue((self.root / "usr/local/victim/keep").exists())
+                self.assertTrue((self.root / "usr/local/victim/sub/keep").exists())
+
+    def test_hard_link_targets_are_decoded_like_every_other_name(self):
+        victim = str(self.root / "usr/local/victim/keep")
+        for source in ("usr/local/cabal/../victim/keep", "/usr/local/victim/keep", victim,
+                       "usr/local/cabal//x", "usr/local/cabal/./x", "usr/local/cabal/..", "../x"):
+            with self.subTest(source=source):
+                self.assert_contained(make_layer([
+                    ("usr/local/cabal/h", "hardlink", source, 0o644)]), msg=source)
+                self.assertFalse(os.path.lexists(self.root / "usr/local/cabal/h"))
+
+    def test_nested_symlink_chains_are_never_followed(self):
+        outside = str(self.outside)
+        for chain in ((("l1", "l2"), ("l2", "../victim")),
+                      (("l1", "l2"), ("l2", "l3"), ("l3", outside)),
+                      (("l1", "."), ("l2", "l1/.."), ("l3", "l2/../../victim"))):
+            entries = [(f"usr/local/cabal/{name}", "symlink", target, 0o777)
+                       for name, target in chain]
+            for tail in ("l1/pwn", "l1/sub/pwn", "l1/.wh.keep", "l1/sub/.wh..wh..opq",
+                         "l1/d"):
+                kind = "dir" if tail.endswith("/d") or tail == "l1/d" else "file"
+                with self.subTest(chain=chain, tail=tail):
+                    self.assert_contained(make_layer(entries), make_layer([
+                        (f"usr/local/cabal/{tail}", kind, "x", 0o755)]))
+                    shutil.rmtree(self.root / "usr/local/cabal", ignore_errors=True)
+
+    def test_absolute_and_dotted_entry_names_are_refused(self):
+        for name in ("/usr/local/cabal/x", "/etc/passwd", "usr/local/cabal/./../x",
+                     "usr/local//cabal/x", "usr/local/cabal/x/../../../victim/keep"):
+            with self.subTest(name=name):
+                self.assert_contained(make_layer([(name, "file", "pwn", 0o644)]), msg=name)
+
+    def test_duplicate_entries_with_different_types(self):
+        self.assert_contained(make_layer([
+            ("usr/local/cabal/x", "dir", None, 0o755),
+            ("usr/local/cabal/x/y", "file", "1", 0o644),
+            ("usr/local/cabal/x", "symlink", "../victim", 0o777),
+            ("usr/local/cabal/x/keep", "file", "pwn", 0o644),
+            ("usr/local/cabal/x", "dir", None, 0o700),
+            ("usr/local/cabal/x", "file", "f", 0o644)]))
+
+    # -- the property -----------------------------------------------------
+    NAMES = ("..", ".", "", "esc", "victim", "cabal", ".ghcup", "a", "x", "keep", "sub", "etc",
+             ".wh.", ".wh..", ".wh...", ".wh.keep", ".wh.sub", ".wh.esc", ".wh.victim",
+             ".wh..wh..opq", ".wh..wh.plnk", ".wh.cabal", ".wh.local", "l1", "l2")
+    ROOTS = ("usr/local/cabal", "usr/local/.ghcup", "usr/local", "usr", "", ".",
+             "./usr/local/cabal", "/usr/local/cabal", "usr/local/cabalx", "usr/local/victim")
+    TARGETS = ("../victim", "../../victim", "../../../outside", "..", ".", "/", "l1", "l2", "a",
+               "esc", "x/../..", "usr/local/victim", "usr/local/victim/keep",
+               "usr/local/cabal/a", "usr/local/cabal/l1", "etc/passwd", "usr/bin/tool",
+               "/etc/passwd", "usr/local/cabal/../victim/keep", "usr/local/cabal", "")
+
+    def entry(self, rng):
+        parts = [rng.choice(self.ROOTS)] + [rng.choice(self.NAMES)
+                                            for _ in range(rng.randint(0, 4))]
+        name = "/".join(part for part in parts if part != "" or rng.random() < 0.15)
+        if rng.random() < 0.35:
+            # a whiteout or opaque marker whose DECODED victim may be `.`, `..` or empty
+            name += "/.wh." + rng.choice(("..", ".", "", "..wh..opq", "keep", "esc", "x"))
+        if rng.random() < 0.15:
+            name += "/"
+        target = rng.choice(self.TARGETS + (str(self.outside), str(self.root / "usr/local/victim"),
+                                            str(self.root / "usr/local/victim/keep")))
+        kind = rng.choice(("file", "file", "dir", "dir", "symlink", "symlink", "hardlink",
+                           "hardlink", "fifo"))
+        if kind == "hardlink" and rng.random() < 0.5:
+            target = rng.choice(self.ROOTS) + "/" + rng.choice(self.NAMES)
+        return (name, kind, "x" if kind == "file" else target, rng.choice((0o644, 0o755, 0o700, 0o777)))
+
+    def test_no_hostile_archive_touches_anything_outside_the_prefixes(self):
+        count = int(os.environ.get("HOSTILE_ARCHIVE_CASES", "600"))
+        for seed in range(count):
+            rng = random.Random(seed)
+            # the prefixes exist (half the time): a hostile name can only reach
+            # outside through a prefix that is there to be addressed
+            layers = ([make_layer([("usr/local/cabal/", "dir", None, 0o755),
+                                   ("usr/local/cabal/a", "file", "a", 0o644),
+                                   ("usr/local/.ghcup/", "dir", None, 0o755)])]
+                      if rng.random() < 0.5 else [])
+            for _ in range(rng.randint(1, 3)):
+                entries = [self.entry(rng) for _ in range(rng.randint(2, 9))]
+                # a chain of links to a planted name makes later entries hostile
+                if rng.random() < 0.6:
+                    entries.insert(0, ("usr/local/cabal/esc", "symlink",
+                                       rng.choice(self.TARGETS), 0o777))
+                try:
+                    layers.append(make_layer(entries))
+                except (ValueError, tarfile.TarError):
+                    continue
+            self.tearDown()
+            self.setUp()
+            before = self.outside_state()
+            self.apply(*layers)
+            self.assertEqual(self.outside_state(), before, f"seed {seed}")
 
 
 class WiringTests(unittest.TestCase):

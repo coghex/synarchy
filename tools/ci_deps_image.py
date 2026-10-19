@@ -66,7 +66,12 @@ operating system is never touched. Every write and whiteout must resolve
 inside one of those two prefixes as resolved under the root (not merely
 inside the root, which is vacuous for the default `/`); symlinks in the
 image are written as links but never followed, so a path through one, or a
-prefix that is a symlink, makes it refuse the layer (`Confinement`). `check` compares a checkout's resolved
+prefix that is a symlink, makes it refuse the layer. Confinement is by
+descriptor (`Jail`): every archive-supplied name is decoded to plain
+components (never empty, `.`, `..` or containing a separator, after every
+decoding step), and every create, remove, link and chmod is a `dir_fd` call
+resolved component by component with `O_NOFOLLOW` from a prefix opened once,
+so there is no path to re-resolve and no check-then-use gap. `check` compares a checkout's resolved
 plan with the image's metadata by compiler, platform and non-local unit
 IDs, which do not contain local paths, unlike plan.json's raw hash.
 
@@ -84,6 +89,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -980,28 +986,92 @@ def resolve_tip_identity(git: Git, docker_factory: Callable[[str], "Docker"],
 # ---------------------------------------------------------------------------
 # Docker-free consumption
 
-def _member_path(name: str) -> PurePosixPath:
-    path = PurePosixPath(name.lstrip("/"))
-    parts = [part for part in path.parts if part not in ("", ".")]
-    if any(part == ".." for part in parts):
-        raise DepsImageError(f"layer entry {name!r} escapes the root")
-    return PurePosixPath(*parts) if parts else PurePosixPath(".")
+def _component(name: str, what: str) -> str:
+    """One decoded path component: never empty, `.` or `..`, and never
+    containing a separator or NUL. Every name the archive supplies is
+    decoded into components, and every component passes here, whatever
+    produced it (an entry name, a whiteout's victim, a link target): a
+    decoding step such as stripping `.wh.` can turn a harmless-looking name
+    into `..`."""
+    if name in ("", ".", "..") or "/" in name or "\0" in name:
+        raise DepsImageError(f"{what}: component {name!r} is not a plain name")
+    return name
 
 
-def _under(path: PurePosixPath, prefixes: tuple[str, ...]) -> bool:
-    return any(path == PurePosixPath(p) or PurePosixPath(p) in path.parents
-               for p in prefixes)
+def _member_parts(name: str, what: str = "layer entry") -> tuple[str, ...]:
+    """An archive member name as a tuple of plain components. A name is
+    relative: absolute paths, empty or `.` or `..` components anywhere are
+    refused; only a leading `./` and a trailing `/` (a directory) are
+    normalised away. `./` alone is the archive root: no components."""
+    if "\0" in name or name.startswith("/"):
+        raise DepsImageError(f"{what} {name!r} is absolute or malformed")
+    parts = name.split("/")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if parts and parts[0] == ".":
+        parts = parts[1:]
+    return tuple(_component(part, f"{what} {name!r}") for part in parts)
 
 
-def _ancestor_of_prefix(path: PurePosixPath, prefixes: tuple[str, ...]) -> list[str]:
-    return [p for p in prefixes if path in PurePosixPath(p).parents]
+def _prefix_parts(prefixes: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    return {prefix: tuple(PurePosixPath(prefix).parts) for prefix in prefixes}
 
 
-def _remove(target: Path) -> None:
-    if target.is_symlink() or target.is_file():
-        target.unlink()
-    elif target.is_dir():
-        shutil.rmtree(target)
+def _prefix_of(parts: tuple[str, ...], by_prefix: dict[str, tuple[str, ...]]) -> Optional[str]:
+    """The prefix `parts` is, or is below."""
+    for prefix, prefix_parts in by_prefix.items():
+        if parts[:len(prefix_parts)] == prefix_parts:
+            return prefix
+    return None
+
+
+def _ancestor_prefixes(parts: tuple[str, ...],
+                       by_prefix: dict[str, tuple[str, ...]]) -> list[str]:
+    """The prefixes that lie strictly below `parts`."""
+    return [prefix for prefix, prefix_parts in by_prefix.items()
+            if len(parts) < len(prefix_parts) and prefix_parts[:len(parts)] == parts]
+
+
+_OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_OPEN_NEW = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+             | getattr(os, "O_CLOEXEC", 0))
+
+
+def _open_dir(parent_fd: int, name: str, what: str) -> int:
+    """Open the directory `name` of `parent_fd`, never through a symlink."""
+    try:
+        return os.open(name, _OPEN_DIR, dir_fd=parent_fd)
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        try:
+            symlink = stat.S_ISLNK(os.stat(name, dir_fd=parent_fd, follow_symlinks=False).st_mode)
+        except OSError:
+            symlink = False
+        if symlink:
+            raise DepsImageError(f"{what} passes through the symlink {name!r}; "
+                                 "symlinks are never followed") from error
+        raise DepsImageError(f"{what}: {name!r} is not a directory") from error
+
+
+def _remove_at(parent_fd: int, name: str) -> None:
+    """Remove `name` from `parent_fd`: a symlink or file is unlinked, a
+    directory is emptied and removed, all by descriptor-relative calls that
+    never follow a link. Absent is fine."""
+    try:
+        mode = os.stat(name, dir_fd=parent_fd, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(mode):
+        fd = _open_dir(parent_fd, name, "removal")
+        try:
+            for child in os.listdir(fd):
+                _remove_at(fd, child)
+        finally:
+            os.close(fd)
+        os.rmdir(name, dir_fd=parent_fd)
+    else:
+        os.unlink(name, dir_fd=parent_fd)
 
 
 def is_within(real_root: str, real_path: str) -> bool:
@@ -1038,69 +1108,172 @@ def within_prefixes(real_prefixes: Iterable[str], real_path: str) -> bool:
     return any(is_within(prefix, real_path) for prefix in real_prefixes)
 
 
-class Confinement:
+class Jail:
     """Where one layer's entries may land: inside the prefixes, through real
-    directories only.
+    directories only, by descriptor-relative operations.
 
-    Symlinks in the image are written as links (leaves) but never followed.
-    An entry or whiteout whose path passes through a symlink at any
-    directory component inside a prefix, or a prefix root that is or would
-    become a symlink, is refused: a layer extracted from a real filesystem
-    never addresses a path through a symlink, so only a hostile or broken
-    layer does. Whatever was checked, the parent is resolved once more
-    before any write and must lie inside its own resolved prefix."""
+    Each prefix is opened once, with `O_NOFOLLOW`, from its host parent (the
+    directories above a prefix, `/usr/local` say, belong to the host and are
+    taken as the host configured them; the prefix itself must not be a
+    symlink). Everything the archive names is then resolved component by
+    component FROM that descriptor with `O_NOFOLLOW`, and every create,
+    remove, link and chmod is a `dir_fd` call on the parent so reached. There
+    is no path string to re-resolve, so no check-then-use gap: a component
+    swapped for a symlink after a check is refused when it is opened, and no
+    operation can address anything but the entry it names inside the prefix
+    tree held by the descriptor. Symlinks in the image are written as links
+    and never followed."""
 
     def __init__(self, root: Path, prefixes: tuple[str, ...] = CONSUMER_PREFIXES):
         self.root = root
         self.prefixes = tuple(prefixes)
+        self.by_prefix = _prefix_parts(self.prefixes)
+        # raises for a prefix that is a symlink or resolves outside the root
         self.real = resolved_prefixes(root, self.prefixes)
+        self._fds: dict[str, int] = {}
 
-    def prefix_of(self, relative: PurePosixPath) -> str:
-        for prefix in self.prefixes:
-            if relative == PurePosixPath(prefix) or PurePosixPath(prefix) in relative.parents:
-                return prefix
-        raise DepsImageError(f"{relative} is outside {', '.join(self.prefixes)}")
+    def close(self) -> None:
+        for fd in self._fds.values():
+            os.close(fd)
+        self._fds.clear()
 
-    def locate(self, relative: PurePosixPath, create: bool = False) -> Path:
-        """The host path of `relative`, which lies in a prefix. Every
-        existing directory component from the prefix root down to the
-        entry's parent must be a real directory; nothing is created until
-        that holds. With `create`, the missing ones are then made one at a
-        time, never through a symlink."""
-        prefix = self.prefix_of(relative)
-        prefix_parts = PurePosixPath(prefix).parts
-        host_prefix = self.root.joinpath(*prefix_parts)
-        below = relative.parts[len(prefix_parts):]
-        current = host_prefix
-        for part in (None,) + tuple(below[:-1]):
-            current = current if part is None else current / part
-            if current.is_symlink():
-                raise DepsImageError(
-                    f"layer path {relative} passes through the symlink {current}; "
-                    "symlinks are never followed")
-            if os.path.lexists(current) and not current.is_dir():
-                raise DepsImageError(f"layer path {relative}: {current} is not a directory")
-        leaf = host_prefix.joinpath(*below)
-        self._check_parent(prefix, relative, leaf.parent, bool(below))
+    def __enter__(self) -> "Jail":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # -- the prefixes ------------------------------------------------------
+    def _host_parent(self, prefix: str, create: bool) -> Optional[int]:
+        parent = self.root.joinpath(*self.by_prefix[prefix][:-1])
         if create:
-            host_prefix.parent.mkdir(parents=True, exist_ok=True)
-            current = host_prefix
-            for part in (None,) + tuple(below[:-1]) if below else ():
-                current = current if part is None else current / part
-                if not os.path.lexists(current):
-                    os.mkdir(current)
-            self._check_parent(prefix, relative, leaf.parent, bool(below))
-        return leaf
-
-    def _check_parent(self, prefix: str, relative: PurePosixPath, parent: Path,
-                      inside: bool) -> None:
+            parent.mkdir(parents=True, exist_ok=True)
         real_parent = os.path.realpath(parent)
-        expected = self.real[prefix]
-        ok = (within_prefixes([expected], real_parent) if inside
-              else real_parent == os.path.dirname(expected))
-        if not ok:
-            raise DepsImageError(f"layer path {relative} would be written in {real_parent}, "
-                                 f"outside its prefix {expected}")
+        if not is_within(os.path.realpath(self.root), real_parent):
+            raise DepsImageError(f"{parent} resolves to {real_parent}, outside {self.root}")
+        try:
+            return os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+        except FileNotFoundError:
+            return None
+
+    def prefix_fd(self, prefix: str, create: bool) -> Optional[int]:
+        """The descriptor of a prefix root (shared: do not close), or
+        `None` when it does not exist and `create` is false."""
+        if prefix in self._fds:
+            return self._fds[prefix]
+        parent = self._host_parent(prefix, create)
+        if parent is None:
+            return None
+        name = self.by_prefix[prefix][-1]
+        try:
+            try:
+                fd = _open_dir(parent, name, f"prefix {prefix}")
+            except FileNotFoundError:
+                if not create:
+                    return None
+                os.mkdir(name, 0o777, dir_fd=parent)
+                fd = _open_dir(parent, name, f"prefix {prefix}")
+        except DepsImageError as error:
+            raise DepsImageError(f"{error}; a prefix is a real directory, never a symlink") from None
+        finally:
+            os.close(parent)
+        self._fds[prefix] = fd
+        return fd
+
+    def remove_prefix_root(self, prefix: str) -> None:
+        """Delete a whole prefix (a whiteout of the prefix or its ancestor)."""
+        parent = self._host_parent(prefix, False)
+        self.forget(prefix)
+        if parent is None:
+            return
+        try:
+            _remove_at(parent, self.by_prefix[prefix][-1])
+        finally:
+            os.close(parent)
+
+    def forget(self, prefix: str) -> None:
+        fd = self._fds.pop(prefix, None)
+        if fd is not None:
+            os.close(fd)
+
+    # -- entries below a prefix -------------------------------------------
+    def parent_of(self, parts: tuple[str, ...], create: bool
+                  ) -> Optional[tuple[int, str]]:
+        """The (open parent directory descriptor, leaf name) of an entry
+        strictly below a prefix, or `None` when a parent is absent and
+        `create` is false. The caller closes the descriptor."""
+        prefix = _prefix_of(parts, self.by_prefix)
+        assert prefix is not None and len(parts) > len(self.by_prefix[prefix])
+        root_fd = self.prefix_fd(prefix, create)
+        if root_fd is None:
+            return None
+        below = parts[len(self.by_prefix[prefix]):]
+        current = os.dup(root_fd)
+        what = "layer path " + "/".join(parts)
+        try:
+            for component in below[:-1]:
+                try:
+                    following = _open_dir(current, component, what)
+                except FileNotFoundError:
+                    if not create:
+                        os.close(current)
+                        return None
+                    os.mkdir(component, 0o777, dir_fd=current)
+                    following = _open_dir(current, component, what)
+                os.close(current)
+                current = following
+        except BaseException:
+            os.close(current)
+            raise
+        return current, below[-1]
+
+    def open_directory(self, parts: tuple[str, ...]) -> Optional[int]:
+        """An open descriptor of the directory `parts` (a prefix root or
+        below), or `None` when it is absent or a leaf symlink or file.
+        Components above the leaf must be real directories."""
+        prefix = _prefix_of(parts, self.by_prefix)
+        assert prefix is not None
+        if parts == self.by_prefix[prefix]:
+            fd = self.prefix_fd(prefix, False)
+            return None if fd is None else os.dup(fd)
+        located = self.parent_of(parts, False)
+        if located is None:
+            return None
+        parent, name = located
+        try:
+            return _open_dir(parent, name, "layer path " + "/".join(parts))
+        except (FileNotFoundError, DepsImageError):
+            return None                       # absent, or a leaf symlink or file
+        finally:
+            os.close(parent)
+
+    def remove(self, parts: tuple[str, ...]) -> None:
+        prefix = _prefix_of(parts, self.by_prefix)
+        assert prefix is not None
+        if parts == self.by_prefix[prefix]:
+            self.remove_prefix_root(prefix)
+            return
+        located = self.parent_of(parts, False)
+        if located is None:
+            return
+        parent, name = located
+        try:
+            _remove_at(parent, name)
+        finally:
+            os.close(parent)
+
+    def clear(self, parts: tuple[str, ...]) -> None:
+        """Empty the directory `parts` (an opaque whiteout). A leaf that is
+        a symlink or file is left for this layer's own entry to replace;
+        it is never followed to clear its target."""
+        fd = self.open_directory(parts)
+        if fd is None:
+            return
+        try:
+            for child in os.listdir(fd):
+                _remove_at(fd, child)
+        finally:
+            os.close(fd)
 
 
 def apply_layer(layer: Path, root: Path,
@@ -1110,85 +1283,148 @@ def apply_layer(layer: Path, root: Path,
     Whiteouts first (they delete what LOWER layers wrote), then the
     entries; directory modes and times last, so writing into a directory
     does not disturb them. Device nodes and entries outside the prefixes
-    are not written. Every path, whiteouts included, goes through
-    `Confinement`. Returns the number of entries written."""
-    confinement = Confinement(root, prefixes)
-    prefix_paths = {PurePosixPath(prefix) for prefix in prefixes}
-    with tarfile.open(layer, "r:*") as archive:
-        members = archive.getmembers()
-        for member in members:
-            path = _member_path(member.name)
-            base = path.name
-            if base == ".wh..wh..opq":
-                directory = path.parent
-                targets = ([directory] if _under(directory, prefixes)
-                           else [PurePosixPath(p) for p in _ancestor_of_prefix(directory, prefixes)])
-                for target in targets:
-                    host = confinement.locate(target)
-                    # A symlink here is replaced by this layer's directory
-                    # entry; it is never followed to clear its target.
-                    if host.is_dir() and not host.is_symlink():
-                        for child in list(host.iterdir()):
-                            _remove(child)
-            elif base.startswith(".wh."):
-                victim = path.parent / base[len(".wh."):]
-                victims = ([victim] if _under(victim, prefixes)
-                           else [PurePosixPath(p) for p in _ancestor_of_prefix(victim, prefixes)])
-                for target in victims:
-                    host = confinement.locate(target)
-                    if os.path.lexists(host):
-                        _remove(host)
-        written = 0
-        directories: list[tuple[PurePosixPath, Path, tarfile.TarInfo]] = []
-        for member in members:
-            path = _member_path(member.name)
-            if path.name.startswith(".wh.") or not _under(path, prefixes):
+    are not written. Every name is decoded to plain components first
+    (`_member_parts`, `_component`), and every operation goes through a
+    `Jail` by descriptor. Returns the number of entries written."""
+    try:
+        return _apply_layer(layer, root, prefixes)
+    except OSError as error:
+        # an operating-system refusal (name too long, not empty, exists) on
+        # a hostile layer is a refusal, not a crash
+        raise DepsImageError(f"layer {layer.name}: {error}") from error
+
+
+def _apply_layer(layer: Path, root: Path, prefixes: tuple[str, ...]) -> int:
+    with Jail(root, prefixes) as jail, tarfile.open(layer, "r:*") as archive:
+        by_prefix = jail.by_prefix
+        members = [(member, _member_parts(member.name)) for member in archive.getmembers()]
+        for member, parts in members:
+            if not parts:
                 continue
-            if path in prefix_paths and not member.isdir():
-                raise DepsImageError(f"layer entry {path} is a prefix root but not a "
-                                     "directory; a prefix is never a symlink or a file")
-            host = confinement.locate(path, create=True)
-            mode = member.mode & 0o1777
+            base = parts[-1]
+            directory = parts[:-1]
+            if base == ".wh..wh..opq":
+                if _prefix_of(directory, by_prefix) is not None:
+                    jail.clear(directory)
+                else:
+                    for prefix in _ancestor_prefixes(directory, by_prefix):
+                        jail.clear(by_prefix[prefix])
+            elif base.startswith(".wh..wh."):
+                continue                      # other archive metadata, never a victim
+            elif base.startswith(".wh."):
+                victim = directory + (_component(base[len(".wh."):],
+                                                 f"whiteout {member.name!r}"),)
+                if _prefix_of(victim, by_prefix) is not None:
+                    jail.remove(victim)
+                else:
+                    for prefix in _ancestor_prefixes(victim, by_prefix):
+                        jail.remove_prefix_root(prefix)
+        written = 0
+        directories: list[tuple[tuple[str, ...], tarfile.TarInfo]] = []
+        for member, parts in members:
+            if (not parts or parts[-1].startswith(".wh.")
+                    or _prefix_of(parts, by_prefix) is None):
+                continue
+            prefix = _prefix_of(parts, by_prefix)
+            if parts == by_prefix[prefix]:
+                if not member.isdir():
+                    raise DepsImageError(f"layer entry {member.name} is a prefix root but not "
+                                         "a directory; a prefix is never a symlink or a file")
+                jail.prefix_fd(prefix, True)
+                directories.append((parts, member))
+                written += 1
+                continue
+            located = jail.parent_of(parts, True)
+            assert located is not None
+            parent, name = located
+            try:
+                _write_entry(jail, archive, member, parts, parent, name)
+            finally:
+                os.close(parent)
             if member.isdir():
-                # A symlink in the way is replaced, never followed: setting
-                # the directory's mode below must not reach outside the root.
-                if os.path.lexists(host) and (host.is_symlink() or not host.is_dir()):
-                    _remove(host)
-                host.mkdir(exist_ok=True)
-                directories.append((path, host, member))
-            elif member.issym():
-                if os.path.lexists(host):
-                    _remove(host)
-                os.symlink(member.linkname, host)
-                os.utime(host, (member.mtime, member.mtime), follow_symlinks=False)
-            elif member.islnk():
-                source = _member_path(member.linkname)
-                if not _under(source, prefixes):
-                    raise DepsImageError(f"hard link {path} -> {source} leaves the prefixes")
-                source_host = confinement.locate(source)
-                if os.path.lexists(host):
-                    _remove(host)
-                os.link(source_host, host, follow_symlinks=False)
-            elif member.isreg():
-                if os.path.lexists(host):
-                    _remove(host)
-                extracted = archive.extractfile(member)
-                assert extracted is not None
-                with extracted, open(host, "wb") as out:
-                    shutil.copyfileobj(extracted, out, 1 << 20)
-                os.chmod(host, mode)
-                os.utime(host, (member.mtime, member.mtime))
-            else:
-                raise DepsImageError(f"layer entry {path} is a device or FIFO; refusing")
+                directories.append((parts, member))
             written += 1
-        for path, host, member in reversed(directories):
-            # Located again: a later entry may have replaced a directory
-            # above this one with a symlink.
-            if confinement.locate(path) != host or host.is_symlink():
-                raise DepsImageError(f"directory {host} was replaced by a symlink")
-            os.chmod(host, member.mode & 0o1777)
-            os.utime(host, (member.mtime, member.mtime))
+        for parts, member in reversed(directories):
+            # Opened again by descriptor: a later entry may have replaced a
+            # directory above this one with a symlink.
+            if parts == by_prefix[_prefix_of(parts, by_prefix)]:
+                fd = jail.prefix_fd(_prefix_of(parts, by_prefix), False)
+                fd = None if fd is None else os.dup(fd)
+            else:
+                located = jail.parent_of(parts, False)
+                fd = None
+                if located is not None:
+                    parent, name = located
+                    try:
+                        fd = _open_dir(parent, name, "layer path " + "/".join(parts))
+                    finally:
+                        os.close(parent)
+            if fd is None:
+                raise DepsImageError(f"directory {'/'.join(parts)} was replaced by a symlink")
+            try:
+                os.fchmod(fd, member.mode & 0o1777)
+                os.utime(fd, (member.mtime, member.mtime))
+            finally:
+                os.close(fd)
     return written
+
+
+def _write_entry(jail: Jail, archive: tarfile.TarFile, member: tarfile.TarInfo,
+                 parts: tuple[str, ...], parent: int, name: str) -> None:
+    """Write one non-prefix-root entry as the leaf `name` of `parent`."""
+    if member.isdir():
+        # A symlink or file in the way is replaced, never followed: the
+        # mode set at the end must not reach outside the prefix.
+        try:
+            mode = os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            mode = None
+        if mode is not None and not stat.S_ISDIR(mode):
+            _remove_at(parent, name)
+        try:
+            os.mkdir(name, 0o777, dir_fd=parent)
+        except FileExistsError:
+            pass
+    elif member.issym():
+        target = member.linkname
+        if not target or "\0" in target:
+            raise DepsImageError(f"symlink {member.name!r} has an empty or malformed target")
+        # The target is stored verbatim and never followed: every later
+        # operation resolves component by component with O_NOFOLLOW.
+        _remove_at(parent, name)
+        os.symlink(target, name, dir_fd=parent)
+        os.utime(name, (member.mtime, member.mtime), dir_fd=parent, follow_symlinks=False)
+    elif member.islnk():
+        source = _member_parts(member.linkname, "hard link target")
+        if not source or _prefix_of(source, jail.by_prefix) is None:
+            raise DepsImageError(f"hard link {member.name} -> {member.linkname} "
+                                 "leaves the prefixes")
+        if source == jail.by_prefix[_prefix_of(source, jail.by_prefix)]:
+            raise DepsImageError(f"hard link {member.name} names a prefix root")
+        located = jail.parent_of(source, False)
+        if located is None:
+            raise DepsImageError(f"hard link {member.name}: source {member.linkname} is absent")
+        source_parent, source_name = located
+        try:
+            _remove_at(parent, name)
+            os.link(source_name, name, src_dir_fd=source_parent, dst_dir_fd=parent,
+                    follow_symlinks=False)
+        except OSError as error:
+            raise DepsImageError(f"hard link {member.name}: {error}") from error
+        finally:
+            os.close(source_parent)
+    elif member.isreg():
+        extracted = archive.extractfile(member)
+        assert extracted is not None
+        _remove_at(parent, name)
+        fd = os.open(name, _OPEN_NEW, 0o600, dir_fd=parent)
+        with extracted, os.fdopen(fd, "wb") as out:
+            shutil.copyfileobj(extracted, out, 1 << 20)
+            out.flush()
+            os.fchmod(out.fileno(), member.mode & 0o1777)
+            os.utime(out.fileno(), (member.mtime, member.mtime))
+    else:
+        raise DepsImageError(f"layer entry {member.name} is a device or FIFO; refusing")
 
 
 def parse_reference(reference: str) -> tuple[str, str, str]:
