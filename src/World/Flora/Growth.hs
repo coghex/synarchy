@@ -33,6 +33,7 @@ module World.Flora.Growth
     ( -- * Derived growth state
       FloraGrowth(..)
     , floraGrowth
+    , growthRate
     , instanceLifespan
     , deadWindowDays
       -- * Phase / stage selection

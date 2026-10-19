@@ -264,6 +264,19 @@ applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth instanceId) lc
                 }
         in lc { lcFlora = FloraChunkData
                     (inst : fcdInstances (lcFlora lc)) }
+-- | #2711: overwrite ONE plant's physical state, found by its id. The
+--   planting edit that placed it is earlier in the same chunk's log
+--   (same tile, so same chunk); an id the chunk does not hold changes
+--   nothing, which keeps replay total over a damaged overlay.
+applyEdit (WeSetFloraState gx gy iid z offU offV variant health baseline) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let set fi | fiInstanceId fi ≡ iid =
+                       fi { fiZ = z, fiOffU = offU, fiOffV = offV
+                          , fiVariant = variant, fiHealth = health
+                          , fiAge = baseline }
+                   | otherwise = fi
+        in lc { lcFlora = FloraChunkData (map set (fcdInstances (lcFlora lc))) }
 applyEdit (WeSetCell gx gy z mat) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =

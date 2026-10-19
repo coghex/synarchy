@@ -306,7 +306,40 @@ data ExpectedPage = ExpectedPage
       -- ^ #2708: the page's finite-arena (width, height). Absent before
       --   world-pages v15 and read as NONE (expandable), which is what
       --   every migrated older payload restores.
+    , epScenarioFlora ∷ !(Maybe [Text])
+      -- ^ #2711: the page's physical plant state as canonical lines
+      --   ('scenarioFloraLines'). Absent before world-edits v6, which
+      --   pins NOTHING (an older fixture may legitimately carry planted
+      --   crops it never declared), rather than asserting none.
     }
+
+-- | #2711: the page's physical plant state as canonical text lines —
+--   the SAME rendering @app-save-codec@'s canonical summary emits, kept
+--   beside the type it is compared against.
+scenarioFloraLines ∷ PageSnapshot → [Text]
+scenarioFloraLines page =
+    [ T.unwords [ "planting", tshowI x, tshowI y, refName ref
+                , tshowI (fromIntegral (floraInstanceIdToLua i)), tshowI d, T.pack (show w) ]
+    | (i, x, y, ref, d, w) ← L.sortOn (\(i, _, _, _, _, _) → floraInstanceIdToLua i)
+        [ (i, x, y, ref, d, w) | es ← HM.elems (pgsEdits page), WePlaceFloraRef x y ref d w i ← es ] ]
+    ⧺ [ T.unwords [ "state", tshowI x, tshowI y, tshowI (fromIntegral (floraInstanceIdToLua i))
+                  , tshowI z, T.pack (show u), T.pack (show v), tshowI (fromIntegral var)
+                  , T.pack (show h), T.pack (show a) ]
+      | (i, x, y, z, u, v, var, h, a) ← L.sortOn (\(i, _, _, _, _, _, _, _, _) → floraInstanceIdToLua i)
+          [ (i, x, y, z, u, v, var, h, a)
+          | es ← HM.elems (pgsEdits page), WeSetFloraState x y i z u v var h a ← es ] ]
+    ⧺ [ T.unwords [ "plot", tshowI x, tshowI y, refName (cpSpecies cp)
+                  , tshowI (cpPlantedDay cp), T.pack (show (cpHealth cp)) ]
+      | ((x, y), cp) ← L.sortOn fst (HM.toList (pgsCropPlots page)) ]
+    ⧺ [ T.unwords [ "harvest", tshowI (fromIntegral (floraInstanceIdToLua i)), T.pack (show secs) ]
+      | (i, secs) ← L.sortOn (floraInstanceIdToLua ∘ fst) (HM.toList (pgsFloraHarvests page)) ]
+    ⧺ [ T.unwords ["cursor", tshowI (fromIntegral (pgsPlantedFloraCursor page))] ]
+  where
+    tshowI ∷ Int → Text
+    tshowI = T.pack ∘ show
+    refName ref = case ref of
+        FloraByName n     → n
+        FloraByLegacyId k → "legacy:" <> T.pack (show k)
 
 -- | The same aggregates, read off a DECODED page. Kept beside the type
 --   it is compared against so the two cannot drift; the emitting half
@@ -484,6 +517,7 @@ instance Aeson.FromJSON ExpectedPage where
                 (,) <$> e .: "id" <*> e .: "ref"))
         <*> (o .:? "arenaBounds" ≫= traverse (Aeson.withObject "arenaBounds" $ \e →
                 (,) <$> e .: "width" <*> e .: "height"))
+        <*> o .:? "scenarioFlora"
 
 -- | One remembered PORTABLE container (#2512), as a fixture's expected
 --   summary declares it. Every learned value is optional on the wire
@@ -761,6 +795,14 @@ manifestFixturesSpec =
                                     (\ab → (arenaWidth ab, arenaHeight ab))
                                         <$> wgpArenaBounds (pgsGenParams page)
                                         `shouldBe` epArenaBounds ep
+
+                                    -- #2711: the physical plant state,
+                                    -- pinned when the fixture declares it,
+                                    -- so a v6 fixture proves every offset,
+                                    -- variant, health, age baseline, plot
+                                    -- and regrowth timer survives decode.
+                                    forM_ (epScenarioFlora ep) $ \want →
+                                        scenarioFloraLines page `shouldBe` want
 
                                     -- #2520: pinned exactly when the
                                     -- fixture declares it, so a v4

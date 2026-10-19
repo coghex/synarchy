@@ -52,7 +52,7 @@ decodeContent sourceVersion o = do
     local (\e → e { envBounds = md ≫= mapTileBounds }) $ do
         terrain    ← family "terrain" decodeTerrain
         fluids     ← family "fluids" decodeFluid
-        flora      ← family "flora" decodeFlora
+        flora      ← family "flora" (decodeFlora sourceVersion)
         structures ← family "structures" decodeStructure
         buildings  ← family "buildings" decodeBuilding
         locations  ← family "locations" decodeLocation
@@ -282,8 +282,16 @@ decodeFluid = entry NodeFluid Nothing ["rect", "tiles", "fluid", "surface_z"] []
 
 -- ** Flora and structures
 
-decodeFlora ∷ Text → A.Value → Dec (Maybe FloraEntry)
-decodeFlora = entry NodeFlora Nothing ["species", "x", "y", "z", "age", "health"] [] $
+-- | A flora entry. The four physical fields v2 added (@offset_u@,
+--   @offset_v@, @variant@, @regrowth@) are part of the vocabulary only for
+--   a document that declared version 2 or later: a version-1 file that
+--   names one still reports it as an unknown field, exactly as the
+--   release that wrote it did (the v1→v2 migration is the identity, so
+--   the source version is what keeps v1's vocabulary closed).
+decodeFlora ∷ Int → Text → A.Value → Dec (Maybe FloraEntry)
+decodeFlora sourceVersion = entry NodeFlora Nothing
+    (["species", "x", "y", "z", "age", "health"]
+     ⧺ (if sourceVersion ≥ 2 then ["offset_u", "offset_v", "variant", "regrowth"] else [])) [] $
     \p o sid tags → do
         cat ← catalog
         sp ← definition p "species" o
@@ -302,7 +310,16 @@ decodeFlora = entry NodeFlora Nothing ["species", "x", "y", "z", "age", "health"
                 z ← optField p "z" pInt o
                 age ← optField p "age" (pFloatMin 0) o
                 health ← optField p "health" (pFloatIn 0 1) o
-                pure (noRefs (FloraEntry sid tags s xv yv z age health))
+                -- the v2 fields are not read at all from a v1 document: the
+                -- key check above already reported them as unknown
+                let v2 ∷ Dec (Authored β) → Dec (Authored β)
+                    v2 act = if sourceVersion ≥ 2 then act else pure Omitted
+                offU ← v2 (optField p "offset_u" (pFloatIn (-0.5) 0.5) o)
+                offV ← v2 (optField p "offset_v" (pFloatIn (-0.5) 0.5) o)
+                variant ← v2 (optField p "variant" (fmap fromIntegral ∘ pIntIn 0 3) o)
+                regrowth ← v2 (optField p "regrowth" (pFloatMin 0) o)
+                pure (noRefs (FloraEntry sid tags s xv yv z age health
+                                         offU offV variant regrowth))
 
 -- | The piece kind a structure slot draws from its pack.
 slotKind ∷ StructureSlot → Text

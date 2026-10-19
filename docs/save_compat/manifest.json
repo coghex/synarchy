@@ -3767,6 +3767,113 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z15-arena-finite.expected.json"
         }
       ]
+    },
+    {
+      "id": "z16-scenario-world",
+      "description": "A scenario world-content session (#2711) as the current build writes it: the finite 20x10 arena page 'finite_arena' of z15 carrying a page's PHYSICAL PLANT STATE in world-edits v6 \u2014 a white_oak and a tomato_plant as named planting edits (planted-id namespace) each followed by a WeSetFloraState edit that records the offsets, visual variant, health (0.5 for the oak) and the stored age baseline the planting edit cannot (it replays offsets 0, health 1, variant 0), a wheat crop plot, an oak regrowth timer (game seconds remaining), the planted-id cursor above both ids, and tile / occurrence / plot gameplay tags. Seeded through synarchy-save-codec seed-tags because no public verb installs scenario content yet (SCN-13 composes it). z15 and every older fixture are the no-state (world-edits v5 and older) counterparts.",
+      "declaredAt": "2026-10-19",
+      "declaredByIssue": 2711,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current build: World.Save.Component.PageEdits.worldEditsCodec (v6) decodes WeSetFloraStateD; no migration (this IS the current format)",
+      "components": [
+        {
+          "id": "buildings",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "container-knowledge",
+          "required": false,
+          "version": 2
+        },
+        {
+          "id": "core-session",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "craft-bills",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "lua.building_spawn",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "lua.unit_ai",
+          "required": true,
+          "version": 10
+        },
+        {
+          "id": "metadata",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "portable-knowledge",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "power-nodes",
+          "required": true,
+          "version": 2
+        },
+        {
+          "id": "texture-palette",
+          "required": true,
+          "version": 1
+        },
+        {
+          "id": "transfer-orders",
+          "required": false,
+          "version": 1
+        },
+        {
+          "id": "unit-sim",
+          "required": true,
+          "version": 3
+        },
+        {
+          "id": "units",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-activity",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-edits",
+          "required": true,
+          "version": 6
+        },
+        {
+          "id": "world-pages",
+          "required": true,
+          "version": 15
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z16-scenario-world",
+          "path": "test-headless/data/save-compat/z16-scenario-world.bin",
+          "kind": "complete-session",
+          "sha256": "89aa1928ac06f5bc0c3bbce6d3a749f5495a3fa2f0764353cd873736cc680b7f",
+          "sizeBytes": 20300,
+          "provenance": "Derived from the tracked z15-arena-finite fixture (generated through the real headless engine and engine.saveWorld on the #2708 build; see its provenance) by synarchy-save-codec seed-tags, which decoded the whole session through the real decoder, appended the planting and WeSetFloraState edits, the crop plot, the regrowth timer and the tag assignments named by the spec (retained as docs/pr-proofs/issue-2711-make-z16.py.txt) to page finite_arena, raised the page's planted-id cursor above the seeded ids, and re-encoded it through the same encoder an ordinary save uses, writing world-edits v6; then the metadata timestamp was normalized. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "/Users/vincentcoghlan/worktrees/coghex/synarchy/issue-2711-scenario-world/test-headless/data/save-compat/z16-scenario-world.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

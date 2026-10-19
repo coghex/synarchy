@@ -31,6 +31,7 @@ import Unit.Types (UnitId)
 import Item.Knowledge (PortableObservation)
 import Gameplay.Tags.Edit (TagEdit, TagEditResult)
 import Gameplay.Tags.Types (TagTarget)
+import Scenario.World.Types (ScenarioWorldRequest, WorldInstallReply)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -524,6 +525,15 @@ data WorldCommand
         --   page incarnation the caller resolved; a page destroyed or
         --   re-initialised since answers 'TagEditNoTarget' and is not
         --   touched, so stale queued work can never reach a replacement.
+    | WorldInstallScenarioContent !WorldPageId !ChunkGeneration !ScenarioWorldRequest
+                                  !WorldInstallReply
+        -- ^ #2711: materialize a scenario's terrain, fluid and flora on one
+        --   page, answered on the reply. Queued for the same reason
+        --   'WorldEditPageTags' is: the world thread is the only writer of
+        --   the tile store the commit replaces chunks in and of the page's
+        --   tag store. Carries the page incarnation the caller resolved; a
+        --   page replaced or destroyed since answers
+        --   'Scenario.World.Types.WorldInstallNotAdmitted' and is untouched.
     | WorldRecordPortableKnowledge !Word64 !Word64 !(Maybe PortableObservation)
         -- ^ #2512: fold ONE portable container's observation into
         --   'World.State.Types.wmPortableKnowledge' — @Just@ a measured

@@ -47,6 +47,7 @@ module World.Save.Component.PageEdits
     , WorldEditDTOv1(..)
     , WorldEditDTOv2(..)
     , WorldEditDTOv3(..)
+    , WorldEditDTOv4(..)
       -- * The @"world-edits"@ wire shapes
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
@@ -58,6 +59,8 @@ module World.Save.Component.PageEdits
     , WorldEditsDTOv3(..)
     , PageEditsDTOv4(..)
     , WorldEditsDTOv4(..)
+    , PageEditsDTOv5(..)
+    , WorldEditsDTOv5(..)
       -- * The component
     , worldEditsCodec
     , validateWorldEdits
@@ -66,6 +69,7 @@ module World.Save.Component.PageEdits
     , migrateWorldEditsV2
     , migrateWorldEditsV3
     , migrateWorldEditsV4
+    , migrateWorldEditsV5
     ) where
 
 import UPrelude
@@ -129,6 +133,37 @@ data WorldEditDTO
       -- v2 log (tools/enum_append_only_audit.py records each
       -- constructor's payload, not just its name).
     | WePlaceFloraRefD !Int !Int !FloraRef !Int !Float !FloraInstanceId
+      -- #2711: appended at the END on the same terms. One plant's PHYSICAL
+      -- state — tile, identity, z, sub-tile offsets, visual variant,
+      -- health and the stored age baseline — written after the planting
+      -- edit that placed it. The planting form carries no offsets,
+      -- variant, health or non-zero baseline, so a scenario's authored
+      -- values need a durable home; this names the plant by its id and
+      -- carries no species, so no catalog translation is needed.
+    | WeSetFloraStateD !Int !Int !FloraInstanceId !Int !Float !Float !Word8
+                       !Float !Float
+    deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN @world-edits@ v4/v5 edit sum (#2711): the sum as it stood
+--   before @WeSetFloraStateD@ was appended, preserved verbatim for
+--   decode-only backward compatibility. v4 and v5 carried the same sum
+--   (#2705 changed the page slice, not the edits); every retained
+--   legacy page slice nests THIS type, never the live one, so a later
+--   append to the live sum cannot reach a shipped payload.
+data WorldEditDTOv4
+    = WeDeleteTileDv4 !Int !Int
+    | WeSetFluidTileDv4 !Int !Int !FluidType
+    | WeAddTileDv4 !Int !Int !MaterialId
+    | WeSetSlopeDv4 !Int !Int !Int !Word8
+    | WeSetCellDv4 !Int !Int !Int !MaterialId
+    | WeSetStructureDv4 !Int !Int !Word8 !Int !Int !Int
+    | WeClearStructureDv4 !Int !Int !Word8
+    | WeSetVegDv4 !Int !Int !Int !Word8
+    | WePlaceFloraDv4 !Int !Int !FloraId !Int !Float
+    | WeSetFluidSnapshotDv4 !Int !Int !FluidType !Int
+    | WeClearFluidSnapshotDv4 !Int !Int
+    | WePlaceFloraWithIdDv4 !Int !Int !FloraId !Int !Float !FloraInstanceId
+    | WePlaceFloraRefDv4 !Int !Int !FloraRef !Int !Float !FloraInstanceId
     deriving (Show, Eq, Generic, Serialize)
 
 -- | The FROZEN pre-#2520 edit sum (@world-edits@ v3), preserved
@@ -268,23 +303,44 @@ migrateWorldEditDTOv2 e = case e of
 --   and only here, so a v1 or v2 payload reaching this hop through the
 --   two migrations above is scaled once, on this step, and a v4 payload
 --   does not take the hop at all.
-migrateWorldEditDTOv3 ∷ WorldEditDTOv3 → WorldEditDTO
+migrateWorldEditDTOv3 ∷ WorldEditDTOv3 → WorldEditDTOv4
 migrateWorldEditDTOv3 e = case e of
-    WeDeleteTileDv3 a b            → WeDeleteTileD a b
-    WeSetFluidTileDv3 a b f        → WeSetFluidTileD a b f
-    WeAddTileDv3 a b m             → WeAddTileD a b m
-    WeSetSlopeDv3 a b c w          → WeSetSlopeD a b c w
-    WeSetCellDv3 a b c m           → WeSetCellD a b c m
-    WeSetStructureDv3 a b w c d f  → WeSetStructureD a b w c d f
-    WeClearStructureDv3 a b w      → WeClearStructureD a b w
-    WeSetVegDv3 a b c w            → WeSetVegD a b c w
-    WePlaceFloraDv3 a b fl d fx    → WePlaceFloraD a b fl d fx
+    WeDeleteTileDv3 a b            → WeDeleteTileDv4 a b
+    WeSetFluidTileDv3 a b f        → WeSetFluidTileDv4 a b f
+    WeAddTileDv3 a b m             → WeAddTileDv4 a b m
+    WeSetSlopeDv3 a b c w          → WeSetSlopeDv4 a b c w
+    WeSetCellDv3 a b c m           → WeSetCellDv4 a b c m
+    WeSetStructureDv3 a b w c d f  → WeSetStructureDv4 a b w c d f
+    WeClearStructureDv3 a b w      → WeClearStructureDv4 a b w
+    WeSetVegDv3 a b c w            → WeSetVegDv4 a b c w
+    WePlaceFloraDv3 a b fl d fx    → WePlaceFloraDv4 a b fl d fx
     WeSetFluidSnapshotDv3 a b f z  →
-        WeSetFluidSnapshotD a b f (exactSurfaceOfZ z)
-    WeClearFluidSnapshotDv3 a b    → WeClearFluidSnapshotD a b
+        WeSetFluidSnapshotDv4 a b f (exactSurfaceOfZ z)
+    WeClearFluidSnapshotDv3 a b    → WeClearFluidSnapshotDv4 a b
     WePlaceFloraWithIdDv3 a b fl d fx i →
-        WePlaceFloraWithIdD a b fl d fx i
+        WePlaceFloraWithIdDv4 a b fl d fx i
     WePlaceFloraRefDv3 a b ref d fx i →
+        WePlaceFloraRefDv4 a b ref d fx i
+
+-- | v4/v5 → current (#2711). Every constructor crosses unchanged: the
+--   current sum only gained a trailing constructor, which no older
+--   payload can carry.
+migrateWorldEditDTOv4 ∷ WorldEditDTOv4 → WorldEditDTO
+migrateWorldEditDTOv4 e = case e of
+    WeDeleteTileDv4 a b            → WeDeleteTileD a b
+    WeSetFluidTileDv4 a b f        → WeSetFluidTileD a b f
+    WeAddTileDv4 a b m             → WeAddTileD a b m
+    WeSetSlopeDv4 a b c w          → WeSetSlopeD a b c w
+    WeSetCellDv4 a b c m           → WeSetCellD a b c m
+    WeSetStructureDv4 a b w c d f  → WeSetStructureD a b w c d f
+    WeClearStructureDv4 a b w      → WeClearStructureD a b w
+    WeSetVegDv4 a b c w            → WeSetVegD a b c w
+    WePlaceFloraDv4 a b fl d fx    → WePlaceFloraD a b fl d fx
+    WeSetFluidSnapshotDv4 a b f z  → WeSetFluidSnapshotD a b f z
+    WeClearFluidSnapshotDv4 a b    → WeClearFluidSnapshotD a b
+    WePlaceFloraWithIdDv4 a b fl d fx i →
+        WePlaceFloraWithIdD a b fl d fx i
+    WePlaceFloraRefDv4 a b ref d fx i →
         WePlaceFloraRefD a b ref d fx i
 
 toWorldEditDTO ∷ WorldEdit → WorldEditDTO
@@ -303,6 +359,8 @@ toWorldEditDTO (WePlaceFloraRef a b ref d fx i) =
     WePlaceFloraRefD a b ref d fx i
 toWorldEditDTO (WeSetFluidSnapshot a b f z)    = WeSetFluidSnapshotD a b f z
 toWorldEditDTO (WeClearFluidSnapshot a b)      = WeClearFluidSnapshotD a b
+toWorldEditDTO (WeSetFloraState a b i z u v var h g) =
+    WeSetFloraStateD a b i z u v var h g
 
 fromWorldEditDTO ∷ WorldEditDTO → WorldEdit
 fromWorldEditDTO (WeDeleteTileD a b)           = WeDeleteTile a b
@@ -320,6 +378,8 @@ fromWorldEditDTO (WePlaceFloraRefD a b ref d fx i) =
     WePlaceFloraRef a b ref d fx i
 fromWorldEditDTO (WeSetFluidSnapshotD a b f z) = WeSetFluidSnapshot a b f z
 fromWorldEditDTO (WeClearFluidSnapshotD a b)   = WeClearFluidSnapshot a b
+fromWorldEditDTO (WeSetFloraStateD a b i z u v var h g) =
+    WeSetFloraState a b i z u v var h g
 
 -- Chunk-keyed edit-log conversion (each value goes through its own
 -- DTO; keys are plain chunk-coordinate leaves).
@@ -355,13 +415,27 @@ data PageEditsDTO = PageEditsDTO
       --   captured under the one save barrier.
     } deriving (Show, Generic, Serialize)
 
--- | The FROZEN @world-edits@ v4 page slice (#2705): the v4 shape
---   verbatim — page id, edit log at the current 'WorldEditDTO' (whose
---   shape v5 did not change), and the allocator cursor.
+-- | The FROZEN @world-edits@ v4 page slice: the v4 shape verbatim —
+--   page id, edit log at the frozen 'WorldEditDTOv4', and the allocator
+--   cursor.
 data PageEditsDTOv4 = PageEditsDTOv4
     { ped4PageId ∷ !WorldPageId
-    , ped4Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTO])
+    , ped4Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv4])
     , ped4PlantedFloraCursor ∷ !Word64
+    } deriving (Show, Generic, Serialize)
+
+-- | The FROZEN @world-edits@ v5 page slice (#2705): the v5 shape verbatim
+--   — the v4 slice plus the page's tile, occurrence and plot tags, with
+--   the edit log still at the frozen 'WorldEditDTOv4' (#2711 appended a
+--   constructor to the live sum, which a v5 payload cannot carry).
+data PageEditsDTOv5 = PageEditsDTOv5
+    { ped5PageId ∷ !WorldPageId
+    , ped5Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv4])
+    , ped5PlantedFloraCursor ∷ !Word64
+    , ped5TileTags ∷ !(TagAssignmentsDTO (Int, Int, Int))
+    , ped5OccurrenceTags ∷ !(TagAssignmentsDTO FloraInstanceId)
+    , ped5OccurrenceTiles ∷ ![(FloraInstanceId, (Int, Int))]
+    , ped5PlotTags ∷ !(TagAssignmentsDTO (Int, Int))
     } deriving (Show, Generic, Serialize)
 
 -- | The FROZEN @world-edits@ v1 page slice: the page id and its edit
@@ -406,6 +480,11 @@ newtype WorldEditsDTOv2 = WorldEditsDTOv2 { wed2Pages ∷ [PageEditsDTOv2] }
 
 -- | The FROZEN @world-edits@ v4 component payload (#2705).
 newtype WorldEditsDTOv4 = WorldEditsDTOv4 { wed4Pages ∷ [PageEditsDTOv4] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN @world-edits@ v5 component payload (#2705).
+newtype WorldEditsDTOv5 = WorldEditsDTOv5 { wed5Pages ∷ [PageEditsDTOv5] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -466,15 +545,34 @@ migrateWorldEditsV3 (WorldEditsDTOv3 slices) = migrateWorldEditsV4 $ WorldEditsD
     | s ← slices ]
 
 -- | v4 → v5 (#2705): everything crosses verbatim and the page carries NO
---   tile, occurrence or plot tags — a v4 save predates them.
+--   tile, occurrence or plot tags — a v4 save predates them. Lands on
+--   the FROZEN v5 shape and crosses into the current one through
+--   'migrateWorldEditsV5' (#2711), so a v4 payload takes the same hop a
+--   v5 payload does.
 migrateWorldEditsV4 ∷ WorldEditsDTOv4 → WorldEditsDTO
-migrateWorldEditsV4 (WorldEditsDTOv4 slices) = WorldEditsDTO
+migrateWorldEditsV4 (WorldEditsDTOv4 slices) = migrateWorldEditsV5 $ WorldEditsDTOv5
+    [ PageEditsDTOv5
+        { ped5PageId = ped4PageId s
+        , ped5Edits  = ped4Edits s
+        , ped5PlantedFloraCursor = ped4PlantedFloraCursor s
+        , ped5TileTags = [], ped5OccurrenceTags = [], ped5OccurrenceTiles = []
+        , ped5PlotTags = []
+        }
+    | s ← slices ]
+
+-- | v5 → v6 (#2711): every edit crosses through 'migrateWorldEditDTOv4'
+--   (the current sum only gained a trailing constructor) and the tags
+--   and cursor cross verbatim.
+migrateWorldEditsV5 ∷ WorldEditsDTOv5 → WorldEditsDTO
+migrateWorldEditsV5 (WorldEditsDTOv5 slices) = WorldEditsDTO
     [ PageEditsDTO
-        { pedPageId = ped4PageId s
-        , pedEdits  = ped4Edits s
-        , pedPlantedFloraCursor = ped4PlantedFloraCursor s
-        , pedTileTags = [], pedOccurrenceTags = [], pedOccurrenceTiles = []
-        , pedPlotTags = []
+        { pedPageId = ped5PageId s
+        , pedEdits  = HM.map (map migrateWorldEditDTOv4) (ped5Edits s)
+        , pedPlantedFloraCursor = ped5PlantedFloraCursor s
+        , pedTileTags = ped5TileTags s
+        , pedOccurrenceTags = ped5OccurrenceTags s
+        , pedOccurrenceTiles = ped5OccurrenceTiles s
+        , pedPlotTags = ped5PlotTags s
         }
     | s ← slices ]
 
@@ -530,12 +628,15 @@ validateWorldEdits (WorldEditsDTO slices) = tagErrors ⧺
     plantedIds edits =
         [ iid | WePlaceFloraWithIdD _ _ _ _ _ iid ← edits ]
         ⧺ [ iid | WePlaceFloraRefD _ _ _ _ _ iid ← edits ]
+        ⧺ [ iid | WeSetFloraStateD _ _ iid _ _ _ _ _ _ ← edits ]
 
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
 worldEditsCodec = componentCodec ComponentSpec
     { csComponent     = worldEditsComponentId
       -- v5 (#2705): the page's tile, occurrence and plot gameplay tags.
-    , csVersion       = 5
+      -- v6 (#2711): the edit sum gains WeSetFloraStateD, one plant's
+      -- physical state (offsets, variant, health, age baseline).
+    , csVersion       = 6
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap → WorldEditsDTO
@@ -550,7 +651,8 @@ worldEditsCodec = componentCodec ComponentSpec
             , pedPlotTags = encodeTagAssignments (ptsPlots tags) }
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 4 migrateWorldEditsV4
+    , csOlderVersions = [ atVersion 5 migrateWorldEditsV5
+                        , atVersion 4 migrateWorldEditsV4
                         , atVersion 3 migrateWorldEditsV3
                         , atVersion 2 migrateWorldEditsV2
                         , atVersion 1 migrateWorldEditsV1 ]
