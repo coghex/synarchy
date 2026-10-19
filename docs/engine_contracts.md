@@ -3829,9 +3829,11 @@ the PLAYER paths retired, the verbs stay registered for the AI (D-7).
 menus), Retrieve and Pick up: candidates are player-commandable and able
 to run the gesture's own AI action, filtered BEFORE ranking; ranking is
 squared distance to the target in THREE dimensions — floored,
-wrap-localized x/y (`world.localizeTile`) plus the candidate's `gridZ`
-against the target's own `gridZ` — and an exact tie goes to the lowest
-uid, never selection order. Distance is to the TARGET, not absolute
+wrap-localized x/y (`world.localizeTile`, in the TARGET page's seam
+frame via its page argument, never the visible page's) plus the
+candidate's `gridZ` against the target's own `gridZ` — and an exact tie
+goes to the lowest uid, never selection order. A dead unit is never a
+candidate (it keeps its faction and actions but executes no order). Distance is to the TARGET, not absolute
 elevation. Every production caller supplies a real target height:
 `unit.transferEndpointInfo` reports `gridZ` (a unit's `uiGridZ`, a
 building's `biGridZ`), and a ground row reports the terrain height the
