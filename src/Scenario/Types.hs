@@ -170,8 +170,24 @@ data FloraEntry = FloraEntry
     , feX       ∷ !Int
     , feY       ∷ !Int
     , feZ       ∷ !(Authored Int)
-    , feAge     ∷ !(Authored Float)     -- ^ game days
+    , feAge     ∷ !(Authored Float)
+      -- ^ The plant's TOTAL growth in game days at the scenario's
+      --   initialized clock — @fiAge + day · growthRate(health)@, before
+      --   the lifecycle wraps it into a generation and a dead window. Not
+      --   the stored placement baseline: construction converts it
+      --   (@baseline = age − day · growthRate(health)@) and capture
+      --   exports the derived total (#2711).
     , feHealth  ∷ !(Authored Float)     -- ^ 0..1
+    , feOffsetU ∷ !(Authored Float)
+      -- ^ sub-tile U offset, @[-0.5, 0.5]@ (format v2); omitted = a
+      --   deterministic hash of the scenario id
+    , feOffsetV ∷ !(Authored Float)     -- ^ sub-tile V offset (v2), as 'feOffsetU'
+    , feVariant ∷ !(Authored Word8)
+      -- ^ visual variant @0..3@ (v2); omitted = a deterministic hash of
+      --   the scenario id
+    , feRegrowth ∷ !(Authored Float)
+      -- ^ GAME SECONDS until the plant is harvestable again (v2); omitted
+      --   or @0@ = harvestable now. Only a harvestable species accepts it
     } deriving (Show, Eq)
 
 -- | One structure piece (floor, wall edge, post, ceiling, wire) from a

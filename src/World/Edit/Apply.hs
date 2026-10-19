@@ -14,13 +14,15 @@
 module World.Edit.Apply
     ( applyEdit
     , replayEdits
+    , applySlopeEditsTd
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Chunk.Types (LoadedChunk(..), ColumnTiles(..), columnIndex)
+import World.Chunk.Types (ChunkCoord, LoadedChunk(..), ColumnTiles(..), columnIndex)
+import World.Tile.Types (WorldTileData(..))
 import Structure.Types (StructurePieceData(..))
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
@@ -264,6 +266,19 @@ applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth instanceId) lc
                 }
         in lc { lcFlora = FloraChunkData
                     (inst : fcdInstances (lcFlora lc)) }
+-- | #2711: overwrite ONE plant's physical state, found by its id. The
+--   planting edit that placed it is earlier in the same chunk's log
+--   (same tile, so same chunk); an id the chunk does not hold changes
+--   nothing, which keeps replay total over a damaged overlay.
+applyEdit (WeSetFloraState gx gy iid z offU offV variant health baseline) lc
+    | not (edgeBelongsTo gx gy lc) = lc
+    | otherwise =
+        let set fi | fiInstanceId fi ≡ iid =
+                       fi { fiZ = z, fiOffU = offU, fiOffV = offV
+                          , fiVariant = variant, fiHealth = health
+                          , fiAge = baseline }
+                   | otherwise = fi
+        in lc { lcFlora = FloraChunkData (map set (fcdInstances (lcFlora lc))) }
 applyEdit (WeSetCell gx gy z mat) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =
@@ -319,6 +334,47 @@ replayEdits ∷ WorldEdits → LoadedChunk → LoadedChunk
 replayEdits edits lc = case HM.lookup (lcCoord lc) edits of
     Nothing → lc
     Just es → foldl (flip applyEdit) lc es
+
+-- | Restore the EFFECTIVE authored slopes of the listed (resident) chunks.
+--
+--   An authored slope is an OVERRIDE of the derived one, and the chunk
+--   admission pipeline rebuilds the derived slopes of a just-admitted
+--   chunk's border strip, and of its loaded neighbours', from terrain
+--   ('World.Slope.recomputeNeighborSlopes') — which erases the override
+--   (#2711: a scenario terrain patch's ramp, or explicit flat, on a
+--   chunk-edge tile, found when the chunk was demanded). Like the dig and
+--   construction slope passes it MUST therefore run after that recompute,
+--   over exactly the set the recompute touched.
+--
+--   Which override is EFFECTIVE is a question about the whole log, not about
+--   its @WeSetSlope@ entries: a later 'WeSetCell', or a delete and refill of
+--   the top cell, resets the cell's slope, and re-applying the old entry
+--   would resurrect what the edit cleared. So the chunk is rebuilt from
+--   @regenerate@ (the loader's own base for the coordinate) with the whole
+--   log replayed, and every cell any @WeSetSlope@ names takes the slope that
+--   replay gives it — the value 'replayEdits' itself would give. A chunk
+--   with no @WeSetSlope@ entry costs nothing, and no other column is touched,
+--   so a derived slope elsewhere stays derived.
+applySlopeEditsTd ∷ (ChunkCoord → Maybe LoadedChunk) → WorldEdits → [ChunkCoord]
+                  → WorldTileData → WorldTileData
+applySlopeEditsTd regenerate edits coords td = foldl' step td coords
+  where
+    step acc c = case (HM.lookup c (wtdChunks acc), HM.lookup c edits) of
+        (Just lc, Just es)
+            | cells@(_ : _) ← [ (gx, gy, z) | WeSetSlope gx gy z _ ← es ]
+            , Just base ← regenerate c →
+                let effective = replayEdits edits base
+                    lc' = foldl' (restoreCell effective) lc cells
+                in acc { wtdChunks = HM.insert c lc' (wtdChunks acc) }
+        _ → acc
+    -- the cell's slope as the replay leaves it, written into the live chunk
+    restoreCell effective lc (gx, gy, z) =
+        let idx = columnIdx gx gy
+            ecol = lcTiles effective V.! idx
+            ei = z - ctStartZ ecol
+            bits = if ei ≥ 0 ∧ ei < VU.length (ctSlopes ecol)
+                   then ctSlopes ecol VU.! ei else 0
+        in applyEdit (WeSetSlope gx gy z bits) lc
 
 -- Helpers ---------------------------------------------------------
 

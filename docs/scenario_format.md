@@ -218,7 +218,7 @@ strings, default `[]`).
 | `tiles` | list of `[x, y]` integer pairs | req (exactly one of `rect` / `tiles`) | — | A malformed tile drops that tile, duplicates collapse, and an empty result rejects the patch. |
 | `material` | material definition name | req | — | Column material (`World.Edit.Types` `WeSetCell`/`WeAddTile`); unknown → entry rejected. |
 | `surface_z` | integer z | req | — | Top solid cell of every column in the patch. |
-| `slope` | integer `[0, 15]` | opt | `0` (flat) | Ramp bitmask, bits N/E/S/W (`WeSetSlope`). |
+| `slope` | integer `[0, 15]` | opt | `0` (flat) | Ramp bitmask, bits N/E/S/W (`WeSetSlope`). Always recorded as an override, flat included: the engine derives border slopes from terrain and neighbour residency, and an omitted slope means flat, not "derived". |
 
 Dependent values to reconstruct: column surface maps, vegetation placement and fluid
 neighbour state (SCN-11). These are derived, not authorable. Construction and capture
@@ -240,8 +240,8 @@ Derived: the per-cell fluid depth below the surface and active-simulation state.
 |---|---|---|---|---|
 | `species` | flora species name | req | — | `FloraSpecies` by name (`World.Flora.Reference`). Its category decides the representation (see below). |
 | `x`, `y` | integer tile | req | — | Tile position. |
-| `z` | integer | opt | Column surface (the tile's final terrain top) | `fiZ`. A crop plot has no z: an authored value other than the surface is a field rejection. |
-| `age` | number ≥ 0, **game days** | opt | Deterministic default | The CURRENT age at the scenario's initialized clock (not the stored baseline; see [the time basis](#flora-format-v2)). |
+| `z` | integer | opt | Column surface (the tile's final terrain top) | `fiZ`. A plant stands on the column's top solid cell (the render and pick resolvers place it there whatever `fiZ` says), so an authored value other than that top is a field rejection and the plant takes the top; a crop plot has no z at all. |
+| `age` | number ≥ 0, **game days** | opt | Deterministic default | The plant's TOTAL growth at the scenario's initialized clock, before the lifecycle wraps it into a generation and a dead window (not the stored baseline; see [the time basis](#flora-format-v2)). |
 | `health` | number `[0, 1]` | opt | Full health (`1`) | `fiHealth` / `cpHealth`; scales the growth rate. |
 | `offset_u`, `offset_v` | number `[-0.5, 0.5]`, tiles (**v2**) | opt | Deterministic hash of the scenario id | `fiOffU`, `fiOffV`. Not applicable to a crop plot. |
 | `variant` | integer `[0, 3]` (**v2**) | opt | Deterministic hash of the scenario id | `fiVariant`. Not applicable to a crop plot. |
@@ -273,13 +273,16 @@ that names a v2 field still reports it as `UnknownField`.
   patch is persisted: nothing references them, capture names them structurally, and
   ordinary saves carry the plants themselves.
 - **Time basis — units are part of the contract.** `age` is **game days**, and it is
-  the age the plant has *at the initialized clock*. Growth derives as
-  `age(day) = fiAge + day · growthRate(health)` (`World.Flora.Growth`), so construction
-  stores the baseline `fiAge = age − day · rate` (searched to the last bit so the
-  derived value is the authored one whenever the float grid at that clock can say it
-  — always at day 0 — and its nearest neighbour otherwise; a derived value is on the
-  grid and round-trips exactly), and capture exports the *derived* current age, never
-  `fiAge` or the planted day. A crop plot stores a planted **day** and derives
+  the plant's TOTAL growth *at the initialized clock*: `fiAge + day · growthRate(health)`
+  (`World.Flora.Growth`), the value the lifecycle starts from, before it wraps it into a
+  generation and a dead window. Exporting the wrapped display age instead would lose the
+  lifecycle (a dead plant would come back living), whereas the total, run through the
+  same hash-derived lifespan, reproduces the generation, the dead window and the phase
+  exactly. Construction stores the baseline `fiAge = age − day · rate` (searched to the
+  last bit so the derived total is the authored one whenever the float grid at that
+  clock can say it — always at day 0 — and its nearest neighbour otherwise; a derived
+  value is on the grid and round-trips exactly), and capture exports the derived total,
+  never `fiAge` or the planted day. A crop plot stores a planted **day** and derives
   `age = elapsedDays · rate`, so its age lands on the nearest whole elapsed day.
   `regrowth` is **game seconds remaining**, counted down by the existing regrowth tick;
   it needs no clock conversion. The scenario file has no clock of its own (see the v1
@@ -293,6 +296,11 @@ that names a v2 field still reports it as `UnknownField`.
   second crop plot on a tile rejects the entry. An out-of-domain value, a field that
   does not apply to a crop plot, and `regrowth` on a species with no harvest block
   reject only that field.
+- **Placed directly.** A plant is a physical baseline, so it is placed through the
+  planting edit primitives themselves (`WePlaceFloraWithId` + `WeSetFloraState`) — no
+  planting designation, no tilled-soil requirement and no climate or soil suitability
+  check, which belong to the farming and worldgen paths. Its default z is the column's
+  top solid cell, where the render and pick resolvers put it.
 - **Chop state is not scenario state.** Construction leaves `wpsChopDesignations` empty
   and every constructed instance's `fiChopDesignated` clear; capture ignores both.
 
@@ -969,9 +977,10 @@ states. It is pure up to one commit.
   in the named material with the authored slope. Relative to the arena's unedited
   column (sixteen cells, loam over granite, top at sea level) that is a raised pad of
   the material, a column dug down to the surface with the top cell set, or the top
-  cell replaced. The cells the base column already has stay. A column that already is
-  the stated one produces no edit and keeps the base's grass; any column an edit
-  changes carries no surface vegetation (vegetation is derived).
+  cell replaced. The cells the base column already has stay. A column that already has
+  the stated shape produces no shape edit and keeps the base's grass (its slope
+  override is still recorded); any column a shape edit changes carries no surface
+  vegetation (vegetation is derived).
 - **Overlap.** Patches apply in authored order and a later one replaces the column
   state of every tile it covers. Edits are built from each tile's FINAL state, so an
   earlier patch's relative raise never stacks under a later one.
@@ -992,7 +1001,9 @@ states. It is pure up to one commit.
 
 A tile is wet when the patch's exact plane is above the tile's **final** terrain top
 (`exactSurface > 8 · top`), and records an exact `WeSetFluidSnapshot` — never rounded
-to a z or a full cell. A tile the terrain changed that no patch wets is cleared
+to a z or a full cell. A plane more than 65,535 exact units above any admitted tile's
+terrain (the simulation's `Word16` volume range, beyond which it would clamp and lose
+fluid) rejects the patch whole, with overflow-safe arithmetic. A tile the terrain changed that no patch wets is cleared
 EXPLICITLY (`WeClearFluidSnapshot`): the replay of a dug column at or below the water
 table would otherwise reveal groundwater, and an authored absence is authoritative.
 A fluid patch has no tag owner, so its `tags` are rejected as a field. Authored fluid
@@ -1010,28 +1021,43 @@ state — in the edit log every entry except structure pieces (`WeSetStructure` 
 `WeClearStructure`), which keep their relative order — so a second materialization or a
 recapture accumulates nothing. Every plant the replaced content placed is forgotten
 (regrowth timer, tags, chop designation), resident or not. It assumes a quiescent page:
-ground items, units and spoil already standing there are not repositioned. Resident chunks are rebuilt exactly as an admission
+ground items, units and spoil already standing there are not repositioned. EVERY resident chunk is rebuilt (not only those the log names: the simulation's
+writebacks put fluid into chunks with no entry of their own) exactly as an admission
 rebuilds them (arena base, replayed log, rectangle re-asserted) and swapped in through
 `replaceChunkForgettingFlora`; a non-resident chunk gets only the log and is rebuilt by
-its own admission.
+its own admission. A tagged cell in a chunk that is not resident is judged against the
+replacement geometry at once: a cell the replacement no longer has loses its tags (a
+cell created there later inherits nothing), one that survives keeps them. Slope
+overrides (`WeSetSlope`, flat included) are restored after the admission pass that
+recomputes border slopes from terrain (`applySlopeEditsTd`): the EFFECTIVE value of each
+named cell is read off a replay of the whole log over the loader's own base — so a later
+cell write, or a delete and refill, that cleared a slope is respected — and a ramp or an
+explicit flat on a chunk-edge tile survives the chunk's admission and a neighbour's.
 
 ### Capture
 
 Capture reads one coherent snapshot (the page's live edit log, resident chunks, crop
-plots, regrowth timers, tag assignments) with no engine handle. It writes every
-supported current value explicitly: a column's top (surface z, material, slope), each
+plots, regrowth timers, tag assignments) with no engine handle; the caller takes it after
+the save barrier has reconciled the simulation with the world, so it never mixes a newer
+simulation grid with stale chunks. It writes every
+supported current value explicitly: a column's top (surface z, material, AUTHORED slope), each
 wet tile's kind and exact eighth-z plane, and each plant's species, tile, z, derived
-current age, health, offsets, variant and regrowth (an explicit `0` for a harvestable
+total age (see the time basis), health, offsets, variant and regrowth (an explicit `0` for a harvestable
 plant whose timer ran out). A column equal to the base is not a patch unless it carries
 tags; a wet cell whose plane does not rise above its terrain top is dry; an occurrence
 outside the planted id namespace is generated flora the world regenerates, not an
 authored one. A non-resident chunk is read by regenerating the base and replaying its
-durable edits — non-residency is never deletion. Tags on a cell below the surface, a
+durable edits — non-residency is never deletion. **Slopes: authored only.** A live chunk's slope also carries DERIVED bits (the
+border-strip recompute after an admission, which depends on which neighbours are
+resident, and mid-dig masks), which are not scenario state; capture reads the slope
+the durable log records for the column's top cell (`WeSetSlope`), else flat. Tags on a cell below the surface, a
 column whose top material has no registered name, and a column with no solid cell are
 outside the vocabulary and come back as diagnostics (`terrain.tags`, `terrain.material`,
-`terrain.columns`) rather than being written wrongly. Entries are written under
+`terrain.columns`) rather than being written wrongly. A tile is captured when its shape differs from the base, when it carries tags, OR when the
+durable log holds a slope override for its top cell — an explicit flat on a base-shaped tile
+included, since without it admission would derive a ramp there. Entries are written under
 generated explicit ids that depend only on the content (family, values, tile, and an
-ordinal among equal siblings ranked by the raw values), made unique against the ids of
+ordinal among same-species, same-tile siblings, ranked by the whole exported entry — species, tile, z, offsets, variant, health, age, regrowth and tags — as raw values under one derived `Ord`, so no input order can change the result), made unique against the ids of
 the document's other entries.
 
 ### Persistence

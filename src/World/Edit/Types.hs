@@ -192,6 +192,22 @@ data WorldEdit
                                            --   loading build's catalog. Appended
                                            --   at the END for the same reason
                                            --   'WePlaceFloraWithId' was.
+    | WeSetFloraState !Int !Int !FloraInstanceId !Int !Float !Float !Word8 !Float !Float
+                                           -- ^ #2711: one plant's PHYSICAL state, written after
+                                           --   the planting edit that placed it: tile (gx,gy),
+                                           --   the plant's id, its z, sub-tile offsets (U, V),
+                                           --   visual variant, health and the STORED age
+                                           --   baseline ('World.Flora.Types.fiAge': derived
+                                           --   age = baseline + day · growthRate(health)).
+                                           --   Replay finds the instance by id and overwrites
+                                           --   exactly those fields; an id the chunk does not
+                                           --   hold changes nothing. The planting edits replay
+                                           --   offsets 0, health 1, variant 0 and a baseline of
+                                           --   minus the planted day, so values a scenario
+                                           --   authors have no other durable home. Appended at
+                                           --   the END; carries no species, so unlike the
+                                           --   planting edits it needs no catalog translation
+                                           --   at the save boundary.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.
@@ -231,6 +247,8 @@ shiftWorldEdit dgx dgy edit = case edit of
         WePlaceFloraWithId (gx + dgx) (gy + dgy) fid d w i
     WePlaceFloraRef gx gy ref d w i →
         WePlaceFloraRef (gx + dgx) (gy + dgy) ref d w i
+    WeSetFloraState gx gy i z u v var h g →
+        WeSetFloraState (gx + dgx) (gy + dgy) i z u v var h g
     WeSetFluidSnapshot gx gy ft z →
         WeSetFluidSnapshot (gx + dgx) (gy + dgy) ft z
     WeClearFluidSnapshot gx gy    → WeClearFluidSnapshot (gx + dgx) (gy + dgy)

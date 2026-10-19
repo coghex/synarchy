@@ -868,6 +868,21 @@
             "Float",
             "FloraInstanceId"
           ]
+        },
+        {
+          "name": "WeSetFloraState",
+          "arity": 9,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraInstanceId",
+            "Int",
+            "Float",
+            "Float",
+            "Word8",
+            "Float",
+            "Float"
+          ]
         }
       ]
     },
@@ -2102,6 +2117,21 @@
             "Float",
             "FloraInstanceId"
           ]
+        },
+        {
+          "name": "WeSetFloraStateD",
+          "arity": 9,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraInstanceId",
+            "Int",
+            "Float",
+            "Float",
+            "Word8",
+            "Float",
+            "Float"
+          ]
         }
       ]
     },
@@ -2496,6 +2526,151 @@
         },
         {
           "name": "WePlaceFloraRefDv3",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraRef",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.PageEdits.WorldEditDTOv4": {
+      "source": "src/World/Save/Component/PageEdits.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
+          "via": "WorldEditsDTOv4 → PageEditsDTOv4 → WorldEditDTOv4"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "WeDeleteTileDv4",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeSetFluidTileDv4",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
+        },
+        {
+          "name": "WeAddTileDv4",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetSlopeDv4",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetCellDv4",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetStructureDv4",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearStructureDv4",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetVegDv4",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WePlaceFloraDv4",
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
+        },
+        {
+          "name": "WeSetFluidSnapshotDv4",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearFluidSnapshotDv4",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WePlaceFloraWithIdDv4",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        },
+        {
+          "name": "WePlaceFloraRefDv4",
           "arity": 6,
           "payload": [
             "Int",

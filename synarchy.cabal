@@ -654,6 +654,12 @@ library
                      Scenario.Items.Encode
                      Scenario.Units.Catalog
                      Scenario.Units.Defaults
+                     Scenario.World.Build
+                     Scenario.World.Capture
+                     Scenario.World.Flora
+                     Scenario.World.Install
+                     Scenario.World.Terrain
+                     Scenario.World.Types
                      Scenario.Units.Build
                      Scenario.Units.Install
                      Scenario.Units.Ready
@@ -2003,6 +2009,9 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Schema
                    Test.Headless.Scenario.Items
                    Test.Headless.Scenario.Units
+                   Test.Headless.Scenario.World
+                   Test.Headless.Scenario.World.Fixtures
+                   Test.Headless.Scenario.World.Live
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents

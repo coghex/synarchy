@@ -7826,12 +7826,19 @@ The invariants, each held by a test of the `Scenario.World` group:
   structure pieces (`WeSetStructure` / `WeClearStructure`) and their relative
   order. Applying the same content twice, or capture → materialize → capture,
   leaves the page and the captured document unchanged.
-- **The one reconstruction.** A resident chunk is rebuilt as an admission
+- **The one reconstruction.** EVERY resident chunk is rebuilt as an admission
   rebuilds it (arena base from the recorded seed and bounds, the new log
   replayed, the rectangle re-asserted) and swapped in through
   `replaceChunkForgettingFlora`, then re-seeded into the simulation through
   `syncEditToSim`. A non-resident chunk gets only the log. Nothing steps the
   simulation or settles the authored fluid away; a finite edge stays closed.
+- **Owners, not restatements.** Every limit and formula comes from the runtime's
+  own owner: the growth total and its inverse are `floraTotalAge` /
+  `floraTotalAgeAt` (`World.Flora.Growth`), the deepest representable fluid column
+  is read off `fluidCellToActive`'s clamp, a resident tag target is written through
+  `editTileTags` / `editOccurrenceTags` / `editPlotTags` (a refusal is a
+  diagnostic), and capture reads slopes from the durable log because a live chunk's
+  border slopes are derived and depend on neighbour residency.
 - **Exact fluid and explicit absence.** A tile is wet iff the authored exact
   plane is above its FINAL terrain top, recorded as `WeSetFluidSnapshot`;
   a terrain-changed tile that stays dry is cleared (`WeClearFluidSnapshot`)
@@ -7844,6 +7851,14 @@ The invariants, each held by a test of the `Scenario.World` group:
   `WeSetFloraState` (`world-edits` v6) is the durable home of offsets, variant,
   health, z and the baseline; a crop plot stores a planted day. Chop state is
   never scenario state.
+- **Authored edits survive the admission passes.** The chunk-admission pipeline
+  rebuilds derived slopes on a just-admitted chunk's border strip and on its
+  loaded neighbours' (`recomputeNeighborSlopes`); slope overrides are restored right
+  after it (`applySlopeEditsTd`, before the dig and construction passes) at their
+  EFFECTIVE value — read off a replay of the whole log over the loader's own base,
+  so a later `WeSetCell` or a delete-and-refill that cleared a slope is respected —
+  and every patch tile records one, flat included. A new derived pass over admitted
+  chunks must restore the authored overrides it clobbers the same way.
 - **Capture is a pure read** of one coherent snapshot, visits only chunks the log
   or the resident set names, treats non-residency as non-deletion, and writes
   content-derived generated ids made unique against the document's other ids.
