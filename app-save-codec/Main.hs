@@ -95,7 +95,8 @@ import World.Save.Snapshot
 import World.Save.Physiology (withoutRebuiltCaches)
 import World.Save.Types
 import World.Page.Types (WorldPageId(..))
-import World.Edit.Types (WorldEdit(..))
+import World.Edit.Types (WorldEdit(..), appendEdit)
+import World.Generate.Coordinates (globalToChunk)
 import World.Fluid.Exact (fluidUnitsPerZ, exactTopLevel)
 import World.Fluid.Types (FluidType(..))
 import Building.Types (BuildingId(..))
@@ -114,7 +115,10 @@ import Control.Monad (foldM)
 import Gameplay.Tags.Index (categoryForward, setCategoryTags)
 import Gameplay.Tags.Page (PageTagsSnapshot(..))
 import Data.Int (Int64)
-import World.Flora.Identity (floraInstanceIdToLua, floraInstanceIdFromLua)
+import World.Flora.CropPlot (CropPlotOf(..))
+import World.Flora.Identity (floraInstanceIdToLua, floraInstanceIdFromLua, plantedFloraCursorAbove)
+import World.Flora.Reference (FloraRef(..))
+import qualified Data.List as L
 import Gameplay.Tags.Tag (GameplayTag, gameplayTagText, mkGameplayTag, itemTargetId, mkItemTarget)
 import Scenario.Items.Refs (itemRefsFromList, itemRefsToAscList, restrictItemRefs)
 import Location.Instance (LocationInstances(..), LocationInstanceId(..))
@@ -299,6 +303,37 @@ canonicalSummary meta snap luaComponentCount isMigrated = Aeson.object
     cam = snapLiveCamera snap
     WorldPageId activePageText = snapActivePage snap
 
+-- | #2711: the page's physical plant state as canonical text lines —
+--   planting edits, the state edits that give each plant its offsets,
+--   variant, health and age baseline, crop plots, regrowth timers and
+--   the planted-id cursor — each section in ascending identity or tile
+--   order so the list is a function of the page's content alone.
+--   Rendered by 'show' so a float's exact value moves its line.
+scenarioFloraLines ∷ PageSnapshot → [T.Text]
+scenarioFloraLines page =
+    [ T.unwords [ "planting", tshowI x, tshowI y, refName ref
+                , tshowI (fromIntegral (floraInstanceIdToLua i)), tshowI d, T.pack (show w) ]
+    | (i, x, y, ref, d, w) ← L.sortOn (\(i, _, _, _, _, _) → floraInstanceIdToLua i)
+        [ (i, x, y, ref, d, w) | es ← HM.elems (pgsEdits page), WePlaceFloraRef x y ref d w i ← es ] ]
+    ⧺ [ T.unwords [ "state", tshowI x, tshowI y, tshowI (fromIntegral (floraInstanceIdToLua i))
+                  , tshowI z, T.pack (show u), T.pack (show v), tshowI (fromIntegral var)
+                  , T.pack (show h), T.pack (show a) ]
+      | (i, x, y, z, u, v, var, h, a) ← L.sortOn (\(i, _, _, _, _, _, _, _, _) → floraInstanceIdToLua i)
+          [ (i, x, y, z, u, v, var, h, a)
+          | es ← HM.elems (pgsEdits page), WeSetFloraState x y i z u v var h a ← es ] ]
+    ⧺ [ T.unwords [ "plot", tshowI x, tshowI y, refName (cpSpecies cp)
+                  , tshowI (cpPlantedDay cp), T.pack (show (cpHealth cp)) ]
+      | ((x, y), cp) ← L.sortOn fst (HM.toList (pgsCropPlots page)) ]
+    ⧺ [ T.unwords [ "harvest", tshowI (fromIntegral (floraInstanceIdToLua i)), T.pack (show secs) ]
+      | (i, secs) ← L.sortOn (floraInstanceIdToLua ∘ fst) (HM.toList (pgsFloraHarvests page)) ]
+    ⧺ [ T.unwords ["cursor", tshowI (fromIntegral (pgsPlantedFloraCursor page))] ]
+  where
+    tshowI ∷ Int → T.Text
+    tshowI = T.pack ∘ show
+    refName ref = case ref of
+        FloraByName n     → n
+        FloraByLegacyId k → "legacy:" <> T.pack (show k)
+
 -- | One remembered PORTABLE container (#2512). Both observations are
 --   independently optional and are emitted as such — a @null@ weight or
 --   reveal time means "never learned", which the reader must be able to
@@ -453,6 +488,11 @@ dumpPage (WorldPageId pid, page) = Aeson.object
       -- summary generated before units v5 / buildings v3 / world-pages
       -- v14, which the Baselines reader reads as "no assignments": the
       -- value every migrated older payload really restores.
+      -- #2711: the page's physical plant state (planting and state
+      -- edits, crop plots, regrowth timers, the planted-id cursor), as
+      -- canonical lines. Absent before world-edits v6, which the
+      -- Baselines reader reads as "this fixture pins nothing here".
+    , "scenarioFlora" .= scenarioFloraLines page
     , "gameplayTags" .= Aeson.object
         [ "units" .= dumpTagged unUnitId (usnTags (pgsUnits page))
         , "buildings" .= dumpTagged unBuildingId (bsnTags (pgsBuildings page))
@@ -835,7 +875,10 @@ writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode
 --
 --   Items (#2703) carry no page: their assignments are session-scoped
 --   and keyed by item instance id, which must not be 0. An empty @tags@
---   list clears the target. Each category is optional. A unit entry may
+--   list clears the target. Each category is optional. A page's physical
+--   plant state (#2711) is seeded by the optional @"plantings"@,
+--   @"floraStates"@, @"cropPlots"@ and @"harvests"@ lists (see
+--   'FloraSeedEntry'). A unit entry may
 --   also carry its scenario reference (#2710): a @"ref"@ sets it (the
 --   empty string clears it), and a unit entry with no @"tags"@ leaves
 --   the unit's tags alone.
@@ -908,17 +951,55 @@ instance Aeson.FromJSON PlaceSeedEntry where
         <$> o .: "page" <*> o .: "x" <*> o .: "y" <*> o .:? "z" <*> o .:? "id"
         <*> o .: "tags"
 
+-- | One page's physical plant seed (#2711): a planting edit, the state
+--   edit that follows it, a crop plot, or a regrowth timer. Ids are
+--   'floraInstanceIdToLua' ids (planted namespace), species are names.
+data FloraSeedEntry
+    = SeedPlanting !Text !Int !Int !Text !Int64 !Int !Float
+      -- ^ page, x, y, species, id, planted day, base width
+    | SeedFloraState !Text !Int !Int !Int64 !Int !Float !Float !Word8 !Float !Float
+      -- ^ page, x, y, id, z, offU, offV, variant, health, age baseline
+    | SeedCropPlot !Text !Int !Int !Text !Int !Float
+      -- ^ page, x, y, species, planted day, health
+    | SeedHarvest !Text !Int64 !Float
+      -- ^ page, id, regrowth game-seconds remaining
+
 data TagSeed = TagSeed
     { tsUnitSeeds ∷ ![UnitSeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
     , tsLocationSeeds ∷ ![SeedEntry], tsItemSeeds ∷ ![ItemSeedEntry]
     , tsTileSeeds ∷ ![PlaceSeedEntry], tsPlantSeeds ∷ ![PlaceSeedEntry]
-    , tsPlotSeeds ∷ ![PlaceSeedEntry] }
+    , tsPlotSeeds ∷ ![PlaceSeedEntry], tsFloraSeeds ∷ ![FloraSeedEntry] }
+
+newtype FloraSeeds = FloraSeeds [FloraSeedEntry]
+
+instance Aeson.FromJSON FloraSeeds where
+    parseJSON = Aeson.withObject "flora seed" $ \o → do
+        plantings ← o .:? "plantings" .!= []
+        states ← o .:? "floraStates" .!= []
+        plots ← o .:? "cropPlots" .!= []
+        harvests ← o .:? "harvests" .!= []
+        FloraSeeds <$> ((\a b c d → a ⧺ b ⧺ c ⧺ d)
+            <$> mapM planting plantings <*> mapM state states
+            <*> mapM plot plots <*> mapM harvest harvests)
+      where
+        planting = Aeson.withObject "planting" $ \e → SeedPlanting
+            <$> e .: "page" <*> e .: "x" <*> e .: "y" <*> e .: "species" <*> e .: "id"
+            <*> e .:? "plantedDay" .!= 0 <*> e .:? "baseWidth" .!= 0
+        state = Aeson.withObject "floraState" $ \e → SeedFloraState
+            <$> e .: "page" <*> e .: "x" <*> e .: "y" <*> e .: "id" <*> e .: "z"
+            <*> e .: "offU" <*> e .: "offV" <*> e .: "variant" <*> e .: "health" <*> e .: "age"
+        plot = Aeson.withObject "cropPlot" $ \e → SeedCropPlot
+            <$> e .: "page" <*> e .: "x" <*> e .: "y" <*> e .: "species"
+            <*> e .: "plantedDay" <*> e .: "health"
+        harvest = Aeson.withObject "harvest" $ \e → SeedHarvest
+            <$> e .: "page" <*> e .: "id" <*> e .: "seconds"
 
 instance Aeson.FromJSON TagSeed where
     parseJSON = Aeson.withObject "tag seed" $ \o → TagSeed
         <$> o .:? "units" .!= [] <*> o .:? "buildings" .!= []
         <*> o .:? "locations" .!= [] <*> o .:? "items" .!= []
         <*> o .:? "tiles" .!= [] <*> o .:? "plants" .!= [] <*> o .:? "plots" .!= []
+        <*> (Aeson.parseJSON (Aeson.Object o) ≫= \(FloraSeeds es) → pure es)
 
 applyTagSeed ∷ TagSeed → SessionSnapshot → Either String SessionSnapshot
 applyTagSeed seed snap0 =
@@ -929,7 +1010,37 @@ applyTagSeed seed snap0 =
         ≫= \s4 → foldM (placeEntry onTile) s4 (tsTileSeeds seed)
         ≫= \s5 → foldM (placeEntry onPlant) s5 (tsPlantSeeds seed)
         ≫= \s6 → foldM (placeEntry onPlot) s6 (tsPlotSeeds seed)
+        ≫= \s7 → foldM floraEntry s7 (tsFloraSeeds seed)
   where
+    -- #2711: a plant's physical state, written the way a scenario
+    -- materialization leaves it in a save (named planting edits, the state
+    -- edits after them, crop plots, regrowth timers), with the page's
+    -- planted-id cursor kept above every id it carries.
+    floraEntry snap e = case e of
+        SeedPlanting pg x y sp i d w → onFloraPage pg snap $ \page → do
+            iid ← seededId i
+            Right (appendEditTo x y (WePlaceFloraRef x y (FloraByName sp) d w iid) page)
+                { pgsPlantedFloraCursor = max (pgsPlantedFloraCursor page)
+                                              (plantedFloraCursorAbove [iid]) }
+        SeedFloraState pg x y i z u v var h a → onFloraPage pg snap $ \page → do
+            iid ← seededId i
+            Right (appendEditTo x y (WeSetFloraState x y iid z u v var h a) page)
+        SeedCropPlot pg x y sp d h → onFloraPage pg snap $ \page →
+            Right page { pgsCropPlots = HM.insert (x, y) (CropPlot (FloraByName sp) d h)
+                                                  (pgsCropPlots page) }
+        SeedHarvest pg i secs → onFloraPage pg snap $ \page → do
+            iid ← seededId i
+            Right page { pgsFloraHarvests = HM.insert iid secs (pgsFloraHarvests page) }
+    seededId i = maybe (Left "a flora seed needs a real flora occurrence id") Right
+                       (floraInstanceIdFromLua i)
+    onFloraPage pg snap f = do
+        let pid = WorldPageId pg
+        page ← maybe (Left ("no page '" ⧺ T.unpack pg ⧺ "' in the save"))
+                     Right (HM.lookup pid (snapPages snap))
+        page' ← f page
+        pure snap { snapPages = HM.insert pid page' (snapPages snap) }
+    appendEditTo x y edit page =
+        page { pgsEdits = appendEdit (fst (globalToChunk x y)) edit (pgsEdits page) }
     placeEntry f snap e = do
         tags ← maybe (Left ("empty tag for " ⧺ T.unpack (pseePage e)))
                      (Right . Set.fromList) (traverse mkGameplayTag (pseeTags e))
