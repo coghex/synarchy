@@ -5084,6 +5084,15 @@ selected mode would ever consume the value.
 **`--region`'s exclusion** is deliberate and tracked: its identical silent
 default is `docs/code_health_findings.md` CH-67, sequenced after #1081.
 
+**`--help` / `-h` (#2863) precede all of it.** Either exact token,
+anywhere in argv (including as another flag's operand), prints the usage
+text to stdout and exits 0 before resource-root resolution, mode
+selection, mode-compatibility rejection and value validation, so none of
+their diagnostics appear and nothing boots or writes a file. Without
+either token every ordering above is unchanged, and unrecognized
+arguments are still ignored. Gates: hspec `--match "App.Usage"`,
+`tools/preview_cli_probe.py` check 11.
+
 ---
 
 ## Debug-console listener policy (#1190)

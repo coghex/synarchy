@@ -279,6 +279,54 @@ function M.load()
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
 end
 
+-- The id engine.loadScript returned for one of the scripts loaded above,
+-- named by its path under scripts/ without the extension ("unit_ai" for
+-- scripts/unit_ai.lua); nil when this session did not load it (a preview
+-- boot loads only preview_manager). Read-only: it lets a caller that did not
+-- load a script still address it, e.g. a probe pausing the autonomous AI so
+-- its fixture units never move on their own (#2865,
+-- tools/probelib.py pause_ai).
+function M.scriptId(name)
+    local ids = {
+        preview_manager = previewScriptId,
+        debug = debugScriptId,
+        debug_anim_panel = debugAnimPanelScriptId,
+        shell = shellScriptId,
+        unit_manager = unitManagerScriptId,
+        unit_info_panel = unitInfoPanelScriptId,
+        unit_info_v2 = unitInfoV2ScriptId,
+        unit_drag_select = unitDragSelectScriptId,
+        unit_resources = unitResourcesScriptId,
+        unit_ai = unitAiScriptId,
+        build_tool = buildToolScriptId,
+        building_spawn = buildingSpawnScriptId,
+        tile_editor = tileEditorScriptId,
+        location_stamper = locationStamperScriptId,
+        pause = pauseScriptId,
+        autosave = autosaveScriptId,
+        transfer_session = transferSessionScriptId,
+        tutorial_progress = tutorialProgressScriptId,
+        tutorial_eval = tutorialEvalScriptId,
+        tutorial_hud = tutorialHudScriptId,
+        building_info_panel = buildingInfoPanelScriptId,
+        item_info_panel = itemInfoPanelScriptId,
+        cargo_inventory_panel = cargoInventoryPanelScriptId,
+        item_contents_panel = itemContentsPanelScriptId,
+        etymology_panel = etymologyPanelScriptId,
+        name_plate = namePlateScriptId,
+        crafting_panel = craftingPanelScriptId,
+        plant_panel = plantPanelScriptId,
+        popup = popupScriptId,
+        event_log = eventLogScriptId,
+        combat_log = combatLogScriptId,
+        injury_log_panel = injuryLogScriptId,
+        thought_log = thoughtLogScriptId,
+        unit_log = unitLogScriptId,
+        ui_manager = uiScriptId,
+    }
+    return ids[name]
+end
+
 function M.shutdown()
     if previewScriptId then
         engine.killScript(previewScriptId)
