@@ -8144,10 +8144,20 @@ UI entry points are not part of this slice.
 | `slsRecovery` | What stands after a failure: `RecoveryPreserved` (failed before the swap; the previous session is exactly as it was), `RecoveryFlatArena` (the swap happened, content failed, a fresh default flat arena stands), `RecoveryIncomplete` (the swap happened and a session-bound callback raised; the replacement is incompletely initialized), `RecoveryFailed why` (recovery failed too). |
 
 **Ready means complete.** `StageReady` and `LoadPublished` / `LoadSucceeded`
-are written together, only after the published shell was reconciled AND every
+are written together, only after the published shell was reconciled, every
 accepted terrain, fluid, flora, structure, building, location, unit and
-ground item was installed. Allocated ids, a queued install, a generated chunk
-or a completed session swap alone never make a request ready. A ready request
+ground item was installed, AND the simulation consumed it. World-thread
+installation answers when the world thread applied a request, but the
+simulation hears of it through its own queue, so the service then makes one
+queue-ordered round trip (`Scenario.Load.Construct.awaitSimulation`: the
+observational `SimReadMemory`, queued behind everything installed and
+answered only after it): the reply proves the simulation holds the installed
+terrain and fluid and the published shell's chunk seeds, and a paused
+session ticks nothing in the meantime. A simulation that does not answer in
+time, or whose answer was discarded by a publication, is a construction
+failure like any other (recovery follows); the recovery arena is awaited the
+same way. Allocated ids, a queued install, a generated chunk or a completed
+session swap alone never make a request ready. A ready request
 may carry warnings: interactive callers show them, automated callers (SCN-15,
 SCN-17) compare them with the ones they expect and treat an unexpected one as a
 setup failure (D-15); this slice supplies the complete evidence.
@@ -8190,6 +8200,11 @@ D-43 permits recovery to a flat arena instead.
   (`failedAtPhase` unset) and `RecoveryFlatArena`. It is never reported as a
   load of the requested file. If recovery itself fails, both diagnostics are
   kept and the disposition is `RecoveryFailed`.
+- `failLoad` is publication-aware: for a request whose record says it was
+  published it ends the generic transaction as `LoadReplacementFailed` with
+  `failedAtPhase` unset, never as `LoadFailed`. The recovery's own staging, its
+  publish barrier and the Lua apply report through the existing paths, so the
+  rule lives there rather than at each call site.
 - Every outcome leaves the simulation paused and releases the exclusion and the
   barrier, so the next request is admitted. A synchronous exception at an
   ownership hand-off is caught and terminalizes the request; a thread
@@ -8211,12 +8226,23 @@ held for the check and the claim only; the operation's own state
 operation's WHOLE lifetime. A conflicting request is answered `Busy` at once:
 no queue, no cancellation, no change to the active request's status, request
 identity or pause state. `engine.setPaused(false)` is refused for the whole
-lifetime of a scenario load for the same reason it is for any load.
+lifetime of a scenario load for the same reason it is for any load, and the
+refusal is decided INSIDE the player-intent lock every pause transition takes
+(`withPlayerIntentUnless`), not before it: an operation admitted on another
+thread imposes its pause under that same lock, so a refusal read before the
+lock could be stale by the time the lock is held and the unpause would clear
+the pause the accepted operation had just imposed.
 
 **Stale completions.** Every write to the request record and to the generic
 status is keyed by request id and ignored once the request is terminal, so a late
-`LuaSaveLoaded`, `LuaLoadStagingFailed` or status write about an older request
-cannot finish or overwrite a newer one.
+status write about an older request cannot finish or overwrite a newer one. A
+late `LuaSaveLoaded` is discarded BEFORE it does anything
+(`Engine.Scripting.Lua.Thread.Dispatch.handleSaveLoaded`): when a NEWER request
+was accepted since, or its own request already ended, no `onSaveLoaded`
+callback runs (its survivor arrays describe a session that is no longer the
+live one) and no queued console command is cancelled. A message for a
+transaction the load status does not track at all is an isolated dispatch (the
+headless reconciliation fixtures drive the handler that way) and runs.
 
 **Transient classification.** The admission lock, the request record, the plan
 the continuation installs and the test seams ride inside `LoadStatusRef`
