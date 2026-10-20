@@ -649,6 +649,11 @@ library
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
                      Scenario.Items.Refs
+                     Scenario.Load.Types
+                     Scenario.Load.Catalog
+                     Scenario.Load.Session
+                     Scenario.Load.Construct
+                     Scenario.Load.Service
                      Scenario.Items.Build
                      Scenario.Items.Owners
                      Scenario.Items.Capture
@@ -2026,6 +2031,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.World
                    Test.Headless.Scenario.World.Fixtures
                    Test.Headless.Scenario.World.Live
+                   Test.Headless.Scenario.Load
+                   Test.Headless.Scenario.Load.Harness
+                   Test.Headless.Scenario.Load.Exclusion
+                   Test.Headless.Scenario.Load.Failure
+                   Test.Headless.Scenario.Load.Session
+                   Test.Headless.Scenario.Load.Persist
+                   Test.Headless.Scenario.Load.Bindings
                    Test.Headless.Lua.Faction
                    Test.Headless.Lua.UnitOwnership
                    Test.Headless.Location.Instance

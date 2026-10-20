@@ -20,6 +20,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -44,30 +45,38 @@ topKeys =
     , "structures", "buildings", "locations", "units", "ground_items" ]
 
 -- | Decode a migrated, current-version document body.
-decodeContent ∷ Int → A.Object → Dec Scenario
+decodeContent ∷ Int → A.Object → Dec (Scenario, SourcePaths)
 decodeContent sourceVersion o = do
     checkKeys "" topKeys o
     md ← readMap o
     cam ← readCamera o
     local (\e → e { envBounds = md ≫= mapTileBounds }) $ do
-        terrain    ← family "terrain" decodeTerrain
-        fluids     ← family "fluids" decodeFluid
-        flora      ← family "flora" (decodeFlora sourceVersion)
-        structures ← family "structures" (decodeStructure sourceVersion)
-        buildings  ← family "buildings" decodeBuilding
-        locations  ← family "locations" (decodeLocation sourceVersion)
-        units      ← family "units" decodeUnit
-        ground     ← family "ground_items" decodeGroundItem
-        pure Scenario
-            { scSourceVersion = sourceVersion
-            , scMap = md, scCamera = cam
-            , scTerrain = terrain, scFluids = fluids, scFlora = flora
-            , scStructures = structures, scBuildings = buildings
-            , scLocations = locations, scUnits = units
-            , scGroundItems = ground }
+        (pTerrain, terrain)       ← unzip <$> family "terrain" decodeTerrain
+        (pFluids, fluids)         ← unzip <$> family "fluids" decodeFluid
+        (pFlora, flora)           ← unzip <$> family "flora" (decodeFlora sourceVersion)
+        (pStructures, structures) ← unzip <$> family "structures" (decodeStructure sourceVersion)
+        (pBuildings, buildings)   ← unzip <$> family "buildings" decodeBuilding
+        (pLocations, locations)   ← unzip <$> family "locations" (decodeLocation sourceVersion)
+        (pUnits, units)           ← unzip <$> family "units" decodeUnit
+        (pGround, ground)         ← unzip <$> family "ground_items" decodeGroundItem
+        surv ← takeSurvivors
+        pure ( Scenario
+                 { scSourceVersion = sourceVersion
+                 , scMap = md, scCamera = cam
+                 , scTerrain = terrain, scFluids = fluids, scFlora = flora
+                 , scStructures = structures, scBuildings = buildings
+                 , scLocations = locations, scUnits = units
+                 , scGroundItems = ground }
+             , SourcePaths
+                 { spTerrain = pTerrain, spFluids = pFluids, spFlora = pFlora
+                 , spStructures = pStructures, spBuildings = pBuildings
+                 , spLocations = pLocations, spUnits = pUnits, spGroundItems = pGround
+                 , spSurvivors = Map.fromList surv } )
   where
-    family ∷ Text → (Text → A.Value → Dec (Maybe β)) → Dec [β]
-    family k dec = authoredOr [] <$> listField "" k o dec
+    -- each retained entry with the path it was read at: a rejected entry is
+    -- absent, so the position among the survivors is not the source position
+    family ∷ Text → (Text → A.Value → Dec (Maybe β)) → Dec [(Text, β)]
+    family k dec = authoredOr [] <$> listField "" k o (\p v → fmap ((,) p) <$> dec p v)
 
 readMap ∷ A.Object → Dec (Maybe MapDimensions)
 readMap o = case KM.lookup "map" o of
@@ -693,6 +702,7 @@ modifiers p o uc = do
                 A.Array xs → do
                     ys ← forM (zip [0 ..] (toList xs)) $ \(i, mv) →
                         decodeModifier (indexPath fp i) mv
+                    recordSurvivors fp [ i | (i, Just _) ← zip [0 ..] ys ]
                     pure (Just (catMaybes ys))
                 _ → do
                     diag fp (InvalidValue "a list of modifiers") FieldRejected
