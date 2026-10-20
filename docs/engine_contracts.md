@@ -6244,6 +6244,18 @@ health, density, placement category and texture path decide nothing. A
 species declaring no cultivated variants renders identically in both
 contexts, so the axis changes no existing visual.
 
+**Context and identity are fixed at creation and persisted nowhere
+(#2547).** `FloraInstance.fiContext` is assigned by the three creators
+(placement `wild`; `WePlaceFlora`/`WePlaceFloraWithId` replay and
+`cropPlotInstance` `cultivated`) and reconstructed from the creation
+record on eviction, load and the `world-edits` v1 rewrite. The occurrence
+key is the page-scoped `FloraInstanceId` for wild and row flora and the
+canonical `CropPlots` tile for a groundcover plot (never the reserved
+zero id) until EFM-6; contract §6.1-6.2 records both rules and the two id
+namespaces. `docs/persistence_state_inventory.md` gains no row: the
+field is covered by the existing `wsTilesRef` rebuild classification, and
+no save component writes `FloraChunkData`.
+
 **Retention is authored, and cause does not move it.** `corpsePolicy`
 declares `visibility` (`transient`/`persistent`) with `durationDays`
 and `successor` required for transient and refused for persistent;
@@ -6288,9 +6300,16 @@ selectors, CropPlot elapsed clock and harvested bypass), and `--match
 "World.FloraVisualResolver — shipped content oracle"` (independent pre-change
 growth and lookup chain across all 16 shipped species, all living phases and
 360 calendar days; dead windows for the 12 mortal species and continued life
-for the four evergreens). OWED by the epic's children, each with its own
-issue: EFM-4 through EFM-6 owe
-occurrence-identity, render-context and persistence gates; EFM-7 owes
+for the four evergreens), and, since #2547, `--match "flora render
+context"` (a generated instance is wild, a replayed `WePlaceFloraWithId`,
+a v1 `WePlaceFlora` rewrite and a crop plot's synthetic instance are
+cultivated, and the context survives chunk regeneration and a
+codec-and-reconstruction round trip of a planted row crop; a
+placement-to-cultivated mutation fails it) beside the unchanged
+`--match "flora instance identity"` and `--match "flora instance
+persistence"`. OWED by the epic's children, each with its own
+issue: EFM-5 and EFM-6 owe the condition-record and persistence gates;
+EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
 killed, renders its dead candidate; alive and depleted, it still
 renders `harvested_texture`); EFM-10 owes retention and successor
