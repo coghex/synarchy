@@ -43,6 +43,14 @@ import Unit.Faction
     , factionRelation, hasUnrestrictedCombat, isPlayerCommandable
     , isPlayerOwned )
 import Unit.Faction.Profile
+import Unit.Faction.Membership
+    ( MembershipSource(..), TagMembership(..), UnitFactionProfile
+    , localController, mkUnitFactionProfile, resolveLegacyFaction
+    , resolveSpawnFaction, unitHasUnrestrictedCombat, unitIsCommandableBy
+    , unitIsOwnedBy, unitPolicyProfile )
+import Location.Discovery (UnitSight(..), findAwareness, findDiscoveries)
+import qualified Test.Headless.Location.Discovery as DiscoveryFixture
+import Test.Headless.Unit.FactionConsumerAudit (consumerAuditSpec)
 
 -- * Fixtures
 
@@ -151,6 +159,8 @@ spec = describe "Unit faction profile policy" $ do
     tagValidationSpec
     controllerSpec
     propertySpec
+    controllerAwareOwnershipSpec
+    consumerAuditSpec
     precedenceSpec
     liveOverlaySpec
     baseTableSpec
@@ -301,6 +311,126 @@ propertySpec = describe "properties of one profile" $ do
             other   = mkProfile Nothing [tagAcolyte] []
         relate legacyBase bare other `shouldBe` relate legacyBase capable other
         relate legacyBase other bare `shouldBe` relate legacyBase other capable
+
+-- * Controller-aware ownership (FTS-4)
+
+-- | #2518's acceptance group: ownership and commandability of LIVE unit
+--   profiles under an explicit observer, kept apart from alliance.
+--
+--   No controller other than the local one can be spawned yet (FTS-6
+--   owns that ingress), so the second human and the AI controller are
+--   pure fixtures here; the local one is the engine's own
+--   'localController' constant, never a re-typed copy.
+controllerAwareOwnershipSpec ∷ Spec
+controllerAwareOwnershipSpec = describe "controller-aware ownership (FTS-4)" $ do
+    let secondHuman = humanController "player_2"
+        raiders     = aiController "raiders"
+        controllers = [localController, secondHuman, raiders]
+        -- One live profile per controller, every one carrying the SAME
+        -- tags, so only the controller can tell them apart.
+        sharedTags  = [tagAcolyte, tagRedTribe]
+        rosterOf c  = mkUnitFactionProfile (Just c)
+            [ TagMembership t MemberDefinitionDefault | t ← sharedTags ] []
+        -- What a tag-less acolyte spawn is (D-31): the definition's
+        -- authored default, no controller.
+        uncontrolled = resolveSpawnFaction [tagAcolyte] Nothing
+        portal       = resolveLegacyFaction [tagAcolyte] FactionPlayer
+        debugSpawn   = resolveLegacyFaction [tagAcolyte] FactionDebug
+
+    it "the local observer is the engine's one local human controller" $
+        localController `shouldBe` localPlayer
+
+    it "each observer owns and commands exactly its own controller's units" $
+        forM_ controllers $ \observer → forM_ controllers $ \c → do
+            unitIsOwnedBy observer (rosterOf c) `shouldBe` (observer ≡ c)
+            unitIsCommandableBy observer (rosterOf c) `shouldBe` (observer ≡ c)
+
+    it "an other-controller unit sharing every tag is allied with the \
+       \local roster yet neither owned nor commandable locally" $
+        forM_ [secondHuman, raiders] $ \c → do
+            relate legacyBase (unitPolicyProfile (rosterOf c))
+                              (unitPolicyProfile (rosterOf localController))
+                `shouldBe` RelAlly
+            unitIsOwnedBy localController (rosterOf c) `shouldBe` False
+            unitIsCommandableBy localController (rosterOf c) `shouldBe` False
+
+    it "an uncontrolled acolyte sharing the acolyte tag is allied by \
+       \policy yet not owned, not commandable, and not a discoverer" $ do
+        relate legacyBase (unitPolicyProfile uncontrolled) (unitPolicyProfile portal)
+            `shouldBe` RelAlly
+        relate legacyBase (unitPolicyProfile portal) (unitPolicyProfile uncontrolled)
+            `shouldBe` RelAlly
+        forM_ controllers $ \observer → do
+            unitIsOwnedBy observer uncontrolled `shouldBe` False
+            unitIsCommandableBy observer uncontrolled `shouldBe` False
+        let sights prof = [UnitSight (1 ∷ Int) (unitPolicyProfile prof) [(8, 8)]]
+            discover = findDiscoveries localController 0 DiscoveryFixture.instances1
+            aware    = findAwareness localController 0 DiscoveryFixture.instances1
+        discover (sights uncontrolled) `shouldBe` []
+        aware (sights uncontrolled) `shouldBe` []
+        -- The same sight from the portal acolyte DOES discover, so the
+        -- empty answers above are exclusion, not a dead fixture.
+        length (discover (sights portal)) `shouldBe` 1
+        length (aware (sights portal)) `shouldBe` 1
+
+    it "a debug profile is commandable and not owned, for every observer" $
+        forM_ controllers $ \observer → do
+            unitIsOwnedBy observer debugSpawn `shouldBe` False
+            unitIsCommandableBy observer debugSpawn `shouldBe` True
+
+    it "unrestricted combat is the capability alone, with no observer" $ do
+        unitHasUnrestrictedCombat debugSpawn `shouldBe` True
+        map unitHasUnrestrictedCombat
+            (portal : uncontrolled : map rosterOf controllers)
+            `shouldBe` replicate 5 False
+
+    it "matches the definitions exhaustively over every controller, tag \
+       \set and capability set (the invariant, not a sample)" $ do
+        -- Owned iff controller ≡ observer; commandable iff owned or
+        -- CapLocalCommandable; unrestricted iff CapUnrestrictedCombat;
+        -- and none of the three ever reads a tag.
+        let tagSets = [ [], [tagAcolyte], [tagWildlife, tagLegacyHostile]
+                      , sharedTags ]
+            capSets = [ [], [CapLocalCommandable], [CapUnrestrictedCombat]
+                      , allFactionCapabilities ]
+            ctrlOpts = Nothing : map Just controllers
+            profiles ∷ [(Maybe ControllerId, [FactionCapability], UnitFactionProfile)]
+            profiles =
+                [ ( c, cs
+                  , mkUnitFactionProfile c
+                      [ TagMembership t MemberDefinitionDefault | t ← ts ] cs )
+                | c ← ctrlOpts, ts ← tagSets, cs ← capSets ]
+        length profiles `shouldBe` 64
+        forM_ profiles $ \(c, cs, p) → do
+            unitHasUnrestrictedCombat p
+                `shouldBe` (CapUnrestrictedCombat `elem` cs)
+            forM_ controllers $ \observer → do
+                let owned = c ≡ Just observer
+                unitIsOwnedBy observer p `shouldBe` owned
+                unitIsCommandableBy observer p
+                    `shouldBe` (owned ∨ CapLocalCommandable `elem` cs)
+                -- The unit queries are FTS-1's profile queries over the
+                -- projection, and nothing else.
+                unitIsOwnedBy observer p
+                    `shouldBe` isProfilePlayerOwned observer (unitPolicyProfile p)
+                unitIsCommandableBy observer p
+                    `shouldBe` isProfileCommandable observer (unitPolicyProfile p)
+
+    it "keeps every current spawn source's legacy answers (requirement 6)" $ do
+        -- portal: owned + commandable; debug: commandable only;
+        -- wildlife, hostile, neutral and location contents: neither.
+        let row f = let p = resolveLegacyFaction [tagAcolyte] f
+                    in ( unitIsOwnedBy localController p
+                       , unitIsCommandableBy localController p
+                       , unitHasUnrestrictedCombat p )
+        map row legacyOrder `shouldBe`
+            [ (True, True, False), (False, False, False), (False, False, False)
+            , (False, False, False), (False, True, True) ]
+        forM_ legacyOrder $ \f → do
+            let (o, c, u) = row f
+            o `shouldBe` isPlayerOwned f
+            c `shouldBe` isPlayerCommandable f
+            u `shouldBe` hasUnrestrictedCombat f
 
 -- * Precedence
 

@@ -35,8 +35,11 @@ import Item.Types
     , ItemStorage(..), itemTotalWeight)
 import Structure.Palette (emptyTexPalette)
 import Unit.Direction (Direction(..))
-import Unit.Faction (Faction(..))
-import Unit.Faction.Membership (resolveLegacyFaction)
+import Unit.Faction (Faction(..), FactionRelation(..))
+import Unit.Faction.Membership
+    ( localController, resolveLegacyFaction, resolveSpawnFaction
+    , unitPolicyProfile )
+import Unit.Faction.Profile (emptyFactionPolicy, relationFromTo, tagAcolyte)
 import Unit.Types
     (UnitId(..), UnitInstance(..), UnitManager(..), emptyUnitManager, emptyPhysioOverrides)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
@@ -463,14 +466,15 @@ spec = describe "Container knowledge" $ do
            \refreshes the record (the AI deposit/withdraw path)" $ do
             sc ← newScene
             setStorage sc cargoBid [kitAt 100 70]
-            revealContainerForUnit (scObserver sc) (scUnits sc) scoutUid cargoBid
+            revealContainerForUnit localController (scObserver sc) (scUnits sc) scoutUid cargoBid
                 `shouldReturn` True
             stateOf sc cargoBid `shouldReturn` KnownContents
 
         it "a DEBUG-faction unit counts too -- the gate is \
-           \isPlayerCommandable, not a hand-rolled player-tag test" $ do
+           \commandability (its capability), not a hand-rolled \
+           \player-tag test" $ do
             sc ← newScene
-            revealContainerForUnit (scObserver sc) (scUnits sc) debugUid cargoBid
+            revealContainerForUnit localController (scObserver sc) (scUnits sc) debugUid cargoBid
                 `shouldReturn` True
             stateOf sc cargoBid `shouldReturn` KnownEmpty
 
@@ -479,7 +483,7 @@ spec = describe "Container knowledge" $ do
            \and the record still does not exist" $ do
             sc ← newScene
             setStorage sc cargoBid [kitAt 100 70]
-            revealContainerForUnit (scObserver sc) (scUnits sc) wildlifeUid cargoBid
+            revealContainerForUnit localController (scObserver sc) (scUnits sc) wildlifeUid cargoBid
                 `shouldReturn` False
             stateOf sc cargoBid `shouldReturn` NeverInspected
 
@@ -492,14 +496,35 @@ spec = describe "Container knowledge" $ do
             before ← recordOf sc cargoBid
             setStorage sc cargoBid []
             writeIORef (scTime sc) 9999
-            revealContainerForUnit (scObserver sc) (scUnits sc) wildlifeUid cargoBid
+            revealContainerForUnit localController (scObserver sc) (scUnits sc) wildlifeUid cargoBid
                 `shouldReturn` False
             recordOf sc cargoBid `shouldReturn` before
+
+        it "an UNCONTROLLED acolyte reveals nothing even though the \
+           \policy calls it the scout's ally -- commandability is not \
+           \alliance (#2518)" $ do
+            sc ← newScene
+            -- The real tag-less spawn ingress (D-31): the acolyte
+            -- definition's authored default tag, and no controller.
+            let strayUid = UnitId 4
+                stray    = (mkUnit pageB FactionNeutral)
+                    { uiFaction = resolveSpawnFaction [tagAcolyte] Nothing }
+                scout    = resolveLegacyFaction [tagAcolyte] FactionPlayer
+            relationFromTo emptyFactionPolicy
+                (unitPolicyProfile (uiFaction stray)) (unitPolicyProfile scout)
+                `shouldBe` RelAlly
+            modifyIORef' (scUnits sc) $ \um →
+                um { umInstances = HM.insert strayUid stray (umInstances um) }
+            setStorage sc cargoBid [kitAt 100 70]
+            revealContainerForUnit localController (scObserver sc) (scUnits sc)
+                                   strayUid cargoBid
+                `shouldReturn` False
+            stateOf sc cargoBid `shouldReturn` NeverInspected
 
         it "an unknown acting unit reveals nothing (no faction, no \
            \reveal) rather than defaulting to commandable" $ do
             sc ← newScene
-            revealContainerForUnit (scObserver sc) (scUnits sc) (UnitId 99) cargoBid
+            revealContainerForUnit localController (scObserver sc) (scUnits sc) (UnitId 99) cargoBid
                 `shouldReturn` False
             stateOf sc cargoBid `shouldReturn` NeverInspected
 

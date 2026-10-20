@@ -63,7 +63,6 @@ tutorialEval.warnedKeys = tutorialEval.warnedKeys or {}
 
 local PORTAL_DEF     = "acolyte_portal"
 local ACOLYTE_DEF    = "acolyte"
-local PLAYER_FACTION = "player"
 local RATIONS_DEF    = "rations"
 -- The container `holds` kind, NOT an item def name. Carried water is
 -- the sum of currentFill over container items declaring this kind, so
@@ -113,7 +112,8 @@ local function aiStateTable()
     return nil
 end
 
--- A live, player-faction acolyte. Every clause is required: aiState
+-- A live, player-OWNED acolyte (#2518: the engine's ownership query, not
+-- a comparison against the raw faction tag). Every clause is required: aiState
 -- outlives nothing (the post-load reconcile prunes dead ids), but a
 -- technomule and a bear both keep AI state too, and neither is a
 -- traveller this tutorial is about.
@@ -121,7 +121,7 @@ local function isPlayerAcolyte(uid)
     if type(uid) ~= "number" then return false end
     if type(unit) ~= "table" then return false end
     if not unit.exists(uid) then return false end
-    if unit.getFaction(uid) ~= PLAYER_FACTION then return false end
+    if not unit.isPlayerOwned(uid) then return false end
     if unit.getPose(uid) == "dead" then return false end
     local info = unit.getInfo(uid)
     return type(info) == "table" and info.defName == ACOLYTE_DEF

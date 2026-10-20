@@ -469,7 +469,7 @@ end
 -- win the assignment.
 --
 -- A candidate is a selected unit that is player-commandable (the same
--- faction.isPlayerCommandable gate the "Attack" entry already uses --
+-- unit.isPlayerCommandable gate the "Attack" entry already uses --
 -- and, since A2, the same gate the engine's own unit-endpoint
 -- eligibility applies) and is not the destination itself (the
 -- self-transfer case the contract refuses at request time). A uid whose
@@ -571,10 +571,9 @@ function M.resolveSource(selectedUids, excludeUid, target, requiredAction, opts)
     for _, uid in ipairs(candidates) do
         if excludeUid == nil or uid ~= excludeUid then
             local info = unit.getInfo(uid)
-            local fac = info and unit.getFaction(uid)
-            if info and info.gridX and info.gridY and fac
+            if info and info.gridX and info.gridY
                and unit.getPose(uid) ~= "dead"
-               and faction.isPlayerCommandable(fac)
+               and unit.isPlayerCommandable(uid)
                and (not pageScoped or info.page == targetPage)
                and (requiredAction == nil
                     or aiActions.unitHas(uid, requiredAction)) then

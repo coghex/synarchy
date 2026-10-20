@@ -60,9 +60,11 @@
 --   leaves knowledge untouched, because the call never happens.
 --
 --   __One faction gate.__ Every unit-driven reveal goes through
---   'revealContainerForUnit', which asks 'Unit.Faction.isPlayerCommandable'
---   (canonically player + debug) — never a duplicated faction-tag
---   comparison at a call site.
+--   'revealContainerForUnit', which asks
+--   'Unit.Faction.Membership.unitIsCommandableBy' of the observer its
+--   caller names (#2518: the observer's own units plus any unit carrying
+--   the local-commandability capability, i.e. a debug spawn) — never a
+--   duplicated faction-tag comparison at a call site.
 module Building.Knowledge.Live
     ( ContainerObserver(..)
     , containerObserver
@@ -91,8 +93,8 @@ import Building.Types
     ( BuildingActivity(..), BuildingId(..)
     , BuildingInstance(..), BuildingManager(..), currentActivity )
 import Item.Types (ItemInstance, ItemManager)
-import Unit.Faction (isPlayerCommandable)
-import Unit.Faction.Membership (legacyFactionOf)
+import Unit.Faction.Membership (unitIsCommandableBy)
+import Unit.Faction.Profile (ControllerId)
 import Unit.Types (UnitId, UnitInstance(..), UnitManager(..))
 import World.Page.Resolve (resolveBuildingPageWith)
 import World.State.Types (WorldManager(..), WorldState(..))
@@ -182,9 +184,11 @@ revealContainerWith betweenReads co bid = do
                 (recordObservation itemMgr now bid storage k, ())
             pure True
 
--- | 'revealContainer', gated on the ACTING unit being player-commandable.
---   A wildlife or hostile unit rummaging in a container teaches the
---   player nothing, so its interaction leaves the record exactly as it
+-- | 'revealContainer', gated on the ACTING unit being commandable by
+--   @observer@. A wildlife or hostile unit rummaging in a container
+--   teaches the player nothing, and neither does an uncontrolled
+--   acolyte that merely shares the roster's tag (allied is not
+--   commandable), so its interaction leaves the record exactly as it
 --   was — which is what lets a stale record stay stale even while the
 --   contents change underneath it.
 --
@@ -194,11 +198,12 @@ revealContainerWith betweenReads co bid = do
 --   acting unit at all, and the seeding trigger in
 --   "Building.Thread.Command" genuinely has no unit roster to hand.
 revealContainerForUnit
-    ∷ ContainerObserver → IORef UnitManager → UnitId → BuildingId → IO Bool
-revealContainerForUnit co unitsRef uid bid = do
+    ∷ ControllerId → ContainerObserver → IORef UnitManager → UnitId
+    → BuildingId → IO Bool
+revealContainerForUnit observer co unitsRef uid bid = do
     um ← readIORef unitsRef
     let commandable =
-            maybe False (isPlayerCommandable ∘ legacyFactionOf ∘ uiFaction)
+            maybe False (unitIsCommandableBy observer ∘ uiFaction)
                   (HM.lookup uid (umInstances um))
     if commandable then revealContainer co bid else pure False
 

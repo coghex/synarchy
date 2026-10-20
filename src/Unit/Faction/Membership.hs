@@ -22,8 +22,12 @@
 --   mutation, relation causes, and further controllers are FTS-6.
 --
 --   __The compatibility adapter.__ Consumers that have not been ported
---   to profile queries yet (FTS-4, FTS-5) read faction through
---   'legacyFactionOf' and through nothing else. It is the exact inverse
+--   to profile queries yet (FTS-5's relation consumers) read faction
+--   through 'legacyFactionOf' and through nothing else; since FTS-4
+--   (#2518) ownership and commandability are asked through
+--   'unitIsOwnedBy' and 'unitIsCommandableBy' instead, and the
+--   adapter's remaining readers are @unit.getFaction@ and the save
+--   codec. It is the exact inverse
 --   of D-26 on the legacy profiles and answers 'FactionNeutral' for
 --   anything it does not recognize — including an uncontrolled acolyte,
 --   which is what a tag-less or @wildlife@ acolyte spawn now IS (D-31).
@@ -39,6 +43,10 @@ module Unit.Faction.Membership
     , ufpCapabilities
     , inertUnitProfile
     , unitPolicyProfile
+      -- * Properties of a live unit
+    , unitIsOwnedBy
+    , unitIsCommandableBy
+    , unitHasUnrestrictedCombat
       -- * The local controller
     , localController
       -- * Legacy compatibility
@@ -55,8 +63,10 @@ import Unit.Faction (Faction(..), defaultSpawnFaction)
 import Unit.Faction.Profile
     ( ControllerId, FactionCapability(..), FactionProfile, FactionTag
     , allFactionCapabilities
-    , humanController, legacyProfile, mkProfile, profileCapabilities
-    , profileController, profileTags, tagLegacyHostile, tagWildlife )
+    , humanController, isProfileCommandable, isProfilePlayerOwned
+    , legacyProfile, mkProfile, profileCapabilities, profileController
+    , profileHasUnrestrictedCombat, profileTags, tagLegacyHostile
+    , tagWildlife )
 
 -- * Membership provenance
 
@@ -103,6 +113,32 @@ unitPolicyProfile p =
     mkProfile (ufpController p)
               (map tmTag (Set.toList (ufpMemberships p)))
               (Set.toList (ufpCapabilities p))
+
+-- * Properties of a live unit
+
+-- | The three non-relation questions about a live unit (#2518, FTS-4),
+--   answered by FTS-1's profile queries over 'unitPolicyProfile' and by
+--   nothing else. Ownership and commandability take the OBSERVING
+--   controller as an argument: no function here reads
+--   'localController' itself, so the entry point that asks — the
+--   discovery tick, a transfer verb, a Lua query — names whose
+--   ownership it means.
+--
+--   Owned iff the unit's controller IS the observer; commandable iff
+--   owned or the profile carries 'CapLocalCommandable'. An uncontrolled
+--   acolyte shares the local roster's @acolyte@ tag, and is therefore
+--   allied with it by policy, yet is neither: alliance is a relation
+--   question, and these are not.
+unitIsOwnedBy ∷ ControllerId → UnitFactionProfile → Bool
+unitIsOwnedBy observer = isProfilePlayerOwned observer ∘ unitPolicyProfile
+
+unitIsCommandableBy ∷ ControllerId → UnitFactionProfile → Bool
+unitIsCommandableBy observer = isProfileCommandable observer ∘ unitPolicyProfile
+
+-- | 'CapUnrestrictedCombat' alone. Observer-independent: it is a
+--   property of the profile, not of who is looking at it.
+unitHasUnrestrictedCombat ∷ UnitFactionProfile → Bool
+unitHasUnrestrictedCombat = profileHasUnrestrictedCombat ∘ unitPolicyProfile
 
 -- * The local controller
 

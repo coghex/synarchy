@@ -50,7 +50,7 @@ local MENU_LABEL = "Drink"
 -- opening and the player picking an entry.
 local function commandableIdle(uid)
     if not uid then return false end
-    if not faction.isPlayerCommandable(unit.getFaction(uid)) then return false end
+    if not unit.isPlayerCommandable(uid) then return false end
     return unit.getActivity(uid) == "idle"
 end
 
