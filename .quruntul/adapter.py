@@ -119,7 +119,7 @@ class Synarchy:
     name = "synarchy"
     flake_trials = 10
     refresh_days = 7
-    playtest = True  # the Synarchy $playtest workflow runs tools/playtest; $test may fall back to it
+    playtest = False  # no playtest() capability yet: $playtest would refuse, so $test must not fall back to it
 
     def suites(self, ctx):
         checkout = ctx.checkout
