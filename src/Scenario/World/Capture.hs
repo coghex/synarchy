@@ -182,12 +182,12 @@ captureWorldContent reserved snap =
                 (name, used') = uniqueName used base
             in (FluidPatch (ExplicitId name) [] (regionOf sorted) kind e : acc, used')
         -- flora --------------------------------------------------------
-        floraEntries = captureFlora snap chunks names2
+        (floraEntries, floraDiags) = captureFlora snap chunks names2
     in CapturedWorld
         { cwTerrain = reverse terrainEntries
         , cwFluids = reverse fluidEntries
         , cwFlora = floraEntries
-        , cwDiagnostics = sortOn sdPath (tagDiags ⧺ columnDiags)
+        , cwDiagnostics = sortOn sdPath (tagDiags ⧺ columnDiags ⧺ floraDiags)
         }
 
 -- | The first tile of a sorted, non-empty group, as @x.y@.
@@ -316,18 +316,37 @@ columnOf lc authored overrides (gx, gy) idx =
 -- * Flora
 
 captureFlora ∷ WorldSnapshot → M.Map ChunkCoord LoadedChunk → Set.Set Text
-             → [FloraEntry]
+             → ([FloraEntry], [ScenarioDiagnostic])
 captureFlora snap chunks used0 =
     let cat = snapFlora snap
         day = snapAbsDay snap
-        occurrences =
-            [ ((x, y), fi, sp)
+        plantedHere =
+            [ (fi, (x, y))
             | (coord, lc) ← M.toAscList chunks
             , fi ← fcdInstances (lcFlora lc)
             , isPlantedFloraInstanceId (fiInstanceId fi)
             , let (x, y) = chunkToGlobal coord (fromIntegral (fiTileX fi)) (fromIntegral (fiTileY fi))
-            , arenaAdmitsTile (snapBounds snap) x y
+            , arenaAdmitsTile (snapBounds snap) x y ]
+        occurrences =
+            [ ((x, y), fi, sp)
+            | (fi, (x, y)) ← plantedHere
             , Just sp ← [lookupSpecies (fiSpecies fi) cat] ]
+        plotsHere =
+            [ ((x, y), cp)
+            | ((x, y), cp) ← M.toAscList (M.fromList (HM.toList (snapCropPlots snap)))
+            , arenaAdmitsTile (snapBounds snap) x y ]
+        -- a plant or a plot whose species this build's catalog cannot name
+        -- cannot be written: it is REPORTED, never dropped, so a capture
+        -- cannot succeed while omitting plants the arena holds
+        unresolved =
+            length [ () | (fi, _) ← plantedHere, isNothing (lookupSpecies (fiSpecies fi) cat) ]
+            + length [ () | (_, cp) ← plotsHere, isNothing (lookupSpecies (cpSpecies cp) cat) ]
+        floraDiags =
+            [ ScenarioDiagnostic "flora.species"
+                (InvalidValue (tshow unresolved <> " planted plant(s) or crop plot(s) are of a species with no "
+                    <> "registered name and cannot be written"))
+                EntryRejected
+            | unresolved > 0 ]
         occEntry ((x, y), fi, sp) = keyed $
                 FloraEntry
                 { feId = ExplicitId ""
@@ -344,8 +363,7 @@ captureFlora snap chunks used0 =
                     else Omitted }
         plots =
             [ ((x, y), cp, sp)
-            | ((x, y), cp) ← M.toAscList (M.fromList (HM.toList (snapCropPlots snap)))
-            , arenaAdmitsTile (snapBounds snap) x y
+            | ((x, y), cp) ← plotsHere
             , Just sp ← [lookupSpecies (cpSpecies cp) cat] ]
         plotEntry ((x, y), cp, sp) = keyed $
                 FloraEntry
@@ -375,7 +393,7 @@ captureFlora snap chunks used0 =
                        <> maybe "" (\n → "." <> tshow n) (ordinalOf i k)
                 (name, used') = uniqueName usedNames base
             in (mk name : acc, used')
-    in reverse entries
+    in (reverse entries, floraDiags)
 
 -- | The ranking of an exported flora entry: its WHOLE structure — every
 --   value a recapture writes — as raw values under the derived 'Ord', never a

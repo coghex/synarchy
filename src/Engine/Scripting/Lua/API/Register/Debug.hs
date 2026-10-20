@@ -16,12 +16,14 @@ import Engine.Scripting.Lua.API.ActionOutcome
 import Engine.Scripting.Lua.API.LoadGate
     (armLoadStageGateFn, releaseLoadStageGateFn, getLoadStageGateFn)
 import Engine.Scripting.Lua.API.QueueStats (getQueueStatsFn)
+import Engine.Scripting.Lua.API.ScenarioDebug
+    (loadScenarioFn, captureScenarioFn, scenarioLoadStatusFn, scenarioCaptureStatusFn)
 import Engine.Scripting.Lua.API.TagQueryDebug (debugLiveTagQueryFn)
 import Engine.Scripting.Lua.API.SceneStats (getSceneStatsFn)
 import qualified HsLua as Lua
 
 -- | Populate the @debug@ global with engine debug verbs
---   (#643, #646, #907, #1181, #2705).
+--   (#643, #646, #907, #1181, #2705, #2714).
 --   openlibs already installed Lua's stock @debug@ stdlib table, so we
 --   add fields to it rather than replacing it — the stock functions
 --   (traceback etc.) stay available. Falls back to creating the table
@@ -44,6 +46,13 @@ registerDebugAPI callStats env = do
   registerLuaFunction callStats "debug" "armLoadStageGate" (armLoadStageGateFn env)
   registerLuaFunction callStats "debug" "releaseLoadStageGate" (releaseLoadStageGateFn env)
   registerLuaFunction callStats "debug" "getLoadStageGate" (getLoadStageGateFn env)
+  -- #2714: INTERNAL load and capture verbs for the scenario services, the
+  -- only way a fresh process reaches them until SCN-15's public entry
+  -- points supersede these (see "Engine.Scripting.Lua.API.ScenarioDebug").
+  registerLuaFunction callStats "debug" "loadScenario" (loadScenarioFn env)
+  registerLuaFunction callStats "debug" "captureScenario" (captureScenarioFn env)
+  registerLuaFunction callStats "debug" "getScenarioLoadStatus" (scenarioLoadStatusFn env)
+  registerLuaFunction callStats "debug" "getScenarioCaptureStatus" (scenarioCaptureStatusFn env)
   -- #2705: the live gameplay-tag query, read-only, for the persistence
   -- probe's eviction and readmission checks.
   registerLuaFunction callStats "debug" "liveTagQuery" (debugLiveTagQueryFn env)

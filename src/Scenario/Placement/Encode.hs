@@ -9,6 +9,10 @@ module Scenario.Placement.Encode
     ( structureEntryValue
     , buildingEntryValue
     , locationEntryValue
+      -- * Shared by the other families' encoders
+    , idField
+    , tagsField
+    , opt
     ) where
 
 import UPrelude

@@ -32,11 +32,12 @@ import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (readTVarIO)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
-    , reachSnapshot, failSave )
+    , reachSnapshot, failSave, standardSaveOwners )
 import Engine.Load.Status (advanceLoad, failLoad, finishLoad
                           , failReconciliation, scenarioSeamPoint
                           , readLoadStatus, LoadStatus(..)
                           , ReconciliationFailure(..), LoadPhase(..))
+import Scenario.Capture.Service (startScenarioCapture)
 import Scenario.Load.Service
     (startScenarioLoad, scenarioPublishing, scenarioPublished, continueScenarioLoad)
 import Scenario.Load.Types (ScenarioLoadPoint(..))
@@ -378,6 +379,7 @@ processLuaMsg env ls stateRef msg = case msg of
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
   LuaScenarioLoad requestId source → startScenarioLoad env ls requestId source
+  LuaScenarioCapture requestId request → startScenarioCapture env requestId request
   LuaLoadStagingFailed requestId → do
       -- This message is QUEUED (not a direct call), so
       -- it can be processed well after 'requestId' has already gone
@@ -568,10 +570,7 @@ publishStaged env ls logger requestId = do
     -- @Engine.Loop.Mode.runGatedByCaptureLock@; a plain save omits
     -- SaveRender ('Engine.Scripting.Lua.API.Save.saveOwnerSet').
     inputActive ← readIORef (inputThreadActiveRef env)
-    let baseOwners = Set.fromList
-            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
-        withInput = if inputActive then Set.insert SaveInput baseOwners else baseOwners
-        owners = Set.insert SaveRender withInput
+    let owners = Set.insert SaveRender (standardSaveOwners inputActive)
     started ← beginSave (saveBarrierRef env) owners
     case started of
       Left err → do

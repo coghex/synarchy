@@ -1,0 +1,268 @@
+version: 3
+map:
+  width: 40
+  height: 40
+camera:
+  x: 3
+  'y': 4
+terrain:
+- id: terrain.-2.sand.s0.8.8
+  material: sand
+  rect:
+    x0: 8
+    y0: 8
+    x1: 9
+    y1: 8
+  surface_z: -2
+  slope: 0
+- id: terrain.6.granite.s0.-3.-3
+  tags:
+  - pad
+  material: granite
+  rect:
+    x0: -3
+    y0: -3
+    x1: 3
+    y1: 3
+  surface_z: 6
+  slope: 0
+fluids:
+- id: fluid.lake.35.8.8
+  fluid: lake
+  rect:
+    x0: 8
+    y0: 8
+    x1: 9
+    y1: 8
+  surface_z: 4.375
+flora: []
+structures: []
+buildings:
+- id: bat
+  tags:
+  - power
+  definition: high_voltage_battery
+  x: 14
+  'y': 4
+  z: 0
+  build_progress: 0
+  materials_delivered: []
+  power_charge: 2500
+  storage: []
+- id: crate
+  definition: cargo_hold_S
+  x: 16
+  'y': 8
+  z: 0
+  build_progress: 240
+  materials_delivered: []
+  storage:
+  - id: bars
+    definition: steel_bar
+    bulk: 0.75
+    condition: 100
+    contents: []
+    fill: 0
+    quality: 100
+    sharpness: 100
+    storage_capacity: null
+    temperature: ambient
+    weight: 0.5
+locations: []
+units:
+- id: medic
+  tags:
+  - squad
+  definition: acolyte
+  x: 1
+  'y': 1
+  z: 6
+  accessories:
+  - id: medic.accessories.0
+    definition: acolyte_habit
+    bulk: 6
+    condition: 100
+    contents: []
+    fill: 0
+    quality: 100
+    sharpness: 100
+    storage_capacity: null
+    temperature: ambient
+    weight: 1.2
+  - id: medic.accessories.1
+    definition: technogoggles
+    bulk: 0.8
+    condition: 100
+    contents: []
+    fill: 0
+    quality: 100
+    sharpness: 100
+    storage_capacity: null
+    temperature: ambient
+    weight: 0.3
+  blood: 3.2
+  equipment:
+    armor:
+      id: medic.equipment.armor
+      definition: wool_gambeson
+      bulk: 8
+      condition: 100
+      contents: []
+      fill: 0
+      quality: 79.379845
+      sharpness: 100
+      storage_capacity: null
+      temperature: ambient
+      weight: 1.8
+    boots:
+      id: medic.equipment.boots
+      definition: leather_boots
+      bulk: 3.5
+      condition: 100
+      contents: []
+      fill: 0
+      quality: 79.574776
+      sharpness: 100
+      storage_capacity: null
+      temperature: ambient
+      weight: 0.9
+    gauntlets:
+      id: medic.equipment.gauntlets
+      definition: leather_gloves
+      bulk: 0.8
+      condition: 100
+      contents: []
+      fill: 0
+      quality: 71.85732
+      sharpness: 100
+      storage_capacity: null
+      temperature: ambient
+      weight: 0.3
+    right_hand:
+      id: medic.equipment.right_hand
+      definition: steel_dagger
+      bulk: 0.5
+      condition: 100
+      contents: []
+      fill: 0
+      quality: 61.616264
+      sharpness: 100
+      storage_capacity: null
+      temperature: ambient
+      weight: 0.4
+  facing: south
+  immune_response: 0
+  immunities: {}
+  inventory:
+  - id: kit
+    definition: field_toolbox
+    bulk: 6
+    condition: 100
+    contents:
+    - id: spare
+      definition: steel_bar
+      bulk: 0.75
+      condition: 100
+      contents: []
+      fill: 0
+      quality: 100
+      sharpness: 100
+      storage_capacity: null
+      temperature: ambient
+      weight: 0.5
+    fill: 0
+    quality: 100
+    sharpness: 100
+    storage_capacity: null
+    temperature: ambient
+    weight: 1.2
+  knowledge:
+    basic_cuisine: 41.57142
+    bleed_control: 38.618355
+    infection_control: 38.122868
+  modifiers: {}
+  name: Fia Underhill
+  scars: []
+  skills:
+    balance: 34.878227
+    climbing: 9.270622
+    construction: 17.310038
+    cooking: 21.119375
+    dagger: 52.558086
+    dodge: 12.978311
+    farming: 32.512306
+    grappling: 17.607227
+    jumping: 6.0020757
+    mining: 36.210823
+    smithing: 15.34333
+    unarmed: 35.187782
+    woodcutting: 27.919806
+  stats:
+    height: 1.8619494
+    agility: 0.99541
+    blood_oxygen: 1
+    body_mass: 59.4198
+    calories: 600
+    constitution: 0.6189208
+    core_temp: 37
+    dexterity: 1.0305022
+    endurance: 0.85790735
+    exhaustion: 8.579074
+    fat_mass: 16.505571
+    frame_mass: 59.4198
+    heart_rate: 70
+    hunger: 594.198
+    hydration: 3
+    intelligence: 1.0208523
+    lean_mass: 21.457113
+    metabolism: 0.92044353
+    perception: 1.0991632
+    reflexes: 1.0329472
+    salt: 6.6666665
+    salt_store: 118.8396
+    sleep_pressure: 8.579074
+    stamina: 8.579074
+    strength_base: 0.78299975
+    toughness: 0.86555725
+  wounds:
+  - age: 0
+    bandage: 1
+    clean: false
+    clot: 0
+    dressing: ''
+    heal: 0
+    infection: 0
+    infection_type: ''
+    kind: slash
+    necrosis: 0
+    part: torso
+    severity: 0.2
+ground_items:
+- id: gem
+  tags:
+  - loot
+  definition: processing_unit
+  x: 10.5
+  'y': -9.5
+  bulk: 0.4
+  condition: 100
+  contents: []
+  fill: 0
+  quality: 100
+  sharpness: 100
+  storage_capacity: null
+  temperature: ambient
+  weight: 0.4
+- id: ground.1
+  definition: steel_bar
+  x: 12.5
+  'y': 12.5
+  bulk: 0.75
+  condition: 71.94037
+  contents: []
+  fill: 0
+  quality: 71.21588
+  sharpness: 100
+  storage_capacity: null
+  temperature: ambient
+  weight: 0.5

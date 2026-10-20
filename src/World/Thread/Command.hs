@@ -73,6 +73,7 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldCancelPlantCommand
                                    , handleWorldSetPlantDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
+import Scenario.Capture.Service (runScenarioCapture)
 import Scenario.Placement.Install (handleWorldInstallScenarioPlacementCommand)
 import Scenario.World.Install (handleWorldInstallScenarioContentCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
@@ -233,6 +234,8 @@ handleWorldCommand env logger (WorldSetWorldCursorHoverBgTexture pageId texHandl
   = handleWorldSetWorldCursorHoverBgTextureCommand (toWorldSimCapability env) logger pageId texHandle
 handleWorldCommand env logger (WorldSave pageId saveName ts luaComponents luaRefs mAuto)
   = handleWorldSaveCommand env logger pageId saveName ts luaComponents luaRefs mAuto
+handleWorldCommand env logger (WorldScenarioCapture requestId request)
+  = runScenarioCapture env logger requestId request
 handleWorldCommand env logger (WorldLoadTransaction requestId saveData matReg)
   = handleWorldLoadTransactionCommand env logger requestId saveData matReg
 handleWorldCommand env logger (WorldLoadPublish requestId)
