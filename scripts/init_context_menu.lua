@@ -113,7 +113,6 @@ function M.tryUnitMenu(x, y)
     end
     local contextMenu = require("scripts.ui.context_menu")
     local selectedUids = unit.getSelected() or {}
-    local targetFac    = unit.getFaction(targetUid)
     local items = {
         { label = "Info",
           callback = function()
@@ -146,14 +145,14 @@ function M.tryUnitMenu(x, y)
     if #attackers > 0 then
         -- Friendly check: Attack is greyed unless at least one
         -- attacker is actually PERMITTED to hit the target.
-        -- faction.canAttack folds in the debug faction's
-        -- unrestricted-combat property (the whole point of "debug"
-        -- is no friendly-fire restriction so the player can stage
-        -- acolyte-vs-acolyte fights in the debug overlay), so this
-        -- no longer carries its own inline special case.
+        -- unit.canAttack (#2521) is the attacker's DIRECTED hostility
+        -- toward the target, or unrestricted combat on either side
+        -- (the whole point of "debug" is no friendly-fire restriction
+        -- so the player can stage acolyte-vs-acolyte fights in the
+        -- debug overlay), so this carries no inline special case.
         local anyPermitted = false
         for _, uid in ipairs(attackers) do
-            if faction.canAttack(unit.getFaction(uid), targetFac) then
+            if unit.canAttack(uid, targetUid) then
                 anyPermitted = true
                 break
             end

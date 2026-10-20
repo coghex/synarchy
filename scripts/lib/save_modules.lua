@@ -20,7 +20,7 @@
 --       snapshot  = function() return dataOnlyTable end,
 --       decode    = function(version, data) return canonicalTable end,
 --       validate  = function(data) return errorStringsOrNil end,
---       apply     = function(data, entities) ... end,
+--       apply     = function(data, entities, phase) ... end,
 --                                              -- run only after ALL
 --                                              -- required components
 --                                              -- validate (requirement 11).
@@ -29,7 +29,18 @@
 --                                              -- context, or nil meaning
 --                                              -- "apply every row, no
 --                                              -- ownership filtering" --
---                                              -- see applyEntityRows below
+--                                              -- see applyEntityRows below.
+--                                              -- `phase` (#2521) is
+--                                              -- "forward" for the load's
+--                                              -- own apply and "rollback"
+--                                              -- when applyAll unwinds a
+--                                              -- failed load by handing
+--                                              -- back the component's own
+--                                              -- pre-load snapshot; a
+--                                              -- component with transient
+--                                              -- state keyed to its rows
+--                                              -- may use it to restore
+--                                              -- that state too
 --       default   = function() return dataOnlyTable end, -- required
 --                                              -- iff required == false
 --       references = function(data) return {{kind=.., id=..}, ...} end,
@@ -1054,7 +1065,8 @@ function saveModules.applyAll()
         for i = #applied, 1, -1 do
             local rid = applied[i]
             local restored, restoreErr =
-                pcall(saveModules.registry[rid].apply, rollback[rid])
+                pcall(saveModules.registry[rid].apply, rollback[rid], nil,
+                      "rollback")
             if not restored then
                 failures[#failures + 1] = { id = rid, err = restoreErr }
             end
@@ -1172,7 +1184,8 @@ function saveModules.applyAll()
                     end
                     context = decoded
                 end
-                return saveModules.registry[id].apply(prepared[id], context)
+                return saveModules.registry[id].apply(prepared[id], context,
+                                                       "forward")
             end)
             if not ok then
                 -- Round 5 review: `apply` is ordinary Lua code, not
@@ -1190,7 +1203,8 @@ function saveModules.applyAll()
                 -- of them to fail.
                 local failures = {}
                 local ownRestored, ownErr =
-                    pcall(saveModules.registry[id].apply, rollback[id])
+                    pcall(saveModules.registry[id].apply, rollback[id], nil,
+                          "rollback")
                 if not ownRestored then
                     failures[#failures + 1] = { id = id, err = ownErr }
                 end

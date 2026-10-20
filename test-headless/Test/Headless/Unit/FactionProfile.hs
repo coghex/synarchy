@@ -46,8 +46,10 @@ import Unit.Faction.Profile
 import Unit.Faction.Membership
     ( MembershipSource(..), TagMembership(..), UnitFactionProfile
     , localController, mkUnitFactionProfile, resolveLegacyFaction
-    , resolveSpawnFaction, unitHasUnrestrictedCombat, unitIsCommandableBy
-    , unitIsOwnedBy, unitPolicyProfile )
+    , resolveSpawnFaction, unitCanAttack, unitHasUnrestrictedCombat
+    , unitIsCommandableBy, unitIsFriendlyToward, unitIsOwnedBy
+    , unitPolicyProfile, unitRelationFromTo )
+import Data.List (permutations)
 import Location.Discovery (UnitSight(..), findAwareness, findDiscoveries)
 import qualified Test.Headless.Location.Discovery as DiscoveryFixture
 import Test.Headless.Unit.FactionConsumerAudit (consumerAuditSpec)
@@ -160,6 +162,7 @@ spec = describe "Unit faction profile policy" $ do
     controllerSpec
     propertySpec
     controllerAwareOwnershipSpec
+    unitRelationSpec
     consumerAuditSpec
     precedenceSpec
     liveOverlaySpec
@@ -431,6 +434,45 @@ controllerAwareOwnershipSpec = describe "controller-aware ownership (FTS-4)" $ d
             o `shouldBe` isPlayerOwned f
             c `shouldBe` isPlayerCommandable f
             u `shouldBe` hasUnrestrictedCombat f
+
+-- * Unit relations (FTS-5)
+
+-- | #2521: the live-unit relation queries are FTS-1's directed queries
+--   over the units' policy profiles, and a fixture overlay merges the
+--   same way whatever order its causes arrive in.
+unitRelationSpec ∷ Spec
+unitRelationSpec = describe "unit relations and the live overlay (FTS-5)" $ do
+    let units = [ mkUnitFactionProfile c
+                    [ TagMembership t MemberDefinitionDefault | t ← ts ] cs
+                | c ← [Nothing, Just localController, Just otherPlayer]
+                , ts ← [[], [tagAcolyte], [tagNomad], [tagFightA, tagAcolyte]]
+                , cs ← [[], allFactionCapabilities] ]
+        overlay = [ LiveRelationCause causeOrder tagFightA tagAcolyte RelHostile
+                  , LiveRelationCause causeReport tagFightA tagAcolyte RelAlly
+                  , LiveRelationCause causeDiplomacy tagNomad tagAcolyte RelNeutral ]
+
+    it "answers through relationFromTo and canProfileAttack over the \
+       \policy projections, exhaustively, and alliance is relation ≡ ally" $ do
+        let pol = withLiveCauses overlay legacyBase
+        forM_ units $ \a → forM_ units $ \b → do
+            let (pa, pb) = (unitPolicyProfile a, unitPolicyProfile b)
+            unitRelationFromTo pol a b `shouldBe` relationFromTo pol pa pb
+            unitCanAttack pol a b `shouldBe` canProfileAttack pol pa pb
+            unitIsFriendlyToward pol a b
+                `shouldBe` (relationFromTo pol pa pb ≡ RelAlly)
+
+    it "merges a fixture overlay identically in every insertion order, \
+       \the most severe cause winning" $ do
+        let answers pol = [ unitRelationFromTo pol a b | a ← units, b ← units ]
+            expected = answers (withLiveCauses overlay legacyBase)
+        forM_ (permutations overlay) $ \o →
+            answers (withLiveCauses o legacyBase) `shouldBe` expected
+        relate (withLiveCauses overlay legacyBase)
+               (mkProfile Nothing [tagFightA] []) (mkProfile Nothing [tagAcolyte] [])
+            `shouldBe` RelHostile
+
+    it "an empty overlay is the base policy" $
+        withLiveCauses [] legacyBase `shouldBe` legacyBase
 
 -- * Precedence
 

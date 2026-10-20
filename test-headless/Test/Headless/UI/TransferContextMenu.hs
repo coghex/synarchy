@@ -1000,7 +1000,7 @@ isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t
 -- @_G.__transferCallback@, so it can be invoked in a LATER evalDebug
 -- call without ever serializing a Lua function back to Haskell
 -- (mirrors SelectTileZ's @_G.__infoCallback@). Also stubs
--- faction.canAttack to the fixed vocabulary every scenario below uses,
+-- unit.canAttack to the fixed vocabulary every scenario below uses,
 -- and gives unit.transferEndpointInfo/unit.exists/unit.getInfo/
 -- unit.getFaction/unit.isPlayerCommandable safe defaults (every unit
 -- commandable) a per-test stub then overrides for the ids it cares
@@ -1028,7 +1028,7 @@ baseSetupLua = T.concat
     , "  _G.__lastLabels = labels; "
     , "end; "
     , "unit.isPlayerCommandable = function(uid) return true end; "
-    , "faction.canAttack = function(a, b) return true end; "
+    , "unit.canAttack = function(a, b) return true end; "
     , "unit.exists = function(uid) return true end; "
     -- A real 'unit.getInfo' always reports the unit's def name, and
     -- since #1250 the source rule reads it (to ask whether that species

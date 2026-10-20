@@ -324,7 +324,7 @@ menuSetup target selection = T.concat
     , "unit.getSelected = function() return {"
     , T.intercalate ", " (map uid selection), "} end; "
     , "unit.isPlayerCommandable = function() return true end; "
-    , "faction.canAttack = function() return true end; "
+    , "unit.canAttack = function() return true end; "
     ]
 
 -- | One row's enabled state, or @nil@ when the menu never offered it.

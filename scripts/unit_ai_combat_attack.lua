@@ -26,6 +26,8 @@ local computeAttackCooldown = combatCore.computeAttackCooldown
 -- than duplicated). Before #1483 the split left the name unbound here,
 -- so the comparison read a nil global and raised.
 local RETALIATE_WINDOW_SEC  = combatCore.RETALIATE_WINDOW_SEC
+-- #2521: continuation and the retaliation swap ask the shared seam.
+local policy = require("scripts.unit_ai_combat_policy")
 
 local M = {}
 
@@ -212,7 +214,11 @@ local function attackTargetExecute(uid, s, params)
            and att and att.uid ~= target and unit.exists(att.uid)
            and attPose ~= "dead" and attPose ~= "collapsed"
            and attInfo and attInfo.defName ~= "technomule"
-           and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC then
+           and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC
+           -- #2521: a governed goal swaps only onto an attacker that
+           -- independently qualifies; no authorization travels with it.
+           and (policy.exempt(uid)
+                or policy.acquireBasis(uid, att.uid, att)) then
             local m = unit.getInfo(uid)
             if m then
                 local d = math.max(math.abs(m.gridX - attInfo.gridX),
@@ -220,10 +226,30 @@ local function attackTargetExecute(uid, s, params)
                 if d <= (unit.getAttackRange(uid) or 1.0) + 0.5 then
                     s.attackTargetUid = att.uid
                     target = att.uid
+                    policy.retargeted(uid)
                     clearAttackAnim(uid)
                 end
             end
         end
+    end
+
+    -- #2521: an autonomous fight continues only while the seam allows it
+    -- -- hostility, a still-fresh hit from this target, or a fixture
+    -- authorization for this exact goal occurrence. Asked AFTER the swap,
+    -- so a newer, independently eligible attacker is answered rather than
+    -- the goal ending on the old target. Committed orders and lash-out
+    -- keep their own rules. Ending also stops the pursuit: the engine's
+    -- move request would otherwise carry on toward the former target.
+    if not policy.mayContinue(uid, s) then
+        engine.logDebug("attack: " .. tostring(uid) .. " stops on "
+                        .. tostring(target) .. ": no permission left")
+        lunge.clear(s)
+        s.attackTargetUid = nil
+        s.attackLastMoveTo = nil
+        markGoalAccomplished(s, "attack")
+        clearAttackAnim(uid)
+        unit.stop(uid)
+        return
     end
 
     local me  = unit.getInfo(uid)

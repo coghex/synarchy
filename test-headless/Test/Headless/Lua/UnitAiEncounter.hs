@@ -54,34 +54,67 @@ prelude = lns
     , "    table.insert(STATES,{i=i,u=u,e=e,r=r,p=p}) end,"
     , "  setLocationEncounterEpisodeState=function(i,a,g,d,p)"
     , "    table.insert(EPISODES,{i=i,a=a,g=g,d=d,p=p}) end }"
-    , "faction = { relation=function(_,targetFaction)"
-    , "  return REL[targetFaction] or 'neutral' end }"
-    , "unit = { getInfo=function(uid) return INFO[uid] end,"
+    -- #2521: the guard's DIRECTED regard of each target, through the
+    -- unit-id relation verb the encounter now asks via the policy seam.
+    , "unit = { relationFromTo=function(_,target)"
+    , "    return REL[target] or 'neutral' end,"
+    , "  getInfo=function(uid) return INFO[uid] end,"
     , "  exists=function(uid) return INFO[uid] ~= nil end,"
     , "  getPose=function(uid) return POSE[uid] end,"
-    , "  getFaction=function(uid) return uid end,"
-    , "  getLastAttacker=function() return LAST_ATTACKER end,"
+    -- HITS, when a case sets it, is per unit; otherwise every unit
+    -- reads the one LAST_ATTACKER the older cases share.
+    , "  getLastAttacker=function(uid)"
+    , "    if HITS then return HITS[uid] end return LAST_ATTACKER end,"
     , "  getVisibleTiles=function() return VISIBLE end,"
     , "  getAllIds=function() return IDS end,"
     , "  clearAnimOverride=function() CLEARS=CLEARS+1 end,"
     , "  stop=function() STOPS=STOPS+1 end,"
     , "  moveTo=function(_,x,y) MOVES=MOVES+1; LAST_MOVE={x=x,y=y} end }"
     , "REGISTER_OPTIONS=nil"
+    -- STATE[uid], when a case registers one, is that guard's AI state:
+    -- commandAttack then models the real one (target, then setGoal), so
+    -- the seam's goal occurrences and cutoffs run exactly as in core.
+    , "STATE = {}"
+    , "POLICY = require('scripts.unit_ai_combat_policy'); POLICY.bindStates(STATE)"
     , "package.loaded['scripts.unit_ai'] = {"
-    , "  commandAttack=function(_,target) COMMAND=target end,"
+    , "  commandAttack=function(uid,target) COMMAND=target"
+    , "    local s=STATE[uid]; if s then s.attackTargetUid=target"
+    , "      POLICY.goalChanged(s,'attack'); s.activeGoal='attack' end end,"
     , "  setConfig=function() end, registerActions=function(_,_,options)"
     , "    REGISTER_OPTIONS=options end }"
     , "package.loaded['scripts.unit_ai_core'] = {"
     , "  isGoalActive=function(s,name) return s.activeGoal == name end,"
     , "  markGoalAccomplished=function(s,name)"
     , "    s.goalStatus=s.goalStatus or {}; s.goalStatus[name]='accomplished';"
-    , "    if s.activeGoal == name then s.activeGoal=nil end end }"
+    , "    if s.activeGoal == name then POLICY.goalChanged(s,nil);"
+    , "      s.activeGoal=nil end end }"
     , "package.loaded['scripts.unit_ai_page'] = {"
     , "  same=function(a,b) return a == b end }"
     , "package.loaded['scripts.movement_speed'] = { comfort=function() return 1 end }"
     , "package.loaded['scripts.unit_ai_combat_lunge'] = {"
     , "  clear=function() CLEARS=CLEARS+1 end }"
     , "local encounter = require('scripts.unit_ai_encounter')"
+    ]
+
+-- | @start(hitAt, now)@: guard 1 takes a hit from unit 2 at @hitAt@ and
+--   engages at @now@ with no hostile visible, through the real seam. The
+--   returned state is registered in STATE so commandAttack and the core
+--   stub run the seam's goal hooks.
+selfDefenseHelpers ∷ Text
+selfDefenseHelpers = lns
+    [ "HITS = HITS or {}"
+    , "function start(hitAt, now)"
+    -- A FRESH guard: the seam keys by uid, so drop guard 1's earlier
+    -- goals' cutoff and occurrence along with its old state.
+    , "  local s = {}; STATE[1] = s; require('scripts.unit_ai_claims').resetAll()"
+    , "  HITS[1] = {uid=2,at=hitAt}; VISIBLE = {}; NOW = now; EVENTS = 0"
+    , "  EVENT_MESSAGES = {}"
+    , "  assert(encounter.engageUtility(1,s) == 8, 'self-defense not offered')"
+    , "  encounter.engageExecute(1,s)"
+    , "  assert(COMMAND == 2 and s.activeGoal == 'attack', 'no attack goal')"
+    , "  VISIBLE = {{x=5,y=5}}"
+    , "  return s"
+    , "end"
     ]
 
 spec ∷ Spec
@@ -164,7 +197,10 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "  LAST_ATTACKER={uid=2,at=0}; mut()"
             , "  assert(encounter.engageUtility(1,{}) == -math.huge)"
             , "end"
-            , "rejected(function() REL[2]='neutral' end)"
+            -- #2521: a NEUTRAL fresh attacker is now acquired through
+            -- local self-defense (the self-defense sequences below);
+            -- what still refuses it is every other eligibility rule.
+            , "rejected(function() REL[2]='neutral'; INFO[2].page='other' end)"
             , "rejected(function() INFO[2].page='other' end)"
             , "rejected(function() INFO[2].gridX=23 end)"
             , "rejected(function() POSE[2]='dead' end)"
@@ -294,6 +330,183 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
             , "invalid(function() INFO[2].page='other' end)"
             , "invalid(function() REL[2]='friendly' end)"
             ]
+
+    describe "local self-defense through the shared policy seam (#2521)" $ do
+        forM_ ["ally", "neutral"] $ \rel →
+            it ("answers a recent " <> T.unpack rel <> " attacker across later \
+                \decisions, inclusive at ten seconds, refreshed by a hit, \
+                \without a peer joining or any hostile claim") $
+                runsOk $ lns
+                    [ prelude, selfDefenseHelpers
+                    , "REL[2]='" <> rel <> "'; REL[3]='neutral'"
+                    , "local s = start(0, 1)"
+                    , "assert(EVENTS == 1, 'expected one aggression notice')"
+                    , "assert(EVENT_MESSAGES[1].message =="
+                    , "  'guard at Old Ruin attacks near in self-defense after a recent attack',"
+                    , "  EVENT_MESSAGES[1].message)"
+                    , "assert(POLICY.isHostile(1, 2) == false, 'no relation moved')"
+                    , "NOW=10; assert(encounter.guardUtility(1,s) == -math.huge,"
+                    , "  'the fight did not survive to exactly ten seconds')"
+                    , "HITS[1]={uid=2,at=9.5}"
+                    , "NOW=19.5; assert(encounter.guardUtility(1,s) == -math.huge,"
+                    , "  'a new hit did not refresh the window')"
+                    , "NOW=19.51; assert(encounter.guardUtility(1,s) == 10)"
+                    , "assert(s.ruinDisengageReason == 'self-defense ended',"
+                    , "  tostring(s.ruinDisengageReason))"
+                    -- An uninjured fellow guard does not join.
+                    , "INFO[4]={gridX=5,gridY=5,page='world',name='peer'}; POSE[4]='standing'"
+                    , "table.insert(LOCATION.encounter.occupants,"
+                    , "  {uid=4,home_x=5,home_y=5,engaged=false,returning=false})"
+                    , "assert(encounter.engageUtility(4,{}) == -math.huge)"
+                    ]
+
+        it "refuses a self-defense hit just beyond ten seconds" $
+            runsOk $ lns
+                [ prelude, selfDefenseHelpers
+                , "REL[2]='ally'; HITS={[1]={uid=2,at=0}}; VISIBLE={}"
+                , "NOW=10.01; assert(encounter.engageUtility(1,{}) == -math.huge)"
+                , "NOW=10; assert(encounter.engageUtility(1,{}) == 8)"
+                ]
+
+        it "keeps the hostile notice for an ordinary hostile acquisition" $
+            runsOk $ lns
+                [ prelude
+                , "encounter.engageExecute(1,{})"
+                , "assert(EVENT_MESSAGES[1].message =="
+                , "  'guard at Old Ruin attacks near because their faction relation is hostile',"
+                , "  EVENT_MESSAGES[1].message)"
+                ]
+
+        it "keeps a hidden encounter's self-defense private and its episode \
+           \notices exactly-once across guards" $
+            runsOk $ lns
+                [ prelude, selfDefenseHelpers
+                , "LOCATION.lifecycle='unknown'; LOCATION.discovered=false"
+                , "REL[2]='ally'"
+                , "local s = start(0, 1)"
+                , "assert(EVENTS == 0, 'a hidden encounter announced self-defense')"
+                , "LOCATION.lifecycle='discovered'; LOCATION.discovered=true"
+                , "INFO[4]={gridX=5,gridY=5,page='world',name='peer'}; POSE[4]='standing'"
+                , "table.insert(LOCATION.encounter.occupants,"
+                , "  {uid=4,home_x=5,home_y=5,engaged=false,returning=false})"
+                , "HITS[4]={uid=2,at=1}; local s4={}; STATE[4]=s4"
+                , "encounter.engageExecute(4,s4)"
+                , "assert(EVENTS == 0, 'the same episode announced on a second guard')"
+                ]
+
+        it "with hostility cleared by a fixture, needs a hit strictly after the \
+           \clear, and cannot sustain a fight on pre-clear damage" $
+            runsOk $ lns
+                [ prelude, selfDefenseHelpers
+                , "REL[2]='neutral'; VISIBLE={}"
+                , "POLICY.fixtureInputs=function(uid)"
+                , "  if uid == 1 then return {diplomacyClearAt=5} end end"
+                , "NOW=6"
+                , "HITS={[1]={uid=2,at=4.5}}; assert(encounter.engageUtility(1,{}) == -math.huge)"
+                , "HITS={[1]={uid=2,at=5}};   assert(encounter.engageUtility(1,{}) == -math.huge)"
+                , "HITS={[1]={uid=2,at=5.01}}; assert(encounter.engageUtility(1,{}) == 8)"
+                , "POLICY.fixtureInputs=function() return nil end"
+                , "local s = start(4, 4.5)"
+                , "POLICY.fixtureInputs=function(uid)"
+                , "  if uid == 1 then return {diplomacyClearAt=5} end end"
+                , "VISIBLE={{x=5,y=5}}; NOW=6"
+                , "assert(encounter.guardUtility(1,s) == 10, 'pre-clear damage sustained it')"
+                ]
+
+        it "lets a fixture authorization keep only the original goal and \
+           \target fighting, and refuses an absent or mismatched one" $
+            runsOk $ lns
+                [ prelude, selfDefenseHelpers
+                , "REL[2]='ally'"
+                , "local cases = {"
+                , "  {fields=function(o) return {uid=1,target=2,occurrence=o} end, keeps=true},"
+                , "  {fields=function(o) return nil end, keeps=false},"
+                , "  {fields=function(o) return {uid=4,target=2,occurrence=o} end, keeps=false},"
+                , "  {fields=function(o) return {uid=1,target=3,occurrence=o} end, keeps=false},"
+                , "  {fields=function(o) return {uid=1,target=2,occurrence=o+1} end, keeps=false} }"
+                , "for i, c in ipairs(cases) do"
+                , "  LOCATION.encounter.episode_active=false"
+                , "  local s = start(0, 1)"
+                , "  local auth = c.fields(POLICY.occurrence(1))"
+                , "  POLICY.fixtureInputs=function(uid)"
+                , "    if uid == 1 and auth then return {authorization=auth} end end"
+                , "  NOW=30; VISIBLE={{x=5,y=5}}"
+                , "  local u = encounter.guardUtility(1,s)"
+                , "  assert((u == -math.huge) == c.keeps, 'case ' .. i)"
+                , "  POLICY.fixtureInputs=function() return nil end"
+                , "end"
+                ]
+
+        it "voids the authorization at every terminating boundary and never \
+           \carries it to a replacement goal against the same target" $
+            runsOk $ lns
+                [ prelude, selfDefenseHelpers
+                , "REL[2]='ally'"
+                , "local boundaries = {"
+                , "  {'target death', function() POSE[2]='dead' end},"
+                , "  {'target disappearance', function() INFO[2]=nil end},"
+                , "  {'page departure', function() INFO[2].page='other' end},"
+                , "  {'target leash', function() INFO[2].gridX=23 end},"
+                , "  {'guard leash', function() INFO[1].gridX=-12.5 end},"
+                , "  {'sight memory', function() VISIBLE={}; NOW=41 end},"
+                , "  {'goal completion', function(s)"
+                , "      package.loaded['scripts.unit_ai_core'].markGoalAccomplished(s,'attack')"
+                , "      s.attackTargetUid=nil end} }"
+                , "for _, b in ipairs(boundaries) do"
+                , "  INFO[1]={gridX=5,gridY=5,page='world',name='guard'}"
+                , "  INFO[2]={gridX=5,gridY=5,page='world',name='near'}; POSE[2]='standing'"
+                , "  LOCATION.encounter.episode_active=false"
+                , "  local s = start(0, 1)"
+                , "  local auth = {uid=1,target=2,occurrence=POLICY.occurrence(1)}"
+                , "  POLICY.fixtureInputs=function(uid)"
+                , "    if uid == 1 then return {authorization=auth} end end"
+                , "  NOW=30; VISIBLE={{x=5,y=5}}"
+                , "  assert(encounter.guardUtility(1,s) == -math.huge, b[1] .. ': not authorized')"
+                , "  b[2](s)"
+                , "  if encounter.guardUtility(1,s) == 10 then encounter.guardExecute(1,s) end"
+                , "  assert(POLICY.occurrence(1) == nil, b[1] .. ': the goal survived')"
+                -- Back at the post with the target restored: neither a fresh
+                -- acquisition nor a replacement goal may use the old one.
+                , "  INFO[1]={gridX=5,gridY=5,page='world',name='guard'}"
+                , "  INFO[2]={gridX=5,gridY=5,page='world',name='near'}; POSE[2]='standing'"
+                -- The clock only moves forward: a boundary may have advanced it.
+                , "  VISIBLE={{x=5,y=5}}; local T = math.max(NOW, 31); NOW = T"
+                -- The guard finishes returning through the real executor,
+                -- so only the seam can refuse what follows.
+                , "  encounter.guardExecute(1,s)"
+                , "  assert(not s.ruinReturning, b[1] .. ': still returning')"
+                , "  assert(encounter.engageUtility(1,s) == -math.huge, b[1] .. ': reacquired')"
+                , "  HITS[1]={uid=2,at=T+0.5}; NOW=T+1"
+                , "  assert(encounter.engageUtility(1,s) == 8, b[1] .. ': a later hit was refused')"
+                , "  HITS[1]={uid=2,at=0}"
+                , "  package.loaded['scripts.unit_ai'].commandAttack(1, 2)"
+                , "  assert(encounter.guardUtility(1,s) == 10, b[1] .. ': carried to a replacement')"
+                , "  POLICY.fixtureInputs=function() return nil end"
+                , "end"
+                ]
+
+        it "after a goal ends while its attacker is still recent, refuses old \
+           \and equal-time hits, accepts a strictly later one, and still \
+           \lets return-home win; a hostile attacker is not cut off" $
+            runsOk $ lns
+                [ prelude, selfDefenseHelpers
+                , "REL[2]='ally'"
+                , "local s = start(0, 1)"
+                , "NOW=2; package.loaded['scripts.unit_ai_core'].markGoalAccomplished(s,'attack')"
+                , "s.attackTargetUid=nil; NOW=3"
+                , "assert(POLICY.cutoff(1) == 2)"
+                , "assert(encounter.engageUtility(1,s) == -math.huge, 'old hit restarted it')"
+                , "HITS[1]={uid=2,at=2}"
+                , "assert(encounter.engageUtility(1,s) == -math.huge, 'equal-time hit restarted it')"
+                , "HITS[1]={uid=2,at=2.5}"
+                , "s.ruinReturning=true"
+                , "assert(encounter.engageUtility(1,s) == -math.huge, 'return-home lost')"
+                , "s.ruinReturning=nil"
+                , "assert(encounter.engageUtility(1,s) == 8, 'a strictly later hit was refused')"
+                -- Out of sight, so only the recent-attacker path can answer.
+                , "REL[2]='hostile'; HITS[1]={uid=2,at=1}; VISIBLE={}"
+                , "assert(encounter.engageUtility(1,s) == 8, 'hostility was cut off')"
+                ]
 
     it "keeps generic retaliation excluded after adding encounter-owned hit acquisition" $
         runsOk $ lns

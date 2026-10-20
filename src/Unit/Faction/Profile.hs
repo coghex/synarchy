@@ -152,6 +152,8 @@ module Unit.Faction.Profile
     , liveCausesFor
     , addRelationCause
     , removeRelationCause
+    , LiveRelationCause(..)
+    , withLiveCauses
       -- * Relation and permission queries
     , relationSeverity
     , relationFromTo
@@ -406,6 +408,27 @@ removeRelationCause cid s t pol = pol
         | Map.null remaining = Nothing
         | otherwise          = Just remaining
       where remaining = Map.delete cid causes
+
+-- | One live directed cause as an INPUT to the policy (#2521, FTS-5):
+--   who owns it, and the ordered tag pair it relates. The runtime has no
+--   producer of these yet — FTS-6 owns attack orders, incidents and
+--   diplomacy — so production passes an empty list and only fixtures
+--   supply one.
+data LiveRelationCause = LiveRelationCause
+    { lrcCause    ∷ !RelationCauseId
+    , lrcSource   ∷ !FactionTag
+    , lrcTarget   ∷ !FactionTag
+    , lrcRelation ∷ !FactionRelation
+    } deriving (Show, Eq)
+
+-- | Install every cause through 'addRelationCause', so the overlay
+--   merges exactly as one cause at a time would (insertion order cannot
+--   change an answer).
+withLiveCauses ∷ [LiveRelationCause] → FactionPolicy → FactionPolicy
+withLiveCauses causes pol = foldr install pol causes
+  where
+    install c = addRelationCause (lrcCause c) (lrcSource c) (lrcTarget c)
+                                 (lrcRelation c)
 
 -- * Relation and permission queries
 
