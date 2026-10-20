@@ -88,6 +88,48 @@ variant candidate is exhausted before §3.3 is consulted.
 `PhaseDead` therefore remains in `LifePhaseTag` for decoding legacy YAML and
 existing saves only. Natural death and hazard death share one fallback path.
 
+### 1.2 Runtime normalization and natural-death clock (EFM-3, #2544)
+
+`World.Flora.Visual.resolveFloraVisual` implements the selector contract as a
+pure species-and-selector lookup. Legacy dead phases and dead cycle overrides
+are normalized into the sparse variant table exactly as §1.1 specifies. Legacy
+living entries remain the separate compatibility step in §3.3; they are never
+ranked as phase-specific variants. An omitted context remains a shared pattern,
+not an explicit wild pattern. Each semantic key tries explicit cultivated,
+shared, then explicit wild for a cultivated request; wild requests try explicit
+wild then shared. A shared miss need not be repeated in the second attempt.
+
+The returned trace names every attempted pattern or legacy lookup in order,
+including misses, with the winner as its final entry. The declared species base
+is always the final fallback. A zero handle stays zero: the draw boundary retains
+its existing suppression rule instead of asking for an unrelated texture.
+
+Natural-death selectors are derived in `World.Flora.Growth`, separately from
+`growthPhaseTag`, harvest eligibility and yield selection. Those gameplay
+consumers retain the existing dead-phase age pin. The visual phase at death is
+the greatest `lifePhaseOrder` among non-dead phases beginning strictly before
+the lifespan threshold. A phase beginning at that threshold was never alive.
+The visual annual stage is selected on the first whole day at or after the
+current generation's death threshold. The inverse gives an initial search bound:
+
+```
+estimate = max 1 (ceiling ((generation * (lifespan + deadWindowDays)
+                          + lifespan - placementAge) / growthRate))
+```
+
+The final date is the first day on which the existing `floraGrowth` calculation
+reaches that generation's dead window (or a later generation), found by binary
+search. This accounts for Float rounding at a threshold rather than assuming
+the inverse is exact. Slower growth and later generations use their actual
+derived clock; a corpse already present at the world epoch freezes at day zero.
+Phase and annual stage stay frozen for the entire dead window.
+No new state is stored and lifecycle timing is unchanged.
+
+EFM-3's occurrence adapter requests wild context. `resolveCropPlotTexture`
+retains the groundcover adapter's elapsed-since-planting clock for both growth
+and annual stages. The harvested-texture bypass, including suppression by
+handle zero, remains outside the resolver and unchanged until EFM-7.
+
 ---
 
 ## 2. Declaring variants: `textureVariants`
@@ -363,8 +405,8 @@ traces share.
 
 This is not a new mechanism, and it is not ranked by the §3.2.1 key. It is one
 fixed step, reached by dead and living requests alike once every
-`textureVariants` candidate is exhausted, and it is exactly today's living
-resolution in `World.Flora.Render.resolveSpeciesTexture` — including its
+`textureVariants` candidate is exhausted, and it preserves the living
+resolution formerly in `World.Flora.Render.resolveSpeciesTexture` — including its
 stage-above-phase precedence (§1.1) — driven by the selector's frozen phase and
 stage rather than by the current age and day of year:
 
@@ -434,6 +476,58 @@ creation record, but it must survive replay and migration.
 **A species that declares no cultivated variants renders exactly as it does
 today in both contexts**, because every cultivated lookup falls through to the
 wild state by invariant 3. Adding the context axis changes no existing visual.
+
+### 6.1 Occurrence identity
+
+Condition records (EFM-5/6) and the resolver's callers need a durable name for
+"this occurrence". The contract adopts what already exists and introduces no new
+identity scheme (#2547):
+
+- **Wild and row flora are keyed by `FloraInstanceId`**
+  (`World.Flora.Identity`, #1854). It is opaque, and **page-scoped**: it
+  identifies a plant within its owning page, so a cross-page consumer must keep
+  the page qualification beside it.
+- **A groundcover plot is keyed by its canonical `CropPlots` tile**, again
+  within its owning page, **until EFM-6 decides replacement identity**. A plot is
+  not a plant: `cropPlotInstance` synthesizes a `FloraInstance` carrying the
+  reserved `floraInstanceIdNone`, and that zero must **never** become an
+  occurrence key.
+
+`FloraInstanceId` has two disjoint namespaces, distinguished by one bit:
+
+| Namespace | Minted by | Determined by | Survives |
+|---|---|---|---|
+| **generated** | `generatedFloraInstanceId` at placement | the page key, the canonical global tile, the species' authored `name`, and the species' per-tile ordinal (a 62-bit digest) | chunk eviction and regeneration (placement is a pure function of those inputs); cylindrical seam aliases agree on it; co-tenants on one tile differ |
+| **planted** | the page-scoped allocator `wpsPlantedFloraCursor` | allocation order | persisted in `world-edits` beside the planting edit and **replayed, never re-allocated**, so a reload cannot reissue a live id |
+
+Zero (`floraInstanceIdNone`) belongs to neither namespace and means "not a
+plant".
+
+### 6.2 Where context is created
+
+Context is a field of the in-memory occurrence (`fiContext`) and is **assigned
+by the code that creates it**, never derived from the id namespace, age, health,
+density, category or texture path:
+
+| Creator | Context |
+|---|---|
+| generated placement (`World.Flora.Placement.mkInstance`) | `wild` |
+| planting-edit replay (`WePlaceFlora` / `WePlaceFloraWithId` in `World.Edit.Apply`) | `cultivated` |
+| `cropPlotInstance` (a groundcover plot's synthetic instance) | `cultivated` |
+
+**Nothing persists it.** The creation record already determines it: the
+deterministic generator for wild flora, the world-edit log for planted row
+flora, the crop-plot table for groundcover. So chunk eviction and regeneration,
+world-edit replay after a load, and the legacy `world-edits` v1 rewrite (which
+turns an id-less planting into an identity-bearing one that replays as any other
+planting) all reconstruct the same value, and no save component or chunk store
+gains a field. (`FloraInstance`'s derived `Serialize` encoding changes with the
+added field, but no component writes `FloraChunkData`.)
+
+Nothing reads the context yet. Handing it to the visual selector is EFM-7's
+render integration; no shipped species declares a cultivated variant, so every
+render path behaves as before. A future transplant feature must choose a
+context explicitly for the occurrence it moves.
 
 ---
 
