@@ -172,6 +172,7 @@ spec = describe "shared exclusion" $ do
         let req = CaptureRequest (dir </> "refused.yaml") False
         -- a scenario load in flight
         hold ← newHold
+        registerHold hold
         armSeams h (holdAt PointPreflight hold)
         src ← SourceFile <$> writeScenario "capture-excl-by-load.yaml" (doc ["units: []"])
         n ← request h src

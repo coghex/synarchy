@@ -25,6 +25,9 @@ module Test.Headless.Scenario.Capture.Support
       -- * Seams
     , armCapture
     , armCaptureHold
+    , registerHold
+    , armCaptureWith
+    , unitIdOf
     , armCaptureOps
     , disarmCapture
     , holdCaptureAt
@@ -51,7 +54,8 @@ import UPrelude
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (readMVar, tryPutMVar)
 import Control.Exception (ErrorCall(..), SomeException, bracket, throwIO, toException)
-import Data.IORef (atomicModifyIORef', readIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import System.IO.Unsafe (unsafePerformIO)
 import GHC.Clock (getMonotonicTime, getMonotonicTimeNSec)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
@@ -145,6 +149,8 @@ captureOf s = case cstOutcome s of
 --   example's failure is reported once instead of blocking every later one.
 clearLine ∷ H → IO ()
 clearLine h = do
+    held ← atomicModifyIORef' heldHolds (\hs → ([], hs))
+    forM_ held $ \hold → tryPutMVar (holdRelease hold) ()
     let env = fxEnv (hFx h)
         sl = toSaveLoadCapability env
         lsr = slLoadStatusRef sl
@@ -172,9 +178,25 @@ armCapture h f = armCaptureSeams (loadRefOf h) noCaptureSeams { cseamAt = f }
 -- | Hold the capture at @point@: the first time it arrives it signals
 --   'holdReached' and waits for 'holdRelease'.
 armCaptureHold ∷ H → CapturePoint → Hold → IO ()
-armCaptureHold h point hold = armCapture h $ \p → when (p ≡ point) $ do
-    _ ← tryPutMVar (holdReached hold) ()
-    readMVar (holdRelease hold)
+armCaptureHold h point hold = do
+    registerHold hold
+    armCapture h $ \p → when (p ≡ point) $ do
+        _ ← tryPutMVar (holdReached hold) ()
+        readMVar (holdRelease hold)
+
+-- | Every hold an example created, so 'clearLine' can let them all go: an
+--   example that fails while a REAL thread (the world thread) is parked at a
+--   seam must not leave it parked for every example after it.
+heldHolds ∷ IORef [Hold]
+heldHolds = unsafePerformIO (newIORef [])
+{-# NOINLINE heldHolds #-}
+
+registerHold ∷ Hold → IO ()
+registerHold hold = atomicModifyIORef' heldHolds (\hs → (hold : hs, ()))
+
+-- | Arm a complete set of seams.
+armCaptureWith ∷ H → CaptureSeams → IO ()
+armCaptureWith h = armCaptureSeams (loadRefOf h)
 
 armCaptureOps ∷ H → StorageOps → IO ()
 armCaptureOps h ops = armCaptureSeams (loadRefOf h) noCaptureSeams { cseamOps = Just ops }
@@ -312,6 +334,14 @@ editUnit h ref f = do
     case [ u | (u, r) ← Map.toList (umScenarioRefs um), r ≡ ref ] of
         [uid] → void $ atomicModifyIORef' (unitManagerRef env) $ \m →
             (m { umInstances = HM.adjust f uid (umInstances m) }, ())
+        other → fail ("expected one unit '" ⧺ T.unpack ref ⧺ "', found " ⧺ show (length other))
+
+-- | The runtime id the unit with this scenario reference was allocated.
+unitIdOf ∷ H → Text → IO UnitId
+unitIdOf h ref = do
+    um ← readIORef (unitManagerRef (fxEnv (hFx h)))
+    case [ u | (u, r) ← Map.toList (umScenarioRefs um), r ≡ ref ] of
+        [u] → pure u
         other → fail ("expected one unit '" ⧺ T.unpack ref ⧺ "', found " ⧺ show (length other))
 
 unitNamed ∷ H → Text → IO UnitInstance
