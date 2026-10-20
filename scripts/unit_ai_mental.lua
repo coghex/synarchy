@@ -171,7 +171,7 @@ local function lashOutExecute(uid, s, params)
             end
             return
         end
-        core.setGoal(s, "attack")
+        core.setGoal(s, "attack", "lash_out")   -- #2521: exempt provenance
         s.attackTargetUid = target
         s.committed        = nil
     end

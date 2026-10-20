@@ -542,7 +542,7 @@ selfDefenseSpec = do
         -- flag and target are dropped BEFORE the goal is accomplished.
         setPose env 3 "standing"
         ok ls "AI.aiState[1] = nil; local s = S(1)\
-              \ s.mentalLashoutActive = true; CORE.setGoal(s, 'attack')\
+              \ s.mentalLashoutActive = true; CORE.setGoal(s, 'attack', 'lash_out')\
               \ s.attackTargetUid = 3; s.committed = nil\
               \ NOW = 4; s.attackTargetUid = nil; s.mentalLashoutActive = nil\
               \ CORE.markGoalAccomplished(s, 'attack'); return POLICY.cutoff(s) == nil"

@@ -29,8 +29,9 @@
 -- (unit.canAttack) are deliberately NOT acquisition rules.
 --
 -- GOVERNED GOALS are classified by EXCLUSION: every attack goal except a
--- committed player/debug order (s.committed) and a mental lash-out
--- (s.mentalLashoutActive), which keep their own termination rules. So a
+-- committed player/debug order and a mental lash-out, which keep their
+-- own termination rules. The classification belongs to the goal
+-- occurrence (see open() below), not to the unit's mutable flags. So a
 -- non-hostile self-defense goal restored from a save ends at its first
 -- decision -- last-attacker fields reset on load and nothing here
 -- survives it -- which is intentional: old damage cannot keep a fight
@@ -59,7 +60,8 @@ M.LOCAL_WINDOW_SEC = 10
 local weak = { __mode = "k" }
 -- s -> game time at which this unit's last attack goal ended.
 local cutoffs = claims.track(setmetatable({}, weak))
--- s -> { id, target, exempt, basis, retargeted } for the live attack goal.
+-- s -> { id, target, provenance, exempt, basis, retargeted } for the
+-- live attack goal.
 local occurrences = claims.track(setmetatable({}, weak))
 local nextOccurrence = 0
 
@@ -79,53 +81,63 @@ function M.isHostile(uid, target)
     return unit.relationFromTo(uid, target) == "hostile"
 end
 
--- Called by unit_ai_core's setGoal (before the goal changes) and by its
--- markGoalAccomplished (with nil, when the ending goal is active): an
--- active GOVERNED attack goal ending or being replaced records the
--- cutoff, and a new attack goal opens a fresh occurrence.
---
--- Whether a goal is governed is fixed when it STARTS (commandAttack sets
--- s.committed, and lash-out s.mentalLashoutActive, before setGoal) and
--- carried on the occurrence, and the ENDING goal is always judged by its
--- own occurrence, never by the live flags: a committed order or a
--- lash-out clears its flag BEFORE ending the goal, and commandAttack
--- sets the REPLACEMENT's flag before setGoal. So a committed order or a
--- lash-out never stamps a cutoff, and a governed goal always does, even
--- when a committed order replaces it.
-local function open(s)
+-- EXEMPTION IS A PROPERTY OF THE GOAL OCCURRENCE, fixed once when the
+-- occurrence opens and never read from mutable state afterwards. The
+-- opener passes the goal's PROVENANCE explicitly: unit_ai_core's
+-- commandAttack ("committed" for a player/debug order, "autonomous"
+-- otherwise) and unit_ai_mental's lash-out start ("lash_out"). Ending,
+-- cutoff, continuation and swap decisions read only that stored
+-- classification -- never s.committed or s.mentalLashoutActive, which
+-- retreat, lash-out cleanup and commandAttack all rewrite before the goal
+-- they describe changes. An attack goal with no occurrence (no opener
+-- passed through setGoal) is GOVERNED: classification fails closed.
+local EXEMPT_PROVENANCE = { committed = true, lash_out = true }
+
+local function open(s, provenance)
     nextOccurrence = nextOccurrence + 1
     occurrences[s] = { id = nextOccurrence, target = s.attackTargetUid,
-                       exempt = not M.governs(s) }
+                       provenance = provenance or "autonomous",
+                       exempt = EXEMPT_PROVENANCE[provenance] == true }
 end
 
--- Is the live attack goal exempt? Its occurrence says; the live flags
--- answer only for a goal with none.
-local function exempt(s)
+-- Is the live attack goal exempt? Only its occurrence answers.
+function M.exempt(s)
     local occ = occurrences[s]
-    if occ then return occ.exempt end
-    return not M.governs(s)
+    return occ ~= nil and occ.exempt
 end
 
-function M.goalChanged(s, newGoal)
+-- Called by unit_ai_core's setGoal (before the goal changes) and by its
+-- markGoalAccomplished (with nil, when the ending goal is active): an
+-- ending or replaced GOVERNED attack goal records the cutoff, and a new
+-- attack goal opens a fresh occurrence with the provenance its opener
+-- passed. A committed order or a lash-out therefore never stamps a
+-- cutoff, and a governed goal always does, whatever replaces it.
+function M.goalChanged(s, newGoal, provenance)
     if s.activeGoal == "attack" then
-        if not exempt(s) then cutoffs[s] = now() end
+        if not M.exempt(s) then cutoffs[s] = now() end
         occurrences[s] = nil
     end
-    if newGoal == "attack" then open(s) end
+    if newGoal == "attack" then open(s, provenance) end
 end
 
 -- After a successful load, once the load reset has emptied the tables
--- and the restored aiState is in place (unit_ai_save's reset hook):
--- re-open an occurrence for every restored attack goal, classified from
--- its restored flags while they still stand, so a restored committed
--- order or lash-out that clears its flag before ending is still judged
--- exempt. A fresh occurrence id inherits nothing from the saving
--- session -- no cutoff, no basis, no authorization. Returns the count.
+-- and the restored aiState is in place (unit_ai_save's reset hook), and
+-- so before any cleanup can rewrite them: rebuild every restored attack
+-- goal's occurrence from its DURABLE saved fields -- mentalLashoutActive
+-- names a lash-out, committed a player/debug order. A fresh occurrence id
+-- inherits nothing from the saving session: no cutoff, basis or
+-- authorization. Returns the count.
+local function savedProvenance(s)
+    if s.mentalLashoutActive then return "lash_out" end
+    if s.committed then return "committed" end
+    return "autonomous"
+end
+
 function M.restoreOccurrences(states)
     local n = 0
     for _, s in pairs(states) do
         if type(s) == "table" and s.activeGoal == "attack" then
-            open(s); n = n + 1
+            open(s, savedProvenance(s)); n = n + 1
         end
     end
     return n
@@ -152,10 +164,6 @@ end
 function M.retargeted(s)
     local occ = occurrences[s]
     if occ then occ.retargeted = true end
-end
-
-function M.governs(s)
-    return not (s.committed or s.mentalLashoutActive)
 end
 
 -- Does `att` (a unit.getLastAttacker record) let `uid` act in local
@@ -194,7 +202,7 @@ end
 
 -- Continuation of the live attack goal. Returns ok, reason.
 function M.mayContinue(uid, s)
-    if exempt(s) then return true end
+    if M.exempt(s) then return true end
     local target = s.attackTargetUid
     if not target then return true end
     if M.isHostile(uid, target) then return true end

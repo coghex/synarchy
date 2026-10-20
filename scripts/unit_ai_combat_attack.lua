@@ -217,7 +217,7 @@ local function attackTargetExecute(uid, s, params)
            and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC
            -- #2521: a governed goal swaps only onto an attacker that
            -- independently qualifies; no authorization travels with it.
-           and (not policy.governs(s)
+           and (policy.exempt(s)
                 or policy.acquireBasis(uid, s, att.uid, att)) then
             local m = unit.getInfo(uid)
             if m then

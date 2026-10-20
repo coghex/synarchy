@@ -229,8 +229,8 @@ local INITIAL_GOAL = {
 
 -- #2521: every attack-goal start/end/replacement passes through these
 -- two, so the combat-policy seam records occurrences and cutoffs here.
-local function setGoal(s, name)
-    combatPolicy.goalChanged(s, name)
+local function setGoal(s, name, provenance)
+    combatPolicy.goalChanged(s, name, provenance)
     s.goalStatus = s.goalStatus or {}; s.goalStatus[name] = "in_progress"
     s.activeGoal = name
 end
@@ -471,7 +471,7 @@ function unitAi.commandAttack(uid, targetUid, committed)
     if committed then hold.clear(s) end
     s.attackTargetUid = targetUid
     s.committed = committed and true or nil
-    setGoal(s, "attack")
+    setGoal(s, "attack", committed and "committed" or "autonomous")
     s.nextActionAt = 0
 end
 

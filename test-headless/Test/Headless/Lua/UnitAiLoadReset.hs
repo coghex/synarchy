@@ -418,6 +418,28 @@ spec = describe "unit AI load reset (#1329)" $ do
                 , "  assert(POLICY.mayContinue(7, s), 'the fresh self-defense goal stopped')"
                 , "  return s end"
                 ]
+        let kinds = ["autonomous", "committed", "lash_out"] ∷ [Text]
+            exemptLit k = if k ≡ "autonomous" then "false" else "true"
+            -- The cutoff a kind's end stamps: its time if governed, else none.
+            stamp k at = if k ≡ "autonomous" then at else "nil"
+            transitionPrelude = lns
+                [ "unit.clearAnimOverride = function() end"
+                , "START, FINISH = {}, {}"
+                , "function START.autonomous() AI.commandAttack(7, 8) end"
+                , "function START.committed() AI.commandAttack(7, 8, true) end"
+                -- unit_ai_mental: the fresh-episode block, then lashOutExecute.
+                , "function START.lash_out() local s = CORE.ensureState(7)"
+                , "  s.attackTargetUid = nil; s.committed = nil; s.mentalLashoutActive = true"
+                , "  CORE.setGoal(s, 'attack', 'lash_out')"
+                , "  s.attackTargetUid = 8; s.committed = nil end"
+                , "function FINISH.autonomous(s) CORE.markGoalAccomplished(s, 'attack') end"
+                -- retreatExecute drops the commitment first.
+                , "function FINISH.committed(s) s.attackTargetUid = nil; s.committed = nil"
+                , "  CORE.markGoalAccomplished(s, 'attack') end"
+                -- unit_ai_mental's episode-end cleanup drops the flag first.
+                , "function FINISH.lash_out(s) s.attackTargetUid = nil; s.committed = nil"
+                , "  s.mentalLashoutActive = nil; CORE.markGoalAccomplished(s, 'attack') end"
+                ]
         it "keeps no saved payload, and a successful load clears it so a \
            \rewound uid inherits nothing" $
             runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
@@ -461,6 +483,37 @@ spec = describe "unit AI load reset (#1329)" $ do
                 , "h = CORE.aiState[7]"
                 , "assert(POLICY.mayContinue(7, h), 'a restored hostile fight was ended')"
                 ]
+        -- Every attack-goal transition, each kind to each, live and after a
+        -- load: the cutoff each END stamps comes only from the ending
+        -- occurrence's own classification. Each kind starts and ends the
+        -- way its production path does -- commandAttack, unit_ai_mental's
+        -- lash-out start, retreat's and the episode cleanup's
+        -- flag-clearing BEFORE the goal ends -- so a classification read
+        -- from the live flags at decision time gets some row wrong.
+        describe "classifies each goal occurrence once, from its provenance" $
+            forM_ [ (from, to, load) | load ← [False, True]
+                                     , from ← kinds, to ← kinds ] $ \(from, to, load) →
+                it (T.unpack (from <> " to " <> to <> if load then ", after a load" else "")) $
+                    runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> transitionPrelude
+                        <> "\n" <> lns
+                        [ "LIVE[7], LIVE[8] = true, true; NOW = 1"
+                        , "START." <> from <> "()"
+                        , if load then "runLoad()" else ""
+                        , "local s = CORE.aiState[7]"
+                        , "assert(s and s.activeGoal == 'attack', 'the first goal is not live')"
+                        , "NOW = 2; START." <> to <> "()"
+                        , "assert(CORE.aiState[7] == s and s.activeGoal == 'attack')"
+                        , "assert(POLICY.cutoff(s) == " <> stamp from "2" <> ","
+                        , "  'replacing the " <> from <> " goal stamped ' .. tostring(POLICY.cutoff(s)))"
+                        , "assert(POLICY.mayContinue(7, s) == " <> exemptLit to <> ","
+                        , "  'the " <> to <> " goal was classified the wrong way')"
+                        , "NOW = 3; FINISH." <> to <> "(s)"
+                        , "assert(s.activeGoal ~= 'attack', 'the goal did not end')"
+                        -- An exempt end stamps nothing, leaving the replacement's.
+                        , "assert(POLICY.cutoff(s) == "
+                            <> (if to ≡ "autonomous" then "3" else stamp from "2") <> ","
+                        , "  'ending the " <> to <> " goal left cutoff ' .. tostring(POLICY.cutoff(s)))"
+                        ]
         it "keeps a restored committed order and a restored lash-out exempt \
            \when each clears its flag before the goal ends, and a restored \
            \autonomous goal governed" $
@@ -487,7 +540,7 @@ spec = describe "unit AI load reset (#1329)" $ do
                 -- cleanup, which drops the flag BEFORE ending the goal.
                 , "CORE.aiState[7] = nil; HIT = nil; NOW = 1000"
                 , "local m = CORE.ensureState(7)"
-                , "m.mentalLashoutActive = true; m.attackTargetUid = 8; CORE.setGoal(m, 'attack')"
+                , "m.mentalLashoutActive = true; m.attackTargetUid = 8; CORE.setGoal(m, 'attack', 'lash_out')"
                 , "runLoad(); m = CORE.aiState[7]"
                 , "assert(m.mentalLashoutActive and m.activeGoal == 'attack', 'no lash-out was restored')"
                 , "require('scripts.mental_state').isBreaking = function() return false end"
