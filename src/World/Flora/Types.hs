@@ -430,13 +430,29 @@ data FloraInstance = FloraInstance
       --   8), so they cannot drift. Chunk data is regenerated on every
       --   eviction, which is exactly why the DURABLE side is the
       --   authority and this is the mirror, never the other way round.
+    , fiContext ∷ !FloraContext
+      -- ^ The render context this occurrence is drawn in (#2547,
+      --   contract §1 and §6): 'ContextWild' for generated flora,
+      --   'ContextCultivated' for anything a player planted and for a
+      --   groundcover crop plot's synthetic instance. It is fixed at
+      --   CREATION by the code that creates the instance —
+      --   'World.Flora.Placement.mkInstance' assigns wild, the
+      --   @WePlaceFlora@\/@WePlaceFloraWithId@ replay in
+      --   "World.Edit.Apply" and 'World.Flora.CropPlot.cropPlotInstance'
+      --   assign cultivated — and is NEVER derived from the id namespace,
+      --   age, health, density, category or texture path. Nothing
+      --   persists it: the creation record (the world-edit log, the crop
+      --   plot table, or the deterministic generator) already determines
+      --   it, so a chunk eviction and regeneration, a load, and the
+      --   legacy @world-edits@ v1 rewrite all reconstruct it. Nothing
+      --   reads it yet; passing it to the visual selector is EFM-7.
     } deriving (Show, Eq, Generic, Serialize)
 instance NFData FloraInstance where
-    rnf (FloraInstance s tx ty ou ov z a h v bw i cd) =
+    rnf (FloraInstance s tx ty ou ov z a h v bw i cd cx) =
         rnf s `seq` rnf tx `seq` rnf ty `seq`
         rnf ou `seq` rnf ov `seq` rnf z `seq`
         rnf a `seq` rnf h `seq` rnf v `seq` rnf bw `seq`
-        rnf i `seq` rnf cd
+        rnf i `seq` rnf cd `seq` rnf cx
 
 -- | Does this instance stand on the given LOCAL chunk column? The one
 --   spelling of the @fiTileX@\/@fiTileY@ comparison every tile-scoped

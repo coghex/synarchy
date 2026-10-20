@@ -800,6 +800,7 @@ tilesWithFloraAt tile =
                           "crop_plant_probe" (fst tile) (snd tile)
                           "probe_crop" 0
                     , fiChopDesignated = False
+                    , fiContext = ContextWild
                     } ] } }
         base = tilesWith vegTilledSoil []
     in base { wtdChunks = HM.adjust occupied storedChunk (wtdChunks base) }

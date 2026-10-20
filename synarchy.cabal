@@ -1920,6 +1920,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FloraGrowth
                    Test.Headless.World.FloraIdentity
                    Test.Headless.World.FloraOrder
+                   Test.Headless.World.FloraRenderContext
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
