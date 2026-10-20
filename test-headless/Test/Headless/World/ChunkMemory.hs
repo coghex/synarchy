@@ -27,7 +27,8 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), WorldManager(..), emptyWorldState, emptyWorldManager)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Fluid.Types (fluidCellAtZ, FluidType(..), IceCell(..), IceMode(..))
-import World.Flora.Types (FloraChunkData(..), FloraInstance(..), FloraId(..))
+import World.Flora.Types
+    (FloraChunkData(..), FloraContext(..), FloraInstance(..), FloraId(..))
 import World.Flora.Identity (plantedFloraInstanceId)
 import World.Magma.Overlay (MagmaOverlay(..))
 import Structure.Types (StructurePieceData(..))
@@ -91,7 +92,7 @@ spec = describe "chunk residency accounting" $ do
         let base = depthChunk 8
             wet = base { lcFluidMap = V.replicate 256 (Just (fluidCellAtZ Lake 12)) }
             plant = FloraInstance (FloraId 1) 0 0 0 0 8 1 1 0 16
-                        (plantedFloraInstanceId 1) False
+                        (plantedFloraInstanceId 1) False ContextWild
             rich = wet { lcIceMap = V.replicate 256 (Just (IceCell 13 BasinIce))
                        , lcFlora = FloraChunkData [plant]
                        , lcStructures = HM.singleton (0,0,0) (StructurePieceData 1 2 8)

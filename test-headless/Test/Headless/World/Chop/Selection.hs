@@ -146,6 +146,7 @@ plantAt ordinal species (lx, ly) = FloraInstance
     , fiBaseWidth = 16
     , fiInstanceId = instanceId ordinal
     , fiChopDesignated = False
+    , fiContext = ContextWild
     }
 
 -- | A chunk whose columns are solid up to @heightAt@, carrying @plants@.

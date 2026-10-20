@@ -35,7 +35,7 @@ import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Reference (FloraRef)
-import World.Flora.Types (FloraId, FloraInstance(..))
+import World.Flora.Types (FloraContext(..), FloraId, FloraInstance(..))
 
 -- | One planted tile, parameterized by HOW it names its species
 --   (#2243). Field order is load-bearing (positional Generic
@@ -117,4 +117,7 @@ cropPlotInstance cp = FloraInstance
     , fiBaseWidth = 0
     , fiInstanceId = floraInstanceIdNone
     , fiChopDesignated = False
+      -- #2547: a tilled plot is cultivated by definition. Its occurrence
+      -- key is the plot's canonical tile, never the reserved zero id above.
+    , fiContext = ContextCultivated
     }
