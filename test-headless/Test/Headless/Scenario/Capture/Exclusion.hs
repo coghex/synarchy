@@ -19,6 +19,7 @@ import Data.IORef (readIORef, writeIORef)
 import qualified Data.ByteString as BS
 import qualified Data.Set as Set
 import System.Directory (doesFileExist)
+import System.Timeout (timeout)
 import System.FilePath ((</>))
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.InputView (InputViewCapability(..), toInputViewCapability)
@@ -259,7 +260,8 @@ spec = describe "shared exclusion" $ do
         takeMVar (holdReached hold)
         -- shutdown reaches the thread the request is running on
         killThread pumpThread
-        outcome ← takeMVar done
+        -- (bounded: a cancellation swallowed as an ordinary exception would leave the thread running)
+        outcome ← timeout 10000000 (takeMVar done) ≫= maybe (fail "the cancelled thread kept running") pure
         case outcome of
             Left e → (fromException e ∷ Maybe AsyncException) `shouldBe` Just ThreadKilled
             Right () → expectationFailure "the pump ended without an exception"

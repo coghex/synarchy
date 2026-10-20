@@ -195,6 +195,11 @@ spec = describe "one coherent snapshot" $ do
         withPump h $ do
             n ← requestCapture h (dir </> "late.yaml") False
             takeMVar (holdReached hold)
+            -- the owners run again: the capture lock was released with the bytes fixed
+            mutated ← forM captureOwners (ownerCounts (hOwners h))
+            waitCondition 30 $ do
+                now ← forM captureOwners (ownerCounts (hOwners h))
+                pure (and [ mNow > mBefore | ((mBefore, _), (mNow, _)) ← zip mutated now ])
             editUnit h "carrier" $ \u → u { uiStats = HM.insert "hydration" 1.0 (uiStats u), uiName = "Renamed" }
             putMVar (holdRelease hold) ()
             s ← awaitCapture h n 60

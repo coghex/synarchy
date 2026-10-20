@@ -10,6 +10,7 @@ import Test.Hspec
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
+import System.FilePath ((</>))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
 import qualified Item.Ground as G
@@ -18,6 +19,7 @@ import Location.Instance (LocationContainerSlot(..), LocationInstance(..), insta
 import Power.Types (PowerNode(..), PowerNodes(..))
 import Scenario.Load.Session (arenaPageId)
 import Scenario.Placement.Install (requestPlacementInstall)
+import Scenario.Capture.Types
 import Scenario.Placement.Types
 import Scenario.Types
 import Scenario.World.Install (requestWorldInstall)
@@ -83,6 +85,29 @@ spec = describe "an edited arena" $ do
         countsOf h `shouldReturn` before
         (_, again, _) ← captureLive h "world-edits-again"
         again `shouldBe` bytes
+
+    it "refuses to write an arena whose content the document cannot state, naming it, and writes nothing" $ \h → do
+        path ← writeScenario "capture-unstatable.yaml" integratedDoc
+        reloadFrom h path
+        let env = fxEnv (hFx h)
+            wsc = toWorldSimCapability env
+        ws ← liveArena h
+        epoch ← pageIncarnation ws
+        -- the pad rises over its own tagged cells: a tag on a cell below the
+        -- surface is something the terrain vocabulary cannot say
+        let higher = terrainPatch "pad" (RegionRect (-3) (-3) 3 3) "granite" 9 Omitted [tag "pad"]
+        outcome ← requestWorldInstall wsc arenaPageId epoch
+            (ScenarioWorldRequest (withPaths "terrain" [higher]) [] [])
+        outcome `shouldSatisfy` isInstalled
+        dir ← freshDir "unstatable"
+        s ← runCapture h (dir </> "out.yaml") False
+        case cstOutcome s of
+            Just (CaptureUnsuccessful f) → do
+                (cfKind f, cfPublication f) `shouldBe` (FailProjection, NotPublished)
+                map sdPath (cfDiagnostics f) `shouldBe` ["terrain.tags"]
+            other → expectationFailure ("expected a refusal, got " ⧺ show other)
+        listDir dir `shouldReturn` []
+        readIORef (enginePausedRef env) `shouldReturn` True
 
     it "keeps a pending container pending: its descriptor is written, its shell never opened" $ \h → do
         path ← writeScenario "capture-pending.yaml" $ doc
