@@ -391,25 +391,33 @@ processLuaMsg env ls stateRef msg = case msg of
 -- | The post-publication reconciliation of a load (the @LuaSaveLoaded@
 --   message the publish queues).
 --
---   #2713: a message about a request that is not the CURRENT, still
---   non-terminal load transaction is DISCARDED before it does anything. Its
---   survivor arrays describe a session that is no longer the live one, so
---   running the @onSaveLoaded@ callbacks with them would prune the current
---   session's Lua state, and cancelling the queued console commands would
---   reject work issued for a session that was never replaced. The request
---   identity is the whole test: a publish queues this message exactly once,
---   while its own request is the active one.
+--   #2713: a message about a request that is STALE — a newer request was
+--   accepted since, or this very request already ended — is DISCARDED before
+--   it does anything. Its survivor arrays describe a session that is no
+--   longer the live one, so running the @onSaveLoaded@ callbacks with them
+--   would prune the current session's Lua state, and cancelling the queued
+--   console commands would reject work issued for a session that was never
+--   replaced. The request identity is the whole test: a publish queues this
+--   message exactly once, while its own request is the active one. A message
+--   for a transaction the load status does not track is an isolated dispatch
+--   (the headless reconciliation fixtures drive the handler that way) and runs.
 handleSaveLoaded ∷ EngineEnv → LuaBackendState → Int → [Int] → [Int]
                  → LoadReconcileContext → IO ()
 handleSaveLoaded env ls requestId survUnitIds survBuildingIds reconcile = do
     current ← readLoadStatus (loadStatusRef env)
-    let live = maybe False (\s → lsRequestId s ≡ requestId ∧ isNothing (lsOutcome s)) current
-    if not live
+    -- stale: a NEWER request was accepted since, or this very request already
+    -- ended (a duplicate completion). A message on a transaction that is not
+    -- tracked at all is an isolated dispatch and runs as it always did.
+    let stale = case current of
+            Just s → lsRequestId s > requestId
+                     ∨ (lsRequestId s ≡ requestId ∧ isJust (lsOutcome s))
+            Nothing → False
+    if stale
       then do
         logger ← readIORef (loggerRef env)
         logWarn logger CatWorld $
             "Discarded a stale session reconciliation for load request #"
-            <> tshow requestId <> ": it is not the active load transaction"
+            <> tshow requestId <> ": a newer request was accepted or this one already ended"
       else do
         -- Issue #763: the debug-console TCP server keeps
         -- accepting commands onto 'lbsDebugQueue' regardless of the save
