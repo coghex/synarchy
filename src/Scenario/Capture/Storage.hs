@@ -50,7 +50,7 @@ module Scenario.Capture.Storage
 
 import UPrelude
 import Control.Exception
-    (SomeAsyncException, SomeException, displayException, fromException, throwIO, try)
+    (SomeAsyncException, SomeException, displayException, fromException, onException, throwIO, try)
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import System.Directory
@@ -168,7 +168,11 @@ writeScenarioFile ops inp = do
                     warns ← maybe (pure []) (cleanup ops) mTmp
                     pure (Left (failBefore FailTemporaryWrite (writeStepPhase step)
                         ("the temporary file could not be " <> stepVerb step <> ": " <> render e) warns))
+                -- a thread cancellation anywhere after the file exists removes
+                -- the request's own temporary on the way out (never the
+                -- destination), and propagates unchanged
                 Right tmp → afterCreate ops inp tmp (verdict ≡ DestinationWillReplace)
+                                `onException` void (cleanup ops tmp)
   where
     stepVerb s = case s of
         StepOpen → "created"

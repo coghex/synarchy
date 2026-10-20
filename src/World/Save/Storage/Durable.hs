@@ -29,6 +29,9 @@ module World.Save.Storage.Durable
     , WriteStep(..)
     , writeBytesDurably
     , writeUniqueDurably
+    , UniqueWriteOps(..)
+    , productionUniqueWriteOps
+    , writeUniqueDurablyWith
     , syncDirectory
       -- * Publication
     , ExclusiveOutcome(..)
@@ -47,7 +50,8 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Char (isDigit)
 import Control.Exception
-    (IOException, SomeException, try, finally, mask_, onException)
+    ( IOException, SomeAsyncException, SomeException, fromException, mask, mask_
+    , onException, throwIO, try, finally )
 import System.Directory (doesFileExist, removeFile, pathIsSymbolicLink)
 import System.IO.Error (isAlreadyExistsError)
 import System.Posix.Files (createLink)
@@ -151,6 +155,18 @@ writeBytesDurably path bytes = do
                     flushed ← try (durableFlush h)
                     pure (either (\e → Left (StepFlush, e)) Right flushed)
 
+-- | The three steps 'writeUniqueDurably' performs, replaceable so a test can
+--   fail or CANCEL exactly one of them without depending on timing.
+data UniqueWriteOps = UniqueWriteOps
+    { uwCreate ∷ FilePath → String → IO (FilePath, Handle)
+    , uwPut    ∷ Handle → BS.ByteString → IO ()
+    , uwFlush  ∷ Handle → IO ()
+    }
+
+-- | The real operations.
+productionUniqueWriteOps ∷ UniqueWriteOps
+productionUniqueWriteOps = UniqueWriteOps openBinaryTempFile BS.hPut durableFlush
+
 -- | 'writeBytesDurably' into a NEW file this call creates: a uniquely named
 --   file in @dir@ (@template@ + a generated suffix, see 'claimUniquePath' for
 --   the template rule), created exclusively and OWNED from the moment it
@@ -162,24 +178,46 @@ writeBytesDurably path bytes = do
 --   The failure carries the step it happened in and, once the file exists,
 --   its path (a failure of 'StepOpen' creates nothing: 'Nothing'). The handle
 --   is closed on every path out, as for 'writeBytesDurably'.
+--
+--   A thread cancellation (any 'SomeAsyncException') is NEVER a write
+--   failure: it propagates unchanged, and what this call created is removed
+--   on the way out (the handle closed, the file unlinked), so a shutdown
+--   mid-write leaves no owned temporary behind. Creation runs masked, so the
+--   file and the handle that owns it come into existence together.
 writeUniqueDurably
     ∷ FilePath → String → BS.ByteString
     → IO (Either (WriteStep, Maybe FilePath, SomeException) FilePath)
-writeUniqueDurably dir template bytes = do
-    opened ← try (openBinaryTempFile dir template)
+writeUniqueDurably = writeUniqueDurablyWith productionUniqueWriteOps
+
+writeUniqueDurablyWith
+    ∷ UniqueWriteOps → FilePath → String → BS.ByteString
+    → IO (Either (WriteStep, Maybe FilePath, SomeException) FilePath)
+writeUniqueDurablyWith ops dir template bytes = mask $ \restore → do
+    opened ← trySync (uwCreate ops dir template)
     case opened of
         Left e → pure (Left (StepOpen, Nothing, e))
         Right (path, h) → do
-            written ← try (BS.hPut h bytes)
+            -- an asynchronous exception from here on abandons the file
+            let abandon = closeQuietly h >> void (removeIfExists path)
+            written ← trySync (restore (uwPut ops h bytes)) `onException` abandon
             case written of
                 Left e → do
                     closeQuietly h
                     pure (Left (StepWrite, Just path, e))
                 Right () → do
-                    flushed ← try (durableFlush h)
+                    flushed ← trySync (restore (uwFlush ops h)) `onException` abandon
                     pure $ case flushed of
                         Left e → Left (StepFlush, Just path, e)
                         Right () → Right path
+
+-- | Run one operation, returning a SYNCHRONOUS exception as a value and
+--   letting an asynchronous one (a cancellation) through unchanged.
+trySync ∷ IO α → IO (Either SomeException α)
+trySync act = do
+    r ← try act
+    case r of
+        Left e | Just (_ ∷ SomeAsyncException) ← fromException e → throwIO e
+        _ → pure r
 
 -- | Durably sync a DIRECTORY, so the entries a preceding rename created
 --   or replaced are themselves on disk — a file's own @fsync@ says

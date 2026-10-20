@@ -8,11 +8,15 @@ module Test.Headless.Scenario.Capture.Edits (spec) where
 import UPrelude
 import Test.Hspec
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Control.Exception (finally)
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import System.FilePath ((</>))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
+import World.Flora.Types (emptyFloraCatalog)
 import qualified Item.Ground as G
 import Item.Types (ItemInstance(..))
 import Location.Instance (LocationContainerSlot(..), LocationInstance(..), instancesToList)
@@ -109,6 +113,29 @@ spec = describe "an edited arena" $ do
             other → expectationFailure ("expected a refusal, got " ⧺ show other)
         listDir dir `shouldReturn` []
         readIORef (enginePausedRef env) `shouldReturn` True
+
+    it "refuses an arena holding plants whose species it cannot name, replacing nothing" $ \h → do
+        path ← writeScenario "capture-unnamed-flora.yaml" integratedDoc
+        reloadFrom h path
+        let env = fxEnv (hFx h)
+        dir ← freshDir "unnamed-flora"
+        let dest = dir </> "out.yaml"
+        -- an existing destination the explicit overwrite would replace, were
+        -- the capture to succeed while omitting the plants
+        BS.writeFile dest (BC.pack "the previous destination\n")
+        saved ← readIORef (floraCatalogRef env)
+        writeIORef (floraCatalogRef env) emptyFloraCatalog
+        s ← runCapture h dest True `finally` writeIORef (floraCatalogRef env) saved
+        case cstOutcome s of
+            Just (CaptureUnsuccessful f) → do
+                (cfKind f, cfPublication f) `shouldBe` (FailProjection, NotPublished)
+                map sdPath (cfDiagnostics f) `shouldBe` ["flora.species"]
+            other → expectationFailure ("expected a refusal, got " ⧺ show other)
+        BS.readFile dest `shouldReturn` BC.pack "the previous destination\n"
+        listDir dir `shouldReturn` ["out.yaml"]
+        -- with the species resolvable again the same arena captures, plants and all
+        (_, bytes, _) ← captureLive h "unnamed-flora-after"
+        length ∘ scFlora <$> decodeBytes h bytes `shouldReturn` 1
 
     it "refuses an ordinary gameplay session and a session with no arena, changing nothing" $ \h → do
         path ← writeScenario "capture-not-testing.yaml" integratedDoc

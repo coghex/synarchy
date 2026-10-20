@@ -14,6 +14,7 @@ module Test.Headless.Scenario.Capture.Storage (spec) where
 import UPrelude
 import Test.Hspec
 import Control.Concurrent.MVar (putMVar)
+import Control.Exception (AsyncException(..), SomeException, fromException, throwIO, try)
 import Data.IORef (readIORef)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
@@ -31,7 +32,9 @@ import Scenario.Capture.Types
 import Test.Headless.Scenario.Capture.Support
 import Test.Headless.Scenario.Load.Harness
 import Test.Headless.Scenario.Placement.Fixtures (Fx(..))
-import World.Save.Storage.Durable (ExclusiveOutcome(..), publishExclusive)
+import World.Save.Storage.Durable
+    ( ExclusiveOutcome(..), UniqueWriteOps(..), WriteStep(..), productionUniqueWriteOps
+    , publishExclusive, writeUniqueDurablyWith )
 
 -- | The scenario the examples capture: small, with a unit and a building.
 contentDoc ∷ [String]
@@ -296,6 +299,63 @@ spec = describe "the file" $ do
             cfKind f4 `shouldBe` FailDestination
             createDirectoryIfMissing True dir
             afterwards h
+
+    describe "a thread cancellation (shutdown) during a write" $ do
+        let cancelled = (== Just ThreadKilled) ∘ fromException
+        it "is never a write failure at creation, write or flush of the owned temporary: it propagates and leaves no file" $ \_ → do
+            forM_ [ ("create", productionUniqueWriteOps { uwCreate = \_ _ → throwIO ThreadKilled })
+                  , ("write", productionUniqueWriteOps { uwPut = \_ _ → throwIO ThreadKilled })
+                  , ("flush", productionUniqueWriteOps { uwFlush = \_ → throwIO ThreadKilled }) ] $ \(step, ops) → do
+                dir ← freshDir ("cancel-" ⧺ step)
+                r ← try (writeUniqueDurablyWith ops dir "scenario-capture-tmp" (BC.pack "bytes"))
+                case r of
+                    Left e → (step, cancelled (e ∷ SomeException)) `shouldBe` (step, True)
+                    Right _ → expectationFailure ("a cancellation at " ⧺ step ⧺ " was reported as a result")
+                -- the temporary the call had created was removed on the way out
+                listDir dir `shouldReturn` []
+        it "still reports an ordinary failure at each of those steps as a result, with the file named for cleanup" $ \_ → do
+            forM_ [ ("create", StepOpen, productionUniqueWriteOps { uwCreate = \_ _ → ioError (userError "create") })
+                  , ("write", StepWrite, productionUniqueWriteOps { uwPut = \_ _ → ioError (userError "write") })
+                  , ("flush", StepFlush, productionUniqueWriteOps { uwFlush = \_ → ioError (userError "flush") }) ] $ \(step, expected, ops) → do
+                dir ← freshDir ("fail-" ⧺ step)
+                r ← writeUniqueDurablyWith ops dir "scenario-capture-tmp" (BC.pack "bytes")
+                case r of
+                    Left (got, mPath, _) → do
+                        (step, got) `shouldBe` (step, expected)
+                        -- only a failure after creation names a file
+                        (step, isJust mPath) `shouldBe` (step, expected ≢ StepOpen)
+                    Right _ → expectationFailure ("a failure at " ⧺ step ⧺ " was reported as success")
+        it "removes the request's own temporary and propagates, wherever the cancellation arrives after creation" $ \_ → do
+            let real = productionOps
+            forM_ [ ("read", real { opRead = \_ → throwIO ThreadKilled })
+                  , ("link", real { opLink = \_ _ → throwIO ThreadKilled })
+                  , ("replace", real { opReplace = \_ _ → throwIO ThreadKilled }) ] $ \(where_, ops) → do
+                dir ← freshDir ("cancel-after-" ⧺ where_)
+                let dest = dir </> "out.yaml"
+                    replacing = where_ ≡ "replace"
+                -- a replacement has an existing file to leave alone; the others publish a new one
+                when replacing (BS.writeFile dest old)
+                r ← try (writeScenarioFile ops StorageInput
+                    { siRequest = CaptureRequest dest replacing, siBytes = BC.pack "version: 3\n"
+                    , siVerify = const (Right ()), siAt = \_ → pure (), siPublished = pure () })
+                case r of
+                    Left e → (where_, cancelled (e ∷ SomeException)) `shouldBe` (where_, True)
+                    Right _ → expectationFailure ("a cancellation during " ⧺ where_ ⧺ " was reported as a result")
+                -- the destination is exactly as it was (still absent, or the old file) and no temporary remains
+                listDir dir `shouldReturn` (if replacing then ["out.yaml"] else [])
+                when replacing (BS.readFile dest `shouldReturn` old)
+        it "after publication leaves the COMPLETE new file, with the temporary name removed" $ \_ → do
+            dir ← freshDir "cancel-after-publish"
+            let dest = dir </> "out.yaml"
+                bytes = BC.pack "version: 3\n"
+            r ← try (writeScenarioFile productionOps { opSyncDir = \_ → throwIO ThreadKilled } StorageInput
+                { siRequest = CaptureRequest dest False, siBytes = bytes
+                , siVerify = const (Right ()), siAt = \_ → pure (), siPublished = pure () })
+            case r of
+                Left e → cancelled (e ∷ SomeException) `shouldBe` True
+                Right _ → expectationFailure "a cancellation during the directory sync was reported as a result"
+            BS.readFile dest `shouldReturn` bytes
+            listDir dir `shouldReturn` ["out.yaml"]
 
     describe "the writer on its own" $ do
         it "rejects a candidate the scenario boundary refuses, before publishing anything" $ \_ → do
