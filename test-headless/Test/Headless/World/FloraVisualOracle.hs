@@ -54,7 +54,7 @@ assertSame sp day fi = do
 
 instanceAt ∷ Float → FloraInstance
 instanceAt age = FloraInstance (FloraId 1) 3 7 0.1 (-0.2) 5 age 1 2 10
-    (generatedFloraInstanceId "visual-oracle" 3 7 "oracle" 0) False
+    (generatedFloraInstanceId "visual-oracle" 3 7 "oracle" 0) False ContextWild
 
 shipped ∷ IO [FloraSpecies]
 shipped = do

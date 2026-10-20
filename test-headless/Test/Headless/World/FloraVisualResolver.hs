@@ -44,7 +44,7 @@ ladder =
 
 inst ∷ FloraInstance
 inst = FloraInstance (FloraId 1) 0 0 0 0 1 0 1 0 1
-    (generatedFloraInstanceId "visual-fixture" 0 0 "synthetic" 0) False
+    (generatedFloraInstanceId "visual-fixture" 0 0 "synthetic" 0) False ContextWild
 
 catalog ∷ FloraSpecies → FloraCatalog
 catalog sp = insertSpecies (FloraId 1) sp emptyFloraCatalog
