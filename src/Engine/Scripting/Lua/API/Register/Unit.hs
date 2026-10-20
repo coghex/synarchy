@@ -22,6 +22,12 @@ import Engine.Scripting.Lua.API.Units.Medical
 -- surface. Its own module because it is the one verb that must commit
 -- against the SAME reference combat debits, not another stat accessor.
 import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
+-- #2518's unit-id ownership/commandability/unrestricted-combat queries,
+-- imported directly for the same reason: the Units facade's export list
+-- is frozen at the pre-split surface.
+import Engine.Scripting.Lua.API.Units.Ownership
+    ( unitHasUnrestrictedCombatFn, unitIsPlayerCommandableFn
+    , unitIsPlayerOwnedFn )
 -- #2470's atomic stamina commit, imported directly for the same reason.
 -- Its own module beside the stance verb: it likewise commits against the
 -- SAME reference combat debits, and additionally REPORTS what it
@@ -133,6 +139,11 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "transitionTo" (unitTransitionToFn env)
   registerLuaFunction callStats "unit" "getPose"      (unitGetPoseFn env)
   registerLuaFunction callStats "unit" "getFaction"   (unitGetFactionFn env)
+  registerLuaFunction callStats "unit" "isPlayerOwned" (unitIsPlayerOwnedFn env)
+  registerLuaFunction callStats "unit" "isPlayerCommandable"
+                                          (unitIsPlayerCommandableFn env)
+  registerLuaFunction callStats "unit" "hasUnrestrictedCombat"
+                                          (unitHasUnrestrictedCombatFn env)
   registerLuaFunction callStats "unit" "exists"       (unitExistsFn env)
   registerLuaFunction callStats "unit" "getAttackRange" (unitGetAttackRangeFn env)
   registerLuaFunction callStats "unit" "getAttackCooldown" (unitGetAttackCooldownFn env)

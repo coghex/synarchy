@@ -15,6 +15,7 @@ import World.Flora.Harvest (tickFloraHarvests)
 import World.Thread.ItemTemp (tickItemTemperatures)
 import World.Thread.Power (tickPowerNetworks)
 import World.Thread.Discovery (tickLocationDiscovery)
+import Unit.Faction.Membership (localController)
 import World.Thread.CraftBills (tickCraftBillOwners)
 
 -- | Advance time for all visible worlds, write sun angle to the shared ref.
@@ -130,7 +131,8 @@ tickWorldTime env dt = do
     loading ← loadInProgress (loadStatusRef env)
     unless loading $
         forM_ (wmWorlds manager) $ \(pageId, worldState) → do
-            tickLocationDiscovery env pageId worldState
+            -- Discovery is ownership under the local observer (#2518).
+            tickLocationDiscovery localController env pageId worldState
             tickCraftBillOwners env pageId worldState
 
     -- The process-global BASE angle (#1869): the visible head page's own

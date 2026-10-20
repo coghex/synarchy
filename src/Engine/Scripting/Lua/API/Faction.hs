@@ -80,6 +80,11 @@ factionCanAttackFn = predicate2 canAttack
 -- | faction.isPlayerOwned(f) → bool
 --   Is this the player's OWN unit? Narrower than "allied with the
 --   player" — see "Unit.Faction".
+--
+--   This and the two property verbs below are the compatibility window
+--   (#2518, D-33): scripts ask @unit.isPlayerOwned(uid)@ and its siblings
+--   ('Engine.Scripting.Lua.API.Units.Ownership') instead, and these gain
+--   no callers.
 factionIsPlayerOwnedFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 factionIsPlayerOwnedFn = predicate1 isPlayerOwned
 
