@@ -31,8 +31,8 @@ import Location.Instance
     , locationAuthorsClearance, locationClearanceSatisfied
     , markLocationEncounterCleared, resolveLocationClearance
     , promoteLifecycle, setLocationLifecycle )
-import Unit.Faction (isPlayerOwned)
-import Unit.Faction.Membership (legacyFactionOf)
+import Unit.Faction.Membership (unitIsOwnedBy, unitPolicyProfile)
+import Unit.Faction.Profile (ControllerId)
 import Unit.LineOfSight (visibleTilesOnPage)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
@@ -43,11 +43,14 @@ import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 --   A no-op when the page has no live gen params yet (mirrors
 --   'World.Thread.ItemTemp.tickItemTemperatures'). Which units count is
 --   NOT decided here: this hands every unit's sight to
---   'findDiscoveries', which applies 'Unit.Faction.isPlayerOwned' — the
---   shared definition of "the player's own unit" (#912). Ownership is
---   narrower than alliance on purpose, so a debug unit (allied with the
---   player, commandable by them, but not owned) still never discovers a
---   location by looking at it.
+--   'findDiscoveries', which applies the shared definition of "the
+--   player's own unit" (#912) — ownership under the @observer@ the
+--   caller passes (#2518; the world thread passes
+--   'Unit.Faction.Membership.localController'). Ownership
+--   is narrower than alliance on purpose, so a debug unit (commandable
+--   through its capability, but not owned) and an uncontrolled acolyte
+--   (allied with the roster by its shared tag, but not owned) still
+--   never discover a location by looking at it.
 --
 --   Sight comes from 'Unit.LineOfSight.visibleTilesOnPage' against THIS
 --   page's own 'WorldState' (#1230) — the same calculation the public
@@ -109,8 +112,9 @@ import World.Types (WorldGenParams(..), WorldPageId(..), WorldState(..))
 --   would just offer the player a location line that cannot act until
 --   they switch worlds, for a place they have not seen — so the event
 --   stays a plain "you found something" notice instead.
-tickLocationDiscovery ∷ EngineEnv → WorldPageId → WorldState → IO ()
-tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
+tickLocationDiscovery
+    ∷ ControllerId → EngineEnv → WorldPageId → WorldState → IO ()
+tickLocationDiscovery observer env pageId@(WorldPageId pageText) ws = do
     mParams ← readIORef (wsGenParamsRef ws)
     case mParams of
         Nothing → pure ()
@@ -209,14 +213,14 @@ tickLocationDiscovery env pageId@(WorldPageId pageText) ws = do
                 [ (uid, inst)
                 | (uid, inst) ← sortOn fst (HM.toList (umInstances um))
                 , uiPage inst ≡ pageId
-                , isPlayerOwned (legacyFactionOf (uiFaction inst))
+                , unitIsOwnedBy observer (uiFaction inst)
                 ]
         sights ← forM pageUnits $ \(uid, inst) → do
             tiles ← visibleTilesOnPage ws inst
             pure UnitSight { usUnit    = uid
-                           , usFaction = legacyFactionOf (uiFaction inst)
+                           , usProfile = unitPolicyProfile (uiFaction inst)
                            , usTiles   = tiles }
-        let hits = findDiscoveries (wgpWorldSize p)
+        let hits = findDiscoveries observer (wgpWorldSize p)
                                    (wgpLocationInstances p)
                                    sights
         forM_ hits $ \hit → do

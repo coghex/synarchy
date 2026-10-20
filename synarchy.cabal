@@ -464,6 +464,7 @@ library
                       Engine.Scripting.Lua.API.Units.TransferOrder
                      Engine.Scripting.Lua.API.Units.Stats
                      Engine.Scripting.Lua.API.Units.Physiology
+                     Engine.Scripting.Lua.API.Units.Ownership
                      Engine.Scripting.Lua.API.Units.Stance
                      Engine.Scripting.Lua.API.Units.Stamina
                      Engine.Scripting.Lua.API.Units.CommitPhysio
@@ -1162,6 +1163,7 @@ library
                      World.Flora.Clock
                      World.Flora.Placement
                      World.Flora.Render
+                     World.Flora.Visual
                      World.Flora.Harvest
                      World.Flora.CropPlot
                      World.Fluid.Types
@@ -1930,6 +1932,8 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
+                   Test.Headless.World.FloraVisualResolver
+                   Test.Headless.World.FloraVisualOracle
                    Test.Headless.World.FloraIdentity
                    Test.Headless.World.FloraOrder
                    Test.Headless.River.CalderaHazard
@@ -2017,6 +2021,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.PhysiologyModes.Transitions
                    Test.Headless.Unit.PhysiologyFixture
                    Test.Headless.Unit.FactionProfile
+                   Test.Headless.Unit.FactionConsumerAudit
                    Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
@@ -2053,6 +2058,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Capture.Cycle
                    Test.Headless.Scenario.Capture.Encode
                    Test.Headless.Lua.Faction
+                   Test.Headless.Lua.UnitOwnership
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
                    Test.Headless.Location.ContainerShells
@@ -2177,6 +2183,7 @@ test-suite synarchy-test-headless
                 -- spec-tree walk in its regression. hspec's own core, so
                 -- already in the build plan.
                 , hspec-core
+                , QuickCheck
                 , JuicyPixels
                 -- #2693's oversized-inflate fixture builds a real zlib stream.
                 , zlib

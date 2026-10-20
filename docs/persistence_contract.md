@@ -212,6 +212,20 @@ the cases are `--match "physiology override persistence"` and
 `--match "persistence of the physiology modes"`. The setters exist since S4
 (#2831): `physiology.setMode` / `clearMode` record and remove the override.
 
+**Combat-policy bookkeeping (#2521).** The Lua combat-policy seam
+(`scripts/unit_ai_combat_policy.lua`) keeps, per unit, the time its last
+attack goal ended (the local self-defense cutoff) and the live attack goal's
+occurrence identity. Both are **Reset to a documented default** (absent):
+they live outside `aiState`, keyed by the unit's AI-state table, ride no save
+payload and no `unit_ai` version, and `unit_ai_claims`' reset empties them on
+every successful load and on session teardown, so a rewound uid inherits
+nothing. With last-attacker memory also reset on load, the intended
+consequence is that a restored NON-HOSTILE self-defense attack goal ends at
+its first decision: old damage cannot keep a fight alive across a load. A
+hostile fight, a committed player/debug order and a lash-out are unaffected,
+and saved withdrawal/hold state keeps its behavior. The case is
+`--match "unit AI load reset"`.
+
 For every inventoried item, the inventory records: its **owner**
 (file:line of the record/module that holds it), its **scope** (global —
 one instance for the whole engine — or per-page), its **restoration

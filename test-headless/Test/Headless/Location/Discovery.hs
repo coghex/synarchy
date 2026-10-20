@@ -9,7 +9,7 @@
 --   'Test.Headless.Location.Bounds' fixture style; no engine needed —
 --   see 'Test.Headless.World.LocationDiscovery' for the IO-level
 --   (player-event + Lua query) coverage.
-module Test.Headless.Location.Discovery (spec) where
+module Test.Headless.Location.Discovery (spec, instances1, loc1Id) where
 
 import UPrelude
 import Test.Hspec
@@ -32,6 +32,10 @@ import Location.Instance
     , markLocationContentsSpawned, setLocationLifecycle )
 import Test.Headless.Location.Fixture (expectGeometry)
 import Unit.Faction (Faction(..), allFactions, factionTag)
+import Unit.Faction.Membership
+    (localController, resolveLegacyFaction, unitPolicyProfile)
+import Unit.Faction.Profile
+    ( FactionProfile, aiController, humanController, mkProfile, tagAcolyte )
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import Language.Semantic.Types (ConceptId(..))
@@ -104,7 +108,7 @@ hit1 = DiscoveryHit loc1Id loc1Coord (8, 8) "Small Ruin" 1
 --   CONTACT rule — a location is revealed iff some seen tile lands
 --   inside its bounds — independently of how the set was produced.
 seeing ∷ [(Int, Int)] → [UnitSight Int]
-seeing tiles = [ UnitSight 1 FactionPlayer tiles ]
+seeing tiles = [ UnitSight 1 (legacySight FactionPlayer) tiles ]
 
 -- | The sight of a unit STANDING at (gx, gy) and seeing nothing else —
 --   a unit's own tile is always in its visible set
@@ -116,7 +120,26 @@ standingAt gx gy = seeing [(gx, gy)]
 
 -- | Several units, each seeing only its own tile.
 unitsAt ∷ [(Int, Faction, Int, Int)] → [UnitSight Int]
-unitsAt us = [ UnitSight uid f [(gx, gy)] | (uid, f, gx, gy) ← us ]
+unitsAt us =
+    [ UnitSight uid (legacySight f) [(gx, gy)] | (uid, f, gx, gy) ← us ]
+
+-- | The policy profile a unit spawned under a legacy faction tag carries
+--   (#2515's D-26 mapping, against the acolyte definition's authored
+--   @acolyte@ default). The ownership filter reads this, never the tag.
+legacySight ∷ Faction → FactionProfile
+legacySight = unitPolicyProfile ∘ resolveLegacyFaction [tagAcolyte]
+
+-- | An acolyte with NO controller: it shares the local roster's
+--   @acolyte@ tag, so the policy calls the two allies, yet nobody owns
+--   it (#2518).
+uncontrolledAcolyte ∷ FactionProfile
+uncontrolledAcolyte = mkProfile Nothing [tagAcolyte] []
+
+-- | Units of controllers other than the local observer, sharing every
+--   tag the local roster carries.
+otherPlayerAcolyte, aiAcolyte ∷ FactionProfile
+otherPlayerAcolyte = mkProfile (Just (humanController "player_2")) [tagAcolyte] []
+aiAcolyte          = mkProfile (Just (aiController "raiders")) [tagAcolyte] []
 
 -- | The overlay/registry pair used by the cylindrical-seam tests: loc1
 --   re-anchored at chunk (1,0) in a 2-chunk-wide world (worldWidthTiles
@@ -134,7 +157,7 @@ spec = describe "Location discovery" $ do
             -- (11,8) is one tile east of the bounds' east edge (6..10).
             -- Under the removed 6-tile halo this was a discovery; the
             -- contact rule is now containment in liBounds itself.
-            findDiscoveries 0 instances1 (standingAt 11 8)
+            findDiscoveries localController 0 instances1 (standingAt 11 8)
                 `shouldBe` []
 
         describe "seeing ONE occupied tile is enough, on every edge and corner" $
@@ -147,23 +170,23 @@ spec = describe "Location discovery" $ do
                     -- The unit itself stands well outside the ruin and
                     -- sees exactly this one tile of it: reveal follows
                     -- SIGHT, never the unit's own position.
-                    findDiscoveries 0 instances1 (seeing [(40, 40), (gx, gy)])
+                    findDiscoveries localController 0 instances1 (seeing [(40, 40), (gx, gy)])
                         `shouldBe` [hit1]
 
         it "a unit standing outside but seeing into the bounds discovers it" $
             -- The case the whole issue exists for: no part of this unit
             -- is inside the ruin, and it still maps it.
-            findDiscoveries 0 instances1 (seeing [(20, 20), (8, 8)])
+            findDiscoveries localController 0 instances1 (seeing [(20, 20), (8, 8)])
                 `shouldBe` [hit1]
 
         it "a unit standing INSIDE the bounds always discovers it — its \
            \own tile is always in its visible set" $
-            findDiscoveries 0 instances1 (standingAt 8 8)
+            findDiscoveries localController 0 instances1 (standingAt 8 8)
                 `shouldBe` [hit1]
 
         it "a unit that sees many tiles, none of them the location's, \
            \discovers nothing" $
-            findDiscoveries 0 instances1
+            findDiscoveries localController 0 instances1
                 (seeing [ (x, y) | x ← [0 .. 5], y ← [0 .. 5] ])
                 `shouldBe` []
 
@@ -172,7 +195,8 @@ spec = describe "Location discovery" $ do
             -- The degenerate input a caller could hand in for a unit on
             -- a page with no live state: no sight, no reveal — never an
             -- unearned discovery from position alone.
-            findDiscoveries 0 instances1 [UnitSight 1 FactionPlayer []]
+            findDiscoveries localController 0 instances1
+                [UnitSight 1 (legacySight FactionPlayer) []]
                 `shouldBe` []
 
     describe "findDiscoveries: player-OWNERSHIP contract (#912)" $ do
@@ -184,45 +208,79 @@ spec = describe "Location discovery" $ do
         forM_ [f | f ← allFactions, f ≢ FactionPlayer] $ \fid →
             it (T.unpack (factionTag fid)
                  <> " that can see it never discovers it") $
-                findDiscoveries 0 instances1 (unitsAt [(1, fid, 8, 8)])
+                findDiscoveries localController 0 instances1 (unitsAt [(1, fid, 8, 8)])
                     `shouldBe` []
 
         it "a debug unit that can see it does not discover it even while \
            \a player unit stands out of sight of it" $
             -- The pairing that catches an ownership→alliance collapse
             -- most directly: the only unit that can see it is debug.
-            findDiscoveries 0 instances1
+            findDiscoveries localController 0 instances1
                 (unitsAt [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 40, 40) ])
                     `shouldBe` []
 
         it "a player unit still discovers it with debug units alongside" $
             -- …and the same scene with the player inside DOES fire, so
             -- the case above is proving exclusion, not a dead fixture.
-            findDiscoveries 0 instances1
+            findDiscoveries localController 0 instances1
                 (unitsAt [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 8, 8) ])
                     `shouldBe` [DiscoveryHit loc1Id loc1Coord (8, 8)
                                              "Small Ruin" 2]
+
+    describe "findDiscoveries: ownership is not alliance (#2518, FTS-4)" $ do
+        let sight uid prof = UnitSight uid prof [(8, 8)]
+            playerAt88     = sight 2 (legacySight FactionPlayer)
+
+        it "an uncontrolled acolyte sharing the roster's tag produces \
+           \neither discovery nor awareness" $ do
+            findDiscoveries localController 0 instances1
+                [sight 1 uncontrolledAcolyte] `shouldBe` []
+            findAwareness localController 0 instances1
+                [sight 1 uncontrolledAcolyte] `shouldBe` []
+
+        it "units of another human or an AI controller discover nothing \
+           \for the local observer" $
+            forM_ [otherPlayerAcolyte, aiAcolyte] $ \prof → do
+                findDiscoveries localController 0 instances1 [sight 1 prof]
+                    `shouldBe` []
+                findAwareness localController 0 instances1 [sight 1 prof]
+                    `shouldBe` []
+
+        it "the same scene with an owned unit alongside does fire, \
+           \attributed to the owned unit" $ do
+            let scene = [sight 1 uncontrolledAcolyte, sight 3 aiAcolyte, playerAt88]
+            map dhUnit (findDiscoveries localController 0 instances1 scene)
+                `shouldBe` [2]
+            map ahUnit (findAwareness localController 0 instances1 scene)
+                `shouldBe` [2]
+
+        it "ownership is observer-relative: the other controller's own \
+           \observer discovers through its unit and not through ours" $ do
+            let p2    = humanController "player_2"
+                scene = [sight 1 otherPlayerAcolyte, playerAt88]
+            map dhUnit (findDiscoveries p2 0 instances1 scene) `shouldBe` [1]
+            map ahUnit (findAwareness p2 0 instances1 scene) `shouldBe` [1]
 
     describe "findDiscoveries: page scoping" $
         it "the same coordinates on a different page have independent \
            \discovered state" $ do
             -- Page A: fresh (nothing discovered yet) — the unit that
             -- sees it discovers it.
-            findDiscoveries 0 instances1 (standingAt 8 8) `shouldBe` [hit1]
+            findDiscoveries localController 0 instances1 (standingAt 8 8) `shouldBe` [hit1]
             -- Page B: same definition and coordinate, but ITS OWN
             -- instance table already has loc1 discovered — a caller
             -- passes each page's own persisted state, so this never
             -- re-fires even though the inputs are otherwise identical.
-            findDiscoveries 0 (instancesAt LifecycleDiscovered) (standingAt 8 8)
+            findDiscoveries localController 0 (instancesAt LifecycleDiscovered) (standingAt 8 8)
                 `shouldBe` []
 
     describe "findDiscoveries: cylindrical U-seam (mirrors #777's contract)" $ do
         it "a seam-adjacent seen tile is NOT a contact under raw \
            \(non-wrapping) coords" $
-            findDiscoveries 0 seamInstances (standingAt 8 24)
+            findDiscoveries localController 0 seamInstances (standingAt 8 24)
                 `shouldBe` []
         it "the same seen tile IS a contact once the seam wrap is considered" $
-            findDiscoveries 2 seamInstances (standingAt 8 24)
+            findDiscoveries localController 2 seamInstances (standingAt 8 24)
                 `shouldBe` [DiscoveryHit loc1Id (ChunkCoord 1 0) (24, 8)
                                           "Small Ruin" 1]
         it "a raw-coordinate alias that is not inside on both \
@@ -231,29 +289,29 @@ spec = describe "Location discovery" $ do
             -- coincidence, but y=100 is nowhere near any seam alias's
             -- y-range — containment requires both axes, not a single
             -- coincidental one.
-            findDiscoveries 2 seamInstances (standingAt 24 100)
+            findDiscoveries localController 2 seamInstances (standingAt 24 100)
                 `shouldBe` []
 
     describe "findDiscoveries: idempotency" $
         it "a location already in the discovered set never re-fires, \
            \even with the same qualifying unit still looking at it" $ do
-            let firstTick = findDiscoveries 0 instances1 (standingAt 8 8)
+            let firstTick = findDiscoveries localController 0 instances1 (standingAt 8 8)
             firstTick `shouldBe` [hit1]
             let afterFirst = foldr (\h acc →
                     fromMaybe acc (setLocationLifecycle (dhInstance h)
                                        LifecycleDiscovered acc))
                     instances1 firstTick
-            findDiscoveries 0 afterFirst (standingAt 8 8) `shouldBe` []
+            findDiscoveries localController 0 afterFirst (standingAt 8 8) `shouldBe` []
 
     describe "lifecycle no-regression (#911)" $ do
         forM_ [ LifecycleDiscovered, LifecycleActive
               , LifecycleCleared, LifecycleDepleted ] $ \l →
             it ("an instance already " <> show l
                 <> " is never re-reported as a discovery") $
-                findDiscoveries 0 (instancesAt l) (standingAt 8 8) `shouldBe` []
+                findDiscoveries localController 0 (instancesAt l) (standingAt 8 8) `shouldBe` []
 
         it "a hinted instance still promotes to discovered on sight" $
-            findDiscoveries 0 (instancesAt LifecycleHinted) (standingAt 8 8)
+            findDiscoveries localController 0 (instancesAt LifecycleHinted) (standingAt 8 8)
                 `shouldBe` [hit1]
 
         it "discovery never downgrades a later lifecycle state" $ do
@@ -265,20 +323,20 @@ spec = describe "Location discovery" $ do
         let aware1 uid = AwarenessHit loc1Id loc1Coord (8, 8) "Small Ruin" uid
 
         it "reports the qualifying player unit that can see it" $
-            findAwareness 0 instances1 (standingAt 8 8) `shouldBe` [aware1 1]
+            findAwareness localController 0 instances1 (standingAt 8 8) `shouldBe` [aware1 1]
 
         it "reports a unit that sees into the bounds from outside them" $
-            findAwareness 0 instances1 (seeing [(20, 20), (8, 8)])
+            findAwareness localController 0 instances1 (seeing [(20, 20), (8, 8)])
                 `shouldBe` [aware1 1]
 
         it "reports nothing for a unit that sees no tile of it" $
-            findAwareness 0 instances1 (standingAt 11 8) `shouldBe` []
+            findAwareness localController 0 instances1 (standingAt 11 8) `shouldBe` []
 
         it "reports EVERY qualifying unit, not just the discoverer — two \
            \acolytes who can both see it both learn it" $
             -- findDiscoveries attributes the transition to the first
             -- qualifying unit alone; awareness must not inherit that.
-            findAwareness 0 instances1
+            findAwareness localController 0 instances1
                 (unitsAt [ (1, FactionPlayer, 8, 8), (2, FactionPlayer, 10, 6) ])
                 `shouldBe` [aware1 1, aware1 2]
 
@@ -289,33 +347,33 @@ spec = describe "Location discovery" $ do
             -- layer is finished with this location, the unit is not.
             forM_ [ LifecycleDiscovered, LifecycleActive
                   , LifecycleCleared, LifecycleDepleted ] $ \l → do
-                findDiscoveries 0 (instancesAt l) (standingAt 8 8)
+                findDiscoveries localController 0 (instancesAt l) (standingAt 8 8)
                     `shouldBe` []
-                findAwareness 0 (instancesAt l) (standingAt 8 8)
+                findAwareness localController 0 (instancesAt l) (standingAt 8 8)
                     `shouldBe` [aware1 1]
 
         describe "player-OWNERSHIP contract is shared with discovery (#912)" $ do
             forM_ [f | f ← allFactions, f ≢ FactionPlayer] $ \fid →
                 it (T.unpack (factionTag fid)
                      <> " that can see it never gains awareness") $
-                    findAwareness 0 instances1 (unitsAt [(1, fid, 8, 8)])
+                    findAwareness localController 0 instances1 (unitsAt [(1, fid, 8, 8)])
                         `shouldBe` []
 
             it "a debug unit that can see it gains nothing while a player \
                \unit alongside gains it" $
-                findAwareness 0 instances1
+                findAwareness localController 0 instances1
                     (unitsAt [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 8, 8) ])
                     `shouldBe` [aware1 2]
 
         it "shares the seam-aware containment discovery uses — never a \
            \second, independently-drifting geometry" $ do
-            findAwareness 0 seamInstances (standingAt 8 24) `shouldBe` []
-            findAwareness 2 seamInstances (standingAt 8 24)
+            findAwareness localController 0 seamInstances (standingAt 8 24) `shouldBe` []
+            findAwareness localController 2 seamInstances (standingAt 8 24)
                 `shouldBe` [AwarenessHit loc1Id (ChunkCoord 1 0) (24, 8)
                                           "Small Ruin" 1]
 
         it "carries the instance identity and anchor a memory keys on" $
-            case findAwareness 0 instances1 (standingAt 8 8) of
+            case findAwareness localController 0 instances1 (standingAt 8 8) of
                 [h] → do
                     ahInstance h `shouldBe` loc1Id
                     ahAnchor h `shouldBe` (8, 8)
@@ -326,8 +384,8 @@ spec = describe "Location discovery" $ do
             let units = unitsAt
                     [ (1, FactionDebug, 8, 8), (2, FactionPlayer, 8, 8)
                     , (3, FactionPlayer, 6, 10), (4, FactionPlayer, 40, 40) ]
-                discovered = findDiscoveries 0 instances1 units
-                aware      = findAwareness 0 instances1 units
+                discovered = findDiscoveries localController 0 instances1 units
+                aware      = findAwareness localController 0 instances1 units
             [ (dhInstance d, dhUnit d) | d ← discovered ]
                 `shouldBe` [(loc1Id, 2)]
             [ (ahInstance a, ahUnit a) | a ← aware ]
@@ -350,7 +408,7 @@ spec = describe "Location discovery" $ do
                     , wgpLocationInstances = fromMaybe instances1
                         (pure (markContents instances1))
                     }
-            findDiscoveries (wgpWorldSize p) (wgpLocationInstances p)
+            findDiscoveries localController (wgpWorldSize p) (wgpLocationInstances p)
                              (standingAt 8 8)
                 `shouldBe` [hit1]
 

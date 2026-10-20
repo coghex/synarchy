@@ -48,8 +48,9 @@ import Location.Instance
     , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances
     , locationAuthorsClearance, locationClearanceSatisfied )
 import Location.Bounds (AbsBounds(..))
-import Unit.Faction (isPlayerOwned)
-import Unit.Faction.Membership (legacyFactionOf)
+import Unit.Faction.Membership
+    (localController, unitIsOwnedBy, unitPolicyProfile)
+import Unit.Faction.Profile (ControllerId)
 import Unit.LineOfSight (visibleTilesOnPage)
 import Unit.Types (UnitInstance(..), UnitManager(..), UnitId(..))
 import World.Generate.Coordinates (globalToChunk)
@@ -171,7 +172,8 @@ worldGetLocationInstanceFn env = do
 --   preserves all three properties of the player-wide discovery tick it
 --   shares its predicate with ("World.Thread.Discovery"):
 --
---   * the same 'Unit.Faction.isPlayerOwned' filter and the same
+--   * the same ownership filter under the same observer
+--     ('Unit.Faction.Membership.localController', #2518) and the same
 --     seam-aware bounds containment over the same sight calculation,
 --     because both come from the SAME pure enumeration
 --     ('Location.Discovery.findAwareness' /
@@ -188,7 +190,7 @@ worldGetLocationInstanceFn env = do
 --   layers.
 worldGetLocationAwarenessFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetLocationAwarenessFn env = do
-    rows ← Lua.liftIO (locationAwarenessRows env)
+    rows ← Lua.liftIO (locationAwarenessRows localController env)
     Lua.newtable
     forM_ (zip [1 ..] rows) $ \(i, (pageText, hit)) → do
         Lua.newtable
@@ -217,10 +219,11 @@ worldGetLocationAwarenessFn env = do
 --   public 'Unit.LineOfSight.unitVisibleTiles' wrapper, whose
 --   @wmVisible@ gate would silently blind every unit on a loaded but
 --   hidden page. As in the discovery tick, sight is computed ONCE per
---   unit and only for units the shared 'isPlayerOwned' filter could
---   accept; 'findAwareness' still applies that filter itself.
-locationAwarenessRows ∷ EngineEnv → IO [(Text, AwarenessHit UnitId)]
-locationAwarenessRows env = do
+--   unit and only for units the shared ownership filter could accept;
+--   'findAwareness' still applies that filter itself.
+locationAwarenessRows
+    ∷ ControllerId → EngineEnv → IO [(Text, AwarenessHit UnitId)]
+locationAwarenessRows observer env = do
     um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let allUnits = sortOn fst (HM.toList (umInstances um))
@@ -235,14 +238,14 @@ locationAwarenessRows env = do
                             [ (uid, inst)
                             | (uid, inst) ← allUnits
                             , uiPage inst ≡ pageId
-                            , isPlayerOwned (legacyFactionOf (uiFaction inst)) ]
+                            , unitIsOwnedBy observer (uiFaction inst) ]
                     sights ← forM pageUnits $ \(uid, inst) → do
                         tiles ← visibleTilesOnPage ws inst
                         pure UnitSight { usUnit    = uid
-                                       , usFaction = legacyFactionOf (uiFaction inst)
+                                       , usProfile = unitPolicyProfile (uiFaction inst)
                                        , usTiles   = tiles }
                     pure [ (pageText, hit)
-                         | hit ← findAwareness (wgpWorldSize p)
+                         | hit ← findAwareness observer (wgpWorldSize p)
                                      (wgpLocationInstances p) sights ]
 
 -- | One instance as a Lua table (the shape both queries above return).

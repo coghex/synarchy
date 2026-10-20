@@ -57,8 +57,11 @@ import Unit.Transfer
     ( TransferEndpoint(..), TransferItemRef(..), TransferReason(..)
     , staleFailure )
 import Unit.Direction (Direction(..))
-import Unit.Faction (Faction(..))
-import Unit.Faction.Membership (resolveLegacyFaction)
+import Unit.Faction (Faction(..), FactionRelation(..))
+import Unit.Faction.Membership
+    ( localController, resolveLegacyFaction, resolveSpawnFaction
+    , unitPolicyProfile )
+import Unit.Faction.Profile (emptyFactionPolicy, relationFromTo, tagAcolyte)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..)
     , UnitInstance(..), UnitManager(..), defaultNaturalResistance
@@ -684,6 +687,31 @@ spec = describe "Unit transfer Lua API" $ do
             r  ← commit ls (req "unit" 3 "unit" 1 (itemLit 301 "ration"))
             r `shouldBe` q "none|301:ration:failed:source_ineligible"
 
+        it "refuses an UNCONTROLLED acolyte in either role although the \
+           \policy calls it the roster's ally (#2518)" $ \env → do
+            resetWorld env [mkItem "ration" 101 0.5] [] [] []
+            -- The real tag-less spawn ingress (D-31): the acolyte
+            -- definition's authored default tag, and no controller.
+            let strayUid = UnitId 4
+                stray    = (mkUnit "acolyte" FactionNeutral (11, 11) 100
+                                   [mkItem "canteen" 401 0.5] [])
+                    { uiFaction = resolveSpawnFaction [tagAcolyte] Nothing }
+            relationFromTo emptyFactionPolicy
+                (unitPolicyProfile (uiFaction stray))
+                (unitPolicyProfile (resolveLegacyFaction [tagAcolyte] FactionPlayer))
+                `shouldBe` RelAlly
+            modifyIORef' (unitManagerRef env) $ \um →
+                um { umInstances = HM.insert strayUid stray (umInstances um) }
+            ls ← newBareLuaBackend env
+            info ← endpointInfo ls "unit" 4
+            info `shouldBe` q "false|Acolyte|transfer_api_page|11,11|100.0|0.5|401:canteen:0.5:true"
+            toStray   ← commit ls (req "unit" 1 "unit" 4 (itemLit 101 "ration"))
+            fromStray ← commit ls (req "unit" 4 "unit" 1 (itemLit 401 "canteen"))
+            toStray   `shouldBe` q "none|101:ration:failed:receiver_ineligible"
+            fromStray `shouldBe` q "none|401:canteen:failed:source_ineligible"
+            unitLoose env acolyteUid `shouldReturn` [(101, "ration")]
+            unitLoose env strayUid `shouldReturn` [(401, "canteen")]
+
         it "refuses an under-construction building source as source-ineligible" $ \env → do
             resetWorld env [] [] [] []
             ls ← newBareLuaBackend env
@@ -761,9 +789,9 @@ spec = describe "Unit transfer Lua API" $ do
             let inv = [ mkItem "ration" 101 0.5, mkItem "canteen" 102 0.5
                       , mkItem "steel_bar" 103 2.5 ]
             resetWorld env inv [] [] []
-            r ← commitCross env (EndpointUnit acolyteUid)
+            r ← commitCross localController env (EndpointUnit acolyteUid)
                                 (EndpointBuilding holdBid)
-                                (popUnit acolyteUid) refusingPush
+                                (popUnit localController acolyteUid) refusingPush
                                 (TransferItemRef 102 "canteen")
             fmap iiInstanceId r `shouldBe`
                 Left (staleFailure ReasonReceiverFull)
@@ -778,7 +806,7 @@ spec = describe "Unit transfer Lua API" $ do
             let stored = [ mkItem "ration" 201 0.5, mkItem "canteen" 202 0.5
                          , mkItem "steel_bar" 203 2.5 ]
             resetWorld env [] [] stored []
-            r ← commitCross env (EndpointBuilding holdBid)
+            r ← commitCross localController env (EndpointBuilding holdBid)
                                 (EndpointUnit acolyteUid)
                                 (popBuilding holdBid) refusingPush
                                 (TransferItemRef 202 "canteen")
@@ -802,9 +830,9 @@ spec = describe "Unit transfer Lua API" $ do
             let inv = [ mkItem "ration" 101 0.5, mkItem "canteen" 102 0.5
                       , mkItem "steel_bar" 103 2.5 ]
             resetWorld env inv [] [] []
-            r ← commitCross env (EndpointUnit acolyteUid)
+            r ← commitCross localController env (EndpointUnit acolyteUid)
                                 (EndpointBuilding holdBid)
-                                (popUnit acolyteUid)
+                                (popUnit localController acolyteUid)
                                 (vanishingUnitPush acolyteUid)
                                 (TransferItemRef 102 "canteen")
             -- Precedence: the source-side truth OVERRIDES the
@@ -821,7 +849,7 @@ spec = describe "Unit transfer Lua API" $ do
             let stored = [ mkItem "ration" 201 0.5, mkItem "canteen" 202 0.5
                          , mkItem "steel_bar" 203 2.5 ]
             resetWorld env [] [] stored []
-            r ← commitCross env (EndpointBuilding holdBid)
+            r ← commitCross localController env (EndpointBuilding holdBid)
                                 (EndpointUnit acolyteUid)
                                 (popBuilding holdBid)
                                 (vanishingBuildingPush holdBid)

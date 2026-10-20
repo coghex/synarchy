@@ -49,6 +49,7 @@ import Engine.Core.Log (LoggerState, LogEntry(..), LogConfig(..), LogBackend(..)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.API.Units.Transfer (commitCross, popUnit)
+import Unit.Faction.Membership (localController)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Gameplay.Tags.Index
 import Gameplay.Tags.ItemLifecycle (forgetItemTags, itemTagEpoch, placeOnGround)
@@ -665,8 +666,8 @@ refusalSpec = describe "refused, rolled-back and partial operations keep tags" $
         tagScene env
         before ← unitHolds env acolyteUid
         let failing _ _ _ = pure (Left ReasonReceiverFull)
-        r ← commitCross env (EndpointUnit acolyteUid) (EndpointUnit muleUid)
-                (popUnit acolyteUid) failing
+        r ← commitCross localController env (EndpointUnit acolyteUid) (EndpointUnit muleUid)
+                (popUnit localController acolyteUid) failing
                 (TransferItemRef (fromIntegral satchel) "satchel")
         either (const True) (const False) r `shouldBe` True
         unitHolds env acolyteUid `shouldReturn` before
@@ -683,8 +684,8 @@ refusalSpec = describe "refused, rolled-back and partial operations keep tags" $
                 Q.writeQueue (unitQueue env) (UnitDestroy acolyteUid)
                 drainEntities env
                 pure (Left ReasonReceiverFull)
-        _ ← commitCross env (EndpointUnit acolyteUid) (EndpointUnit muleUid)
-                (popUnit acolyteUid) destroySourceThenFail
+        _ ← commitCross localController env (EndpointUnit acolyteUid) (EndpointUnit muleUid)
+                (popUnit localController acolyteUid) destroySourceThenFail
                 (TransferItemRef (fromIntegral satchel) "satchel")
         goneEverywhere env acolyteTree
         survivorsKeep env acolyteTree

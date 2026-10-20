@@ -134,12 +134,12 @@ function M.tryUnitMenu(x, y)
     }
     -- Filter selection down to units that can take orders at all,
     -- excluding the target itself. That's the COMMANDABILITY
-    -- property (#912) — a different question from "friendly to the
-    -- player", which is why it isn't the relation below.
+    -- property (#912), asked of the unit itself (#2518) — a different
+    -- question from "friendly to the player", which is why it isn't
+    -- the relation below.
     local attackers = {}
     for _, uid in ipairs(selectedUids) do
-        if uid ~= targetUid
-           and faction.isPlayerCommandable(unit.getFaction(uid)) then
+        if uid ~= targetUid and unit.isPlayerCommandable(uid) then
             table.insert(attackers, uid)
         end
     end
