@@ -26,7 +26,7 @@ no redirect came.
 
 | Group | Examples | Result |
 |---|---|---|
-| `Scenario.Load` | 52 | pass |
+| `Scenario.Load` | 49 | pass |
 | `Scenario` (all four SCN groups and this one) | 335 | pass |
 | `transactional load` | 25 | pass (7 new status-contract examples) |
 | `load exception terminalization` | 6 | pass |
