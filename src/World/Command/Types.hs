@@ -31,6 +31,7 @@ import Unit.Types (UnitId)
 import Item.Knowledge (PortableObservation)
 import Gameplay.Tags.Edit (TagEdit, TagEditResult)
 import Gameplay.Tags.Types (TagTarget)
+import Scenario.Placement.Types (PlacementInstallReply, ScenarioPlacementRequest)
 import Scenario.World.Types (ScenarioWorldRequest, WorldInstallReply)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
@@ -525,6 +526,14 @@ data WorldCommand
         --   page incarnation the caller resolved; a page destroyed or
         --   re-initialised since answers 'TagEditNoTarget' and is not
         --   touched, so stale queued work can never reach a replacement.
+    | WorldInstallScenarioPlacement !WorldPageId !ChunkGeneration !ScenarioPlacementRequest
+                                    !PlacementInstallReply
+        -- ^ #2712: commit a scenario's structure pieces and placed
+        --   locations on one page, answered on the reply, for the same
+        --   reason (and with the same incarnation fence) as
+        --   'WorldInstallScenarioContent': the world thread is the only
+        --   writer of the page's edit log, tile store and generation
+        --   parameters.
     | WorldInstallScenarioContent !WorldPageId !ChunkGeneration !ScenarioWorldRequest
                                   !WorldInstallReply
         -- ^ #2711: materialize a scenario's terrain, fluid and flora on one

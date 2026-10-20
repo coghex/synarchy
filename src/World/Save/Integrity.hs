@@ -249,6 +249,7 @@ sessionIntegrityErrors snap = concat
     , orderRefErrors snap
     , unitTagErrors, buildingTagErrors
     , unitRefErrors, unitRefClaimErrors
+    , buildingRefErrors, locationRefErrors, crossFamilyRefClaimErrors
     ]
   where
     pages = snapPages snap
@@ -306,6 +307,84 @@ sessionIntegrityErrors snap = concat
             [ (r, [(pid, uid)])
             | (pid, page) ← L.sortOn fst (HM.toList pages)
             , (uid, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
+
+    -- #2712: a page's building scenario references are captured by the
+    -- same page filter as its instances, exactly like its tags.
+    buildingRefErrors =
+        [ err
+        | (pid, page) ← HM.toList pages
+        , bid ← Map.keys (bsnScenarioRefs (pgsBuildings page))
+        , let path = "buildings[page=" <> unWorldPageId pid
+                     <> "].scenario-refs[building=" <> tshow (unBuildingId bid) <> "]"
+        , Just err ← [ refEdgeError buildingsComponentId
+                         (ccVersion buildingsCodec) path RefBuilding
+                         ScopeSamePage pid (buildingPages bid)
+                         (tshow (unBuildingId bid)) ]
+        ]
+
+    -- #2712: a location's scenario reference must name a location THIS
+    -- page's own table holds (the table is per page, ids are page-local).
+    locationRefErrors =
+        [ IntegrityError
+            { ieComponent = worldPagesComponentId, ieVersion = worldPagesVersion
+            , iePath = "world-pages[page=" <> unWorldPageId pid
+                       <> "].scenario-refs[location=" <> v <> "]"
+            , ieRefKind = RefLocationInstance, ieRefValue = v
+            , ieExpectedScope = "same page"
+            , ieActual = "absent from the page's location table"
+            , ieCode = "dangling-reference"
+            , ieMessage = "scenario reference on location '" <> v
+                <> "' names no location this page holds"
+            }
+        | (pid, page) ← HM.toList pages
+        , let lis = wgpLocationInstances (pgsGenParams page)
+        , lid ← Map.keys (lisScenarioRefs lis)
+        , not (HM.member lid (lisById lis))
+        , let v = tshow (unLocationInstanceId lid) ]
+
+    -- #2712: scenario ids share ONE session namespace across units,
+    -- buildings and locations, so a reference held by two different
+    -- objects would restore a mapping that names two runtime objects. Two
+    -- units are 'unitRefClaimErrors''; this reports every other pair — two
+    -- families, or two buildings or two locations on different pages (one
+    -- page's list is the codec's own check).
+    crossFamilyRefClaimErrors =
+        [ IntegrityError
+            { ieComponent = comp, ieVersion = ver
+            , iePath = path, ieRefKind = kind, ieRefValue = v
+            , ieExpectedScope = "one runtime object per scenario reference"
+            , ieActual = "reference '" <> r <> "' is held by "
+                         <> tshow (length holders) <> " objects"
+            , ieCode = "duplicate-scenario-reference"
+            , ieMessage = "scenario reference '" <> r
+                <> "' names more than one unit, building or location in the session"
+            }
+        | (r, holders) ← Map.toList claims
+        , contested holders
+        , (_, _, (comp, ver, path, kind, v)) ← holders ]
+      where
+        -- (family, page, where it is held)
+        claims ∷ Map.Map Text [(Text, WorldPageId, (ComponentId, Word32, Text, RefKind, Text))]
+        claims = Map.fromListWith (flip (⧺)) $
+            [ (r, [("unit", pid, ( unitsComponentId, ccVersion unitsCodec
+                                 , "units[page=" <> unWorldPageId pid <> "].scenario-refs[unit=" <> tshow (unUnitId uid) <> "]"
+                                 , RefUnit, tshow (unUnitId uid) ))])
+            | (pid, page) ← L.sortOn fst (HM.toList pages)
+            , (uid, r) ← Map.toAscList (usnScenarioRefs (pgsUnits page)) ]
+            ⧺ [ (r, [("building", pid, ( buildingsComponentId, ccVersion buildingsCodec
+                                       , "buildings[page=" <> unWorldPageId pid <> "].scenario-refs[building=" <> tshow (unBuildingId bid) <> "]"
+                                       , RefBuilding, tshow (unBuildingId bid) ))])
+              | (pid, page) ← L.sortOn fst (HM.toList pages)
+              , (bid, r) ← Map.toAscList (bsnScenarioRefs (pgsBuildings page)) ]
+            ⧺ [ (r, [("location", pid, ( worldPagesComponentId, worldPagesVersion
+                                       , "world-pages[page=" <> unWorldPageId pid <> "].scenario-refs[location=" <> tshow (unLocationInstanceId lid) <> "]"
+                                       , RefLocationInstance, tshow (unLocationInstanceId lid) ))])
+              | (pid, page) ← L.sortOn fst (HM.toList pages)
+              , (lid, r) ← Map.toAscList (lisScenarioRefs (wgpLocationInstances (pgsGenParams page))) ]
+        contested holders =
+            length (L.nub [ f | (f, _, _) ← holders ]) > 1
+            ∨ or [ length (L.nub [ pg | (f', pg, _) ← holders, f' ≡ f ]) > 1
+                 | f ← ["building", "location"] ]
 
     buildingTagErrors =
         [ err
@@ -1385,6 +1464,17 @@ tagDanglingWarnings snap =
       , uid ← Map.keys (usnScenarioRefs (pgsUnits page))
       , null (sessionPagesOf entitiesByPage (OrderRefUnit uid))
       , let v = tshow (unUnitId uid) ]
+    -- #2712: a building scenario reference naming no building, dropped
+    -- exactly like a dangling building tag.
+    ⧺ [ (dangling buildingsComponentId (ccVersion buildingsCodec) RefBuilding pid
+          ("buildings[page=" <> unWorldPageId pid <> "].scenario-refs[building=" <> v <> "]")
+          ("building '" <> v <> "'") v)
+          { ieMessage = "scenario reference on building '" <> v
+              <> "' names no existing building (dropped: a reference to nothing is not restored)" }
+      | (pid, page) ← HM.toList (snapPages snap)
+      , bid ← Map.keys (bsnScenarioRefs (pgsBuildings page))
+      , null (sessionPagesOf entitiesByPage (OrderRefBuilding bid))
+      , let v = tshow (unBuildingId bid) ]
     ⧺ [ dangling buildingsComponentId (ccVersion buildingsCodec) RefBuilding pid
           ("buildings[page=" <> unWorldPageId pid <> "].tags[building=" <> v <> "]")
           ("building '" <> v <> "'") v

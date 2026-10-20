@@ -38,6 +38,7 @@ module Power.Types
     , emptyPowerNodes
     , powerNodeRole
     , addPowerNode
+    , addPowerNodeCharged
     , removePowerNode
     , lookupPowerNode
     , nodeForBuilding
@@ -123,6 +124,19 @@ addPowerNode bid role param nodes =
             }
     in ( nodes { pnsNodes  = HM.insert nid node (pnsNodes nodes)
                , pnsNextId = pnsNextId nodes + 1 }
+       , nid )
+
+-- | 'addPowerNode' for a node that starts with a stated charge (#2712: a
+--   scenario's partly charged battery). The registry's own constructor
+--   stays the one place a node is minted; the charge is then written onto
+--   that node. A source holds no charge of its own, so it is ignored for
+--   one.
+addPowerNodeCharged ∷ BuildingId → PowerRole → Float → Float → PowerNodes
+                    → (PowerNodes, PowerNodeId)
+addPowerNodeCharged bid role param charge nodes =
+    let (nodes', nid) = addPowerNode bid role param nodes
+        stored = if role ≡ PowerStorage then charge else 0
+    in ( nodes' { pnsNodes = HM.adjust (\n → n { pnStoredWh = stored }) nid (pnsNodes nodes') }
        , nid )
 
 -- | Retire one node, reporting whether it was there. Leaves 'pnsNextId'

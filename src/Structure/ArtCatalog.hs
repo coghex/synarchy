@@ -101,6 +101,8 @@ module Structure.ArtCatalog
     , PieceArtContext(..)
     , defaultPieceArtContext
     , resolveUnplacedArt
+    , resolveVariantArt
+    , placedArtPairs
     , resolveConstructionSequence
     , resolveConstructionFrame
     , undeclaredConstructionAppearances
@@ -421,6 +423,17 @@ data PackArt = PackArt
       --   never inherited, never substituted. An appearance absent here
       --   resolves no sequence, which is requirement 8's "the site draws
       --   nothing".
+    , pkVariantFace ∷ !(M.Map (Text, ArtKey) ArtAsset)
+      -- ^ #2712: the EFFECTIVE facemap of every variant art slot — the
+      --   variant's own override where the pack declares one (the
+      --   @weathered@ floor and post), else the facemap the variant
+      --   inherits from the default art — keyed by (variant name, art
+      --   slot). A placed piece is a (texture, facemap) PAIR, and
+      --   'pkVariantArt' carries only the sprite, so materializing a
+      --   scenario's @variant@ piece needs this half to place exactly the
+      --   pair the pack's own placer would. Empty for a pack with no
+      --   variants and for a registration predating it, whose variants
+      --   then take the default facemap ('resolveVariantArt').
     , pkVariantArt ∷ !(M.Map AppearanceKey ArtAsset)
       -- ^ #2491: every authored VARIANT appearance's static sprite.
       --
@@ -534,6 +547,11 @@ data PackArtRegistration = PackArtRegistration
     , parFrames  ∷ ![(AppearanceKey, ConstructionSequence)]
       -- ^ #2488: the construction sequences this pack declares, at most
       --   one per appearance. Empty for a pack that declares none.
+    , parVariantFaces ∷ ![((Text, ArtKey), ArtAsset)]
+      -- ^ #2712: the effective facemap of every variant art slot, by
+      --   (variant, art slot), overridden or inherited. Each variant it
+      --   names must also be declared in 'parVariants'. Optional: empty
+      --   for a pack with no variants.
     , parVariants ∷ ![(AppearanceKey, ArtAsset)]
       -- ^ #2491: every authored VARIANT appearance and the static sprite
       --   it is placed with, overridden or inherited. Empty for a pack
@@ -600,6 +618,7 @@ registerPackArt reg cat = case validate of
                         ∧ pkArt a ≡ pkArt b
                         ∧ pkFrames a ≡ pkFrames b
                         ∧ pkVariantArt a ≡ pkVariantArt b
+                        ∧ pkVariantFace a ≡ pkVariantFace b
                         ∧ pkDestruction a ≡ pkDestruction b
 
     -- Name WHAT differs rather than dumping both declarations: the
@@ -624,6 +643,7 @@ registerPackArt reg cat = case validate of
                 , ("art", pkArt existing ≢ pkArt pack)
                 , ("construction frames", pkFrames existing ≢ pkFrames pack)
                 , ("variant art", pkVariantArt existing ≢ pkVariantArt pack)
+                , ("variant facemaps", pkVariantFace existing ≢ pkVariantFace pack)
                 , ("destruction frames"
                   , pkDestruction existing ≢ pkDestruction pack) ]
             , differs ]
@@ -673,6 +693,7 @@ registerPackArt reg cat = case validate of
         -- build sequence is reported as that rather than as one of
         -- these.
         variantMap ← validateVariants kindSet
+        variantFaceMap ← validateVariantFaces kindSet variantMap
         wreckMap ← validateDestruction kindSet
         pure PackArt { pkKinds     = kindSet
                      , pkBuildable = buildable
@@ -680,6 +701,7 @@ registerPackArt reg cat = case validate of
                      , pkArt       = artMap
                      , pkFrames    = frameMap
                      , pkVariantArt = variantMap
+                     , pkVariantFace = variantFaceMap
                      , pkDestruction = wreckMap
                      , pkMissingDestruction = S.empty
                      , pkFailures  = HM.empty }
@@ -790,6 +812,35 @@ registerPackArt reg cat = case validate of
                         "the same variant appearance is supplied more than \
                         \once")
         pure variantMap
+
+    -- #2712: the variant facemaps. Each is an ordinary asset of a declared
+    -- kind, for a variant the registration declares art for, at most once
+    -- per (variant, slot).
+    validateVariantFaces ∷ S.Set PieceKind → M.Map AppearanceKey ArtAsset
+                         → Either ArtFault (M.Map (Text, ArtKey) ArtAsset)
+    validateVariantFaces kindSet variantMap = do
+        let declared = S.fromList [ v | AppearanceKey (Just v) _ ← M.keys variantMap ]
+        forM_ (parVariantFaces reg) $ \((variant, key), asset) → do
+            unless (artKeyKind key `S.member` kindSet) $
+                Left (fault (Just (artKeyKind key)) (artKeyRole key) Nothing
+                            "a variant facemap was supplied for a kind the \
+                            \registration does not declare")
+            unless (variant `S.member` declared) $
+                Left (fault (Just (artKeyKind key))
+                            (artKeyRole key <> " variant '" <> variant <> "' facemap")
+                            Nothing
+                            "a facemap was supplied for a variant the \
+                            \registration declares no art for")
+            checkAsset key ("variant '" <> variant <> "' facemap") asset
+            when (escapingPath (aaPath asset)) $
+                Left (fault (Just (artKeyKind key)) (artKeyRole key) (Just (aaPath asset))
+                            "the asset path escapes the resource root")
+        let faceMap = M.fromList (parVariantFaces reg)
+        when (M.size faceMap ≢ length (parVariantFaces reg)) $
+            Left (fault Nothing "variant facemaps" Nothing
+                        "the same variant facemap slot is supplied more \
+                        \than once")
+        pure faceMap
 
     -- #2491's registration rules. Deliberately NOT a copy of
     -- 'validateFrames': a destruction clip hands off to nothing (so
@@ -1352,3 +1403,40 @@ packKindBuild cat pack kindText = do
     p    ← HM.lookup pack (sacPacks cat)
     kind ← pieceKindFromText kindText
     M.lookup kind (pkBuild p)
+
+-- | Every (sprite path, facemap path) pair this catalogue can place a
+--   piece with, each with the (pack, variant, art slot) that places it
+--   (#2712): the default art of every pack, and every variant's resolved
+--   art ('resolveVariantArt') for every art slot. A placed piece stores
+--   exactly its palette ids, so the PAIR its ids resolve to is its whole
+--   art identity. Two entries for one pair are art that renders
+--   identically — a variant that inherits both the default's sprite and
+--   its facemap — and the caller picks among them by a fixed rule.
+placedArtPairs ∷ StructureArtCatalog → [((Text, Text), (Text, Maybe Text, ArtKey))]
+placedArtPairs cat =
+    [ (pairOf a, (pack, Nothing, key))
+    | (pack, p) ← HM.toList (sacPacks cat), (key, a) ← M.toList (pkArt p) ]
+    ⧺ [ (pairOf a, (pack, Just v, key))
+      | (pack, p) ← HM.toList (sacPacks cat)
+      , v ← S.toList (S.fromList [ v' | AppearanceKey (Just v') _ ← M.keys (pkVariantArt p) ])
+      , key ← M.keys (pkArt p)
+      , Just a ← [resolveVariantArt p v key] ]
+  where
+    pairOf a = (aaPath (paTexture a), aaPath (paFacemap a))
+
+-- | The (texture, facemap) pair of a VARIANT art slot (#2712): the
+--   variant's own sprite, and its effective facemap — the variant's
+--   override or inherited facemap as registered, else the default art's
+--   facemap for the slot. 'Nothing' for a variant this pack declares no
+--   sprite for in that slot, or a slot with no default art to inherit
+--   from. Never another variant's art and never the default's sprite: a
+--   variant that declares no sprite for a slot resolves nothing, exactly
+--   as 'pkFrames' and 'pkDestruction' treat a missing appearance.
+resolveVariantArt ∷ PackArt → Text → ArtKey → Maybe PieceArt
+resolveVariantArt pack variant key = do
+    sprite ← M.lookup (AppearanceKey (Just variant) (artKeyAppearanceSlot key))
+                      (pkVariantArt pack)
+    face ← case M.lookup (variant, key) (pkVariantFace pack) of
+        Just own → Just own
+        Nothing  → paFacemap ⊚ M.lookup key (pkArt pack)
+    pure (PieceArt sprite face)

@@ -45,6 +45,7 @@ module Scenario.Units.Capture
     ( UnitCaptureCtx(..)
     , UnitsCapture(..)
     , captureUnits
+    , unitTrees
     , UnitSig(..)
     , unitSig
     ) where
@@ -58,10 +59,7 @@ import qualified Data.Set as Set
 import GHC.Float (castFloatToWord32, castDoubleToWord64)
 import Gameplay.Tags.Types (GameplayTag)
 import Item.Types (ItemInstance, ItemManager)
-import qualified Data.Text as T
-import Numeric (showHex)
 import Scenario.Items.Capture
-import Scenario.Items.Refs (refIsAutomatic, maxItemRefLength, stableHash64)
 import Scenario.Types
 import Scenario.Units.Catalog
 import Scenario.Units.Defaults (rollTemplate)
@@ -82,6 +80,19 @@ data UnitCaptureCtx = UnitCaptureCtx
     , uccUnitTags   ∷ UnitId → Set.Set GameplayTag
       -- ^ 'Unit.Types.Manager.umTags'
     , uccItemCtx    ∷ !CaptureCtx
+    , uccOtherTrees ∷ [ItemInstance]
+      -- ^ the item trees of every OTHER owner of the document (buildings,
+      --   ground): reserved together with the units' own, so every
+      --   reference in the document is named up front and no owner
+      --   captured first can take a name another is entitled to keep
+    , uccPreNamed   ∷ UnitId → Maybe Text
+      -- ^ the final explicit id of a referenced unit when the caller named
+      --   the document's references together ('nameDocumentRefs'); 'Nothing'
+      --   names the unit here, against 'captureUnits'' foreign ids
+    , uccEncounterOf ∷ UnitId → Maybe ScenarioId
+      -- ^ the explicit id of the location whose encounter roster the unit
+      --   belongs to ('Scenario.Placement.Location', #2712), which owns
+      --   the roster; 'const Nothing' for a document with no locations
     }
 
 data UnitsCapture = UnitsCapture
@@ -113,14 +124,17 @@ captureUnits ctx docIds units0 = UnitsCapture
     skipped = [ uid | (uid, _) ← units0, uid `notElem` [ i | (i, _, _) ← live ] ]
     -- tier 1 for items: the referenced units, named first, explicit
     -- references before automatic ones, then by raw reference
-    referenced = sortOn (\(_, _, _, r) → (refIsAutomatic r, r))
-        [ (uid, u, d, r) | (uid, u, d) ← live, Just r ← [uccUnitRef ctx uid] ]
+    -- a name the caller already decided document-wide ('nameDocumentRefs')
+    -- is final; the rest are named here against the foreign ids
+    referenced = [ (uid, r) | (uid, _, _) ← live, Just r ← [uccUnitRef ctx uid]
+                            , isNothing (uccPreNamed ctx uid) ]
     foreign0 = HS.fromList docIds
-    refNames = nameReferenced foreign0 referenced
+    preNamed = Map.fromList [ (uid, n) | (uid, _, _) ← live, Just n ← [uccPreNamed ctx uid] ]
+    refNames = Map.union preNamed (nameReferenced (HS.union foreign0 (HS.fromList (Map.elems preNamed))) referenced)
     taken0 = HS.union foreign0 (HS.fromList (Map.elems refNames))
     -- every item tree of every captured unit, reserved together
     st0 = newCaptureState (uccItemCtx ctx) (HS.toList taken0)
-              (concat [ unitTrees u | (_, u, _) ← live ])
+              (concat [ unitTrees u | (_, u, _) ← live ] ⧺ uccOtherTrees ctx)
     -- unreferenced units in structural order, each named after the
     -- reservation so it can never take an item's reference
     unreferenced = sortOn (\(uid, u, _) → unitSig ctx uid u)
@@ -136,32 +150,6 @@ captureUnits ctx docIds units0 = UnitsCapture
                                           let (st', e, is) = captureOne ctx st uid n u d
                                           in (st', (is, e)))
                                      st1 named
-
--- | Name the referenced units: each takes its own spelling when nothing
---   holds it, then the displaced ones take the first free @-2@, @-3@, …
---   — the item rule, so the outcome is a function of the set.
-nameReferenced ∷ HS.HashSet Text → [(UnitId, UnitInstance, UnitDef, Text)] → Map.Map UnitId Text
-nameReferenced foreign0 refs = snd (foldl' displace (foldl' clean (foreign0, Map.empty) refs) refs)
-  where
-    clean (taken, m) (uid, _, _, r)
-        | HS.member (explicitRefOf r) taken = (taken, m)
-        | otherwise = (HS.insert (explicitRefOf r) taken, Map.insert uid (explicitRefOf r) m)
-    displace (taken, m) (uid, _, _, r)
-        | Map.member uid m = (taken, m)
-        | otherwise =
-            let n = head' [ c | k ← [2 ∷ Int ..], let c = bounded (explicitRefOf r <> "-" <> tshow k)
-                              , not (HS.member c taken) ]
-            in (HS.insert n taken, Map.insert uid n m)
-    head' (x : _) = x
-    head' [] = ""
-
--- | A suffixed name that fits the save, shortened exactly as the item
---   rule shortens one ('Scenario.Items.Capture').
-bounded ∷ Text → Text
-bounded c
-    | T.length c ≤ maxItemRefLength = c
-    | otherwise = T.take (maxItemRefLength - 17) c <> "-"
-        <> T.justifyRight 16 '0' (T.pack (showHex (stableHash64 c) ""))
 
 -- | Every item tree a unit holds, in capture order.
 unitTrees ∷ UnitInstance → [ItemInstance]
@@ -204,7 +192,7 @@ captureOne ctx st0 uid name u d = (st1, entry, capRefs (ucCaptured itemsC))
         , ueDefinition = uiDefName u
         , ueX = uiGridX u, ueY = uiGridY u, ueZ = Authored (uiGridZ u)
         , ueName = Authored (uiName u), ueFacing = Authored (uiFacing u)
-        , ueEncounter = Nothing
+        , ueEncounter = uccEncounterOf ctx uid
         , ueStats = stats
         , ueSkills = HM.filterWithKey (\k _ → HM.member k (udSkillTemplates d)) (uiSkills u)
         , ueKnowledge = Authored (uiKnowledge u)

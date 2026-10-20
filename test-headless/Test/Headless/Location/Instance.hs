@@ -10,6 +10,7 @@
 module Test.Headless.Location.Instance (spec) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -232,7 +233,7 @@ spec = describe "Location instance identity" $ do
                 broken = LocationInstances
                     { lisNextId        = 9
                     , lisById          = HM.singleton (LocationInstanceId 5) inst
-                    , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex }
+                    , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex }
             locationInstanceAllocatorErrors broken `shouldSatisfy` (not . null)
 
     -- #1668: the table's GEOMETRY, beside its ids. The save decode path
@@ -255,7 +256,7 @@ spec = describe "Location instance identity" $ do
                     ((expectGeometry
                           (newLocationInstance Nothing (LocationInstanceId 1)
                               (ChunkCoord 0 0) ruinDef)) { liBounds = b })
-                , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex }
+                , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex }
 
         it "accepts every box an engine-placed table carries" $
             locationInstanceBoundsErrors instances3 `shouldBe` []
@@ -320,7 +321,7 @@ spec = describe "Location instance identity" $ do
                               inst (LocationInstanceId 2) (AbsBounds 9 0 1 2))
                         , (LocationInstanceId 3,
                               inst (LocationInstanceId 3) (AbsBounds 0 9 2 1)) ]
-                    , lisPendingLegacy = Nothing, lisTags = emptyCategoryIndex }
+                    , lisPendingLegacy = Nothing, lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex }
                 msgs = locationInstanceBoundsErrors table
             length msgs `shouldBe` 2
             msgs `shouldSatisfy` any (T.isInfixOf "#2")

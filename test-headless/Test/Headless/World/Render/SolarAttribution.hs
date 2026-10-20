@@ -583,7 +583,7 @@ restoreSpec = describe "a restored multi-page session" $
                     , pcMapMode    = ZMDefault
                     , pcIdentity   = Nothing
                     , pcGeneratedId =
-                        Just (fixtureGeneratedWorldIdForPage pageId), pcLocationTags = [], pcArenaBounds = Nothing
+                        Just (fixtureGeneratedWorldIdForPage pageId), pcLocationTags = [], pcArenaBounds = Nothing, pcLocationScenarioRefs = []
                     }
                 paramsFor n = defaultWorldGenParams { wgpWorldSize = n }
                 written = WorldPagesDTO

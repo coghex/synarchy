@@ -22,7 +22,7 @@ import qualified Data.HashSet as HS
 import Data.List (sort)
 import Data.Maybe (mapMaybe)
 import Scenario.Types
-import Scenario.Decode.Monad (Node(..))
+import Scenario.Decode.Monad (Node(..), NodeKind(..))
 
 data Analysis = Analysis
     { anRejected    ∷ !(HS.HashSet Text)   -- ^ entry paths to exclude
@@ -30,8 +30,8 @@ data Analysis = Analysis
     , anDiagnostics ∷ ![ScenarioDiagnostic]
     }
 
-analyseNodes ∷ [Node] → Analysis
-analyseNodes nodes =
+analyseNodes ∷ ScenarioCatalog → [Node] → Analysis
+analyseNodes cat nodes =
     Analysis rejected dropped (dupDiags ⧺ refDiags ⧺ cascadeDiags ⧺ bindingDiags)
   where
     alive = filter nAlive nodes
@@ -57,8 +57,15 @@ analyseNodes nodes =
         [ nPath n | n ← alive, not (HS.member (nPath n) r)
                   , any (refBroken r) (nRequired n) ]
     refBroken r (_, i, kind) = case target r i of
-        [t] → nKind t ≢ kind
+        [t] → nKind t ≢ kind ∨ noEncounter kind t
         _   → True
+    -- an @encounter@ names a location whose definition has an encounter to
+    -- join (#2712): joining one that has none is a broken required
+    -- reference, not a roster the location could never hold
+    noEncounter kind t =
+        kind ≡ NodeLocation
+        ∧ maybe False (\d → maybe False (not ∘ lcHasEncounter) (HM.lookup d (catLocations cat)))
+                (nDefinition t)
     fixpoint r = let r' = closeOver (step r) in if r' ≡ r then r else fixpoint r'
     rejected = fixpoint (closeOver dupRejected)
 
@@ -71,6 +78,7 @@ analyseNodes nodes =
         , (fp, i, kind) ← nRequired n, refBroken rejected (fp, i, kind) ]
     refReason r i kind = case target r i of
         [t] | nKind t ≢ kind → WrongReferenceKind i
+            | noEncounter kind t → NoEncounter (fromMaybe "" (nDefinition t))
         _ | HS.member i declared → RejectedReference i
           | otherwise → MissingReference i
     refEffect r i = case target r i of

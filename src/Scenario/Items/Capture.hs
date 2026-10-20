@@ -54,6 +54,9 @@ module Scenario.Items.Capture
     , captureGroundItems
       -- * Names
     , explicitRefOf
+    , nameReferenced
+    , DocKey(..)
+    , nameDocumentRefs
     ) where
 
 import UPrelude
@@ -65,6 +68,10 @@ import GHC.Float (castFloatToWord32)
 import qualified Data.Text as T
 import Numeric (showHex)
 import Scenario.Items.Refs (maxItemRefLength, refIsAutomatic, stableHash64)
+import qualified Data.Map.Strict as Map
+import Building.Types (BuildingId)
+import Location.Instance (LocationInstanceId)
+import Unit.Types.Manager (UnitId)
 import Building.Types (BuildingInstance(..))
 import Gameplay.Tags.Types (GameplayTag)
 import qualified Item.Ground as G
@@ -233,6 +240,39 @@ captureNodes ctx st00 roots = (stN, Captured (concatMap fst parts) (concatMap sn
         -- named up front by 'reserveMapped' (every referenced item is)
         Just name → name
         Nothing → freshRef st (sanitize (spelling base))
+
+-- | Name the entries that hold a scenario reference, document-wide: each
+--   takes its own explicit spelling ('explicitRefOf') when nothing holds
+--   it, then the displaced ones take the first free @-2@, @-3@, … — the
+--   item rule, so the outcome is a function of the SET of references and
+--   the foreign (tier-1) names, never of traversal order. Explicit
+--   references come before automatic ones, then by raw reference.
+nameReferenced ∷ Ord k ⇒ HS.HashSet Text → [(k, Text)] → Map.Map k Text
+nameReferenced foreign0 refs0 = snd (foldl' displace (foldl' clean (foreign0, Map.empty) refs) refs)
+  where
+    refs = sortOn (\(_, r) → (refIsAutomatic r, r)) refs0
+    clean (taken, m) (k, r)
+        | HS.member (explicitRefOf r) taken = (taken, m)
+        | otherwise = (HS.insert (explicitRefOf r) taken, Map.insert k (explicitRefOf r) m)
+    displace (taken, m) (k, r)
+        | Map.member k m = (taken, m)
+        | otherwise =
+            let n = head' [ c | j ← [2 ∷ Int ..], let c = bounded (explicitRefOf r <> "-" <> tshow j)
+                              , not (HS.member c taken) ]
+            in (HS.insert n taken, Map.insert k n m)
+    head' (x : _) = x
+    head' [] = ""
+
+-- | Which kind of document entry holds a reference: scenario ids share ONE
+--   namespace across units, buildings and locations (and items), so their
+--   references are named together ('nameDocumentRefs').
+data DocKey = DocUnit !UnitId | DocBuilding !BuildingId | DocLocation !LocationInstanceId
+    deriving (Eq, Ord, Show)
+
+-- | 'nameReferenced' over every referenced unit, building and location of
+--   one document at once, so no family's name can take another's.
+nameDocumentRefs ∷ HS.HashSet Text → [(DocKey, Text)] → Map.Map DocKey Text
+nameDocumentRefs = nameReferenced
 
 -- | The explicit-id spelling of a reference an item ALREADY holds,
 --   verbatim: an admitted reference is at most 'maxItemRefLength'

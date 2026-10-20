@@ -744,7 +744,7 @@ wireSpec = describe "the component wire" $ do
         let page = WorldPageId "wire_page"
             unitErrs w = ccValidate unitsCodec (UnitsDTO [PageUnitsDTO page HM.empty w []])
             bldErrs w = ccValidate buildingsCodec
-                (BuildingsDTO [PageBuildingsDTO page HM.empty w])
+                (BuildingsDTO [PageBuildingsDTO page HM.empty w []])
         map cePhase (unitErrs [(UnitId 1, [""])]) `shouldBe` [ValidatePhase]
         unitErrs [(UnitId 1, [])] `shouldSatisfy` ((≡ 1) . length)
         unitErrs [(UnitId 1, ["a", "a"])] `shouldSatisfy` ((≡ 1) . length)
@@ -754,8 +754,8 @@ wireSpec = describe "the component wire" $ do
             `shouldBe` [buildingsComponentId]
         let core w = PageCoreDTO page (toWorldGenParamsDTO arenaParams)
                        0 0 0 0 0 1 1 1 ZMDefault Nothing
-                       (Just (fixtureGeneratedWorldIdForPage page)) w Nothing
-            locErrs w = case ccDecode worldPagesCodec 15
+                       (Just (fixtureGeneratedWorldIdForPage page)) w Nothing []
+            locErrs w = case ccDecode worldPagesCodec 16
                                  (S.encode (WorldPagesDTO [core w])) of
                 Left e → [renderComponentError e]
                 Right wp → map renderComponentError (ccValidate worldPagesCodec wp)

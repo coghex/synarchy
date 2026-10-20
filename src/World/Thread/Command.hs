@@ -73,6 +73,7 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldCancelPlantCommand
                                    , handleWorldSetPlantDesignateTextureCommand)
 import World.Thread.Command.Texture (handleWorldSetTextureCommand)
+import Scenario.Placement.Install (handleWorldInstallScenarioPlacementCommand)
 import Scenario.World.Install (handleWorldInstallScenarioContentCommand)
 import World.Thread.Command.Time (handleWorldSetTimeCommand
                                  , handleWorldSetDateCommand
@@ -258,6 +259,8 @@ handleWorldCommand env logger WorldDestroyAll
   = handleWorldDestroyAllCommand env logger
 handleWorldCommand env _ (WorldEditPageTags pageId epoch target edit reply)
   = handleWorldEditPageTagsCommand env pageId epoch target edit reply
+handleWorldCommand env logger (WorldInstallScenarioPlacement pageId epoch request reply)
+  = handleWorldInstallScenarioPlacementCommand env logger pageId epoch request reply
 handleWorldCommand env logger (WorldInstallScenarioContent pageId epoch request reply)
   = handleWorldInstallScenarioContentCommand (toWorldSimCapability env) logger pageId epoch request reply
 handleWorldCommand env _ (WorldRecordPortableKnowledge epoch iid mObs)

@@ -163,6 +163,7 @@ parsePiecePack = withObject "structure pack" $ \o → do
                 ⧺ wallEntries
             , parFrames  = pieceFrames ⧺ wallFrames
             , parDestruction = []
+            , parVariantFaces = []
             , parVariants = []
             , parSizes   = HM.empty
             }
@@ -192,6 +193,7 @@ parseWirePack = withObject "wire pack" $ \o → do
             , parEntries = entries
             , parFrames  = []
             , parDestruction = []
+            , parVariantFaces = []
             , parVariants = []
             , parSizes   = HM.empty
             }

@@ -104,6 +104,7 @@ module World.Save.Component.WorldGenNaming
     ) where
 
 import UPrelude
+import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
@@ -519,7 +520,7 @@ fromLocationInstancesDTO d = LocationInstances
     , lisById          = HM.map fromLocationInstanceDTO (lisdById d)
     , lisPendingLegacy = Nothing
       -- #2701: tags ride beside this table on the page core, not in it.
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The FROZEN pre-#2505 location shape (@world-pages@ v10 and v11),
@@ -616,7 +617,7 @@ fromLocationInstancesDTOv6 d = LocationInstances
     { lisNextId        = lisd6NextId d
     , lisById          = HM.map fromLocationInstanceDTOv6 (lisd6ById d)
     , lisPendingLegacy = Nothing
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The FROZEN pre-#917 location shape (@world-pages@ v8 and v9),
@@ -699,7 +700,7 @@ fromLocationInstancesDTOv5 d = LocationInstances
     { lisNextId        = lisd5NextId d
     , lisById          = HM.map fromLocationInstanceDTOv5 (lisd5ById d)
     , lisPendingLegacy = Nothing
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The FROZEN @world-pages@ v7 location shape (#1230 through #916),
@@ -768,7 +769,7 @@ fromLocationInstancesDTOv4 d = LocationInstances
     { lisNextId        = lisd4NextId d
     , lisById          = HM.map fromLocationInstanceDTOv4 (lisd4ById d)
     , lisPendingLegacy = Nothing
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The FROZEN pre-#1101 instance shape, preserved verbatim for
@@ -852,7 +853,7 @@ fromLocationInstancesDTOv1 d = LocationInstances
     { lisNextId        = lisd1NextId d
     , lisById          = HM.map fromLocationInstanceDTOv1 (lisd1ById d)
     , lisPendingLegacy = Nothing
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The FROZEN pre-#1104 instance shape, preserved verbatim for
@@ -935,7 +936,7 @@ fromLocationInstancesDTOv2 d = LocationInstances
     { lisNextId        = lisd2NextId d
     , lisById          = HM.map fromLocationInstanceDTOv2 (lisd2ById d)
     , lisPendingLegacy = Nothing
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The FROZEN pre-#1230 instance shape, preserved verbatim for
@@ -1021,7 +1022,7 @@ fromLocationInstancesDTOv3 d = LocationInstances
     { lisNextId        = lisd3NextId d
     , lisById          = HM.map fromLocationInstanceDTOv3 (lisd3ById d)
     , lisPendingLegacy = Nothing
-    , lisTags = emptyCategoryIndex
+    , lisScenarioRefs = Map.empty, lisTags = emptyCategoryIndex
     }
 
 -- | The discovery margin every FROZEN instance encoder writes (#1230).

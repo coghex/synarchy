@@ -563,7 +563,7 @@ codecSpec = describe "the real component codec" $ do
                 , pcTimeRemainder = 0, pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1
                 , pcMapMode = pgsMapMode page, pcIdentity = Nothing
                 , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage (WorldPageId stagedName))
-                , pcLocationTags = [], pcArenaBounds = Just size }
+                , pcLocationTags = [], pcArenaBounds = Just size, pcLocationScenarioRefs = [] }
             errorsFor size = map renderComponentError
                 (validatePages (basePageSnapshots (WorldPagesDTO [core size])))
         errorsFor (ArenaBoundsDTO 20 10) `shouldBe` []
@@ -582,7 +582,7 @@ codecSpec = describe "the real component codec" $ do
                 , pcTimeRemainder = 0, pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1
                 , pcMapMode = pgsMapMode page, pcIdentity = Nothing
                 , pcGeneratedId = pgsGeneratedId page, pcLocationTags = []
-                , pcArenaBounds = Just (ArenaBoundsDTO 20 10) }
+                , pcArenaBounds = Just (ArenaBoundsDTO 20 10), pcLocationScenarioRefs = [] }
         map renderComponentError (validatePages (basePageSnapshots (WorldPagesDTO [core])))
             `shouldSatisfy` any (T.isInfixOf "not an arena page")
 

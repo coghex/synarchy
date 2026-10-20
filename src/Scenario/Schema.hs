@@ -44,7 +44,7 @@ import Scenario.Validate (Analysis(..), analyseNodes)
 
 -- | The scenario format version this build writes and decodes natively.
 currentScenarioVersion ∷ Int
-currentScenarioVersion = 2
+currentScenarioVersion = 3
 
 -- | A format: its current version, and the migration that lifts a
 --   document from version @k@ to @k + 1@, for every released @k@ below
@@ -54,12 +54,14 @@ data ScenarioFormat = ScenarioFormat
     , sfMigrations ∷ ![(Int, A.Object → Either Text A.Object)]
     }
 
--- | The shipped format: v2 is current. v1 → v2 is the identity: v2 only
---   ADDED optional @flora[]@ fields (#2711), so every v1 document is
---   already a valid v2 one, and the decoder keeps v1's vocabulary closed
---   by the document's declared source version.
+-- | The shipped format: v3 is current. Both released steps are the
+--   identity: v2 only ADDED optional @flora[]@ fields (#2711) and v3 only
+--   ADDED optional @structures[].variant@ and @locations[].containers@
+--   (#2712), so every v1 or v2 document is already a valid v3 one, and the
+--   decoder keeps each older vocabulary closed by the document's declared
+--   source version.
 scenarioFormat ∷ ScenarioFormat
-scenarioFormat = ScenarioFormat currentScenarioVersion [(1, Right)]
+scenarioFormat = ScenarioFormat currentScenarioVersion [(1, Right), (2, Right)]
 
 loadScenarioFile ∷ ScenarioCatalog → FilePath → IO ScenarioOutcome
 loadScenarioFile = loadScenarioFileWith scenarioFormat
@@ -109,7 +111,7 @@ validate ∷ ScenarioCatalog → Int → A.Object → ScenarioOutcome
 validate cat sourceVersion o =
     let env1 = DecEnv cat Nothing False HS.empty HS.empty
         (_, localDiags, nodes) = runDec env1 (decodeContent sourceVersion o)
-        an = analyseNodes nodes
+        an = analyseNodes cat nodes
         env2 = env1 { envFinal = True
                     , envRejected = anRejected an
                     , envDropped = anDropped an }

@@ -53,9 +53,9 @@ decodeContent sourceVersion o = do
         terrain    ← family "terrain" decodeTerrain
         fluids     ← family "fluids" decodeFluid
         flora      ← family "flora" (decodeFlora sourceVersion)
-        structures ← family "structures" decodeStructure
+        structures ← family "structures" (decodeStructure sourceVersion)
         buildings  ← family "buildings" decodeBuilding
-        locations  ← family "locations" decodeLocation
+        locations  ← family "locations" (decodeLocation sourceVersion)
         units      ← family "units" decodeUnit
         ground     ← family "ground_items" decodeGroundItem
         pure Scenario
@@ -336,8 +336,12 @@ slotKind s = case s of
     SPostS   → "post"
     SPostW   → "post"
 
-decodeStructure ∷ Text → A.Value → Dec (Maybe StructurePiece)
-decodeStructure = entry NodeStructure Nothing ["pack", "piece", "x", "y", "z"] [] $
+-- | A structure piece. @variant@ is format v3's: a v1 or v2 document that
+--   names it has the key rejected like any unknown one, and it is not
+--   read.
+decodeStructure ∷ Int → Text → A.Value → Dec (Maybe StructurePiece)
+decodeStructure sourceVersion = entry NodeStructure Nothing
+    (["pack", "piece", "x", "y", "z"] ⧺ [ "variant" | sourceVersion ≥ 3 ]) [] $
     \p o sid tags → do
         cat ← catalog
         pack ← definition p "pack" o (\n → HM.lookup n (catStructurePacks cat))
@@ -363,7 +367,15 @@ decodeStructure = entry NodeStructure Nothing ["pack", "piece", "x", "y", "z"] [
             guard (ok ∧ inside)
             Just $ do
                 z ← optField p "z" pInt o
-                pure (noRefs (StructurePiece sid tags pn pt xv yv z))
+                variant ← if sourceVersion ≥ 3
+                    then optField p "variant" pNonEmptyText o ≫= \v → case v of
+                        Authored name
+                            | not (HS.member name (HM.lookupDefault HS.empty pn (catPackVariants cat))) → do
+                                diag (keyPath p "variant") (UnknownDefinition (pn <> ":" <> name)) FieldRejected
+                                pure Omitted
+                        other → pure other
+                    else pure Omitted
+                pure (noRefs (StructurePiece sid tags pn pt xv yv z variant))
   where
     pPiece v = do
         t ← pText v
@@ -428,8 +440,10 @@ decodeMaterial owner mats ip v = do
             pure Nothing
         _ → decodeItem owner ip v
 
-decodeLocation ∷ Text → A.Value → Dec (Maybe LocationEntry)
-decodeLocation = entry NodeLocation Nothing ["definition", "x", "y", "significant_items"] [] $
+-- | A location. @containers@ is format v3's (see 'decodeStructure').
+decodeLocation ∷ Int → Text → A.Value → Dec (Maybe LocationEntry)
+decodeLocation sourceVersion = entry NodeLocation Nothing
+    (["definition", "x", "y", "significant_items"] ⧺ [ k | sourceVersion ≥ 3, k ← ["containers", "incidental_content"] ]) [] $
     \p o sid tags → do
         cat ← catalog
         def ← definition p "definition" o (\n → HM.lookup n (catLocations cat))
@@ -457,18 +471,70 @@ decodeLocation = entry NodeLocation Nothing ["definition", "x", "y", "significan
                             | HS.member fp (envDropped env) → pure Nothing
                             | otherwise → pure (Just (slot, target, fp))
                 let bs = authoredOr [] bindings
+                containers ← if sourceVersion ≥ 3
+                    then mapField p "containers" o $ \fp key v → do
+                        let slots = length (lcContainerSlots lc)
+                        case parseSlotIn "a container slot" slots key of
+                            Left why → do
+                                diag fp (InvalidValue why) FieldRejected
+                                pure Nothing
+                            Right slot → decodeContainerBinding cat lc slot fp v
+                    else pure Omitted
+                let cs = authoredOr [] containers
+                incidental ← if sourceVersion ≥ 3 then optField p "incidental_content" pBool o else pure Omitted
                 pure ( LocationEntry sid tags dn xv yv
-                         (HM.fromList [ (slot, ExplicitId t) | (_, (slot, t, _)) ← bs ])
+                         (fmap (\xs → HM.fromList [ (slot, ExplicitId t) | (_, (slot, t, _)) ← xs ]) bindings)
+                         (fmap (\xs → HM.fromList [ (slot, b) | (_, (slot, b, _)) ← xs ]) containers)
+                         incidental
                      , []
                      , [ (fp, t, NodeItem, slotDefinition lc slot)
-                       | (_, (slot, t, fp)) ← bs ] )
+                       | (_, (slot, t, fp)) ← bs ]
+                       ⧺ [ (fp, scenarioIdText (cbItem b), NodeItem
+                           , listToMaybe (drop (slot - 1) (lcContainerSlots lc)))
+                         | (_, (slot, b, fp)) ← cs ] )
   where
     slotDefinition lc slot = listToMaybe (drop (slot - 1) (lcSignificantSlots lc))
     -- canonical decimal only ("1", never "01" or "+1"), so two keys can
     -- never name the same slot
-    parseSlot n key = case reads (T.unpack key) of
-        [(i, "")] | tshow i ≡ key, i ≥ 1 ∧ i ≤ n → Right i
-        _ → Left ("a significant-item slot in [1, " <> tshow n <> "], written plainly")
+    parseSlot = parseSlotIn "a significant-item slot"
+
+-- | A slot key: a plain decimal in @[1, n]@, so two keys can never name
+--   one slot.
+parseSlotIn ∷ Text → Int → Text → Either Text Int
+parseSlotIn what n key = case reads (T.unpack key) of
+    [(i, "")] | tshow i ≡ key, i ≥ 1 ∧ i ≤ n → Right i
+    _ → Left (what <> " in [1, " <> tshow n <> "], written plainly")
+
+-- | One container binding: its item reference (required — a binding names
+--   a physical item), whether the slot is realized, and the pending
+--   slot's loot profile. A binding whose item reference the analysis
+--   dropped is dropped whole; a bad @realized@ or @profile@ costs only
+--   that field.
+decodeContainerBinding
+    ∷ ScenarioCatalog → LocationCatalogEntry → Int → Text → A.Value
+    → Dec (Maybe (Int, ContainerBinding, Text))
+decodeContainerBinding cat _lc slot fp v = do
+    env ← askEnv
+    mm ← subObject FieldRejected fp ["item", "realized", "profile"] v
+    case mm of
+        Nothing → pure Nothing
+        Just m → do
+            item ← memberField FieldRejected fp "item" pRef m
+            realized ← optField fp "realized" pBool m
+            profile ← optField fp "profile" pNonEmptyText m ≫= \r → case r of
+                Authored name
+                    | not (HS.member name (catLootProfiles cat)) → do
+                        diag (keyPath fp "profile") (UnknownDefinition name) FieldRejected
+                        pure Omitted
+                    | realized ≡ Authored True → do
+                        diag (keyPath fp "profile")
+                             (InvalidValue "no profile: a realized slot has discarded it") FieldRejected
+                        pure Omitted
+                other → pure other
+            pure $ case item of
+                Just t | not (HS.member (keyPath fp "item") (envDropped env)) →
+                    Just (slot, ContainerBinding (ExplicitId t) realized profile, keyPath fp "item")
+                _ → Nothing
 
 -- | A reference value: the explicit id of another entry.
 pRef ∷ Parser Text
