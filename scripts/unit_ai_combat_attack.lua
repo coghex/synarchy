@@ -26,6 +26,8 @@ local computeAttackCooldown = combatCore.computeAttackCooldown
 -- than duplicated). Before #1483 the split left the name unbound here,
 -- so the comparison read a nil global and raised.
 local RETALIATE_WINDOW_SEC  = combatCore.RETALIATE_WINDOW_SEC
+-- #2521: continuation and the retaliation swap ask the shared seam.
+local policy = require("scripts.unit_ai_combat_policy")
 
 local M = {}
 
@@ -188,6 +190,20 @@ local function attackTargetExecute(uid, s, params)
         return
     end
 
+    -- #2521: an autonomous fight continues only while the seam allows it
+    -- -- hostility, a still-fresh hit from this target, or a fixture
+    -- authorization for this exact goal occurrence. Committed orders
+    -- and lash-out keep their own rules (policy.governs).
+    if not policy.mayContinue(uid, s) then
+        engine.logDebug("attack: " .. tostring(uid) .. " stops on "
+                        .. tostring(target) .. ": no permission left")
+        lunge.clear(s)
+        s.attackTargetUid = nil
+        markGoalAccomplished(s, "attack")
+        clearAttackAnim(uid)
+        return
+    end
+
     -- Mid-fight RETALIATION: if someone other than the current target just
     -- hit us and they're within melee reach, turn on them. A predator
     -- chasing a fleeing victim will round on whoever's stabbing its flank
@@ -212,7 +228,11 @@ local function attackTargetExecute(uid, s, params)
            and att and att.uid ~= target and unit.exists(att.uid)
            and attPose ~= "dead" and attPose ~= "collapsed"
            and attInfo and attInfo.defName ~= "technomule"
-           and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC then
+           and (engine.gameTime() - (att.at or 0)) <= RETALIATE_WINDOW_SEC
+           -- #2521: a governed goal swaps only onto an attacker that
+           -- independently qualifies; no authorization travels with it.
+           and (not policy.governs(s)
+                or policy.acquireBasis(uid, s, att.uid, att)) then
             local m = unit.getInfo(uid)
             if m then
                 local d = math.max(math.abs(m.gridX - attInfo.gridX),
@@ -220,6 +240,7 @@ local function attackTargetExecute(uid, s, params)
                 if d <= (unit.getAttackRange(uid) or 1.0) + 0.5 then
                     s.attackTargetUid = att.uid
                     target = att.uid
+                    policy.retargeted(s)
                     clearAttackAnim(uid)
                 end
             end

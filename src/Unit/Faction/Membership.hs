@@ -47,6 +47,10 @@ module Unit.Faction.Membership
     , unitIsOwnedBy
     , unitIsCommandableBy
     , unitHasUnrestrictedCombat
+      -- * Relations between live units
+    , unitRelationFromTo
+    , unitIsFriendlyToward
+    , unitCanAttack
       -- * The local controller
     , localController
       -- * Legacy compatibility
@@ -59,10 +63,10 @@ module Unit.Faction.Membership
 import UPrelude
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Unit.Faction (Faction(..), defaultSpawnFaction)
+import Unit.Faction (Faction(..), FactionRelation(..), defaultSpawnFaction)
 import Unit.Faction.Profile
-    ( ControllerId, FactionCapability(..), FactionProfile, FactionTag
-    , allFactionCapabilities
+    ( ControllerId, FactionCapability(..), FactionPolicy, FactionProfile
+    , FactionTag, allFactionCapabilities, canProfileAttack, relationFromTo
     , humanController, isProfileCommandable, isProfilePlayerOwned
     , legacyProfile, mkProfile, profileCapabilities, profileController
     , profileHasUnrestrictedCombat, profileTags, tagLegacyHostile
@@ -139,6 +143,35 @@ unitIsCommandableBy observer = isProfileCommandable observer ∘ unitPolicyProfi
 --   property of the profile, not of who is looking at it.
 unitHasUnrestrictedCombat ∷ UnitFactionProfile → Bool
 unitHasUnrestrictedCombat = profileHasUnrestrictedCombat ∘ unitPolicyProfile
+
+-- * Relations between live units
+
+-- | The relation questions about two live units (#2521, FTS-5), each
+--   answered by FTS-1's directed authority over both units' policy
+--   profiles and nothing else. DIRECTED: @unitRelationFromTo pol a b@ is
+--   how @a@ regards @b@, which can differ from the reverse once a live
+--   cause or an asymmetric base entry applies. The policy is the
+--   caller's — the shipped catalogue's base table plus whatever live
+--   overlay it was handed — so nothing here reads a registry.
+unitRelationFromTo ∷ FactionPolicy → UnitFactionProfile → UnitFactionProfile
+                   → FactionRelation
+unitRelationFromTo pol a b =
+    relationFromTo pol (unitPolicyProfile a) (unitPolicyProfile b)
+
+-- | Does @a@ regard @b@ as an ally? A medic treats a patient it regards
+--   so; a unit counts toward a subject's group strength when it does.
+unitIsFriendlyToward ∷ FactionPolicy → UnitFactionProfile
+                     → UnitFactionProfile → Bool
+unitIsFriendlyToward pol a b = unitRelationFromTo pol a b ≡ RelAlly
+
+-- | May @a@ be ordered to attack @b@? @a@'s directed hostility toward
+--   @b@, or unrestricted combat on either profile ('canProfileAttack').
+--   A permission only: it mutates nothing, and it does not by itself
+--   make @b@ an autonomous acquisition target.
+unitCanAttack ∷ FactionPolicy → UnitFactionProfile → UnitFactionProfile
+              → Bool
+unitCanAttack pol a b =
+    canProfileAttack pol (unitPolicyProfile a) (unitPolicyProfile b)
 
 -- * The local controller
 

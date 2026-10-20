@@ -464,6 +464,7 @@ library
                      Engine.Scripting.Lua.API.Units.Stats
                      Engine.Scripting.Lua.API.Units.Physiology
                      Engine.Scripting.Lua.API.Units.Ownership
+                     Engine.Scripting.Lua.API.Units.Relation
                      Engine.Scripting.Lua.API.Units.Stance
                      Engine.Scripting.Lua.API.Units.Stamina
                      Engine.Scripting.Lua.API.Units.CommitPhysio
@@ -2040,6 +2041,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Load.Bindings
                    Test.Headless.Lua.Faction
                    Test.Headless.Lua.UnitOwnership
+                   Test.Headless.Lua.DirectedRelations
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
                    Test.Headless.Location.ContainerShells

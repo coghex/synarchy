@@ -10,6 +10,9 @@ local core = require("scripts.unit_ai_core")
 local page = require("scripts.unit_ai_page")
 local mv = require("scripts.movement_speed")
 local claims = require("scripts.unit_ai_claims")
+-- #2521: hostility, local self-defense and continuation are the shared
+-- combat-policy seam's answers, not this module's own faction reads.
+local policy = require("scripts.unit_ai_combat_policy")
 
 local M = {}
 
@@ -77,8 +80,7 @@ local function bindingFor(uid)
 end
 
 local function relationIsHostile(uid, target)
-    return faction.relation(unit.getFaction(uid), unit.getFaction(target))
-        == "hostile"
+    return policy.isHostile(uid, target)
 end
 
 local function targetVisible(uid, targetInfo)
@@ -151,9 +153,10 @@ local function disengageReason(uid, s, binding)
     if not targetInfo or not page.same(binding.info.page, targetInfo.page) then
         return "target left the page"
     end
-    if not relationIsHostile(uid, target) then
-        return "faction relation is no longer hostile"
-    end
+    -- Hostility, a still-fresh hit from this very target, or a
+    -- fixture authorization for this goal occurrence (#2521).
+    local continues, why = policy.mayContinue(uid, s)
+    if not continues then return why end
     if outsideLeash(targetInfo, binding.location.bounds) then
         return "target crossed the ruin leash"
     end
@@ -307,7 +310,10 @@ local function visibleHostile(uid, binding)
     return nil
 end
 
-local function recentHostileAttacker(uid, binding)
+-- A recent attacker this guard may answer: hostile, or (#2521) a fresh
+-- local self-defense hit under the shared seam's window and cutoffs.
+-- Returns the attacker and the basis that admitted it.
+local function recentAttacker(uid, binding, s)
     if binding.location.encounter.cleared then return nil end
     local attacker = unit.getLastAttacker(uid)
     if not attacker or attacker.uid == uid
@@ -318,17 +324,18 @@ local function recentHostileAttacker(uid, binding)
     end
     local info = unit.getInfo(attacker.uid)
     if not info or not page.same(binding.info.page, info.page)
-       or outsideLeash(info, binding.location.bounds)
-       or not relationIsHostile(uid, attacker.uid) then
+       or outsideLeash(info, binding.location.bounds) then
         return nil
     end
-    return attacker.uid
+    local basis = policy.acquireBasis(uid, s, attacker.uid, attacker)
+    if not basis then return nil end
+    return attacker.uid, basis
 end
 
-local function hostileTarget(uid, binding)
-    local attacker = recentHostileAttacker(uid, binding)
-    if attacker then return attacker, false end
-    return visibleHostile(uid, binding), true
+local function hostileTarget(uid, binding, s)
+    local attacker, basis = recentAttacker(uid, binding, s)
+    if attacker then return attacker, false, basis end
+    return visibleHostile(uid, binding), true, "hostile"
 end
 
 local function engageUtility(uid, s)
@@ -340,19 +347,21 @@ local function engageUtility(uid, s)
        or outsideLeash(binding.info, binding.location.bounds) then
         return -math.huge
     end
-    local target = hostileTarget(uid, binding)
+    local target = hostileTarget(uid, binding, s)
     return target and ENGAGE_UTILITY or -math.huge
 end
 
 local function engageExecute(uid, s)
     local binding = bindingFor(uid)
-    local target, requiresSight = nil, true
-    if binding then target, requiresSight = hostileTarget(uid, binding) end
+    local target, requiresSight, basis = nil, true, nil
+    if binding then
+        target, requiresSight, basis = hostileTarget(uid, binding, s)
+    end
     if not target or not unit.exists(target) then return end
     local targetInfo = unit.getInfo(target)
     if not targetInfo or not page.same(binding.info.page, targetInfo.page)
        or outsideLeash(targetInfo, binding.location.bounds)
-       or not relationIsHostile(uid, target)
+       or (requiresSight and not relationIsHostile(uid, target))
        or (requiresSight and not targetVisible(uid, targetInfo)) then
         return
     end
@@ -361,6 +370,7 @@ local function engageExecute(uid, s)
     s.ruinLastSeenY = targetInfo.gridY
     s.ruinEncounterCombat = true
     unitAi.commandAttack(uid, target)
+    policy.noteBasis(s, basis)
     local key = encounterKey(binding)
     local participation = participationFor(key)
     participation[uid] = "engaged"
@@ -372,9 +382,15 @@ local function engageExecute(uid, s)
         localEpisodeDisengaged[key] = false
         localEpisodeAggression[key] = visible
         if visible then
+            -- #2521: a local-retaliation episode must not claim a
+            -- hostile faction relation it does not have.
+            local why = basis == "self_defense"
+                and "in self-defense after a recent attack"
+                or "because their faction relation is hostile"
             engine.emitEventForUnit("unit_event", string.format(
-                "%s at %s attacks %s because their faction relation is hostile",
-                label(binding.info), binding.location.name, label(targetInfo)),
+                "%s at %s attacks %s %s",
+                label(binding.info), binding.location.name, label(targetInfo),
+                why),
                 uid, binding.info.gridX, binding.info.gridY)
         end
         persistEpisodeState(binding, true, visible, false)

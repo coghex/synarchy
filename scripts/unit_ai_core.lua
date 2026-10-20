@@ -25,6 +25,7 @@ local hold = require("scripts.unit_ai_hold")
 -- A row's transient runtime fields and their fresh-unit values, shared
 -- with the save-restore path that normalizes sparse legacy rows (#2055).
 local defaults = require("scripts.unit_ai_defaults")
+local combatPolicy = require("scripts.unit_ai_combat_policy")
 
 local M = {}
 
@@ -226,18 +227,16 @@ local INITIAL_GOAL = {
     acolyte = "find_water",
 }
 
+-- #2521: every attack-goal start/end/replacement passes through these
+-- two, so the combat-policy seam records occurrences and cutoffs here.
 local function setGoal(s, name)
-    s.goalStatus = s.goalStatus or {}
-    s.goalStatus[name] = "in_progress"
+    combatPolicy.goalChanged(s, name)
+    s.goalStatus = s.goalStatus or {}; s.goalStatus[name] = "in_progress"
     s.activeGoal = name
 end
-
 local function markGoalAccomplished(s, name)
-    s.goalStatus = s.goalStatus or {}
-    s.goalStatus[name] = "accomplished"
-    if s.activeGoal == name then
-        s.activeGoal = nil
-    end
+    s.goalStatus = s.goalStatus or {}; s.goalStatus[name] = "accomplished"
+    if s.activeGoal == name then combatPolicy.goalChanged(s, nil); s.activeGoal = nil end
 end
 
 local function isGoalActive(s, name)
@@ -438,11 +437,10 @@ function unitAi.groupEffectivenessVs(threatUid, subjectUid)
     if not unit.exists(threatUid) then return 0 end
     if not subjectUid or not unit.exists(subjectUid) then return 0 end
     local you = unit.getInfo(threatUid)
-    local subjectFaction = unit.getFaction(subjectUid)
     local total = 0
     for _, uid in ipairs(unit.getAllIds() or {}) do
-        if uid ~= threatUid
-           and faction.areAllies(unit.getFaction(uid), subjectFaction) then
+        -- #2521: DIRECTED -- the candidate's own regard of the subject.
+        if uid ~= threatUid and unit.isFriendlyToward(uid, subjectUid) then
             local st = aiState[uid]
             local committed = st and st.attackTargetUid == threatUid
             local rallyable = false

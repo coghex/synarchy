@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeApplications #-}
--- | The "Lua faction model" gate (#912): the @faction@ global as unit AI
---   actually sees it, plus the one AI consumer whose meaning changed —
---   @unitAi.groupEffectivenessVs@.
+-- | The "Lua faction model" gate (#912): the string-taking @faction@
+--   global, whose answers stay exactly as they were for the
+--   compatibility window.
 --
 --   Same pattern as 'Test.Headless.Lua.SaveModules': a standalone Lua VM
 --   (no engine, no world/unit threads) with the REAL
@@ -13,7 +13,10 @@
 --
 --   The relation/property TABLE itself is pinned in
 --   'Test.Headless.Unit.Faction'; what this gate adds is that Lua reads
---   the same answers, and that the scripts consuming them behave.
+--   the same answers. These string-taking verbs are the compatibility
+--   window: since #2521 no script calls them, and the consuming
+--   scripts are exercised through the unit-id verbs with real units in
+--   "Test.Headless.Lua.DirectedRelations" (same gate name).
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Lua faction model"'@.
@@ -53,52 +56,6 @@ runsOk = runsOkWith ""
 
 lns ∷ [Text] → Text
 lns = T.intercalate "\n"
-
--- | A stub @unit@ table plus the @engine@/@world@ globals
---   @unit_ai_core.lua@ touches, driven by a @UNITS@ table each case
---   fills in: @{ [uid] = { faction=…, gridX=…, gridY=… } }@. Enough for
---   'unitAi.groupEffectivenessVs', which reads exists/getInfo/
---   getFaction/getAllIds and nothing else.
---
---   @unitAi.combatEffectiveness@ is REPLACED with a per-unit constant so
---   the assertion is about which units are counted — the question this
---   gate exists to answer — rather than about the strength heuristic,
---   which has its own coverage.
-aiPrelude ∷ Text
-aiPrelude = lns
-    [ "UNITS = {}"
-    , "ORDER = {}"
-    , "unit = {"
-    , "  exists = function(uid) return UNITS[uid] ~= nil end,"
-    , "  getAllIds = function() return ORDER end,"
-    , "  getFaction = function(uid)"
-    , "      local u = UNITS[uid]; return u and u.faction or nil end,"
-    , "  getInfo = function(uid)"
-    , "      local u = UNITS[uid]"
-    , "      if not u then return nil end"
-    , "      return { gridX = u.gridX, gridY = u.gridY } end,"
-    , "}"
-    , "engine = { emitEventForUnit = function() end,"
-    , "           logWarn = function() end }"
-    , "world = {}"
-      -- unit_ai_core extends the singleton the real unit_ai.lua registers
-      -- before requiring it; stand that singleton up the same way.
-    , "package.loaded['scripts.unit_ai'] = {}"
-    , "local core = require('scripts.unit_ai_core')"
-    , "unitAi = package.loaded['scripts.unit_ai']"
-    , "aiState = unitAi.aiState"
-    , "unitAi.combatEffectiveness = function(uid)"
-    , "    local u = UNITS[uid]; return u and u.power or 0 end"
-    , "function addUnit(uid, faction, gx, gy, power)"
-    , "    UNITS[uid] = { faction = faction, gridX = gx, gridY = gy,"
-    , "                   power = power }"
-    , "    ORDER[#ORDER + 1] = uid"
-    , "end"
-    , "function commitTo(uid, targetUid)"
-    , "    aiState[uid] = aiState[uid] or {}"
-    , "    aiState[uid].attackTargetUid = targetUid"
-    , "end"
-    ]
 
 spec ∷ Spec
 spec = describe "Lua faction model" $ do
@@ -167,58 +124,4 @@ spec = describe "Lua faction model" $ do
             , "assert(faction.canAttack('player', 'wildlife') == true)"
             , "assert(faction.canAttack('player', 'hostile') == true)"
             , "assert(faction.canAttack('player', 'player') == false)"
-            ]
-
-    describe "groupEffectivenessVs (unit_ai_core)" $ do
-        it "counts the subject and its allies, and nobody else — a \
-           \third faction fighting the same threat is not our side" $
-            runsOkWith aiPrelude $ lns
-            [ "addUnit(1, 'player',   0, 0, 10)"   -- subject, near threat
-            , "addUnit(2, 'player',   1, 1, 20)"   -- ally, near threat
-            , "addUnit(3, 'debug',    1, 0, 40)"   -- ally (player↔debug)
-            , "addUnit(4, 'hostile',  1, 1, 80)"   -- third faction, near
-            , "addUnit(9, 'wildlife', 0, 0, 999)"  -- the threat itself
-              -- The hostile unit is ALSO attacking the threat. Under the
-              -- old \"not the threat's faction\" rule it counted toward
-              -- our swarm; it is not our side.
-            , "commitTo(4, 9)"
-            , "local eff = unitAi.groupEffectivenessVs(9, 1)"
-            , "assert(eff == 70, 'expected 70, got ' .. tostring(eff))"
-            ]
-
-        it "excludes the threat itself even when it is an ally of the \
-           \subject — the staged same-faction debug fight" $
-            runsOkWith aiPrelude $ lns
-            [ "addUnit(1, 'debug', 0, 0, 10)"
-            , "addUnit(2, 'debug', 0, 0, 25)"   -- the opponent, allied
-            , "local eff = unitAi.groupEffectivenessVs(2, 1)"
-            , "assert(eff == 10, 'expected 10, got ' .. tostring(eff))"
-            ]
-
-        it "still counts a committed ally that is out of rally range" $
-            runsOkWith aiPrelude $ lns
-            [ "addUnit(1, 'player', 0, 0, 10)"
-            , "addUnit(2, 'player', 500, 500, 7)"  -- far, but committed
-            , "addUnit(9, 'wildlife', 0, 0, 999)"
-            , "commitTo(2, 9)"
-            , "local eff = unitAi.groupEffectivenessVs(9, 1)"
-            , "assert(eff == 17, 'expected 17, got ' .. tostring(eff))"
-            ]
-
-        it "ignores an uncommitted ally standing outside rally range" $
-            runsOkWith aiPrelude $ lns
-            [ "addUnit(1, 'player', 0, 0, 10)"
-            , "addUnit(2, 'player', 500, 500, 7)"
-            , "addUnit(9, 'wildlife', 0, 0, 999)"
-            , "local eff = unitAi.groupEffectivenessVs(9, 1)"
-            , "assert(eff == 10, 'expected 10, got ' .. tostring(eff))"
-            ]
-
-        it "is zero without a subject, rather than silently measuring \
-           \everyone who isn't the threat" $
-            runsOkWith aiPrelude $ lns
-            [ "addUnit(1, 'player', 0, 0, 10)"
-            , "addUnit(9, 'wildlife', 0, 0, 999)"
-            , "assert(unitAi.groupEffectivenessVs(9) == 0)"
-            , "assert(unitAi.groupEffectivenessVs(9, 404) == 0)"
             ]

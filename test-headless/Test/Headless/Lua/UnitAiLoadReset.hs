@@ -383,14 +383,91 @@ spec = describe "unit AI load reset (#1329)" $ do
             , "assert(YAML_READS == 1,"
             , "       'the load evicted packBuildCache (' .. YAML_READS .. ' YAML reads)')"
             ]
+    describe "the combat-policy seam's transient bookkeeping (#2521)" $ do
+        let policyPrelude = lns
+                [ "POLICY = require('scripts.unit_ai_combat_policy')"
+                , "engine.logDebug = function() end"
+                , "unit.getPose = function() return 'standing' end"
+                , "REL = 'ally'"
+                , "unit.relationFromTo = function() return REL end"
+                , "HIT = nil"
+                , "unit.getLastAttacker = function(u) if u == 7 then return HIT end end"
+                -- A recursive search of a snapshot for any key or string
+                -- naming the seam's bookkeeping.
+                , "function mentions(v, seen)"
+                , "  seen = seen or {}"
+                , "  if type(v) == 'string' then"
+                , "    local l = v:lower()"
+                , "    return l:find('cutoff', 1, true) or l:find('occurrence', 1, true) end"
+                , "  if type(v) ~= 'table' or seen[v] then return false end"
+                , "  seen[v] = true"
+                , "  for k, x in pairs(v) do"
+                , "    if mentions(k, seen) or mentions(x, seen) then return true end end"
+                , "  return false end"
+                -- Unit 7 fights 8 in self-defense, then ends that goal and
+                -- starts another: one cutoff and one live occurrence.
+                , "function fight()"
+                , "  LIVE[7], LIVE[8] = true, true; NOW = 1000; HIT = { uid = 8, at = 999 }"
+                , "  local s = CORE.ensureState(7)"
+                , "  AI.commandAttack(7, 8); POLICY.noteBasis(s, 'self_defense')"
+                , "  CORE.markGoalAccomplished(s, 'attack')"
+                -- A hit strictly after that termination starts the next one.
+                , "  NOW = 1001; HIT = { uid = 8, at = 1000.5 }"
+                , "  AI.commandAttack(7, 8); POLICY.noteBasis(s, 'self_defense')"
+                , "  assert(POLICY.cutoff(s) == 1000 and POLICY.occurrence(s) ~= nil)"
+                , "  assert(POLICY.mayContinue(7, s), 'the fresh self-defense goal stopped')"
+                , "  return s end"
+                ]
+        it "keeps no saved payload, and a successful load clears it so a \
+           \rewound uid inherits nothing" $
+            runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
+                [ "local s = fight()"
+                , "local snap = SAVE.snapshotAll(); assert(snap.ok)"
+                , "assert(not mentions(snap.components), 'a snapshot carries seam bookkeeping')"
+                , "runLoad()"
+                , "assert(POLICY.cutoff(s) == nil and POLICY.occurrence(s) == nil,"
+                , "  'the seam bookkeeping survived the load')"
+                , "local s2 = CORE.ensureState(7)"
+                , "assert(s2 ~= s, 'the load kept the old state table')"
+                , "assert(POLICY.cutoff(s2) == nil and POLICY.occurrence(s2) == nil,"
+                , "  'the rewound uid inherited the old session cutoff')"
+                ]
+        it "is cleared by Exit to Menu's session teardown" $
+            runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
+                [ "local s = fight()"
+                , "require('scripts.lib.session_teardown').runAll()"
+                , "assert(POLICY.cutoff(s) == nil and POLICY.occurrence(s) == nil,"
+                , "  'the seam bookkeeping survived session teardown')"
+                ]
+        it "ends a restored non-hostile self-defense goal at its first \
+           \decision, as the persistence contract records" $
+            runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
+                [ "local s = fight()"
+                , "runLoad()"
+                -- The load resets last-attacker memory (Reset to default).
+                , "HIT = nil"
+                , "local r = CORE.aiState[7]"
+                , "assert(r and r.attackTargetUid == 8 and r.activeGoal == 'attack',"
+                , "  'the attack goal was not restored')"
+                , "local ATTACK = require('scripts.unit_ai_combat_attack')"
+                , "ATTACK.attackTargetExecute(7, r, P)"
+                , "assert(r.attackTargetUid == nil and r.activeGoal ~= 'attack',"
+                , "  'a restored self-defense goal kept fighting on old damage')"
+                -- Hostility, by contrast, is not old damage: it continues.
+                , "local h = fight(); runLoad(); HIT = nil; REL = 'hostile'"
+                , "h = CORE.aiState[7]"
+                , "assert(POLICY.mayContinue(7, h), 'a restored hostile fight was ended')"
+                ]
+
     it "tracks every transient registry the unit-AI family owns" $
         runsOk $ prelude <> "\n" <> lns
-            [ "-- Eleven: dig, chop, construct, till and plant coordinate claims,"
-            , "-- repairClaims/repairPriority, and four encounter tick overlays."
+            [ "-- Thirteen: dig, chop, construct, till and plant coordinate claims,"
+            , "-- repairClaims/repairPriority, four encounter tick overlays, and"
+            , "-- #2521's combat-policy goal cutoffs and goal occurrences."
             , "-- A new registry that forgets"
             , "-- claimsLib.track() would silently survive every load, so pin the count."
-            , "assert(CLAIMS.trackedCount() == 11,"
-            , "       'expected 11 tracked registries, got ' .. CLAIMS.trackedCount())"
+            , "assert(CLAIMS.trackedCount() == 13,"
+            , "       'expected 13 tracked registries, got ' .. CLAIMS.trackedCount())"
             ]
     it "preserves same-page timeout and dead-claimant release" $
         runsOk $ prelude <> "\n" <> lns

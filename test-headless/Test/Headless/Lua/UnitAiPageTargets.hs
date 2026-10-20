@@ -98,7 +98,6 @@ prelude = lns
     , "WOUNDS, KNOW = {}, {}"
     , "TREAT_RANGE = 1.5"
     , "TREATS, INFECT_TREATS = 0, 0"
-    , "faction = { areAllies = function() return true end }"
     , "function unitRow(uid, defName, x, y, pg, inv)"
     , "  UNITS[uid] = { uid = uid, defName = defName, gridX = x, gridY = y,"
     , "                 page = pg, inv = inv or {}, contents = {} }"
@@ -158,7 +157,8 @@ prelude = lns
     -- A LEVEL, not a flag: unit_ai_medic multiplies it by intelligence
     -- to rank medics, so a boolean could not model two of them.
     , "  getKnowledge = function(uid) return KNOW[uid] or 50.0 end,"
-    , "  getFaction = function() return 'player' end,"
+    -- #2521: the medic asks its own directed regard of the patient.
+    , "  isFriendlyToward = function() return true end,"
     , "  getWounds = function(uid) return WOUNDS[uid] or {} end,"
     , "  treatBleeding = function()"
     , "    TREATS = TREATS + 1; return { ok = true } end,"

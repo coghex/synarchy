@@ -41,6 +41,9 @@ prelude = lns
     , "  getInfo=function(uid) return POS[uid] end,"
     , "  getAttackRange=function() return 1.5 end,"
     , "  getLastAttacker=function() return LAST_ATTACKER end,"
+    -- #2521: engage asks the policy seam, which asks the relation; a
+    -- neutral attacker re-engages only through local self-defense.
+    , "  relationFromTo=function() return REL or 'neutral' end,"
     , "  getActivity=function() return ACTIVITY or 'idle' end,"
     , "  clearAnimOverride=function() CLEARS=CLEARS+1 end,"
     , "  stop=function() STOPS=STOPS+1 end,"

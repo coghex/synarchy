@@ -123,14 +123,13 @@ local function needsTreatment(uid, minSeep)
     return needsDressing(uid, minSeep) or hasInfection(uid)
 end
 
--- A medic treats its own side. Which factions count as "its own side"
--- is the shared ALLY relation (#912), not a rule medic logic gets to
--- state for itself: the player↔debug pairing that used to be spelled
--- out here (so a debug medic staged in the overlay can patch up player
--- units after a test fight) is now declared in the faction model, where
--- swarm rallying reads the same answer.
-local function isAlly(uid, medicFaction)
-    return faction.areAllies(unit.getFaction(uid), medicFaction)
+-- A medic treats its own side: the patient the MEDIC regards as an ally
+-- (#2521, directed -- medic toward patient, never the reverse). The
+-- answer is the engine's relation authority (unit.isFriendlyToward), not
+-- a rule medic logic states for itself; swarm rallying reads the same
+-- authority, so the two cannot disagree about who is on whose side.
+local function isAlly(medicUid, patientUid)
+    return unit.isFriendlyToward(medicUid, patientUid)
 end
 
 -- A best-medic who's fighting can't break off — that's what frees a
@@ -186,7 +185,7 @@ local function bestMedicFor(patientUid, params)
     local bestUid, bestScore = nil, 0
     for _, uid in ipairs(unit.getAllIds() or {}) do
         if uid ~= patientUid and canActAsMedic(uid)
-           and isAlly(patientUid, unit.getFaction(uid))
+           and isAlly(uid, patientUid)
            and medicAvailable(uid, patientUid) then
             local minfo = unit.getInfo(uid)
             -- #2297: rank only medics standing on the PATIENT's own
@@ -289,7 +288,6 @@ end
 -- standing closest would shadow every other patient the medic could
 -- still help, and the ranking below would then reject the whole tick.
 local function findPatient(uid, s, info, params)
-    local myFaction = unit.getFaction(uid)
     -- #2297: page-qualified against the scanning medic, same rule and
     -- same reason as findKitHolder below. `info` is the medic's own
     -- projection, and page.same is false whenever either side is
@@ -297,7 +295,7 @@ local function findPatient(uid, s, info, params)
     local myPage = info and info.page
     local best, bestD = nil, params.treat_scan_range
     for _, pid in ipairs(unit.getAllIds() or {}) do
-        if pid ~= uid and isAlly(pid, myFaction)
+        if pid ~= uid and isAlly(uid, pid)
            and needsTreatment(pid, params.treat_min_seep)
            and deferralLifted(s, pid)
            and not patientClaimed(pid, uid) then

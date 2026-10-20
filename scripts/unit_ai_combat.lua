@@ -22,6 +22,8 @@ local ensureState         = core.ensureState
 local mv = require("scripts.movement_speed")
 local pace = require("scripts.unit_ai_pace")
 local combatMove = require("scripts.unit_ai_combat_move")
+-- #2521: who an autonomous engage may pick (hostility / self-defense).
+local policy = require("scripts.unit_ai_combat_policy")
 local staminaPct = pace.staminaPct
 
 local M = {}
@@ -221,6 +223,12 @@ local THREAT_SOURCES = {
                > ENGAGE_WINDOW_SEC then return nil end
             if not unit.exists(att.uid) then return nil end
             if unit.getPose(att.uid) == "dead" then return nil end
+            -- #2521: hostility, or fresh LOCAL self-defense under the
+            -- shared seam's ten-second window and cutoffs -- an old hit
+            -- from a non-hostile attacker cannot restart a fight.
+            if not policy.acquireBasis(uid, s, att.uid, att) then
+                return nil
+            end
             -- 8.0 sits above a player move order (follow_command 7.0)
             -- and well above the goal candidates (find_water/notify,
             -- ≤6): a unit defends itself when struck rather than
@@ -269,6 +277,8 @@ local function engageExecute(uid, s, params)
     -- Reuse commandAttack so the goal + state are set identically
     -- to a player-issued order. attack_target wins on the next tick.
     unitAi.commandAttack(uid, target)
+    policy.noteBasis(s, policy.acquireBasis(uid, s, target,
+                                            unit.getLastAttacker(uid)))
     engine.logDebug("engage: " .. tostring(uid)
         .. " engages " .. tostring(target))
 end

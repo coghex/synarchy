@@ -4,7 +4,8 @@
 --   a grep someone has to remember to run.
 --
 --   After FTS-4 no non-relation consumer reads 'Unit.Faction.Membership.
---   legacyFactionOf', the scalar 'Unit.Faction.isPlayerOwned' /
+--   legacyFactionOf', and after FTS-5 (#2521) no relation consumer
+--   either; nothing reads the scalar 'Unit.Faction.isPlayerOwned' /
 --   'Unit.Faction.isPlayerCommandable', @unit.getFaction@, or the
 --   string-taking @faction.*@ property verbs for ownership or
 --   commandability. Each scan below pins the EXACT set of files allowed
@@ -50,17 +51,18 @@ consumerAuditSpec = describe "legacy faction consumers (FTS-4)" $ do
         owned `shouldBe` allowed
         commandable `shouldBe` allowed
 
-    it "no script calls a string-taking faction property verb" $
+    it "no script calls a string-taking faction verb" $
         forM_ [ "faction.isPlayerOwned", "faction.isPlayerCommandable"
-              , "faction.hasUnrestrictedCombat" ] $ \verb →
-            luaFilesNaming verb ⌦ (`shouldBe` [])
+              , "faction.hasUnrestrictedCombat"
+              -- #2521 (FTS-5): the relation verbs joined them.
+              , "faction.relation", "faction.areAllies", "faction.canAttack" ]
+          $ \verb → luaFilesNaming verb ⌦ (`shouldBe` [])
 
-    it "unit.getFaction is read only by the relation consumers FTS-5 owns" $
-        luaFilesNaming "unit.getFaction" ⌦ (`shouldBe`
-            [ "scripts/init_context_menu.lua"   -- the canAttack gate
-            , "scripts/unit_ai_core.lua"        -- rally alliance
-            , "scripts/unit_ai_encounter.lua"   -- faction.relation
-            , "scripts/unit_ai_medic.lua" ])    -- medic alliance
+    -- #2521 (FTS-5) ported the four relation consumers this allowlisted,
+    -- so it is EMPTY: any future script deciding policy from the legacy
+    -- tag fails here.
+    it "no script reads unit.getFaction" $
+        luaFilesNaming "unit.getFaction" ⌦ (`shouldBe` [])
 
     describe "the scanner itself" $ do
         it "ignores comments and string literals, keeps code" $ do
