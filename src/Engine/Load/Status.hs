@@ -42,6 +42,7 @@ module Engine.Load.Status
     , terminateScenario
     , setScenarioPlan, takeScenarioPlan, readScenarioPlan
     , armScenarioSeams, disarmScenarioSeams, scenarioSeamPoint, scenarioSeamFormat
+    , scenarioSeamSimWait
     , StageGate(..), unarmedStageGate
     , defaultStageGateHold, maxStageGateHold
     , armStageGate, releaseStageGate, readStageGate, awaitStageGate
@@ -287,14 +288,28 @@ advanceLoad (LoadStatusRef _ statusR _ _ _ _ _) n phase =
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing = s { lsPhase = phase }
            | otherwise                                 = s
 
+-- | End a load that FAILED. Before a replacement session was published
+--   (every ordinary load, and a scenario load until its shell is swapped in)
+--   this is 'LoadFailed' with 'lsFailedAtPhase' set, the promise that the old
+--   session survived. #2713: a scenario load whose replacement WAS published
+--   (its record says so) has no such session to promise — a failure of its
+--   recovery staging, of the recovery's publish barrier, or of anything else
+--   the existing paths report through here ends it as 'LoadReplacementFailed'
+--   with 'lsFailedAtPhase' unset, exactly as 'failPublishedLoad' does.
 failLoad ∷ LoadStatusRef → Int → Text → IO ()
-failLoad (LoadStatusRef _ statusR _ _ _ _ _) n err =
+failLoad (LoadStatusRef _ statusR _ _ scenarioR _ _) n err = do
+    scenario ← readIORef scenarioR
+    let published = case scenario of
+            Just r | slsRequestId r ≡ n → slsPublished r
+            _ → False
+        step s
+            | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
+                if published
+                    then s { lsPhase = LoadReplacementFailed, lsOutcome = Just (LoadAborted err) }
+                    else s { lsPhase = LoadFailed, lsOutcome = Just (LoadAborted err)
+                           , lsFailedAtPhase = Just (lsPhase s) }
+            | otherwise = s
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
-  where
-    step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
-               s { lsPhase = LoadFailed, lsOutcome = Just (LoadAborted err)
-                 , lsFailedAtPhase = Just (lsPhase s) }
-           | otherwise = s
 
 finishLoad ∷ LoadStatusRef → Int → IO ()
 finishLoad (LoadStatusRef _ statusR _ _ _ _ _) n =
@@ -563,6 +578,12 @@ disarmScenarioSeams ref = armScenarioSeams ref noSeams
 scenarioSeamPoint ∷ LoadStatusRef → ScenarioLoadPoint → IO ()
 scenarioSeamPoint (LoadStatusRef _ _ _ _ _ seamsR _) point =
     readIORef seamsR ≫= \seams → seamAt seams point
+
+-- | How long the service waits for the simulation to consume what it
+--   installed: the armed override, else @shipped@ seconds.
+scenarioSeamSimWait ∷ LoadStatusRef → Double → IO Double
+scenarioSeamSimWait (LoadStatusRef _ _ _ _ _ seamsR _) shipped =
+    fromMaybe shipped ∘ seamSimWait <$> readIORef seamsR
 
 -- | The decode format the suite armed, if any (the shipped one otherwise).
 scenarioSeamFormat ∷ LoadStatusRef → IO (Maybe ScenarioFormat)

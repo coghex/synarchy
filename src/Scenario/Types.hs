@@ -49,6 +49,9 @@ module Scenario.Types
     , ItemTemperature(..)
     , StorageCapacity(..)
     , GroundItemEntry(..)
+    , SourcePaths(..)
+    , noSourcePaths
+    , withSourcePaths
       -- * Definition catalog
     , ScenarioCatalog(..)
     , emptyScenarioCatalog
@@ -396,6 +399,41 @@ data Scenario = Scenario
     , scUnits       ∷ ![UnitEntry]
     , scGroundItems ∷ ![GroundItemEntry]
     } deriving (Show, Eq)
+
+-- | Where each RETAINED entry stood in the document it was read from, per
+--   family, parallel to the family's list in 'Scenario'. A rejected entry is
+--   absent from its list, so the position in the list is NOT the position in
+--   the file; a diagnostic a later phase raises (a building overlapping
+--   another, an item binding that cannot be honoured) must name the entry by
+--   the path the author wrote, never by its index among the survivors.
+--
+--   Deliberately NOT a field of 'Scenario': a scenario's identity is its
+--   content, and two documents that hold the same content are the same
+--   scenario however they were laid out (a captured scenario re-encodes every
+--   entry at a new position, and a decode of that capture must equal the
+--   original). The loader returns them beside the scenario
+--   ('Scenario.Schema.loadScenarioFilePaths').
+data SourcePaths = SourcePaths
+    { spTerrain     ∷ ![Text]
+    , spFluids      ∷ ![Text]
+    , spFlora       ∷ ![Text]
+    , spStructures  ∷ ![Text]
+    , spBuildings   ∷ ![Text]
+    , spLocations   ∷ ![Text]
+    , spUnits       ∷ ![Text]
+    , spGroundItems ∷ ![Text]
+    } deriving (Show, Eq)
+
+-- | No recorded positions: a scenario not read from a document.
+noSourcePaths ∷ SourcePaths
+noSourcePaths = SourcePaths [] [] [] [] [] [] [] []
+
+-- | The entries of one family with their paths: the recorded source paths
+--   when there is one per entry, else their indices (@family[i]@).
+withSourcePaths ∷ Text → [Text] → [α] → [(Text, α)]
+withSourcePaths family recorded xs
+    | length recorded ≡ length xs = zip recorded xs
+    | otherwise = [ (family <> "[" <> tshow i <> "]", x) | (i, x) ← zip [0 ∷ Int ..] xs ]
 
 -- * Definition catalog
 

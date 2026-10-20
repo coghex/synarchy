@@ -44,6 +44,7 @@ import qualified Test.Headless.Scenario.Load.Exclusion as Exclusion
 import qualified Test.Headless.Scenario.Load.Failure as Failure
 import qualified Test.Headless.Scenario.Load.Session as Session
 import qualified Test.Headless.Scenario.Load.Persist as Persist
+import qualified Test.Headless.Scenario.Load.Bindings as Bindings
 import Test.Headless.Scenario.Load.Persist (integratedDoc)
 import Test.Headless.Scenario.Placement.Fixtures (Fx(..))
 import Unit.Types
@@ -64,6 +65,7 @@ spec = aroundAll withH $ do
     Failure.spec
     Session.spec
     Persist.spec
+    Bindings.spec
 
 tag ∷ Text → GameplayTag
 tag t = fromMaybe (error "empty tag") (mkGameplayTag t)

@@ -191,7 +191,26 @@ recoverySpec = describe "when recovery fails too" $ do
         case slsRecovery s of
             RecoveryFailed why → why `shouldSatisfy` T.isInfixOf "recovery fault"
             other → expectationFailure ("expected RecoveryFailed, got " ⧺ show other)
+        Just ls0 ← readLoadStatus (slLoadStatusRef (toSaveLoadCapability (fxEnv (hFx h))))
+        (lsPhase ls0, lsFailedAtPhase ls0) `shouldBe` (LoadReplacementFailed, Nothing)
         readIORef (enginePausedRef (fxEnv (hFx h))) `shouldReturn` True
+        lineIsClear h
+
+    it "reports the generic transaction as replaced, not as preserved, when the recovery's publish barrier fails" $ \h → do
+        hits ← newIORef (0 ∷ Int)
+        armSeams h $ \p → do
+            failAt PointUnits "construction fault" p
+            when (p ≡ PointBarrier) $ do
+                n ← atomicModifyIORef' hits (\k → (k + 1, k + 1))
+                -- the SECOND barrier is the recovery's
+                when (n ≡ 2) (failAt PointBarrier "recovery barrier fault" p)
+        src ← SourceFile <$> writeScenario "double-fault-barrier.yaml" withContent
+        s ← runLoad h src
+        disarm h
+        readIORef hits `shouldReturn` 2
+        slsRecovery s `shouldSatisfy` (\r → case r of RecoveryFailed _ → True; _ → False)
+        Just ls ← readLoadStatus (slLoadStatusRef (toSaveLoadCapability (fxEnv (hFx h))))
+        (lsPhase ls, lsFailedAtPhase ls) `shouldBe` (LoadReplacementFailed, Nothing)
         lineIsClear h
 
     it "keeps both diagnostics when the recovery shell fails to stage" $ \h → do
@@ -212,6 +231,10 @@ recoverySpec = describe "when recovery fails too" $ do
                 fcDetails ctx `shouldSatisfy` any (T.isInfixOf "recovery staging fault")
             other → expectationFailure ("expected an unsuccessful outcome, got " ⧺ show other)
         slsRecovery s `shouldSatisfy` (\r → case r of RecoveryFailed _ → True; _ → False)
+        -- the generic transaction says the same: the old session did NOT survive,
+        -- whichever path (here the world thread's staging) reported the failure
+        Just ls ← readLoadStatus (slLoadStatusRef (toSaveLoadCapability (fxEnv (hFx h))))
+        (lsPhase ls, lsFailedAtPhase ls) `shouldBe` (LoadReplacementFailed, Nothing)
         lineIsClear h
 
 -- * Post-publication callbacks

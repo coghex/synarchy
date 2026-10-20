@@ -26,10 +26,15 @@ module Scenario.Load.Construct
     ( ConstructEnv(..)
     , Constructed(..)
     , constructScenario
+    , awaitSimulation
     ) where
 
 import UPrelude
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
 import Data.IORef (atomicModifyIORef', readIORef)
+import System.Timeout (timeout)
+import qualified Engine.Core.Queue as Q
+import Sim.Command.Types (SimCommand(..))
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
@@ -52,7 +57,7 @@ import Item.Types (ItemInstance(..))
 import qualified Item.Ground as G
 import Location.Instance
 import Scenario.Items.Build (ItemBuild(..), ItemBuildEnv(..), itemRefTargets, itemTagTargets)
-import Scenario.Items.Owners (buildGroundItems, installGroundItems)
+import Scenario.Items.Owners (buildGroundItemsAt, installGroundItems)
 import Scenario.Load.Types (ScenarioLoadPoint(..))
 import Scenario.Placement.Building
 import Scenario.Placement.Install (requestPlacementInstall)
@@ -80,6 +85,10 @@ data ConstructEnv = ConstructEnv
     , ceLua    ∷ LuaBackendState
     , ceLogger ∷ LoggerState
     , cePage   ∷ !WorldPageId
+    , cePaths  ∷ !SourcePaths
+      -- ^ where each retained entry stood in the document; diagnostics name an
+      --   entry by that path (an index among the survivors would blame the
+      --   wrong entry)
     , ceBounds ∷ !(Maybe ArenaBounds)
     , ceSeam   ∷ ScenarioLoadPoint → IO ()
     }
@@ -90,6 +99,11 @@ data Constructed = Constructed
     , ccFailures    ∷ ![Text]
       -- ^ accepted content that could not be installed; empty when the
       --   page is the scenario
+    , ccStructures  ∷ ![(ScenarioId, (Int, Int, Word8))]
+    , ccLocations   ∷ ![(ScenarioId, LocationInstanceId)]
+    , ccBuildings   ∷ ![BuildingCompletion]
+    , ccUnits       ∷ ![UnitCompletion]
+      -- ^ what each owner installed, by scenario identity
     }
 
 -- | Install @sc@. Runs on the Lua thread.
@@ -104,15 +118,15 @@ constructScenario ce sc = do
         buildingRef = bcBuildingManagerRef (toBuildingCapability env)
     wm0 ← readIORef (wsWorldManagerRef wsc)
     case lookup pid (wmWorlds wm0) of
-        Nothing → pure (Constructed [] ["the published arena page '" <> tshow pid <> "' is gone"])
+        Nothing → pure (Constructed [] ["the published arena page '" <> tshow pid <> "' is gone"] [] [] [] [])
         Just ws → do
             epoch ← pageIncarnation ws
             -- 1. terrain, fluids and flora
             ceSeam ce PointTerrain
             worldOutcome ← requestWorldInstall wsc pid epoch ScenarioWorldRequest
-                { swrTerrain = indexed "terrain" (scTerrain sc)
-                , swrFluids = indexed "fluids" (scFluids sc)
-                , swrFlora = indexed "flora" (scFlora sc) }
+                { swrTerrain = sourced "terrain" spTerrain (scTerrain sc)
+                , swrFluids = sourced "fluids" spFluids (scFluids sc)
+                , swrFlora = sourced "flora" spFlora (scFlora sc) }
             (worldDiags, worldFails) ← pure $ case worldOutcome of
                 WorldInstalled r → (wirDiagnostics r, [])
                 WorldInstallNotAdmitted → ([], ["the arena page no longer admits the terrain install"])
@@ -140,7 +154,7 @@ constructScenario ce sc = do
                       { bbeDefs = defsB, bbeItems = itemEnv, bbeBounds = ceBounds ce
                       , bbeWorldSize = worldSize, bbeTiles = tiles, bbeExisting = pageB
                       , bbeLocations = lis0, bbeNow = now, bbePage = pid }
-                (indexed "buildings" (scBuildings sc))
+                (sourced "buildings" spBuildings (scBuildings sc))
             let brefs = BuildingInstallRefs
                     { birBuildings = buildingRef, birUnits = unitRef
                     , birWorld = wsWorldManagerRef wsc
@@ -150,9 +164,9 @@ constructScenario ce sc = do
             -- 3. locations judged, their would-be occupants decided
             let lenv = LocationBuildEnv
                     { lbeDefs = locs, lbeBounds = ceBounds ce, lbeSeed = seed, lbeNamer = Nothing }
-                lv = validateLocations lenv (indexed "locations" (scLocations sc))
+                lv = validateLocations lenv (sourced "locations" spLocations (scLocations sc))
                 (liveUnits, unitCascade) =
-                    rejectUnitsOfRejectedLocations (lvRejected lv) (indexed "units" (scUnits sc))
+                    rejectUnitsOfRejectedLocations (lvRejected lv) (sourced "units" spUnits (scUnits sc))
             -- 4. units
             ceSeam ce PointUnits
             um ← readIORef unitRef
@@ -176,7 +190,13 @@ constructScenario ce sc = do
             -- locations omit
             let (acceptedLocs, defaultGround) =
                     expandLocationDefaults locs loot (scGroundItems sc) (lvAccepted lv)
-            (placements, gbuild) ← buildGroundItems itemEnv (scGroundItems sc ⧺ defaultGround)
+            -- the authored items at their source paths; the default content a
+            -- location constructs is not in the document, so it is labelled as
+            -- what it is rather than given a position it never had
+            (placements, gbuild) ← buildGroundItemsAt itemEnv
+                (sourced "ground_items" spGroundItems (scGroundItems sc)
+                 ⧺ [ ("ground_items(default)[" <> T.pack (show j) <> "]", g)
+                   | (j, g) ← zip [0 ∷ Int ..] defaultGround ])
             let (store, _) = installGroundItems [ p | Just p ← placements ] G.emptyGroundItems
             -- a materialization establishes the page's baseline: its ground is replaced
             atomicModifyIORef' (wsGroundItemsRef ws) (const (store, ()))
@@ -197,10 +217,20 @@ constructScenario ce sc = do
                       , BuildingInstalled _ ref ← bcs, ref ≡ bbRef b
                       , Just root ← ibTrees (bbItems b), n ← flatNodes root
                       , (i, r) ← ibRefs (bbItems b), i ≡ iiInstanceId n ]
+                    -- what an installed unit CARRIES (inventory, equipment,
+                    -- accessories, and what each holds): a significant item
+                    -- a unit holds binds as taken and a realized container a
+                    -- unit holds is a legitimate shell, so these resolve like
+                    -- any other physical item (never as an outer ground item)
+                    ⧺ [ (r, ItemBinding i (iiDefName n) False)
+                      | ((_, ub), UnitInstalled _ ref) ← zip ubs ucs
+                      , Just b ← [ubUnit ub], ref ≡ buRef b
+                      , Just root ← ibTrees (buItems b), n ← flatNodes root
+                      , (i, r) ← ibRefs (buItems b), i ≡ iiInstanceId n ]
                 (installs, resolveDiags) = resolveLocationInstalls locs joins bindings acceptedLocs
             ceSeam ce PointPlacement
             placed ← requestPlacementInstall wsc pid epoch ScenarioPlacementRequest
-                { sprStructures = Just (indexed "structures" (scStructures sc))
+                { sprStructures = Just (sourced "structures" spStructures (scStructures sc))
                 , sprLocations = Just installs }
             let (placeDiags, placeFails) = case placed of
                     PlacementInstalled r → (pirDiagnostics r, [])
@@ -211,14 +241,20 @@ constructScenario ce sc = do
                 buildingFails = [ "building '" <> ref <> "' could not be installed: " <> tshow why
                                 | BuildingNotInstalled ref why ← bcs ]
             pure Constructed
-                { ccDiagnostics = worldDiags ⧺ concatMap bbuDiagnostics bbs ⧺ lvDiagnostics lv
+                { ccStructures = case placed of PlacementInstalled r → pirStructures r; _ → []
+                , ccLocations = case placed of PlacementInstalled r → pirLocations r; _ → []
+                , ccBuildings = bcs, ccUnits = ucs
+                , ccDiagnostics = worldDiags ⧺ concatMap bbuDiagnostics bbs ⧺ lvDiagnostics lv
                     ⧺ unitCascade ⧺ unitDiagnostics (map snd ubs) ucs
                     ⧺ ibDiagnostics gbuild ⧺ resolveDiags ⧺ placeDiags
                 , ccFailures = worldFails ⧺ unitFails ⧺ buildingFails ⧺ placeFails }
   where
     flatNodes i = i : concatMap flatNodes (iiContents i)
-    indexed ∷ Text → [α] → [(Text, α)]
-    indexed key xs = [ (key <> "[" <> T.pack (show i) <> "]", x) | (i, x) ← zip [0 ∷ Int ..] xs ]
+    -- the entries of one family at the paths they had in the document: a
+    -- rejected entry is absent from the list, so an index among the survivors
+    -- would blame the wrong entry
+    sourced ∷ Text → (SourcePaths → [Text]) → [α] → [(Text, α)]
+    sourced key sel = withSourcePaths key (sel (cePaths ce))
     -- a rejected unit's completion already carries its build diagnostics
     -- (and the lethality rejection after them); every other unit's are the
     -- build's own
@@ -227,3 +263,30 @@ constructScenario ce sc = do
             UnitRejected ds → ds
             _ → ubDiagnostics b
         | (b, c) ← zip builds comps ]
+
+-- | The acknowledged boundary after which the simulation holds what was
+--   installed: it has CONSUMED everything queued before this call — the
+--   outgoing session's drop, the shell's chunk seeds, every terrain and
+--   fluid edit — and nothing it consumed advanced the clock (a paused
+--   session ticks nothing).
+--
+--   World-thread installation returns once the world thread has applied a
+--   request, but the simulation hears of it through its own queue, so a
+--   reply from the world thread proves nothing about the simulation.
+--   'World.Command.Types'-side queue acceptance is not completion
+--   (requirement 6); this is a queue-ordered round trip instead: the
+--   observational 'Sim.Command.Types.SimReadMemory' (which changes nothing)
+--   is queued BEHIND every earlier command and its reply is the proof they
+--   were handled. A reply of 'Nothing' is the publication-discard answer: the
+--   command was dropped because a session was being published, so the
+--   boundary was never reached.
+awaitSimulation ∷ WorldSimCapability → Double → IO (Either Text ())
+awaitSimulation wsc seconds = do
+    reply ← newEmptyMVar
+    Q.writeQueue (wsSimQueue wsc) (SimReadMemory reply)
+    answered ← timeout (round (seconds * 1000000)) (takeMVar reply)
+    pure $ case answered of
+        Nothing → Left ("the simulation did not consume the installed content within "
+                        <> tshow seconds <> " s")
+        Just Nothing → Left "the simulation's acknowledgement was discarded by a session publication"
+        Just (Just _) → Right ()

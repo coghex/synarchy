@@ -25,6 +25,7 @@ import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombat
 import Engine.Core.State (EngineEnv(..))
 import Engine.Load.Status
 import Engine.Save.Barrier (SaveOwner(..))
+import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Gameplay.Tags.Index (categoryTagsOf)
 import Scenario.Load.Types
@@ -262,6 +263,15 @@ staleSpec = describe "stale completions" $ do
         pump ← startPump h
         takeMVar (holdReached hold)
         activeBefore ← statusOf h
+        -- a late reconciliation about the OLD request reaches the handler: no
+        -- callback may run and no console command may be cancelled by it
+        _ ← lua h "__stale = 0; return 'ok'"
+        registerLuaModule h 91 "scripts/stale_probe.lua"
+            "return { onSaveLoaded = function(units, buildings) __stale = __stale + 1 end }"
+        processLuaMsg env (fxLua (hFx h)) (hCtl h)
+            (LuaSaveLoaded oldId [7, 8] [9] emptyLoadReconcileContext)
+        lua h "return tostring(__stale)" `shouldReturn` "0"
+        statusOf h `shouldReturn` activeBefore
         -- late messages about the OLD request arrive
         Q.writeQueue (luaQueueOf env) (LuaSaveLoaded oldId [] [] emptyLoadReconcileContext)
         Q.writeQueue (luaQueueOf env) (LuaLoadStagingFailed oldId)
@@ -279,5 +289,8 @@ staleSpec = describe "stale completions" $ do
         stopPump pump
         disarm h
         (slsRequestId done, slsOutcome done) `shouldBe` (n, Just ScenarioReady)
+        -- the probe IS wired: the CURRENT request's own reconciliation ran it
+        lua h "return tostring(__stale)" `shouldReturn` "1"
+        unregister h [91]
   where
     luaQueueOf = ivLuaQueue ∘ toInputViewCapability

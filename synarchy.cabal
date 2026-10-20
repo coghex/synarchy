@@ -2035,6 +2035,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Load.Failure
                    Test.Headless.Scenario.Load.Session
                    Test.Headless.Scenario.Load.Persist
+                   Test.Headless.Scenario.Load.Bindings
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents

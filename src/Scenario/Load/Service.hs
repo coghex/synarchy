@@ -73,7 +73,7 @@ import Scenario.Load.Construct
 import Scenario.Load.Session
 import Scenario.Load.Types
 import Scenario.Schema
-    (decodeScenarioBytesWith, loadScenarioFileWith, scenarioFormat)
+    (decodeScenarioBytesPaths, loadScenarioFilePaths, scenarioFormat)
 import Scenario.Types
     (MapDimensions(..), Scenario(..), ScenarioOutcome(..))
 import World.Arena.Bounds (mkArenaBounds)
@@ -126,16 +126,16 @@ startScenarioLoad env ls rid src = guarded (preFailure env rid StagePreflight) $
         Right () → do
             catalog ← liveScenarioCatalog env
             format ← fromMaybe scenarioFormat <$> scenarioSeamFormat lsr
-            outcome ← case src of
-                SourceFile path → loadScenarioFileWith format catalog path
-                SourceBytes _ bytes → pure (decodeScenarioBytesWith format catalog bytes)
+            (outcome, paths) ← case src of
+                SourceFile path → loadScenarioFilePaths format catalog path
+                SourceBytes _ bytes → pure (decodeScenarioBytesPaths format catalog bytes)
             case outcome of
                 ScenarioFailed f → preflightFailure env rid (CauseSource f) []
                 ScenarioLoaded scenario warnings → do
                     mapM_ (advanceLoad lsr rid) [LoadSourceSelected, LoadContentValidated]
                     updateScenarioStatus lsr rid $ \s → s { slsWarnings = warnings }
                     scenarioSeamPoint lsr PointPreflighted
-                    case planOf scenario of
+                    case planOf scenario paths of
                         Left why → preflightFailure env rid (CauseSetup why) []
                         Right plan → do
                             setScenarioPlan lsr rid plan
@@ -147,11 +147,11 @@ startScenarioLoad env ls rid src = guarded (preFailure env rid StagePreflight) $
                                 Left why → preflightFailure env rid (CauseSetup why) []
                                 Right () → pure ()
   where
-    planOf scenario = case scMap scenario of
-        Nothing → Right (ScenarioPlan scenario Nothing)
+    planOf scenario paths = case scMap scenario of
+        Nothing → Right (ScenarioPlan scenario paths Nothing)
         Just (MapDimensions w h) → case mkArenaBounds w h of
             Left e → Left ("the scenario's map is not a finite arena: " <> tshow e)
-            Right ab → Right (ScenarioPlan scenario (Just ab))
+            Right ab → Right (ScenarioPlan scenario paths (Just ab))
 
 -- | Called by the Lua thread when the staged shell reaches the publish
 --   barrier: the request is now publishing. A no-op for any request that
@@ -221,6 +221,7 @@ construct env ls rid = do
                 scenarioSeamPoint lsr PointReconciled
                 constructScenario ConstructEnv
                     { ceEnv = env, ceLua = ls, ceLogger = logger, cePage = arenaPageId
+                    , cePaths = plPaths plan
                     , ceBounds = plBounds plan, ceSeam = scenarioSeamPoint lsr }
                     (plScenario plan)
             case built of
@@ -233,14 +234,26 @@ construct env ls rid = do
                         then recover env ls rid (FailureContext StageConstructing
                                 (CauseConstruction (T.intercalate "; " (ccFailures c))) [])
                         else do
-                            done ← syncTry (scenarioSeamPoint lsr PointInitialized)
-                            case done of
+                            -- the content is installed on the world thread, but
+                            -- the simulation hears of it through its own queue:
+                            -- ready means it has CONSUMED it, not that it was
+                            -- queued (requirement 6)
+                            wait ← scenarioSeamSimWait lsr simulationWaitSeconds
+                            simulated ← syncTry (awaitSimulation (toWorldSimCapability env) wait)
+                            case simulated of
                                 Left e → recover env ls rid (FailureContext StageConstructing
                                             (CauseException (renderException e)) [])
-                                Right () → do
-                                    logInfo logger CatWorld $
-                                        "Scenario load #" <> tshow rid <> " ready"
-                                    terminateScenario lsr rid ScenarioReady RecoveryNone
+                                Right (Left why) → recover env ls rid
+                                    (FailureContext StageConstructing (CauseConstruction why) [])
+                                Right (Right ()) → do
+                                    done ← syncTry (scenarioSeamPoint lsr PointInitialized)
+                                    case done of
+                                        Left e → recover env ls rid (FailureContext StageConstructing
+                                                    (CauseException (renderException e)) [])
+                                        Right () → do
+                                            logInfo logger CatWorld $
+                                                "Scenario load #" <> tshow rid <> " ready"
+                                            terminateScenario lsr rid ScenarioReady RecoveryNone
 
 -- | Construction failed after the swap: publish a fresh default flat arena
 --   through the same transaction. The request still ends unsuccessful; the
@@ -277,6 +290,21 @@ finishRecovery ∷ EngineEnv → Int → ScenarioLoadStatus → [(Text, Text)] �
 finishRecovery env rid s failures = do
     let ctx = fromMaybe (FailureContext StageRecovering (CauseSetup "construction failed") [])
                         (slsPendingFailure s)
+    -- the flat arena stands only once the simulation consumed it too
+    wait ← scenarioSeamSimWait (loadStatusOf env) simulationWaitSeconds
+    simulated ← syncTry (awaitSimulation (toWorldSimCapability env) wait)
+    let simProblem = case simulated of
+            Left e → Just (renderException e)
+            Right (Left why) → Just why
+            Right (Right ()) → Nothing
+    case simProblem of
+      Just why | null failures → terminateScenario (loadStatusOf env) rid
+          (ScenarioUnsuccessful ctx { fcDetails = fcDetails ctx ⧺ ["recovery incomplete: " <> why] })
+          (RecoveryFailed why)
+      _ → finishRecoveryWith env rid ctx failures
+
+finishRecoveryWith ∷ EngineEnv → Int → FailureContext → [(Text, Text)] → IO ()
+finishRecoveryWith env rid ctx failures =
     if null failures
         then terminateScenario (loadStatusOf env) rid (ScenarioUnsuccessful ctx) RecoveryFlatArena
         else do
@@ -312,6 +340,12 @@ handoffShell env ls rid shell = do
             scenarioSeamPoint lsr PointStagingHandoff
             Q.writeQueue (wsWorldQueue wsc) (WorldLoadTransaction rid shell materials)
             pure (Right ())) `Catch.onException` abort
+
+-- | How long the service waits for the simulation to consume what it
+--   installed. Generous: a paused simulation drains its queue in a tick, so
+--   this only bounds a simulation that is not running at all.
+simulationWaitSeconds ∷ Double
+simulationWaitSeconds = 30
 
 -- * Failure plumbing
 

@@ -17,6 +17,8 @@ module Test.Headless.Scenario.Load.Harness
     , withOwners
     , ownerCounts
     , holdOwner
+    , holdSimulation
+    , pendingSimulationAcks
     , Pump
     , startPump
     , stopPump
@@ -32,6 +34,8 @@ module Test.Headless.Scenario.Load.Harness
     , failAt
     , armSeams
     , armSeamsWith
+    , armSeamsSimWait
+    , waitCondition
     , disarm
     , writeScenario
     , scratchFile
@@ -55,6 +59,9 @@ import GHC.Clock (getMonotonicTime)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
+import qualified Engine.Core.Queue as Q
+import Sim.Command.Types (SimCommand(..))
+import Sim.Memory (SimMemory(..))
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
 import System.FilePath ((</>))
 import Test.Hspec (expectationFailure)
@@ -78,6 +85,7 @@ import Test.Headless.Scenario.Placement.Fixtures
 import Test.Headless.Scenario.World.Fixtures (catalog)
 import Unit.Types (UnitId, UnitInstance, UnitManager(..))
 import World.State.Types
+import Location.Types (lookupLocation)
 import World.Flora.Types (FloraCatalog)
 
 -- | The engine, and the control cell the production message pump takes.
@@ -88,6 +96,7 @@ withH ∷ (H → IO ()) → IO ()
 withH act = withFx $ \fx → do
     -- the flora species the world-content examples name
     writeIORef (floraCatalogRef (fxEnv fx)) floraFixture
+    registerCrypt fx
     ctl ← newIORef ThreadRunning
     withOwners (fxEnv fx) $ \owners → act (H fx ctl owners)
 
@@ -100,6 +109,11 @@ data Owners = Owners
     { owMutated ∷ IORef (Map.Map SaveOwner Int)
     , owParked  ∷ IORef (Map.Map SaveOwner Int)
     , owHeld    ∷ IORef (Map.Map SaveOwner Bool)
+    , owSimHeld ∷ IORef Bool
+      -- ^ the simulation stand-in withholds its answer to the
+      --   acknowledged-consumption round trip
+    , owSimPending ∷ IORef [MVar (Maybe SimMemory)]
+      -- ^ the round trips it has received and not answered
     }
 
 standIns ∷ [SaveOwner]
@@ -108,7 +122,25 @@ standIns = [SaveUnit, SaveBuilding, SaveCombat, SaveSimulation, SaveRender]
 withOwners ∷ EngineEnv → (Owners → IO α) → IO α
 withOwners env act = do
     owners ← Owners <$> newIORef Map.empty <*> newIORef Map.empty <*> newIORef Map.empty
+                    <*> newIORef False <*> newIORef []
     let barrier = slSaveBarrierRef (toSaveLoadCapability env)
+        simQ = wsSimQueue (toWorldSimCapability env)
+        -- the simulation thread's one observable duty here: consume its queue
+        -- in order and answer the observational read when (and only when) it is
+        -- not being held. Everything else it consumes is dropped, as an
+        -- unobserved simulation would drop it.
+        simLoop = forever $ do
+            held ← readIORef (owSimHeld owners)
+            unless held $ do
+                pending ← atomicModifyIORef' (owSimPending owners) (\ps → ([], ps))
+                forM_ pending $ \r → tryPutMVar r (Just (SimMemory 0 []))
+            m ← Q.readQueueTimeout 1000 simQ
+            case m of
+                Just (SimReadMemory reply) → do
+                    h ← readIORef (owSimHeld owners)
+                    if h then atomicModifyIORef' (owSimPending owners) (\ps → (reply : ps, ()))
+                         else void (tryPutMVar reply (Just (SimMemory 0 [])))
+                _ → pure ()
         loop o = forever $ do
             gated ← ownerGated barrier o
             modifyIORef' (if gated then owParked owners else owMutated owners)
@@ -116,7 +148,7 @@ withOwners env act = do
             held ← Map.findWithDefault False o <$> readIORef (owHeld owners)
             unless held (acknowledgeCurrent barrier o)
             threadDelay 500
-    bracket (mapM (forkIO ∘ loop) standIns) (mapM_ killThread) (const (act owners))
+    bracket (mapM forkIO (simLoop : map loop standIns)) (mapM_ killThread) (const (act owners))
 
 -- | (mutated, parked) tick counts of one owner so far.
 ownerCounts ∷ Owners → SaveOwner → IO (Int, Int)
@@ -124,6 +156,15 @@ ownerCounts ow o = do
     m ← readIORef (owMutated ow)
     p ← readIORef (owParked ow)
     pure (Map.findWithDefault 0 o m, Map.findWithDefault 0 o p)
+
+-- | Withhold (True) or resume (False) the simulation stand-in's answers to
+--   the acknowledged-consumption round trip.
+holdSimulation ∷ Owners → Bool → IO ()
+holdSimulation ow = writeIORef (owSimHeld ow)
+
+-- | How many round trips the held simulation has received and not answered.
+pendingSimulationAcks ∷ Owners → IO Int
+pendingSimulationAcks = fmap length ∘ readIORef ∘ owSimPending
 
 -- | Withhold (True) or resume (False) one owner's acknowledgements.
 holdOwner ∷ Owners → SaveOwner → Bool → IO ()
@@ -308,3 +349,28 @@ unregister h ids = atomically $
 
 floraFixture ∷ FloraCatalog
 floraFixture = catalog
+
+-- | The crypt definition the container examples bind shells of, derived
+--   from the shipped @ruin_small@.
+registerCrypt ∷ Fx → IO ()
+registerCrypt fx = do
+    ruin ← locationRegistry (fxEnv fx) ≫= maybe (fail "ruin_small is not registered") pure ∘ lookupLocation "ruin_small"
+    addLocationDef (fxEnv fx) (cryptDef ruin)
+
+-- | Arm only the simulation wait bound.
+armSeamsSimWait ∷ H → Double → IO ()
+armSeamsSimWait h secs = armScenarioSeams (loadRef h) noSeams { seamSimWait = Just secs }
+
+-- | Poll (bounded) until a condition holds; fail the example, never skip,
+--   if it does not.
+waitCondition ∷ Double → IO Bool → IO ()
+waitCondition secs cond = do
+    start ← getMonotonicTime
+    let go = do
+            ok ← cond
+            unless ok $ do
+                now ← getMonotonicTime
+                if now - start > secs
+                    then expectationFailure "the awaited condition never held"
+                    else threadDelay 500 >> go
+    go

@@ -19,7 +19,10 @@ import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
 import qualified Engine.Core.Queue as Q
-import Engine.Load.Status (beginLoad, failLoad, terminateScenario)
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability, withPlayerIntentHeld)
+import Engine.Load.Status (beginLoad, claimScenarioLoad, failLoad, terminateScenario)
 import Scenario.Load.Service (requestScenarioLoad)
 import Scenario.Load.Types
 import Engine.Scripting.Lua.API.Core (setPausedFn)
@@ -125,3 +128,30 @@ spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
         afterApplied ← callSetPaused ls env False
         afterApplied `shouldBe` True
         readIORef (enginePausedRef env) `shouldReturn` False
+
+    -- #2713 (review round 1): the refusal of an unpause is decided INSIDE
+    -- the player-intent lock, which every pause transition takes. An
+    -- operation admitted on another thread between a check and that lock
+    -- must still win: with the check taken before the lock, the unpause
+    -- below reads "no load in flight", waits for the lock, and then clears
+    -- the pause the accepted operation imposes.
+    it "setPaused(false) decides under the pause lock, so a load admitted while it waits still refuses it" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        writeIORef (enginePausedRef env) False
+        result ← newEmptyMVar
+        reqId ← withPlayerIntentHeld (toWorldSimCapability env) $ \_ → do
+            -- the unpause starts and waits for the lock this thread holds
+            _ ← forkIO (callSetPaused ls env False ≫= putMVar result)
+            threadDelay 100000
+            -- a scenario load is admitted meanwhile (its claim does not take
+            -- the lock; its own pause would wait for it)
+            admitted ← claimScenarioLoad (slLoadStatusRef (toSaveLoadCapability env))
+                           (pure False) "pause-race"
+            either (\b → fail ("not admitted: " ⧺ show b)) pure admitted
+        applied ← takeMVar result
+        applied `shouldBe` False
+        terminateScenario (slLoadStatusRef (toSaveLoadCapability env)) reqId
+            (ScenarioUnsuccessful (FailureContext StagePreflight (CauseSetup "test abort") []))
+            RecoveryPreserved

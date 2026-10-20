@@ -38,7 +38,7 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import Scenario.Schema (ScenarioFormat)
-import Scenario.Types (Scenario, ScenarioDiagnostic, ScenarioFailure)
+import Scenario.Types (Scenario, ScenarioDiagnostic, ScenarioFailure, SourcePaths)
 import World.Arena.Bounds (ArenaBounds)
 
 -- | A scenario source an entry-point caller has already RESOLVED (path
@@ -172,6 +172,8 @@ initialScenarioStatus rid src = ScenarioLoadStatus
 --   created with. Transient, keyed by request id, never saved.
 data ScenarioPlan = ScenarioPlan
     { plScenario ∷ !Scenario
+    , plPaths    ∷ !SourcePaths
+      -- ^ where each retained entry stood in the document
     , plBounds   ∷ !(Maybe ArenaBounds)
     } deriving (Show, Eq)
 
@@ -223,9 +225,13 @@ data ScenarioLoadPoint
 --   shipped format for the request's decode (a migration that fails cannot
 --   be authored from a shipped chain, whose steps are all the identity).
 data ScenarioLoadSeams = ScenarioLoadSeams
-    { seamAt     ∷ ScenarioLoadPoint → IO ()
-    , seamFormat ∷ Maybe ScenarioFormat
+    { seamAt      ∷ ScenarioLoadPoint → IO ()
+    , seamFormat  ∷ Maybe ScenarioFormat
+    , seamSimWait ∷ Maybe Double
+      -- ^ seconds the service waits for the simulation to consume the
+      --   installed content (the shipped bound otherwise), so a held
+      --   consumer can be timed out without waiting it out
     }
 
 noSeams ∷ ScenarioLoadSeams
-noSeams = ScenarioLoadSeams { seamAt = \_ → pure (), seamFormat = Nothing }
+noSeams = ScenarioLoadSeams { seamAt = \_ → pure (), seamFormat = Nothing, seamSimWait = Nothing }
