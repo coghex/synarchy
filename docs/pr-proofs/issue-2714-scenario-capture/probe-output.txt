@@ -1,0 +1,62 @@
+
+--- process 1: load the scenario, edit it, capture it ---
+  PASS the scenario loaded ready ({'outcome': 'ready', 'warnings': 0, 'source': '/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/scenario_capture_probe_8zn8yma5/work/source.yaml', 'recovery': 'RecoveryNone', 'id': 1, 'stage': 'StageReady', 'published': True})
+  PASS the loaded arena is paused
+  PASS the live hydration was edited to 3.0 (read 3.0)
+
+  live admission: competing requests while the capture is in flight
+  PASS the capture was accepted (2)
+  PASS a competing save was refused (False)
+  PASS a competing autosave was refused (False)
+  PASS a competing load was refused (False)
+  PASS a competing scenario load was refused (False)
+  PASS a competing second capture was refused (False)
+  PASS a competing unpause was refused (False)
+  PASS the arena stayed paused through every attempt
+  PASS the capture succeeded ({'overwrite': False, 'entries': {'buildings': 2, 'fluids': 1, 'units': 1, 'structures': 0, 'ground_items': 2, 'terrain': 2, 'locations': 0, 'flora': 0}, 'stage': 'CaptureDone', 'outcome': 'succeeded', 'warnings': 0, 'id': 2, 'published': True, 'destination': '/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/scenario_capture_probe_8zn8yma5/work/capture-1.yaml', 'replaced': False, 'bytes': 4893})
+  PASS it is the SAME request the chunk was given
+  PASS the arena is paused after the capture
+  PASS the destination holds the captured file
+  PASS the refused capture wrote nothing
+  PASS the directory holds only the file and the source (['capture-1.yaml', 'source.yaml'])
+  PASS the document records the CURRENT hydration (3.0), not the original 4.0
+  PASS the original override did not come back
+  PASS the spawned ground item is in the document
+  PASS one unit was captured ({'buildings': 2, 'fluids': 1, 'units': 1, 'structures': 0, 'ground_items': 2, 'terrain': 2, 'locations': 0, 'flora': 0})
+
+  overwrite intent
+  PASS an existing destination without overwrite is refused (FailOverwriteRefused)
+  PASS the refused capture changed none of the destination's bytes
+  PASS …and reports that nothing was published
+  PASS still paused after the refusal
+  PASS with overwrite the file is replaced (True)
+  PASS the arena is unchanged, so the replacement is the same document
+  PASS a different name (Save As) is accepted
+  PASS the original is preserved and the copy is identical
+  PASS the source scenario was never rewritten
+  PASS no temporary file was left behind
+
+--- ordinary save of the arena, then stop the engine ---
+  PASS engine.saveWorld accepted the ordinary save
+  PASS the ordinary save was written
+
+--- process 2 (fresh): restore the ordinary save WITHOUT the scenario file, capture ---
+  PASS engine.loadSave accepted the ordinary save
+  PASS the ordinary load published ((True, {'outcome': 'LoadSucceeded', 'saveName': 'scn_capture_probe', 'id': 1, 'phase': 'LoadPublished'}))
+  PASS the restored arena was captured ({'entries': {'ground_items': 2, 'terrain': 2, 'units': 1, 'structures': 0, 'buildings': 2, 'fluids': 1, 'locations': 0, 'flora': 0}, 'replaced': False, 'outcome': 'succeeded', 'published': True, 'id': 2, 'warnings': 0, 'destination': '/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/scenario_capture_probe_8zn8yma5/work/capture-2-restored.yaml', 'bytes': 4893, 'stage': 'CaptureDone', 'overwrite': False})
+  PASS the document captured from the RESTORED arena is byte-identical to the live capture
+
+--- process 3 (fresh): load the captured file, check the values, capture again ---
+  PASS the captured file loaded ready ({'id': 1, 'source': '/var/folders/xs/kyf0vrg92c340wk3jncyp1fr0000gn/T/scenario_capture_probe_8zn8yma5/work/capture-2-restored.yaml', 'published': True, 'recovery': 'RecoveryNone', 'outcome': 'ready', 'warnings': 0, 'stage': 'StageReady'})
+  PASS the fresh process has the EDITED hydration (read 3.0)
+  PASS the fresh process captured it again
+  PASS …byte-identical to the first capture: nothing accumulated across three captures
+  PASS no capture rewrote an earlier one
+
+--- comparison ---
+  capture-1 sha256: c7378aa48b92ee5cf386801d1a539ec038b046905685c0cbf7f3603b599a92e3
+  capture-2 sha256: c7378aa48b92ee5cf386801d1a539ec038b046905685c0cbf7f3603b599a92e3
+  capture-3 sha256: c7378aa48b92ee5cf386801d1a539ec038b046905685c0cbf7f3603b599a92e3
+
+PASS: every check passed
+exit 0
