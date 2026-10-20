@@ -2100,7 +2100,11 @@ end of its previous attack goal and after any diplomacy-clear time), or a
 fixture authorization for the exact (unit, target, goal occurrence).
 Hostility is never cut off; visibility never refreshes self-defense;
 permission alone acquires nobody; committed player/debug orders and
-lash-out keep their own rules. A guard acquiring through self-defense
+lash-out keep their own rules. Whether a goal is exempt is fixed when it
+starts, and it is restored from the saved flags on load. An ending goal is
+judged by that classification, so a committed order replacing an autonomous
+goal still cuts off, and an exempt goal whose flag is cleared before it ends
+never does. A guard acquiring through self-defense
 announces "attacks <target> in self-defense after a recent attack" instead
 of claiming a hostile relation. Runtime diplomacy and authorization are
 FTS-6's; until then they reach the seam only through its `fixtureInputs`
