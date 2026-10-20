@@ -8237,10 +8237,12 @@ the pause the accepted operation had just imposed.
 status is keyed by request id and ignored once the request is terminal, so a late
 status write about an older request cannot finish or overwrite a newer one. A
 late `LuaSaveLoaded` is discarded BEFORE it does anything
-(`Engine.Scripting.Lua.Thread.Dispatch.handleSaveLoaded`): unless its request
-is the active, non-terminal load transaction, no `onSaveLoaded` callback runs
-(its survivor arrays describe a session that is no longer the live one) and no
-queued console command is cancelled.
+(`Engine.Scripting.Lua.Thread.Dispatch.handleSaveLoaded`): when a NEWER request
+was accepted since, or its own request already ended, no `onSaveLoaded`
+callback runs (its survivor arrays describe a session that is no longer the
+live one) and no queued console command is cancelled. A message for a
+transaction the load status does not track at all is an isolated dispatch (the
+headless reconciliation fixtures drive the handler that way) and runs.
 
 **Transient classification.** The admission lock, the request record, the plan
 the continuation installs and the test seams ride inside `LoadStatusRef`

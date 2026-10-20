@@ -115,6 +115,10 @@ The SCN-12 test glue now composes through `constructScenario` instead of a copy 
 
 Codex confirmed five of the six round-1 fixes and requested changes for the sixth: source paths covered only top-level entries, so a rejection reported below a rejected nested sibling (a building's second `storage` item, cascaded when the building is rejected) was numbered among the survivors. The decoder now records which source positions of EVERY nested list survived (`spSurvivors`), and `Scenario.Types.translateNested` rewrites each adapter diagnostic to the positions of the document. Covered by an end-to-end example (the reviewer's scenario), by the decoder's survivor record, and by an exhaustive check of every rejection pattern of a nested list up to six items; reverting either the recording or the translation fails them (rows `nested-translation-off`, `nested-survivors-not-recorded`).
 
+## Review rounds 3 and 4, and a CI regression
+
+Round 3 approved at `e8296e4ae`. CI's `static-audits` then failed `tshow_spelling_audit` (three `T.pack (show …)` spellings; fixed, and all 73 engine-free static-audit commands of `ci.yml` now pass locally), and a flaky example was stabilized (a world-thread staging failure reaches the Lua thread as a QUEUED abort message, so the registration-guard check pumps it first). Round 4 approved at `2e3cc9a1f`; CI's `headless-lanes (world)` then failed six examples (`Lua.DebugQueue`, `unit AI reconciliation boundary`) because the round-1 stale-`LuaSaveLoaded` guard also discarded isolated dispatches for a transaction the load status does not track. The rule is now: stale means a newer request was accepted or this one already ended; an untracked request runs as it always did. Those groups, all 761 `Lua` examples and `Scenario.Load` pass.
+
 ## Mutation checks
 
 One source mutation at a time, the `Scenario.Load` group run (the `shared exclusion`
