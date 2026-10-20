@@ -1364,8 +1364,9 @@ being opened; realized contents are written as they are, never rerolled.
 
 **What stops a capture.** A document is never written if it could not be read
 back as the arena: a unit or building of a definition no longer registered, a
-structure no registered pack places, a column with no solid cell, or a tag on a
-cell below the surface each fail the capture with one diagnostic per finding
+structure no registered pack places, a planted plant or crop plot of a species the
+catalog cannot name, a column with no solid cell, or a tag on a cell below the
+surface each fail the capture with one diagnostic per finding
 (`terrain.tags`, `units[…]`, …) and nothing is written. The document is also
 decoded again through the shared boundary and compared with what was captured; a
 document the schema refuses, or one that decodes into something else, is never

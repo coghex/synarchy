@@ -8416,9 +8416,10 @@ enumerated.
 
 Nothing is dropped silently: a unit or building whose definition is no longer
 registered, a location instance of an unknown definition, a structure no
-registered pack places, and the terrain the vocabulary cannot state (a column
-with no solid cell, a tag on a cell below the surface) each fail the projection
-with one diagnostic per finding. A dead unit is the single exclusion. The one
+registered pack places, a planted plant or crop plot of a species this build's
+catalog cannot name (`flora.species`), and the terrain the vocabulary cannot
+state (a column with no solid cell, a tag on a cell below the surface) each fail
+the projection with one diagnostic per finding. A dead unit is the single exclusion. The one
 thing the projection cannot judge is Lua-owned readiness: a LIVING unit whose
 captured resources are already fatal is written, and the loader (not the
 capture) rejects it with its own diagnostic.
@@ -8446,7 +8447,12 @@ storage's):
 2. *Temporary file.* A uniquely named file created EXCLUSIVELY next to the
    destination (`writeUniqueDurably`: `openBinaryTempFile`, written, flushed and
    `fsync`ed on the same handle), so it is on the destination's filesystem and
-   owned from the moment it exists. Cleanup removes exactly this path.
+   owned from the moment it exists. Cleanup removes exactly this path. A thread
+   cancellation is never a write failure: `writeUniqueDurably` runs creation
+   masked and, on a cancellation at creation, write or flush, closes and unlinks
+   what it created before propagating; the writer does the same for the
+   temporary on a cancellation at any later step (the destination is never
+   removed, and a destination already published stays complete).
 3. *Candidate verification.* Read back, compared byte for byte with what was
    written, then decoded and validated through the scenario boundary.
 4. *Atomic publication.* Without overwrite: `publishExclusive`, a hard link the
