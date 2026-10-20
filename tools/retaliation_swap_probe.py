@@ -67,6 +67,15 @@ branch's preconditions and then drives a single `unitAi.update(dt)` under
      Asserting only 8 would pass on the pre-#1483 code, where the swap
      never happens because the tick died.
 
+Every order this probe issues is COMMITTED (#2521): the probe stands in
+for the player. Its three acolytes spawn tag-less, so they are
+uncontrolled allies of one another, and since FTS-5 an AUTONOMOUS attack
+on an ally with no hostility, fresh self-defense or authorization ends at
+its first decision (`scripts/unit_ai_combat_policy.lua`). Committed player
+orders keep their own rules, which is the branch #1483 pins; the seam's
+governed swap has its own hspec coverage
+(`--match "directed relation consumers (FTS-5)"`).
+
 The two cases stage their hit at a fixed 0 s and 60 s, chosen to sit
 unambiguously inside and outside the window WITHOUT restating its
 duration. That is what lets them run — and fail — against code that does
@@ -789,7 +798,7 @@ def graded_update(port: int, subject: int, target: int, attacker: int,
         f"local s = ai.getState({subject});",
         f"local ss = ai.getState({sentinel});",
         "if not s or not ss then return { fixture = 'missing-ai-state' } end;",
-        f"ai.commandAttack({subject}, {target});",
+        f"ai.commandAttack({subject}, {target}, true);",
         "ss.nextActionAt = 0;",
         f"local me = unit.getInfo({subject});",
         f"local at = unit.getInfo({attacker});",
@@ -876,7 +885,7 @@ def stage_hit(port, ledger: Ledger, key: str, fx: Fixture) -> None:
     patch_ids(port, [fx.attacker])
     patch_bounded_attack(port, fx.subject, fx.attacker)
     send(port, f"require('scripts.unit_ai').commandAttack({fx.attacker}, "
-               f"{fx.subject}); return 'ok'")
+               f"{fx.subject}, true); return 'ok'")
     landed = poll_until(STAGED_HIT_TIMEOUT_SEC, lambda: send(
         port, lua("local raw = _G.__ret_gla or unit.getLastAttacker;",
                   f"local a = raw({fx.subject});",
@@ -957,7 +966,7 @@ def run_case(port, ledger: Ledger, log_key: str, fx: Fixture,
         restore(port, uid, f"{fx.label} setup")
     stage_geometry(port, fx.subject, fx.target, fx.attacker)
     send(port, f"require('scripts.unit_ai').commandAttack({fx.subject}, "
-               f"{fx.target}); return 'ok'")
+               f"{fx.target}, true); return 'ok'")
 
     mark = log_size()
     time.sleep(NATURAL_TICK_WINDOW_SEC)
