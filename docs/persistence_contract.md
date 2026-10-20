@@ -219,14 +219,16 @@ occurrence identity. Both are **Reset to a documented default** (absent):
 they live outside `aiState`, keyed by the unit's AI-state table, ride no save
 payload and no `unit_ai` version, and `unit_ai_claims`' reset empties them on
 every successful load and on session teardown, so a rewound uid inherits
-nothing. On a load, the same reset hook then opens a FRESH occurrence for
-every restored attack goal and classifies it from that goal's restored
-`committed` / `mentalLashoutActive` flags. It carries no cutoff, basis or
-authorization from the saving session. This matters because a committed
-order or a lash-out clears its flag BEFORE ending the goal, and an ending
-goal is judged by its occurrence, never by the live flags. So a restored
-committed order or lash-out still stamps no cutoff when it ends, and a
-restored autonomous goal still does. With last-attacker memory also reset
+nothing. An occurrence's exempt classification is fixed once, from the
+provenance its opener passes to `setGoal`: committed order, lash-out or
+autonomous. Every ending, cutoff and continuation decision reads only that
+stored classification. On a load, the same reset hook then opens a FRESH
+occurrence for every restored attack goal and rebuilds its provenance from
+the goal's durable saved `mentalLashoutActive` / `committed` fields. It does
+this before any cleanup can clear those fields, and it carries no cutoff,
+basis or authorization from the saving session. So a restored committed
+order or lash-out still stamps no cutoff when it ends, and a restored
+autonomous goal still does. With last-attacker memory also reset
 on load, the intended
 consequence is that a restored NON-HOSTILE self-defense attack goal ends at
 its first decision: old damage cannot keep a fight alive across a load. A
