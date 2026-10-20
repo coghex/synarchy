@@ -466,6 +466,7 @@ import qualified Test.Headless.Lua.CraftCycleReplenishment as LuaCraftCycleReple
 import qualified Test.Headless.Lua.CraftBillQueuePriority as LuaCraftBillQueue
 import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
+import qualified Test.Headless.Lua.UnitOwnership as LuaUnitOwnership
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
 import qualified Test.Headless.Unit.FactionCatalogue as UnitFactionCatalogue
@@ -747,6 +748,9 @@ restLane = do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#2518): the unit-id ownership queries run against a
+    -- unit roster this spec WRITES into the unit manager ref.
+    aroundAll withHeadlessEngine LuaUnitOwnership.spec
     -- Own engine (#1733): the live unit.addXP boundary WRITES the
     -- unit manager ref (and seeds a deliberately corrupt stat map),
     -- so it cannot share the worldgen engine above.

@@ -143,7 +143,7 @@ spec = describe "Transfer context menu" $ do
             run ls baseSetupLua
             run ls (buildingStub 517 "built" 200 [] <> selectedStub [5, 6]
                     <> unitInfoStub [(5, (10, 21)), (6, (10, 25))]
-                    <> unitFactionStub [(5, "wildlife"), (6, "player")]
+                    <> unitCommandableStub [(5, False), (6, True)]
                     <> endpointInfoStubAt "building" 517 True "Cargo Hold" (10, 20))
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
@@ -158,7 +158,7 @@ spec = describe "Transfer context menu" $ do
             run ls baseSetupLua
             run ls (buildingStub 518 "built" 200 [] <> selectedStub [5, 6]
                     <> unitInfoStub [(5, (10, 21)), (6, (10, 25))]
-                    <> unitFactionStub [(5, "wildlife"), (6, "wildlife")]
+                    <> unitCommandableStub [(5, False), (6, False)]
                     <> endpointInfoStubAt "building" 518 True "Cargo Hold" (10, 20))
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldBe` "true"
@@ -170,13 +170,14 @@ spec = describe "Transfer context menu" $ do
             -- unit.getSelected filters live ids, but a Lua read a
             -- moment later can still observe a deletion. uid 3 would
             -- have been nearest but has no live info; uid 11 has info
-            -- but no live faction; uid 12 survives and must be chosen
+            -- but is no longer a live commandable unit; uid 12 survives
+            -- and must be chosen
             -- without any arithmetic/indexing error.
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 519 "built" 200 [] <> selectedStub [3, 11, 12]
                     <> unitInfoStub [(11, (10, 21)), (12, (10, 26))]
-                    <> unitFactionStub [(3, "player"), (12, "player")]
+                    <> unitCommandableStub [(3, True), (12, True)]
                     <> endpointInfoStubAt "building" 519 True "Cargo Hold" (10, 20))
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldNotSatisfy` isLuaError
@@ -191,7 +192,7 @@ spec = describe "Transfer context menu" $ do
             ls ← newBareLuaBackend env
             run ls baseSetupLua
             run ls (buildingStub 520 "built" 200 [] <> selectedStub [3, 11]
-                    <> unitInfoStub [] <> unitFactionStub []
+                    <> unitInfoStub [] <> unitCommandableStub []
                     <> endpointInfoStubAt "building" 520 True "Cargo Hold" (10, 20))
             claimed ← evalDebug ls "return require('scripts.init_context_menu').tryBuildingMenu(10, 20)"
             claimed `shouldNotSatisfy` isLuaError
@@ -999,10 +1000,10 @@ isLuaError t = "error:" `T.isPrefixOf` t ∨ "syntax error:" `T.isPrefixOf` t
 -- @_G.__transferCallback@, so it can be invoked in a LATER evalDebug
 -- call without ever serializing a Lua function back to Haskell
 -- (mirrors SelectTileZ's @_G.__infoCallback@). Also stubs
--- faction.isPlayerCommandable/canAttack to the fixed vocabulary every
--- scenario below uses ("player" = commandable), and gives
--- unit.transferEndpointInfo/unit.exists/unit.getInfo/unit.getFaction
--- safe defaults a per-test stub then overrides for the ids it cares
+-- faction.canAttack to the fixed vocabulary every scenario below uses,
+-- and gives unit.transferEndpointInfo/unit.exists/unit.getInfo/
+-- unit.getFaction/unit.isPlayerCommandable safe defaults (every unit
+-- commandable) a per-test stub then overrides for the ids it cares
 -- about.
 baseSetupLua ∷ Text
 baseSetupLua = T.concat
@@ -1026,7 +1027,7 @@ baseSetupLua = T.concat
     , "  end; "
     , "  _G.__lastLabels = labels; "
     , "end; "
-    , "faction.isPlayerCommandable = function(f) return f == 'player' end; "
+    , "unit.isPlayerCommandable = function(uid) return true end; "
     , "faction.canAttack = function(a, b) return true end; "
     , "unit.exists = function(uid) return true end; "
     -- A real 'unit.getInfo' always reports the unit's def name, and
@@ -1177,14 +1178,16 @@ unitInfoStubF entries = T.concat
     , "})[uid] end; "
     ]
 
--- | @unit.getFaction@ answering a fixed per-uid faction; an unlisted
--- uid returns nil (the live faction vanished).
-unitFactionStub ∷ [(Int, Text)] → Text
-unitFactionStub entries = T.concat
-    [ "unit.getFaction = function(uid) return ({"
+-- | @unit.isPlayerCommandable@ answering a fixed per-uid verdict; an
+-- unlisted uid answers false, as the engine verb does for an id with no
+-- live unit (#2518).
+unitCommandableStub ∷ [(Int, Bool)] → Text
+unitCommandableStub entries = T.concat
+    [ "unit.isPlayerCommandable = function(uid) return ({"
     , T.intercalate ", "
-        [ T.concat [ "[", tshow uid, "]='", f, "'" ] | (uid, f) ← entries ]
-    , "})[uid] end; "
+        [ T.concat [ "[", tshow uid, "]=", if c then "true" else "false" ]
+        | (uid, c) ← entries ]
+    , "})[uid] == true end; "
     ]
 
 -- | A faithful Lua transcription of 'World.Generate.Coordinates.

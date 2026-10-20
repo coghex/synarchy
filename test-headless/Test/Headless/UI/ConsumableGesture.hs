@@ -58,6 +58,8 @@ import Test.Headless.Harness (withHeadlessEngine)
 import Test.Headless.Unit.TransferApi (minimalDef, mkItem, mkUnit)
 import UI.Types (emptyUIPageManager)
 import Unit.Faction (Faction(..))
+import Unit.Faction.Membership (resolveSpawnFaction)
+import Unit.Faction.Profile (tagAcolyte)
 import Unit.Types
     (UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..)
     , emptyUnitManager)
@@ -492,6 +494,16 @@ spec = aroundAll withSharedFixture $
            \came to be the panel's active unit" $ \(env, ls) → do
             resetFixture env ls
             noDrinkableEntry ls "_G.__menu(3, 'coffee_pot', 1.0)" 3 401
+
+        it "an UNCONTROLLED acolyte offers no drink: it shares the \
+           \roster's tag and is its ally, but it is not commandable \
+           \(#2518)" $ \(env, ls) → do
+            resetFixture env ls
+            -- The drinker becomes what a tag-less acolyte spawn is
+            -- (D-31): the definition's acolyte tag, no controller.
+            mutateUnit env drinkerUid $ \u →
+                u { uiFaction = resolveSpawnFaction [tagAcolyte] Nothing }
+            noDrinkableEntry ls "_G.__menu(1, 'coffee_pot', 1.0)" 1 301
 
         it "a NON-IDLE unit offers no drink, because the engine would \
            \drop the queued UnitDrink and the stats would move with no \

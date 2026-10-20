@@ -95,6 +95,8 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.State (EngineEnv)
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId(..))
+import Unit.Faction.Membership (localController)
+import Unit.Faction.Profile (ControllerId)
 import Unit.Transfer
 import Unit.Transfer.Orders
 import World.Page.Resolve (resolveUnitPage)
@@ -364,7 +366,7 @@ unitCreateTransferOrderFn env = do
                             \building-to-building order (D-10) may name a \
                             \carrier that is neither end"
                 Just (page, ws) → do
-                    ls ← Lua.liftIO $ readLiveState env
+                    ls ← Lua.liftIO $ readLiveState localController env
                     let scene = sceneFor ls (trSource req) (trDestination req)
                     -- The CARRIER's page, not merely the endpoints'
                     -- agreement with each other: an order is stored in
@@ -421,7 +423,7 @@ unitGetTransferOrdersFn env = do
                     -- places because the sim ticked between them.
                     (orders, ls) ← Lua.liftIO $ (,)
                         ⊚ readIORef (wsTransferOrdersRef ws)
-                        ⊛ readLiveState env
+                        ⊛ readLiveState localController env
                     Lua.newtable
                     forM_ (zip [1 ..] (ordersForUnit uid orders)) $ \(i, o) → do
                         pushOrder ls o
@@ -500,7 +502,7 @@ unitCommitTransferOrderFn env = do
                         Nothing → pushErr "unit.commitTransferOrder: no such \
                                           \order for that unit"
                         Just order → do
-                            outs ← Lua.liftIO $ commitReadyEntries env
+                            outs ← Lua.liftIO $ commitReadyEntries localController env
                                                     (troBatch order)
                             mFinal ← Lua.liftIO $ withOwnedOrder env uid oid
                                         (const (applyOutcomes outs))
@@ -516,11 +518,12 @@ unitCommitTransferOrderFn env = do
 --   each result with the INDEX it came from — positions, not instance
 --   ids, because the reconciliation below must not depend on ids being
 --   unique across a batch a caller hand-built.
-commitReadyEntries ∷ EngineEnv → TransferBatch → IO [(Int, TransferState)]
-commitReadyEntries env b =
+commitReadyEntries ∷ ControllerId → EngineEnv → TransferBatch
+                   → IO [(Int, TransferState)]
+commitReadyEntries observer env b =
     fmap concat $ forM (zip [0 ..] (tbEntries b)) $ \(i, q) →
         if qtState q ≢ TransferReadyToCommit then pure [] else do
-            r ← commitOneLive env (tbSource b) (tbDestination b) (qtItem q)
+            r ← commitOneLive observer env (tbSource b) (tbDestination b) (qtItem q)
             pure [ (i, case r of
                         Right _ → TransferCompleted
                         Left f  → TransferFailed (staleOf f)) ]

@@ -58,7 +58,7 @@ import Item.Ground (GroundItems(..), spawnGroundItem)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
-import Unit.Faction.Membership (resolveLegacyFaction)
+import Unit.Faction.Membership (localController, resolveLegacyFaction)
 import Unit.Types
 import World.Chunk.Types
     (ChunkCoord(..), LoadedChunk(..), chunkSize, wrapChunkCoordU)
@@ -344,7 +344,7 @@ poisonSight ws = do
 -- | Tick an armed page and report whether sight was rasterized.
 sightRasterized ∷ EngineEnv → WorldPageId → WorldState → IO Bool
 sightRasterized env pageId ws = do
-    outcome ← (try (tickLocationDiscovery env pageId ws)
+    outcome ← (try (tickLocationDiscovery localController env pageId ws)
                   ∷ IO (Either SightRasterized ()))
     pure $ case outcome of
         Left SightRasterized → True
@@ -372,7 +372,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 101)
                     (testUnit pageId FactionPlayer 8 8) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp1 ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp1 `shouldBe` Just [LifecycleDiscovered]
 
@@ -384,7 +384,7 @@ spec = beforeAll initEnv $ do
 
             -- Re-tick: the unit hasn't moved, the location is already
             -- discovered — no second event, no change to the set.
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp2 ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp2 `shouldBe` Just [LifecycleDiscovered]
             evs2 ← eventsFor env 101
@@ -400,7 +400,7 @@ spec = beforeAll initEnv $ do
 
             before ← readIORef (wsGenParamsRef ws)
             lifecyclesOf before `shouldBe` Just [LifecycleUnknown]
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             after ← readIORef (wsGenParamsRef ws)
             lifecyclesOf after `shouldBe` Just [LifecycleCleared]
             evs ← eventsOnPage env "disc_zero_encounter"
@@ -424,7 +424,7 @@ spec = beforeAll initEnv $ do
                         [(UnitId 710, player), (uidA, a), (uidB, b)] }
 
             publish (nomadA "standing") (nomadB pageId "collapsed")
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
 
@@ -441,18 +441,18 @@ spec = beforeAll initEnv $ do
             -- Collapsed/crawling is not death, and a wrong-page occupant
             -- is equally non-clearable at runtime.
             publish (nomadA "dead") (nomadB pageId "collapsed")
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleActive])
             publish (nomadA "dead")
                 (nomadB (WorldPageId "somewhere_else") "dead")
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleActive])
 
             publish (nomadA "dead") (nomadB pageId "dead")
-            tickLocationDiscovery env pageId ws
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
             evs ← eventsOnPage env "disc_death_only_encounter"
@@ -469,7 +469,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton uidA
                     ((testUnit pageId FactionHostile 7 8) { uiPose = "dead" }) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
             eventsOnPage env "disc_hidden_clear_encounter" `shouldReturn` []
@@ -480,8 +480,8 @@ spec = beforeAll initEnv $ do
                         { uiPose = "dead" })
                     , (UnitId 715, testUnit pageId FactionPlayer 8 8)
                     ] }
-            tickLocationDiscovery env pageId ws
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
             evs ← eventsOnPage env "disc_hidden_clear_encounter"
@@ -510,7 +510,7 @@ spec = beforeAll initEnv $ do
                     , (uidA, (testUnit pageId FactionHostile 7 8)
                         { uiPose = "dead" })
                     ] }
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             params ← readIORef (wsGenParamsRef ws)
             lifecyclesOf params `shouldBe` Just [LifecycleActive]
             evs ← eventsOnPage env "disc_missing_encounter"
@@ -524,7 +524,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 202)
                     (testUnit pageId FactionHostile 8 8) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             evs ← eventsFor env 202
@@ -544,7 +544,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 203)
                     (testUnit pageId FactionDebug 8 8) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             evs ← eventsFor env 203
@@ -574,8 +574,8 @@ spec = beforeAll initEnv $ do
                     ]
                 }
 
-            tickLocationDiscovery env pageActive wsActive
-            tickLocationDiscovery env pageHidden wsHidden
+            tickLocationDiscovery localController env pageActive wsActive
+            tickLocationDiscovery localController env pageHidden wsHidden
 
             mpActive ← readIORef (wsGenParamsRef wsActive)
             mpHidden ← readIORef (wsGenParamsRef wsHidden)
@@ -617,7 +617,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 501)
                     (facingUnit pageId 14 8 DirW 1.0) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleDiscovered]
             evs ← eventsFor env 501
@@ -633,7 +633,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 502)
                     (facingUnit pageId 20 8 DirW 1.0) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             eventsFor env 502 >>= (`shouldBe` [])
@@ -649,7 +649,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 503)
                     (facingUnit pageId 14 8 DirE 1.0) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             eventsFor env 503 >>= (`shouldBe` [])
@@ -666,7 +666,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 504)
                     (facingUnit pageId 14 8 DirW 1.0) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             eventsFor env 504 >>= (`shouldBe` [])
@@ -685,7 +685,7 @@ spec = beforeAll initEnv $ do
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 505)
                     (facingUnit nightPage 14 8 DirW 1.0) }
-            tickLocationDiscovery env nightPage wsNight
+            tickLocationDiscovery localController env nightPage wsNight
             mpNight ← readIORef (wsGenParamsRef wsNight)
             lifecyclesOf mpNight `shouldBe` Just [LifecycleUnknown]
             eventsFor env 505 >>= (`shouldBe` [])
@@ -694,7 +694,7 @@ spec = beforeAll initEnv $ do
             writeIORef (unitManagerRef env) $ emptyUnitManager
                 { umInstances = HM.singleton (UnitId 506)
                     (facingUnit dayPage 14 8 DirW 1.0) }
-            tickLocationDiscovery env dayPage wsDay
+            tickLocationDiscovery localController env dayPage wsDay
             mpDay ← readIORef (wsGenParamsRef wsDay)
             lifecyclesOf mpDay `shouldBe` Just [LifecycleDiscovered]
             evsDay ← eventsFor env 506
@@ -731,7 +731,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 601)
                     (facingUnit pageId 28 8 DirW 1.0) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleUnknown]
             eventsFor env 601 >>= (`shouldBe` [])
@@ -756,7 +756,7 @@ spec = beforeAll initEnv $ do
                 { umInstances = HM.singleton (UnitId 602)
                     (facingUnit pageId 28 8 DirW 1.0) }
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             mp ← readIORef (wsGenParamsRef ws)
             lifecyclesOf mp `shouldBe` Just [LifecycleDiscovered]
             evs ← eventsFor env 602
@@ -1002,7 +1002,7 @@ spec = beforeAll initEnv $ do
                     ((testUnit pageId FactionHostile 7 8)
                         { uiPose = "dead" }) }
             -- Defeated with nobody watching: private, no event.
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
             eventsOnPage env "cost_guard_predeath" `shouldReturn` []
@@ -1012,8 +1012,8 @@ spec = beforeAll initEnv $ do
                     [ (uid, (testUnit pageId FactionHostile 7 8)
                         { uiPose = "dead" })
                     , (UnitId 792, testUnit pageId FactionPlayer 8 8) ] }
-            tickLocationDiscovery env pageId ws
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
             evs ← eventsOnPage env "cost_guard_predeath"
@@ -1197,7 +1197,7 @@ significantSpec =
                 Lua.setglobal "realPickup"
                 status ← Lua.dostring $ TE.encodeUtf8 $ T.unlines
                     [ "unit={exists=function(uid) return uid==809 end,"
-                    , " getFaction=function() return 'player' end, getPose=function() return 'standing' end,"
+                    , " isPlayerOwned=function() return true end, getPose=function() return 'standing' end,"
                     , " getInfo=function() return {defName='acolyte'} end, getInventory=realInventory}"
                     , "world={getLocationInstance=realLocation}"
                     , "local ev=require('scripts.tutorial_eval')"
@@ -1242,7 +1242,7 @@ significantSpec =
             gid ← onlyGroundId ws
             pickupGroundOnPage env ws (UnitId 809) gid `shouldReturn` True
             takenFlags ws `shouldReturn` [True]
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
 
@@ -1295,7 +1295,7 @@ significantSpec =
                     (testUnit pageId FactionPlayer 8 8) }
             pickupGroundOnPage env ws (UnitId 811) decoy `shouldReturn` True
             takenFlags ws `shouldReturn` [False]
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
 
@@ -1334,7 +1334,7 @@ significantSpec =
 
             -- Sight discovers it, but it is NOT cleared: the item is
             -- still there. One event, not two.
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
             eventsOnPage env "sig_both_conditions"
@@ -1345,12 +1345,12 @@ significantSpec =
             pickupGroundOnPage env ws (UnitId 801) gid `shouldReturn` True
             takenFlags ws `shouldReturn` [True]
 
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
             -- Re-ticking cannot announce it twice.
-            tickLocationDiscovery env pageId ws
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
+            tickLocationDiscovery localController env pageId ws
             evs ← eventsOnPage env "sig_both_conditions"
             map peCategory evs `shouldBe`
                 ["location_discovery", "location_clearance"]
@@ -1367,7 +1367,7 @@ significantSpec =
                     (testUnit pageId FactionPlayer 8 8) }
 
             pickupGroundOnPage env ws (UnitId 802) gidA `shouldReturn` True
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
             takenFlags ws `shouldReturn` [True, False]
@@ -1385,7 +1385,7 @@ significantSpec =
 
             pickupGroundOnPage env ws (UnitId 803) gid `shouldReturn` True
             takenFlags ws `shouldReturn` [True]
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
 
@@ -1400,7 +1400,7 @@ significantSpec =
 
             pickupGroundOnPage env ws (UnitId 999) gid `shouldReturn` False
             takenFlags ws `shouldReturn` [False]
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
 
@@ -1434,7 +1434,7 @@ significantSpec =
 
             pickupGroundOnPage env ws (UnitId 805) lootGid `shouldReturn` True
             takenFlags ws `shouldReturn` [False]
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
             eventsOnPage env "sig_incidental_pickup" `shouldReturn` []
@@ -1447,8 +1447,8 @@ significantSpec =
                 { umInstances = HM.singleton (UnitId 806)
                     (testUnit pageId FactionPlayer 8 8) }
 
-            tickLocationDiscovery env pageId ws
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
             evs ← eventsOnPage env "sig_no_condition"
@@ -1466,7 +1466,7 @@ significantSpec =
                 { umInstances = HM.singleton (UnitId 807)
                     (testUnit pageId FactionHostile 8 8) }
             pickupGroundOnPage env ws (UnitId 807) gid `shouldReturn` True
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
             eventsOnPage env "sig_hidden_recovery" `shouldReturn` []
@@ -1475,8 +1475,8 @@ significantSpec =
                 { umInstances = HM.fromList
                     [ (UnitId 807, testUnit pageId FactionHostile 8 8)
                     , (UnitId 808, testUnit pageId FactionPlayer 8 8) ] }
-            tickLocationDiscovery env pageId ws
-            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery localController env pageId ws
+            tickLocationDiscovery localController env pageId ws
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
             evs ← eventsOnPage env "sig_hidden_recovery"

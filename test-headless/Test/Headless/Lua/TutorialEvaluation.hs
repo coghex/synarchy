@@ -195,9 +195,14 @@ worldHelpers = lns
     , "    unit = {"
     , "        exists = function(uid) return WORLD.units[uid] ~= nil end,"
     , "        getPose = function(uid) return WORLD.units[uid].pose or 'standing' end,"
-    , "        getFaction = function(uid)"
+    -- The engine's ownership answer for a unit spawned under the legacy
+    -- tag in its fixture row: only a "player" spawn carries the local
+    -- controller (#2515's D-26 mapping). There is deliberately NO
+    -- getFaction here any more: the evaluator asks ownership (#2518),
+    -- so a regression back to the raw tag comparison raises.
+    , "        isPlayerOwned = function(uid)"
     , "            local u = WORLD.units[uid]"
-    , "            return u and u.faction or nil"
+    , "            return u ~= nil and u.faction == 'player'"
     , "        end,"
     , "        getInfo = function(uid)"
     , "            local u = WORLD.units[uid]"

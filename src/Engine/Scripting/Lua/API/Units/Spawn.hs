@@ -761,10 +761,13 @@ unitGetPosFn env = do
 --   Returns the unit's canonical faction tag ("player", "wildlife",
 --   etc.). Kept as-is for compatibility (#912): scripts still identify a
 --   unit's faction with this, but they must NOT compare two of these
---   strings to decide policy — feed the tag to the @faction@ global
---   ('Engine.Scripting.Lua.API.Faction'), which answers ownership,
---   commandability, alliance, and attack permission from the one typed
---   model the engine itself uses.
+--   strings to decide policy. Ownership, commandability and unrestricted
+--   combat are asked of the unit itself since #2518
+--   ('Engine.Scripting.Lua.API.Units.Ownership': @unit.isPlayerOwned@,
+--   @unit.isPlayerCommandable@, @unit.hasUnrestrictedCombat@); only the
+--   relation consumers still feed this tag to the @faction@ global
+--   ('Engine.Scripting.Lua.API.Faction') for alliance and attack
+--   permission, until FTS-5.
 unitGetFactionFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetFactionFn env = do
     idArg ← Lua.tointeger 1
