@@ -19,6 +19,7 @@ import Engine.Save.Barrier (readSaveStatus, ssOutcome, saveInProgress)
 import Location.Instance (instancesToList)
 import Scenario.Load.Session (arenaPageId)
 import Scenario.Load.Types
+import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsgs)
 import Test.Headless.Scenario.Load.Harness
 import Test.Headless.Scenario.Placement.Fixtures (Fx(..))
 import Unit.Types (UnitManager(..))
@@ -75,7 +76,11 @@ lineIsClear h = do
     saveInProgress (slSaveBarrierRef sl) `shouldReturn` False
     -- no prepared Lua load is left active: a registration guard wedged open
     -- would refuse every later module registration until restart
-    lua h "return tostring(require('scripts.lib.save_modules')._loadActive)" `shouldReturn` "false"
+    -- (a world-thread staging failure reaches the Lua thread as a QUEUED abort
+    -- message, so the check pumps until it has been handled)
+    waitCondition 10 $ do
+        processLuaMsgs (fxEnv (hFx h)) (fxLua (hFx h)) (hCtl h)
+        (≡ "false") <$> lua h "return tostring(require('scripts.lib.save_modules')._loadActive)"
     src ← SourceFile <$> writeScenario "after-failure.yaml" (doc ["units: []"])
     s ← runLoad h src
     slsOutcome s `shouldBe` Just ScenarioReady

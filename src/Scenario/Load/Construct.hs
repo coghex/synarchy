@@ -37,7 +37,6 @@ import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import Building.Placement (lookupSurfaceZ)
 import Building.Types
 import Engine.Core.Capability.Building (BuildingCapability(..), toBuildingCapability)
@@ -195,7 +194,7 @@ constructScenario ce sc = do
             -- what it is rather than given a position it never had
             (placements, gbuild) ← buildGroundItemsAt itemEnv
                 (sourced "ground_items" spGroundItems (scGroundItems sc)
-                 ⧺ [ ("ground_items(default)[" <> T.pack (show j) <> "]", g)
+                 ⧺ [ ("ground_items(default)[" <> tshow j <> "]", g)
                    | (j, g) ← zip [0 ∷ Int ..] defaultGround ])
             let (store, _) = installGroundItems [ p | Just p ← placements ] G.emptyGroundItems
             -- a materialization establishes the page's baseline: its ground is replaced

@@ -110,11 +110,11 @@ data FailureContext = FailureContext
 --   and the log.
 failureText ∷ FailureContext → Text
 failureText (FailureContext stage cause details) =
-    "scenario load failed at " <> T.pack (show stage) <> ": " <> causeText cause
+    "scenario load failed at " <> tshow stage <> ": " <> causeText cause
     <> (if null details then "" else " [" <> T.intercalate "; " details <> "]")
   where
     causeText c = case c of
-        CauseSource f → T.pack (show f)
+        CauseSource f → tshow f
         CauseNotTestingSession t → t
         CauseSetup t → t
         CauseConstruction t → t
