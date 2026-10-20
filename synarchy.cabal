@@ -1150,6 +1150,7 @@ library
                      World.Flora.Clock
                      World.Flora.Placement
                      World.Flora.Render
+                     World.Flora.Visual
                      World.Flora.Harvest
                      World.Flora.CropPlot
                      World.Fluid.Types
@@ -1918,6 +1919,8 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
+                   Test.Headless.World.FloraVisualResolver
+                   Test.Headless.World.FloraVisualOracle
                    Test.Headless.World.FloraIdentity
                    Test.Headless.World.FloraOrder
                    Test.Headless.River.CalderaHazard
@@ -2149,6 +2152,7 @@ test-suite synarchy-test-headless
                 -- spec-tree walk in its regression. hspec's own core, so
                 -- already in the build plan.
                 , hspec-core
+                , QuickCheck
                 , JuicyPixels
                 -- #2693's oversized-inflate fixture builds a real zlib stream.
                 , zlib
