@@ -216,10 +216,10 @@ the cases are `--match "physiology override persistence"` and
 (`scripts/unit_ai_combat_policy.lua`) keeps, per unit, the time its last
 attack goal ended (the local self-defense cutoff) and the live attack goal's
 occurrence identity. Both are **Reset to a documented default** (absent):
-they live outside `aiState`, keyed by the unit's AI-state table, ride no save
-payload and no `unit_ai` version, and `unit_ai_claims`' reset empties them on
-every successful load and on session teardown, so a rewound uid inherits
-nothing. An occurrence's exempt classification is fixed once, from the
+they live outside `aiState`, keyed by unit id (each occurrence carrying its
+own id), never by AI-state table identity. They ride no save payload and no
+`unit_ai` version, and `unit_ai_claims`' reset empties them on every
+successful load and on session teardown, so a rewound uid inherits nothing. An occurrence's exempt classification is fixed once, from the
 provenance its opener passes to `setGoal`: committed order, lash-out or
 autonomous. Every ending, cutoff and continuation decision reads only that
 stored classification. On a load, the same reset hook then opens a FRESH
@@ -235,6 +235,30 @@ its first decision: old damage cannot keep a fight alive across a load. A
 hostile fight, a committed player/debug order and a lash-out are unaffected,
 and saved withdrawal/hold state keeps its behavior. The case is
 `--match "unit AI load reset"`.
+
+A load that FAILS after `unit_ai` applied is unwound by `saveModules`
+re-applying the old session's rows. The seam survives that rollback too.
+`unit_ai`'s forward apply copies the registry into an in-memory stash, and
+its `"rollback"`-phase apply puts the copy back. The stash is never saved,
+is overwritten by the next forward apply and is cleared on teardown. So the
+restored session keeps its exemptions, cutoffs and occurrences, including
+when the load reset had already re-seeded them before a later reset hook
+failed. The cases are `--match "survives a load that rolls back"`.
+
+**The component apply phase (#2521).** `saveModules` calls every component's
+`apply(data, entities, phase)` with `phase` `"forward"` for the load's own
+apply, and `"rollback"` at both rollback call sites:
+- the failing component's own restore;
+- the unwind of every component applied before it, including after a
+  reset-hook failure.
+
+A rollback apply receives the component's own pre-load snapshot and no
+entity context. A component with transient state keyed to its rows may use
+the phase to restore that state as well; one that ignores it is unaffected.
+Reset hooks are still never compensated (#1200). So a load whose envelope
+carries no data for a component, and is then abandoned by a later failing
+reset hook, cannot restore that component's transient state. The gate is
+`--match "the apply phase (#2521)"`.
 
 For every inventoried item, the inventory records: its **owner**
 (file:line of the record/module that holds it), its **scope** (global —
