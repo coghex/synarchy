@@ -291,6 +291,7 @@ partitionAuthorizedFull commands
   where
     (authorized, deferred) = partition isAuthorized commands
     isAuthorized (WorldSave _ _ _ _ _ _) = True
+    isAuthorized (WorldScenarioCapture _ _) = True
     isAuthorized (WorldLoadPublish _)  = True
     isAuthorized _                     = False
     isLoadPublish (WorldLoadPublish _) = True

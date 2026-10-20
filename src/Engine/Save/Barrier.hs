@@ -10,6 +10,7 @@ module Engine.Save.Barrier
     , reachSnapshot, releaseCaptureLock, finishSave, waitForOwners
     , readSaveStatus, acknowledgeCurrent, captureLocked, saveInProgress
     , ownerGated, ownersGated
+    , standardSaveOwners
     ) where
 
 import UPrelude
@@ -47,6 +48,17 @@ data SaveBarrier = SaveBarrier !(TVar Int) !(TVar (Maybe SaveStatus)) deriving (
 -- original work, the second its first-hop effects, and the third writeback.
 requiredQuiescencePasses ∷ Int
 requiredQuiescencePasses = 3
+
+-- | The owners an ordinary save, a load's publish and a scenario capture all
+--   coordinate: every worker owner and the Lua thread, plus the input thread
+--   when one was started — 'App.Headless' boots without one (no GLFW window
+--   to poll), so requiring it there would make 'waitForOwners' time out
+--   waiting for an owner that can never acknowledge. The argument is whether
+--   the input thread is running.
+standardSaveOwners ∷ Bool → Set.Set SaveOwner
+standardSaveOwners inputActive = if inputActive then Set.insert SaveInput base else base
+  where
+    base = Set.fromList [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
 
 newSaveBarrier ∷ IO SaveBarrier
 newSaveBarrier = SaveBarrier <$> newTVarIO 0 <*> newTVarIO Nothing

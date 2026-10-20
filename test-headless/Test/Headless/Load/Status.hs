@@ -6,8 +6,11 @@ import Control.Concurrent
 import GHC.Clock (getMonotonicTime)
 import qualified Data.Text as T
 import Test.Hspec
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import qualified Data.Set as Set
 import Engine.Load.Status
+import Engine.Save.Barrier
+import Scenario.Capture.Types
 import Scenario.Load.Types
 import World.Thread (partitionAuthorized)
 import World.Command.Types (WorldCommand(..))
@@ -358,6 +361,115 @@ spec = describe "transactional load" $ do
             updateScenarioStatus ref n (\r → r { slsStage = StageFailed })
             terminateScenario ref n (ScenarioUnsuccessful (FailureContext StageReady (CauseSetup "late") [])) (RecoveryFailed "late")
             fmap slsStage <$> readScenarioStatus ref `shouldReturn` Just StageReady
+
+    describe "scenario capture request record and shared admission (#2714)" $ do
+        let req = CaptureRequest "out.yaml" False
+            failed = CaptureUnsuccessful CaptureFailure
+                { cfStage = CaptureAdmitted, cfKind = FailCoordination, cfPhase = Nothing
+                , cfDestination = "out.yaml", cfPublication = NotPublished, cfDetail = "d"
+                , cfDiagnostics = [], cfWarnings = [] }
+            owners = Set.fromList [SaveLua]
+
+        it "is admitted through the barrier's own claim, with the record under the id the barrier allocated" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            Just st ← readSaveStatus barrier
+            ssRequestId st `shouldBe` n
+            Just r ← readCaptureRecord ref
+            (cstRequestId r, cstStage r, cstOutcome r, cstPublication r) `shouldBe` (n, CaptureAdmitted, Nothing, NotPublished)
+            captureInProgress ref barrier `shouldReturn` True
+
+        it "refuses while a load (ordinary or scenario) is active, allocating nothing and recording nothing" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right _ ← claimLoad ref (saveInProgress barrier) "slot"
+            claimCapture ref (beginSave barrier owners) req `shouldReturn` Left BusyLoad
+            readSaveStatus barrier `shouldReturn` Nothing
+            readCaptureRecord ref `shouldReturn` Nothing
+
+        it "refuses while a save, an autosave or a capture holds the barrier, leaving all of it as it was" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right sid ← beginSave barrier owners
+            before ← readSaveStatus barrier
+            claimCapture ref (beginSave barrier owners) req `shouldReturn` Left BusySave
+            readSaveStatus barrier `shouldReturn` before
+            readCaptureRecord ref `shouldReturn` Nothing
+            finishSave barrier sid
+            -- and a capture refuses a capture
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            before' ← readSaveStatus barrier
+            claimCapture ref (beginSave barrier owners) req { crDestination = "other.yaml" } `shouldReturn` Left BusySave
+            readSaveStatus barrier `shouldReturn` before'
+            fmap cstRequestId <$> readCaptureRecord ref `shouldReturn` Just n
+
+        it "refuses a load while the capture's transaction is open (the load's own check reads the barrier)" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            claimLoad ref (saveInProgress barrier) "slot" `shouldReturn` Left BusySave
+            claimScenarioLoad ref (saveInProgress barrier) "s" `shouldReturn` Left BusySave
+            terminateCapture ref n failed
+            failSave barrier n "ended"
+            Right _ ← claimLoad ref (saveInProgress barrier) "slot"
+            pure ()
+
+        it "ends the record before the transaction, and holds the pause only while both are open" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            captureInProgress ref barrier `shouldReturn` True
+            terminateCapture ref n failed
+            Just r ← readCaptureRecord ref
+            (cstStage r, cstOutcome r) `shouldBe` (CaptureFailed, Just failed)
+            -- the record has ended: the pause is released even though the
+            -- transaction has not been told yet
+            captureInProgress ref barrier `shouldReturn` False
+
+        it "never lets a record the barrier has moved past hold anything" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            -- the transaction ended without the record being told ...
+            failSave barrier n "ended elsewhere"
+            captureInProgress ref barrier `shouldReturn` False
+            -- ... and a newer transaction is not mistaken for it
+            Right _ ← beginSave barrier owners
+            captureInProgress ref barrier `shouldReturn` False
+
+        it "ignores updates and terminations that name another request or a finished one" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            updateCaptureStatus ref (n + 1) (\r → r { cstStage = CaptureFailed })
+            terminateCapture ref (n + 1) failed
+            fmap cstStage <$> readCaptureRecord ref `shouldReturn` Just CaptureAdmitted
+            terminateCapture ref n (CaptureSucceeded (CaptureReport "out.yaml" 1 False [] []))
+            updateCaptureStatus ref n (\r → r { cstStage = CaptureFailed })
+            terminateCapture ref n failed
+            fmap cstStage <$> readCaptureRecord ref `shouldReturn` Just CaptureDone
+
+        it "reports the publication the moment it is recorded, and on every unsuccessful end" $ do
+            ref ← newLoadStatusRef
+            barrier ← newSaveBarrier
+            Right n ← claimCapture ref (beginSave barrier owners) req
+            updateCaptureStatus ref n (\r → r { cstPublication = Published })
+            fmap cstPublication <$> readCaptureRecord ref `shouldReturn` Just Published
+            terminateCapture ref n failed
+            -- the failure the request ends with is the one that says whether it was published
+            fmap cstPublication <$> readCaptureRecord ref `shouldReturn` Just NotPublished
+
+        it "serializes the seams: an unarmed seam is inert, and an armed one is consulted at its point" $ do
+            ref ← newLoadStatusRef
+            captureSeamPoint ref CpAdmitted
+            hits ← newIORef []
+            armCaptureSeams ref noCaptureSeams { cseamAt = \p → modifyIORef' hits (p :) }
+            mapM_ (captureSeamPoint ref) [CpPreflight, CpEncoded]
+            readIORef hits `shouldReturn` [CpEncoded, CpPreflight]
+            disarmCaptureSeams ref
+            captureSeamPoint ref CpReleased
+            readIORef hits `shouldReturn` [CpEncoded, CpPreflight]
 
 -- | Poll @act@ every 20 ms for up to @secs@ seconds, returning its
 --   first 'Just'. Keeps the gate tests off fixed sleeps for the same

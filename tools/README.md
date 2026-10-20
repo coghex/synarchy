@@ -118,6 +118,24 @@ CI or probe-runner gate, and neither is registered in
 baseline byte for byte. Archive layout, provenance and limitations:
 [the evidence README](../docs/evidence/river-runtime/README.md).
 
+## Manual scenario capture probe (`scenario_capture_probe.py`, #2714)
+
+`python3 tools/scenario_capture_probe.py [--port 9231] [--retain DIR]` drives the
+scenario capture service against three SEQUENTIAL real `--headless` engines, each
+on its own isolated resource root, through the internal `debug.loadScenario` /
+`debug.captureScenario` / `debug.getScenario*Status` console verbs (superseded by
+SCN-15's public entry points). It checks live admission (an ordinary save, an
+autosave, an ordinary load, a scenario load, another capture and an unpause are
+all refused while a capture is in flight, from one console chunk, so the capture
+is guaranteed to be in flight), overwrite intent, ordinary-save restoration
+without the source file, and a fresh-process load and recapture whose documents
+are byte-identical. `--retain` copies the documents and the comparison out. It is
+a manual evidence script, not a registered CI probe; the GPU-free hspec group
+`Scenario.Capture` is the gate. Boot it only after the project's probe-slot
+grant, and stop engines by PID. The contract is in
+[engine_contracts.md](../docs/engine_contracts.md#scenario-capture-the-coherent-snapshot-and-the-safe-file-write-2714);
+the retained run is [the evidence](../docs/pr-proofs/issue-2714-scenario-capture-evidence.md).
+
 ## Pre-push gate: `ci-local.sh`
 
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local

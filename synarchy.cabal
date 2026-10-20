@@ -417,6 +417,7 @@ library
                      Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.LoadGate
+                     Engine.Scripting.Lua.API.ScenarioDebug
                      Engine.Scripting.Lua.API.TagQueryDebug
                      Engine.Scripting.Lua.API.QueueStats
                      Engine.Scripting.Lua.API.SceneStats
@@ -680,6 +681,12 @@ library
                      Scenario.Units.Encode
                      Scenario.Types
                      Scenario.Bounds
+                     Scenario.Capture.Types
+                     Scenario.Capture.Encode
+                     Scenario.Capture.Inputs
+                     Scenario.Capture.Project
+                     Scenario.Capture.Service
+                     Scenario.Capture.Storage
                      Scenario.Decode.Monad
                      Scenario.Decode
                      Scenario.Validate
@@ -2042,6 +2049,15 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Load.Session
                    Test.Headless.Scenario.Load.Persist
                    Test.Headless.Scenario.Load.Bindings
+                   Test.Headless.Scenario.Capture
+                   Test.Headless.Scenario.Capture.Support
+                   Test.Headless.Scenario.Capture.Content
+                   Test.Headless.Scenario.Capture.Edits
+                   Test.Headless.Scenario.Capture.Exclusion
+                   Test.Headless.Scenario.Capture.Storage
+                   Test.Headless.Scenario.Capture.Coherence
+                   Test.Headless.Scenario.Capture.Cycle
+                   Test.Headless.Scenario.Capture.Encode
                    Test.Headless.Lua.Faction
                    Test.Headless.Lua.UnitOwnership
                    Test.Headless.Location.Instance

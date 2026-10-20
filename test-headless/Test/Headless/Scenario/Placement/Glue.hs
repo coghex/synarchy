@@ -33,38 +33,25 @@ module Test.Headless.Scenario.Placement.Glue
 
 import UPrelude
 import Data.IORef (readIORef)
-import Data.List (sortOn)
 import qualified Data.Aeson as A
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Yaml as Y
 import Building.Types
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.RenderHandoff (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.State (EngineEnv(..))
-import Gameplay.Tags.Index (categoryForward, categoryTagsOf)
-import Power.Types (nodeForBuilding)
-import Gameplay.Tags.Tag (mkItemTarget)
-import Item.Ground (GroundItems(..))
-import qualified Item.Ground as G
+import Gameplay.Tags.Index (categoryForward)
 import Location.Instance
-import Scenario.Items.Capture
-    ( CaptureCtx(..), Captured(..), DocKey(..), captureGroundItems, nameDocumentRefs, newCaptureState )
 import Scenario.Items.Encode (itemEntryFields, floatValue)
-import Scenario.Items.Refs (lookupItemRef)
 import Scenario.Placement.Building
 import Scenario.Placement.Encode
-import Scenario.Placement.Location
-import Scenario.Placement.Structure
-import Scenario.Schema (decodeScenarioBytes)
+import Scenario.Capture.Inputs (SessionParts(..), readSessionInputs)
+import Scenario.Capture.Project (Projected(..), projectParts)
+import Scenario.Schema (currentScenarioVersion, decodeScenarioBytes)
 import Scenario.Types
-import Scenario.Units.Capture
 import Scenario.Units.Encode (unitEntryValue)
 import Scenario.Units.Install
 import Unit.Sim.Types (UnitThreadState(..))
@@ -77,22 +64,20 @@ import World.Save.Component.Page (blankPageSnapshot)
 import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import Item.Knowledge (emptyPortableKnowledge)
-import Engine.Graphics.Camera (CameraFacing(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import Gameplay.Tags.Index (CategoryIndex)
 import Gameplay.Tags.Tag (ItemTarget)
 import Scenario.Items.Refs (ItemRefs)
 import Structure.Palette (TexPalette)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import qualified Data.HashSet as HS
-import Scenario.World.Capture (chunkStatesOf)
 import Scenario.Load.Construct (ConstructEnv(..), Constructed(..), constructScenario)
 import Test.Headless.Scenario.Placement.Fixtures
 import Unit.Types
 import World.Arena.Bounds (ArenaBounds)
-import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId)
+import World.Render.Camera.Types (WorldCamera(..))
 import World.State.Types
-import World.Tile.Types (WorldTileData(..))
 
 -- | What one materialization reports.
 data Materialized = Materialized
@@ -167,82 +152,21 @@ capturePage fx pid ws ab = do
         , csItemTags = wmItemTags wm, csPalette = palette, csPage = pid, csWorld = ws } ab
 
 capturePageFrom ∷ Fx → CaptureSources → ArenaBounds → IO Captured'
-capturePageFrom fx src ab = do
-    let env = fxEnv fx
-        caps = toContentRegistriesCapability env
-        pid = csPage src
-        ws = csWorld src
-        um = csUnits src
-        bm = csBuildings src
-        palette = csPalette src
-    params ← readIORef (wsGenParamsRef ws)
-    ground ← readIORef (wsGroundItemsRef ws)
-    nodes ← readIORef (wsPowerNodesRef ws)
-    td ← readIORef (wsTilesRef ws)
-    edits ← readIORef (wsEditsRef ws)
-    items ← itemsOf env
-    defsB ← bmDefsOf env
-    locs ← locationRegistry env
-    reg ← readIORef (crPhysiologyRegistryRef caps)
-    now ← readIORef (gameTimeRef env)
-    art ← readIORef (rhStructureArtCatalogRef (toRenderHandoffCapability env))
-    let lis = maybe emptyLocationInstances wgpLocationInstances params
-        seed = maybe 0 wgpSeed params
-        itemCtx = CaptureCtx
-            { ccRef = \i → lookupItemRef i (csItemRefs src)
-            , ccTags = \i → maybe Set.empty (\t → categoryTagsOf t (csItemTags src)) (mkItemTarget i) }
-        pageUnits = sortOn fst [ (u, i) | (u, i) ← HM.toList (umInstances um), uiPage i ≡ pid ]
-        pageBuildings = sortOn fst [ (b, i) | (b, i) ← HM.toList (bmInstances bm), biPage i ≡ pid ]
-        -- scenario ids share ONE namespace: every referenced unit, building
-        -- and location is named together, before anything is captured
-        docNames = nameDocumentRefs HS.empty $
-            [ (DocUnit u, r) | (u, _) ← pageUnits, Just r ← [Map.lookup u (umScenarioRefs um)] ]
-            ⧺ [ (DocBuilding b, r) | (b, _) ← pageBuildings, Just r ← [Map.lookup b (bmScenarioRefs bm)] ]
-            ⧺ [ (DocLocation l, r) | (l, r) ← Map.toList (lisScenarioRefs lis) ]
-        groundTrees = map G.giInst (HM.elems (gisItems ground))
-        buildingTrees = concat [ biStorage b ⧺ concat (HM.elems (biMaterialsDelivered b)) | (_, b) ← pageBuildings ]
-        unitItemTrees = concatMap (unitTrees ∘ snd) pageUnits
-        -- every item reference in the document is named up front too
-        stNames = newCaptureState itemCtx (Map.elems docNames) (groundTrees ⧺ buildingTrees ⧺ unitItemTrees)
-        lctx = LocationCaptureCtx
-            { lccDefs = locs, lccItemRef = const Nothing
-            , lccNameOf = \l → Map.lookup (DocLocation l) docNames }
-        (_, locNameMap) = locationNames lctx stNames lis
-        foreignIds = Map.elems docNames ⧺ Map.elems locNameMap
-        ucap = captureUnits UnitCaptureCtx
-            { uccDefs = umDefs um, uccItems = items, uccPhysiology = reg, uccNow = now
-            , uccUnitRef = \u → Map.lookup u (umScenarioRefs um)
-            , uccUnitTags = \u → categoryTagsOf u (umTags um)
-            , uccItemCtx = itemCtx
-            , uccOtherTrees = groundTrees ⧺ buildingTrees
-            , uccPreNamed = \u → Map.lookup (DocUnit u) docNames
-            , uccEncounterOf = \u → lookup u occupantNames }
-            foreignIds pageUnits
-        occupantNames =
-            [ (leoUnitId o, ExplicitId n)
-            | inst ← instancesToList lis, Just n ← [Map.lookup (liId inst) locNameMap]
-            , Just enc ← [liEncounter inst], o ← leOccupants enc ]
-        bcap = captureBuildings BuildingCaptureCtx
-            { bccDefs = defsB
-            , bccNodes = \b → nodeForBuilding b nodes
-            , bccNameOf = \b → Map.lookup (DocBuilding b) docNames
-            , bccTags = \b → categoryTagsOf b (bmTags bm)
-            , bccItemCtx = itemCtx } (ucapState ucap) pageBuildings
-        (gst, groundRows, gcap) = captureGroundItems itemCtx (bcapState bcap) ground
-        itemRefs = capRefs gcap ⧺ bcapItems bcap ⧺ ucapItems ucap
-        lcap = captureLocations lctx { lccItemRef = \i → lookup i itemRefs
-                                     , lccNameOf = \l → Map.lookup l locNameMap }
-                                gst lis
-        chunks = chunkStatesOf (Just ab) seed edits (HM.elems (wtdChunks td))
-        taken = Set.fromList (map (scenarioIdText ∘ beId) (bcapEntries bcap)
-                             ⧺ map (scenarioIdText ∘ leId) (lcapEntries lcap)
-                             ⧺ map (scenarioIdText ∘ ueId) (ucapEntries ucap))
-        scap = captureStructures StructureCaptureCtx
-            { sccArt = art, sccPalette = palette, sccBounds = Just ab } chunks taken
+capturePageFrom fx src _ab = do
+    -- the PRODUCTION projection (Scenario.Capture.Project) over the same
+    -- inputs the service reads: this is a view of it, not a second copy
+    inputs ← readSessionInputs (fxEnv fx) SessionParts
+        { spPage = csPage src, spWorld = csWorld src, spUnits = csUnits src
+        , spBuildings = csBuildings src, spItemRefs = csItemRefs src
+        , spItemTags = csItemTags src, spPalette = csPalette src
+        , spLiveCamera = Nothing }
+    let parts = projectParts currentScenarioVersion inputs
+        sc = pjScenario parts
     pure Captured'
-        { cpStructures = scPieces scap, cpBuildings = bcapEntries bcap
-        , cpLocations = lcapEntries lcap, cpUnits = ucapEntries ucap
-        , cpGround = groundRows, cpDiagnostics = scDiagnostics scap }
+        { cpStructures = scStructures sc, cpBuildings = scBuildings sc
+        , cpLocations = scLocations sc, cpUnits = scUnits sc
+        , cpGround = [ (giX g, giY g, giItem g) | g ← scGroundItems sc ]
+        , cpDiagnostics = pjStructureFindings parts }
 
 -- | The session snapshot an ordinary save of the page holds: every owner's
 --   snapshot function over the live managers, the page's own edit log,
@@ -268,11 +192,15 @@ sessionSnapshotOf fx pid ws = do
     harvests ← readIORef (wsFloraHarvestsRef ws)
     pageTags ← readIORef (wsPageTagsRef ws)
     cursor ← readIORef (wsPlantedFloraCursorRef ws)
+    -- the page's own camera and the live one, as a save writes them
+    WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
+    cam ← readIORef (cameraRef env)
     (namedEdits, namedCrops, _) ← either (const (fail "a flora species cannot be named")) pure
         (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty)
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
-            { pgsEdits = namedEdits
+            { pgsCameraX = wcx, pgsCameraY = wcy
+            , pgsEdits = namedEdits
             , pgsCropPlots = namedCrops
             , pgsFloraHarvests = harvests
             , pgsPlantedFloraCursor = cursor
@@ -288,7 +216,7 @@ sessionSnapshotOf fx pid ws = do
         , snapNextItemId = max 1 nextItem
         , snapNextBuildingId = bmNextId bm, snapNextUnitId = umNextId um
         , snapActivePage = pid, snapVisiblePages = [pid]
-        , snapLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
+        , snapLiveCamera = LiveCameraSnapshot (Just pid) (fst (camPosition cam)) (snd (camPosition cam)) (camZoom cam) (camFacing cam)
         , snapPages = HM.singleton pid page
         , snapItemTags = categoryForward (wmItemTags wm), snapItemRefs = wmItemScenarioRefs wm
         , snapPortableKnowledge = emptyPortableKnowledge }

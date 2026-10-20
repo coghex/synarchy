@@ -41,6 +41,11 @@ module Engine.Load.Status
     , claimScenarioLoad, readScenarioStatus, updateScenarioStatus
     , terminateScenario
     , setScenarioPlan, takeScenarioPlan, readScenarioPlan
+      -- * The scenario capture request record (#2714)
+    , claimCapture, readCaptureRecord, updateCaptureStatus, terminateCapture
+    , captureInProgress
+    , armCaptureSeams, disarmCaptureSeams, captureSeamPoint, captureSeamOps
+    , captureSeamTransforms
     , armScenarioSeams, disarmScenarioSeams, scenarioSeamPoint, scenarioSeamFormat
     , scenarioSeamSimWait
     , StageGate(..), unarmedStageGate
@@ -53,9 +58,13 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Data.IORef
 import GHC.Clock (getMonotonicTime)
+import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import Engine.Save.Barrier (SaveBarrier, SaveStatus(..), readSaveStatus)
+import Scenario.Capture.Types
 import Scenario.Load.Types
 import Scenario.Schema (ScenarioFormat)
+import Scenario.Types (Scenario)
 
 -- | The 12 phases requirement 2 lists, in the order a successful load
 --   moves through them, plus the 13th 'LoadReconciliationFailed' added
@@ -244,16 +253,20 @@ data LoadStatusRef =
     LoadStatusRef !(IORef Int) !(IORef (Maybe LoadStatus)) !(IORef StageGate)
                   !(MVar ()) !(IORef (Maybe ScenarioLoadStatus))
                   !(IORef ScenarioLoadSeams) !(IORef (Maybe (Int, ScenarioPlan)))
+                  !(IORef CaptureCell)
     deriving (Eq)
-    -- ^ The last three (#2713) are the admission lock, the scenario
-    --   request record and the scenario test seams. They ride inside this
-    --   handle, like the stage gate, so no new @EngineEnv@ field exists.
+    -- ^ The scenario fields (#2713) are the admission lock, the scenario
+    --   request record, the scenario test seams and the continuation's plan.
+    --   The last (#2714) is the scenario CAPTURE request record and its test
+    --   seams. They ride inside this handle, like the stage gate, so no new
+    --   @EngineEnv@ field exists.
 
 newLoadStatusRef ∷ IO LoadStatusRef
 newLoadStatusRef = LoadStatusRef <$> newIORef 0 <*> newIORef Nothing
                                  <*> newIORef unarmedStageGate
                                  <*> newMVar () <*> newIORef Nothing
                                  <*> newIORef noSeams <*> newIORef Nothing
+                                 <*> newIORef (CaptureCell Nothing noCaptureSeams)
 
 -- | Accept a new load request, allocating a fresh request id. Fails if
 --   another load is already in-flight (non-terminal outcome). Does NOT
@@ -263,7 +276,7 @@ newLoadStatusRef = LoadStatusRef <$> newIORef 0 <*> newIORef Nothing
 --   module into the save barrier — either shape was acceptable per the
 --   issue's review).
 beginLoad ∷ LoadStatusRef → Text → IO (Either Text Int)
-beginLoad (LoadStatusRef nextR statusR _ _ _ _ _) saveName = do
+beginLoad (LoadStatusRef nextR statusR _ _ _ _ _ _) saveName = do
     current ← readIORef statusR
     case current of
         Just s | lsOutcome s ≡ Nothing →
@@ -282,7 +295,7 @@ beginLoad (LoadStatusRef nextR statusR _ _ _ _ _) saveName = do
 --   terminal outcome — defensive; should not happen since only one load
 --   is ever in flight and only 'failLoad'/'finishLoad' end it.
 advanceLoad ∷ LoadStatusRef → Int → LoadPhase → IO ()
-advanceLoad (LoadStatusRef _ statusR _ _ _ _ _) n phase =
+advanceLoad (LoadStatusRef _ statusR _ _ _ _ _ _) n phase =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing = s { lsPhase = phase }
@@ -297,7 +310,7 @@ advanceLoad (LoadStatusRef _ statusR _ _ _ _ _) n phase =
 --   the existing paths report through here ends it as 'LoadReplacementFailed'
 --   with 'lsFailedAtPhase' unset, exactly as 'failPublishedLoad' does.
 failLoad ∷ LoadStatusRef → Int → Text → IO ()
-failLoad (LoadStatusRef _ statusR _ _ scenarioR _ _) n err = do
+failLoad (LoadStatusRef _ statusR _ _ scenarioR _ _ _) n err = do
     scenario ← readIORef scenarioR
     let published = case scenario of
             Just r | slsRequestId r ≡ n → slsPublished r
@@ -312,7 +325,7 @@ failLoad (LoadStatusRef _ statusR _ _ scenarioR _ _) n err = do
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
 
 finishLoad ∷ LoadStatusRef → Int → IO ()
-finishLoad (LoadStatusRef _ statusR _ _ _ _ _) n =
+finishLoad (LoadStatusRef _ statusR _ _ _ _ _ _) n =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
@@ -339,7 +352,7 @@ finishLoad (LoadStatusRef _ statusR _ _ _ _ _) n =
 --   longer names the current transaction or one that already reached a
 --   terminal outcome.
 failReconciliation ∷ LoadStatusRef → Int → [ReconciliationFailure] → IO ()
-failReconciliation (LoadStatusRef _ statusR _ _ _ _ _) n failures
+failReconciliation (LoadStatusRef _ statusR _ _ _ _ _ _) n failures
     | null failures = pure ()
     | otherwise     = atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
@@ -359,7 +372,7 @@ failReconciliation (LoadStatusRef _ statusR _ _ _ _ _) n failures
 --   'LoadFailed'. A no-op for a request id that no longer names the
 --   current transaction or one that already ended.
 failPublishedLoad ∷ LoadStatusRef → Int → Text → IO ()
-failPublishedLoad (LoadStatusRef _ statusR _ _ _ _ _) n err =
+failPublishedLoad (LoadStatusRef _ statusR _ _ _ _ _ _) n err =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
@@ -368,7 +381,7 @@ failPublishedLoad (LoadStatusRef _ statusR _ _ _ _ _) n err =
            | otherwise = s
 
 readLoadStatus ∷ LoadStatusRef → IO (Maybe LoadStatus)
-readLoadStatus (LoadStatusRef _ statusR _ _ _ _ _) = readIORef statusR
+readLoadStatus (LoadStatusRef _ statusR _ _ _ _ _ _) = readIORef statusR
 
 loadInProgress ∷ LoadStatusRef → IO Bool
 loadInProgress ref = maybe False ((≡ Nothing) . lsOutcome) <$> readLoadStatus ref
@@ -384,7 +397,7 @@ loadInProgress ref = maybe False ((≡ Nothing) . lsOutcome) <$> readLoadStatus 
 --   state; it does not extend the running hold's own deadline, which
 --   was fixed when that hold began.
 armStageGate ∷ LoadStatusRef → Double → IO ()
-armStageGate (LoadStatusRef _ _ gateR _ _ _ _) holdSeconds =
+armStageGate (LoadStatusRef _ _ gateR _ _ _ _ _) holdSeconds =
     writeIORef gateR unarmedStageGate
         { sgArmed = True, sgHoldSeconds = clampedHold holdSeconds }
 
@@ -399,14 +412,14 @@ clampedHold s
 --   resumes on its next poll; an armed-but-never-reached gate is simply
 --   disarmed, so a probe's @finally@ can call this unconditionally.
 releaseStageGate ∷ LoadStatusRef → IO ()
-releaseStageGate (LoadStatusRef _ _ gateR _ _ _ _) =
+releaseStageGate (LoadStatusRef _ _ gateR _ _ _ _ _) =
     atomicModifyIORef' gateR $ \g → (g { sgArmed = False }, ())
 
 -- | Test-only (issue #1181): the gate's current state, for a caller
 --   that must positively observe the hold before racing anything
 --   against it.
 readStageGate ∷ LoadStatusRef → IO StageGate
-readStageGate (LoadStatusRef _ _ gateR _ _ _ _) = readIORef gateR
+readStageGate (LoadStatusRef _ _ gateR _ _ _ _ _) = readIORef gateR
 
 -- | Test-only (issue #1181): the world thread's park point, called
 --   once per load transaction immediately before staging.
@@ -420,7 +433,7 @@ readStageGate (LoadStatusRef _ _ gateR _ _ _ _) = readIORef gateR
 --   Ending a hold always disarms the gate and clears 'sgHeldRequest',
 --   so exactly one transaction is ever held per arm.
 awaitStageGate ∷ LoadStatusRef → Int → IO Bool
-awaitStageGate (LoadStatusRef _ _ gateR _ _ _ _) requestId = do
+awaitStageGate (LoadStatusRef _ _ gateR _ _ _ _ _) requestId = do
     gate ← readIORef gateR
     if not (sgArmed gate)
       then pure False
@@ -463,7 +476,7 @@ awaitStageGate (LoadStatusRef _ _ gateR _ _ _ _) requestId = do
 --   ('Engine.Save.Barrier.beginSave' on the load's own behalf) is not an
 --   admission and does not take it.
 withAdmission ∷ LoadStatusRef → IO α → IO α
-withAdmission (LoadStatusRef _ _ _ lock _ _ _) act = withMVar lock (const act)
+withAdmission (LoadStatusRef _ _ _ lock _ _ _ _) act = withMVar lock (const act)
 
 claimLoadLocked ∷ LoadStatusRef → IO Bool → Text → IO (Either Busy Int)
 claimLoadLocked ref saving name = do
@@ -492,7 +505,7 @@ claimSave ref begin = withAdmission ref $ do
 -- | Admit a SCENARIO load: 'claimLoad' plus the request's own record,
 --   created as one step so no identity exists without it.
 claimScenarioLoad ∷ LoadStatusRef → IO Bool → Text → IO (Either Busy Int)
-claimScenarioLoad ref@(LoadStatusRef _ _ _ _ scenarioR _ _) saving source =
+claimScenarioLoad ref@(LoadStatusRef _ _ _ _ scenarioR _ _ _) saving source =
     withAdmission ref $ do
         claimed ← claimLoadLocked ref saving source
         forM_ claimed $ \n →
@@ -503,7 +516,7 @@ claimScenarioLoad ref@(LoadStatusRef _ _ _ _ scenarioR _ _) saving source =
 --   load transaction: a later ordinary load supersedes it, so a stale
 --   record is never reported under a newer request's name.
 readScenarioStatus ∷ LoadStatusRef → IO (Maybe ScenarioLoadStatus)
-readScenarioStatus ref@(LoadStatusRef _ _ _ _ scenarioR _ _) = do
+readScenarioStatus ref@(LoadStatusRef _ _ _ _ scenarioR _ _ _) = do
     current ← readLoadStatus ref
     rec' ← readIORef scenarioR
     pure $ case (current, rec') of
@@ -533,7 +546,7 @@ readScenarioStatus ref@(LoadStatusRef _ _ _ _ scenarioR _ _) = do
 --   and once the request is terminal, so a stale completion can neither
 --   finish nor overwrite a newer request.
 updateScenarioStatus ∷ LoadStatusRef → Int → (ScenarioLoadStatus → ScenarioLoadStatus) → IO ()
-updateScenarioStatus (LoadStatusRef _ _ _ _ scenarioR _ _) n f =
+updateScenarioStatus (LoadStatusRef _ _ _ _ scenarioR _ _ _) n f =
     atomicModifyIORef' scenarioR $ \m → case m of
         Just s | slsRequestId s ≡ n ∧ isNothing (slsOutcome s) → (Just (f s), ())
         _ → (m, ())
@@ -567,7 +580,7 @@ terminateScenario ref n outcome recovery = do
 
 -- | Test-only: install the scenario seams. Inert until armed.
 armScenarioSeams ∷ LoadStatusRef → ScenarioLoadSeams → IO ()
-armScenarioSeams (LoadStatusRef _ _ _ _ _ seamsR _) = writeIORef seamsR
+armScenarioSeams (LoadStatusRef _ _ _ _ _ seamsR _ _) = writeIORef seamsR
 
 disarmScenarioSeams ∷ LoadStatusRef → IO ()
 disarmScenarioSeams ref = armScenarioSeams ref noSeams
@@ -576,27 +589,27 @@ disarmScenarioSeams ref = armScenarioSeams ref noSeams
 --   suite armed (which may block or throw). A synchronous exception it
 --   throws is meant to reach the handoff's own exception boundary.
 scenarioSeamPoint ∷ LoadStatusRef → ScenarioLoadPoint → IO ()
-scenarioSeamPoint (LoadStatusRef _ _ _ _ _ seamsR _) point =
+scenarioSeamPoint (LoadStatusRef _ _ _ _ _ seamsR _ _) point =
     readIORef seamsR ≫= \seams → seamAt seams point
 
 -- | How long the service waits for the simulation to consume what it
 --   installed: the armed override, else @shipped@ seconds.
 scenarioSeamSimWait ∷ LoadStatusRef → Double → IO Double
-scenarioSeamSimWait (LoadStatusRef _ _ _ _ _ seamsR _) shipped =
+scenarioSeamSimWait (LoadStatusRef _ _ _ _ _ seamsR _ _) shipped =
     fromMaybe shipped ∘ seamSimWait <$> readIORef seamsR
 
 -- | The decode format the suite armed, if any (the shipped one otherwise).
 scenarioSeamFormat ∷ LoadStatusRef → IO (Maybe ScenarioFormat)
-scenarioSeamFormat (LoadStatusRef _ _ _ _ _ seamsR _) = seamFormat <$> readIORef seamsR
+scenarioSeamFormat (LoadStatusRef _ _ _ _ _ seamsR _ _) = seamFormat <$> readIORef seamsR
 
 -- | Keep the plan the continuation will install (keyed by request id, so a
 --   stale plan can never be mistaken for a newer request's).
 setScenarioPlan ∷ LoadStatusRef → Int → ScenarioPlan → IO ()
-setScenarioPlan (LoadStatusRef _ _ _ _ _ _ planR) n plan = writeIORef planR (Just (n, plan))
+setScenarioPlan (LoadStatusRef _ _ _ _ _ _ planR _) n plan = writeIORef planR (Just (n, plan))
 
 -- | The plan of request @n@, if it is the one held.
 readScenarioPlan ∷ LoadStatusRef → Int → IO (Maybe ScenarioPlan)
-readScenarioPlan (LoadStatusRef _ _ _ _ _ _ planR) n = do
+readScenarioPlan (LoadStatusRef _ _ _ _ _ _ planR _) n = do
     held ← readIORef planR
     pure $ case held of
         Just (m, plan) | m ≡ n → Just plan
@@ -604,7 +617,107 @@ readScenarioPlan (LoadStatusRef _ _ _ _ _ _ planR) n = do
 
 -- | Consume request @n@'s plan.
 takeScenarioPlan ∷ LoadStatusRef → Int → IO (Maybe ScenarioPlan)
-takeScenarioPlan ref@(LoadStatusRef _ _ _ _ _ _ planR) n = do
+takeScenarioPlan ref@(LoadStatusRef _ _ _ _ _ _ planR _) n = do
     plan ← readScenarioPlan ref n
     forM_ plan $ \_ → writeIORef planR Nothing
     pure plan
+
+-- * The scenario capture request record (#2714)
+
+-- | The capture request's record beside its test seams: one cell, so the
+--   handle gains one field.
+data CaptureCell = CaptureCell
+    { ccStatus ∷ !(Maybe ScenarioCaptureStatus)
+    , ccSeams  ∷ !CaptureSeams
+    }
+
+-- | Admit a scenario CAPTURE: refuse while a load (ordinary or scenario) is
+--   active, else run @begin@ — the save barrier's own 'Engine.Save.Barrier.beginSave',
+--   which refuses a second save, an autosave or a capture itself — INSIDE
+--   the same admission lock, and keep the request's record under the id the
+--   barrier allocated. One step, so no identity exists without its record
+--   and a conflicting request changes nothing about the operation that holds
+--   the line.
+claimCapture ∷ LoadStatusRef → IO (Either Text Int) → CaptureRequest → IO (Either Busy Int)
+claimCapture ref@(LoadStatusRef _ _ _ _ _ _ _ cellR) begin req =
+    withAdmission ref $ do
+        loading ← loadInProgress ref
+        if loading then pure (Left BusyLoad) else do
+            started ← begin
+            case started of
+                Left _ → pure (Left BusySave)
+                Right n → do
+                    atomicModifyIORef' cellR $ \c →
+                        (c { ccStatus = Just (initialCaptureStatus n req) }, ())
+                    pure (Right n)
+
+-- | The capture record as last written. It names whichever capture ran
+--   last; whether it is still the CURRENT operation is the save barrier's
+--   to say (see "Scenario.Capture.Service".@readCaptureStatus@).
+readCaptureRecord ∷ LoadStatusRef → IO (Maybe ScenarioCaptureStatus)
+readCaptureRecord (LoadStatusRef _ _ _ _ _ _ _ cellR) = ccStatus <$> readIORef cellR
+
+-- | Change the record of request @n@. A no-op for any other request id and
+--   once the request is terminal, so a stale completion can neither finish
+--   nor overwrite a newer request.
+updateCaptureStatus ∷ LoadStatusRef → Int → (ScenarioCaptureStatus → ScenarioCaptureStatus) → IO ()
+updateCaptureStatus (LoadStatusRef _ _ _ _ _ _ _ cellR) n f =
+    atomicModifyIORef' cellR $ \c → case ccStatus c of
+        Just s | cstRequestId s ≡ n ∧ isNothing (cstOutcome s) → (c { ccStatus = Just (f s) }, ())
+        _ → (c, ())
+
+-- | End request @n@ with @outcome@. The record ends FIRST, so by the time
+--   the caller ends the barrier transaction (which is what lets the next
+--   operation in) a reader already sees the terminal result. A no-op for a
+--   request that already ended or is not the recorded one.
+terminateCapture ∷ LoadStatusRef → Int → CaptureOutcome → IO ()
+terminateCapture ref n outcome = updateCaptureStatus ref n $ \r → r
+    { cstOutcome = Just outcome
+    , cstStage = case outcome of
+        CaptureSucceeded _ → CaptureDone
+        CaptureUnsuccessful _ → CaptureFailed
+    , cstPublication = case outcome of
+        CaptureUnsuccessful f → cfPublication f
+        CaptureSucceeded _ → Published }
+
+-- | Is a capture holding the line? True exactly while the recorded capture
+--   has no outcome AND the save barrier's current transaction is still that
+--   request: a record the barrier has moved past (a transaction that ended
+--   or was replaced) holds nothing, so a request that somehow never
+--   finished cannot pin the pause forever.
+captureInProgress ∷ LoadStatusRef → SaveBarrier → IO Bool
+captureInProgress ref barrier = do
+    rec' ← readCaptureRecord ref
+    case rec' of
+        Just r | isNothing (cstOutcome r) → do
+            cur ← readSaveStatus barrier
+            pure $ case cur of
+                Just b → ssRequestId b ≡ cstRequestId r ∧ isNothing (ssOutcome b)
+                Nothing → False
+        _ → pure False
+
+-- | Test-only: install the capture seams. Inert until armed.
+armCaptureSeams ∷ LoadStatusRef → CaptureSeams → IO ()
+armCaptureSeams (LoadStatusRef _ _ _ _ _ _ _ cellR) seams =
+    atomicModifyIORef' cellR $ \c → (c { ccSeams = seams }, ())
+
+disarmCaptureSeams ∷ LoadStatusRef → IO ()
+disarmCaptureSeams ref = armCaptureSeams ref noCaptureSeams
+
+-- | Consult the seam at @point@: one 'IORef' read, then whatever the suite
+--   armed (which may block or throw).
+captureSeamPoint ∷ LoadStatusRef → CapturePoint → IO ()
+captureSeamPoint (LoadStatusRef _ _ _ _ _ _ _ cellR) point =
+    readIORef cellR ≫= \c → cseamAt (ccSeams c) point
+
+-- | The storage operations the suite armed, if any (the production ones
+--   otherwise).
+captureSeamOps ∷ LoadStatusRef → IO (Maybe StorageOps)
+captureSeamOps (LoadStatusRef _ _ _ _ _ _ _ cellR) = cseamOps ∘ ccSeams <$> readIORef cellR
+
+-- | The transforms the suite armed on the projection and the encoded bytes
+--   (the identity otherwise).
+captureSeamTransforms ∷ LoadStatusRef → IO (Scenario → Scenario, BS.ByteString → BS.ByteString)
+captureSeamTransforms (LoadStatusRef _ _ _ _ _ _ _ cellR) = do
+    c ← readIORef cellR
+    pure (cseamScenario (ccSeams c), cseamBytes (ccSeams c))
