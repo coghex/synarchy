@@ -41,6 +41,9 @@ module World.Flora.Growth
       -- * Phase / stage selection
     , findActivePhase
     , findActiveCycleStage
+    , growthVisualPhase
+    , growthDeathDay
+    , growthVisualStage
     , growthPhaseTag
     , activeStageTag
       -- * Harvest window
@@ -180,6 +183,51 @@ findActiveCycleStage stages dayOfYear =
 --   species defines no phases).
 growthPhaseTag ∷ FloraSpecies → FloraGrowth → Maybe LifePhaseTag
 growthPhaseTag sp g = lpTag <$> findActivePhase (fsPhases sp) (fgAge g)
+
+-- | Visual phase only: keep gameplay's dead-phase pin unchanged. At natural
+-- death use the last living phase strictly before the lifespan threshold;
+-- a phase beginning at the death threshold was never a living phase.
+growthVisualPhase ∷ FloraSpecies → FloraInstance → FloraGrowth → Maybe LifePhaseTag
+growthVisualPhase sp fi g = lpTag <$> findActivePhase living age
+  where
+    living = HM.filter (\lp → lpTag lp ≢ PhaseDead
+                      ∧ (not (fgDead g) ∨ lpAge lp < age)) (fsPhases sp)
+    age = if fgDead g then fromMaybe (fgAge g) (instanceLifespan sp fi)
+                     else fgAge g
+
+-- | First whole world day at or after this generation's death threshold.
+-- The inverse estimates a bound; binary search checks the actual Float growth
+-- calculation, whose rounding can cross the threshold before that estimate.
+-- A corpse present at epoch freezes at day zero.
+-- This is derived visual information, never persisted or used by harvesting.
+growthDeathDay ∷ FloraSpecies → FloraInstance → FloraGrowth → Maybe Int
+growthDeathDay sp fi g
+    | not (fgDead g) = Nothing
+    | otherwise = firstDay <$> instanceLifespan sp fi
+  where
+    reached day =
+        let observed = floraGrowth sp day fi
+        in fgGeneration observed > fgGeneration g
+           ∨ (fgGeneration observed ≡ fgGeneration g ∧ fgDead observed)
+    firstDay lifespan =
+        let estimate = max 1 $ ceiling $
+                (fromIntegral (fgGeneration g) * (lifespan + deadWindowDays)
+                 + lifespan - fiAge fi) / growthRate (fiHealth fi)
+            upper = until reached (* 2) estimate
+        in search 0 upper
+    search lo hi
+        | lo ≥ hi = lo
+        | reached mid = search lo mid
+        | otherwise = search (mid + 1) hi
+      where mid = lo + (hi - lo) `div` 2
+
+-- | Living stages follow the supplied clock; dead stages freeze on the
+-- derived death day. CropPlot callers deliberately supply their elapsed clock.
+growthVisualStage ∷ FloraSpecies → Int → Int → FloraInstance → FloraGrowth
+                  → Maybe AnnualStageTag
+growthVisualStage sp daysPerYear absDay fi g =
+    activeStageTag sp (floraDayOfYear daysPerYear
+        (fromMaybe absDay (growthDeathDay sp fi g)))
 
 -- | The annual-cycle stage active on a given day-of-year (Nothing when
 --   the species has no annual cycle).
