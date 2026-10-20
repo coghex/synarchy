@@ -26,8 +26,8 @@ no redirect came.
 
 | Group | Examples | Result |
 |---|---|---|
-| `Scenario.Load` | 49 | pass |
-| `Scenario` (all four SCN groups and this one) | 335 | pass |
+| `Scenario.Load` | 50 | pass |
+| `Scenario` (all four SCN groups and this one) | 339 | pass |
 | `transactional load` | 25 | pass (7 new status-contract examples) |
 | `load exception terminalization` | 6 | pass |
 | `save snapshot barrier` | 30 | pass |
@@ -110,6 +110,10 @@ Codex requested changes at `e0ad119d0`. Each finding was reproduced by a new exa
 6. Diagnostics were numbered among the survivors: entries are reported at their source paths (`SourcePaths`, returned beside the scenario).
 
 The SCN-12 test glue now composes through `constructScenario` instead of a copy of its order, and all 335 `Scenario` examples still pass.
+
+## Review round 2 (one finding, fixed)
+
+Codex confirmed five of the six round-1 fixes and requested changes for the sixth: source paths covered only top-level entries, so a rejection reported below a rejected nested sibling (a building's second `storage` item, cascaded when the building is rejected) was numbered among the survivors. The decoder now records which source positions of EVERY nested list survived (`spSurvivors`), and `Scenario.Types.translateNested` rewrites each adapter diagnostic to the positions of the document. Covered by an end-to-end example (the reviewer's scenario), by the decoder's survivor record, and by an exhaustive check of every rejection pattern of a nested list up to six items; reverting either the recording or the translation fails them (rows `nested-translation-off`, `nested-survivors-not-recorded`).
 
 ## Mutation checks
 
