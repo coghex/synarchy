@@ -843,6 +843,68 @@ spec = do
     -- engine.getLoadStatus() and the CatWorld warning reported a cleanly
     -- aborted load. These cases arm restores to throw and assert BOTH
     -- the live disposition and the reported text.
+    -- #2521: apply(data, entities, phase). The forward pass says
+    -- "forward" and BOTH rollback call sites -- the failing component's
+    -- own restore and the unwind of every component applied before it,
+    -- including after a reset-hook failure -- say "rollback", so a
+    -- component can restore transient state keyed to its rows.
+    describe "the apply phase (#2521)" $ do
+        let phaseFixture = lns
+                [ "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "PHASES = {}"
+                , "local function comp(name, boom)"
+                , "  PHASES[name] = {}"
+                , "  return { version=1, inputVersions={1}, required=true,"
+                , "    scope='global', deps={},"
+                , "    snapshot=function() return {} end,"
+                , "    decode=function(v,d) return d end,"
+                , "    validate=function() return nil end,"
+                , "    apply=function(_, _, phase)"
+                , "      local p = PHASES[name]; p[#p + 1] = tostring(phase)"
+                , "      if boom and phase == 'forward' then error('BOOM_2521') end"
+                , "    end } end"
+                , "function load(names)"
+                , "  local list = {}"
+                , "  for _, n in ipairs(names) do"
+                , "    list[#list + 1] = { id=n, version=1, payload=codec.encode({}) } end"
+                , "  assert(saveModules.prepareLoad(list, 1, false, nil).ok)"
+                , "  return pcall(saveModules.applyAll) end"
+                , "function seq(name) return table.concat(PHASES[name], ',') end"
+                , "SAVE = saveModules"
+                ]
+        it "passes forward on the load and rollback at both rollback call \
+           \sites, to every component" $ runsOk $ lns
+            [ phaseFixture
+            , "SAVE.register('ph_a', comp('a'))"
+            , "SAVE.register('ph_b', comp('b'))"
+            -- Sorts last: applies after a and b, then fails.
+            , "SAVE.register('ph_z_boom', comp('z', true))"
+            , "local ok = load({ 'ph_a', 'ph_b', 'ph_z_boom' })"
+            , "assert(not ok, 'the forward failure must abort the load')"
+            , "assert(seq('a') == 'forward,rollback', 'a: ' .. seq('a'))"
+            , "assert(seq('b') == 'forward,rollback', 'b: ' .. seq('b'))"
+            -- The failing component's OWN restore is a rollback too.
+            , "assert(seq('z') == 'forward,rollback', 'z: ' .. seq('z'))"
+            ]
+        it "passes rollback to every applied component when a reset hook \
+           \fails" $ runsOk $ lns
+            [ phaseFixture
+            , "SAVE.register('ph_a', comp('a'))"
+            , "SAVE.register('ph_b', comp('b'))"
+            , "SAVE.registerResetHook('ph_hook', function() error('HOOK_2521') end)"
+            , "local ok = load({ 'ph_a', 'ph_b' })"
+            , "assert(not ok, 'the hook failure must abort the load')"
+            , "assert(seq('a') == 'forward,rollback', 'a: ' .. seq('a'))"
+            , "assert(seq('b') == 'forward,rollback', 'b: ' .. seq('b'))"
+            -- A successful load never says rollback.
+            , "PHASES.a, PHASES.b = {}, {}"
+            , "SAVE.resetHooks['ph_hook'] = function() end"
+            , "assert(load({ 'ph_a', 'ph_b' }))"
+            , "assert(seq('a') == 'forward' and seq('b') == 'forward',"
+            , "  'a successful load: ' .. seq('a') .. ' / ' .. seq('b'))"
+            ]
+
     describe "rollback double faults (issue #1200)" $ do
         it "keeps unwinding after a restore throws, names EVERY component \
            \it could not restore, and still attempts the restores behind \

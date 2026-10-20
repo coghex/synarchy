@@ -130,6 +130,9 @@ session env = do
         , "COMBAT = require('scripts.unit_ai_combat')"
         , "ATTACK = require('scripts.unit_ai_combat_attack')"
         , "POLICY = require('scripts.unit_ai_combat_policy')"
+        -- A fixture that drops a unit's AI row to start it afresh also
+        -- drops the seam's uid-keyed bookkeeping with CLAIMS.resetAll().
+        , "CLAIMS = require('scripts.unit_ai_claims')"
         , "NOW = 0; engine.gameTime = function() return NOW end"
         , "function S(uid) return CORE.ensureState(uid) end"
         -- One autonomous engage decision; the chosen target or false.
@@ -453,7 +456,7 @@ selfDefenseSpec = do
               \ if uid == 1 then return { diplomacyClearAt = 5 } end end\
               \ return true"
         forM_ [(4.5, "false"), (5, "false"), (5.01, "3")] $ \(at, expected) → do
-            ok ls "AI.aiState[1] = nil; return true"
+            ok ls "AI.aiState[1] = nil; CLAIMS.resetAll(); return true"
             hit env 1 3 at
             ok ls "NOW = 6; return true"
             r ← val ls "engage(1)"
@@ -461,7 +464,7 @@ selfDefenseSpec = do
         -- A non-hostile fight acquired before the clear cannot be sustained
         -- by that pre-clear damage once it is cleared.
         ok ls "POLICY.fixtureInputs = function() return nil end\
-              \ AI.aiState[1] = nil; return true"
+              \ AI.aiState[1] = nil; CLAIMS.resetAll(); return true"
         hit env 1 3 4
         ok ls "NOW = 4.5; return true"
         val ls "engage(1)" `shouldReturn` "3"
@@ -495,7 +498,7 @@ selfDefenseSpec = do
         ok ls "NOW = 3; return true"
         val ls "engage(1)" `shouldReturn` "3"
         ok ls "NOW = 4; CORE.markGoalAccomplished(S(1), 'attack'); NOW = 5; return true"
-        val ls "POLICY.cutoff(S(1))" `shouldReturn` "4"
+        val ls "POLICY.cutoff(1)" `shouldReturn` "4"
         val ls "engage(1)" `shouldReturn` "false"       -- old hit
         hit env 1 3 4
         val ls "engage(1)" `shouldReturn` "false"       -- equal-time hit
@@ -517,11 +520,11 @@ selfDefenseSpec = do
         hit env 1 3 0
         ok ls "NOW = 1; return true"
         val ls "engage(1)" `shouldReturn` "3"
-        ok ls "OCC = POLICY.occurrence(S(1)); return true"
+        ok ls "OCC = POLICY.occurrence(1); return true"
         hit env 1 7 1.9                          -- 3 is no longer the last attacker
         ok ls "NOW = 2; return true"
         val ls "tick(1)" `shouldReturn` "7"      -- swapped, not ended
-        val ls "POLICY.cutoff(S(1)) == nil and POLICY.occurrence(S(1)) == OCC"
+        val ls "POLICY.cutoff(1) == nil and POLICY.occurrence(1) == OCC"
             `shouldReturn` "true"
         ok ls "NOW = 11.9; return true"
         val ls "tick(1)" `shouldReturn` "7"      -- 7's own window holds
@@ -534,24 +537,24 @@ selfDefenseSpec = do
         ok ls "NOW = 1; AI.commandAttack(1, 3, true); NOW = 2; return true"
         setPose env 3 "dead"
         val ls "tick(1)" `shouldReturn` "false"
-        val ls "POLICY.cutoff(S(1)) == nil" `shouldReturn` "true"
+        val ls "POLICY.cutoff(1) == nil" `shouldReturn` "true"
         hit env 1 7 1.5                          -- before that termination
         ok ls "NOW = 3; return true"
         val ls "engage(1)" `shouldReturn` "7"
         -- A lash-out episode, ended the way unit_ai_mental ends it: the
         -- flag and target are dropped BEFORE the goal is accomplished.
         setPose env 3 "standing"
-        ok ls "AI.aiState[1] = nil; local s = S(1)\
+        ok ls "AI.aiState[1] = nil; CLAIMS.resetAll(); local s = S(1)\
               \ s.mentalLashoutActive = true; CORE.setGoal(s, 'attack', 'lash_out')\
               \ s.attackTargetUid = 3; s.committed = nil\
               \ NOW = 4; s.attackTargetUid = nil; s.mentalLashoutActive = nil\
-              \ CORE.markGoalAccomplished(s, 'attack'); return POLICY.cutoff(s) == nil"
+              \ CORE.markGoalAccomplished(s, 'attack'); return POLICY.cutoff(1) == nil"
         hit env 1 7 3.5
         ok ls "NOW = 5; return true"
         val ls "engage(1)" `shouldReturn` "7"
         -- The governed control: an autonomous goal's end DOES cut off.
         ok ls "NOW = 6; CORE.markGoalAccomplished(S(1), 'attack'); return true"
-        val ls "POLICY.cutoff(S(1))" `shouldReturn` "6"
+        val ls "POLICY.cutoff(1)" `shouldReturn` "6"
 
     it "stamps the cutoff when a committed order replaces an autonomous \
        \goal, so a hit before that replacement cannot reopen self-defense" $ \env → do
@@ -564,11 +567,11 @@ selfDefenseSpec = do
         -- The player orders an attack on the hostile 4: commandAttack sets
         -- the REPLACEMENT's committed flag before the goal changes.
         ok ls "NOW = 2; AI.commandAttack(1, 4, true); return true"
-        val ls "POLICY.cutoff(S(1))" `shouldReturn` "2"
+        val ls "POLICY.cutoff(1)" `shouldReturn` "2"
         setPose env 4 "dead"
         ok ls "NOW = 3; return true"
         val ls "tick(1)" `shouldReturn` "false"
-        val ls "POLICY.cutoff(S(1))" `shouldReturn` "2" -- the order's end stamps none
+        val ls "POLICY.cutoff(1)" `shouldReturn` "2" -- the order's end stamps none
         val ls "engage(1)" `shouldReturn` "false"       -- 7's hit predates cutoff 2
         hit env 1 7 3.1                                 -- strictly after it
         val ls "engage(1)" `shouldReturn` "7"
@@ -597,7 +600,7 @@ selfDefenseSpec = do
         val ls "POLICY.fixtureInputs(1) == nil and POLICY.fixtureInputs(3) == nil"
             `shouldReturn` "true"
         let run = do
-                ok ls "AI.aiState[1] = nil; return true"
+                ok ls "AI.aiState[1] = nil; CLAIMS.resetAll(); return true"
                 hit env 1 3 0
                 a ← ok ls "NOW = 1; return true" >> val ls "engage(1)"
                 b ← ok ls "NOW = 10; return true" >> val ls "tick(1)"
@@ -623,9 +626,9 @@ authorizationSpec = do
         start env ls = do
             resetWorld env roster
             hit env 1 3 0
-            ok ls "AI.aiState[1] = nil; NOW = 1; return true"
+            ok ls "AI.aiState[1] = nil; CLAIMS.resetAll(); NOW = 1; return true"
             val ls "engage(1)" `shouldReturn` "3"
-            ok ls "OCC = POLICY.occurrence(S(1)); return OCC ~= nil"
+            ok ls "OCC = POLICY.occurrence(1); return OCC ~= nil"
         authorize ls fields = ok ls $
             "POLICY.fixtureInputs = function(uid) if uid == 1 then\
             \ return { authorization = { " <> fields <> " } } end end; return true"

@@ -80,6 +80,7 @@ end
 -- }
 unitAi.aiState = unitAi.aiState or {}
 local aiState = unitAi.aiState
+combatPolicy.bindStates(aiState)   -- #2521: goal changes resolve uid here
 
 -----------------------------------------------------------
 -- Helpers

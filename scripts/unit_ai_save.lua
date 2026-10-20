@@ -312,9 +312,19 @@ function M.register(aiState)
         -- this boundary would edit pre-load state during a load that
         -- is being abandoned. It runs at the post-publish reconcile
         -- instead -- see scripts/unit_ai_reconcile.lua.
-        apply = function(data, entities)
+        --
+        -- #2521: the combat-policy seam's transient registry describes
+        -- the rows being replaced. A forward apply copies it first, and
+        -- the ROLLBACK apply (saveModules' explicit phase) puts that copy
+        -- back, so an abandoned load leaves the restored session's
+        -- exemptions, cutoffs and occurrences as they were -- even when
+        -- the load reset below already emptied and re-seeded them.
+        apply = function(data, entities, phase)
+            local policy = require("scripts.unit_ai_combat_policy")
+            if phase ~= "rollback" then policy.stashForLoad() end
             saveMods.applyEntityRows(aiState, refsMod.unwrapAiState(data),
                 entities, { kind = "unit", component = "unit_ai" })
+            if phase == "rollback" then policy.restoreStash() end
         end,
     })
 
@@ -371,6 +381,7 @@ function M.register(aiState)
         local n = 0
         for k in pairs(aiState) do aiState[k] = nil; n = n + 1 end
         local transient = claimsLib.resetAll()
+        require("scripts.unit_ai_combat_policy").dropStash()
         engine.logInfo("Unit AI: cleared " .. n
             .. " AI state row(s) and " .. transient
             .. " transient coordination entries on session teardown")

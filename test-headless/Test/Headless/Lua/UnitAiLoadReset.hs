@@ -409,15 +409,26 @@ spec = describe "unit AI load reset (#1329)" $ do
                 , "function fight()"
                 , "  LIVE[7], LIVE[8] = true, true; NOW = 1000; HIT = { uid = 8, at = 999 }"
                 , "  local s = CORE.ensureState(7)"
-                , "  AI.commandAttack(7, 8); POLICY.noteBasis(s, 'self_defense')"
+                , "  AI.commandAttack(7, 8); POLICY.noteBasis(7, 'self_defense')"
                 , "  CORE.markGoalAccomplished(s, 'attack')"
                 -- A hit strictly after that termination starts the next one.
                 , "  NOW = 1001; HIT = { uid = 8, at = 1000.5 }"
-                , "  AI.commandAttack(7, 8); POLICY.noteBasis(s, 'self_defense')"
-                , "  assert(POLICY.cutoff(s) == 1000 and POLICY.occurrence(s) ~= nil)"
+                , "  AI.commandAttack(7, 8); POLICY.noteBasis(7, 'self_defense')"
+                , "  assert(POLICY.cutoff(7) == 1000 and POLICY.occurrence(7) ~= nil)"
                 , "  assert(POLICY.mayContinue(7, s), 'the fresh self-defense goal stopped')"
                 , "  return s end"
                 ]
+        let component = lns
+                [ "SAVE.register('zz_boom_2521', { version = 1, inputVersions = {1},"
+                , "  required = true, scope = 'global', deps = { 'unit_ai' },"
+                , "  snapshot = function() return {} end,"
+                , "  decode = function(v, d) return d end,"
+                , "  validate = function() return nil end,"
+                , "  apply = function(_, _, phase)"
+                , "    if BOOM and phase == 'forward' then error('BOOM_2521') end end })"
+                ]
+            hook name = "SAVE.registerResetHook('" <> name
+                <> "', function() if BOOM then error('BOOM_2521') end end)"
         let kinds = ["autonomous", "committed", "lash_out"] ∷ [Text]
             exemptLit k = if k ≡ "autonomous" then "false" else "true"
             -- The cutoff a kind's end stamps: its time if governed, else none.
@@ -443,25 +454,24 @@ spec = describe "unit AI load reset (#1329)" $ do
         it "keeps no saved payload, and a successful load clears it so a \
            \rewound uid inherits nothing" $
             runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
-                [ "local s = fight(); OLD_OCC = POLICY.occurrence(s)"
+                [ "local s = fight(); OLD_OCC = POLICY.occurrence(7)"
                 , "local snap = SAVE.snapshotAll(); assert(snap.ok)"
                 , "assert(not mentions(snap.components), 'a snapshot carries seam bookkeeping')"
                 , "runLoad()"
-                , "assert(POLICY.cutoff(s) == nil and POLICY.occurrence(s) == nil,"
-                , "  'the seam bookkeeping survived the load')"
                 , "local s2 = CORE.ensureState(7)"
                 , "assert(s2 ~= s, 'the load kept the old state table')"
-                -- The restored attack goal gets a FRESH occurrence, never
-                -- the saving session's.
-                , "assert(POLICY.cutoff(s2) == nil, 'the rewound uid inherited the old session cutoff')"
-                , "local o2 = POLICY.occurrence(s2)"
+                -- Keyed by uid, so the load reset is what clears it: the
+                -- rewound uid keeps no cutoff, and its restored attack goal
+                -- gets a FRESH occurrence, never the saving session's.
+                , "assert(POLICY.cutoff(7) == nil, 'the rewound uid inherited the old session cutoff')"
+                , "local o2 = POLICY.occurrence(7)"
                 , "assert(o2 ~= nil and o2 ~= OLD_OCC, 'the restored goal kept the old occurrence')"
                 ]
         it "is cleared by Exit to Menu's session teardown" $
             runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
                 [ "local s = fight()"
                 , "require('scripts.lib.session_teardown').runAll()"
-                , "assert(POLICY.cutoff(s) == nil and POLICY.occurrence(s) == nil,"
+                , "assert(POLICY.cutoff(7) == nil and POLICY.occurrence(7) == nil,"
                 , "  'the seam bookkeeping survived session teardown')"
                 ]
         it "ends a restored non-hostile self-defense goal at its first \
@@ -503,17 +513,81 @@ spec = describe "unit AI load reset (#1329)" $ do
                         , "assert(s and s.activeGoal == 'attack', 'the first goal is not live')"
                         , "NOW = 2; START." <> to <> "()"
                         , "assert(CORE.aiState[7] == s and s.activeGoal == 'attack')"
-                        , "assert(POLICY.cutoff(s) == " <> stamp from "2" <> ","
-                        , "  'replacing the " <> from <> " goal stamped ' .. tostring(POLICY.cutoff(s)))"
+                        , "assert(POLICY.cutoff(7) == " <> stamp from "2" <> ","
+                        , "  'replacing the " <> from <> " goal stamped ' .. tostring(POLICY.cutoff(7)))"
                         , "assert(POLICY.mayContinue(7, s) == " <> exemptLit to <> ","
                         , "  'the " <> to <> " goal was classified the wrong way')"
                         , "NOW = 3; FINISH." <> to <> "(s)"
                         , "assert(s.activeGoal ~= 'attack', 'the goal did not end')"
                         -- An exempt end stamps nothing, leaving the replacement's.
-                        , "assert(POLICY.cutoff(s) == "
+                        , "assert(POLICY.cutoff(7) == "
                             <> (if to ≡ "autonomous" then "3" else stamp from "2") <> ","
-                        , "  'ending the " <> to <> " goal left cutoff ' .. tostring(POLICY.cutoff(s)))"
+                        , "  'ending the " <> to <> " goal left cutoff ' .. tostring(POLICY.cutoff(7)))"
                         ]
+        -- A load that FAILS after unit_ai applied is unwound by
+        -- saveModules re-applying the old rows (phase "rollback"). Each
+        -- rollback path must leave the live session's combat-policy
+        -- registry as it was: a committed non-hostile order stays exempt
+        -- under its own occurrence, the governed cutoff survives, and
+        -- damage it rejected stays rejected.
+        describe "survives a load that rolls back" $
+            forM_ [ ("a component's apply fails after unit_ai's", component)
+                  , ("a reset hook sorted before unit_ai_claims fails", hook "aa_boom_2521")
+                  , ("a reset hook sorted after unit_ai_claims fails", hook "zz_boom_2521") ]
+              $ \(label, inject) →
+                it label $ runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
+                    [ "BOOM = false"
+                    , inject
+                    , "LIVE[7], LIVE[8], LIVE[9] = true, true, true; NOW = 1000"
+                    -- An autonomous goal that ended: governed cutoff 1000.
+                    , "AI.commandAttack(7, 8); CORE.markGoalAccomplished(CORE.ensureState(7), 'attack')"
+                    , "assert(POLICY.cutoff(7) == 1000)"
+                    -- A committed player order on the ALLY 8 is now live.
+                    , "NOW = 1001; AI.commandAttack(7, 8, true)"
+                    , "local OCC = POLICY.occurrence(7)"
+                    , "assert(OCC and POLICY.exempt(7))"
+                    , "HIT = { uid = 9, at = 999.5 }"
+                    , "assert(not POLICY.selfDefenseFresh(7, 9, HIT), 'the pre-cutoff hit was eligible')"
+                    , "local snap = SAVE.snapshotAll(); assert(snap.ok)"
+                    , "assert(SAVE.prepareLoad(snap.components).ok)"
+                    , "BOOM = true"
+                    , "local ok, err = pcall(SAVE.applyAll)"
+                    , "assert(not ok and tostring(err):find('BOOM_2521', 1, true),"
+                    , "  'the injected failure did not abort the load: ' .. tostring(err))"
+                    , "local r = CORE.aiState[7]"
+                    , "assert(r and r.committed and r.activeGoal == 'attack' and r.attackTargetUid == 8,"
+                    , "  'the rollback did not restore the committed order')"
+                    , "assert(POLICY.exempt(7), 'the rollback lost the exemption')"
+                    , "assert(POLICY.occurrence(7) == OCC, 'the rollback lost the occurrence')"
+                    , "assert(POLICY.cutoff(7) == 1000, 'the rollback lost the cutoff: '"
+                    , "  .. tostring(POLICY.cutoff(7)))"
+                    , "NOW = 1002"
+                    , "assert(not POLICY.selfDefenseFresh(7, 9, HIT),"
+                    , "  'damage the cutoff rejected became eligible again')"
+                    -- The real executor keeps the committed non-hostile
+                    -- order (no fresh attacker to swap onto).
+                    , "HIT = nil"
+                    -- 8 stands out of reach, so the order pursues it.
+                    , "local info = unit.getInfo"
+                    , "unit.getInfo = function(u) local i = info(u)"
+                    , "  if i and u == 8 then i.gridX = 10 end; return i end"
+                    , "MOVES = 0; unit.moveTo = function() MOVES = MOVES + 1 end"
+                    , "unit.getAttackRange = function() return 1 end"
+                    , "unit.getActivity = function() return 'idle' end"
+                    , "unit.getAnimDuration = function() return 0.5 end"
+                    , "unit.setAnimOverride = function() end"
+                    , "unit.clearAnimOverride = function() end; unit.stop = function() end"
+                    -- The lunge gate reads the attack cooldown first.
+                    , "unit.getAttackCooldown = function() return 1.5 end"
+                    , "unit.getEquippedWeaponWeight = function() return 0 end"
+                    , "unit.getWeaponWieldedFrom = function() return nil end"
+                    , "unit.getWoundSeverityOn = function() return 0 end"
+                    , "unit.readPhysio = function() return 50, nil end"
+                    , "unit.getJumpReach = function() return nil end   -- no lunge"
+                    , "require('scripts.unit_ai_combat_attack').attackTargetExecute(7, r, P)"
+                    , "assert(r.activeGoal == 'attack' and r.attackTargetUid == 8 and MOVES >= 1,"
+                    , "  'attack_target cancelled the restored committed order')"
+                    ]
         it "keeps a restored committed order and a restored lash-out exempt \
            \when each clears its flag before the goal ends, and a restored \
            \autonomous goal governed" $
@@ -526,7 +600,7 @@ spec = describe "unit AI load reset (#1329)" $ do
                 -- leave that hit able to open self-defense.
                 , "function hitAfterLoad() NOW = 1001.5; HIT = { uid = 9, at = 1001.5 } end"
                 , "function stillFresh(s) NOW = 1003"
-                , "  return POLICY.cutoff(s) == nil and POLICY.selfDefenseFresh(7, s, 9, HIT) end"
+                , "  return POLICY.cutoff(7) == nil and POLICY.selfDefenseFresh(7, 9, HIT) end"
                 -- A committed order, broken off by the real retreat path,
                 -- which drops s.committed BEFORE ending the attack goal.
                 , "AI.commandAttack(7, 8, true); runLoad()"
@@ -556,8 +630,8 @@ spec = describe "unit AI load reset (#1329)" $ do
                 , "local g = CORE.aiState[7]"
                 , "assert(not g.committed and g.activeGoal == 'attack', 'no autonomous goal was restored')"
                 , "hitAfterLoad(); NOW = 1002; CORE.markGoalAccomplished(g, 'attack')"
-                , "assert(POLICY.cutoff(g) == 1002, 'a restored autonomous goal stamped no cutoff')"
-                , "NOW = 1003; assert(not POLICY.selfDefenseFresh(7, g, 9, HIT),"
+                , "assert(POLICY.cutoff(7) == 1002, 'a restored autonomous goal stamped no cutoff')"
+                , "NOW = 1003; assert(not POLICY.selfDefenseFresh(7, 9, HIT),"
                 , "  'a hit before the governed goal ended still opened self-defense')"
                 ]
 

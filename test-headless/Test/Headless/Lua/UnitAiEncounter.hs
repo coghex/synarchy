@@ -75,7 +75,7 @@ prelude = lns
     -- commandAttack then models the real one (target, then setGoal), so
     -- the seam's goal occurrences and cutoffs run exactly as in core.
     , "STATE = {}"
-    , "POLICY = require('scripts.unit_ai_combat_policy')"
+    , "POLICY = require('scripts.unit_ai_combat_policy'); POLICY.bindStates(STATE)"
     , "package.loaded['scripts.unit_ai'] = {"
     , "  commandAttack=function(uid,target) COMMAND=target"
     , "    local s=STATE[uid]; if s then s.attackTargetUid=target"
@@ -104,7 +104,9 @@ selfDefenseHelpers ∷ Text
 selfDefenseHelpers = lns
     [ "HITS = HITS or {}"
     , "function start(hitAt, now)"
-    , "  local s = {}; STATE[1] = s"
+    -- A FRESH guard: the seam keys by uid, so drop guard 1's earlier
+    -- goals' cutoff and occurrence along with its old state.
+    , "  local s = {}; STATE[1] = s; require('scripts.unit_ai_claims').resetAll()"
     , "  HITS[1] = {uid=2,at=hitAt}; VISIBLE = {}; NOW = now; EVENTS = 0"
     , "  EVENT_MESSAGES = {}"
     , "  assert(encounter.engageUtility(1,s) == 8, 'self-defense not offered')"
@@ -425,7 +427,7 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
                 , "for i, c in ipairs(cases) do"
                 , "  LOCATION.encounter.episode_active=false"
                 , "  local s = start(0, 1)"
-                , "  local auth = c.fields(POLICY.occurrence(s))"
+                , "  local auth = c.fields(POLICY.occurrence(1))"
                 , "  POLICY.fixtureInputs=function(uid)"
                 , "    if uid == 1 and auth then return {authorization=auth} end end"
                 , "  NOW=30; VISIBLE={{x=5,y=5}}"
@@ -455,14 +457,14 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
                 , "  INFO[2]={gridX=5,gridY=5,page='world',name='near'}; POSE[2]='standing'"
                 , "  LOCATION.encounter.episode_active=false"
                 , "  local s = start(0, 1)"
-                , "  local auth = {uid=1,target=2,occurrence=POLICY.occurrence(s)}"
+                , "  local auth = {uid=1,target=2,occurrence=POLICY.occurrence(1)}"
                 , "  POLICY.fixtureInputs=function(uid)"
                 , "    if uid == 1 then return {authorization=auth} end end"
                 , "  NOW=30; VISIBLE={{x=5,y=5}}"
                 , "  assert(encounter.guardUtility(1,s) == -math.huge, b[1] .. ': not authorized')"
                 , "  b[2](s)"
                 , "  if encounter.guardUtility(1,s) == 10 then encounter.guardExecute(1,s) end"
-                , "  assert(POLICY.occurrence(s) == nil, b[1] .. ': the goal survived')"
+                , "  assert(POLICY.occurrence(1) == nil, b[1] .. ': the goal survived')"
                 -- Back at the post with the target restored: neither a fresh
                 -- acquisition nor a replacement goal may use the old one.
                 , "  INFO[1]={gridX=5,gridY=5,page='world',name='guard'}"
@@ -492,7 +494,7 @@ spec = describe "persistent ruin encounter AI (#916)" $ do
                 , "local s = start(0, 1)"
                 , "NOW=2; package.loaded['scripts.unit_ai_core'].markGoalAccomplished(s,'attack')"
                 , "s.attackTargetUid=nil; NOW=3"
-                , "assert(POLICY.cutoff(s) == 2)"
+                , "assert(POLICY.cutoff(1) == 2)"
                 , "assert(encounter.engageUtility(1,s) == -math.huge, 'old hit restarted it')"
                 , "HITS[1]={uid=2,at=2}"
                 , "assert(encounter.engageUtility(1,s) == -math.huge, 'equal-time hit restarted it')"

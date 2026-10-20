@@ -327,7 +327,7 @@ local function recentAttacker(uid, binding, s)
        or outsideLeash(info, binding.location.bounds) then
         return nil
     end
-    local basis = policy.acquireBasis(uid, s, attacker.uid, attacker)
+    local basis = policy.acquireBasis(uid, attacker.uid, attacker)
     if not basis then return nil end
     return attacker.uid, basis
 end
@@ -370,7 +370,7 @@ local function engageExecute(uid, s)
     s.ruinLastSeenY = targetInfo.gridY
     s.ruinEncounterCombat = true
     unitAi.commandAttack(uid, target)
-    policy.noteBasis(s, basis)
+    policy.noteBasis(uid, basis)
     local key = encounterKey(binding)
     local participation = participationFor(key)
     participation[uid] = "engaged"

@@ -226,7 +226,7 @@ local THREAT_SOURCES = {
             -- #2521: hostility, or fresh LOCAL self-defense under the
             -- shared seam's ten-second window and cutoffs -- an old hit
             -- from a non-hostile attacker cannot restart a fight.
-            if not policy.acquireBasis(uid, s, att.uid, att) then
+            if not policy.acquireBasis(uid, att.uid, att) then
                 return nil
             end
             -- 8.0 sits above a player move order (follow_command 7.0)
@@ -277,7 +277,7 @@ local function engageExecute(uid, s, params)
     -- Reuse commandAttack so the goal + state are set identically
     -- to a player-issued order. attack_target wins on the next tick.
     unitAi.commandAttack(uid, target)
-    policy.noteBasis(s, policy.acquireBasis(uid, s, target,
+    policy.noteBasis(uid, policy.acquireBasis(uid, target,
                                             unit.getLastAttacker(uid)))
     engine.logDebug("engage: " .. tostring(uid)
         .. " engages " .. tostring(target))
