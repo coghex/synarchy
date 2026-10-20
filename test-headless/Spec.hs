@@ -342,6 +342,7 @@ import qualified Test.Headless.World.Chop.Authority as ChopAuthority
 import qualified Test.Headless.World.Chop.TagPolicy as ChopTagPolicy
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
 import qualified Test.Headless.World.FloraOrder as FloraOrder
+import qualified Test.Headless.World.FloraRenderContext as FloraRenderContext
 import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
@@ -1315,6 +1316,7 @@ restLane = do
     describe "World.DigDomain (engine)" DigDomain.engineSpec
     FloraIdentity.spec
     FloraIdentity.engineSpec
+    FloraRenderContext.spec
     describe "World.CropPlant" CropPlant.spec
     describe "World.CropPlant (engine)" CropPlant.engineSpec
 

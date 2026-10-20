@@ -252,6 +252,10 @@ buildFlora env entries =
                     , fiBaseWidth = baseWidth
                     , fiInstanceId = iid
                     , fiChopDesignated = False
+                      -- A scenario occurrence is planted through the
+                      -- planted allocator (above) and replayed as a
+                      -- planting edit, so it is cultivated (#2547).
+                    , fiContext = ContextCultivated
                     }
                 built = BuiltOccurrence path (feId e) (feTags e) iid tile fid state
             Right acc

@@ -12,7 +12,8 @@ The scope of the schema slice is the representation and its validation. Nothing 
 the schema constructs, replaces or captures a live world. Runtime construction,
 finite-map enforcement and capture belong to the later SCN slices (construction:
 SCN-09 to SCN-12; the session transaction that composes them:
-[SCN-13](#loading-a-scenario-session-scn-13-2713)). Those slices consume
+[SCN-13](#loading-a-scenario-session-scn-13-2713); writing the arena back to a
+file: [SCN-14](#capturing-a-scenario-session-scn-14-2714)). Those slices consume
 `Scenario.Schema.loadScenarioFile` and the typed values in `Scenario.Types`. No
 runtime behaviour is claimed from the schema tests.
 
@@ -1313,6 +1314,157 @@ this section is what the FORMAT means to it.
   family's Persistence section); loading that save needs no scenario file, and
   reapplies no default and rerolls nothing.
 
+## Capturing a scenario session (SCN-14, #2714)
+
+The capture service (`Scenario.Capture.Service`; contract in
+[engine_contracts.md](engine_contracts.md#scenario-capture-the-coherent-snapshot-and-the-safe-file-write-2714))
+writes the live testing arena as a scenario document in the CURRENT format, from
+one coherent snapshot, and leaves the arena paused. It composes the per-family
+capture adapters described under each family above; this section is what the
+whole document looks like and how it relates to the one you wrote.
+
+**Every supported current value is written, explicitly (D-12).** A handwritten
+file may omit values and let deterministic defaults fill the gaps; a captured one
+states them all, so loading it never rolls anything and a later capture never
+depends on a default that changed. Zero, empty and explicit-absence values are
+authoritative: a healed wound is `wounds: []`, an emptied container is
+`contents: []`, a dry cell is no fluid patch, a removed structure is no piece. No
+old override is merged in and no current value is replaced by a definition
+default. A recapture therefore REPLACES what you wrote.
+
+**Shape of the document.** `version` (the current one), `map` (only when the
+arena is finite), `camera` (where it stands: the live camera when the arena owns
+it, the page's own otherwise), then the eight families in the decoder's order —
+`terrain`, `fluids`, `flora`, `structures`, `buildings`, `locations`, `units`,
+`ground_items` — each always present, `[]` when empty. An entry's own keys come in
+the order a person writes them (`id`, `tags`, the definition, the position, then
+the physical values); every other key is alphabetical, and lists keep the order
+the capture produced, which is structural (never an allocation number or a
+hash-map order) and keeps nested item and content order. Two captures of the same
+arena are byte-identical. Because a YAML 1.1 reader would take a bare `y` for a
+boolean, the encoder writes the key as `'y'`; both spellings read the same.
+
+**Identities.** Every entry is written with an explicit `id`. An object loaded
+from a scenario keeps the id it was loaded under (the ordinary save carries it,
+so an arena restored from an ordinary save captures to the same ids). An object
+made by hand has none and is named structurally: terrain, fluids and flora as
+`terrain.<z>.<material>.s<slope>.<x>.<y>`, `fluid.<kind>.<eighths>.<x>.<y>`,
+`flora.<species>.<x>.<y>`; structures `structures.<pack>.<piece>.<x>.<y>`;
+unreferenced units `units.<k>` by a structural order; a unit's items
+`<unit>.inventory.<k>`, `<unit>.equipment.<slot>`, `<unit>.accessories.<k>`. Ids
+share one namespace across every family, items included, and are made unique
+against each other.
+
+**What a scenario does not carry.** Orders and AI jobs, work designations,
+discovery, expedition history and other player progress are not part of the
+format and are neither written nor disturbed: capture never clears an order
+merely because it is not exported. Pending container shells are written as the
+descriptors they are (`containers: {1: {item: box, realized: false}}`) without
+being opened; realized contents are written as they are, never rerolled.
+
+**What stops a capture.** A document is never written if it could not be read
+back as the arena: a unit or building of a definition no longer registered, a
+structure no registered pack places, a column with no solid cell, or a tag on a
+cell below the surface each fail the capture with one diagnostic per finding
+(`terrain.tags`, `units[…]`, …) and nothing is written. The document is also
+decoded again through the shared boundary and compared with what was captured; a
+document the schema refuses, or one that decodes into something else, is never
+published. A living unit whose captured resources are already fatal is written
+(whether a unit survives readiness is decided by Lua at load) and the loader
+rejects it with its own diagnostic.
+
+**Overwriting.** A capture without overwrite intent may create a new file and
+refuses an existing one, at publication as well as beforehand: a file that
+appears while the capture runs is not replaced. With intent it replaces the
+destination in one step and keeps no backup. Saving under another name
+preserves the original; loading, migration and capture preparation never
+rewrite the source.
+
+### Example: handwritten, then captured
+
+Handwritten (every unlisted value is a deterministic default):
+
+```yaml
+version: 3
+map: {width: 40, height: 40}
+units:
+  - id: medic
+    definition: acolyte
+    x: 1
+    y: 1
+    stats: {hydration: 4.0}
+    wounds: [{part: torso, kind: slash, severity: 0.2}]
+    inventory: [{id: kit, definition: field_toolbox, contents: [{id: spare, definition: steel_bar}]}]
+```
+
+Captured from that arena after `hydration` was changed to 3 through the engine
+(excerpt of a real capture; the whole file is retained in
+[pr-proofs/issue-2714-scenario-capture-evidence.md](pr-proofs/issue-2714-scenario-capture-evidence.md)):
+
+```yaml
+version: 3
+map:
+  width: 40
+  height: 40
+camera:
+  x: 3
+  'y': 4
+…
+units:
+- id: medic
+  tags:
+  - squad
+  definition: acolyte
+  x: 1
+  'y': 1
+  z: 6
+  blood: 3.2
+  inventory:
+  - id: kit
+    definition: field_toolbox
+    contents:
+    - id: spare
+      definition: steel_bar
+      bulk: 0.75
+      condition: 100
+      …
+  skills:
+    balance: 34.878227            # every skill: rolled once at load, stated now
+    …
+  stats:
+    calories: 600
+    hydration: 3                  # the CURRENT value, not the 4.0 that was written
+    …
+  wounds:
+  - {age: 0, bandage: 1, clean: false, clot: 0, dressing: '', heal: 0,
+     infection: 0, infection_type: '', kind: slash, necrosis: 0, part: torso, severity: 0.2}
+```
+
+### Example: edited, then recaptured
+
+After the arena is played with — the wound heals, the unit's hydration drops to
+3 and its calories to 150, the canteen is half emptied, the dagger nearly breaks
+and one toolbox is emptied while another is overloaded — a recapture states the
+arena as it IS, not as it was written:
+
+```yaml
+units:
+- id: medic
+  stats: {calories: 150, hydration: 3, …}
+  wounds: []                       # healed: an empty list, never the old wound
+  equipment:
+    right_hand: {id: blade, definition: steel_dagger, condition: 3, …}
+  inventory:
+  - {id: flask, definition: canteen_steel_2l, fill: 1, …}   # half of 2 L
+  - {id: kit, definition: field_toolbox, contents: [], …}   # emptied: stays empty on reload
+  - id: pack
+    definition: field_toolbox
+    contents: […]                  # 13 items, past the definition's capacity, as it is
+```
+
+Loading the recaptured file and capturing again writes the same bytes: nothing
+accumulates across cycles, and no entity or membership is added or lost.
+
 ## Fixture expectations and tests
 
 The `Scenario.Units` group (`test-headless/Test/Headless/Scenario/Units.hs`) covers unit
@@ -1377,4 +1529,28 @@ must keep decoding to the same content through the migration chain.
 ```sh
 cabal build all synarchy-test-headless
 cabal test synarchy-test-headless --test-options='--match "Scenario.Schema"'
+```
+
+The `Scenario.Capture` group (`test-headless/Test/Headless/Scenario/Capture.hs`,
+#2714) drives the PRODUCTION capture service, the production Lua message pump,
+the real save barrier, the real world thread, the real projection and the real
+file writer against the shipped definitions. Only the owner threads a headless
+harness never starts are stand-ins (`Test.Headless.Scenario.Load.Harness`), and
+the examples act as those owners the way `Test.Headless.Save.Barrier` does:
+withholding a stand-in's acknowledgement to put a mutation that crosses owners on
+either side of the snapshot boundary, never sleeping. It covers the document
+encoder as a property over 500 generated scenarios; capture of a loaded, an
+edited and a manually edited arena with explicit current values; pending
+containers and orders left alone; the busy matrix and the unpause refusal held at
+each stage; stale and cancelled work; deferred failures inside the capture window;
+an injected failure at every storage step (assert the destination, the temporary
+files, the publication flag, the terminal result and the paused state); and the
+route back through an ordinary save and through the captured file. Faults are
+injected through the writer's operation seam, never through permissions or timing.
+`tools/scenario_capture_probe.py` adds the live multi-thread and fresh-process
+evidence against real engines:
+
+```sh
+cabal test synarchy-test-headless --test-options='--match "Scenario.Capture"'
+python3 tools/scenario_capture_probe.py --port 9231     # after the probe-slot grant
 ```

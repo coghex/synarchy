@@ -222,6 +222,7 @@ plants =
         , fiInstanceId =
             generatedFloraInstanceId "chop_tag_policy" 0 0 "probe" ordinal
         , fiChopDesignated = False
+        , fiContext = ContextWild
         }
 
 -- | A MATURED instance of any species, on tile (12, 4). Used by the
@@ -236,6 +237,7 @@ maturedOf species = FloraInstance
     , fiInstanceId =
         generatedFloraInstanceId "chop_tag_policy" 0 0 "forage" 0
     , fiChopDesignated = False
+    , fiContext = ContextWild
     }
 
 foragedTile ∷ (Int, Int)

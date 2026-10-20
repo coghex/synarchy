@@ -93,7 +93,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import World.Render.FloraQuads (floraToQuad)
 import World.Render.Textures.Types (defaultWorldTextures)
 import Unit.Direction (Direction(..))
-import World.Flora.Types (FloraCatalog(..), FloraId(..), FloraSpecies(..)
+import World.Flora.Types (FloraCatalog(..), FloraContext(..), FloraId(..), FloraSpecies(..)
     , FloraHarvest(..), FloraInstance(..), lookupSpecies)
 import World.Flora.Identity (floraInstanceIdNone)
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
@@ -441,6 +441,7 @@ sentinelHandleSpec = do
                     , fiBaseWidth = 8
                     , fiInstanceId = floraInstanceIdNone
                     , fiChopDesignated = False
+                    , fiContext = ContextWild
                     }
                 lookupSlot = toInt
             case floraToQuad lookupSlot defaultWorldTextures FaceSouth

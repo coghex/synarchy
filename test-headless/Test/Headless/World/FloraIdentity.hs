@@ -133,6 +133,7 @@ instanceAt tile fid ordinal =
         , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
         , fiInstanceId = idAt (fst tile) (snd tile) fid ordinal
         , fiChopDesignated = False
+        , fiContext = ContextWild
         }
 
 -- | The co-tenancy the whole issue is about: an oak and a berry bush on

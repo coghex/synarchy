@@ -104,6 +104,7 @@ plant ordinal species (lx, ly) = FloraInstance
     , fiAge = 100, fiHealth = 1, fiVariant = 0, fiBaseWidth = 16
     , fiInstanceId = plantId ordinal
     , fiChopDesignated = False
+    , fiContext = ContextWild
     }
 
 fixtureTiles ∷ WorldTileData
