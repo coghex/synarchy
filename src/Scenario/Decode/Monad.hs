@@ -13,6 +13,9 @@ module Scenario.Decode.Monad
     , Node(..)
     , NodeKind(..)
     , runDec
+    , runDecSurvivors
+    , recordSurvivors
+    , takeSurvivors
     , askEnv
     , diag
     , emitNode
@@ -101,7 +104,7 @@ data DecEnv = DecEnv
       -- ^ optional-reference field paths dropped by analysis
     }
 
-data Acc = Acc ![ScenarioDiagnostic] ![Node]
+data Acc = Acc ![ScenarioDiagnostic] ![Node] ![(Text, [Int])]
 
 -- | The decoder: an environment plus an accumulator of diagnostics and
 --   nodes, both kept newest-first and reversed by 'runDec'.
@@ -109,8 +112,16 @@ type Dec = ReaderT DecEnv (State Acc)
 
 runDec ∷ DecEnv → Dec α → (α, [ScenarioDiagnostic], [Node])
 runDec env m =
-    let (a, Acc ds ns) = runState (runReaderT m env) (Acc [] [])
-    in (a, reverse ds, reverse ns)
+    let (a, ds, ns, _) = runDecSurvivors env m
+    in (a, ds, ns)
+
+-- | 'runDec' that also answers, for every list the building pass read, which
+--   source positions survived (newest-first order undone): see
+--   'recordSurvivors'.
+runDecSurvivors ∷ DecEnv → Dec α → (α, [ScenarioDiagnostic], [Node], [(Text, [Int])])
+runDecSurvivors env m =
+    let (a, Acc ds ns ss) = runState (runReaderT m env) (Acc [] [] [])
+    in (a, reverse ds, reverse ns, reverse ss)
 
 askEnv ∷ Dec DecEnv
 askEnv = ask
@@ -127,12 +138,28 @@ diag ∷ Text → DiagnosticReason → DiagnosticEffect → Dec ()
 diag p r e = do
     final ← isFinalPass
     unless final $
-        modify (\(Acc ds ns) → Acc (ScenarioDiagnostic p r e : ds) ns)
+        modify (\(Acc ds ns ss) → Acc (ScenarioDiagnostic p r e : ds) ns ss)
 
 emitNode ∷ Node → Dec ()
 emitNode n = do
     final ← isFinalPass
-    unless final $ modify (\(Acc ds ns) → Acc ds (n : ns))
+    unless final $ modify (\(Acc ds ns ss) → Acc ds (n : ns) ss)
+
+-- | Record which source positions of the list at path @p@ SURVIVED decoding
+--   (a rejected element is absent from the decoded list, so a later phase
+--   that numbers the survivors must be able to name each by the position it
+--   had in the document). Only the building pass records: it is the one that
+--   returns the values the survivors belong to.
+recordSurvivors ∷ Text → [Int] → Dec ()
+recordSurvivors p idxs = do
+    final ← isFinalPass
+    when final $ modify (\(Acc ds ns ss) → Acc ds ns ((p, idxs) : ss))
+
+-- | The survivors recorded so far, in the order recorded.
+takeSurvivors ∷ Dec [(Text, [Int])]
+takeSurvivors = do
+    Acc _ _ ss ← get
+    pure (reverse ss)
 
 -- * Paths
 
@@ -224,6 +251,7 @@ listField p k o elemDec = case lookupKey k o of
     Just (A.Array xs) → do
         let fp = keyPath p k
         ys ← forM (zip [0 ..] (toList xs)) $ \(i, v) → elemDec (indexPath fp i) v
+        recordSurvivors fp [ i | (i, Just _) ← zip [0 ..] ys ]
         pure (Authored (catMaybes ys))
     Just _ → do
         diag (keyPath p k) (InvalidValue "a list") FieldRejected

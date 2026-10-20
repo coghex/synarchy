@@ -17,11 +17,14 @@
 module Test.Headless.Scenario.Placement.Glue
     ( Materialized(..)
     , materialize
+    , materializeAllowingFailures
     , Captured'(..)
     , capturePage
     , CaptureSources(..)
     , capturePageFrom
     , saveAndStage
+    , encodeSession
+    , stageEnvelope
     , sessionSnapshotOf
     , savedEnvelopeFrom
     , capturedYaml
@@ -29,7 +32,7 @@ module Test.Headless.Scenario.Placement.Glue
     ) where
 
 import UPrelude
-import Data.IORef (atomicModifyIORef', readIORef)
+import Data.IORef (readIORef)
 import Data.List (sortOn)
 import qualified Data.Aeson as A
 import qualified Data.ByteString as BS
@@ -44,41 +47,29 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.RenderHandoff (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombatCapability)
-import Engine.Core.Capability.WorldSim (toWorldSimCapability, withPageLifecycle)
-import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Core.Capability.ContentRegistriesView
-    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
-import Engine.Core.ReadOnlyRef (readReadOnlyRef)
+import Engine.Core.State (EngineEnv(..))
 import Gameplay.Tags.Index (categoryForward, categoryTagsOf)
 import Power.Types (nodeForBuilding)
-import Gameplay.Tags.Live (commitItemTreeAssignments)
 import Gameplay.Tags.Tag (mkItemTarget)
 import Item.Ground (GroundItems(..))
 import qualified Item.Ground as G
-import Item.Types (ItemInstance(..))
 import Location.Instance
-import Scenario.Items.Build (ItemBuild(..), ItemBuildEnv(..), itemRefTargets, itemTagTargets)
 import Scenario.Items.Capture
     ( CaptureCtx(..), Captured(..), DocKey(..), captureGroundItems, nameDocumentRefs, newCaptureState )
 import Scenario.Items.Encode (itemEntryFields, floatValue)
-import Scenario.Items.Owners (buildGroundItems, installGroundItems)
 import Scenario.Items.Refs (lookupItemRef)
 import Scenario.Placement.Building
 import Scenario.Placement.Encode
-import Scenario.Placement.Install (requestPlacementInstall)
 import Scenario.Placement.Location
 import Scenario.Placement.Structure
-import Scenario.Placement.Types
 import Scenario.Schema (decodeScenarioBytes)
 import Scenario.Types
-import Scenario.Units.Build
 import Scenario.Units.Capture
 import Scenario.Units.Encode (unitEntryValue)
 import Scenario.Units.Install
-import Scenario.Units.Ready (luaUnitReadiness)
 import Unit.Sim.Types (UnitThreadState(..))
-import World.Save.Types (toBuildingSnapshot, toUnitSnapshot, UnitSnapshot(..))
+import World.Save.Types (nameFloraReferences, toBuildingSnapshot, toUnitSnapshot, UnitSnapshot(..))
+import Gameplay.Tags.Page (CropPlotStore(..), capturePageTags)
 import World.Save.Snapshot (LiveCameraSnapshot(..), PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
@@ -93,11 +84,11 @@ import Scenario.Items.Refs (ItemRefs)
 import Structure.Palette (TexPalette)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import qualified Data.HashSet as HS
-import Scenario.World.Capture (chunkStatesOf, placementTiles)
+import Scenario.World.Capture (chunkStatesOf)
+import Scenario.Load.Construct (ConstructEnv(..), Constructed(..), constructScenario)
 import Test.Headless.Scenario.Placement.Fixtures
 import Unit.Types
 import World.Arena.Bounds (ArenaBounds)
-import World.Chunk.Admit (pageIncarnation)
 import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId)
 import World.State.Types
@@ -110,103 +101,35 @@ data Materialized = Materialized
     , mzBuildings   ∷ ![BuildingCompletion]
     , mzUnits       ∷ ![UnitCompletion]
     , mzDiagnostics ∷ ![ScenarioDiagnostic]
+    , mzFailures    ∷ ![Text]
+      -- ^ accepted content that did not install (empty on success)
     }
 
--- | Materialize @sc@ on @pid@.
+-- | Materialize @sc@ on @pid@ through the PRODUCTION construction
+--   ('Scenario.Load.Construct.constructScenario'): the one place the
+--   adapters are composed, so these tests exercise the order the product
+--   load follows rather than a copy of it. A runtime failure to install
+--   accepted content fails the example.
 materialize ∷ Fx → WorldPageId → WorldState → ArenaBounds → Scenario → IO Materialized
 materialize fx pid ws ab sc = do
-    let env = fxEnv fx
-        caps = toContentRegistriesCapability env
-    epoch ← pageIncarnation ws
-    items ← itemsOf env
-    now ← readIORef (gameTimeRef env)
-    defsB ← bmDefsOf env
-    locs ← locationRegistry env
-    loot ← lootTables env
-    params ← readIORef (wsGenParamsRef ws)
-    let seed = maybe 0 wgpSeed params
-        worldSize = maybe 0 wgpWorldSize params
-        itemEnv = ItemBuildEnv items (freshItemInstanceId env)
-    td ← readIORef (wsTilesRef ws)
-    edits ← readIORef (wsEditsRef ws)
-    let tiles = placementTiles (Just ab) seed edits td (buildingFootprintTiles defsB (scBuildings sc))
-    bm0 ← readIORef (buildingManagerRef env)
-    let lis0 = maybe emptyLocationInstances wgpLocationInstances params
-        pageB = bm0 { bmInstances = HM.filter ((≡ pid) ∘ biPage) (bmInstances bm0) }
-    -- 1. buildings
-    bbs ← buildBuildings BuildingBuildEnv
-              { bbeDefs = defsB, bbeItems = itemEnv, bbeBounds = Just ab
-              , bbeWorldSize = worldSize, bbeTiles = tiles, bbeExisting = pageB
-              , bbeLocations = lis0, bbeNow = now, bbePage = pid }
-        [ (indexPath' "buildings" i, e) | (i, e) ← zip [0 ∷ Int ..] (scBuildings sc) ]
-    let brefs = BuildingInstallRefs
-            { birBuildings = buildingManagerRef env, birUnits = unitManagerRef env
-            , birWorld = worldManagerRef env
-            , birLifecycle = withPageLifecycle (toWorldSimCapability env)
-            , birWorldSize = worldSize }
-    bcs ← installBuildingBuilds brefs pid epoch bbs
-    -- 2. locations judged, their occupants decided
-    let lenv = LocationBuildEnv { lbeDefs = locs, lbeBounds = Just ab, lbeSeed = seed, lbeNamer = Nothing }
-        locEntries = [ (indexPath' "locations" i, e) | (i, e) ← zip [0 ∷ Int ..] (scLocations sc) ]
-        lv = validateLocations lenv locEntries
-        unitEntries = [ (indexPath' "units" i, e) | (i, e) ← zip [0 ∷ Int ..] (scUnits sc) ]
-        (liveUnits, unitCascade) = rejectUnitsOfRejectedLocations (lvRejected lv) unitEntries
-    -- 3. units and ground items
-    um ← readIORef (unitManagerRef env)
-    reg ← readIORef (crPhysiologyRegistryRef caps)
-    ecm ← readReadOnlyRef (crvEquipmentClassManagerRef (toContentRegistriesViewCapability env))
-    inf ← readIORef (crInfectionManagerRef caps)
-    let uenv = UnitBuildEnv
-            { ubeDefs = umDefs um, ubeItems = itemEnv, ubeEquipment = ecm
-            , ubePhysiology = reg, ubeInfections = inf, ubeNow = now
-            , ubePage = pid, ubeSurfaceZ = \_ _ → Just 4 }
-    ubs ← forM liveUnits $ \(p, e) → (,) e ⊚ buildUnit uenv p e
-    let urefs = UnitInstallRefs
-            { uirUnits = unitManagerRef env, uirSims = ucUtsRef (toUnitCombatCapability env)
-            , uirBuildings = buildingManagerRef env, uirWorld = worldManagerRef env
-            , uirLifecycle = withPageLifecycle (toWorldSimCapability env)
-            , uirReady = luaUnitReadiness (lbsLuaState (fxLua fx)) }
-    ucs ← installUnitBuilds urefs pid epoch (map snd ubs)
-    -- the definition-provided guaranteed content a location omits is
-    -- constructed once, from the accepted locations only
-    let (acceptedLocs, defaultGround) = expandLocationDefaults locs loot (scGroundItems sc) (lvAccepted lv)
-    (placements, gbuild) ← buildGroundItems itemEnv (scGroundItems sc ⧺ defaultGround)
-    let (store, _) = installGroundItems [ p | Just p ← placements ] G.emptyGroundItems
-    -- a materialization establishes the page's baseline: its ground is replaced
-    atomicModifyIORef' (wsGroundItemsRef ws) (const (store, ()))
-    _ ← commitItemTreeAssignments (unitManagerRef env) (buildingManagerRef env) (worldManagerRef env)
-            (itemTagTargets gbuild) (itemRefTargets gbuild)
-    -- 4. locations resolved and everything committed on the world thread
-    let joins =
-            [ UnitJoin loc uid (usRealHome e)
-            | ((e, _), UnitInstalled uid _) ← zip ubs ucs
-            , Just loc ← [ueEncounter e] ]
-        usRealHome e = (ueX e, ueY e)
-        bindings = Map.fromList $
-            [ (r, ItemBinding i (iiDefName n) (iiInstanceId n ≡ iiInstanceId root))
-            | (placement, tree) ← zip placements (ibTrees gbuild)
-            , Just _ ← [placement], Just root ← [tree], n ← flatNodes root
-            , (i, r) ← ibRefs gbuild, i ≡ iiInstanceId n ]
-            ⧺ [ (r, ItemBinding i (iiDefName n) False)
-              | BuildingBuild (Just b) _ ← bbs
-              , BuildingInstalled _ ref ← bcs, ref ≡ bbRef b
-              , Just root ← ibTrees (bbItems b), n ← flatNodes root
-              , (i, r) ← ibRefs (bbItems b), i ≡ iiInstanceId n ]
-        (installs, resolveDiags) = resolveLocationInstalls locs joins bindings acceptedLocs
-    outcome ← requestPlacementInstall (toWorldSimCapability env) pid epoch
-        ScenarioPlacementRequest
-            { sprStructures = Just [ (indexPath' "structures" i, p) | (i, p) ← zip [0 ∷ Int ..] (scStructures sc) ]
-            , sprLocations = Just installs }
-    case outcome of
-        PlacementInstalled r → pure Materialized
-            { mzStructures = pirStructures r, mzLocations = pirLocations r
-            , mzBuildings = bcs, mzUnits = ucs
-            , mzDiagnostics = concatMap bbuDiagnostics bbs ⧺ lvDiagnostics lv ⧺ unitCascade
-                ⧺ resolveDiags ⧺ pirDiagnostics r }
-        other → fail ("placement was not installed: " ⧺ show other)
-  where
-    flatNodes i = i : concatMap flatNodes (iiContents i)
-    indexPath' k i = k <> "[" <> T.pack (show i) <> "]"
+    mz ← materializeAllowingFailures fx pid ws ab sc
+    unless (null (mzFailures mz)) $
+        fail ("construction failed: " ⧺ show (mzFailures mz))
+    pure mz
+
+-- | 'materialize' for an example that EXPECTS accepted content not to
+--   install (a building whose references cannot be held, say): the failures
+--   are reported, not raised.
+materializeAllowingFailures ∷ Fx → WorldPageId → WorldState → ArenaBounds → Scenario → IO Materialized
+materializeAllowingFailures fx pid _ws ab sc = do
+    logger ← readIORef (loggerRef (fxEnv fx))
+    c ← constructScenario ConstructEnv
+        { ceEnv = fxEnv fx, ceLua = fxLua fx, ceLogger = logger, cePage = pid
+        , cePaths = noSourcePaths, ceBounds = Just ab, ceSeam = \_ → pure () } sc
+    pure Materialized
+        { mzStructures = ccStructures c, mzLocations = ccLocations c
+        , mzBuildings = ccBuildings c, mzUnits = ccUnits c
+        , mzDiagnostics = ccDiagnostics c, mzFailures = ccFailures c }
 
 -- | A captured page.
 data Captured' = Captured'
@@ -338,9 +261,22 @@ sessionSnapshotOf fx pid ws = do
     ground ← readIORef (wsGroundItemsRef ws)
     powerNodes ← readIORef (wsPowerNodesRef ws)
     nextItem ← readIORef (nextItemInstanceIdRef env)
+    -- the page's plants, as a save writes them: species NAMED, the planted
+    -- allocator and regrowth timers, the crop plots, the page's tags
+    floraCat ← readIORef (floraCatalogRef env)
+    plots ← readIORef (wsCropPlotsRef ws)
+    harvests ← readIORef (wsFloraHarvestsRef ws)
+    pageTags ← readIORef (wsPageTagsRef ws)
+    cursor ← readIORef (wsPlantedFloraCursorRef ws)
+    (namedEdits, namedCrops, _) ← either (const (fail "a flora species cannot be named")) pure
+        (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty)
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
-            { pgsEdits = edits
+            { pgsEdits = namedEdits
+            , pgsCropPlots = namedCrops
+            , pgsFloraHarvests = harvests
+            , pgsPlantedFloraCursor = cursor
+            , pgsPageTags = capturePageTags pageTags plots
             , pgsGroundItems = ground
             , pgsPowerNodes = powerNodes
             , pgsBuildings = toBuildingSnapshot pid bm
@@ -366,12 +302,21 @@ saveMeta = SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts", srmAutos
 --   into save data and stage it. No scenario document is involved at any
 --   point.
 saveAndStage ∷ Fx → WorldPageId → WorldState → IO CaptureSources
-saveAndStage fx pid ws = do
-    let env = fxEnv fx
+saveAndStage fx pid ws = encodeSession fx pid ws ≫= stageEnvelope fx pid
+
+-- | An ordinary save of the page, as the envelope bytes the codec writes.
+encodeSession ∷ Fx → WorldPageId → WorldState → IO BS.ByteString
+encodeSession fx pid ws = do
     snap ← sessionSnapshotOf fx pid ws
+    pure (encodeSessionSnapshot (snapshotSaveMetadata saveMeta snap) snap [])
+
+-- | Load a saved envelope through the real decoder and the real load
+--   stage, with the sources a capture of the RESTORED state reads.
+stageEnvelope ∷ Fx → WorldPageId → BS.ByteString → IO CaptureSources
+stageEnvelope fx pid bytes = do
+    let env = fxEnv fx
     back ← either (fail ∘ show) pure $ fmap (\(_, s, _, _) → s) $
-        decodeSessionEnvelope HS.empty HS.empty
-            (encodeSessionSnapshot (snapshotSaveMetadata saveMeta snap) snap [])
+        decodeSessionEnvelope HS.empty HS.empty bytes
     logger ← readIORef (loggerRef env)
     matReg ← readIORef (materialRegistryRef env)
     staged ← stageSession env logger (snapshotToSaveData saveMeta back) matReg ≫= \r → case r of

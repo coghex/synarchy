@@ -5,6 +5,7 @@
 module Building.Placement
     ( canPlaceAt
     , buildingAnchorZ
+    , lookupSurfaceZ
     , PlacementResult(..)
     , RemoteCheck(..)
     , remoteCheck

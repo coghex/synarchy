@@ -151,6 +151,7 @@ import qualified Test.Headless.Scenario.Items as ScenarioItems
 import qualified Test.Headless.Scenario.Units as ScenarioUnits
 import qualified Test.Headless.Scenario.Placement as ScenarioPlacement
 import qualified Test.Headless.Scenario.World as ScenarioWorld
+import qualified Test.Headless.Scenario.Load as ScenarioLoad
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -670,6 +671,7 @@ restLane = do
     -- #2711 (SCN-11). Terrain, fluid and flora adapters.
     describe "Scenario.World" ScenarioWorld.spec
     describe "Scenario.Placement" ScenarioPlacement.spec
+    describe "Scenario.Load" ScenarioLoad.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
     -- #2278. Own engine: it registers an out-of-tree material into the
     -- ONE process-global material registry and creates two private w8

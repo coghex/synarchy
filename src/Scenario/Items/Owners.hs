@@ -33,6 +33,7 @@ module Scenario.Items.Owners
       -- * Ground
     , GroundPlacement(..)
     , buildGroundItems
+    , buildGroundItemsAt
     , installGroundItems
     ) where
 
@@ -130,8 +131,17 @@ data GroundPlacement = GroundPlacement
 --   quality/condition roll beyond the entry's own: this is not
 --   @item.spawnGround@.
 buildGroundItems ∷ ItemBuildEnv → [GroundItemEntry] → IO ([Maybe GroundPlacement], ItemBuild)
-buildGroundItems env entries = do
-    let roots = [ (indexPath "ground_items" i, giItem g) | (i, g) ← zip [0 ..] entries ]
+buildGroundItems env entries =
+    buildGroundItemsAt env [ (indexPath "ground_items" i, g) | (i, g) ← zip [0 ..] entries ]
+
+-- | 'buildGroundItems' for entries that carry the path they stood at in the
+--   document (#2713): a rejected entry is absent from the decoded list, so a
+--   diagnostic a later phase raises must name the entry by its source path,
+--   not by its index among the survivors.
+buildGroundItemsAt ∷ ItemBuildEnv → [(Text, GroundItemEntry)] → IO ([Maybe GroundPlacement], ItemBuild)
+buildGroundItemsAt env pathed = do
+    let roots = [ (p, giItem g) | (p, g) ← pathed ]
+        entries = map snd pathed
     built ← buildItemForest env roots
     return
         ( zipWith (\g t → (\inst → GroundPlacement (giX g) (giY g) inst) <$> t)
