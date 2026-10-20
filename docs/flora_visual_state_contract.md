@@ -88,6 +88,48 @@ variant candidate is exhausted before §3.3 is consulted.
 `PhaseDead` therefore remains in `LifePhaseTag` for decoding legacy YAML and
 existing saves only. Natural death and hazard death share one fallback path.
 
+### 1.2 Runtime normalization and natural-death clock (EFM-3, #2544)
+
+`World.Flora.Visual.resolveFloraVisual` implements the selector contract as a
+pure species-and-selector lookup. Legacy dead phases and dead cycle overrides
+are normalized into the sparse variant table exactly as §1.1 specifies. Legacy
+living entries remain the separate compatibility step in §3.3; they are never
+ranked as phase-specific variants. An omitted context remains a shared pattern,
+not an explicit wild pattern. Each semantic key tries explicit cultivated,
+shared, then explicit wild for a cultivated request; wild requests try explicit
+wild then shared. A shared miss need not be repeated in the second attempt.
+
+The returned trace names every attempted pattern or legacy lookup in order,
+including misses, with the winner as its final entry. The declared species base
+is always the final fallback. A zero handle stays zero: the draw boundary retains
+its existing suppression rule instead of asking for an unrelated texture.
+
+Natural-death selectors are derived in `World.Flora.Growth`, separately from
+`growthPhaseTag`, harvest eligibility and yield selection. Those gameplay
+consumers retain the existing dead-phase age pin. The visual phase at death is
+the greatest `lifePhaseOrder` among non-dead phases beginning strictly before
+the lifespan threshold. A phase beginning at that threshold was never alive.
+The visual annual stage is selected on the first whole day at or after the
+current generation's death threshold. The inverse gives an initial search bound:
+
+```
+estimate = max 0 (ceiling ((generation * (lifespan + deadWindowDays)
+                          + lifespan - placementAge) / growthRate))
+```
+
+The final date is the first day on which the existing `floraGrowth` calculation
+reaches that generation's dead window (or a later generation), found by binary
+search. This accounts for Float rounding at a threshold rather than assuming
+the inverse is exact. Slower growth and later generations use their actual
+derived clock; a corpse already present at the world epoch freezes at day zero.
+Phase and annual stage stay frozen for the entire dead window.
+No new state is stored and lifecycle timing is unchanged.
+
+EFM-3's occurrence adapter requests wild context. `resolveCropPlotTexture`
+retains the groundcover adapter's elapsed-since-planting clock for both growth
+and annual stages. The harvested-texture bypass, including suppression by
+handle zero, remains outside the resolver and unchanged until EFM-7.
+
 ---
 
 ## 2. Declaring variants: `textureVariants`
@@ -363,8 +405,8 @@ traces share.
 
 This is not a new mechanism, and it is not ranked by the §3.2.1 key. It is one
 fixed step, reached by dead and living requests alike once every
-`textureVariants` candidate is exhausted, and it is exactly today's living
-resolution in `World.Flora.Render.resolveSpeciesTexture` — including its
+`textureVariants` candidate is exhausted, and it preserves the living
+resolution formerly in `World.Flora.Render.resolveSpeciesTexture` — including its
 stage-above-phase precedence (§1.1) — driven by the selector's frozen phase and
 stage rather than by the current age and day of year:
 

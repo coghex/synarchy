@@ -6281,9 +6281,15 @@ and variant registration through `engine.loadFloraYaml`), `--match
 vocabularies refused at the authoring boundary), `--match
 "Asset.FloraContent"` (whole-file refusal atomicity) and `--match
 "World.FloraGrowth"` (the lifespan and dead-window behaviour the legacy
-default preserves). OWED by the epic's children, each with its own
-issue: EFM-3 owes table-driven resolver tests covering
-all ten ladder steps and both fallbacks; EFM-4 through EFM-6 owe
+default preserves), `--match "World.FloraVisualResolver"` (#2544: the
+pure canonical lattice and trace, context interleave, legacy normalization and
+living precedence, arbitrary-subset ordering property, frozen natural-death
+selectors, CropPlot elapsed clock and harvested bypass), and `--match
+"World.FloraVisualResolver — shipped content oracle"` (independent pre-change
+growth and lookup chain across all 16 shipped species, all living phases and
+360 calendar days; dead windows for the 12 mortal species and continued life
+for the four evergreens). OWED by the epic's children, each with its own
+issue: EFM-4 through EFM-6 owe
 occurrence-identity, render-context and persistence gates; EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
 killed, renders its dead candidate; alive and depleted, it still
