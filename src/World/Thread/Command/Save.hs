@@ -27,7 +27,8 @@ import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Engine.Load.Status
     (advanceLoad, failLoad, LoadPhase(..), awaitStageGate, readStageGate
-    , sgExpired)
+    , sgExpired, scenarioSeamPoint)
+import Scenario.Load.Types (ScenarioLoadPoint(..))
 import Engine.Save.Barrier
     (releaseCaptureLock, finishSave, failSave, readSaveStatus, ssRequestId)
 import World.Types (SaveData)
@@ -82,7 +83,11 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
                   else "released")
     logInfo logger CatWorld $
         "Staging load transaction #" <> tshow requestId
-    outcome ← try (stageSession env logger saveData matReg)
+    -- #2713: the scenario seam consulted INSIDE the guard, so a fault
+    -- armed at staging is the same "internal error during staging" a real
+    -- one would be. Inert (one IORef read) unless a scenario test armed it.
+    outcome ← try (scenarioSeamPoint (loadStatusRef env) PointStaging
+                    ≫ stageSession env logger saveData matReg)
     case outcome of
         Left (ex ∷ SomeException) → do
             let msg = "internal error during staging: " <> tshow ex

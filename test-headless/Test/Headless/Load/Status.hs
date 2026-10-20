@@ -6,7 +6,9 @@ import Control.Concurrent
 import GHC.Clock (getMonotonicTime)
 import qualified Data.Text as T
 import Test.Hspec
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Engine.Load.Status
+import Scenario.Load.Types
 import World.Thread (partitionAuthorized)
 import World.Command.Types (WorldCommand(..))
 import World.Page.Types (WorldPageId(..))
@@ -277,6 +279,85 @@ spec = describe "transactional load" $ do
             gate ← readStageGate ref
             sgArmed gate `shouldBe` False
             awaitStageGate ref 1 `shouldReturn` False
+
+    -- #2713: the admission boundary and the scenario request record.
+    describe "scenario request record and shared admission (#2713)" $ do
+        it "claimLoad refuses while a save is active and while a load is, without allocating an identity" $ do
+            ref ← newLoadStatusRef
+            Right first ← claimLoad ref (pure False) "a"
+            claimLoad ref (pure False) "b" `shouldReturn` Left BusyLoad
+            finishLoad ref first
+            claimLoad ref (pure True) "c" `shouldReturn` Left BusySave
+            -- the refusals allocated nothing: the next admitted request follows the first
+            Right second ← claimLoad ref (pure False) "d"
+            second `shouldBe` first + 1
+
+        it "claimSave refuses while a load is active and runs its claim otherwise" $ do
+            ref ← newLoadStatusRef
+            Right n ← claimLoad ref (pure False) "x"
+            ran ← newIORef False
+            claimSave ref (writeIORef ran True) `shouldReturn` Left BusyLoad
+            readIORef ran `shouldReturn` False
+            finishLoad ref n
+            claimSave ref (writeIORef ran True) `shouldReturn` Right ()
+            readIORef ran `shouldReturn` True
+
+        it "a scenario claim creates the request's record under the load's own identity" $ do
+            ref ← newLoadStatusRef
+            Right n ← claimScenarioLoad ref (pure False) "scenarios/ruin.yaml"
+            Just s ← readScenarioStatus ref
+            (slsRequestId s, slsSource s, slsStage s, slsOutcome s, slsPublished s)
+                `shouldBe` (n, "scenarios/ruin.yaml", StageAdmitted, Nothing, False)
+
+        it "an ordinary load supersedes the record instead of reporting it under the newer request" $ do
+            ref ← newLoadStatusRef
+            Right n ← claimScenarioLoad ref (pure False) "s"
+            terminateScenario ref n ScenarioReady RecoveryNone
+            readScenarioStatus ref >>= \m → fmap slsStage m `shouldBe` Just StageReady
+            Right _ ← beginLoad ref "ordinary"
+            readScenarioStatus ref `shouldReturn` Nothing
+
+        it "ends the generic transaction by where the request stood: before the swap, after it, and as a callback failure" $ do
+            let ctx = FailureContext StageConstructing (CauseSetup "boom") []
+                end ref n recovery published outcome = do
+                    when published $ updateScenarioStatus ref n (\r → r { slsPublished = True })
+                    terminateScenario ref n outcome recovery
+                    Just l ← readLoadStatus ref
+                    pure (lsPhase l, lsFailedAtPhase l)
+            ref1 ← newLoadStatusRef
+            Right n1 ← claimScenarioLoad ref1 (pure False) "a"
+            advanceLoad ref1 n1 LoadPaused
+            end ref1 n1 RecoveryPreserved False (ScenarioUnsuccessful ctx)
+                `shouldReturn` (LoadFailed, Just LoadPaused)
+            ref2 ← newLoadStatusRef
+            Right n2 ← claimScenarioLoad ref2 (pure False) "b"
+            end ref2 n2 RecoveryFlatArena True (ScenarioUnsuccessful ctx)
+                `shouldReturn` (LoadReplacementFailed, Nothing)
+            ref3 ← newLoadStatusRef
+            Right n3 ← claimScenarioLoad ref3 (pure False) "c"
+            end ref3 n3 RecoveryIncomplete True
+                (ScenarioUnsuccessful ctx { fcCause = CauseReconciliation [("m", "e")] })
+                `shouldReturn` (LoadReconciliationFailed, Nothing)
+
+        it "settles a record the generic transaction failed on its own, never leaving it non-terminal" $ do
+            ref ← newLoadStatusRef
+            Right n ← claimScenarioLoad ref (pure False) "s"
+            failLoad ref n "staging blew up"
+            Just s ← readScenarioStatus ref
+            (slsStage s, slsRecovery s) `shouldBe` (StageFailed, RecoveryPreserved)
+            fmap fcCause (case slsOutcome s of Just (ScenarioUnsuccessful c) → Just c; _ → Nothing)
+                `shouldBe` Just (CauseSetup "staging blew up")
+
+        it "ignores updates and terminations that name another request or a finished one" $ do
+            ref ← newLoadStatusRef
+            Right n ← claimScenarioLoad ref (pure False) "s"
+            updateScenarioStatus ref (n + 1) (\r → r { slsStage = StageFailed })
+            terminateScenario ref (n + 1) ScenarioReady RecoveryNone
+            fmap slsStage <$> readScenarioStatus ref `shouldReturn` Just StageAdmitted
+            terminateScenario ref n ScenarioReady RecoveryNone
+            updateScenarioStatus ref n (\r → r { slsStage = StageFailed })
+            terminateScenario ref n (ScenarioUnsuccessful (FailureContext StageReady (CauseSetup "late") [])) (RecoveryFailed "late")
+            fmap slsStage <$> readScenarioStatus ref `shouldReturn` Just StageReady
 
 -- | Poll @act@ every 20 ms for up to @secs@ seconds, returning its
 --   first 'Just'. Keeps the gate tests off fixed sleeps for the same

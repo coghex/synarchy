@@ -1002,7 +1002,8 @@ storageSpec = describe "building contents" $ do
             , "    x: 2"
             , "    y: 0"
             , "    storage: [{id: bars, definition: steel_bar}]" ]
-        mz ← materialize fx pid2 ws2 arena40 second
+        -- this example EXPECTS the building not to install
+        mz ← materializeAllowingFailures fx pid2 ws2 arena40 second
         [ case c of BuildingNotInstalled r (BuildingItemsRefused _) → Just r; _ → Nothing | c ← mzBuildings mz ]
             `shouldBe` [Just "crate2"]
         bm ← readIORef (buildingManagerRef (fxEnv fx))
