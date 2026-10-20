@@ -2074,9 +2074,42 @@ an error, for anything that names no live unit; global roster, so an
 inactive page answers too). The string-taking `faction.*` property verbs
 remain for the compatibility window and have no script callers. After
 FTS-4 the only `legacyFactionOf` readers are `unit.getFaction`, the save
-codec and the adapter itself, and `unit.getFaction` is read only by the
-FTS-5 relation consumers; the hspec group `legacy faction consumers
-(FTS-4)` inside `Unit faction profile policy` pins both sets. The
+codec and the adapter itself; since FTS-5 no script reads
+`unit.getFaction` at all. The hspec group `legacy faction consumers
+(FTS-4)` inside `Unit faction profile policy` pins both sets.
+
+**Relations and autonomous combat (#2521, FTS-5).** Every live relation
+question is FTS-1's DIRECTED authority over both units' policy profiles,
+the shipped catalogue's base table and a live overlay
+(`unitRelationFromTo` / `unitIsFriendlyToward` / `unitCanAttack`). Lua asks
+`unit.relationFromTo(a, b)`, `unit.isFriendlyToward(a, b)` and
+`unit.canAttack(a, b)` (fail closed: `neutral` / false). The overlay is a
+registration-time input of those verbs: production passes none, and only a
+fixture calls the same registration function with causes. A medic treats
+the patient IT regards as an ally; `groupEffectivenessVs` counts a
+candidate that regards the SUBJECT as an ally and never the threat; the
+context-menu Attack row is `unit.canAttack` (directed hostility, or
+unrestricted combat on either side, so debug staging works across shared
+controllers and tags). The approved matrix's eight changed pairs carry into
+these consumers: a debug unit regards nobody, itself included, as an ally.
+Autonomous acquisition and continuation — ruin guards, the generic
+`incoming_hit` engage, `attack_target` and its mid-fight swap — go through
+`scripts/unit_ai_combat_policy.lua`: hostility, or LOCAL SELF-DEFENSE (the
+unit's own last attacker, hit at most ten seconds ago, strictly after the
+end of its previous attack goal and after any diplomacy-clear time), or a
+fixture authorization for the exact (unit, target, goal occurrence).
+Hostility is never cut off; visibility never refreshes self-defense;
+permission alone acquires nobody; committed player/debug orders and
+lash-out keep their own rules. A guard acquiring through self-defense
+announces "attacks <target> in self-defense after a recent attack" instead
+of claiming a hostile relation. Runtime diplomacy and authorization are
+FTS-6's; until then they reach the seam only through its `fixtureInputs`
+provider, which returns nothing in production. The seam's per-unit cutoff
+and goal occurrence are transient (`docs/persistence_state_inventory.md`,
+`unit_ai_combat_policy`). Gates: hspec `--match "Lua faction model"`
+(`directed relation consumers (FTS-5)`), `"persistent ruin encounter AI"`,
+`"unit AI load reset"`, and `tools/medic_coord_probe.py`,
+`tools/retaliation_swap_probe.py`, `tools/expedition_loop_probe.py`. The
 `units` component (v3, now v4) persists profiles exactly; v1/v2 faction strings
 resolve by D-26 at the load boundary
 (`docs/persistence_state_inventory.md`, `UnitsDTO` and `umInstances`).
@@ -2806,7 +2839,8 @@ lifecycle `unknown → hinted → discovered → active → cleared → depleted
 `wgpLocationStamped` stays chunk-keyed (#424). `hinted` is deliberately
 unreachable but must NOT be deleted (the enum is positionally serialized
 and append-only). #916's ruin encounters are the first runtime owner of
-`active` and `cleared`: first autonomous aggression activates an encounter
+`active` and `cleared` (a guard acquires through hostility, or since #2521
+in local self-defense against a fresh attacker; §The faction tag catalogue): first autonomous aggression activates an encounter
 (without revealing an unknown location), while first sight exposes an already
 activated ruin as `active`. Since #917 `cleared` is no longer the
 encounter's to grant on its own — see §Guaranteed significant contents

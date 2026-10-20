@@ -429,6 +429,18 @@ tag, and controller queries land. The pure `faction` table can continue owning
 policy, but its arguments and fixtures must move from scalar strings to the
 approved profile representation; Lua scripts never reimplement precedence.
 
+**As built (FTS-4 #2518, FTS-5 #2521).** Lua asks these questions of unit ids:
+`unit.isPlayerOwned`, `unit.isPlayerCommandable`, `unit.hasUnrestrictedCombat`,
+`unit.relationFromTo(a, b)` (directed), `unit.isFriendlyToward(a, b)` and
+`unit.canAttack(a, b)`. The last one is deliberately NOT named `canAttackNow`:
+it answers only the attack PERMISSION (the attacker's directed hostility, or
+unrestricted combat on either side) and takes no local-awareness input. Local
+awareness, the self-defense window and the cutoffs belong to the Lua combat
+policy seam (`scripts/unit_ai_combat_policy.lua`), so a permission check can
+never be mistaken for an autonomous acquisition rule. The live overlay is a
+registration-time input of those verbs; production registers them with an
+empty one.
+
 `canAttackNow` and `canInitiateAttackOrder` are deliberately different. The
 current context menu asks whether the relation is already hostile and therefore
 cannot start a player-directed conflict. The replacement order transaction may
@@ -510,6 +522,18 @@ no ally could know about it.
    triggered, and A's ordinary Hold/Cancel can no longer unwind either
    direction. A victim's short-term local retaliation before communication does
    not cross that threshold.
+
+**As built in FTS-5 (#2521).** Local awareness is the struck unit's own
+last-attacker memory (`unit.getLastAttacker`), and it is a separate
+self-defense PERMISSION, not a relation: a hit at most ten seconds old (exactly
+ten qualifies; each new hit refreshes it) lets that unit, and only that unit,
+acquire and keep fighting its attacker under an allied or neutral relation.
+Visibility never refreshes it, and nothing team-wide changes. A hit at or
+before the latest applicable cutoff — the end of that unit's previous attack
+goal, or a diplomacy-clear time — cannot supply it, while hostility is never
+gated by those cutoffs. Runtime diplomacy, incident propagation and
+grandfathered authorization remain deferred to FTS-6; until then the seam
+receives a diplomacy-clear time and an authorization only from fixtures.
 
 The faction arc owns the directed relation and mutation API. FTS-6A integrates
 the minimal damage/witness/communication path needed to prove that awareness is
@@ -811,6 +835,14 @@ the goal otherwise completes. It cannot select a replacement target, restart
 the completed attack, or authorize another unit to join. This is narrower than
 grandfathering an encounter and less disruptive than aborting mid-action.
 
+FTS-5 (#2521) implements the consumer side: an authorization names one unit,
+one target and one goal OCCURRENCE (a new goal of the same name against the
+same target is a new occurrence), it does not follow a mid-fight retaliation
+swap, and every goal end voids it. New damage after the clear is not revival:
+it is the separate local self-defense permission, available only for a hit
+strictly later than both the clear and the end of the unit's previous attack
+goal. The authorization itself is a fixture input until FTS-6F produces it.
+
 ### D-22. Tag mutation is ownership-scoped
 
 Every mutable tag membership records where it came from. An ordinary runtime
@@ -922,7 +954,11 @@ an acting unit is the actor's own directed regard toward the beneficiary
 (medic toward patient, rallying unit toward subject). FTS-5's relation
 authority takes the live overlay as an input that is empty at runtime, and
 the current-goal authorization is a fixture input, until the live-state
-slices that replace FTS-6 land them.
+slices that replace FTS-6 land them. As built (#2521): one production
+registration function installs the relation verbs and production passes it no
+overlay; the Lua combat policy seam's `fixtureInputs` provider returns nothing
+in production. New damage is its own local self-defense permission, separate
+from both hostility and grandfathering, and runtime diplomacy stays deferred.
 
 ### D-34. Attack orders name a per-order target tag against a roster team tag
 
@@ -1322,6 +1358,19 @@ removing it.
   without silently changing diplomacy, alerts, ownership, or discovery.
 - **Out of scope:** Nomad-specific threat range/AI and multiplayer transport.
 - **Open questions:** None
+- **As built (#2521):** the directed authority is `Unit.Faction.Membership`'s
+  `unitRelationFromTo` / `unitIsFriendlyToward` / `unitCanAttack` over the
+  catalogue's base table plus a registration-time overlay; medics and swarm
+  rallying ask the actor's own directed regard; autonomous acquisition and
+  continuation go through `scripts/unit_ai_combat_policy.lua` (hostility, or
+  ten-second local self-defense after the latest cutoff, or a fixture
+  authorization for the exact goal occurrence). Committed player/debug orders
+  and lash-out keep their own termination rules. The seam's per-unit cutoff
+  and occurrence are transient (Reset to default, cleared on load and session
+  teardown), so a restored non-hostile self-defense goal ends at its first
+  decision. A consequence of the approved matrix, applied literally: a debug
+  unit regards nobody, itself included, as an ally, so it counts toward no
+  group strength and treats no patient.
 
 ### FTS-6. Expose mutable faction profiles and directed order hostility
 
