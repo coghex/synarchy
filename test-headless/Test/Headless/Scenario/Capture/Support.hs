@@ -26,6 +26,7 @@ module Test.Headless.Scenario.Capture.Support
     , armCapture
     , armCaptureHold
     , registerHold
+    , awaitHold
     , armCaptureWith
     , unitIdOf
     , armCaptureOps
@@ -56,6 +57,7 @@ import Control.Concurrent.MVar (readMVar, tryPutMVar)
 import Control.Exception (ErrorCall(..), SomeException, bracket, throwIO, toException)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import System.IO.Unsafe (unsafePerformIO)
+import System.Timeout (timeout)
 import GHC.Clock (getMonotonicTime, getMonotonicTimeNSec)
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
@@ -190,6 +192,16 @@ armCaptureHold h point hold = do
 heldHolds ∷ IORef [Hold]
 heldHolds = unsafePerformIO (newIORef [])
 {-# NOINLINE heldHolds #-}
+
+-- | Wait (bounded) until the held thread has arrived at its seam. A request
+--   that ended BEFORE the seam (a failure the example did not expect) must
+--   fail the example, never hang the suite.
+awaitHold ∷ Hold → IO ()
+awaitHold hold = timeout 30000000 (readMVar (holdReached hold)) ≫= \case
+    Just () → pure ()
+    Nothing → do
+        expectationFailure "the capture never reached the seam the example holds it at"
+        throwIO (ErrorCall "seam not reached")
 
 registerHold ∷ Hold → IO ()
 registerHold hold = atomicModifyIORef' heldHolds (\hs → (hold : hs, ()))

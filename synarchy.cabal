@@ -2051,6 +2051,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Capture.Storage
                    Test.Headless.Scenario.Capture.Coherence
                    Test.Headless.Scenario.Capture.Cycle
+                   Test.Headless.Scenario.Capture.Encode
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents

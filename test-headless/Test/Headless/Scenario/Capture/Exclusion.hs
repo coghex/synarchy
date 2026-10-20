@@ -56,7 +56,7 @@ spec = describe "shared exclusion" $ do
         armCaptureHold h CpBoundary hold
         withPump h $ do
             n ← requestCapture h dest False
-            takeMVar (holdReached hold)
+            awaitHold hold
             -- the request is accepted, paused, and not finished
             activeBefore ← captureStatusOf h
             barrierBefore ← readSaveStatus barrier
@@ -114,7 +114,7 @@ spec = describe "shared exclusion" $ do
         armCaptureHold h CpReleased hold
         withPump h $ do
             n ← requestCapture h (dir </> "stored.yaml") False
-            takeMVar (holdReached hold)
+            awaitHold hold
             fmap cstStage <$> captureStatusOf h `shouldReturn` Just CaptureStoring
             lua h "return tostring(engine.setPaused(false))" `shouldReturn` "false"
             readIORef (enginePausedRef env) `shouldReturn` True
@@ -139,7 +139,7 @@ spec = describe "shared exclusion" $ do
         armCaptureHold h CpPreflight hold
         withPump h $ do
             n ← requestCapture h (dir </> "lua.yaml") False
-            takeMVar (holdReached hold)
+            awaitHold hold
             fmap cstStage <$> captureStatusOf h `shouldReturn` Just CapturePreflight
             lua h "return tostring(engine.setPaused(false))" `shouldReturn` "false"
             putMVar (holdRelease hold) ()
@@ -178,7 +178,7 @@ spec = describe "shared exclusion" $ do
         src ← SourceFile <$> writeScenario "capture-excl-by-load.yaml" (doc ["units: []"])
         n ← request h src
         pump ← startPump h
-        takeMVar (holdReached hold)
+        awaitHold hold
         loadBefore ← statusOf h
         requestScenarioCapture env req `shouldReturn` Left BusyLoad
         statusOf h `shouldReturn` loadBefore
@@ -257,7 +257,7 @@ spec = describe "shared exclusion" $ do
             (forever (processLuaMsgs env (fxLua (hFx h)) (hCtl h) >> threadDelay 500))
             (putMVar done)
         n ← requestCapture h (dir </> "killed.yaml") False
-        takeMVar (holdReached hold)
+        awaitHold hold
         -- shutdown reaches the thread the request is running on
         killThread pumpThread
         -- (bounded: a cancellation swallowed as an ordinary exception would leave the thread running)

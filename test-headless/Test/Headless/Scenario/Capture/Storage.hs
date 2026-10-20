@@ -13,6 +13,7 @@ module Test.Headless.Scenario.Capture.Storage (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent.MVar (putMVar)
 import Data.IORef (readIORef)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
@@ -162,6 +163,29 @@ spec = describe "the file" $ do
         _ ← failure (Attempt s3 "" [] Nothing)
         BS.readFile src `shouldReturn` srcBefore
         listDir dir `shouldReturn` ["copy-1.yaml", "copy-2.yaml", "source.yaml"]
+        afterwards h
+
+    it "reports the publication the moment the destination holds the new file, while the request is still finishing" $ \h → do
+        loadDoc h "capture-store-recorded.yaml" contentDoc
+        dir ← freshDir "recorded"
+        let dest = dir </> "out.yaml"
+        hold ← newHold
+        -- held after the atomic publication, before the directory is synced
+        armCaptureHold h CpPublished hold
+        withPump h $ do
+            n ← requestCapture h dest False
+            awaitHold hold
+            st ← captureStatusOf h
+            fmap (\r → (cstStage r, cstPublication r, isNothing (cstOutcome r))) st
+                `shouldBe` Just (CaptureStoring, Published, True)
+            -- the complete file is already in place
+            bytes ← BS.readFile dest
+            fmap BS.length (Just bytes) `shouldSatisfy` maybe False (> 0)
+            _ ← decodeFile h dest
+            putMVar (holdRelease hold) ()
+            s ← awaitCapture h n 60
+            disarmCapture h
+            void (captureOf s)
         afterwards h
 
     describe "an injected failure at each step" $ do

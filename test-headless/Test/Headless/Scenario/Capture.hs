@@ -19,15 +19,18 @@ import qualified Test.Headless.Scenario.Capture.Exclusion as Exclusion
 import qualified Test.Headless.Scenario.Capture.Storage as Storage
 import qualified Test.Headless.Scenario.Capture.Coherence as Coherence
 import qualified Test.Headless.Scenario.Capture.Cycle as Cycle
+import qualified Test.Headless.Scenario.Capture.Encode as Encode
 import Control.Exception (finally)
 import Test.Headless.Scenario.Capture.Support (clearLine)
 import Test.Headless.Scenario.Load.Harness (withH)
 
 spec ∷ Spec
-spec = aroundAll withH $ aroundWith (\example h → (clearLine h ≫ example h) `finally` clearLine h) $ do
-    Content.spec
-    Edits.spec
-    Exclusion.spec
-    Storage.spec
-    Coherence.spec
-    Cycle.spec
+spec = do
+    Encode.spec
+    aroundAll withH $ aroundWith (\example h → (clearLine h ≫ example h) `finally` clearLine h) $ do
+        Content.spec
+        Edits.spec
+        Exclusion.spec
+        Storage.spec
+        Coherence.spec
+        Cycle.spec

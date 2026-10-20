@@ -143,7 +143,7 @@ spec = describe "one coherent snapshot" $ do
         armCaptureHold h CpBoundary hold
         withPump h $ do
             n ← requestCapture h (dir </> "park.yaml") False
-            takeMVar (holdReached hold)
+            awaitHold hold
             -- inside the capture window: every owner is alive (it keeps
             -- ticking) and parked (it mutates nothing)
             before ← forM captureOwners (ownerCounts (hOwners h))
@@ -171,7 +171,7 @@ spec = describe "one coherent snapshot" $ do
         armCaptureHold h CpEncoded hold
         withPump h $ do
             n ← requestCapture h (dir </> "sealed.yaml") False
-            takeMVar (holdReached hold)
+            awaitHold hold
             before ← forM captureOwners (ownerCounts (hOwners h))
             waitCondition 30 $ do
                 now ← forM captureOwners (ownerCounts (hOwners h))
@@ -194,7 +194,7 @@ spec = describe "one coherent snapshot" $ do
         armCaptureHold h CpReleased hold
         withPump h $ do
             n ← requestCapture h (dir </> "late.yaml") False
-            takeMVar (holdReached hold)
+            awaitHold hold
             -- the owners run again: the capture lock was released with the bytes fixed
             mutated ← forM captureOwners (ownerCounts (hOwners h))
             waitCondition 30 $ do
