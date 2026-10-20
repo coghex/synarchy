@@ -299,12 +299,14 @@ def wait_stage_gate_held(port: int, request_id, secs: float = 60.0):
     return None
 
 
-# The three phases that END a load transaction. "LoadReconciliationFailed"
-# (issue #1204) belongs here with the other two: it ends the transaction
+# The phases that END a load transaction. "LoadReconciliationFailed"
+# (issue #1204) belongs here with the first two: it ends the transaction
 # (its outcome is non-nil, so the engine's own mutual-exclusion gate stops
 # rejecting), and treating it as in-flight would misread a finished load
-# as a still-racing one.
-TERMINAL_LOAD_PHASES = ("LoadPublished", "LoadFailed", "LoadReconciliationFailed")
+# as a still-racing one. "LoadReplacementFailed" (issue #2713) is the same
+# for a scenario load whose published replacement could not be completed.
+TERMINAL_LOAD_PHASES = ("LoadPublished", "LoadFailed", "LoadReconciliationFailed",
+                        "LoadReplacementFailed")
 
 
 def inflight(status, request_id) -> bool:

@@ -22,6 +22,8 @@ module Test.Headless.Scenario.Placement.Glue
     , CaptureSources(..)
     , capturePageFrom
     , saveAndStage
+    , encodeSession
+    , stageEnvelope
     , sessionSnapshotOf
     , savedEnvelopeFrom
     , capturedYaml
@@ -78,7 +80,8 @@ import Scenario.Units.Encode (unitEntryValue)
 import Scenario.Units.Install
 import Scenario.Units.Ready (luaUnitReadiness)
 import Unit.Sim.Types (UnitThreadState(..))
-import World.Save.Types (toBuildingSnapshot, toUnitSnapshot, UnitSnapshot(..))
+import World.Save.Types (nameFloraReferences, toBuildingSnapshot, toUnitSnapshot, UnitSnapshot(..))
+import Gameplay.Tags.Page (CropPlotStore(..), capturePageTags)
 import World.Save.Snapshot (LiveCameraSnapshot(..), PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
@@ -338,9 +341,22 @@ sessionSnapshotOf fx pid ws = do
     ground ← readIORef (wsGroundItemsRef ws)
     powerNodes ← readIORef (wsPowerNodesRef ws)
     nextItem ← readIORef (nextItemInstanceIdRef env)
+    -- the page's plants, as a save writes them: species NAMED, the planted
+    -- allocator and regrowth timers, the crop plots, the page's tags
+    floraCat ← readIORef (floraCatalogRef env)
+    plots ← readIORef (wsCropPlotsRef ws)
+    harvests ← readIORef (wsFloraHarvestsRef ws)
+    pageTags ← readIORef (wsPageTagsRef ws)
+    cursor ← readIORef (wsPlantedFloraCursorRef ws)
+    (namedEdits, namedCrops, _) ← either (const (fail "a flora species cannot be named")) pure
+        (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty)
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
-            { pgsEdits = edits
+            { pgsEdits = namedEdits
+            , pgsCropPlots = namedCrops
+            , pgsFloraHarvests = harvests
+            , pgsPlantedFloraCursor = cursor
+            , pgsPageTags = capturePageTags pageTags plots
             , pgsGroundItems = ground
             , pgsPowerNodes = powerNodes
             , pgsBuildings = toBuildingSnapshot pid bm
@@ -366,12 +382,21 @@ saveMeta = SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts", srmAutos
 --   into save data and stage it. No scenario document is involved at any
 --   point.
 saveAndStage ∷ Fx → WorldPageId → WorldState → IO CaptureSources
-saveAndStage fx pid ws = do
-    let env = fxEnv fx
+saveAndStage fx pid ws = encodeSession fx pid ws ≫= stageEnvelope fx pid
+
+-- | An ordinary save of the page, as the envelope bytes the codec writes.
+encodeSession ∷ Fx → WorldPageId → WorldState → IO BS.ByteString
+encodeSession fx pid ws = do
     snap ← sessionSnapshotOf fx pid ws
+    pure (encodeSessionSnapshot (snapshotSaveMetadata saveMeta snap) snap [])
+
+-- | Load a saved envelope through the real decoder and the real load
+--   stage, with the sources a capture of the RESTORED state reads.
+stageEnvelope ∷ Fx → WorldPageId → BS.ByteString → IO CaptureSources
+stageEnvelope fx pid bytes = do
+    let env = fxEnv fx
     back ← either (fail ∘ show) pure $ fmap (\(_, s, _, _) → s) $
-        decodeSessionEnvelope HS.empty HS.empty
-            (encodeSessionSnapshot (snapshotSaveMetadata saveMeta snap) snap [])
+        decodeSessionEnvelope HS.empty HS.empty bytes
     logger ← readIORef (loggerRef env)
     matReg ← readIORef (materialRegistryRef env)
     staged ← stageSession env logger (snapshotToSaveData saveMeta back) matReg ≫= \r → case r of

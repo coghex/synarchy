@@ -13,7 +13,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules
                                  , broadcastToModulesReportingErrors)
-import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
+import Engine.Core.Log (logWarn, logDebug, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
 import Structure.ArtCatalog
@@ -34,8 +34,12 @@ import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
 import Engine.Load.Status (advanceLoad, failLoad, finishLoad
-                          , failReconciliation
+                          , failReconciliation, scenarioSeamPoint
                           , ReconciliationFailure(..), LoadPhase(..))
+import Scenario.Load.Service
+    (startScenarioLoad, scenarioPublishing, scenarioPublished, continueScenarioLoad)
+import Scenario.Load.Types (ScenarioLoadPoint(..))
+import Control.Exception (SomeException, SomeAsyncException, fromException, throwIO, try)
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import Engine.Scripting.Lua.Message (discardStaleLuaToEngineWork)
 import Engine.Scripting.Lua.DebugServer
@@ -360,6 +364,12 @@ processLuaMsg env ls stateRef msg = case msg of
                         \session while this command was queued"
                     cancelStaleDebugCommands
     cancelStaleDebugCommands
+    -- #2713: a SCENARIO load is not finished by its reconciliation: the
+    -- scenario's content is installed after it. 'scenarioPublished' claims
+    -- the request (and runs the publication seam); 'continueScenarioLoad'
+    -- takes over from the broadcast's result instead of the two ordinary
+    -- terminations below.
+    scenario ← scenarioPublished env requestId
     reconcileFailures ← broadcastToModulesReportingErrors ls "onSaveLoaded"
       [ intsToScriptArray survUnitIds
       , intsToScriptArray survBuildingIds
@@ -388,11 +398,15 @@ processLuaMsg env ls stateRef msg = case msg of
     -- not a presentation-only concern. It gets its own honest terminal
     -- disposition instead — see 'failReconciliation', which is
     -- deliberately not 'failLoad'.
-    if null reconcileFailures
-      then finishLoad (loadStatusRef env) requestId
-      else failReconciliation (loadStatusRef env) requestId
-             [ ReconciliationFailure (T.pack scriptPath') err
-             | (scriptPath', err) ← reconcileFailures ]
+    case scenario of
+      Just seamFault → continueScenarioLoad env ls requestId seamFault
+          [ (T.pack scriptPath', err) | (scriptPath', err) ← reconcileFailures ]
+      Nothing →
+        if null reconcileFailures
+          then finishLoad (loadStatusRef env) requestId
+          else failReconciliation (loadStatusRef env) requestId
+                 [ ReconciliationFailure (T.pack scriptPath') err
+                 | (scriptPath', err) ← reconcileFailures ]
   LuaHudLogInfo text1 text2 kind →
     broadcastToModules ls "onSetInfoText"
       [ScriptString text1, ScriptString text2, ScriptString kind]
@@ -441,6 +455,7 @@ processLuaMsg env ls stateRef msg = case msg of
       , maybe ScriptNil ScriptString mPage
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
+  LuaScenarioLoad requestId source → startScenarioLoad env ls requestId source
   LuaLoadStagingFailed requestId → do
       -- This message is QUEUED (not a direct call), so
       -- it can be processed well after 'requestId' has already gone
@@ -471,6 +486,27 @@ processLuaMsg env ls stateRef msg = case msg of
 handleLoadStaged ∷ EngineEnv → LuaBackendState → Int → IO ()
 handleLoadStaged env ls requestId = do
     logger ← readIORef (loggerRef env)
+    -- #2713: the scenario seam at the publish hand-off. A synchronous
+    -- exception raised here ends the request exactly as the barrier failing
+    -- to open does (the staged session is dropped, the prepared Lua load
+    -- aborted); a cancellation propagates. Inert unless a scenario test
+    -- armed it.
+    seam ← try (scenarioSeamPoint (loadStatusRef env) PointPublishHandoff)
+    case seam of
+      Left e | Just (ae ∷ SomeAsyncException) ← fromException e → throwIO ae
+             | otherwise → do
+        let why = "unhandled exception at the publish hand-off: "
+                  <> tshow (e ∷ SomeException)
+        logWarn logger CatWorld $
+            "load publish #" <> tshow requestId <> " " <> why
+        failLoad (loadStatusRef env) requestId why
+        writeIORef (pendingLoadRef env) Nothing
+        Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
+      Right () → publishStaged env ls logger requestId
+
+publishStaged ∷ EngineEnv → LuaBackendState → LoggerState → Int → IO ()
+publishStaged env ls logger requestId = do
+    scenarioPublishing env requestId
     -- SaveInput is omitted when the input thread was
     -- never started (App.Headless boots without one — no GLFW window
     -- to poll), so waitForOwners below never times out forever waiting
@@ -533,6 +569,25 @@ handleLoadStaged env ls requestId = do
             Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
           Right () → do
             reachSnapshot (saveBarrierRef env) barrierRequestId
+            -- #2713: the scenario seam with the barrier HELD (every owner
+            -- acknowledged and parked). A synchronous exception here ends
+            -- the request the way a failing Lua apply does: before any
+            -- Haskell state changed.
+            held ← try (scenarioSeamPoint (loadStatusRef env) PointBarrier)
+            case held of
+              Left e | Just (ae ∷ SomeAsyncException) ← fromException e → throwIO ae
+                     | otherwise → do
+                let why = "unhandled exception while the publish barrier was \
+                          \held: " <> tshow (e ∷ SomeException)
+                failSave (saveBarrierRef env) barrierRequestId why
+                logWarn logger CatWorld $
+                    "load publish #" <> tshow requestId <> " " <> why
+                failLoad (loadStatusRef env) requestId why
+                writeIORef (pendingLoadRef env) Nothing
+                Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
+              Right () → applyAndCommit barrierRequestId
+  where
+   applyAndCommit barrierRequestId = do
             applied ← Lua.runWith (lbsLuaState ls) (applyLuaLoad logger)
             case applied of
               -- applyLuaLoad is only reachable after prepareLoad already

@@ -17,7 +17,11 @@ import Test.Hspec
 import qualified HsLua as Lua
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Load.Status (beginLoad, failLoad)
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
+import qualified Engine.Core.Queue as Q
+import Engine.Load.Status (beginLoad, failLoad, terminateScenario)
+import Scenario.Load.Service (requestScenarioLoad)
+import Scenario.Load.Types
 import Engine.Scripting.Lua.API.Core (setPausedFn)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -94,3 +98,30 @@ spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
         afterApplied `shouldBe` True
         unpausedAfter ← readIORef (enginePausedRef env)
         unpausedAfter `shouldBe` False
+
+    -- #2713: a SCENARIO load is a load transaction too, so the same gate
+    -- must hold from the moment it is accepted until it is terminal. The
+    -- request is made through the production entry point and then left
+    -- un-pumped, which is exactly a request held in flight.
+    it "setPaused(false) is rejected while a SCENARIO load is in flight and \
+       \accepted again once it ends" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        writeIORef (enginePausedRef env) False
+        accepted ← requestScenarioLoad env (SourceBytes "pausegate-scenario" "version: 3\n")
+        reqId ← either (\b → fail ("not accepted: " ⧺ show b)) pure accepted
+        -- acceptance itself paused the session, synchronously
+        readIORef (enginePausedRef env) `shouldReturn` True
+        duringApplied ← callSetPaused ls env False
+        duringApplied `shouldBe` False
+        readIORef (enginePausedRef env) `shouldReturn` True
+        -- the request ends (unsuccessfully, before any replacement) and the
+        -- queued hand-off message it left is dropped with it
+        terminateScenario (slLoadStatusRef (toSaveLoadCapability env)) reqId
+            (ScenarioUnsuccessful (FailureContext StagePreflight (CauseSetup "test abort") []))
+            RecoveryPreserved
+        _ ← Q.flushQueue (luaQueue env)
+        afterApplied ← callSetPaused ls env False
+        afterApplied `shouldBe` True
+        readIORef (enginePausedRef env) `shouldReturn` False
