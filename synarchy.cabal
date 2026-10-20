@@ -463,6 +463,7 @@ library
                       Engine.Scripting.Lua.API.Units.TransferOrder
                      Engine.Scripting.Lua.API.Units.Stats
                      Engine.Scripting.Lua.API.Units.Physiology
+                     Engine.Scripting.Lua.API.Units.Ownership
                      Engine.Scripting.Lua.API.Units.Stance
                      Engine.Scripting.Lua.API.Units.Stamina
                      Engine.Scripting.Lua.API.Units.CommitPhysio
@@ -648,6 +649,11 @@ library
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
                      Scenario.Items.Refs
+                     Scenario.Load.Types
+                     Scenario.Load.Catalog
+                     Scenario.Load.Session
+                     Scenario.Load.Construct
+                     Scenario.Load.Service
                      Scenario.Items.Build
                      Scenario.Items.Owners
                      Scenario.Items.Capture
@@ -1150,6 +1156,7 @@ library
                      World.Flora.Clock
                      World.Flora.Placement
                      World.Flora.Render
+                     World.Flora.Visual
                      World.Flora.Harvest
                      World.Flora.CropPlot
                      World.Fluid.Types
@@ -1918,6 +1925,8 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
+                   Test.Headless.World.FloraVisualResolver
+                   Test.Headless.World.FloraVisualOracle
                    Test.Headless.World.FloraIdentity
                    Test.Headless.World.FloraOrder
                    Test.Headless.World.FloraRenderContext
@@ -2006,6 +2015,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.PhysiologyModes.Transitions
                    Test.Headless.Unit.PhysiologyFixture
                    Test.Headless.Unit.FactionProfile
+                   Test.Headless.Unit.FactionConsumerAudit
                    Test.Headless.Unit.FactionProfileWire
                    Test.Headless.Gameplay.Tags
                    Test.Headless.Gameplay.TagsMemory
@@ -2025,7 +2035,15 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.World
                    Test.Headless.Scenario.World.Fixtures
                    Test.Headless.Scenario.World.Live
+                   Test.Headless.Scenario.Load
+                   Test.Headless.Scenario.Load.Harness
+                   Test.Headless.Scenario.Load.Exclusion
+                   Test.Headless.Scenario.Load.Failure
+                   Test.Headless.Scenario.Load.Session
+                   Test.Headless.Scenario.Load.Persist
+                   Test.Headless.Scenario.Load.Bindings
                    Test.Headless.Lua.Faction
+                   Test.Headless.Lua.UnitOwnership
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
                    Test.Headless.Location.ContainerShells
@@ -2150,6 +2168,7 @@ test-suite synarchy-test-headless
                 -- spec-tree walk in its regression. hspec's own core, so
                 -- already in the build plan.
                 , hspec-core
+                , QuickCheck
                 , JuicyPixels
                 -- #2693's oversized-inflate fixture builds a real zlib stream.
                 , zlib

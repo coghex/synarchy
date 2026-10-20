@@ -151,6 +151,7 @@ import qualified Test.Headless.Scenario.Items as ScenarioItems
 import qualified Test.Headless.Scenario.Units as ScenarioUnits
 import qualified Test.Headless.Scenario.Placement as ScenarioPlacement
 import qualified Test.Headless.Scenario.World as ScenarioWorld
+import qualified Test.Headless.Scenario.Load as ScenarioLoad
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -319,6 +320,8 @@ import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.SubMinuteClock as SubMinuteClock
+import qualified Test.Headless.World.FloraVisualResolver as FloraVisualResolver
+import qualified Test.Headless.World.FloraVisualOracle as FloraVisualOracle
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
@@ -467,6 +470,7 @@ import qualified Test.Headless.Lua.CraftCycleReplenishment as LuaCraftCycleReple
 import qualified Test.Headless.Lua.CraftBillQueuePriority as LuaCraftBillQueue
 import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
+import qualified Test.Headless.Lua.UnitOwnership as LuaUnitOwnership
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
 import qualified Test.Headless.Unit.FactionCatalogue as UnitFactionCatalogue
@@ -671,6 +675,7 @@ restLane = do
     -- #2711 (SCN-11). Terrain, fluid and flora adapters.
     describe "Scenario.World" ScenarioWorld.spec
     describe "Scenario.Placement" ScenarioPlacement.spec
+    describe "Scenario.Load" ScenarioLoad.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
     -- #2278. Own engine: it registers an out-of-tree material into the
     -- ONE process-global material registry and creates two private w8
@@ -748,6 +753,9 @@ restLane = do
     -- mutation paths, which would corrupt the shared-worlds engine
     -- above (same precedent as World identity / autosave guards).
     aroundAll withHeadlessEngine UnitTransferApi.spec
+    -- Own engine (#2518): the unit-id ownership queries run against a
+    -- unit roster this spec WRITES into the unit manager ref.
+    aroundAll withHeadlessEngine LuaUnitOwnership.spec
     -- Own engine (#1733): the live unit.addXP boundary WRITES the
     -- unit manager ref (and seeds a deliberately corrupt stat map),
     -- so it cannot share the worldgen engine above.
@@ -1268,6 +1276,8 @@ restLane = do
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     SubMinuteClock.spec
+    describe "World.FloraVisualResolver" FloraVisualResolver.spec
+    describe "World.FloraVisualResolver — shipped content oracle" FloraVisualOracle.spec
     describe "World.FloraGrowth" FloraGrowth.spec
     describe "World.FloraOrder" FloraOrder.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec

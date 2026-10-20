@@ -19,6 +19,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (LoggerState)
 import World.Save.Payload (LoadReconcileContext)
+import Scenario.Load.Types (ScenarioSource)
 import Language.Semantic.Types (Catalogue)
 import Language.Generated.Types (LanguageProvenance)
 import Language.Suggest (NameSuggester)
@@ -391,6 +392,15 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   other thing that clears it) — so this tells the Lua
               --   thread to call
               --   'Engine.Scripting.Lua.API.Save.Bridge.abortLuaLoad' instead.
+            | LuaScenarioLoad Int ScenarioSource
+              -- ^ Issue #2713 (SCN-13): an ACCEPTED scenario-load request
+              --   (its request id and the resolved source) for the Lua
+              --   thread to run. Everything the request does that needs
+              --   the Lua state — preparing the replacement session's
+              --   Lua components, the units' paused-readiness hook, the
+              --   session-bound reconciliation — runs on that thread, so
+              --   an entry point on any other thread hands the request
+              --   over this way ('Scenario.Load.Service.requestScenarioLoad').
             deriving (Eq, Show)
 
 data LuaResult = LuaSuccess

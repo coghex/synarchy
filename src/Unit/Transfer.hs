@@ -358,7 +358,9 @@ data UnitEndpointView = UnitEndpointView
       -- ^ @(floor gx, floor gy)@ — the same tile craft.executeAt and
       --   the Store menu measure from.
     , uevCommandable   ∷ !Bool
-      -- ^ 'Unit.Faction.isPlayerCommandable' of the unit's faction.
+      -- ^ Commandability of the unit's faction profile under the
+      --   observing controller
+      --   ('Unit.Faction.Membership.unitIsCommandableBy', #2518).
       --   Required in BOTH roles: A2 deleted the @transfer_receiver@
       --   data marker, and faction is what replaced it.
     , uevCapacity      ∷ !Float

@@ -19,6 +19,8 @@ module Test.Headless.Scenario.Schema (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
+import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Aeson as A
@@ -398,6 +400,7 @@ spec = do
     preservationSpec
     formatV2Spec
     formatV3Spec
+    sourcePathSpec
 
 boundsSpec ∷ Spec
 boundsSpec = describe "finite map bounds" $ do
@@ -1019,3 +1022,58 @@ formatV3Spec = describe "format v3: structure variants and container bindings" $
         ds `shouldBe` []
         map spVariant (scStructures s) `shouldBe` [Omitted]
         scSourceVersion s `shouldBe` 2
+
+-- * Source paths (#2713)
+
+-- | Where each retained entry stood in the document, and the translation of
+--   the survivor positions an adapter reports back to them.
+sourcePathSpec ∷ Spec
+sourcePathSpec = describe "source paths of retained entries" $ do
+
+    let decodeWith yaml = case decodeScenarioBytesPaths scenarioFormat catalog (BC.pack yaml) of
+            (ScenarioLoaded s ds, paths) → pure (s, ds, paths)
+            (ScenarioFailed f, _) → expectationFailure ("unexpected failure: " ⧺ show f) ≫ error "unreachable"
+
+    it "records the document position of every retained top-level entry, rejected ones absent" $ do
+        (_, _, paths) ← decodeWith $ unlines
+            [ "version: 3"
+            , "buildings:"
+            , "  - {id: ghost, definition: no_such_building, x: 0, y: 0}"
+            , "  - {id: a, definition: battery, x: 5, y: 5}"
+            , "  - {definition: battery, x: 6, y: 6}"
+            , "ground_items:"
+            , "  - {id: nope, definition: no_such_item, x: 1, y: 1}"
+            , "  - {id: k, definition: knife, x: 2, y: 2}" ]
+        spBuildings paths `shouldBe` ["buildings[1]", "buildings[2]"]
+        spGroundItems paths `shouldBe` ["ground_items[1]"]
+
+    it "records which positions of a nested list survived, and translates a survivor's position back" $ do
+        (_, _, paths) ← decodeWith $ unlines
+            [ "version: 3"
+            , "buildings:"
+            , "  - id: hold"
+            , "    definition: cargo_hold"
+            , "    x: 0"
+            , "    y: 0"
+            , "    storage: [{id: bad, definition: no_such_item}, {id: ok1, definition: knife}, {id: bad2, definition: no_such_item}, {id: ok2, definition: knife, contents: []}]" ]
+        Map.lookup "buildings[0].storage" (spSurvivors paths) `shouldBe` Just [1, 3]
+        translateNested paths "buildings[0].storage[0]" `shouldBe` "buildings[0].storage[1]"
+        translateNested paths "buildings[0].storage[1].x" `shouldBe` "buildings[0].storage[3].x"
+        -- the top-level entry is already a source path; an unrecorded list is left alone
+        translateNested paths "buildings[7]" `shouldBe` "buildings[7]"
+        translateNested paths "buildings[0].materials_delivered[2]" `shouldBe` "buildings[0].materials_delivered[2]"
+        translateNested paths "ground_items(default)[3]" `shouldBe` "ground_items(default)[3]"
+
+    it "translates every survivor of every rejection pattern of a nested list (exhaustive up to six items)" $
+        forM_ [1 .. 6 ∷ Int] $ \n → forM_ [0 .. 2 ^ n - 1 ∷ Int] $ \mask → do
+            let rejected i = testBit' mask i
+                items = [ if rejected i then "{definition: no_such_item}" else "{definition: knife}" | i ← [0 .. n - 1] ]
+                survivors = [ i | i ← [0 .. n - 1], not (rejected i) ]
+            (_, _, paths) ← decodeWith $ unlines
+                [ "version: 3", "buildings:", "  - {definition: cargo_hold, x: 0, y: 0, storage: [" ⧺ intercalate' ", " items ⧺ "]}" ]
+            forM_ (zip [0 ∷ Int ..] survivors) $ \(k, source) →
+                translateNested paths ("buildings[0].storage[" <> tshow k <> "]")
+                    `shouldBe` ("buildings[0].storage[" <> tshow source <> "]")
+  where
+    testBit' m i = (m `div` (2 ^ i)) `mod` 2 ≡ 1
+    intercalate' sep = foldr1 (\a b → a ⧺ sep ⧺ b)

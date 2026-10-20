@@ -421,6 +421,13 @@ def wait_load_published(port: int, seconds: float = 180.0, interval: float = 0.2
             # failure message.
             if phase == "LoadReconciliationFailed":
                 return False, status
+            # Issue #2713: a SCENARIO load whose replacement was published
+            # and then could not be completed (recovered to a flat arena,
+            # or not). Terminal and UNSUCCESSFUL like the two above; it
+            # leaves ``failedAtPhase`` unset because the old session did
+            # not survive.
+            if phase == "LoadReplacementFailed":
+                return False, status
         time.sleep(interval)
     return False, last
 

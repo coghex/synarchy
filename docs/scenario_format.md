@@ -8,9 +8,11 @@ state a home (see [Flora, format v2](#flora-format-v2)), and for version 3, whic
 is in [designs/predefined_arena_worlds_design.md](designs/predefined_arena_worlds_design.md),
 in SCN-01 and the decisions it cites.
 
-The scope of this slice is the representation and its validation. Nothing here
-constructs, replaces or captures a live world. Runtime construction, finite-map
-enforcement and capture belong to the later SCN slices. Those slices consume
+The scope of the schema slice is the representation and its validation. Nothing in
+the schema constructs, replaces or captures a live world. Runtime construction,
+finite-map enforcement and capture belong to the later SCN slices (construction:
+SCN-09 to SCN-12; the session transaction that composes them:
+[SCN-13](#loading-a-scenario-session-scn-13-2713)). Those slices consume
 `Scenario.Schema.loadScenarioFile` and the typed values in `Scenario.Types`. No
 runtime behaviour is claimed from the schema tests.
 
@@ -208,7 +210,7 @@ strings, default `[]`).
 |---|---|---|---|---|
 | `version` | integer | req | unsuccessful load | Format dispatch; must be 1 or migratable to it. |
 | `map.width`, `map.height` | integer, `[1, 100000]` tiles | opt (both or neither) | Expandable arena | Finite page bounds (SCN-08). |
-| `camera.x`, `camera.y` | number, tiles | opt | `0` | Initial camera position only (SCN-13). |
+| `camera.x`, `camera.y` | number, tiles | opt | `0` | Initial camera position only (SCN-13: the replacement session's camera and its page's). |
 | `terrain`, `fluids`, `flora`, `structures`, `buildings`, `locations`, `units`, `ground_items` | list | opt | `[]` | One family each; a non-list is a field rejection. |
 
 ### `terrain[]` — column patches
@@ -1252,6 +1254,64 @@ no building. The
 decodes and stages it, and a capture of the restored state equals the original
 without the source document. See
 [persistence_state_inventory.md](persistence_state_inventory.md).
+
+## Loading a scenario session (SCN-13, #2713)
+
+`Scenario.Load.Service` loads a decoded scenario as one paused session
+transaction. The exclusion, status, failure and recovery contract is in
+[engine_contracts.md](engine_contracts.md#scenario-load-the-paused-session-transaction-2713);
+this section is what the FORMAT means to it.
+
+- **What a source is.** A path, or a document held in memory under a name. The
+  loader reads it and never writes it: not on success, not on failure, not
+  while migrating (D-24).
+- **`map` and `camera`.** `map` decides the replacement arena's bounds (D-9): a
+  finite rectangle, or the expandable arena when omitted. `camera` is the
+  initial camera position of the replacement session and of its page (D-21); it
+  translates neither the bounds nor any object.
+- **What replaces what.** A scenario replaces the TESTING session whole (D-11):
+  every page, unit, building, item, tag, order, reference, allocator and clock of
+  the previous one is gone, and the new session starts at the session epoch with
+  fresh allocators. Runtime ids may therefore be reused; nothing queued against
+  the old ids reaches the new ones. A live session that holds an ordinary
+  gameplay page is never replaced.
+- **Order of construction.** Terrain, fluids and flora; then buildings (judged
+  against that terrain); then locations, with the units that would join a
+  rejected one excluded first; then units and ground items (the omitted default
+  content of the accepted locations among them); then structures and locations
+  in one commit. This is the order the SCN-09..12 sections document, composed.
+- **Warnings.** Every rejection (`ScenarioDiagnostic`) found by the decoder or by
+  any adapter is kept in the request's result in the order found, with its path,
+  reason and effect. A document with rejections loads its retained subset and is
+  ready WITH those warnings; an automated caller compares the list with the one
+  it expects and fails setup on any other (D-15).
+- **Omitted `z` of a unit** is the column surface of the terrain the scenario
+  itself installed, read after the terrain and before the units.
+- **Paths.** A diagnostic names an entry by the path it had in the DOCUMENT
+  (`buildings[2]`), not by its index among the entries that survived decoding:
+  `Scenario.Schema.loadScenarioFilePaths` returns each family's source paths
+  beside the scenario (`Scenario.Types.SourcePaths`, not part of a scenario's
+  identity), and the adapters report at them. The same holds for NESTED lists
+  (a building's `storage`, an item's `contents`, a unit's `inventory`,
+  `wounds`, one stat's `modifiers`): the decoder records which source
+  positions of each survived (`spSurvivors`), the adapters number the
+  survivors, and `Scenario.Types.translateNested` rewrites each adapter
+  diagnostic back to the positions the author wrote (an item behind a
+  rejected first sibling is reported at `storage[1]`, not `storage[0]`). A rejection at the decoder
+  (`buildings[0].definition`) followed by an adapter's rejection of the
+  overlapping third building reads `buildings[2]`, never `buildings[1]`. The
+  default content a location constructs is not in the document and is labelled
+  `ground_items(default)[j]`.
+- **Carried items bind too.** A location's `significant_items` / `containers`
+  reference may name an item an installed unit carries (inventory, equipment,
+  accessories and what each holds), as it may a ground item or a building's
+  contents: a carried significant item binds as taken and a carried REALIZED
+  container is a legitimate shell. A pending shell must still be an outer
+  ground item (the save's own provenance rule).
+- **Saving the loaded session.** An ordinary save of the session carries the
+  bounds, the tags, every scenario reference and every physical value (see each
+  family's Persistence section); loading that save needs no scenario file, and
+  reapplies no default and rerolls nothing.
 
 ## Fixture expectations and tests
 
