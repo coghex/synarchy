@@ -64,7 +64,7 @@ import World.Save.Component.Page (blankPageSnapshot)
 import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import Item.Knowledge (emptyPortableKnowledge)
-import Engine.Graphics.Camera (CameraFacing(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import Gameplay.Tags.Index (CategoryIndex)
 import Gameplay.Tags.Tag (ItemTarget)
 import Scenario.Items.Refs (ItemRefs)
@@ -76,6 +76,7 @@ import Test.Headless.Scenario.Placement.Fixtures
 import Unit.Types
 import World.Arena.Bounds (ArenaBounds)
 import World.Page.Types (WorldPageId)
+import World.Render.Camera.Types (WorldCamera(..))
 import World.State.Types
 
 -- | What one materialization reports.
@@ -191,11 +192,15 @@ sessionSnapshotOf fx pid ws = do
     harvests ← readIORef (wsFloraHarvestsRef ws)
     pageTags ← readIORef (wsPageTagsRef ws)
     cursor ← readIORef (wsPlantedFloraCursorRef ws)
+    -- the page's own camera and the live one, as a save writes them
+    WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
+    cam ← readIORef (cameraRef env)
     (namedEdits, namedCrops, _) ← either (const (fail "a flora species cannot be named")) pure
         (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty)
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
-            { pgsEdits = namedEdits
+            { pgsCameraX = wcx, pgsCameraY = wcy
+            , pgsEdits = namedEdits
             , pgsCropPlots = namedCrops
             , pgsFloraHarvests = harvests
             , pgsPlantedFloraCursor = cursor
@@ -211,7 +216,7 @@ sessionSnapshotOf fx pid ws = do
         , snapNextItemId = max 1 nextItem
         , snapNextBuildingId = bmNextId bm, snapNextUnitId = umNextId um
         , snapActivePage = pid, snapVisiblePages = [pid]
-        , snapLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
+        , snapLiveCamera = LiveCameraSnapshot (Just pid) (fst (camPosition cam)) (snd (camPosition cam)) (camZoom cam) (camFacing cam)
         , snapPages = HM.singleton pid page
         , snapItemTags = categoryForward (wmItemTags wm), snapItemRefs = wmItemScenarioRefs wm
         , snapPortableKnowledge = emptyPortableKnowledge }
