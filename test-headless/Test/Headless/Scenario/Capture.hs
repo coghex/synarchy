@@ -16,6 +16,7 @@ import Test.Hspec
 import qualified Test.Headless.Scenario.Capture.Content as Content
 import qualified Test.Headless.Scenario.Capture.Edits as Edits
 import qualified Test.Headless.Scenario.Capture.Exclusion as Exclusion
+import qualified Test.Headless.Scenario.Capture.Storage as Storage
 import Control.Exception (finally)
 import Test.Headless.Scenario.Capture.Support (clearLine)
 import Test.Headless.Scenario.Load.Harness (withH)
@@ -25,3 +26,4 @@ spec = aroundAll withH $ aroundWith (\example h → (clearLine h ≫ example h) 
     Content.spec
     Edits.spec
     Exclusion.spec
+    Storage.spec
