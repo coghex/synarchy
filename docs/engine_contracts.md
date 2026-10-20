@@ -2046,11 +2046,37 @@ ingress by D-26 against the spawned definition's defaults; an OMITTED
 tag is the `wildlife` row (D-31), so a tag-less animal stays wildlife
 while a tag-less acolyte is an uncontrolled acolyte. An unrecognized tag
 warns once per request and spawns the inert profile. The one local
-controller is the constant `localController`. Until FTS-4/FTS-5 port
-them, consumers read faction ONLY through `legacyFactionOf`: local
+controller is the constant `localController`. The relation consumers
+FTS-5 ports read faction ONLY through `legacyFactionOf`: local
 controller → `player`, both debug capabilities → `debug`,
 `legacy_hostile` → `hostile`, `wildlife` → `wildlife`, otherwise
-`neutral` (so an uncontrolled acolyte or nomad reads `neutral`). The
+`neutral` (so an uncontrolled acolyte or nomad reads `neutral`).
+
+**Ownership and commandability (#2518, FTS-4).** The non-relation
+consumers ask FTS-1's profile queries of the live profile through
+`Unit.Faction.Membership.unitIsOwnedBy` / `unitIsCommandableBy` /
+`unitHasUnrestrictedCombat`, with the OBSERVER as an explicit argument:
+owned iff the unit's controller is the observer, commandable iff owned
+or `CapLocalCommandable`, unrestricted combat iff `CapUnrestrictedCombat`
+(no observer). No policy function names `localController`; the entry
+points do (the world-time tick into `tickLocationDiscovery`, the
+awareness, transfer, transfer-order and cargo Lua verbs). Location
+discovery and awareness keep only sights the observer owns
+(`UnitSight` carries the policy profile, not a `Faction`); container
+reveal and every strict transfer gate use commandability, while the lax
+AI cargo verbs keep their own eligibility and pass the observer only to
+the reveal. So an uncontrolled acolyte, allied with the roster by its
+shared `acolyte` tag, neither discovers, reveals, transfers nor takes
+orders, and a debug spawn is commandable but owns nothing. Lua asks the
+same questions of a unit id: `unit.isPlayerOwned`,
+`unit.isPlayerCommandable`, `unit.hasUnrestrictedCombat` (false, never
+an error, for anything that names no live unit; global roster, so an
+inactive page answers too). The string-taking `faction.*` property verbs
+remain for the compatibility window and have no script callers. After
+FTS-4 the only `legacyFactionOf` readers are `unit.getFaction`, the save
+codec and the adapter itself, and `unit.getFaction` is read only by the
+FTS-5 relation consumers; the hspec group `legacy faction consumers
+(FTS-4)` inside `Unit faction profile policy` pins both sets. The
 `units` component (v3, now v4) persists profiles exactly; v1/v2 faction strings
 resolve by D-26 at the load boundary
 (`docs/persistence_state_inventory.md`, `UnitsDTO` and `umInstances`).
@@ -2065,7 +2091,8 @@ the real loaders and the real Lua bindings, the shipped corpus, and the
 D-26 mapping), `--match "Unit faction profile policy"` (both five-by-five
 legacy matrices re-asserted against the shipped catalogue),
 `--match "Unit faction profile wire"` (adapter, units v1/v2/v3 wire,
-spawn ingress), `--match "Startup readiness"` / `"Startup asset logging"`, and
+spawn ingress), `--match "Lua faction model"` (the unit-id queries through
+their real registration), `--match "Startup readiness"` / `"Startup asset logging"`, and
 `tools/startup_asset_logging_probe.py`.
 
 ---
@@ -3413,7 +3440,10 @@ meant.
 **The three rules on sight (moved from CLAUDE.md).**
 
 - **Discovery (#780, sight-based since #1230)** is a one-way promotion
-  to `discovered`, fired when a player-faction unit SEES the location:
+  to `discovered`, fired when a unit the local controller OWNS SEES the
+  location (ownership under an explicit observer since #2518: debug
+  spawns, uncontrolled acolytes and other controllers' units never
+  discover):
   its visible-tile set intersects the instance's stored `liBounds`,
   seam-aware, one tile being enough (the `discovery_margin` halo is GONE
   from YAML, def, instance, Lua and wire). Sight is
@@ -3894,8 +3924,9 @@ the container, the lax AI cargo verbs, a Mode A session OPENING on it
 first completion of a storage-capable building (seeds KNOWN-EMPTY
 because the player watched it go up). Walking past, selecting,
 right-clicking and opening the window reveal NOTHING; every unit-driven
-reveal is gated on `isPlayerCommandable`; knowledge is player-global,
-never per-unit.
+reveal is gated on commandability under the local controller
+(`unitIsCommandableBy`, #2518), so an allied but uncontrolled acolyte
+reveals nothing; knowledge is player-global, never per-unit.
 
 Beyond the gates listed below, the reveal rule is pinned by hspec
 `--match "Container knowledge"`, and the arc's INTEGRATED gate is
@@ -3927,7 +3958,8 @@ refused as `item_not_transferable`, and an escort source that never
 registered the action is refused as `source_not_escortable`. Only
 `ready_to_commit` entries are ever submitted. `unit.cancelTransferOrder`
 takes pending entries only (via `cancelBatch`); escort/hold eligibility
-stays `isPlayerCommandable` of the live faction, never a def allowlist.
+stays commandability of the live faction profile under the local
+controller (`unit.isPlayerCommandable`, #2518), never a def allowlist.
 
 - **Durable orders (#1246/#1247/#1253).** `createTransferOrder`
   validates with adjacency DEFERRED (`ReachPolicy`; same page still

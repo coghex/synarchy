@@ -93,9 +93,11 @@ decisions below, and the ledger above as the processing cursor.
   instance, batches are ordered and report per-item outcomes, and no item ever
   half-moves. `trSource ∷ TransferEndpoint` gives both ends one endpoint type,
   instance sets replaced `trQuantity`, `TransferBatch` carries the
-  partial-batch outcome, eligibility is `faction.isPlayerCommandable` rather
-  than a data marker, and the endpoint-info verb is `unit.transferEndpointInfo`
-  (#1085).
+  partial-batch outcome, eligibility is commandability rather than a data
+  marker (`faction.isPlayerCommandable` at #1085; since #2518 the unit's own
+  profile under the local controller, `unit.isPlayerCommandable` in Lua, so an
+  allied but uncontrolled acolyte is ineligible), and the endpoint-info verb is
+  `unit.transferEndpointInfo` (#1085).
 - **Mode B — queued gestures** (`scripts/transfer_gestures.lua`, [#1249]). One
   builder serves both directions: **Store 1 / Store all** from a unit-info row
   into the open container window's active level, and **Retrieve 1 / Retrieve
