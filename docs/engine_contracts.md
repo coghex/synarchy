@@ -4861,7 +4861,12 @@ integrity graph). This is the phase and failure detail it defers.
 **`engine.getLoadStatus()` exposes a 12-phase lifecycle plus a 13th
 terminal phase, `LoadReconciliationFailed` (#1204):** publication
 SUCCEEDED but a Lua `onSaveLoaded` callback raised, so the live session is
-incompletely reconciled.
+incompletely reconciled. A SCENARIO load (#2713, §Scenario load below) adds
+two more: `LoadInitializing` (non-terminal: the shell is published and
+reconciled and the scenario's content is being installed) and
+`LoadReplacementFailed` (terminal, unsuccessful: the replacement was published
+and then could not be completed; like `LoadReconciliationFailed` it leaves
+`failedAtPhase` unset, because the old session did NOT survive).
 
 It is a THIRD terminal disposition, not a flavour of either existing one.
 Every poller must treat it as terminal (its outcome is non-nil, so
@@ -8107,3 +8112,134 @@ migrations"`; `tools/persistence_inventory_audit.py`,
 `tools/engine_env_capability_audit.py`, `tools/save_compat_audit.py`,
 `tools/enum_append_only_audit.py`, `tools/haskell_module_budget.py`,
 `tools/lua_module_budget.py` and `tools/unicode_operator_audit.py`.
+
+---
+
+## Scenario load: the paused session transaction (#2713)
+
+One engine service (`Scenario.Load.Service`) turns a resolved scenario source
+into a fully initialized, PAUSED testing session, or reports honestly why it
+could not (field-level format: [scenario_format.md](scenario_format.md#loading-a-scenario-session-scn-13-2713)).
+A scenario load IS a whole-session load transaction (the 12 phases, the 13th
+terminal `LoadReconciliationFailed`, and the two phases below, in
+§Save/load transaction): the same request ids, exclusion, save barrier, owner
+parking, queue cutover, allocator and page-incarnation reset and Lua
+reconciliation. It adds a request record and a post-publication install.
+
+**Entry and result.** `requestScenarioLoad env source` (any thread) returns
+`Left Busy` at once or `Right requestId`; `readScenarioStatus` answers the
+request's record until the next accepted operation of any kind replaces it.
+The source is `SourceFile path` or `SourceBytes name bytes`, already resolved
+(path shorthand and launch-directory policy are SCN-15's). Public CLI, Lua and
+UI entry points are not part of this slice.
+
+| Field of `ScenarioLoadStatus` | Meaning |
+|---|---|
+| `slsRequestId` | The load transaction's request id (the same id `engine.getLoadStatus()` reports). |
+| `slsSource` | The source's identity (the path, or the name given with the bytes). |
+| `slsStage` | `StageAdmitted` → `StagePreflight` → `StageStaging` → `StagePublishing` → `StageReconciling` → `StageConstructing` (→ `StageRecovering`) → `StageReady` \| `StageFailed`. The last two are terminal. |
+| `slsWarnings` | Every rejection across every phase as a `ScenarioDiagnostic` (`sdPath`, `sdReason`, `sdEffect`), in the order found; present on a ready request and on a failed one. |
+| `slsOutcome` | `Nothing` while in flight; `ScenarioReady` or `ScenarioUnsuccessful FailureContext` (stage reached, cause, further details). |
+| `slsPublished` | Whether a replacement session was ever published. |
+| `slsRecovery` | What stands after a failure: `RecoveryPreserved` (failed before the swap; the previous session is exactly as it was), `RecoveryFlatArena` (the swap happened, content failed, a fresh default flat arena stands), `RecoveryIncomplete` (the swap happened and a session-bound callback raised; the replacement is incompletely initialized), `RecoveryFailed why` (recovery failed too). |
+
+**Ready means complete.** `StageReady` and `LoadPublished` / `LoadSucceeded`
+are written together, only after the published shell was reconciled AND every
+accepted terrain, fluid, flora, structure, building, location, unit and
+ground item was installed. Allocated ids, a queued install, a generated chunk
+or a completed session swap alone never make a request ready. A ready request
+may carry warnings: interactive callers show them, automated callers (SCN-15,
+SCN-17) compare them with the ones they expect and treat an unexpected one as a
+setup failure (D-15); this slice supplies the complete evidence.
+
+**Preflight preserves the session.** The live session must be a testing one: no
+page at all (a direct boot) or only arena pages (`isArenaParams`). A generated
+gameplay page makes the request fail with `CauseNotTestingSession` and
+`RecoveryPreserved`, constructing nothing. The source is then read, parsed,
+dispatched by its own version and migrated in memory
+(`Scenario.Schema`); `ScenarioFailed` (unreadable, syntax, not a mapping,
+missing/malformed/unsupported version, failed migration) fails the request the
+same way. A rejected field or entry in a document that parses is NOT a failure:
+it is a warning and the retained subset loads (D-14, D-47). The source is never
+written.
+
+**The shell, then the content.** The replacement is first an empty arena shell
+(one fresh `test_arena` page at the scenario's bounds, `Scenario.Load.Session`),
+staged privately by `World.Load.Stage` and published through the ordinary
+barrier, so the quiescence, the queue cutover (`discardStaleQueues`,
+`commitLoadPublish`), the allocator and page-incarnation reset and the
+`onSaveLoaded` reconciliation all apply unchanged. Only then is the content
+installed, on the Lua thread, through the SCN-09..12 adapters in their fixed
+order (`Scenario.Load.Construct`), each commit fenced by the shell page's
+incarnation. The adapters commit through the live owners (world-thread install
+commands and simulation seeding, the units' Lua readiness hook, the live
+managers), so a fully private session would need a second engine environment;
+D-43 permits recovery to a flat arena instead.
+
+**Failure and recovery.**
+
+- Before the swap (preflight, staging, the publish hand-off, the barrier, the
+  Lua apply): `StageFailed`, `LoadFailed` with `failedAtPhase`,
+  `RecoveryPreserved`. The prepared Lua load is aborted, nothing is published.
+- After the swap, a session-bound callback raised: every callback is still
+  attempted; `LoadReconciliationFailed` with the per-module list,
+  `RecoveryIncomplete`; no content is installed. `failedAtPhase` stays unset.
+- After the swap, construction failed (an exception, or accepted content the page
+  no longer admits): a fresh default flat arena is published the same way,
+  paused, and the request ENDS `StageFailed` with `LoadReplacementFailed`
+  (`failedAtPhase` unset) and `RecoveryFlatArena`. It is never reported as a
+  load of the requested file. If recovery itself fails, both diagnostics are
+  kept and the disposition is `RecoveryFailed`.
+- Every outcome leaves the simulation paused and releases the exclusion and the
+  barrier, so the next request is admitted. A synchronous exception at an
+  ownership hand-off is caught and terminalizes the request; a thread
+  cancellation (`SomeAsyncException`) propagates unchanged.
+- A failure the existing transaction records on its own (the world thread's
+  staging failing, the barrier timing out, the Lua apply failing) ends the
+  generic transaction without the request record having been told; the record is
+  settled from the generic outcome when read, so it is never non-terminal under a
+  terminal request.
+
+**One admission boundary.** Admission to an ordinary save, an autosave, an
+ordinary load, a scenario load and (SCN-14) a scenario capture is a CHECK of the
+other kinds followed by a CLAIM of its own. It runs as one action under the
+admission lock inside `LoadStatusRef` (`withAdmission`): `claimLoad`,
+`claimScenarioLoad` (loads) and `claimSave` (a save, an autosave through the same
+`engine.saveWorld`, and a capture, which closes the save barrier). The lock is
+held for the check and the claim only; the operation's own state
+(`loadInProgress`, `saveInProgress`) is what the next claimant reads, for the
+operation's WHOLE lifetime. A conflicting request is answered `Busy` at once:
+no queue, no cancellation, no change to the active request's status, request
+identity or pause state. `engine.setPaused(false)` is refused for the whole
+lifetime of a scenario load for the same reason it is for any load.
+
+**Stale completions.** Every write to the request record and to the generic
+status is keyed by request id and ignored once the request is terminal, so a late
+`LuaSaveLoaded`, `LuaLoadStagingFailed` or status write about an older request
+cannot finish or overwrite a newer one.
+
+**Transient classification.** The admission lock, the request record, the plan
+the continuation installs and the test seams ride inside `LoadStatusRef`
+(no new `EngineEnv` field) and are Exclude/transient
+([persistence_state_inventory.md](persistence_state_inventory.md), `loadStatusRef`).
+Nothing a scenario load adds is saved. The arena bounds, the general tags, the
+scenario identities (`umScenarioRefs`, `bmScenarioRefs`, `lisScenarioRefs`, the
+item reference mapping) and the physical values were already persisted by SCN-03
+to SCN-12; an ordinary save of a loaded session restores all of them without the
+source YAML, and no component, migration or fixture changed.
+
+**Test seams.** `armScenarioSeams` installs a hook consulted at named instants
+(`ScenarioLoadPoint`): it may block (a held request) or throw (an injected
+fault), and costs one `IORef` read when unarmed. `seamFormat` replaces the
+decode format for one request, because the shipped migration chain is all
+identity steps.
+
+**Gates:** hspec `--match "Scenario.Load"`, `--match "transactional load"`,
+`--match "load exception terminalization"`, `--match "save snapshot barrier"`,
+`--match "Lua.PauseGate"`, `--match "LuaSaveLoaded reconciliation failure
+disposition"`, `--match "load replacement clears transient session surfaces"`,
+`--match "persistence contract"`; `tools/transactional_load_probe.py`,
+`tools/persistence_inventory_audit.py`, `tools/engine_env_capability_audit.py`,
+`tools/save_compat_audit.py`, `tools/enum_append_only_audit.py`,
+`tools/haskell_module_budget.py`, `tools/lua_module_budget.py` and
+`tools/unicode_operator_audit.py`.
