@@ -259,6 +259,10 @@ mkInstance cat fid lx ly surfZ seed gx gy salt j count baseWidth maxAge health
           -- chunk is admitted to residency (#1854 requirement 15,
           -- "World.Flora.Designation").
         , fiChopDesignated = False
+          -- Generated flora is WILD by construction (#2547). The context
+          -- is assigned here, by the code that creates the occurrence,
+          -- and is not derived from its namespace, age or health.
+        , fiContext = ContextWild
         }
 
 -- | Evenly space @count@ row-crop instances along the U axis, spanning

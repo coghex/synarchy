@@ -52,7 +52,7 @@ import World.Flora.Render (resolveFloraTexture)
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types
     ( AnnualCycleKey(..), AnnualStage(..), AnnualStageTag(..)
-    , FloraCatalog(..), FloraChunkData(..)
+    , FloraCatalog(..), FloraChunkData(..), FloraContext(..)
     , FloraId(..), FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
     , LifePhase(..), LifePhaseTag(..), LifecycleType(..), emptyFloraCatalog
     , findSpeciesByName, insertSpecies, insertWorldGen, newFloraSpecies )
@@ -733,6 +733,7 @@ assertCattailTextures def = do
             , fiBaseWidth = 6
             , fiInstanceId = floraInstanceIdNone
             , fiChopDesignated = False
+            , fiContext = ContextWild
             }
         resolve day inst = resolveFloraTexture catalog 360 day inst
         adult = mkInstance 300 1

@@ -165,6 +165,7 @@ seedling = FloraInstance
     , fiInstanceId = generatedFloraInstanceId "flora_growth_probe" 3 7
                          "probe_species" 0
     , fiChopDesignated = False
+    , fiContext = ContextWild
     }
 
 -- The same placement as 'seedling', written out independently rather
@@ -179,6 +180,7 @@ regenerated = FloraInstance
     , fiInstanceId = generatedFloraInstanceId "flora_growth_probe" 3 7
                          "probe_species" 0
     , fiChopDesignated = False
+    , fiContext = ContextWild
     }
 
 -- The five placement fields 'instanceHashFrac' mixes, each varied ONE

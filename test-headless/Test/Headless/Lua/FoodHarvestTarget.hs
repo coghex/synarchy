@@ -183,6 +183,7 @@ instanceAt tile fid ordinal =
         , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
         , fiInstanceId = idAt tile fid ordinal
         , fiChopDesignated = False
+        , fiContext = ContextWild
         }
 
 -- | Through the PRODUCTION identity function, so the fixture cannot

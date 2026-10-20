@@ -63,7 +63,8 @@ import World.Construct.Types
     , StructurePiece(..), constructDesignationPaid )
 import World.Flora.CropPlot (newCropPlot)
 import World.Flora.Types
-    ( FloraCatalog(..), FloraChunkData(..), FloraHarvest(..), FloraId(..)
+    ( FloraCatalog(..), FloraChunkData(..), FloraContext(..), FloraHarvest(..)
+    , FloraId(..)
     , FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
     , emptyFloraCatalog, emptyFloraChunkData, newFloraSpecies )
 import Item.Types (ItemDef(..), ItemFood(..), ItemManager(..))
@@ -223,6 +224,7 @@ treesEverywhere coord = emptyFloraChunkData
             , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
             , fiInstanceId = fixtureFloraId coord lx ly "probe_tree"
             , fiChopDesignated = False
+            , fiContext = ContextWild
             }
         | lx ← [0 .. chunkSize - 1 ∷ Int], ly ← [0 .. chunkSize - 1 ∷ Int] ]
     }
@@ -273,6 +275,7 @@ floraAtTiles spots coord = emptyFloraChunkData
             , fiAge = 1, fiHealth = 1, fiVariant = 0, fiBaseWidth = 8
             , fiInstanceId = fixtureFloraId coord lx ly (tshow (unFloraId fid))
             , fiChopDesignated = False
+            , fiContext = ContextWild
             }
         | (tile, fid) ← spots
         , let (home, (lx, ly)) = globalToChunk (fst tile) (snd tile)
