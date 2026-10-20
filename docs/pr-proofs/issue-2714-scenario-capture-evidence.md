@@ -47,7 +47,7 @@ engines, on non-8008 ports, under the project's probe-slot grant).
 
 | Group | Examples | Result |
 |---|---|---|
-| `Scenario.Capture` | 59 | pass |
+| `Scenario.Capture` | 64 | pass |
 | `Scenario.Load` | 50 | pass |
 | `Scenario` (every SCN group) | 398 | pass |
 | `Save.Snapshot` | 25 | pass |
@@ -106,7 +106,7 @@ refusing a taken name however it was taken; the route back through an ordinary s
 
 ## Mutation checks
 
-27 single-source mutants, each applied alone, the matching group run, the file
+30 single-source mutants, each applied alone, the matching group run, the file
 restored. Every one is killed by an assertion (never by a compile error or a timeout):
 
 | Mutant | Effect | Group | Result |
@@ -132,6 +132,9 @@ restored. Every one is killed by an assertion (never by a compile error or a tim
 | `camera-not-encoded` | the camera x is not written | `Scenario.Capture` | killed |
 | `flora-age-not-encoded` | a flora entry's age is not written | `Scenario.Capture` | killed |
 | `tile-lists-truncated` | a tile-list region is truncated to its first tile | `Scenario.Capture` | killed |
+| `flora-unnamed-dropped` | a plant of an unnameable species is dropped without a finding (review round 1) | `Scenario.Capture` | killed |
+| `durable-swallows-cancellation` | the owned-temp writer reports a thread cancellation as a write failure (review round 1) | `Scenario.Capture` | killed |
+| `storage-leaves-temp-on-cancellation` | a cancellation after creation leaves the request's temporary (review round 1) | `Scenario.Capture` | killed |
 | `exclusive-primitive-clobbers` | the exclusive publish primitive reports success on a taken name | `Scenario.Capture` | killed |
 | `claim-ignores-load` | a capture is admitted while a load is active | `transactional load` | killed |
 | `in-progress-ignores-barrier` | a record the barrier moved past still holds the pause | `transactional load` | killed |
