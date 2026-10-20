@@ -7,7 +7,7 @@ module Test.Headless.Scenario.Capture.Edits (spec) where
 
 import UPrelude
 import Test.Hspec
-import Data.IORef (atomicModifyIORef', readIORef)
+import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import System.FilePath ((</>))
@@ -32,7 +32,8 @@ import Test.Headless.Scenario.World.Fixtures (floraEntry, terrainPatch, withPath
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Unit.Types
 import World.Chunk.Admit (pageIncarnation)
-import World.Generate.Types (WorldGenParams(..))
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Page.Types (WorldPageId(..))
 import World.State.Types
 
 spec ∷ SpecWith H
@@ -106,6 +107,31 @@ spec = describe "an edited arena" $ do
                 (cfKind f, cfPublication f) `shouldBe` (FailProjection, NotPublished)
                 map sdPath (cfDiagnostics f) `shouldBe` ["terrain.tags"]
             other → expectationFailure ("expected a refusal, got " ⧺ show other)
+        listDir dir `shouldReturn` []
+        readIORef (enginePausedRef env) `shouldReturn` True
+
+    it "refuses an ordinary gameplay session and a session with no arena, changing nothing" $ \h → do
+        path ← writeScenario "capture-not-testing.yaml" integratedDoc
+        reloadFrom h path
+        let env = fxEnv (hFx h)
+        dir ← freshDir "not-testing"
+        before ← sessionFingerprint h
+        -- an ordinary gameplay page beside the arena
+        gameplay ← emptyWorldState
+        writeIORef (wsGenParamsRef gameplay) (Just defaultWorldGenParams { wgpSeed = 7 })
+        let pid = WorldPageId "main_world"
+        atomicModifyIORef' (worldManagerRef env) $ \wm → (wm { wmWorlds = (pid, gameplay) : wmWorlds wm }, ())
+        s1 ← runCapture h (dir </> "gameplay.yaml") False
+        atomicModifyIORef' (worldManagerRef env) $ \wm → (wm { wmWorlds = filter ((≢ pid) ∘ fst) (wmWorlds wm) }, ())
+        -- and no page at all
+        saved ← atomicModifyIORef' (worldManagerRef env) $ \wm → (wm { wmWorlds = [] }, wmWorlds wm)
+        s2 ← runCapture h (dir </> "none.yaml") False
+        atomicModifyIORef' (worldManagerRef env) $ \wm → (wm { wmWorlds = saved }, ())
+        forM_ [s1, s2] $ \s → case cstOutcome s of
+            Just (CaptureUnsuccessful f) → (cfKind f, cfPublication f) `shouldBe` (FailNotTestingSession, NotPublished)
+            other → expectationFailure ("expected a refusal, got " ⧺ show other)
+        -- the session is exactly as it was, paused, and nothing was written
+        sessionFingerprint h `shouldReturn` before
         listDir dir `shouldReturn` []
         readIORef (enginePausedRef env) `shouldReturn` True
 
