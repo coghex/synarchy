@@ -113,7 +113,7 @@ The visual annual stage is selected on the first whole day at or after the
 current generation's death threshold. The inverse gives an initial search bound:
 
 ```
-estimate = max 0 (ceiling ((generation * (lifespan + deadWindowDays)
+estimate = max 1 (ceiling ((generation * (lifespan + deadWindowDays)
                           + lifespan - placementAge) / growthRate))
 ```
 
