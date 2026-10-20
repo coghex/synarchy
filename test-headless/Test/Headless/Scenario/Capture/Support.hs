@@ -21,6 +21,7 @@ module Test.Headless.Scenario.Capture.Support
     , captureStatusOf
     , captureOf
     , withPump
+    , clearLine
       -- * Seams
     , armCapture
     , armCaptureHold
@@ -63,6 +64,7 @@ import Test.Hspec (expectationFailure)
 import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Load.Status
+import Engine.Save.Barrier (SaveStatus(..), failSave, readSaveStatus)
 import Gameplay.Tags.Types (GameplayTag, mkGameplayTag)
 import Scenario.Capture.Service (requestScenarioCapture, readCaptureStatus)
 import Scenario.Capture.Types
@@ -136,6 +138,31 @@ captureOf s = case cstOutcome s of
     other → do
         expectationFailure ("the capture did not succeed: " ⧺ show other)
         throwIO (ErrorCall "unsuccessful")
+
+-- | Put the shared line back as a fresh engine has it: no seam armed, no
+--   owner held, and no operation left half-done by an example that failed
+--   (or stopped a thread on purpose). Run around every example, so one
+--   example's failure is reported once instead of blocking every later one.
+clearLine ∷ H → IO ()
+clearLine h = do
+    let env = fxEnv (hFx h)
+        sl = toSaveLoadCapability env
+        lsr = slLoadStatusRef sl
+        barrier = slSaveBarrierRef sl
+    disarmCapture h
+    disarm h
+    forM_ [minBound .. maxBound] $ \o → holdOwner (hOwners h) o False
+    holdSimulation (hOwners h) False
+    rec' ← readCaptureRecord lsr
+    forM_ rec' $ \r → when (isNothing (cstOutcome r)) $
+        terminateCapture lsr (cstRequestId r) $ CaptureUnsuccessful CaptureFailure
+            { cfStage = cstStage r, cfKind = FailCoordination, cfPhase = Nothing
+            , cfDestination = crDestination (cstRequest r), cfPublication = NotPublished
+            , cfDetail = "cleared between examples", cfDiagnostics = [], cfWarnings = [] }
+    cur ← readSaveStatus barrier
+    forM_ cur $ \b → when (isNothing (ssOutcome b)) $ failSave barrier (ssRequestId b) "cleared between examples"
+    load ← readLoadStatus lsr
+    forM_ load $ \l → when (isNothing (lsOutcome l)) $ finishLoad lsr (lsRequestId l)
 
 -- * Seams
 
