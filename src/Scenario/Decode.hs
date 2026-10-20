@@ -20,6 +20,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -58,6 +59,7 @@ decodeContent sourceVersion o = do
         (pLocations, locations)   ← unzip <$> family "locations" (decodeLocation sourceVersion)
         (pUnits, units)           ← unzip <$> family "units" decodeUnit
         (pGround, ground)         ← unzip <$> family "ground_items" decodeGroundItem
+        surv ← takeSurvivors
         pure ( Scenario
                  { scSourceVersion = sourceVersion
                  , scMap = md, scCamera = cam
@@ -68,7 +70,8 @@ decodeContent sourceVersion o = do
              , SourcePaths
                  { spTerrain = pTerrain, spFluids = pFluids, spFlora = pFlora
                  , spStructures = pStructures, spBuildings = pBuildings
-                 , spLocations = pLocations, spUnits = pUnits, spGroundItems = pGround } )
+                 , spLocations = pLocations, spUnits = pUnits, spGroundItems = pGround
+                 , spSurvivors = Map.fromList surv } )
   where
     -- each retained entry with the path it was read at: a rejected entry is
     -- absent, so the position among the survivors is not the source position
@@ -699,6 +702,7 @@ modifiers p o uc = do
                 A.Array xs → do
                     ys ← forM (zip [0 ..] (toList xs)) $ \(i, mv) →
                         decodeModifier (indexPath fp i) mv
+                    recordSurvivors fp [ i | (i, Just _) ← zip [0 ..] ys ]
                     pure (Just (catMaybes ys))
                 _ → do
                     diag fp (InvalidValue "a list of modifiers") FieldRejected

@@ -28,6 +28,7 @@ spec ∷ SpecWith H
 spec = do
     carriedSpec
     pathSpec
+    nestedPathSpec
     simulationSpec
 
 -- | The location instance the published page holds, and the page's item
@@ -131,6 +132,31 @@ pathSpec = describe "diagnostic paths" $ do
         slsWarnings s `shouldSatisfy` any (T.isPrefixOf "ground_items[1].contents" ∘ sdPath)
         bm ← readIORef (buildingManagerRef (fxEnv (hFx h)))
         Map.elems (bmScenarioRefs bm) `shouldBe` ["first"]
+
+-- | Nested entries: the survivors of a list are numbered by the adapters, so
+--   a rejection reported below a rejected sibling must be translated back.
+nestedPathSpec ∷ SpecWith H
+nestedPathSpec = describe "nested diagnostic paths" $ do
+
+    it "name a nested item by its position in the document when an earlier sibling was rejected and its owner is rejected later" $ \h → do
+        path ← writeScenario "nested-paths.yaml" $ doc
+            [ "map: {width: 40, height: 40}"
+            , "buildings:"
+            , "  - {id: first, definition: cargo_hold_S, x: 10, y: 10}"
+            , "  - id: second"
+            , "    definition: cargo_hold_S"
+            , "    x: 10"
+            , "    y: 10"
+            , "    storage: [{id: ghost, definition: no_such_item}, {id: bar, definition: steel_bar}]" ]
+        s ← runLoad h (SourceFile path)
+        slsOutcome s `shouldBe` Just ScenarioReady
+        let found = [ (sdPath d, sdEffect d) | d ← slsWarnings s ]
+        -- the decoder dropped storage[0]; the adapter then rejected the overlapping building
+        -- and cascaded to the survivor, which is the item the author wrote SECOND
+        found `shouldSatisfy` elem ("buildings[1].storage[0].definition", EntryRejected)
+        found `shouldSatisfy` elem ("buildings[1]", EntryRejected)
+        found `shouldSatisfy` elem ("buildings[1].storage[1]", CascadeRejected)
+        found `shouldSatisfy` notElem ("buildings[1].storage[0]", CascadeRejected)
 
 -- * The simulation has consumed what was installed
 

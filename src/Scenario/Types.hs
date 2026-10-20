@@ -52,6 +52,7 @@ module Scenario.Types
     , SourcePaths(..)
     , noSourcePaths
     , withSourcePaths
+    , translateNested
       -- * Definition catalog
     , ScenarioCatalog(..)
     , emptyScenarioCatalog
@@ -74,6 +75,8 @@ import GHC.Generics (Generic)
 import Data.Hashable (Hashable)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import Gameplay.Tags.Types (GameplayTag)
 import Unit.Direction (Direction)
 
@@ -422,11 +425,51 @@ data SourcePaths = SourcePaths
     , spLocations   ∷ ![Text]
     , spUnits       ∷ ![Text]
     , spGroundItems ∷ ![Text]
+    , spSurvivors   ∷ !(Map.Map Text [Int])
+      -- ^ for every NESTED list (a building's @storage@, an item's
+      --   @contents@, a unit's @wounds@, one stat's @modifiers@, …) read at
+      --   this SOURCE path, which source positions survived decoding, in
+      --   order. See 'translateNested'.
     } deriving (Show, Eq)
 
 -- | No recorded positions: a scenario not read from a document.
 noSourcePaths ∷ SourcePaths
-noSourcePaths = SourcePaths [] [] [] [] [] [] [] []
+noSourcePaths = SourcePaths [] [] [] [] [] [] [] [] Map.empty
+
+-- | Rewrite a path a construction adapter reported — whose top-level entry is
+--   already the source path, but whose nested list positions are indices among
+--   the SURVIVORS of each list — into the path the author wrote. Walked left
+--   to right: each @[n]@ below the top-level entry is looked up in the
+--   survivors recorded for the (already translated) list it indexes, so an
+--   item that sat at @storage[1]@ behind a rejected first item is reported at
+--   @storage[1]@, not at the @storage[0]@ its survivor position says. A list
+--   with no record (a keyed mapping, default content that was never in the
+--   document) is left as it is.
+translateNested ∷ SourcePaths → Text → Text
+translateNested sp = go "" Nothing
+  where
+    isDigit' c = c ≥ '0' ∧ c ≤ '9'
+    -- cur: the translated prefix so far; Nothing = still inside the root name
+    go cur _ rest = case T.uncons rest of
+        Nothing → cur
+        Just ('.', r) →
+            let (key, r') = T.break (\c → c ≡ '.' ∨ c ≡ '[') r
+            in go (cur <> "." <> key) (Just ()) r'
+        Just ('[', r) →
+            let (digits, r') = T.span isDigit' r
+            in case (T.uncons r', T.null digits) of
+                (Just (']', r''), False) →
+                    let n = read (T.unpack digits) ∷ Int
+                        nested = T.any (\c → c ≡ '.' ∨ c ≡ '[') cur
+                        shown | nested = case Map.lookup cur (spSurvivors sp) of
+                                    Just xs | n < length xs → xs !! n
+                                    _ → n
+                              | otherwise = n
+                    in go (cur <> "[" <> tshow shown <> "]") (Just ()) r''
+                _ → go (cur <> "[") (Just ()) r
+        Just _ →
+            let (name, r') = T.break (\c → c ≡ '.' ∨ c ≡ '[') rest
+            in go (cur <> name) Nothing r'
 
 -- | The entries of one family with their paths: the recorded source paths
 --   when there is one per entry, else their indices (@family[i]@).

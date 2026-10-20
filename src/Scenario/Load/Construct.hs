@@ -244,12 +244,15 @@ constructScenario ce sc = do
                 { ccStructures = case placed of PlacementInstalled r → pirStructures r; _ → []
                 , ccLocations = case placed of PlacementInstalled r → pirLocations r; _ → []
                 , ccBuildings = bcs, ccUnits = ucs
-                , ccDiagnostics = worldDiags ⧺ concatMap bbuDiagnostics bbs ⧺ lvDiagnostics lv
+                , ccDiagnostics = map atSource $ worldDiags ⧺ concatMap bbuDiagnostics bbs ⧺ lvDiagnostics lv
                     ⧺ unitCascade ⧺ unitDiagnostics (map snd ubs) ucs
                     ⧺ ibDiagnostics gbuild ⧺ resolveDiags ⧺ placeDiags
                 , ccFailures = worldFails ⧺ unitFails ⧺ buildingFails ⧺ placeFails }
   where
     flatNodes i = i : concatMap flatNodes (iiContents i)
+    -- every adapter numbers the survivors of a nested list; the author
+    -- wrote the positions of the document
+    atSource d = d { sdPath = translateNested (cePaths ce) (sdPath d) }
     -- the entries of one family at the paths they had in the document: a
     -- rejected entry is absent from the list, so an index among the survivors
     -- would blame the wrong entry
