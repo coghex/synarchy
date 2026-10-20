@@ -78,16 +78,25 @@ end
 
 -- Called by unit_ai_core's setGoal (before the goal changes) and by its
 -- markGoalAccomplished (with nil, when the ending goal is active): an
--- active attack goal ending or being replaced records the cutoff, and a
--- new attack goal opens a fresh occurrence.
+-- active GOVERNED attack goal ending or being replaced records the
+-- cutoff, and a new attack goal opens a fresh occurrence.
+--
+-- Whether a goal is governed is fixed when it STARTS (commandAttack sets
+-- s.committed, and lash-out s.mentalLashoutActive, before setGoal) and
+-- carried on the occurrence, because both clear their flag BEFORE ending
+-- the goal: a committed order or a lash-out never stamps a cutoff.
 function M.goalChanged(s, newGoal)
     if s.activeGoal == "attack" then
-        cutoffs[s] = now()
+        local occ = occurrences[s]
+        if not ((occ and occ.exempt) or not M.governs(s)) then
+            cutoffs[s] = now()
+        end
         occurrences[s] = nil
     end
     if newGoal == "attack" then
         nextOccurrence = nextOccurrence + 1
-        occurrences[s] = { id = nextOccurrence, target = s.attackTargetUid }
+        occurrences[s] = { id = nextOccurrence, target = s.attackTargetUid,
+                           exempt = not M.governs(s) }
     end
 end
 
@@ -154,7 +163,8 @@ end
 
 -- Continuation of the live attack goal. Returns ok, reason.
 function M.mayContinue(uid, s)
-    if not M.governs(s) then return true end
+    local live = occurrences[s]
+    if not M.governs(s) or (live and live.exempt) then return true end
     local target = s.attackTargetUid
     if not target then return true end
     if M.isHostile(uid, target) then return true end

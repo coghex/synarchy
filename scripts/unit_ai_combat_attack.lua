@@ -190,20 +190,6 @@ local function attackTargetExecute(uid, s, params)
         return
     end
 
-    -- #2521: an autonomous fight continues only while the seam allows it
-    -- -- hostility, a still-fresh hit from this target, or a fixture
-    -- authorization for this exact goal occurrence. Committed orders
-    -- and lash-out keep their own rules (policy.governs).
-    if not policy.mayContinue(uid, s) then
-        engine.logDebug("attack: " .. tostring(uid) .. " stops on "
-                        .. tostring(target) .. ": no permission left")
-        lunge.clear(s)
-        s.attackTargetUid = nil
-        markGoalAccomplished(s, "attack")
-        clearAttackAnim(uid)
-        return
-    end
-
     -- Mid-fight RETALIATION: if someone other than the current target just
     -- hit us and they're within melee reach, turn on them. A predator
     -- chasing a fleeing victim will round on whoever's stabbing its flank
@@ -245,6 +231,25 @@ local function attackTargetExecute(uid, s, params)
                 end
             end
         end
+    end
+
+    -- #2521: an autonomous fight continues only while the seam allows it
+    -- -- hostility, a still-fresh hit from this target, or a fixture
+    -- authorization for this exact goal occurrence. Asked AFTER the swap,
+    -- so a newer, independently eligible attacker is answered rather than
+    -- the goal ending on the old target. Committed orders and lash-out
+    -- keep their own rules. Ending also stops the pursuit: the engine's
+    -- move request would otherwise carry on toward the former target.
+    if not policy.mayContinue(uid, s) then
+        engine.logDebug("attack: " .. tostring(uid) .. " stops on "
+                        .. tostring(target) .. ": no permission left")
+        lunge.clear(s)
+        s.attackTargetUid = nil
+        s.attackLastMoveTo = nil
+        markGoalAccomplished(s, "attack")
+        clearAttackAnim(uid)
+        unit.stop(uid)
+        return
     end
 
     local me  = unit.getInfo(uid)

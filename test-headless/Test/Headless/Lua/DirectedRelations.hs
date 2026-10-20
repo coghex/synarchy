@@ -509,6 +509,67 @@ selfDefenseSpec = do
         ok ls "CORE.markGoalAccomplished(S(1), 'retreat'); return true"
         val ls "engage(1)" `shouldReturn` "3"           -- strictly later
 
+    it "answers a newer non-hostile attacker in reach by swapping onto it, \
+       \with neither hostility nor an authorization keeping the old target, \
+       \and stamps no cutoff" $ \env → do
+        resetWorld env roster
+        ls ← session env
+        hit env 1 3 0
+        ok ls "NOW = 1; return true"
+        val ls "engage(1)" `shouldReturn` "3"
+        ok ls "OCC = POLICY.occurrence(S(1)); return true"
+        hit env 1 7 1.9                          -- 3 is no longer the last attacker
+        ok ls "NOW = 2; return true"
+        val ls "tick(1)" `shouldReturn` "7"      -- swapped, not ended
+        val ls "POLICY.cutoff(S(1)) == nil and POLICY.occurrence(S(1)) == OCC"
+            `shouldReturn` "true"
+        ok ls "NOW = 11.9; return true"
+        val ls "tick(1)" `shouldReturn` "7"      -- 7's own window holds
+
+    it "stamps no cutoff when a committed order or a lash-out ends, so a \
+       \recent hit from another attacker still opens self-defense" $ \env → do
+        resetWorld env roster
+        ls ← session env
+        -- A committed player order whose target dies.
+        ok ls "NOW = 1; AI.commandAttack(1, 3, true); NOW = 2; return true"
+        setPose env 3 "dead"
+        val ls "tick(1)" `shouldReturn` "false"
+        val ls "POLICY.cutoff(S(1)) == nil" `shouldReturn` "true"
+        hit env 1 7 1.5                          -- before that termination
+        ok ls "NOW = 3; return true"
+        val ls "engage(1)" `shouldReturn` "7"
+        -- A lash-out episode, ended the way unit_ai_mental ends it: the
+        -- flag and target are dropped BEFORE the goal is accomplished.
+        setPose env 3 "standing"
+        ok ls "AI.aiState[1] = nil; local s = S(1)\
+              \ s.mentalLashoutActive = true; CORE.setGoal(s, 'attack')\
+              \ s.attackTargetUid = 3; s.committed = nil\
+              \ NOW = 4; s.attackTargetUid = nil; s.mentalLashoutActive = nil\
+              \ CORE.markGoalAccomplished(s, 'attack'); return POLICY.cutoff(s) == nil"
+        hit env 1 7 3.5
+        ok ls "NOW = 5; return true"
+        val ls "engage(1)" `shouldReturn` "7"
+        -- The governed control: an autonomous goal's end DOES cut off.
+        ok ls "NOW = 6; CORE.markGoalAccomplished(S(1), 'attack'); return true"
+        val ls "POLICY.cutoff(S(1))" `shouldReturn` "6"
+
+    it "stops the pursuit when permission expires out of range" $ \env → do
+        resetWorld env [ (1, legacy FactionPlayer, (0, 0))
+                       , (3, prof False ["acolyte"] [], (20, 0)) ]
+        ls ← session env
+        hit env 1 3 0
+        ok ls "NOW = 1; return true"
+        val ls "engage(1)" `shouldReturn` "3"
+        ok ls "NOW = 2; return true"
+        val ls "tick(1)" `shouldReturn` "3"
+        val ls "S(1).attackLastMoveTo ~= nil" `shouldReturn` "true"   -- pursuing
+        ok ls "STOPS = 0; local stop = unit.stop\
+              \ unit.stop = function(u) if u == 1 then STOPS = STOPS + 1 end\
+              \ return stop(u) end; return true"
+        ok ls "NOW = 10.01; return true"
+        val ls "tick(1)" `shouldReturn` "false"
+        val ls "STOPS >= 1 and S(1).attackLastMoveTo == nil" `shouldReturn` "true"
+
     it "leaves the production behaviour unchanged while the fixture provider \
        \is unset" $ \env → do
         resetWorld env roster
