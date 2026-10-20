@@ -32,7 +32,7 @@ import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
+import Engine.Core.State (EngineEnv, EngineLifecycle(..))
 import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
     , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..)
@@ -42,7 +42,8 @@ import Engine.Core.Types
     , PreviewStructPath(..)
     , PreviewDeclaredEntry(..), PreviewFacingCell(..), PreviewFsClass(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
-import Engine.Load.Status (loadInProgress)
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
+import Engine.Load.Status (captureInProgress, loadInProgress)
 import World.Pause (imposePauseHeld, releasePauseHeld)
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import qualified HsLua as Lua
@@ -129,17 +130,20 @@ setPausedFn env = do
               if b then imposePauseHeld wsc else releasePauseHeld wsc
               atomically $ setAudioPlayerPaused (acTransport $ toAudioCapability env) b
       -- a PAUSE is never refused
+      let sl = toSaveLoadCapability env
+          refused = (||) <$> loadInProgress (slLoadStatusRef sl)
+                         <*> captureInProgress (slLoadStatusRef sl) (slSaveBarrierRef sl)
       result ← withPlayerIntentUnless wsc
-                   (if b then pure False else loadInProgress (loadStatusRef env))
+                   (if b then pure False else refused)
                    setFlag
       case result of
           Just () → pure True
           Nothing → do
               logger ← readIORef (ccLoggerRef (toCoreCapability env))
               logWarn logger CatLua
-                  "setPaused(false) rejected: a load transaction is in \
-                  \flight -- unpausing now could resume simulation before \
-                  \it either publishes or fails"
+                  "setPaused(false) rejected: a load transaction or a \
+                  \scenario capture is in flight -- unpausing now could \
+                  \resume simulation before it either publishes or fails"
               pure False
   Lua.pushboolean applied
   return 1

@@ -679,6 +679,12 @@ library
                      Scenario.Units.Encode
                      Scenario.Types
                      Scenario.Bounds
+                     Scenario.Capture.Types
+                     Scenario.Capture.Encode
+                     Scenario.Capture.Inputs
+                     Scenario.Capture.Project
+                     Scenario.Capture.Service
+                     Scenario.Capture.Storage
                      Scenario.Decode.Monad
                      Scenario.Decode
                      Scenario.Validate

@@ -284,11 +284,7 @@ loadStatusFn env = do
 --   'Engine.Core.State' already depends on for 'SaveBarrier' — the
 --   reverse import would cycle).
 saveOwnerSet ∷ EngineEnv → IO (Set.Set SaveOwner)
-saveOwnerSet env = do
-    inputActive ← readIORef (inputThreadActiveRef env)
-    let base = Set.fromList
-            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
-    pure $ if inputActive then Set.insert SaveInput base else base
+saveOwnerSet env = standardSaveOwners <$> readIORef (inputThreadActiveRef env)
 
 -- | engine.saveWorld(pageId, saveName). Validates the request
 --   synchronously ('World.Save.Serialize.checkSaveName' — the name is

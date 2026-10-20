@@ -19,6 +19,7 @@ import qualified Graphics.UI.GLFW as GLFW
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Log (LoggerState)
 import World.Save.Payload (LoadReconcileContext)
+import Scenario.Capture.Types (CaptureRequest)
 import Scenario.Load.Types (ScenarioSource)
 import Language.Semantic.Types (Catalogue)
 import Language.Generated.Types (LanguageProvenance)
@@ -392,6 +393,14 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               --   other thing that clears it) — so this tells the Lua
               --   thread to call
               --   'Engine.Scripting.Lua.API.Save.Bridge.abortLuaLoad' instead.
+            | LuaScenarioCapture Int CaptureRequest
+              -- ^ Issue #2714 (SCN-14): an ACCEPTED scenario-capture request
+              --   (its request id and the resolved destination with its
+              --   overwrite intent) for the Lua thread to run. The Lua
+              --   thread is the Lua OWNER of the save barrier, so it is the
+              --   one that acknowledges for Lua and waits for the other
+              --   owners; an entry point on any other thread hands the
+              --   request over here.
             | LuaScenarioLoad Int ScenarioSource
               -- ^ Issue #2713 (SCN-13): an ACCEPTED scenario-load request
               --   (its request id and the resolved source) for the Lua
