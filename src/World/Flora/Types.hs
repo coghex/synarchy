@@ -154,8 +154,8 @@ instance Hashable AnnualCycleKey where
 --   The selector axes and the corpse-retention schema that
 --   @docs/flora_visual_state_contract.md@ (#2530) defines. This module
 --   holds them as loaded CONTENT only: 'FloraSpecies' carries the
---   declared variant table and the corpse policy, and nothing reads
---   either yet — the resolver (EFM-3) and retention (EFM-10) do.
+--   declared variant table and the corpse policy. World.Flora.Visual reads
+--   the variants; corpse retention remains deferred to EFM-10.
 --   Phase and stage reuse 'LifePhaseTag' and 'AnnualStageTag'; the
 --   contract adds no token to either.
 
@@ -342,8 +342,7 @@ data FloraSpecies = FloraSpecies
       -- ^ Present ⇒ foraging units can harvest this species (#94).
     , fsTextureVariants ∷ !(HM.HashMap FloraVariantSelector TextureHandle)
       -- ^ Declared @textureVariants@ (#2539), keyed by semantic
-      --   selector. Loaded content only: nothing resolves against it
-      --   until EFM-3.
+      --   selector; resolved by World.Flora.Visual (#2544).
     , fsCorpsePolicy    ∷ !FloraCorpsePolicy
       -- ^ Authored or defaulted corpse retention (#2539). Loaded
       --   content only: retention reads it from EFM-10.

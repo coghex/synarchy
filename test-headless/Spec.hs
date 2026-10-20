@@ -320,6 +320,8 @@ import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
 import qualified Test.Headless.World.Calendar as Calendar
 import qualified Test.Headless.World.SubMinuteClock as SubMinuteClock
+import qualified Test.Headless.World.FloraVisualResolver as FloraVisualResolver
+import qualified Test.Headless.World.FloraVisualOracle as FloraVisualOracle
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
@@ -1277,6 +1279,8 @@ restLane = do
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     SubMinuteClock.spec
+    describe "World.FloraVisualResolver" FloraVisualResolver.spec
+    describe "World.FloraVisualResolver — shipped content oracle" FloraVisualOracle.spec
     describe "World.FloraGrowth" FloraGrowth.spec
     describe "World.FloraOrder" FloraOrder.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec
