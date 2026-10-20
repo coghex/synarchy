@@ -45,6 +45,7 @@ module Engine.Core.Capability.WorldSim
   ( WorldSimCapability(..)
   , toWorldSimCapability
   , withPlayerIntent
+  , withPlayerIntentUnless
   , withPlayerIntentHeld
   , restoreIfPlayerIdle
   , withPageLifecycle
@@ -235,6 +236,26 @@ withPlayerIntent wsc act =
   modifyMVar (wsPlayerIntentGenRef wsc) $ \g → do
     result ← act
     pure (g + 1, result)
+
+-- | 'withPlayerIntent' with a REFUSAL decided INSIDE the critical section
+--   (#2713): @refused@ is evaluated holding the lock, and when it answers
+--   'True' the action never runs, the generation is not advanced (a
+--   refused request is not player intent) and the result is 'Nothing'.
+--
+--   The decision has to be taken here, not before the lock. A check made
+--   outside it can be overtaken by a transition that takes the lock first
+--   — an operation admitted on another thread asserts its own pause, and
+--   the caller, holding a stale "not refused", then clears it. Every
+--   writer of the pause flag takes this lock, so a check inside it sees the
+--   admission that preceded it and an admission that follows it waits for
+--   the pause it imposes to land after this one.
+withPlayerIntentUnless ∷ WorldSimCapability → IO Bool → IO α → IO (Maybe α)
+withPlayerIntentUnless wsc refused act =
+  modifyMVar (wsPlayerIntentGenRef wsc) $ \g → do
+    isRefused ← refused
+    if isRefused
+      then pure (g, Nothing)
+      else (\r → (g + 1, Just r)) ⊚ act
 
 -- | Run @act@ with the current generation, holding the lock but NOT
 --   advancing it — the shape a save's own acceptance needs: it reads the

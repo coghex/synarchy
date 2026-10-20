@@ -27,12 +27,12 @@ import Engine.Scripting.Lua.TickPolicy
     (TickInterval(..), classifyTickInterval, tickIntervalSeconds
     , describeTickRefusal)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability, withPlayerIntent)
+    (WorldSimCapability(..), toWorldSimCapability, withPlayerIntentUnless)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
+import Engine.Core.State (EngineEnv, EngineLifecycle(..))
 import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
     , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..)
@@ -42,7 +42,8 @@ import Engine.Core.Types
     , PreviewStructPath(..)
     , PreviewDeclaredEntry(..), PreviewFacingCell(..), PreviewFsClass(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
-import Engine.Load.Status (loadInProgress)
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
+import Engine.Load.Status (captureInProgress, loadInProgress)
 import World.Pause (imposePauseHeld, releasePauseHeld)
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import qualified HsLua as Lua
@@ -104,35 +105,46 @@ setPausedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 setPausedFn env = do
   b ← Lua.toboolean 1
   applied ← Lua.liftIO $ do
-      loading ← loadInProgress (loadStatusRef env)
-      if loading ∧ not b
-        then do
-            logger ← readIORef (ccLoggerRef (toCoreCapability env))
-            logWarn logger CatLua
-                "setPaused(false) rejected: a load transaction is in \
-                \flight -- unpausing now could resume simulation before \
-                \it either publishes or fails"
-            pure False
-        else do
-            -- #913: an APPLIED pause/resume is player intent. The flag
-            -- write happens INSIDE the intent lock, so an autosave's
-            -- compare-then-restore (which takes the same lock) can
-            -- neither miss this transition nor overwrite it afterwards.
-            -- Counted unconditionally rather than only on a value CHANGE:
-            -- the generation records that the player asked for something
-            -- during a save's request window, and an autosave that finds
-            -- it bumped declines to restore its own pre-save state — so
-            -- over-counting is the safe direction and under-counting is
-            -- not. A REJECTED call above deliberately doesn't count:
-            -- nothing changed for anyone.
-            -- The @…Held@ variants: 'withPlayerIntent' already holds
-            -- the MVar that is also the epoch mutex ("World.Pause"), and
-            -- re-entering it would deadlock.
-            withPlayerIntent (toWorldSimCapability env) $ do
-                if b then imposePauseHeld (toWorldSimCapability env)
-                     else releasePauseHeld (toWorldSimCapability env)
-                atomically $ setAudioPlayerPaused (acTransport $ toAudioCapability env) b
-            pure True
+      -- #913: an APPLIED pause/resume is player intent. The flag write
+      -- happens INSIDE the intent lock, so an autosave's compare-then-
+      -- restore (which takes the same lock) can neither miss this
+      -- transition nor overwrite it afterwards. Counted unconditionally
+      -- rather than only on a value CHANGE: the generation records that
+      -- the player asked for something during a save's request window, and
+      -- an autosave that finds it bumped declines to restore its own
+      -- pre-save state — so over-counting is the safe direction and
+      -- under-counting is not. A REJECTED call deliberately doesn't count:
+      -- nothing changed for anyone.
+      -- The @…Held@ variants: the intent lock is also the epoch mutex
+      -- ("World.Pause"), and re-entering it would deadlock.
+      --
+      -- #2713: the load-in-flight refusal of an UNPAUSE is decided INSIDE
+      -- that lock ('withPlayerIntentUnless'), not before it. An operation
+      -- can be admitted on another thread (a scenario load's
+      -- 'requestScenarioLoad') and impose its own pause under the same
+      -- lock; a refusal read before the lock could be stale by the time
+      -- the lock is held, and the unpause would then clear the pause the
+      -- accepted operation had just imposed.
+      let wsc = toWorldSimCapability env
+          setFlag = do
+              if b then imposePauseHeld wsc else releasePauseHeld wsc
+              atomically $ setAudioPlayerPaused (acTransport $ toAudioCapability env) b
+      -- a PAUSE is never refused
+      let sl = toSaveLoadCapability env
+          refused = (||) <$> loadInProgress (slLoadStatusRef sl)
+                         <*> captureInProgress (slLoadStatusRef sl) (slSaveBarrierRef sl)
+      result ← withPlayerIntentUnless wsc
+                   (if b then pure False else refused)
+                   setFlag
+      case result of
+          Just () → pure True
+          Nothing → do
+              logger ← readIORef (ccLoggerRef (toCoreCapability env))
+              logWarn logger CatLua
+                  "setPaused(false) rejected: a load transaction or a \
+                  \scenario capture is in flight -- unpausing now could \
+                  \resume simulation before it either publishes or fails"
+              pure False
   Lua.pushboolean applied
   return 1
 

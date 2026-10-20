@@ -24,6 +24,8 @@ module Scenario.Schema
       -- * Loading
     , loadScenarioFile
     , loadScenarioFileWith
+    , loadScenarioFilePaths
+    , decodeScenarioBytesPaths
     , decodeScenarioBytes
     , decodeScenarioBytesWith
     ) where
@@ -67,26 +69,36 @@ loadScenarioFile ∷ ScenarioCatalog → FilePath → IO ScenarioOutcome
 loadScenarioFile = loadScenarioFileWith scenarioFormat
 
 loadScenarioFileWith ∷ ScenarioFormat → ScenarioCatalog → FilePath → IO ScenarioOutcome
-loadScenarioFileWith fmt cat path = do
+loadScenarioFileWith fmt cat path = fst <$> loadScenarioFilePaths fmt cat path
+
+-- | 'loadScenarioFileWith' that also answers where each retained entry stood
+--   in the file ('Scenario.Types.SourcePaths'). The paths of a failed load are
+--   empty.
+loadScenarioFilePaths ∷ ScenarioFormat → ScenarioCatalog → FilePath → IO (ScenarioOutcome, SourcePaths)
+loadScenarioFilePaths fmt cat path = do
     r ← try (BS.readFile path)
     pure $ case r of
-        Left (e ∷ IOException) → ScenarioFailed (ScenarioUnreadable (tshow e))
-        Right bytes → decodeScenarioBytesWith fmt cat bytes
+        Left (e ∷ IOException) → (ScenarioFailed (ScenarioUnreadable (tshow e)), noSourcePaths)
+        Right bytes → decodeScenarioBytesPaths fmt cat bytes
 
 decodeScenarioBytes ∷ ScenarioCatalog → BS.ByteString → ScenarioOutcome
 decodeScenarioBytes = decodeScenarioBytesWith scenarioFormat
 
 decodeScenarioBytesWith ∷ ScenarioFormat → ScenarioCatalog → BS.ByteString → ScenarioOutcome
-decodeScenarioBytesWith fmt cat bytes =
+decodeScenarioBytesWith fmt cat bytes = fst (decodeScenarioBytesPaths fmt cat bytes)
+
+decodeScenarioBytesPaths ∷ ScenarioFormat → ScenarioCatalog → BS.ByteString → (ScenarioOutcome, SourcePaths)
+decodeScenarioBytesPaths fmt cat bytes =
     case Yaml.decodeEither' bytes of
-        Left e → ScenarioFailed (ScenarioSyntaxError (T.pack (Yaml.prettyPrintParseException e)))
+        Left e → failed (ScenarioSyntaxError (T.pack (Yaml.prettyPrintParseException e)))
         Right (A.Object o) → case readVersion o of
-            Left f → ScenarioFailed f
+            Left f → failed f
             Right v → case migrate fmt v o of
-                Left f → ScenarioFailed f
+                Left f → failed f
                 Right current → validate cat v current
-        Right _ → ScenarioFailed ScenarioNotAMapping
+        Right _ → failed ScenarioNotAMapping
   where
+    failed f = (ScenarioFailed f, noSourcePaths)
     readVersion o = case KM.lookup "version" o of
         Nothing → Left ScenarioVersionMissing
         Just n@(A.Number _) → case A.fromJSON n of
@@ -107,7 +119,7 @@ migrate fmt v o
 
 -- | Two decoding passes around the cross-entry analysis (see
 --   "Scenario.Decode").
-validate ∷ ScenarioCatalog → Int → A.Object → ScenarioOutcome
+validate ∷ ScenarioCatalog → Int → A.Object → (ScenarioOutcome, SourcePaths)
 validate cat sourceVersion o =
     let env1 = DecEnv cat Nothing False HS.empty HS.empty
         (_, localDiags, nodes) = runDec env1 (decodeContent sourceVersion o)
@@ -115,5 +127,5 @@ validate cat sourceVersion o =
         env2 = env1 { envFinal = True
                     , envRejected = anRejected an
                     , envDropped = anDropped an }
-        (scenario, _, _) = runDec env2 (decodeContent sourceVersion o)
-    in ScenarioLoaded scenario (sortOn sdPath (localDiags ⧺ anDiagnostics an))
+        ((scenario, paths), _, _) = runDec env2 (decodeContent sourceVersion o)
+    in ( ScenarioLoaded scenario (sortOn sdPath (localDiags ⧺ anDiagnostics an)), paths )

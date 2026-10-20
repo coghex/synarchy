@@ -2046,11 +2046,70 @@ ingress by D-26 against the spawned definition's defaults; an OMITTED
 tag is the `wildlife` row (D-31), so a tag-less animal stays wildlife
 while a tag-less acolyte is an uncontrolled acolyte. An unrecognized tag
 warns once per request and spawns the inert profile. The one local
-controller is the constant `localController`. Until FTS-4/FTS-5 port
-them, consumers read faction ONLY through `legacyFactionOf`: local
+controller is the constant `localController`. The relation consumers
+FTS-5 ports read faction ONLY through `legacyFactionOf`: local
 controller → `player`, both debug capabilities → `debug`,
 `legacy_hostile` → `hostile`, `wildlife` → `wildlife`, otherwise
-`neutral` (so an uncontrolled acolyte or nomad reads `neutral`). The
+`neutral` (so an uncontrolled acolyte or nomad reads `neutral`).
+
+**Ownership and commandability (#2518, FTS-4).** The non-relation
+consumers ask FTS-1's profile queries of the live profile through
+`Unit.Faction.Membership.unitIsOwnedBy` / `unitIsCommandableBy` /
+`unitHasUnrestrictedCombat`, with the OBSERVER as an explicit argument:
+owned iff the unit's controller is the observer, commandable iff owned
+or `CapLocalCommandable`, unrestricted combat iff `CapUnrestrictedCombat`
+(no observer). No policy function names `localController`; the entry
+points do (the world-time tick into `tickLocationDiscovery`, the
+awareness, transfer, transfer-order and cargo Lua verbs). Location
+discovery and awareness keep only sights the observer owns
+(`UnitSight` carries the policy profile, not a `Faction`); container
+reveal and every strict transfer gate use commandability, while the lax
+AI cargo verbs keep their own eligibility and pass the observer only to
+the reveal. So an uncontrolled acolyte, allied with the roster by its
+shared `acolyte` tag, neither discovers, reveals, transfers nor takes
+orders, and a debug spawn is commandable but owns nothing. Lua asks the
+same questions of a unit id: `unit.isPlayerOwned`,
+`unit.isPlayerCommandable`, `unit.hasUnrestrictedCombat` (false, never
+an error, for anything that names no live unit; global roster, so an
+inactive page answers too). The string-taking `faction.*` property verbs
+remain for the compatibility window and have no script callers. After
+FTS-4 the only `legacyFactionOf` readers are `unit.getFaction`, the save
+codec and the adapter itself; since FTS-5 no script reads
+`unit.getFaction` at all. The hspec group `legacy faction consumers
+(FTS-4)` inside `Unit faction profile policy` pins both sets.
+
+**Relations and autonomous combat (#2521, FTS-5).** Every live relation
+question is FTS-1's DIRECTED authority over both units' policy profiles,
+the shipped catalogue's base table and a live overlay
+(`unitRelationFromTo` / `unitIsFriendlyToward` / `unitCanAttack`). Lua asks
+`unit.relationFromTo(a, b)`, `unit.isFriendlyToward(a, b)` and
+`unit.canAttack(a, b)` (fail closed: `neutral` / false). The overlay is a
+registration-time input of those verbs: production passes none, and only a
+fixture calls the same registration function with causes. A medic treats
+the patient IT regards as an ally; `groupEffectivenessVs` counts a
+candidate that regards the SUBJECT as an ally and never the threat; the
+context-menu Attack row is `unit.canAttack` (directed hostility, or
+unrestricted combat on either side, so debug staging works across shared
+controllers and tags). The approved matrix's eight changed pairs carry into
+these consumers: a debug unit regards nobody, itself included, as an ally.
+Autonomous acquisition and continuation — ruin guards, the generic
+`incoming_hit` engage, `attack_target` and its mid-fight swap — go through
+`scripts/unit_ai_combat_policy.lua`: hostility, or LOCAL SELF-DEFENSE (the
+unit's own last attacker, hit at most ten seconds ago, strictly after the
+end of its previous attack goal and after any diplomacy-clear time), or a
+fixture authorization for the exact (unit, target, goal occurrence).
+Hostility is never cut off; visibility never refreshes self-defense;
+permission alone acquires nobody; committed player/debug orders and
+lash-out keep their own rules. A guard acquiring through self-defense
+announces "attacks <target> in self-defense after a recent attack" instead
+of claiming a hostile relation. Runtime diplomacy and authorization are
+FTS-6's; until then they reach the seam only through its `fixtureInputs`
+provider, which returns nothing in production. The seam's per-unit cutoff
+and goal occurrence are transient (`docs/persistence_state_inventory.md`,
+`unit_ai_combat_policy`). Gates: hspec `--match "Lua faction model"`
+(`directed relation consumers (FTS-5)`), `"persistent ruin encounter AI"`,
+`"unit AI load reset"`, and `tools/medic_coord_probe.py`,
+`tools/retaliation_swap_probe.py`, `tools/expedition_loop_probe.py`. The
 `units` component (v3, now v4) persists profiles exactly; v1/v2 faction strings
 resolve by D-26 at the load boundary
 (`docs/persistence_state_inventory.md`, `UnitsDTO` and `umInstances`).
@@ -2065,7 +2124,8 @@ the real loaders and the real Lua bindings, the shipped corpus, and the
 D-26 mapping), `--match "Unit faction profile policy"` (both five-by-five
 legacy matrices re-asserted against the shipped catalogue),
 `--match "Unit faction profile wire"` (adapter, units v1/v2/v3 wire,
-spawn ingress), `--match "Startup readiness"` / `"Startup asset logging"`, and
+spawn ingress), `--match "Lua faction model"` (the unit-id queries through
+their real registration), `--match "Startup readiness"` / `"Startup asset logging"`, and
 `tools/startup_asset_logging_probe.py`.
 
 ---
@@ -2779,7 +2839,8 @@ lifecycle `unknown → hinted → discovered → active → cleared → depleted
 `wgpLocationStamped` stays chunk-keyed (#424). `hinted` is deliberately
 unreachable but must NOT be deleted (the enum is positionally serialized
 and append-only). #916's ruin encounters are the first runtime owner of
-`active` and `cleared`: first autonomous aggression activates an encounter
+`active` and `cleared` (a guard acquires through hostility, or since #2521
+in local self-defense against a fresh attacker; §The faction tag catalogue): first autonomous aggression activates an encounter
 (without revealing an unknown location), while first sight exposes an already
 activated ruin as `active`. Since #917 `cleared` is no longer the
 encounter's to grant on its own — see §Guaranteed significant contents
@@ -3413,7 +3474,10 @@ meant.
 **The three rules on sight (moved from CLAUDE.md).**
 
 - **Discovery (#780, sight-based since #1230)** is a one-way promotion
-  to `discovered`, fired when a player-faction unit SEES the location:
+  to `discovered`, fired when a unit the local controller OWNS SEES the
+  location (ownership under an explicit observer since #2518: debug
+  spawns, uncontrolled acolytes and other controllers' units never
+  discover):
   its visible-tile set intersects the instance's stored `liBounds`,
   seam-aware, one tile being enough (the `discovery_margin` halo is GONE
   from YAML, def, instance, Lua and wire). Sight is
@@ -3894,8 +3958,9 @@ the container, the lax AI cargo verbs, a Mode A session OPENING on it
 first completion of a storage-capable building (seeds KNOWN-EMPTY
 because the player watched it go up). Walking past, selecting,
 right-clicking and opening the window reveal NOTHING; every unit-driven
-reveal is gated on `isPlayerCommandable`; knowledge is player-global,
-never per-unit.
+reveal is gated on commandability under the local controller
+(`unitIsCommandableBy`, #2518), so an allied but uncontrolled acolyte
+reveals nothing; knowledge is player-global, never per-unit.
 
 Beyond the gates listed below, the reveal rule is pinned by hspec
 `--match "Container knowledge"`, and the arc's INTEGRATED gate is
@@ -3927,7 +3992,8 @@ refused as `item_not_transferable`, and an escort source that never
 registered the action is refused as `source_not_escortable`. Only
 `ready_to_commit` entries are ever submitted. `unit.cancelTransferOrder`
 takes pending entries only (via `cancelBatch`); escort/hold eligibility
-stays `isPlayerCommandable` of the live faction, never a def allowlist.
+stays commandability of the live faction profile under the local
+controller (`unit.isPlayerCommandable`, #2518), never a def allowlist.
 
 - **Durable orders (#1246/#1247/#1253).** `createTransferOrder`
   validates with adjacency DEFERRED (`ReachPolicy`; same page still
@@ -4829,7 +4895,12 @@ integrity graph). This is the phase and failure detail it defers.
 **`engine.getLoadStatus()` exposes a 12-phase lifecycle plus a 13th
 terminal phase, `LoadReconciliationFailed` (#1204):** publication
 SUCCEEDED but a Lua `onSaveLoaded` callback raised, so the live session is
-incompletely reconciled.
+incompletely reconciled. A SCENARIO load (#2713, §Scenario load below) adds
+two more: `LoadInitializing` (non-terminal: the shell is published and
+reconciled and the scenario's content is being installed) and
+`LoadReplacementFailed` (terminal, unsuccessful: the replacement was published
+and then could not be completed; like `LoadReconciliationFailed` it leaves
+`failedAtPhase` unset, because the old session did NOT survive).
 
 It is a THIRD terminal disposition, not a flavour of either existing one.
 Every poller must treat it as terminal (its outcome is non-nil, so
@@ -6244,6 +6315,18 @@ health, density, placement category and texture path decide nothing. A
 species declaring no cultivated variants renders identically in both
 contexts, so the axis changes no existing visual.
 
+**Context and identity are fixed at creation and persisted nowhere
+(#2547).** `FloraInstance.fiContext` is assigned by the three creators
+(placement `wild`; `WePlaceFlora`/`WePlaceFloraWithId` replay and
+`cropPlotInstance` `cultivated`) and reconstructed from the creation
+record on eviction, load and the `world-edits` v1 rewrite. The occurrence
+key is the page-scoped `FloraInstanceId` for wild and row flora and the
+canonical `CropPlots` tile for a groundcover plot (never the reserved
+zero id) until EFM-6; contract §6.1-6.2 records both rules and the two id
+namespaces. `docs/persistence_state_inventory.md` gains no row: the
+field is covered by the existing `wsTilesRef` rebuild classification, and
+no save component writes `FloraChunkData`.
+
 **Retention is authored, and cause does not move it.** `corpsePolicy`
 declares `visibility` (`transient`/`persistent`) with `durationDays`
 and `successor` required for transient and refused for persistent;
@@ -6281,10 +6364,23 @@ and variant registration through `engine.loadFloraYaml`), `--match
 vocabularies refused at the authoring boundary), `--match
 "Asset.FloraContent"` (whole-file refusal atomicity) and `--match
 "World.FloraGrowth"` (the lifespan and dead-window behaviour the legacy
-default preserves). OWED by the epic's children, each with its own
-issue: EFM-3 owes table-driven resolver tests covering
-all ten ladder steps and both fallbacks; EFM-4 through EFM-6 owe
-occurrence-identity, render-context and persistence gates; EFM-7 owes
+default preserves), `--match "World.FloraVisualResolver"` (#2544: the
+pure canonical lattice and trace, context interleave, legacy normalization and
+living precedence, arbitrary-subset ordering property, frozen natural-death
+selectors, CropPlot elapsed clock and harvested bypass), and `--match
+"World.FloraVisualResolver — shipped content oracle"` (independent pre-change
+growth and lookup chain across all 16 shipped species, all living phases and
+360 calendar days; dead windows for the 12 mortal species and continued life
+for the four evergreens), and, since #2547, `--match "flora render
+context"` (a generated instance is wild, a replayed `WePlaceFloraWithId`,
+a v1 `WePlaceFlora` rewrite and a crop plot's synthetic instance are
+cultivated, and the context survives chunk regeneration and a
+codec-and-reconstruction round trip of a planted row crop; a
+placement-to-cultivated mutation fails it) beside the unchanged
+`--match "flora instance identity"` and `--match "flora instance
+persistence"`. OWED by the epic's children, each with its own
+issue: EFM-5 and EFM-6 owe the condition-record and persistence gates;
+EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
 killed, renders its dead candidate; alive and depleted, it still
 renders `harvested_texture`); EFM-10 owes retention and successor
@@ -8050,3 +8146,364 @@ migrations"`; `tools/persistence_inventory_audit.py`,
 `tools/engine_env_capability_audit.py`, `tools/save_compat_audit.py`,
 `tools/enum_append_only_audit.py`, `tools/haskell_module_budget.py`,
 `tools/lua_module_budget.py` and `tools/unicode_operator_audit.py`.
+
+---
+
+## Scenario load: the paused session transaction (#2713)
+
+One engine service (`Scenario.Load.Service`) turns a resolved scenario source
+into a fully initialized, PAUSED testing session, or reports honestly why it
+could not (field-level format: [scenario_format.md](scenario_format.md#loading-a-scenario-session-scn-13-2713)).
+A scenario load IS a whole-session load transaction (the 12 phases, the 13th
+terminal `LoadReconciliationFailed`, and the two phases below, in
+§Save/load transaction): the same request ids, exclusion, save barrier, owner
+parking, queue cutover, allocator and page-incarnation reset and Lua
+reconciliation. It adds a request record and a post-publication install.
+
+**Entry and result.** `requestScenarioLoad env source` (any thread) returns
+`Left Busy` at once or `Right requestId`; `readScenarioStatus` answers the
+request's record until the next accepted operation of any kind replaces it.
+The source is `SourceFile path` or `SourceBytes name bytes`, already resolved
+(path shorthand and launch-directory policy are SCN-15's). Public CLI, Lua and
+UI entry points are not part of this slice.
+
+| Field of `ScenarioLoadStatus` | Meaning |
+|---|---|
+| `slsRequestId` | The load transaction's request id (the same id `engine.getLoadStatus()` reports). |
+| `slsSource` | The source's identity (the path, or the name given with the bytes). |
+| `slsStage` | `StageAdmitted` → `StagePreflight` → `StageStaging` → `StagePublishing` → `StageReconciling` → `StageConstructing` (→ `StageRecovering`) → `StageReady` \| `StageFailed`. The last two are terminal. |
+| `slsWarnings` | Every rejection across every phase as a `ScenarioDiagnostic` (`sdPath`, `sdReason`, `sdEffect`), in the order found; present on a ready request and on a failed one. |
+| `slsOutcome` | `Nothing` while in flight; `ScenarioReady` or `ScenarioUnsuccessful FailureContext` (stage reached, cause, further details). |
+| `slsPublished` | Whether a replacement session was ever published. |
+| `slsRecovery` | What stands after a failure: `RecoveryPreserved` (failed before the swap; the previous session is exactly as it was), `RecoveryFlatArena` (the swap happened, content failed, a fresh default flat arena stands), `RecoveryIncomplete` (the swap happened and a session-bound callback raised; the replacement is incompletely initialized), `RecoveryFailed why` (recovery failed too). |
+
+**Ready means complete.** `StageReady` and `LoadPublished` / `LoadSucceeded`
+are written together, only after the published shell was reconciled, every
+accepted terrain, fluid, flora, structure, building, location, unit and
+ground item was installed, AND the simulation consumed it. World-thread
+installation answers when the world thread applied a request, but the
+simulation hears of it through its own queue, so the service then makes one
+queue-ordered round trip (`Scenario.Load.Construct.awaitSimulation`: the
+observational `SimReadMemory`, queued behind everything installed and
+answered only after it): the reply proves the simulation holds the installed
+terrain and fluid and the published shell's chunk seeds, and a paused
+session ticks nothing in the meantime. A simulation that does not answer in
+time, or whose answer was discarded by a publication, is a construction
+failure like any other (recovery follows); the recovery arena is awaited the
+same way. Allocated ids, a queued install, a generated chunk or a completed
+session swap alone never make a request ready. A ready request
+may carry warnings: interactive callers show them, automated callers (SCN-15,
+SCN-17) compare them with the ones they expect and treat an unexpected one as a
+setup failure (D-15); this slice supplies the complete evidence.
+
+**Preflight preserves the session.** The live session must be a testing one: no
+page at all (a direct boot) or only arena pages (`isArenaParams`). A generated
+gameplay page makes the request fail with `CauseNotTestingSession` and
+`RecoveryPreserved`, constructing nothing. The source is then read, parsed,
+dispatched by its own version and migrated in memory
+(`Scenario.Schema`); `ScenarioFailed` (unreadable, syntax, not a mapping,
+missing/malformed/unsupported version, failed migration) fails the request the
+same way. A rejected field or entry in a document that parses is NOT a failure:
+it is a warning and the retained subset loads (D-14, D-47). The source is never
+written.
+
+**The shell, then the content.** The replacement is first an empty arena shell
+(one fresh `test_arena` page at the scenario's bounds, `Scenario.Load.Session`),
+staged privately by `World.Load.Stage` and published through the ordinary
+barrier, so the quiescence, the queue cutover (`discardStaleQueues`,
+`commitLoadPublish`), the allocator and page-incarnation reset and the
+`onSaveLoaded` reconciliation all apply unchanged. Only then is the content
+installed, on the Lua thread, through the SCN-09..12 adapters in their fixed
+order (`Scenario.Load.Construct`), each commit fenced by the shell page's
+incarnation. The adapters commit through the live owners (world-thread install
+commands and simulation seeding, the units' Lua readiness hook, the live
+managers), so a fully private session would need a second engine environment;
+D-43 permits recovery to a flat arena instead.
+
+**Failure and recovery.**
+
+- Before the swap (preflight, staging, the publish hand-off, the barrier, the
+  Lua apply): `StageFailed`, `LoadFailed` with `failedAtPhase`,
+  `RecoveryPreserved`. The prepared Lua load is aborted, nothing is published.
+- After the swap, a session-bound callback raised: every callback is still
+  attempted; `LoadReconciliationFailed` with the per-module list,
+  `RecoveryIncomplete`; no content is installed. `failedAtPhase` stays unset.
+- After the swap, construction failed (an exception, or accepted content the page
+  no longer admits): a fresh default flat arena is published the same way,
+  paused, and the request ENDS `StageFailed` with `LoadReplacementFailed`
+  (`failedAtPhase` unset) and `RecoveryFlatArena`. It is never reported as a
+  load of the requested file. If recovery itself fails, both diagnostics are
+  kept and the disposition is `RecoveryFailed`.
+- `failLoad` is publication-aware: for a request whose record says it was
+  published it ends the generic transaction as `LoadReplacementFailed` with
+  `failedAtPhase` unset, never as `LoadFailed`. The recovery's own staging, its
+  publish barrier and the Lua apply report through the existing paths, so the
+  rule lives there rather than at each call site.
+- Every outcome leaves the simulation paused and releases the exclusion and the
+  barrier, so the next request is admitted. A synchronous exception at an
+  ownership hand-off is caught and terminalizes the request; a thread
+  cancellation (`SomeAsyncException`) propagates unchanged.
+- A failure the existing transaction records on its own (the world thread's
+  staging failing, the barrier timing out, the Lua apply failing) ends the
+  generic transaction without the request record having been told; the record is
+  settled from the generic outcome when read, so it is never non-terminal under a
+  terminal request.
+
+**One admission boundary.** Admission to an ordinary save, an autosave, an
+ordinary load, a scenario load and (SCN-14) a scenario capture is a CHECK of the
+other kinds followed by a CLAIM of its own. It runs as one action under the
+admission lock inside `LoadStatusRef` (`withAdmission`): `claimLoad`,
+`claimScenarioLoad` (loads) and `claimSave` (a save, an autosave through the same
+`engine.saveWorld`, and a capture, which closes the save barrier). The lock is
+held for the check and the claim only; the operation's own state
+(`loadInProgress`, `saveInProgress`) is what the next claimant reads, for the
+operation's WHOLE lifetime. A conflicting request is answered `Busy` at once:
+no queue, no cancellation, no change to the active request's status, request
+identity or pause state. `engine.setPaused(false)` is refused for the whole
+lifetime of a scenario load for the same reason it is for any load, and the
+refusal is decided INSIDE the player-intent lock every pause transition takes
+(`withPlayerIntentUnless`), not before it: an operation admitted on another
+thread imposes its pause under that same lock, so a refusal read before the
+lock could be stale by the time the lock is held and the unpause would clear
+the pause the accepted operation had just imposed.
+
+**Stale completions.** Every write to the request record and to the generic
+status is keyed by request id and ignored once the request is terminal, so a late
+status write about an older request cannot finish or overwrite a newer one. A
+late `LuaSaveLoaded` is discarded BEFORE it does anything
+(`Engine.Scripting.Lua.Thread.Dispatch.handleSaveLoaded`): when a NEWER request
+was accepted since, or its own request already ended, no `onSaveLoaded`
+callback runs (its survivor arrays describe a session that is no longer the
+live one) and no queued console command is cancelled. A message for a
+transaction the load status does not track at all is an isolated dispatch (the
+headless reconciliation fixtures drive the handler that way) and runs.
+
+**Transient classification.** The admission lock, the request record, the plan
+the continuation installs and the test seams ride inside `LoadStatusRef`
+(no new `EngineEnv` field) and are Exclude/transient
+([persistence_state_inventory.md](persistence_state_inventory.md), `loadStatusRef`).
+Nothing a scenario load adds is saved. The arena bounds, the general tags, the
+scenario identities (`umScenarioRefs`, `bmScenarioRefs`, `lisScenarioRefs`, the
+item reference mapping) and the physical values were already persisted by SCN-03
+to SCN-12; an ordinary save of a loaded session restores all of them without the
+source YAML, and no component, migration or fixture changed.
+
+**Test seams.** `armScenarioSeams` installs a hook consulted at named instants
+(`ScenarioLoadPoint`): it may block (a held request) or throw (an injected
+fault), and costs one `IORef` read when unarmed. `seamFormat` replaces the
+decode format for one request, because the shipped migration chain is all
+identity steps.
+
+**Gates:** hspec `--match "Scenario.Load"`, `--match "transactional load"`,
+`--match "load exception terminalization"`, `--match "save snapshot barrier"`,
+`--match "Lua.PauseGate"`, `--match "LuaSaveLoaded reconciliation failure
+disposition"`, `--match "load replacement clears transient session surfaces"`,
+`--match "persistence contract"`; `tools/transactional_load_probe.py`,
+`tools/persistence_inventory_audit.py`, `tools/engine_env_capability_audit.py`,
+`tools/save_compat_audit.py`, `tools/enum_append_only_audit.py`,
+`tools/haskell_module_budget.py`, `tools/lua_module_budget.py` and
+`tools/unicode_operator_audit.py`.
+
+## Scenario capture: the coherent snapshot and the safe file write (#2714)
+
+One engine service (`Scenario.Capture.Service`) turns the live testing arena into
+a scenario file, or reports honestly why it could not, and leaves the arena
+PAUSED either way (field-level format and examples:
+[scenario_format.md](scenario_format.md#capturing-a-scenario-session-scn-14-2714)).
+A capture IS a save-barrier transaction (§Save/load transaction): the same owner
+quiescence, final acknowledgement and parking, capture lock and
+encode-before-release discipline an ordinary save has, because a coherent
+snapshot of the state owners is exactly what it needs. What differs is what is
+read from the snapshot (the supported scenario baseline, projected; not an
+ordinary session) and what is written (one YAML file, not a save slot). It
+creates no second session-save system and changes no saved component.
+
+**Entry and result.** `requestScenarioCapture env (CaptureRequest destination
+overwrite)` (any thread) returns `Left Busy` at once or `Right requestId`;
+`readCaptureStatus env` answers the request's `ScenarioCaptureStatus` while it is
+the CURRENT save-barrier transaction (a later operation of any kind supersedes
+it, so a stale record is never reported under a newer request's name). The
+destination is already resolved and the overwrite intent explicit: filename
+shorthand, the scenario folder, directory browsing and overwrite confirmation
+are SCN-15's. The only console entry until then is the internal
+`debug.captureScenario(path[, overwrite])` /
+`debug.getScenarioCaptureStatus()` pair, with `debug.loadScenario(path)` /
+`debug.getScenarioLoadStatus()` for the load side
+(`Engine.Scripting.Lua.API.ScenarioDebug`): test-only bindings on the `debug`
+table, documented as superseded by SCN-15's public functions, taking a resolved
+path and nothing else.
+
+| Field of `ScenarioCaptureStatus` | Meaning |
+|---|---|
+| `cstRequestId` | The barrier transaction's request id. |
+| `cstRequest` | The destination and the overwrite intent. |
+| `cstStage` | `CaptureAdmitted` → `CapturePreflight` → `CaptureCoordinating` → `CaptureSnapshotting` → `CaptureEncoding` → `CaptureStoring` → `CaptureDone` \| `CaptureFailed`. The last two are terminal. |
+| `cstOutcome` | `Nothing` while in flight; `CaptureSucceeded CaptureReport` (destination, bytes, whether an existing file was replaced, entries per family, warnings) or `CaptureUnsuccessful CaptureFailure`. |
+| `cstPublication` | `Published` the moment the destination holds the new file, `NotPublished` before. |
+
+A `CaptureFailure` names the stage reached, the `FailureKind`, the storage phase
+when the file writer failed, the destination, whether the new file was
+published, the actionable cause, every diagnostic behind a projection or
+validation failure and any warning.
+
+| `FailureKind` | Meaning |
+|---|---|
+| `FailCoordination` | The owners did not reach the boundary in time, or an exception ended a hand-off. |
+| `FailNotTestingSession` | The live session holds an ordinary gameplay page, or the arena page is not live. |
+| `FailProjection` | The supported snapshot is inconsistent or holds content the schema cannot state; one diagnostic per finding, nothing is written. |
+| `FailValidation` | The encoded document is refused by the shared scenario boundary, or decodes into something other than what was captured. |
+| `FailEncoding` | A deferred exception surfaced while the document was evaluated and encoded. |
+| `FailDestination` | The destination cannot be written to at all: no such directory, not a regular file, a symlink. |
+| `FailOverwriteRefused` | A file already names the destination and overwrite was not requested. |
+| `FailTemporaryWrite` | Creating, writing or flushing the request's own temporary file failed. |
+| `FailVerification` | The candidate did not read back as the bytes written, or the boundary refused what was read back. |
+| `FailPublication` | The atomic publication itself failed. |
+| `FailDurability` | The file was published but the directory entry could not be made durable: it is NOT reported as saved. |
+
+**Admission.** The same boundary as every other operation
+(`Engine.Load.Status.claimCapture`, one action under the admission lock):
+refused with `BusyLoad` while a load (ordinary or scenario) is active and with
+`BusySave` while a save, an autosave or another capture holds the barrier — the
+barrier's own `beginSave` runs inside the lock, so the check and the claim cannot
+be separated. A refused request allocates no identity, queues nothing and changes
+nothing about the operation that holds the line. The capture's record rides
+inside `LoadStatusRef` beside the scenario-load record (no new `EngineEnv` field;
+Exclude/transient, see [persistence_state_inventory.md](persistence_state_inventory.md),
+`loadStatusRef`) and ends BEFORE the barrier transaction does, so the next
+operation is admitted only after a reader can see the result.
+
+**Pause.** Acceptance pauses synchronously (`imposePause`), before any
+coordination. `engine.setPaused(false)` is refused from acceptance until the
+request is terminal — decided inside the player-intent lock like the load gate
+(`withPlayerIntentUnless`), by `captureInProgress`, which is true only while the
+capture's own record is open AND the barrier's current transaction is still that
+request. An ordinary save does not hold an unpause (today's contract is
+unchanged). Success and failure alike leave the arena paused; resuming is an
+explicit user or script action.
+
+**One coherent snapshot.** The Lua thread (the Lua owner) judges the destination,
+acknowledges for Lua, blocks while the other owners drain their three
+quiescence passes (so a command and its causal follow-ups — a world → simulation
+→ world writeback among them — are all consumed), and queues
+`WorldScenarioCapture`, which is authorized inside the capture window exactly as
+`WorldSave` is. On the world thread, with every other owner parked from its own
+final acknowledgement, the session is read ONCE (`Scenario.Capture.Inputs`): the
+unit and building managers, the page's tile store, edit log, ground items, power
+nodes, tags, crop plots, regrowth timers and generation parameters, the item
+identities and tags, the registries the adapters read definitions from and the
+camera (the live one when the arena owns it, the page's own otherwise). An owner
+never acknowledges while earlier work is executing and mutates nothing between
+its final acknowledgement and the release; transport queues are not serialized to
+achieve this.
+
+**Projection.** `Scenario.Capture.Project` is pure and composes the SCN-09..12
+capture adapters over those inputs: it consumes no gameplay RNG, heals, refills
+and realizes nothing, mints no item and opens no container. Every supported
+CURRENT value is written explicitly (D-12): zero, empty and explicit-absence
+values stay authoritative, a healed wound is `[]`, an emptied inventory is `[]`,
+a dry cell and a removed structure do not come back, and no old override is
+merged in. Scenario identities share one namespace across every family, items
+included, so every referenced object is named together before any entry is
+captured and each later family is named against everything an earlier one took:
+items, buildings, locations and units; then structures; then terrain, fluids and
+flora. An unreferenced object is named by its place in a STRUCTURAL order (never
+an allocation number, a hash-map order or a rendered string), so two captures of
+the same arena agree however it was built. Orders, designations, discovery,
+expedition history and other player progress are not part of a scenario and are
+neither written nor disturbed. A chunk that is not resident is read from the
+durable log (non-residency is never deletion) and no unbounded arena is
+enumerated.
+
+Nothing is dropped silently: a unit or building whose definition is no longer
+registered, a location instance of an unknown definition, a structure no
+registered pack places, a planted plant or crop plot of a species this build's
+catalog cannot name (`flora.species`), and the terrain the vocabulary cannot
+state (a column with no solid cell, a tag on a cell below the surface) each fail
+the projection with one diagnostic per finding. A dead unit is the single exclusion. The one
+thing the projection cannot judge is Lua-owned readiness: a LIVING unit whose
+captured resources are already fatal is written, and the loader (not the
+capture) rejects it with its own diagnostic.
+
+**Validated and fully encoded before release.** The projection is encoded
+(`Scenario.Capture.Encode`; stable key and list order, the current format
+version, durable authored definition references, no runtime handle and no
+ordinary-save bytes), decoded back through the shared scenario boundary and
+compared with what was captured. A document the schema refuses, or one that
+decodes into anything else (an entry it could not carry), fails with
+`FailValidation` before the destination is touched. All of it is evaluated
+INSIDE the capture window under an exception boundary, so a deferred exception
+can never escape into storage or make storage read live state. Only then is the
+capture lock released and the owners resume; operation exclusion and the pause
+continue through publication.
+
+**The write** (`Scenario.Capture.Storage`, built from
+`World.Save.Storage.Durable`'s primitives; its phase list is
+scenario-specific and mapped onto Durable's `WriteStep`, not ordinary-save
+storage's):
+
+1. *Destination check.* The directory exists, the destination is not a symlink
+   (`rejectSymlinkedPath`) and not anything but a regular file, and an existing
+   file is refused without overwrite intent.
+2. *Temporary file.* A uniquely named file created EXCLUSIVELY next to the
+   destination (`writeUniqueDurably`: `openBinaryTempFile`, written, flushed and
+   `fsync`ed on the same handle), so it is on the destination's filesystem and
+   owned from the moment it exists. Cleanup removes exactly this path. A thread
+   cancellation is never a write failure: `writeUniqueDurably` runs creation
+   masked and, on a cancellation at creation, write or flush, closes and unlinks
+   what it created before propagating; the writer does the same for the
+   temporary on a cancellation at any later step (the destination is never
+   removed, and a destination already published stays complete).
+3. *Candidate verification.* Read back, compared byte for byte with what was
+   written, then decoded and validated through the scenario boundary.
+4. *Atomic publication.* Without overwrite: `publishExclusive`, a hard link the
+   filesystem refuses when the name is taken, so a file that appears during the
+   capture is never replaced (enforced at publication, not only in preflight).
+   With overwrite: a rename, which replaces the destination in one step; no
+   backup is kept. The destination is never streamed into or truncated.
+5. *Cleanup and durability.* The temporary name is removed (a failure is a
+   warning: the destination is complete) and the containing directory is
+   synced. Success is reported only after that sync.
+
+Durability is plain POSIX `fsync` of the file and the directory, exactly the
+boundary ordinary saves document (§Save/load transaction): nothing stronger is
+claimed (no `F_FULLFSYNC`). A filesystem without hard links cannot publish
+without overwrite and the answer is `FailPublication`, never a fallback to a
+check-then-rename; an explicit overwrite uses rename and is unaffected.
+
+**What a failure promises.** Before step 4 the destination is exactly as it was
+(an existing file intact, a new one absent), the request's temporary file is
+gone, `cfPublication = NotPublished`. From step 4 on the complete NEW file
+stands and the failure says so (`Published`) and names the step left
+(`PhaseDirectorySync` is `FailDurability`; a temporary that cannot be removed is
+only a warning on a successful capture); nothing claims the old file survived.
+At no point is the destination a partial document. Every handled failure
+releases the capture gate and the shared operation ownership; the request ends
+before the transaction does.
+
+**Stale and cancelled work.** `WorldScenarioCapture` and `LuaScenarioCapture`
+carry the barrier request id; a command whose transaction has ended or been
+replaced does nothing (`whenCurrent`). A synchronous exception at a hand-off ends
+the request unsuccessful; a thread cancellation (`SomeAsyncException`)
+propagates unchanged and is never reported as a failed capture.
+
+**Test seams.** `armCaptureSeams` installs a hook consulted at named instants
+(`CapturePoint`: admitted, preflight, coordinating, boundary, snapshotted,
+encoded, released, before publish, published) that may block or throw, the
+filesystem operations the writer uses (`StorageOps`, each replaceable so one can
+fail alone, independent of permissions and timing), and transforms of the
+projection and the encoded bytes inside the evaluated region (so a deferred
+exception can be raised exactly where a real one would surface). All inert and
+one `IORef` read when unarmed.
+
+**Gates:** hspec `--match "Scenario.Capture"`, `--match "Scenario.Load"`,
+`--match "Save.Snapshot"`, `--match "save snapshot barrier"`, `--match "atomic
+save storage"`, `--match "Lua.PauseGate"`, `--match "transactional load"`,
+`--match "generated world library"` (the shared publication helper);
+`tools/scenario_capture_probe.py` (real engines: live admission, overwrite
+intent, ordinary-save restoration without the source, fresh-process load and
+recapture; evidence in
+[pr-proofs/issue-2714-scenario-capture-evidence.md](pr-proofs/issue-2714-scenario-capture-evidence.md));
+`tools/save_barrier_probe.py` (the ordinary barrier, a regression gate);
+`tools/persistence_inventory_audit.py`, `tools/engine_env_capability_audit.py`,
+`tools/haskell_module_budget.py`, `tools/lua_module_budget.py` and
+`tools/unicode_operator_audit.py`.

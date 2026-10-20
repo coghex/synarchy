@@ -28,7 +28,14 @@ module World.Save.Storage.Durable
     , durableFlush
     , WriteStep(..)
     , writeBytesDurably
+    , writeUniqueDurably
+    , UniqueWriteOps(..)
+    , productionUniqueWriteOps
+    , writeUniqueDurablyWith
     , syncDirectory
+      -- * Publication
+    , ExclusiveOutcome(..)
+    , publishExclusive
       -- * Unique names
     , claimUniquePath
     , isTransientName
@@ -43,8 +50,11 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Char (isDigit)
 import Control.Exception
-    (IOException, SomeException, try, finally, mask_, onException)
+    ( IOException, SomeAsyncException, SomeException, fromException, mask, mask_
+    , onException, throwIO, try, finally )
 import System.Directory (doesFileExist, removeFile, pathIsSymbolicLink)
+import System.IO.Error (isAlreadyExistsError)
+import System.Posix.Files (createLink)
 import System.FilePath (takeDirectory)
 import System.IO
     ( Handle, IOMode(..), openBinaryFile, openBinaryTempFile, hFlush
@@ -145,6 +155,70 @@ writeBytesDurably path bytes = do
                     flushed ← try (durableFlush h)
                     pure (either (\e → Left (StepFlush, e)) Right flushed)
 
+-- | The three steps 'writeUniqueDurably' performs, replaceable so a test can
+--   fail or CANCEL exactly one of them without depending on timing.
+data UniqueWriteOps = UniqueWriteOps
+    { uwCreate ∷ FilePath → String → IO (FilePath, Handle)
+    , uwPut    ∷ Handle → BS.ByteString → IO ()
+    , uwFlush  ∷ Handle → IO ()
+    }
+
+-- | The real operations.
+productionUniqueWriteOps ∷ UniqueWriteOps
+productionUniqueWriteOps = UniqueWriteOps openBinaryTempFile BS.hPut durableFlush
+
+-- | 'writeBytesDurably' into a NEW file this call creates: a uniquely named
+--   file in @dir@ (@template@ + a generated suffix, see 'claimUniquePath' for
+--   the template rule), created exclusively and OWNED from the moment it
+--   exists. The file is the one 'openBinaryTempFile' made, never a name that
+--   was claimed and released first, so no other process can have raced onto
+--   it and the caller may remove exactly this path on failure without
+--   touching anything it did not create.
+--
+--   The failure carries the step it happened in and, once the file exists,
+--   its path (a failure of 'StepOpen' creates nothing: 'Nothing'). The handle
+--   is closed on every path out, as for 'writeBytesDurably'.
+--
+--   A thread cancellation (any 'SomeAsyncException') is NEVER a write
+--   failure: it propagates unchanged, and what this call created is removed
+--   on the way out (the handle closed, the file unlinked), so a shutdown
+--   mid-write leaves no owned temporary behind. Creation runs masked, so the
+--   file and the handle that owns it come into existence together.
+writeUniqueDurably
+    ∷ FilePath → String → BS.ByteString
+    → IO (Either (WriteStep, Maybe FilePath, SomeException) FilePath)
+writeUniqueDurably = writeUniqueDurablyWith productionUniqueWriteOps
+
+writeUniqueDurablyWith
+    ∷ UniqueWriteOps → FilePath → String → BS.ByteString
+    → IO (Either (WriteStep, Maybe FilePath, SomeException) FilePath)
+writeUniqueDurablyWith ops dir template bytes = mask $ \restore → do
+    opened ← trySync (uwCreate ops dir template)
+    case opened of
+        Left e → pure (Left (StepOpen, Nothing, e))
+        Right (path, h) → do
+            -- an asynchronous exception from here on abandons the file
+            let abandon = closeQuietly h >> void (removeIfExists path)
+            written ← trySync (restore (uwPut ops h bytes)) `onException` abandon
+            case written of
+                Left e → do
+                    closeQuietly h
+                    pure (Left (StepWrite, Just path, e))
+                Right () → do
+                    flushed ← trySync (restore (uwFlush ops h)) `onException` abandon
+                    pure $ case flushed of
+                        Left e → Left (StepFlush, Just path, e)
+                        Right () → Right path
+
+-- | Run one operation, returning a SYNCHRONOUS exception as a value and
+--   letting an asynchronous one (a cancellation) through unchanged.
+trySync ∷ IO α → IO (Either SomeException α)
+trySync act = do
+    r ← try act
+    case r of
+        Left e | Just (_ ∷ SomeAsyncException) ← fromException e → throwIO e
+        _ → pure r
+
 -- | Durably sync a DIRECTORY, so the entries a preceding rename created
 --   or replaced are themselves on disk — a file's own @fsync@ says
 --   nothing about the directory entry naming it.
@@ -152,6 +226,44 @@ syncDirectory ∷ FilePath → IO ()
 syncDirectory dir = do
     fd ← openFd dir ReadOnly defaultFileFlags
     fileSynchronise fd `finally` closeFd fd
+
+-- Publication -------------------------------------------------------------
+
+-- | The result of 'publishExclusive'.
+data ExclusiveOutcome
+    = ExclusivePublished
+    | ExclusiveDestinationExists
+      -- ^ something already names the destination (a file, a directory, a
+      --   dangling symlink): nothing was changed
+    | ExclusiveFailed IOException
+      -- ^ the filesystem refused for any other reason — among them a
+      --   filesystem that cannot create hard links; nothing was changed
+    deriving (Show)
+
+-- | Publish the complete file @src@ at @dst@ ONLY IF nothing names @dst@, as
+--   one atomic step: a hard link, which the filesystem refuses with
+--   @EEXIST@ when the name is taken. This is the primitive an
+--   overwrite-refusing writer needs and no check-then-rename can be: a file
+--   that appears between a check and a rename is silently replaced, whereas
+--   here the existing file is never touched however late it appears.
+--
+--   The source is left in place (it is still linked): the caller removes it
+--   once the publication has been reported, so a failure of that removal is
+--   a leftover temporary and never a lost or partial destination.
+--
+--   A filesystem without hard links (some network and removable volumes)
+--   cannot publish this way, and the answer is 'ExclusiveFailed' — never a
+--   fallback to a rename that would reopen the window. A rename (which
+--   replaces atomically but never refuses) remains the primitive for an
+--   explicit overwrite.
+publishExclusive ∷ FilePath → FilePath → IO ExclusiveOutcome
+publishExclusive src dst = do
+    r ← try (createLink src dst)
+    pure $ case r of
+        Right () → ExclusivePublished
+        Left (e ∷ IOException)
+            | isAlreadyExistsError e → ExclusiveDestinationExists
+            | otherwise → ExclusiveFailed e
 
 -- Unique names -----------------------------------------------------------
 

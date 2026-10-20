@@ -97,7 +97,9 @@ import Engine.Save.Barrier
 import Engine.Load.Status
     ( LoadPhase(..), LoadStatus(..), ReconciliationFailure(..)
     , LoadStatusRef
-    , beginLoad, advanceLoad, failLoad, readLoadStatus, loadInProgress )
+    , advanceLoad, failLoad, readLoadStatus, loadInProgress
+    , claimLoad, claimSave )
+import Scenario.Load.Types (busyText)
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
 --   sorted newest-first by timestamp. `name` is the save-slot identity
@@ -282,11 +284,7 @@ loadStatusFn env = do
 --   'Engine.Core.State' already depends on for 'SaveBarrier' — the
 --   reverse import would cycle).
 saveOwnerSet ∷ EngineEnv → IO (Set.Set SaveOwner)
-saveOwnerSet env = do
-    inputActive ← readIORef (inputThreadActiveRef env)
-    let base = Set.fromList
-            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
-    pure $ if inputActive then Set.insert SaveInput base else base
+saveOwnerSet env = standardSaveOwners <$> readIORef (inputThreadActiveRef env)
 
 -- | engine.saveWorld(pageId, saveName). Validates the request
 --   synchronously ('World.Save.Serialize.checkSaveName' — the name is
@@ -386,8 +384,17 @@ saveWorldFn env = do
                                     -- it acknowledges only after the worker
                                     -- owners reached their tick boundary.
                                     owners ← Lua.liftIO $ saveOwnerSet env
-                                    started ← Lua.liftIO $ beginSave
-                                        (saveBarrierRef env) owners
+                                    -- #2713: the load check and the claim are ONE
+                                    -- action under the admission lock, so a
+                                    -- scenario load admitted on another thread
+                                    -- between the early 'loading' read above and
+                                    -- this claim cannot be passed.
+                                    claimed ← Lua.liftIO $ claimSave
+                                        (loadStatusRef env)
+                                        (beginSave (saveBarrierRef env) owners)
+                                    let started = case claimed of
+                                            Left busy → Left (busyText busy)
+                                            Right r → r
                                     case started of
                                       Left err → do
                                         Lua.liftIO $ do
@@ -686,23 +693,18 @@ loadSaveFn env = do
             -- the load's WHOLE duration (not just its brief publish
             -- window) — see "Engine.Load.Status"'s haddock for why this
             -- is a plain reject rather than the barrier itself.
-            saving ← Lua.liftIO $ saveInProgress (saveBarrierRef env)
-            loading ← Lua.liftIO $ loadInProgress (loadStatusRef env)
-            if saving ∨ loading
-              then do
-                Lua.liftIO $ logWarn logger CatWorld $
-                    "loadSave rejected for '" <> saveName <> "': a "
-                    <> (if saving then "save" else "load")
-                    <> " transaction is already active"
-                Lua.pushboolean False
-                return 1
-              else do
-                begun ← Lua.liftIO $ beginLoad (loadStatusRef env) saveName
-                case begun of
-                  Left err → do
+            -- #2713: the save/load check and the claim are ONE atomic
+            -- action ('claimLoad'), shared with scenario loads and with
+            -- the save claim, so no two callers can both pass.
+            begun ← Lua.liftIO $ claimLoad (loadStatusRef env)
+                        (saveInProgress (saveBarrierRef env)) saveName
+            case begun of
+                  Left busy → do
                     Lua.liftIO $ logWarn logger CatWorld $
-                        "loadSave rejected for '" <> saveName <> "': " <> err
+                        "loadSave rejected for '" <> saveName <> "': "
+                        <> busyText busy
                     Lua.pushboolean False
+                    return 1
                   Right requestId → do
                     -- #2162: from here until the transaction is handed
                     -- to the world thread, the request is ACCEPTED and
@@ -736,7 +738,7 @@ loadSaveFn env = do
                                 continueLoad env logger requestId saveName
                                              descriptors
                     Lua.pushboolean accepted
-                return 1
+                    return 1
 
 -- | #2162: the exception boundary of an ACCEPTED load. Runs the
 --   Lua-thread half of the transaction — everything between

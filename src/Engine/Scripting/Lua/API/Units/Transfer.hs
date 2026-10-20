@@ -97,8 +97,8 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Unit.Types
-import Unit.Faction (isPlayerCommandable)
-import Unit.Faction.Membership (legacyFactionOf)
+import Unit.Faction.Membership (localController, unitIsCommandableBy)
+import Unit.Faction.Profile (ControllerId)
 import Unit.Stats (effectiveStat)
 import Unit.Transfer
 import Building.Types
@@ -115,16 +115,19 @@ import Engine.Scripting.Lua.API.Units.List (prettifyDefName)
 
 -- | Everything read out of the live refs in one pass, so a scene is
 --   built from a single consistent view rather than five interleaved
---   reads.
+--   reads — plus the observing controller whose commandability every
+--   unit endpoint is projected under (#2518). The observer is not read
+--   from any ref: the Lua verb that starts the transaction names it.
 data LiveState = LiveState
-    { lsUnits     ∷ !UnitManager
+    { lsObserver  ∷ !ControllerId
+    , lsUnits     ∷ !UnitManager
     , lsBuildings ∷ !BuildingManager
     , lsItems     ∷ !ItemManager
     , lsNow       ∷ !Double
     }
 
-readLiveState ∷ EngineEnv → IO LiveState
-readLiveState env = LiveState
+readLiveState ∷ ControllerId → EngineEnv → IO LiveState
+readLiveState observer env = LiveState observer
     ⊚ readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     ⊛ readIORef (bcBuildingManagerRef (toBuildingCapability env))
     ⊛ readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
@@ -142,10 +145,12 @@ data LivePlacement = LivePlacement
 
 -- * Projections
 
--- | Project a unit endpoint. Eligibility is
---   'Unit.Faction.isPlayerCommandable' of its live faction — #1085
+-- | Project a unit endpoint. Eligibility is commandability of its live
+--   faction profile under the scene's observer
+--   ('Unit.Faction.Membership.unitIsCommandableBy', #2518) — #1085
 --   deleted the @transfer_receiver@ data marker, so an acolyte and a
---   technomule are equally valid endpoints and a wolf is not. Capacity
+--   technomule are equally valid endpoints and a wolf is not, nor is an
+--   uncontrolled acolyte merely allied with the roster. Capacity
 --   is the modifier-applied @carrying_capacity@ stat against the
 --   getCarryingWeight measure (inventory + equipment + accessories at
 --   full recursive weight) — the same pair the pickup and fetch gates
@@ -161,7 +166,7 @@ unitEndpoint ls uid = do
         { uevPage          = uiPage u
         , uevTile          = (floor (uiGridX u), floor (uiGridY u))
         , uevCommandable   =
-              isPlayerCommandable (legacyFactionOf (uiFaction u))
+              unitIsCommandableBy (lsObserver ls) (uiFaction u)
         , uevCapacity      = effectiveStat (lsNow ls) capBase capMods
         , uevInventory     = uiInventory u
         , uevEquipped      = HM.elems (uiEquipment u) ⧺ uiAccessories u
@@ -385,7 +390,7 @@ unitCheckTransferFn env = do
     case mReq of
         Nothing  → pushArgError
         Just req → do
-            ls ← Lua.liftIO $ readLiveState env
+            ls ← Lua.liftIO $ readLiveState localController env
             case checkBatch (sceneFor ls (trSource req) (trDestination req))
                             req of
                 Left e  → pushRequestError e
@@ -403,15 +408,15 @@ unitCommitTransferFn env = do
     case mReq of
         Nothing  → pushArgError
         Just req → do
-            outcome ← Lua.liftIO $ commitRequestLive env req
+            outcome ← Lua.liftIO $ commitRequestLive localController env req
             case outcome of
                 Left e  → pushRequestError e
                 Right b → pushBatchResult b (commitCompletion b)
 
-commitRequestLive ∷ EngineEnv → TransferRequest
+commitRequestLive ∷ ControllerId → EngineEnv → TransferRequest
                   → IO (Either TransferRequestError TransferBatch)
-commitRequestLive env req = do
-    ls ← readLiveState env
+commitRequestLive observer env req = do
+    ls ← readLiveState observer env
     case checkBatch (sceneFor ls from to) req of
         Left e  → pure (Left e)
         Right b → do
@@ -423,7 +428,7 @@ commitRequestLive env req = do
     attempt q
         | qtState q ≢ TransferQueued = pure q
         | otherwise = do
-            r ← commitOneLive env from to (qtItem q)
+            r ← commitOneLive observer env from to (qtItem q)
             pure $ case r of
                 Left f  → q { qtState = TransferFailed f }
                 Right _ → q { qtState = TransferCompleted }
@@ -432,19 +437,22 @@ commitRequestLive env req = do
 --   four pairs are live: the two same-manager pairs commit inside a
 --   single 'atomicModifyIORef'', the two cross-manager pairs
 --   pop-then-push with an order-preserving rollback.
-commitOneLive ∷ EngineEnv → TransferEndpoint → TransferEndpoint
-              → TransferItemRef → IO (Either TransferFailure ItemInstance)
-commitOneLive env from to ref = case (from, to) of
+commitOneLive ∷ ControllerId → EngineEnv → TransferEndpoint
+              → TransferEndpoint → TransferItemRef
+              → IO (Either TransferFailure ItemInstance)
+commitOneLive observer env from to ref = case (from, to) of
     (EndpointUnit a, EndpointUnit b) →
-        commitUnitToUnit env a b ref
+        commitUnitToUnit observer env a b ref
     (EndpointBuilding a, EndpointBuilding b) →
-        commitBuildingToBuilding env a b ref
+        commitBuildingToBuilding observer env a b ref
     (EndpointUnit a, EndpointBuilding b) →
-        commitCross env from to (popUnit a) (pushBuilding b) ref
-            ⌦ revealAfter env a b
+        commitCross observer env from to (popUnit observer a)
+                    (pushBuilding b) ref
+            ⌦ revealAfter observer env a b
     (EndpointBuilding a, EndpointUnit b) →
-        commitCross env from to (popBuilding a) (pushUnit b) ref
-            ⌦ revealAfter env b a
+        commitCross observer env from to (popBuilding a)
+                    (pushUnit observer b) ref
+            ⌦ revealAfter observer env b a
 
 -- | #1087: a successful transfer between a player unit and a building
 --   container teaches the player what is in there.
@@ -462,12 +470,12 @@ commitOneLive env from to ref = case (from, to) of
 --   strict path because A2 is what makes a building SOURCE expressible
 --   at all. Building↔building deliberately does not: there is no
 --   acting unit, and 'revealContainerForUnit' is gated on one.
-revealAfter ∷ EngineEnv → UnitId → BuildingId
+revealAfter ∷ ControllerId → EngineEnv → UnitId → BuildingId
             → Either TransferFailure ItemInstance
             → IO (Either TransferFailure ItemInstance)
-revealAfter env uid bid outcome = do
+revealAfter observer env uid bid outcome = do
     case outcome of
-        Right _ → void $ revealContainerForUnit
+        Right _ → void $ revealContainerForUnit observer
             (containerObserver (toBuildingCapability env)
                                (toWorldSimCapability env)
                                (toContentRegistriesViewCapability env))
@@ -480,14 +488,16 @@ revealAfter env uid bid outcome = do
 --   'atomicModifyIORef'' — no interleaving can duplicate or drop the
 --   instance, and no rollback is needed because there is never a
 --   half-applied state.
-commitUnitToUnit ∷ EngineEnv → UnitId → UnitId → TransferItemRef
+commitUnitToUnit ∷ ControllerId → EngineEnv → UnitId → UnitId
+                 → TransferItemRef
                  → IO (Either TransferFailure ItemInstance)
-commitUnitToUnit env fromUid toUid ref = do
+commitUnitToUnit observer env fromUid toUid ref = do
     itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        let ls    = LiveState { lsUnits = um, lsBuildings = bm
+        let ls    = LiveState { lsObserver = observer
+                              , lsUnits = um, lsBuildings = bm
                               , lsItems = itemMgr, lsNow = now }
             from  = EndpointUnit fromUid
             to    = EndpointUnit toUid
@@ -511,15 +521,16 @@ commitUnitToUnit env fromUid toUid ref = do
 --   reason: both storages live in the building manager's one ref, so
 --   the whole move is a single atomic update with nothing to roll
 --   back.
-commitBuildingToBuilding ∷ EngineEnv → BuildingId → BuildingId
-                         → TransferItemRef
+commitBuildingToBuilding ∷ ControllerId → EngineEnv → BuildingId
+                         → BuildingId → TransferItemRef
                          → IO (Either TransferFailure ItemInstance)
-commitBuildingToBuilding env fromBid toBid ref = do
+commitBuildingToBuilding observer env fromBid toBid ref = do
     itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     atomicModifyIORef' (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
-        let ls    = LiveState { lsUnits = um, lsBuildings = bm
+        let ls    = LiveState { lsObserver = observer
+                              , lsUnits = um, lsBuildings = bm
                               , lsItems = itemMgr, lsNow = now }
             from  = EndpointBuilding fromBid
             to    = EndpointBuilding toBid
@@ -595,12 +606,12 @@ type RestoreStep = EngineEnv → Int → ItemInstance
 --   rather than a stale destination-side reason that would imply a
 --   splice-back which never happened. A restore that SUCCEEDS keeps
 --   returning the destination's original refusal, unchanged.
-commitCross ∷ EngineEnv → TransferEndpoint → TransferEndpoint
-            → (PopStep, RestoreStep) → PushStep → TransferItemRef
-            → IO (Either TransferFailure ItemInstance)
-commitCross env from to (pop, restore) push ref = do
+commitCross ∷ ControllerId → EngineEnv → TransferEndpoint
+            → TransferEndpoint → (PopStep, RestoreStep) → PushStep
+            → TransferItemRef → IO (Either TransferFailure ItemInstance)
+commitCross observer env from to (pop, restore) push ref = do
     let wmRef = wsWorldManagerRef (toWorldSimCapability env)
-    ls ← readLiveState env
+    ls ← readLiveState observer env
     case commitItem (sceneFor ls from to) from to ref of
         Left f  → pure (Left f)
         Right c → do
@@ -625,15 +636,15 @@ commitCross env from to (pop, restore) push ref = do
                                 Right () → r
                                 Left rr  → rr
 
-popUnit ∷ UnitId → (PopStep, RestoreStep)
-popUnit uid = (pop, restore)
+popUnit ∷ ControllerId → UnitId → (PopStep, RestoreStep)
+popUnit observer uid = (pop, restore)
   where
     pop env ix planned =
         atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
             case HM.lookup uid (umInstances um) of
                 Nothing → (um, Left ReasonSourceMissing)
                 Just u
-                    | not (isPlayerCommandable (legacyFactionOf (uiFaction u))) →
+                    | not (unitIsCommandableBy observer (uiFaction u)) →
                         (um, Left ReasonSourceIneligible)
                     | otherwise → case drop ix (uiInventory u) of
                         (live : _)
@@ -734,16 +745,16 @@ pushBuilding bid env item srcPlace = do
                        , Right () )
 
 -- | The unit-destination mirror of 'pushBuilding': still exists, still
---   player-commandable, still in reach, still has capacity.
-pushUnit ∷ UnitId → PushStep
-pushUnit uid env item srcPlace = do
+--   commandable by @observer@, still in reach, still has capacity.
+pushUnit ∷ ControllerId → UnitId → PushStep
+pushUnit observer uid env item srcPlace = do
     itemMgr ← readReadOnlyRef (crvItemManagerRef (toContentRegistriesViewCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing → (um, Left ReasonReceiverMissing)
             Just u
-                | not (isPlayerCommandable (legacyFactionOf (uiFaction u))) →
+                | not (unitIsCommandableBy observer (uiFaction u)) →
                     (um, Left ReasonReceiverIneligible)
                 | not (inReach srcPlace (uiPage u)
                                 ( floor (uiGridX u), floor (uiGridY u) )
@@ -861,7 +872,7 @@ unitTransferEndpointInfoFn env = do
     case mEp of
         Nothing → Lua.pushnil >> return 1
         Just ep → do
-            ls ← Lua.liftIO $ readLiveState env
+            ls ← Lua.liftIO $ readLiveState localController env
             case endpointView ls ep of
                 Nothing → Lua.pushnil >> return 1
                 Just v  → pushEndpointInfo ls ep v

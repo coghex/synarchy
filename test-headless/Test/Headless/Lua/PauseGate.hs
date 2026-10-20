@@ -17,7 +17,18 @@ import Test.Hspec
 import qualified HsLua as Lua
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Load.Status (beginLoad, failLoad)
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
+import qualified Engine.Core.Queue as Q
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability, withPlayerIntentHeld)
+import Engine.Load.Status (beginLoad, captureInProgress, claimCapture, loadInProgress, claimScenarioLoad, failLoad, terminateCapture, terminateScenario)
+import Engine.Save.Barrier (SaveOwner(..), beginSave, failSave)
+import qualified Data.Set as Set
+import Scenario.Capture.Service (requestScenarioCapture)
+import Scenario.Capture.Types
+import Scenario.Load.Service (requestScenarioLoad)
+import Scenario.Load.Types
 import Engine.Scripting.Lua.API.Core (setPausedFn)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -34,7 +45,9 @@ callSetPaused ls env b =
         Lua.pushboolean b
         _ ← setPausedFn env
         applied ← Lua.toboolean (-1)
-        Lua.pop 1
+        -- the argument stays on the stack too: clear it, so a second call
+        -- on the same state reads ITS argument at index 1, not the first's
+        Lua.settop 0
         pure applied
 
 spec ∷ SpecWith EngineEnv
@@ -94,3 +107,120 @@ spec = describe "engine.setPaused load-in-flight gate (round 15 review, \
         afterApplied `shouldBe` True
         unpausedAfter ← readIORef (enginePausedRef env)
         unpausedAfter `shouldBe` False
+
+    -- #2713: a SCENARIO load is a load transaction too, so the same gate
+    -- must hold from the moment it is accepted until it is terminal. The
+    -- request is made through the production entry point and then left
+    -- un-pumped, which is exactly a request held in flight.
+    it "setPaused(false) is rejected while a SCENARIO load is in flight and \
+       \accepted again once it ends" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        writeIORef (enginePausedRef env) False
+        accepted ← requestScenarioLoad env (SourceBytes "pausegate-scenario" "version: 3\n")
+        reqId ← either (\b → fail ("not accepted: " ⧺ show b)) pure accepted
+        -- acceptance itself paused the session, synchronously
+        readIORef (enginePausedRef env) `shouldReturn` True
+        duringApplied ← callSetPaused ls env False
+        duringApplied `shouldBe` False
+        readIORef (enginePausedRef env) `shouldReturn` True
+        -- the request ends (unsuccessfully, before any replacement) and the
+        -- queued hand-off message it left is dropped with it
+        terminateScenario (slLoadStatusRef (toSaveLoadCapability env)) reqId
+            (ScenarioUnsuccessful (FailureContext StagePreflight (CauseSetup "test abort") []))
+            RecoveryPreserved
+        _ ← Q.flushQueue (luaQueue env)
+        afterApplied ← callSetPaused ls env False
+        afterApplied `shouldBe` True
+        readIORef (enginePausedRef env) `shouldReturn` False
+
+    -- #2713 (review round 1): the refusal of an unpause is decided INSIDE
+    -- the player-intent lock, which every pause transition takes. An
+    -- operation admitted on another thread between a check and that lock
+    -- must still win: with the check taken before the lock, the unpause
+    -- below reads "no load in flight", waits for the lock, and then clears
+    -- the pause the accepted operation imposes.
+    it "setPaused(false) decides under the pause lock, so a load admitted while it waits still refuses it" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        writeIORef (enginePausedRef env) False
+        result ← newEmptyMVar
+        reqId ← withPlayerIntentHeld (toWorldSimCapability env) $ \_ → do
+            -- the unpause starts and waits for the lock this thread holds
+            _ ← forkIO (callSetPaused ls env False ≫= putMVar result)
+            threadDelay 100000
+            -- a scenario load is admitted meanwhile (its claim does not take
+            -- the lock; its own pause would wait for it)
+            admitted ← claimScenarioLoad (slLoadStatusRef (toSaveLoadCapability env))
+                           (pure False) "pause-race"
+            either (\b → fail ("not admitted: " ⧺ show b)) pure admitted
+        applied ← takeMVar result
+        applied `shouldBe` False
+        terminateScenario (slLoadStatusRef (toSaveLoadCapability env)) reqId
+            (ScenarioUnsuccessful (FailureContext StagePreflight (CauseSetup "test abort") []))
+            RecoveryPreserved
+
+    -- #2714: a scenario CAPTURE holds the pause from acceptance until it is
+    -- terminal, exactly as a load does (D-51). An ordinary save does not: a
+    -- player may resume while one writes, which is today's contract and is
+    -- not this issue's to change — so the gate reads the capture's own
+    -- record, not the shared barrier alone.
+    it "setPaused(false) is rejected while a scenario CAPTURE is in flight and accepted again once it ends" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        let sl = toSaveLoadCapability env
+        writeIORef (enginePausedRef env) False
+        accepted ← requestScenarioCapture env (CaptureRequest "/nonexistent/pausegate-capture.yaml" False)
+        reqId ← either (\b → fail ("not accepted: " ⧺ show b)) pure accepted
+        -- acceptance itself paused the session, synchronously
+        readIORef (enginePausedRef env) `shouldReturn` True
+        duringApplied ← callSetPaused ls env False
+        duringApplied `shouldBe` False
+        readIORef (enginePausedRef env) `shouldReturn` True
+        -- a pause is never refused
+        callSetPaused ls env True `shouldReturn` True
+        -- the request ends, and the barrier transaction with it
+        terminateCapture (slLoadStatusRef sl) reqId (CaptureUnsuccessful CaptureFailure
+            { cfStage = CaptureAdmitted, cfKind = FailCoordination, cfPhase = Nothing, cfDestination = ""
+            , cfPublication = NotPublished, cfDetail = "test abort", cfDiagnostics = [], cfWarnings = [] })
+        failSave (slSaveBarrierRef sl) reqId "test abort"
+        _ ← Q.flushQueue (luaQueue env)
+        loadInProgress (slLoadStatusRef sl) `shouldReturn` False
+        captureInProgress (slLoadStatusRef sl) (slSaveBarrierRef sl) `shouldReturn` False
+        callSetPaused ls env False `shouldReturn` True
+        readIORef (enginePausedRef env) `shouldReturn` False
+
+    it "an ordinary save in flight does not hold an unpause: only a capture or a load does" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        let sl = toSaveLoadCapability env
+        writeIORef (enginePausedRef env) True
+        Right sid ← beginSave (slSaveBarrierRef sl) (Set.fromList [SaveLua])
+        callSetPaused ls env False `shouldReturn` True
+        failSave (slSaveBarrierRef sl) sid "test cleanup"
+
+    it "setPaused(false) decides under the pause lock, so a capture admitted while it waits still refuses it" $ \env → do
+        ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                                    (assetPoolRef env) (nextObjectIdRef env)
+                                    (inputStateRef env) (loggerRef env)
+        let sl = toSaveLoadCapability env
+        writeIORef (enginePausedRef env) False
+        result ← newEmptyMVar
+        reqId ← withPlayerIntentHeld (toWorldSimCapability env) $ \_ → do
+            _ ← forkIO (callSetPaused ls env False ≫= putMVar result)
+            threadDelay 100000
+            -- a capture is admitted meanwhile (its claim does not take the pause lock)
+            admitted ← claimCapture (slLoadStatusRef sl)
+                           (beginSave (slSaveBarrierRef sl) (Set.fromList [SaveLua]))
+                           (CaptureRequest "/nonexistent/pause-race.yaml" False)
+            either (\b → fail ("not admitted: " ⧺ show b)) pure admitted
+        applied ← takeMVar result
+        applied `shouldBe` False
+        terminateCapture (slLoadStatusRef sl) reqId (CaptureUnsuccessful CaptureFailure
+            { cfStage = CaptureAdmitted, cfKind = FailCoordination, cfPhase = Nothing, cfDestination = ""
+            , cfPublication = NotPublished, cfDetail = "test abort", cfDiagnostics = [], cfWarnings = [] })
+        failSave (slSaveBarrierRef sl) reqId "test abort"

@@ -31,6 +31,7 @@ import Unit.Types (UnitId)
 import Item.Knowledge (PortableObservation)
 import Gameplay.Tags.Edit (TagEdit, TagEditResult)
 import Gameplay.Tags.Types (TagTarget)
+import Scenario.Capture.Types (CaptureRequest)
 import Scenario.Placement.Types (PlacementInstallReply, ScenarioPlacementRequest)
 import Scenario.World.Types (ScenarioWorldRequest, WorldInstallReply)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
@@ -526,6 +527,14 @@ data WorldCommand
         --   page incarnation the caller resolved; a page destroyed or
         --   re-initialised since answers 'TagEditNoTarget' and is not
         --   touched, so stale queued work can never reach a replacement.
+    | WorldScenarioCapture !Int !CaptureRequest
+        -- ^ #2714: the world thread's turn of an accepted scenario capture,
+        --   queued by the Lua thread once every other state owner has
+        --   acknowledged the snapshot boundary. Authorized inside the save
+        --   barrier's capture window exactly as 'WorldSave' is: the world
+        --   owner is the sole thread allowed to run, so what it reads is
+        --   one coherent state. Carries the barrier request id; a command
+        --   whose transaction has ended does nothing.
     | WorldInstallScenarioPlacement !WorldPageId !ChunkGeneration !ScenarioPlacementRequest
                                     !PlacementInstallReply
         -- ^ #2712: commit a scenario's structure pieces and placed

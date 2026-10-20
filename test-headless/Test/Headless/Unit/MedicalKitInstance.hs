@@ -323,7 +323,7 @@ menuSetup target selection = T.concat
     , "unit.hitTestAt = function() return ", uid target, " end; "
     , "unit.getSelected = function() return {"
     , T.intercalate ", " (map uid selection), "} end; "
-    , "faction.isPlayerCommandable = function() return true end; "
+    , "unit.isPlayerCommandable = function() return true end; "
     , "faction.canAttack = function() return true end; "
     ]
 

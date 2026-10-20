@@ -3,8 +3,7 @@
 --   location instances (#911) and what every unit currently on that page
 --   can SEE, decides which locations just transitioned from undiscovered
 --   to discovered this tick. A location is discovered the instant a
---   PLAYER-OWNED unit's ('Unit.Faction.isPlayerOwned', #912) visible-tile
---   set touches its stored absolute bounds (#777) — reusing the exact
+--   PLAYER-OWNED unit's visible-tile set touches its stored absolute bounds (#777) — reusing the exact
 --   seam-aware containment 'Location.Bounds.boundsContainsPoint' already
 --   provides. This module only decides WHICH locations qualify; the
 --   caller ('World.Thread.Discovery') owns persisting the transition and
@@ -20,6 +19,13 @@
 --   is enough — nothing here requires the unit to stand inside, and a
 --   unit that IS inside always qualifies, since its own tile is always
 --   in its visible set.
+--
+--   "Player-owned" is OBSERVER-RELATIVE (#2518, FTS-4): both queries
+--   take the observing controller as an argument and keep a sight only
+--   when 'Unit.Faction.Profile.isProfilePlayerOwned' holds for it
+--   (#912's ownership question, asked of the unit's faction profile).
+--   Nothing here reads the engine's local controller; the caller names
+--   it.
 --
 --   #915 added the second, independent knowledge layer
 --   ('findAwareness'): which player-owned units can see which location
@@ -48,12 +54,13 @@ import Location.Instance
     ( LocationInstance(..), LocationInstances, LocationInstanceId
     , LocationLifecycle(..), instancesToList, promoteLifecycle )
 import Location.Bounds (boundsContainsPoint)
-import Unit.Faction (Faction, isPlayerOwned)
+import Unit.Faction.Profile
+    (ControllerId, FactionProfile, isProfilePlayerOwned)
 import World.Chunk.Types (ChunkCoord)
 
 -- | One unit's sight this tick, as both layers below consume it: its
---   id, its faction (the ownership filter is applied HERE, not by the
---   caller), and every tile it can currently see.
+--   id, its faction profile (the ownership filter is applied HERE, not
+--   by the caller), and every tile it can currently see.
 --
 --   The tile set is computed ONCE per unit by the IO caller and shared
 --   across every location on the page and across both layers (#1230):
@@ -62,7 +69,7 @@ import World.Chunk.Types (ChunkCoord)
 --   with the page's location count for no gain.
 data UnitSight uid = UnitSight
     { usUnit    ∷ !uid
-    , usFaction ∷ !Faction
+    , usProfile ∷ !FactionProfile
     , usTiles   ∷ ![(Int, Int)]
     } deriving (Show, Eq)
 
@@ -87,12 +94,15 @@ data DiscoveryHit uid = DiscoveryHit
 --   currently-known unit's sight on this page — units of every faction
 --   included, since the filter is applied HERE.
 --
---   Discovery asks 'Unit.Faction.isPlayerOwned' — "is this the player's
---   OWN unit?" (#912) — which is deliberately NOT the same question as
---   "is this unit friendly to the player?". 'Unit.Faction.FactionDebug'
---   is allied with the player and takes player orders, yet is not
---   player-owned, so a debug unit still never discovers a location by
---   looking at it.
+--   Discovery asks 'isProfilePlayerOwned' of the observer — "is this
+--   the observer's OWN unit?" (#912) — which is deliberately NOT the
+--   same question as "is this unit friendly to the observer?". A debug
+--   unit takes local orders through its capability, yet has no
+--   controller and is not owned; an uncontrolled acolyte shares the
+--   roster's @acolyte@ tag and is allied with it by policy, yet is not
+--   owned either; and a unit of any other controller is owned by that
+--   controller, not by this observer. None of them discovers a location
+--   by looking at it.
 --
 --   Only a transition 'promoteLifecycle' accepts is reported: an
 --   instance already at 'LifecycleDiscovered' or beyond
@@ -117,14 +127,16 @@ data DiscoveryHit uid = DiscoveryHit
 --   its units are scanned, exactly as before), and taking only the
 --   FIRST qualifying unit per location (the attributed discoverer).
 findDiscoveries
-    ∷ Int → LocationInstances → [UnitSight uid] → [DiscoveryHit uid]
-findDiscoveries worldSize instances sights =
+    ∷ ControllerId → Int → LocationInstances → [UnitSight uid]
+    → [DiscoveryHit uid]
+findDiscoveries observer worldSize instances sights =
     [ DiscoveryHit (liId inst) (liChunk inst) (liAnchor inst)
                    (liDisplayName inst) uid
     | ((inst, uid) : _) ← groupBy ((≡) `on` (liId . fst)) contacts
     ]
   where
-    contacts = sightContactsWhere promotable worldSize instances sights
+    contacts =
+        sightContactsWhere observer promotable worldSize instances sights
     promotable inst =
         isJust (promoteLifecycle (liLifecycle inst) LifecycleDiscovered)
 
@@ -150,8 +162,8 @@ data AwarenessHit uid = AwarenessHit
 --   acquisition predicate, as distinct from the player-wide
 --   CARTOGRAPHIC transition 'findDiscoveries' reports.
 --
---   Same world-size/instance-table/sight inputs, same
---   'Unit.Faction.isPlayerOwned' filter, and the same seam-aware
+--   Same observer/world-size/instance-table/sight inputs, same
+--   'isProfilePlayerOwned' filter, and the same seam-aware
 --   bounds containment — literally the same 'sightContactsWhere'
 --   enumeration, so the two layers cannot drift apart. Two deliberate
 --   differences, both required by #915:
@@ -169,15 +181,17 @@ data AwarenessHit uid = AwarenessHit
 --   caller's unit order — deterministic for the same reason
 --   'findDiscoveries' is.
 findAwareness
-    ∷ Int → LocationInstances → [UnitSight uid] → [AwarenessHit uid]
-findAwareness worldSize instances sights =
+    ∷ ControllerId → Int → LocationInstances → [UnitSight uid]
+    → [AwarenessHit uid]
+findAwareness observer worldSize instances sights =
     [ AwarenessHit (liId inst) (liChunk inst) (liAnchor inst)
                    (liDisplayName inst) uid
-    | (inst, uid) ← sightContactsWhere (const True) worldSize instances sights
+    | (inst, uid) ← sightContactsWhere observer (const True)
+                                       worldSize instances sights
     ]
 
 -- | The one sight enumeration both layers above are built from: every
---   (placed location, player-owned unit that can see it) pair, instances
+--   (placed location, unit the observer owns that can see it) pair, instances
 --   in 'instancesToList' order and units in the caller's order.
 --
 --   "Can see it" is exactly requirement 7 of #1230: the unit's visible
@@ -192,9 +206,9 @@ findAwareness worldSize instances sights =
 --   caller that only cares about some instances ('findDiscoveries' and
 --   its promotable-lifecycle filter) pays nothing for the rest.
 sightContactsWhere
-    ∷ (LocationInstance → Bool) → Int → LocationInstances
+    ∷ ControllerId → (LocationInstance → Bool) → Int → LocationInstances
     → [UnitSight uid] → [(LocationInstance, uid)]
-sightContactsWhere keep worldSize instances sights =
+sightContactsWhere observer keep worldSize instances sights =
     [ (inst, usUnit s)
     | inst ← instancesToList instances
     , keep inst
@@ -202,4 +216,5 @@ sightContactsWhere keep worldSize instances sights =
     , any (boundsContainsPoint worldSize (liBounds inst)) (usTiles s)
     ]
   where
-    playerSights = [ s | s ← sights, isPlayerOwned (usFaction s) ]
+    playerSights =
+        [ s | s ← sights, isProfilePlayerOwned observer (usProfile s) ]

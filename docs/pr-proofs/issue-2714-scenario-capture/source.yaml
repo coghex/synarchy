@@ -1,0 +1,23 @@
+version: 3
+map: {width: 40, height: 40}
+camera: {x: 3, y: 4}
+terrain:
+  - {id: pad, rect: {x0: -3, y0: -3, x1: 3, y1: 3}, material: granite, surface_z: 6, tags: [pad]}
+  - {id: pit, tiles: [[8, 8], [9, 8]], material: sand, surface_z: -2}
+fluids:
+  - {id: pond, rect: {x0: 8, y0: 8, x1: 9, y1: 8}, fluid: lake, surface_z: 4.375}
+buildings:
+  - {id: bat, definition: high_voltage_battery, x: 14, y: 4, power_charge: 2500, tags: [power]}
+  - {id: crate, definition: cargo_hold_S, x: 16, y: 8, storage: [{id: bars, definition: steel_bar}]}
+units:
+  - id: medic
+    definition: acolyte
+    x: 1
+    y: 1
+    tags: [squad]
+    stats: {hydration: 4.0, calories: 600}
+    blood: 3.2
+    wounds: [{part: torso, kind: slash, severity: 0.2}]
+    inventory: [{id: kit, definition: field_toolbox, contents: [{id: spare, definition: steel_bar}]}]
+ground_items:
+  - {id: gem, definition: processing_unit, x: 10.5, y: -9.5, tags: [loot]}

@@ -27,6 +27,7 @@ import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logWarn)
 import Unit.Types
+import Unit.Faction.Membership (localController)
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..), BuildingManager(..))
 import Item.Types (itemMatches, itemTotalWeight)
 import Engine.Scripting.Lua.API.Units.Inventory (popFirstByNameIx, insertAt, popFirstWhereIx)
@@ -349,8 +350,12 @@ unitDepositToCargoFn env = do
                                     <> tshow nU
                                     <> " also vanished — "
                                     <> defName <> " lost"
+                        -- The lax AI path keeps its own eligibility; only
+                        -- the knowledge reveal asks commandability, under
+                        -- the local observer (#2518).
                         when ok $ Lua.liftIO $ void $
-                            revealContainerForUnit (observerFor env)
+                            revealContainerForUnit localController
+                                (observerFor env)
                                 (ucUnitManagerRef (toUnitCombatCapability env))
                                 uid bid
                         Lua.pushboolean ok
@@ -451,7 +456,8 @@ unitWithdrawFromCargoFn env = do
                                 <> " also vanished — "
                                 <> defName <> " lost"
                     when ok $ Lua.liftIO $ void $
-                        revealContainerForUnit (observerFor env)
+                        revealContainerForUnit localController
+                                (observerFor env)
                                 (ucUnitManagerRef (toUnitCombatCapability env))
                                 uid bid
                     Lua.pushboolean ok

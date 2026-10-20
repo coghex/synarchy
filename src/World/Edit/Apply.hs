@@ -25,7 +25,8 @@ import World.Chunk.Types (ChunkCoord, LoadedChunk(..), ColumnTiles(..), columnIn
 import World.Tile.Types (WorldTileData(..))
 import Structure.Types (StructurePieceData(..))
 import World.Flora.Identity (floraInstanceIdNone)
-import World.Flora.Types (FloraChunkData(..), FloraInstance(..))
+import World.Flora.Types
+    (FloraChunkData(..), FloraContext(..), FloraInstance(..))
 import World.Fluid.Types
     ( FluidCell(..), FluidType(..), renderedSurfaceZ, fluidSurfaceCeilZ
     , fluidCellAtZ )
@@ -263,6 +264,12 @@ applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth instanceId) lc
                   -- eviction and every load of the save that recorded it.
                 , fiInstanceId = instanceId
                 , fiChopDesignated = False
+                  -- #2547: a planting edit is a player's act, so what it
+                  -- replays is CULTIVATED. Not persisted: this clause IS
+                  -- the creation record's reading, so every replay (a
+                  -- reload, a chunk regeneration, the v1 rewrite) lands
+                  -- on the same value.
+                , fiContext = ContextCultivated
                 }
         in lc { lcFlora = FloraChunkData
                     (inst : fcdInstances (lcFlora lc)) }

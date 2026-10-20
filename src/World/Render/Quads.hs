@@ -23,8 +23,7 @@ import Engine.Core.Capability.RenderView
 import Engine.Asset.Handle (toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Types
-import World.Flora.Render (resolveFloraTexture)
-import World.Flora.CropPlot (cropPlotElapsedDays, cropPlotInstance)
+import World.Flora.Render (resolveCropPlotTexture)
 import World.Generate (chunkToGlobal, viewDepth)
 import World.Grid (gridToScreen, tileSideHeight)
 import World.Render.ViewBounds (viewBoundsAt, expandViewBounds, isTileVisible)
@@ -247,10 +246,8 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                                                             -- texture is DERIVED from the #332 growth
                                                             -- runtime instead of the static ctVeg id.
                                                             Just cp →
-                                                                let elapsed = cropPlotElapsedDays absDay cp
-                                                                    tex = resolveFloraTexture floraCat
-                                                                              daysPerYear elapsed
-                                                                              (cropPlotInstance cp)
+                                                                let tex = resolveCropPlotTexture floraCat
+                                                                              daysPerYear absDay cp
                                                                 in vegQuadWithTexture lookupSlot lookupFmSlot
                                                                        textures facing gx gy z tex slopeId
                                                                        zSlice effectiveDepth zoomAlpha wrapOff

@@ -13,7 +13,7 @@ import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction)
 import Engine.Scripting.Lua.Util (isValidRef, broadcastToModules
                                  , broadcastToModulesReportingErrors)
-import Engine.Core.Log (logWarn, logDebug, LogCategory(..))
+import Engine.Core.Log (logWarn, logDebug, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State (EngineEnv(..))
 import Structure.ArtCatalog
@@ -32,10 +32,16 @@ import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (readTVarIO)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
-    , reachSnapshot, failSave )
+    , reachSnapshot, failSave, standardSaveOwners )
 import Engine.Load.Status (advanceLoad, failLoad, finishLoad
-                          , failReconciliation
+                          , failReconciliation, scenarioSeamPoint
+                          , readLoadStatus, LoadStatus(..)
                           , ReconciliationFailure(..), LoadPhase(..))
+import Scenario.Capture.Service (startScenarioCapture)
+import Scenario.Load.Service
+    (startScenarioLoad, scenarioPublishing, scenarioPublished, continueScenarioLoad)
+import Scenario.Load.Types (ScenarioLoadPoint(..))
+import Control.Exception (SomeException, SomeAsyncException, fromException, throwIO, try)
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import Engine.Scripting.Lua.Message (discardStaleLuaToEngineWork)
 import Engine.Scripting.Lua.DebugServer
@@ -322,77 +328,8 @@ processLuaMsg env ls stateRef msg = case msg of
     broadcastToModules ls "onInterrupt" [ScriptNumber (fromIntegral fid)]
   LuaWorldGenLog text →
     broadcastToModules ls "onWorldGenLog" [ScriptString text]
-  LuaSaveLoaded requestId survUnitIds survBuildingIds reconcile → do
-    -- Issue #763: the debug-console TCP server keeps
-    -- accepting commands onto 'lbsDebugQueue' regardless of the save
-    -- barrier's capture-lock state — while this load held the boundary
-    -- ('handleLoadStaged' through the world thread's matching publish),
-    -- any command that arrived is still sitting there, queued for a
-    -- session that no longer exists once this handler runs (this is
-    -- the FIRST point on the Lua thread reached after publish — see
-    -- "Engine.Scripting.Lua.Thread.Scheduler"'s reconciliation hold,
-    -- which admits engine messages but no timed pass and no ordinary
-    -- console execution until THIS message has been reached, however
-    -- many message batches away it is). Left alone, that later
-    -- 'processDebugCommands' call would execute every one of them
-    -- against the REPLACEMENT session — e.g. a queued
-    -- @world.setDate(pageId, ...)@ whose pageId the load happens to
-    -- reuse would silently mutate the new page. Cancel every command
-    -- still queued at this exact handoff instead, resolving its
-    -- waiting response MVar so the client (netcat, a script) doesn't
-    -- hang: none of them can possibly have been issued FOR the session
-    -- that's live from this point on.
-    --
-    -- #2282 made that cancellation the SHARED 'cancelDebugCommand'
-    -- rather than a bare 'tryPutMVar'. Answering the MVar was never
-    -- what stopped the command running — being off the queue was, and
-    -- only until something put one back. A rejected command is now
-    -- CANCELLED in its own lifecycle cell and so is permanently
-    -- unclaimable, whoever holds it. The rejection text is unchanged,
-    -- verbatim.
-    let cancelStaleDebugCommands = do
-            mCmd ← pollDebugCommand (lbsDebugQueue ls)
-            case mCmd of
-                Nothing → pure ()
-                Just cmd → do
-                    _ ← cancelDebugCommand cmd
-                        "REJECTED: a load transaction replaced the \
-                        \session while this command was queued"
-                    cancelStaleDebugCommands
-    cancelStaleDebugCommands
-    reconcileFailures ← broadcastToModulesReportingErrors ls "onSaveLoaded"
-      [ intsToScriptArray survUnitIds
-      , intsToScriptArray survBuildingIds
-      -- Issue #1589: appended, never inserted — every shipped
-      -- 'onSaveLoaded' callback reads the two survivor arrays
-      -- positionally, and Lua ignores arguments a function does not
-      -- declare, so only the callbacks that actually want the context
-      -- (today @scripts/unit_ai.lua@'s) have to name it.
-      , reconcileToScriptValue reconcile ]
-    -- The transaction is reported
-    -- 'LoadPublished' only NOW, once this reconciliation broadcast has
-    -- actually run — not the instant the Haskell-side ref swap
-    -- happened (World.Load.Publish.publishStagedSession, well before
-    -- this message was even drained). The broadcast never
-    -- throws (each module call is pcall-guarded internally), so exactly
-    -- one of the two terminations below always runs.
-    --
-    -- Issue #1204: that pcall guard used to SWALLOW what it caught, so
-    -- a callback that partially reconciled its singleton and then
-    -- raised still reported an unqualified 'LoadSucceeded'. The
-    -- shipped callbacks do correctness-critical work (scripts/
-    -- unit_ai.lua and building_spawn.lua prune orphaned rows and scrub
-    -- typed references, unit_resources.lua rebuilds derived body
-    -- statistics, ui_manager_menu.lua rebinds Lua's world/HUD ids to
-    -- the published session), so an incompletely reconciled session is
-    -- not a presentation-only concern. It gets its own honest terminal
-    -- disposition instead — see 'failReconciliation', which is
-    -- deliberately not 'failLoad'.
-    if null reconcileFailures
-      then finishLoad (loadStatusRef env) requestId
-      else failReconciliation (loadStatusRef env) requestId
-             [ ReconciliationFailure (T.pack scriptPath') err
-             | (scriptPath', err) ← reconcileFailures ]
+  LuaSaveLoaded requestId survUnitIds survBuildingIds reconcile →
+      handleSaveLoaded env ls requestId survUnitIds survBuildingIds reconcile
   LuaHudLogInfo text1 text2 kind →
     broadcastToModules ls "onSetInfoText"
       [ScriptString text1, ScriptString text2, ScriptString kind]
@@ -441,6 +378,8 @@ processLuaMsg env ls stateRef msg = case msg of
       , maybe ScriptNil ScriptString mPage
       ]
   LuaLoadStaged requestId → handleLoadStaged env ls requestId
+  LuaScenarioLoad requestId source → startScenarioLoad env ls requestId source
+  LuaScenarioCapture requestId request → startScenarioCapture env requestId request
   LuaLoadStagingFailed requestId → do
       -- This message is QUEUED (not a direct call), so
       -- it can be processed well after 'requestId' has already gone
@@ -450,6 +389,118 @@ processLuaMsg env ls stateRef msg = case msg of
       -- request (see 'Engine.Scripting.Lua.API.Save.Bridge.abortLuaLoad').
       logger ← readIORef (loggerRef env)
       Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
+
+-- | The post-publication reconciliation of a load (the @LuaSaveLoaded@
+--   message the publish queues).
+--
+--   #2713: a message about a request that is STALE — a newer request was
+--   accepted since, or this very request already ended — is DISCARDED before
+--   it does anything. Its survivor arrays describe a session that is no
+--   longer the live one, so running the @onSaveLoaded@ callbacks with them
+--   would prune the current session's Lua state, and cancelling the queued
+--   console commands would reject work issued for a session that was never
+--   replaced. The request identity is the whole test: a publish queues this
+--   message exactly once, while its own request is the active one. A message
+--   for a transaction the load status does not track is an isolated dispatch
+--   (the headless reconciliation fixtures drive the handler that way) and runs.
+handleSaveLoaded ∷ EngineEnv → LuaBackendState → Int → [Int] → [Int]
+                 → LoadReconcileContext → IO ()
+handleSaveLoaded env ls requestId survUnitIds survBuildingIds reconcile = do
+    current ← readLoadStatus (loadStatusRef env)
+    -- stale: a NEWER request was accepted since, or this very request already
+    -- ended (a duplicate completion). A message on a transaction that is not
+    -- tracked at all is an isolated dispatch and runs as it always did.
+    let stale = case current of
+            Just s → lsRequestId s > requestId
+                     ∨ (lsRequestId s ≡ requestId ∧ isJust (lsOutcome s))
+            Nothing → False
+    if stale
+      then do
+        logger ← readIORef (loggerRef env)
+        logWarn logger CatWorld $
+            "Discarded a stale session reconciliation for load request #"
+            <> tshow requestId <> ": a newer request was accepted or this one already ended"
+      else do
+        -- Issue #763: the debug-console TCP server keeps
+        -- accepting commands onto 'lbsDebugQueue' regardless of the save
+        -- barrier's capture-lock state — while this load held the boundary
+        -- ('handleLoadStaged' through the world thread's matching publish),
+        -- any command that arrived is still sitting there, queued for a
+        -- session that no longer exists once this handler runs (this is
+        -- the FIRST point on the Lua thread reached after publish — see
+        -- "Engine.Scripting.Lua.Thread.Scheduler"'s reconciliation hold,
+        -- which admits engine messages but no timed pass and no ordinary
+        -- console execution until THIS message has been reached, however
+        -- many message batches away it is). Left alone, that later
+        -- 'processDebugCommands' call would execute every one of them
+        -- against the REPLACEMENT session — e.g. a queued
+        -- @world.setDate(pageId, ...)@ whose pageId the load happens to
+        -- reuse would silently mutate the new page. Cancel every command
+        -- still queued at this exact handoff instead, resolving its
+        -- waiting response MVar so the client (netcat, a script) doesn't
+        -- hang: none of them can possibly have been issued FOR the session
+        -- that's live from this point on.
+        --
+        -- #2282 made that cancellation the SHARED 'cancelDebugCommand'
+        -- rather than a bare 'tryPutMVar'. Answering the MVar was never
+        -- what stopped the command running — being off the queue was, and
+        -- only until something put one back. A rejected command is now
+        -- CANCELLED in its own lifecycle cell and so is permanently
+        -- unclaimable, whoever holds it. The rejection text is unchanged,
+        -- verbatim.
+        let cancelStaleDebugCommands = do
+                mCmd ← pollDebugCommand (lbsDebugQueue ls)
+                case mCmd of
+                    Nothing → pure ()
+                    Just cmd → do
+                        _ ← cancelDebugCommand cmd
+                            "REJECTED: a load transaction replaced the \
+                            \session while this command was queued"
+                        cancelStaleDebugCommands
+        cancelStaleDebugCommands
+        -- #2713: a SCENARIO load is not finished by its reconciliation: the
+        -- scenario's content is installed after it. 'scenarioPublished' claims
+        -- the request (and runs the publication seam); 'continueScenarioLoad'
+        -- takes over from the broadcast's result instead of the two ordinary
+        -- terminations below.
+        scenario ← scenarioPublished env requestId
+        reconcileFailures ← broadcastToModulesReportingErrors ls "onSaveLoaded"
+          [ intsToScriptArray survUnitIds
+          , intsToScriptArray survBuildingIds
+          -- Issue #1589: appended, never inserted — every shipped
+          -- 'onSaveLoaded' callback reads the two survivor arrays
+          -- positionally, and Lua ignores arguments a function does not
+          -- declare, so only the callbacks that actually want the context
+          -- (today @scripts/unit_ai.lua@'s) have to name it.
+          , reconcileToScriptValue reconcile ]
+        -- The transaction is reported
+        -- 'LoadPublished' only NOW, once this reconciliation broadcast has
+        -- actually run — not the instant the Haskell-side ref swap
+        -- happened (World.Load.Publish.publishStagedSession, well before
+        -- this message was even drained). The broadcast never
+        -- throws (each module call is pcall-guarded internally), so exactly
+        -- one of the two terminations below always runs.
+        --
+        -- Issue #1204: that pcall guard used to SWALLOW what it caught, so
+        -- a callback that partially reconciled its singleton and then
+        -- raised still reported an unqualified 'LoadSucceeded'. The
+        -- shipped callbacks do correctness-critical work (scripts/
+        -- unit_ai.lua and building_spawn.lua prune orphaned rows and scrub
+        -- typed references, unit_resources.lua rebuilds derived body
+        -- statistics, ui_manager_menu.lua rebinds Lua's world/HUD ids to
+        -- the published session), so an incompletely reconciled session is
+        -- not a presentation-only concern. It gets its own honest terminal
+        -- disposition instead — see 'failReconciliation', which is
+        -- deliberately not 'failLoad'.
+        case scenario of
+          Just seamFault → continueScenarioLoad env ls requestId seamFault
+              [ (T.pack scriptPath', err) | (scriptPath', err) ← reconcileFailures ]
+          Nothing →
+            if null reconcileFailures
+              then finishLoad (loadStatusRef env) requestId
+              else failReconciliation (loadStatusRef env) requestId
+                     [ ReconciliationFailure (T.pack scriptPath') err
+                     | (scriptPath', err) ← reconcileFailures ]
 
 -- | Issue #763 (save-overhaul C2): a whole-session load transaction just
 --   finished STAGING (on the world thread, touching no live ref) and is
@@ -471,6 +522,27 @@ processLuaMsg env ls stateRef msg = case msg of
 handleLoadStaged ∷ EngineEnv → LuaBackendState → Int → IO ()
 handleLoadStaged env ls requestId = do
     logger ← readIORef (loggerRef env)
+    -- #2713: the scenario seam at the publish hand-off. A synchronous
+    -- exception raised here ends the request exactly as the barrier failing
+    -- to open does (the staged session is dropped, the prepared Lua load
+    -- aborted); a cancellation propagates. Inert unless a scenario test
+    -- armed it.
+    seam ← try (scenarioSeamPoint (loadStatusRef env) PointPublishHandoff)
+    case seam of
+      Left e | Just (ae ∷ SomeAsyncException) ← fromException e → throwIO ae
+             | otherwise → do
+        let why = "unhandled exception at the publish hand-off: "
+                  <> tshow (e ∷ SomeException)
+        logWarn logger CatWorld $
+            "load publish #" <> tshow requestId <> " " <> why
+        failLoad (loadStatusRef env) requestId why
+        writeIORef (pendingLoadRef env) Nothing
+        Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
+      Right () → publishStaged env ls logger requestId
+
+publishStaged ∷ EngineEnv → LuaBackendState → LoggerState → Int → IO ()
+publishStaged env ls logger requestId = do
+    scenarioPublishing env requestId
     -- SaveInput is omitted when the input thread was
     -- never started (App.Headless boots without one — no GLFW window
     -- to poll), so waitForOwners below never times out forever waiting
@@ -498,10 +570,7 @@ handleLoadStaged env ls requestId = do
     -- @Engine.Loop.Mode.runGatedByCaptureLock@; a plain save omits
     -- SaveRender ('Engine.Scripting.Lua.API.Save.saveOwnerSet').
     inputActive ← readIORef (inputThreadActiveRef env)
-    let baseOwners = Set.fromList
-            [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimulation]
-        withInput = if inputActive then Set.insert SaveInput baseOwners else baseOwners
-        owners = Set.insert SaveRender withInput
+    let owners = Set.insert SaveRender (standardSaveOwners inputActive)
     started ← beginSave (saveBarrierRef env) owners
     case started of
       Left err → do
@@ -533,6 +602,25 @@ handleLoadStaged env ls requestId = do
             Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
           Right () → do
             reachSnapshot (saveBarrierRef env) barrierRequestId
+            -- #2713: the scenario seam with the barrier HELD (every owner
+            -- acknowledged and parked). A synchronous exception here ends
+            -- the request the way a failing Lua apply does: before any
+            -- Haskell state changed.
+            held ← try (scenarioSeamPoint (loadStatusRef env) PointBarrier)
+            case held of
+              Left e | Just (ae ∷ SomeAsyncException) ← fromException e → throwIO ae
+                     | otherwise → do
+                let why = "unhandled exception while the publish barrier was \
+                          \held: " <> tshow (e ∷ SomeException)
+                failSave (saveBarrierRef env) barrierRequestId why
+                logWarn logger CatWorld $
+                    "load publish #" <> tshow requestId <> " " <> why
+                failLoad (loadStatusRef env) requestId why
+                writeIORef (pendingLoadRef env) Nothing
+                Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
+              Right () → applyAndCommit barrierRequestId
+  where
+   applyAndCommit barrierRequestId = do
             applied ← Lua.runWith (lbsLuaState ls) (applyLuaLoad logger)
             case applied of
               -- applyLuaLoad is only reachable after prepareLoad already

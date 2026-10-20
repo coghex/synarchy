@@ -93,7 +93,8 @@ import World.Flora.Designation (replaceChunkForgettingFlora)
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdToLua, generatedFloraInstanceId, plantedFloraInstanceId)
 import World.Flora.Types
-    ( FloraCatalog(..), FloraChunkData(..), FloraId(..), FloraInstance(..)
+    ( FloraCatalog(..), FloraChunkData(..), FloraContext(..), FloraId(..)
+    , FloraInstance(..)
     , emptyFloraCatalog, newFloraSpecies )
 import World.Fluid.Types (emptyIceMap)
 import Structure.Types (emptyChunkStructures)
@@ -292,7 +293,7 @@ plant (gx, gy) fid iid = FloraInstance
     { fiSpecies = fid, fiTileX = fromIntegral (gx `mod` chunkSize)
     , fiTileY = fromIntegral (gy `mod` chunkSize)
     , fiOffU = 0, fiOffV = 0, fiZ = 10, fiAge = 1, fiHealth = 1
-    , fiVariant = 0, fiBaseWidth = 8, fiInstanceId = iid, fiChopDesignated = False }
+    , fiVariant = 0, fiBaseWidth = 8, fiInstanceId = iid, fiChopDesignated = False, fiContext = ContextWild }
 
 chunkWith ∷ ChunkCoord → [FloraInstance] → LoadedChunk
 chunkWith coord flora =

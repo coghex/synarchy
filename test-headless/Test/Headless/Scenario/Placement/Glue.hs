@@ -17,11 +17,14 @@
 module Test.Headless.Scenario.Placement.Glue
     ( Materialized(..)
     , materialize
+    , materializeAllowingFailures
     , Captured'(..)
     , capturePage
     , CaptureSources(..)
     , capturePageFrom
     , saveAndStage
+    , encodeSession
+    , stageEnvelope
     , sessionSnapshotOf
     , savedEnvelopeFrom
     , capturedYaml
@@ -29,56 +32,31 @@ module Test.Headless.Scenario.Placement.Glue
     ) where
 
 import UPrelude
-import Data.IORef (atomicModifyIORef', readIORef)
-import Data.List (sortOn)
+import Data.IORef (readIORef)
 import qualified Data.Aeson as A
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Yaml as Y
 import Building.Types
-import Engine.Core.Capability.ContentRegistries
-    (ContentRegistriesCapability(..), toContentRegistriesCapability)
 import Engine.Core.Capability.RenderHandoff (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..), toUnitCombatCapability)
-import Engine.Core.Capability.WorldSim (toWorldSimCapability, withPageLifecycle)
-import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
-import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Engine.Core.Capability.ContentRegistriesView
-    (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
-import Engine.Core.ReadOnlyRef (readReadOnlyRef)
-import Gameplay.Tags.Index (categoryForward, categoryTagsOf)
-import Power.Types (nodeForBuilding)
-import Gameplay.Tags.Live (commitItemTreeAssignments)
-import Gameplay.Tags.Tag (mkItemTarget)
-import Item.Ground (GroundItems(..))
-import qualified Item.Ground as G
-import Item.Types (ItemInstance(..))
+import Engine.Core.State (EngineEnv(..))
+import Gameplay.Tags.Index (categoryForward)
 import Location.Instance
-import Scenario.Items.Build (ItemBuild(..), ItemBuildEnv(..), itemRefTargets, itemTagTargets)
-import Scenario.Items.Capture
-    ( CaptureCtx(..), Captured(..), DocKey(..), captureGroundItems, nameDocumentRefs, newCaptureState )
 import Scenario.Items.Encode (itemEntryFields, floatValue)
-import Scenario.Items.Owners (buildGroundItems, installGroundItems)
-import Scenario.Items.Refs (lookupItemRef)
 import Scenario.Placement.Building
 import Scenario.Placement.Encode
-import Scenario.Placement.Install (requestPlacementInstall)
-import Scenario.Placement.Location
-import Scenario.Placement.Structure
-import Scenario.Placement.Types
-import Scenario.Schema (decodeScenarioBytes)
+import Scenario.Capture.Inputs (SessionParts(..), readSessionInputs)
+import Scenario.Capture.Project (Projected(..), projectParts)
+import Scenario.Schema (currentScenarioVersion, decodeScenarioBytes)
 import Scenario.Types
-import Scenario.Units.Build
-import Scenario.Units.Capture
 import Scenario.Units.Encode (unitEntryValue)
 import Scenario.Units.Install
-import Scenario.Units.Ready (luaUnitReadiness)
 import Unit.Sim.Types (UnitThreadState(..))
-import World.Save.Types (toBuildingSnapshot, toUnitSnapshot, UnitSnapshot(..))
+import World.Save.Types (nameFloraReferences, toBuildingSnapshot, toUnitSnapshot, UnitSnapshot(..))
+import Gameplay.Tags.Page (CropPlotStore(..), capturePageTags)
 import World.Save.Snapshot (LiveCameraSnapshot(..), PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Envelope (decodeSessionEnvelope, encodeSessionSnapshot)
@@ -86,22 +64,20 @@ import World.Save.Component.Page (blankPageSnapshot)
 import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import Item.Knowledge (emptyPortableKnowledge)
-import Engine.Graphics.Camera (CameraFacing(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import Gameplay.Tags.Index (CategoryIndex)
 import Gameplay.Tags.Tag (ItemTarget)
 import Scenario.Items.Refs (ItemRefs)
 import Structure.Palette (TexPalette)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import qualified Data.HashSet as HS
-import Scenario.World.Capture (chunkStatesOf, placementTiles)
+import Scenario.Load.Construct (ConstructEnv(..), Constructed(..), constructScenario)
 import Test.Headless.Scenario.Placement.Fixtures
 import Unit.Types
 import World.Arena.Bounds (ArenaBounds)
-import World.Chunk.Admit (pageIncarnation)
-import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldPageId)
+import World.Render.Camera.Types (WorldCamera(..))
 import World.State.Types
-import World.Tile.Types (WorldTileData(..))
 
 -- | What one materialization reports.
 data Materialized = Materialized
@@ -110,103 +86,35 @@ data Materialized = Materialized
     , mzBuildings   ∷ ![BuildingCompletion]
     , mzUnits       ∷ ![UnitCompletion]
     , mzDiagnostics ∷ ![ScenarioDiagnostic]
+    , mzFailures    ∷ ![Text]
+      -- ^ accepted content that did not install (empty on success)
     }
 
--- | Materialize @sc@ on @pid@.
+-- | Materialize @sc@ on @pid@ through the PRODUCTION construction
+--   ('Scenario.Load.Construct.constructScenario'): the one place the
+--   adapters are composed, so these tests exercise the order the product
+--   load follows rather than a copy of it. A runtime failure to install
+--   accepted content fails the example.
 materialize ∷ Fx → WorldPageId → WorldState → ArenaBounds → Scenario → IO Materialized
 materialize fx pid ws ab sc = do
-    let env = fxEnv fx
-        caps = toContentRegistriesCapability env
-    epoch ← pageIncarnation ws
-    items ← itemsOf env
-    now ← readIORef (gameTimeRef env)
-    defsB ← bmDefsOf env
-    locs ← locationRegistry env
-    loot ← lootTables env
-    params ← readIORef (wsGenParamsRef ws)
-    let seed = maybe 0 wgpSeed params
-        worldSize = maybe 0 wgpWorldSize params
-        itemEnv = ItemBuildEnv items (freshItemInstanceId env)
-    td ← readIORef (wsTilesRef ws)
-    edits ← readIORef (wsEditsRef ws)
-    let tiles = placementTiles (Just ab) seed edits td (buildingFootprintTiles defsB (scBuildings sc))
-    bm0 ← readIORef (buildingManagerRef env)
-    let lis0 = maybe emptyLocationInstances wgpLocationInstances params
-        pageB = bm0 { bmInstances = HM.filter ((≡ pid) ∘ biPage) (bmInstances bm0) }
-    -- 1. buildings
-    bbs ← buildBuildings BuildingBuildEnv
-              { bbeDefs = defsB, bbeItems = itemEnv, bbeBounds = Just ab
-              , bbeWorldSize = worldSize, bbeTiles = tiles, bbeExisting = pageB
-              , bbeLocations = lis0, bbeNow = now, bbePage = pid }
-        [ (indexPath' "buildings" i, e) | (i, e) ← zip [0 ∷ Int ..] (scBuildings sc) ]
-    let brefs = BuildingInstallRefs
-            { birBuildings = buildingManagerRef env, birUnits = unitManagerRef env
-            , birWorld = worldManagerRef env
-            , birLifecycle = withPageLifecycle (toWorldSimCapability env)
-            , birWorldSize = worldSize }
-    bcs ← installBuildingBuilds brefs pid epoch bbs
-    -- 2. locations judged, their occupants decided
-    let lenv = LocationBuildEnv { lbeDefs = locs, lbeBounds = Just ab, lbeSeed = seed, lbeNamer = Nothing }
-        locEntries = [ (indexPath' "locations" i, e) | (i, e) ← zip [0 ∷ Int ..] (scLocations sc) ]
-        lv = validateLocations lenv locEntries
-        unitEntries = [ (indexPath' "units" i, e) | (i, e) ← zip [0 ∷ Int ..] (scUnits sc) ]
-        (liveUnits, unitCascade) = rejectUnitsOfRejectedLocations (lvRejected lv) unitEntries
-    -- 3. units and ground items
-    um ← readIORef (unitManagerRef env)
-    reg ← readIORef (crPhysiologyRegistryRef caps)
-    ecm ← readReadOnlyRef (crvEquipmentClassManagerRef (toContentRegistriesViewCapability env))
-    inf ← readIORef (crInfectionManagerRef caps)
-    let uenv = UnitBuildEnv
-            { ubeDefs = umDefs um, ubeItems = itemEnv, ubeEquipment = ecm
-            , ubePhysiology = reg, ubeInfections = inf, ubeNow = now
-            , ubePage = pid, ubeSurfaceZ = \_ _ → Just 4 }
-    ubs ← forM liveUnits $ \(p, e) → (,) e ⊚ buildUnit uenv p e
-    let urefs = UnitInstallRefs
-            { uirUnits = unitManagerRef env, uirSims = ucUtsRef (toUnitCombatCapability env)
-            , uirBuildings = buildingManagerRef env, uirWorld = worldManagerRef env
-            , uirLifecycle = withPageLifecycle (toWorldSimCapability env)
-            , uirReady = luaUnitReadiness (lbsLuaState (fxLua fx)) }
-    ucs ← installUnitBuilds urefs pid epoch (map snd ubs)
-    -- the definition-provided guaranteed content a location omits is
-    -- constructed once, from the accepted locations only
-    let (acceptedLocs, defaultGround) = expandLocationDefaults locs loot (scGroundItems sc) (lvAccepted lv)
-    (placements, gbuild) ← buildGroundItems itemEnv (scGroundItems sc ⧺ defaultGround)
-    let (store, _) = installGroundItems [ p | Just p ← placements ] G.emptyGroundItems
-    -- a materialization establishes the page's baseline: its ground is replaced
-    atomicModifyIORef' (wsGroundItemsRef ws) (const (store, ()))
-    _ ← commitItemTreeAssignments (unitManagerRef env) (buildingManagerRef env) (worldManagerRef env)
-            (itemTagTargets gbuild) (itemRefTargets gbuild)
-    -- 4. locations resolved and everything committed on the world thread
-    let joins =
-            [ UnitJoin loc uid (usRealHome e)
-            | ((e, _), UnitInstalled uid _) ← zip ubs ucs
-            , Just loc ← [ueEncounter e] ]
-        usRealHome e = (ueX e, ueY e)
-        bindings = Map.fromList $
-            [ (r, ItemBinding i (iiDefName n) (iiInstanceId n ≡ iiInstanceId root))
-            | (placement, tree) ← zip placements (ibTrees gbuild)
-            , Just _ ← [placement], Just root ← [tree], n ← flatNodes root
-            , (i, r) ← ibRefs gbuild, i ≡ iiInstanceId n ]
-            ⧺ [ (r, ItemBinding i (iiDefName n) False)
-              | BuildingBuild (Just b) _ ← bbs
-              , BuildingInstalled _ ref ← bcs, ref ≡ bbRef b
-              , Just root ← ibTrees (bbItems b), n ← flatNodes root
-              , (i, r) ← ibRefs (bbItems b), i ≡ iiInstanceId n ]
-        (installs, resolveDiags) = resolveLocationInstalls locs joins bindings acceptedLocs
-    outcome ← requestPlacementInstall (toWorldSimCapability env) pid epoch
-        ScenarioPlacementRequest
-            { sprStructures = Just [ (indexPath' "structures" i, p) | (i, p) ← zip [0 ∷ Int ..] (scStructures sc) ]
-            , sprLocations = Just installs }
-    case outcome of
-        PlacementInstalled r → pure Materialized
-            { mzStructures = pirStructures r, mzLocations = pirLocations r
-            , mzBuildings = bcs, mzUnits = ucs
-            , mzDiagnostics = concatMap bbuDiagnostics bbs ⧺ lvDiagnostics lv ⧺ unitCascade
-                ⧺ resolveDiags ⧺ pirDiagnostics r }
-        other → fail ("placement was not installed: " ⧺ show other)
-  where
-    flatNodes i = i : concatMap flatNodes (iiContents i)
-    indexPath' k i = k <> "[" <> T.pack (show i) <> "]"
+    mz ← materializeAllowingFailures fx pid ws ab sc
+    unless (null (mzFailures mz)) $
+        fail ("construction failed: " ⧺ show (mzFailures mz))
+    pure mz
+
+-- | 'materialize' for an example that EXPECTS accepted content not to
+--   install (a building whose references cannot be held, say): the failures
+--   are reported, not raised.
+materializeAllowingFailures ∷ Fx → WorldPageId → WorldState → ArenaBounds → Scenario → IO Materialized
+materializeAllowingFailures fx pid _ws ab sc = do
+    logger ← readIORef (loggerRef (fxEnv fx))
+    c ← constructScenario ConstructEnv
+        { ceEnv = fxEnv fx, ceLua = fxLua fx, ceLogger = logger, cePage = pid
+        , cePaths = noSourcePaths, ceBounds = Just ab, ceSeam = \_ → pure () } sc
+    pure Materialized
+        { mzStructures = ccStructures c, mzLocations = ccLocations c
+        , mzBuildings = ccBuildings c, mzUnits = ccUnits c
+        , mzDiagnostics = ccDiagnostics c, mzFailures = ccFailures c }
 
 -- | A captured page.
 data Captured' = Captured'
@@ -244,82 +152,21 @@ capturePage fx pid ws ab = do
         , csItemTags = wmItemTags wm, csPalette = palette, csPage = pid, csWorld = ws } ab
 
 capturePageFrom ∷ Fx → CaptureSources → ArenaBounds → IO Captured'
-capturePageFrom fx src ab = do
-    let env = fxEnv fx
-        caps = toContentRegistriesCapability env
-        pid = csPage src
-        ws = csWorld src
-        um = csUnits src
-        bm = csBuildings src
-        palette = csPalette src
-    params ← readIORef (wsGenParamsRef ws)
-    ground ← readIORef (wsGroundItemsRef ws)
-    nodes ← readIORef (wsPowerNodesRef ws)
-    td ← readIORef (wsTilesRef ws)
-    edits ← readIORef (wsEditsRef ws)
-    items ← itemsOf env
-    defsB ← bmDefsOf env
-    locs ← locationRegistry env
-    reg ← readIORef (crPhysiologyRegistryRef caps)
-    now ← readIORef (gameTimeRef env)
-    art ← readIORef (rhStructureArtCatalogRef (toRenderHandoffCapability env))
-    let lis = maybe emptyLocationInstances wgpLocationInstances params
-        seed = maybe 0 wgpSeed params
-        itemCtx = CaptureCtx
-            { ccRef = \i → lookupItemRef i (csItemRefs src)
-            , ccTags = \i → maybe Set.empty (\t → categoryTagsOf t (csItemTags src)) (mkItemTarget i) }
-        pageUnits = sortOn fst [ (u, i) | (u, i) ← HM.toList (umInstances um), uiPage i ≡ pid ]
-        pageBuildings = sortOn fst [ (b, i) | (b, i) ← HM.toList (bmInstances bm), biPage i ≡ pid ]
-        -- scenario ids share ONE namespace: every referenced unit, building
-        -- and location is named together, before anything is captured
-        docNames = nameDocumentRefs HS.empty $
-            [ (DocUnit u, r) | (u, _) ← pageUnits, Just r ← [Map.lookup u (umScenarioRefs um)] ]
-            ⧺ [ (DocBuilding b, r) | (b, _) ← pageBuildings, Just r ← [Map.lookup b (bmScenarioRefs bm)] ]
-            ⧺ [ (DocLocation l, r) | (l, r) ← Map.toList (lisScenarioRefs lis) ]
-        groundTrees = map G.giInst (HM.elems (gisItems ground))
-        buildingTrees = concat [ biStorage b ⧺ concat (HM.elems (biMaterialsDelivered b)) | (_, b) ← pageBuildings ]
-        unitItemTrees = concatMap (unitTrees ∘ snd) pageUnits
-        -- every item reference in the document is named up front too
-        stNames = newCaptureState itemCtx (Map.elems docNames) (groundTrees ⧺ buildingTrees ⧺ unitItemTrees)
-        lctx = LocationCaptureCtx
-            { lccDefs = locs, lccItemRef = const Nothing
-            , lccNameOf = \l → Map.lookup (DocLocation l) docNames }
-        (_, locNameMap) = locationNames lctx stNames lis
-        foreignIds = Map.elems docNames ⧺ Map.elems locNameMap
-        ucap = captureUnits UnitCaptureCtx
-            { uccDefs = umDefs um, uccItems = items, uccPhysiology = reg, uccNow = now
-            , uccUnitRef = \u → Map.lookup u (umScenarioRefs um)
-            , uccUnitTags = \u → categoryTagsOf u (umTags um)
-            , uccItemCtx = itemCtx
-            , uccOtherTrees = groundTrees ⧺ buildingTrees
-            , uccPreNamed = \u → Map.lookup (DocUnit u) docNames
-            , uccEncounterOf = \u → lookup u occupantNames }
-            foreignIds pageUnits
-        occupantNames =
-            [ (leoUnitId o, ExplicitId n)
-            | inst ← instancesToList lis, Just n ← [Map.lookup (liId inst) locNameMap]
-            , Just enc ← [liEncounter inst], o ← leOccupants enc ]
-        bcap = captureBuildings BuildingCaptureCtx
-            { bccDefs = defsB
-            , bccNodes = \b → nodeForBuilding b nodes
-            , bccNameOf = \b → Map.lookup (DocBuilding b) docNames
-            , bccTags = \b → categoryTagsOf b (bmTags bm)
-            , bccItemCtx = itemCtx } (ucapState ucap) pageBuildings
-        (gst, groundRows, gcap) = captureGroundItems itemCtx (bcapState bcap) ground
-        itemRefs = capRefs gcap ⧺ bcapItems bcap ⧺ ucapItems ucap
-        lcap = captureLocations lctx { lccItemRef = \i → lookup i itemRefs
-                                     , lccNameOf = \l → Map.lookup l locNameMap }
-                                gst lis
-        chunks = chunkStatesOf (Just ab) seed edits (HM.elems (wtdChunks td))
-        taken = Set.fromList (map (scenarioIdText ∘ beId) (bcapEntries bcap)
-                             ⧺ map (scenarioIdText ∘ leId) (lcapEntries lcap)
-                             ⧺ map (scenarioIdText ∘ ueId) (ucapEntries ucap))
-        scap = captureStructures StructureCaptureCtx
-            { sccArt = art, sccPalette = palette, sccBounds = Just ab } chunks taken
+capturePageFrom fx src _ab = do
+    -- the PRODUCTION projection (Scenario.Capture.Project) over the same
+    -- inputs the service reads: this is a view of it, not a second copy
+    inputs ← readSessionInputs (fxEnv fx) SessionParts
+        { spPage = csPage src, spWorld = csWorld src, spUnits = csUnits src
+        , spBuildings = csBuildings src, spItemRefs = csItemRefs src
+        , spItemTags = csItemTags src, spPalette = csPalette src
+        , spLiveCamera = Nothing }
+    let parts = projectParts currentScenarioVersion inputs
+        sc = pjScenario parts
     pure Captured'
-        { cpStructures = scPieces scap, cpBuildings = bcapEntries bcap
-        , cpLocations = lcapEntries lcap, cpUnits = ucapEntries ucap
-        , cpGround = groundRows, cpDiagnostics = scDiagnostics scap }
+        { cpStructures = scStructures sc, cpBuildings = scBuildings sc
+        , cpLocations = scLocations sc, cpUnits = scUnits sc
+        , cpGround = [ (giX g, giY g, giItem g) | g ← scGroundItems sc ]
+        , cpDiagnostics = pjStructureFindings parts }
 
 -- | The session snapshot an ordinary save of the page holds: every owner's
 --   snapshot function over the live managers, the page's own edit log,
@@ -338,9 +185,26 @@ sessionSnapshotOf fx pid ws = do
     ground ← readIORef (wsGroundItemsRef ws)
     powerNodes ← readIORef (wsPowerNodesRef ws)
     nextItem ← readIORef (nextItemInstanceIdRef env)
+    -- the page's plants, as a save writes them: species NAMED, the planted
+    -- allocator and regrowth timers, the crop plots, the page's tags
+    floraCat ← readIORef (floraCatalogRef env)
+    plots ← readIORef (wsCropPlotsRef ws)
+    harvests ← readIORef (wsFloraHarvestsRef ws)
+    pageTags ← readIORef (wsPageTagsRef ws)
+    cursor ← readIORef (wsPlantedFloraCursorRef ws)
+    -- the page's own camera and the live one, as a save writes them
+    WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
+    cam ← readIORef (cameraRef env)
+    (namedEdits, namedCrops, _) ← either (const (fail "a flora species cannot be named")) pure
+        (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty)
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
-            { pgsEdits = edits
+            { pgsCameraX = wcx, pgsCameraY = wcy
+            , pgsEdits = namedEdits
+            , pgsCropPlots = namedCrops
+            , pgsFloraHarvests = harvests
+            , pgsPlantedFloraCursor = cursor
+            , pgsPageTags = capturePageTags pageTags plots
             , pgsGroundItems = ground
             , pgsPowerNodes = powerNodes
             , pgsBuildings = toBuildingSnapshot pid bm
@@ -352,7 +216,7 @@ sessionSnapshotOf fx pid ws = do
         , snapNextItemId = max 1 nextItem
         , snapNextBuildingId = bmNextId bm, snapNextUnitId = umNextId um
         , snapActivePage = pid, snapVisiblePages = [pid]
-        , snapLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
+        , snapLiveCamera = LiveCameraSnapshot (Just pid) (fst (camPosition cam)) (snd (camPosition cam)) (camZoom cam) (camFacing cam)
         , snapPages = HM.singleton pid page
         , snapItemTags = categoryForward (wmItemTags wm), snapItemRefs = wmItemScenarioRefs wm
         , snapPortableKnowledge = emptyPortableKnowledge }
@@ -366,12 +230,21 @@ saveMeta = SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts", srmAutos
 --   into save data and stage it. No scenario document is involved at any
 --   point.
 saveAndStage ∷ Fx → WorldPageId → WorldState → IO CaptureSources
-saveAndStage fx pid ws = do
-    let env = fxEnv fx
+saveAndStage fx pid ws = encodeSession fx pid ws ≫= stageEnvelope fx pid
+
+-- | An ordinary save of the page, as the envelope bytes the codec writes.
+encodeSession ∷ Fx → WorldPageId → WorldState → IO BS.ByteString
+encodeSession fx pid ws = do
     snap ← sessionSnapshotOf fx pid ws
+    pure (encodeSessionSnapshot (snapshotSaveMetadata saveMeta snap) snap [])
+
+-- | Load a saved envelope through the real decoder and the real load
+--   stage, with the sources a capture of the RESTORED state reads.
+stageEnvelope ∷ Fx → WorldPageId → BS.ByteString → IO CaptureSources
+stageEnvelope fx pid bytes = do
+    let env = fxEnv fx
     back ← either (fail ∘ show) pure $ fmap (\(_, s, _, _) → s) $
-        decodeSessionEnvelope HS.empty HS.empty
-            (encodeSessionSnapshot (snapshotSaveMetadata saveMeta snap) snap [])
+        decodeSessionEnvelope HS.empty HS.empty bytes
     logger ← readIORef (loggerRef env)
     matReg ← readIORef (materialRegistryRef env)
     staged ← stageSession env logger (snapshotToSaveData saveMeta back) matReg ≫= \r → case r of
