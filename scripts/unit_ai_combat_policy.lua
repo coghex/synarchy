@@ -41,7 +41,10 @@
 -- stored in aiState and never saved, so a rewound uid after a load can
 -- inherit nothing; both tables are enrolled with unit_ai_claims and
 -- emptied by its reset on every successful load and session teardown.
--- Neither grants a permission by itself.
+-- After a load, each restored attack goal gets a FRESH occurrence,
+-- classified from its restored flags (M.restoreOccurrences); it carries
+-- no cutoff, basis or authorization from the saving session. Neither
+-- table grants a permission by itself.
 --
 -- FIXTURE INPUTS. Runtime diplomacy and grandfathered authorization
 -- belong to FTS-6; until then they reach this seam only through
@@ -56,7 +59,7 @@ M.LOCAL_WINDOW_SEC = 10
 local weak = { __mode = "k" }
 -- s -> game time at which this unit's last attack goal ended.
 local cutoffs = claims.track(setmetatable({}, weak))
--- s -> { id, target, basis, retargeted } for the live attack goal.
+-- s -> { id, target, exempt, basis, retargeted } for the live attack goal.
 local occurrences = claims.track(setmetatable({}, weak))
 local nextOccurrence = 0
 
@@ -83,21 +86,49 @@ end
 --
 -- Whether a goal is governed is fixed when it STARTS (commandAttack sets
 -- s.committed, and lash-out s.mentalLashoutActive, before setGoal) and
--- carried on the occurrence, because both clear their flag BEFORE ending
--- the goal: a committed order or a lash-out never stamps a cutoff.
+-- carried on the occurrence, and the ENDING goal is always judged by its
+-- own occurrence, never by the live flags: a committed order or a
+-- lash-out clears its flag BEFORE ending the goal, and commandAttack
+-- sets the REPLACEMENT's flag before setGoal. So a committed order or a
+-- lash-out never stamps a cutoff, and a governed goal always does, even
+-- when a committed order replaces it.
+local function open(s)
+    nextOccurrence = nextOccurrence + 1
+    occurrences[s] = { id = nextOccurrence, target = s.attackTargetUid,
+                       exempt = not M.governs(s) }
+end
+
+-- Is the live attack goal exempt? Its occurrence says; the live flags
+-- answer only for a goal with none.
+local function exempt(s)
+    local occ = occurrences[s]
+    if occ then return occ.exempt end
+    return not M.governs(s)
+end
+
 function M.goalChanged(s, newGoal)
     if s.activeGoal == "attack" then
-        local occ = occurrences[s]
-        if not ((occ and occ.exempt) or not M.governs(s)) then
-            cutoffs[s] = now()
-        end
+        if not exempt(s) then cutoffs[s] = now() end
         occurrences[s] = nil
     end
-    if newGoal == "attack" then
-        nextOccurrence = nextOccurrence + 1
-        occurrences[s] = { id = nextOccurrence, target = s.attackTargetUid,
-                           exempt = not M.governs(s) }
+    if newGoal == "attack" then open(s) end
+end
+
+-- After a successful load, once the load reset has emptied the tables
+-- and the restored aiState is in place (unit_ai_save's reset hook):
+-- re-open an occurrence for every restored attack goal, classified from
+-- its restored flags while they still stand, so a restored committed
+-- order or lash-out that clears its flag before ending is still judged
+-- exempt. A fresh occurrence id inherits nothing from the saving
+-- session -- no cutoff, no basis, no authorization. Returns the count.
+function M.restoreOccurrences(states)
+    local n = 0
+    for _, s in pairs(states) do
+        if type(s) == "table" and s.activeGoal == "attack" then
+            open(s); n = n + 1
+        end
     end
+    return n
 end
 
 -- Which permission acquired the live goal ("hostile" / "self_defense").
@@ -163,8 +194,7 @@ end
 
 -- Continuation of the live attack goal. Returns ok, reason.
 function M.mayContinue(uid, s)
-    local live = occurrences[s]
-    if not M.governs(s) or (live and live.exempt) then return true end
+    if exempt(s) then return true end
     local target = s.attackTargetUid
     if not target then return true end
     if M.isHostile(uid, target) then return true end

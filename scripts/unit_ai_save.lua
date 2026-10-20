@@ -346,6 +346,10 @@ function M.register(aiState)
             engine.logInfo("Unit AI: cleared " .. dropped
                 .. " transient claim/priority entries on load")
         end
+        -- #2521: the restored aiState is already in place, so the
+        -- combat-policy seam re-classifies each restored attack goal
+        -- before its flags can be cleared ahead of the goal's end.
+        require("scripts.unit_ai_combat_policy").restoreOccurrences(aiState)
     end)
 
     -- aiState across the OTHER session-replacement path (#1610). Exit to

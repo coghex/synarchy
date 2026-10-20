@@ -553,6 +553,26 @@ selfDefenseSpec = do
         ok ls "NOW = 6; CORE.markGoalAccomplished(S(1), 'attack'); return true"
         val ls "POLICY.cutoff(S(1))" `shouldReturn` "6"
 
+    it "stamps the cutoff when a committed order replaces an autonomous \
+       \goal, so a hit before that replacement cannot reopen self-defense" $ \env → do
+        resetWorld env roster
+        ls ← session env
+        hit env 1 3 0.5
+        ok ls "NOW = 1; return true"
+        val ls "engage(1)" `shouldReturn` "3"           -- autonomous self-defense
+        hit env 1 7 1.5                                 -- a neutral hit mid-fight
+        -- The player orders an attack on the hostile 4: commandAttack sets
+        -- the REPLACEMENT's committed flag before the goal changes.
+        ok ls "NOW = 2; AI.commandAttack(1, 4, true); return true"
+        val ls "POLICY.cutoff(S(1))" `shouldReturn` "2"
+        setPose env 4 "dead"
+        ok ls "NOW = 3; return true"
+        val ls "tick(1)" `shouldReturn` "false"
+        val ls "POLICY.cutoff(S(1))" `shouldReturn` "2" -- the order's end stamps none
+        val ls "engage(1)" `shouldReturn` "false"       -- 7's hit predates cutoff 2
+        hit env 1 7 3.1                                 -- strictly after it
+        val ls "engage(1)" `shouldReturn` "7"
+
     it "stops the pursuit when permission expires out of range" $ \env → do
         resetWorld env [ (1, legacy FactionPlayer, (0, 0))
                        , (3, prof False ["acolyte"] [], (20, 0)) ]

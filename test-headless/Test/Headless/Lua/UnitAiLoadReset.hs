@@ -421,7 +421,7 @@ spec = describe "unit AI load reset (#1329)" $ do
         it "keeps no saved payload, and a successful load clears it so a \
            \rewound uid inherits nothing" $
             runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
-                [ "local s = fight()"
+                [ "local s = fight(); OLD_OCC = POLICY.occurrence(s)"
                 , "local snap = SAVE.snapshotAll(); assert(snap.ok)"
                 , "assert(not mentions(snap.components), 'a snapshot carries seam bookkeeping')"
                 , "runLoad()"
@@ -429,8 +429,11 @@ spec = describe "unit AI load reset (#1329)" $ do
                 , "  'the seam bookkeeping survived the load')"
                 , "local s2 = CORE.ensureState(7)"
                 , "assert(s2 ~= s, 'the load kept the old state table')"
-                , "assert(POLICY.cutoff(s2) == nil and POLICY.occurrence(s2) == nil,"
-                , "  'the rewound uid inherited the old session cutoff')"
+                -- The restored attack goal gets a FRESH occurrence, never
+                -- the saving session's.
+                , "assert(POLICY.cutoff(s2) == nil, 'the rewound uid inherited the old session cutoff')"
+                , "local o2 = POLICY.occurrence(s2)"
+                , "assert(o2 ~= nil and o2 ~= OLD_OCC, 'the restored goal kept the old occurrence')"
                 ]
         it "is cleared by Exit to Menu's session teardown" $
             runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
@@ -457,6 +460,52 @@ spec = describe "unit AI load reset (#1329)" $ do
                 , "local h = fight(); runLoad(); HIT = nil; REL = 'hostile'"
                 , "h = CORE.aiState[7]"
                 , "assert(POLICY.mayContinue(7, h), 'a restored hostile fight was ended')"
+                ]
+        it "keeps a restored committed order and a restored lash-out exempt \
+           \when each clears its flag before the goal ends, and a restored \
+           \autonomous goal governed" $
+            runsOk $ prelude <> "\n" <> policyPrelude <> "\n" <> lns
+                [ "LIVE[7], LIVE[8], LIVE[9] = true, true, true; NOW = 1000"
+                , "unit.clearAnimOverride = function() end"
+                , "unit.stop = function() end; unit.getActivity = function() return 'idle' end"
+                -- A neutral unit 9 hits 7 after the load, while the
+                -- restored goal still runs: an exempt goal's end must
+                -- leave that hit able to open self-defense.
+                , "function hitAfterLoad() NOW = 1001.5; HIT = { uid = 9, at = 1001.5 } end"
+                , "function stillFresh(s) NOW = 1003"
+                , "  return POLICY.cutoff(s) == nil and POLICY.selfDefenseFresh(7, s, 9, HIT) end"
+                -- A committed order, broken off by the real retreat path,
+                -- which drops s.committed BEFORE ending the attack goal.
+                , "AI.commandAttack(7, 8, true); runLoad()"
+                , "local r = CORE.aiState[7]"
+                , "assert(r.committed and r.activeGoal == 'attack', 'no committed goal was restored')"
+                , "hitAfterLoad(); NOW = 1002"
+                , "require('scripts.unit_ai_combat').retreatExecute(7, r, P)"
+                , "assert(r.activeGoal == 'retreat' and r.committed == nil, 'retreat did not take over')"
+                , "assert(stillFresh(r), 'a restored committed order stamped a cutoff when it broke off')"
+                -- A lash-out, ended by unit_ai_mental's real episode-end
+                -- cleanup, which drops the flag BEFORE ending the goal.
+                , "CORE.aiState[7] = nil; HIT = nil; NOW = 1000"
+                , "local m = CORE.ensureState(7)"
+                , "m.mentalLashoutActive = true; m.attackTargetUid = 8; CORE.setGoal(m, 'attack')"
+                , "runLoad(); m = CORE.aiState[7]"
+                , "assert(m.mentalLashoutActive and m.activeGoal == 'attack', 'no lash-out was restored')"
+                , "require('scripts.mental_state').isBreaking = function() return false end"
+                , "require('scripts.brain').isDelirious = function() return false end"
+                , "hitAfterLoad(); NOW = 1002"
+                , "require('scripts.unit_ai_mental').shortCircuit(7, m, P, 'idle', {})"
+                , "assert(m.activeGoal ~= 'attack' and m.mentalLashoutActive == nil,"
+                , "  'the episode-end cleanup did not run')"
+                , "assert(stillFresh(m), 'a restored lash-out stamped a cutoff when it ended')"
+                -- The governed control: a restored autonomous goal cuts off.
+                , "CORE.aiState[7] = nil; HIT = nil; NOW = 1000"
+                , "AI.commandAttack(7, 8); runLoad()"
+                , "local g = CORE.aiState[7]"
+                , "assert(not g.committed and g.activeGoal == 'attack', 'no autonomous goal was restored')"
+                , "hitAfterLoad(); NOW = 1002; CORE.markGoalAccomplished(g, 'attack')"
+                , "assert(POLICY.cutoff(g) == 1002, 'a restored autonomous goal stamped no cutoff')"
+                , "NOW = 1003; assert(not POLICY.selfDefenseFresh(7, g, 9, HIT),"
+                , "  'a hit before the governed goal ended still opened self-defense')"
                 ]
 
     it "tracks every transient registry the unit-AI family owns" $
