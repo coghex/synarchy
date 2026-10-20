@@ -417,6 +417,7 @@ library
                      Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.LoadGate
+                     Engine.Scripting.Lua.API.ScenarioDebug
                      Engine.Scripting.Lua.API.TagQueryDebug
                      Engine.Scripting.Lua.API.QueueStats
                      Engine.Scripting.Lua.API.SceneStats
