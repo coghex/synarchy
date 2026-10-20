@@ -14,6 +14,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import Building.Types
 import Engine.Core.State (EngineEnv(..), freshItemInstanceId)
+import Engine.Graphics.Camera (Camera2D(..))
 import Location.Instance (LocationInstances(..))
 import Scenario.Items.Refs (emptyItemRefs)
 import World.Generate.Types (WorldGenParams(..))
@@ -93,6 +94,21 @@ spec = describe "content" $ do
         fmap (map wsPart) (authoredList (ueWounds medic)) `shouldBe` Just ["torso"]
         [bat] ← pure [ b | b ← scBuildings sc, beId b ≡ ExplicitId "bat" ]
         bePowerCharge bat `shouldBe` Authored 2500
+
+    it "writes the camera where it stands: the live one when the arena owns it, the page's own otherwise" $ \h → do
+        let env = fxEnv (hFx h)
+        path ← writeScenario "capture-camera.yaml" integratedDoc
+        reloadFrom h path
+        -- the player moved the camera
+        atomicModifyIORef' (cameraRef env) $ \c → (c { camPosition = (7, 8) }, ())
+        (_, moved, _) ← captureLive h "camera-moved"
+        scCamera <$> decodeBytes h moved `shouldReturn` (7, 8)
+        -- with no page on screen the live camera belongs to nobody: the page's own is written
+        wm ← readIORef (worldManagerRef env)
+        atomicModifyIORef' (worldManagerRef env) $ \m → (m { wmVisible = [] }, ())
+        (_, own, _) ← captureLive h "camera-page"
+        atomicModifyIORef' (worldManagerRef env) $ \m → (m { wmVisible = wmVisible wm }, ())
+        scCamera <$> decodeBytes h own `shouldReturn` (3, 4)
 
     it "is a fixed point: loading the captured file and capturing again writes the same bytes and adds nothing" $ \h → do
         path ← writeScenario "capture-fixpoint.yaml" integratedDoc

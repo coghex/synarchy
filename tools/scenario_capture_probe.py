@@ -238,7 +238,8 @@ def run(args, base: str) -> int:
             out.paused = engine.isPaused()
             return out
         """
-        racing = send_json(port, chunk)
+        # the debug console reads one line per command
+        racing = send_json(port, " ".join(line.strip() for line in chunk.strip().splitlines()))
         ok(isinstance(racing, dict) and isinstance(racing.get("capture"), (int, float)),
            f"the capture was accepted ({racing.get('capture') if isinstance(racing, dict) else racing})")
         for key in ("save", "autosave", "load", "scenario_load", "second_capture", "unpause"):

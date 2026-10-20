@@ -14,6 +14,7 @@ import Test.Hspec
 import Control.Concurrent.MVar
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -161,6 +162,29 @@ spec = describe "one coherent snapshot" $ do
                 now ← forM captureOwners (ownerCounts (hOwners h))
                 pure (and [ mNow > mBefore | ((mBefore, _), (mNow, _)) ← zip mutated now ])
 
+    it "keeps every owner parked until the lock is released: still held with the document complete" $ \h → do
+        loadDoc h "capture-coh-sealed.yaml" transferDoc
+        dir ← freshDir "coh-sealed"
+        hold ← newHold
+        -- the document is fully encoded and validated, the lock is not yet
+        -- released: nothing may have started running again
+        armCaptureHold h CpEncoded hold
+        withPump h $ do
+            n ← requestCapture h (dir </> "sealed.yaml") False
+            takeMVar (holdReached hold)
+            before ← forM captureOwners (ownerCounts (hOwners h))
+            waitCondition 30 $ do
+                now ← forM captureOwners (ownerCounts (hOwners h))
+                pure (and [ pNow ≥ pBefore + 20 | ((_, pBefore), (_, pNow)) ← zip before now ])
+            after ← forM captureOwners (ownerCounts (hOwners h))
+            map fst after `shouldBe` map fst before
+            -- the capture window is still open
+            captureLocked' h `shouldReturn` True
+            putMVar (holdRelease hold) ()
+            s ← awaitCapture h n 60
+            disarmCapture h
+            void (captureOf s)
+
     it "keeps a write made after the bytes were fixed out of the file" $ \h → do
         loadDoc h "capture-coh-late.yaml" transferDoc
         dir ← freshDir "coh-late"
@@ -220,6 +244,12 @@ spec = describe "one coherent snapshot" $ do
         deferred "an exception hidden in the projection surfaces during encoding, not in storage"
             noCaptureSeams { cseamScenario = \sc → if null (scUnits sc) then sc else sc { scUnits = error "deferred projection failure" } }
             (FailEncoding, NotPublished)
+        deferred "a document that decodes into something other than the captured scenario is never published"
+            noCaptureSeams { cseamBytes = \b → if BS.null b then b else replaceFirst "id: carrier" "id: karrier" b }
+            (FailValidation, NotPublished)
+        deferred "a document the schema boundary refuses is never published"
+            noCaptureSeams { cseamBytes = \b → if BS.null b then b else BC.pack "version: 99\n" }
+            (FailValidation, NotPublished)
         deferred "an exception hidden in one element surfaces while the document is being written out, not in storage"
             noCaptureSeams { cseamScenario = \sc → if null (scUnits sc) then sc else sc { scUnits = map (\u → if T.null (ueDefinition u) then u else error "deferred element") (scUnits sc) } }
             (FailEncoding, NotPublished)
@@ -265,6 +295,16 @@ spec = describe "one coherent snapshot" $ do
   where
     authored a = case a of Authored x → Just x; Omitted → Nothing
     armCaptureSeamsOf = armCaptureWith
+
+-- | Replace the first occurrence of @needle@ in @hay@.
+replaceFirst ∷ BS.ByteString → BS.ByteString → BS.ByteString → BS.ByteString
+replaceFirst needle new hay = case BS.breakSubstring needle hay of
+    (before, rest) | BS.null rest → before
+                   | otherwise → before <> new <> BS.drop (BS.length needle) rest
+
+-- | Is the barrier's snapshot-boundary window (the capture lock) open?
+captureLocked' ∷ H → IO Bool
+captureLocked' h = captureLocked (slSaveBarrierRef (toSaveLoadCapability (fxEnv (hFx h))))
 
 -- | The carrier's tool, removed from its inventory (the unit owner's half of a
 --   transfer).
