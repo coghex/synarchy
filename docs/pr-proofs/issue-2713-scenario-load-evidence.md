@@ -26,16 +26,16 @@ no redirect came.
 
 | Group | Examples | Result |
 |---|---|---|
-| `Scenario.Load` | 42 | pass |
-| `Scenario` (all four SCN groups and this one) | 328 | pass |
+| `Scenario.Load` | 52 | pass |
+| `Scenario` (all four SCN groups and this one) | 335 | pass |
 | `transactional load` | 25 | pass (7 new status-contract examples) |
 | `load exception terminalization` | 6 | pass |
 | `save snapshot barrier` | 30 | pass |
-| `Lua.PauseGate` | 4 | pass (new: `setPaused(false)` refused for the whole life of a SCENARIO load, accepted after) |
+| `Lua.PauseGate` | 5 | pass (new: `setPaused(false)` refused for the whole life of a SCENARIO load and accepted after; and decided under the pause lock, so a load admitted while an unpause waits still refuses it) |
 | `LuaSaveLoaded reconciliation failure disposition` | 2 | pass |
 | `load replacement clears transient session surfaces` | 7 | pass |
 | `persistence contract` | 8 | pass |
-| `autosave`, `Autosave`, `Pause` (autosave and pause gates) | 30, 4, 12 | pass |
+| `autosave`, `Autosave`, `Pause` (autosave and pause gates) | 30, 4, 13 | pass |
 
 `Scenario.Load` covers: an integrated scenario of every family (terrain, fluid,
 flora, structure, building, location with its bound item, units with nested
@@ -97,6 +97,20 @@ terminal-phase set gained `LoadReplacementFailed`, here and in
 save-compat reproducibility run used the compiled `exe:synarchy-save-codec` only: no
 engine, no port, no probe slot.
 
+## Review round 1 (six findings, all fixed)
+
+Codex requested changes at `e0ad119d0`. Each finding was reproduced by a new example and the example is killed by reverting its fix (rows
+`unpause-checked-before-the-lock` through `paths-renumbered` below):
+
+1. An unpause could overtake a load admitted on another thread: the refusal is now decided inside the player-intent lock (`withPlayerIntentUnless`).
+2. A stale `LuaSaveLoaded` ran callbacks and cancelled console commands before being ignored: it is discarded first (`handleSaveLoaded`); the example dispatches one into the live handler and counts the callbacks.
+3. Ready preceded the simulation consuming the installed content: a queue-ordered round trip (`awaitSimulation`) now precedes it; the stand-in simulation can be held, and a never-consuming simulation fails the request.
+4. Items an installed unit carries were not bindable by a location: they now bind (a significant item as taken, a realized container; a pending carried shell is still refused).
+5. A recovery whose staging or barrier failed was reported by the generic status as `LoadFailed`: `failLoad` is publication-aware.
+6. Diagnostics were numbered among the survivors: entries are reported at their source paths (`SourcePaths`, returned beside the scenario).
+
+The SCN-12 test glue now composes through `constructScenario` instead of a copy of its order, and all 335 `Scenario` examples still pass.
+
 ## Mutation checks
 
 One source mutation at a time, the `Scenario.Load` group run (the `shared exclusion`
@@ -122,6 +136,12 @@ compiled was killed by an assertion, by the example named.
 | `load-claim-ignores-save` | KILLED | shared exclusion, rejects a scenario load while a save holds the barrier, and leaves the save alone |
 | `published-failure-reported-as-preserved` | KILLED | failure outcomes, after the session is replaced, recovers to a default flat arena, still FAILED, when a fault strikes at PointPublished |
 | `stale-update-unguarded` | KILLED | the session, stale completions, cannot finish or overwrite a newer request |
+| `unpause-checked-before-the-lock` | KILLED | engine.setPaused load-in-flight gate (round 15 review, issue #763), setPaused(false) decides under the pause lock, so a load admitted while it waits still refuses it |
+| `stale-reconcile-not-discarded` | KILLED | the session, stale completions, cannot finish or overwrite a newer request |
+| `simulation-not-awaited` | KILLED | the simulation, has consumed the installed content before the request is ready |
+| `carried-items-not-bound` | KILLED | items an installed unit carries, binds a significant slot to a carried item as taken, with no warning |
+| `recovery-failure-reported-as-preserved` | KILLED | failure outcomes, when recovery fails too, reports the generic transaction as replaced, not as preserved, when the recovery's publish barrier fails |
+| `paths-renumbered` | KILLED | diagnostic paths, name an entry by the path it had in the document, not by its index among the survivors |
 
 One further mutant (the continuation never claiming a published request) was
 dropped: it makes every example wait out its 60 second terminal bound.

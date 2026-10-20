@@ -1287,6 +1287,21 @@ this section is what the FORMAT means to it.
   it expects and fails setup on any other (D-15).
 - **Omitted `z` of a unit** is the column surface of the terrain the scenario
   itself installed, read after the terrain and before the units.
+- **Paths.** A diagnostic names an entry by the path it had in the DOCUMENT
+  (`buildings[2]`), not by its index among the entries that survived decoding:
+  `Scenario.Schema.loadScenarioFilePaths` returns each family's source paths
+  beside the scenario (`Scenario.Types.SourcePaths`, not part of a scenario's
+  identity), and the adapters report at them. A rejection at the decoder
+  (`buildings[0].definition`) followed by an adapter's rejection of the
+  overlapping third building reads `buildings[2]`, never `buildings[1]`. The
+  default content a location constructs is not in the document and is labelled
+  `ground_items(default)[j]`.
+- **Carried items bind too.** A location's `significant_items` / `containers`
+  reference may name an item an installed unit carries (inventory, equipment,
+  accessories and what each holds), as it may a ground item or a building's
+  contents: a carried significant item binds as taken and a carried REALIZED
+  container is a legitimate shell. A pending shell must still be an outer
+  ground item (the save's own provenance rule).
 - **Saving the loaded session.** An ordinary save of the session carries the
   bounds, the tags, every scenario reference and every physical value (see each
   family's Persistence section); loading that save needs no scenario file, and
