@@ -35,6 +35,8 @@ module Scenario.Capture.Project
     ( Projection(..)
     , ProjectionFailure(..)
     , projectScenario
+    , Projected(..)
+    , projectParts
     , scenarioIds
     ) where
 
@@ -76,7 +78,9 @@ data ProjectionFailure = ProjectionFailure
     , pfDiagnostics ∷ ![ScenarioDiagnostic]
     } deriving (Show, Eq)
 
--- | Project @ci@. The scenario carries the CURRENT format version.
+-- | Project @ci@. The scenario carries the version the caller names (the
+--   current format's, for a capture). Anything that cannot be written as a
+--   scenario fails the whole projection: see the module header.
 projectScenario ∷ Int → CaptureInputs → Either ProjectionFailure Projection
 projectScenario version ci
     | not (null findings) = Left ProjectionFailure
@@ -88,6 +92,31 @@ projectScenario version ci
                      , ("flora", length (scFlora scenario)), ("structures", length (scStructures scenario))
                      , ("buildings", length (scBuildings scenario)), ("locations", length (scLocations scenario))
                      , ("units", length (scUnits scenario)), ("ground_items", length (scGroundItems scenario)) ] }
+  where
+    parts = projectParts version ci
+    scenario = pjScenario parts
+    findings = pjWorldFindings parts ⧺ pjStructureFindings parts ⧺ pjSkipped parts
+
+-- | The scenario an instant holds, and the findings that make it
+--   unrepresentable, kept apart by the family that raised them. A caller that
+--   wants the scenario regardless (a test that asserts on one family) reads
+--   the parts; the capture service refuses unless all three are empty.
+data Projected = Projected
+    { pjScenario         ∷ !Scenario
+    , pjWorldFindings    ∷ ![ScenarioDiagnostic]
+      -- ^ terrain, fluids and flora the vocabulary cannot state
+    , pjStructureFindings ∷ ![ScenarioDiagnostic]
+      -- ^ placed structure pieces no registered pack places
+    , pjSkipped          ∷ ![ScenarioDiagnostic]
+      -- ^ live objects whose definition is no longer registered
+    }
+
+projectParts ∷ Int → CaptureInputs → Projected
+projectParts version ci = Projected
+    { pjScenario = scenario
+    , pjWorldFindings = cwDiagnostics world
+    , pjStructureFindings = scDiagnostics scap
+    , pjSkipped = skippedFindings }
   where
     pid = ciPage ci
     um = ciUnits ci
@@ -161,8 +190,7 @@ projectScenario version ci
         , scStructures = scPieces scap
         , scBuildings = bcapEntries bcap, scLocations = lcapEntries lcap
         , scUnits = ucapEntries ucap, scGroundItems = groundEntries }
-    -- the findings that make a snapshot unrepresentable
-    findings = cwDiagnostics world ⧺ scDiagnostics scap ⧺ skippedFindings
+    -- the live objects capture could not name
     skippedFindings =
         [ finding ("units[" <> tshow u <> "]") ("a unit of the unregistered definition '" <> uiDefName i <> "'")
         | (u, i) ← pageUnits, u `elem` ucapSkipped ucap, uiPose i ≢ "dead" ]
