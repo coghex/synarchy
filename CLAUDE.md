@@ -31,15 +31,11 @@ and their validation gates. Use its contents to select sections; see
 
 ## Working-tree discipline
 
+The GitHub-project and documentation rules in the owner's global instructions
+apply; the default branch is `master`. Specific to synarchy:
+
 - **Keep the primary checkout (`~/work/synarchy`) clean.** The PR drainer
   updates it after merges; conflicting uncommitted work can block the drainer.
-- Implement PRs in isolated worktrees.
-- **Documentation** is tracked but never gated on CI or review. Land it on
-  `master` with `docs-push [-m "message"] <paths...>` from any worktree as soon
-  as it is ready, including documentation that goes with a code change: link
-  it from the pull request instead of committing it to the pull request's
-  branch. Markdown that tests read or agents execute is code and goes in the
-  pull request; `docs-push` refuses it and says why.
 - Reports and drafts not ready to publish can wait uncommitted anywhere, for
   example in the `docs-wip` worktree; it is optional scratch, not a
   publication lane.
