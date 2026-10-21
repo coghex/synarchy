@@ -84,6 +84,9 @@ flagSpecs =
         "inclusive seed range to report (required)"
     , FlagSpec "--arena" "" [SelectHeadless, SelectGraphical, SelectOffscreen]
         "boot the arena profile instead of the normal game"
+    , FlagSpec "--scenario" "PATH" [SelectHeadless, SelectGraphical, SelectOffscreen]
+        ("load a scenario file (.yaml; relative paths resolve from the launch "
+         ⧺ "directory) into the arena profile, paused; implies --arena")
     , FlagSpec "--port" "N"
         [SelectHeadless, SelectGraphical, SelectOffscreen, SelectPreview]
         ("debug-console TCP port (default " ⧺ show defaultDebugPort ⧺ ")")

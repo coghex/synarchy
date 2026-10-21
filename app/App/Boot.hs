@@ -39,7 +39,7 @@ import Engine.Core.Error.Exception (EngineException)
 import Engine.Core.Log (shutdownLogger)
 import Engine.Core.State (EngineEnv, engineConfig, loggerRef)
 import Engine.Core.Thread (ThreadState)
-import Engine.Core.Workers (EngineWorkers, WorkerSlot, shutdownEngineWorkers
+import Engine.Core.Workers (EngineWorkers, WorkerSlot, allWorkers
                            , stopWorkers)
 import Engine.Core.Types (EngineConfig(..), BootProfile(..), BootMode(..)
                          , PreviewBrowse)
@@ -62,14 +62,19 @@ withBootPreviewAudio env options sink = bracketOnError
 --   debug port from the CLI when it supplied one. 'Nothing' leaves
 --   'ecDebugPort' at its configured default.
 --
+--   The fourth argument is the resolved @--scenario@ file (#2715), 'Nothing'
+--   when the flag was absent; only the three scenario-capable modes ever
+--   pass a 'Just'.
+--
 --   @--dump@ passes @Just 0@ deliberately: port 0 tells
 --   'Engine.Scripting.Lua.DebugServer.startDebugServer' to start no TCP
 --   listener at all. That sentinel is honoured for 'ModeDump' (and the
 --   two windowed modes) only — the mode recorded here is what lets
 --   'Engine.Scripting.Lua.DebugServer.listenerAction' refuse the same 0
 --   for @--headless@\/@--offscreen@ (#1190).
-bootConfig ∷ BootMode → BootProfile → Maybe Int → EngineEnv → EngineEnv
-bootConfig mode profile mPort = patchBootConfig mode profile mPort Nothing Nothing
+bootConfig ∷ BootMode → BootProfile → Maybe Int → Maybe FilePath → EngineEnv → EngineEnv
+bootConfig mode profile mPort mScenario =
+    patchBootConfig mode profile mPort Nothing Nothing mScenario
 
 -- | 'bootConfig' for @--preview@ (always 'ModePreview' \/
 --   'BootPreview'), plus the two preview-only fields: the requested
@@ -83,7 +88,7 @@ bootConfig mode profile mPort = patchBootConfig mode profile mPort Nothing Nothi
 previewBootConfig ∷ (Text, Maybe Text) → PreviewBrowse → Maybe Int
                   → EngineEnv → EngineEnv
 previewBootConfig target browse mPort =
-    patchBootConfig ModePreview BootPreview mPort (Just target) (Just browse)
+    patchBootConfig ModePreview BootPreview mPort (Just target) (Just browse) Nothing
 
 -- | The one definition of the patch. Every mode reaches it through
 --   'bootConfig' or 'previewBootConfig'; the preview fields stay at
@@ -91,14 +96,15 @@ previewBootConfig target browse mPort =
 --   every other mode.
 patchBootConfig ∷ BootMode → BootProfile → Maybe Int
                 → Maybe (Text, Maybe Text)
-                → Maybe PreviewBrowse → EngineEnv → EngineEnv
-patchBootConfig mode profile mPort mTarget mBrowse env = env
+                → Maybe PreviewBrowse → Maybe FilePath → EngineEnv → EngineEnv
+patchBootConfig mode profile mPort mTarget mBrowse mScenario env = env
     { engineConfig = base
         { ecDebugPort     = fromMaybe (ecDebugPort base) mPort
         , ecBootProfile   = profile
         , ecBootMode      = mode
         , ecPreviewTarget = mTarget
         , ecPreviewBrowse = mBrowse
+        , ecScenarioStartup = mScenario
         } }
   where base = engineConfig env
 
@@ -110,8 +116,8 @@ data FatalStream = FatalToStdout | FatalToStderr
 -- | The shared tail of every boot mode's 'Engine.Core.Monad.runEngineM'
 --   result. On success, nothing happens. On failure: report the error
 --   on the mode's stream, tear down every worker it started (in
---   @Engine.Core.Workers.allWorkers@ order), flush the logger, and exit
---   non-zero.
+--   @Engine.Core.Workers.allWorkers@ order, announcing each on stderr as
+--   it stops), flush the logger, say so, and exit non-zero.
 handleBootResult ∷ FatalStream → EngineEnv → EngineWorkers
                  → Either EngineException () → IO ()
 handleBootResult stream env workers result = case result of
@@ -121,11 +127,20 @@ handleBootResult stream env workers result = case result of
                 FatalToStdout → putStrLn
                 FatalToStderr → hPutStrLn stderr
         report $ displayException err
-        shutdownEngineWorkers workers
+        -- Announced BY 'stopWorkers' as each started worker is actually
+        -- stopped (the same trace 'luaThreadOrAbort' gives a boot that
+        -- never got this far), so the cleanup is evidence rather than a
+        -- claim: a process that merely exits reclaims its threads and
+        -- descriptors either way, and an exit code alone cannot show
+        -- that the workers were joined or the log was flushed (#2715).
+        let live = [ slot | slot@(_, Just _) ← allWorkers workers ]
+        stopWorkers (\name → reportBootCleanup ("stopped the " <> name <> " worker")) live
+        reportBootCleanup $ tshow (length live) <> " worker thread(s) stopped"
         -- Flush buffered log lines — the error context is exactly
         -- what we must not lose — then exit with a failure code.
         logger ← readIORef (loggerRef env)
         shutdownLogger logger
+        reportBootCleanup "log flushed"
         exitFailure
 
 -- | Take the Lua thread a boot mode just started — or, when that mode

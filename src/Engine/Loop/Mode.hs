@@ -14,6 +14,7 @@ module Engine.Loop.Mode
   ( LoopMode(..)
   , runLoopMode
   , runStartupHandshake
+  , checkScenarioStartup
   , frameBudgetMicros
     -- * The save-barrier handshake, exported for its gate
   , runGatedByCaptureLock
@@ -24,10 +25,15 @@ import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Monad
+import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
+import Engine.Core.Error.Exception (ExceptionType(..), SystemError(..))
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), lifecycleRef
                          , inputQueue, saveBarrierRef)
+import Engine.Core.Types (BootMode(..), EngineConfig(..))
 import Engine.Core.Log (LogCategory(..))
-import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM)
+import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM, logAndThrowM)
+import Engine.Load.Status (readStartupFailure)
 import Engine.Loop.Timing (primeFrameTiming)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
 import Engine.Scripting.Lua.Message (processLuaMessages)
@@ -280,6 +286,28 @@ runGatedByCaptureLock mode env = do
         processLuaMessages
     liftIO $ acknowledgeCurrent (saveBarrierRef env) SaveRender
 
+-- | A direct @--scenario@ boot (#2715) in a WINDOWLESS mode has no one to
+--   see a failed scenario and nothing else to do, so it exits instead of
+--   idling in a session that is not the one it was asked for: when the
+--   startup load ended unsuccessfully (or the startup driver reported a
+--   failure of its own) this raises it as an engine-level fatal error. That
+--   is the only way out that runs the whole fatal tail — report, worker
+--   shutdown, logger flush, nonzero exit ('App.Boot.handleBootResult') —
+--   which a bare @engine.quit@ or @exitFailure@ from another thread would
+--   not. Graphical boots keep the failed scenario's paused recovery
+--   controls, and a boot with no @--scenario@ never reads the latch.
+--
+--   The latch ('Engine.Load.Status.readStartupFailure') is written the
+--   instant the startup load fails, before the operation exclusion
+--   releases, so a later request cannot replace the cause unseen. A flat
+--   arena that recovery published does not clear it.
+checkScenarioStartup ∷ EngineEnv → EngineM σ ()
+checkScenarioStartup env = do
+    let cfg = ccEngineConfig (toCoreCapability env)
+    when (isJust (ecScenarioStartup cfg) ∧ ecBootMode cfg `elem` [ModeHeadless, ModeOffscreen]) $ do
+        failure ← liftIO $ readStartupFailure (slLoadStatusRef (toSaveLoadCapability env))
+        forM_ failure $ \cause → logAndThrowM CatSystem (ExSystem (StartupError cause)) cause
+
 -- | One 'EngineRunning' tick: pump the window system, do the gated
 --   work, then either shut down or run the mode's end-of-tick work and
 --   go round again.
@@ -287,6 +315,7 @@ runLoopTick ∷ LoopMode σ → EngineEnv → EngineM σ ()
 runLoopTick mode env = do
     lmPollEvents mode
     runGatedByCaptureLock mode env
+    checkScenarioStartup env
 
     exitRequested ← lmExitRequested mode
     lifecycle ← liftIO $ readIORef (lifecycleRef env)

@@ -16,6 +16,7 @@ module Engine.Core.Workers
   , WorkerSlot
   , preRenderWorkers
   , postRenderWorkers
+  , allWorkers
   , stopWorkers
   , shutdownEngineWorkers
   ) where

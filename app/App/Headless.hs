@@ -26,11 +26,11 @@ import App.Boot (FatalStream(..), bootConfig, handleBootResult
                 , luaThreadOrAbort, withBootAudio)
 import App.Exception (guardNativeExceptions)
 
-runHeadless ∷ BootProfile → Maybe Int → IO ()
-runHeadless bootProfile mPort = do
+runHeadless ∷ BootProfile → Maybe Int → Maybe FilePath → IO ()
+runHeadless bootProfile mPort mScenario = do
   EngineInitResult env ← initializeEngineHeadless
 
-  let env' = bootConfig ModeHeadless bootProfile mPort env
+  let env' = bootConfig ModeHeadless bootProfile mPort mScenario env
 
   withBootAudio env' ForcedNull $ \audioThreadState → do
 

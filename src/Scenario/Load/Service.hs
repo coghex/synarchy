@@ -43,6 +43,7 @@
 --   environment. D-43 permits the flat-arena recovery in that case.
 module Scenario.Load.Service
     ( requestScenarioLoad
+    , requestStartupScenarioLoad
     , startScenarioLoad
     , scenarioPublishing
     , scenarioPublished
@@ -99,11 +100,23 @@ import World.Types (SaveData)
 --   request unsuccessful (the previous session is untouched) rather than
 --   leaving it permanently non-terminal; a thread cancellation propagates.
 requestScenarioLoad ∷ EngineEnv → ScenarioSource → IO (Either Busy Int)
-requestScenarioLoad env src = do
+requestScenarioLoad = admitScenarioLoad False
+
+-- | The load a direct @--scenario@ boot submits (#2715): exactly
+--   'requestScenarioLoad', except that the request is marked as the
+--   startup load, so an unsuccessful end is latched for the boot to exit
+--   on. The mark is made before the request is handed to the Lua thread,
+--   hence before any stage of it can run.
+requestStartupScenarioLoad ∷ EngineEnv → ScenarioSource → IO (Either Busy Int)
+requestStartupScenarioLoad = admitScenarioLoad True
+
+admitScenarioLoad ∷ Bool → EngineEnv → ScenarioSource → IO (Either Busy Int)
+admitScenarioLoad startup env src = do
     let sl = toSaveLoadCapability env
         lsr = slLoadStatusRef sl
     claimed ← claimScenarioLoad lsr (saveInProgress (slSaveBarrierRef sl)) (sourceIdentity src)
     forM_ claimed $ \rid → guarded (preFailure env rid StageAdmitted) $ do
+        when startup $ markScenarioStartup lsr rid
         imposePause (toWorldSimCapability env)
         advanceLoad lsr rid LoadPaused
         scenarioSeamPoint lsr PointAdmitted

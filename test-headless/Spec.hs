@@ -152,6 +152,9 @@ import qualified Test.Headless.Scenario.Units as ScenarioUnits
 import qualified Test.Headless.Scenario.Placement as ScenarioPlacement
 import qualified Test.Headless.Scenario.World as ScenarioWorld
 import qualified Test.Headless.Scenario.Load as ScenarioLoad
+import qualified Test.Headless.Scenario.Paths as ScenarioPaths
+import qualified Test.Headless.Lua.ScenarioApi as LuaScenarioApi
+import qualified Test.Headless.Lua.ScenarioApi.Startup as LuaScenarioApiStartup
 import qualified Test.Headless.Scenario.Capture as ScenarioCapture
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
@@ -681,6 +684,9 @@ restLane = do
     describe "Scenario.World" ScenarioWorld.spec
     describe "Scenario.Placement" ScenarioPlacement.spec
     describe "Scenario.Load" ScenarioLoad.spec
+    ScenarioPaths.spec
+    LuaScenarioApi.spec
+    LuaScenarioApiStartup.spec
     describe "Scenario.Capture" ScenarioCapture.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
     -- #2278. Own engine: it registers an out-of-tree material into the

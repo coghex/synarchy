@@ -13,6 +13,8 @@ module Scenario.Load.Types
     ( -- * What a caller supplies
       ScenarioSource(..)
     , sourceIdentity
+      -- * Which operation
+    , ScenarioOperation(..)
       -- * The request's stages and result
     , ScenarioLoadStage(..)
     , isTerminalStage
@@ -48,6 +50,13 @@ data ScenarioSource
     = SourceFile !FilePath
     | SourceBytes !Text !BS.ByteString
       -- ^ a document held in memory, under the name it is reported by
+    deriving (Show, Eq)
+
+-- | The two scenario operations the entry points expose, as the status
+--   names them: a load and a save (the capture service's request).
+data ScenarioOperation
+    = OpLoad
+    | OpSave
     deriving (Show, Eq)
 
 -- | The name a status reports the source by.
@@ -159,13 +168,17 @@ data ScenarioLoadStatus = ScenarioLoadStatus
     , slsPendingFailure ∷ !(Maybe FailureContext)
       -- ^ construction failed and recovery is publishing the flat arena:
       --   the failure the request ends with once recovery has finished
+    , slsStartup ∷ !Bool
+      -- ^ this is the load a direct @--scenario@ boot submitted (#2715):
+      --   its unsuccessful end is latched so a headless or offscreen
+      --   boot exits on it. False for every other request.
     } deriving (Show, Eq)
 
 initialScenarioStatus ∷ Int → Text → ScenarioLoadStatus
 initialScenarioStatus rid src = ScenarioLoadStatus
     { slsRequestId = rid, slsSource = src, slsStage = StageAdmitted
     , slsWarnings = [], slsOutcome = Nothing, slsPublished = False
-    , slsRecovery = RecoveryNone, slsPendingFailure = Nothing }
+    , slsRecovery = RecoveryNone, slsPendingFailure = Nothing, slsStartup = False }
 
 -- | What the Lua-thread continuation needs once the replacement shell has
 --   been published: the decoded scenario and the bounds its page was

@@ -38,6 +38,7 @@ defaultEngineConfig = EngineConfig
   , ecBootMode = ModeGraphical
   , ecPreviewTarget = Nothing
   , ecPreviewBrowse = Nothing
+  , ecScenarioStartup = Nothing
   }
 
 defaultGraphicsConfig ∷ GraphicsConfig

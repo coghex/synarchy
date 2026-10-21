@@ -33,7 +33,7 @@ import Data.List (isInfixOf)
 import App.Cli
   ( DumpLayers(..), defaultLayers, dumpLayerNames
   , CliError(..), cliErrorMessage
-  , parseDump, parseArg, parseSize, lookupFlagValue
+  , parseDump, parseArg, parseSize, lookupFlagValue, parseScenarioArg
   , BootModeSelection(..), selectBootMode, selectionBootMode
   , bootModeSelectionName, dumpSelected )
 import Engine.Core.Types (BootMode(..), bootModeName)
@@ -131,6 +131,35 @@ spec = describe "App.Cli value validation (#1191)" $ do
     it "treats a trailing --size with no operand as present-but-invalid" $
       parseSize ["--offscreen", "--size"]
         `shouldBe` Left (MissingFlagValue "--size")
+
+  describe "parseScenarioArg (#2715)" $ do
+    it "reports absence as Right Nothing: a boot without the flag keeps \
+       \its behaviour" $ do
+      parseScenarioArg [] `shouldBe` Right Nothing
+      parseScenarioArg ["--headless", "--arena", "--port", "9008"]
+        `shouldBe` Right Nothing
+
+    it "returns the raw token, untouched, wherever it stands" $ do
+      parseScenarioArg ["--scenario", "ambush.yaml"] `shouldBe` Right (Just "ambush.yaml")
+      parseScenarioArg ["--headless", "--scenario", "dir/with space/ü \"q\".yaml"]
+        `shouldBe` Right (Just "dir/with space/ü \"q\".yaml")
+      -- the policy, not the parser, judges the extension and the file
+      parseScenarioArg ["--scenario", "ambush"] `shouldBe` Right (Just "ambush")
+
+    it "treats a trailing flag with no operand as an error, never as absence" $
+      parseScenarioArg ["--headless", "--scenario"]
+        `shouldBe` Left (MissingFlagValue "--scenario")
+
+    it "refuses an empty or blank operand" $ do
+      parseScenarioArg ["--scenario", ""] `shouldBe` Left (EmptyFlagValue "--scenario")
+      parseScenarioArg ["--scenario", "  \t"] `shouldBe` Left (EmptyFlagValue "--scenario")
+      cliErrorMessage (EmptyFlagValue "--scenario") `shouldSatisfy` ("--scenario" `isInfixOf`)
+
+    it "lets the FIRST occurrence decide, like every other flag" $ do
+      parseScenarioArg ["--scenario", "", "--scenario", "ok.yaml"]
+        `shouldBe` Left (EmptyFlagValue "--scenario")
+      parseScenarioArg ["--scenario", "a.yaml", "--scenario", ""]
+        `shouldBe` Right (Just "a.yaml")
 
   describe "parseDump" $ do
     it "reports absence as Right Nothing" $

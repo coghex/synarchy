@@ -32,12 +32,12 @@ import App.Boot (FatalStream(..), bootConfig, handleBootResult
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine with full graphics (GLFW window + Vulkan)
-runGraphical ∷ BootProfile → Maybe Int → IO ()
-runGraphical bootProfile mPort = do
+runGraphical ∷ BootProfile → Maybe Int → Maybe FilePath → IO ()
+runGraphical bootProfile mPort mScenario = do
   -- Initialize engine
   EngineInitResult env ← initializeEngine
 
-  let env' = bootConfig ModeGraphical bootProfile mPort env
+  let env' = bootConfig ModeGraphical bootProfile mPort mScenario env
 
   withBootAudio env' RealWithNullFallback $ \audioThreadState → do
 

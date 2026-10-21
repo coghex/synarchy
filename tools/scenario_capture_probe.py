@@ -6,10 +6,11 @@ cannot give.
 The hspec group drives the production capture service against stand-in
 owner threads; this probe drives it against a REAL engine (every owner
 thread running) over the debug console, and crosses real process
-boundaries. It uses the INTERNAL console verbs #2714 added on the ``debug``
-table — ``debug.loadScenario``, ``debug.captureScenario`` and the two
-``debug.getScenario*Status`` readers — which SCN-15's public entry points
-supersede (they are not a public API and take a resolved path only).
+boundaries. It drives the services through the PUBLIC entry points SCN-15
+(#2715) added on the ``engine`` table — ``engine.loadScenario``,
+``engine.saveScenario`` and ``engine.getScenarioStatus`` — which replaced
+the internal ``debug.*Scenario`` verbs #2714 first shipped. Every path is
+absolute, so it reaches the services through the same policy the CLI does.
 
 Checks (exit 0 = all pass):
 
@@ -56,7 +57,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import boot, quit_engine, send, send_json, wait_load_published
+from probelib import boot, lua_string, quit_engine, send, send_json, wait_load_published
 
 REPO = Path(__file__).resolve().parent.parent
 SAVE_SLOT = "scn_capture_probe"
@@ -133,34 +134,43 @@ def bootstrap(port: int) -> None:
         send(port, f"engine.loadScript('scripts/{script}.lua', {dt}); return 'ok'")
 
 
-def lua_str(path: str) -> str:
-    return "'" + path.replace("\\", "\\\\").replace("'", "\\'") + "'"
+# the status table, flattened to the fields this probe reads (the console
+# renders a returned table as JSON; nested tables stay nested)
+STATUS = "return engine.getScenarioStatus()"
 
 
-def wait_status(port: int, getter: str, seconds: float = 90.0):
-    """Poll a ``debug.getScenario*Status`` reader until its record is terminal."""
+def wait_status(port: int, op_id: int, kind: str, seconds: float = 90.0):
+    """Poll ``engine.getScenarioStatus`` until THE operation asked for (its
+    kind and id) is terminal. A status that names another operation is not
+    this one's result."""
     deadline = time.time() + seconds
     last = None
     while time.time() < deadline:
-        last = send_json(port, f"return {getter}()")
-        if isinstance(last, dict) and last.get("outcome"):
+        last = send_json(port, STATUS)
+        if (isinstance(last, dict) and last.get("kind") == kind
+                and last.get("id") == op_id and last.get("done")):
             return last
         time.sleep(0.2)
     return last
 
 
+def accepted_id(reply: str, what: str) -> int:
+    """The id ``engine.loadScenario`` / ``engine.saveScenario`` answered."""
+    try:
+        return int(float(reply.strip()))
+    except ValueError:
+        sys.exit(f"FAIL: {what} was refused: {reply!r}")
+
+
 def load_scenario(port: int, path: str) -> dict | None:
-    r = send(port, f"return debug.loadScenario({lua_str(path)})")
-    if r.strip() in ("false", ""):
-        sys.exit(f"FAIL: debug.loadScenario was refused: {r!r}")
-    return wait_status(port, "debug.getScenarioLoadStatus")
+    r = send(port, f"return engine.loadScenario({lua_string(path)})")
+    return wait_status(port, accepted_id(r, "engine.loadScenario"), "load")
 
 
 def capture(port: int, dest: str, overwrite: bool = False) -> dict | None:
-    r = send(port, f"return debug.captureScenario({lua_str(dest)}, {str(overwrite).lower()})")
-    if r.strip() in ("false", ""):
-        sys.exit(f"FAIL: debug.captureScenario was refused: {r!r}")
-    return wait_status(port, "debug.getScenarioCaptureStatus")
+    opts = "{overwrite = true}" if overwrite else "{}"
+    r = send(port, f"return engine.saveScenario({lua_string(dest)}, {opts})")
+    return wait_status(port, accepted_id(r, "engine.saveScenario"), "save")
 
 
 def sha(path: str) -> str:
@@ -222,18 +232,18 @@ def run(args, base: str) -> int:
         # chunk) can take its turn
         print("\n  live admission: competing requests while the capture is in flight")
         chunk = f"""
-            local id = debug.captureScenario({lua_str(first)}, false)
+            local id = engine.saveScenario({lua_string(first)}, {{}})
             local out = {{}}
             out.capture = id
             out.save = engine.saveWorld('test_arena', 'probe_during_capture')
             out.autosave = engine.saveWorld('test_arena', 'probe_during_autosave', {{autosave = true}})
             out.load = engine.loadSave('probe_nothing')
-            local lid, lwhy = debug.loadScenario({lua_str(source)})
-            out.scenario_load = lid
-            out.scenario_load_why = lwhy
-            local cid, cwhy = debug.captureScenario({lua_str(os.path.join(work, 'second.yaml'))}, false)
-            out.second_capture = cid
-            out.second_capture_why = cwhy
+            local lid, lwhy = engine.loadScenario({lua_string(source)})
+            out.scenario_load = lid or false
+            out.scenario_load_reason = lwhy and lwhy.reason
+            local cid, cwhy = engine.saveScenario({lua_string(os.path.join(work, 'second.yaml'))}, {{}})
+            out.second_capture = cid or false
+            out.second_capture_reason = cwhy and cwhy.reason
             out.unpause = engine.setPaused(false)
             out.paused = engine.isPaused()
             return out
@@ -246,8 +256,8 @@ def run(args, base: str) -> int:
             ok(racing.get(key) is False, f"a competing {key.replace('_', ' ')} was refused ({racing.get(key)!r})")
         ok(racing.get("paused") is True, "the arena stayed paused through every attempt")
         capture_id = int(racing["capture"])
-        done = wait_status(port, "debug.getScenarioCaptureStatus")
-        ok(bool(done) and done.get("outcome") == "succeeded", f"the capture succeeded ({done})")
+        done = wait_status(port, capture_id, "save")
+        ok(bool(done) and done.get("outcome") == "saved", f"the capture succeeded ({done})")
         ok(bool(done) and done.get("id") == capture_id, "it is the SAME request the chunk was given")
         ok(send(port, "return engine.isPaused()") == "true", "the arena is paused after the capture")
         ok(os.path.exists(first), "the destination holds the captured file")
@@ -265,18 +275,19 @@ def run(args, base: str) -> int:
         print("\n  overwrite intent")
         h1 = sha(first)
         refused = capture(port, first, overwrite=False)
-        ok(bool(refused) and refused.get("outcome") == "unsuccessful" and refused.get("kind") == "FailOverwriteRefused",
-           f"an existing destination without overwrite is refused ({refused and refused.get('kind')})")
+        ok(bool(refused) and refused.get("outcome") == "failed"
+           and (refused.get("failure") or {}).get("kind") == "overwrite_refused",
+           f"an existing destination without overwrite is refused ({refused and refused.get('failure')})")
         ok(sha(first) == h1, "the refused capture changed none of the destination's bytes")
         ok(refused and refused.get("published") is False, "…and reports that nothing was published")
         ok(send(port, "return engine.isPaused()") == "true", "still paused after the refusal")
         replaced = capture(port, first, overwrite=True)
-        ok(bool(replaced) and replaced.get("outcome") == "succeeded" and replaced.get("replaced") is True,
+        ok(bool(replaced) and replaced.get("outcome") == "saved" and replaced.get("replaced") is True,
            f"with overwrite the file is replaced ({replaced and replaced.get('replaced')})")
         ok(sha(first) == h1, "the arena is unchanged, so the replacement is the same document")
         other = os.path.join(work, "capture-1-copy.yaml")
         saved_as = capture(port, other)
-        ok(bool(saved_as) and saved_as.get("outcome") == "succeeded", "a different name (Save As) is accepted")
+        ok(bool(saved_as) and saved_as.get("outcome") == "saved", "a different name (Save As) is accepted")
         ok(sha(first) == h1 and sha(other) == h1, "the original is preserved and the copy is identical")
         ok(sha(source) == source_sha, "the source scenario was never rewritten")
         ok(not any(n.startswith("scenario-capture-tmp") for n in os.listdir(work)), "no temporary file was left behind")
@@ -302,7 +313,7 @@ def run(args, base: str) -> int:
         loaded = wait_load_published(port)
         ok(bool(loaded), f"the ordinary load published ({loaded})")
         got = capture(port, restored)
-        ok(bool(got) and got.get("outcome") == "succeeded", f"the restored arena was captured ({got})")
+        ok(bool(got) and got.get("outcome") == "saved", f"the restored arena was captured ({got})")
         ok(Path(restored).read_bytes() == Path(first).read_bytes(),
            "the document captured from the RESTORED arena is byte-identical to the live capture")
         results["capture-2 sha256"] = sha(restored)
@@ -318,7 +329,7 @@ def run(args, base: str) -> int:
         hyd = send(port, f"return unit.getStat({uid3}, 'hydration')").strip()
         ok(hyd in ("3", "3.0"), f"the fresh process has the EDITED hydration (read {hyd})")
         got3 = capture(port, final)
-        ok(bool(got3) and got3.get("outcome") == "succeeded", "the fresh process captured it again")
+        ok(bool(got3) and got3.get("outcome") == "saved", "the fresh process captured it again")
         ok(Path(final).read_bytes() == Path(first).read_bytes(),
            "…byte-identical to the first capture: nothing accumulated across three captures")
         results["capture-3 sha256"] = sha(final)
