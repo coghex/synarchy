@@ -8601,8 +8601,10 @@ directory, never its parents or a subfolder); a load never creates it.
 - **Existence.** A load requires the resolved file to exist and be a regular
   file; the refusal carries the resolved path. A capture's destination may not
   exist (the capture service judges writability and overwrite).
-- **Empty, blank and NUL-bearing** paths are refused; spaces, quotes and Unicode
-  are ordinary file-name characters. The path is carried as DATA end to end: the
+- **Empty, blank and NUL-bearing** paths are refused, and so is a path whose
+  final component is `.` (`ambush.yaml/.` names a directory; it is refused before
+  dot segments are dropped, never folded into the file before it); spaces, quotes
+  and Unicode are ordinary file-name characters. The path is carried as DATA end to end: the
   CLI value goes through `EngineConfig.ecScenarioStartup`, a Lua argument is read
   as a string (the Lua type is checked first, the bytes must be valid UTF-8, so a
   number is never coerced and a lenient decode never names a different file), and
