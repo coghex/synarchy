@@ -1466,6 +1466,46 @@ units:
 Loading the recaptured file and capturing again writes the same bytes: nothing
 accumulates across cycles, and no entity or membership is added or lost.
 
+## Loading and saving from scripts and the command line (SCN-15, #2715)
+
+The services are reached three ways, all through one path policy (contract and
+status vocabulary: [engine_contracts.md](engine_contracts.md#scenario-entry-points-lua-the-console-and-direct-cli-boot-2715)).
+Put authored scenarios in `scenarios/` at the top of the resource root, beside
+`saves/` — SCN-17 ships its examples there.
+
+```lua
+-- in a script or over the console; names resolve inside scenarios/
+local id, rejection = engine.loadScenario("ambush")      -- or "ambush.yaml", "sub/ambush"
+if not id then error(rejection.reason .. ": " .. rejection.message) end   -- busy | invalid_path | not_found
+
+local status
+repeat status = engine.getScenarioStatus() until status and status.kind == "load"
+                                              and status.id == id and status.done  -- poll (yield between polls)
+assert(status.outcome == "ready" and #status.warnings == 0, "unexpected setup warnings")
+-- the arena stands PAUSED; inspect it, then resume ON PURPOSE:
+engine.setPaused(false)
+
+-- capture it back; overwrite is explicit and defaults to false
+local sid = engine.saveScenario("ambush-after", { overwrite = false })
+```
+
+- A **busy** rejection means a save, load or capture is in flight: nothing was
+  queued, nothing changed; wait for the active operation's terminal status and ask
+  again. A **terminal** `failed` is the operation's own result — `status.failure`
+  says why, `status.recovery` says what stands (`preserved`: the previous
+  session; `flat_arena`: a default arena, NOT your scenario).
+- **Warnings are results.** A file with a bad definition still loads its usable
+  subset; each rejection is in `status.warnings` with the document path, a stable
+  `code`, and its `effect`. Treat an unexpected warning as a failed setup.
+- **From a shell:** `echo 'return engine.loadScenario("ambush")' | nc -w 5 localhost 9008`,
+  then poll `engine.getScenarioStatus()` the same way.
+- **From the command line:** `synarchy --headless --port 9008 --scenario ambush.yaml`
+  (also `--offscreen` and graphical). The path is relative to the directory you
+  launched from, or absolute, and always carries `.yaml`; it is NOT looked up in
+  `scenarios/`. The console `READY` line means the listener is up, not that the
+  scenario is — poll the status for the load's completion as above. A fatal
+  failure exits nonzero (headless/offscreen) after an orderly shutdown.
+
 ## Fixture expectations and tests
 
 The `Scenario.Units` group (`test-headless/Test/Headless/Scenario/Units.hs`) covers unit
