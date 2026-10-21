@@ -126,6 +126,31 @@ def send_json(port: int, lua: str, timeout: float = 10.0, idle: float = DEFAULT_
 # --------------------------------------------------------------------------
 # Inline fixtures (#1342)
 # --------------------------------------------------------------------------
+def lua_string(value: str) -> str:
+    """A Lua string literal holding ``value``'s UTF-8 bytes EXACTLY (#2715).
+
+    The socket console evaluates Lua source, so a path sent through it is
+    text the engine compiles. The older idiom — interpolating the path inside
+    single quotes — breaks on a quote or a backslash and, worse, can turn a
+    crafted name into code. This encoder writes every byte outside printable
+    ASCII (and the backslash and double quote) as a three-digit decimal
+    escape, so spaces, both quote marks, backslashes, newlines, NUL and
+    non-ASCII text all arrive as the DATA they are, on the one line the
+    console reads.
+    """
+    out = []
+    for byte in value.encode("utf-8"):
+        if byte == 0x5C:
+            out.append("\\\\")
+        elif byte == 0x22:
+            out.append('\\"')
+        elif 0x20 <= byte < 0x7F:
+            out.append(chr(byte))
+        else:
+            out.append("\\%03d" % byte)
+    return '"' + "".join(out) + '"'
+
+
 class FixtureNotRegistered(RuntimeError):
     """A probe's own inline fixture was rejected by the engine loader.
 

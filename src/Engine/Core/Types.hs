@@ -456,4 +456,12 @@ data EngineConfig = EngineConfig
   , ecPreviewTarget ∷ Maybe (Text, Maybe Text)
   -- | Resolved simple-category browsing state; see 'PreviewBrowse'.
   , ecPreviewBrowse ∷ Maybe PreviewBrowse
+  -- | The scenario file @--scenario@ asked the boot to load (#2715),
+  --   already RESOLVED by the path policy ("Scenario.Path") before any
+  --   engine started: an absolute path, validated, never re-derived and
+  --   never spliced into Lua source. 'Nothing' for every launch without
+  --   the flag. Immutable boot configuration, not session state: the
+  --   startup load itself is an ordinary scenario load whose status
+  --   the scenario services own.
+  , ecScenarioStartup ∷ Maybe FilePath
   } deriving (Eq, Show)

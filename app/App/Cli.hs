@@ -31,6 +31,8 @@ module App.Cli
   , parseArg
   , lookupFlagValue
   , parseStrArg
+  , parseScenarioArg
+  , scenarioFlag
   , ChunkRegion(..)
   , defaultChunkRegion
   , parseRegion
@@ -46,7 +48,7 @@ module App.Cli
   ) where
 
 import UPrelude
-import Data.Char (toLower)
+import Data.Char (isSpace, toLower)
 import Data.List (intercalate, stripPrefix)
 import qualified Data.Text as T
 import Engine.Core.Types (BootMode(..), bootModeName)
@@ -112,6 +114,10 @@ data CliError
       --   empty explicitly rather than as an unknown layer @""@.
     | UnknownDumpLayer !String
       -- ^ A non-empty token naming no layer in 'dumpLayerNames'.
+    | EmptyFlagValue !String
+      -- ^ A flag whose operand is a path and is empty or only white space
+      --   (@--scenario ""@). Distinct from 'MissingFlagValue': a token
+      --   followed the flag, it just names nothing (#2715).
     deriving (Eq, Show)
 
 -- | The stderr line a 'CliError' is reported with. Always names the
@@ -121,6 +127,8 @@ data CliError
 cliErrorMessage ∷ CliError → String
 cliErrorMessage (MissingFlagValue flag) =
     flag ⧺ " requires a value, but no value followed it"
+cliErrorMessage (EmptyFlagValue flag) =
+    flag ⧺ " requires a path, but its value is empty"
 cliErrorMessage (BadNumericValue flag raw) =
     flag ⧺ ": invalid value " ⧺ show raw ⧺ " (expected a whole number)"
 cliErrorMessage (BadSizeValue raw) =
@@ -228,6 +236,24 @@ parseArg flag args = lookupFlagValue flag args ⌦ \case
 --   reports one error for all of them.
 parseStrArg ∷ String → [String] → Maybe String
 parseStrArg flag = either (const Nothing) id ∘ lookupFlagValue flag
+
+-- | @--scenario PATH@ (#2715): the raw token, STRICTLY. Unlike
+--   'parseStrArg' a trailing flag with no operand is the 'MissingFlagValue'
+--   error and not absence, and an operand that is empty or only white space
+--   is 'EmptyFlagValue' — a scenario path the user asked for must never
+--   quietly become "no scenario" and boot an ordinary arena. The path
+--   policy ("Scenario.Path": extension, launch directory, existence) is
+--   applied to the token afterwards, by the caller that knows the roots.
+parseScenarioArg ∷ [String] → Either CliError (Maybe String)
+parseScenarioArg args = lookupFlagValue scenarioFlag args ⌦ \case
+    Nothing → Right Nothing
+    Just raw
+        | all isSpace raw → Left (EmptyFlagValue scenarioFlag)
+        | otherwise → Right (Just raw)
+
+-- | The flag that names the scenario a boot loads.
+scenarioFlag ∷ String
+scenarioFlag = "--scenario"
 
 -- | The chunk region a dump covers: @--region@'s four coordinates,
 --   each named, in the order the flag writes them. It replaces the

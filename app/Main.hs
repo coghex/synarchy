@@ -21,12 +21,14 @@ import Engine.Preview.StructurePack (loadStructurePack
                                     , structurePackErrorMessage)
 import Engine.Audio.Preview.Discovery (isAudioFile, resolvePreviewFile)
 import World.Plate (defaultPlatesFor)
+import Scenario.Path (ScenarioEntry(..), ScenarioRoots(..), ScenarioUse(..)
+                     , pathProblemText, resolveScenarioPath)
 import App.Cli (parseDump, defaultLayers, parseArg, parseRegion
                , defaultChunkRegion
                , parseSize, parsePreview, parseStrArg
                , PreviewCategoryKind(..), classifyPreviewCategory
                , simplePreviewCategories, groupedPreviewCategories
-               , parseSeeds
+               , parseSeeds, parseScenarioArg, scenarioFlag
                , BootModeSelection(..), selectBootMode, bootModeSelectionName
                , CliError, cliErrorMessage)
 import App.ResourceRoot (applyResourceRoot)
@@ -101,8 +103,20 @@ main = do
   agesLeg ← orExitCli (parseArg "--ages" args)
   mSize   ← orExitCli (parseSize args)
   mRegion ← orExitCli (parseRegion args)
+  -- `--scenario` (#2715) is validated in the same stretch: its token
+  -- strictly (a trailing flag or a blank value fails), then the path
+  -- policy against the directory that LAUNCHED the process, so a missing
+  -- file, a bad extension or a bare name exits 1 before any engine,
+  -- window or listener exists. Only the three modes that honour the flag
+  -- ever get here; the others were rejected above.
+  mScenarioRaw ← orExitCli (parseScenarioArg args)
+  resourceRoot ← getCurrentDirectory
+  mScenario ← traverse (resolveScenarioOrExit callerDirectory resourceRoot) mScenarioRaw
 
-  let bootProfile = if "--arena" `elem` args then BootArena else BootNormal
+  -- `--scenario` selects the arena profile without `--arena`; given with
+  -- it, the profile is the same one (#2715).
+  let bootProfile = if "--arena" `elem` args ∨ isJust mScenario
+                      then BootArena else BootNormal
       mPreview = parsePreview args
       -- Absence, and only absence, takes the documented default
       -- (#1481): 'parseRegion' answers 'Nothing' just for a --region
@@ -160,9 +174,9 @@ main = do
     -- through untouched (#1086): absence is 'Nothing', and
     -- 'App.Boot.patchBootConfig' resolves it against the one
     -- library-owned 'Engine.Core.Defaults.defaultDebugPort'.
-    SelectOffscreen → runOffscreen bootProfile port mSize
-    SelectHeadless  → runHeadless bootProfile port
-    SelectGraphical → runGraphical bootProfile port
+    SelectOffscreen → runOffscreen bootProfile port mSize mScenario
+    SelectHeadless  → runHeadless bootProfile port mScenario
+    SelectGraphical → runGraphical bootProfile port mScenario
 
 -- | Dispatch a resolved @--preview \<category\>[\/\<item\>]@ target.
 --   Lifted out of 'main' by #1086's single boot-mode resolution; the
@@ -272,6 +286,19 @@ orExitCli = either report pure
   where
     report err = do
         hPutStrLn stderr (cliErrorMessage err)
+        exitWith (ExitFailure 1)
+
+-- | Resolve a `--scenario` token through the scenario path policy
+--   ("Scenario.Path", entry 'EntryCli') or exit 1 naming the flag, the
+--   token and the reason — the same pre-boot-rejection shape as 'orExitCli'.
+resolveScenarioOrExit ∷ FilePath → FilePath → String → IO FilePath
+resolveScenarioOrExit launchDir resourceRoot raw =
+    resolveScenarioPath EntryCli UseLoad
+        (ScenarioRoots { srLaunchDir = launchDir, srResourceRoot = resourceRoot }) raw
+    ⌦ either report pure
+  where
+    report problem = do
+        hPutStrLn stderr (scenarioFlag ⧺ ": " ⧺ T.unpack (pathProblemText problem))
         exitWith (ExitFailure 1)
 
 -- | Exit 1 before any normalization warning or boot dispatch if argv

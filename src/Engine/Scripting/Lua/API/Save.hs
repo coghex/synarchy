@@ -98,7 +98,7 @@ import Engine.Load.Status
     ( LoadPhase(..), LoadStatus(..), ReconciliationFailure(..)
     , LoadStatusRef
     , advanceLoad, failLoad, readLoadStatus, loadInProgress
-    , claimLoad, claimSave )
+    , claimLoad, claimSave, supersedeScenarioStatus )
 import Scenario.Load.Types (busyText)
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
@@ -403,6 +403,10 @@ saveWorldFn env = do
                                                 "Save failed: " <> err
                                         Lua.pushboolean False
                                       Right requestId → do
+                                        -- #2715: an accepted ordinary save (or
+                                        -- autosave) supersedes the public
+                                        -- scenario status, as an ordinary load does
+                                        Lua.liftIO $ supersedeScenarioStatus (loadStatusRef env)
                                         -- #913: capture what the player was
                                         -- looking at, then impose the save's
                                         -- own pause, as ONE step -- see

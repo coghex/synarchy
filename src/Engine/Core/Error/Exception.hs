@@ -44,6 +44,9 @@ data SystemError
   | MemoryError T.Text     -- ^ Memory allocation/management error
   | IOError T.Text         -- ^ General IO error
   | TimeoutError T.Text    -- ^ Operation timed out
+  | StartupError T.Text    -- ^ A step the boot REQUIRED failed (#2715):
+                           --   the @--scenario@ load, or the definitions
+                           --   it needs
   deriving (Show, Eq)
 
 data InitError

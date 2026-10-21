@@ -38,6 +38,7 @@ local injuryLogScriptId = nil
 local thoughtLogScriptId = nil
 local unitLogScriptId = nil
 local previewScriptId = nil
+local scenarioStartupScriptId = nil
 local isPreview = false
 
 function M.isPreview()
@@ -277,6 +278,11 @@ function M.load()
 
     -- Initialize UI (which loads the main menu)
     uiScriptId = engine.loadScript("scripts/ui_manager.lua", 0.1)
+
+    -- Direct `--scenario` startup (#2715): a no-op unless the boot asked
+    -- for a scenario. Loaded after ui_manager so its tick finds the UI
+    -- boot's module already registered.
+    scenarioStartupScriptId = engine.loadScript("scripts/scenario_startup.lua", 0.05)
 end
 
 -- The id engine.loadScript returned for one of the scripts loaded above,
@@ -323,11 +329,15 @@ function M.scriptId(name)
         thought_log = thoughtLogScriptId,
         unit_log = unitLogScriptId,
         ui_manager = uiScriptId,
+        scenario_startup = scenarioStartupScriptId,
     }
     return ids[name]
 end
 
 function M.shutdown()
+    if scenarioStartupScriptId then
+        engine.killScript(scenarioStartupScriptId)
+    end
     if previewScriptId then
         engine.killScript(previewScriptId)
     end

@@ -41,11 +41,11 @@ import App.Exception (guardNativeExceptions)
 --   run of the same machine would show) and can be pinned with
 --   @--size WxH@ so parallel harness runs are deterministic regardless
 --   of local config.
-runOffscreen ∷ BootProfile → Maybe Int → Maybe (Int, Int) → IO ()
-runOffscreen bootProfile mPort mSize = do
+runOffscreen ∷ BootProfile → Maybe Int → Maybe (Int, Int) → Maybe FilePath → IO ()
+runOffscreen bootProfile mPort mSize mScenario = do
   EngineInitResult env ← initializeEngine
 
-  let env' = bootConfig ModeOffscreen bootProfile mPort env
+  let env' = bootConfig ModeOffscreen bootProfile mPort mScenario env
 
   withBootAudio env' ForcedNull $ \audioThreadState → do
 

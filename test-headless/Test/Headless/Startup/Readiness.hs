@@ -347,6 +347,7 @@ bootPrelude ∷ Scenario → Text → Text
 bootPrelude sc profile = T.unlines $ enginePrelude sc ⧺
     [ "menus = {}"
     , "engine.getBootProfile = function() return '" <> profile <> "' end"
+    , "engine.getScenarioStartup = function() return nil end"
     , "engine.getUIScale = function() return 1.0 end"
     , "engine.getTooltipDwellMs = function() return 0 end"
     , "engine.getTooltipHintDelayMs = function() return 0 end"

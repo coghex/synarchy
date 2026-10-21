@@ -106,7 +106,7 @@ runDump layers gen region = do
 
   -- Port 0 is dump's own contract, not a CLI default: it tells
   -- startDebugServer to open no TCP listener at all.
-  let env' = bootConfig ModeDump BootNormal (Just 0) env
+  let env' = bootConfig ModeDump BootNormal (Just 0) Nothing env
 
   -- 'ModeDump' is what keeps issue #46's port-0 sentinel meaning "no
   -- TCP listener" here while the same 0 is refused in the two modes
