@@ -59,7 +59,7 @@ import Control.Exception (IOException, try)
 import Data.List (isPrefixOf)
 import qualified Data.Text as T
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist)
-import System.Posix.Files (FileStatus, getFileStatus, isRegularFile)
+import System.Posix.Files (FileStatus, getFileStatus, getSymbolicLinkStatus, isRegularFile)
 import System.FilePath
     ( isAbsolute, joinPath, normalise, splitDirectories, takeBaseName
     , takeExtension, takeFileName, (</>) )
@@ -224,7 +224,18 @@ resolveScenarioPath entry use roots raw = case lexicalPath entry roots raw of
         case contained of
             Left problem → pure (Left problem)
             Right () → case use of
-                UseCapture → pure (Right path)
+                UseCapture → do
+                    -- an EXISTING destination must be a regular file (after a
+                    -- permitted link): a directory, a named pipe or a device
+                    -- is refused even with overwrite, as a load refuses it
+                    existing ← try (getSymbolicLinkStatus path) ∷ IO (Either IOException FileStatus)
+                    case existing of
+                        Left _ → pure (Right path)
+                        Right _ → do
+                            followed ← try (getFileStatus path) ∷ IO (Either IOException FileStatus)
+                            pure $ case followed of
+                                Right st | isRegularFile st → Right path
+                                _ → Left (PathNotAFile path)
                 UseLoad → do
                     -- the file's real type, following a permitted symbolic link:
                     -- a named pipe, socket or device 'exists' too, and reading

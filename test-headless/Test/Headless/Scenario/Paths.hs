@@ -68,6 +68,10 @@ withTree act = withScratch "scenario paths" $ \base → do
     -- a named pipe 'exists', but reading it can wait forever
     createNamedPipe (folder </> "pipe.yaml") 0o600
     createNamedPipe (launch </> "pipe.yaml") 0o600
+    -- a link to a pipe, inside the folder, and a directory named like a file
+    createFileLink (folder </> "pipe.yaml") (folder </> "pipe-link.yaml")
+    createFileLink (launch </> "pipe.yaml") (launch </> "pipe-link.yaml")
+    createDirectory (launch </> "dir.yaml")
     -- a link out of the folder, a link to a folder outside, and a link that
     -- stays inside
     createFileLink (outside </> "out.yaml") (folder </> "link.yaml")
@@ -136,8 +140,9 @@ cliSpec = around withTree $ describe "command-line paths (D-49, D-50)" $ do
         resolveLoad EntryCli t "   " `shouldReturn` Left PathEmpty
         resolveLoad EntryCli t "a\NULb.yaml" `shouldReturn` Left PathBadCharacter
 
-    it "refuses a named pipe, which exists but is not a regular file" $ \t → do
-        resolveLoad EntryCli t "pipe.yaml" `shouldReturn` Left (PathNotAFile (tLaunch t </> "pipe.yaml"))
+    it "refuses every non-regular source: a named pipe, a link to one, a directory named like a file" $ \t → do
+        forM_ ["pipe.yaml", "pipe-link.yaml", "dir.yaml"] $ \name →
+            resolveLoad EntryCli t name `shouldReturn` Left (PathNotAFile (tLaunch t </> name))
 
     it "refuses a final '.' component, which names a directory whatever precedes it" $ \t → do
         forM_ ["rel.yaml/.", "./rel.yaml/.", "sub/./.", ".", "./"] $ \raw →
@@ -190,9 +195,11 @@ gameSpec = around withTree $ describe "in-game names (D-49, D-50)" $ do
         resolveLoad EntryGame t "ambush.txt" `shouldReturn` Left (PathUnsupportedExtension "ambush.txt" ".txt")
         resolveLoad EntryGame t "v1.2" `shouldReturn` Left (PathUnsupportedExtension "v1.2" ".2")
 
-    it "refuses a named pipe, by name and with its extension" $ \t → do
+    it "refuses a named pipe and a link to one, by name and with its extension" $ \t → do
         forM_ ["pipe", "pipe.yaml"] $ \name →
             resolveLoad EntryGame t name `shouldReturn` Left (PathNotAFile (tFolder t </> "pipe.yaml"))
+        forM_ ["pipe-link", "pipe-link.yaml"] $ \name →
+            resolveLoad EntryGame t name `shouldReturn` Left (PathNotAFile (tFolder t </> "pipe-link.yaml"))
 
     it "refuses a final '.' component rather than folding it into the file before it" $ \t → do
         -- 'ambush.yaml/.' must not load (or overwrite) scenarios/ambush.yaml
@@ -272,6 +279,14 @@ captureSpec = describe "capture destinations follow the same rules" $ do
             r `shouldSatisfy` either (\case PathEscapesFolder _ _ → True; _ → False) (const False)
             r2 ← resolveSave EntryGame t "dirlink/new"
             r2 `shouldSatisfy` either (\case PathEscapesFolder _ _ → True; _ → False) (const False)
+
+        it "refuse an existing non-regular destination: a directory, a pipe, a link to a pipe" $ \t → do
+            forM_ ["adir", "pipe", "pipe-link"] $ \name →
+                resolveSave EntryGame t name `shouldReturn` Left (PathNotAFile (tFolder t </> name <> ".yaml"))
+            let abs' = tLaunch t </> "pipe-link.yaml"
+            resolveSave EntryGame t abs' `shouldReturn` Left (PathNotAFile abs')
+            resolveSave EntryGame t (tLaunch t </> "dir.yaml")
+                `shouldReturn` Left (PathNotAFile (tLaunch t </> "dir.yaml"))
 
         it "take an absolute destination as given, and still require the extension" $ \t → do
             let p = tOutside t </> "new.yaml"
