@@ -58,9 +58,8 @@ import UPrelude
 import Control.Exception (IOException, try)
 import Data.List (isPrefixOf)
 import qualified Data.Text as T
-import System.Directory
-    ( canonicalizePath, createDirectoryIfMissing, doesDirectoryExist
-    , doesFileExist, doesPathExist )
+import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist)
+import System.Posix.Files (FileStatus, getFileStatus, isRegularFile)
 import System.FilePath
     ( isAbsolute, joinPath, normalise, splitDirectories, takeBaseName
     , takeExtension, takeFileName, (</>) )
@@ -227,11 +226,14 @@ resolveScenarioPath entry use roots raw = case lexicalPath entry roots raw of
             Right () → case use of
                 UseCapture → pure (Right path)
                 UseLoad → do
-                    present ← doesPathExist path
-                    isFile ← doesFileExist path
-                    pure $ if not present then Left (PathNotFound path)
-                           else if not isFile then Left (PathNotAFile path)
-                           else Right path
+                    -- the file's real type, following a permitted symbolic link:
+                    -- a named pipe, socket or device 'exists' too, and reading
+                    -- one can wait forever on the Lua thread
+                    status ← try (getFileStatus path) ∷ IO (Either IOException FileStatus)
+                    pure $ case status of
+                        Left _ → Left (PathNotFound path)
+                        Right st | isRegularFile st → Right path
+                                 | otherwise → Left (PathNotAFile path)
   where
     folder = scenarioFolder roots
     -- the destination of a capture creates the folder; a load never does

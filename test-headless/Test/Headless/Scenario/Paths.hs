@@ -25,6 +25,7 @@ import qualified Data.Text as T
 import System.Directory
 import System.FilePath
 import System.Random (randomRIO)
+import System.Posix.Files (createNamedPipe)
 import Scenario.Path
 
 -- | The directories one example works in.
@@ -64,6 +65,9 @@ withTree act = withScratch "scenario paths" $ \base → do
           , folder </> "ünï cødé \"q\" 'x'.yaml", outside </> "out.yaml"
           , folder </> "sub" </> "twin.yaml" ] $ \f → writeFile f "version: 3\n"
     createDirectory (folder </> "adir.yaml")
+    -- a named pipe 'exists', but reading it can wait forever
+    createNamedPipe (folder </> "pipe.yaml") 0o600
+    createNamedPipe (launch </> "pipe.yaml") 0o600
     -- a link out of the folder, a link to a folder outside, and a link that
     -- stays inside
     createFileLink (outside </> "out.yaml") (folder </> "link.yaml")
@@ -132,6 +136,9 @@ cliSpec = around withTree $ describe "command-line paths (D-49, D-50)" $ do
         resolveLoad EntryCli t "   " `shouldReturn` Left PathEmpty
         resolveLoad EntryCli t "a\NULb.yaml" `shouldReturn` Left PathBadCharacter
 
+    it "refuses a named pipe, which exists but is not a regular file" $ \t → do
+        resolveLoad EntryCli t "pipe.yaml" `shouldReturn` Left (PathNotAFile (tLaunch t </> "pipe.yaml"))
+
     it "refuses a final '.' component, which names a directory whatever precedes it" $ \t → do
         forM_ ["rel.yaml/.", "./rel.yaml/.", "sub/./.", ".", "./"] $ \raw →
             resolveLoad EntryCli t raw `shouldReturn` Left (PathNamesNoFile raw)
@@ -182,6 +189,10 @@ gameSpec = around withTree $ describe "in-game names (D-49, D-50)" $ do
         resolveLoad EntryGame t "ambush.YAML" `shouldReturn` Left (PathUnsupportedExtension "ambush.YAML" ".YAML")
         resolveLoad EntryGame t "ambush.txt" `shouldReturn` Left (PathUnsupportedExtension "ambush.txt" ".txt")
         resolveLoad EntryGame t "v1.2" `shouldReturn` Left (PathUnsupportedExtension "v1.2" ".2")
+
+    it "refuses a named pipe, by name and with its extension" $ \t → do
+        forM_ ["pipe", "pipe.yaml"] $ \name →
+            resolveLoad EntryGame t name `shouldReturn` Left (PathNotAFile (tFolder t </> "pipe.yaml"))
 
     it "refuses a final '.' component rather than folding it into the file before it" $ \t → do
         -- 'ambush.yaml/.' must not load (or overwrite) scenarios/ambush.yaml
@@ -234,6 +245,11 @@ absoluteSpec = around withTree $ describe "absolute paths" $ do
     it "are never invented from a bare name" $ \t → do
         resolveLoad EntryGame t "out" `shouldReturn` Left (PathNotFound (tFolder t </> "out.yaml"))
         resolveLoad EntryCli t "out" `shouldReturn` Left (PathMissingExtension "out")
+
+    it "refuse an absolute named pipe through both entry points" $ \t → do
+        let p = tFolder t </> "pipe.yaml"
+        resolveLoad EntryCli t p `shouldReturn` Left (PathNotAFile p)
+        resolveLoad EntryGame t p `shouldReturn` Left (PathNotAFile p)
 
     it "report a missing absolute file by its own path" $ \t → do
         let p = tOutside t </> "gone.yaml"
