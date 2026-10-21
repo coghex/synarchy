@@ -1,7 +1,7 @@
 -- Position hold after a completed player move order (#1216).
 --
 -- Project-owner decision (2026-08-10, SURV-4,
--- docs/expedition_survival_calibration.md): a unit that COMPLETES a
+-- docs/archive/expedition_survival_calibration.md): a unit that COMPLETES a
 -- player-issued move order stands at the destination instead of
 -- drifting off on ambient wander. It stops contributing autonomously
 -- until re-commanded -- that is the deliberate trade-off, not a

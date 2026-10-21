@@ -207,7 +207,7 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
         -- #2541: source drinking, checked BEFORE the pose branches
         -- because an eligible drinker IS crawling -- and deliberately
         -- WITHOUT requiring that pose, so the gate never depends on the
-        -- injury tick having left the drinker in it (docs/bugs.md
+        -- injury tick having left the drinker in it (docs/archive/bugs.md
         -- BUG-14 stands a healthy crawler back up and does not except
         -- s.sourcePhase). A resource declaring no source-drinking
         -- factor short-circuits here and reaches neither the AI nor the
