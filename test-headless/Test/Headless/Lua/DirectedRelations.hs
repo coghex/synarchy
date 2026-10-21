@@ -10,8 +10,9 @@
 --
 --   What is stubbed is never a relation answer: the catalogue is the
 --   shipped @data\/factions\/base.yaml@ loaded through the real
---   @engine.loadFactionYaml@, a live overlay is installed by calling the
---   production unit registrar 'registerUnitAPIWith' with fixture causes, and the
+--   @engine.loadFactionYaml@, a live overlay is written into the
+--   persisted relation-cause store (#2548) the production verbs read
+--   (see "Test.Headless.Lua.DirectedRelationsFixture"), and the
 --   last-attacker memory is written into the real unit manager. Only
 --   inputs no relation question reads are stubbed: @engine.gameTime@
 --   (so a case owns the clock), medic knowledge/wounds, per-unit combat
@@ -22,51 +23,14 @@ module Test.Headless.Lua.DirectedRelations (spec) where
 
 import UPrelude
 import Test.Hspec
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import qualified HsLua as Lua
-import Data.IORef (atomicModifyIORef', writeIORef)
 import Engine.Core.State (EngineEnv(..))
-import Engine.Scripting.Lua.CallStats (newLuaCallStats)
-import Engine.Scripting.Lua.API.Register.Unit (registerUnitAPIWith)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Test.Headless.Unit.TransferApi
-    (evalDebug, minimalDef, mkUnit, newBareLuaBackend)
+import Test.Headless.Lua.DirectedRelationsFixture
+import Test.Headless.Unit.TransferApi (evalDebug)
 import Unit.Faction
     ( Faction(..), FactionRelation(..), canAttack, factionRelation
     , factionTag, relationTag )
-import Unit.Faction.Membership
-    ( MembershipSource(..), TagMembership(..), UnitFactionProfile
-    , localController, mkUnitFactionProfile, resolveLegacyFaction )
-import Unit.Faction.Profile
-    ( FactionCapability(..), LiveRelationCause(..)
-    , mkFactionTag, relationCauseId, tagAcolyte )
-import Unit.Types
-import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), emptyWorldState, emptyWorldManager)
-
-fixturePage ∷ WorldPageId
-fixturePage = WorldPageId "fts5_page"
-
--- * Profiles
-
--- | A live profile from tag text, every tag a definition default. Fails
---   loudly on a bad fixture tag rather than silently dropping it.
-prof ∷ Bool → [Text] → [FactionCapability] → UnitFactionProfile
-prof controlled ts = mkUnitFactionProfile
-    (if controlled then Just localController else Nothing)
-    [ TagMembership (fromMaybe (error ("bad tag " ⧺ show t)) (mkFactionTag t))
-                    MemberDefinitionDefault
-    | t ← ts ]
-
--- | The approved D-26 legacy profile for a legacy faction value: the
---   acolyte definition's @acolyte@ default carried by @player@, no
---   defaults for the rest (so @wildlife@ falls back to its own tag).
-legacy ∷ Faction → UnitFactionProfile
-legacy f = resolveLegacyFaction (if f ≡ FactionPlayer then [tagAcolyte] else []) f
-
-legacyOrder ∷ [Faction]
-legacyOrder = [FactionPlayer, FactionWildlife, FactionHostile, FactionNeutral, FactionDebug]
 
 -- | The issue's requirement-9 matrix, actor rows × target columns, in
 --   'legacyOrder'.
@@ -77,99 +41,6 @@ expectedRelations =
     , [RelHostile, RelHostile, RelAlly,    RelNeutral, RelNeutral]
     , [RelNeutral, RelNeutral, RelNeutral, RelNeutral, RelNeutral]
     , [RelNeutral, RelNeutral, RelNeutral, RelNeutral, RelNeutral] ]
-
--- * World fixtures
-
--- | Replace the roster with @rows@ (uid, profile, position), all on the
---   one visible page.
-resetWorld ∷ EngineEnv → [(Int, UnitFactionProfile, (Float, Float))] → IO ()
-resetWorld env rows = do
-    ws ← emptyWorldState
-    writeIORef (worldManagerRef env) emptyWorldManager
-        { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
-    writeIORef (unitManagerRef env) emptyUnitManager
-        { umDefs = HM.fromList [("acolyte", minimalDef "acolyte" "Acolyte")]
-        , umInstances = HM.fromList
-            [ ( UnitId (fromIntegral uid)
-              , (mkUnit "acolyte" FactionNeutral pos 100 [] [])
-                    { uiFaction = p, uiPage = fixturePage } )
-            | (uid, p, pos) ← rows ]
-        , umNextId = 1000 }
-
--- | Record that @attacker@ struck @victim@ at game time @at@, as
---   Combat.Resolution does.
-hit ∷ EngineEnv → Int → Int → Double → IO ()
-hit env victim attacker at = atomicModifyIORef' (unitManagerRef env) $ \um →
-    ( um { umInstances = HM.adjust
-             (\u → u { uiLastAttackerUid = Just (fromIntegral attacker)
-                     , uiLastAttackerAt  = at })
-             (UnitId (fromIntegral victim)) (umInstances um) }
-    , () )
-
-setPose ∷ EngineEnv → Int → Text → IO ()
-setPose env uid pose = atomicModifyIORef' (unitManagerRef env) $ \um →
-    ( um { umInstances = HM.adjust (\u → u { uiPose = pose })
-                                   (UnitId (fromIntegral uid)) (umInstances um) }
-    , () )
-
-removeUnit ∷ EngineEnv → Int → IO ()
-removeUnit env uid = atomicModifyIORef' (unitManagerRef env) $ \um →
-    (um { umInstances = HM.delete (UnitId (fromIntegral uid)) (umInstances um) }, ())
-
--- * Lua session
-
--- | A fresh Lua state with the full production API, the shipped faction
---   catalogue, the real unit AI loaded, an owned clock, and helpers.
-session ∷ EngineEnv → IO LuaBackendState
-session env = do
-    ls ← newBareLuaBackend env
-    ok ls $ T.unlines
-        [ "assert(engine.loadFactionYaml('data/factions/base.yaml') ~= false)"
-        , "AI = require('scripts.unit_ai')"
-        , "CORE = require('scripts.unit_ai_core')"
-        , "COMBAT = require('scripts.unit_ai_combat')"
-        , "ATTACK = require('scripts.unit_ai_combat_attack')"
-        , "POLICY = require('scripts.unit_ai_combat_policy')"
-        -- A fixture that drops a unit's AI row to start it afresh also
-        -- drops the seam's uid-keyed bookkeeping with CLAIMS.resetAll().
-        , "CLAIMS = require('scripts.unit_ai_claims')"
-        , "NOW = 0; engine.gameTime = function() return NOW end"
-        , "function S(uid) return CORE.ensureState(uid) end"
-        -- One autonomous engage decision; the chosen target or false.
-        , "function engage(uid) local s = S(uid)"
-        , "  if COMBAT.engageUtility(uid, s, {}) == -math.huge then return false end"
-        , "  COMBAT.engageExecute(uid, s, {}); return s.attackTargetUid or false end"
-        -- One attack_target decision; the target still held, or false.
-        , "function tick(uid) local s = S(uid)"
-        , "  ATTACK.attackTargetExecute(uid, s, {})"
-        , "  if not CORE.isGoalActive(s, 'attack') then return false end"
-        , "  return s.attackTargetUid or false end"
-        , "return true"
-        ]
-    pure ls
-
--- | Install a live overlay through the PRODUCTION unit registrar,
---   re-registering the whole @unit@ namespace with @causes@ (stubs a
---   case needs are installed after this).
-withOverlay ∷ EngineEnv → LuaBackendState → [LiveRelationCause] → IO ()
-withOverlay env ls causes = Lua.runWith (lbsLuaState ls) $ do
-    cs ← Lua.liftIO newLuaCallStats
-    registerUnitAPIWith causes cs env
-
-cause ∷ Text → Text → Text → FactionRelation → LiveRelationCause
-cause cid s t r = LiveRelationCause
-    { lrcCause = relationCauseId cid
-    , lrcSource = fromMaybe (error "tag") (mkFactionTag s)
-    , lrcTarget = fromMaybe (error "tag") (mkFactionTag t)
-    , lrcRelation = r }
-
--- | Run a chunk that must return @true@.
-ok ∷ LuaBackendState → Text → IO ()
-ok ls chunk = evalDebug ls chunk `shouldReturn` "true"
-
--- | Evaluate an expression.
-val ∷ LuaBackendState → Text → IO Text
-val ls expr = evalDebug ls ("return " <> expr)
 
 -- * Spec
 
@@ -225,7 +96,7 @@ relationSpec = do
             , (3, legacy FactionDebug, (0, 0))
             , (4, legacy FactionDebug, (0, 0)) ]
         ls ← session env
-        withOverlay env ls
+        setCauses env
             [cause "fixture_fight" "fight_team_A" "fight_team_B" RelHostile]
         val ls "unit.relationFromTo(1, 2) .. ',' .. unit.relationFromTo(2, 1)"
             `shouldReturn` "\"hostile,ally\""
@@ -236,7 +107,7 @@ relationSpec = do
         attackRow ls 3 4 `shouldReturn` "\"true\""   -- debug vs debug
         attackRow ls 3 1 `shouldReturn` "\"true\""   -- debug vs roster
         -- Without the overlay the same roster is one side again.
-        withOverlay env ls []
+        setCauses env []
         attackRow ls 1 2 `shouldReturn` "\"false\""
 
     it "answers all 25 legacy pairs per the approved matrix, keeps attack \
@@ -308,7 +179,7 @@ medicSpec = do
             [ (1, prof False ["medic_team"] [], (0, 0))
             , (2, prof False ["patient_team"] [], (1, 0)) ]
         ls ← session env
-        withOverlay env ls
+        setCauses env
             [cause "fixture_ally" "medic_team" "patient_team" RelAlly]
         val ls "unit.relationFromTo(1, 2) .. ',' .. unit.relationFromTo(2, 1)"
             `shouldReturn` "\"ally,neutral\""
@@ -366,7 +237,7 @@ groupSpec = do
             , (2, prof False ["cand_team"] [], (1, 0))      -- candidate
             , (9, prof False ["subj_team"] [], (0, 1)) ]    -- threat, allied
         ls ← session env
-        withOverlay env ls
+        setCauses env
             [cause "fixture_ally" "cand_team" "subj_team" RelAlly]
         powers ls
         -- Subject 1: itself (shared tag) + candidate 2 (cand → subj ally);

@@ -156,6 +156,7 @@ module Unit.Faction.Profile
     , withLiveCauses
       -- * Relation and permission queries
     , relationSeverity
+    , moreSevere
     , relationFromTo
     , hasLiveReverseHostility
     , canProfileAttack
@@ -442,7 +443,10 @@ relationSeverity r = case r of
     RelNeutral → 1
     RelHostile → 2
 
--- | The commutative, associative reduction every tier uses.
+-- | The commutative, associative reduction every tier uses. Exported
+--   so the persisted cause store ("Unit.Faction.RelationStore") merges a
+--   re-added cause by the very rule 'addRelationCause' applies, rather
+--   than restating it.
 moreSevere ∷ FactionRelation → FactionRelation → FactionRelation
 moreSevere a b
     | relationSeverity b > relationSeverity a = b

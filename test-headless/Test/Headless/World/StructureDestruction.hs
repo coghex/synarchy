@@ -29,6 +29,7 @@
 --   --test-options='--match "structure destruction presentation lifecycle"'@
 module Test.Headless.World.StructureDestruction (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
@@ -797,6 +798,7 @@ restoreThroughProduction env page = do
             , sgItemTags = mempty
             , sgItemRefs = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore
             }
         req = SaveRequestMeta { srmSlotName = "teardown_test"
                               , srmTimestamp = "ts", srmAutosave = False }

@@ -58,6 +58,7 @@ import Craft.Bills (CraftBills)
 import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge)
 import Item.Knowledge (PortableKnowledge(..))
+import Unit.Faction.RelationStore (RelationCauseStore)
 import qualified Data.Map.Strict as Map
 import qualified Data.HashSet as HS
 import qualified Data.Set as Set
@@ -118,6 +119,11 @@ data SessionGlobals = SessionGlobals
       --   crate is carried between pages, so its memory is keyed by the
       --   crate and belongs to the session, never duplicated into every
       --   page's slot the way #1087's building-keyed knowledge is.
+    , sgRelationCauses ∷ !RelationCauseStore
+      -- ^ #2548: every live directed relation cause, read once from
+      --   'Engine.Core.State.relationCauseStoreRef' — the same seam as
+      --   'sgTexPalette'. A cause relates two tags, which are
+      --   session-wide, so it belongs to no page.
     } deriving (Show, Eq)
 
 -- | The live render camera's position/zoom/facing. 'lcsOwnerPage' is
@@ -275,6 +281,11 @@ data SessionSnapshot = SessionSnapshot
       --   'PageSnapshot''s 'pgsContainerKnowledge' its remembered
       --   instances are HISTORICAL OBSERVATIONS, deliberately absent
       --   from 'allItemInstanceIds' below — see that function's note.
+    , snapRelationCauses ∷ !RelationCauseStore
+      -- ^ #2548: every live directed relation cause. Session-scoped, like
+      --   'snapPortableKnowledge'; persisted by the optional
+      --   @"relation-causes"@ component, whose absence is the empty
+      --   store.
     } deriving (Show, Eq)
 
 -- | One failed invariant, naming the specific component/identity that
@@ -326,6 +337,7 @@ buildSessionSnapshot globals pages = SessionSnapshot
     , snapItemTags = sgItemTags globals
     , snapItemRefs = sgItemRefs globals
     , snapPortableKnowledge = sgPortableKnowledge globals
+    , snapRelationCauses = sgRelationCauses globals
     }
 
 -- | Every referential-integrity invariant a valid snapshot must

@@ -20,6 +20,7 @@
 --   expectation behind.
 module Test.Headless.World.GenConfigDomain (pureSpec, spec, stagingSpec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString.Char8 as BS
@@ -636,6 +637,7 @@ saveWith params = snapshotToSaveData
         , snapItemTags = mempty
         , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore
         }
 
 -- | Stage one such save and hand back the staged page's OWN gen params

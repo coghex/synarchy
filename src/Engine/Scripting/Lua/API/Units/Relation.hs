@@ -22,13 +22,13 @@
 --   (@scripts\/unit_ai_combat_policy.lua@), not by this verb, hence the
 --   different name.
 --
---   __The live overlay is a registration-time input.__ The runtime has
---   no producer of live causes yet (FTS-6 owns attack orders, incidents
---   and diplomacy), so production registers these verbs with an EMPTY
---   overlay ('Engine.Scripting.Lua.API.Register.Unit.registerUnitAPI').
---   A fixture that needs one calls the same registrar,
---   'Engine.Scripting.Lua.API.Register.Unit.registerUnitAPIWith', with
---   its causes; there is no mutation verb and no engine state for it.
+--   __The live overlay is the persisted cause store (#2548).__ Every
+--   call reads 'ucRelationCauseStoreRef' afresh, so a cause added to
+--   the store changes the next answer with no re-registration and no
+--   consumer change. The runtime has no producer of causes yet (FTS-6
+--   owns attack orders, incidents and diplomacy), so the store is empty
+--   and every answer is FTS-5's; there is no mutation verb here (FTS-6C
+--   exposes them).
 --
 --   __Fails closed.__ Anything that does not name two live units — a
 --   missing or non-number argument (a numeric string included), a
@@ -56,40 +56,38 @@ import Unit.Faction.Catalogue (cataloguePolicy)
 import Unit.Faction.Membership
     ( UnitFactionProfile, unitCanAttack, unitIsFriendlyToward
     , unitRelationFromTo )
-import Unit.Faction.Profile
-    (FactionPolicy, LiveRelationCause, withLiveCauses)
+import Unit.Faction.Profile (FactionPolicy, withLiveCauses)
+import Unit.Faction.RelationStore (relationCauseStoreOverlay)
 import Unit.Types
 
 -- | unit.relationFromTo(a, b) → "ally" | "neutral" | "hostile"
-unitRelationFromToFn ∷ EngineEnv → [LiveRelationCause]
-                     → Lua.LuaE Lua.Exception Lua.NumResults
-unitRelationFromToFn env overlay = do
-    r ← pairQuery env overlay RelNeutral unitRelationFromTo
+unitRelationFromToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitRelationFromToFn env = do
+    r ← pairQuery env RelNeutral unitRelationFromTo
     Lua.pushstring (TE.encodeUtf8 (relationTag r))
     return 1
 
 -- | unit.isFriendlyToward(a, b) → bool
-unitIsFriendlyTowardFn ∷ EngineEnv → [LiveRelationCause]
-                       → Lua.LuaE Lua.Exception Lua.NumResults
-unitIsFriendlyTowardFn env overlay = do
-    b ← pairQuery env overlay False unitIsFriendlyToward
+unitIsFriendlyTowardFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitIsFriendlyTowardFn env = do
+    b ← pairQuery env False unitIsFriendlyToward
     Lua.pushboolean b
     return 1
 
 -- | unit.canAttack(a, b) → bool
-unitCanAttackFn ∷ EngineEnv → [LiveRelationCause]
-                → Lua.LuaE Lua.Exception Lua.NumResults
-unitCanAttackFn env overlay = do
-    b ← pairQuery env overlay False unitCanAttack
+unitCanAttackFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitCanAttackFn env = do
+    b ← pairQuery env False unitCanAttack
     Lua.pushboolean b
     return 1
 
 -- | Resolve arguments 1 and 2 to live profiles and answer @q@ under the
---   catalogue's policy plus @overlay@; @fallback@ for anything else.
-pairQuery ∷ EngineEnv → [LiveRelationCause] → α
+--   catalogue's policy plus the live cause store; @fallback@ for
+--   anything else.
+pairQuery ∷ EngineEnv → α
           → (FactionPolicy → UnitFactionProfile → UnitFactionProfile → α)
           → Lua.LuaE Lua.Exception α
-pairQuery env overlay fallback q = do
+pairQuery env fallback q = do
     ma ← unitIdArg 1
     mb ← unitIdArg 2
     case (ma, mb) of
@@ -97,7 +95,10 @@ pairQuery env overlay fallback q = do
             um  ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
             cat ← readIORef (crFactionCatalogueRef
                                 (toContentRegistriesCapability env))
-            let pol = withLiveCauses overlay (cataloguePolicy cat)
+            causes ← readIORef (ucRelationCauseStoreRef
+                                  (toUnitCombatCapability env))
+            let pol = withLiveCauses (relationCauseStoreOverlay causes)
+                                     (cataloguePolicy cat)
                 prof u = uiFaction <$> HM.lookup u (umInstances um)
             pure $ case (prof a, prof b) of
                 (Just pa, Just pb) → q pol pa pb

@@ -38,6 +38,7 @@ module Test.Headless.World.Calendar
     , stagingSpec
     ) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString.Char8 as BS
@@ -525,6 +526,7 @@ saveWith cc (WorldDate y mo d) = snapshotToSaveData
         , snapItemTags = mempty
         , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore
         }
 
 -- | Stage one such save and hand back the staged page's OWN date — read

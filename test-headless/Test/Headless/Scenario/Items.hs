@@ -16,6 +16,7 @@
 --   --test-options='--match "Scenario.Items"'@.
 module Test.Headless.Scenario.Items (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -1392,7 +1393,8 @@ spec = describe "Scenario.Items" $ do
         , snapNextBuildingId = 1, snapNextUnitId = 1, snapActivePage = pageP
         , snapVisiblePages = [], snapLiveCamera = LiveCameraSnapshot Nothing 0 0 1 FaceSouth
         , snapPages = HM.empty, snapItemTags = mempty, snapItemRefs = mempty
-        , snapPortableKnowledge = emptyPortableKnowledge }
+        , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore }
     fromRight' = either (error ∘ show) id
 
 -- * Small helpers

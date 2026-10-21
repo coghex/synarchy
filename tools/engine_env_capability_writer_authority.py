@@ -504,6 +504,10 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "buildingGhostRef": frozenset({"Engine.Scripting.Lua.API.Buildings.Spawn"}),
     "worldGenConfigRef": frozenset({"Engine.Scripting.Lua.API.World.GenConfig"}),
     "pathingConfigRef": frozenset(),
+    # #2548. The Exit-to-Menu teardown empties it through
+    # `ucRelationCauseStoreRef`. The load publish that REPLACES it is a
+    # SS6.1 permanent module, which D-4 keeps out of this map.
+    "relationCauseStoreRef": frozenset({"World.Thread.Command.Basic"}),
     "simQueue": frozenset(),
     "enginePausedRef": frozenset({"World.Pause"}),
     "playerIntentGenRef": frozenset(),

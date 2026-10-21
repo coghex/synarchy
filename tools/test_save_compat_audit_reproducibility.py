@@ -122,6 +122,69 @@ _TAG_SEED = ('{"units":[{"page":"generated_page","id":1,"tags":["defender"]}],'
              '"plots":[{"page":"generated_page","x":5,"y":5,"tags":["field"]}]}')
 
 
+#: #2548: the tracked fixture carrying a nonempty relation-cause store
+#: (relation-causes v1), and the one cause this test seeds onto z8.
+_CAUSE_FIXTURE_PATH = common.FIXTURE_DATA_DIR / "z18-relation-causes.bin"
+_CAUSE_SEED = ('{"relationCauses":[{"owner":"o","source":"a_t",'
+               '"target":"b_t","relation":"hostile"}]}')
+_CAUSE_SEEDED = [{"owner": "o", "source": "a_t", "target": "b_t",
+                  "relation": "hostile"}]
+
+
+def _summary_causes(fixture: Path, out: Path) -> list | None:
+    ok, tail = codec.dump_canonical_summary(fixture, out)
+    if not ok:
+        expect(False, f"expected a canonical summary of {fixture.name}, got: {tail}")
+        return None
+    import json
+    return json.loads(out.read_text()).get("relationCauses", [])
+
+
+def _check_relation_cause_seeding(tmp: Path) -> None:
+    """#2548: `seed-tags` also writes live relation causes (no production
+    code adds one yet), and that is as reproducible as the tag seeding
+    beside it: two timestamp variants seeded with the same spec converge
+    to byte-identical files, the canonical summary reads NO cause off the
+    pre-component fixture and exactly the seeded one off the variant, and
+    the tracked z18 fixture carries a nonempty store."""
+    spec = tmp / "causes.json"
+    spec.write_text(_CAUSE_SEED)
+    variants = []
+    for name, timestamp in (("a", _VARIANT_A_TIMESTAMP), ("b", _VARIANT_B_TIMESTAMP)):
+        variant = tmp / f"caused_{name}.bin"
+        ok, tail = codec.set_fixture_timestamp(_PRE_TAG_FIXTURE_PATH, timestamp, variant)
+        expect(ok, f"expected cause variant {name} to be written, got: {tail}")
+        ok, tail = codec.seed_fixture_tags(variant, spec, variant)
+        expect(ok, f"expected cause variant {name} to be seeded, got: {tail}")
+        ok, tail = codec.normalize_fixture_timestamp(variant)
+        expect(ok, f"expected cause variant {name} to normalize, got: {tail}")
+        variants.append(variant)
+    if not all(v.exists() for v in variants):
+        return
+    expect(variants[0].read_bytes() == variants[1].read_bytes(),
+           "expected the two cause-seeded variants to be byte-identical after "
+           "normalization")
+    expect(_summary_causes(_PRE_TAG_FIXTURE_PATH, tmp / "no_causes.json") == [],
+           "expected the pre-component fixture to read no relation cause")
+    expect(_summary_causes(variants[0], tmp / "seeded_causes.json") == _CAUSE_SEEDED,
+           "expected the seeded variant to carry exactly the seeded cause")
+    tracked = _summary_causes(_CAUSE_FIXTURE_PATH, tmp / "tracked_causes.json")
+    expect(bool(tracked), f"expected the tracked z18 fixture to carry a nonempty "
+                          f"relation-cause store, got {tracked}")
+    # A malformed tag is refused by the codec, never written or dropped.
+    bad = tmp / "bad.json"
+    bad.write_text('{"relationCauses":[{"owner":"o","source":"has space",'
+                   '"target":"b_t","relation":"hostile"}]}')
+    refused = tmp / "refused.bin"
+    ok, tail = codec.set_fixture_timestamp(_PRE_TAG_FIXTURE_PATH,
+                                           _VARIANT_A_TIMESTAMP, refused)
+    expect(ok, f"expected the refusal fixture to be written, got: {tail}")
+    ok, tail = codec.seed_fixture_tags(refused, bad, tmp / "refused_out.bin")
+    expect(not ok and "malformed source tag" in tail,
+           f"expected a malformed cause tag to be refused naming it, got "
+           f"{ok}, {tail}")
+
+
 def _summary_tags(fixture: Path, out: Path) -> dict | None:
     ok, tail = codec.dump_canonical_summary(fixture, out)
     if not ok:
@@ -207,6 +270,7 @@ def test_seeded_tag_fixture_generation_is_reproducible() -> None:
         expect(all(page.get(cat) for cat in ("units", "buildings", "locations")),
                f"expected the tracked tagged fixture to carry nonempty unit, "
                f"building and location assignments, got {tracked}")
+        _check_relation_cause_seeding(tmp)
 
 
 #: This owner's members, in the run order the façade concatenates

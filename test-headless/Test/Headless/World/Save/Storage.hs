@@ -15,6 +15,7 @@
 --   --test-options='--match "atomic save storage"'@.
 module Test.Headless.World.Save.Storage (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Test.Hspec
@@ -151,6 +152,7 @@ minimalGlobals = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = emptyRelationCauseStore
     }
 
 -- | A valid, captured snapshot whose seed is the one distinguishing

@@ -119,6 +119,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             gameTime   ← readIORef (gameTimeRef env)
             -- v54 (structure persistence): the texture palette is global.
             texPalette ← readIORef (texPaletteRef env)
+            -- #2548: the live relation-cause store is global too (a cause
+            -- relates two session-wide tags), read on the same seam.
+            relationCauses ← readIORef (relationCauseStoreRef env)
             -- v56 (item-instance identity, #67): persist the allocator so
             -- new items created after a reload keep unique ids.
             nextItemId ← readIORef (nextItemInstanceIdRef env)
@@ -321,6 +324,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- #2709: the scenario references, off
                                 -- the same manager read as the tags.
                                 , sgItemRefs = wmItemScenarioRefs mgr
+                                , sgRelationCauses = relationCauses
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do

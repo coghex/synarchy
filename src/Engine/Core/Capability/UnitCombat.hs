@@ -83,12 +83,13 @@ import Engine.ActionOutcome (ActionOutcome)
 import Unit.Command.Types (UnitCommand)
 import Unit.Types (UnitManager)
 import Unit.Sim.Types (UnitThreadState)
+import Unit.Faction.RelationStore (RelationCauseStore)
 import Unit.Pathing.Config (PathingConfig)
 import Engine.Core.State
   ( EngineEnv
   , unitManagerRef, unitQueue, utsRef, statRNGRef, treatRNGRef, combatQueue
   , combatEventsRef, injuryEventsRef, thoughtEventsRef, actionOutcomeRef
-  , pathingConfigRef
+  , pathingConfigRef, relationCauseStoreRef
   )
 
 -- | The units-and-combat slice of @units-buildings-combat@: the unit
@@ -96,7 +97,8 @@ import Engine.Core.State
 --   thread state, the runtime stat RNG, the medical-treatment RNG,
 --   the three @CombatEvent@-shaped
 --   event streams, the F4 action-outcome tap, and the pathing
---   tunables. See 'docs/engineenv_capability_inventory.md' §5
+--   tunables, and (#2548) the live relation-cause store. See
+--   'docs/engineenv_capability_inventory.md' §5
 --   @units-buildings-combat@ and §7.5.
 data UnitCombatCapability = UnitCombatCapability
   { ucUnitManagerRef   ∷ IORef UnitManager
@@ -193,6 +195,14 @@ data UnitCombatCapability = UnitCombatCapability
     --   @config/pathing.yaml@. No writers today — it is an 'IORef' so a
     --   future settings UI can retune routing live, and the movement
     --   tick rereads it every tick. Read by @UnitThread@ only.
+  , ucRelationCauseStoreRef ∷ IORef RelationCauseStore
+    -- ^ Every live directed relation cause (#2548, FTS-6B): the overlay
+    --   the relation authority takes. Read by @LuaThread@ on every
+    --   @unit.relationFromTo@ \/ @isFriendlyToward@ \/ @canAttack@
+    --   call. No production writer exists yet (FTS-6 adds them); the
+    --   lifecycle accesses are @WorldThread@'s: the save capture reads
+    --   it, the load publish replaces it, and Exit to Menu empties it,
+    --   all under the existing save\/load barrier.
   }
 
 -- | Total projection — every field aliases the identical live
@@ -210,4 +220,5 @@ toUnitCombatCapability env = UnitCombatCapability
   , ucThoughtEventsRef = thoughtEventsRef env
   , ucActionOutcomeRef = actionOutcomeRef env
   , ucPathingConfigRef = pathingConfigRef env
+  , ucRelationCauseStoreRef = relationCauseStoreRef env
   }

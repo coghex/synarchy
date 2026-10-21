@@ -13,6 +13,7 @@
 --   @cabal test synarchy-test-headless --test-options='--match "Container knowledge"'@
 module Test.Headless.Building.Knowledge (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
@@ -323,6 +324,7 @@ knowledgeSnapshot = buildSessionSnapshot globals [knowledgePage pageA]
         , sgItemTags = mempty
         , sgItemRefs = mempty
         , sgPortableKnowledge = emptyPortableKnowledge
+        , sgRelationCauses = emptyRelationCauseStore
         }
 
 encodeFor ∷ SessionSnapshot → BS.ByteString
