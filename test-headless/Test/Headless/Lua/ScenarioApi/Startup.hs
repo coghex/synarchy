@@ -27,6 +27,7 @@ module Test.Headless.Lua.ScenarioApi.Startup (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent.MVar (putMVar, takeMVar)
 import qualified Data.Text as T
 import qualified HsLua as Lua
 import System.Directory (removeFile)
@@ -94,7 +95,7 @@ verbSpec = describe "the startup verbs" $ do
 
     it "refuse everything when the boot asked for no scenario" $ \a → do
         _ ← configure a ModeHeadless Nothing
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         before ← observed a
         call a "return tostring(engine.getScenarioStartup())" `shouldReturn` "nil"
         call a "local id, why = engine.startScenarioStartup() return tostring(id) .. '|' .. why.reason"
@@ -103,6 +104,40 @@ verbSpec = describe "the startup verbs" $ do
             `shouldReturn` "nil|invalid_path"
         latched a `shouldReturn` Nothing
         observed a `shouldReturn` before
+
+    it "keep a boot to ONE startup load: a second submission is refused and queues nothing" $ \a → do
+        let file = aLaunch a </> "once.yaml"
+        writeFile file (doc ["units: []"])
+        _ ← configure a ModeHeadless (Just file)
+        resetStartupState (lsrOf a)
+        n ← loadStartupId a
+        _ ← pumpUntilTerminal (aH a) n 60
+        before ← observed a
+        call a "local id, why = engine.startScenarioStartup() return tostring(id) .. '|' .. why.reason"
+            `shouldReturn` "nil|already_started"
+        observed a `shouldReturn` before
+
+    it "give the claim back when the line is busy, so the caller can ask again" $ \a → do
+        let file = aLaunch a </> "retry.yaml"
+        writeFile file (doc ["units: []"])
+        _ ← configure a ModeHeadless (Just file)
+        resetStartupState (lsrOf a)
+        _ ← put a "holding.yaml" (doc ["units: []"])
+        hold ← newHold
+        armSeams (aH a) (holdAt PointPreflight hold)
+        held ← loadViaLua a "'holding'"
+        pump ← startPump (aH a)
+        takeMVar (holdReached hold)
+        call a "local id, why = engine.startScenarioStartup() return tostring(id) .. '|' .. why.reason"
+            `shouldReturn` "nil|busy"
+        putMVar (holdRelease hold) ()
+        _ ← await (aH a) held 60
+        stopPump pump
+        disarm (aH a)
+        n ← loadStartupId a
+        n `shouldBe` held + 1
+        s ← pumpUntilTerminal (aH a) n 60
+        slsOutcome s `shouldBe` Just ScenarioReady
 
     it "refuse a wrong argument count and a non-string message" $ \a → do
         _ ← configure a ModeHeadless (Just (aLaunch a </> "x.yaml"))
@@ -128,7 +163,7 @@ latchSpec = describe "the startup-failure latch" $ do
 
     it "is never written by an ordinary load, whatever way it fails" $ \a → do
         _ ← configure a ModeHeadless (Just (aLaunch a </> "unused.yaml"))
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         _ ← put a "ordinary-bad.yaml" "version: 3\nunits: [unclosed\n"
         n ← loadViaLua a "'ordinary-bad'"
         s ← pumpUntilTerminal (aH a) n 60
@@ -139,7 +174,7 @@ latchSpec = describe "the startup-failure latch" $ do
         let file = aLaunch a </> "gone.yaml"
         writeFile file "version: 3\n"
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         removeFile file
         s ← startup a
         slsRecovery s `shouldBe` RecoveryPreserved
@@ -153,7 +188,7 @@ latchSpec = describe "the startup-failure latch" $ do
             let file = aLaunch a </> name
             writeFile file text
             _ ← configure a ModeHeadless (Just file)
-            clearStartupFailure (lsrOf a)
+            resetStartupState (lsrOf a)
             _ ← startup a
             latched a >>= (`shouldSatisfy` mentions [T.pack file, needle])
 
@@ -161,7 +196,7 @@ latchSpec = describe "the startup-failure latch" $ do
         let file = aLaunch a </> "migrating.yaml"
         writeFile file "version: 1\n"
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         armSeamsWith (aH a) (\_ → pure ())
             (Just scenarioFormat { sfMigrations = [(1, \_ → Left "step 1 cannot be applied"), (2, Right)] })
         _ ← startup a
@@ -172,7 +207,7 @@ latchSpec = describe "the startup-failure latch" $ do
         let file = aLaunch a </> "constructs.yaml"
         writeFile file (doc ["units: []"])
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         armSeams (aH a) (failAt PointUnits "injected construction fault")
         s ← startup a
         disarm (aH a)
@@ -189,7 +224,7 @@ latchSpec = describe "the startup-failure latch" $ do
         let file = aLaunch a </> "reconciles.yaml"
         writeFile file (doc ["units: []"])
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         registerLuaModule (aH a) 91 "scripts/startup_reconcile_fixture.lua"
             "return { onSaveLoaded = function() error('fixture reconcile fault') end }"
         s ← startup a
@@ -202,7 +237,7 @@ latchSpec = describe "the startup-failure latch" $ do
         let file = aLaunch a </> "fine.yaml"
         writeFile file (doc ["units: []"])
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         s ← startup a
         slsOutcome s `shouldBe` Just ScenarioReady
         latched a `shouldReturn` Nothing
@@ -214,7 +249,7 @@ latchSpec = describe "the startup-failure latch" $ do
         let file = aLaunch a </> "first.yaml"
         writeFile file "- not a mapping\n"
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         _ ← startup a
         call a "return tostring(engine.failScenarioStartup('a later definition failure'))" `shouldReturn` "true"
         latched a >>= (`shouldSatisfy` mentions ["ScenarioNotAMapping"])
@@ -223,7 +258,7 @@ latchSpec = describe "the startup-failure latch" $ do
     it "is written by the driver's own report, naming the file and the cause" $ \a → do
         let file = aLaunch a </> "driver-report.yaml"
         _ ← configure a ModeHeadless (Just file)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         call a "return tostring(engine.failScenarioStartup('Startup failed: materials could not parse x.yaml'))"
             `shouldReturn` "true"
         latched a >>= (`shouldSatisfy` mentions [T.pack file, "Startup failed: materials could not parse x.yaml"])
@@ -245,7 +280,7 @@ loopSpec = describe "checkScenarioStartup" $ do
 
     it "raises the latched cause as a fatal engine error in headless and in offscreen" $ \a → do
         forM_ [ModeHeadless, ModeOffscreen] $ \mode → do
-            clearStartupFailure (lsrOf a)
+            resetStartupState (lsrOf a)
             latchedFault a
             r ← verdict a mode (Just (aLaunch a </> "x.yaml"))
             case r of
@@ -255,19 +290,19 @@ loopSpec = describe "checkScenarioStartup" $ do
                 Right () → expectationFailure ("no fatal error in " ⧺ show mode)
 
     it "does nothing in graphical, which keeps its paused recovery controls" $ \a → do
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         latchedFault a
         r ← verdict a ModeGraphical (Just (aLaunch a </> "x.yaml"))
         r `shouldSatisfy` isRight'
 
     it "does nothing when the boot asked for no scenario, even with a latch set" $ \a → do
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         latchedFault a
         forM_ [ModeHeadless, ModeOffscreen, ModeGraphical] $ \mode →
             verdict a mode Nothing >>= (`shouldSatisfy` isRight')
 
     it "does nothing while nothing has failed" $ \a → do
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         forM_ [ModeHeadless, ModeOffscreen] $ \mode →
             verdict a mode (Just (aLaunch a </> "x.yaml")) >>= (`shouldSatisfy` isRight')
   where isRight' = either (const False) (const True)
@@ -311,7 +346,7 @@ driverSpec = describe "the startup driver (scripts/scenario_startup.lua)" $ do
     it "headless: drives the arena definitions ITSELF, once, then submits exactly one load and follows it" $ \a → do
         writeFile (file a) (doc ["units: []"])
         _ ← configure a ModeHeadless (Just (file a))
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         install a "stub.done = true"
         ticks a 1
         calls a `shouldReturn` "build:arena,runAll"
@@ -330,7 +365,7 @@ driverSpec = describe "the startup driver (scripts/scenario_startup.lua)" $ do
         forM_ [ModeOffscreen, ModeGraphical] $ \mode → do
             writeFile (file a) (doc ["units: []"])
             _ ← configure a mode (Just (file a))
-            clearStartupFailure (lsrOf a)
+            resetStartupState (lsrOf a)
             install a "stub.done = true"
             call a "package.loaded['scripts.startup_loader'].built = false return 'ok'" `shouldReturn` "ok"
             ticks a 4
@@ -347,10 +382,35 @@ driverSpec = describe "the startup driver (scripts/scenario_startup.lua)" $ do
             -- never built or drained by the driver; the arena view shown once the scenario stands
             calls a `shouldReturn` "show:test_arena_view"
 
+    it "a busy submission is retried on the next tick, not treated as a failure" $ \a → do
+        writeFile (file a) (doc ["units: []"])
+        _ ← configure a ModeHeadless (Just (file a))
+        resetStartupState (lsrOf a)
+        install a "stub.done = true"
+        _ ← put a "driver-holding.yaml" (doc ["units: []"])
+        hold ← newHold
+        armSeams (aH a) (holdAt PointPreflight hold)
+        held ← loadViaLua a "'driver-holding'"
+        pump ← startPump (aH a)
+        takeMVar (holdReached hold)
+        ticks a 4                                   -- definitions, then busy submits
+        call a "return __driver.phase" `shouldReturn` "submit"
+        latched a `shouldReturn` Nothing
+        putMVar (holdRelease hold) ()
+        _ ← await (aH a) held 60
+        stopPump pump
+        disarm (aH a)
+        ticks a 1
+        n ← currentLoadId a
+        n `shouldBe` held + 1
+        _ ← pumpUntilTerminal (aH a) n 60
+        ticks a 2
+        call a "return __driver.outcome" `shouldReturn` "ready"
+
     it "a definition failure becomes a startup failure and nothing is submitted" $ \a → do
         writeFile (file a) (doc ["units: []"])
         _ ← configure a ModeHeadless (Just (file a))
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         install a "stub.failed = true stub.failure = {message = 'Startup failed: materials could not parse bad.yaml'}"
         before ← observed a
         ticks a 4
@@ -362,7 +422,7 @@ driverSpec = describe "the startup driver (scripts/scenario_startup.lua)" $ do
         let bad = aLaunch a </> "driven-bad.yaml"
         writeFile bad "version: 3\nunits: [unclosed\n"
         _ ← configure a ModeGraphical (Just bad)
-        clearStartupFailure (lsrOf a)
+        resetStartupState (lsrOf a)
         install a "stub.done = true"
         call a "local s = package.loaded['scripts.startup_loader'] s.built = true s.done = true return 'ok'"
             `shouldReturn` "ok"

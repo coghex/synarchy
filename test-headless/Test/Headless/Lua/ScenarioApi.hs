@@ -318,6 +318,12 @@ saveSpec = describe "saving" $ do
         fmap isSucceeded (cstOutcome s2) `shouldBe` Just False
         call a saveStatus `shouldReturn` "save|failed|false|false|nil|overwrite_refused"
         BS.readFile out `shouldReturn` firstBytes
+        -- 2b. an explicit nil, an empty table and overwrite = false are the same default
+        forM_ [", nil", ", {}", ", {overwrite = false}"] $ \opts → do
+            nx ← saveViaLua a "'copy'" opts
+            sx ← withPump h (awaitCapture h nx 60)
+            fmap isSucceeded (cstOutcome sx) `shouldBe` Just False
+            BS.readFile out `shouldReturn` firstBytes
         -- 3. explicit overwrite replaces it
         n3 ← saveViaLua a "'copy'" ", {overwrite = true}"
         s3 ← withPump h (awaitCapture h n3 60)

@@ -580,7 +580,9 @@ def main() -> int:
     if args.port == GUI_PORT:
         sys.exit(f"refusing to use port {GUI_PORT} (the GUI port)")
 
-    base = tempfile.mkdtemp(prefix="scenario_entrypoint_probe_")
+    # canonical: the engine reports the paths it resolved from its own
+    # (canonical) working directory, so the expectations must be canonical too
+    base = os.path.realpath(tempfile.mkdtemp(prefix="scenario_entrypoint_probe_"))
     ctx = {"port": args.port, "base": base, "logs": os.path.join(base, "logs"),
            "work": os.path.join(base, "work"), "launch": os.path.join(base, "launch dir"),
            "pwned": os.path.join(base, "PWNED")}

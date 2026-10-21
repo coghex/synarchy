@@ -99,6 +99,9 @@ end
 local function stepSubmit()
     local id, rejection = engine.startScenarioStartup()
     if not id then
+        -- another operation holds the line (a console client got there
+        -- first): the engine gave the claim back, so ask again next tick
+        if rejection and rejection.reason == "busy" then return end
         fail("the startup scenario was not accepted: "
             .. tostring(rejection and rejection.message))
         return

@@ -21,7 +21,8 @@
 --     Nothing is submitted.
 --   * A well-typed request the engine cannot take is a REJECTION, answered
 --     at once as @nil, rejection@ with @rejection.reason@ one of
---     @"busy"@, @"invalid_path"@, @"not_found"@, plus @message@ and, when
+--     @"busy"@, @"invalid_path"@, @"not_found"@ (the startup verb adds
+--     @"already_started"@), plus @message@ and, when
 --     known, the resolved @path@. A rejection allocates no identity,
 --     queues nothing, replaces no status and changes no pause state.
 --   * An ACCEPTED request answers its integer id. Its outcome is read from
@@ -54,7 +55,8 @@ import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapabi
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Types (BootMode(..), EngineConfig(..))
 import Engine.Load.Status
-    ( readLastScenarioOperation, readScenarioStatus, recordStartupFailure )
+    ( claimStartupSubmission, readLastScenarioOperation, readScenarioStatus
+    , recordStartupFailure, releaseStartupSubmission )
 import Scenario.Capture.Service (readCaptureStatus, requestScenarioCapture)
 import Scenario.Capture.Types
 import Scenario.Load.Service (requestScenarioLoad, requestStartupScenarioLoad)
@@ -437,15 +439,27 @@ scenarioStartupFn env = do
 --   Submit the boot's one scenario load: the file @--scenario@ resolved,
 --   through the same service @engine.loadScenario@ uses, marked as the
 --   startup load so an unsuccessful end is latched for the boot to exit
---   on. Refused (nothing submitted) when the boot asked for no scenario.
---   The startup driver calls it exactly once, after the definitions the
---   scenario names are available.
+--   on. The engine, not the caller, keeps it to ONE: a second call after an
+--   accepted submission is rejected @already_started@, and a submission
+--   the service refused as @busy@ (another operation held the line) gives
+--   the claim back so the caller may ask again. Refused (nothing
+--   submitted) when the boot asked for no scenario. The startup driver
+--   calls it after the definitions the scenario names are available.
 startScenarioStartupFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 startScenarioStartupFn env = do
     arity "engine.startScenarioStartup" 0 0
+    let lsr = slLoadStatusRef (toSaveLoadCapability env)
     case ecScenarioStartup (ccEngineConfig (toCoreCapability env)) of
         Nothing → reject "invalid_path" "this boot did not ask for a scenario (--scenario)" Nothing
-        Just path → Lua.liftIO (requestStartupScenarioLoad env (SourceFile path)) ⌦ answer
+        Just path → do
+            claimed ← Lua.liftIO (claimStartupSubmission lsr)
+            if not claimed
+                then reject "already_started"
+                        "the startup scenario was already submitted; a boot submits exactly one" Nothing
+                else do
+                    submitted ← Lua.liftIO (requestStartupScenarioLoad env (SourceFile path))
+                    either (const (Lua.liftIO (releaseStartupSubmission lsr))) (const (pure ())) submitted
+                    answer submitted
 
 -- | @engine.failScenarioStartup(message) → true | nil, rejection@
 --

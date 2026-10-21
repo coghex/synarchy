@@ -40,7 +40,8 @@ module Engine.Load.Status
       -- * The scenario request record (#2713)
     , claimScenarioLoad, readScenarioStatus, updateScenarioStatus
     , terminateScenario
-    , markScenarioStartup, recordStartupFailure, readStartupFailure, clearStartupFailure
+    , markScenarioStartup, recordStartupFailure, readStartupFailure, resetStartupState
+    , claimStartupSubmission, releaseStartupSubmission
     , readLastScenarioOperation
     , setScenarioPlan, takeScenarioPlan, readScenarioPlan
       -- * The scenario capture request record (#2714)
@@ -275,7 +276,7 @@ newLoadStatusRef = LoadStatusRef <$> newIORef 0 <*> newIORef Nothing
                                  <*> newMVar () <*> newIORef Nothing
                                  <*> newIORef noSeams <*> newIORef Nothing
                                  <*> newIORef (CaptureCell Nothing noCaptureSeams)
-                                 <*> newIORef (EntryCell Nothing Nothing)
+                                 <*> newIORef (EntryCell Nothing Nothing False)
 
 -- | Accept a new load request, allocating a fresh request id. Fails if
 --   another load is already in-flight (non-terminal outcome). Does NOT
@@ -598,6 +599,8 @@ terminateScenario ref n outcome recovery = do
 data EntryCell = EntryCell
     { entLastOperation   ∷ !(Maybe ScenarioOperation)
     , entStartupFailure  ∷ !(Maybe Text)
+    , entStartupSubmitted ∷ !Bool
+      -- ^ the boot's one startup load has been (or is being) submitted
     }
 
 -- | The scenario operation admitted last, if any. Every claim sets it
@@ -629,12 +632,27 @@ recordStartupFailure (LoadStatusRef _ _ _ _ _ _ _ _ cellR) cause =
 readStartupFailure ∷ LoadStatusRef → IO (Maybe Text)
 readStartupFailure (LoadStatusRef _ _ _ _ _ _ _ _ cellR) = entStartupFailure <$> readIORef cellR
 
--- | Test-only: forget the latched startup failure, so one engine can
---   exercise the latch for several causes in turn. Nothing in the engine
---   calls it: a real boot exits on its first cause.
-clearStartupFailure ∷ LoadStatusRef → IO ()
-clearStartupFailure (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
-    atomicModifyIORef' cellR $ \c → (c { entStartupFailure = Nothing }, ())
+-- | Claim the boot's one startup submission: True exactly once, atomically,
+--   so "submit exactly one load" is the engine's rule and not only the
+--   driver's habit. A submission the service then refuses as busy gives the
+--   claim back ('releaseStartupSubmission') so the driver can ask again.
+claimStartupSubmission ∷ LoadStatusRef → IO Bool
+claimStartupSubmission (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
+    atomicModifyIORef' cellR $ \c →
+        if entStartupSubmitted c then (c, False) else (c { entStartupSubmitted = True }, True)
+
+releaseStartupSubmission ∷ LoadStatusRef → IO ()
+releaseStartupSubmission (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
+    atomicModifyIORef' cellR $ \c → (c { entStartupSubmitted = False }, ())
+
+-- | Test-only: forget the latched startup failure and the startup
+--   submission, so one engine can exercise the startup path for several
+--   causes in turn. Nothing in the engine calls it: a real boot exits on
+--   its first cause and submits once.
+resetStartupState ∷ LoadStatusRef → IO ()
+resetStartupState (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
+    atomicModifyIORef' cellR $ \c →
+        (c { entStartupFailure = Nothing, entStartupSubmitted = False }, ())
 
 -- | Latch request @n@'s failure when it is the startup load. Runs from
 --   every function that ends a load unsuccessfully, BEFORE the generic
