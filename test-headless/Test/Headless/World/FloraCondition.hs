@@ -35,6 +35,7 @@ import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import Building.Types (emptyBuildingManager)
 import Unit.Types (emptyUnitManager)
 import Unit.Sim.Types (emptyUnitThreadState)
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 
 import Item.Ground (emptyGroundItems)
 import World.Construct.Attempt (firstConstructAttemptId)
@@ -465,7 +466,8 @@ spec = describe "flora condition persistence" $ do
             , snapLiveCamera = LiveCameraSnapshot Nothing 0 0 1 FaceSouth
             , snapPages = HM.fromList pages
             , snapItemTags = mempty, snapItemRefs = mempty
-            , snapPortableKnowledge = emptyPortableKnowledge }
+            , snapPortableKnowledge = emptyPortableKnowledge
+            , snapRelationCauses = emptyRelationCauseStore }
         problems snap = [ (ieCode e, ieMessage e) | e ← sessionIntegrityErrors snap
                         , ieComponent e ≡ worldActivityComponentId ]
         planted1 = plantedFloraInstanceId 1
@@ -571,7 +573,8 @@ sessionWithPage page = SessionSnapshot
     , snapLiveCamera = LiveCameraSnapshot (Just (pgsPageId page)) 0 0 1 FaceSouth
     , snapPages = HM.singleton (pgsPageId page) page
     , snapItemTags = mempty, snapItemRefs = mempty
-    , snapPortableKnowledge = emptyPortableKnowledge }
+    , snapPortableKnowledge = emptyPortableKnowledge
+            , snapRelationCauses = emptyRelationCauseStore }
 
 roundTrip ∷ (Eq a, Show a, Enum a, Bounded a) ⇒ [a] → Expectation
 roundTrip xs = map (fromVocabTag ∘ toVocabTag) xs `shouldBe` map Just xs
@@ -702,7 +705,8 @@ throughEnvelope catalog ws pid = do
             , sgActivePage = pid, sgVisiblePages = [pid]
             , sgLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
             , sgItemTags = mempty, sgItemRefs = mempty
-            , sgPortableKnowledge = emptyPortableKnowledge }
+            , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore }
         withId = page { pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pid) }
     snap ← either (\e → expectationFailure (show e) ≫ error "unreachable")
                   pure (captureSessionSnapshot globals [withId])
