@@ -34,6 +34,7 @@ module Test.Headless.World.SubMinuteClock
     , stagingSpec
     ) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -664,6 +665,7 @@ sessionWith stored = SessionSnapshot
     , snapItemTags = mempty
     , snapItemRefs = mempty
     , snapPortableKnowledge = emptyPortableKnowledge
+    , snapRelationCauses = emptyRelationCauseStore
     }
 
 -- | @stored@ put through the REAL @world-pages@ codec and component

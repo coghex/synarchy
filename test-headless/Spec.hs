@@ -473,6 +473,8 @@ import qualified Test.Headless.Lua.CraftBillQueuePriority as LuaCraftBillQueue
 import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Lua.UnitOwnership as LuaUnitOwnership
+import qualified Test.Headless.Faction.RelationStore as FactionRelationStore
+import qualified Test.Headless.Faction.RelationStoreLive as FactionRelationStoreLive
 import qualified Test.Headless.Lua.DirectedRelations as LuaDirectedRelations
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Unit.StandardSpawn as UnitStandardSpawn
@@ -763,6 +765,10 @@ restLane = do
     -- Own engine (#2521): directed relation consumers drive the real
     -- unit AI against a roster this spec WRITES into the unit manager.
     aroundAll withHeadlessEngine LuaDirectedRelations.spec
+    -- Own engine (#2548): the live relation-cause store is WRITTEN and
+    -- the unit manager rewritten per case, and one case tears the
+    -- session down with Exit to Menu's handler.
+    aroundAll withHeadlessEngine FactionRelationStoreLive.spec
     -- Own engine (#1733): the live unit.addXP boundary WRITES the
     -- unit manager ref (and seeds a deliberately corrupt stat map),
     -- so it cannot share the worldgen engine above.
@@ -1425,6 +1431,7 @@ restLane = do
     UnitFaction.spec
     UnitStandardSpawn.spec
     UnitFactionProfile.spec
+    FactionRelationStore.spec
     UnitFactionProfileWire.spec
     UnitFactionCatalogue.spec
     -- #2828: the physiology system registry, resolver and read verbs.

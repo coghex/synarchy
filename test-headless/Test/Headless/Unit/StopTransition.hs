@@ -30,6 +30,7 @@
 --   lives in @tools/mental_state_probe.py@'s catatonia stage.
 module Test.Headless.Unit.StopTransition (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Unit.Faction.Membership (inertUnitProfile)
@@ -322,6 +323,7 @@ globalsAt now = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = emptyRelationCauseStore
     }
 
 snapshotAt ∷ Double → UnitSimState → SessionSnapshot

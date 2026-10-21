@@ -489,6 +489,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssItemTags = stagedItemTags
                       , ssItemRefs = stagedItemRefs
                       , ssPortableKnowledge = stagedPortableKnowledge
+                      , ssRelationCauses = sdRelationCauses saveData
                       , ssMaterialRegistry = registry
                       }
 

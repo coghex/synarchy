@@ -4090,7 +4090,119 @@
       ]
     },
     {
-      "id": "z18-flora-condition-store",
+      "id": "z18-relation-causes",
+      "description": "Live directed relation causes (#2548, FTS-6B of #2496) as the current build writes them: five causes of three owners on four ordered tag pairs \u2014 two owners on one pair, its reverse direction, one owner on a second pair, and a shipped-tag pair beside runtime-minted tags \u2014 in the optional session component relation-causes v1, beside a generated page with one building and one unit. Seeded through synarchy-save-codec seed-tags because no production code adds a cause yet (FTS-6A/6E own the producers, FTS-6C the verbs). Every earlier fixture is the empty-default counterpart: absence means no cause exists.",
+      "declaredAt": "2026-10-21",
+      "declaredByIssue": 2548,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.RelationCauses.relationCausesCodec (current v1, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 2,
+          "required": false
+        },
+        {
+          "id": "transfer-orders",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "portable-knowledge",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "relation-causes",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "version": 1,
+          "required": false
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z18-relation-causes",
+          "path": "test-headless/data/save-compat/z18-relation-causes.bin",
+          "kind": "complete-session",
+          "sha256": "23a3aabfd36e8a4cff097fe0df5f33bcf3df73979d5dd65bcc5e17a1a4ae2789",
+          "sizeBytes": 909269,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Before that, synarchy-save-codec seed-tags wrote the general gameplay-tag assignments {\"relationCauses\":[{\"owner\":\"order:attack_1\",\"source\":\"raid_a\",\"target\":\"raid_b\",\"relation\":\"hostile\"},{\"owner\":\"report:incident_7\",\"source\":\"raid_a\",\"target\":\"raid_b\",\"relation\":\"hostile\"},{\"owner\":\"diplomacy:truce_2\",\"source\":\"raid_b\",\"target\":\"raid_a\",\"relation\":\"ally\"},{\"owner\":\"order:attack_1\",\"source\":\"raid_a\",\"target\":\"farmers\",\"relation\":\"neutral\"},{\"owner\":\"report:incident_7\",\"source\":\"nomad\",\"target\":\"acolyte\",\"relation\":\"hostile\"}]} into the saved bytes through the real session decoder and encoder (#2701: no public tag verb exists yet).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z18-relation-causes.expected.json"
+        }
+      ]
+    },
+    {
+      "id": "z19-flora-condition-store",
       "description": "The #2549 shape (world-activity v7): every page slice carries the sparse flora condition store (padFloraConditions, keyed by FloraInstanceId). The session is generated through a real headless engine with a planted row crop (tomato_plant) in the edit log, the occurrence a condition record would join; a live session has no public verb that marks an occurrence dead yet (EFM-7), so the store is empty here and the populated v7 shape is pinned by the 'flora condition persistence' and 'persistence contract' hspec groups. v1-v6 payloads stay tracked by the earlier baselines and migrate to an empty store.",
       "declaredAt": "2026-10-21",
       "declaredByIssue": 2549,
@@ -4166,13 +4278,13 @@
       ],
       "fixtures": [
         {
-          "id": "z18-flora-condition-store",
-          "path": "test-headless/data/save-compat/z18-flora-condition-store.bin",
+          "id": "z19-flora-condition-store",
+          "path": "test-headless/data/save-compat/z19-flora-condition-store.bin",
           "kind": "complete-session",
           "sha256": "40628189bd24e5b52cb0b34aefeffa6083e6cd8190ab874c5a20ddf1ef190a9e",
           "sizeBytes": 905488,
           "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), then return (function() local fs=engine.listFiles('data/flora','.yaml') if not fs then return false end local ps={} for _,f in ipairs(fs) do ps[#ps+1]='data/flora/'..f end table.sort(ps) for _,p in ipairs(ps) do engine.loadFloraYaml(p) end return flora.exists('tomato_plant') end)(), settled 2.0s and held until `(function() local p='generated_page' local site=nil for gy=-32,32 do for gx=-32,32 do if site==nil then local s=world.getSlopeAt(gx,gy) local f=world.getFluidAt(gx,gy) if s==0 and (f==nil or f=='') then site={gx,gy} end end end end if site==nil then return false end if not world.isPlantable(site[1],site[2]) then local z=world.getSurfaceAt(site[1],site[2]) world.setVegAt(p,site[1],site[2],z,77) end if world.isPlantable(site[1],site[2]) and world.getFloraAt(site[1],site[2])==nil then world.plantRowCropAt(p,site[1],site[2],'tomato_plant') end return world.getFloraAt(site[1],site[2])~=nil end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
-          "expectedCanonicalSummary": "test-headless/data/save-compat/z18-flora-condition-store.expected.json"
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z19-flora-condition-store.expected.json"
         }
       ]
     }

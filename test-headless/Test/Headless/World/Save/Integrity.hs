@@ -36,6 +36,7 @@ module Test.Headless.World.Save.Integrity
     , buildSnap
     ) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
@@ -262,6 +263,7 @@ minimalGlobals active = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = emptyRelationCauseStore
     }
 
 -- | A bill on @page1@ whose station is a building that exists ONLY on

@@ -26,6 +26,7 @@
 --   --test-options='--match "Gameplay.Tags.Residency"'@.
 module Test.Headless.Gameplay.TagsResidency (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -796,7 +797,8 @@ capturedSession env = do
             , sgVisiblePages = [pageP]
             , sgLiveCamera = LiveCameraSnapshot (Just pageP) 0 0 1 FaceSouth
             , sgItemTags = mempty, sgItemRefs = mempty
-            , sgPortableKnowledge = emptyPortableKnowledge }
+            , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore }
             pages
 
 arenaParams ∷ WorldGenParams

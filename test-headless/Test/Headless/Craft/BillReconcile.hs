@@ -42,6 +42,7 @@
 --   --test-options='--match "craft bill claimant reconciliation"'@.
 module Test.Headless.Craft.BillReconcile (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Index (emptyCategoryIndex)
 import Test.Hspec
@@ -276,6 +277,7 @@ stagedSessionWith bills = do
         , ssItemTags = emptyCategoryIndex
         , ssItemRefs = mempty
         , ssPortableKnowledge = emptyPortableKnowledge
+        , ssRelationCauses = emptyRelationCauseStore
         }
 
 -- | The LIVE 'WorldState' registered under @pid@, read back off the

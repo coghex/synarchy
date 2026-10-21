@@ -5,6 +5,7 @@
 --   ordinary save codec and the real staging, and captured again.
 module Test.Headless.Scenario.World.Live (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
@@ -387,7 +388,8 @@ spec = describe "on a live arena page (through the world thread)" $ do
                 , snapLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
                 , snapPages = HM.singleton pid page
                 , snapItemTags = mempty, snapItemRefs = mempty
-                , snapPortableKnowledge = emptyPortableKnowledge }
+                , snapPortableKnowledge = emptyPortableKnowledge
+                , snapRelationCauses = emptyRelationCauseStore }
             meta = SaveRequestMeta "scenario_world" "2026-10-19T00:00:00.000000Z" False
             bytes = encodeSessionSnapshot (snapshotSaveMetadata meta snap) snap []
         back ← case decodeSessionEnvelope HS.empty HS.empty bytes of

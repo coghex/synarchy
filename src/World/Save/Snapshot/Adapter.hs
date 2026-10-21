@@ -141,6 +141,8 @@ snapshotToSaveData req snap = SaveData
     , sdItemTags           = snapItemTags snap
     , sdItemRefs           = snapItemRefs snap
     , sdPortableKnowledge  = snapPortableKnowledge snap
+      -- #2548: global and undeduplicated, like the knowledge above.
+    , sdRelationCauses     = snapRelationCauses snap
     }
 
 -- | One page's legacy 'WorldPageSave'. Camera position uses the live

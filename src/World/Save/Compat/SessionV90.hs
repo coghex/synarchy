@@ -115,6 +115,7 @@ import World.Save.Component
 import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
 import World.Save.Types (SaveMetadata)
 import Item.Knowledge (emptyPortableKnowledge)
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..)
     , validateSessionSnapshot, structureEditPaletteErrors )
@@ -381,6 +382,9 @@ migrateSessionV90 meta sd = do
               -- looked inside it. Exactly the absent-payload default
               -- 'World.Save.Component.assembleSnapshot' installs.
             , snapPortableKnowledge = emptyPortableKnowledge
+              -- #2548: EMPTY — the B1 wire format predates the store, so
+              -- no cause existed in any v90 session.
+            , snapRelationCauses = emptyRelationCauseStore
             , snapItemTags = Map.empty
             , snapItemRefs = emptyItemRefs
             }

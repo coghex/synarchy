@@ -49,17 +49,20 @@ wire-format break the audit refuses to record.
   (`World.Save.Envelope`): FNV-1a-checksummed manifest + independently
   versioned components (`core-session`, `world-pages`, `world-edits`,
   `world-activity`, `buildings`, `units`, `unit-sim`, `craft-bills`,
-  `power-nodes`, `texture-palette`, `metadata`, the three OPTIONAL
-  `container-knowledge`, `transfer-orders` and `portable-knowledge`,
-  plus dynamic
+  `power-nodes`, `texture-palette`, `metadata`, the four OPTIONAL
+  `container-knowledge`, `transfer-orders`, `portable-knowledge` and
+  `relation-causes`, plus dynamic
   `lua.<module>` components). Registry:
   `World.Save.Component.saveComponentRegistry`. Every gameplay component
-  is REQUIRED except those three, each of whose absence has an honest
+  is REQUIRED except those four, each of whose absence has an honest
   default — see `docs/persistence_contract.md` §5 before declaring a
-  fourth. `portable-knowledge` (#2512) is also the only SESSION-scoped
-  gameplay component: it folds straight onto the `SessionSnapshot`
-  rather than onto a per-page slice, because a crate's memory is keyed
-  by the crate and must survive its moving between pages. Component evolution = per-component schema version bumps +
+  fifth. `portable-knowledge` (#2512) and `relation-causes` (#2548) are
+  the SESSION-scoped optional components: each folds straight onto the
+  `SessionSnapshot` rather than onto a per-page slice, because a crate's
+  memory is keyed by the crate and a relation cause relates session-wide
+  tags. `relation-causes` is captured from the global
+  `relationCauseStoreRef` and replaced by the load publish on the
+  `texPaletteRef` seam, and Exit to Menu empties it. Component evolution = per-component schema version bumps +
   explicit migrations from frozen vN DTOs, NOT a global save-version
   bump. `currentSaveVersion` versions only the transitional in-memory
   load bridge (`SaveData`) and is bumped freely — don't trust any number

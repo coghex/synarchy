@@ -77,6 +77,8 @@ spec = do
     aliases "ucThoughtEventsRef" ucThoughtEventsRef thoughtEventsRef
     aliases "ucActionOutcomeRef" ucActionOutcomeRef actionOutcomeRef
     aliases "ucPathingConfigRef" ucPathingConfigRef pathingConfigRef
+    aliases "ucRelationCauseStoreRef" ucRelationCauseStoreRef
+            relationCauseStoreRef
 
     it "keeps the three CombatEvent streams on their own refs" $ \env → do
       -- combatEventsRef / injuryEventsRef / thoughtEventsRef all have

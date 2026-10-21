@@ -90,6 +90,18 @@ draining), and the facade switch back to Simulated that seeds the maximum into
 the dedicated uiBlood field. No shadow ``blood`` stat exists in any process, and
 a raw write of the volume is refused.
 
+#2548 adds three FOCUSED fresh-process cycles for the live directed relation
+causes (``relation_cause_cycles`` below), because no production code adds a
+cause yet and the generic cycles above therefore always carry an EMPTY store.
+A save is written by a real engine, one ``wildlife -> acolyte`` ally cause is
+written into its bytes through the real session codec (``synarchy-save-codec
+seed-tags``, the compiled-codec seeding the compatibility corpus uses), and
+three fresh engines each load the previous generation, ask the PRODUCTION verbs
+what a wildlife unit and a player acolyte now think of each other (ally in
+one direction only, where the shipped table says hostile both ways) and
+re-save. Every generation must still carry that one cause, and the four must
+compare structurally identical.
+
 The BROADER manual sweep (all of requirement 4's representative-scenario
 checklist, the assembled failure contract, and every maintained
 migration baseline) is ``tools/persistence_contract_sweep.py``.
@@ -113,6 +125,7 @@ from probelib import (boot, pause_ai, quit_engine, send, send_json, wait_load_pu
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files, prepare_decoder
 from save_compat_audit import dump_canonical_summary
+from save_compat_audit_codec import seed_fixture_tags
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -721,6 +734,118 @@ def engagement_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
                    f"exactly across a fresh process (got {got}, saved {want})")
         quit_engine(port, proc)
         proc = None
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+
+
+# ── #2548: live directed relation causes across fresh processes ────────────
+
+RC_PAGE = "relation_cause_page"
+#: The one cause the seeded save carries: wildlife regards acolyte as an ALLY.
+#: The shipped base table makes that pair hostile both ways, and a live cause
+#: outranks the base table (Unit.Faction.Profile, tier 1), so a restored store
+#: shows as exactly one flipped direction: wildlife -> acolyte.
+RC_CAUSE = {"owner": "diplomacy:probe_truce", "source": "wildlife",
+            "target": "acolyte", "relation": "ally"}
+RC_SEED = ('{"relationCauses":[{"owner":"diplomacy:probe_truce",'
+           '"source":"wildlife","target":"acolyte","relation":"ally"}]}')
+
+
+def relation_answers(port: int, a: int, b: int) -> str:
+    """`relation,canAttack` of a -> b through the PRODUCTION unit verbs."""
+    return lua_text(port, f"unit.relationFromTo({a}, {b}) .. ',' .. "
+                           f"tostring(unit.canAttack({a}, {b}))")
+
+
+def relation_causes_of(tmpdir: str, save_path: str, tag: str):
+    """The live causes a saved file's canonical summary reads, or None."""
+    out = Path(tmpdir) / f"relation_causes_{tag}.json"
+    ok, tail = dump_canonical_summary(Path(save_path), out)
+    if not ok:
+        return None, tail
+    import json
+    return json.loads(out.read_text()).get("relationCauses", []), ""
+
+
+def relation_cause_cycles(chk: Checks, root: str, tmpdir: str, port: int) -> None:
+    """Three fresh processes carry one live relation cause through
+    load -> re-save -> load, and the restored authority answers exactly."""
+    print("=== relation-cause engine Q: baseline answers, save 'rcause1' ===")
+    proc = engagement_boot(root, tmpdir, port, "Q")
+    try:
+        send(port, f"world.init('{RC_PAGE}', {SEED}, {WORLD_SIZE}, {PLATE_COUNT}, "
+                   f"'Relation Cause World', 'the relation causes'); return 'ok'")
+        send(port, f"world.show('{RC_PAGE}'); return 'ok'")
+        wait_for(port, lambda: send(port, "return world.getActiveWorldId()")
+                 .strip('"') == RC_PAGE, 30.0)
+        send(port, "return world.waitForInit(30)", timeout=35)
+        ensure_chunks(port)
+        player = as_int(send(port, "return unit.spawn('acolyte', 4, 4, 0, 'player', "
+                                   "nil, nil, 'standard')"))
+        # A squirrel: its definition's own default tag is `wildlife`. An acolyte
+        # spawned as 'wildlife' would keep the definition's `acolyte` tag
+        # (D-26) and so be the player's ally by the shared tag.
+        wild = as_int(send(port, "return unit.spawn('red_squirrel', 5, 4, 0, 'wildlife', "
+                                 "nil, nil, 'standard')"))
+        chk.ok(None not in (player, wild) and min(player, wild) >= 0,
+               f"a player acolyte and a wildlife squirrel spawned (got {player}, {wild})")
+        time.sleep(0.6)   # unit.spawn only queues; let the unit thread commit
+
+        # Non-vacuity: with an EMPTY store the shipped table says hostile both
+        # ways, so the ally answer below can only come from the restored cause.
+        chk.ok(relation_answers(port, wild, player) == "hostile,true"
+               and relation_answers(port, player, wild) == "hostile,true",
+               f"with no cause the pair is hostile both ways (got "
+               f"{relation_answers(port, wild, player)!r} / "
+               f"{relation_answers(port, player, wild)!r})")
+        send(port, "require('scripts.pause').set(true); return 'ok'")
+        save_and_wait(chk, port, RC_PAGE, "rcause1")
+        quit_engine(port, proc)
+        proc = None
+
+        # No production code adds a cause, so the store is seeded into the
+        # saved bytes through the real session decoder and encoder.
+        slot1 = os.path.join(root, "saves", "rcause1", "world.synworld")
+        chk.ok(wait_for_file(slot1, seconds=5.0), f"save file appeared at {slot1}")
+        spec = os.path.join(tmpdir, "relation_cause_seed.json")
+        with open(spec, "w") as fh:
+            fh.write(RC_SEED)
+        seeded, tail = seed_fixture_tags(Path(slot1), Path(spec), Path(slot1))
+        chk.ok(seeded, f"the cause was seeded into 'rcause1' through the real codec ({tail})")
+
+        paths = [slot1]
+        prev, expected_answers = "rcause1", ("ally,false", "hostile,true")
+        for letter, nxt in (("R", "rcause2"), ("S", "rcause3"), ("T", "rcause4")):
+            print(f"=== relation-cause engine {letter}: load '{prev}', save '{nxt}' ===")
+            proc = engagement_boot(root, tmpdir, port, letter)
+            engagement_load(chk, port, prev)
+            got = (relation_answers(port, wild, player),
+                   relation_answers(port, player, wild))
+            chk.ok(got == expected_answers,
+                   f"after loading '{prev}' the wildlife squirrel regards the acolyte as an ally "
+                   f"(and may not attack it) while the acolyte still regards wildlife "
+                   f"as hostile -- the restored store is the live authority "
+                   f"(got {got}, wanted {expected_answers})")
+            save_and_wait(chk, port, RC_PAGE, nxt)
+            path = os.path.join(root, "saves", nxt, "world.synworld")
+            chk.ok(wait_for_file(path, seconds=5.0), f"save file appeared at {path}")
+            paths.append(path)
+            quit_engine(port, proc)
+            proc = None
+            prev = nxt
+
+        # Non-empty before AND after: every generation, including the three
+        # written by real engines, still carries exactly the seeded cause.
+        for i, path in enumerate(paths, start=1):
+            causes, why = relation_causes_of(tmpdir, path, str(i))
+            chk.ok(causes == [RC_CAUSE],
+                   f"generation rcause{i} carries exactly the one seeded cause "
+                   f"(got {causes}{' -- ' + why if why else ''})")
+        ok, detail = compare_session_files([Path(p) for p in paths])
+        chk.ok(ok, f"all {len(paths)} relation-cause generations are structurally "
+                   f"IDENTICAL across three real fresh-process cycles"
+               + (f" -- {detail}" if not ok else ""))
     finally:
         if proc is not None:
             quit_engine(port, proc)
@@ -1657,6 +1782,9 @@ def main() -> int:
 
         # ── S10 (#2837): blood in the dedicated field, focused ───────────
         blood_cycles(chk, root, tmpdir, port)
+
+        # ── #2548: live relation causes, seeded and restored ─────────────
+        relation_cause_cycles(chk, root, tmpdir, port)
 
     finally:
         if proc is not None:

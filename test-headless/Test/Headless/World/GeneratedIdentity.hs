@@ -17,6 +17,7 @@
 --   isolated for the same reason.
 module Test.Headless.World.GeneratedIdentity (spec, pureSpec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
@@ -152,6 +153,7 @@ snapshotWith active rest =
         , sgItemTags = mempty
         , sgItemRefs = mempty
         , sgPortableKnowledge = emptyPortableKnowledge
+        , sgRelationCauses = emptyRelationCauseStore
         }
     mkPage (pid, gid) =
         (blankPageSnapshot pid defaultWorldGenParams) { pgsGeneratedId = gid }

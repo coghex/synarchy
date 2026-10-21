@@ -52,6 +52,7 @@
 --   @cabal test synarchy-test-headless --test-options='--match \"persistence contract\"'@
 module Test.Headless.World.Save.Contract (spec) where
 
+import Test.Headless.Faction.RelationStore.Fixture (sampleStore)
 import UPrelude
 import qualified Data.Map.Strict as Map
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
@@ -679,6 +680,7 @@ richGlobals = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = sampleStore
     }
 
 representativeSnapshot ∷ SessionSnapshot

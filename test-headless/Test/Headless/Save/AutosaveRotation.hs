@@ -28,6 +28,7 @@
 --   --test-options='--match "autosave rotation durability"'@.
 module Test.Headless.Save.AutosaveRotation (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Test.Hspec
@@ -138,6 +139,7 @@ minimalGlobals = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = emptyRelationCauseStore
     }
 
 -- | Publish a REAL autosave generation into @saves\/\<slot\>@. The

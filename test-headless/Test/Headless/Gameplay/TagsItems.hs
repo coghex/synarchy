@@ -26,6 +26,7 @@
 --   --test-options='--match "Gameplay.Tags.Items"'@.
 module Test.Headless.Gameplay.TagsItems (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
@@ -1074,7 +1075,8 @@ sessionSpec = describe "whole-session save and load" $ do
         , snapPages = HM.empty
         , snapItemTags = Map.singleton (it' 1) (tags ["stale"])
         , snapItemRefs = mempty
-        , snapPortableKnowledge = emptyPortableKnowledge }
+        , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore }
 
 -- * Session helpers
 
@@ -1104,7 +1106,8 @@ capturedSession env = do
             , sgLiveCamera = LiveCameraSnapshot (Just pageP) 0 0 1 FaceSouth
             , sgItemTags = categoryForward (wmItemTags wm)
             , sgItemRefs = wmItemScenarioRefs wm
-            , sgPortableKnowledge = emptyPortableKnowledge }
+            , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore }
             pages
 
 arenaParams ∷ WorldGenParams

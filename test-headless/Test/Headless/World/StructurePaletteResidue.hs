@@ -39,6 +39,7 @@
 --   structure-named example).
 module Test.Headless.World.StructurePaletteResidue (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
@@ -370,6 +371,7 @@ encodedPalettePaths env = do
             , sgItemTags = mempty
             , sgItemRefs = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore
             }
         pages = [ blankPageSnapshot visiblePage genParams ]
     snap ← case captureSessionSnapshot globals pages of

@@ -54,6 +54,7 @@ import World.Page.Types (WorldIdentity(..), WorldPageId(..))
 import World.Page.GeneratedId (renderGeneratedWorldId)
 import Structure.Palette (emptyTexPalette)
 import Item.Knowledge (emptyPortableKnowledge)
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Save.Component.Types
 import World.Save.Component.Session
@@ -62,6 +63,7 @@ import World.Save.Component.Entities
 import World.Save.Component.Knowledge
 import World.Save.Component.Transfer
 import World.Save.Component.PortableKnowledge
+import World.Save.Component.RelationCauses
 import World.Save.Integrity
     (IntegrityError(..), sessionIntegrityErrors, integrityErrorCap)
 
@@ -133,6 +135,11 @@ saveComponentRegistry =
       -- portable containers honestly recorded.
     , registerComponent portableKnowledgeCodec
         (\ver d snap → Right (applyPortableKnowledge ver d snap))
+      -- #2548: the FOURTH OPTIONAL entry, session-scoped like the one
+      -- above. Absent ⇒ the skeleton's empty store ("no cause exists"),
+      -- which is true of every baseline that predates it.
+    , registerComponent relationCausesCodec
+        (\ver d snap → Right (applyRelationCauses ver d snap))
     ]
   where
     onPages snap f = (\pages → snap { snapPages = pages }) ⊚ f (snapPages snap)
@@ -152,7 +159,8 @@ componentKnownIds = HS.fromList (map rcId saveComponentRegistry)
 --   queued", true of every session that had nowhere to queue one), and
 --   #2512's @"portable-knowledge"@ is the third ("no crate has ever
 --   been hefted or opened", true of every session that had nowhere to
---   record either).
+--   record either). #2548's @"relation-causes"@ is the fourth ("no
+--   cause exists", true of every session that had nowhere to store one).
 componentRequiredIds ∷ HS.HashSet ComponentId
 componentRequiredIds =
     HS.fromList [ rcId c | c ← saveComponentRegistry, rcRequired c ]
@@ -338,6 +346,9 @@ assembleSnapshot meta de = do
           -- makes the component's optionality honest rather than a
           -- fabricated default.
         , snapPortableKnowledge = emptyPortableKnowledge
+          -- #2548: an ABSENT @"relation-causes"@ payload leaves exactly
+          -- this — no cause at all.
+        , snapRelationCauses = emptyRelationCauseStore
           -- #2703: filled by @core-session@ v2's fold; every older
           -- payload carries none.
         , snapItemTags = Map.empty

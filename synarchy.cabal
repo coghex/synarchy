@@ -632,6 +632,7 @@ library
                      Unit.Faction.Catalogue
                      Unit.Faction.Membership
                      Unit.Faction.Profile
+                     Unit.Faction.RelationStore
                      Unit.Blood
                      Unit.Physiology
                      Unit.Physiology.Circulation
@@ -1117,6 +1118,7 @@ library
                      World.Save.Component.EntitySystems
                      World.Save.Component.Knowledge
                      World.Save.Component.PortableKnowledge
+                     World.Save.Component.RelationCauses
                      World.Save.Component.Transfer
                      World.Save.Component
                      World.Save.Autosave
@@ -2063,7 +2065,14 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.Capture.Encode
                    Test.Headless.Lua.Faction
                    Test.Headless.Lua.UnitOwnership
+                   Test.Headless.Faction.RelationStore
+                   Test.Headless.Faction.RelationStore.Fixture
+                   Test.Headless.Faction.RelationStore.Lifecycle
+                   Test.Headless.Faction.RelationStore.Model
+                   Test.Headless.Faction.RelationStore.Persistence
+                   Test.Headless.Faction.RelationStoreLive
                    Test.Headless.Lua.DirectedRelations
+                   Test.Headless.Lua.DirectedRelationsFixture
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents
                    Test.Headless.Location.ContainerShells

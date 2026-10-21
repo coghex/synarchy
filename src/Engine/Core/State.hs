@@ -73,6 +73,7 @@ import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
 import LootProfile.Types (LootProfileRegistry)
 import Unit.Faction.Catalogue (FactionCatalogue)
+import Unit.Faction.RelationStore (RelationCauseStore)
 import Unit.Physiology.Types (PhysiologyRegistry)
 import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
@@ -461,6 +462,24 @@ data EngineEnv = EngineEnv
     --   @config/pathing.yaml@ at init (defaults if absent). In an IORef
     --   so a future settings UI can retune routing live; the movement
     --   tick rereads it each tick.
+  , relationCauseStoreRef ∷ IORef RelationCauseStore
+    -- ^ Every live DIRECTED relation cause (#2548, FTS-6B of epic
+    --   #2496): the overlay "Unit.Faction.Profile"'s relation authority
+    --   takes as an input, so a cause added by a later order, report or
+    --   diplomacy script changes live answers. Starts EMPTY, and an
+    --   empty store reproduces every answer FTS-5 shipped. Nothing in
+    --   production adds a cause yet (FTS-6A\/6E own the producers,
+    --   FTS-6C the Lua verbs); the only writers are the pure
+    --   "Unit.Faction.RelationStore" operations and tests. Read by the
+    --   @unit.relationFromTo@ \/ @isFriendlyToward@ \/ @canAttack@ verbs
+    --   on every call. PERSISTED exactly as the optional
+    --   @"relation-causes"@ save component: captured by
+    --   @World.Thread.Command.Save.WriteWorld@ and replaced by
+    --   @World.Load.Publish@ beside 'texPaletteRef', so a load REPLACES
+    --   it wholesale (an absent payload clears it) and a failed load
+    --   leaves it untouched; emptied by Exit to Menu
+    --   (@World.Thread.Command.Basic@) and never by an ordinary page
+    --   transition.
   , simQueue           ∷ Q.Queue SimCommand
   , enginePausedRef    ∷ IORef Bool
     -- ^ Global pause flag. When True, threads that advance simulated

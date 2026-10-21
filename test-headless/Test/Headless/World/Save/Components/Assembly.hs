@@ -263,7 +263,8 @@ spec = do
                                    , texPaletteComponentId
                                    , containerKnowledgeComponentId
                                    , transferOrdersComponentId
-                                   , portableKnowledgeComponentId ]
+                                   , portableKnowledgeComponentId
+                                   , relationCausesComponentId ]
                     ids `shouldMatchList` expected
                     (ComponentId "session" `elem` ids) `shouldBe` False
 
