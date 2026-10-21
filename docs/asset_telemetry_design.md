@@ -6,7 +6,7 @@ stable-handle space, asset-pool state, and estimated image memory a live session
 is using, rather than inferring pressure from repository file counts or private
 Haskell structures.
 
-`docs/asset_system_findings.md` remains the defect report and
+`docs/archive/asset_system_findings.md` remains the defect report and
 `docs/asset_pool_scaling_design.md` remains the broader architectural context.
 The open correctness issues identified there stay independent: this arc exposes
 and verifies their resource behavior, but does not re-file or absorb their

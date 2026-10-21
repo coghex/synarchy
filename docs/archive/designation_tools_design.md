@@ -137,7 +137,7 @@ concrete precondition
   were category-level placeholders from #1780. That proposed solution is
   intentionally abandoned: planned construction should not use replacement
   category marker art at all. #1780 is closed as superseded against epic
-  #1837 (D-23), and the stale narrative in `docs/asset_system_findings.md`
+  #1837 (D-23), and the stale narrative in `docs/archive/asset_system_findings.md`
   (ASSET-5) now redirects here and to the two replacement children. #1846
   removed the STRUCTURE placeholder, its handle, its HUD wiring and the
   structure branch of `construction.setDesignateTexture`; #1845 (DTV-10) did

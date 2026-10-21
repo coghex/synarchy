@@ -3,7 +3,7 @@
 This document records the architectural direction for growing Synarchy's
 texture corpus without silently exhausting bindless descriptors, stable texture
 handles, GPU memory, or lifecycle bookkeeping. It builds on
-`docs/asset_system_findings.md`: that report owns the verified defects and
+`docs/archive/asset_system_findings.md`: that report owns the verified defects and
 content findings, while this document owns the intended capacity model,
 component boundaries, decisions, open questions, and dependency-ordered
 delivery plan.
@@ -189,7 +189,7 @@ only residency telemetry can show how many are simultaneously consuming slots.
 ## Verified risks
 
 The underlying correctness defects are recorded with full evidence in
-`docs/asset_system_findings.md`. The scaling-relevant set is:
+`docs/archive/asset_system_findings.md`. The scaling-relevant set is:
 
 - Slot exhaustion previously could publish `AssetReady`, cache the path, and
   send `LuaAssetLoaded` even though the handle had no descriptor mapping.
@@ -605,6 +605,6 @@ implementation should name only lifecycle boundaries with real teardown events.
 - Font atlas construction and dedicated upload descriptors:
   `src/Engine/Graphics/Font/Atlas.hs`, `SDF.hs`, and `Upload.hs`.
 - Zoom atlas construction: `src/World/ZoomMap/ChunkTexture.hs`.
-- Verified audit findings: `docs/asset_system_findings.md`.
+- Verified audit findings: `docs/archive/asset_system_findings.md`.
 - Related zoom scaling design:
   `docs/chunk_residency_streaming_design.md`.

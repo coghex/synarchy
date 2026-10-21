@@ -1034,7 +1034,7 @@ compiled runs. This is a qualified observation about race-test sampling,
 not a confirmed treatment transaction failure. No production fix is proposed
 for that observation without a controlled reproduction.
 
-`docs/expedition_survival_calibration.md` SURV-10 already records missing
+`docs/archive/expedition_survival_calibration.md` SURV-10 already records missing
 end-to-end stabilization observations. The two findings below establish
 specific current implementation defects beyond that broader coverage gap;
 SURV-9's owner-approved above-collapse locomotion policy is unaffected.

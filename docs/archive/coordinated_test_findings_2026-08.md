@@ -28,7 +28,7 @@ Four assessed findings are not copied into the durable queue:
   focused diagnostic prescribed by the assessment before either can be filed
   as a defect.
 - The randbox replacement-selection claim is omitted because report-level
-  re-verification disproves it. `docs/coordinated_test_findings.md` already
+  re-verification disproves it. `docs/archive/coordinated_test_findings.md` already
   processed the same concern as `[no-issue]`: the focused and unfocused
   textbox center textures are byte-identical, only the border becomes a yellow
   focus ring, the cursor visibly remains at the end, and focus-at-end is the

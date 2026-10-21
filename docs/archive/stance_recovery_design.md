@@ -43,7 +43,7 @@ Combat admission and spending use stored stance directly; absence means 1 (`src/
 
 Two repository gates bind a new Lua verb: `python3 tools/lua_registration_audit.py` (#1996) fails when any `scripts/**/*.lua` reference names a verb its namespace does not register, so the caller migration and the registration must land together; and `python3 tools/lua_module_budget.py` caps the `scripts/unit_resource*.lua` family at 500 lines, which `unit_resource_injury.lua` belongs to.
 
-The [retained reproduction](audit_evidence/2026-09-05/stance_interleaving.lua) runs the actual recovery module with a simulated engine-boundary interleaving:
+The [retained reproduction](../audit_evidence/2026-09-05/stance_interleaving.lua) runs the actual recovery module with a simulated engine-boundary interleaving:
 
 | Event | Stance |
 | --- | ---: |

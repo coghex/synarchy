@@ -52,7 +52,7 @@ concrete precondition
   related wet-neighbour rule; this arc deliberately supersedes that visual
   contract rather than reopening any completed issue. Open #1997 owns chunk
   residency and future sparse fluid authority, not fluid precision or
-  presentation. `docs/fluid_reaction_design.md` owns unlike-fluid reactions.
+  presentation. `docs/archive/fluid_reaction_design.md` owns unlike-fluid reactions.
 - **Arc label:** `fluid` proposed; no matching label exists today.
 
 ## Current state and evidence

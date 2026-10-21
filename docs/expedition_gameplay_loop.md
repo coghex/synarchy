@@ -550,7 +550,7 @@ currently visible.
   too sandbox-dependent to gate anything, and there is no replacement gate.
 - **Step 7 (survival tuning) — #925 and #919, epic #918.** Recorded in
   `docs/history/expedition_survival_calibration_2026-07.md` as an observation
-  log, since processed into `docs/expedition_survival_calibration.md` as the
+  log, since processed into `docs/archive/expedition_survival_calibration.md` as the
   SURV-N findings ledger; the project-owner decision was to land the
   calibration with **zero** balance changes and file the mechanic-level
   findings as follow-ups instead. The

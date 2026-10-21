@@ -1,7 +1,7 @@
 # Raw measurement data — probe concurrency characterization (#1427)
 
 The complete, unedited evidence behind
-[`docs/probe_concurrency_characterization.md`](../../probe_concurrency_characterization.md).
+[`docs/archive/probe_concurrency_characterization.md`](../../archive/probe_concurrency_characterization.md).
 Read the report first; this directory exists so every table in it can be
 re-derived and every non-pass attempt inspected.
 

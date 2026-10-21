@@ -1,6 +1,6 @@
 # Simulation consistency bug findings
 
-Recorded during the owner's plain-language architecture audit on 2026-09-05, initially against `da96202c863b7d563f4968d34cb685d2e622e73c`; follow-up findings name their own reviewed revision. This file contains concrete bugs; broader design discussion and absorbed timing-audit coverage live in [the conversation audit](architecture_conversation_audit_2026-09-05.md) and [the shared gameplay timing design](gameplay_timing_design.md).
+Recorded during the owner's plain-language architecture audit on 2026-09-05, initially against `da96202c863b7d563f4968d34cb685d2e622e73c`; follow-up findings name their own reviewed revision. This file contains concrete bugs; broader design discussion and absorbed timing-audit coverage live in [the conversation audit](architecture_conversation_audit_2026-09-05.md) and [the shared gameplay timing design](../gameplay_timing_design.md).
 
 Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` deliberately not filed · `[deferred]` blocked on a stated precondition.
 
@@ -140,7 +140,7 @@ Verified on 2026-09-05 at `2922bb476be795c9fd3d33eb65962b7eccca39ed` by source t
 
 **Reproduction:**
 
-Run the [retained GHCi script](audit_evidence/2026-09-05/gameplay_timing.ghci) through `cabal repl lib:synarchy --repl-options=-v0` in the reviewed checkout. Starting day 1 at 10:00, 240 calls of 0.25 seconds at scale 1 still return day 1 at 10:00. The pure function given the same total 60 seconds in one call returns 11:00; that large call is a comparison, not a value the normal worker admits. At scale 60, splitting the same elapsed minute into 600 × 0.1 seconds yields day 3 at 22:00, while 480 × 0.125 seconds yields day 3 at 18:00. [Recorded outputs](audit_evidence/2026-09-05/gameplay_timing_results.md).
+Run the [retained GHCi script](../audit_evidence/2026-09-05/gameplay_timing.ghci) through `cabal repl lib:synarchy --repl-options=-v0` in the reviewed checkout. Starting day 1 at 10:00, 240 calls of 0.25 seconds at scale 1 still return day 1 at 10:00. The pure function given the same total 60 seconds in one call returns 11:00; that large call is a comparison, not a value the normal worker admits. At scale 60, splitting the same elapsed minute into 600 × 0.1 seconds yields day 3 at 22:00, while 480 × 0.125 seconds yields day 3 at 18:00. [Recorded outputs](../audit_evidence/2026-09-05/gameplay_timing_results.md).
 
 **Handoff context:**
 
@@ -170,7 +170,7 @@ When the next waypoint falls within the current movement budget, `stepTowardSubG
 
 **Reproduction:**
 
-Run [movement_timing.ghci](audit_evidence/2026-09-05/movement_timing.ghci) through `cabal repl lib:synarchy --repl-options=-v0`. Start at `(0.4, 0.5)`, speed 1 tile/second, with path waypoints `(0.5, 0.5)`, `(1.5, 0.5)`, `(2.5, 0.5)` and target `(2.5, 0.5)`. One elapsed second split into 4 × 0.25 yields final x **1.25** (0.85 tiles travelled). The same second as 10 × 0.1 yields x **1.4000002** (about 1 tile). With 20 × 0.05, arrival tolerance yields x **1.4499997** (about 1.05 tiles). The path is supplied directly, with no terrain and `FallPermitted`; this isolates the production movement function and does not assert that a particular generated route appears in ordinary play. [Recorded outputs](audit_evidence/2026-09-05/gameplay_timing_results.md).
+Run [movement_timing.ghci](../audit_evidence/2026-09-05/movement_timing.ghci) through `cabal repl lib:synarchy --repl-options=-v0`. Start at `(0.4, 0.5)`, speed 1 tile/second, with path waypoints `(0.5, 0.5)`, `(1.5, 0.5)`, `(2.5, 0.5)` and target `(2.5, 0.5)`. One elapsed second split into 4 × 0.25 yields final x **1.25** (0.85 tiles travelled). The same second as 10 × 0.1 yields x **1.4000002** (about 1 tile). With 20 × 0.05, arrival tolerance yields x **1.4499997** (about 1.05 tiles). The path is supplied directly, with no terrain and `FallPermitted`; this isolates the production movement function and does not assert that a particular generated route appears in ordinary play. [Recorded outputs](../audit_evidence/2026-09-05/gameplay_timing_results.md).
 
 **Handoff context:**
 

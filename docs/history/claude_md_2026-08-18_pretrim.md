@@ -1669,7 +1669,7 @@ before touching each area:
   has its own gate, `foraging_probe.py`); BOTH travellers are shed to
   inside their carrying capacity first (an over-encumbered acolyte
   crawls, its order stall-times-out and it never arrives —
-  `docs/expedition_survival_calibration.md` E1); the control is given NO
+  `docs/archive/expedition_survival_calibration.md` E1); the control is given NO
   retrieval target of its own, because a ruin can roll food and a
   control that eats what it finds destroys the measurement; the travel
   VERB matches, since `commandMove` walks at `movement_speed.ordered` =
@@ -1696,7 +1696,7 @@ before touching each area:
   attributed to a mechanism rather than inferred from a number two
   differently-massed acolytes could reach by other routes. The gated
   metric is FOOD (stomach fraction), matching what
-  `docs/expedition_survival_calibration.md` measured actually goes live
+  `docs/archive/expedition_survival_calibration.md` measured actually goes live
   on a trip this length; water is reported as evidence, not gated.
   **Don't "fix" that by seeding a thirst deficit** — `scripts/salts.lua`
   derives blood salt concentration as saltFrac/hydrationFrac and
