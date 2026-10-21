@@ -112,11 +112,11 @@ local function stepSubmit()
 end
 
 local function stepFollow()
-    local status = engine.getScenarioStatus()
-    if not status or status.kind ~= "load" or status.id ~= scenarioStartup.id then
-        return
-    end
-    if not status.done then return end
+    -- the startup load's OWN terminal record, kept by the engine: the latest
+    -- scenario operation may already be a capture or another load by now
+    local startup = engine.getScenarioStartup()
+    local status = startup and startup.result
+    if not status or status.id ~= scenarioStartup.id then return end
     scenarioStartup.phase = "done"
     scenarioStartup.outcome = status.outcome
     if status.outcome == "ready" then

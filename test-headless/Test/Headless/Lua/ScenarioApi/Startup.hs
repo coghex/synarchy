@@ -47,6 +47,7 @@ import Scenario.Load.Types
 import Scenario.Path (ScenarioRoots(..))
 import Scenario.Schema (ScenarioFormat(..), scenarioFormat)
 import Test.Headless.Lua.ScenarioApi.Support
+import Test.Headless.Scenario.Capture.Support (awaitCapture, withPump)
 import Test.Headless.Scenario.Load.Harness
 import Test.Headless.Scenario.Placement.Fixtures (Fx(..))
 
@@ -255,6 +256,59 @@ latchSpec = describe "the startup-failure latch" $ do
         latched a >>= (`shouldSatisfy` mentions ["ScenarioNotAMapping"])
         latched a >>= (`shouldSatisfy` (maybe False (not ∘ T.isInfixOf "later definition failure")))
 
+    it "ignores a LATE failure of a startup load that already succeeded, however it is reported" $ \a → do
+        let file = aLaunch a </> "late.yaml"
+            lsr = lsrOf a
+        writeFile file (doc ["units: []"])
+        _ ← configure a ModeHeadless (Just file)
+        resetStartupState lsr
+        s ← startup a
+        slsOutcome s `shouldBe` Just ScenarioReady
+        let n = slsRequestId s
+        failLoad lsr n "late failLoad"
+        failPublishedLoad lsr n "late failPublishedLoad"
+        failReconciliation lsr n [ReconciliationFailure "scripts/late.lua" "late reconcile"]
+        latched a `shouldReturn` Nothing
+        -- …and the generic transaction itself is untouched
+        fmap (fmap lsOutcome) (readLoadStatus lsr) `shouldReturn` Just (Just LoadSucceeded)
+        fmap (fmap slsOutcome) (readStartupResult lsr) `shouldReturn` Just (Just ScenarioReady)
+
+    it "ignores a late failure of a startup load that a NEWER load has replaced" $ \a → do
+        let file = aLaunch a </> "replaced.yaml"
+            lsr = lsrOf a
+        writeFile file (doc ["units: []"])
+        _ ← configure a ModeHeadless (Just file)
+        resetStartupState lsr
+        s ← startup a
+        let n = slsRequestId s
+        _ ← put a "newer.yaml" (doc ["units: []"])
+        m ← loadViaLua a "'newer'"
+        _ ← pumpUntilTerminal (aH a) m 60
+        m `shouldBe` n + 1
+        failLoad lsr n "late failLoad"
+        failPublishedLoad lsr n "late failPublishedLoad"
+        latched a `shouldReturn` Nothing
+        fmap (lsRequestId <$>) (readLoadStatus lsr) `shouldReturn` Just m
+        fmap (fmap lsOutcome) (readLoadStatus lsr) `shouldReturn` Just (Just LoadSucceeded)
+
+    it "keeps the startup load's own result after later operations replace the newest record" $ \a → do
+        let file = aLaunch a </> "kept-result.yaml"
+            lsr = lsrOf a
+        writeFile file (doc ["units: []"])
+        _ ← configure a ModeHeadless (Just file)
+        resetStartupState lsr
+        s ← startup a
+        let n = slsRequestId s
+        -- a capture, then another load, are admitted after it
+        sid ← saveViaLua a "'kept-result-capture'" ""
+        _ ← withPump (aH a) (awaitCapture (aH a) sid 60)
+        _ ← put a "kept-newer.yaml" (doc ["units: []"])
+        m ← loadViaLua a "'kept-newer'"
+        _ ← pumpUntilTerminal (aH a) m 60
+        call a "local s = engine.getScenarioStartup() return s.result.id .. '|' .. s.result.kind .. '|' .. s.result.outcome"
+            `shouldReturn` T.pack (show n <> "|load|ready")
+        call a "return engine.getScenarioStatus().id" `shouldReturn` T.pack (show m)
+
     it "is written by the driver's own report, naming the file and the cause" $ \a → do
         let file = aLaunch a </> "driver-report.yaml"
         _ ← configure a ModeHeadless (Just file)
@@ -417,6 +471,25 @@ driverSpec = describe "the startup driver (scripts/scenario_startup.lua)" $ do
         call a "return __driver.phase" `shouldReturn` "failed"
         latched a >>= (`shouldSatisfy` mentions ["Startup failed: materials could not parse bad.yaml", T.pack (file a)])
         observed a `shouldReturn` before
+
+    it "completes even when a capture was accepted between the load's end and the next tick" $ \a → do
+        writeFile (file a) (doc ["units: []"])
+        _ ← configure a ModeOffscreen (Just (file a))
+        resetStartupState (lsrOf a)
+        install a "stub.done = true"
+        -- the UI boot has built and drained the queue
+        call a "local s = package.loaded['scripts.startup_loader'] s.built = true s.done = true return 'ok'"
+            `shouldReturn` "ok"
+        ticks a 2                                   -- definitions seen, load submitted
+        n ← currentLoadId a
+        _ ← pumpUntilTerminal (aH a) n 60
+        -- a script saw the load ready and captured BEFORE the driver's next tick
+        sid ← saveViaLua a "'between-ticks'" ""
+        _ ← withPump (aH a) (awaitCapture (aH a) sid 60)
+        call a "return engine.getScenarioStatus().kind" `shouldReturn` "save"
+        ticks a 2
+        call a "return __driver.phase .. '|' .. __driver.outcome" `shouldReturn` "done|ready"
+        calls a `shouldReturn` "show:test_arena_view"
 
     it "graphical: a failed scenario still shows the session that stands, and the driver never exits the process" $ \a → do
         let bad = aLaunch a </> "driven-bad.yaml"

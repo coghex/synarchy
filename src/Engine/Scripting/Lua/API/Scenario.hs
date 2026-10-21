@@ -56,7 +56,7 @@ import Engine.Core.State (EngineEnv)
 import Engine.Core.Types (BootMode(..), EngineConfig(..))
 import Engine.Load.Status
     ( claimStartupSubmission, readLastScenarioOperation, readScenarioStatus
-    , recordStartupFailure, releaseStartupSubmission )
+    , readStartupResult, recordStartupFailure, releaseStartupSubmission )
 import Scenario.Capture.Service (readCaptureStatus, requestScenarioCapture)
 import Scenario.Capture.Types
 import Scenario.Load.Service (requestScenarioLoad, requestStartupScenarioLoad)
@@ -414,10 +414,15 @@ pushSaveStatus s = do
 
 -- * The startup verbs
 
--- | @engine.getScenarioStartup() → nil | { path, loadsDefinitions }@
+-- | @engine.getScenarioStartup() → nil | { path, loadsDefinitions [, result] }@
 --
 --   The startup driver's question: did this boot ask for a scenario, and
---   must the driver bring the arena-profile definitions in itself. The
+--   must the driver bring the arena-profile definitions in itself; and,
+--   once the startup load has ended, how — @result@ is that load's terminal
+--   status (the same table @engine.getScenarioStatus@ gives a load), kept
+--   for the boot however many operations were admitted after it (a capture
+--   a script made the instant the scenario was ready would otherwise hide
+--   it from the driver). The
 --   path is the RESOLVED file @--scenario@ named; it comes from the engine
 --   configuration and is only ever handed on as data. Headless never runs
 --   the UI boot that loads definitions for the other modes, so headless
@@ -429,9 +434,13 @@ scenarioStartupFn env = do
     case ecScenarioStartup cfg of
         Nothing → Lua.pushnil
         Just path → do
+            result ← Lua.liftIO (readStartupResult (slLoadStatusRef (toSaveLoadCapability env)))
             Lua.newtable
             setText "path" (T.pack path)
             setBool "loadsDefinitions" (ecBootMode cfg ≡ ModeHeadless)
+            -- the startup load's OWN terminal record, kept however many
+            -- operations were admitted since
+            forM_ result $ \r → pushLoadStatus r *> Lua.setfield (-2) "result"
     pure 1
 
 -- | @engine.startScenarioStartup() → id | nil, rejection@

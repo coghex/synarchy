@@ -41,7 +41,7 @@ module Engine.Load.Status
     , claimScenarioLoad, readScenarioStatus, updateScenarioStatus
     , terminateScenario
     , markScenarioStartup, recordStartupFailure, readStartupFailure, resetStartupState
-    , claimStartupSubmission, releaseStartupSubmission
+    , claimStartupSubmission, releaseStartupSubmission, readStartupResult
     , readLastScenarioOperation
     , setScenarioPlan, takeScenarioPlan, readScenarioPlan
       -- * The scenario capture request record (#2714)
@@ -276,7 +276,7 @@ newLoadStatusRef = LoadStatusRef <$> newIORef 0 <*> newIORef Nothing
                                  <*> newMVar () <*> newIORef Nothing
                                  <*> newIORef noSeams <*> newIORef Nothing
                                  <*> newIORef (CaptureCell Nothing noCaptureSeams)
-                                 <*> newIORef (EntryCell Nothing Nothing False)
+                                 <*> newIORef (EntryCell Nothing Nothing False Nothing)
 
 -- | Accept a new load request, allocating a fresh request id. Fails if
 --   another load is already in-flight (non-terminal outcome). Does NOT
@@ -321,7 +321,6 @@ advanceLoad (LoadStatusRef _ statusR _ _ _ _ _ _ _) n phase =
 --   with 'lsFailedAtPhase' unset, exactly as 'failPublishedLoad' does.
 failLoad ∷ LoadStatusRef → Int → Text → IO ()
 failLoad ref@(LoadStatusRef _ statusR _ _ scenarioR _ _ _ _) n err = do
-    latchStartupFailure ref n err
     scenario ← readIORef scenarioR
     let published = case scenario of
             Just r | slsRequestId r ≡ n → slsPublished r
@@ -333,7 +332,8 @@ failLoad ref@(LoadStatusRef _ statusR _ _ scenarioR _ _ _ _) n err = do
                     else s { lsPhase = LoadFailed, lsOutcome = Just (LoadAborted err)
                            , lsFailedAtPhase = Just (lsPhase s) }
             | otherwise = s
-    atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
+    moved ← transitionActive statusR n step
+    forM_ moved $ afterStartupFailure ref scenario n err
 
 finishLoad ∷ LoadStatusRef → Int → IO ()
 finishLoad (LoadStatusRef _ statusR _ _ _ _ _ _ _) n =
@@ -363,19 +363,30 @@ finishLoad (LoadStatusRef _ statusR _ _ _ _ _ _ _) n =
 --   longer names the current transaction or one that already reached a
 --   terminal outcome.
 failReconciliation ∷ LoadStatusRef → Int → [ReconciliationFailure] → IO ()
-failReconciliation ref@(LoadStatusRef _ statusR _ _ _ _ _ _ _) n failures
+failReconciliation ref@(LoadStatusRef _ statusR _ _ scenarioR _ _ _ _) n failures
     | null failures = pure ()
     | otherwise     = do
-        latchStartupFailure ref n (renderReconciliationFailures failures)
-        atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
+        scenario ← readIORef scenarioR
+        moved ← transitionActive statusR n step
+        forM_ moved $ afterStartupFailure ref scenario n (renderReconciliationFailures failures)
   where
-    step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
-               s { lsPhase = LoadReconciliationFailed
-                 , lsOutcome = Just
-                     (LoadReconciliationIncomplete
-                        (renderReconciliationFailures failures))
-                 , lsReconciliationFailures = failures }
-           | otherwise = s
+    step s = s { lsPhase = LoadReconciliationFailed
+               , lsOutcome = Just
+                   (LoadReconciliationIncomplete
+                      (renderReconciliationFailures failures))
+               , lsReconciliationFailures = failures }
+
+-- | Apply @step@ to the generic transaction ONLY if it is request @n@ and
+--   still active, atomically, and answer the status it became — 'Nothing'
+--   when nothing moved. A late failure for a request that already ended,
+--   or that a newer request has replaced, therefore changes nothing and is
+--   reported to nobody (the guard every ender of a load shares, and the one
+--   the startup latch below depends on).
+transitionActive ∷ IORef (Maybe LoadStatus) → Int → (LoadStatus → LoadStatus) → IO (Maybe LoadStatus)
+transitionActive statusR n step = atomicModifyIORef' statusR $ \mS → case mS of
+    Just s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing →
+        let s' = step s in (Just s', Just s')
+    _ → (mS, Nothing)
 
 -- | Issue #2713: terminate a scenario load whose replacement session was
 --   PUBLISHED and then could not be completed. The counterpart of
@@ -385,9 +396,10 @@ failReconciliation ref@(LoadStatusRef _ statusR _ _ _ _ _ _ _) n failures
 --   'LoadFailed'. A no-op for a request id that no longer names the
 --   current transaction or one that already ended.
 failPublishedLoad ∷ LoadStatusRef → Int → Text → IO ()
-failPublishedLoad ref@(LoadStatusRef _ statusR _ _ _ _ _ _ _) n err = do
-    latchStartupFailure ref n err
-    atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
+failPublishedLoad ref@(LoadStatusRef _ statusR _ _ scenarioR _ _ _ _) n err = do
+    scenario ← readIORef scenarioR
+    moved ← transitionActive statusR n step
+    forM_ moved $ afterStartupFailure ref scenario n err
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
                s { lsPhase = LoadReplacementFailed
@@ -535,27 +547,28 @@ readScenarioStatus ref@(LoadStatusRef _ _ _ _ scenarioR _ _ _ _) = do
     current ← readLoadStatus ref
     rec' ← readIORef scenarioR
     pure $ case (current, rec') of
-        (Just l, Just s) | lsRequestId l ≡ slsRequestId s → Just (settle l s)
+        (Just l, Just s) | lsRequestId l ≡ slsRequestId s → Just (settleScenarioRecord l s)
         _ → Nothing
-  where
-    -- A load failure the existing transaction recorded on its own — the
-    -- world thread's staging failing, the publish barrier timing out, the
-    -- prepared Lua state refusing to apply — ends the generic transaction
-    -- without this record having been told. The record must never stay
-    -- non-terminal under a terminal request, so it is settled here, from
-    -- the generic outcome, rather than at each of those sites.
-    settle l s = case lsOutcome l of
-        Just (LoadAborted msg) | isNothing (slsOutcome s) →
-            let base = fromMaybe (FailureContext (slsStage s) (CauseSetup msg) [])
-                                 (slsPendingFailure s)
-                recovered
-                    | slsPublished s = RecoveryFailed msg
-                    | otherwise = RecoveryPreserved
-                ctx | slsPublished s = base { fcDetails = fcDetails base <> [msg] }
-                    | otherwise = base
-            in s { slsStage = StageFailed, slsOutcome = Just (ScenarioUnsuccessful ctx)
-                 , slsRecovery = recovered }
-        _ → s
+
+-- | A load failure the existing transaction recorded on its own — the
+--   world thread's staging failing, the publish barrier timing out, the
+--   prepared Lua state refusing to apply — ends the generic transaction
+--   without the scenario record having been told. The record must never
+--   stay non-terminal under a terminal request, so it is settled from the
+--   generic outcome, here, rather than at each of those sites.
+settleScenarioRecord ∷ LoadStatus → ScenarioLoadStatus → ScenarioLoadStatus
+settleScenarioRecord l s = case lsOutcome l of
+    Just (LoadAborted msg) | isNothing (slsOutcome s) →
+        let base = fromMaybe (FailureContext (slsStage s) (CauseSetup msg) [])
+                             (slsPendingFailure s)
+            recovered
+                | slsPublished s = RecoveryFailed msg
+                | otherwise = RecoveryPreserved
+            ctx | slsPublished s = base { fcDetails = fcDetails base <> [msg] }
+                | otherwise = base
+        in s { slsStage = StageFailed, slsOutcome = Just (ScenarioUnsuccessful ctx)
+             , slsRecovery = recovered }
+    _ → s
 
 -- | Change the record of request @n@. A no-op for any other request id
 --   and once the request is terminal, so a stale completion can neither
@@ -584,6 +597,12 @@ terminateScenario ref n outcome recovery = do
                     ScenarioReady → StageReady
                     ScenarioUnsuccessful _ → StageFailed
                 , slsRecovery = recovery }
+            -- the startup load's result is kept for the boot (see
+            -- 'readStartupResult'), before the generic transaction releases
+            -- the exclusion and a later request can replace the record
+            terminal ← readScenarioRecord ref
+            forM_ terminal $ \r →
+                when (slsRequestId r ≡ n ∧ slsStartup r) (storeStartupResult ref r)
             case outcome of
                 ScenarioReady → finishLoad ref n
                 ScenarioUnsuccessful ctx
@@ -601,6 +620,10 @@ data EntryCell = EntryCell
     , entStartupFailure  ∷ !(Maybe Text)
     , entStartupSubmitted ∷ !Bool
       -- ^ the boot's one startup load has been (or is being) submitted
+    , entStartupResult ∷ !(Maybe ScenarioLoadStatus)
+      -- ^ the startup load's TERMINAL record, kept for the boot: the
+      --   scenario record is replaced by the next operation admitted, and
+      --   the driver must still learn how its own load ended
     }
 
 -- | The scenario operation admitted last, if any. Every claim sets it
@@ -652,19 +675,28 @@ releaseStartupSubmission (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
 resetStartupState ∷ LoadStatusRef → IO ()
 resetStartupState (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
     atomicModifyIORef' cellR $ \c →
-        (c { entStartupFailure = Nothing, entStartupSubmitted = False }, ())
+        (c { entStartupFailure = Nothing, entStartupSubmitted = False
+           , entStartupResult = Nothing }, ())
 
--- | Latch request @n@'s failure when it is the startup load. Runs from
---   every function that ends a load unsuccessfully, BEFORE the generic
---   transaction ends (and with it the operation exclusion), so no later
---   operation can replace the evidence before the boot has seen it.
-latchStartupFailure ∷ LoadStatusRef → Int → Text → IO ()
-latchStartupFailure ref@(LoadStatusRef _ _ _ _ scenarioR _ _ _ _) n err = do
-    rec' ← readIORef scenarioR
-    forM_ rec' $ \s → when (slsRequestId s ≡ n ∧ slsStartup s) $
+-- | What a function that just moved request @n@'s generic transaction to an
+--   unsuccessful end does for the boot, when @n@ is the startup load. It runs
+--   ONLY if that transition really happened ('transitionActive'), so a late
+--   failure for a request that already ended — or that a newer request has
+--   replaced — latches nothing and cannot end a boot that started fine. The
+--   scenario record is read BEFORE the transition (the caller's @scenario@),
+--   because the exclusion releases the instant the transaction ends and the
+--   next claim replaces the record; the latch cell itself is never replaced
+--   by a claim, so the evidence survives. @moved@ is the status the
+--   transaction became: if the scenario record had not been told (the world
+--   thread's staging failed, say) the result is settled from it.
+afterStartupFailure ∷ LoadStatusRef → Maybe ScenarioLoadStatus → Int → Text → LoadStatus → IO ()
+afterStartupFailure ref scenario n err moved = forM_ scenario $ \s →
+    when (slsRequestId s ≡ n ∧ slsStartup s) $ do
         recordStartupFailure ref $
             "scenario startup failed for " <> slsSource s <> ": " <> err
             <> recoveryNote (slsRecovery s)
+        when (isNothing (slsOutcome s)) $
+            storeStartupResult ref (settleScenarioRecord moved s)
   where
     recoveryNote = \case
         RecoveryFlatArena → " (a default flat arena stands, NOT the requested scenario)"
@@ -672,6 +704,21 @@ latchStartupFailure ref@(LoadStatusRef _ _ _ _ scenarioR _ _ _ _) n err = do
         RecoveryIncomplete → " (the replacement session is incompletely initialized)"
         RecoveryPreserved → " (the previous session stands)"
         RecoveryNone → ""
+
+-- | Keep the startup load's terminal record for the boot.
+storeStartupResult ∷ LoadStatusRef → ScenarioLoadStatus → IO ()
+storeStartupResult (LoadStatusRef _ _ _ _ _ _ _ _ cellR) r =
+    atomicModifyIORef' cellR $ \c → (c { entStartupResult = Just r }, ())
+
+-- | The startup load's terminal record, once it has one — however many
+--   operations were admitted since (a capture a script made the instant the
+--   scenario was ready, an ordinary load): the record the boot's driver
+--   needs is its OWN load's, not the newest operation's.
+readStartupResult ∷ LoadStatusRef → IO (Maybe ScenarioLoadStatus)
+readStartupResult (LoadStatusRef _ _ _ _ _ _ _ _ cellR) = entStartupResult <$> readIORef cellR
+
+readScenarioRecord ∷ LoadStatusRef → IO (Maybe ScenarioLoadStatus)
+readScenarioRecord (LoadStatusRef _ _ _ _ scenarioR _ _ _ _) = readIORef scenarioR
 
 -- | Test-only: install the scenario seams. Inert until armed.
 armScenarioSeams ∷ LoadStatusRef → ScenarioLoadSeams → IO ()
