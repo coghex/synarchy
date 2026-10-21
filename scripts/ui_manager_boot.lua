@@ -301,7 +301,7 @@ function uiManager.finishArenaBoot()
     uiManager.ensureTooltipStyle()
     uiManager.ensureGameplayUI()
     uiManager.ensureTestArena()
-    uiManager.showMenu("test_arena")
+    if not engine.getScenarioStartup() then uiManager.showMenu("test_arena") end -- #2715: a --scenario boot gets its arena from scenario_startup.lua, never a default one first
 end
 
 function uiManager.onFramebufferResize(width, height)

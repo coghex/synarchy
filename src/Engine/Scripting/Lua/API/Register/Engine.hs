@@ -1,5 +1,6 @@
 module Engine.Scripting.Lua.API.Register.Engine
   ( registerEngineAPI
+  , registerEngineAPIWith
   ) where
 
 import UPrelude
@@ -73,6 +74,10 @@ import Engine.Scripting.Lua.API.Physiology
     (loadPhysiologyYamlFn, getPhysiologyRegistryFn)
 import Engine.Scripting.Lua.API.Tutorial (loadTutorialDirFn, getTutorialTreeFn)
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
+import Engine.Scripting.Lua.API.Scenario
+    ( ScenarioApi, productionScenarioApi, loadScenarioFn, saveScenarioFn
+    , scenarioStatusFn, scenarioStartupFn, startScenarioStartupFn
+    , failScenarioStartupFn )
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (toCoreCapability)
 import Engine.Core.Capability.ContentRegistries
@@ -90,7 +95,15 @@ debugThrowFn = error "debugThrow: deliberate test exception"
 -- | Populate and install the @engine@ global table.
 registerEngineAPI ∷ LuaCallStats → EngineEnv → LuaBackendState
                   → Lua.LuaE Lua.Exception ()
-registerEngineAPI callStats env backendState = do
+registerEngineAPI = registerEngineAPIWith productionScenarioApi
+
+-- | 'registerEngineAPI' with the scenario entry points' path roots supplied
+--   (#2715): the Hspec group installs the PRODUCTION verbs over a resource
+--   root of its own, distinct from the launch directory, instead of the
+--   process's working directory.
+registerEngineAPIWith ∷ ScenarioApi → LuaCallStats → EngineEnv → LuaBackendState
+                      → Lua.LuaE Lua.Exception ()
+registerEngineAPIWith scenarioApi callStats env backendState = do
   -- The content-registry loaders are narrowed to the `content-registries`
   -- capability (#890) — projected once here, alongside `core-init` for
   -- their logging. See docs/engineenv_capability_inventory.md SS7.6.
@@ -229,6 +242,14 @@ registerEngineAPI callStats env backendState = do
   registerLuaFunction callStats "engine" "finalizeAutosaveRotation"
       (finalizeAutosaveRotationFn env)
   registerLuaFunction callStats "engine" "loadSave"  (loadSaveFn env)
+  -- #2715: the scenario services' public entry points (load, save, status)
+  -- and the three verbs a direct --scenario boot's startup driver uses.
+  registerLuaFunction callStats "engine" "loadScenario"         (loadScenarioFn scenarioApi env)
+  registerLuaFunction callStats "engine" "saveScenario"         (saveScenarioFn scenarioApi env)
+  registerLuaFunction callStats "engine" "getScenarioStatus"    (scenarioStatusFn env)
+  registerLuaFunction callStats "engine" "getScenarioStartup"   (scenarioStartupFn env)
+  registerLuaFunction callStats "engine" "startScenarioStartup" (startScenarioStartupFn env)
+  registerLuaFunction callStats "engine" "failScenarioStartup"  (failScenarioStartupFn env)
 
   registerLuaFunction callStats "engine" "emitEvent"   (emitEventFn env)
   registerLuaFunction callStats "engine" "emitEventAt" (emitEventAtFn env)

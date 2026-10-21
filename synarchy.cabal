@@ -417,7 +417,7 @@ library
                      Engine.Scripting.Lua.API.ActionOutcome
                      Engine.Scripting.Lua.API.InputInject
                      Engine.Scripting.Lua.API.LoadGate
-                     Engine.Scripting.Lua.API.ScenarioDebug
+                     Engine.Scripting.Lua.API.Scenario
                      Engine.Scripting.Lua.API.TagQueryDebug
                      Engine.Scripting.Lua.API.QueueStats
                      Engine.Scripting.Lua.API.SceneStats
@@ -651,6 +651,7 @@ library
                      Gameplay.Tags.Registry
                      Gameplay.Tags.Query
                      Scenario.Items.Refs
+                     Scenario.Path
                      Scenario.Load.Types
                      Scenario.Load.Catalog
                      Scenario.Load.Session
@@ -2043,6 +2044,10 @@ test-suite synarchy-test-headless
                    Test.Headless.Scenario.World
                    Test.Headless.Scenario.World.Fixtures
                    Test.Headless.Scenario.World.Live
+                   Test.Headless.Scenario.Paths
+                   Test.Headless.Lua.ScenarioApi
+                   Test.Headless.Lua.ScenarioApi.Support
+                   Test.Headless.Lua.ScenarioApi.Startup
                    Test.Headless.Scenario.Load
                    Test.Headless.Scenario.Load.Harness
                    Test.Headless.Scenario.Load.Exclusion

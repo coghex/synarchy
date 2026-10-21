@@ -383,6 +383,12 @@ INCOMPATIBLE_FLAG_CASES = [
     (["--dump", "--arena"], "--arena", "dump"),
     (["--dump", "--seeds", "0:1"], "--seeds", "dump"),
     (["--language-report", "--seed", "42"], "--seed", "language-report"),
+    # --scenario (#2715) is honoured by headless, graphical and offscreen
+    # only; the three modes that never start a scenario refuse it by name.
+    (["--dump", "--scenario", "ambush.yaml"], "--scenario", "dump"),
+    (["--preview", "icons", "--scenario", "ambush.yaml"], "--scenario", "preview"),
+    (["--language-report", "--seeds", "0:1", "--scenario", "ambush.yaml"],
+     "--scenario", "language-report"),
 ]
 
 
@@ -478,6 +484,21 @@ MALFORMED_VALUE_CASES = [
     # falling back to the video-config resolution.
     ("--size non-positive", ["--offscreen", "--size", "0x100"],
      ["--size", "0x100"]),
+    # --scenario (#2715): every malformed value fails BEFORE an engine,
+    # window or listener exists. Each rides --headless, which honours it.
+    ("--scenario with no operand", ["--headless", "--scenario"], ["--scenario"]),
+    ("--scenario empty", ["--headless", "--scenario", ""], ["--scenario", "empty"]),
+    ("--scenario blank", ["--headless", "--scenario", "   "], ["--scenario", "empty"]),
+    ("--scenario extensionless name",
+     ["--headless", "--scenario", "ambush"], ["--scenario", "ambush", "extension"]),
+    ("--scenario unsupported extension",
+     ["--headless", "--scenario", "ambush.yml"], ["--scenario", ".yml"]),
+    ("--scenario relative path that does not exist",
+     ["--headless", "--scenario", "no-such-scenario-2715.yaml"],
+     ["--scenario", "no-such-scenario-2715.yaml"]),
+    ("--scenario absolute path that does not exist",
+     ["--headless", "--scenario", "/no/such/dir/scenario-2715.yaml"],
+     ["--scenario", "/no/such/dir/scenario-2715.yaml"]),
     ("--dump= empty selection", ["--dump="], ["--dump=", "terrain"]),
     ("--dump= unknown layer",
      ["--dump=bogus_layer_typo", "--worldSize", "16", "--region", "0,0,0,0"],

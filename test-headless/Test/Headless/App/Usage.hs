@@ -129,6 +129,8 @@ spec = describe "App.Usage --help (#2863)" $ do
         , ("--size",      [SelectOffscreen])
         , ("--seeds",     [SelectLanguageReport])
         , ("--arena",     [SelectHeadless, SelectGraphical, SelectOffscreen])
+          -- #2715: honoured exactly where --arena is (it selects that profile)
+        , ("--scenario",  [SelectHeadless, SelectGraphical, SelectOffscreen])
         , ("--port",      [SelectHeadless, SelectGraphical, SelectOffscreen
                           , SelectPreview])
         ]
