@@ -110,6 +110,16 @@ CI_ELIGIBLE = {
     # records the end-to-end coverage this deliberately leaves out of CI.
     "persistence_contract",
     "preview_cli",
+    # #2715: the only automated proof, across a PROCESS boundary, of the scenario
+    # entry points: a real --scenario boot (launch-relative, fancy file name,
+    # READY before scenario readiness), the Lua verbs over the console (busy,
+    # retry, overwrite, one baseline from every entry point), and the seven
+    # fatal startups that must exit nonzero with an orderly-shutdown trace.
+    # Deterministic (no AI, no timing: every wait is on an operation identity or
+    # a process exit), headless only, no worldgen beyond the 40x40 finite arena,
+    # no GPU. The --offscreen half is a manual flag of the same script and is
+    # not part of the registered run.
+    "scenario_entrypoint",
     "repair",
     "repair_item",
 }

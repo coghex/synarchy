@@ -324,17 +324,19 @@ def check_cli_boot(ctx) -> str | None:
         port = ctx["port"]
         ok(send(port, "return engine.getBootProfile()").strip() == "arena",
            "--scenario selected the arena profile without --arena")
+        # console availability is not scenario readiness: follow the operation
+        # (a command sent while the load is replacing the session is itself
+        # rejected as stale, so nothing else is asked until it has finished)
+        done = await_operation(port, "load", 1)
         req = send_json(port, "return engine.getScenarioStartup()")
         ok(isinstance(req, dict) and req.get("path") == cli_file and req.get("loadsDefinitions") is True,
            f"the engine carries the RESOLVED file as data ({req})")
-        # console availability is not scenario readiness: follow the operation
-        done = await_operation(port, "load", 1)
         ok(bool(done) and done.get("outcome") == "ready" and done.get("done") is True,
            f"operation load #1 reached its ready result ({done and done.get('outcome')})")
         ok(bool(done) and done.get("source") == cli_file,
            "its source is the launch-relative file, resolved against the LAUNCH directory")
-        ok(bool(done) and done.get("warnings") == [] and done.get("published") is True
-           and done.get("recovery") == "none", "no warnings; published; nothing recovered")
+        ok(bool(done) and not done.get("warnings") and done.get("published") is True
+           and done.get("recovery") == "none", f"no warnings; published; nothing recovered ({done and done.get('warnings')})")
         ok(send(port, "return engine.isPaused()").strip() == "true", "the scenario stands PAUSED")
         ok(unit_count(port) == 1, "the launch file's single unit stands, not the folder file's two")
         text = eng.text()
@@ -458,8 +460,8 @@ def check_bare_boot(ctx, cli_capture: str | None) -> None:
         cli_file = os.path.join(launch, FANCY_FILE)
         lid, reply = lua_load(port, cli_file)
         done = lid and await_operation(port, "load", lid)
-        ok(bool(done) and done.get("outcome") == "ready" and done.get("warnings") == [],
-           f"the same file loads through Lua ({done and done.get('outcome')})")
+        ok(bool(done) and done.get("outcome") == "ready" and not done.get("warnings"),
+           f"the same file loads through Lua ({done and (done.get('outcome'), done.get('warnings'))})")
         out = os.path.join(ctx["work"], "lua-capture.yaml")
         sid, _ = lua_save(port, out)
         saved = sid and await_operation(port, "save", sid)
@@ -629,7 +631,10 @@ def run_offscreen(ctx) -> None:
             done = await_operation(ctx["port"], "load", 1, 180.0)
             ok(bool(done) and done.get("outcome") == "ready", f"ready ({done and done.get('outcome')})")
             ok(send(ctx["port"], "return engine.isPaused()").strip() == "true", "paused")
-            ok(unit_count(ctx["port"]) == 1, "the scenario's unit stands (no intermediate default arena)")
+            ok(unit_count(ctx["port"]) == 1, "the scenario's unit stands")
+            log = eng.text()
+            ok("Creating test arena world" not in log and "Test arena world created" not in log,
+               "no intermediate default arena was created before the scenario")
     finally:
         rc = eng.stop()
         ok(rc == 0, f"clean quit (exit {rc})")

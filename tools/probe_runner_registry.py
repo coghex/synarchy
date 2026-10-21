@@ -252,6 +252,13 @@ PROBES = [
      "with omission still defaulting (#1191); and every malformed --region shape "
      "(non-numeric/too few/too many/partially numeric/no operand) rejected pre-boot with the "
      "omitted-flag default still reachable (#1481, CH-67)"),
+    ("scenario_entrypoint", "scenario_entrypoint_probe.py",
+     "scenario entry points (#2715): engine.loadScenario/saveScenario/getScenarioStatus over the "
+     "console and a direct --scenario boot on isolated resource roots (launch dir != resource "
+     "root): launch-relative CLI path with a fancy name, READY vs scenario readiness, Lua names/"
+     "absolute paths/rejections, busy + retry, capture + overwrite + reload, one baseline from "
+     "every entry point, partial content, and seven fatal startups that exit nonzero with the "
+     "cleanup trace (headless; --offscreen is a manual flag)"),
     ("remote_warning_page_guard", "remote_warning_page_guard_probe.py",
      "remote-warning establishHere() revalidation guard against an active-world switch (#844)"),
     ("repair_item", "repair_item_probe.py",
@@ -589,6 +596,7 @@ PROBE_EXPECTED_SECONDS: dict[str, float] = {
     "medic_coord": 39.0,
     "canteen_instance": 36.0,
     "preview_cli": 14.0,
+    "scenario_entrypoint": 70.0,
     "debug_console_boot": 5.0,
 }
 
