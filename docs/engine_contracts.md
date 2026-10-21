@@ -6408,7 +6408,7 @@ same-tile siblings untouched. `markFloraDead` refuses a second record
 for an occurrence rather than overwriting it; selecting the retention
 outcome from species policy is not the store's job (EFM-7/EFM-10). A
 record also carries the species' authored NAME and the occurrence's
-canonical tile, as validation provenance only: the id cannot recover
+canonical tile, as validation provenance only (the frozen life phase and annual stage are each optional: a species with no phases or no annual cycle freezes none, and the legacy dead token is refused as a phase at death): the id cannot recover
 either, and a record for an unloaded wild occurrence must still be
 checked. Three boundaries judge a record, each naming the page and key:
 `validateWorldActivity` (reserved key, a wire tag outside its

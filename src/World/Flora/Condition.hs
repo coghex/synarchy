@@ -79,7 +79,7 @@ import World.Flora.Identity
 import World.Flora.Reference (FloraRef)
 import World.Flora.Types
     ( AnnualStageTag, CorpseSuccessor(..), FloraCondition(..)
-    , FloraContext(..), FloraDeathCause, FloraId, LifePhaseTag )
+    , FloraContext(..), FloraDeathCause, FloraId, LifePhaseTag(..) )
 
 -- | What follows a transient corpse. The two WILD outcomes are the
 --   species-level @successor@ (@reseed@ | @absent@); 'RetainAwaitReplanting'
@@ -136,8 +136,11 @@ data FloraConditionRecordOf s = FloraConditionRecord
       -- ^ Absolute world day ('World.Time.Types.worldAbsoluteDay') the
       --   condition began.
     , fcrContext   ∷ !FloraContext
-    , fcrPhase     ∷ !LifePhaseTag
-      -- ^ Frozen at the transition (D-10).
+    , fcrPhase     ∷ !(Maybe LifePhaseTag)
+      -- ^ Frozen at the transition (D-10); 'Nothing' for a species that
+      --   declares no phases at all, whose growth has no visual phase
+      --   (flora visual state contract §1). 'PhaseDead' is not a phase
+      --   at death (§1.1) and is refused ('PhaseDeadAtDeath').
     , fcrStage     ∷ !(Maybe AnnualStageTag)
       -- ^ Frozen at the transition (D-10); 'Nothing' for an occurrence
       --   with no annual cycle, which is valid.
@@ -210,6 +213,9 @@ data ConditionProblem
       --   names no plant.
     | NotAStoredCondition
       -- ^ The condition is 'ConditionAlive'.
+    | PhaseDeadAtDeath
+      -- ^ The frozen phase is the legacy 'PhaseDead' token, which the
+      --   contract forbids as a phase at death.
     | ExpiryBeforeBegin !Int !Int
       -- ^ @(expiry day, begin day)@.
     | WildAwaitsReplanting
@@ -229,6 +235,7 @@ conditionRecordProblems
 conditionRecordProblems key r = concat
     [ [ ReservedKey | isFloraInstanceIdNone key ]
     , [ NotAStoredCondition | fcrCondition r ≢ ConditionDead ]
+    , [ PhaseDeadAtDeath | fcrPhase r ≡ Just PhaseDead ]
     , case fcrRetention r of
         RetentionPersistent → []
         RetentionTransient expiry successor → concat
@@ -248,6 +255,9 @@ renderConditionProblem p = case p of
         "the key is the reserved non-identity value"
     NotAStoredCondition →
         "the condition is not a stored condition (only dead is)"
+    PhaseDeadAtDeath →
+        "the frozen life phase is the legacy dead token, which is not a \
+        \phase at death"
     ExpiryBeforeBegin expiry began →
         "expiry day " <> tshow expiry <> " precedes begin day " <> tshow began
     WildAwaitsReplanting →

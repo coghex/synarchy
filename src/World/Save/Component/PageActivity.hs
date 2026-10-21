@@ -724,7 +724,8 @@ data FloraConditionDTO = FloraConditionDTO
     , fcdCause     ∷ !VocabTag
     , fcdBeganDay  ∷ !Int
     , fcdContext   ∷ !VocabTag
-    , fcdPhase     ∷ !VocabTag
+    , fcdPhase     ∷ !(Maybe VocabTag)
+      -- ^ Optional: a species with no phases has none to freeze.
     , fcdStage     ∷ !(Maybe VocabTag)
     , fcdRetention ∷ !FloraRetentionDTO
     } deriving (Show, Eq, Generic, Serialize)
@@ -745,7 +746,7 @@ toFloraConditionDTO r = FloraConditionDTO
     , fcdCause     = toVocabTag (fcrCause r)
     , fcdBeganDay  = fcrBeganDay r
     , fcdContext   = toVocabTag (fcrContext r)
-    , fcdPhase     = toVocabTag (fcrPhase r)
+    , fcdPhase     = toVocabTag <$> fcrPhase r
     , fcdStage     = toVocabTag <$> fcrStage r
     , fcdRetention = case fcrRetention r of
         RetentionPersistent → RetentionPersistentD
@@ -779,8 +780,8 @@ fromFloraConditionDTO d =
     cause = tagged "cause" (fcdCause d)
     context ∷ Either ConditionProblem FloraContext
     context = tagged "context" (fcdContext d)
-    phase ∷ Either ConditionProblem LifePhaseTag
-    phase = tagged "life phase" (fcdPhase d)
+    phase ∷ Either ConditionProblem (Maybe LifePhaseTag)
+    phase = traverse (tagged "life phase") (fcdPhase d)
     stage ∷ Either ConditionProblem (Maybe AnnualStageTag)
     stage = traverse (tagged "annual stage") (fcdStage d)
     retention ∷ Either ConditionProblem ConditionRetention

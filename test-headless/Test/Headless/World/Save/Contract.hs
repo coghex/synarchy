@@ -441,21 +441,21 @@ richPage = PageSnapshot
               { fcrSpecies = FloraByName "probe_berry", fcrTile = (15, 16)
               , fcrCondition = ConditionDead, fcrCause = CauseDrought
               , fcrBeganDay = 40, fcrContext = ContextWild
-              , fcrPhase = PhaseFlowering, fcrStage = Just CycleBudding
+              , fcrPhase = Just PhaseFlowering, fcrStage = Just CycleBudding
               , fcrRetention = RetentionTransient 100 RetainReseed } )
         , ( plantedFloraInstanceId 99
           , FloraConditionRecord
               { fcrSpecies = FloraByName "wheat", fcrTile = (11, 12)
               , fcrCondition = ConditionDead, fcrCause = CauseFrost
               , fcrBeganDay = 41, fcrContext = ContextCultivated
-              , fcrPhase = PhaseRipening, fcrStage = Nothing
+              , fcrPhase = Nothing, fcrStage = Nothing
               , fcrRetention = RetentionTransient 41 RetainAwaitReplanting } )
         , ( generatedFloraInstanceId "page1" 17 18 "probe_oak" 1
           , FloraConditionRecord
               { fcrSpecies = FloraByName "probe_oak", fcrTile = (17, 18)
               , fcrCondition = ConditionDead, fcrCause = CauseFire
               , fcrBeganDay = 42, fcrContext = ContextWild
-              , fcrPhase = PhaseMatured, fcrStage = Nothing
+              , fcrPhase = Just PhaseMatured, fcrStage = Nothing
               , fcrRetention = RetentionPersistent } ) ]
     , pgsPlantedFloraCursor = 3
     , pgsCraftBills   = richBills

@@ -182,7 +182,7 @@ deadRecord fid tile ctx = FloraConditionRecord
     , fcrCause     = CauseFire
     , fcrBeganDay  = 120
     , fcrContext   = ctx
-    , fcrPhase     = PhaseMatured
+    , fcrPhase     = Just PhaseMatured
     , fcrStage     = Just CycleFlowering
     , fcrRetention = RetentionTransient 180 $ case ctx of
         ContextWild       → RetainReseed
@@ -244,11 +244,12 @@ spec = describe "flora condition persistence" $ do
         clearFloraCondition (generatedAt otherTile oakId 0) store
             `shouldBe` store
 
-    it "accepts a persistent outcome, an absent annual stage and a \
-       \zero-length retention window" $ do
+    it "accepts a persistent outcome, an absent annual stage, an absent \
+       \life phase and a zero-length retention window" $ do
         let base = deadRecord oakId homeTile ContextWild
         forM_ [ base { fcrRetention = RetentionPersistent }
               , base { fcrStage = Nothing }
+              , base { fcrPhase = Nothing }
               , base { fcrRetention = RetentionTransient (fcrBeganDay base)
                                                          RetainAbsent } ] $ \r →
             conditionRecordProblems oakIid r `shouldBe` []
@@ -273,6 +274,9 @@ spec = describe "flora condition persistence" $ do
         conditionRecordProblems floraInstanceIdNone ok `shouldBe` [ReservedKey]
         conditionRecordProblems oakIid (ok { fcrCondition = ConditionAlive })
             `shouldBe` [NotAStoredCondition]
+        -- The legacy dead token is not a phase at death (contract §1.1).
+        conditionRecordProblems oakIid (ok { fcrPhase = Just PhaseDead })
+            `shouldBe` [PhaseDeadAtDeath]
         conditionRecordProblems oakIid
             (ok { fcrRetention = RetentionTransient 119 RetainReseed })
             `shouldBe` [ExpiryBeforeBegin 119 120]
@@ -311,7 +315,9 @@ spec = describe "flora condition persistence" $ do
         forM_ [ savedOf (deadRecord oakId homeTile ContextWild)
               , savedOf (deadRecord berryId homeTile ContextCultivated)
               , (savedOf (deadRecord fernId homeTile ContextWild))
-                    { fcrStage = Nothing, fcrRetention = RetentionPersistent } ] $
+                    { fcrStage = Nothing, fcrRetention = RetentionPersistent }
+              , (savedOf (deadRecord oakId homeTile ContextWild))
+                    { fcrPhase = Nothing } ] $
             \r → fromFloraConditionDTO (toFloraConditionDTO r) `shouldBe` Right r
 
   describe "world-activity versions" $ do
@@ -405,7 +411,7 @@ spec = describe "flora condition persistence" $ do
         forM_ [ ("condition", \d → d { fcdCondition = 77 })
               , ("cause",     \d → d { fcdCause = 77 })
               , ("context",   \d → d { fcdContext = 77 })
-              , ("life phase", \d → d { fcdPhase = 77 })
+              , ("life phase", \d → d { fcdPhase = Just 77 })
               , ("retention successor"
                 , \d → d { fcdRetention = RetentionTransientD 150 77 }) ] $
             \(field, corrupt) → do
@@ -418,6 +424,9 @@ spec = describe "flora condition persistence" $ do
         alive ← refusalFor pageA oakIid
                     (wireOf base { fcrCondition = ConditionAlive })
         namesPageAndKey pageA oakIid alive
+        deadPhase ← refusalFor pageA oakIid
+                    (wireOf base { fcrPhase = Just PhaseDead })
+        namesPageAndKey pageA oakIid deadPhase
         wildAwait ← refusalFor pageA oakIid
             (wireOf base { fcrRetention = RetentionTransient 150
                                               RetainAwaitReplanting })
@@ -502,6 +511,17 @@ spec = describe "flora condition persistence" $ do
         map fst errs `shouldSatisfy` elem "tile-not-owned"
         forM_ errs $ \(_, m) →
             m `shouldSatisfy` T.isInfixOf (unWorldPageId pageA)
+
+    it "judges tiles in an EXPANDABLE arena by the page's own authority: \
+       \a tile far beyond the sentinel's wrap threshold is its own \
+       \canonical name, for the record and for its planting" $ do
+        let far = (800000, 0)
+            iid = plantedFloraInstanceId 1
+            -- the sentinel world size would wrap this to (0, 800000)
+            a = pageWith pageA arenaParams far berryId iid
+                    (HM.singleton iid (recAt far))
+        canonicalTile 100000 (fst far) (snd far) `shouldNotBe` far
+        problems (sessionOf [(pageA, a)]) `shouldBe` []
 
     it "tolerates a record whose planting this page's log does not \
        \hold, and a wild record whose chunk is not resident" $ do
@@ -624,7 +644,9 @@ engineSpec = describe "flora condition persistence" $ do
         ws ← emptyWorldState
         writeIORef (wsGenParamsRef ws) (Just arenaParams)
         let iid = plantedFloraInstanceId 7
-            rec' = deadRecord berryId otherTile ContextCultivated
+            -- a species with no phases freezes none (contract §1)
+            rec' = (deadRecord berryId otherTile ContextCultivated)
+                       { fcrPhase = Nothing }
         atomicModifyIORef' (wsEditsRef ws) $ \es →
             ( appendEdit (chunkOf otherTile)
                   (WePlaceFloraWithId (fst otherTile) (snd otherTile) berryId

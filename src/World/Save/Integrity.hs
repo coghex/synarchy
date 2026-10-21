@@ -98,7 +98,8 @@ import World.Flora.Condition (FloraConditionRecordOf(..))
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdToLua, isPlantedFloraInstanceId)
 import World.Flora.Reference (FloraRef(..))
-import World.Generate.Coordinates (canonicalTile)
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Generate.Coordinates (canonicalTileFrameWith)
 import World.Save.Component.EntitySnapshots (unitsCodec, buildingsCodec)
 import World.Save.Component.Session (coreSessionCodec)
 import World.Save.Component.PageEdits (worldEditsCodec)
@@ -267,18 +268,24 @@ floraConditionProvenanceErrors snap = concatMap pageErrors (HM.toList (snapPages
         | (iid, rec) ← HM.toList (pgsFloraConditions page)
         , (code, expected, actual) ← recordErrors iid rec ]
       where
-        ws = wgpWorldSize (pgsGenParams page)
+        -- The PAGE's own canonicalization authority: an expandable
+        -- arena uses a sentinel world size and never wraps, which
+        -- 'canonicalChunkCoord' knows and a bare world size does not.
+        canon gx gy =
+            let (_, _, (dgx, dgy)) = canonicalTileFrameWith
+                    (canonicalChunkCoord (pgsGenParams page)) gx gy
+            in (gx + dgx, gy + dgy)
         plantings ∷ HM.HashMap FloraInstanceId ((Int, Int), FloraRef)
         plantings = HM.fromList
-            [ (iid, (canonicalTile ws gx gy, ref))
+            [ (iid, (canon gx gy, ref))
             | edits ← HM.elems (pgsEdits page)
             , WePlaceFloraRef gx gy ref _ _ iid ← edits ]
         recordErrors iid rec = concat
             [ [ ( "tile-not-owned", "a canonical tile of this page's frame"
                 , "tile " <> tshow (fcrTile rec) <> " (canonical form "
-                  <> tshow canon <> ")" )
-              | let canon = uncurry (canonicalTile ws) (fcrTile rec)
-              , canon ≢ fcrTile rec ]
+                  <> tshow canonical <> ")" )
+              | let canonical = uncurry canon (fcrTile rec)
+              , canonical ≢ fcrTile rec ]
             , case HM.lookup iid plantings of
                 Just (tile, ref)
                   | isPlantedFloraInstanceId iid →
