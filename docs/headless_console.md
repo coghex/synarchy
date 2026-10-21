@@ -42,6 +42,36 @@ $(cabal list-bin exe:synarchy) --headless --port 9008 --resource-root ~/work/syn
 SYNARCHY_ROOT=~/work/synarchy $(cabal list-bin exe:synarchy) --dump
 ```
 
+## Booting straight into a scenario (#2715)
+
+`--scenario <path>` (headless, offscreen, graphical; implies the arena profile)
+loads a scenario file as the paused testing session. The path is relative to the
+directory you launched from, or absolute, and carries its `.yaml` extension;
+`--dump`, `--preview` and `--language-report` reject the flag, and a malformed or
+missing file exits 1 before any engine starts.
+
+```bash
+cd ~/scenarios-work    # relative paths resolve from HERE, not the resource root
+$(cabal list-bin exe:synarchy) --headless --port 9008 --resource-root ~/work/synarchy \
+    --scenario ambush.yaml > /tmp/engine.log 2>&1 &
+until grep -q "READY" /tmp/engine.log 2>/dev/null; do sleep 0.2; done       # console: listener up
+# READY is NOT scenario readiness. Wait for the startup load (the process's first
+# operation, id 1) to finish, by identity:
+until echo 'local s = engine.getScenarioStatus() return s ~= nil and s.kind == "load" and s.id == 1 and s.done' \
+      | nc -w 5 localhost 9008 | grep -q true; do sleep 0.5; done
+echo 'return engine.getScenarioStatus().outcome' | nc -w 5 localhost 9008      # "ready"
+# ... inspect the paused baseline; resume only on purpose: engine.setPaused(false)
+```
+
+A fatal startup failure (unreadable file, invalid YAML, unsupported version, failed
+migration, construction failure, incomplete reconciliation, a definition family that
+will not load) makes headless/offscreen exit nonzero after announcing each worker it
+stops (`synarchy: boot cleanup: stopped the <name> worker`) and `boot cleanup: log
+flushed`. Loading from the console later uses `engine.loadScenario(name)` /
+`engine.saveScenario(name[, {overwrite = true}])` with names under `scenarios/` in the
+resource root; contract, return values, retry and the status fields:
+`docs/engine_contracts.md` §Scenario entry points.
+
 ## Offscreen render mode (#650)
 
 `--offscreen` is GPU on, window off — the full Vulkan pipeline into
