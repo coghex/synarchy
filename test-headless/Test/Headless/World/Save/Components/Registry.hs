@@ -31,6 +31,7 @@ import World.Save.Component.Entities
 import World.Save.Component.Knowledge (containerKnowledgeCodec)
 import World.Save.Component.Transfer (transferOrdersCodec)
 import World.Save.Component.PortableKnowledge (portableKnowledgeCodec)
+import World.Save.Component.RelationCauses (relationCausesCodec)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
 import Location.Bounds (AbsBounds(..))
@@ -78,21 +79,23 @@ spec = do
                 b = stubComponent (ComponentId "b") [ComponentId "a"]
             isLeft (dependencyOrder [a, b]) `shouldBe` True
 
-        it "every gameplay component is required EXCEPT the three \
+        it "every gameplay component is required EXCEPT the four \
            \deliberately-optional ones -- requirement 7's rule, plus its \
            \documented exceptions: #1087's container-knowledge (absence \
            \means no container has ever been inspected), #1246's \
-           \transfer-orders (absence means no order is queued) and \
+           \transfer-orders (absence means no order is queued), \
            \#2512's portable-knowledge (absence means no crate has ever \
-           \been hefted or opened). All three post-date every tracked \
-           \compatibility baseline and all three absences are TRUE of \
+           \been hefted or opened) and #2548's relation-causes (absence \
+           \means no cause exists). All four post-date every tracked \
+           \compatibility baseline and all four absences are TRUE of \
            \such a session rather than invented -- each had nowhere to \
-           \record the fact at all. A FOURTH optional component has to \
+           \record the fact at all. A FIFTH optional component has to \
            \be justified here rather than slip in unnoticed" $
             [ rcId c | c ← saveComponentRegistry, not (rcRequired c) ]
                 `shouldBe` [ containerKnowledgeComponentId
                            , transferOrdersComponentId
-                           , portableKnowledgeComponentId ]
+                           , portableKnowledgeComponentId
+                           , relationCausesComponentId ]
 
     describe "per-component codecs" $ do
         it "each component round-trips its own slice of the snapshot at \
@@ -130,6 +133,7 @@ spec = do
             check containerKnowledgeCodec
             check transferOrdersCodec
             check portableKnowledgeCodec
+            check relationCausesCodec
 
         it "declares a stable id and its current version" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
@@ -951,6 +955,7 @@ goldenRichPayloads =
       -- with the page count; this one cannot, because a crate's memory
       -- is keyed by the crate rather than by where it happens to sit.
     , ("portable-knowledge",  (8,    "a8c7f832281a39c5"))
+    , ("relation-causes",     (8,    "a8c7f832281a39c5"))
     ]
 
 goldenFullPayloads ∷ [(Text, (Int, Text))]
@@ -994,6 +999,10 @@ goldenFullPayloads =
       -- #2512: v1, session-scoped -- 8 bytes, one empty HashMap,
       -- unchanged by this fixture's page count.
     , ("portable-knowledge",  (8,    "a8c7f832281a39c5"))
+      -- #2548: the ONE row here carrying a NON-empty store (the five
+      -- causes of 'sampleStore'), so the relation-causes wire layout is
+      -- pinned on real content and not only on its empty list.
+    , ("relation-causes",     (273,  "5d671fa5e4fbdfa2"))
     ]
 
 encodedPayloadDigests ∷ SessionSnapshot → [(Text, (Int, Text))]
@@ -1032,6 +1041,7 @@ codecProbes =
     , probeOf containerKnowledgeCodec
     , probeOf transferOrdersCodec
     , probeOf portableKnowledgeCodec
+    , probeOf relationCausesCodec
     ]
 
 decodeErrorOf ∷ ComponentCodec a → Word32 → BS.ByteString → Maybe ComponentError

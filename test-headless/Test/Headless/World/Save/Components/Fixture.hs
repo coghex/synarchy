@@ -27,6 +27,8 @@ module Test.Headless.World.Save.Components.Fixture
     , isLeft, mentions
     ) where
 
+import Test.Headless.Faction.RelationStore.Fixture (sampleStore)
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Unit.Faction.Membership (inertUnitProfile)
@@ -281,6 +283,7 @@ minimalGlobals = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = emptyRelationCauseStore
     }
 
 -- | A placed location owing @entries@ (#917), with every other field
@@ -396,7 +399,8 @@ fullPage pid = (richPage pid)
 
 fullSnapshot ∷ SessionSnapshot
 fullSnapshot = case captureSessionSnapshot
-        minimalGlobals { sgNextItemId = 1000 } [fullPage page1] of
+        minimalGlobals { sgNextItemId = 1000, sgRelationCauses = sampleStore }
+        [fullPage page1] of
     Right s   → s
     Left errs → error ("fullSnapshot invalid: " <> show errs)
 

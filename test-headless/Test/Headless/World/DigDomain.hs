@@ -31,6 +31,7 @@
 --   passing because the fixture could never have moved.
 module Test.Headless.World.DigDomain (spec, engineSpec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
@@ -679,6 +680,7 @@ saveWith desigs = snapshotToSaveData
         , snapItemTags = mempty
         , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore
         }
 
 -- | Stage that save and report the designations the staged (never

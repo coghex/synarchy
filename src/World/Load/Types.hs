@@ -28,6 +28,7 @@ import Engine.Graphics.Camera (Camera2D)
 import Structure.Palette (TexPalette)
 import Building.Types (BuildingManager)
 import Item.Knowledge (PortableKnowledge)
+import Unit.Faction.RelationStore (RelationCauseStore)
 import Gameplay.Tags.Index (CategoryIndex)
 import Gameplay.Tags.Tag (ItemTarget)
 import Scenario.Items.Refs (ItemRefs)
@@ -118,6 +119,13 @@ data StagedSession = StagedSession
       --   'World.State.Types.wmPortableKnowledge', which is what makes
       --   an absent payload CLEAR whatever the outgoing session
       --   remembered rather than leave it standing.
+    , ssRelationCauses ∷ !RelationCauseStore
+      -- ^ #2548: the restored live relation-cause store. Publish writes
+      --   it verbatim to 'Engine.Core.State.relationCauseStoreRef'
+      --   beside the texture palette, which is what makes an absent
+      --   @"relation-causes"@ payload CLEAR whatever the outgoing
+      --   session held; a load that fails before publication never
+      --   reaches that write, so the old store survives it.
     , ssMaterialRegistry ∷ !MaterialRegistry
       -- ^ The off-session registry staged against (see
       --   "World.Load.Stage"'s haddock) — carried through so publish is

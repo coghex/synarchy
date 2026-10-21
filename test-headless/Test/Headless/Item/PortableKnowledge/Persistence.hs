@@ -7,6 +7,7 @@
 --   optionality turns on.
 module Test.Headless.Item.PortableKnowledge.Persistence (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
@@ -80,6 +81,7 @@ knowledgeSnapshot = buildSessionSnapshot globals [page]
         , sgItemTags = mempty
         , sgItemRefs = mempty
         , sgPortableKnowledge = allFourStates
+        , sgRelationCauses = emptyRelationCauseStore
         }
 
 encodeFor ∷ SessionSnapshot → BS.ByteString

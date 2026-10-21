@@ -126,6 +126,7 @@ import Equipment.Reconcile
     (EquipmentOrphan(..), reconcileUnitEquipment)
 import Item.Knowledge
     (PortableKnowledge(..), PortableRecord(..), ContentsObservation(..))
+import Unit.Faction.RelationStore (RelationCauseStore)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -164,7 +165,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 108
+currentSaveVersion = 109
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -608,6 +609,13 @@ data SaveData = SaveData
         --   "World.Load.Stage"'s scrub and "World.Load.Publish"'s
         --   replacement manager. #1087's BUILDING-keyed knowledge stays
         --   per-page in 'wpsContainerKnowledge'.
+    , sdRelationCauses ∷ !RelationCauseStore
+        -- ^ #2548: every live directed relation cause. A GLOBAL field
+        --   beside 'sdTexPalette': a cause relates two tags, which are
+        --   session-wide. Restores onto
+        --   'Engine.Core.State.relationCauseStoreRef' through
+        --   "World.Load.Stage" and "World.Load.Publish", so a load
+        --   REPLACES the live store and an absent component clears it.
     } deriving (Show, Serialize, Generic)
 
 -- | The primary/active world page in a save — the one that restores as

@@ -2683,6 +2683,36 @@
         }
       ]
     },
+    "World.Save.Component.RelationCauses.RelationValueDTO": {
+      "source": "src/World/Save/Component/RelationCauses.hs",
+      "onSaveWire": true,
+      "components": [
+        "relation-causes"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"relation-causes\" — World.Save.Component.RelationCauses",
+          "via": "RelationCausesDTO → RelationCauseDTO → RelationValueDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "RvdAlly",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "RvdNeutral",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "RvdHostile",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
     "World.Save.Component.Transfer.TransferEndpointDTO": {
       "source": "src/World/Save/Component/Transfer.hs",
       "onSaveWire": true,

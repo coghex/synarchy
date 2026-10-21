@@ -389,8 +389,8 @@ def test_audit_against_the_real_repo():
            f"the real EngineEnv + the real inventory doc should have zero "
            f"violations, got: {violations}")
     live_fields = extract_record_fields(real_source, ENGINE_ENV_PATTERN)
-    expect(len(live_fields) == 96,
-           f"expected 96 live EngineEnv fields (issue #876's own count of 81, "
+    expect(len(live_fields) == 97,
+           f"expected 97 live EngineEnv fields (issue #876's own count of 81, "
            f"plus #907's `windowPosRef`, #957's `tutorialRegistryRef`, "
            f"#913's `playerIntentGenRef`, #1693's "
            f"`framebufferMinimizeGenRef`, #1730's `enginePauseGenRef`, "
@@ -400,7 +400,8 @@ def test_audit_against_the_real_repo():
            f"#2499's `lootProfileRegistryRef`, "
            f"#2476's `pageLifecycleLock`, "
            f"#2506's `factionCatalogueRef` and "
-           f"#2828's `physiologyRegistryRef`, "
+           f"#2828's `physiologyRegistryRef` and "
+           f"#2548's `relationCauseStoreRef`, "
            f"plus audio transport/status, minus #2285's write-only `popupQueueRef`), "
            f"got {len(live_fields)}")
 

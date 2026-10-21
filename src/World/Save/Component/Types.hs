@@ -136,6 +136,7 @@ module World.Save.Component.Types
     , containerKnowledgeComponentId
     , transferOrdersComponentId
     , portableKnowledgeComponentId
+    , relationCausesComponentId
     ) where
 
 import UPrelude
@@ -602,8 +603,8 @@ containerKnowledgeComponentId = ComponentId "container-knowledge"
 --   "World.Save.Component.Transfer"'s header for the justification
 --   @docs\/persistence_contract.md@ §5 requires of each one, and note
 --   that @lua.tutorial_progress@ is already an optional component too;
---   these three are the optional set of the STATIC Haskell registry
---   specifically, not of the envelope as a whole.
+--   these (with #2512's and #2548's) are the optional set of the STATIC
+--   Haskell registry specifically, not of the envelope as a whole.
 transferOrdersComponentId ∷ ComponentId
 transferOrdersComponentId = ComponentId "transfer-orders"
 
@@ -616,3 +617,11 @@ transferOrdersComponentId = ComponentId "transfer-orders"
 --   one, and for why a crate's memory cannot be a per-page slice.
 portableKnowledgeComponentId ∷ ComponentId
 portableKnowledgeComponentId = ComponentId "portable-knowledge"
+
+-- | #2548: every live directed relation cause, session-scoped. The
+--   FOURTH OPTIONAL Haskell-owned gameplay component — absence means "no
+--   cause exists", true of every save that predates the store. See
+--   "World.Save.Component.RelationCauses"'s header for the justification
+--   @docs\/persistence_contract.md@ §5 requires of each one.
+relationCausesComponentId ∷ ComponentId
+relationCausesComponentId = ComponentId "relation-causes"

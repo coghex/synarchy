@@ -12,6 +12,7 @@
 --   --test-options='--match "generated world library"'@.
 module Test.Headless.World.GeneratedLibrary (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Test.Hspec
@@ -298,6 +299,7 @@ sessionWith gids =
             , sgItemTags = mempty
             , sgItemRefs = mempty
             , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore
             }
     in case captureSessionSnapshot globals pages of
         Right s   → s

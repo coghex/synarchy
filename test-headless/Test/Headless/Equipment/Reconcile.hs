@@ -18,6 +18,7 @@
 --   the save that session would write back.
 module Test.Headless.Equipment.Reconcile (pureSpec, stagingSpec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Unit.Faction.Membership (inertUnitProfile)
 import World.Save.UnitFaction (UnitFactionSnapshot(..))
@@ -401,6 +402,7 @@ saveWith units = snapshotToSaveData
         , snapItemTags = mempty
         , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore
         }
 
 -- | Install the fixture content on the live registries, stage a save

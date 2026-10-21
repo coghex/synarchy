@@ -297,7 +297,11 @@ def main() -> int:
                           "JSON spec with {bid}/{uid} substituted for the "
                           "spawned ids. There is no public tag verb yet, so "
                           "this is the only way a generated fixture can "
-                          "carry assignments")
+                          "carry assignments. Its optional \"relationCauses\" "
+                          "list (#2548: owner, source, target, relation) is "
+                          "likewise the only way a fixture can carry live "
+                          "directed relation causes, which no production "
+                          "code adds yet")
     ap.add_argument("--port", type=int, default=9280,
                      help="--generate-session only: debug-console port "
                           "for the generation engine boot")

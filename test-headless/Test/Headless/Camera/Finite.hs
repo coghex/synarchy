@@ -27,6 +27,7 @@
 --   --test-options='--match "Camera"'@.
 module Test.Headless.Camera.Finite (pureSpec, spec, stagingSpec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Control.Exception (bracket)
@@ -367,6 +368,7 @@ saveWith (x, y, zoom) = snapshotToSaveData
         , snapItemTags = mempty
         , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore
         }
 
 -- | The decoded page such a save carries, for the pure examples above.

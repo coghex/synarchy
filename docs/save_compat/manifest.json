@@ -4088,6 +4088,118 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/z17-scenario-placement.expected.json"
         }
       ]
+    },
+    {
+      "id": "z18-relation-causes",
+      "description": "Live directed relation causes (#2548, FTS-6B of #2496) as the current build writes them: five causes of three owners on four ordered tag pairs \u2014 two owners on one pair, its reverse direction, one owner on a second pair, and a shipped-tag pair beside runtime-minted tags \u2014 in the optional session component relation-causes v1, beside a generated page with one building and one unit. Seeded through synarchy-save-codec seed-tags because no production code adds a cause yet (FTS-6A/6E own the producers, FTS-6C the verbs). Every earlier fixture is the empty-default counterpart: absence means no cause exists.",
+      "declaredAt": "2026-10-21",
+      "declaredByIssue": 2548,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "World.Save.Component.RelationCauses.relationCausesCodec (current v1, no migration)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 16,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 4,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "container-knowledge",
+          "version": 2,
+          "required": false
+        },
+        {
+          "id": "transfer-orders",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "portable-knowledge",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "relation-causes",
+          "version": 1,
+          "required": false
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 11,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.tutorial_progress",
+          "version": 1,
+          "required": false
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z18-relation-causes",
+          "path": "test-headless/data/save-compat/z18-relation-causes.bin",
+          "kind": "complete-session",
+          "sha256": "23a3aabfd36e8a4cff097fe0df5f33bcf3df73979d5dd65bcc5e17a1a4ae2789",
+          "sizeBytes": 909269,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed. Before that, synarchy-save-codec seed-tags wrote the general gameplay-tag assignments {\"relationCauses\":[{\"owner\":\"order:attack_1\",\"source\":\"raid_a\",\"target\":\"raid_b\",\"relation\":\"hostile\"},{\"owner\":\"report:incident_7\",\"source\":\"raid_a\",\"target\":\"raid_b\",\"relation\":\"hostile\"},{\"owner\":\"diplomacy:truce_2\",\"source\":\"raid_b\",\"target\":\"raid_a\",\"relation\":\"ally\"},{\"owner\":\"order:attack_1\",\"source\":\"raid_a\",\"target\":\"farmers\",\"relation\":\"neutral\"},{\"owner\":\"report:incident_7\",\"source\":\"nomad\",\"target\":\"acolyte\",\"relation\":\"hostile\"}]} into the saved bytes through the real session decoder and encoder (#2701: no public tag verb exists yet).",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z18-relation-causes.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",
