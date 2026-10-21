@@ -105,6 +105,7 @@ exactly why the detail could move out of the always-loaded file.
 
 - [CLI value validation (#1191)](#cli-value-validation-1191)
 - [Debug-console listener policy (#1190)](#debug-console-listener-policy-1190)
+- [Scenario entry points: Lua, the console and direct CLI boot (#2715)](#scenario-entry-points-lua-the-console-and-direct-cli-boot-2715)
 
 **Engine core**
 
@@ -2083,9 +2084,10 @@ question is FTS-1's DIRECTED authority over both units' policy profiles,
 the shipped catalogue's base table and a live overlay
 (`unitRelationFromTo` / `unitIsFriendlyToward` / `unitCanAttack`). Lua asks
 `unit.relationFromTo(a, b)`, `unit.isFriendlyToward(a, b)` and
-`unit.canAttack(a, b)` (fail closed: `neutral` / false). The overlay is a
-registration-time input of those verbs: production passes none, and only a
-fixture calls the same registration function with causes. A medic treats
+`unit.canAttack(a, b)` (fail closed: `neutral` / false). Since #2548 the
+overlay is the persisted relation-cause store (§Relation cause store below),
+which the verbs read afresh on every call; there is no registration-time
+overlay. A medic treats
 the patient IT regards as an ally; `groupEffectivenessVs` counts a
 candidate that regards the SUBJECT as an ally and never the threat; the
 context-menu Attack row is `unit.canAttack` (directed hostility, or
@@ -2119,6 +2121,41 @@ and goal occurrence are transient (`docs/persistence_state_inventory.md`,
 `units` component (v3, now v4) persists profiles exactly; v1/v2 faction strings
 resolve by D-26 at the load boundary
 (`docs/persistence_state_inventory.md`, `UnitsDTO` and `umInstances`).
+
+**Relation cause store (#2548, FTS-6B).** `Unit.Faction.RelationStore` holds
+every live DIRECTED relation cause: an owner identity (`RelationCauseId`), an
+ordered (source tag, target tag) pair and a relation value. A cause is keyed by
+its pair AND its owner, so one owner may hold several and two owners may hold
+one pair; re-adding a key merges by hostile > neutral > ally (never
+last-write-wins), `removeCausesByOwner` removes one owner's causes on every pair,
+`clearPairByOwner` one owner's cause on one ordered pair, and the text boundary
+`mkLiveRelationCause` refuses a malformed tag. The store is the
+`relationCauseStoreRef` `EngineEnv` field, reached through
+`UnitCombatCapability`'s `ucRelationCauseStoreRef`. Ordinary runtime access is
+the Lua thread's (the three relation verbs); the lifecycle accesses are the world
+thread's, under the existing save/load barrier: the save capture
+(`WriteWorld`) reads it, the load publish replaces it on the texture palette's
+seam, and Exit to Menu (`handleWorldDestroyAllCommand`) empties it. It starts
+empty, survives show, hide and destroy of one page, and a same-process next
+session starts empty, so an old cause cannot act on reused tags. Nothing in
+production adds a cause yet (FTS-6A and FTS-6E own the producers, FTS-6C the
+verbs); a producer that runs off the world thread must order itself against
+`wmSessionEpoch` as #2512's portable-knowledge writes do. It persists as the
+FOURTH optional save component `relation-causes` (v1; absence means "no cause
+exists"), session-scoped and written from `SessionGlobals`; its relation value
+is the frozen `RelationValueDTO`, a present payload that is malformed, carries a
+malformed tag, repeats an (owner, source, target) key or is at an unsupported
+version fails the load, and any ordering of a valid payload restores the same
+store. Gates: hspec `--match "Faction relation store"` (pure rules against exact
+overlays, the codec through real envelope bytes, the real save → load → stage →
+publish and teardown lifecycle on a private engine, and the live verbs),
+`--match "save components"`, `--match "save envelope"`, `--match "persistence
+contract"`, the tracked `z18-relation-causes` fixture (seeded with
+`save_compat_audit.py --generate-session --seed-tags`, whose `relationCauses`
+category is the one test-only way to put a cause in a save) and
+`tools/persistence_contract_probe.py`'s `relation_cause_cycles` (a seeded save
+through three fresh processes, every generation non-empty and identical, the
+restored authority's answers exact).
 
 **Capabilities.** `factionCatalogueRef` is a `content-registries` field,
 written only by `Engine.Scripting.Lua.API.Factions` through
@@ -5268,6 +5305,15 @@ selected mode would ever consume the value.
 **`--region`'s exclusion** is deliberate and tracked: its identical silent
 default is `docs/code_health_findings.md` CH-67, sequenced after #1081.
 
+**`--scenario PATH` (#2715)** follows the same ordering: rejected by the
+mode-compatibility table in `--dump`, `--preview` and `--language-report`;
+otherwise validated in the same stretch as the numeric flags, strictly (a
+trailing flag is `MissingFlagValue`, an empty or blank value `EmptyFlagValue`),
+then resolved against the LAUNCH directory by the scenario path policy, so a bad
+extension or a file that does not exist exits 1 before any engine, window or
+listener. Detail: §Scenario entry points. Gates: hspec `--match "App.Cli"`,
+`tools/preview_cli_probe.py`.
+
 **`--help` / `-h` (#2863) precede all of it.** Either exact token,
 anywhere in argv (including as another flag's operand), prints the usage
 text to stdout and exits 0 before resource-root resolution, mode
@@ -8330,14 +8376,11 @@ overwrite)` (any thread) returns `Left Busy` at once or `Right requestId`;
 the CURRENT save-barrier transaction (a later operation of any kind supersedes
 it, so a stale record is never reported under a newer request's name). The
 destination is already resolved and the overwrite intent explicit: filename
-shorthand, the scenario folder, directory browsing and overwrite confirmation
-are SCN-15's. The only console entry until then is the internal
-`debug.captureScenario(path[, overwrite])` /
-`debug.getScenarioCaptureStatus()` pair, with `debug.loadScenario(path)` /
-`debug.getScenarioLoadStatus()` for the load side
-(`Engine.Scripting.Lua.API.ScenarioDebug`): test-only bindings on the `debug`
-table, documented as superseded by SCN-15's public functions, taking a resolved
-path and nothing else.
+shorthand and the scenario folder belong to the entry points (§Scenario entry
+points, #2715: `engine.saveScenario` / `engine.loadScenario` /
+`engine.getScenarioStatus`, which replaced the internal `debug.*Scenario` verbs
+this issue first shipped); directory browsing and overwrite confirmation are
+SCN-16's.
 
 | Field of `ScenarioCaptureStatus` | Meaning |
 |---|---|
@@ -8513,3 +8556,262 @@ recapture; evidence in
 `tools/persistence_inventory_audit.py`, `tools/engine_env_capability_audit.py`,
 `tools/haskell_module_budget.py`, `tools/lua_module_budget.py` and
 `tools/unicode_operator_audit.py`.
+
+---
+
+## Scenario entry points: Lua, the console and direct CLI boot (#2715)
+
+SCN-15 of epic #2698 puts the two services behind public entry points: the
+paused scenario load (§Scenario load) and the coherent-snapshot capture
+(§Scenario capture). **It adds no loader, capture path, coordinator or session
+state of its own.** Every entry point resolves a path through ONE policy
+(`Scenario.Path`), hands the result to the service, and reports through the
+operation identities and status records the services already own. The
+decisions are D-15, D-16, D-28, D-48–D-50 and D-58 of
+[predefined_arena_worlds_design.md](designs/predefined_arena_worlds_design.md),
+plus the owner's decision of 2026-10-21 on the scenario folder (below).
+
+**The scenario folder** is the top-level `scenarios/` directory under the
+SELECTED RESOURCE ROOT (`--resource-root` > `SYNARCHY_ROOT` > cwd), beside
+`saves/`. It is NOT one of the validated resource families and is not
+gitignored: SCN-17 (#2717) commits shipped example scenarios there, so a
+captured file appears untracked until someone commits it. A capture whose
+destination is a folder-relative name CREATES the folder on first use (that one
+directory, never its parents or a subfolder); a load never creates it.
+
+### Path policy (`Scenario.Path`)
+
+| Entry point | Relative path | Absolute path | Extension |
+|---|---|---|---|
+| CLI `--scenario` | resolved from the directory that LAUNCHED the process, captured before the resource root changed the working directory | as given | the full file name is required: `ambush.yaml` is a launch-relative file, `ambush` is invalid (never a scenario-name lookup) |
+| `engine.loadScenario` / `engine.saveScenario` | a NAME inside `<resource root>/scenarios/`: `ambush` and `ambush.yaml` both mean `scenarios/ambush.yaml`; subfolders are allowed (`sub/ambush`) | as given | required on an absolute path; optional on a name (appended when the name has none) |
+
+- **One extension**: `.yaml`, lower case. `.yml`, `.YAML` and everything else is
+  refused with the suffix named — never rewritten. A name that already has a
+  dot-suffix (`v1.2`) has an extension, so it is refused for that reason.
+- **Containment.** A relative in-game name can never leave the folder: any `..`
+  component is refused, and the REAL location is compared with the folder's real
+  location, so a symbolic link (to a file or to a folder) that leaves it is
+  refused too. A link that stays inside is fine. This applies to capture
+  destinations exactly as to load sources. A CLI path and an absolute path are
+  the user's own and are not confined.
+- **No substitution.** A missing in-game name is not retried against the launch
+  directory and is never turned into an absolute path; a missing CLI file is not
+  looked for in the scenario folder; no source is rewritten.
+- **Existence.** A load requires the resolved file to exist and be a regular
+  file; the refusal carries the resolved path. A capture's destination may not
+  exist (the capture service judges writability and overwrite).
+- **Empty, blank and NUL-bearing** paths are refused; spaces, quotes and Unicode
+  are ordinary file-name characters. The path is carried as DATA end to end: the
+  CLI value goes through `EngineConfig.ecScenarioStartup`, a Lua argument is read
+  as a string (the Lua type is checked first, the bytes must be valid UTF-8, so a
+  number is never coerced and a lenient decode never names a different file), and
+  no Lua source is ever generated from either.
+
+Examples (launch directory `/work/runs`, resource root `/srv/synarchy`):
+
+| Typed | Where | Resolves to |
+|---|---|---|
+| `--scenario ambush.yaml` | CLI | `/work/runs/ambush.yaml` |
+| `--scenario ../ambush.yaml` | CLI | `/work/ambush.yaml` |
+| `--scenario ambush` | CLI | refused: no extension |
+| `--scenario /tmp/a b/ambush.yaml` | CLI | `/tmp/a b/ambush.yaml` |
+| `engine.loadScenario("ambush")` | Lua | `/srv/synarchy/scenarios/ambush.yaml` |
+| `engine.loadScenario("sub/ambush.yaml")` | Lua | `/srv/synarchy/scenarios/sub/ambush.yaml` |
+| `engine.loadScenario("../x")` | Lua | rejected `invalid_path` (leaves the folder) |
+| `engine.saveScenario("run1")` | Lua | `/srv/synarchy/scenarios/run1.yaml` (folder created if absent) |
+| `engine.loadScenario("/tmp/a.yaml")` | Lua | `/tmp/a.yaml` |
+
+### The Lua entry points
+
+All three are registered through the guarded, instrumented boundary
+(`registerLuaFunction`, in `Engine.Scripting.Lua.API.Register.Scenario`), so
+they work in scripts and over the socket console, shell-driven requests
+included.
+
+`engine.loadScenario(path) → id | nil, rejection`
+
+`engine.saveScenario(path [, { overwrite = boolean }]) → id | nil, rejection`
+
+`engine.getScenarioStatus() → status | nil`
+
+- **Wrong-typed calls raise a Lua error** and submit nothing: a non-string path
+  (a number is not coerced), a path that is not valid UTF-8, an options value
+  that is neither absent/`nil` nor a table, an option other than `overwrite`, a
+  non-boolean `overwrite`, a non-string option name, a wrong argument count. The
+  options table is read RAW — no metamethod runs.
+- **A well-typed request the engine cannot take is a REJECTION**, answered at
+  once as `nil, rejection`. `rejection.reason` is `"busy"`, `"invalid_path"` or
+  `"not_found"`; `rejection.message` is actionable text; `rejection.path` is the
+  resolved path when one was reached. A rejection allocates no identity, queues
+  nothing, replaces no status and changes no pause state — a busy request in
+  particular never queues, cancels the active operation or replaces its status,
+  and the caller polls and retries explicitly.
+- **An accepted request answers its integer id.** The id is the service's own
+  operation identity (a load's request id; a capture's save-barrier request id).
+  The two counters are separate, so a status names the operation by `kind` AND
+  `id`.
+- **`overwrite` defaults to false.** A capture without it refuses an existing
+  destination at preflight and again at publication; with `overwrite = true` it
+  replaces the file atomically. The original of a loaded source is never written.
+
+**The status** is the record of the scenario operation admitted LAST, while it is
+still current: a terminal result stays readable until the next scenario
+operation is admitted or an ordinary load, save or autosave supersedes it (a
+later request never reads a stale record under its own name). `nil` before any
+operation or once superseded. A poller therefore compares `kind` and `id` with
+its own request before believing a result.
+
+| Field | Load (`kind = "load"`) | Save (`kind = "save"`) |
+|---|---|---|
+| `id`, `kind`, `done`, `stage`, `published` | request id; `stage` ∈ admitted, preflight, staging, publishing, reconciling, constructing, recovering, ready, failed; `published`: a replacement session was published | barrier id; `stage` ∈ admitted, preflight, coordinating, snapshotting, encoding, storing, done, failed; `published`: the new file stands |
+| resolved path | `source` | `destination`, `overwrite` |
+| `outcome` (once `done`) | `"ready"` or `"failed"` | `"saved"` or `"failed"` |
+| `warnings` | array of `{ path, code, detail?, reason, effect }` — every content rejection across every phase, in order found (`path` is the document path, `code` a stable snake_case reason, `effect` ∈ entry_rejected, field_rejected, tiles_clipped, cascade_rejected) | array of `{ message }` (a leftover temporary file the capture could not remove) |
+| `recovery` | `"none"`, `"preserved"` (failed before the swap; the previous session stands), `"flat_arena"` (a default flat arena stands, NOT the requested scenario), `"incomplete"`, `"failed"` (+ `recoveryError`) | — |
+| on success | — | `bytes`, `replaced`, `entries` (count per family) |
+| `failure` (when `outcome = "failed"`) | `{ stage, kind, message, details[] }`; `kind` ∈ source (+ `source`: unreadable, syntax_error, not_a_mapping, version_missing, version_malformed, version_unsupported, migration_failed), not_testing_session, setup, construction, reconciliation (+ `reconciliation[]` of `{module, error}`), exception | `{ stage, kind, phase?, message, destination, published, diagnostics[] }`; `kind` ∈ coordination, not_testing_session, projection, validation, encoding, destination, overwrite_refused, temporary_write, verification, publication, durability |
+
+A fallback arena is NEVER reported as the requested scenario loading: a load
+whose construction failed ends `outcome = "failed"`, `recovery = "flat_arena"`.
+`ready` means initialization and reconciliation completed and the session is
+PAUSED; nothing here resumes the simulation (an explicit `engine.setPaused(false)`
+does). A usable load with content warnings is `ready` with the warnings
+queryable — automated callers must grade unexpected warnings as failed setup;
+tests that load malformed content on purpose assert both the expected warnings
+and the retained/rejected content (`Lua scenario API`, `partial content`).
+
+### Direct boot: `--scenario <path>`
+
+| Mode | `--scenario` |
+|---|---|
+| `--headless`, `--offscreen`, graphical | honoured; selects the arena profile without `--arena` (with it, the same profile) |
+| `--dump`, `--preview`, `--language-report` | refused pre-boot by `incompatibleFlagTable`, naming the flag and the mode |
+
+Boot-mode precedence is untouched. The flag is validated in the established
+stretch of `app/Main.hs`: after mode-compatibility rejection and the numeric
+flags, before any mode-specific boot. A trailing flag, an empty or blank value,
+an extensionless or foreign-extension name, and a path that does not resolve to
+an existing regular file (relative to the launch directory) each exit 1 with a
+diagnostic naming the flag and the cause, before an engine, window or listener
+exists. A launch WITHOUT the flag is unchanged.
+
+**What the boot does.** The resolved absolute path rides `EngineConfig`
+(`ecScenarioStartup`, immutable boot configuration); `scripts/scenario_startup.lua`
+(loaded by `scripts/init_loader.lua`, a no-op without the flag) drives three
+steps in order:
+
+1. **Definitions.** The scenario names units, items, buildings and locations,
+   so the arena profile's definition families load first. Headless never runs
+   `ui_manager_boot` (it gates on a GPU font atlas), so headless drives
+   `scripts/startup_loader.lua` itself (`build("arena")`, `runAll()`);
+   offscreen and graphical already have `ui_manager_boot` draining that queue,
+   and the driver only WAITS for it — never a second drain. A definition family
+   that will not load is a startup failure. `ui_manager_boot.finishArenaBoot`
+   skips `showMenu("test_arena")` for a scenario boot, so no default arena is
+   created and nothing plays against it.
+2. **Submission.** `engine.startScenarioStartup()` submits exactly one load
+   through the same service `engine.loadScenario` uses, marked as the startup
+   load (`slsStartup`). The ENGINE keeps it to one: the claim is atomic, a second
+   call is rejected `already_started`, and a submission the service refused as
+   `busy` (a console client got the line first) gives the claim back, so the
+   driver asks again on its next tick. Any other refusal is a startup failure.
+3. **Completion.** The driver follows THAT operation (kind and id) to its
+   terminal result and, graphical/offscreen only, shows the arena view.
+
+**Console readiness is not scenario readiness.** `READY port=NNNN` still means
+the listener is up — it prints before the definitions load and long before the
+scenario is ready, exactly as in every other boot. The scenario is ready when
+`engine.getScenarioStatus()` reports the matching operation `done` with
+`outcome = "ready"` (paused). Inspect the baseline, or resume, only after that:
+
+```bash
+cabal run exe:synarchy -- --headless --port 9008 --scenario ambush.yaml > /tmp/engine.log 2>&1 &
+until grep -q "READY" /tmp/engine.log 2>/dev/null; do sleep 0.2; done     # listener up
+until echo 'local s = engine.getScenarioStatus(); return s ~= nil and s.kind == "load" and s.id == 1 and s.done' \
+      | nc -w 5 localhost 9008 | grep -q true; do sleep 0.5; done          # the startup load finished
+echo 'return engine.getScenarioStatus().outcome' | nc -w 5 localhost 9008   # "ready" (or "failed")
+echo 'engine.setPaused(false)' | nc -w 2 localhost 9008                    # only now, and only on purpose
+```
+
+(The startup load is the first operation of the process, so its id is 1.)
+
+**CLI boot and a Lua load of the same file establish the same values and the same
+warning semantics** — both are the one load service; the probe captures each
+and compares the documents byte for byte.
+
+### Startup failure policy
+
+A fatal `--scenario` startup failure in `--headless` or `--offscreen` reports the
+cause and exits NONZERO after the orderly worker shutdown and log flush. Fatal
+means: a file that cannot be read, invalid YAML syntax, a document that is not a
+mapping, a missing/malformed/unsupported version, a failed migration, a content
+construction failure, an incomplete post-publication reconciliation, and a
+definition family that will not load. A flat arena that recovery published does
+NOT change the outcome: the startup still fails. A usable partial load with
+content warnings is not a failure — it stays available, paused, with its
+complete warnings queryable. Graphical startup keeps the paused session and its
+recovery controls (the driver shows the arena that stands); a Lua load failure in
+an already-running engine likewise returns its status and the engine keeps
+running, so a later valid load succeeds.
+
+The mechanism is the existing fatal tail, not a second exit path:
+
+- The cause is **latched** (`Engine.Load.Status.recordStartupFailure`, in the
+  entry-point cell of `LoadStatusRef`) the instant the startup load ends
+  unsuccessfully — from every function that ends a load unsuccessfully, BEFORE
+  the generic transaction releases the operation exclusion, so a later request
+  cannot supersede the evidence unseen. The first cause stands; a later success
+  or a recovered flat arena does not clear it; an ordinary load never writes it.
+  The driver writes it (`engine.failScenarioStartup`) for a failure that is not a
+  scenario load's.
+- The loop reads it (`Engine.Loop.Mode.checkScenarioStartup`, once per tick) only
+  when the boot asked for a scenario AND the mode is headless or offscreen, and
+  raises it as an engine-level fatal error (`ExSystem (StartupError _)`).
+  `runEngineM` then returns `Left`, which is `App.Boot.handleBootResult`:
+  report the error, stop every started worker (each announced on stderr as it
+  stops: `synarchy: boot cleanup: stopped the <name> worker`, then `N worker
+  thread(s) stopped`), flush the logger (`boot cleanup: log flushed`), exit 1.
+  A bare `engine.quit()` or `exitFailure` from the Lua thread would skip that
+  tail, so neither is used. The debug-console listener policy (#1190) is
+  untouched: the listener is required in these two modes, and `READY` has been
+  printed by the time a startup load can fail.
+
+### State and capability classification
+
+All of it is TRANSIENT and persists nothing; no `EngineEnv` field was added.
+`EngineConfig.ecScenarioStartup` is immutable boot configuration (like
+`ecPreviewTarget`). `ScenarioLoadStatus.slsStartup` and the entry-point cell
+(`EntryCell`: the scenario operation admitted last, and the startup-failure
+latch) live inside `LoadStatusRef`, the handle `EngineEnv` already carries as
+`loadStatusRef`; they are inventoried with it in
+[persistence_state_inventory.md](persistence_state_inventory.md). The path
+policy reads the file system and keeps nothing.
+
+### Test seams and the split of evidence
+
+The hspec harness boots stand-in owner threads, so it drives full loads and
+captures in-process. `Scenario.Paths` (the policy, with real launch and resource
+directories, links in and out of the folder, and property tests of its
+invariants), `Lua scenario API` (strict arguments, rejections, admission versus
+completion, busy, the status vocabulary, overwrite, capture-and-reload, the
+startup verbs, the startup-failure latch for every cause, the loop's reading of
+it, and the real startup driver against a stand-in startup loader) and
+`App.Cli` (the strict `--scenario` parse) cover everything that does not need a
+process. `tools/scenario_entrypoint_probe.py` crosses the process boundary:
+the real CLI boot, console readiness versus scenario readiness, the exit code and
+the cleanup trace of every fatal cause, and one baseline from every entry point.
+The two failures that need a seam (a construction failure, an incomplete
+reconciliation) and the definition-family failure use an isolated resource root
+whose `scripts/` or `data/` is a private copy with one fixture change, in place
+BEFORE the boot, so nothing races the automatic load. A migration failure is not
+reachable from a shipped chain (every shipped step is the identity); it is
+covered in process through the service's `seamFormat`.
+
+**Gates:** hspec `--match "Scenario.Paths"`, `--match "Lua scenario API"`,
+`--match "App.Cli"`, `--match "App.Usage"`, `--match "Scenario.Load"`,
+`--match "Scenario.Capture"`; `tools/scenario_entrypoint_probe.py` (CI-eligible,
+headless; `--offscreen` is the manual GPU half), `tools/preview_cli_probe.py`
+(the pre-boot rejections), `tools/scenario_capture_probe.py` (the capture
+service through the public verbs), `tools/lua_registration_audit.py`,
+`tools/lua_strict_decode_audit.py`, `tools/persistence_inventory_audit.py`.
