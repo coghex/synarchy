@@ -886,6 +886,60 @@
         }
       ]
     },
+    "World.Flora.Condition.ConditionRetention": {
+      "source": "src/World/Flora/Condition.hs",
+      "onSaveWire": true,
+      "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → ConditionRetention"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "RetentionPersistent",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "RetentionTransient",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "RetentionSuccessor"
+          ]
+        }
+      ]
+    },
+    "World.Flora.Condition.RetentionSuccessor": {
+      "source": "src/World/Flora/Condition.hs",
+      "onSaveWire": true,
+      "components": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → ConditionRetention → RetentionSuccessor"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "RetainReseed",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "RetainAbsent",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "RetainAwaitReplanting",
+          "arity": 0,
+          "payload": []
+        }
+      ]
+    },
     "World.Flora.Reference.FloraRef": {
       "source": "src/World/Flora/Reference.hs",
       "onSaveWire": true,
@@ -926,9 +980,14 @@
     },
     "World.Flora.Types.AnnualStageTag": {
       "source": "src/World/Flora/Types.hs",
-      "onSaveWire": false,
+      "onSaveWire": true,
       "components": [],
-      "carriers": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → AnnualStageTag"
+        }
+      ],
       "constructors": [
         {
           "name": "CycleDormant",
@@ -1016,9 +1075,14 @@
     },
     "World.Flora.Types.FloraCondition": {
       "source": "src/World/Flora/Types.hs",
-      "onSaveWire": false,
+      "onSaveWire": true,
       "components": [],
-      "carriers": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → FloraCondition"
+        }
+      ],
       "constructors": [
         {
           "name": "ConditionAlive",
@@ -1034,9 +1098,14 @@
     },
     "World.Flora.Types.FloraContext": {
       "source": "src/World/Flora/Types.hs",
-      "onSaveWire": false,
+      "onSaveWire": true,
       "components": [],
-      "carriers": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → FloraContext"
+        }
+      ],
       "constructors": [
         {
           "name": "ContextWild",
@@ -1052,9 +1121,14 @@
     },
     "World.Flora.Types.FloraDeathCause": {
       "source": "src/World/Flora/Types.hs",
-      "onSaveWire": false,
+      "onSaveWire": true,
       "components": [],
-      "carriers": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → FloraDeathCause"
+        }
+      ],
       "constructors": [
         {
           "name": "CauseNatural",
@@ -1095,9 +1169,14 @@
     },
     "World.Flora.Types.LifePhaseTag": {
       "source": "src/World/Flora/Types.hs",
-      "onSaveWire": false,
+      "onSaveWire": true,
       "components": [],
-      "carriers": [],
+      "carriers": [
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "WorldPageSave → SavedFloraConditions → SavedFloraConditionRecord → FloraConditionRecordOf → LifePhaseTag"
+        }
+      ],
       "constructors": [
         {
           "name": "PhaseSprout",
@@ -1971,6 +2050,34 @@
           "arity": 1,
           "payload": [
             "Text"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.PageActivity.FloraRetentionDTO": {
+      "source": "src/World/Save/Component/PageActivity.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-activity"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-activity\" — World.Save.Component.PageActivity",
+          "via": "PageActivityDTO → FloraConditionDTO → FloraRetentionDTO"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "RetentionPersistentD",
+          "arity": 0,
+          "payload": []
+        },
+        {
+          "name": "RetentionTransientD",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "VocabTag"
           ]
         }
       ]

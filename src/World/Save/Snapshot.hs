@@ -70,6 +70,7 @@ import World.Till.Types (TillDesignations)
 import World.Plant.Types (SavedPlantDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
+import World.Flora.Condition (SavedFloraConditions)
 import World.Flora.CropPlot (SavedCropPlots)
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
@@ -178,6 +179,10 @@ data PageSnapshot = PageSnapshot
     , pgsUnits        ∷ !UnitSnapshot
     , pgsUnitSimStates ∷ !(HM.HashMap UnitId UnitSimState)
     , pgsFloraHarvests ∷ !FloraHarvests
+    , pgsFloraConditions ∷ !SavedFloraConditions
+      -- ^ #2549: the page's flora condition records, species by
+      --   authored NAME (named at capture, like 'pgsCropPlots'), keyed by
+      --   occurrence identity.
     , pgsChopDesignations ∷ !ChopDesignations
     , pgsPendingChopMigration ∷ !PendingChopDesignations
       -- ^ #1854: pre-identity, tile-keyed chop designations still

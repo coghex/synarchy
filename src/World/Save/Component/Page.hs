@@ -145,6 +145,12 @@ module World.Save.Component.Page
     , WorldActivityDTOv4(..)
     , PageActivityDTOv5(..)
     , WorldActivityDTOv5(..)
+    , PageActivityDTOv6(..)
+    , WorldActivityDTOv6(..)
+    , FloraConditionDTO(..)
+    , FloraRetentionDTO(..)
+    , toFloraConditionDTO
+    , fromFloraConditionDTO
     , WorldActivityDTOv2(..)
     , migrateWorldActivityV2
       -- * Frozen leaf DTOs (requirement 4)

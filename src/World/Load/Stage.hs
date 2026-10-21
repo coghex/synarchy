@@ -78,6 +78,7 @@ import Engine.Map.ImageAdmission (readMapImageCeiling)
 import World.Edit.Apply (replayEdits)
 import World.Edit.Types (canonicalizeWorldEdits, WorldEdits)
 import World.Flora.CropPlot (CropPlots)
+import World.Flora.Condition (FloraConditions)
 import World.Plant.Types (PlantDesignations)
 import World.Mine.Apply (applyDigSlopes)
 import World.Mine.Types
@@ -271,7 +272,8 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                 [ (wpsPageId wps
                   , resolveFloraReferences catalog (wpsPageId wps)
                         (wpsEdits wps) (wpsCropPlots wps)
-                        (wpsPlantDesignations wps))
+                        (wpsPlantDesignations wps)
+                        (wpsFloraConditions wps))
                 | wps ← orderedPages ]
             -- Both pre-stage refusals in ONE list, in the order they are
             -- checked, so either fails the transaction identically and
@@ -634,8 +636,9 @@ stagePage
       --   kinds every page's saved equipment map is reconciled against.
     → StructureArtCatalog → ConstructRefundDeps
     → MapImageCeiling → WorldPageId
-    → (WorldEdits, CropPlots, PlantDesignations)
+    → (WorldEdits, CropPlots, PlantDesignations, FloraConditions)
       -- ^ #2243: this page's edit log, crop plots and plant designations
+      --   (and, since #2549, flora condition records)
       --   with every species reference already resolved to a runtime
       --   handle by 'stageSession'. Handed in rather than read off
       --   @wps@, because the saved values name their species and only
@@ -645,7 +648,8 @@ stagePage
     → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
           infMgr ecMgr itemMgr artCatalog refundDeps mapCeiling activeWpsId
-          (liveEdits, liveCropPlots, livePlantDesignations) savedWps = do
+          (liveEdits, liveCropPlots, livePlantDesignations, liveConditions)
+          savedWps = do
     -- #2337: the saved camera view is repaired HERE, before @wps@ is
     -- bound at all, so no consumer below can reach an unrepaired value
     -- -- not the 'wsCameraRef' write, not 'cameraChunkCoord', not
@@ -815,6 +819,12 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                         refundDeps artCatalog logger worldState
     writeIORef (wsSpoilRef worldState) (wpsSpoilPiles wps)
     writeIORef (wsFloraHarvestsRef worldState) (wpsFloraHarvests wps)
+    -- #2549: the condition records restore beside the harvest timers,
+    -- keyed by the same occurrence identity and for the same reason —
+    -- they are page-scoped state that outlives any chunk, so the
+    -- occurrence a later admission regenerates or replays finds its
+    -- record by id. Species were resolved with the other references.
+    writeIORef (wsFloraConditionsRef worldState) liveConditions
     writeIORef (wsChopDesignationsRef worldState) (wpsChopDesignations wps)
     -- #1854: deferred legacy migration state restores beside the real
     -- maps, so a session that saves before every chunk has been visited

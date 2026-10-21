@@ -6397,6 +6397,33 @@ context, condition, cause, frozen phase and stage, retention outcome
 and expiry — and never a texture handle or a resolved path, so art can
 be added or renamed without migrating a save.
 
+**The condition store is page-scoped and joined by id (#2549, EFM-5).**
+`World.Flora.Condition` holds at most one record per occurrence, keyed
+by the #1854 `FloraInstanceId`, in `wsFloraConditionsRef` beside
+`wsFloraHarvestsRef`; `wpsFloraConditions` carries it and
+`world-activity` v7 persists it (v1–v6 decode to an empty map). Wild
+flora regenerates and row crops replay, then each finds its record by
+id, so a death survives eviction, regeneration and a save/load with its
+same-tile siblings untouched. `markFloraDead` refuses a second record
+for an occurrence rather than overwriting it; selecting the retention
+outcome from species policy is not the store's job (EFM-7/EFM-10). A
+record also carries the species' authored NAME and the occurrence's
+canonical tile, as validation provenance only (the frozen life phase and annual stage are each optional: a species with no phases or no annual cycle freezes none, and the legacy dead token is refused as a phase at death): the id cannot recover
+either, and a record for an unloaded wild occurrence must still be
+checked. Three boundaries judge a record, each naming the page and key:
+`validateWorldActivity` (reserved key, a wire tag outside its
+vocabulary, a stored condition other than dead, an expiry before the
+begin day, a successor that contradicts the render context),
+`missingFloraReferences` (a species the build lacks fails the load like
+any other flora reference, resolved by `resolveFloraReferences` at
+staging), and `sessionIntegrityErrors` at save and load (the tile must be
+the canonical name of a tile in the page's OWN frame, and a planted id —
+which encodes neither page nor tile — is checked only against that
+page's own planting). A record whose planting the page's log does not
+hold, or whose chunk is not resident, is the tolerated dangling case.
+Nothing renders, ticks or reads a record yet: the mutation/query seam is
+EFM-7 and expiry is EFM-10.
+
 Design record:
 [`docs/environmental_flora_mortality_design.md`](environmental_flora_mortality_design.md).
 Gates: TODAY, `tools/texture_subset_audit.py` (declared flora texture
@@ -6430,8 +6457,22 @@ cultivated, and the context survives chunk regeneration and a
 codec-and-reconstruction round trip of a planted row crop; a
 placement-to-cultivated mutation fails it) beside the unchanged
 `--match "flora instance identity"` and `--match "flora instance
-persistence"`. OWED by the epic's children, each with its own
-issue: EFM-5 and EFM-6 owe the condition-record and persistence gates;
+persistence"`, and, since #2549, `--match "flora condition persistence"`
+(the pure store — double-mark refused with the original preserved,
+clear removes exactly one, the whole context-by-outcome space judged
+against an independent oracle; the v6→v7 migration to an empty map; every
+validation refusal driven through the real decode and validate path with
+the page and key asserted, including a stage outside the vocabulary; page
+ownership and planted-provenance isolation between two pages carrying the
+same planted counter; an unloaded wild occurrence naming a missing
+species; and one of three same-tile co-tenants kept dead across eviction,
+regeneration, the production capture, an envelope encode/decode and
+staging, with a planted row crop doing the same across a save/load),
+`--match "save migrations"` and `python3 tools/save_compat_audit.py`
+(the v7 fixture), and `python3 tools/persistence_inventory_audit.py` (the
+`wsFloraConditionsRef` and `wpsFloraConditions` rows). OWED by the epic's
+children, each with its own issue: EFM-6 owes the groundcover-crop
+condition and persistence gates;
 EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
 killed, renders its dead candidate; alive and depleted, it still

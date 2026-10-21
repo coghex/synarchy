@@ -768,7 +768,7 @@ emptyPageActivity ∷ WorldPageId → PageActivityDTO
 emptyPageActivity pid = PageActivityDTO pid HM.empty HM.empty HM.empty
     HM.empty HM.empty emptyFloraHarvests HM.empty
     (toGroundItemsDTO emptyGroundItems) HM.empty HM.empty HM.empty
-    firstConstructAttemptId
+    firstConstructAttemptId HM.empty
 
 -- | #1667: one well-formed bill, so a floor test can pair an invalid
 --   allocator with a live id and see BOTH findings reported.

@@ -240,9 +240,10 @@ basePage = blankPageSnapshot fixturePage
 resolvedEdits ∷ PageSnapshot → WorldEdits
 resolvedEdits p =
     case resolveFloraReferences probeCatalog fixturePage
-            (pgsEdits p) (pgsCropPlots p) (pgsPlantDesignations p) of
+            (pgsEdits p) (pgsCropPlots p) (pgsPlantDesignations p)
+            (pgsFloraConditions p) of
         Left missing → error ("unresolved flora references: " <> show missing)
-        Right (edits, _, _) → edits
+        Right (edits, _, _, _) → edits
 
 -- | Decode a payload through the real codec at @ver@ and apply it to the
 --   fixture page, as the loader does.

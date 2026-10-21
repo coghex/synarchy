@@ -73,6 +73,7 @@ import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests,
                             emptyFloraHarvests, emptyPendingFloraHarvests)
 import Gameplay.Tags.Page (PageTags, emptyPageTags, CropPlotStore, emptyCropPlotStore)
 import World.Flora.Identity (firstPlantedFloraCursor)
+import World.Flora.Condition (FloraConditions, emptyFloraConditions)
 import Item.Knowledge (PortableKnowledge, emptyPortableKnowledge)
 import Item.Ground (GroundItems, emptyGroundItems)
 
@@ -390,6 +391,16 @@ data WorldState = WorldState
       --   eviction can't wipe it; written by world.harvestFlora + the
       --   regrowth tick, read by the flora render pass and the foraging
       --   AI's queries. Persisted in saves (wpsFloraHarvests).
+    , wsFloraConditionsRef ∷ IORef FloraConditions
+      -- ^ Flora condition records (#2549, EFM-5): flora INSTANCE id → a
+      --   sparse, semantic death record (cause, begin day, render
+      --   context, frozen phase/stage, retention outcome; see
+      --   "World.Flora.Condition"). World-level (NOT in lcFlora) for the
+      --   reason 'wsFloraHarvestsRef' is: chunk eviction cannot wipe it,
+      --   and the regenerated occurrence finds its record again by its
+      --   deterministic id (wild) or its edit-log id (row crops).
+      --   Persisted in saves (wpsFloraConditions). Nothing reads it yet
+      --   (EFM-7 owns the mutation/query seam and rendering).
     , wsChopDesignationsRef ∷ IORef ChopDesignations
       -- ^ Chop-designation set (#97): flora INSTANCE id → designation
       --   (surface z + the plant's canonical tile; see
@@ -636,6 +647,7 @@ emptyWorldState = do
     wsConstructDesignationsRef ← newIORef HM.empty
     wsConstructAttemptRef ← newIORef firstConstructAttemptId
     wsFloraHarvestsRef ← newIORef emptyFloraHarvests
+    wsFloraConditionsRef ← newIORef emptyFloraConditions
     wsChopDesignationsRef ← newIORef HM.empty
     wsPendingChopMigrationRef ← newIORef HM.empty
     wsPendingFloraHarvestsRef ← newIORef emptyPendingFloraHarvests
@@ -677,6 +689,7 @@ emptyWorldState = do
                         wsStructureDestructionsRef
                         wsConstructDesignationsRef wsConstructAttemptRef
                         wsFloraHarvestsRef
+                        wsFloraConditionsRef
                         wsChopDesignationsRef
                         wsPendingChopMigrationRef
                         wsPendingFloraHarvestsRef

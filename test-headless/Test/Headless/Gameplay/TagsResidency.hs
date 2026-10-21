@@ -779,9 +779,9 @@ capturedSession env = do
         store ← readIORef (wsCropPlotsRef ws)
         cursor ← readIORef (wsPlantedFloraCursorRef ws)
         -- The edit log through the save's own naming step.
-        (edits, _, _) ← readIORef (wsEditsRef ws) ⌦ \es →
+        (edits, _, _, _) ← readIORef (wsEditsRef ws) ⌦ \es →
             either (\e → fail ("naming refused: " <> show e)) pure
-                (nameFloraReferences catalog pid es HM.empty HM.empty)
+                (nameFloraReferences catalog pid es HM.empty HM.empty HM.empty)
         pure (blankPageSnapshot pid (withVolcanoCtx arenaParams))
             { pgsPageTags = capturePageTags pt store
             , pgsEdits = edits

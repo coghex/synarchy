@@ -146,6 +146,7 @@ minimalPage pid = PageSnapshot
     , pgsChopDesignations = HM.empty
     , pgsPendingChopMigration = HM.empty
     , pgsPendingFloraHarvests = HM.empty
+    , pgsFloraConditions = HM.empty
     , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
