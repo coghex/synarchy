@@ -2084,9 +2084,10 @@ question is FTS-1's DIRECTED authority over both units' policy profiles,
 the shipped catalogue's base table and a live overlay
 (`unitRelationFromTo` / `unitIsFriendlyToward` / `unitCanAttack`). Lua asks
 `unit.relationFromTo(a, b)`, `unit.isFriendlyToward(a, b)` and
-`unit.canAttack(a, b)` (fail closed: `neutral` / false). The overlay is a
-registration-time input of those verbs: production passes none, and only a
-fixture calls the same registration function with causes. A medic treats
+`unit.canAttack(a, b)` (fail closed: `neutral` / false). Since #2548 the
+overlay is the persisted relation-cause store (§Relation cause store below),
+which the verbs read afresh on every call; there is no registration-time
+overlay. A medic treats
 the patient IT regards as an ally; `groupEffectivenessVs` counts a
 candidate that regards the SUBJECT as an ally and never the threat; the
 context-menu Attack row is `unit.canAttack` (directed hostility, or
@@ -2120,6 +2121,41 @@ and goal occurrence are transient (`docs/persistence_state_inventory.md`,
 `units` component (v3, now v4) persists profiles exactly; v1/v2 faction strings
 resolve by D-26 at the load boundary
 (`docs/persistence_state_inventory.md`, `UnitsDTO` and `umInstances`).
+
+**Relation cause store (#2548, FTS-6B).** `Unit.Faction.RelationStore` holds
+every live DIRECTED relation cause: an owner identity (`RelationCauseId`), an
+ordered (source tag, target tag) pair and a relation value. A cause is keyed by
+its pair AND its owner, so one owner may hold several and two owners may hold
+one pair; re-adding a key merges by hostile > neutral > ally (never
+last-write-wins), `removeCausesByOwner` removes one owner's causes on every pair,
+`clearPairByOwner` one owner's cause on one ordered pair, and the text boundary
+`mkLiveRelationCause` refuses a malformed tag. The store is the
+`relationCauseStoreRef` `EngineEnv` field, reached through
+`UnitCombatCapability`'s `ucRelationCauseStoreRef`. Ordinary runtime access is
+the Lua thread's (the three relation verbs); the lifecycle accesses are the world
+thread's, under the existing save/load barrier: the save capture
+(`WriteWorld`) reads it, the load publish replaces it on the texture palette's
+seam, and Exit to Menu (`handleWorldDestroyAllCommand`) empties it. It starts
+empty, survives show, hide and destroy of one page, and a same-process next
+session starts empty, so an old cause cannot act on reused tags. Nothing in
+production adds a cause yet (FTS-6A and FTS-6E own the producers, FTS-6C the
+verbs); a producer that runs off the world thread must order itself against
+`wmSessionEpoch` as #2512's portable-knowledge writes do. It persists as the
+FOURTH optional save component `relation-causes` (v1; absence means "no cause
+exists"), session-scoped and written from `SessionGlobals`; its relation value
+is the frozen `RelationValueDTO`, a present payload that is malformed, carries a
+malformed tag, repeats an (owner, source, target) key or is at an unsupported
+version fails the load, and any ordering of a valid payload restores the same
+store. Gates: hspec `--match "Faction relation store"` (pure rules against exact
+overlays, the codec through real envelope bytes, the real save → load → stage →
+publish and teardown lifecycle on a private engine, and the live verbs),
+`--match "save components"`, `--match "save envelope"`, `--match "persistence
+contract"`, the tracked `z18-relation-causes` fixture (seeded with
+`save_compat_audit.py --generate-session --seed-tags`, whose `relationCauses`
+category is the one test-only way to put a cause in a save) and
+`tools/persistence_contract_probe.py`'s `relation_cause_cycles` (a seeded save
+through three fresh processes, every generation non-empty and identical, the
+restored authority's answers exact).
 
 **Capabilities.** `factionCatalogueRef` is a `content-registries` field,
 written only by `Engine.Scripting.Lua.API.Factions` through
