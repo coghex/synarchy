@@ -294,7 +294,9 @@ def set_fixture_timestamp(fixture_path: Path, timestamp: str,
 def seed_fixture_tags(fixture_path: Path, spec_path: Path,
                       output_path: Path) -> tuple[bool, str]:
     """Write the general gameplay-tag assignments `spec_path` names
-    (#2701; JSON, see `app-save-codec/Main.hs`'s `seed-tags`) into
+    (#2701; JSON, see `app-save-codec/Main.hs`'s `seed-tags`, whose
+    optional `relationCauses` list #2548 also writes live directed
+    relation causes) into
     `fixture_path`, writing the result to `output_path` (which may be
     the same path). The save is decoded and re-encoded through the real
     session codec, Lua components verbatim. Returns

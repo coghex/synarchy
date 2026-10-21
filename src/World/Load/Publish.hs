@@ -130,6 +130,12 @@ publishStagedSession env logger requestId staged = do
     -- validation time, when the load isn't yet known to succeed.
     writeIORef (materialRegistryRef env) (ssMaterialRegistry staged)
     writeIORef (texPaletteRef env) (ssTexPalette staged)
+    -- #2548: installed from the STAGED session, so an absent
+    -- @"relation-causes"@ payload CLEARS whatever the outgoing session
+    -- held. Tags are session-wide identities and a cause outliving the
+    -- session that minted it would act on an unrelated roster that
+    -- happens to reuse a tag — the merge §1 forbids.
+    writeIORef (relationCauseStoreRef env) (ssRelationCauses staged)
     -- Runtime paletteId → texture handle table is session-local; clear it
     -- so Lua re-resolves every palette texture for this session.
     writeIORef (texPaletteHandlesRef env) HM.empty

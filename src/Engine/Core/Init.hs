@@ -75,6 +75,7 @@ import Location.Types (emptyLocationRegistry)
 import LootTable.Types (emptyLootTableRegistry)
 import LootProfile.Types (emptyLootProfileRegistry)
 import Unit.Faction.Catalogue (emptyFactionCatalogue)
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import Unit.Physiology.Types (emptyPhysiologyRegistry)
 import Tutorial.Types (emptyTutorialRegistry)
 import World.Types (emptyWorldManager, emptyFloraCatalog)
@@ -484,6 +485,7 @@ initializeEngineWith logBackend = do
   worldGenConfigRef ← newIORef worldGenConfig
   pathingConfig ← loadPathingConfig logger "config/pathing.yaml"
   pathingConfigRef ← newIORef pathingConfig
+  relationCauseStoreRef ← newIORef emptyRelationCauseStore
 
   enginePausedRef ← newIORef False
   -- #913: starts at 0 and only ever counts UP; an autosave compares a
@@ -614,6 +616,7 @@ initializeEngineWith logBackend = do
         , buildingGhostRef   = buildingGhostRef
         , worldGenConfigRef  = worldGenConfigRef
         , pathingConfigRef   = pathingConfigRef
+        , relationCauseStoreRef = relationCauseStoreRef
         , simQueue          = simQueue
         , enginePausedRef   = enginePausedRef
         , playerIntentGenRef = playerIntentGenRef

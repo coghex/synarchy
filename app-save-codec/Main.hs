@@ -108,6 +108,11 @@ import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Item.Knowledge
+import Unit.Faction (FactionRelation(..), relationTag)
+import Unit.Faction.Profile
+    (LiveRelationCause(..), factionTagText, relationCauseId, relationCauseIdText)
+import Unit.Faction.RelationStore
+    (addStoredCause, mkLiveRelationCause, relationCauseStoreOverlay)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Aeson ((.:), (.:?), (.!=))
@@ -297,6 +302,16 @@ canonicalSummary meta snap luaComponentCount isMigrated = Aeson.object
     , "itemRefs" .=
         [ Aeson.object [ "id" .= i, "ref" .= r ]
         | (i, r) ← itemRefsToAscList (snapItemRefs snap) ]
+      -- #2548: the live directed relation causes, SESSION-scoped, in the
+      -- store's own deterministic order. Absent from every expected
+      -- summary generated before the component existed, which the
+      -- Baselines reader reads as "no cause".
+    , "relationCauses" .=
+        [ Aeson.object [ "owner" .= relationCauseIdText (lrcCause c)
+                       , "source" .= factionTagText (lrcSource c)
+                       , "target" .= factionTagText (lrcTarget c)
+                       , "relation" .= relationTag (lrcRelation c) ]
+        | c ← relationCauseStoreOverlay (snapRelationCauses snap) ]
     , "isMigratedLegacyBaseline" .= isMigrated
     ]
   where
@@ -873,6 +888,13 @@ writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode
 --   >  "buildings": [...], "locations": [...],
 --   >  "items":     [{"id": 42, "tags": ["c"]}]}
 --
+--   An optional @"relationCauses"@ list (#2548) ADDS live directed
+--   relation causes — @{"owner": "o", "source": "a", "target": "b",
+--   "relation": "hostile"}@, relation @ally@, @neutral@ or @hostile@ — to
+--   the save's store through 'mkLiveRelationCause' (a malformed tag is
+--   refused) and 'addStoredCause'. It is the only way a fixture carries
+--   one, because no production code adds a cause yet.
+--
 --   Items (#2703) carry no page: their assignments are session-scoped
 --   and keyed by item instance id, which must not be 0. An empty @tags@
 --   list clears the target. Each category is optional. A page's physical
@@ -968,7 +990,21 @@ data TagSeed = TagSeed
     { tsUnitSeeds ∷ ![UnitSeedEntry], tsBuildingSeeds ∷ ![SeedEntry]
     , tsLocationSeeds ∷ ![SeedEntry], tsItemSeeds ∷ ![ItemSeedEntry]
     , tsTileSeeds ∷ ![PlaceSeedEntry], tsPlantSeeds ∷ ![PlaceSeedEntry]
-    , tsPlotSeeds ∷ ![PlaceSeedEntry], tsFloraSeeds ∷ ![FloraSeedEntry] }
+    , tsPlotSeeds ∷ ![PlaceSeedEntry], tsFloraSeeds ∷ ![FloraSeedEntry]
+    , tsRelationCauses ∷ ![RelationCauseSeed] }
+
+-- | One live directed relation cause (#2548): owner identity, the
+--   ORDERED tag pair as text, and @"ally"@ \/ @"neutral"@ \/
+--   @"hostile"@. Fixture support only — no production code adds a cause
+--   yet, so a non-empty store can only reach a fixture through here.
+data RelationCauseSeed = RelationCauseSeed
+    { rcsOwner ∷ !Text, rcsSource ∷ !Text, rcsTarget ∷ !Text
+    , rcsRelation ∷ !Text }
+
+instance Aeson.FromJSON RelationCauseSeed where
+    parseJSON = Aeson.withObject "relation cause seed" $ \o →
+        RelationCauseSeed <$> o .: "owner" <*> o .: "source" <*> o .: "target"
+                          <*> o .: "relation"
 
 newtype FloraSeeds = FloraSeeds [FloraSeedEntry]
 
@@ -1000,6 +1036,7 @@ instance Aeson.FromJSON TagSeed where
         <*> o .:? "locations" .!= [] <*> o .:? "items" .!= []
         <*> o .:? "tiles" .!= [] <*> o .:? "plants" .!= [] <*> o .:? "plots" .!= []
         <*> (Aeson.parseJSON (Aeson.Object o) ≫= \(FloraSeeds es) → pure es)
+        <*> o .:? "relationCauses" .!= []
 
 applyTagSeed ∷ TagSeed → SessionSnapshot → Either String SessionSnapshot
 applyTagSeed seed snap0 =
@@ -1011,7 +1048,22 @@ applyTagSeed seed snap0 =
         ≫= \s5 → foldM (placeEntry onPlant) s5 (tsPlantSeeds seed)
         ≫= \s6 → foldM (placeEntry onPlot) s6 (tsPlotSeeds seed)
         ≫= \s7 → foldM floraEntry s7 (tsFloraSeeds seed)
+        ≫= \s8 → foldM causeEntry s8 (tsRelationCauses seed)
   where
+    -- #2548: ADDS to the save's store through the one text boundary
+    -- ('mkLiveRelationCause', which refuses a malformed tag) and the one
+    -- insertion ('addStoredCause'), so a seeded fixture merges exactly as
+    -- the live store would.
+    causeEntry snap e = do
+        r ← maybe (Left ("unknown relation '" ⧺ T.unpack (rcsRelation e)
+                         ⧺ "' (ally, neutral or hostile)")) Right
+                  (lookup (rcsRelation e) relationsByTag)
+        c ← either (Left ∘ T.unpack) Right
+                (mkLiveRelationCause (relationCauseId (rcsOwner e))
+                     (rcsSource e) (rcsTarget e) r)
+        pure snap { snapRelationCauses =
+                        addStoredCause c (snapRelationCauses snap) }
+    relationsByTag = [ (relationTag r, r) | r ← [RelAlly, RelNeutral, RelHostile] ]
     -- #2711: a plant's physical state, written the way a scenario
     -- materialization leaves it in a save (named planting edits, the state
     -- edits after them, crop plots, regrowth timers), with the page's

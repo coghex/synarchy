@@ -19,6 +19,7 @@
 --   --test-options='--match "Gameplay.Tags.Persistence"'@.
 module Test.Headless.Gameplay.TagsPersistence (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString as BS
@@ -501,7 +502,8 @@ capturedSession env = do
             , sgLiveCamera = LiveCameraSnapshot (Just incPage) 0 0 1 FaceSouth
             , sgItemTags = mempty
             , sgItemRefs = mempty
-            , sgPortableKnowledge = emptyPortableKnowledge }
+            , sgPortableKnowledge = emptyPortableKnowledge
+            , sgRelationCauses = emptyRelationCauseStore }
             pages
 
 arenaParams ∷ WorldGenParams

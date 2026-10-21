@@ -33,6 +33,7 @@
 --   --test-options='--match "arena generation consistency"'@.
 module Test.Headless.World.ArenaGenerationConsistency (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
@@ -529,7 +530,8 @@ stageArena env params edits = do
             , snapLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
             , snapPages = HM.singleton pid page
             , snapItemTags = mempty, snapItemRefs = mempty
-            , snapPortableKnowledge = emptyPortableKnowledge }
+            , snapPortableKnowledge = emptyPortableKnowledge
+            , snapRelationCauses = emptyRelationCauseStore }
         saveData = snapshotToSaveData
             (SaveRequestMeta "arena_consistency" "2026-10-18T00:00:00.000000Z" False) snap
     stageSaveData env logger pid saveData

@@ -1,6 +1,5 @@
 module Engine.Scripting.Lua.API.Register.Unit
   ( registerUnitAPI
-  , registerUnitAPIWith
   ) where
 
 import Engine.Scripting.Lua.CallStats (LuaCallStats)
@@ -30,11 +29,10 @@ import Engine.Scripting.Lua.API.Units.Ownership
     ( unitHasUnrestrictedCombatFn, unitIsPlayerCommandableFn
     , unitIsPlayerOwnedFn )
 -- #2521's directed relation/alliance/permission queries. Their live
--- overlay is a parameter of THIS registrar ('registerUnitAPIWith'):
--- production passes none, and a fixture calls the same registrar.
+-- overlay is the persisted cause store, read afresh on every call
+-- (#2548), so there is nothing to pass at registration.
 import Engine.Scripting.Lua.API.Units.Relation
     (unitCanAttackFn, unitIsFriendlyTowardFn, unitRelationFromToFn)
-import Unit.Faction.Profile (LiveRelationCause)
 -- #2470's atomic stamina commit, imported directly for the same reason.
 -- Its own module beside the stance verb: it likewise commits against the
 -- SAME reference combat debits, and additionally REPORTS what it
@@ -56,17 +54,11 @@ import Engine.Scripting.Lua.API.Units.Physiology
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
--- | Populate and install the @unit@ global table.
+-- | Populate and install the @unit@ global table. The relation verbs
+--   read the persisted cause store on every call (#2548), so this takes
+--   no overlay and a fixture that needs live causes writes the store.
 registerUnitAPI ∷ LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception ()
-registerUnitAPI = registerUnitAPIWith []
-
--- | The @unit@ namespace with the relation verbs answering under
---   @overlay@ (#2521). Production calls it with none through
---   'registerUnitAPI'; a fixture that needs live causes calls this same
---   function, so no test-only registration exists.
-registerUnitAPIWith ∷ [LiveRelationCause] → LuaCallStats → EngineEnv
-                    → Lua.LuaE Lua.Exception ()
-registerUnitAPIWith overlay callStats env = do
+registerUnitAPI callStats env = do
   Lua.newtable
 
   registerLuaFunction callStats "unit" "spawn"       (unitSpawnFn env)
@@ -160,11 +152,11 @@ registerUnitAPIWith overlay callStats env = do
   registerLuaFunction callStats "unit" "hasUnrestrictedCombat"
                                           (unitHasUnrestrictedCombatFn env)
   registerLuaFunction callStats "unit" "relationFromTo"
-                                          (unitRelationFromToFn env overlay)
+                                          (unitRelationFromToFn env)
   registerLuaFunction callStats "unit" "isFriendlyToward"
-                                          (unitIsFriendlyTowardFn env overlay)
+                                          (unitIsFriendlyTowardFn env)
   registerLuaFunction callStats "unit" "canAttack"
-                                          (unitCanAttackFn env overlay)
+                                          (unitCanAttackFn env)
   registerLuaFunction callStats "unit" "exists"       (unitExistsFn env)
   registerLuaFunction callStats "unit" "getAttackRange" (unitGetAttackRangeFn env)
   registerLuaFunction callStats "unit" "getAttackCooldown" (unitGetAttackCooldownFn env)

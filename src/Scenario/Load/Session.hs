@@ -31,6 +31,7 @@ import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import Engine.Core.SessionEpoch (freshSessionGameTime)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Item.Knowledge (emptyPortableKnowledge)
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import Structure.Palette (emptyTexPalette)
 import World.Arena.Bounds (ArenaBounds)
 import World.Generate.Types
@@ -117,5 +118,6 @@ shellSaveData spec = do
             , snapPages = HM.singleton arenaPageId page
             , snapItemTags = mempty
             , snapItemRefs = mempty
-            , snapPortableKnowledge = emptyPortableKnowledge }
+            , snapPortableKnowledge = emptyPortableKnowledge
+            , snapRelationCauses = emptyRelationCauseStore }
     pure (snapshotToSaveData (SaveRequestMeta "scenario" "" False) snap)

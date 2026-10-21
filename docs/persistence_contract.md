@@ -506,6 +506,9 @@ staged restoration, the movement snapshot of a hidden page) and the
 fresh-process finite arena in `tools/multiworld_save_probe.py --arena`.
 `currentSaveVersion` was bumped to 108 as the worldgen-output bookkeeping
 marker; the bump does not replace the component migration above.
+`currentSaveVersion` was bumped to 109 for #2548's new optional
+`relation-causes` component; the bump marks the in-memory `SaveData` bridge
+gaining `sdRelationCauses` and, as above, replaces no component migration.
 
 ## 5. Format-version policy
 
@@ -592,7 +595,7 @@ marker; the bump does not replace the component migration above.
   §1 applied to the format layer specifically.
 - **A NEW component may be declared OPTIONAL** when a save predating it
   has an honest, non-guessing default — the reader then treats an
-  ABSENT payload as that default instead of failing the load. Three
+  ABSENT payload as that default instead of failing the load. Four
   components in the static Haskell registry qualify so far, and each
   states its own justification in its module header. #1087's
   `container-knowledge` (the player's last-known container contents)
@@ -610,7 +613,18 @@ marker; the bump does not replace the component migration above.
   optional component that is SESSION-scoped rather than page-scoped — a
   crate is carried between pages and owners, so its memory is keyed by
   the crate and written once for the whole session — which changes
-  nothing about the optionality rule itself. (On the Lua side
+  nothing about the optionality rule itself. #2548's `relation-causes`
+  (every live DIRECTED relation cause, keyed by its ordered tag pair and
+  its owner's `RelationCauseId`) is the fourth, again on identical terms:
+  "absent" means "no cause exists", which is true of every session that
+  predates the component because nothing could hold one. It is
+  session-scoped too — a cause relates two TAGS, which no page owns — and
+  its owner is the global `relationCauseStoreRef`, captured and replaced
+  on the texture palette's seam: a load REPLACES the live store (an absent
+  component clears it, a failure before publication leaves it), and Exit
+  to Menu empties it while an ordinary page transition never does. Its
+  relation value rides the wire as the frozen `RelationValueDTO`, never as
+  `FactionRelation`. (On the Lua side
   `lua.tutorial_progress` is separately optional under the same rule —
   §7 — so the count here is of the static Haskell registry, not of the
   envelope as a whole.) This is a
@@ -619,7 +633,7 @@ marker; the bump does not replace the component migration above.
   `World.Save.Component.Types.registerComponent`, and only the
   MANIFEST-level absence is tolerated: a component that IS declared but
   whose payload is malformed, truncated, or at an unsupported version
-  still fails exactly as a required one would. A FOURTH optional
+  still fails exactly as a required one would. A FIFTH optional
   component has to justify itself against
   `Test.Headless.World.Save.Components`' explicit required/optional
   split assertion, which names every one of them.

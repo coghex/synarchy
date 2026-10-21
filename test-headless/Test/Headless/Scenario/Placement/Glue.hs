@@ -31,6 +31,7 @@ module Test.Headless.Scenario.Placement.Glue
     , roundTrip
     ) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Data.IORef (readIORef)
 import qualified Data.Aeson as A
@@ -219,7 +220,8 @@ sessionSnapshotOf fx pid ws = do
         , snapLiveCamera = LiveCameraSnapshot (Just pid) (fst (camPosition cam)) (snd (camPosition cam)) (camZoom cam) (camFacing cam)
         , snapPages = HM.singleton pid page
         , snapItemTags = categoryForward (wmItemTags wm), snapItemRefs = wmItemScenarioRefs wm
-        , snapPortableKnowledge = emptyPortableKnowledge }
+        , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore }
 
 saveMeta ∷ SaveRequestMeta
 saveMeta = SaveRequestMeta { srmSlotName = "slot", srmTimestamp = "ts", srmAutosave = False }

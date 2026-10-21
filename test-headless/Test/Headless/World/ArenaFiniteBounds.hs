@@ -22,6 +22,7 @@
 --   --test-options='--match "arena finite bounds"'@.
 module Test.Headless.World.ArenaFiniteBounds (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
@@ -439,7 +440,8 @@ snapshotOf mb edits =
         , snapLiveCamera = LiveCameraSnapshot (Just pid) 0 0 1 FaceSouth
         , snapPages = HM.singleton pid page
         , snapItemTags = mempty, snapItemRefs = mempty
-        , snapPortableKnowledge = emptyPortableKnowledge }
+        , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore }
 
 saveDataOf ∷ SessionSnapshot → SaveData
 saveDataOf = snapshotToSaveData

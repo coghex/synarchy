@@ -46,6 +46,7 @@ import World.Types
 import Item.Knowledge
     ( PortableObservation
     , applyPortableObservation, emptyPortableKnowledge, forgetPortable )
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import World.Blood.Teardown (enqueueBloodDisposalForPage, enqueueBloodDisposalAll)
 
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()
@@ -258,6 +259,13 @@ handleWorldDestroyAllCommand env logger = do
                -- (#2512).
                , wmSessionEpoch = wmSessionEpoch m' + 1
                , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
+    -- #2548: the next session's tags are different tags, and a live
+    -- cause names tags rather than units, so one surviving the teardown
+    -- would act on whatever roster later reuses them. Emptied here — the
+    -- Exit-to-Menu boundary — and nowhere an ordinary page transition
+    -- runs ('handleWorldDestroyCommand' removes one page and leaves it).
+    writeIORef (ucRelationCauseStoreRef (toUnitCombatCapability env))
+               emptyRelationCauseStore
     atomically $ resetAudioSession (acTransport $ toAudioCapability env)
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)

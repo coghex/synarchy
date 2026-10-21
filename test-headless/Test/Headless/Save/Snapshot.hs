@@ -8,6 +8,7 @@
 --   'tools/save_barrier_probe.py'.
 module Test.Headless.Save.Snapshot (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Gameplay.Tags.Page (emptyPageTagsSnapshot)
 import Unit.Faction.Membership (inertUnitProfile)
@@ -112,6 +113,7 @@ minimalGlobals = SessionGlobals
     , sgItemTags = mempty
     , sgItemRefs = mempty
     , sgPortableKnowledge = emptyPortableKnowledge
+    , sgRelationCauses = emptyRelationCauseStore
     }
 
 minimalItem ∷ Word64 → ItemInstance

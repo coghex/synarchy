@@ -61,6 +61,10 @@ import qualified Data.Set as Set
 import Gameplay.Tags.Index (categoryAssignments)
 import Gameplay.Tags.Tag (gameplayTagText, itemTargetId)
 import Scenario.Items.Refs (itemRefsToAscList)
+import Unit.Faction (relationTag)
+import Unit.Faction.Profile
+    (LiveRelationCause(..), factionTagText, relationCauseIdText)
+import Unit.Faction.RelationStore (relationCauseStoreOverlay)
 import Gameplay.Tags.Page (PageTagsSnapshot(..))
 import World.Flora.Identity (floraInstanceIdToLua)
 import Data.Int (Int64)
@@ -563,6 +567,11 @@ data ExpectedSummary = ExpectedSummary
       -- ^ #2709: the session's item → scenario-reference mapping,
       --   ascending by item id. Absent before core-session v3 and read
       --   as NONE, which is what every such payload restores.
+    , esRelationCauses ∷ ![(Text, Text, Text, Text)]
+      -- ^ #2548: every live directed relation cause as (owner, source,
+      --   target, relation), in the store's own order. Absent before the
+      --   @relation-causes@ component and read as NONE, which is what
+      --   every such payload restores.
     , esIsMigratedLegacyBaseline ∷ !Bool
     }
 
@@ -576,6 +585,9 @@ instance Aeson.FromJSON ExpectedSummary where
         <*> (map unTagged ⊚ (o .:? "itemTags" .!= []))
         <*> (o .:? "itemRefs" .!= [] ≫= mapM (Aeson.withObject "itemRef" $ \e →
                 (,) <$> e .: "id" <*> e .: "ref"))
+        <*> (o .:? "relationCauses" .!= [] ≫= mapM (Aeson.withObject "relationCause" $ \e →
+                (,,,) <$> e .: "owner" <*> e .: "source" <*> e .: "target"
+                      <*> e .: "relation"))
         <*> o .: "isMigratedLegacyBaseline"
 
 decodeJSONFile ∷ Aeson.FromJSON a ⇒ FilePath → IO (Either String a)
@@ -712,6 +724,19 @@ manifestFixturesSpec =
                         -- decode, every older one proves none.
                         itemRefsToAscList (snapItemRefs snap)
                             `shouldBe` esItemRefs expected
+
+                        -- #2548: the live relation causes, compared
+                        -- EXACTLY and in the store's own order, so the
+                        -- seeded fixture proves each owner, both tags and
+                        -- the relation value survive decode, and every
+                        -- earlier fixture proves its absence restores none.
+                        [ ( relationCauseIdText (lrcCause c)
+                          , factionTagText (lrcSource c)
+                          , factionTagText (lrcTarget c)
+                          , relationTag (lrcRelation c) )
+                            | c ← relationCauseStoreOverlay
+                                      (snapRelationCauses snap) ]
+                            `shouldBe` esRelationCauses expected
 
                         snapGameTime snap `shouldBe` esGameTime expected
                         snapNextItemId snap `shouldBe` esNextItemId expected

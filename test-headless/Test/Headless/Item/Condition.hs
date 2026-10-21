@@ -52,6 +52,7 @@
 --   --test-options='--match "Item.Condition"'@.
 module Test.Headless.Item.Condition (spec) where
 
+import Unit.Faction.RelationStore (emptyRelationCauseStore)
 import UPrelude
 import Test.Hspec
 import qualified Data.ByteString.Char8 as BS8
@@ -664,6 +665,7 @@ poisonedSaveWith units = snapshotToSaveData
         , snapItemTags = mempty
         , snapItemRefs = mempty
         , snapPortableKnowledge = emptyPortableKnowledge
+        , snapRelationCauses = emptyRelationCauseStore
         }
 
 -- | The global item-instance cursor the save carries, above every
