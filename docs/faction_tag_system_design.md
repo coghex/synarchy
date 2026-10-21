@@ -437,9 +437,9 @@ it answers only the attack PERMISSION (the attacker's directed hostility, or
 unrestricted combat on either side) and takes no local-awareness input. Local
 awareness, the self-defense window and the cutoffs belong to the Lua combat
 policy seam (`scripts/unit_ai_combat_policy.lua`), so a permission check can
-never be mistaken for an autonomous acquisition rule. The live overlay is a
-registration-time input of those verbs; production registers them with an
-empty one.
+never be mistaken for an autonomous acquisition rule. The live overlay is the
+persisted relation-cause store (FTS-6B, #2548) those verbs read on every call;
+production adds no cause until FTS-6A/6E, so it is empty.
 
 `canAttackNow` and `canInitiateAttackOrder` are deliberately different. The
 current context menu asks whether the relation is already hostile and therefore
@@ -1360,7 +1360,8 @@ removing it.
 - **Open questions:** None
 - **As built (#2521):** the directed authority is `Unit.Faction.Membership`'s
   `unitRelationFromTo` / `unitIsFriendlyToward` / `unitCanAttack` over the
-  catalogue's base table plus a registration-time overlay; medics and swarm
+  catalogue's base table plus a live overlay (a registration-time input here,
+  the persisted relation-cause store since #2548); medics and swarm
   rallying ask the actor's own directed regard; autonomous acquisition and
   continuation go through `scripts/unit_ai_combat_policy.lua` (hostility, or
   ten-second local self-defense after the latest cutoff, or a fixture
@@ -1427,6 +1428,16 @@ removing it.
   load; removing one owner's cause leaves every other cause; no Lua verb yet.
 - **Out of scope:** Lua API, spawn ingress, orders, reports.
 - **Open questions:** None
+- **As built (#2548):** `Unit.Faction.RelationStore` (causes keyed by ordered
+  pair and `RelationCauseId`, merged hostile > neutral > ally), held in the
+  `relationCauseStoreRef` `EngineEnv` field through `UnitCombatCapability`, read
+  by the three relation verbs on every call, and persisted as the FOURTH
+  optional component `relation-causes` (v1, session-scoped, frozen
+  `RelationValueDTO`). Replaced by a load on the texture palette's seam and
+  emptied by Exit to Menu only. Evidence: hspec `Faction relation store`, the
+  tracked `z18-relation-causes` fixture and the `relation_cause_cycles` of
+  `tools/persistence_contract_probe.py`; contract:
+  `docs/engine_contracts.md` §Relations and autonomous combat.
 
 ### FTS-6C. Expose the narrow Lua profile, tag, and relation-cause API
 
