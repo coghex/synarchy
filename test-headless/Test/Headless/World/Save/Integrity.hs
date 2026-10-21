@@ -142,6 +142,7 @@ minimalPage pid = PageSnapshot
     , pgsChopDesignations = HM.empty
     , pgsPendingChopMigration = HM.empty
     , pgsPendingFloraHarvests = HM.empty
+    , pgsFloraConditions = HM.empty
     , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders
@@ -1355,12 +1356,12 @@ spec = do
                            HM.empty
             missingFloraReferences shippedCatalog [(page1, save)]
                 `shouldBe` []
-            fmap (\(_, cs, _) → map cpSpecies (HM.elems cs))
+            fmap (\(_, cs, _, _) → map cpSpecies (HM.elems cs))
                  (resolveFloraReferences shippedCatalog page1
                       emptyWorldEdits
                       (HM.singleton (13, 14)
                           (CropPlot (FloraByLegacyId wheatIdA) 5 0.9))
-                      HM.empty)
+                      HM.empty HM.empty)
                 `shouldBe` Right [wheatIdA]
 
         -- The central claim of the whole slice, and the one a same-catalog
@@ -1379,10 +1380,10 @@ spec = do
                 livePlants = HM.singleton (15, 16)
                                  (PlantDesignation 0 wheatIdA)
             case nameFloraReferences shippedCatalog page1
-                     liveEdits liveCrops livePlants of
+                     liveEdits liveCrops livePlants HM.empty of
                 Left errs → expectationFailure
                     ("capture refused a resolvable page: " ⧺ show errs)
-                Right (savedEdits, savedCrops, savedPlants) → do
+                Right (savedEdits, savedCrops, savedPlants, _) → do
                     -- Nothing numeric survived the capture.
                     [ ref | es ← HM.elems savedEdits
                           , WePlaceFloraRef _ _ ref _ _ _ ← es ]
@@ -1396,10 +1397,10 @@ spec = do
                     (tomatoIdA, wheatIdA) `shouldNotBe`
                         (tomatoIdB, wheatIdB)
                     case resolveFloraReferences reorderedCatalog page1
-                             savedEdits savedCrops savedPlants of
+                             savedEdits savedCrops savedPlants HM.empty of
                         Left errs → expectationFailure
                             ("staging refused an accepted page: " ⧺ show errs)
-                        Right (backEdits, backCrops, backPlants) → do
+                        Right (backEdits, backCrops, backPlants, _) → do
                             [ fid | es ← HM.elems backEdits
                                   , WePlaceFloraWithId _ _ fid _ _ _ ← es ]
                                 `shouldBe` [tomatoIdB]
@@ -1426,14 +1427,15 @@ spec = do
                     (HM.singleton (ChunkCoord 0 0)
                         [ WePlaceFloraWithId 11 12 unknownId 4 0.5
                               (plantedFloraInstanceId 1) ])
-                    HM.empty HM.empty
+                    HM.empty HM.empty HM.empty
                 atCrop = nameFloraReferences shippedCatalog page1
                     emptyWorldEdits
                     (HM.singleton (13, 14) (CropPlot unknownId 5 0.9))
-                    HM.empty
+                    HM.empty HM.empty
                 atPlant = nameFloraReferences shippedCatalog page1
                     emptyWorldEdits HM.empty
                     (HM.singleton (15, 16) (PlantDesignation 0 unknownId))
+                    HM.empty
                 describeLeft r = case r of
                     Left errs → map (\e → ( mfrSource e, mfrPage e
                                           , mfrCoord e, mfrSpecies e )) errs

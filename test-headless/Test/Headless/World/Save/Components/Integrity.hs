@@ -755,6 +755,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsChopDesignations = HM.empty
     , wpsPendingChopMigration = HM.empty
     , wpsPendingFloraHarvests = HM.empty
+    , wpsFloraConditions = HM.empty
     , wpsPlantedFloraCursor = firstPlantedFloraCursor
     , wpsCraftBills   = emptyCraftBills
     , wpsTransferOrders = emptyTransferOrders

@@ -12,6 +12,7 @@
 --   (issue #561).
 module World.Thread.Command.Save.WriteWorld
     ( handleWorldSaveCommand
+    , capturePageSnapshot
     , restoreAfterAutosave
     ) where
 
@@ -151,140 +152,8 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                     -- Every page must be snapshotable.  Omitting an
                     -- in-progress page makes a superficially successful save
                     -- corrupt the whole session, so fail the transaction.
-                    maybePages ← forM (wmWorlds mgr) $ \(pid, ws) → do
-                        mPageParams ← readIORef (wsGenParamsRef ws)
-                        case mPageParams of
-                            Nothing → pure $ Left ("page is not snapshotable: " <> unWorldPageId pid)
-                            Just params → do
-                                -- #2471: one read gives the whole
-                                -- clock — the minutes AND the
-                                -- sub-minute progress beside them, so a
-                                -- save written mid-minute restores
-                                -- mid-minute rather than silently
-                                -- rounding the calendar down, and the
-                                -- capture cannot pair halves of two
-                                -- published states.
-                                PreciseWorldTime (WorldTime h m)
-                                    timeRemainder ← readIORef (wsTimeRef ws)
-                                WorldDate y mo d ← readIORef (wsDateRef ws)
-                                -- No clock write here: 'imposePause' above
-                                -- owns the (flag, visible page's clock) pair
-                                -- for the whole epoch and has already zeroed
-                                -- exactly this page — it resolves the
-                                -- visible page by the same rule
-                                -- 'visibleId' above does. A second
-                                -- zeroing here was redundant on
-                                -- the paired path and actively wrong on its
-                                -- own: it discarded the speed it overwrote,
-                                -- which is the #1599 defect. Drift while
-                                -- paused is prevented for every page by
-                                -- tickWorldTime, which gates advancement on
-                                -- enginePausedRef and only ticks wmVisible
-                                -- worlds (#42). Time scale itself is never
-                                -- captured in the snapshot at all (#758: load
-                                -- policy, not gameplay state — see
-                                -- World.Save.Snapshot).
-                                mapMode   ← readIORef (wsMapModeRef ws)
-                                edits     ← readIORef (wsEditsRef ws)
-                                tiles     ← readIORef (wsTilesRef ws)
-                                mineDesigs ← readIORef (wsMineDesignationsRef ws)
-                                constructDesigs ← readIORef
-                                    (wsConstructDesignationsRef ws)
-                                constructNext ← readIORef
-                                    (wsConstructAttemptRef ws)
-                                groundItems ← readIORef (wsGroundItemsRef ws)
-                                spoilPiles ← readIORef (wsSpoilRef ws)
-                                floraHarvests ← readIORef (wsFloraHarvestsRef ws)
-                                chopDesigs ← readIORef (wsChopDesignationsRef ws)
-                                pendingChop ← readIORef
-                                    (wsPendingChopMigrationRef ws)
-                                pendingHarvests ← readIORef
-                                    (wsPendingFloraHarvestsRef ws)
-                                plantedCursor ← readIORef
-                                    (wsPlantedFloraCursorRef ws)
-                                tillDesigs ← readIORef (wsTillDesignationsRef ws)
-                                cropStore ← readIORef (wsCropPlotsRef ws)
-                                let cropPlots = cpsPlots cropStore
-                                -- #2705: the cell and occurrence tags,
-                                -- read beside the edits and the plots
-                                -- (whose tags ride the plot store).
-                                pageTags ← readIORef (wsPageTagsRef ws)
-                                plantDesigs ← readIORef (wsPlantDesignationsRef ws)
-                                craftBills ← readIORef (wsCraftBillsRef ws)
-                                transferOrders ← readIORef
-                                    (wsTransferOrdersRef ws)
-                                powerNodes ← readIORef (wsPowerNodesRef ws)
-                                containerKnowledge ← readIORef
-                                    (wsContainerKnowledgeRef ws)
-                                identity  ← readIORef (wsIdentityRef ws)
-                                generatedId ← readIORef
-                                    (wsGeneratedIdRef ws)
-                                WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
-                                let buildings = toBuildingSnapshot pid bm
-                                    units     = toUnitSnapshot pid um
-                                    -- Keep only this page's units' sim states.
-                                    savedUids = HM.keysSet
-                                        (unitsOnPage pid (umInstances um))
-                                    simStates = HM.filterWithKey
-                                        (\uid _ → uid `HS.member` savedUids)
-                                        (utsSimStates uts)
-                                    persistedEdits = appendFluidSnapshot edits tiles
-                                -- #2243: the one place a live species
-                                -- handle becomes a durable reference. A
-                                -- handle this build's own catalog cannot
-                                -- name fails the whole transaction here,
-                                -- before anything is encoded or written,
-                                -- rather than shipping a save no build
-                                -- could resolve.
-                                case nameFloraReferences floraCat pid
-                                         persistedEdits cropPlots
-                                         plantDesigs of
-                                  Left unnamed → pure $ Left $
-                                    "cannot save: "
-                                    <> T.intercalate "; "
-                                         (map renderUnnamedFloraRef unnamed)
-                                  Right (namedEdits, namedCrops, namedPlants) →
-                                    pure $ Right PageSnapshot
-                                        { pgsPageId     = pid
-                                        , pgsGenParams  = params
-                                        , pgsCameraX    = wcx
-                                        , pgsCameraY    = wcy
-                                        , pgsTimeHour   = h
-                                        , pgsTimeMinute = m
-                                        , pgsTimeRemainder =
-                                            clockRemainderMinutes
-                                                timeRemainder
-                                        , pgsDateYear   = y
-                                        , pgsDateMonth  = mo
-                                        , pgsDateDay    = d
-                                        , pgsMapMode    = mapMode
-                                        , pgsEdits      = namedEdits
-                                        , pgsMineDesignations = mineDesigs
-                                        , pgsConstructDesignations = constructDesigs
-                                        , pgsConstructNextAttempt = constructNext
-                                        , pgsGroundItems = groundItems
-                                        , pgsSpoilPiles  = spoilPiles
-                                        , pgsBuildings   = buildings
-                                        , pgsUnits       = units
-                                        , pgsUnitSimStates = simStates
-                                        , pgsFloraHarvests = floraHarvests
-                                        , pgsChopDesignations = chopDesigs
-                                        , pgsPendingChopMigration = pendingChop
-                                        , pgsPendingFloraHarvests = pendingHarvests
-                                        , pgsPlantedFloraCursor = plantedCursor
-                                        , pgsCraftBills  = craftBills
-                                        , pgsTransferOrders = transferOrders
-                                        , pgsPowerNodes  = powerNodes
-                                        , pgsContainerKnowledge = containerKnowledge
-                                        , pgsTillDesignations = tillDesigs
-                                        , pgsCropPlots   = namedCrops
-                                        , pgsPageTags    = capturePageTags pageTags cropStore
-                                        , pgsPlantDesignations = namedPlants
-                                        , pgsIdentity    = identity
-                                        -- #2021: always 'Just' — the
-                                        -- live ref is not optional.
-                                        , pgsGeneratedId = Just generatedId
-                                        }
+                    maybePages ← forM (wmWorlds mgr)
+                                    (capturePageSnapshot floraCat bm um uts)
                     case sequence maybePages of
                       Left err → do
                         logWarn logger CatWorld err
@@ -677,3 +546,154 @@ isFluidSnapshot ∷ WorldEdit → Bool
 isFluidSnapshot (WeSetFluidSnapshot _ _ _ _) = True
 isFluidSnapshot (WeClearFluidSnapshot _ _)   = True
 isFluidSnapshot _                            = False
+
+
+-- | Capture ONE live page into an immutable 'PageSnapshot', or say why it
+--   cannot be (#758). Split out of 'handleWorldSaveCommand' (#2549) so the
+--   production capture path — every live ref read, every species named —
+--   is callable by the tests that must prove a populated runtime ref
+--   reaches the snapshot, instead of a test supplying the value at an
+--   intermediate boundary. The catalog and the three entity states are
+--   read once by the caller, so every page of one save is named against
+--   one consistent view.
+capturePageSnapshot
+    ∷ FloraCatalog → BuildingManager → UnitManager → UnitThreadState
+    → (WorldPageId, WorldState) → IO (Either Text PageSnapshot)
+capturePageSnapshot floraCat bm um uts (pid, ws) = do
+    mPageParams ← readIORef (wsGenParamsRef ws)
+    case mPageParams of
+        Nothing → pure $ Left ("page is not snapshotable: " <> unWorldPageId pid)
+        Just params → do
+            -- #2471: one read gives the whole
+            -- clock — the minutes AND the
+            -- sub-minute progress beside them, so a
+            -- save written mid-minute restores
+            -- mid-minute rather than silently
+            -- rounding the calendar down, and the
+            -- capture cannot pair halves of two
+            -- published states.
+            PreciseWorldTime (WorldTime h m)
+                timeRemainder ← readIORef (wsTimeRef ws)
+            WorldDate y mo d ← readIORef (wsDateRef ws)
+            -- No clock write here: 'imposePause' above
+            -- owns the (flag, visible page's clock) pair
+            -- for the whole epoch and has already zeroed
+            -- exactly this page — it resolves the
+            -- visible page by the same rule
+            -- 'visibleId' above does. A second
+            -- zeroing here was redundant on
+            -- the paired path and actively wrong on its
+            -- own: it discarded the speed it overwrote,
+            -- which is the #1599 defect. Drift while
+            -- paused is prevented for every page by
+            -- tickWorldTime, which gates advancement on
+            -- enginePausedRef and only ticks wmVisible
+            -- worlds (#42). Time scale itself is never
+            -- captured in the snapshot at all (#758: load
+            -- policy, not gameplay state — see
+            -- World.Save.Snapshot).
+            mapMode   ← readIORef (wsMapModeRef ws)
+            edits     ← readIORef (wsEditsRef ws)
+            tiles     ← readIORef (wsTilesRef ws)
+            mineDesigs ← readIORef (wsMineDesignationsRef ws)
+            constructDesigs ← readIORef
+                (wsConstructDesignationsRef ws)
+            constructNext ← readIORef
+                (wsConstructAttemptRef ws)
+            groundItems ← readIORef (wsGroundItemsRef ws)
+            spoilPiles ← readIORef (wsSpoilRef ws)
+            floraHarvests ← readIORef (wsFloraHarvestsRef ws)
+            floraConditions ← readIORef
+                (wsFloraConditionsRef ws)
+            chopDesigs ← readIORef (wsChopDesignationsRef ws)
+            pendingChop ← readIORef
+                (wsPendingChopMigrationRef ws)
+            pendingHarvests ← readIORef
+                (wsPendingFloraHarvestsRef ws)
+            plantedCursor ← readIORef
+                (wsPlantedFloraCursorRef ws)
+            tillDesigs ← readIORef (wsTillDesignationsRef ws)
+            cropStore ← readIORef (wsCropPlotsRef ws)
+            let cropPlots = cpsPlots cropStore
+            -- #2705: the cell and occurrence tags,
+            -- read beside the edits and the plots
+            -- (whose tags ride the plot store).
+            pageTags ← readIORef (wsPageTagsRef ws)
+            plantDesigs ← readIORef (wsPlantDesignationsRef ws)
+            craftBills ← readIORef (wsCraftBillsRef ws)
+            transferOrders ← readIORef
+                (wsTransferOrdersRef ws)
+            powerNodes ← readIORef (wsPowerNodesRef ws)
+            containerKnowledge ← readIORef
+                (wsContainerKnowledgeRef ws)
+            identity  ← readIORef (wsIdentityRef ws)
+            generatedId ← readIORef
+                (wsGeneratedIdRef ws)
+            WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
+            let buildings = toBuildingSnapshot pid bm
+                units     = toUnitSnapshot pid um
+                -- Keep only this page's units' sim states.
+                savedUids = HM.keysSet
+                    (unitsOnPage pid (umInstances um))
+                simStates = HM.filterWithKey
+                    (\uid _ → uid `HS.member` savedUids)
+                    (utsSimStates uts)
+                persistedEdits = appendFluidSnapshot edits tiles
+            -- #2243: the one place a live species
+            -- handle becomes a durable reference. A
+            -- handle this build's own catalog cannot
+            -- name fails the whole transaction here,
+            -- before anything is encoded or written,
+            -- rather than shipping a save no build
+            -- could resolve.
+            case nameFloraReferences floraCat pid
+                     persistedEdits cropPlots
+                     plantDesigs floraConditions of
+              Left unnamed → pure $ Left $
+                "cannot save: "
+                <> T.intercalate "; "
+                     (map renderUnnamedFloraRef unnamed)
+              Right ( namedEdits, namedCrops, namedPlants
+                    , namedConditions ) →
+                pure $ Right PageSnapshot
+                    { pgsPageId     = pid
+                    , pgsGenParams  = params
+                    , pgsCameraX    = wcx
+                    , pgsCameraY    = wcy
+                    , pgsTimeHour   = h
+                    , pgsTimeMinute = m
+                    , pgsTimeRemainder =
+                        clockRemainderMinutes
+                            timeRemainder
+                    , pgsDateYear   = y
+                    , pgsDateMonth  = mo
+                    , pgsDateDay    = d
+                    , pgsMapMode    = mapMode
+                    , pgsEdits      = namedEdits
+                    , pgsMineDesignations = mineDesigs
+                    , pgsConstructDesignations = constructDesigs
+                    , pgsConstructNextAttempt = constructNext
+                    , pgsGroundItems = groundItems
+                    , pgsSpoilPiles  = spoilPiles
+                    , pgsBuildings   = buildings
+                    , pgsUnits       = units
+                    , pgsUnitSimStates = simStates
+                    , pgsFloraHarvests = floraHarvests
+                    , pgsFloraConditions = namedConditions
+                    , pgsChopDesignations = chopDesigs
+                    , pgsPendingChopMigration = pendingChop
+                    , pgsPendingFloraHarvests = pendingHarvests
+                    , pgsPlantedFloraCursor = plantedCursor
+                    , pgsCraftBills  = craftBills
+                    , pgsTransferOrders = transferOrders
+                    , pgsPowerNodes  = powerNodes
+                    , pgsContainerKnowledge = containerKnowledge
+                    , pgsTillDesignations = tillDesigs
+                    , pgsCropPlots   = namedCrops
+                    , pgsPageTags    = capturePageTags pageTags cropStore
+                    , pgsPlantDesignations = namedPlants
+                    , pgsIdentity    = identity
+                    -- #2021: always 'Just' — the
+                    -- live ref is not optional.
+                    , pgsGeneratedId = Just generatedId
+                    }

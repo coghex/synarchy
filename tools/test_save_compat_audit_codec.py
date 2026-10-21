@@ -462,6 +462,13 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'power-nodes:2:R relation-causes:1:o texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:6:R '
         'world-edits:6:R world-pages:16:R',
+    "z19-flora-condition-store.bin":
+        'buildings:4:R container-knowledge:2:o core-session:3:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:11:R metadata:3:R portable-knowledge:1:o '
+        'power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:6:R world-activity:7:R '
+        'world-edits:6:R world-pages:16:R',
 }
 
 

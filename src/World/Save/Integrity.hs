@@ -90,8 +90,16 @@ import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
     , transferOrdersComponentId, worldPagesComponentId, ccVersion
-    , coreSessionComponentId, worldEditsComponentId )
-import World.Save.Component.Page (worldPagesCodec)
+    , coreSessionComponentId, worldEditsComponentId
+    , worldActivityComponentId )
+import World.Save.Component.Page (worldPagesCodec, worldActivityCodec)
+import World.Edit.Types (WorldEdit(..))
+import World.Flora.Condition (FloraConditionRecordOf(..))
+import World.Flora.Identity
+    (FloraInstanceId, floraInstanceIdToLua, isPlantedFloraInstanceId)
+import World.Flora.Reference (FloraRef(..))
+import World.Chunk.Residency (canonicalChunkCoord)
+import World.Generate.Coordinates (canonicalTileFrameWith)
 import World.Save.Component.EntitySnapshots (unitsCodec, buildingsCodec)
 import World.Save.Component.Session (coreSessionCodec)
 import World.Save.Component.PageEdits (worldEditsCodec)
@@ -103,7 +111,8 @@ import Gameplay.Tags.Tag (itemTargetId)
 import Scenario.Items.Refs (itemRefsToAscList)
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
-import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
+import World.Save.Reference
+    (ContentKind(..), RefKind(..), RefScope(..), refKindText)
 import World.Save.Snapshot
     ( SessionSnapshot(..), PageSnapshot(..), allItemInstanceIds )
 import World.Save.Types
@@ -230,6 +239,86 @@ refEdgeError cid ver path kind scope sourcePage foundPages val =
             <> "' resolves only on page '" <> unWorldPageId p <> "'"
         }
 
+-- | #2549: the page-scoped PROVENANCE of every flora condition record,
+--   judged where a page's frame and its edit log are both assembled —
+--   which the component-local 'validateWorldActivity' cannot see, since
+--   it receives only its own DTO and a record's tile means nothing
+--   without the page's world size.
+--
+--   Two hard errors, each naming the page and the record's key:
+--
+--   * __the page does not own the tile.__ The record's tile must be the
+--     CANONICAL name of a tile in this page's own frame
+--     ('canonicalTile'); an alias or a coordinate from another page's
+--     frame is refused.
+--   * __a planted id contradicts its planting.__ A planted id encodes
+--     neither page nor tile and repeats across pages (each page has its
+--     own allocator), so ownership is never inferred from the number and
+--     global uniqueness is never required. Instead, when THIS page's
+--     edit log holds the planting that issued the id, the record must
+--     agree with it about the tile and the species. A record whose
+--     planting this page's log does not hold is the tolerated dangling
+--     case (the crop may have been harvested, and nothing about
+--     residency is required), exactly as a dangling transfer order is.
+floraConditionProvenanceErrors ∷ SessionSnapshot → [IntegrityError]
+floraConditionProvenanceErrors snap = concatMap pageErrors (HM.toList (snapPages snap))
+  where
+    pageErrors (pid, page) =
+        [ conditionError pid iid code expected actual
+        | (iid, rec) ← HM.toList (pgsFloraConditions page)
+        , (code, expected, actual) ← recordErrors iid rec ]
+      where
+        -- The PAGE's own canonicalization authority: an expandable
+        -- arena uses a sentinel world size and never wraps, which
+        -- 'canonicalChunkCoord' knows and a bare world size does not.
+        canon gx gy =
+            let (_, _, (dgx, dgy)) = canonicalTileFrameWith
+                    (canonicalChunkCoord (pgsGenParams page)) gx gy
+            in (gx + dgx, gy + dgy)
+        plantings ∷ HM.HashMap FloraInstanceId ((Int, Int), FloraRef)
+        plantings = HM.fromList
+            [ (iid, (canon gx gy, ref))
+            | edits ← HM.elems (pgsEdits page)
+            , WePlaceFloraRef gx gy ref _ _ iid ← edits ]
+        recordErrors iid rec = concat
+            [ [ ( "tile-not-owned", "a canonical tile of this page's frame"
+                , "tile " <> tshow (fcrTile rec) <> " (canonical form "
+                  <> tshow canonical <> ")" )
+              | let canonical = uncurry canon (fcrTile rec)
+              , canonical ≢ fcrTile rec ]
+            , case HM.lookup iid plantings of
+                Just (tile, ref)
+                  | isPlantedFloraInstanceId iid →
+                    [ ( "planted-tile-mismatch"
+                      , "the tile of this page's planting " <> tshow tile
+                      , "tile " <> tshow (fcrTile rec) )
+                    | tile ≢ fcrTile rec ]
+                    ⧺
+                    -- A legacy ordinal cannot be compared with a name;
+                    -- it is resolved at load, not here.
+                    [ ( "planted-species-mismatch"
+                      , "the species of this page's planting, " <> tshow ref
+                      , "species " <> tshow (fcrSpecies rec) )
+                    | FloraByName _ ← [ref], ref ≢ fcrSpecies rec ]
+                _ → []
+            ]
+    conditionError pid iid code expected actual =
+        let k = tshow (floraInstanceIdToLua iid)
+        in IntegrityError
+            { ieComponent = worldActivityComponentId
+            , ieVersion = ccVersion worldActivityCodec
+            , iePath = "world-activity[page=" <> unWorldPageId pid
+                       <> "].flora-conditions[instance=" <> k <> "]"
+            , ieRefKind = RefContent ContentFlora
+            , ieRefValue = k
+            , ieExpectedScope = expected
+            , ieActual = actual
+            , ieCode = code
+            , ieMessage = "flora condition record (instance " <> k
+                <> ") on page '" <> unWorldPageId pid <> "': expected "
+                <> expected <> ", found " <> actual
+            }
+
 -- | Every NEW structural integrity check this issue adds over a fully
 --   assembled 'SessionSnapshot' — see the module haddock for what's
 --   deliberately left to the existing checks instead. Both
@@ -247,6 +336,7 @@ sessionIntegrityErrors snap = concat
     , significantProvenanceErrors snap
     , containerProvenanceErrors snap
     , orderRefErrors snap
+    , floraConditionProvenanceErrors snap
     , unitTagErrors, buildingTagErrors
     , unitRefErrors, unitRefClaimErrors
     , buildingRefErrors, locationRefErrors, crossFamilyRefClaimErrors

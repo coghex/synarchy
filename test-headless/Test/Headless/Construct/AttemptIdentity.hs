@@ -962,6 +962,7 @@ savePage designs next = PageActivityDTO
     , padSpoilPiles = HM.empty
     , padPendingChop = HM.empty, padPendingHarvests = HM.empty
     , padConstructNextAttempt = next
+    , padFloraConditions = HM.empty
     }
 
 encodeActivity ∷ PageActivityDTO → BS.ByteString
