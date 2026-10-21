@@ -475,6 +475,7 @@ emptyActivity pid = PageActivityDTO
     , padSpoilPiles = HM.empty
     , padPendingChop = HM.empty, padPendingHarvests = HM.empty
     , padConstructNextAttempt = firstConstructAttemptId
+    , padFloraConditions = HM.empty
     }
 
 -- * Engine-backed

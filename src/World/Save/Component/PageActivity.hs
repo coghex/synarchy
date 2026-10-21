@@ -3,8 +3,8 @@
 --   out of "World.Save.Component.Page" by #2135).
 --
 --   @"world-activity"@ (required) — per page: designations (mine/
---   construct/chop/till/plant), flora harvests, crop plots, ground
---   items, and spoil piles. Owner: the mutable-world-activity layer.
+--   construct/chop/till/plant), flora harvests, flora condition records
+--   (#2549), crop plots, ground items, and spoil piles. Owner: the mutable-world-activity layer.
 --   Boundary reason: requirement 2 bullet 4's "designations, jobs,
 --   progress, flora, crops, ground items, spoil" — the transient-ish
 --   but persisted world activity, grouped away from the terrain spine
@@ -44,6 +44,8 @@
 --                             slice, and by three other components plus
 --                             the v90 legacy tree)
 --   - 'SpoilPile'           → 'SpoilPileDTO'
+--   - 'FloraConditionRecordOf' → 'FloraConditionDTO' (#2549; its
+--                             retention outcome as 'FloraRetentionDTO')
 --
 --   Per the frozen-DTO boundary rule (stated in
 --   "World.Save.Component.Types"), genuine LEAF references are reused
@@ -102,6 +104,13 @@ module World.Save.Component.PageActivity
     , WorldActivityDTOv4(..)
     , PageActivityDTOv5(..)
     , WorldActivityDTOv5(..)
+    , PageActivityDTOv6(..)
+    , WorldActivityDTOv6(..)
+      -- * Flora condition records (#2549)
+    , FloraConditionDTO(..)
+    , FloraRetentionDTO(..)
+    , toFloraConditionDTO
+    , fromFloraConditionDTO
       -- * The component
     , worldActivityCodec
     , validateWorldActivity
@@ -116,7 +125,7 @@ import Data.Serialize (Serialize)
 import GHC.Generics (Generic)
 import World.Generate.Types (WorldGenParams(..))
 import World.Generate.Coordinates (canonicalTile)
-import World.Page.Types (WorldPageId)
+import World.Page.Types (WorldPageId(..))
 import World.Material.Id (MaterialId)
 import World.Flora.Types (FloraId)
 import World.Flora.Reference (FloraRef(..))
@@ -129,7 +138,17 @@ import World.Construct.Attempt
     ( ConstructAttemptId, advanceConstructAttemptsPast
     , firstConstructAttemptId, takeConstructAttempts )
 import World.Construct.Receipt (ConstructPayment(..))
-import World.Flora.Identity (FloraInstanceId)
+import World.Flora.Identity
+    (FloraInstanceId, floraInstanceIdToLua, isFloraInstanceIdNone)
+import World.Flora.Condition
+    ( ConditionProblem(..), ConditionRetention(..)
+    , FloraConditionRecordOf(..), RetentionSuccessor
+    , SavedFloraConditionRecord, VocabTag
+    , conditionRecordProblems, fromVocabTag, renderConditionProblem
+    , toVocabTag )
+import World.Flora.Types
+    ( AnnualStageTag, FloraCondition, FloraContext, FloraDeathCause
+    , LifePhaseTag )
 import World.Till.Types (TillDesignation(..), TillDesignations)
 import World.Plant.Types
     ( PlantDesignationOf(..), SavedPlantDesignation
@@ -681,6 +700,101 @@ toSpoilDTO = HM.map toSpoilPileDTO
 fromSpoilDTO ∷ HM.HashMap (Int, Int) SpoilPileDTO → SpoilPiles
 fromSpoilDTO = HM.map fromSpoilPileDTO
 
+-- Flora condition records (#2549) ------------------------------------
+
+-- | Frozen wire shape of one flora condition record (@world-activity@
+--   v7), mirroring 'World.Flora.Condition.SavedFloraConditionRecord'.
+--
+--   Every vocabulary field is carried as its constructor INDEX
+--   ('VocabTag'), not as the closed enum: a value outside the vocabulary
+--   then decodes and is refused by 'validateWorldActivity' naming the
+--   page and the record's key, where a closed enum would fail the whole
+--   component decode with a positional-tag error naming neither. The
+--   indices are the 'Generic' 'Serialize' tags of enums
+--   @tools\/enum_append_only_audit.py@ already freezes, so the
+--   vocabulary can only grow.
+--
+--   The species is the authored NAME (#2243) and the tile is the
+--   occurrence's canonical global tile; see "World.Flora.Condition" for
+--   why a record carries both.
+data FloraConditionDTO = FloraConditionDTO
+    { fcdSpecies   ∷ !FloraRef
+    , fcdTile      ∷ !(Int, Int)
+    , fcdCondition ∷ !VocabTag
+    , fcdCause     ∷ !VocabTag
+    , fcdBeganDay  ∷ !Int
+    , fcdContext   ∷ !VocabTag
+    , fcdPhase     ∷ !VocabTag
+    , fcdStage     ∷ !(Maybe VocabTag)
+    , fcdRetention ∷ !FloraRetentionDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+-- | The retention outcome on the wire. A persistent outcome has nowhere
+--   to put an expiry or a successor, by construction.
+data FloraRetentionDTO
+    = RetentionPersistentD
+    | RetentionTransientD !Int !VocabTag
+      -- ^ Absolute expiry day, then the successor's index.
+    deriving (Show, Eq, Generic, Serialize)
+
+toFloraConditionDTO ∷ SavedFloraConditionRecord → FloraConditionDTO
+toFloraConditionDTO r = FloraConditionDTO
+    { fcdSpecies   = fcrSpecies r
+    , fcdTile      = fcrTile r
+    , fcdCondition = toVocabTag (fcrCondition r)
+    , fcdCause     = toVocabTag (fcrCause r)
+    , fcdBeganDay  = fcrBeganDay r
+    , fcdContext   = toVocabTag (fcrContext r)
+    , fcdPhase     = toVocabTag (fcrPhase r)
+    , fcdStage     = toVocabTag <$> fcrStage r
+    , fcdRetention = case fcrRetention r of
+        RetentionPersistent → RetentionPersistentD
+        RetentionTransient expiry s → RetentionTransientD expiry (toVocabTag s)
+    }
+
+-- | The typed record a wire record names, or EVERY vocabulary field that
+--   is outside its vocabulary.
+fromFloraConditionDTO
+    ∷ FloraConditionDTO → Either [ConditionProblem] SavedFloraConditionRecord
+fromFloraConditionDTO d =
+    case (condition, cause, context, phase, stage, retention) of
+        (Right c, Right ca, Right cx, Right ph, Right st, Right re) →
+            Right FloraConditionRecord
+                { fcrSpecies   = fcdSpecies d
+                , fcrTile      = fcdTile d
+                , fcrCondition = c
+                , fcrCause     = ca
+                , fcrBeganDay  = fcdBeganDay d
+                , fcrContext   = cx
+                , fcrPhase     = ph
+                , fcrStage     = st
+                , fcrRetention = re
+                }
+        _ → Left (concat [ bad condition, bad cause, bad context, bad phase
+                         , bad stage, bad retention ])
+  where
+    condition ∷ Either ConditionProblem FloraCondition
+    condition = tagged "condition" (fcdCondition d)
+    cause ∷ Either ConditionProblem FloraDeathCause
+    cause = tagged "cause" (fcdCause d)
+    context ∷ Either ConditionProblem FloraContext
+    context = tagged "context" (fcdContext d)
+    phase ∷ Either ConditionProblem LifePhaseTag
+    phase = tagged "life phase" (fcdPhase d)
+    stage ∷ Either ConditionProblem (Maybe AnnualStageTag)
+    stage = traverse (tagged "annual stage") (fcdStage d)
+    retention ∷ Either ConditionProblem ConditionRetention
+    retention = case fcdRetention d of
+        RetentionPersistentD → Right RetentionPersistent
+        RetentionTransientD expiry t →
+            RetentionTransient expiry <$> successor t
+    successor ∷ VocabTag → Either ConditionProblem RetentionSuccessor
+    successor = tagged "retention successor"
+    tagged ∷ (Enum a, Bounded a) ⇒ Text → VocabTag → Either ConditionProblem a
+    tagged field tag = maybe (Left (OutOfVocabulary field tag)) Right
+                             (fromVocabTag tag)
+    bad = either pure (const [])
+
 -- world-activity ----------------------------------------------------
 
 data PageActivityDTO = PageActivityDTO
@@ -720,9 +834,40 @@ data PageActivityDTO = PageActivityDTO
       --   beside the designations it hands ids to, because an attempt id
       --   is only durable if the cursor that will not reissue it is
       --   durable too.
+    , padFloraConditions ∷ !(HM.HashMap FloraInstanceId FloraConditionDTO)
+      -- ^ #2549 (v7): the sparse flora condition store, keyed by the
+      --   occurrence's #1854 identity like 'padChop' and
+      --   'padFloraHarvests'. Wild occurrences regenerate and row crops
+      --   replay, then join against this overlay by id.
     } deriving (Show, Generic, Serialize)
 
 newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The FROZEN pre-#2549 activity slice (@world-activity@ v6): the v6
+--   shape verbatim — everything the current slice carries but the
+--   condition store. Its nested records are the CURRENT leaf and
+--   non-leaf DTOs, which #2549 does not change; the next change to
+--   any of them must freeze the one it changes, as #2243 did.
+data PageActivityDTOv6 = PageActivityDTOv6
+    { pad6PageId        ∷ !WorldPageId
+    , pad6Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad6Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad6Chop          ∷ !(HM.HashMap FloraInstanceId ChopDesignationDTO)
+    , pad6Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad6Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad6FloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
+    , pad6CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad6GroundItems   ∷ !GroundItemsDTO
+    , pad6SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    , pad6PendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
+    , pad6PendingHarvests ∷ !FloraHarvestsDTOv1
+    , pad6ConstructNextAttempt ∷ !ConstructAttemptId
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv6 =
+    WorldActivityDTOv6 { wad6Pages ∷ [PageActivityDTOv6] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
@@ -895,25 +1040,47 @@ migratePageActivityV4 s =
 --   plots and plant designations, whose species ordinals become legacy
 --   references — see 'migrateWorldEditDTOv2' for why a pure migration
 --   cannot resolve one to a name here, and where it is resolved instead.
-migratePageActivityV5 ∷ PageActivityDTOv5 → PageActivityDTO
-migratePageActivityV5 s = PageActivityDTO
-    { padPageId               = pad5PageId s
-    , padMine                 = pad5Mine s
-    , padConstruct            = pad5Construct s
-    , padChop                 = pad5Chop s
-    , padTill                 = pad5Till s
-    , padPlant                = HM.map migratePlantDesignationDTOv1
+migratePageActivityV5 ∷ PageActivityDTOv5 → PageActivityDTOv6
+migratePageActivityV5 s = PageActivityDTOv6
+    { pad6PageId               = pad5PageId s
+    , pad6Mine                 = pad5Mine s
+    , pad6Construct            = pad5Construct s
+    , pad6Chop                 = pad5Chop s
+    , pad6Till                 = pad5Till s
+    , pad6Plant                = HM.map migratePlantDesignationDTOv1
                                       (pad5Plant s)
-    , padFloraHarvests        = pad5FloraHarvests s
-    , padCropPlots            = HM.map migrateCropPlotDTOv1 (pad5CropPlots s)
-    , padGroundItems          = pad5GroundItems s
-    , padSpoilPiles           = pad5SpoilPiles s
-    , padPendingChop          = pad5PendingChop s
-    , padPendingHarvests      = pad5PendingHarvests s
-    , padConstructNextAttempt = pad5ConstructNextAttempt s
+    , pad6FloraHarvests        = pad5FloraHarvests s
+    , pad6CropPlots            = HM.map migrateCropPlotDTOv1 (pad5CropPlots s)
+    , pad6GroundItems          = pad5GroundItems s
+    , pad6SpoilPiles           = pad5SpoilPiles s
+    , pad6PendingChop          = pad5PendingChop s
+    , pad6PendingHarvests      = pad5PendingHarvests s
+    , pad6ConstructNextAttempt = pad5ConstructNextAttempt s
     }
 
--- | v1/v2 → v3: every designation map crosses unchanged and each ground
+-- | v6 → v7 (#2549). Every field crosses unchanged and the condition
+--   store starts EMPTY: no earlier payload recorded a death, and
+--   'fgDead' is derived from the lifespan clock, not state, so there is
+--   nothing to carry.
+migratePageActivityV6 ∷ PageActivityDTOv6 → PageActivityDTO
+migratePageActivityV6 s = PageActivityDTO
+    { padPageId               = pad6PageId s
+    , padMine                 = pad6Mine s
+    , padConstruct            = pad6Construct s
+    , padChop                 = pad6Chop s
+    , padTill                 = pad6Till s
+    , padPlant                = pad6Plant s
+    , padFloraHarvests        = pad6FloraHarvests s
+    , padCropPlots            = pad6CropPlots s
+    , padGroundItems          = pad6GroundItems s
+    , padSpoilPiles           = pad6SpoilPiles s
+    , padPendingChop          = pad6PendingChop s
+    , padPendingHarvests      = pad6PendingHarvests s
+    , padConstructNextAttempt = pad6ConstructNextAttempt s
+    , padFloraConditions      = HM.empty
+    }
+
+-- | v1/v2 → v7: every designation map crosses unchanged and each ground
 --   item's physical values decode absent (see 'migrateItemInstanceDTOv1'
 --   for why). #1175's v1 canonical-frame repair is deliberately NOT done
 --   here — 'applyWorldActivity' re-keys for EVERY accepted version, so
@@ -922,28 +1089,37 @@ migratePageActivityV5 s = PageActivityDTO
 migrateWorldActivityV2 ∷ WorldActivityDTOv2 → WorldActivityDTO
 migrateWorldActivityV2 (WorldActivityDTOv2 slices) =
     WorldActivityDTO
-        (map (migratePageActivityV5 . migratePageActivityV4
+        (map (migratePageActivityV6 . migratePageActivityV5
+                                    . migratePageActivityV4
                                     . migratePageActivityV3
                                     . migratePageActivityV2)
              slices)
 
--- | v3 → v6: see 'migratePageActivityV3' onward.
+-- | v3 → v7: see 'migratePageActivityV3' onward.
 migrateWorldActivityV3 ∷ WorldActivityDTOv3 → WorldActivityDTO
 migrateWorldActivityV3 (WorldActivityDTOv3 slices) =
-    WorldActivityDTO (map (migratePageActivityV5 . migratePageActivityV4
+    WorldActivityDTO (map (migratePageActivityV6 . migratePageActivityV5
+                                                 . migratePageActivityV4
                                                  . migratePageActivityV3)
                           slices)
 
--- | v4 → v6: see 'migratePageActivityV4' and 'migratePageActivityV5'.
+-- | v4 → v7: see 'migratePageActivityV4' onward.
 migrateWorldActivityV4 ∷ WorldActivityDTOv4 → WorldActivityDTO
 migrateWorldActivityV4 (WorldActivityDTOv4 slices) =
-    WorldActivityDTO (map (migratePageActivityV5 . migratePageActivityV4)
+    WorldActivityDTO (map (migratePageActivityV6 . migratePageActivityV5
+                                                 . migratePageActivityV4)
                           slices)
 
--- | v5 → v6: see 'migratePageActivityV5'.
+-- | v5 → v7: see 'migratePageActivityV5' and 'migratePageActivityV6'.
 migrateWorldActivityV5 ∷ WorldActivityDTOv5 → WorldActivityDTO
 migrateWorldActivityV5 (WorldActivityDTOv5 slices) =
-    WorldActivityDTO (map migratePageActivityV5 slices)
+    WorldActivityDTO (map (migratePageActivityV6 . migratePageActivityV5)
+                          slices)
+
+-- | v6 → v7: see 'migratePageActivityV6'.
+migrateWorldActivityV6 ∷ WorldActivityDTOv6 → WorldActivityDTO
+migrateWorldActivityV6 (WorldActivityDTOv6 slices) =
+    WorldActivityDTO (map migratePageActivityV6 slices)
 
 -- | Component-local invariant (#760, mirrors
 --   @worldPagesCodec@'s @validatePages@ precedent above): every ground
@@ -982,9 +1158,36 @@ validateWorldActivity (WorldActivityDTO slices) = concat
       , gid ← HM.keys (gisiItems (padGroundItems s))
       , gid ≥ gisiNextId (padGroundItems s)
       ]
+    , floraConditionErrors slices
     ]
   where
     firstGroundItemId = gisNextId emptyGroundItems
+
+-- | #2549: the component-local validity of every flora condition record,
+--   each refusal naming the page and the record's key. Covers what a
+--   record can be judged on from its own bytes: the reserved
+--   non-identity key, a vocabulary tag outside its vocabulary, a stored
+--   condition that is not dead, an expiry day before the begin day, and
+--   a successor that contradicts the render context. The species and
+--   the tile are judged where a catalog and a page frame exist
+--   ('World.Save.Types.missingFloraReferences',
+--   'World.Save.Integrity.sessionIntegrityErrors').
+--
+--   Sorted by key so the diagnostics are deterministic rather than in
+--   hash order.
+floraConditionErrors ∷ [PageActivityDTO] → [ComponentError]
+floraConditionErrors slices =
+    [ ComponentError worldActivityComponentId 7 ValidatePhase
+        ("page '" <> unWorldPageId (padPageId s) <> "': flora condition \
+         \record (instance " <> tshow (floraInstanceIdToLua key) <> "): "
+         <> renderConditionProblem problem)
+    | s ← slices
+    , (key, dto) ← L.sortOn fst (HM.toList (padFloraConditions s))
+    , problem ← case fromFloraConditionDTO dto of
+        Left vocabulary → [ ReservedKey | isFloraInstanceIdNone key ]
+                          ⧺ vocabulary
+        Right record    → conditionRecordProblems key record
+    ]
 
 -- | v2 (#1175) is a SEMANTIC bump, not a shape change: the wire layout
 --   is byte-identical to v1, but a v2 payload promises every designation
@@ -1017,16 +1220,23 @@ validateWorldActivity (WorldActivityDTO slices) = concat
 --   allocator that issued them. v4's own layout is frozen as
 --   'PageActivityDTOv4', and every older version reaches v5 through it,
 --   so the legacy assignment lives in exactly one place.
+--   v6 (#2243) names the crop plots' and plant designations' species by
+--   authored name instead of runtime ordinal.
+--   v7 (#2549) is the fourth SHAPE change: the page gains the sparse flora
+--   condition store ('padFloraConditions'). v6's own layout is frozen as
+--   'PageActivityDTOv6', every older version reaches v7 through it, and
+--   each migrates to an EMPTY store — no earlier payload recorded a death.
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 6
+    , csVersion       = 7
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 5 migrateWorldActivityV5
+    , csOlderVersions = [ atVersion 6 migrateWorldActivityV6
+                        , atVersion 5 migrateWorldActivityV5
                         , atVersion 4 migrateWorldActivityV4
                         , atVersion 3 migrateWorldActivityV3
                         , atVersion 2 migrateWorldActivityV2
@@ -1049,6 +1259,8 @@ worldActivityCodec = componentCodec ComponentSpec
             HM.map toPendingChopDesignationDTO (pgsPendingChopMigration p)
         , padPendingHarvests = pgsPendingFloraHarvests p
         , padConstructNextAttempt = pgsConstructNextAttempt p
+        , padFloraConditions =
+            HM.map toFloraConditionDTO (pgsFloraConditions p)
         }
 
 -- | #1175: a v1 slice's designation keys carry no canonical-frame
@@ -1111,4 +1323,13 @@ applyWorldActivity ver (WorldActivityDTO slices) =
                 | ((gx, gy), cd) ← L.sortOn fst
                                      (HM.toList (padPendingChop s)) ]
             , pgsPendingFloraHarvests  = canon (padPendingHarvests s)
+              -- #2549: keyed by occurrence identity, with the record's
+              -- tile already canonical by contract (the integrity graph
+              -- checks it against the page's frame). 'validateWorldActivity'
+              -- has refused any record whose vocabulary does not decode,
+              -- so this conversion is total on a validated payload.
+            , pgsFloraConditions       =
+                HM.mapMaybe (either (const Nothing) Just
+                                . fromFloraConditionDTO)
+                            (padFloraConditions s)
             }

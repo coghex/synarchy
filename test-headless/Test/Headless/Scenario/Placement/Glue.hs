@@ -195,8 +195,8 @@ sessionSnapshotOf fx pid ws = do
     -- the page's own camera and the live one, as a save writes them
     WorldCamera wcx wcy ← readIORef (wsCameraRef ws)
     cam ← readIORef (cameraRef env)
-    (namedEdits, namedCrops, _) ← either (const (fail "a flora species cannot be named")) pure
-        (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty)
+    (namedEdits, namedCrops, _, _) ← either (const (fail "a flora species cannot be named")) pure
+        (nameFloraReferences floraCat pid edits (cpsPlots plots) HM.empty HM.empty)
     let unitSnap = toUnitSnapshot pid um
         page = (blankPageSnapshot pid params)
             { pgsCameraX = wcx, pgsCameraY = wcy

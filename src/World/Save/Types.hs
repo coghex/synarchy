@@ -113,10 +113,13 @@ import World.Spoil.Types (SpoilPiles, SpoilPile(..))
 import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
 import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
+import World.Flora.Condition
+    ( FloraConditions, SavedFloraConditions, FloraConditionRecordOf(..)
+    , traverseConditionSpecies )
 import World.Flora.CropPlot
     ( CropPlots, SavedCropPlots, CropPlotOf(..) )
 import World.Flora.Types (FloraCatalog)
-import World.Flora.Identity (floraInstanceIdNone)
+import World.Flora.Identity (FloraInstanceId, floraInstanceIdNone, floraInstanceIdToLua)
 import World.Flora.Reference
     ( FloraRef(..), renderFloraRef, resolveFloraRef, floraRefForId )
 import World.Chunk.Types (ChunkCoord(..))
@@ -164,7 +167,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 108
+currentSaveVersion = 109
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -407,6 +410,15 @@ data WorldPageSave = WorldPageSave
         --   one plant's timer stops depleting its co-tenants. Like
         --   designations, restored straight into wsFloraHarvestsRef —
         --   render and queries need no chunk loading first.
+    , wpsFloraConditions ∷ !SavedFloraConditions
+        -- ^ Flora condition records (#2549, EFM-5): flora INSTANCE id →
+        --   a sparse semantic death record, the species named by
+        --   authored NAME like every other saved flora reference
+        --   (#2243) so a record for an unloaded wild occurrence is still
+        --   validated against the loading catalog. Restored straight
+        --   into wsFloraConditionsRef, exactly as 'wpsFloraHarvests' is,
+        --   so a regenerated or replayed occurrence finds its record by
+        --   its id. Carried by @world-activity@ v7.
     , wpsChopDesignations ∷ !ChopDesignations
         -- ^ Chop designations (#97): flora INSTANCE id → surface z plus
         --   the plant's canonical tile (#1854). Like the other
@@ -1666,10 +1678,12 @@ renderMissingFloraRef r =
 --   not resolve against the currently-registered flora catalog. Empty
 --   ⇒ every reference resolves and the load may proceed.
 --
---   Walks all THREE durable reference sites: the edit log, crop plots,
+--   Walks all FOUR durable reference sites: the edit log, crop plots,
 --   and — since #2243 — plant designations, which were silently omitted
 --   before and could therefore restore a designation naming a species
---   nothing could plant.
+--   nothing could plant, and — since #2549 — flora condition records,
+--   which carry the species of an occurrence whose chunk may not be
+--   resident (its id alone cannot recover a name).
 --
 --   Every site is validated through the one
 --   'World.Flora.Reference.resolveFloraRef', so a name and a legacy
@@ -1698,6 +1712,13 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
         [ MissingFloraRef "plant designation" pid coord (ptCrop pd)
         | (coord, pd) ← HM.toList (wpsPlantDesignations w)
         , unresolved (ptCrop pd) ]
+        ⧺
+        -- #2549: a condition record names its species so that a record
+        -- for a wild occurrence whose chunk is not resident is still
+        -- checked — its id alone cannot recover a name.
+        [ conditionMissing pid iid rec
+        | (iid, rec) ← HM.toList (wpsFloraConditions w)
+        , unresolved (fcrSpecies rec) ]
     -- Only the #2243 constructor can appear here: a decoded page's
     -- planting edits are named, whatever version the payload was
     -- written at
@@ -1716,6 +1737,18 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
         [(gx, gy, FloraByLegacyId fid)]
     editFloraRef _ = []
     unresolved ref = isNothing (resolveFloraRef catalog ref)
+
+-- | The finding for one condition record whose species did not resolve
+--   (#2549): the source names the record's instance id, the coordinate
+--   is its canonical tile.
+conditionMissing
+    ∷ WorldPageId → FloraInstanceId → FloraConditionRecordOf FloraRef
+    → MissingFloraRef
+conditionMissing pid iid rec =
+    MissingFloraRef
+        ("flora condition record (instance "
+            <> tshow (floraInstanceIdToLua iid) <> ")")
+        pid (fcrTile rec) (fcrSpecies rec)
 
 -- | The save-side rendering of the same finding: a LIVE species handle
 --   the capturing build's own catalog could not name, so no durable
@@ -1755,14 +1788,17 @@ nameFloraReferences
     → WorldEdits
     → CropPlots
     → PlantDesignations
+    → FloraConditions
     → Either [MissingFloraRef]
-             (WorldEdits, SavedCropPlots, SavedPlantDesignations)
-nameFloraReferences catalog pid edits crops plants =
+             ( WorldEdits, SavedCropPlots, SavedPlantDesignations
+             , SavedFloraConditions )
+nameFloraReferences catalog pid edits crops plants conditions =
     case (traverse (traverse nameEdit) edits
          , traverse nameCrop crops
-         , traverse namePlant plants) of
-        (Just es, Just cs, Just ps) → Right (es, cs, ps)
-        _                           → Left problems
+         , traverse namePlant plants
+         , traverse nameCondition conditions) of
+        (Just es, Just cs, Just ps, Just ds) → Right (es, cs, ps, ds)
+        _                                    → Left problems
   where
     -- One lookup per reference, and the SAME lookup decides both
     -- outcomes: a 'Nothing' anywhere is what makes the triple above
@@ -1784,6 +1820,7 @@ nameFloraReferences catalog pid edits crops plants =
         _ → Just e
     nameCrop cp  = (\ref → cp { cpSpecies = ref }) <$> named (cpSpecies cp)
     namePlant pd = (\ref → pd { ptCrop = ref }) <$> named (ptCrop pd)
+    nameCondition = traverseConditionSpecies named
     problems =
         [ MissingFloraRef "edit log" pid (gx, gy) (FloraByLegacyId fid)
         | es ← HM.elems edits, e ← es, (gx, gy, fid) ← liveEditSpecies e
@@ -1796,6 +1833,9 @@ nameFloraReferences catalog pid edits crops plants =
         [ MissingFloraRef "plant designation" pid coord
               (FloraByLegacyId (ptCrop pd))
         | (coord, pd) ← HM.toList plants, unnamed (ptCrop pd) ]
+        ⧺
+        [ conditionMissing pid iid (rec { fcrSpecies = FloraByLegacyId (fcrSpecies rec) })
+        | (iid, rec) ← HM.toList conditions, unnamed (fcrSpecies rec) ]
     liveEditSpecies (WePlaceFlora gx gy fid _ _)         = [(gx, gy, fid)]
     liveEditSpecies (WePlaceFloraWithId gx gy fid _ _ _) = [(gx, gy, fid)]
     liveEditSpecies _                                    = []
@@ -1824,13 +1864,16 @@ resolveFloraReferences
     → WorldEdits
     → SavedCropPlots
     → SavedPlantDesignations
-    → Either [MissingFloraRef] (WorldEdits, CropPlots, PlantDesignations)
-resolveFloraReferences catalog pid edits crops plants =
+    → SavedFloraConditions
+    → Either [MissingFloraRef]
+             (WorldEdits, CropPlots, PlantDesignations, FloraConditions)
+resolveFloraReferences catalog pid edits crops plants conditions =
     case (traverse (traverse resolveEdit) edits
          , traverse resolveCrop crops
-         , traverse resolvePlant plants) of
-        (Just es, Just cs, Just ps) → Right (es, cs, ps)
-        _                           → Left problems
+         , traverse resolvePlant plants
+         , traverse resolveCondition conditions) of
+        (Just es, Just cs, Just ps, Just ds) → Right (es, cs, ps, ds)
+        _                                    → Left problems
   where
     resolve = resolveFloraRef catalog
     unresolved ref = isNothing (resolve ref)
@@ -1845,6 +1888,7 @@ resolveFloraReferences catalog pid edits crops plants =
         _ → Just e
     resolveCrop cp  = (\fid → cp { cpSpecies = fid }) <$> resolve (cpSpecies cp)
     resolvePlant pd = (\fid → pd { ptCrop = fid }) <$> resolve (ptCrop pd)
+    resolveCondition = traverseConditionSpecies resolve
     problems =
         [ MissingFloraRef "edit log" pid (gx, gy) ref
         | es ← HM.elems edits, e ← es, (gx, gy, ref) ← savedEditSpecies e
@@ -1855,6 +1899,9 @@ resolveFloraReferences catalog pid edits crops plants =
         ⧺
         [ MissingFloraRef "plant designation" pid coord (ptCrop pd)
         | (coord, pd) ← HM.toList plants, unresolved (ptCrop pd) ]
+        ⧺
+        [ conditionMissing pid iid rec
+        | (iid, rec) ← HM.toList conditions, unresolved (fcrSpecies rec) ]
     savedEditSpecies (WePlaceFloraRef gx gy ref _ _ _) = [(gx, gy, ref)]
     savedEditSpecies _                                 = []
 

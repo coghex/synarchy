@@ -412,6 +412,18 @@ dropping the in-progress stamp.
   immunity key would make removing one infection definition reject every
   save in which any surviving unit still holds un-decayed immunity to
   it, while the wound case needs a unit that is infected right now.
+- A saved **flora condition record** (#2549, `world-activity` v7) names
+  its species by authored name, so a record for a species the loading
+  build lacks fails the load exactly like any other flora reference
+  (`missingFloraReferences`) — including a record for a wild occurrence
+  whose chunk is not resident, which is why the record carries the name
+  at all. A record whose occurrence is merely absent (its planting is not
+  in the page's log, or its chunk is not resident) is the tolerated
+  dangling case, not a failure; a record that contradicts its own page's
+  planting, names a tile outside the page's canonical frame, or is
+  malformed (reserved key, a tag outside its vocabulary, an expiry before
+  its begin day, a successor that contradicts its render context) is a
+  hard error naming the page and key.
 - Producing placeholder textures and changing renderer fallback
   behavior are tracked separately (out of scope here); this contract
   only defines their effect on load *validity*, which is: none, for

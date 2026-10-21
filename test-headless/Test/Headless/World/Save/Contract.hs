@@ -101,6 +101,11 @@ import World.Flora.CropPlot (CropPlotOf(..))
 import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
 import qualified Data.List as L
 import World.Flora.Reference (FloraRef(..), renderFloraRef)
+import World.Flora.Condition
+    ( ConditionRetention(..), FloraConditionRecordOf(..), RetentionSuccessor(..) )
+import World.Flora.Types
+    ( AnnualStageTag(..), FloraCondition(..), FloraContext(..)
+    , FloraDeathCause(..), LifePhaseTag(..) )
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Mine.Types (MineDesignation(..))
@@ -425,6 +430,33 @@ richPage = PageSnapshot
       -- silently dropped.
     , pgsPendingChopMigration = HM.singleton (21, 22) (ChopDesignation 4 21 22)
     , pgsPendingFloraHarvests = HM.singleton (23, 24) 77.5
+      -- #2549: the condition store, populated so the full-record
+      -- round trip covers every field — a wild transient death with an
+      -- annual stage, a cultivated one awaiting replanting with none,
+      -- and a persistent one — under both id namespaces. The planted id
+      -- has no planting in this page's log (the tolerated dangling case).
+    , pgsFloraConditions = HM.fromList
+        [ ( generatedFloraInstanceId "page1" 15 16 "probe_berry" 0
+          , FloraConditionRecord
+              { fcrSpecies = FloraByName "probe_berry", fcrTile = (15, 16)
+              , fcrCondition = ConditionDead, fcrCause = CauseDrought
+              , fcrBeganDay = 40, fcrContext = ContextWild
+              , fcrPhase = PhaseFlowering, fcrStage = Just CycleBudding
+              , fcrRetention = RetentionTransient 100 RetainReseed } )
+        , ( plantedFloraInstanceId 99
+          , FloraConditionRecord
+              { fcrSpecies = FloraByName "wheat", fcrTile = (11, 12)
+              , fcrCondition = ConditionDead, fcrCause = CauseFrost
+              , fcrBeganDay = 41, fcrContext = ContextCultivated
+              , fcrPhase = PhaseRipening, fcrStage = Nothing
+              , fcrRetention = RetentionTransient 41 RetainAwaitReplanting } )
+        , ( generatedFloraInstanceId "page1" 17 18 "probe_oak" 1
+          , FloraConditionRecord
+              { fcrSpecies = FloraByName "probe_oak", fcrTile = (17, 18)
+              , fcrCondition = ConditionDead, fcrCause = CauseFire
+              , fcrBeganDay = 42, fcrContext = ContextWild
+              , fcrPhase = PhaseMatured, fcrStage = Nothing
+              , fcrRetention = RetentionPersistent } ) ]
     , pgsPlantedFloraCursor = 3
     , pgsCraftBills   = richBills
     , pgsTransferOrders = richTransferOrders
@@ -589,6 +621,7 @@ minimalPage2 = PageSnapshot
     , pgsChopDesignations = HM.empty
     , pgsPendingChopMigration = HM.empty
     , pgsPendingFloraHarvests = HM.empty
+    , pgsFloraConditions = HM.empty
     , pgsPlantedFloraCursor = firstPlantedFloraCursor
     , pgsCraftBills   = emptyCraftBills
     , pgsTransferOrders = emptyTransferOrders

@@ -195,6 +195,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsUnits        = (pgsUnits page) { usnNextId = nextUid }
     , wpsUnitSimStates = pgsUnitSimStates page
     , wpsFloraHarvests = pgsFloraHarvests page
+    , wpsFloraConditions = pgsFloraConditions page
     , wpsChopDesignations = pgsChopDesignations page
     , wpsPendingChopMigration = pgsPendingChopMigration page
     , wpsPendingFloraHarvests = pgsPendingFloraHarvests page

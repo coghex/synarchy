@@ -270,7 +270,7 @@ spec = do
                     [ PageActivityDTO page1 HM.empty HM.empty HM.empty
                         HM.empty HM.empty emptyFloraHarvests HM.empty
                         badGround HM.empty HM.empty HM.empty
-                        firstConstructAttemptId ]
+                        firstConstructAttemptId HM.empty ]
             ccValidate worldActivityCodec bad `shouldSatisfy` (not . null)
 
         it "world-activity accepts ground items whose ids all sit below \
@@ -283,7 +283,7 @@ spec = do
                             (HM.singleton 1 (toGroundItemDTO
                                 (GroundItem richItem 0 0))))
                         HM.empty HM.empty HM.empty
-                        firstConstructAttemptId ])
+                        firstConstructAttemptId HM.empty ])
                 `shouldBe` []
 
     -- #1668: the stored footprint of a persisted location instance is
@@ -929,7 +929,9 @@ goldenRichPayloads =
       -- #1844 re-pinned again: world-activity v5 appends each
       -- designation's attempt identity and payment record, and the
       -- page's own attempt allocator.
-    , ("world-activity",      (242,  "d5f6a72687031136"))
+    , ("world-activity",      (258,  "4bcc1f0c10d1c916"))
+      -- #2549 re-pinned: world-activity v7 appends the page's flora
+      -- condition store (8 bytes empty, ×2 pages).
       -- #2701 re-pinned: @buildings@ v3 and @units@ v5 each append the
       -- page slice's gameplay-tag list (8 bytes empty, ×2 pages).
     , ("buildings",           (183,  "eeec9c956f3a0402"))
@@ -977,7 +979,9 @@ goldenFullPayloads =
       -- is unchanged, because no other fixture slice holds an item.
       -- #1844 re-pinned again for world-activity v5, exactly as
       -- goldenRichPayloads is.
-    , ("world-activity",      (378, "401b1ef21412a4ee"))
+    , ("world-activity",      (386, "9a833d3940460eae"))
+      -- #2549 re-pinned: world-activity v7's empty flora condition store
+      -- (8 bytes, one page).
       -- #2701 re-pinned: @buildings@ v3 / @units@ v5's empty page tag
       -- list (8 bytes each, one page).
     , ("buildings",           (146, "93fb8ed2e3230569"))

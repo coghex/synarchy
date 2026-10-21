@@ -374,8 +374,8 @@ spec = describe "on a live arena page (through the world thread)" $ do
         harvests ← readIORef (wsFloraHarvestsRef ws)
         tags ← readIORef (wsPageTagsRef ws)
         cursor ← readIORef (wsPlantedFloraCursorRef ws)
-        (namedEdits, namedCrops, _) ← either (const (error "unnamed species")) pure
-            (nameFloraReferences catalog pid edits (cpsPlots plots) HM.empty)
+        (namedEdits, namedCrops, _, _) ← either (const (error "unnamed species")) pure
+            (nameFloraReferences catalog pid edits (cpsPlots plots) HM.empty HM.empty)
         let page = (blankPageSnapshot pid params)
                 { pgsEdits = namedEdits, pgsCropPlots = namedCrops, pgsFloraHarvests = harvests
                 , pgsPlantedFloraCursor = cursor, pgsPageTags = capturePageTags tags plots
