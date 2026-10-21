@@ -21,6 +21,7 @@ it applies to and is validated before every mode.
 | `--size` | `--offscreen` |
 | `--seeds` | `--language-report` |
 | `--arena` | `--headless`, `--offscreen`, graphical |
+| `--scenario <path>` | `--headless`, `--offscreen`, graphical (implies the arena profile; combined with `--arena` it is the same profile) |
 | `--port` | `--headless`, `--offscreen`, `--preview`, graphical |
 
 The rejection table is `incompatibleFlagTable`, a projection of
@@ -37,6 +38,17 @@ to `flagSpecs` (value format, summary, honouring modes) and it is both
 rejected in other modes and listed by `--help`; a new boot mode is a
 compile error in `App.Usage.modeUsage` until described. Gates: hspec
 `--match "App.Usage"`, `tools/preview_cli_probe.py` check 11.
+
+**`--scenario` (#2715)** is validated strictly in `app/Main.hs`'s value stretch:
+a trailing flag, an empty or blank value, an extensionless or non-`.yaml` name,
+and a file that does not exist (resolved against the directory the process was
+LAUNCHED from, captured before the resource root's chdir) each exit 1 naming the
+flag and the cause, before an engine, window or listener starts. The resolved
+absolute path rides `EngineConfig.ecScenarioStartup`; Lua reads it as data and
+never as source. Path policy, startup driver and failure policy:
+`docs/engine_contracts.md` §Scenario entry points. Gates: hspec
+`--match "App.Cli"` / `"Scenario.Paths"`, `tools/preview_cli_probe.py`,
+`tools/scenario_entrypoint_probe.py`.
 
 **A present-but-malformed value is an error, not a default (#1191).** In
 a mode that honours it, a non-numeric
@@ -58,7 +70,12 @@ resource root at startup (`App.ResourceRoot`) and chdirs into it.
 Precedence: `--resource-root <path>` flag > `SYNARCHY_ROOT` env var >
 cwd. The root is validated before dispatch (missing root/family exits 1
 with a clear error). The chdir means relative OUTPUT paths (`saves/`,
-config saves) also land under the resource root. Gate:
+config saves) also land under the resource root. So does the SCENARIO FOLDER
+(#2715): `scenarios/`, top-level beside `saves/`, where in-game scenario names
+(`engine.loadScenario("ambush")`) resolve and captures land — created by the
+first folder-relative capture, never by a load, and tracked (not gitignored).
+`--scenario` paths are the opposite: relative to the directory the process was
+launched from. Gate:
 `tools/resource_root_probe.py` (manual-only).
 
 ## Console listener policy (#1190)
