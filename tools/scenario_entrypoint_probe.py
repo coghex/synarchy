@@ -309,7 +309,8 @@ def arena_definitions(port: int) -> bool:
 # ---------------------------------------------------------------------------
 def check_cli_boot(ctx) -> str | None:
     """1-4: the CLI boot, then the Lua entry points on the same process.
-    Returns the capture of the CLI-loaded file (for check 5)."""
+    Returns the capture of the session the CLI boot itself loaded, taken
+    before any Lua load (for check 5)."""
     print("\n--- 1. CLI boot: launch-relative, fancy name, distinct roots ---")
     root, launch = ctx["root"], ctx["launch"]
     cli_file = os.path.join(launch, FANCY_FILE)
@@ -318,6 +319,7 @@ def check_cli_boot(ctx) -> str | None:
     cli_sha = sha(cli_file)
     eng = Engine("cli-boot", ctx["port"], root, launch, ctx["logs"], ["--scenario", FANCY_FILE])
     capture_path = os.path.join(ctx["work"], "cli-capture.yaml")
+    baseline_path = os.path.join(ctx["work"], "cli-baseline.yaml")
     try:
         if not ok(eng.wait_ready(), "the console printed READY"):
             return None
@@ -339,6 +341,13 @@ def check_cli_boot(ctx) -> str | None:
            and done.get("recovery") == "none", f"no warnings; published; nothing recovered ({done and done.get('warnings')})")
         ok(send(port, "return engine.isPaused()").strip() == "true", "the scenario stands PAUSED")
         ok(unit_count(port) == 1, "the launch file's single unit stands, not the folder file's two")
+        # THE CLI baseline: captured now, before ANY Lua load replaces the
+        # startup session, and kept apart from the overwrite tests below
+        sid0, _ = lua_save(port, baseline_path)
+        base_done = sid0 and await_operation(port, "save", sid0)
+        ok(bool(base_done) and base_done.get("outcome") == "saved"
+           and base_done.get("destination") == baseline_path,
+           "the CLI-loaded session was captured BEFORE any Lua load touched it")
         text = eng.text()
         ready_at = text.find("READY")
         done_at = text.find("Scenario load #1 ready")
@@ -434,13 +443,13 @@ def check_cli_boot(ctx) -> str | None:
            "the captured file reloads")
         ok(sha(cli_file) == cli_sha, "the original source's bytes never changed")
         ok(send(port, "return engine.isPaused()").strip() == "true", "everything ended paused")
-        return capture_path if os.path.exists(capture_path) else None
+        return baseline_path if os.path.exists(baseline_path) else None
     finally:
         rc = eng.stop()
         ok(rc == 0, f"the CLI-booted engine quit cleanly (exit {rc})")
 
 
-def check_bare_boot(ctx, cli_capture: str | None) -> None:
+def check_bare_boot(ctx, cli_baseline: str | None) -> None:
     print("\n--- 5. a boot WITHOUT --scenario: unchanged, and the same baseline via Lua ---")
     root, launch = ctx["root"], ctx["launch"]
     eng = Engine("bare-boot", ctx["port"], root, launch, ctx["logs"], ["--arena"])
@@ -466,9 +475,9 @@ def check_bare_boot(ctx, cli_capture: str | None) -> None:
         sid, _ = lua_save(port, out)
         saved = sid and await_operation(port, "save", sid)
         ok(bool(saved) and saved.get("outcome") == "saved", "…and captures")
-        if cli_capture and os.path.exists(out):
-            ok(sha(out) == sha(cli_capture),
-               "the capture is BYTE-IDENTICAL to the CLI boot's: one baseline, not two")
+        ok(bool(cli_baseline) and os.path.exists(out) and sha(out) == sha(cli_baseline),
+           "the capture is BYTE-IDENTICAL to the one taken straight after the CLI "
+           "boot's own load: one baseline, not two")
         ok(send(port, "return engine.isPaused()").strip() == "true", "paused")
     finally:
         eng.stop()

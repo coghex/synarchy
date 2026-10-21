@@ -31,8 +31,10 @@ import qualified Data.Text as T
 import System.Directory
 import System.FilePath ((</>))
 import Engine.Core.State (EngineEnv(..))
+import Engine.Load.Status (claimLoad, finishLoad)
 import Scenario.Capture.Types (CaptureOutcome(..), ScenarioCaptureStatus(..))
 import Scenario.Load.Types
+import Engine.Core.Capability.SaveLoad (SaveLoadCapability(..), toSaveLoadCapability)
 import Test.Headless.Lua.ScenarioApi.Support
 import Test.Headless.Scenario.Capture.Support (awaitCapture, withPump)
 import Test.Headless.Scenario.Load.Harness
@@ -48,6 +50,7 @@ spec = describe "Lua scenario API" $ aroundAll withApi $ do
     failureSpec
     busySpec
     saveSpec
+    supersessionSpec
 
 -- * Strict arguments
 
@@ -350,3 +353,53 @@ saveSpec = describe "saving" $ do
     isSucceeded = \case CaptureSucceeded _ → True; _ → False
     nubInts = foldr (\x acc → if x `elem` acc then acc else x : acc) []
 
+
+-- * Ordinary operations supersede the public status
+
+supersessionSpec ∷ SpecWith Api
+supersessionSpec = describe "ordinary operations supersede the scenario status" $ do
+
+    it "an admitted ordinary load supersedes it; a refused one does not" $ \a → do
+        let h = aH a
+            lsr = slLoadStatusRef (toSaveLoadCapability (fxEnv (hFx h)))
+        _ ← put a "supersede.yaml" (doc ["units: []"])
+        n ← loadViaLua a "'supersede'"
+        _ ← pumpUntilTerminal h n 60
+        call a "return engine.getScenarioStatus().id" `shouldReturn` T.pack (show n)
+        -- admitted: the newest operation is no longer a scenario one
+        Right m ← claimLoad lsr (pure False) "ordinary-load"
+        call a "return tostring(engine.getScenarioStatus())" `shouldReturn` "nil"
+        -- refused (the ordinary load is still active): nothing changes
+        claimLoad lsr (pure False) "second" `shouldReturn` Left BusyLoad
+        call a "return tostring(engine.getScenarioStatus())" `shouldReturn` "nil"
+        finishLoad lsr m
+        -- the next scenario operation is reported again, under its own identity
+        k ← loadViaLua a "'supersede'"
+        _ ← pumpUntilTerminal h k 60
+        call a "return engine.getScenarioStatus().id" `shouldReturn` T.pack (show k)
+
+    it "a refused ordinary request leaves a scenario operation in flight reported" $ \a → do
+        let h = aH a
+            lsr = slLoadStatusRef (toSaveLoadCapability (fxEnv (hFx h)))
+        _ ← put a "supersede-busy.yaml" (doc ["units: []"])
+        hold ← newHold
+        armSeams h (holdAt PointPreflight hold)
+        n ← loadViaLua a "'supersede-busy'"
+        pump ← startPump h
+        takeMVar (holdReached hold)
+        claimLoad lsr (pure False) "ordinary" `shouldReturn` Left BusyLoad
+        call a "return engine.getScenarioStatus().id" `shouldReturn` T.pack (show n)
+        putMVar (holdRelease hold) ()
+        _ ← await h n 60
+        stopPump pump
+        disarm h
+
+    it "an accepted ordinary save supersedes it" $ \a → do
+        let h = aH a
+        _ ← put a "supersede-save.yaml" (doc ["units: []"])
+        n ← loadViaLua a "'supersede-save'"
+        _ ← pumpUntilTerminal h n 60
+        call a "return engine.getScenarioStatus().id" `shouldReturn` T.pack (show n)
+        accepted ← call a "return tostring(engine.saveWorld('test_arena', 'supersede-ordinary-save'))"
+        accepted `shouldBe` "true"
+        call a "return tostring(engine.getScenarioStatus())" `shouldReturn` "nil"

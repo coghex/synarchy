@@ -132,6 +132,10 @@ cliSpec = around withTree $ describe "command-line paths (D-49, D-50)" $ do
         resolveLoad EntryCli t "   " `shouldReturn` Left PathEmpty
         resolveLoad EntryCli t "a\NULb.yaml" `shouldReturn` Left PathBadCharacter
 
+    it "refuses a final '.' component, which names a directory whatever precedes it" $ \t → do
+        forM_ ["rel.yaml/.", "./rel.yaml/.", "sub/./.", ".", "./"] $ \raw →
+            resolveLoad EntryCli t raw `shouldReturn` Left (PathNamesNoFile raw)
+
     it "refuses a directory and a name with no stem" $ \t → do
         resolveLoad EntryCli t "sub/" `shouldReturn` Left (PathNamesNoFile "sub/")
         resolveLoad EntryCli t ".yaml" `shouldReturn` Left (PathNamesNoFile ".yaml")
@@ -179,6 +183,12 @@ gameSpec = around withTree $ describe "in-game names (D-49, D-50)" $ do
         resolveLoad EntryGame t "ambush.txt" `shouldReturn` Left (PathUnsupportedExtension "ambush.txt" ".txt")
         resolveLoad EntryGame t "v1.2" `shouldReturn` Left (PathUnsupportedExtension "v1.2" ".2")
 
+    it "refuses a final '.' component rather than folding it into the file before it" $ \t → do
+        -- 'ambush.yaml/.' must not load (or overwrite) scenarios/ambush.yaml
+        forM_ ["ambush.yaml/.", "ambush/.", "sub/deep.yaml/./.", ".", "./", "sub/."] $ \raw → do
+            resolveLoad EntryGame t raw `shouldReturn` Left (PathNamesNoFile raw)
+            resolveSave EntryGame t raw `shouldReturn` Left (PathNamesNoFile raw)
+
     it "refuses an empty name, a trailing separator and a directory" $ \t → do
         resolveLoad EntryGame t "" `shouldReturn` Left PathEmpty
         resolveLoad EntryGame t "sub/" `shouldReturn` Left (PathNamesNoFile "sub/")
@@ -215,6 +225,11 @@ absoluteSpec = around withTree $ describe "absolute paths" $ do
     it "are not confined to the scenario folder in game, and symlinks are followed" $ \t → do
         let p = tFolder t </> "link.yaml"
         resolveLoad EntryGame t p `shouldReturn` Right p
+
+    it "refuse a final '.' component through both entry points" $ \t → do
+        let p = tOutside t </> "out.yaml" ++ "/."
+        resolveLoad EntryCli t p `shouldReturn` Left (PathNamesNoFile p)
+        resolveLoad EntryGame t p `shouldReturn` Left (PathNamesNoFile p)
 
     it "are never invented from a bare name" $ \t → do
         resolveLoad EntryGame t "out" `shouldReturn` Left (PathNotFound (tFolder t </> "out.yaml"))
@@ -268,6 +283,10 @@ captureSpec = describe "capture destinations follow the same rules" $ do
             _ ← resolveSave EntryGame t ""
             doesDirectoryExist (tFolder t) `shouldReturn` False
 
+        it "never create it for a destination ending in a '.' component" $ \t → do
+            _ ← resolveSave EntryGame t "first.yaml/."
+            doesDirectoryExist (tFolder t) `shouldReturn` False
+
         it "never create it for a command-line or absolute destination" $ \t → do
             _ ← resolveSave EntryCli t "x.yaml"
             _ ← resolveSave EntryGame t (tLaunch t </> "x.yaml")
@@ -318,6 +337,12 @@ propertySpec = describe "invariants" $ do
                     not (lxInside lx)
                     ∧ takeExtension (lxPath lx) ≡ ".yaml"
                     ∧ lxPath lx ≡ normalise ("/launch/dir" </> name)
+
+    it "a path whose final component is '.' is never accepted, by any entry point or shape" $
+        property $ forAll (nameOf (nameAlphabet ⧺ ["/abs"])) $ \name →
+            let dotted = name ⧺ "/."
+            in all (\e → either (const True) (const False) (lexicalPath e rs dotted))
+                   [EntryGame, EntryCli]
 
     it "an extensionless command-line path is never accepted" $
         property $ forAll (nameOf cliAlphabet) $ \name →

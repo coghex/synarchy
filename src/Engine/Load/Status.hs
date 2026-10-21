@@ -42,7 +42,7 @@ module Engine.Load.Status
     , terminateScenario
     , markScenarioStartup, recordStartupFailure, readStartupFailure, resetStartupState
     , claimStartupSubmission, releaseStartupSubmission, readStartupResult
-    , readLastScenarioOperation
+    , readLastScenarioOperation, supersedeScenarioStatus
     , setScenarioPlan, takeScenarioPlan, readScenarioPlan
       -- * The scenario capture request record (#2714)
     , claimCapture, readCaptureRecord, updateCaptureStatus, terminateCapture
@@ -516,7 +516,12 @@ claimLoadLocked ref saving name = do
 --   active, else accept it with a fresh request id. @saving@ reads the
 --   save barrier. Nothing about the operation that held the line changes.
 claimLoad ∷ LoadStatusRef → IO Bool → Text → IO (Either Busy Int)
-claimLoad ref saving name = withAdmission ref (claimLoadLocked ref saving name)
+claimLoad ref saving name = withAdmission ref $ do
+    claimed ← claimLoadLocked ref saving name
+    -- an ORDINARY load supersedes the public scenario status (a refusal
+    -- does not: nothing was admitted)
+    forM_ claimed $ \_ → supersedeScenarioStatus ref
+    pure claimed
 
 -- | Admit a save, an autosave or a capture: refuse while a load is
 --   active, else run @begin@ (the barrier's own 'Engine.Save.Barrier.beginSave',
@@ -631,6 +636,15 @@ data EntryCell = EntryCell
 --   the newest of the two.
 readLastScenarioOperation ∷ LoadStatusRef → IO (Maybe ScenarioOperation)
 readLastScenarioOperation (LoadStatusRef _ _ _ _ _ _ _ _ cellR) = entLastOperation <$> readIORef cellR
+
+-- | An ordinary load, save or autosave was ADMITTED: the public scenario
+--   status no longer names the newest operation, so it reports nothing
+--   until the next scenario operation is admitted. Called only on success,
+--   under the admission lock, so a busy refusal leaves it as it was. The
+--   startup load's own result is kept separately ('readStartupResult').
+supersedeScenarioStatus ∷ LoadStatusRef → IO ()
+supersedeScenarioStatus (LoadStatusRef _ _ _ _ _ _ _ _ cellR) =
+    atomicModifyIORef' cellR $ \c → (c { entLastOperation = Nothing }, ())
 
 noteOperation ∷ LoadStatusRef → ScenarioOperation → IO ()
 noteOperation (LoadStatusRef _ _ _ _ _ _ _ _ cellR) op =

@@ -178,6 +178,10 @@ lexicalPath ∷ ScenarioEntry → ScenarioRoots → String → Either PathProble
 lexicalPath entry roots raw
     | T.null (T.strip (T.pack raw)) = Left PathEmpty
     | '\NUL' `elem` raw = Left PathBadCharacter
+      -- a final '.' (@ambush.yaml/.@) names a directory, whatever precedes
+      -- it: it must be refused BEFORE dot segments are dropped, or it would
+      -- fold into the file before it and name a different thing than typed
+    | lastComponent raw ≡ "." = Left (PathNamesNoFile raw)
     | isAbsolute raw = withExtension raw ⌦ \p → Right (Lexical (normalise p) False)
     | entry ≡ EntryCli =
         withExtension raw ⌦ \p → Right (Lexical (normalise (srLaunchDir roots </> p)) False)
@@ -199,6 +203,13 @@ lexicalPath entry roots raw
             ext | ext ≢ scenarioExtension → Left (PathUnsupportedExtension raw ext)
                 | null (takeBaseName p) → Left (PathNamesNoFile raw)
                 | otherwise → Right p
+
+-- | The last path component of the text as typed, trailing separators
+--   ignored (@sub/.@ → @.@, @sub/@ → @sub@).
+lastComponent ∷ String → String
+lastComponent raw = case splitDirectories raw of
+    [] → ""
+    comps → last comps
 
 -- | Resolve what a caller typed into the file a service is handed, or the
 --   reason it cannot be. Consults the file system for containment (real
