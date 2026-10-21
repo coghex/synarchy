@@ -34,7 +34,7 @@ arena paths, animation and pose mappings, captured logs, and relevant history.
 The current implementation was rechecked at
 `4c2a26d2e707e05355ca637a5b3717b2d7ddc0f4`.
 
-Existing findings reports and `docs/bugs.md` were searched for equivalent
+Existing findings reports and `docs/archive/bugs.md` were searched for equivalent
 entries. The two action-outcome concerns overlap the combined, still-unprocessed
 PRR-2 entry in `docs/project_review_715-694.md`; they remain separate here
 because the approved assessment established two independently repairable root

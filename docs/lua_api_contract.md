@@ -172,7 +172,7 @@ withheld from the restricted in-game shell.
 
 The raw activity label says `enemy-location encounter`; the owner's subsequent
 clarification above is authoritative about what happened. The raw file is
-preserved unchanged in the [capture evidence](lua_api_profile_20260909.md),
+preserved unchanged in the [capture evidence](archive/lua_api_profile_20260909.md),
 with its checksum and the exact capture helper.
 
 This is one interactive exploration sample. It is not a combat benchmark,

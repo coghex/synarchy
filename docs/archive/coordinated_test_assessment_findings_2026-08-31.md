@@ -26,7 +26,7 @@ artifacts, and current source remain the evidence. The report-drafting workflow
 did not perform a new tracker search; tracker deduplication and final
 disposition remain the responsibility of `process-report`.
 
-A prior report, `docs/assessed_test_findings_2026-08.md`, recorded and later
+A prior report, `docs/archive/assessed_test_findings_2026-08.md`, recorded and later
 rejected an earlier HUD-glyph observation because pixel inspection of that
 run's captures showed invariant glyphs. The later 2026-08-30 full-frame
 captures assessed here visibly differ: complete glyphs appear at south and
@@ -206,7 +206,7 @@ visible change to bitmap glyph content rather than the entire HUD layout.
   assets and construct the six-item `toolbarTool` stack.
 - `scripts/ui/toggle.lua:107-122` — creates every toolbar item as a square
   `UI.newSprite`.
-- `docs/assessed_test_findings_2026-08.md:174-186` — documents why an older
+- `docs/archive/assessed_test_findings_2026-08.md:174-186` — documents why an older
   observation was rejected after its own earlier captures showed invariant
   glyph pixels; those are not the later captures cited here.
 

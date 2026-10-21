@@ -5,7 +5,7 @@ navigation: it names the function that actually does the thing a comment is
 explaining. On 2026-09-02, 107 such links across 77 files under `src/` and
 `app/` name a function the named module does not export, so they render as
 plain text, cannot be jumped to, and send a reader to a module that hides the
-symbol. The count was 67 when `docs/explore_report.md` EXPL-27 recorded it
+symbol. The count was 67 when `docs/archive/explore_report.md` EXPL-27 recorded it
 two weeks earlier; it grows every time a module is split and the extracted
 function is documented from outside. This arc adds the guard that makes a
 haddock link resolve, and drains the existing debt behind it. It benefits
@@ -81,7 +81,7 @@ concrete precondition
   the form `@M.f@`.
 - **The precedent for the fix shape.** PR #1407 (#1083) rewrote 16 files'
   links to unexported names from `'x'` to monospace `@x@` when it narrowed
-  those export lists; `docs/explore_report.md` EXPL-6 was closed as
+  those export lists; `docs/archive/explore_report.md` EXPL-6 was closed as
   `[no-issue]` on exactly that ground. So the tree already treats "a code span
   names a real definition without claiming a link" as the accepted spelling.
 - **The gate-set conventions this must follow.** Every audit under `tools/`
@@ -96,7 +96,7 @@ concrete precondition
   that a run compares against and that only an explicit `--update-baseline`
   may rewrite.
 - **Tracker.** No open or closed issue proposes a haddock link audit. The
-  related findings are `docs/explore_report.md` EXPL-6 (`[no-issue]`),
+  related findings are `docs/archive/explore_report.md` EXPL-6 (`[no-issue]`),
   EXPL-24 (`[deferred]` behind this arc; its four `pagesInScope` sites are in
   the list), and EXPL-39 (`World.Geology.Ore`'s `'World.Geology.Timeline.buildAge'`
   link, which carries a separate wrong-caller narrative and is in the list).
@@ -135,7 +135,7 @@ widens an export list to make a link resolve.
 - Widening any export list. #1083, #1154 and #1156 narrowed them on purpose.
 - Unqualified `'f'` links (4053) and module links `"M.N"` (843), per D-1.
 - Rewriting the prose around a dead link. A sweep changes the link's spelling
-  or target and nothing else; the narrative corrections `docs/explore_report.md`
+  or target and nothing else; the narrative corrections `docs/archive/explore_report.md`
   records separately (EXPL-24's `scopedPageOk` wording, EXPL-39's caller
   claim) stay with their own findings.
 - `test-headless/`, `test/`, `cbits/`, and Lua.
@@ -304,7 +304,7 @@ Resolved by D-3: ratchet first, four sweeps, baseline deleted by the last.
 
 - **Outcome:** the 19 dead links in 12 files under `src/Engine/Input` and
   `src/UI` are fixed, including the four `pagesInScope` sites that
-  `docs/explore_report.md` EXPL-24 records.
+  `docs/archive/explore_report.md` EXPL-24 records.
 - **Scope:** `dispatchInput` (4), `pagesInScope` (4), `inputBoundaryPage` (3),
   `absolutePosition` (2) and the rest of that area.
 - **Phase:** 2
@@ -320,7 +320,7 @@ Resolved by D-3: ratchet first, four sweeps, baseline deleted by the last.
 
 - **Outcome:** the 27 dead links in 23 files under the rest of `src/World`,
   `src/Sim` and `src/Language` are fixed, including `traceRivers` (4) and the
-  `buildAge` link `docs/explore_report.md` EXPL-39 records.
+  `buildAge` link `docs/archive/explore_report.md` EXPL-39 records.
 - **Scope:** the `World.Fluid.River.Identify.*` split, `World.Slope`,
   `World.Plate`, `World.Geology`, `Sim.Fluid`, and `Language.Generated`.
 - **Phase:** 2

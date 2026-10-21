@@ -6230,7 +6230,7 @@ diagnostic per removal. It never inspects a designation another chunk
 owns, so an entry whose chunk is simply not resident survives.
 
 Design record:
-[`docs/flora_species_identity_design.md`](flora_species_identity_design.md).
+[`docs/archive/flora_species_identity_design.md`](archive/flora_species_identity_design.md).
 Gates: hspec `--match "World.FloraOrder"` (two opposing registration
 orders, the impossible-fit lexically-earlier species, the checked-in
 seed-42/world-size-64 golden, and the pre-change numeric-reference
@@ -7203,7 +7203,7 @@ reproducible fixture belong in the implementation PR before final review.
 
 ## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)
 
-Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
+Design record: [`docs/archive/fluid_reaction_design.md`](archive/fluid_reaction_design.md)
 (decisions D-1, D-2, D-3, D-5 and D-7). FR-1 of epic #2480 makes the
 contact react inside the sim; FR-2 (#2485) is the world-side consumer
 that turns the events into durable stone. The two halves are separated

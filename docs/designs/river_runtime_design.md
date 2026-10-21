@@ -912,7 +912,7 @@ Art inventory for the accepted granite recipe:
 |---|---|
 | Material/picker icon | `assets/textures/items/material/granite_chunk.png`; `scripts/build_tool.lua` already reuses content textures. Verify picker legibility. |
 | Completed terrain | `assets/textures/world/granite/granite.png`, plus existing granite zoom/background textures in `data/materials/igneous_intrusive.yaml`; use terrain rendering, not a structure overlay. |
-| Cursor/designation preview | Adapt the target-art ghost convention to the actual proposed terrain height. `docs/designation_tools_design.md` specifies runtime opacity factors; translucency alone does not require a new PNG. Wet occlusion, depth order, invalid-state feedback, and pending-job visibility need rendered evidence. |
+| Cursor/designation preview | Adapt the target-art ghost convention to the actual proposed terrain height. `docs/archive/designation_tools_design.md` specifies runtime opacity factors; translucency alone does not require a new PNG. Wet occlusion, depth order, invalid-state feedback, and pending-job visibility need rendered evidence. |
 | Paid/in-progress work | Specify a visible progress presentation using approved existing UI/art or inventory missing assets before delivery. Structure construction-frame behavior is not automatically a terrain-fill implementation. |
 
 These are reuse candidates, not completed visual signoff. Missing icons, preview

@@ -46,7 +46,7 @@ Verified on master `b4631ca6e` (2026-08-31):
   (`src/Sim/Fluid/Active.hs:180-181`), gravity (`:306-308`), lateral
   (`:346-352`), waterfall (`:425-431`). A pure GHCi tick with `Lava 7` above
   an occupied `Lake 1` produced `Lake 8` — the lava became water
-  (`docs/holistic_project_audit_findings.md` HPA-3).
+  (`docs/archive/holistic_project_audit_findings.md` HPA-3).
 - Fluid identity is gameplay-load-bearing: `fluidPenalty`
   (`src/Unit/Pathing/Cost.hs:272-277`) makes lava and ocean impassable while
   rivers and lakes are wadeable.
@@ -415,6 +415,6 @@ Resolved by D-7.
 
 ## Source notes
 
-Origin: `docs/holistic_project_audit_findings.md` HPA-3 (marked `[deferred]`
+Origin: `docs/archive/holistic_project_audit_findings.md` HPA-3 (marked `[deferred]`
 pending this arc's epic). The owner chose "Reaction (lava+water→stone)" over
 blocking, precedence, and deferral on 2026-08-31.

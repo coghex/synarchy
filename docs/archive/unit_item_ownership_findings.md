@@ -19,7 +19,7 @@ then compared those paths with explicit-page spawning and the newer transfer
 policy, which treats cross-page endpoints as out of range.
 
 Existing findings reports were searched for overlap. No equivalent concern was
-found in `docs/bugs.md`, `docs/save_load_findings.md`, or
+found in `docs/archive/bugs.md`, `docs/archive/save_load_findings.md`, or
 `docs/code_health_findings.md`. No GitHub duplicate search was performed; that
 belongs to `process-report`.
 

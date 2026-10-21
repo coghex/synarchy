@@ -27,7 +27,7 @@ corresponding coverage.
 Existing reports were searched for overlap. `docs/code_health_findings.md`
 already records hardcoded power-device definitions in CH-108 and the
 production-call ambiguity around pruning helpers in CH-109; neither describes
-the lifecycle failures below. `docs/unit_item_ownership_findings.md` covers
+the lifecycle failures below. `docs/archive/unit_item_ownership_findings.md` covers
 related page-ownership failures in ground-item and cargo operations, but not
 power placement. No GitHub duplicate search was performed; that belongs to
 `process-report`.

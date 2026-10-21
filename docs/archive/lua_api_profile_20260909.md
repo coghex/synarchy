@@ -1,6 +1,6 @@
 # Lua boundary profile evidence, 2026-09-09
 
-Companion evidence for [the API contract](lua_api_contract.md) and issue #2483.
+Companion evidence for [the API contract](../lua_api_contract.md) and issue #2483.
 This archive preserves the raw capture and the exact helper used. The raw label
 `enemy-location encounter` was entered before play; the owner subsequently
 confirmed exploration toward a ruin with no combat before the capture ended.

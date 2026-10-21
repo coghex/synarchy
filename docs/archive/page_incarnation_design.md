@@ -44,7 +44,7 @@ concrete precondition
 ## Current state and evidence
 
 Verified on master `67b17a353` (2026-09-02). Origin: holistic audit finding
-HPA-26 in `docs/holistic_project_audit_findings.md`.
+HPA-26 in `docs/archive/holistic_project_audit_findings.md`.
 
 **Three paths replace or remove a page; only one of them fences entities.**
 

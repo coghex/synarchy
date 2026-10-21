@@ -22,7 +22,7 @@ nineteen observations:
 - `20260821T135443Z-combat-retaliation-tick-continuity-gamep-3d7769`.
 
 The first three assessments were already incorporated into
-`docs/coordinated_playtest_findings.md`. That report retained seven confirmed
+`docs/archive/coordinated_playtest_findings.md`. That report retained seven confirmed
 concerns, all since processed as issues, and explicitly accounted for the two
 remaining observations as one fixed transfer-probe failure and one inconclusive
 recovered-radio scenario. Those nine observations are not duplicated here.

@@ -9,7 +9,7 @@ filesystem, so the same seed grows the same forest on every platform, and
 adding, renaming, or reordering a species can never silently turn a player's
 crop into a different plant. It benefits players carrying saves across builds
 and platforms, and maintainers adding flora content. Origin: holistic audit
-HPA-20 (`docs/holistic_project_audit_findings.md`).
+HPA-20 (`docs/archive/holistic_project_audit_findings.md`).
 
 Design state: `ready for issue processing`
 
@@ -94,7 +94,7 @@ Verified on master `5500e9771`.
   (`API/Plant.hs:115,265`). No Lua save module persists a species id
   (`scripts/lib/save_modules.lua`, `unit_ai_save_refs.lua` searched).
 - **Adjacent arcs.** #1854 (closed) owns instance identity and Chop keying by
-  `FloraInstanceId`; `docs/designation_tools_design.md` and
+  `FloraInstanceId`; `docs/archive/designation_tools_design.md` and
   `docs/environmental_flora_mortality_design.md` restate its rule and plan no
   species-key persistence. Open epics #1837 (designation tools) and #1997
   (world streaming) do not touch species identity.

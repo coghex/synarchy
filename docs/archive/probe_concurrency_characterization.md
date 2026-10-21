@@ -8,7 +8,7 @@ default exactly as it is.
 
 Every number here comes from the retained
 `probe-flake-result/v1` documents under
-[`docs/measurements/probe_concurrency_1427/`](measurements/probe_concurrency_1427/),
+[`docs/measurements/probe_concurrency_1427/`](../measurements/probe_concurrency_1427/),
 which also holds the exact launcher scripts, the launcher logs, the
 aggregation script, and the durable event/stdout/engine-log evidence for
 every non-pass attempt. `summary.json` there is this report's
@@ -119,7 +119,7 @@ The raw terminal outcome in each result document (`PASS`, `FAIL`,
 `TIMEOUT`, and the separate `error_run` harness record) is **never
 rewritten**. The categories below are a report-level analysis layered on
 top of it, applied mechanically by
-[`aggregate.py`](measurements/probe_concurrency_1427/aggregate.py):
+[`aggregate.py`](../measurements/probe_concurrency_1427/aggregate.py):
 
 | category | rule | evidence |
 |---|---|---|
@@ -350,7 +350,7 @@ within noise for `position_hold`, whose duration is real-time-bound.
 `n1-c4-position_hold` attempt inv4/run-002 aborted after 86.0 s with all
 12 checks `MISSING` and one `WARN` diagnostic, *"the commanded acolyte
 never arrived and never held"*
-([retained evidence](measurements/probe_concurrency_1427/artifacts/position_hold-20260822T041444Z-46835-18b3565d__run-002.txt):
+([retained evidence](../measurements/probe_concurrency_1427/artifacts/position_hold-20260822T041444Z-46835-18b3565d__run-002.txt):
 event stream, empty stdout, full engine log). The engine log shows a
 healthy boot, arena init and unit spawn, then shutdown at the probe's own
 deadline. This is a single-capability engine missing a real-time AI
@@ -487,7 +487,7 @@ checked-in copy packages those down to fit the review payload limit: one
 noise elided and counted, and only the launcher's stderr progress kept
 as `invocation_launches.txt`. Every invocation's `inv<i>.json` result
 document is verbatim and still its own file, and the data
-[README](measurements/probe_concurrency_1427/README.md) states exactly
+[README](../measurements/probe_concurrency_1427/README.md) states exactly
 what was left out and why.
 
 ## 9. Recommendation

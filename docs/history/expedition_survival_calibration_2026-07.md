@@ -10,7 +10,7 @@ appended on 2026-07-31.
 Commit `9eda1412b` (2026-08-10, "Rewrite three epic design docs and add
 four audit findings reports") replaced that narrative in place with the
 SURV-1..SURV-10 findings ledger. **The processed successor is
-[`docs/expedition_survival_calibration.md`](../expedition_survival_calibration.md)**
+[`docs/expedition_survival_calibration.md`](../archive/expedition_survival_calibration.md)**
 — read it, not this file, for what is still actionable. This archive
 exists because live code and documentation cite observations E1-E7 and
 the fall-calibration section, which the ledger does not carry.

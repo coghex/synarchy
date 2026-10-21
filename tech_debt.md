@@ -824,7 +824,7 @@ The module grew from 227 lines for the initial power-item registry to 552 as bui
 - `test-headless/Test/Headless/Power/Network.hs:1` — the pure network suite separately pins connectivity, balance, consumer combination, residency-independent wires, and local solar phasing without an engine or Lua backend.
 - `tools/power_workshop_probe.py:2` — job-dependent demand, the single-bill exclusion, building/recipe gates, network wire tables, and AI stall/resume are covered end-to-end only by a long scenario-heavy manual probe.
 - `tools/power_probe.py:2` and `tools/ci_probes.py:144` — the full placement/query/network/save-restart surface also remains scenario-heavy and manual rather than a default CI gate.
-- `docs/power_network_findings.md:47` — the earlier placement ownership, demolition cleanup, and chunk-eviction findings are all dispositioned as #1205–#1207; this structural concern is distinct and must preserve their corrected behavior.
+- `docs/archive/power_network_findings.md:47` — the earlier placement ownership, demolition cleanup, and chunk-eviction findings are all dispositioned as #1205–#1207; this structural concern is distinct and must preserve their corrected behavior.
 - `git log --follow -- src/Engine/Scripting/Lua/API/Power.hs` — the file grew from 227 to 244, 322, 382, 466, 514, and finally 552 lines as separately owned power features and corrections accumulated.
 - `tools/haskell_module_budget.py:30` — this module family has no explicit line ratchet, so the split should follow policy, transaction, and dependency ownership rather than impose a blanket 500-line target.
 

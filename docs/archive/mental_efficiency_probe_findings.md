@@ -23,7 +23,7 @@ recorded configuration hashes, and a headless engine on port 9353 with four
 RTS capabilities. No implementation change has been delivered. Tracker
 deduplication and issue disposition remain for `$process-report`.
 
-The [full diagnosis](deflake_diagnoses/mental_efficiency_20260922T143133Z.md)
+The [full diagnosis](../deflake_diagnoses/mental_efficiency_20260922T143133Z.md)
 records commands, configuration, measurement identity, ownership cleanup, and
 the separate canonical handoff rejection. Local diagnostic evidence is retained
 under `/Users/vincentcoghlan/work/.deflake-diagnostics/mental_efficiency_20260922T143133Z/`.
