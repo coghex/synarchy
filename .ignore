@@ -1,0 +1,15 @@
+# Hidden from search, kept for tools and history (ripgrep and fd read this file; git does not).
+# docs/archive/ is history; the rest are records tools read in place, or record directories
+# kept where they are because they hold scripts and data. See CLAUDE.md.
+docs/archive/
+docs/project_review/
+docs/project_review_*.md
+docs/epic_review_*.md
+docs/guide/*
+!docs/guide/CURSOR.md
+docs/history/
+docs/pr-proofs/
+docs/issue_*_rereview/
+docs/measurements/
+docs/audit_evidence/
+docs/deflake_diagnoses/

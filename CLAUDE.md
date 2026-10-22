@@ -39,6 +39,13 @@ apply; the default branch is `master`. Specific to synarchy:
 - Reports and drafts not ready to publish can wait uncommitted anywhere, for
   example in the `docs-wip` worktree; it is optional scratch, not a
   publication lane.
+- **`docs/archive/` is history:** processed findings, finished designs and
+  evidence. Read it only when asked or when tracing why something was decided;
+  it is never current behavior. `.ignore` hides it, the records tools read in
+  place, and the record directories from search (`rg --no-ignore` reaches
+  them). Once a design's epic has closed or a report's last finding is
+  dispositioned, and no open issue cites it by path, move it there with
+  `git mv` and land it with `docs-push`; leave anything a test or tool reads.
 - Workflow skills that create their own worktree or require the primary
   checkout may use it: `solve`, `pr-revise`, `repair`, read-only reviewers,
   `drain-prs`, `janitor`, `finalize`.
